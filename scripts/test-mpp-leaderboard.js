@@ -162,6 +162,7 @@ const snap = {
   seen.length = 0; mode = "ok";
   const first = await refreshMppLeaderboard({ snapshot: snap, rpcFn, now: 10, self: null });
   ok(first.rows.length === 3 && first.rows[0].transfers === 2 && mppLeaderboardSnapshot(11).stale === false, "refresh publishes a fresh snapshot");
+  ok(mppLeaderboardSnapshot(11).provenMinPayers === 3 && mppLeaderboardSnapshot(11).provenFloor === 20, "the snapshot carries the payer rule beside the transfer floor");
   mode = "dead";
   const second = await refreshMppLeaderboard({ snapshot: snap, rpcFn, now: 20, self: null });
   ok(second.rows.length === 3 && second.rows[0].transfers === 2 && /rpc down/.test(second.lastError || ""), "an RPC failure keeps the PREVIOUS board up and records the error");
@@ -229,7 +230,16 @@ const snap = {
   const html = mppMarketPage("https://x.test", snap, lb);
   ok(/MPP leaderboard/.test(html) && /id="leaderboard"/.test(html), "page renders the leaderboard section");
   ok(/Alpha<\/a>, <a[^>]*>Alpha Pro<\/a>/.test(html), "a shared recipient row names every seller behind it");
-  ok(/\(this server\)/.test(html), "our own recipient is labelled as this server");
+  // The host card says ranked rows never include the host: our own recipient
+  // is left out of the ranked table and the ranks renumber over what shows.
+  ok(!/\(this server\)/.test(html) && !/explore\.tempo\.xyz\/address\/${SELF.toLowerCase()}/.test(html), "our own recipient is not a ranked row");
+  ok(/<td class="num">2<\/td>\s*<td><a[^>]*>Gw0/.test(html), "ranks renumber over the shown rows, leaving no gap where the host sat");
+  // The router's real rule, not the floor alone.
+  const lbRule = { ...lb, provenMinPayers: 3, rows: [...lb.rows, { rank: 5, recipient: "0x" + "9".repeat(40), sellers: [{ name: "Few", origin: "https://few.example", url: "https://few.example" }], intents: ["charge"], self: false, transfers: 40, payers: 2, evidencePayers: 2, volumeUsdc: 1, proven: false, routable: false }, { rank: 6, recipient: "0x" + "8".repeat(40), sellers: [{ name: "Small", origin: "https://small.example", url: "https://small.example" }], intents: ["charge"], self: false, transfers: 7, payers: 4, evidencePayers: 4, volumeUsdc: 0.1, proven: false, routable: false }] };
+  const ruled = mppMarketPage("https://x.test", snap, lbRule);
+  ok(/at least 20 inbound transfers in the window from at least 3 distinct payers other than the recipient, plus a tempo\/charge offer/.test(ruled) && !/floor 20 in the window =/.test(ruled), "the routable rule names the transfer floor, the payer rule and the charge offer");
+  ok(/too few payers \(2 of 3\)/.test(ruled), "a row over the transfer floor but short on payers says that, not 'below floor'");
+  ok(/below floor \(7 of 20 transfers\)/.test(ruled), "a row under the transfer floor says by how much");
   ok(!/Beta<\/a><div><a class="mlb-addr"/.test(html) && /1 more verified recipient with no inbound transfer/.test(html), "zero-transfer recipients are counted, not ranked");
   ok(/routable &middot; #1/.test(html), "the roster row for a proven seller carries its rank badge");
   ok(/Gw3<\/a> <span[^>]*>\+3 more on this recipient<\/span>/.test(html) && !/>Gw5</.test(html), "a shared recipient shows 4 names + a count, the rest in a title");

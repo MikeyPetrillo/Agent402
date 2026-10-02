@@ -268,9 +268,14 @@ const qMppTotals = db.prepare(`
   SELECT network, internal, COUNT(*) AS n, SUM(price_usd) AS usd, MIN(ts) AS first_ts, MAX(ts) AS last_ts
   FROM sales WHERE wire IN ('mpp', 'mpp-tempo', 'mpp-stripe', 'mpp-tempo-subscription')
   GROUP BY network, internal`);
-const qMppRecentExternal = db.prepare(`
-  SELECT ts, network, tx FROM sales WHERE wire IN ('mpp', 'mpp-tempo', 'mpp-stripe', 'mpp-tempo-subscription') AND internal = 0
-  ORDER BY ts DESC LIMIT ?`);
+// Our own (internal) MPP settlements, newest per network: the only hashes the
+// public view lists. Partitioned per network so the Tempo volume runner's
+// volume cannot crowd a Base or Celo canary hash out of the list.
+const qMppRecentOwnByNetwork = db.prepare(`
+  SELECT ts, network, tx FROM (
+    SELECT ts, network, tx, ROW_NUMBER() OVER (PARTITION BY network ORDER BY ts DESC) AS rn
+    FROM sales WHERE wire IN ('mpp', 'mpp-tempo', 'mpp-stripe', 'mpp-tempo-subscription') AND internal = 1 AND tx IS NOT NULL
+  ) WHERE rn <= 12 ORDER BY ts DESC`);
 // Every MPP tx hash, for joining the wire onto the on-chain revenue ledger
 // (separate db) so the chart can filter by wire. Unbounded by design: the
 // series spans the whole chart window, not just the recent list. Widened to
@@ -703,11 +708,12 @@ export function mppSales({ limit = 30, detailed = false } = {}) {
       if (firstTs === null || t.first_ts < firstTs) firstTs = t.first_ts;
       if (lastTs === null || t.last_ts > lastTs) lastTs = t.last_ts;
     }
-    // Recent on-chain proof: external rows first; a rail with no external
-    // settle yet shows its newest internal (canary) hashes, flagged as such.
-    const ext = qMppRecentExternal.all(Math.min(Math.max(1, limit | 0), 100));
-    for (const r of ext) { const e = rails[canonRail(r.network)]; if (e && r.tx && e.txs.length < 12) e.txs.push(r.tx); }
-    for (const r of rows) { const e = rails[canonRail(r.network)]; if (e && e.external === 0 && r.tx && e.txs.length < 12) { e.txs.push(r.tx); e.txsInternal = true; } }
+    // On-chain proof: OUR OWN settlements only (daily canary, Tempo volume
+    // runner). An outside buyer's tx hash resolves to that buyer's wallet on
+    // chain, so publishing it would publish who pays us; outside settlements
+    // are counted above and never listed.
+    const own = qMppRecentOwnByNetwork.all();
+    for (const r of own) { const e = rails[canonRail(r.network)]; if (e && e.txs.length < 12) { e.txs.push(r.tx); e.txsInternal = true; } }
     return {
       persistent: salesPersistent,
       count,
@@ -718,7 +724,8 @@ export function mppSales({ limit = 30, detailed = false } = {}) {
       byNetwork: Object.fromEntries(Object.entries(rails).map(([n, e]) => [n, e.count])),
       externalCount,
       internalCount: count - externalCount,
-      txs: ext.map((r) => r.tx).filter(Boolean),
+      txs: own.map((r) => r.tx),
+      txsInternal: true,
       // Per-rail slice of the same evidence (all-time count, external/internal
       // split, newest settlement, recent external hashes) so /revenue can give
       // each MPP rail its own card and link every hash to the RIGHT explorer.
@@ -726,7 +733,7 @@ export function mppSales({ limit = 30, detailed = false } = {}) {
       // timestamp. externalUsd is the rail's all-time outside total, the same
       // aggregate the x402 table shows per chain.
       rails,
-      note: "Aggregate view, all-time. internal = settlements paid by our own wallets (daily canary, Tempo volume runner); external = everyone else. Per-settlement tool/price rows are operator-only; the tx hashes resolve on-chain for independent verification.",
+      note: "Aggregate view, all-time. internal = settlements paid by our own wallets (daily canary, Tempo volume runner); external = everyone else. Per-settlement tool/price rows are operator-only. The tx hashes are our own settlements only and resolve on-chain for independent verification; outside buyers' hashes are never listed, because a hash names its payer on chain.",
     };
   }
   return {
@@ -937,8 +944,8 @@ export function externalTempoPayments() {
 //
 // Shape is deliberately NOT a purchase feed (the mppSales lesson: tool + price
 // + timestamp per row is a customer's buying pattern). It is aggregates plus
-// ONE latest external row and ONE latest internal (canary) row, each with the
-// settle tx so the amount is checkable on-chain, and never a payer.
+// ONE latest external row and ONE latest internal (canary) row, never a payer.
+// Only the canary row carries its settle tx (a hash names its payer on chain).
 const qProofAgg = db.prepare(`
   SELECT COUNT(*) AS n, SUM(price_usd) AS settled, SUM(quote_usd) AS quoted,
          SUM(CASE WHEN quote_usd IS NOT NULL THEN 1 ELSE 0 END) AS quoted_n
@@ -973,7 +980,12 @@ export function proofFeed({ slug = "v1-chat-metered" } = {}) {
       settledUsd: +Number(l.price_usd).toFixed(6),
       quoteUsd: l.quote_usd == null ? null : +Number(l.quote_usd).toFixed(6),
       underQuote: l.quote_usd == null ? null : Number(l.price_usd) <= Number(l.quote_usd) + 1e-9,
-      network: l.network, wire: l.wire, rail: l.rail, tx: l.tx,
+      network: l.network, wire: l.wire, rail: l.rail,
+      // An outside buyer's tx hash resolves to that buyer's wallet on chain,
+      // so only our own canary row carries one; the external row is the
+      // amount, the quote and the hour.
+      tx: internal ? l.tx : null,
+      txWithheld: !internal,
     } : null;
     return {
       count: Number(a.n) || 0,

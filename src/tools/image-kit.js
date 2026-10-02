@@ -17,9 +17,15 @@
 import { Jimp } from "jimp";
 import { safeFetch } from "./fetch-guard.js";
 import {
-  bad, MAX_DIM, declaredDimensions, posInt, readImage, sniffFormat, toBuffer,
+  bad, MAX_DIM, declaredDimensions, posInt, readImage, sniffFormat, toBuffer, MIME,
 } from "./image-ops.js";
 import { runImageOffThread } from "./image-pool.js";
+
+// The content types resize/convert/thumbnail answer with (raw bytes through
+// the route binder's __binary sentinel, chosen by `format`). Declared on each
+// def as `binaryTypes` so the tool page and /openapi.json describe bytes, not
+// a JSON object.
+const IMAGE_OUT_TYPES = [...new Set(Object.values(MIME))];
 
 // Re-exported for scripts/test-image.js, which imports the parser surface from
 // this module.
@@ -211,6 +217,7 @@ export const IMAGE_TOOLS = [
     description:
       "Resize an image to given pixel dimensions. Send a base64 PNG/JPEG/BMP and width and/or height (give one to scale proportionally). Returns the resized image. Deterministic, no network.",
     tags: ["image", "resize", "scale", "thumbnail", "png", "jpeg"],
+    binaryTypes: IMAGE_OUT_TYPES,
     discovery: {
       bodyType: "json",
       input: { image: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==", width: 256 },
@@ -233,6 +240,7 @@ export const IMAGE_TOOLS = [
     description:
       "Convert an image between formats (PNG, JPEG, BMP). Send a base64 image and the target format; returns the converted image. Optional jpeg quality (1-100). Deterministic, no network.",
     tags: ["image", "convert", "format", "png", "jpeg", "bmp"],
+    binaryTypes: IMAGE_OUT_TYPES,
     discovery: {
       bodyType: "json",
       input: { image: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==", format: "jpeg", quality: 80 },
@@ -256,6 +264,7 @@ export const IMAGE_TOOLS = [
     description:
       "Make a square thumbnail of an image - scales and center-crops to NxN (default 128). Send a base64 image and optional size. Returns the thumbnail. Deterministic, no network.",
     tags: ["image", "thumbnail", "crop", "square", "preview"],
+    binaryTypes: IMAGE_OUT_TYPES,
     discovery: {
       bodyType: "json",
       input: { image: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==", size: 128 },

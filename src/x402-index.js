@@ -45,7 +45,7 @@ import { RAILS, railKey, truncateCaip2 } from "./rails.js";
 import { CHAIN_PAGES, marketSellers } from "./market-page.js";
 import { WELL_KNOWN_PATH, discoveryNote } from "./discovery-note.js";
 import { judgeFreeResponse } from "./tool-judge.js";
-import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, probeAttemptsFor, isQuoteResponse } from "./x402-live-quote.js";
+import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, probeAttemptsFor, isQuoteResponse, joinSellerRoute } from "./x402-live-quote.js";
 import { evmDomainsOfAccepts, EVM_TOKEN_DOMAINS } from "./evm-usdc-domain.js";
 import { queryTerms, isCjkTerm, splitTokens } from "./query-terms.js";
 import { summarize, fmtUsd, fmtPct } from "./economy.js";
@@ -111,15 +111,10 @@ const INDEX_ROW_CAP = 100;
 // see it, versus five minutes, and the churn signals downstream all read in
 // days). Raise the interval BEFORE raising any seed cap: the cap is linear,
 // this is the multiplier.
-const CRAWL_INTERVAL_MS = 30 * 60 * 1000; // 30 min — gentle on third-party sellers
-const DISCOVERY_INTERVAL_MS = 60 * 60 * 1000; // 1 hr — registries don't change fast
+// 30 min crawl, 1 hr discovery: defined in src/crawl-cadence.js so the pages
+// that quote the cadence read the same constants without importing this file.
+import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS } from "./crawl-cadence.js";
 
-/**
- * Human label for the crawl cadence, DERIVED from CRAWL_INTERVAL_MS so served
- * copy cannot drift from the timer. Page prose that states a cadence is a
- * factual claim about our own behaviour toward third parties - the same class
- * as a price quoted in prose - so it is generated, never typed.
- */
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
 // or anything else (a string reached a marketplace attribute unescaped, review
 // 2026-08-28). Only a non-negative integer counts; everything else is 0.
@@ -128,14 +123,6 @@ function manifestToolCount(manifest) {
   return Number.isInteger(n) && n >= 0 && n < 1_000_000 ? n : 0;
 }
 
-export function crawlIntervalLabel() {
-  const mins = Math.round(CRAWL_INTERVAL_MS / 60000);
-  if (mins % 60 === 0 && mins >= 60) {
-    const h = mins / 60;
-    return h === 1 ? "every hour" : `every ${h} hours`;
-  }
-  return `every ${mins} minutes`;
-}
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_OPENAPI_BYTES = 12 * 1024 * 1024; // Agent402's own is ~5 MB; allow headroom
 const MAX_DISCOVERY_BYTES = 64 * 1024 * 1024;
@@ -231,7 +218,7 @@ export function sellerRouteUrl(key, route) {
   const r = String(route || "");
   if (!r.startsWith("/") || r.startsWith("//")) return null;
   let u;
-  try { u = new URL(`${String(key || "")}${r}`); } catch { return null; }
+  try { u = new URL(joinSellerRoute(key, r)); } catch { return null; }
   if (u.username || u.password) return null;
   return isUnderSeller(u.href, key) ? u.href : null;
 }
@@ -262,8 +249,18 @@ export function scopeRouteToSeller(key, hostPath) {
 }
 
 /** Scope parsed rows to their seller: routes made prefix-relative, rows
- *  outside the prefix (or naming the prefix root itself) dropped. A no-op for a
- *  bare origin, so every existing seller's rows are returned untouched. */
+ *  outside the prefix dropped. A no-op for a bare origin, so every existing
+ *  seller's rows are returned untouched.
+ *
+ *  The prefix ROOT ("/" or "/?q=1") is kept only when the row declares payment
+ *  (a price, or accepts that named a chain). The root of a path seller is
+ *  usually its landing page or the function's own index, and an unpriced row
+ *  there is not a tool; but a function host often serves ONE paid endpoint at
+ *  its own path (GET <prefix>?package=react answers 402), and dropping that row
+ *  left the seller listed with no route, no chains and nothing to probe. */
+export function rowDeclaresPayment(r) {
+  return priceToMicroUsd(r?.price) > 0 || (Array.isArray(r?.networks) && r.networks.length > 0) || r?.paid === true;
+}
 // Rows already made prefix-relative (a Bazaar row converted in
 // bazaarItemToTool, which a single-resource manifest reuses) carry this mark,
 // so a second pass cannot read their relative route as host-absolute and drop
@@ -276,7 +273,8 @@ export function scopeRowsToSeller(rows, key) {
     if (!r || typeof r.route !== "string") continue;
     if (r[SCOPED_ROW]) { out.push(r); continue; }
     const route = scopeRouteToSeller(key, r.route);
-    if (route == null || route === "/" || route.startsWith("/?")) continue;
+    if (route == null) continue;
+    if ((route === "/" || route.startsWith("/?")) && !rowDeclaresPayment(r)) continue;
     out.push({ ...r, route, [SCOPED_ROW]: true });
   }
   return out;
@@ -1912,7 +1910,10 @@ export function bazaarItemToTool(item, originUrl) {
   const scopedHere = Boolean(sellerPrefixOf(originUrl));
   if (scopedHere) {
     const scoped = scopeRouteToSeller(originUrl, pathStr);
-    if (scoped == null || scoped === "/") return null;
+    // The prefix root is kept for a registry row that carries payment terms:
+    // such a row is minted by a settled payment, so it is a paid route, not a
+    // landing page (see scopeRowsToSeller).
+    if (scoped == null || (scoped === "/" && !rowDeclaresPayment(pay))) return null;
     pathStr = scoped;
   }
   const tags = Array.isArray(item.tags) ? item.tags : [];
@@ -6272,7 +6273,15 @@ export function sellerDetail(originOrHost) {
       ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
       displayName: v.manifest?.name || origin.replace(/^https?:\/\//, ""),
       homepage: v.manifest?.homepage || origin,
-      toolCount: v.tools?.length || manifestToolCount(v.manifest),
+      // The routes this lookup returns, counted. It used to fall back to the
+      // manifest's own capabilities.tools when we held no rows, so a seller
+      // whose one route we had dropped read "toolCount 1, toolsReturned 0".
+      // The seller's own figure is still published, under its own name, when
+      // it differs from what we hold.
+      toolCount: (v.tools || []).length,
+      ...(manifestToolCount(v.manifest) > 0 && manifestToolCount(v.manifest) !== (v.tools || []).length
+        ? { declaredToolCount: manifestToolCount(v.manifest), declaredToolCountNote: "the tool count the seller's own manifest states (capabilities.tools); toolCount is the routes this index holds and returns" }
+        : {}),
       ...(v.tools?.some((t) => t.paid !== undefined)
         ? { paidToolCount: v.tools.filter((t) => t.paid !== false).length }
         : {}),
@@ -7412,7 +7421,9 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
       name: t.name,
       method: t.method,
       route: t.route,
-      url: t.seller === LOCAL_SELLER ? `${baseUrl}${t.route}` : `${t.seller}${t.route}`,
+      // The joined text as written (a template keeps its {param}); sellerRouteUrl
+      // only validates it, since its URL-parsed form percent-encodes the braces.
+      url: t.seller === LOCAL_SELLER ? `${baseUrl}${t.route}` : joinSellerRoute(t.seller, t.route),
       // A crawled OpenAPI path can carry template segments the seller never
       // substitutes ("/stock/{symbol}"). Handing an agent that URL as if it
       // were callable wastes its money and its time - measured 2026-08-28,

@@ -8,6 +8,12 @@
 // on the product pages). Deliberately narrow: an agent that lands here should
 // leave with one curl, not a catalog.
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
+import { FEED_TTL_MS, META_TTL_MS as SIGNALS_META_TTL_MS } from "./tools/crypto-signals-kit.js";
+import { META_TTL_MS as DERIV_META_TTL_MS } from "./tools/derivatives-kit.js";
+import { CACHE_TTL_MS as DEFI_CACHE_TTL_MS } from "./tools/defi-kit.js";
+// The longest a reading on this page can sit in a shared cache, read from the
+// kits' own TTLs. The page said "a minute" while every one of them is longer.
+const MAX_CACHE_MIN = Math.round(Math.max(FEED_TTL_MS, SIGNALS_META_TTL_MS, DERIV_META_TTL_MS, DEFI_CACHE_TTL_MS) / 60_000);
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -47,7 +53,7 @@ export function marketsPage(baseUrl, catalog) {
   const hi = prices.length ? Math.max(...prices) : 0;
   const canonical = `${baseUrl}/markets`;
   const title = "Crypto market data for agents, one call at a time";
-  const description = `${tools.length} keyless market-data calls - perps, options, DeFi, stablecoins, news and indicators - ${fmtUsd(lo)} to ${fmtUsd(hi)} each, paid per request in USDC over x402 or MPP, or by card credits. No API key, no account.`;
+  const description = `${tools.length} keyless market-data calls - perps, options, DeFi, stablecoins, news and indicators - ${fmtUsd(lo)} to ${fmtUsd(hi)} each, paid per request in USDC over x402 or MPP. No API key, no account.`;
   const heroPath = hero ? hero.route.split(" ")[1] : "/api/crypto-market-pulse";
   const heroInput = JSON.stringify(hero?.discovery?.input ?? { limit: 5 });
   const curl = `curl -X POST ${baseUrl}${heroPath} \\\n  -H "Content-Type: application/json" \\\n  -d '${heroInput}'`;
@@ -96,7 +102,7 @@ export function marketsPage(baseUrl, catalog) {
       <div>
         <h1 style="font-weight:800;font-size:46px;line-height:.98;letter-spacing:-.035em;margin:0 0 18px;color:var(--ink);">The whole crypto market in one call.</h1>
         <p style="font-size:18px;line-height:1.55;color:var(--muted);margin:0 0 18px;">${esc(hero?.name || "Market pulse")} returns breadth, volume, open interest, funding extremes, the day's gainers and losers and BTC and ETH at a glance - one request, ${esc(hero?.price || "")}, no API key. ${tools.length - 1} more calls below cover perps, options, DeFi and stablecoins at ${esc(fmtUsd(lo))} to ${esc(fmtUsd(hi))} each.</p>
-        <p style="font-size:14px;line-height:1.6;color:var(--muted);margin:0 0 22px;">Pay per request in USDC over <a href="/what-is-x402" style="color:var(--ink);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);">MPP</a> from any wallet, or by <a href="/credits" style="color:var(--ink);">card credits</a> with a Bearer key. The first call answers 402 with the price; the paid retry returns the data. A call that fails is never charged.</p>
+        <p style="font-size:14px;line-height:1.6;color:var(--muted);margin:0 0 22px;">Pay per request in USDC over <a href="/what-is-x402" style="color:var(--ink);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);">MPP</a> from any wallet. The first call answers 402 with the price; the paid retry returns the data. A call that fails is never charged.</p>
         <div style="display:flex;gap:11px;flex-wrap:wrap;">
           <a href="/playground?slug=${esc(MARKETS_HERO_SLUG)}" style="background:var(--btn-bg);color:var(--btn-fg);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 22px;">TRY IT IN THE PLAYGROUND →</a>
           <a href="/tools/${esc(MARKETS_HERO_SLUG)}" style="border:1.5px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:12px 22px;">DOCS + SAMPLE OUTPUT</a>
@@ -105,7 +111,7 @@ export function marketsPage(baseUrl, catalog) {
       <div>
         <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;">the call</div>
         <pre class="mk-pre">${esc(curl)}</pre>
-        <p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:10px 0 0;line-height:1.6;">Sources are public venue and aggregator feeds read live per call; nothing is cached across buyers longer than a minute. Every tool answers its own documented example in CI before it can ship.</p>
+        <p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:10px 0 0;line-height:1.6;">Sources are public venue and aggregator feeds; a reading can come from a shared cache up to ${MAX_CACHE_MIN} minutes old. Every tool on this page answers its own documented example in CI before it can ship.</p>
       </div>
     </div>
   </div>
@@ -118,7 +124,6 @@ ${groupsHtml}
     <div style="display:flex;gap:11px;flex-wrap:wrap;">
       <a href="/docs#add" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:14px 24px;">ADD TO YOUR AGENT →</a>
       <a href="/tools/category/crypto" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 24px;">EVERY CRYPTO TOOL</a>
-      <a href="/credits" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 24px;">PREPAID CREDITS</a>
     </div>
   </div>
 </section>

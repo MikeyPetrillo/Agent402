@@ -17,8 +17,8 @@
 //   SOLANA_AGENT_KEY      base58 (or JSON byte-array) secret key of a funded Solana wallet (USDC on Solana) — optional
 //   AGENT402_TOOLS        comma-separated slugs to expose first-class (overrides default)
 //   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (e.g. 0.01)
-//   AGENT402_CREDITS_KEY  a prepaid card-credits key (a402_...) from https://agent402.tools/credits -
-//                         pays every tool by card with no wallet; debited per successful call
+//   AGENT402_CREDITS_KEY  a prepaid credits key (a402_...) already issued (new credits are not on
+//                         sale); pays per successful call with no wallet
 //   AGENT402_BUDGET       hard cap on total USDC spent this session (e.g. 1.00)
 //   AGENT402_NETWORKS     restrict + order the chains to pay on (e.g. "robinhood" for USDG on
 //                         Robinhood Chain, "base,solana", or a raw CAIP-2 like eip155:4663) — optional
@@ -198,7 +198,7 @@ function walletRequiredText(tool) {
     `To enable it: set AGENT_KEY on this MCP server to the hex private key of an EVM wallet funded with USDC`,
     `on Base (or Polygon/Arbitrum), and/or SOLANA_AGENT_KEY to the base58 secret key of a Solana wallet funded`,
     `with USDC on Solana. Payment is per call via the x402 protocol — no signup or API key.`,
-    `No wallet? Buy prepaid card credits at ${BASE}/credits and set AGENT402_CREDITS_KEY to the a402_ key - every tool then pays by card, debited per successful call.`,
+    `Already hold a prepaid credits key? Set AGENT402_CREDITS_KEY to the a402_ key and it pays per successful call (new credits are not on sale).`,
     `Pricing and details: ${BASE}/tools/${tool.slug}`,
   ].join(" ");
 }
@@ -729,7 +729,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ? "Every tool is available; each call is paid in USDC via x402 from the configured wallet(s) - EVM chains via AGENT_KEY, Solana via SOLANA_AGENT_KEY - within the spend controls above."
           : HAS_CREDITS
             ? "Every tool is available; each call is paid from the prepaid card credits key (AGENT402_CREDITS_KEY), debited only on a successful call, within the spend controls above."
-            : `No wallet or credits key configured: ${computePayable} pure-CPU tools are free via proof-of-work; the ${catalog.size - computePayable} network/browser/memory tools need a funded wallet (AGENT_KEY / SOLANA_AGENT_KEY) or a prepaid credits key (AGENT402_CREDITS_KEY, buy at ${BASE}/credits).`,
+            : `No wallet or credits key configured: ${computePayable} pure-CPU tools are free via proof-of-work; the ${catalog.size - computePayable} network/browser/memory tools need a funded wallet (AGENT_KEY / SOLANA_AGENT_KEY) or a prepaid credits key already issued (AGENT402_CREDITS_KEY).`,
         install: {
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
           claudeCodeNpm: "claude mcp add agent402 -s user -- npx -y agent402-mcp@latest",

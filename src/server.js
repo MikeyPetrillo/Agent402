@@ -259,7 +259,6 @@ import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redact
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { baseNotificationsEnabled } from "./base-notifications.js";
-import { initSentry, captureToolError, sentryEnabled } from "./sentry.js";
 import { railOf } from "./payment-rail.js";
 import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
@@ -290,6 +289,7 @@ import { probeCompanyFilings as faProbeFilings } from "./tools/filing-watch-kit.
 import { latest13fFiling as faLatest13f, resolveManager as faResolveManager } from "./tools/edgar-kit.js";
 import { probeDomain as faProbeDomain } from "./tools/domain-audit-kit.js";
 import { probeRecalls as faProbeRecalls } from "./tools/recall-report-kit.js";
+import { makeFreeAlertProbes } from "./free-alert-probes.js";
 import { sendEmail as faSendEmail } from "./email.js";
 import { marketsPage } from "./markets.js";
 import { decidePage } from "./decide-page.js";
@@ -311,7 +311,7 @@ import { acpFeed, acpManifest } from "./acp.js";
 import { findTools, findRelatedSellers } from "./find.js";
 import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
-import { priceToMicroUsd } from "./x402-index.js";
+import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
@@ -487,12 +487,12 @@ import { corsMiddleware } from "./cors.js";
 import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
+import { IDEM_MAX_BODY_BYTES } from "./idempotency-limits.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
 import { docsIndex, docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
 import { shopPage } from "./shop.js";
-import { integrationsPage } from "./integrations.js";
 import { changelogPage, changelogRss } from "./changelog.js";
 import { useCasesPage } from "./use-cases.js";
 import { playgroundPage } from "./playground.js";
@@ -510,13 +510,13 @@ import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, led
 import { ledgerHomePage } from "./ledger-home.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
-import { revenueSnapshot, withFreshRecent, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
+import { revenueSnapshot, withFreshRecent, publicRevenueSnapshot, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
-import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml } from "./market-page.js";
+import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml, catalogPayableOn } from "./market-page.js";
 import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
-import { externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerSummary, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
+import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerSummary, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
@@ -530,9 +530,11 @@ import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decid
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
-import { hostFigures, hostIndexEntry, isSelfSellerQuery } from "./host-entry.js";
+import { hostFigures, hostIndexEntry, isSelfSellerQuery, railsWithOutsideSettlements } from "./host-entry.js";
+import { standingCountsExcludingHost } from "./standing.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
 
 // Listed only with a key, like every other env-gated kit: a tool we cannot serve
 // must not appear in the catalog, on /api/pricing, or in a 402's offer.
@@ -559,11 +561,14 @@ const MODEL_BACKED_KITS = [
   ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS,
   ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS,
   ...LINKEDIN_TOOLS,
+  ...DECIDE_TOOLS_ENABLED, // decide: the plan is written by the decision service's model (services/decide/llm.js); decide-execute: its plan steps can run model-backed tools
 ];
 const MODEL_BACKED_SLUGS = new Set(MODEL_BACKED_KITS.map((t) => t.slug).filter(Boolean));
-// `answer` says so in its own description ("AI-generated answer"), and lives in
-// the search kit beside deterministic tools, so it is named individually.
-MODEL_BACKED_SLUGS.add("answer");
+// A tool that runs a model inside a kit of deterministic tools (`answer` in the
+// search kit, `exa-answer` in the Exa kit) declares `modelBacked: true` on its
+// own definition. Skill packs are added below, once their tools exist: a pack
+// that runs any model-backed step is model-backed.
+for (const def of ALL_KIT) if (def?.modelBacked === true && def.slug) MODEL_BACKED_SLUGS.add(def.slug);
 export function isModelBacked(slugOrDef) {
   const slug = typeof slugOrDef === "string" ? slugOrDef : slugOrDef?.slug;
   return MODEL_BACKED_SLUGS.has(String(slug || ""));
@@ -588,7 +593,7 @@ for (const def of ALL_KIT) if (Object.hasOwn(REPORT_TIERS, def.slug) && typeof d
     if (add.length) def.aliases = [...(def.aliases || []), ...add];
   }
 }
-import { buildSkillTools } from "./tools/skill-runner.js";
+import { buildSkillTools, modelBackedPackSlugs } from "./tools/skill-runner.js";
 import { buildRouteExecuteTool, EXEC_TIERS } from "./tools/route-execute.js";
 import { buildSellerTrustTool } from "./tools/seller-trust.js";
 import { buildSellerDossierTool } from "./tools/seller-dossier.js";
@@ -1088,6 +1093,14 @@ for (const tool of SKILL_TOOLS) {
   if (CATALOG[tool.route]) throw new Error(`Duplicate route in skill set: ${tool.route}`);
   CATALOG[tool.route] = tool;
   ALL_KIT.push(tool); // so the route-binding loop below picks them up too
+}
+// A pack is model-backed when any tool it runs is (every advertised tool runs
+// as a step: test-skill-pack-steps). Derived, so a pack that gains a model step
+// can never publish modelBacked:false.
+for (const slug of modelBackedPackSlugs(SKILL_PACKS, isModelBacked)) {
+  MODEL_BACKED_SLUGS.add(slug);
+  const def = SKILL_TOOLS.find((t) => t.slug === slug);
+  if (def) def.modelBacked = true;
 }
 
 // Route-and-execute: the SOR's executing surface. Internal dispatch always;
@@ -2036,6 +2049,10 @@ assertRetiredRegistryConsistent(new Set(Object.values(CATALOG).map((d) => d.slug
 const TOOL_PRICES = Object.fromEntries(
   Object.values(CATALOG).map((d) => [d.slug, parseFloat(String(d.price).replace(/[^0-9.]/g, "")) || 0])
 );
+// The cheapest priced tool is the floor under which an inbound transfer
+// cannot be a payment for a call (revenue-ledger's dust floor: a sub-cent
+// lookalike transfer is not a paying agent).
+setPayerDustFloorUsd(Math.min(...Object.values(TOOL_PRICES).filter((n) => n > 0)));
 const POW_ROUTES = new Map();
 const POW_SLUGS = new Set();
 for (const [route, def] of Object.entries(CATALOG)) {
@@ -2338,13 +2355,7 @@ const _freeAlerts = createFreeAlerts({
   baseUrl: BASE_URL,
   sendEmail: faSendEmail,
   validators: _monitorTargetValidators,
-  probes: {
-    insider: async (t) => { const r = await faProbeInsider({ ticker: t, days: 90, limit: 40 }); return { ids: r.ids, items: (r.filings || []).map((f) => ({ id: f.accessionNumber, label: `${(f.displayNames || []).join(", ") || "Form 4"} · filed ${f.filedDate}`, url: f.url })) }; },
-    filing: async (t) => { const r = await faProbeFilings(t); return { ids: r.keys || r.ids, items: (r.filings || []).map((f) => ({ id: f.key || `${f.accessionNumber}|${f.form}`, label: `${f.form} · filed ${f.filedDate}`, url: f.url })) }; },
-    fund: async (t) => { const m = /^\d{1,10}$/.test(t) ? await faResolveManager({ cik: t }) : await faResolveManager({ name: t }); const l = m?.cik ? await faLatest13f({ cik: m.cik }) : null; return { ids: l?.accessionNumber ? [l.accessionNumber] : [], items: l ? [{ id: l.accessionNumber, label: `13F for the period ended ${l.reportDate} · filed ${l.filedDate}` }] : [] }; },
-    domain: async (t) => { const r = await faProbeDomain(t); return { ids: [r.fingerprint], items: [{ id: r.fingerprint, label: `Security posture changed on ${t}` }] }; },
-    recall: async (t) => { const r = await faProbeRecalls(t); return { ids: r.ids, items: (r.items || []).map((x) => ({ id: x.recallNumber, label: `${x.classification || "Recall"} · ${String(x.product || "").slice(0, 90)}` })) }; },
-  },
+  probes: makeFreeAlertProbes({ probeInsider: faProbeInsider, probeFilings: faProbeFilings, resolveManager: faResolveManager, latest13f: faLatest13f, probeDomain: faProbeDomain, probeRecalls: faProbeRecalls }),
   onEvent: ({ step, kind }) => { try { capturePostHogHumanFunnel({ step, kind }); } catch { /* telemetry never breaks the engine */ } },
 });
 if (process.env.FREE_ALERTS !== "off") _freeAlerts.start();
@@ -3008,7 +3019,6 @@ app.get("/health", (req, res) => {
   const flags = {
     leadsDb: leadsDbReady,
     operatorToken: Boolean(OPERATOR_TOKEN),
-    sentry: sentryEnabled(),
     posthog: posthogEnabled(),
     // True when the stats SQLite DB is on the /data volume (counters + the
     // recentCalls ring buffer survive restarts). False = silent fallback to
@@ -3397,7 +3407,7 @@ app.get("/api/revenue", async (_req, res) => {
     // only the balances ride the hourly background snapshot.
     const snap = withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent);
     const ledger = memoSurface("revenue:allTime", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), sales: salesSummary() }));
-    res.set("Cache-Control", "public, max-age=30").json({ ...snap, ...ledger });
+    res.set("Cache-Control", "public, max-age=30").json({ ...publicRevenueSnapshot(snap), ...ledger });
   } catch (e) {
     res.status(500).json({ error: "revenue snapshot failed", detail: String(e?.message || e).slice(0, 120) });
   }
@@ -3524,9 +3534,8 @@ app.get("/revenue", async (_req, res) => {
     // `standing` is what the page is MEASURING, read from the index totals rather
     // than typed into the copy: a framing paragraph that goes stale is worse
     // than none, because it is the sentence asking to be trusted.
-    const idx = getIndexSnapshot()?.totals || {};
     const ledger = memoSurface("revenue:page-ledger", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }), card: cardSales({ days: 30 }), decide: decideSales({ days: 30 }), agents: ledgerBuyerConcentration(revenueWallets()) }));
-    res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: { sellers: idx.sellers, listings: idx.tools, rails: settlementRailCount() } }));
+    res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: standingFigures() }));
   } catch (e) {
     if (e?.snapshotWarming) {
       res.status(200).type("html").send('<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body style="font-family:system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 24px;color:#14201b"><h2 style="font-weight:500">Warming up…</h2><p style="color:#5d675f">The live on-chain transaction view is loading for the first time since a deploy. It refreshes here automatically in a few seconds.</p><p><a href="/" style="color:#15654a">Home</a></p></body>');
@@ -3679,7 +3688,6 @@ app.get("/reports/dossier/:ticker", (req, res, next) => { _programmaticEntity(re
 // nobody's money is stranded by this switch. Nothing has ever been sold to an
 // outside buyer (one key has ever existed, bought by the operator and gifted
 // unused), so no refund is owed and no customer is disrupted.
-const creditsSalesEnabled = () => /^(1|true|on|yes)$/i.test(String(process.env.CREDITS_SALES || "").trim());
 app.get("/credits", (_req, res) => res.set("Cache-Control", "public, max-age=120").type("html").send(creditsPage(BASE_URL, creditsSalesEnabled())));
 app.get("/credits/thanks", (req, res) => res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(creditsThanksPage(String(req.query.session || ""), BASE_URL)));
 if (_credits) {
@@ -4192,7 +4200,7 @@ app.get("/x402-economy", (_req, res) => {
   res.redirect(301, "/marketplace#economy");
 });
 app.get("/changelog", (_req, res) => htmlCache(res, 300, 900).send(changelogPage(BASE_URL)));
-app.get("/use-cases", (_req, res) => htmlCache(res, 300, 900).send(useCasesPage(BASE_URL)));
+app.get("/use-cases", (_req, res) => htmlCache(res, 300, 900).send(useCasesPage(BASE_URL, CATALOG)));
 app.get("/playground", (_req, res) => htmlCache(res, 300, 900).send(playgroundPage(BASE_URL, CATALOG)));
 app.get("/sdk-playground", (_req, res) => htmlCache(res, 300, 900).send(sdkPlaygroundPage(BASE_URL)));
 // Capitalised wiki URLs whose page the site serves at a lowercase route: 301
@@ -4212,7 +4220,7 @@ app.get("/blog/:slug", (req, res) => { const html = blogPost(BASE_URL, req.param
 app.get("/compare", (_req, res) => htmlCache(res, 300, 900).send(comparePage(BASE_URL)));
 app.get("/community", (_req, res) => htmlCache(res, 300, 900).send(communityPage(BASE_URL)));
 app.get("/contribute", (_req, res) => htmlCache(res, 300, 900).send(contributePage(BASE_URL)));
-app.get("/workflows", (_req, res) => htmlCache(res, 300, 900).send(workflowsPage(BASE_URL)));
+app.get("/workflows", (_req, res) => htmlCache(res, 300, 900).send(workflowsPage(BASE_URL, CATALOG)));
 // /uptime was a second, static "System Status" page carrying a hardcoded
 // "All systems operational" banner — green during an outage, which is the exact
 // failure /status was rebuilt to remove. It already declared /status as its
@@ -5331,7 +5339,7 @@ for (const alias of ["/router", "/sor", "/smart-order-router"]) {
 }
 app.get("/guides", (_req, res) => htmlCache(res, 300, 900).send(guidesIndex(BASE_URL)));
 app.get("/guides/:slug", (req, res) => {
-  const html = guidePage(BASE_URL, req.params.slug);
+  const html = guidePage(BASE_URL, req.params.slug, CATALOG);
   if (!html) return notFoundPage(res, { what: "Guide", href: "/guides", label: "All guides" });
   htmlCache(res, 300, 900).send(html);
 });
@@ -5698,13 +5706,9 @@ function logToolError(slug, status, message, shape, synthetic, probe) {
   const synthStr = synthetic ? " synthetic=true" : "";
   const probeStr = probe ? " probe=true" : "";
   if (!skipConsole) console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr}${synthStr}${probeStr} msg=${String(message || "").slice(0, 200)}`);
-  // Sentry mirrors the same data as searchable tags so we can query/trend
-  // rejected shapes from the Sentry UI. No-op when SENTRY_DSN is unset.
-  captureToolError({ slug, status, message, shape, synthetic });
   // PostHog mirrors the same payload as a "tool_error" event with slug/
-  // status/errorClass/shape properties. Same privacy posture, same no-op
-  // behavior when POSTHOG_API_KEY is unset. Independent of Sentry — either,
-  // both, or neither can be enabled at any time.
+  // status/errorClass/shape properties. Same privacy posture, a no-op when
+  // POSTHOG_API_KEY is unset.
   capturePostHogToolError({ slug, status, message, shape, synthetic, probe });
 }
 // True iff this request carries a valid HMAC-signed X-Heartbeat-Token (POW_SECRET).
@@ -5991,10 +5995,22 @@ function refreshIndexSnapshotInBackground() {
 function settlementRailCount() {
   return RAILS.length + (tempoEnabled() ? 1 : 0);
 }
+// Our own row on /leaderboard: OUTSIDE settlements only, from the sales
+// ledger's classification - rails that carried one, and the MPP-wire count.
+// The lifetime /api/stats counters it replaced include our own canary and
+// volume purchases.
+function leaderboardSelfFigures() {
+  return memoSurface("leaderboard:self", 60_000, () => {
+    try {
+      const rails = railsWithOutsideSettlements(externalByNetwork({ days: 36_500 }), RAILS, tempoEnabled() ? [{ name: "Tempo", keys: ["tempo", "eip155:4217"] }] : []);
+      return { railsWithOutside: rails.withOutside, railsOffered: rails.offered, mppExternal: Number(mppSales({ detailed: false }).externalCount) || 0 };
+    } catch { return null; }
+  });
+}
 function standingFigures() {
   try {
-    const t = getIndexSnapshot()?.totals || {};
-    return { sellers: t.sellers, listings: t.tools, rails: settlementRailCount() };
+    // Host left out of both counts: the band says the host is in none of them.
+    return { ...standingCountsExcludingHost(getIndexSnapshot()), rails: settlementRailCount() };
   } catch { return {}; }
 }
 
@@ -6125,7 +6141,7 @@ app.get("/stellar", async (req, res) => {
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
-    htmlCache(res, 120, 600).send(stellarPage(BASE_URL, { snapshot, rail, activity, selectedSeller, stellarWallet: selfWallet || undefined, host: hostEntryFigures("stellar") }));
+    htmlCache(res, 120, 600).send(stellarPage(BASE_URL, { snapshot, rail, activity, selectedSeller, stellarWallet: selfWallet || undefined, host: hostEntryFigures("stellar"), payable: chainPayable("stellar") }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -6204,7 +6220,7 @@ app.get("/algorand", async (req, res) => {
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
-    htmlCache(res, 120, 600).send(algorandPage(BASE_URL, { snapshot, rail, activity, selectedSeller, algorandWallet: selfWallet || undefined, host: hostEntryFigures("algorand") }));
+    htmlCache(res, 120, 600).send(algorandPage(BASE_URL, { snapshot, rail, activity, selectedSeller, algorandWallet: selfWallet || undefined, host: hostEntryFigures("algorand"), payable: chainPayable("algorand") }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -6405,7 +6421,15 @@ async function buildChainPage(chainKey, sellerQuery, all) {
     scanWallet ? getActivityForChain(chainKey, scanWallet, { maxWaitMs: PAGE_ACTIVITY_WAIT_MS }) : Promise.resolve(null),
   ]);
   const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
-  return marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey) });
+  return marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey) });
+}
+// How many catalog tools a chain page can say take payment on that chain, by
+// the 402 builder's own rules (identity-bound and long-running tools are EVM
+// only). Derived, so the page never claims "every tool" for a rail that
+// serves fewer.
+function chainPayable(chainKey) {
+  const caip2 = CHAIN_PAGES[chainKey]?.caip2;
+  return caip2 ? catalogPayableOn(Object.values(CATALOG), caip2) : null;
 }
 // ?seller= views render per request; at most this many at once (2026-10-01).
 const CHAIN_SELLER_VIEW_MAX_INFLIGHT = 2;
@@ -7116,7 +7140,7 @@ app.get("/api/leaderboard", (req, res) => {
 });
 // Human-readable companion to /api/leaderboard. Same cached snapshot, rendered
 // as a dashboard so visitors (and the site nav) have something to land on.
-app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(ledgerLeaderboardPage(BASE_URL, getLeaderboardSnapshot(), { stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), walletAddress: WALLET_ADDRESS, host: hostEntryFigures(), standing: standingFigures(), solana: getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null, window: getLeaderboardSnapshot()?.windowLabel === "24h" ? "24h" : "7d" }) })));
+app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(ledgerLeaderboardPage(BASE_URL, getLeaderboardSnapshot(), { stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), walletAddress: WALLET_ADDRESS, host: hostEntryFigures(), self: leaderboardSelfFigures(), standing: standingFigures(), solana: getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null, window: getLeaderboardSnapshot()?.windowLabel === "24h" ? "24h" : "7d" }) })));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").set("Cache-Control", "public, max-age=3600").send(robotsTxt(BASE_URL)));
 // IndexNow ownership key file (env-gated no-op like the other integrations).
 // The protocol verifies a submitted key by fetching /{key}.txt from the host;
@@ -7617,7 +7641,10 @@ app.get("/tools/:slug", (req, res) => {
   if (!tool) return notFoundPage(res, { what: "Tool", href: "/tools", label: "All tools" });
   const related = relatedTools(tool, tools, 6);
   const cachePolicy = tool.method === "GET" ? CACHEABLE_ROUTES[tool.path] : null;
-  htmlCache(res, 300, 900).send(skillPackCanonical(tool.slug, toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null })));
+  // The method alias (POST on a GET-only path, GET/HEAD on a POST-only path)
+  // runs only when the catalog has no route of the other method at this path.
+  const otherMethodRouted = !!CATALOG[`${tool.method === "GET" ? "POST" : "GET"} ${tool.path}`];
+  htmlCache(res, 300, 900).send(skillPackCanonical(tool.slug, toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null, otherMethodRouted })));
 });
 // A skill pack's catalog page points its canonical at the pack page (/skills/<pack>).
 const SKILL_PACK_SLUGS = new Set(SKILL_PACKS.map((p) => p.slug));
@@ -7882,13 +7909,16 @@ app.get("/api/pricing", (_req, res) => {
     // credits for every tool, and the human report/monitor products. Stripe-
     // gated - absent rather than advertised when card checkout is off.
     ...(humanCheckoutEnabled() ? {
-      credits: { how: "buy a pack by card at /credits, then Authorization: Bearer a402_<key> on any paid route; the list price is held before the call and debited only on a 200", buy: `${BASE_URL}/credits`, packsUsd: Object.values(CREDIT_PACKS).map((p) => p.cents / 100),
+      // Follows the CREDITS_SALES gate: while sales are off the checkout
+      // answers 503, so this block must not advertise packs or a checkout an
+      // agent would be refused. Existing keys still spend, so it says how.
+      credits: creditsSalesEnabled() ? { onSale: true, how: "buy a pack by card at /credits, then Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones; the list price is held before the call and debited only on a 200", buy: `${BASE_URL}/credits`, packsUsd: Object.values(CREDIT_PACKS).map((p) => p.cents / 100),
         // The IDS, not just the dollar amounts: POST /api/credits/checkout takes
-        // {"pack":"credits-20"} and an agent cannot guess that from a bare 20
-        // (an outside reviewer brute-forced it, 2026-08-28).
+        // {"pack":"credits-20"} and an agent cannot guess that from a bare 20.
         packs: Object.entries(CREDIT_PACKS).map(([id, p]) => ({ pack: id, label: p.label, priceUsd: p.cents / 100 })),
         checkout: { method: "POST", url: `${BASE_URL}/api/credits/checkout`, body: { pack: Object.keys(CREDIT_PACKS)[0] } },
-        balance: `${BASE_URL}/api/credits/balance` },
+        balance: `${BASE_URL}/api/credits/balance` }
+        : { onSale: false, how: "new credits are not on sale; a key already issued keeps working: Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones; the list price is held before the call and debited only on a 200", balance: `${BASE_URL}/api/credits/balance` },
       humanProducts: {
         reports: Object.entries(HUMAN_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsd: p.price / 100, slug: p.slug, buy: `${BASE_URL}/reports` })),
         monitors: Object.entries(MONITOR_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsdPerMonth: p.price / 100, slug: p.slug, subscribe: `${BASE_URL}/monitors` })),
@@ -8211,7 +8241,7 @@ const IDEM_MAX_ENTRIES = 5000;
 // responses skip the cache entirely (retry will re-run the tool, no charge
 // because PoW/x402 credentials are single-use anyway).
 const IDEM_MAX_BYTES = 32 * 1024 * 1024;
-const IDEM_MAX_BODY_BYTES = 1024 * 1024;
+// IDEM_MAX_BODY_BYTES lives in src/idempotency-limits.js (the tool pages quote it).
 let idemBytes = 0;
 // Background sweep: entries expire on read at IDEM_TTL_MS, but on a quiet
 // service stale bodies (some kits return large blobs) would sit in memory
@@ -9350,7 +9380,7 @@ for (const tool of ALL_KIT) {
     const startedAt = Date.now();
     // Unspoofable: requires a valid HMAC-signed X-Heartbeat-Token. CI canaries,
     // heartbeat probes, and operator smoke tests carry it; real callers don't.
-    // Threaded into analytics + Sentry + PostHog so test traffic never inflates
+    // Threaded into analytics + PostHog so test traffic never inflates
     // the public error rate (see /api/analytics ?include_synthetic to override).
     const synthetic = isSyntheticRequest(req);
     const payer = payerFromRequest(req);
@@ -9835,15 +9865,8 @@ initWithRetry("leads-db", initLeadsDb, { onResult: (r) => { leadsDbReady = !!r.o
 // can't hold up /health.
 initWithRetry("analytics-db", initAnalyticsDb);
 
-// Sentry — opt-in via SENTRY_DSN. Same env-gated, fire-and-forget pattern
-// as the other optional infra. Captures tool errors with slug + status + the
-// keys-only shape as searchable tags. No values, no IPs, no headers.
-const sentryInit = initSentry();
-if (sentryInit.ok) console.log("[sentry] enabled");
-else console.log(`[sentry] disabled (${sentryInit.reason || "unknown"})`);
-
 // PostHog — opt-in via POSTHOG_API_KEY. Same env-gated, fire-and-forget
-// pattern as Sentry. Captures tool errors as "tool_error" events. Free tier
+// pattern as the other optional infra. Captures tool errors as "tool_error" events. Free tier
 // is generous (1M events/mo), and the same key powers product analytics and
 // session replay later without code changes.
 const posthogInit = initPostHog();
@@ -10008,7 +10031,7 @@ bootStep("setAlgorandCrawlSources", () => {
           const route = String(t?.route || "");
           if (!route.startsWith("/")) continue;
           out.push({
-            url: `${origin}${route}`,
+            url: sellerRouteUrl(origin, route) ?? `${origin}${route}`,
             method: String(t?.method || "GET").toUpperCase(),
             description: String(t?.description || t?.name || ""),
             amountAtomic: String(micro),

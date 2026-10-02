@@ -276,7 +276,8 @@ const NEW = `https://api.seller-${TAG}.com`;
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
   const limit = Number((src.match(/discoverSuccessions\(\{[^}]*limit = (\d+)/) || [])[1] || 0);
-  const cycleMin = Number((src.match(/CRAWL_INTERVAL_MS = (\d+) \* 60 \* 1000/) || [])[1] || 0);
+  const { CRAWL_INTERVAL_MS } = await import("../src/crawl-cadence.js");
+  const cycleMin = Number(CRAWL_INTERVAL_MS) / 60_000;
   ok(limit > 0 && cycleMin > 0, "the discovery bound and the crawl cycle are both readable from source");
   const hoursForFullPass = (586 / limit) * (cycleMin / 60);
   ok(hoursForFullPass <= 24,

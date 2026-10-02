@@ -1565,6 +1565,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Ledger-backed rail transfers (empty ledger must fall back, never render zero)
           t node scripts/test-ledger-recent.js
+          # /api/revenue publishes no payer address and no outside buyer's tx hash
+          t node scripts/test-revenue-no-payers.js
           # Html-kit tests (html-select, html-table, html-strip, html-links, html-meta)
           t node scripts/test-html-kit.js
           # Bazaar quality ingestion (30d calls/payers on index sellers + /api/find external rows + ranking tiebreak - offline)
@@ -1751,12 +1753,14 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (3 scripts, one process each)
+      - name: Offline suites (4 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # PoW solve roundtrip (paid-mode boot, honest solver unlocks /api/hash, replay rejected)
           t node scripts/test-pow-solve-roundtrip.js
+          # Tool-page PoW snippets (paid-mode boot, every GET snippet sends its documented input and answers 200)
+          t node scripts/test-tool-page-pow-snippet.js
           # Cold start (a wallet-less agent reaches its first call from the docs alone)
           t node scripts/test-coldstart.js
           # Idempotency (opt-in safe retry of paid/proven calls; boots paid-mode)
@@ -1920,6 +1924,8 @@ jobs:
           t node scripts/test-tool-page-backlinks.js
           # Tool pages: escaped examples, one h1, title/description bounds, sections
           t node scripts/test-tool-page-content.js
+          # Every tool category is a CATEGORIES key (breadcrumb + category page), decide included (offline + booted)
+          TARGET_URL=http://localhost:3000 t node scripts/test-tool-categories.js
 
       - name: Tool-count sync (static surfaces match the live catalog total — no count drift)
         run: node scripts/sync-count.js --check
@@ -1937,6 +1943,8 @@ jobs:
           t node scripts/test-static-pages.js
           # Integration + learn pages and /llms-full.txt: 200, unique title, one H1, canonical, BreadcrumbList, in both sitemaps; llms-full lists every catalog route (boots a real server, offline)
           t node scripts/test-integration-learn-pages.js
+          # Developer-docs code samples match the packages they import: our adapters' exports, option names and return shapes (read from source), verified third-party imports, free-tier slugs compute-payable, /workflows costs summed from the catalog (reads the free-mode server on :3000)
+          t env TARGET_URL=http://127.0.0.1:3000 node scripts/test-doc-snippets.js
           # Section Open Graph cards: every section page derives its own og:image, tool pages keep theirs, every card SVG well-formed (2026-09-14)
           t node scripts/test-og-cards.js
           # SEO meta ratchet: title <= 70, description <= 165, exactly one H1, canonical on every hand-written page (reader pass 2026-09-08)
@@ -2963,6 +2971,7 @@ jobs:
           node scripts/test-router-health.js
           node scripts/test-chain-kit.js
           node scripts/test-contract-kit.js
+          node scripts/test-address-label-settlement.js
           node scripts/test-dex-kit.js
           node scripts/test-forecast-kit.js
           node scripts/test-mev-and-l2-kit.js
@@ -3139,6 +3148,7 @@ jobs:
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/ai-sdk/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/langchain/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/openai-agents/test.js
+          AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/openai-agents/test-real-sdk.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/llamaindex/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/strands/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/google-adk/test.js
@@ -3932,12 +3942,15 @@ jobs:
           t node scripts/test-recall-nomatch.js
           # Free email alerts engine: double opt-in, signed links, change-only daily email, caps (offline)
           t node scripts/test-free-alerts.js
+          t node scripts/test-free-alert-probes.js
           t node scripts/test-email-status.js
           t node scripts/test-wallet-digest.js
           # Alert routes end to end on a booted server: confirm / unsubscribe / stop pages render (the engine test could not see a 500 here)
           t node scripts/test-alerts-routes.js
           # Post-purchase follow-ups: two emails at most, stoppable, failure notice (offline)
           t node scripts/test-followups.js
+          # Erasure on request: erase-subject.js removes an address from every file store that holds one (alerts, follow-ups, weekly digest, subscriptions) (offline)
+          t node scripts/test-erase-subject.js
           # Server-side tweet queue: one post per clock hour oldest first, recorded before it is sent (a killed child never re-sends), two processes post once, drops past the window, an in-doubt post retried once (a duplicate refusal records it posted), the alarm word on /api/gateway-status, kill switch, only the production server posts (FREE_MODE, no NODE_ENV=production or no volume stay read-only), no text or credential in logs or the operator read (stub X; boots three servers, one a control that posts to the stub)
           t node scripts/test-tweet-queue.js
           # Public reports: buyer toggle by session id, unguessable public id, indexable page, revocable (boots FREE_MODE)

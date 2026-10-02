@@ -494,7 +494,7 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
       route: "POST /api/decide",
       name: "Decide: tool plan for a task",
       slug: "decide",
-      category: "agents",
+      category: "agent",
       price: `$${priceForDepth("quick").toFixed(3)}`,
       quote: (body) => decideQuoteUsd(body),
       // Quoted by depth: the listed price is quick's, the ceiling is full's.
@@ -521,7 +521,7 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
       route: "POST /api/decide/execute",
       name: "Decide: execute a plan",
       slug: "decide-execute",
-      category: "agents",
+      category: "agent",
       price: "$0.001",
       spendsOwnWallet: true,
       // Outside steps are bought from the Base spending wallet, which only a

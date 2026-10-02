@@ -47,7 +47,7 @@ export function webhooksPage(baseUrl) {
         </div>
         <div style="background:var(--card);border:1px solid var(--hairline);padding:20px 22px;">
           <h3 style="font-weight:700;font-size:1rem;margin:0 0 8px;">Sequential chaining <span style="display:inline-block;background:var(--surface);color:var(--green);font-size:.72rem;font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Available</span></h3>
-          <p style="color:var(--muted);font-size:.9rem;line-height:1.6;margin:0;">Chain tools by calling them in sequence: <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">render</code> &rarr; <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">extract</code> &rarr; <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">memory-write</code>. Each call is independent and stateless. Use <a href="/workflows" style="color:var(--accent);">workflow examples</a> for patterns.</p>
+          <p style="color:var(--muted);font-size:.9rem;line-height:1.6;margin:0;">Chain tools by calling them in sequence, for example <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">render</code> &rarr; <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">extract</code> &rarr; <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">memory-write</code> (wallet-only tools, paid per call). Each call is independent and stateless. Use <a href="/workflows" style="color:var(--accent);">workflow examples</a> for patterns.</p>
         </div>
         <div style="background:var(--card);border:1px solid var(--hairline);padding:20px 22px;">
           <h3 style="font-weight:700;font-size:1rem;margin:0 0 8px;">Wallet-keyed state <span style="display:inline-block;background:var(--surface);color:var(--green);font-size:.72rem;font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Available</span></h3>
@@ -74,19 +74,17 @@ curl -X POST https://agent402.tools/api/hash \\
       <h2 id="chaining" style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Chaining with agent402-client</h2>
       <pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;padding:16px;margin:0 0 36px;overflow-x:auto;">import { Agent402 } from "agent402-client";
 
+// Free tier: each call settles its own proof-of-work, no wallet needed
 const a = new Agent402();
+const md = await a.call("html-to-markdown", { html: "&lt;h1&gt;Q3 report&lt;/h1&gt;&lt;p&gt;Revenue rose.&lt;/p&gt;" });
+const stats = await a.call("text-stats", { text: md.markdown });
 
-// Step 1: Render a page
-const html = await a.call("render", { url: "https://example.com" });
-
-// Step 2: Extract structured data
-const data = await a.call("extract", { html: html.html, selector: "h1" });
-
-// Step 3: Store for later
-await a.call("memory-write", {
-  key: "example-title",
-  value: data.text
-});</pre>
+// Wallet-only tools chain the same way through a payment-wrapped fetch.
+// Memory is keyed to the wallet that signs the x402 payment.
+// payFetch: an @x402/fetch-wrapped fetch (see the USDC tab on /quickstart).
+const paid = new Agent402({ fetch: payFetch });
+const page = await paid.call("extract", { url: "https://example.com" });
+await paid.call("memory-write", { key: "example-title", value: page.title });</pre>
 
       <h2 id="planned" style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Planned: webhook callbacks <span style="display:inline-block;background:var(--card);border:1px solid var(--hairline);color:var(--accent);font-size:.72rem;font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Planned</span></h2>
       <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">We're designing a webhook system for long-running chains. The planned flow:</p>

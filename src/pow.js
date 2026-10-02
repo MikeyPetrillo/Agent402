@@ -366,6 +366,16 @@ export const WALLET_ONLY_SLUGS = new Set([
   "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema",
 ]);
 
+/** Wallet-only slugs that make no network call and read no stored state: they
+ *  are wallet-only by POLICY (see the comments in WALLET_ONLY_SLUGS above), so
+ *  the tool page states that reason instead of the network/state one. Each
+ *  value is completed by the page with ", so it is metered with money and has
+ *  no proof-of-work tier". */
+export const WALLET_ONLY_POLICY_REASON = new Map([
+  ["sql-guard", "is pure computation, but it can mint an execution certificate signed with this server's key"],
+  ["action-gate", "is pure computation, but its verdict is what a caller relies on before a real action"],
+]);
+
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */
 export function isComputePayable(tool) {
   return !WALLET_ONLY_SLUGS.has(tool.slug);
@@ -389,6 +399,20 @@ const SECRET = process.env.POW_SECRET || randomBytes(32).toString("hex");
 // snappy. Higher difficulties have brutal tail latency (difficulty 20 p90 ≈ 12s)
 // because solving is a memoryless random search. Tune via POW_DIFFICULTY.
 export const POW_DIFFICULTY = clampInt(process.env.POW_DIFFICULTY, 16, 8, 28);
+/**
+ * What one solve costs, said one way on every page and derived from the live
+ * difficulty. Measured with the published client solver (client/index.js
+ * solvePow) at difficulty 16 on a laptop: median 22 ms, p99 150 ms over 300
+ * solves. Pages had stated it four ways ("a few seconds", "about a second",
+ * "a few hundred milliseconds", "sub-second"). Above 17 bits the tail grows
+ * fast enough that "a fraction of a second" stops being true, so the phrase
+ * changes with the difficulty rather than staying a typed claim.
+ */
+export function powCostPhrase(difficulty = POW_DIFFICULTY) {
+  const hashes = (2 ** difficulty).toLocaleString("en-US");
+  const time = difficulty <= 17 ? "a fraction of a second of CPU on a laptop" : "a few seconds of CPU or more";
+  return `about ${hashes} sha256 hashes on average, ${time}`;
+}
 const TTL_SECONDS = clampInt(process.env.POW_TTL_SECONDS, 300, 30, 3600);
 
 function sign(payload) {

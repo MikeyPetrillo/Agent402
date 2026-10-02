@@ -151,8 +151,11 @@ ok(s.totals.external.sales >= 2, "ledger still readable after garbage rows");
   ok(pub.rails.tempo.external === base.rails.tempo.external && pub.rails.tempo.internal === (base.rails.tempo.internal || 0) + 40, "the tempo rail card keeps its external count and gains an internal count");
   ok(pub.rails.tempo.externalUsd === base.rails.tempo.externalUsd && pub.rails.tempo.externalUsd >= 0.001, `the tempo rail's external dollars count outside money only (${pub.rails.tempo.externalUsd})`);
   ok(Object.values(pub.rails).every((r) => typeof r.externalUsd === "number"), "every rail carries an externalUsd aggregate");
-  ok(pub.rails.tempo.txs[0] === "0xTempo000000000000000000000000000000000000000000000000000000001" && pub.rails.tempo.txsInternal === false, "the tempo rail's hashes are the EXTERNAL settlement's, not the 40 newer internal ones");
-  ok(pub.txs.every((t) => !/^0xInternal/.test(t)), "the flat txs list is external-only");
+  // A tx hash resolves to its payer on chain, so the public view lists OUR
+  // OWN settlements only, and never an outside buyer's hash.
+  ok(!pub.rails.tempo.txs.includes("0xTempo000000000000000000000000000000000000000000000000000000001") && pub.rails.tempo.txsInternal === true, "the tempo rail lists our own hashes, never the external settlement's");
+  ok(pub.rails.tempo.txs.length > 0 && pub.rails.tempo.txs.every((t) => /^0xInternal/.test(t)), "the tempo rail's hashes are all internal");
+  ok(pub.txs.every((t) => /^0xInternal|^0x/.test(t)) && !pub.txs.includes("0xTempo000000000000000000000000000000000000000000000000000000001") && pub.txsInternal === true, "the flat txs list is own-settlements only");
   const det = mppSales({ limit: 100, detailed: true });
   ok(det.settlements.filter((r) => r.internal).length >= 40, `operator view still lists the internal rows (${det.settlements.length} rows)`);
 }
@@ -232,7 +235,7 @@ ok(txFromPaymentResponse("not-base64-json") === null && txFromPaymentResponse(""
   ok(feed.count > 0, "public mpp feed still reports that settlements exist");
   ok(feed.settlements === undefined, "public mpp feed carries NO per-settlement rows");
   ok(!/"slug"/.test(blob) && !/"priceUsd"/.test(blob), "public mpp feed pairs no tool name with a price");
-  ok(Array.isArray(feed.txs) && feed.txs.includes("0xmpp1"), "the settlement tx is still published (that is the on-chain proof)");
+  ok(Array.isArray(feed.txs) && !feed.txs.includes("0xmpp1") && !blob.includes("0xmpp1"), "an outside buyer's settlement tx is not published (the hash names the payer on chain)");
   ok(!blob.includes(MPPW) && !blob.includes(MPPW.toLowerCase()), "mpp feed carries no payer address");
   ok(!/0x[0-9a-f]{40}(?![0-9a-f])/i.test(blob), "mpp feed contains no EVM-address-shaped value");
 

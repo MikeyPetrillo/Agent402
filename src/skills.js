@@ -39,7 +39,7 @@ export const PACK_PRICES = {
   "sec-filings-deep-dive": 0.028, // 7 tools, parts $0.031
   "structured-scrape": 0.023, // 7 tools, parts $0.025
   "decode-blob": 0.007, // 7 tools, parts $0.007
-  "trend-analysis": 0.015, // 8 tools, parts $0.016
+  "trend-analysis": 0.018, // 11 tools, parts $0.019
   "forecasting-bake-off": 0.014, // 7 tools, parts $0.015
   "document-intel": 0.024, // 7 tools, parts $0.026
   "document-brief": 0.031, // 3 tools, parts $0.034
@@ -228,9 +228,9 @@ export const SKILL_PACKS = [
     ],
     workflow: [
       "Pull the certificate transparency log to enumerate every subdomain a CA has ever issued a cert for - this is the fastest external recon step.",
-      "For each interesting subdomain, resolve A/AAAA/MX/NS/CAA records to map the live infrastructure and certificate authority constraints.",
+      "Resolve the apex's A and CAA records, then A records for up to three subdomains the log named (shallowest first), to map the live infrastructure and certificate authority constraints.",
       "Check SPF and DMARC on the apex to see whether the domain can be spoofed in email - a missing or weak DMARC is one of the highest-impact findings on most audits.",
-      "Pull HTTP response headers on the apex and a few key subdomains; the security analyzer scores HSTS, CSP, XFO, XCTO, Referrer-Policy, Permissions-Policy, and the COOP/CORP/COEP triad.",
+      "Pull HTTP response headers on the apex and up to two of those subdomains; the security analyzer scores HSTS, CSP, XFO, XCTO, Referrer-Policy, Permissions-Policy, and the COOP/CORP/COEP triad.",
       "Inspect the live TLS cert (chain, expiry, SANs) - useful for spotting near-expiry, mismatched SANs, or weak chain configurations.",
       "Fingerprint the tech stack so you know what CMS/framework/CDN to research for known CVEs.",
     ],
@@ -295,7 +295,7 @@ export const SKILL_PACKS = [
     tagline:
       "Quick company snapshot: latest close, 9 key financial metrics (revenue through cash flow), and upcoming earnings - one call, one payment.",
     useCase:
-      "An agent needs to answer 'how is this company doing?' without knowing XBRL tags or juggling 3 separate API calls. The $0.04 bundle is cheaper than calling the tools individually ($0.045).",
+      "An agent needs to answer 'how is this company doing?' without knowing XBRL tags or juggling 3 separate API calls.",
     promptArgs: [
       { name: "ticker", description: "Stock ticker symbol (e.g. AAPL, MSFT, NVDA)", required: true, substitute: "AAPL" },
     ],
@@ -630,6 +630,12 @@ export const SKILL_PACKS = [
         required: false,
         substitute: "1y",
       },
+      {
+        name: "benchmark",
+        description: "Optional second series to correlate against - a ticker (SPY) or a FRED series id. Without it the correlation step is skipped.",
+        required: false,
+        substitute: "SPY",
+      },
     ],
     // Ordered as: fetch → describe → smooth → trend → anomalies → benchmark →
     // forecast. Each step takes the array of close prices / observations from
@@ -645,6 +651,9 @@ export const SKILL_PACKS = [
       "outliers",
       "correlation",
       "forecast-eval",
+      "forecast-naive",
+      "forecast-ses",
+      "forecast-holt",
     ],
     workflow: [
       "Fetch the series. For an equity ticker, call stock-history with range=horizon (or \"1y\" if unspecified) and pull the array of `close` prices in chronological order. For a macro indicator, call fred-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",
@@ -652,12 +661,12 @@ export const SKILL_PACKS = [
       "Smooth the noise with moving-average. A 20-day SMA is the textbook short-term trend smoother for daily prices; a 12-month MA suits monthly macro data. Use which=\"both\" so you can compare SMA (lagging but stable) with EMA (responsive but jittery).",
       "Fit linear-regression with x = [0, 1, ..., n-1] (just the index) and y = values. Slope tells you direction + magnitude per unit time; r² tells you how clean the trend is (>0.7 = strong trend, <0.3 = mostly noise). Pass `predict` for next-N-period extrapolation if the user wants a projection.",
       "Flag anomalies with outliers method=\"iqr\" - Tukey fences (1.5·IQR) are the conservative default. Report the indices + values; agents should then map indices back to dates from the original fetch so the answer says \"2024-03-14: $187.23 outlier\" not just \"index 142\".",
-      "If the user asked a comparison question (\"is AAPL correlated with the S&P?\", \"do CPI and fed funds move together?\"), repeat steps 1-2 for the benchmark series, then call correlation with the two equal-length arrays. r above 0.7 = strong same-direction move; near 0 = independent; negative = inverse. Use the `interpretation` field as your one-line answer.",
+      "If the user asked a comparison question (\"is AAPL correlated with the S&P?\", \"do CPI and fed funds move together?\"), fetch the benchmark series the same way, align the two on their most recent shared length, then call correlation with the two equal-length arrays. r above 0.7 = strong same-direction move; near 0 = independent; negative = inverse. Use the `interpretation` field as your one-line answer.",
       "Pick a forecast method honestly by backtesting. Call forecast-eval three times - once each with method=\"drift\", \"ses\", \"holt\" - passing the same values + testSize (≈ 20% of the series, capped at half). Compare RMSE; the lowest wins. Check `warnings` - non-empty means treat the result as indicative not predictive. Skip the bake-off only if you already know the series shape (e.g. holt-winters for clearly seasonal data with a known period).",
       "Forecast forward with the winning method. Call forecast-naive / forecast-ses / forecast-holt (whichever won) with the full values + the user's horizon. Return the point forecast AND lower95/upper95 - never report a point estimate without its interval; that's the whole reason these tools exist instead of an LLM guess. Combine summary + trend + outliers + optional correlation + forecast into a single JSON object. That's the deterministic analyst-grade reply.",
     ],
     claudePrompt:
-      "Run a full trend analysis on AAPL over the last 1y using Agent402, then project the next quarter forward. (1) Fetch the daily closes via stock-history (ticker=AAPL, days=250). (2) Run stats-summary on the closes for the descriptive panel. (3) Run moving-average with window=20, which=\"both\" - compare SMA vs EMA. (4) Run linear-regression with x=[0..n-1], y=closes; report slope (annualized = slope·252), intercept, r². (5) Run outliers method=\"iqr\" and map the flagged indices back to actual dates from the fetch. (6) Pick a forecast method: call forecast-eval three times with method=\"drift\", \"ses\", \"holt\" and testSize=50 (≈ 20% of a 252-day year); pick the lowest RMSE. (7) Forecast the next ~63 trading days using the winning method (forecast-naive / forecast-ses / forecast-holt) and report both point and 95% interval. (8) Return a single JSON object: {summary, trend, outlierDates, forecastMethod, forecastWithIntervals, oneLineConclusion}. The stats + forecast steps are free over PoW; only the stock-history fetch is paid.",
+      "Run a full trend analysis on AAPL over the last 1y using Agent402, then project the next quarter forward. (1) Fetch the daily closes via stock-history (ticker=AAPL, days=250). (2) Run stats-summary on the closes for the descriptive panel. (3) Run moving-average with window=20, which=\"both\" - compare SMA vs EMA. (4) Run linear-regression with x=[0..n-1], y=closes; report slope (annualized = slope·252), intercept, r². (5) Run outliers method=\"iqr\" and map the flagged indices back to actual dates from the fetch, then fetch SPY's daily closes the same way, align both series on their most recent shared length and run correlation on them. (6) Pick a forecast method: call forecast-eval three times with method=\"drift\", \"ses\", \"holt\" and testSize=50 (≈ 20% of a 252-day year); pick the lowest RMSE. (7) Forecast the next ~63 trading days using the winning method (forecast-naive / forecast-ses / forecast-holt) and report both point and 95% interval. (8) Return a single JSON object: {summary, trend, outlierDates, forecastMethod, forecastWithIntervals, oneLineConclusion}. The stats + forecast steps are free over PoW; only the stock-history fetch is paid.",
   },
   {
     slug: "forecasting-bake-off",
@@ -2682,7 +2691,7 @@ const FLAGSHIP_PACKS = ["security-audit", "trend-analysis", "structured-scrape",
 // contract lives on its own page and in /api/skill-packs.json.
 const ILLUSTRATIVE_RUN = [
   ["1", "cert-transparency", "14 certificates logged, none unexpected", true],
-  ["2", "dns-lookup", "A, AAAA, MX, NS, TXT resolved", true],
+  ["2", "dns-lookup", "apex A + CAA and three subdomains resolved", true],
   ["3", "spf-check", "single include, hard fail policy", true],
   ["4", "dmarc-check", "p=none - reporting only, no enforcement", true],
   ["5", "http-headers", "HSTS present, CSP missing", true],
@@ -2693,7 +2702,7 @@ const ILLUSTRATIVE_RUN = [
 const SKILLS_FAQS = [
   { q: "What is a skill pack?", a: "A multi-tool workflow that runs server-side in a single request. Instead of your agent calling seven tools in sequence - seven payments, seven round trips, seven things to handle when one fails - you make one call to POST /api/skill/{slug}, pay once, and get every step back in one response." },
   { q: "What happens if one step fails?", a: "You get a partial-success envelope rather than an error. Every step that succeeded returns its result, the failed step is marked with its reason, and the response is still usable. That is the real difference from orchestrating the sequence yourself, where a failure mid-chain leaves you holding partial state you have already paid for and have to reconcile." },
-  { q: "How is a pack priced?", a: `Below its parts. A pack costs the sum of the tools it runs minus a 10% bundle discount, rounded up to the $0.001 settlement floor - ${PACK_PRICE_RANGE.text} today, recomputed from the live catalog whenever a tool is repriced. One payment instead of several, cheaper than assembling the steps yourself, and no orchestration code to write or maintain.` },
+  { q: "How is a pack priced?", a: `Never more than its parts. A pack costs the sum of the tools it runs minus a 10% bundle discount, rounded up to the $0.001 settlement floor, so a pack of the cheapest tools can land at the sum itself - ${PACK_PRICE_RANGE.text} today, recomputed from the live catalog whenever a tool is repriced. One payment instead of several, and no orchestration code to write or maintain.` },
   { q: "Can I see which tools a pack will run before paying?", a: "Yes. Every pack publishes its tool sequence up front, on its own page and in /api/skill-packs.json. Packs are fixed sequences, not an agent improvising - the same inputs run the same steps in the same order every time." },
   { q: "Which chains can I pay a pack on?", a: `The same rails as any other call: ${RAILS_SHORT}. Gas is sponsored on EVM chains, so you need only the stablecoin, or run free over proof-of-work where a pack is pure-CPU.` },
 ];
@@ -2745,7 +2754,7 @@ export function skillsIndex(baseUrl) {
       <div>
         <h1 style="font-weight:800;font-size:56px;line-height:.96;letter-spacing:-.035em;margin:0 0 20px;color:var(--ink);">Seven tools.<br>One <span style="color:var(--accent);">payment</span>.</h1>
         <p style="font-size:18px;line-height:1.55;color:var(--muted);margin:0 0 16px;">A real job is never one call. Auditing a domain takes seven tools; parsing a document takes seven more. Orchestrate that yourself and you are running seven payments, seven round trips and seven failure modes - and writing the code that holds it together.</p>
-        <p style="font-size:16px;line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount}+ packs, ${PACK_PRICE_RANGE.text}, every one priced below the sum of its tools.</strong></p>
+        <p style="font-size:16px;line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount}+ packs, ${PACK_PRICE_RANGE.text}, none priced above the sum of its tools.</strong></p>
         <div style="display:flex;flex-wrap:wrap;gap:11px;">
           <a class="ml-cta" href="#packs" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:14px 22px;">Browse the packs →</a>
           <a class="ml-cta" href="/api/skill-packs.json" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 22px;">skill-packs.json</a>
@@ -2844,7 +2853,7 @@ ${ledgerFooterCompact()}`;
 
   const canonical = `${baseUrl}/skills`;
   const title = "Skill packs - multi-tool agent workflows for one x402 payment";
-  const description = `${packCount}+ skill packs run a whole multi-tool job server-side for one USDC payment: several tools, one settlement, one response. Partial-success envelope means a failed step never costs you the whole call. $0.05-$1.50 per pack, no signup.`;
+  const description = `${packCount}+ skill packs run a whole multi-tool job server-side for one payment: several tools, one settlement, one response. Partial-success envelope means a failed step never costs you the whole call. ${PACK_PRICE_RANGE.text} per pack, no signup.`;
 
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, sameAs: ORG_SAME_AS };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
@@ -2853,7 +2862,7 @@ ${ledgerFooterCompact()}`;
     { "@type": "ListItem", position: 3, name: "Skill packs", item: canonical },
   ] };
   const collectionLd = { "@type": "CollectionPage", "@id": `${canonical}#page`, name: "Agent402 skill packs", url: canonical, description: `${packCount}+ multi-tool workflows that run server-side in one request: one payment, one settlement, and a single response with a partial-success envelope if a step fails.`, isPartOf: { "@id": `${baseUrl}/#organization` }, mainEntity: { "@id": `${canonical}#packs` } };
-  const appLd = { "@type": "SoftwareApplication", "@id": `${canonical}#app`, name: "Agent402 skill packs", applicationCategory: "DeveloperApplication", operatingSystem: "HTTP, MCP (streamable HTTP)", offers: { "@type": "AggregateOffer", offerCount: String(packCount), lowPrice: "0.05", highPrice: "1.50", priceCurrency: "USD", description: "One USDC payment per pack run, settled on twelve rails. No signup, no API key." } };
+  const appLd = { "@type": "SoftwareApplication", "@id": `${canonical}#app`, name: "Agent402 skill packs", applicationCategory: "DeveloperApplication", operatingSystem: "HTTP, MCP (streamable HTTP)", offers: { "@type": "AggregateOffer", offerCount: String(packCount), lowPrice: PACK_PRICE_RANGE.min.toFixed(3), highPrice: PACK_PRICE_RANGE.max.toFixed(3), priceCurrency: "USD", description: `One payment per pack run, on ${RAILS_SHORT}. No signup, no API key.` } };
   const itemListLd = { "@type": "ItemList", "@id": `${canonical}#packs`, name: "Featured skill packs", itemListElement: flagship.map((p, i) => ({ "@type": "ListItem", position: i + 1, name: p.slug, url: `${baseUrl}/skills/${p.slug}` })) };
   const faqLd = { "@type": "FAQPage", "@id": `${canonical}#faq`, mainEntity: SKILLS_FAQS.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
 
@@ -2892,6 +2901,18 @@ function renderToolList(pack, ix) {
 </li>`;
     })
     .join("\n");
+}
+
+// The "Call it directly" snippet on a pack page. agent402-client is a library
+// (no CLI bin), so the snippet is the SDK's own constructor + call(), keyed on
+// the pack's CATALOG slug ("skill-<pack>"), which is what call() resolves.
+export function packClientSnippet(catalogSlug, args) {
+  return [
+    `import { Agent402 } from "agent402-client";`,
+    `// creditsKey pays by card credits; pass { fetch } for an x402-wrapped fetch instead`,
+    `const client = new Agent402({ creditsKey: process.env.AGENT402_CREDITS_KEY });`,
+    `const result = await client.call(${JSON.stringify(catalogSlug)}, ${JSON.stringify(args)});`,
+  ].join("\n");
 }
 
 export function skillPackPage(baseUrl, slug, catalog) {
@@ -2976,8 +2997,8 @@ ${returnsHtml}
 
 ${packTool ? `
 <h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Call it directly</h2>
-<p style="color:var(--muted);font-size:15px;line-height:1.7;">Any x402 client pays the 402 and gets the whole workflow back in one response:</p>
-<pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:18px 20px;font-size:13px;line-height:1.6;border:none;margin-top:12px;overflow-x:auto;">npx agent402-client call ${e(pack.slug)} ${e(JSON.stringify(Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute ?? "..."]))))}</pre>` : ""}
+<p style="color:var(--muted);font-size:15px;line-height:1.7;">Any x402 client pays the 402 and gets the whole workflow back in one response. With the <code>agent402-client</code> SDK (<code>npm i agent402-client</code>, an ES module):</p>
+<pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:18px 20px;font-size:13px;line-height:1.6;border:none;margin-top:12px;overflow-x:auto;">${e(packClientSnippet(packTool.slug, Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute ?? "..."]))))}</pre>` : ""}
 
 <h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Run it in Claude</h2>
 <pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:18px 20px;font-size:13px;line-height:1.6;border:none;margin-top:12px;">claude mcp add agent402 -s user -- npx -y agent402-mcp@latest</pre>

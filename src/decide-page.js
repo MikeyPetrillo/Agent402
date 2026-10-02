@@ -102,7 +102,7 @@ export function decidePage(baseUrl, catalog) {
         <div class="dc-num">Agent402 Decide</div>
         <h1 style="font-weight:800;font-size:48px;line-height:.98;letter-spacing:-.035em;margin:0 0 18px;color:var(--ink);">Describe the job. Get the plan.</h1>
         <p style="font-size:18px;line-height:1.55;color:var(--muted);margin:0 0 18px;">One paid call returns a call-ready plan over this catalog and outside x402 sellers with a recently verified 402: which tools, in what order, with fallbacks and params that validate. Run it yourself, or have Agent402 run it and the fee comes back as credit.</p>
-        <p style="font-size:14px;line-height:1.6;color:var(--muted);margin:0 0 22px;">${usd(p.quick)} to ${usd(p.full)} per decision, paid per request in USDC over <a href="/what-is-x402" style="color:var(--ink);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);">MPP</a>, or with <a href="/credits" style="color:var(--ink);">card credits</a>. No account.</p>
+        <p style="font-size:14px;line-height:1.6;color:var(--muted);margin:0 0 22px;">${usd(p.quick)} to ${usd(p.full)} per decision, paid per request in USDC over <a href="/what-is-x402" style="color:var(--ink);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);">MPP</a>. No account.</p>
         <div style="display:flex;gap:11px;flex-wrap:wrap;">
           <a href="#connect" style="background:var(--btn-bg);color:var(--btn-fg);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 22px;">ADD TO YOUR AGENT →</a>
           <a href="/docs#decide" style="border:1.5px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:12px 22px;">DOCS</a>

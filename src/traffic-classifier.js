@@ -11,7 +11,7 @@
 // operator at /__operator/traffic.json. O(1) per request, every map capped,
 // never a raw ip or a payer address in the store.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { railOf } from "./payment-rail.js";
 
@@ -56,6 +56,9 @@ export const DEFAULTS = Object.freeze({
   keyCap: 400,      // top-N keys kept per map; the rest fold into _other
   ipCap: 20_000,    // sliding-window ip rows
   payerCap: 50_000,
+  // Daily rollups hold salted ip hashes; a day file older than this is deleted
+  // (on load and on every persist). /privacy states the same figure.
+  retentionDays: Math.max(1, Number(process.env.TRAFFIC_RETENTION_DAYS) || 90),
   salt: process.env.TRAFFIC_HASH_SALT || process.env.POW_SECRET || "traffic",
 });
 
@@ -107,12 +110,26 @@ export function createTrafficStore(opts = {}) {
   let dirty = false;
   const dayOf = (t = Date.now()) => new Date(t).toISOString().slice(0, 10);
   const rollup = (day) => { if (!days.has(day)) days.set(day, emptyDay(day)); return days.get(day); };
-
-  function load() {
+  const expired = (day, now) => day < dayOf(now - o.retentionDays * 864e5);
+  // Drop rollups past retention, in memory and on disk.
+  function prune(now = Date.now()) {
+    for (const d of [...days.keys()]) if (expired(d, now)) days.delete(d);
+    for (const d of [...dayIps.keys()]) if (expired(d, now)) dayIps.delete(d);
     try {
       if (!existsSync(o.dir)) return;
       for (const f of readdirSync(o.dir)) {
-        if (/^\d{4}-\d{2}-\d{2}\.json$/.test(f)) { try { const d = JSON.parse(readFileSync(join(o.dir, f), "utf8")); if (d?.day) days.set(d.day, d); } catch { /* a torn file is skipped */ } }
+        const m = /^(\d{4}-\d{2}-\d{2})\.json$/.exec(f);
+        if (m && expired(m[1], now)) { try { unlinkSync(join(o.dir, f)); } catch { /* retried next persist */ } }
+      }
+    } catch { /* unreadable dir */ }
+  }
+
+  function load(now = Date.now()) {
+    prune(now);
+    try {
+      if (!existsSync(o.dir)) return;
+      for (const f of readdirSync(o.dir)) {
+        if (/^\d{4}-\d{2}-\d{2}\.json$/.test(f)) { try { const d = JSON.parse(readFileSync(join(o.dir, f), "utf8")); if (d?.day && !expired(d.day, now)) days.set(d.day, d); } catch { /* a torn file is skipped */ } }
         if (f === "payers.json") { try { for (const [k, v] of Object.entries(JSON.parse(readFileSync(join(o.dir, f), "utf8")))) payers.set(k, Number(v) || 0); } catch { /* same */ } }
       }
     } catch { /* unreadable dir: start cold */ }
@@ -120,6 +137,7 @@ export function createTrafficStore(opts = {}) {
   // `now` is injectable like record()'s: the test fixture records a fixed day,
   // and a wall-clock-only persist made it fail from the second day after.
   function persist(now = Date.now()) {
+    prune(now);
     if (!dirty) return false;
     try {
       mkdirSync(o.dir, { recursive: true });

@@ -3,7 +3,7 @@
 //
 //   node scripts/test-traffic-classifier.js
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
@@ -62,6 +62,19 @@ ok(store.persist(t0) === true && existsSync(join(dir, "2026-09-22.json")) && exi
 const again = createTrafficStore({ dir, crawlerDistinctPaths: 5, salt: "test" }); again.load();
 ok(again.report({ days: 1 }).days[0]?.total === 13 && again._payers.size === 2, "a fresh store warm-starts from disk");
 ok(again.record({ ip: "192.0.2.9", ua: "curl", path: "/api/hash", method: "POST", status: 200, paidReceipt: true, payer: "0xabc", now: t0 }) === "repeat-buyer", "...and remembers the payer across a restart");
+{
+  // Retention: a day rollup past retentionDays is deleted from disk and memory,
+  // on load and on persist; a day inside it is kept. /privacy states this figure.
+  ok(DEFAULTS.retentionDays === 90, `default retention is 90 days (${DEFAULTS.retentionDays})`);
+  const rdir = mkdtempSync(join(tmpdir(), "a402-traffic-ret-"));
+  writeFileSync(join(rdir, "2026-06-01.json"), JSON.stringify({ day: "2026-06-01", total: 1 }));
+  writeFileSync(join(rdir, "2026-09-01.json"), JSON.stringify({ day: "2026-09-01", total: 1 }));
+  const rs0 = createTrafficStore({ dir: rdir, salt: "t" }); rs0.load(t0);
+  ok(!existsSync(join(rdir, "2026-06-01.json")) && !rs0._days.has("2026-06-01"), "a rollup older than 90 days is deleted on load");
+  ok(existsSync(join(rdir, "2026-09-01.json")) && rs0._days.has("2026-09-01"), "a rollup inside retention is kept");
+  rs0.persist(t0 + 70 * 864e5);
+  ok(!existsSync(join(rdir, "2026-09-01.json")) && !rs0._days.has("2026-09-01"), "persist deletes a rollup once it passes retention");
+}
 {
   const capped = createTrafficStore({ dir: mkdtempSync(join(tmpdir(), "a402-traffic-cap-")), keyCap: 3, salt: "t" });
   for (let i = 0; i < 10; i++) capped.record({ ip: `10.0.0.${i}`, ua: `ua-${i}`, path: `/api/t${i}`, method: "GET", status: 402, now: t0 });

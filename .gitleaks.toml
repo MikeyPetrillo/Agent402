@@ -143,6 +143,11 @@ regexes = [
   '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiIxMjM0NTY3ODkw''',
   '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiJ4IiwiZXhw''',
   '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiJ3ZWJob29rIiwi''',
+  # src/tools/mev-and-l2-kit.js mev-block-payment example: the builder and
+  # proposer BLS PUBLIC keys of Ethereum block 26104983, as the relay data API
+  # publishes them. Public identifiers, never secrets; pinned exactly.
+  '''0x89057b5818abfca92fb9d38ea74dfab0f6f58630b6138e4f73da26666295e047cb18d353a134c5fad672eba231ff610c''',
+  '''0xb6ab19ca47a0b0f67e95e4cbb772fd8feff2a4f481eb494a06d54308f7fa959ee87889e2ffbe34ee8d466ed47a7d5dbd''',
 ]
 # No stopwords: the former HS256-header stopword hid every HS256 JWT (see the
 # fixture regexes above).

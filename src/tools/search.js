@@ -639,6 +639,7 @@ export const SEARCH_TOOLS = [
     name: "Web answer",
     slug: "answer",
     category: "web",
+    modelBacked: true, // "AI-generated answer": read by server.js's MODEL_BACKED_SLUGS
     // Price set deliberately by the operator (2026-09-11), outside the usual
     // margin rule: raising it would also raise the two skill packs that run it
     // (search-and-cite, article-digest). Do not reprice without asking; revisit

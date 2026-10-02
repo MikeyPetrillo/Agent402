@@ -333,7 +333,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     const rows = scored.slice(0, Math.min(Number(limit) || 10, SEARCH_LIMIT_MAX)).map(([, def, free]) => ({
       slug: def.slug,
       price: def.price,
-      access: free ? "free here (rate-limited)" : "paid (USDC via x402 / MPP, or prepaid card credits - agent402-mcp with AGENT_KEY or AGENT402_CREDITS_KEY)",
+      access: free ? "free here (rate-limited)" : "paid (USDC via x402 / MPP - agent402-mcp with AGENT_KEY, or a prepaid credits key already issued as AGENT402_CREDITS_KEY)",
       description: def.description.length > 200 ? `${def.description.slice(0, 200)}…` : def.description,
       inputSchema: schemaOf(def),
     }));
@@ -346,7 +346,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       ...(mppLoopback ? [`Pay it RIGHT HERE over MPP: call again with an MPP credential in _meta["org.paymentauth/credential"] - mppx's McpClient.wrap() does this automatically (USDC on Base/Celo via evm.charge, or native Tempo via tempo.charge); the receipt comes back in _meta["org.paymentauth/receipt"].`] : []),
       `Or from Claude/any MCP client: run the npm server with a funded Base wallet -`,
       `npx agent402-mcp with env AGENT_KEY=0x<private key> (USDC on Base/Polygon/Arbitrum, or USDG on Robinhood Chain via AGENT402_NETWORKS=robinhood) and/or SOLANA_AGENT_KEY=<base58 secret> (USDC on Solana); spend caps: AGENT402_MAX_PER_CALL, AGENT402_BUDGET.`,
-      `Or without a wallet: buy prepaid card credits at ${baseUrl}/credits and run npx agent402-mcp with AGENT402_CREDITS_KEY=a402_... (or send Authorization: Bearer a402_... over HTTP). Or call it over HTTP with any x402 client. Docs: ${baseUrl}/tools/${def.slug}`,
+      `Already hold a prepaid credits key? Run npx agent402-mcp with AGENT402_CREDITS_KEY=a402_... (or send Authorization: Bearer a402_... over HTTP); new credits are not on sale. Or call it over HTTP with any x402 client. Docs: ${baseUrl}/tools/${def.slug}`,
     ].join(" ");
   }
 
@@ -450,7 +450,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           title: "Run an Agent402 tool",
           annotations: { title: "Run an Agent402 tool", ...SAFE },
           description:
-            `Run an Agent402 tool by slug (discover slugs with catalog.find or catalog.search; params must match that tool's inputSchema). The ${freeCount} pure-CPU tools execute free on this hosted connector (rate-limited, no wallet - proof-of-work covers them) and return the tool's JSON result. Wallet-only tools (live search/answer, browser render, market data, STT, durable memory) return a paid-access setup guide instead - this connector holds no wallet. An unknown slug returns an error pointing back to catalog.search.`,
+            `Run an Agent402 tool by slug (discover slugs with catalog.find or catalog.search; params must match that tool's inputSchema). The ${freeCount} pure-CPU tools execute free on this hosted connector (rate-limited, no wallet - proof-of-work covers them) and return the tool's JSON result. Wallet-only tools (live search/answer, browser render, market data, STT, durable memory) ${mppLoopback ? "answer with a payment ask that is payable right here over MPP (the challenges ride in _meta[\"org.paymentauth/payment-required\"], and the text names every other way to pay)" : "return a paid-access setup guide instead"} - this connector holds no wallet of its own. An unknown slug returns an error pointing back to catalog.search.`,
           inputSchema: {
             type: "object",
             properties: {
@@ -483,7 +483,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             : `[wallet-required, ${def.price}/call]`;
           const walletNote = free
             ? ""
-            : " This hosted connector holds no wallet: pay it here over MPP, or run npx agent402-mcp with a funded wallet (AGENT_KEY) or prepaid card credits (AGENT402_CREDITS_KEY), or any x402 client.";
+            : " This hosted connector holds no wallet: pay it here over MPP, or run npx agent402-mcp with a funded wallet (AGENT_KEY) or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 client.";
           const outSchema = FLAGSHIP_OUTPUT_SCHEMAS[slug]
             || outputSchemaFromExample(def.discovery?.output?.example);
           return {
@@ -907,7 +907,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             ...(r.packs?.length ? { workflows: r.packs, workflowsUsage: "One call: catalog.call { slug: 'skill-' + workflows[i].slug, params: { …promptArgs } } (or POST workflows[i].route) runs every step for the single price in workflows[i].price. To orchestrate the steps yourself instead: prompts/get { name: workflows[i].promptName, arguments: { …promptArgs } } - that bills each underlying tool separately." } : {}),
             ...(relatedSellers ? { relatedSellers } : {}),
             ...(weak && !relatedSellers ? { hint: WISH_HINT_TEXT } : {}),
-            usage: "Run catalog.call with the chosen {slug, params}. Free results execute here; paid tools are payable here over MPP or via the agent402-mcp npm server (wallet or prepaid card credits).",
+            usage: "Run catalog.call with the chosen {slug, params}. Free results execute here; paid tools are payable here over MPP or via the agent402-mcp npm server (a wallet, or a prepaid credits key already issued).",
           });
         }
         if (name === "demand.request") {
@@ -960,7 +960,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               })),
             },
             clientsSeenSinceBoot: Object.fromEntries([...mcpClients].sort((a, b) => b[1] - a[1]).slice(0, 20)),
-            paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or prepaid card credits (AGENT402_CREDITS_KEY, buy at ${baseUrl}/credits), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo. No signup, no API key; most tools $0.001–$0.02/call, LLM gateway tiers $0.002–$0.50, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
+            paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo. No signup, no API key; most tools $0.001–$0.02/call, LLM gateway tiers $0.002–$0.50, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
             ...(getLeaderboard ? { ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog." } : {}),
             missingATool: "Call demand.request (or POST /api/wish) with what you needed. We cluster and track demand - repeated requests get built.",
             docs: `${baseUrl}/llms.txt`,
@@ -1063,7 +1063,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         if (name === "payment.info") {
           return mcpJsonResult({
             connector: "hosted free tier - no wallet is held on this connector (authless)",
-            credits: { how: "prepaid card credits: buy a pack at /credits, then Authorization: Bearer a402_<key> on any paid HTTP route, or AGENT402_CREDITS_KEY on the agent402-mcp npm server; the list price is held before the call and debited only on success", buy: `${baseUrl}/credits`, balance: `${baseUrl}/api/credits/balance` },
+            credits: { onSale: false, how: "new credits are not on sale; a key already issued keeps working: Authorization: Bearer a402_<key> on any paid HTTP route except the wallet-identity-bound ones, or AGENT402_CREDITS_KEY on the agent402-mcp npm server; the list price is held before the call and debited only on success", balance: `${baseUrl}/api/credits/balance` },
             // DERIVED, never typed. This block quoted the pre-2026-08-23 ladder
             // for three weeks - every figure understated 1.7x to 3.4x - and an
             // agent budgeting from a machine surface under-budgets, pays, and
@@ -1072,7 +1072,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             reports: { what: `finished, cited report products with a data appendix - ${reportLadder().agentLadder} - the same endpoints over x402/MPP or by card`, human: `${baseUrl}/reports`, humanPricing: `people pay ${reportLadder().cardLadder} by card; the card price includes payment processing, so an agent paying per call pays the lower tool price above for the same report`, monitors: `${baseUrl}/monitors`, monitorPricing: reportLadder().monthlySentence },
             freeTier: {
               pureCpuToolsFree: freeCount,
-              how: "pure-CPU tools run free here (rate-limited); wallet-only tools are payable on this connector over MPP (JSON-RPC -32042 carries the challenges; send the credential in _meta[\"org.paymentauth/credential\"], receipt returns in _meta[\"org.paymentauth/receipt\"] - mppx's McpClient.wrap() handles it) or via the npm server with a wallet",
+              how: "pure-CPU tools run free here (rate-limited); wallet-only tools are payable on this connector over MPP (the first ask is a tool result whose challenges ride in _meta[\"org.paymentauth/payment-required\"]; on the tasks path the ask is JSON-RPC error -32042, and a presented credential that is refused is -32043; send the credential in _meta[\"org.paymentauth/credential\"], receipt returns in _meta[\"org.paymentauth/receipt\"] - mppx's McpClient.wrap() handles it) or via the npm server with a wallet",
               proofOfWork: "a walletless client can solve a proof-of-work puzzle instead of paying on eligible tools",
             },
             pay: {

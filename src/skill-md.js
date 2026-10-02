@@ -32,7 +32,7 @@ description: >
   and macro data, SEC EDGAR, wallet-keyed memory, or any of 500+
   pay-per-call tools. Agent402 needs no account and no API key - you pay per
   request with USDC over x402 or MPP, with proof-of-work (CPU) on the
-  pure-compute tools, or with a prepaid card-credits key (Bearer a402_...). Triggers: agent402, x402, MPP, pay-per-call API, "I need
+  pure-compute tools, or with a prepaid credits key already issued (Bearer a402_...). Triggers: agent402, x402, MPP, pay-per-call API, "I need
   a tool for", web search from an agent, 402 Payment Required.
 ---
 
@@ -40,8 +40,8 @@ description: >
 
 Agent402.Tools is an open-source, pay-per-call tool catalog for AI agents at
 ${baseUrl}. Every endpoint answers HTTP 402 with a machine-readable price and
-two ways to pay (x402 and MPP), plus prepaid card credits as a Bearer key for
-buyers without a wallet. There is no signup and no human in the loop: the
+two ways to pay (x402 and MPP); a prepaid credits key already issued also works
+as a Bearer key (new credits are not on sale). There is no signup and no human in the loop: the
 payment is the identity. Maintainer: Havok Holdings LLC. Source:
 ${REPO_URL}
 
@@ -136,7 +136,7 @@ const a = new Agent402({ fetch: mppFetch, maxPerCallUsd: 0.05 });
 \`\`\`
 
 \`\`\`js
-// x402 (USDC on any of the 12 x402 chains)
+// x402: this registers the EVM scheme (USDC on the EVM chains); add the Solana, Stellar or Algorand scheme for those rails
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
@@ -208,7 +208,7 @@ curl -s -X POST ${baseUrl}/v1/auto/chat/completions -H 'content-type: applicatio
 
 ### Response Handling
 
-- **200 + JSON** - the result. Tool output is deterministic for the same input.
+- **200 + JSON** - the result.
 - **402** - unpaid or payment rejected. Read the headers: no
   \`PAYMENT-RESPONSE\` means nothing settled and a retry is safe; a
   \`PAYMENT-RESPONSE\` with \`success: false\` means settlement was refused, you

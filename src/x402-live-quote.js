@@ -220,13 +220,33 @@ export function queryPlaceholderFor(name) {
 }
 
 /**
+ * seller key + route as one URL text. A route is stored relative to its seller,
+ * so for a bare origin this is plain concatenation. A path seller's route AT
+ * its prefix root ("/" or "/?q=1": a Supabase edge function, a Vercel or
+ * Cloudflare function serving one paid endpoint at its own path) joins to the
+ * prefix itself, "<key>?q=1", never "<key>/?q=1": the seller lists the URL
+ * without the slash, and a function host may redirect or 404 the other one.
+ * Keys are stored normalised (no trailing slash), so this is a split, not a
+ * parse; the caller still validates the result (sellerRouteUrl).
+ */
+export function joinSellerRoute(key, route) {
+  const k = String(key || "");
+  const r = String(route || "");
+  const scheme = k.indexOf("://");
+  const slash = scheme >= 0 ? k.indexOf("/", scheme + 3) : -1;
+  const hasPrefix = slash >= 0 && slash < k.length - 1;
+  if (hasPrefix && (r === "/" || r.startsWith("/?"))) return `${k.replace(/\/+$/, "")}${r.slice(1)}`;
+  return `${k}${r}`;
+}
+
+/**
  * The URLs an unpaid quote probe should try for one route, in order. A route
  * whose seller declares required query parameters is tried WITH them first
  * (placeholders, see above), then bare; every other route is tried bare only,
  * exactly as before. A parameter the route already carries is left alone.
  */
 export function probeTargetsFor(originUrl, tool) {
-  const bare = `${originUrl}${tool?.route || ""}`;
+  const bare = joinSellerRoute(originUrl, tool?.route || "");
   const names = unpackRequestContract(tool)?.required?.query || [];
   if (!names.length) return [bare];
   let u;

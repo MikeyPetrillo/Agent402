@@ -89,7 +89,7 @@ function chainCard(html, slug) {
   const sellers = [LOCAL, { origin: "https://c.example", displayName: "C", homepage: "https://c.example", local: false, toolCount: 12, routable: true, networks: ["eip155:8453"], payToByNetwork: {} }];
   const html = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] } });
   ok(html.includes("TOOL LISTINGS"), "the new TOOL LISTINGS stat card renders");
-  ok(/TOOL LISTINGS<\/div><div[^>]*>20</.test(html), "TOOL LISTINGS sums real toolCount across every seller (8+12=20)");
+  ok(/TOOL LISTINGS<\/div><div[^>]*>12</.test(html) && /advertised by other sellers/.test(html), "TOOL LISTINGS sums other sellers' toolCount (12); the host's 8 sit on their own card, as the host card says NOT COUNTED");
   ok(html.includes("SELLERS LISTED"), "the existing SELLERS LISTED card is preserved");
   ok(html.includes("CHAINS SUPPORTED"), "the existing CHAINS SUPPORTED card is preserved");
 }

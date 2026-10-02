@@ -31,7 +31,7 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPORTS_CSS } from "./human-reports-page.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
-import { INSIDER_TIERS } from "./tools/insider-flow-kit.js";
+import { INSIDER_TIERS, INSIDER_DEFAULT_DAYS } from "./tools/insider-flow-kit.js";
 import { FUND_TIERS } from "./tools/fund-report-kit.js";
 import { DOSSIER_TIERS } from "./tools/dossier-kit.js";
 import { probeInsiderFilings, parseForm4 } from "./tools/insider-flow-kit.js";
@@ -523,7 +523,7 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
 <section>
   ${table}
   ${rows.length ? `<div class="pg-meta">Transaction codes: P is an open-market purchase, S an open-market sale, A a grant or award, M an option exercise, F shares surrendered for tax. ${buys} open-market buy${buys === 1 ? "" : "s"} and ${sells} open-market sale${sells === 1 ? "" : "s"} in the rows above.</div>` : ""}
-  ${buySection({ family, alertKind: "insider", input: ticker, headline: `Every Form 4 against ${name}, parsed and explained`, blurb: `The free view above is the newest few filings. The paid report reads every Form 4 in your window (up to 365 days), separates open-market buys and sales from awards, exercises and tax withholding, totals the flow per insider, flags 10b5-1 plans where the filing notes them, and hands you a cited write-up plus a downloadable transactions table.` })}
+  ${buySection({ family, alertKind: "insider", input: ticker, headline: `The Form 4 flow against ${name}, parsed and explained`, blurb: `The free view above is the newest few filings. The paid report reads the newest Form 4 filings of the last ${INSIDER_DEFAULT_DAYS} days (up to ${INSIDER_TIERS["insider-report"].maxFilings}), separates open-market buys and sales from awards, exercises and tax withholding, totals the flow per insider, flags 10b5-1 plans where the filing notes them, and hands you a cited write-up plus a downloadable transactions table.` })}
   ${crossLinks([
     { href: `/reports/dossier/${ticker}`, label: `${ticker} company profile` },
     { href: "/reports/insider", label: "All insider pages" },

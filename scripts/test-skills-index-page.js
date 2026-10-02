@@ -14,7 +14,24 @@ const html = skillsIndex(BASE_URL);
 
 // --- real data rendering ------------------------------------------------------
 ok(html.includes("Seven tools.") && html.includes("One <span"), "hero H1 renders");
-ok(html.includes(`${SKILL_PACKS.length}+ packs, ${PACK_PRICE_RANGE.text}`) && html.includes("priced below the sum of its tools"), "hero cites the real live pack count, the derived price range and the rule");
+ok(html.includes(`${SKILL_PACKS.length}+ packs, ${PACK_PRICE_RANGE.text}`) && html.includes("none priced above the sum of its tools"), "hero cites the real live pack count, the derived price range and the rule");
+// The pricing claim must hold for EVERY pack. Rounding up to the $0.001 floor
+// puts many packs exactly AT the sum of their tools, so the copy may claim
+// "never above", never "below" (it said "below" while 34 of 84 sat at the sum).
+{
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/skills.js", import.meta.url), "utf8");
+  const rows = [...src.matchAll(/^\s+"([a-z0-9-]+)": ([0-9.]+), \/\/ \d+ tools?, parts \$([0-9.]+)/gm)];
+  ok(rows.length === SKILL_PACKS.length, `every pack price row carries its parts sum (${rows.length}/${SKILL_PACKS.length})`);
+  const over = rows.filter(([, , price, parts]) => Number(price) > Number(parts));
+  ok(over.length === 0, `no pack is priced above the sum of its tools${over.length ? `: ${over.map((r) => r[1]).join(", ")}` : ""}`);
+  const atSum = rows.filter(([, , price, parts]) => Number(price) === Number(parts)).length;
+  ok(atSum === 0 || !/priced below the sum|Below its parts|cheaper than assembling/.test(html + src),
+    `${atSum} pack(s) sit at the sum of their tools, so no copy may claim every pack is below it`);
+  const lo = html.match(/"lowPrice":"([0-9.]+)"/)?.[1], hi = html.match(/"highPrice":"([0-9.]+)"/)?.[1];
+  ok(Number(lo) === PACK_PRICE_RANGE.min && Number(hi) === PACK_PRICE_RANGE.max, `AggregateOffer low/high derive from PACK_PRICE_RANGE (got ${lo}/${hi})`);
+  ok(/\$\{PACK_PRICE_RANGE\.text\} per pack, no signup/.test(src) && !/\$0\.05-\$1\.50/.test(html + src), "the page description quotes the derived range, never the retired $0.05-$1.50");
+}
 
 const flagshipCount = (html.match(/class="sk-flagship"/g) || []).length;
 ok(flagshipCount === 6, `exactly 6 flagship cards render (got ${flagshipCount})`);
@@ -63,6 +80,36 @@ ok(html.includes(">failed<"), "illustrative table shows a real failed-step statu
   const detail = skillPackPage(BASE_URL, "security-audit", {});
   ok(typeof detail === "string" && detail.includes('class="sk-tl"'), "skillPackPage still renders with .sk-tl (shared CSS untouched for the detail page)");
   ok(detail.includes("Tools in this pack"), "skillPackPage still renders its own sections unchanged");
+}
+// --- "Call it directly" snippet runs against the published SDK (2026-10-02) --
+// It used to read `npx agent402-client call <pack> {...}`, and the package
+// ships no bin, so the command could not run. The snippet now uses the SDK's
+// constructor + call(); this drives that exact call against a stubbed server.
+{
+  const { packClientSnippet } = await import("../src/skills.js");
+  const { Agent402 } = await import("../client/index.js");
+  const { readFileSync } = await import("node:fs");
+  const catalog = { "POST /api/skill/security-audit": { slug: "skill-security-audit", route: "POST /api/skill/security-audit", price: "$0.017", discovery: {} } };
+  const detail = skillPackPage(BASE_URL, "security-audit", catalog);
+  const snippet = packClientSnippet("skill-security-audit", { domain: "example.com" });
+  ok(detail.includes("client.call(&quot;skill-security-audit&quot;"), "pack page shows the SDK call keyed on the catalog slug");
+  ok(!/npx agent402-client/.test(detail), "pack page does not show a CLI the package does not ship");
+  const pkg = JSON.parse(readFileSync(new URL("../client/package.json", import.meta.url), "utf8"));
+  ok(/import \{ Agent402 \} from "agent402-client"/.test(snippet) && pkg.name === "agent402-client" && pkg.bin === undefined, "snippet imports the package the way it is published (a library, no bin)");
+  const hits = [];
+  const stub = async (url, init = {}) => {
+    const u = new URL(url);
+    hits.push(`${init.method || "GET"} ${u.pathname}`);
+    if (u.pathname === "/api/pricing") return new Response(JSON.stringify({ endpoints: [{ slug: "skill-security-audit", method: "POST", path: "/api/skill/security-audit", computePayable: true, price: "$0.017" }] }), { headers: { "content-type": "application/json" } });
+    if (u.pathname === "/api/skill/security-audit") return new Response(JSON.stringify({ pack: "security-audit", args: JSON.parse(init.body || "{}"), steps: [], summary: "0/0" }), { headers: { "content-type": "application/json" } });
+    return new Response("not found", { status: 404 });
+  };
+  const m = snippet.match(/client\.call\(("[^"]+"), (\{.*\})\);/);
+  const client = new Agent402({ baseUrl: "http://stub.test", fetchImpl: stub, cache: false });
+  let out = null, err = null;
+  try { out = await client.call(JSON.parse(m[1]), JSON.parse(m[2])); } catch (e2) { err = e2; }
+  ok(out && out.pack === "security-audit" && out.args.domain === "example.com" && hits.includes("POST /api/skill/security-audit"),
+    `the snippet's call() resolves and posts the pack args${err ? ` (error: ${err.message})` : ""}`);
 }
 {
   const json = skillPacksJson();

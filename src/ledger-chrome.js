@@ -244,9 +244,6 @@ body { transition: background-color .18s ease, color .18s ease; }
    whole nav into a tap menu) --- */
 .ml-burger { display:none; align-items:center; justify-content:center; width:38px; height:34px; padding:0; border:1px solid var(--hairline); border-radius:8px; background:var(--card); color:var(--ink); cursor:pointer; }
 .ml-burger .ml-burger-close { display:none; }
-.ml-live-dot { width:7px; height:7px; border-radius:50%; background:#E5484D; display:inline-block; box-shadow:0 0 0 0 rgba(229,72,77,.55); animation:ml-live-pulse 1.8s ease-out infinite; }
-@keyframes ml-live-pulse { 0% { box-shadow:0 0 0 0 rgba(229,72,77,.55); } 70% { box-shadow:0 0 0 6px rgba(229,72,77,0); } 100% { box-shadow:0 0 0 0 rgba(229,72,77,0); } }
-@media (prefers-reduced-motion: reduce) { .ml-live-dot { animation:none; } }
 .ml-theme-toggle { display:inline-flex; align-items:center; justify-content:center; width:36px; height:34px; padding:0; border:1px solid var(--hairline); border-radius:999px; background:var(--card); color:var(--ink); cursor:pointer; }
 .ml-theme-toggle .ml-moon { display:none; } :root[data-theme="dark"] .ml-theme-toggle .ml-moon { display:inline; } :root[data-theme="dark"] .ml-theme-toggle .ml-sun { display:none; }
 .ml-mobile-menu { display:none; border-top:1px solid var(--hairline); background:var(--paper); max-height:calc(100vh - 62px); overflow-y:auto; -webkit-overflow-scrolling:touch; }
@@ -579,8 +576,7 @@ function peoplePanelNav() {
               <span style="display:block;width:300px;border:1px solid var(--hairline);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
                 <span class="mlnav-label">FOR PEOPLE · CARD OR USDC</span>
                 <a href="/reports" class="mlnav-row"><span style="font-weight:700;">reports</span><span class="mlnav-faint">finished, cited, $2 and up</span></a>
-                <a href="/monitors" class="mlnav-row"><span style="font-weight:700;">monitors</span><span class="mlnav-faint">watch one target monthly</span></a>
-                <a href="/credits" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">credits</span><span class="mlnav-faint">pay by card, use every tool</span></a>
+                <a href="/monitors" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">monitors</span><span class="mlnav-faint">watch one target monthly</span></a>
                 <a href="/reports" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--surface);color:var(--on-dark);"><span style="font-weight:700;">get a report</span><span style="opacity:.7;">→</span></a>
               </span>
             </span>`;
@@ -700,7 +696,6 @@ function mobileMenuHtml(chainInfo, activePath) {
     <div class="ml-mm-group">
       ${mmLink("/reports", "reports · card or USDC", activePath === "/reports")}
       ${mmLink("/monitors", "monitors · monthly, cancel anytime", activePath === "/monitors")}
-      ${mmLink("/credits", "credits · pay by card, use every tool", activePath === "/credits")}
     </div>
     <div class="ml-mm-h">Buy</div>
     <div class="ml-mm-group">
@@ -792,7 +787,7 @@ function nav(activePath) {
       ${zone3}
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;">
-      <a class="ml-nav-gh ml-nav-live" href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;" title="x402 and MPP payments as they settle, read from the chain"><span class="ml-live-dot" aria-hidden="true"></span>live</a>
+      <a class="ml-nav-gh ml-nav-live" href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:6px 11px;border:1px solid var(--hairline);border-radius:8px;background:var(--card);" title="Watch x402 and MPP payments settle, read from the chain"><svg width="15" height="13" viewBox="0 0 24 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="13" rx="2"/><path d="M8 19h8"/><path d="M10.5 6.2v4.6l4-2.3z" fill="currentColor" stroke="none"/></svg>live</a>
       <a class="ml-nav-gh" href="/status" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;" title="Uptime from two outside observers"><span aria-hidden="true" style="width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;"></span>status</a>
       <a class="ml-nav-gh" href="/llms.txt" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:none;padding:8px 13px;border:1px solid var(--hairline);border-radius:999px;background:var(--card);white-space:nowrap;">llms.txt</a>
       ${activePath === "/reports" ? "" : `<a class="ml-nav-cta" href="/reports" style="background:var(--btn-bg);color:var(--btn-fg);font-family:var(--font-body);font-weight:500;font-size:13.5px;text-decoration:none;padding:9px 16px;border-radius:999px;box-shadow:var(--btn-shadow);white-space:nowrap;">Get a report</a>`}
@@ -844,7 +839,7 @@ export function ledgerFooterCompact() {
   <div style="max-width:1180px;margin:0 auto;padding:26px 30px;font-family:var(--font-mono);font-size:12px;color:var(--faint);">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
       <a href="/" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);">${brandMark(20, "f")}<span style="font-weight:600;font-size:14px;font-family:var(--font-sans);letter-spacing:-.01em;">Agent402</span></a>
-      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/reports" style="color:var(--muted);text-decoration:none;">reports</a><a href="/monitors" style="color:var(--muted);text-decoration:none;">monitors</a><a href="/credits" style="color:var(--muted);text-decoration:none;">credits</a><a href="/tools" style="color:var(--muted);text-decoration:none;">catalog</a>${DECIDE_LIVE ? `<a href="/decide" style="color:var(--muted);text-decoration:none;">decide</a>` : ""}<a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/marketplace" style="color:var(--muted);text-decoration:none;">marketplace</a><a href="/revenue" style="color:var(--muted);text-decoration:none;">transactions</a><a href="/sell" style="color:var(--muted);text-decoration:none;">sell</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a><a href="/why" style="color:var(--muted);text-decoration:none;">why</a><a href="/company" style="color:var(--muted);text-decoration:none;">company</a></span>
+      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/reports" style="color:var(--muted);text-decoration:none;">reports</a><a href="/monitors" style="color:var(--muted);text-decoration:none;">monitors</a><a href="/tools" style="color:var(--muted);text-decoration:none;">catalog</a>${DECIDE_LIVE ? `<a href="/decide" style="color:var(--muted);text-decoration:none;">decide</a>` : ""}<a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/marketplace" style="color:var(--muted);text-decoration:none;">marketplace</a><a href="/revenue" style="color:var(--muted);text-decoration:none;">transactions</a><a href="/sell" style="color:var(--muted);text-decoration:none;">sell</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a><a href="/why" style="color:var(--muted);text-decoration:none;">why</a><a href="/company" style="color:var(--muted);text-decoration:none;">company</a></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--hairline);">
       <span>© 2026 Havok Holdings LLC · <a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:underline;">mike@agent402.tools</a></span>

@@ -32,7 +32,7 @@ import { createHmac } from "node:crypto";
 import { mppProblem, markMppProblem, sendMppProblem } from "./mpp-problem.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 
-const STRIPE_MIN_USD = 0.50; // SPT card minimum (docs.stripe.com/payments/machine)
+export const STRIPE_MIN_USD = 0.50; // SPT card minimum (docs.stripe.com/payments/machine)
 const CHALLENGE_TIMEOUT_SECONDS = 300;
 
 export function stripeEnabled() {

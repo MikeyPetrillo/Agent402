@@ -15,9 +15,9 @@ import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { privateKeyToAccount } from "viem/accounts";
 
-const client = new x402Client();
-registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
-const payFetch = wrapFetchWithPayment(fetch, client);`;
+const payClient = new x402Client();
+registerExactEvmScheme(payClient, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const payFetch = wrapFetchWithPayment(fetch, payClient);`;
 
 // Shared descriptions of the two adapter shapes, so every page in a family
 // says the same true thing.
@@ -60,11 +60,12 @@ export const INTEGRATIONS = [
 import { agent402Tools } from "agent402-openai-tools";
 
 const openai = new OpenAI();
-const { tools, execute } = await agent402Tools({ slugs: ["extract", "hash", "render", "screenshot"] });
+// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "text-stats", "uuid"] });
 
 const res = await openai.chat.completions.create({
   model: "gpt-4o-mini",
-  messages: [{ role: "user", content: "Get the title of https://example.com/article" }],
+  messages: [{ role: "user", content: "What is the SHA-256 of 'hello world'?" }],
   tools,
 });
 
@@ -75,7 +76,12 @@ if (call) {
 }`,
     walletExample: `${X402_FETCH}
 
-const { tools, execute } = await agent402Tools({ freeOnly: false, fetch: payFetch });`,
+// wallet-only tools (extract, render, screenshot, ...) need freeOnly: false and a paying fetch
+const { tools, execute } = await agent402Tools({
+  slugs: ["extract", "render", "hash"],
+  freeOnly: false,
+  fetch: payFetch,
+});`,
     exposes: PER_SLUG_EXPOSES,
     payment: PER_SLUG_PAYMENT,
     tools: ["extract", "hash", "render", "screenshot", "search", "answer"],
@@ -95,13 +101,14 @@ const { tools, execute } = await agent402Tools({ freeOnly: false, fetch: payFetc
 import { agent402Tools } from "agent402-anthropic-tools";
 
 const client = new Anthropic();
-const { tools, execute } = await agent402Tools({ slugs: ["extract", "hash", "render", "screenshot"] });
+// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "text-stats", "uuid"] });
 
 const res = await client.messages.create({
-  model: "claude-sonnet-4-6",
+  model: "claude-opus-5-5",
   max_tokens: 1024,
   tools,
-  messages: [{ role: "user", content: "Get the title of https://example.com/article" }],
+  messages: [{ role: "user", content: "What is the SHA-256 of 'hello world'?" }],
 });
 
 const block = res.content.find((b) => b.type === "tool_use");
@@ -109,9 +116,13 @@ if (block) {
   const result = await execute(block.name, block.input);
   console.log(result);
 }`,
-    walletExample: `const { tools, execute } = await agent402Tools({
+    walletExample: `${X402_FETCH}
+
+// wallet-only tools (extract, render, screenshot, ...) need freeOnly: false and a paying fetch
+const { tools, execute } = await agent402Tools({
+  slugs: ["extract", "render", "hash"],
   freeOnly: false,
-  fetch: payFetch, // your @x402/fetch-wrapped fetch
+  fetch: payFetch,
 });`,
     exposes: PER_SLUG_EXPOSES,
     payment: PER_SLUG_PAYMENT,
@@ -127,19 +138,23 @@ if (block) {
     dir: "adapters/ai-sdk",
     docsSlug: "ai-sdk",
     what: "Gives a Vercel AI SDK agent four meta tools that reach the whole catalog: the model describes a task, `agent402_find` or `agent402_route` picks the tool, and `agent402_call` runs and pays for it. Works with `generateText` and `streamText` on any provider the SDK supports.",
-    install: "npm install agent402-ai-sdk ai zod",
+    install: "npm install agent402-ai-sdk ai @ai-sdk/openai zod",
     example: `import { agent402Tools } from "agent402-ai-sdk";
-import { generateText } from "ai";
+import { generateText, stepCountIs } from "ai";
 import { openai } from "@ai-sdk/openai";
 
-const tools = await agent402Tools();   // free tier: proof-of-work, no wallet
+const tools = await agent402Tools();   // an object keyed by tool name; free tier: proof-of-work, no wallet
 
 const { text } = await generateText({
   model: openai("gpt-4o"),
   tools,
+  stopWhen: stepCountIs(3),   // let the model read the tool result and answer
   prompt: "Hash 'hello world' with sha256",
 });`,
-    walletExample: `const tools = await agent402Tools({ fetch: payFetch }); // an x402- or MPP-wrapped fetch`,
+    walletExample: `${X402_FETCH}
+
+// agent402_call pays wallet-only tools through this fetch
+const tools = await agent402Tools({ fetch: payFetch });`,
     exposes: META_EXPOSES,
     payment: META_PAYMENT,
     tools: ["hash", "search", "extract", "render", "route-execute"],
@@ -154,13 +169,21 @@ const { text } = await generateText({
     dir: "adapters/langchain",
     docsSlug: "langchain",
     what: "LangChain.js tool objects for Agent402, ready for any LangChain or LangGraph agent. Four meta tools cover the whole catalog, so the agent's tool budget stays small however many endpoints the catalog holds.",
-    install: "npm install agent402-langchain @langchain/core zod",
+    install: "npm install agent402-langchain @langchain/core @langchain/langgraph @langchain/openai zod",
     example: `import { agent402Tools } from "agent402-langchain";
+import { ChatOpenAI } from "@langchain/openai";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 
-const tools = await agent402Tools();   // free tier: proof-of-work, no wallet
-const agent = createReactAgent({ llm, tools });`,
-    walletExample: `const tools = await agent402Tools({ fetch: payFetch }); // an x402- or MPP-wrapped fetch`,
+const tools = await agent402Tools();   // an array of four tools; free tier: proof-of-work, no wallet
+const agent = createReactAgent({ llm: new ChatOpenAI({ model: "gpt-4o-mini" }), tools });
+
+const result = await agent.invoke({
+  messages: [{ role: "user", content: "Hash 'hello world' with sha256" }],
+});`,
+    walletExample: `${X402_FETCH}
+
+// agent402_call pays wallet-only tools through this fetch
+const tools = await agent402Tools({ fetch: payFetch });`,
     exposes: META_EXPOSES,
     payment: META_PAYMENT,
     tools: ["search", "answer", "extract", "hash", "route-execute"],
@@ -207,18 +230,24 @@ toolkit = Agent402Toolkit(base_url="https://agent402.tools", x402_fetch=my_signe
     dir: "adapters/llamaindex",
     docsSlug: "llamaindex",
     what: "Returns a `FunctionTool[]` array for any LlamaIndex TS agent or workflow, built from the catalog's raw JSON Schema, so there is no Zod or hand-written schema to maintain.",
-    install: "npm install llamaindex agent402-llamaindex",
-    example: `import { OpenAIAgent } from "llamaindex";
+    install: "npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-llamaindex",
+    example: `import { agent } from "@llamaindex/workflow";
+import { openai } from "@llamaindex/openai";
 import { agent402Tools } from "agent402-llamaindex";
 
-const { tools } = await agent402Tools({ slugs: ["extract", "hash", "render", "screenshot"] });
+// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
+const { tools } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "text-stats", "uuid"] });
 
-const agent = new OpenAIAgent({ tools });
-const res = await agent.chat({ message: "Get the title of https://example.com/article" });
-console.log(res.response);`,
-    walletExample: `const { tools } = await agent402Tools({
+const myAgent = agent({ tools, llm: openai({ model: "gpt-4o-mini" }) });
+const res = await myAgent.run("What is the SHA-256 of 'hello world'?");
+console.log(res.data.result);`,
+    walletExample: `${X402_FETCH}
+
+// wallet-only tools (extract, render, screenshot, ...) need freeOnly: false and a paying fetch
+const { tools } = await agent402Tools({
+  slugs: ["extract", "render", "hash"],
   freeOnly: false,
-  fetch: payFetch, // your @x402/fetch-wrapped fetch
+  fetch: payFetch,
 });`,
     exposes: PER_SLUG_EXPOSES,
     payment: PER_SLUG_PAYMENT,
@@ -242,11 +271,14 @@ const tools = await agent402Tools();   // free tier: proof-of-work, no wallet
 
 const agent = new LlmAgent({
   name: "x402-agent",
-  model: "gemini-2.0-flash",
+  model: "gemini-3.6-flash",
   tools,
   instruction: "Use agent402_find to discover the right tool, then agent402_call to invoke it.",
 });`,
-    walletExample: `const tools = await agent402Tools({ fetch: payFetch }); // an x402- or MPP-wrapped fetch`,
+    walletExample: `${X402_FETCH}
+
+// agent402_call pays wallet-only tools through this fetch
+const tools = await agent402Tools({ fetch: payFetch });`,
     exposes: META_EXPOSES,
     payment: META_PAYMENT,
     tools: ["search", "answer", "hash", "crypto-market-pulse", "route-execute"],
@@ -261,7 +293,7 @@ const agent = new LlmAgent({
     dir: "adapters/openai-agents",
     docsSlug: "openai-agents",
     what: "Tools for agents built with the OpenAI Agents SDK (`@openai/agents`). Pass them to `new Agent({ tools })` and the agent can find, route to and call any tool in the catalog.",
-    install: "npm install agent402-openai-agents @openai/agents zod",
+    install: "npm install agent402-openai-agents @openai/agents",
     example: `import { agent402Tools } from "agent402-openai-agents";
 import { Agent, run } from "@openai/agents";
 
@@ -273,7 +305,10 @@ const agent = new Agent({
   tools,
 });
 const result = await run(agent, "Hash 'hello world' with sha256");`,
-    walletExample: `const tools = await agent402Tools({ fetch: payFetch }); // an x402- or MPP-wrapped fetch`,
+    walletExample: `${X402_FETCH}
+
+// agent402_call pays wallet-only tools through this fetch
+const tools = await agent402Tools({ fetch: payFetch });`,
     exposes: META_EXPOSES,
     payment: META_PAYMENT,
     tools: ["hash", "search", "answer", "extract", "route-execute"],
@@ -293,13 +328,21 @@ const result = await run(agent, "Hash 'hello world' with sha256");`,
     example: `import { Agent } from "@strands-agents/sdk";
 import { agent402Tools } from "agent402-strands";
 
+// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
 const { tools } = await agent402Tools({
-  slugs: ["extract", "hash", "render", "screenshot"],
+  slugs: ["hash", "markdown-to-html", "text-stats", "uuid"],
 });
 
 const agent = new Agent({ tools });
-const out = await agent.invoke("Extract the article at https://example.com");`,
-    walletExample: `const { tools } = await agent402Tools({ freeOnly: false, fetch: payFetch });`,
+const out = await agent.invoke("What is the SHA-256 of 'hello world'?");`,
+    walletExample: `${X402_FETCH}
+
+// wallet-only tools (extract, render, screenshot, ...) need freeOnly: false and a paying fetch
+const { tools } = await agent402Tools({
+  slugs: ["extract", "render", "hash"],
+  freeOnly: false,
+  fetch: payFetch,
+});`,
     exposes: [
       ...PER_SLUG_EXPOSES,
       "A `client` field with the underlying buyer SDK (`find()`, `call()`, `clearCache()`), and `agent402Execute()` for a standalone executor.",
@@ -360,8 +403,8 @@ await agent402ActionProvider({
     short: "elizaOS",
     pkg: "elizaos-plugin-agent402",
     dir: "adapters/eliza",
-    what: "An elizaOS plugin with three actions and a provider. The agent can find a tool from a plain-language task and call it, paying with a prepaid credits key or in USDC over x402, inside per-call and daily ceilings you set in the character config.",
-    install: "elizaos plugins add elizaos-plugin-agent402",
+    what: "An elizaOS plugin with three actions and a provider, installed from npm into the agent project and named in the character's \`plugins\` list. The agent can find a tool from a plain-language task and call it, paying with a prepaid credits key or in USDC over x402, inside per-call and daily ceilings you set in the character config.",
+    install: "npm install elizaos-plugin-agent402",
     lang: "json",
     example: `{
   "plugins": ["elizaos-plugin-agent402"],
@@ -493,7 +536,8 @@ npm i @x402/express @x402/core @x402/evm
 TOLLBOOTH_UPSTREAM=https://your-site.com \\
 TOLLBOOTH_PAYTO=0xYourWallet \\
 TOLLBOOTH_FACILITATOR_URL=https://x402.org/facilitator \\
-npx agent402-tollbooth`,
+TOLLBOOTH_NETWORK=base-sepolia \\
+npx agent402-tollbooth   # testnet dry run; for mainnet, drop TOLLBOOTH_NETWORK and use a mainnet facilitator`,
     exposes: [
       "`createTollbooth(config)`: Express-compatible middleware with charge modes, adaptive proof-of-work and a stats sink.",
       "`npx agent402-tollbooth`: a reverse proxy that needs no code change on the origin.",

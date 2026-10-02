@@ -3,7 +3,7 @@
   "name": "io.github.MikeyPetrillo/agent402",
   "title": "Agent402.Tools: pay-per-call web tools",
   "description": "Agentic Finance: 500+ agent tools, multi-chain USDC over x402 or MPP, free via PoW or card credits",
-  "version": "0.13.5",
+  "version": "0.13.6",
   "repository": {
     "url": "https://github.com/MikeyPetrillo/Agent402",
     "source": "github"
@@ -20,7 +20,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "agent402-mcp",
-      "version": "0.13.5",
+      "version": "0.13.6",
       "transport": {
         "type": "stdio"
       },

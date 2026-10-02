@@ -23,15 +23,15 @@ const STEPS = [
   ["01", "The agent asks for something", "A plain HTTP request, with no credentials attached. There is no account to authenticate against, so nothing to send."],
   ["02", "The server answers 402 with a price", "The response names the amount, the asset, the chain, and where to pay. This is machine-readable, so the caller does not need documentation to understand the terms."],
   ["03", "The agent signs a payment and retries", "It signs an EIP-3009 stablecoin transfer authorization with its own key and repeats the identical request, carrying the authorization in a header. Funds are never handed to the seller's server."],
-  ["04", "The server verifies, settles, and answers", "A facilitator checks and settles the authorization on chain, then the server returns the real response plus a receipt. The caller experiences one request that cost a fraction of a cent."],
+  ["04", "The server verifies, answers, then settles", "A facilitator verifies the authorization, the server runs the request, and the payment settles on chain only when the response succeeds; the receipt rides back in a PAYMENT-RESPONSE header. A failed call is never charged."],
 ];
 
 const COMPARE = [
   ["Full name", "x402", "MPP, the Machine Payments Protocol"],
   ["Origin", "Open standard published by Coinbase", "IETF-track specification (tempoxyz/mpp)"],
-  ["Challenge", "402 with an x402 JSON body of payment requirements", "402 with a standard WWW-Authenticate: Payment header"],
+  ["Challenge", "402 with a PAYMENT-REQUIRED header (base64 JSON payment requirements)", "402 with a standard WWW-Authenticate: Payment header"],
   ["Credential", "X-PAYMENT header carrying the signed authorization", "Authorization: Payment, the normal HTTP auth slot"],
-  ["Receipt", "Settlement details returned in the response body", "Payment-Receipt response header"],
+  ["Receipt", "PAYMENT-RESPONSE response header", "Payment-Receipt response header"],
   ["Settlement", "EIP-3009 stablecoin authorization, verified by a facilitator", "Identical: EIP-3009, same facilitator, same price"],
   ["Client", "@x402/fetch and other x402 clients", "mppx and any HTTP client that speaks the Payment scheme"],
   ["On Agent402", "Served on every paid route", "Served on the same routes, no configuration either side"],
@@ -40,7 +40,7 @@ const COMPARE = [
 const FAQS = [
   ["What is x402?", "x402 is an open payment protocol that finally uses HTTP status code 402 Payment Required. A client asks for a resource, gets a price back, pays in a stablecoin, and the same request goes through. It lets a program buy one thing in one round trip with no subscription, no checkout page and no account."],
   ["What is MPP, the Machine Payments Protocol?", "MPP is the IETF-track standard that gives HTTP a native Payment authorization scheme. The server answers 402 with a WWW-Authenticate: Payment challenge, the client retries with Authorization: Payment credentials, and the settled response returns a Payment-Receipt header. It is a second wire for the same idea as x402, with the same EIP-3009 USDC settlement underneath."],
-  ["What is the difference between x402 and MPP?", "They differ in wire format, not in economics. x402 carries payment requirements in its own JSON body and an X-PAYMENT header; MPP uses standard HTTP authentication headers, WWW-Authenticate: Payment and Authorization: Payment, plus a Payment-Receipt on success. Both settle the same EIP-3009 USDC authorization through the same facilitator at the same price. A server can answer both on one route, which is what Agent402 does, so the buyer's client chooses."],
+  ["What is the difference between x402 and MPP?", "They differ in wire format, not in economics. x402 carries payment requirements in a PAYMENT-REQUIRED header and the payment in a PAYMENT-SIGNATURE header; MPP uses standard HTTP authentication headers, WWW-Authenticate: Payment and Authorization: Payment, plus a Payment-Receipt on success. Both settle the same EIP-3009 USDC authorization through the same facilitator at the same price. A server can answer both on one route, which is what Agent402 does, so the buyer's client chooses."],
   ["What are agentic payments?", "Agentic payments are purchases made by software rather than people. An AI agent cannot sign up for twenty APIs, because it has no email, no credit card and no way to accept terms, but it can pay a fraction of a cent per call from its own wallet. The wallet is the identity, so there is nothing to register and no key to rotate."],
   ["Why was HTTP 402 unused for thirty years?", "HTTP reserved 402 Payment Required in 1997 as a placeholder for a digital cash system that never arrived. Card payments needed a redirect, a session and a human, none of which fit inside a single HTTP response. Stablecoins made a one-round-trip machine payment practical, so the status code finally has a payment system to describe."],
   ["Do I need a wallet or crypto to call an x402 API?", "Not always. Some servers, including Agent402, offer a proof-of-work tier where your own machine solves a single-use sha256 puzzle instead of paying, costing about a second of CPU. A wallet is needed only for calls that cost the operator real money, and those quote their price in the 402 challenge before anything is charged."],
@@ -189,23 +189,20 @@ table{border-collapse:collapse;width:100%}
     <div style="background:var(--surface);">
       <div style="display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11px;letter-spacing:.06em;color:var(--dk-muted);"><span style="color:var(--accent-lit);">●</span><span>on the wire</span></div>
       <pre style="margin:0;padding:20px 18px;font-family:var(--font-mono);font-size:12px;line-height:1.85;color:var(--on-dark);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># 1. the agent asks, without paying
-</span>POST /api/edgar-filing-text
+</span>POST /api/hash
 
-<span style="color:var(--dk-muted3);"># 2. the server quotes a price
-</span><span style="color:var(--accent-lit);">HTTP/1.1 402 PAYMENT REQUIRED</span>
-WWW-Authenticate: Payment
-  realm="agent402", amount="0.004",
-  asset="USDC", network="base"
+<span style="color:var(--dk-muted3);"># 2. the server quotes a price (base64 JSON: scheme, network, amount, asset, payTo)
+</span><span style="color:var(--accent-lit);">HTTP/1.1 402 Payment Required</span>
+PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6MiwiZXJyb3IiOi&hellip;
 
-<span style="color:var(--dk-muted3);"># 3. the agent signs and retries
-</span>POST /api/edgar-filing-text
-Authorization: Payment
-  &lt;EIP-3009 authorization&gt;
+<span style="color:var(--dk-muted3);"># 3. the agent signs an EIP-3009 authorization and retries
+</span>POST /api/hash
+PAYMENT-SIGNATURE: eyJ4NDAyVmVyc2lvbiI6MiwicGF5bG9hZCI6&hellip;
 
-<span style="color:var(--dk-muted3);"># 4. verified, settled, delivered
+<span style="color:var(--dk-muted3);"># 4. verified, the handler runs, then the payment settles
 </span><span style="color:var(--accent-lit);">HTTP/1.1 200 OK</span>
-Payment-Receipt: 0x8f2a&hellip;c41d
-<span style="color:var(--faint);">{ "filing": "10-K", "text": "&hellip;" }</span></pre>
+PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
+<span style="color:var(--faint);">{ "algo": "sha256", "hex": "&hellip;" }</span></pre>
     </div>
   </div>
   <p style="font-size:15px;line-height:1.65;color:var(--faint);max-width:820px;margin:22px 0 0;">The payment settles only alongside a successful response, so a failed call is never charged. Because settlement lands on a public chain, both sides can check afterwards what was actually paid instead of trusting an invoice.</p>

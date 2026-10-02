@@ -15,6 +15,37 @@ import { fitTitle } from "./seo-meta.js";
 import { GUIDE_INTEGRATIONS, integrationBySlug } from "./integration-pages.js";
 import { RAILS_OR, RAILS_AMP } from "./rails.js";
 import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE } from "./tools/llm-gateway-kit.js";
+import { routingProofSentence } from "./routing-proof.js";
+
+// Prices in guide prose are never typed: a guide writes {{price:<slug>}} (the
+// list price), {{amount:<slug>}} (the same price in USDC atomic units, as an
+// x402 v2 accepts entry carries it) or {{routerTiers}} (the route-execute tier
+// table), and guidePage() resolves them against the live catalog. An unknown
+// slug throws, so a retired tool fails the page test instead of shipping a
+// stale figure. Without a catalog (offline renders) the tokens point at
+// /api/pricing.
+const priceUsd = (p) => Number(String(p ?? "").replace(/[^0-9.]/g, ""));
+const fmtUsd = (n) => `$${n.toFixed(n < 0.01 ? 3 : 2)}`;
+function resolveGuideTokens(text, catalog) {
+  const bySlug = catalog ? new Map(Object.values(catalog).filter((d) => d && d.slug).map((d) => [d.slug, d])) : null;
+  const def = (slug) => {
+    const d = bySlug.get(slug);
+    if (!d) throw new Error(`guide token names "${slug}", which is not in the catalog`);
+    return d;
+  };
+  return String(text)
+    .replace(/\{\{price:([a-z0-9-]+)\}\}/g, (_, slug) => (bySlug ? def(slug).price : "(price on /api/pricing)"))
+    .replace(/\{\{amount:([a-z0-9-]+)\}\}/g, (_, slug) => (bySlug ? String(Math.round(priceUsd(def(slug).price) * 1e6)) : "<amount>"))
+    .replace(/\{\{routerTiers\}\}/g, () => {
+      if (!bySlug) return "The tiers and their prices are listed at [/api/pricing](https://agent402.tools/api/pricing).";
+      const rows = [...bySlug.values()]
+        .filter((d) => /^route-execute(-|$)/.test(d.slug) && Number.isFinite(d.underlyingMaxUsd))
+        .sort((a, b) => priceUsd(a.price) - priceUsd(b.price));
+      return "| Route | Price | Covers tools listed up to |\n| --- | --- | --- |\n" +
+        rows.map((d) => `| \`${d.route}\` | ${fmtUsd(priceUsd(d.price))} | ${fmtUsd(d.underlyingMaxUsd)} |`).join("\n");
+    })
+    .replace(/\{\{routingProof\}\}/g, () => routingProofSentence());
+}
 // Derived at module load from the live tier table so the guide can never say a
 // price the gateway does not charge (the first version typed these).
 const FLAT_TIER_ROWS = Object.entries(TIERS)
@@ -41,15 +72,18 @@ Your client calls a paid endpoint. The server replies \`402\` with a
 machine-readable quote - price, asset (USDC), network (Base), pay-to address.
 Your client signs a USDC transfer authorization from its own wallet (no gas
 needed; the facilitator sponsors it) and retries the request with the payment
-header. The server verifies, settles on-chain, and serves the result. Seconds,
-end to end. **The payment is the identity** - no account ever existed.
+header. The server verifies the payment, runs the request, and settles on-chain
+only when the response succeeds, so a failed call is not charged. Seconds, end
+to end. **The payment is the identity** - no account ever existed.
 
 ## See a quote (free)
 
 \`\`\`bash
 curl -i -X POST https://agent402.tools/api/extract \\
   -H 'Content-Type: application/json' -d '{"url":"https://example.com"}'
-# HTTP/2 402 … {"x402Version":2,"accepts":[{"price":"$0.010","network":"eip155:8453",…}]}
+# HTTP/2 402  (the same terms ride base64-encoded in the PAYMENT-REQUIRED header)
+# {"x402Version":2,…,"accepts":[{"scheme":"exact","network":"eip155:8453","amount":"{{amount:extract}}",
+#   "asset":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","payTo":"0x…",…},…]}
 \`\`\`
 
 ## Pay it (JavaScript)
@@ -144,7 +178,7 @@ authenticated identity, with zero credentials to store or leak.
 ## Write today, read next week, different machine
 
 \`\`\`bash
-# machine A, today ($0.002)
+# machine A, today ({{price:memory-write}})
 POST /api/memory   {"key":"deploy-fix","value":{"cause":"build OOM","fix":"NODE_VERSION=22"}}
 
 # machine B, next week - same wallet key, nothing else
@@ -188,7 +222,7 @@ deterministic: it calls no model and no external API.
 You could - if you can keep credentials, run migrations, and pay a monthly
 bill. The point of wallet-keyed memory is that an agent **mid-task** can't do
 any of that, and doesn't need to: the credential it already holds for payment
-doubles as its identity, the marginal cost is $0.002 a call, and state outlives
+doubles as its identity, a write costs {{price:memory-write}} and a read {{price:memory-read}}, and state outlives
 any single sandbox. The whole implementation is
 [open source](${REPO_URL}) - see the
 [memory wiki page](${repoUrl("wiki/Memory-and-Coordination")})
@@ -211,26 +245,36 @@ lets you charge them per call with about as much code as adding a middleware.
 
 You return \`402 Payment Required\` with a quote (price, USDC, network, your
 wallet address). The buyer signs a transfer authorization and retries; a
-**facilitator** (Coinbase's is free; Stripe also operates x402 infrastructure)
-verifies the signature and settles on-chain to your wallet. You never touch
+**facilitator** verifies the signature, your handler runs, and the facilitator
+settles on-chain to your wallet. You never touch
 keys, cards, or PCI anything - your "billing system" is one HTTP header check.
 
 ## Express example
 
 \`\`\`js
 import express from "express";
-import { paymentMiddleware } from "@x402/express";
+import { paymentMiddleware, x402ResourceServer } from "@x402/express";
+import { HTTPFacilitatorClient } from "@x402/core/server";
+import { ExactEvmScheme } from "@x402/evm/exact/server";
+
+const facilitator = new HTTPFacilitatorClient({ url: "https://x402.org/facilitator" });
+const server = new x402ResourceServer(facilitator).register("eip155:84532", new ExactEvmScheme());
 
 const app = express();
+app.use(express.json());
 app.use(paymentMiddleware({
-  payTo: "0xYOUR_WALLET",                     // USDC lands here, on Base
-  routes: { "POST /api/summarize": { price: "$0.005" } },
-}));
+  "POST /api/summarize": {
+    accepts: { scheme: "exact", price: "$0.005", network: "eip155:84532", payTo: "0xYOUR_WALLET" },
+    description: "Summarize a document",
+  },
+}, server));
 app.post("/api/summarize", (req, res) => res.json({ ok: true }));
+app.listen(3000);
 \`\`\`
 
-Set Coinbase CDP facilitator keys (free at portal.cdp.coinbase.com) and you're
-settling real money on mainnet. Test the buyer side yourself with Stripe's
+That example settles USDC on Base Sepolia (\`eip155:84532\`) through a public
+testnet facilitator. For mainnet, switch the network to \`eip155:8453\` and point
+\`HTTPFacilitatorClient\` at a facilitator that settles Base mainnet. Test the buyer side yourself with Stripe's
 [purl](https://github.com/stripe/purl): \`purl http://localhost:3000/api/summarize\`.
 
 ## What we learned operating one (the honest part)
@@ -238,9 +282,12 @@ settling real money on mainnet. Test the buyer side yourself with Stripe's
 [agent402.tools](https://agent402.tools) runs ~500+ paid endpoints this way -
 [fully open source](${REPO_URL}). The lessons:
 
-1. **x402 settles before your handler runs.** If your tool then fails, you took
-   money for nothing. Anything that can't be served reliably (upstreams that
-   block datacenter IPs, flaky APIs) should be removed, not monetized.
+1. **x402 settles after your handler runs, and only on success.**
+   \`@x402/express\` verifies the payment, runs the handler, and settles only a
+   response below 400; an error answer cancels settlement, so the buyer is not
+   charged. You still paid for any upstream work that failed, so anything that
+   can't be served reliably (upstreams that block datacenter IPs, flaky APIs)
+   should be removed, not monetized.
 2. **Discovery is half the product.** Publish a machine-readable catalog
    (/api/pricing, OpenAPI, llms.txt) and register with the
    [x402 Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar) - agents
@@ -285,9 +332,11 @@ base), and needs no API key.
 Point it at any paid URL and get the decoded HTTP 402 terms:
 
 \`\`\`bash
-curl "https://agent402.tools/api/x402-quote?url=https://api.example.com/paid&method=GET"
-# { "status": 402, "paymentRequired": true,
-#   "accepts": [{ "scheme":"exact","network":"base","asset":"USDC","maxAmountRequired":"1000","payTo":"0x…" }] }
+curl "https://agent402.tools/api/x402-quote?url=https://agent402.tools/api/uuid&method=GET"
+# { "url": "https://agent402.tools/api/uuid", "status": 402, "paymentRequired": true, "x402Version": 2,
+#   "accepts": [{ "scheme": "exact", "network": "eip155:8453", "amount": "{{amount:uuid}}",
+#                 "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "payTo": "0x…",
+#                 "maxTimeoutSeconds": 300, "extra": { "name": "USD Coin", "version": "2" } }, … ] }
 \`\`\`
 
 ## 2. Who am I paying? - \`/api/ens-resolve\`
@@ -552,7 +601,7 @@ provably.
     slug: "smart-order-router",
     title: "One payment, any proven seller: the x402 Smart Order Router",
     description:
-      "Describe a task, pay once, and the router resolves the best tool - from Agent402's own 500+ catalog or from any PROVEN external x402 seller in the open economy - pays it on your behalf on the chain you paid on (Base or Algorand), and relays the result with an on-chain receipt.",
+      "Describe a task, pay once, and the router resolves the best tool - from Agent402's own 500+ catalog or from any PROVEN external x402 seller in the open economy - pays it on your behalf on the chain you paid on, and relays the result with an on-chain receipt.",
     md: `
 The open x402 economy has a discovery problem and a trust problem. Hundreds of
 sellers advertise endpoints; some deliver, some 402 you and then 404 the paid
@@ -569,11 +618,7 @@ counterparty risk stays on our side of the fee.
 
 ## The three tiers
 
-| Route | Price | Covers tools up to |
-| --- | --- | --- |
-| \`POST /api/route/execute\` | $0.01 | $0.005 |
-| \`POST /api/route/execute-plus\` | $0.05 | $0.04 (the proportional middle rung - a $0.02 tool costs $0.05 through the router, not $0.55) |
-| \`POST /api/route/execute-max\` | $0.55 | $0.50 (the top tier) |
+{{routerTiers}}
 
 \`GET /api/route?q=<task>\` is the free quote: it names the best match and the
 exact tier that can execute it, so there is never any guessing.
@@ -595,10 +640,10 @@ the routing fee, stated, never hidden.
 Add \`"include":"external"\` and the router deliberately looks OUTSIDE its own
 catalog. Selection is deliberate, and it is intentionally boring:
 
-1. **Proven deliverers only.** Candidates need real settled volume - on Base
-   that means on-chain settlement counts from the public leaderboard; on
-   Algorand, verification counts witnessed by the GoPlausible facilitator.
-   Marketing claims are worth zero; only receipts count.
+1. **Proven deliverers first.** Candidates are ranked on real settled volume -
+   on Base that means on-chain settlement counts from the public leaderboard;
+   on Algorand, verification counts witnessed by the GoPlausible facilitator.
+   {{routingProof}}
 2. **A live probe before commitment.** Even a proven seller's crawled route can
    drift, so the router confirms a live 402 challenge before any money moves.
 3. **A price guard before signing.** The seller's quote is pinned to the exact
@@ -607,8 +652,9 @@ catalog. Selection is deliberate, and it is intentionally boring:
 ## Chain-matched settlement
 
 The chain you pay on decides where the router spends: pay on **Base** and it
-pays Base sellers; pay on **Algorand** and it pays Algorand sellers from its
-AVM wallet. The buyer's settlement funds the float on the same rail - and if
+pays Base sellers, and the same holds for its **Solana**, **Algorand** and
+**Tempo** (MPP) legs, each paid from this server's spending wallet on that
+chain. The buyer's settlement funds the float on the same rail - and if
 you pay on a chain without a spending wallet behind it, you get an honest 409
 naming the supported chains, and **you are not charged** (a rejected request
 cancels x402 settlement by design).
@@ -658,10 +704,10 @@ Browse the live economy the router draws from at
     md: `
 [x402](https://x402.org) reused HTTP 402 for a specific shape of payment: an
 unsigned request, an on-chain settle, a retry with proof attached. It is not
-the only proposal doing this. [MPP](https://paymentauth.org) - the Merchant
+the only proposal doing this. [MPP](https://paymentauth.org) - the Machine
 Payments Protocol, an IETF-track spec for a \`Payment\` HTTP auth scheme -
 solves the same problem with a different wire format: a \`WWW-Authenticate:
-Payment\` challenge instead of a bare 402 body, and an \`Authorization: Payment\`
+Payment\` challenge instead of a PAYMENT-REQUIRED header, and an \`Authorization: Payment\`
 credential on retry instead of a custom header.
 
 Two clients, two conventions, one seller who doesn't want to run two paywalls.
@@ -672,10 +718,11 @@ underneath - for MPP's \`evm\` method specifically.
 model does NOT cover.** Tempo (the chain MPP's own reference implementation
 targets) settles natively via TIP-1034/TIP-20 primitives through Tempo's own
 relay - not EIP-3009, no x402 facilitator involved, a genuinely separate
-settlement path from everything below. Every 402 on this server now carries
-BOTH \`evm\` and \`tempo\` MPP challenges (buyer's client picks whichever it
-speaks), but only \`evm\`'s mechanics are what the rest of this guide
-describes.
+settlement path from everything below. A 402 on this server carries both
+\`evm\` and \`tempo\` MPP challenges (the buyer's client picks whichever it
+speaks), except on wallet-identity-bound routes (memory, usage) and
+long-running ones (the report products), which carry no \`tempo\` challenge.
+Only \`evm\`'s mechanics are what the rest of this guide describes.
 
 ## What actually changes on the wire (the \`evm\` method)
 
@@ -707,9 +754,13 @@ If you already have an MPP-capable client, point it at any paid Agent402
 route the normal way - no separate config, no MPP-specific endpoint:
 
 \`\`\`bash
-curl -i -X POST https://agent402.tools/api/hash -d '{"text":"hi","algo":"sha256"}'
+curl -i -X POST https://agent402.tools/api/hash \\
+  -H 'Content-Type: application/json' -d '{"text":"hi","algo":"sha256"}'
 # HTTP/2 402
-# www-authenticate: Payment realm="agent402.tools", evm=eip155:8453;charge="…"
+# www-authenticate: Payment id="…", realm="agent402.tools", method="tempo",
+#   intent="charge", request="eyJhbW91bnQiOi…", expires="…",
+#   Payment id="…", realm="agent402.tools", method="evm",
+#   intent="charge", request="eyJhbW91bnQiOi…", expires="…", opaque="eyJ4NDAyIjoi…"
 \`\`\`
 
 Sign against that challenge the way your MPP client already knows how to,
@@ -789,8 +840,7 @@ tool, per network:
   discovery lives).
 - **Solana, Polygon, Arbitrum** - settled via Coinbase CDP first (it advertises
   these networks too), with PayAI as the fallback.
-- **Avalanche, Sei** - settled via the PayAI facilitator, free up to a
-  generous monthly settlement quota.
+- **Avalanche, Sei** - settled via the PayAI facilitator.
 - **Optimism** - settled via Solvador, a fee-charging facilitator; the price
   quoted on Optimism is bumped to cover that fee, so what you're quoted is
   what actually clears.
@@ -896,6 +946,8 @@ A CDP-managed wallet with server-side spend controls, wrapped around fetch:
 \`\`\`ts
 import { CdpX402Client } from "@coinbase/cdp-sdk/x402";
 import { wrapFetchWithPayment } from "@x402/fetch";
+
+const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"; // USDC on Base
 
 const client = new CdpX402Client({
   spendControls: {
@@ -1172,7 +1224,7 @@ mcpServers:
 \`\`\`
 
 Any id from \`/v1/models\` works as \`model\`; the metered route takes up to
-85,000 characters of input per request.
+${TIERS["v1-chat-metered"].maxInputChars.toLocaleString("en-US")} characters of input per request.
 
 ## ElizaOS
 
@@ -1477,8 +1529,8 @@ not as its model host.
 The credits key that pays for chat pays for the rest: three wires on every
 tier (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank,
 images, speech and transcription, 500+ tools, finished reports
-and monitors, and a router that buys from other proven sellers on your
-agent's behalf. Why pay here, with the proof links:
+and monitors, and a router that buys from other sellers on your agent's
+behalf, proven sellers first. Why pay here, with the proof links:
 [agent402.tools/why](https://agent402.tools/why).
 `,
   },
@@ -1619,7 +1671,8 @@ receipt shape:
   domain audits, token risk, deep research, market briefs, a LinkedIn article
   package; monitors that re-run a report only when the facts change.
 - **Routing that buys on your behalf**: \`POST /api/route/execute\` pays the
-  best proven external seller for a task and relays the result.
+  best-matching external seller for a task, proven sellers first, and relays
+  the result.
 
 Why pay here, in one page with the proof links:
 [agent402.tools/why](https://agent402.tools/why). The short version: usage is
@@ -1704,9 +1757,10 @@ ${ledgerFooterCompact()}`;
   return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd, extraCss: GUIDE_INDEX_CSS, body });
 }
 
-export function guidePage(baseUrl, slug) {
-  const g = GUIDES.find((x) => x.slug === slug);
-  if (!g) return null;
+export function guidePage(baseUrl, slug, catalog = null) {
+  const found = GUIDES.find((x) => x.slug === slug);
+  if (!found) return null;
+  const g = { ...found, md: resolveGuideTokens(found.md, catalog), description: resolveGuideTokens(found.description, catalog) };
 
   const title = fitTitle([`${g.title} - Agent402`, g.seoTitle ? `${g.seoTitle} - Agent402` : "", g.seoTitle || g.title]);
   const canonical = `${baseUrl}/guides/${g.slug}`;

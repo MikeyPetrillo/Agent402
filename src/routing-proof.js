@@ -34,3 +34,16 @@ export function routingProofSentence() {
   if (!tiers.length) return "Sellers are routable on proven on-chain settlement.";
   return `Sellers are routable on proven on-chain settlement, with one exception: a seller with no settlement history yet is tried only after every proven candidate, capped at ${tiers.join(" and ")}, and flagged unproven on the receipt.`;
 }
+
+/**
+ * How the router orders candidates, written once. The order is the comparator
+ * in routeQuery (src/x402-index.js): lexical match score, then crawl health,
+ * then distinct payers measured over the last 30 days, then the cheapest known
+ * price; a judgment model (src/tool-judge.js) may then pick one candidate from
+ * that shortlist or decline them all, and when it is not consulted the
+ * shortlist order stands. Pages used to type three different versions of this
+ * ("health then price", "health x price", "match, health, price").
+ */
+export function routerRankingSentence() {
+  return "Candidates are shortlisted by how well they match the task, then ordered by crawl health, by distinct payers over the last 30 days and by price; a judgment model can then pick the one that does the job from that shortlist, or decline them all, and when it is not consulted the shortlist order stands.";
+}

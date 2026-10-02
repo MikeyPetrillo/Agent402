@@ -120,12 +120,12 @@ export function indexToolsPage(baseUrl, data, categories, params = {}) {
 
   const body = `<div class="ix-wrap">
 <h1 class="ix-h1">Every tool, indexed</h1>
-<p class="ix-sub">${fmtNum(data.total)} paid endpoints across the x402 ecosystem in one searchable list: <b>${fmtNum(data.ours)} we build and operate ourselves</b>, and ${fmtNum(data.thirdParty)} run by other people. Every row says which is which. Ours are badged <span class="ix-badge ours">OURS</span> and tinted; everything else belongs to a third party.</p>
+<p class="ix-sub">${fmtNum(data.total)} endpoints across the x402 ecosystem in one searchable list: <b>${fmtNum(data.ours)} we build and operate ourselves</b>, and ${fmtNum(data.thirdParty)} run by other people. Every row says which is which. Ours are badged <span class="ix-badge ours">OURS</span> and tinted; everything else belongs to a third party.</p>
 
 <div class="ix-note">
   <h2>What each badge means</h2>
   <ul>
-    <li><span class="ix-badge ours">OURS</span> <b>We build, host and stand behind these.</b> Every one answers its own documented example on every deploy, is priced by us, and is covered by the paywall guarantees on <a href="/tools">our catalog</a>. A failed call is never charged. ${fmtNum(data.ours)} of the ${fmtNum(data.total)} rows here.</li>
+    <li><span class="ix-badge ours">OURS</span> <b>We build, host and stand behind these.</b> They are priced by us and covered by the paywall guarantees on <a href="/tools">our catalog</a>. The ones CI can run without spending at an upstream answer their own documented example on every deploy; the metered ones (model tiers, search, reports) are outside that sweep. On the x402 and prepaid-credit paths, a call that answers an error is not charged. ${fmtNum(data.ours)} of the ${fmtNum(data.total)} rows here.</li>
     <li><span class="ix-badge third">3rd party</span> <b>Someone else's endpoint. We do not operate, host, or test it.</b> Everything below applies only to these rows:</li>
   </ul>
   <ul>
@@ -146,7 +146,7 @@ export function indexToolsPage(baseUrl, data, categories, params = {}) {
 </ul>
 
 <form class="ix-search" method="get" action="/marketplace/tools">
-  <input type="search" name="q" value="${esc(search)}" placeholder="Search ${fmtNum(data.total)} third-party tools…" aria-label="Search third-party tools">
+  <input type="search" name="q" value="${esc(search)}" placeholder="Search ${fmtNum(data.total)} tools…" aria-label="Search indexed tools">
   ${category ? `<input type="hidden" name="category" value="${esc(category)}">` : ""}
   ${source ? `<input type="hidden" name="source" value="${esc(source)}">` : ""}
   <button type="submit">Search</button>
@@ -174,7 +174,7 @@ ${ledgerFooterCompact()}`;
   const canonical = `${baseUrl}/marketplace/tools${page > 1 || search || category ? qs().replace("/marketplace/tools", "") : ""}`;
   return ledgerShell({
     title: `Every x402 tool indexed${category ? ` — ${category}` : ""}${page > 1 ? ` (page ${page})` : ""} - Agent402`,
-    description: `${fmtNum(data.total)} paid x402 endpoints in one searchable index: ${fmtNum(data.ours)} built and operated by Agent402, ${fmtNum(data.thirdParty)} run by third parties. Every row is labelled with who operates it. Third-party listings are not tested or endorsed by Agent402.`,
+    description: `${fmtNum(data.total)} x402 endpoints in one searchable index: ${fmtNum(data.ours)} built and operated by Agent402, ${fmtNum(data.thirdParty)} run by third parties. Every row is labelled with who operates it. Third-party listings are not tested or endorsed by Agent402.`,
     canonical,
     baseUrl,
     activePath: "/marketplace",

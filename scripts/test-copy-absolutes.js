@@ -101,7 +101,9 @@ const FORBIDDEN = [
     // Same shape for the no-model claim. Every honest use on the site scopes it
     // ("of the utility tools", "the deterministic tools"); the README's
     // hand-written /why copy did not, and said the service runs no model at all.
-    re: /\bno (?:model|LLM)\b[^.]{0,30}serving path/i,
+    // "no large language model runs in that serving path" (/terms) slipped
+    // past the first form of this rule: the model was named in full.
+    re: /\bno (?:model|LLM|large language model)\b[^.]{0,30}serving path/i,
     why: "the /v1 tiers, the reports and the media tools run models; scope the claim to the utility or deterministic tools",
     // A scope names WHICH tools. A bare "deterministic" was accepted here, and a
     // file whose neighbouring line was the false count claim ("500+ deterministic
@@ -147,6 +149,23 @@ const FORBIDDEN = [
   {
     re: /[Ee]very tool is deterministic/,
     why: "the /v1 tiers, the report products and the media tools are model-backed",
+  },
+  {
+    // The same claim about the catalog, written as "500+ tools ... Every one
+    // deterministic" on /101 and /agentic-finance. Neither earlier rule saw it:
+    // the count and the adjective sat in different sentences.
+    re: /\b[Ee]very one(?: of them)?,? (?:is )?deterministic\b|\b(?:[Tt]ool )?[Oo]utput is deterministic for the same input\b/,
+    why: "the catalog includes model-backed and live-data tools; say priced per call and name the model-backed ones",
+  },
+  {
+    // The same claim with a word in the middle, which the rule above missed on
+    // the blog for months: "Every Agent402 tool is deterministic", "every one
+    // deterministic", "Every one of those tools is deterministic".
+    re: /\b[Ee]very (?:one|(?:\w+ )?tool)\b[^.]{0,30}\bdeterministic\b/,
+    why: "the catalog holds model-backed tools; scope it to the utility tools",
+    // A dated correction note quotes the old claim to retract it.
+    scopedBy: /\bCorrection\b|\butility\b|\bclaimed\b/,
+    scopeWindow: 0,
   },
   {
     // A COMPLETENESS CLAIM ABOUT A SURFACE THAT ANSWERS WITH A PAGE.
@@ -226,8 +245,10 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "Agent402 never holds funds."],
                        ["<control>", "Flat pricing for ${n} deterministic web tools."],
                        ["<control>", "Every tool is deterministic."],
-                       ["<control>", "If it was, the charge is recorded as owed and refunded automatically."]]);
-ok(control.length === 5, `control: the sweep reports all 5 planted violations through its real code path (got ${control.length})`);
+                       ["<control>", "If it was, the charge is recorded as owed and refunded automatically."],
+                       ["<control>", "500+ pay-per-call tools. Every one deterministic, priced, and settled on chain."]]);
+const CONTROL_EXPECTED = 8;
+ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 6 planted lines (${CONTROL_EXPECTED} rule hits; a line can match more than one determinism rule) through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);
@@ -274,7 +295,7 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
 
   // Every page that makes the claim must call the function. A page that
   // reworded the absolute by hand would pass the regex sweep above.
-  for (const rel of ["src/why.js", "src/glossary.js", "src/agentic-finance.js", "src/blog.js"]) {
+  for (const rel of ["src/why.js", "src/glossary.js", "src/agentic-finance.js", "src/blog.js", "src/guides.js"]) {
     ok(/routingProofSentence\(\)/.test(read(rel) || ""), `${rel} renders the routing claim from the shared function`);
   }
 }
@@ -359,6 +380,51 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
   const missing = uncovered(kitFiles, reachable);
   ok(missing.length === 0,
      `every kit that reaches a model upstream is in MODEL_BACKED_KITS${missing.length ? ` - MISSING: ${missing.join(" | ")}` : ""}`);
+
+  // Two shapes the check above could not see (2026-10-02): a kit that reaches
+  // its model through an internal SERVICE it calls over HTTP (decide-kit ->
+  // DECIDE_SERVICE_URL -> services/decide/llm.js), and a kit that BUILDS its
+  // tools in a function (`export function buildDecideTools`) rather than
+  // exporting a *_TOOLS const - both read as "helper-only" and were skipped,
+  // so decide published modelBacked:false.
+  const serviceKits = files.filter((f) => f.startsWith("src/tools/")).filter((f) => {
+    const svc = [...(read(f) || "").matchAll(/process\.env\.([A-Z]+)_SERVICE_URL/g)].map((m) => m[1].toLowerCase());
+    return svc.some((name) => files.some((g) => g.startsWith(`services/${name}/`) && MODEL_UPSTREAM.test(read(g) || "")));
+  });
+  ok(serviceKits.includes("src/tools/decide-kit.js"), `a kit that calls a model-running service is detected (found: ${serviceKits.join(", ") || "none"})`);
+  const builderExports = (f) => {
+    const src = read(f) || "";
+    const consts = (src.match(/^export const ([A-Z0-9_]+_TOOLS[A-Z0-9_]*)/gm) || []).map((x) => x.replace("export const ", ""));
+    const builders = (src.match(/^export function (build[A-Za-z0-9]*Tools)\b/gm) || []).map((x) => x.replace("export function ", ""));
+    // A builder is covered when server.js binds its result to a const that is listed.
+    const bound = builders.flatMap((b) => [...server.matchAll(new RegExp(`const ([A-Z0-9_]+)\\s*=[^;\\n]*\\b${b}\\(`, "g"))].map((m) => m[1]));
+    return [...consts, ...bound, ...(builders.length && !bound.length ? builders : [])];
+  };
+  ok(uncovered(["<control>"], reachable, () => ["DECIDE_LIKE_UNLISTED"]).length === 1, "control: an unlisted builder-bound kit is reported");
+  const missing2 = uncovered([...new Set([...kitFiles, ...serviceKits])], reachable, builderExports);
+  ok(missing2.length === 0,
+     `every kit that reaches a model (directly or through its service), incl. builder-made tools, is in MODEL_BACKED_KITS${missing2.length ? ` - MISSING: ${missing2.join(" | ")}` : ""}`);
+
+  // A tool whose OWN description says its output is generated must say so in
+  // the catalog too: such a tool inside an otherwise deterministic kit declares
+  // `modelBacked: true` on its definition (server.js folds it in). exa-answer
+  // said "Model-backed" in its description and published modelBacked:false.
+  ok(/def\?\.modelBacked === true/.test(server), "server.js folds a definition's own modelBacked:true into MODEL_BACKED_SLUGS");
+  const GENERATED = /Model-backed|AI-generated|answer text is generated/;
+  const undeclared = [];
+  for (const f of files.filter((x) => x.startsWith("src/tools/"))) {
+    const src = read(f) || "";
+    if (exportsOf(f).some((n) => reachable.has(n))) continue; // whole kit is listed
+    const parts = src.split(/\n\s+slug: "/).slice(1);
+    for (const seg of parts) {
+      const slug = seg.slice(0, seg.indexOf('"'));
+      if (GENERATED.test(seg) && !/\bmodelBacked: true\b/.test(seg)) undeclared.push(`${f}:${slug}`);
+    }
+  }
+  ok(undeclared.length === 0, `a tool describing generated output declares modelBacked: true${undeclared.length ? ` - MISSING: ${undeclared.join(", ")}` : ""}`);
+
+  // Packs inherit: a pack running a model-backed tool is model-backed.
+  ok(/modelBackedPackSlugs\(SKILL_PACKS, isModelBacked\)/.test(server), "skill packs derive modelBacked from the tools they run");
 }
 
 // --- the class rules are pinned in BOTH directions -------------------------
@@ -400,6 +466,16 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
     "A charge that reached no answer is automatically refunded to the paying wallet.",
     "Undelivered calls are auto-refunded on chain.",
     "Refunds for a failed paid call are automatic.",
+    // The catalog-wide determinism claim as it shipped on /101, /agentic-finance,
+    // SKILL.md and /terms.
+    "Every one deterministic, priced, tested, settled on chain over x402 or MPP.",
+    "Every one deterministic, priced, and settled on chain, over x402 or MPP.",
+    "- **200 + JSON** - the result. Tool output is deterministic for the same input.",
+    "small, deterministic web tools - same input, same output; no large language model runs in that serving path.",
+    // The determinism class with a word in the middle (all three were blog copy).
+    "Every Agent402 tool is deterministic: same input, same output, every time.",
+    "The Agent402 catalog passed the 500-tool mark - every one deterministic, tested in CI",
+    "Every one of those tools is deterministic, tested in CI, and callable with a single HTTP request.",
   ];
   const MUST_PASS = [
     "On Base we route ONLY to sellers with proven settled volume",
@@ -423,6 +499,7 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
     // or the rule pushes authors into hedging true sentences.
     "every route and price is in /openapi.json and /api/pricing",
     "The catalog is capped - every tool here earns its place and answers its own example on every deploy",
+    "Every one priced per call and settled on chain over x402 or MPP; the model-backed ones are marked as such.",
     // The card path really does refund on its own, and says so in these forms.
     "<span> If a report fails, you're auto-refunded</span><span><span class=\"dot\"></span> Secured by Stripe</span>",
     "Payment is verified before anything is generated; if generation fails after payment, the card is refunded automatically and the x402 settlement is cancelled.",
@@ -430,6 +507,8 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
     "Checkout, generate-once per paid session, auto-refund on failure, report at",
     // What the connector says now.
     "The call may still have completed and been charged. If it was, the charge is recorded as owed in our refund ledger and repaid after review. Do not retry blindly: a retry is a new paid call.",
+    "The utility tools are deterministic: same input, same output, every time.",
+    "Correction (2026-10-02): this post called every tool deterministic. The utility tools are.",
   ];
   const hits = (t) => sweep([["<case>", t]]).length;
   const missed = MUST_FAIL.filter((t) => hits(t) === 0);

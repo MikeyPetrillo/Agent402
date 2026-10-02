@@ -124,13 +124,14 @@ export function quickstartPage(baseUrl) {
 
 <span class="qs-label">Pay with proof-of-work (free, no wallet)</span>
 <div class="qs-code-wrap">
-<pre><code># Grab a challenge
-CHAL=$(curl -s "https://agent402.tools/api/pow/challenge?slug=hash")
+<pre><code># Grab a challenge: { "challenge", "difficulty", "token", ... }
+curl -s "https://agent402.tools/api/pow/challenge?slug=hash"
 
-# Solve the challenge, then retry with:
+# Find an integer nonce so sha256("&lt;challenge&gt;:&lt;nonce&gt;") has at least
+# &lt;difficulty&gt; leading zero bits, then send the TOKEN (not the challenge):
 curl -X POST https://agent402.tools/api/hash \\
   -H "Content-Type: application/json" \\
-  -H "X-Pow-Solution: &lt;nonce&gt;:&lt;hash&gt;" \\
+  -H "X-Pow-Solution: &lt;token&gt;:&lt;nonce&gt;" \\
   -d '{"text":"hello world","algo":"sha256"}'</code></pre>
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
@@ -175,7 +176,7 @@ console.log(result);</code></pre>
 <div class="qs-next-title">What to try next</div>
 <ul>
   <li>Use <code>a.find("geocode")</code> to search tools programmatically</li>
-  <li>Pass a wallet key to unlock paid-only tools</li>
+  <li>Pass a payment-wrapped <code>fetch</code> (<code>new Agent402({ fetch: payFetch })</code>, see the USDC tab) to call wallet-only tools</li>
   <li>Enable <a href="/docs">idempotent retries</a> for production use</li>
 </ul>
 </div>
@@ -196,20 +197,24 @@ console.log(result);</code></pre>
 <span class="qs-label">Wire into your LLM call</span>
 <div class="qs-code-wrap">
 <pre><code>import { agent402Tools } from "agent402-openai-tools";
-// also: agent402-anthropic-tools, agent402-ai-sdk
+// same shape: agent402-anthropic-tools
 
-const { tools, execute } = await agent402Tools();
+// free tier: every compute-payable tool, paid with proof-of-work
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-html"] });
 
 // pass tools to your LLM call
 // when it returns a tool_call, run:
-await execute(name, args);</code></pre>
+const result = await execute(call.function.name, JSON.parse(call.function.arguments));
+
+// agent402-ai-sdk returns four meta tools instead, keyed by name:
+// const tools = await agent402Tools(); await generateText({ model, tools, prompt });</code></pre>
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
 
 <div class="qs-next">
 <div class="qs-next-title">What to try next</div>
 <ul>
-  <li>Filter tools by category: <code>agent402Tools({ categories: ["search"] })</code></li>
+  <li>Wallet-only tools (search, extract, render): <code>agent402Tools({ slugs: ["search"], freeOnly: false, fetch: payFetch })</code></li>
   <li>Combine with the <a href="/docs">MCP connector</a> for Claude-native integration</li>
   <li>See the <a href="/playground">playground</a> for live examples</li>
 </ul>

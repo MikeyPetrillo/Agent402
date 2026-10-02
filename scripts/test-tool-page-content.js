@@ -15,7 +15,11 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
-import { toolPage, toolTitle, toolMetaDescription, relatedTools } from "../src/pages.js";
+import { toolPage, toolTitle, toolMetaDescription, relatedTools, powSnippetRequest } from "../src/pages.js";
+// Remove every tag, repeating until none remain (one pass can leave a tag
+// formed by the text it removed).
+function stripTags(s) { let prev; do { prev = s; s = s.replace(/<[^>]*>/g, ""); } while (s !== prev); return s; }
+
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0;
@@ -58,6 +62,47 @@ ok(/\$0\.002\/call/.test(toolTitle({ name: "An extremely long name for a tool th
   const tools = [hostile, { ...hostile, slug: "b", tags: ["html"], category: "web" }, { ...hostile, slug: "c", tags: [], category: "math" }];
   const rel = relatedTools(hostile, tools);
   ok(rel.length === 1 && rel[0].slug === "b", "relatedTools keeps category/tag matches and drops unrelated tools");
+}
+
+// ---- 1b. Offline: the "Errors and behavior" sentences are true per tool. ----
+// Each of these once stated the same thing on every page, true for most tools
+// and false for some: settlement on failure (a Tempo push credential settles
+// before the tool runs), the method alias (not on a path with both methods),
+// the idempotent replay (not for raw bytes), the free-tier and wallet-only
+// reasons, and the JSON field table on a tool that answers raw bytes.
+{
+  const factsOf = (html) => decode(stripTags((html.match(/<ul class="tp-facts">([\s\S]*?)<\/ul>/) || [])[1] || ""));
+  const plain = { ...hostile, slug: "plain", method: "GET", path: "/api/plain", discovery: { ...hostile.discovery, input: { text: "a b", n: 2 } } };
+  const saved = { k: process.env.TEMPO_API_KEY, r: process.env.TEMPO_RECIPIENT_ADDRESS };
+  delete process.env.TEMPO_API_KEY;
+  ok(!/Tempo push/.test(factsOf(toolPage("https://example.test", plain, []))), "no Tempo push sentence when Tempo is not offered");
+  process.env.TEMPO_API_KEY = "test"; process.env.TEMPO_RECIPIENT_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+  ok(/Tempo push credential.*refund owed/.test(factsOf(toolPage("https://example.test", plain, []))), "Tempo push sentence when Tempo is offered on the route");
+  ok(!/Tempo push/.test(factsOf(toolPage("https://example.test", { ...plain, identityBound: true }, []))), "no Tempo push sentence on an identity-bound route (no Tempo offer)");
+  ok(!/Tempo push/.test(factsOf(toolPage("https://example.test", { ...plain, longRunning: true }, []))), "no Tempo push sentence on a long-running route (no Tempo offer)");
+  if (saved.k === undefined) delete process.env.TEMPO_API_KEY; else process.env.TEMPO_API_KEY = saved.k;
+  if (saved.r === undefined) delete process.env.TEMPO_RECIPIENT_ADDRESS; else process.env.TEMPO_RECIPIENT_ADDRESS = saved.r;
+
+  ok(/served as this GET/.test(factsOf(toolPage("https://example.test", plain, []))), "method alias sentence when the other method has no route");
+  ok(!/served as this GET/.test(factsOf(toolPage("https://example.test", plain, [], { otherMethodRouted: true }))), "no method alias sentence when the other method has its own route");
+  ok(!/same 402 quote/.test(factsOf(toolPage("https://example.test", hostile, [], { otherMethodRouted: true }))), "no GET/HEAD alias sentence when GET has its own route");
+
+  const bin = { ...plain, slug: "bin", binaryTypes: ["image/png", "image/jpeg"], discovery: { ...plain.discovery, output: { example: { __note: "returns the image as binary" } } } };
+  const binHtml = toolPage("https://example.test", bin, [], { computePayable: true, powDifficulty: 16 });
+  ok(!/a JSON object with/.test(binHtml) && !/__note/.test(binHtml), "binary tool: no JSON object claim and no __note shown");
+  ok(/raw bytes, not JSON/.test(binHtml) && /image\/jpeg/.test(binHtml), "binary tool: names raw bytes and its content types");
+  ok(/does not replay/.test(factsOf(binHtml)), "binary tool: Idempotency-Key replay not promised");
+  ok(/larger than 1 MB is not replayed/.test(factsOf(toolPage("https://example.test", plain, []))), "JSON tool: replay scoped by the body ceiling");
+
+  ok(!/pure computation/.test(factsOf(toolPage("https://example.test", plain, [], { computePayable: true, powDifficulty: 16 }))), "free tier sentence makes no pure-computation claim");
+  const sq = factsOf(toolPage("https://example.test", { ...hostile, slug: "sql-guard" }, []));
+  ok(/pure computation, but it can mint/.test(sq) && !/reaches the network/.test(sq), "sql-guard: wallet-only by policy, not by network");
+  const ag = factsOf(toolPage("https://example.test", { ...hostile, slug: "action-gate" }, []));
+  ok(/pure computation/.test(ag) && !/reaches the network/.test(ag), "action-gate: wallet-only by policy, not by network");
+
+  const r = powSnippetRequest("https://example.test", plain);
+  ok(r.url === "https://example.test/api/plain?text=a+b&n=2", `GET PoW snippet carries the documented input (${r.url})`);
+  ok(powSnippetRequest("https://example.test", hostile).url === "https://example.test/api/fake-html", "POST PoW snippet URL has no query string");
 }
 
 // ---- 2 + 3. Booted: every catalog page. ----
@@ -109,6 +154,58 @@ try {
     const offer = ld.find((b) => b.offers)?.offers;
     ok(offer && offer.priceCurrency === "USD" && `$${offer.price}` === def.price, `/tools/${slug}: Offer price matches the catalog`);
     ok(!ld.some((b) => b["@type"] === "FAQPage"), `/tools/${slug}: no FAQPage without visible Q&A`);
+  }
+
+  // ---- 4. Booted: the per-tool claims on real routes, and /openapi.json. ----
+  {
+    const factsOf = (html) => decode(stripTags((html.match(/<ul class="tp-facts">([\s\S]*?)<\/ul>/) || [])[1] || ""));
+    const page = async (slug) => (await fetch(`${BASE}/tools/${slug}`)).text();
+    // /api/memory carries both a GET and a POST route, so the method alias never runs there.
+    for (const slug of ["memory-read", "memory-write"]) {
+      const f = factsOf(await page(slug));
+      ok(!/served as this GET/.test(f) && !/same 402 quote/.test(f), `/tools/${slug}: no method-alias sentence on a path with both methods`);
+    }
+    for (const slug of ["qr", "image-resize", "image-convert", "image-thumbnail", "screenshot"]) {
+      const html = await page(slug);
+      ok(/raw bytes, not JSON/.test(html) && !/a JSON object with/.test(html) && !/__note/.test(html), `/tools/${slug}: described as raw bytes`);
+      ok(/does not replay/.test(factsOf(html)), `/tools/${slug}: no idempotent replay promised for bytes`);
+    }
+    for (const slug of ["feedback-summary", "seller-trust", "x402-market-pulse"]) {
+      const f = factsOf(await page(slug));
+      if (f) ok(!/pure computation/.test(f), `/tools/${slug}: no pure-computation claim on a tool that reads server state`);
+    }
+    for (const slug of ["sql-guard", "action-gate"]) {
+      ok(!/reaches the network or stored state/.test(factsOf(await page(slug))), `/tools/${slug}: wallet-only reason is the policy, not network`);
+    }
+
+    const spec = await (await fetch(`${BASE}/openapi.json`)).json();
+    const g = spec.info["x-guidance"];
+    ok(!/Every \/api\/\* and \/v1\/\*/.test(g) && /x-price/.test(g), "x-guidance scopes pay-per-call to priced operations");
+    ok(!/buy at \/credits/.test(g), "x-guidance does not send agents to buy credits");
+    ok(!/Every endpoint is paid/.test(spec.info.description), "info.description makes no every-endpoint claim");
+    const ops = [];
+    for (const [p, item] of Object.entries(spec.paths)) for (const [m, op] of Object.entries(item)) ops.push({ p, m, op });
+    const opOf = (slug) => ops.find((o) => o.op.operationId === slug || o.op.operationId === `${slug}Get`);
+    for (const slug of ["memory-write", "memory-read", "research", "dossier"]) {
+      const o = opOf(slug);
+      if (!o) continue;
+      ok(!/Solana|Stellar|Algorand/.test(o.op.description), `/openapi.json ${slug}: EVM-only route names no non-EVM rail`);
+    }
+    const hash = opOf("hash");
+    ok(hash && /Solana/.test(hash.op.description), "/openapi.json hash: a route on every rail still names them");
+    const img = opOf("image-resize");
+    ok(img && img.op.responses[200].content["image/jpeg"] && !img.op.responses[200].content["application/json"], "/openapi.json image-resize: 200 is binary per content type");
+
+    // An example whose output shows a found/success result must not be fed a
+    // placeholder all-zero hash, which can only answer not-found.
+    const ZERO = /0x0{64}\b/;
+    for (const o of ops) {
+      const ex = o.op.responses?.[200]?.content?.["application/json"]?.example;
+      if (!ex || typeof ex !== "object") continue;
+      if (!(ex.status === "success" || ex.found === true || ex.settled === true)) continue;
+      const input = JSON.stringify(o.op.requestBody?.content?.["application/json"]?.example ?? (o.op.parameters || []).map((p) => p.example));
+      ok(!ZERO.test(input), `/openapi.json ${o.op.operationId}: success-shaped example is not fed an all-zero hash`);
+    }
   }
 
   console.log(`\n${pass} passed`);

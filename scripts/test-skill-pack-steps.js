@@ -110,12 +110,15 @@ for (const pack of SKILL_PACKS) {
     "stats-summary": rec("stats-summary", (i) => ({ n: i.values.length })),
     "moving-average": rec("moving-average", () => ({})), "linear-regression": rec("linear-regression", () => ({})),
     "outliers": rec("outliers", () => ({})), "correlation": rec("correlation", () => ({})), "forecast-eval": rec("forecast-eval", () => ({})),
+    "forecast-naive": rec("forecast-naive", () => ({})), "forecast-ses": rec("forecast-ses", () => ({})), "forecast-holt": rec("forecast-holt", () => ({})),
   };
   const ctx = { packIndex, catalog: {}, inlineHandlers: inline };
   const equity = await runPack("trend-analysis", { series: "AAPL" }, ctx);
   const fred = equity.steps.find((s) => s.slug === "fred-series");
   ok(fred && fred.skipped === true && fred.ok === true && !calls.includes("fred-series"), "an equity series skips the fred-series leg (reported skipped, handler never called)");
-  ok(/7\/7 steps succeeded \(1 skipped as not applicable\)/.test(equity.summary), `the summary counts only attempted steps (got "${equity.summary}")`);
+  // No benchmark: the two benchmark fetches and correlation are skipped, and
+  // only the winning forward forecast runs (drift wins a tie of no RMSE).
+  ok(/9\/9 steps succeeded \(6 skipped as not applicable\)/.test(equity.summary), `the summary counts only attempted steps (got "${equity.summary}")`);
   calls.length = 0;
   inline["stock-history"] = rec("stock-history", () => { throw Object.assign(new Error("Yahoo: not found"), { statusCode: 404 }); });
   const macro = await runPack("trend-analysis", { series: "UNRATE" }, ctx);
@@ -128,4 +131,75 @@ for (const pack of SKILL_PACKS) {
   ok(refused && /No step in the "trend-analysis" pack succeeded/.test(refused.message), "all attempted steps failing still refuses (nothing to sell)");
 }
 
+// ---- trend-analysis does what its workflow says (2026-10-02) ---------------
+// The correlation step used to pass the series against itself (r = 1 on every
+// run) and the bake-off ran forecast-eval once with drift.
+{
+  const { __test: { runPack } } = await import("../src/tools/skill-runner.js");
+  const { SKILL_PACKS } = await import("../src/skills.js");
+  const packIndex = new Map(SKILL_PACKS.map((p) => [p.slug, p]));
+  const mk = (base) => Array.from({ length: 40 }, (_, i) => ({ close: base + i * (base === 100 ? 0.5 : -0.3) + (i % 3) }));
+  const seen = { corr: null, evals: [], forward: [] };
+  const RMSE = { drift: 2.5, ses: 1.1, holt: 1.7 };
+  const inline = {
+    "stock-history": (i) => ({ bars: i.symbol === "SPY" ? mk(400).slice(5) : mk(100) }),
+    "fred-series": () => { throw Object.assign(new Error("unused"), { statusCode: 404 }); },
+    "stats-summary": () => ({}), "moving-average": () => ({}), "linear-regression": () => ({}), "outliers": () => ({}),
+    "correlation": (i) => { seen.corr = i; return { r: 0.5 }; },
+    "forecast-eval": (i) => { seen.evals.push(i); return { method: i.method, rmse: RMSE[i.method] }; },
+    "forecast-naive": (i) => { seen.forward.push(["naive", i]); return {}; },
+    "forecast-ses": (i) => { seen.forward.push(["ses", i]); return { forecast: [{ lower95: 1, upper95: 2 }] }; },
+    "forecast-holt": (i) => { seen.forward.push(["holt", i]); return {}; },
+  };
+  const r = await runPack("trend-analysis", { series: "AAPL", benchmark: "SPY" }, { packIndex, catalog: {}, inlineHandlers: inline });
+  ok(seen.corr && seen.corr.x.length === 35 && seen.corr.y.length === 35, `correlation gets the series and the benchmark aligned on their shared length (got ${seen.corr?.x.length}/${seen.corr?.y.length})`);
+  ok(seen.corr && JSON.stringify(seen.corr.x) !== JSON.stringify(seen.corr.y), "correlation is never the series against itself");
+  ok(seen.corr && seen.corr.x[34] === mk(100)[39].close && seen.corr.y[34] === mk(400)[39].close, "both series keep their most recent observations");
+  ok(JSON.stringify(seen.evals.map((e) => e.method)) === JSON.stringify(["drift", "ses", "holt"]), `the bake-off backtests drift, ses and holt (got ${seen.evals.map((e) => e.method)})`);
+  ok(seen.evals.every((e) => e.testSize === 8 && e.values.length === 40), "every backtest uses the same values and a ~20% holdout");
+  ok(seen.forward.length === 1 && seen.forward[0][0] === "ses" && seen.forward[0][1].horizon === 10, `only the lowest-RMSE method forecasts forward (got ${JSON.stringify(seen.forward.map((f) => f[0]))})`);
+  const evalSteps = r.steps.filter((s) => s.slug === "forecast-eval");
+  ok(evalSteps.map((s) => s.as).join(",") === "forecast-eval-drift,forecast-eval-ses,forecast-eval-holt", "each backtest is reported under its own key");
+  const pack = SKILL_PACKS.find((p) => p.slug === "trend-analysis");
+  ok((pack.promptArgs || []).some((a) => a.name === "benchmark"), "the benchmark is a declared pack argument");
+}
+
+// ---- security-audit checks subdomains the CT log names (2026-10-02) ---------
+{
+  const { __test: { runPack }, AUDIT_DNS_SUBDOMAINS, AUDIT_HEADER_SUBDOMAINS } = await import("../src/tools/skill-runner.js");
+  const { SKILL_PACKS } = await import("../src/skills.js");
+  const packIndex = new Map(SKILL_PACKS.map((p) => [p.slug, p]));
+  const dns = [], headers = [];
+  const inline = {
+    "cert-transparency": () => ({ subdomains: ["a.b.example.com", "example.com", "www.example.com", "api.example.com", "mail.example.com", "evil.com"] }),
+    "dns-lookup": (i) => { dns.push(`${i.host}/${i.type}`); return {}; },
+    "spf-check": () => ({}), "dmarc-check": () => ({}),
+    "http-headers": (i) => { headers.push(i.url); return {}; },
+    "tls-cert": () => ({}), "tech-stack": () => ({}),
+  };
+  await runPack("security-audit", { domain: "example.com" }, { packIndex, catalog: {}, inlineHandlers: inline });
+  ok(JSON.stringify(dns) === JSON.stringify(["example.com/A", "example.com/CAA", "api.example.com/A", "mail.example.com/A", "www.example.com/A"]),
+    `DNS runs on the apex and the ${AUDIT_DNS_SUBDOMAINS} shallowest CT subdomains, never a foreign host (got ${dns.join(", ")})`);
+  ok(JSON.stringify(headers) === JSON.stringify(["https://example.com", "https://api.example.com", "https://mail.example.com"]),
+    `headers run on the apex and ${AUDIT_HEADER_SUBDOMAINS} CT subdomains (got ${headers.join(", ")})`);
+  dns.length = 0; headers.length = 0;
+  inline["cert-transparency"] = () => ({ subdomains: [] });
+  const none = await runPack("security-audit", { domain: "example.com" }, { packIndex, catalog: {}, inlineHandlers: inline });
+  ok(dns.length === 2 && headers.length === 1 && none.steps.filter((s) => s.skipped).length === AUDIT_DNS_SUBDOMAINS + AUDIT_HEADER_SUBDOMAINS,
+    "with no subdomains logged the subdomain legs are skipped, not failed");
+}
+
 console.log(`\n${passed} passed, 0 failed (${SKILL_PACKS.length} packs checked)`);
+
+// ---- a pack running a model-backed tool is model-backed (2026-10-02) --------
+{
+  const { modelBackedPackSlugs } = await import("../src/tools/skill-runner.js");
+  const { SKILL_PACKS } = await import("../src/skills.js");
+  const model = new Set(["pdf-summarize", "answer", "transcribe"]);
+  const got = modelBackedPackSlugs(SKILL_PACKS, (s) => model.has(s)).sort();
+  const want = SKILL_PACKS.filter((p) => p.toolSlugs.some((s) => model.has(s))).map((p) => `skill-${p.slug}`).sort();
+  ok(got.length >= 4 && JSON.stringify(got) === JSON.stringify(want), `packs running a model-backed tool are flagged (got ${got.join(", ")})`);
+  ok(["skill-document-brief", "skill-search-and-cite", "skill-article-digest", "skill-subtitle-pipeline"].every((s) => got.includes(s)), "the four packs with a model step are among them");
+  ok(modelBackedPackSlugs(SKILL_PACKS, () => false).length === 0, "no model-backed tool, no model-backed pack");
+}
+console.log("model-backed pack derivation checked");

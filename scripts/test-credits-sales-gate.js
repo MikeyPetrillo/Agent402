@@ -45,12 +45,24 @@ try {
   // redemption must survive: a 404 here would mean an existing key was stranded
   ok((await fetch(`${B}/api/credits/balance`)).status !== 404, "the balance route still exists, so an existing key can still be read");
   ok((await fetch(`${B}/api/credits/claim?session=x`)).status !== 404, "the claim route still exists");
+
+  // The machine and page surfaces follow the same switch. /api/pricing used to
+  // advertise packs and a checkout body that this server answers 503 to, and
+  // /credits carried an InStock Offer and a "Buy $20" snippet while refusing.
+  const pricingOff = await (await fetch(`${B}/api/pricing`)).json();
+  ok(pricingOff.credits && pricingOff.credits.onSale === false, "/api/pricing says credits are not on sale");
+  ok(!pricingOff.credits.checkout && !pricingOff.credits.packs && !pricingOff.credits.buy, "...and offers no packs, buy link or checkout body");
+  ok(/already issued/.test(String(pricingOff.credits.how)) && /balance/.test(String(pricingOff.credits.balance)), "...and still tells an existing key holder how to spend and read it");
+  const pageOff = await (await fetch(`${B}/credits`)).text();
+  ok(!/InStock/.test(pageOff) && !/Buy \$20/.test(pageOff) && !/data-pack-buy/.test(pageOff), "/credits carries no Offer, buy snippet or buy button while sales are off");
   proc.kill("SIGKILL");
 
   // --- explicitly on: selling works again, so this is a switch and not a deletion
   ok(await boot({ CREDITS_SALES: "on" }), "server booted with CREDITS_SALES=on");
   const on = await fetch(`${B}/api/credits/checkout`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pack: "credits-20" }) });
   ok(on.status !== 503, `selling is reachable when explicitly enabled (got ${on.status}, not the 503 refusal)`);
+  const pricingOn = await (await fetch(`${B}/api/pricing`)).json();
+  ok(pricingOn.credits?.onSale === true && pricingOn.credits.checkout?.method === "POST", "/api/pricing advertises the checkout when sales are on");
 
   // the gate must be read at call time, never latched at boot
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");

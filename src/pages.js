@@ -8,8 +8,14 @@ import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbLd } from
 import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
 import { agentReportPriceRange, cardReportPriceRange } from "./report-tiers.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
-import { RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT } from "./rails.js";
+import { RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly } from "./rails.js";
 import { mppOffersFor } from "./mpp-offers.js";
+import { tempoOfferedFor, tempoDiscoveryInfo } from "./mpp-tempo.js";
+import { WALLET_ONLY_POLICY_REASON, powCostPhrase } from "./pow.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
+import { crawlIntervalLabel, discoveryIntervalLabel } from "./crawl-cadence.js";
+import { routerRankingSentence } from "./routing-proof.js";
+import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { mppFlagshipRows } from "./mpp-flagship.js";
 import { PRICED_BY_MODEL_NOTE } from "./tools/llm-gateway-kit.js";
 import { PARAM_ALIASES } from "./input-aliases.js";
@@ -150,12 +156,7 @@ function exampleCall(baseUrl, tool) {
 
 function payExample(baseUrl, tool) {
   const { method, path, discovery } = tool;
-  if (method === "GET") {
-    const qs = new URLSearchParams(
-      Object.entries(discovery?.input ?? {}).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)])
-    ).toString();
-    return `const res = await payFetch("${baseUrl}${path}${qs ? `?${qs}` : ""}");`;
-  }
+  if (method === "GET") return `const res = await payFetch("${baseUrl}${path}${exampleQueryString(tool)}");`;
   return `const res = await payFetch("${baseUrl}${path}", {
   method: "${method}",
   headers: { "Content-Type": "application/json" },
@@ -301,17 +302,47 @@ function codeList(names, max = 4) {
   return more ? `${shown.join(", ")}${more}` : `${shown.slice(0, -1).join(", ")} and ${shown.at(-1)}`;
 }
 
+/** The query string a GET tool's documented input becomes, "" when it has none.
+ *  ONE builder for the curl example and the proof-of-work snippet, so the two
+ *  cannot send different inputs. */
+export function exampleQueryString(tool) {
+  const input = tool.discovery?.input ?? {};
+  const qs = new URLSearchParams(Object.entries(input).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)])).toString();
+  return qs ? `?${qs}` : "";
+}
+
+/** Content types a tool answers with as raw bytes (the route binder's
+ *  { __binary, contentType } sentinel), or null for a JSON tool. */
+export function binaryTypesOf(tool) {
+  if (Array.isArray(tool?.binaryTypes) && tool.binaryTypes.length) return tool.binaryTypes;
+  if (tool?.mimeType && tool.mimeType !== "application/json") return [tool.mimeType];
+  return null;
+}
+
+const listWords = (xs, joiner = "or") => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} ${joiner} ${xs.at(-1)}`);
+
+/** The request the proof-of-work snippet sends: { url, method, headers, body }.
+ *  Exported so a test can send exactly what the page publishes. */
+export function powSnippetRequest(baseUrl, tool) {
+  const input = tool.discovery?.input ?? {};
+  const isGet = tool.method === "GET";
+  return {
+    url: `${baseUrl}${tool.path}${isGet ? exampleQueryString(tool) : ""}`,
+    method: tool.method,
+    body: isGet ? null : JSON.stringify(input),
+  };
+}
+
 function curlExample(baseUrl, tool) {
   const input = tool.discovery?.input ?? {};
   if (tool.method === "GET") {
-    const qs = new URLSearchParams(Object.entries(input).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)])).toString();
-    return `curl -i "${baseUrl}${tool.path}${qs ? `?${qs}` : ""}"`;
+    return `curl -i "${baseUrl}${tool.path}${exampleQueryString(tool)}"`;
   }
   const body = JSON.stringify(input).replace(/'/g, "'\\''");
   return `curl -i -X ${tool.method} ${baseUrl}${tool.path} \\\n  -H "Content-Type: application/json" \\\n  -d '${body}'`;
 }
 
-export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0, cacheTtl = null } = {}) {
+export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0, cacheTtl = null, otherMethodRouted = false } = {}) {
   const e = ledgerEsc;
   const title = toolTitle(tool);
   const canonical = `${baseUrl}/tools/${tool.slug}`;
@@ -323,7 +354,13 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const required = Array.isArray(schema.required) ? schema.required : [];
   const example = tool.discovery?.output?.example;
   const input = tool.discovery?.input ?? {};
-  const evmOnly = !!(tool.identityBound || tool.longRunning);
+  // A tool that names its only networks (`onlyNetworks`, e.g. decide-execute:
+  // Base) is offered on exactly those (payments.js acceptsForItem), so the page
+  // names them (railsOrFor) rather than "EVM chains".
+  const evmOnly = x402EvmOnly(tool);
+  const binaryTypes = binaryTypesOf(tool);
+  const hasOnly = Array.isArray(tool.onlyNetworks) && tool.onlyNetworks.length > 0;
+  const evmOne = hasOnly ? railsOrFor(tool) : "USDC on an EVM chain";
   const isPack = tool.category === "skill-pack";
   const packSlug = isPack ? tool.slug.replace(/^skill-/, "") : null;
 
@@ -340,7 +377,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
         "@type": "Offer",
         price: tool.price.replace("$", ""),
         priceCurrency: "USD",
-        description: `${pw.long}, paid over x402${evmOnly ? " (USDC on EVM chains)" : ` in ${RAILS_OR}`} or MPP. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
+        description: `${pw.long}, paid over x402 in ${railsOrFor(tool)} or MPP. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
       },
     },
     {
@@ -359,13 +396,15 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const payHow = computePayable
     ? `pay ${pw.long} over x402 or MPP, or call it free by solving a proof-of-work challenge`
     : evmOnly
-      ? `pay ${pw.long} over x402 with USDC on an EVM chain${tool.identityBound ? " (the paying wallet is the identity)" : ""}`
+      ? `pay ${pw.long} over x402 with ${evmOne}${tool.identityBound ? " (the paying wallet is the identity)" : ""}`
       : `pay ${pw.long} over x402 or MPP (there is no free tier)`;
   const reqPhrase = required.length
     ? `${required.length === 1 ? "the required field" : "the required fields"} ${codeList(required)}`
     : Object.keys(props).length ? `no required fields (${Object.keys(props).length} optional)` : "no input";
-  const outKeys = example && typeof example === "object" && !Array.isArray(example) ? Object.keys(example) : [];
-  const outPhrase = outKeys.length ? `a JSON object with ${codeList(outKeys, 5)}` : Array.isArray(example) ? "a JSON array" : "the result";
+  // A binary tool's example is a note about the bytes, not a response shape.
+  const outKeys = !binaryTypes && example && typeof example === "object" && !Array.isArray(example) ? Object.keys(example) : [];
+  const binaryPhrase = binaryTypes ? `raw bytes, not JSON, with <code>Content-Type</code> ${listWords(binaryTypes.map((t) => `<code>${ledgerEsc(t)}</code>`))}` : "";
+  const outPhrase = binaryTypes ? binaryPhrase : outKeys.length ? `a JSON object with ${codeList(outKeys, 5)}` : Array.isArray(example) ? "a JSON array" : "the result";
   const summary = `${e(firstSentence(tool.description))} Send <code>${e(tool.method)} ${e(tool.path)}</code> with ${reqPhrase} and ${e(payHow)}. It returns ${outPhrase}.`;
   const restOfDescription = String(tool.description).replace(/\s+/g, " ").trim().slice(firstSentence(tool.description).length).trim();
 
@@ -404,19 +443,33 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   } else {
     facts.push(`There is no input to get wrong: any request to ${e(tool.path)} runs the tool.`);
   }
-  facts.push(`A paid call that ends in any status of 400 or above is not charged: settlement is cancelled when the tool fails.`);
-  if (computePayable) facts.push(`Free tier: this is pure computation, so proof-of-work (${e(String(powDifficulty))} leading zero bits of sha256) pays for it and no network call leaves the server.`);
-  else facts.push(`Wallet-only: this tool ${tool.modelBacked ? "runs a model" : "reaches the network or stored state"}, so it has no proof-of-work tier.${tool.identityBound ? "" : " A prepaid card-credits key (<code>Authorization: Bearer a402_...</code>) also pays it."}`);
+  // Settlement on failure, per rail this route offers. x402, MPP evm and card
+  // settle only after an under-400 answer and a credits key is debited only on
+  // a 200; a Tempo PUSH credential is a transfer already on chain before the
+  // tool runs (src/mpp-tempo.js), so a failure there is a refund owed
+  // (src/tempo-push-debts.js), not a cancelled charge.
+  const tempoHere = tempoOfferedFor(tool) && !!tempoDiscoveryInfo();
+  const notCharged = ["x402", "MPP", ...(tool.identityBound ? [] : ["a prepaid credits key"])];
+  facts.push(`A paid call that ends in any status of 400 or above is not charged over ${listWords(notCharged)}: settlement is cancelled when the tool fails.${tempoHere ? " The exception is a Tempo push credential, a transfer the buyer sent before the call: it settles before the tool runs, so if the tool then fails the payment is recorded as a refund owed to the paying wallet." : ""}`);
+  if (computePayable) facts.push(`Free tier: no outbound network call leaves the server for this tool, so proof-of-work (${e(String(powDifficulty))} leading zero bits of sha256) pays for it.`);
+  else facts.push(`Wallet-only: this tool ${tool.modelBacked ? "runs a model, so it has no proof-of-work tier" : WALLET_ONLY_POLICY_REASON.has(tool.slug) ? `${e(WALLET_ONLY_POLICY_REASON.get(tool.slug))}, so it is metered with money and has no proof-of-work tier` : "reaches the network or stored state, so it has no proof-of-work tier"}.${tool.identityBound ? "" : " A prepaid card-credits key (<code>Authorization: Bearer a402_...</code>) also pays it."}`);
   if (tool.modelBacked) facts.push(`Model-backed: the answer is generated by a model, so the same input can produce different wording.`);
   if (tool.identityBound) facts.push(`Identity-bound: results are keyed to the wallet that signed the payment, so only EVM x402 payments are accepted; credits keys and Tempo are refused.`);
   else if (tool.longRunning) facts.push(`Long-running: payment settles after the work finishes, so only EVM exact payments are offered.`);
   if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(tool.price)} and $${e(String(tool.quoteRange.maxUsd))}.`);
   if (typeof tool.tierQuote === "function") facts.push(e(PRICED_BY_MODEL_NOTE));
   if (cacheTtl) facts.push(`Cached: an identical request within ${e(fmtTtl(cacheTtl))} is answered from cache with <code>X-Cache: hit</code>.`);
-  facts.push(tool.method === "GET"
-    ? `A <code>POST</code> with a JSON body to ${e(tool.path)} is served as this GET, with the body as the input.`
-    : `A <code>GET</code> or <code>HEAD</code> to ${e(tool.path)} returns the same 402 quote, so the price can be read without a body.`);
-  facts.push(`An <code>Idempotency-Key</code> header makes a retried paid call replay the first 200 instead of charging again${String(tool.path).startsWith("/v1/") ? " (streamed responses are not replayed)" : ""}.`);
+  // The method alias (server.js) runs only when no catalog route of the other
+  // method shares this path: /api/memory has both, so neither page says it.
+  if (!otherMethodRouted) {
+    facts.push(tool.method === "GET"
+      ? `A <code>POST</code> with a JSON body to ${e(tool.path)} is served as this GET, with the body as the input.`
+      : `A <code>GET</code> or <code>HEAD</code> to ${e(tool.path)} returns the same 402 quote, so the price can be read without a body.`);
+  }
+  // The replay cache holds JSON answers only (it captures res.json) and only
+  // up to IDEM_MAX_BODY_BYTES; bytes and streams are never replayed.
+  if (binaryTypes) facts.push(`An <code>Idempotency-Key</code> header does not replay this tool's answer: the replay cache holds JSON answers only, so a retried paid call runs and is charged again.`);
+  else facts.push(`An <code>Idempotency-Key</code> header makes a retried paid call replay the first 200 instead of charging again (an answer larger than ${e(IDEM_MAX_BODY_LABEL)}${String(tool.path).startsWith("/v1/") ? " and a streamed response are" : " is"} not replayed).`);
 
   // --- MCP usage.
   const mcpArgs = JSON.stringify({ slug: tool.slug, params: input }, null, 2);
@@ -500,7 +553,9 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   <p class="tp-sub">Without payment this returns <code>HTTP 402 Payment Required</code> with the exact price for ${e(tool.slug)}; any x402 v2 or MPP client pays it and retries.</p>
 
   <h2 class="tp-h2">Example response</h2>
-  <pre class="tp-pre">${e(JSON.stringify(example ?? {}, null, 2))}</pre>
+  ${binaryTypes
+    ? `<p class="tp-sub">A 200 carries ${binaryPhrase}: the file itself.</p>`
+    : `<pre class="tp-pre">${e(JSON.stringify(example ?? {}, null, 2))}</pre>`}
   ${respRows ? `<div class="tp-tw"><table class="tp-table"><tr><th>Field</th><th>Type</th><th>Always present</th><th>In the example</th></tr>${respRows}</table></div>` : ""}
 
   <h2 class="tp-h2">From an MCP client</h2>
@@ -532,7 +587,7 @@ const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; 
 const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=${tool.slug}")).json();
 let n = 0;
 while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
-await fetch("${baseUrl}${tool.path}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(input)})` : ""} });`)}</pre>`
+await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(input)})` : ""} });`)}</pre>`
       : ""
   }
 
@@ -691,29 +746,33 @@ ${ledgerFooterCompact()}`;
 // humans/agents landing on the site. The Q&A pairs are the single source for
 // BOTH the visible HTML and the JSON-LD, so they can't drift apart. Answers may
 // contain simple inline HTML (links) — allowed in FAQPage and rendered as-is.
-const FAQ_ITEMS = [
-  { q: "Do I need an account or API key?", a: 'No. Nothing here has a signup. Payment - USDC, proof-of-work, or a prepaid card-credits key you bought at <a href="/credits">/credits</a> - is the only credential, charged per call.' },
-  { q: "Can I pay by card instead of crypto?", a: 'Yes, three ways: buy a finished report at <a href="/reports">/reports</a> ($2 to $5 by card, refunded if it fails), subscribe to a monitor at <a href="/monitors">/monitors</a> ($5 a month, cancel anytime), or buy prepaid credits at <a href="/credits">/credits</a> and call any tool with <code>Authorization: Bearer a402_…</code> - debited only when a call succeeds. The card price includes payment processing; an agent paying per call over x402 or MPP pays the lower tool price for the same report.' },
+// A function, not a constant: whether credits are on sale is read at render.
+function faqItems() {
+  const creditsOnSale = creditsSalesEnabled();
+  return [
+  { q: "Do I need an account or API key?", a: `No. Nothing here has a signup. Payment - USDC, proof-of-work, or a prepaid card-credits key${creditsOnSale ? ' you bought at <a href="/credits">/credits</a>' : " you already hold"} - is the only credential, charged per call.` },
+  { q: "Can I pay by card instead of crypto?", a: `Yes: buy a finished report at <a href="/reports">/reports</a> ($2 to $5 by card, refunded if it fails) or subscribe to a monitor at <a href="/monitors">/monitors</a> ($5 a month, cancel anytime).${creditsOnSale ? ' You can also buy prepaid credits at <a href="/credits">/credits</a> and call any tool with <code>Authorization: Bearer a402_…</code> - debited only when a call succeeds.' : " Prepaid card credits are not on sale; a credits key bought earlier still pays any tool with <code>Authorization: Bearer a402_…</code>, debited only when a call succeeds."} The card price includes payment processing; an agent paying per call over x402 or MPP pays the lower tool price for the same report.` },
   // DERIVED. Every figure in this answer was typed once and then outlived two
   // repricings: the pack ceiling was over ten times the real one and the card
   // range was quoted below its own floor, which a reader meets at checkout.
-  { q: "What does it cost?", a: `Flat per-call prices from $0.001. Most tools are $0.001 to $0.02; premium AI and media tiers run higher and multi-tool skill packs are ${PACK_PRICE_RANGE.text}; finished report products are ${agentReportPriceRange()?.text || "priced per product"} per call for an agent per report (${cardReportPriceRange(HUMAN_PRODUCTS)?.text || "priced per product"} by card at <a href="/reports">/reports</a>, where the price includes payment processing). Every price is published in <a href="/api/pricing">/api/pricing</a> and quoted exactly in every HTTP 402 response. No subscriptions. The metered model route (<code>/v1/metered</code>) quotes each request from its body before payment and settles what the call used, under that quote.` },
-  { q: "Can I use it without any money or a wallet?", a: "Yes. Most pure-CPU tools accept proof-of-work - a sub-second sha256 puzzle solved by your own CPU - and the hosted MCP connector runs that same set for free (rate-limited)." },
+  { q: "What does it cost?", a: `Flat per-call prices from $0.001. Most tools are $0.001 to $0.02; premium AI and media tiers run higher and multi-tool skill packs are ${PACK_PRICE_RANGE.text}; finished report products are ${agentReportPriceRange()?.text || "priced per product"} per call for an agent per report (${cardReportPriceRange(HUMAN_PRODUCTS)?.text || "priced per product"} by card at <a href="/reports">/reports</a>, where the price includes payment processing). Every price is published in <a href="/api/pricing">/api/pricing</a> and quoted exactly in every HTTP 402 response. Calling a tool needs no subscription. The metered model route (<code>/v1/metered</code>) quotes each request from its body before payment and settles what the call used, under that quote.` },
+  { q: "Can I use it without any money or a wallet?", a: `Yes. Most pure-CPU tools accept proof-of-work - a sha256 puzzle solved by your own CPU (${powCostPhrase()}) - and the hosted MCP connector runs that same set for free (rate-limited).` },
   { q: "What is x402?", a: 'An open HTTP payment standard built on the 402 Payment Required status code, for machine-to-machine pay-per-call payments in stablecoins, with settlement infrastructure from Coinbase. Plain-English explainer: <a href="/what-is-x402">/what-is-x402</a>.' },
   { q: "What is MPP, and does Agent402 support it?", a: 'Yes - every paid endpoint is dual-stack, and now natively via Tempo too. MPP (Machine Payments Protocol, the IETF-track Payment HTTP authentication scheme) carries the pay-per-call handshake through the web&rsquo;s standard auth headers: the 402 carries a <code>WWW-Authenticate: Payment</code> challenge, the client pays via <code>Authorization: Payment</code>, and settled responses return a signed <code>Payment-Receipt</code>. Same URL, same price either way - MPP&rsquo;s evm method settles identically to x402 (same on-chain USDC settlement), while its tempo method settles natively via Tempo&rsquo;s own relay, a genuinely separate mechanism. How the two compare: <a href="/what-is-x402">/what-is-x402</a>; the full MPP explainer: <a href="/what-is-mpp">/what-is-mpp</a>.' },
   { q: "Which blockchain and asset does it use?", a: `${RAILS_PAREN}. The buyer needs only the stablecoin - gas is sponsored by the facilitator on EVM chains.` },
-  { q: "Does using this spend my AI tokens?", a: "No. Not your tokens, ever: you never hand us a model key, and a model we run is billed to us and priced into the call. Most of the catalog is deterministic code (parsers, hashes, math, a real browser) with no model in its path. The ones that do run a model are named: the /v1 gateway tiers, the report products, and the image, speech, transcription, embedding and AI-answer tools. Proof-of-work spends your CPU; x402 spends USDC." },
+  { q: "Does using this spend my AI tokens?", a: "No. Not your tokens, ever: you never hand us a model key, and a model we run is billed to us and priced into the call. Most of the catalog is deterministic code (parsers, hashes, math, a real browser) with no model in its path. The ones that do run a model are named: the /v1 gateway tiers, the report products, Decide (<code>/api/decide</code>), the judgment model the Smart Order Router uses to pick among shortlisted tools, and the image, speech, transcription, embedding and AI-answer tools. Proof-of-work spends your CPU; x402 spends USDC." },
   { q: "Is there an OpenAI-compatible endpoint?", a: 'Yes - <code>/v1</code> is a pay-per-call OpenAI-wire LLM gateway: point any OpenAI SDK at <code>base_url https://agent402.tools/v1</code> for chat (five quality tiers, model-optional auto-routing), embeddings, and image generation. No API key, no signup - settle in USDC over x402, same as every other tool. See <a href="/pricing">/pricing</a> for the tier breakdown.' },
-  { q: "Is my data stored?", a: 'Tool inputs are processed in memory and not persisted - except the memory tools, whose purpose is storage (wallet-keyed, owner-deletable, with optional TTL). Full policy: <a href="/privacy">/privacy</a>.' },
-  { q: "How do I know the service is honest?", a: "It is fully open source; CI re-tests every endpoint against its own documented example before each deploy; and revenue settles on-chain to agent402.base.eth (the named public receiving wallet), auditable by anyone on Basescan." },
+  { q: "Is my data stored?", a: 'Tool inputs are processed in memory to compute the response. The memory tools store data by design (wallet-keyed, owner-deletable, with optional TTL). An input is otherwise kept only in the cases the privacy policy lists, such as short-lived response caches, catalog searches that find no tool, decisions bought on /api/decide (30 days), and the feedback you leave on a paid call. Full policy: <a href="/privacy">/privacy</a>.' },
+  { q: "How do I know the service is honest?", a: "It is fully open source; CI re-tests every non-metered tool against its own documented example before each deploy (the metered ones - LLM tiers, report products, search and the tools that need a third-party key - are excluded so CI never spends upstream); and revenue settles on-chain to agent402.base.eth (the named public receiving wallet), auditable by anyone on Basescan." },
   { q: "What happens if a tool fails after I pay?", a: "You are not charged. Payment settles only for a successful (under-400) response, so an error cancels settlement and no money moves. On top of that guarantee, anything which can't be served reliably is removed from the catalog rather than left to fail, and failure rates are watched by CI and a 15-minute production heartbeat." },
   { q: "Is Agent402 self-hostable and open source?", a: 'Yes - the server is open source under the AGPL-3.0 license (the client SDK, MCP connector, and tollbooth are MIT). Clone the repo and run it yourself for free, with or without payments enabled. It also ships agent402-tollbooth, an open-source pay-per-crawl gate for charging AI crawlers on your own site.' },
-  { q: "Can I find tools on other x402 sellers from here?", a: 'Yes. Agent402 is also an x402 Index + Smart Order Router: <code>POST /api/route</code> ranks tools across every x402 seller we have crawled - the local catalog plus sellers auto-discovered from public registries like the Coinbase CDP Bazaar, refreshed hourly. It filters out unhealthy sellers and tiebreaks on health then price. Browse the live marketplace at <a href="/marketplace">/marketplace</a> or fetch the index as JSON at <a href="/api/index">/api/index</a>, which is paginated - one page at a time, with <code>?seller=&lt;host&gt;</code> for a single origin. Both surfaces are free.' },
+  { q: "Can I find tools on other x402 sellers from here?", a: `Yes. Agent402 is also an x402 Index + Smart Order Router: <code>POST /api/route</code> ranks tools across every x402 seller we have crawled - the local catalog plus sellers auto-discovered from public registries like the Coinbase CDP Bazaar, which are re-read ${discoveryIntervalLabel()}, with every known seller re-probed ${crawlIntervalLabel()}. Sellers whose recent crawls errored are filtered out. ${routerRankingSentence()} Browse the live marketplace at <a href="/marketplace">/marketplace</a> or fetch the index as JSON at <a href="/api/index">/api/index</a>, which is paginated - one page at a time, with <code>?seller=&lt;host&gt;</code> for a single origin. Both surfaces are free.` },
   { q: "How do I list my own API?", a: 'For free, three ways: your origin is auto-discovered from public x402 registries (Coinbase CDP Bazaar, GoPlausible) once it&rsquo;s live and settling; paste it on <a href="/sell">/sell</a> for an immediate probe; or call <code>POST /api/index/register</code> directly. A listed seller is routable by the Smart Order Router and ranked on <a href="/leaderboard">/leaderboard</a> by real on-chain USDC volume - 0% take, settlement lands straight in your wallet.' },
   { q: "How do I see which x402 sellers are most used?", a: '<code>GET <a href="/api/leaderboard">/api/leaderboard</a></code> returns the <b>head</b> of the live on-chain ranking of x402 sellers by Base USDC settled volume - callsSettled, totalUsd, and uniqueBuyers per seller. It is a top-N slice, not the whole board: 25 rows by default, up to 50 with <code>?top=N</code>, and the response carries <code>totalSellers</code> for how many are ranked in all, so a seller absent from the rows you were served may still be ranked below them. The pipeline walks every page of the Coinbase CDP Bazaar discovery endpoint, queries <code>eth_getLogs</code> on Base USDC for each seller&rsquo;s payTo, counts a transfer that matches a price the seller publishes and otherwise holds it to the per-call ceiling the response reports as <code>maxCallUsd</code> (larger inbound is funding/swaps, not buys), and aggregates over the window the response reports as <code>windowServed</code>. The snapshot refreshes hourly server-side. Free, like <code>/api/find</code> and <code>/api/route</code>. Use <code>?include=external</code> to exclude Agent402 itself and rank only the rest of the ecosystem.' },
-  { q: "How does the Smart Order Router decide which seller to route to?", a: "It shortlists tools by lexical match against your query (at most two listings per seller) and by seller health (computed from the last five crawl outcomes), then a judgment model picks the one that actually does the task; when several do it equally well, the cheapest wins. If none of them does, route-and-execute refuses before anything is paid. Sellers whose recent crawls errored are excluded entirely - a buyer routed to a dead seller wastes money. Brand-new sellers with no history yet are still routable: benefit of the doubt for newcomers." },
+  { q: "How does the Smart Order Router decide which seller to route to?", a: `${routerRankingSentence()} Seller health is computed from the last five crawl outcomes. If none of them does, route-and-execute refuses before anything is paid. Sellers whose recent crawls errored are excluded entirely - a buyer routed to a dead seller wastes money. Brand-new sellers with no history yet are still routable: benefit of the doubt for newcomers.` },
   { q: "Who runs Agent402?", a: `Havok Holdings LLC - a public, contactable maintainer reachable at <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>, on <a href="${REPO_URL}">GitHub</a>, and on <a href="https://x.com/Agent402Tools">X</a>.` },
-];
+  ];
+}
 
 export function faqPage(baseUrl) {
   const e = ledgerEsc;
@@ -721,6 +780,7 @@ export function faqPage(baseUrl) {
   const title = "Agent402 FAQ - x402 + MPP + MCP server for AI agents";
   const description =
     `Frequently asked questions about Agent402: pricing, proof-of-work, x402 and ${RAILS_SHORT}, the OpenAI-compatible /v1 gateway, self-serve listing, MCP, data handling, and self-hosting the open-source server.`;
+  const FAQ_ITEMS = faqItems();
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "FAQPage",
@@ -798,17 +858,16 @@ export function openapiSpec(baseUrl, catalog) {
       // from reading as a ceiling it is not.
       // The 402 walkthrough lives ONCE in info.x-guidance; repeating it on
       // every operation was ~20% of a 2 MB document for no new information.
-      description: `${tool.description}\n\nPrice: ${typeof tool.quote === "function" ? `quoted per request from the body, from ${tool.price}` : `${tool.price} per call`}, over x402 (${RAILS_OR}) or MPP (${tool.identityBound || tool.longRunning ? "Base" : "Tempo or Base"}).${typeof tool.tierQuote === "function" ? ` ${PRICED_BY_MODEL_NOTE}` : ""} Docs: ${baseUrl}/tools/${tool.slug}`,
+      description: `${tool.description}\n\nPrice: ${typeof tool.quote === "function" ? `quoted per request from the body, from ${tool.price}` : `${tool.price} per call`}, over x402 (${railsOrFor(tool)}) or MPP (${tool.identityBound || tool.longRunning ? "Base" : "Tempo or Base"}).${typeof tool.tierQuote === "function" ? ` ${PRICED_BY_MODEL_NOTE}` : ""} Docs: ${baseUrl}/tools/${tool.slug}`,
       tags: [tool.category],
       responses: {
         200: {
           description: "Success",
-          content: {
-            [tool.mimeType ?? "application/json"]:
-              tool.mimeType && tool.mimeType !== "application/json"
-                ? { schema: { type: "string", format: "binary" } }
-                : { schema: responseSchemaFor(path, discovery?.output?.example), example: discovery?.output?.example ?? {} },
-          },
+          // A binary tool answers raw bytes (one content type per format it
+          // can produce), never the JSON note its discovery example carries.
+          content: binaryTypesOf(tool)
+            ? Object.fromEntries(binaryTypesOf(tool).map((t) => [t, { schema: { type: "string", format: "binary" } }]))
+            : { "application/json": { schema: responseSchemaFor(path, discovery?.output?.example), example: discovery?.output?.example ?? {} } },
         },
         402: { description: "Payment Required - x402 payment requirements in the PAYMENT-REQUIRED header, mirrored in the JSON body, and MPP challenges (WWW-Authenticate: Payment)" },
         400: { description: "Invalid input" },
@@ -976,14 +1035,19 @@ export function openapiSpec(baseUrl, catalog) {
         // Template literal, not a plain string: this is the spec description
         // every crawler and directory reads, and as a quoted string it shipped
         // a literal ${RAILS_OR} to production.
-        `The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: 500+ machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Every endpoint is paid per call in ${RAILS_OR} over x402, or over MPP (Machine Payments Protocol: USDC on Base/Celo, or USDC.e (and PathUSD) natively on Tempo) - no signup, no API keys - the first request returns HTTP 402 carrying both offers, an x402 or mppx client pays and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
+        `The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: 500+ machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Each priced operation is paid per call over x402 (${RAILS_OR}; identity-bound and long-running operations take EVM chains only, and each operation's description names its own rails), or over MPP (Machine Payments Protocol: USDC on Base/Celo, or USDC.e (and PathUSD) natively on Tempo) - no signup, no API keys - the first request returns HTTP 402 carrying both offers, an x402 or mppx client pays and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
       // Email doubles as x402scan's ownership-verification signal; it is the
       // same public maintainer contact the /.well-known/x402 manifest names.
       contact: { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: baseUrl },
       // Agent-facing quickstart read by MPP/x402 discovery crawlers
       // (info.x-guidance in MPPScan's audit).
       "x-guidance":
-        "Every /api/* and /v1/* path is pay-per-call: request it unauthenticated, read the 402 (x402 PAYMENT-REQUIRED or MPP WWW-Authenticate: Payment), pay in USDC and retry - or send a prepaid card-credits key as Authorization: Bearer a402_<key> (buy at /credits; balance at GET /api/credits/balance). Find the right tool with GET /api/find?q=<task>; prices at GET /api/pricing; many tools also accept free proof-of-work (GET /api/pow).",
+        // Scoped to the operations that carry x-price: discovery paths such as
+        // /api/find, /api/route, /api/index and /api/pricing are free and are
+        // not pay-per-call. No credits sentence: credit sales are off by
+        // default (CREDITS_SALES), so "buy at /credits" is not an instruction
+        // an agent can follow.
+        "Every operation in this document that carries x-price is pay-per-call: request it unauthenticated, read the 402 (x402 PAYMENT-REQUIRED or MPP WWW-Authenticate: Payment), pay and retry. Find the right tool with GET /api/find?q=<task> and read prices at GET /api/pricing, both free; many tools also accept free proof-of-work (GET /api/pow).",
     },
     servers: [{ url: baseUrl }],
     // These exist ONLY so the openapi-resolve-refs tool's example (which

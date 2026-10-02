@@ -1,57 +1,81 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
+// Example tasks, each with the calls it makes. The COST is computed from the
+// live catalog at render time: every typed cost line on this page had drifted
+// from the prices the paywall charges, one claimed a set of network tools was
+// free over proof-of-work, and the stories were written as past events.
+// `calls` = [slug, count]; `per` names the unit the total is for.
 const USE_CASES = [
   {
     title: "Research 50 public companies overnight",
-    story: "An investment analyst\u2019s agent iterated through 50 S&P 500 tickers, pulling 10-K filings, earnings history, and live quotes for each. By morning, 50 structured summaries were ready for review.",
-    tools: ["edgar-filings", "edgar-company-facts", "stock-quote", "stock-history"],
-    cost: "~$0.50 (50 \u00d7 ~$0.01/call)",
+    story: "An analyst's agent walks 50 tickers, pulling filings, reported financials and live quotes for each, and leaves 50 structured summaries ready for review in the morning.",
+    calls: [["edgar-filings", 50], ["edgar-company-facts", 50], ["stock-quote", 50], ["stock-history", 50]],
+    per: "for 50 companies",
   },
   {
-    title: "Audit a domain\u2019s security posture in 30 seconds",
-    story: "A security team\u2019s agent ran the security-audit skill pack against a candidate vendor\u2019s domain: DNS records, TLS certificate, WHOIS, HTTP headers, SPF/DKIM, and robots.txt - all in one pass.",
-    tools: ["dns", "tls-cert", "whois", "http-check", "spf-check", "robots-check"],
-    cost: "~$0.04 (7 tool calls)",
+    title: "Check a domain's security posture",
+    story: "A security team's agent reads a vendor's domain in one pass: DNS records, TLS certificate, WHOIS, HTTP headers, SPF and robots.txt.",
+    calls: [["dns", 1], ["tls-cert", 1], ["whois", 1], ["http-check", 1], ["spf-check", 1], ["robots-check", 1]],
+    per: "per domain",
   },
   {
-    title: "Extract and compare 200 PDF invoices",
-    story: "A procurement agent batch-processed 200 supplier invoices: PDF to markdown, then parsed line items, totals, and dates into structured JSON for reconciliation.",
-    tools: ["pdf-to-markdown", "extract"],
-    cost: "~$1.00 (200 \u00d7 $0.005)",
+    title: "Extract 200 PDF invoices to text",
+    story: "A procurement agent converts 200 supplier invoices from PDF to markdown, then parses line items, totals and dates into structured JSON for reconciliation.",
+    calls: [["pdf-to-markdown", 200]],
+    per: "for 200 invoices",
   },
   {
-    title: "Monitor competitor pricing daily",
-    story: "A pricing agent visits 20 product pages every morning, renders the JavaScript-heavy pages, extracts the price elements, and logs changes to wallet-keyed memory for trend analysis.",
-    tools: ["render", "extract", "memory-write", "memory-read"],
-    cost: "~$0.40/day (20 renders + 20 extracts + writes)",
+    title: "Watch competitor pricing daily",
+    story: "A pricing agent renders 20 JavaScript-heavy product pages every morning, extracts the price elements and logs changes to its wallet-keyed memory for trend analysis.",
+    calls: [["render", 20], ["extract", 20], ["memory-write", 20]],
+    per: "per day",
   },
   {
     title: "Build a macro dashboard from government data",
-    story: "A research agent assembled a US economic snapshot: CPI year-over-year, unemployment, Fed funds rate, Treasury yield curve, and FX rates - all from official FRED and Treasury feeds, no API keys needed.",
-    tools: ["cpi-yoy", "unemployment-rate", "fed-funds", "treasury-yield-curve", "fx-dashboard"],
-    cost: "~$0.005 (5 \u00d7 $0.001, all free via PoW)",
+    story: "A research agent assembles a US economic snapshot: CPI year-over-year, unemployment, the Fed funds rate, the Treasury yield curve and FX rates, from official feeds, with no API keys.",
+    calls: [["cpi-yoy", 1], ["unemployment-rate", 1], ["fed-funds", 1], ["treasury-yield-curve", 1], ["fx-dashboard", 1]],
+    per: "per snapshot",
   },
   {
     title: "Answer customer questions with live web search",
-    story: "A support agent searches the live web for product documentation, gets a cited synthesis via the answer tool, and includes source URLs in its response to the customer.",
-    tools: ["search", "answer", "extract"],
-    cost: "~$0.02 per question",
+    story: "A support agent searches the live web for product documentation, gets a cited synthesis from the answer tool and includes the source URLs in its reply.",
+    calls: [["search", 1], ["answer", 1]],
+    per: "per question",
   },
   {
     title: "Validate and geocode a 500-row address list",
-    story: "An ops agent processed a CSV of customer addresses: validated formatting, geocoded each to lat/lng, and flagged duplicates - no Google Maps API key required.",
-    tools: ["geocode", "csv-lint", "email-validate"],
-    cost: "~$2.50 (500 geocodes at $0.005)",
+    story: "An ops agent lints a CSV of customer addresses, geocodes each row to lat/lng and checks the contact emails, with no maps API key.",
+    calls: [["csv-lint", 1], ["geocode", 500], ["email-validate", 500]],
+    per: "for 500 rows",
   },
   {
     title: "Cross-check SEC insider trades against stock moves",
-    story: "A compliance agent pulled recent insider trades from EDGAR, matched them against stock price history, and flagged trades that preceded significant price movements.",
-    tools: ["edgar-insider-trades", "stock-history", "stock-quote"],
-    cost: "~$0.10 per company",
+    story: "A compliance agent pulls recent insider trades from EDGAR, matches them against the stock's price history and flags trades that preceded large moves.",
+    calls: [["edgar-insider-trades", 1], ["stock-history", 1], ["stock-quote", 1]],
+    per: "per company",
   },
 ];
 
-export function useCasesPage(baseUrl) {
+const priceNum = (def) => Number(String(def?.price ?? "").replace(/[^0-9.]/g, ""));
+// Shortest exact form at the $0.001 grain: $0.01, $0.004, $0.033, $1.94.
+const fmtUsd = (n) => { const s3 = n.toFixed(3); return `$${s3.endsWith("0") ? n.toFixed(2) : s3}`; };
+
+/** The use case's cost from the catalog, or null when any of its tools is not
+ *  served here (the line is then left out rather than guessed). */
+export function useCaseCost(uc, catalog) {
+  const bySlug = new Map(Object.values(catalog || {}).map((d) => [d?.slug, d]));
+  let total = 0;
+  const parts = [];
+  for (const [slug, n] of uc.calls) {
+    const p = priceNum(bySlug.get(slug));
+    if (!(Number.isFinite(p) && p > 0)) return null;
+    total += p * n;
+    parts.push(`${n} \u00d7 ${slug} at ${fmtUsd(p)}`);
+  }
+  return `${fmtUsd(total)} ${uc.per} (${parts.join(" + ")})`;
+}
+
+export function useCasesPage(baseUrl, catalog = {}) {
   const canonical = `${baseUrl}/use-cases`;
   const pageTitle = "Use Cases - what agents build with Agent402";
   const pageDesc = "Concrete examples of autonomous agents using Agent402: company research, security audits, PDF processing, live web search, macro dashboards, and more.";
@@ -72,7 +96,8 @@ export function useCasesPage(baseUrl) {
   };
 
   const cards = USE_CASES.map((uc) => {
-    const toolLinks = uc.tools
+    const cost = useCaseCost(uc, catalog);
+    const toolLinks = uc.calls.map(([slug]) => slug)
       .map((slug) => `<a href="/tools/${esc(slug)}" class="uc-tool-link">${esc(slug)}</a>`)
       .join(", ");
     return `
@@ -80,7 +105,7 @@ export function useCasesPage(baseUrl) {
         <h3>${esc(uc.title)}</h3>
         <p class="uc-story">${esc(uc.story)}</p>
         <p class="uc-tools"><span class="uc-label">Tools used:</span> ${toolLinks}</p>
-        <p class="uc-cost"><span class="uc-label">Cost:</span> <span class="uc-price">${esc(uc.cost)}</span></p>
+        ${cost ? `<p class="uc-cost"><span class="uc-label">Cost at list price:</span> <span class="uc-price">${esc(cost)}</span></p>` : ""}
       </div>`;
   }).join("\n");
 
@@ -108,7 +133,7 @@ export function useCasesPage(baseUrl) {
 <div class="uc-wrap">
 <div class="uc-eyebrow">$ GET /use-cases</div>
 <h1 class="uc-h1">Use Cases</h1>
-<p class="uc-intro">Real tasks agents solve with Agent402 - from overnight research to live monitoring. Each example shows the tools involved and what it costs at per-call pricing.</p>
+<p class="uc-intro">Example tasks an agent can run with Agent402, from overnight research to daily monitoring. Each one names the calls it makes and what they cost at today's per-call prices.</p>
 <div class="uc-grid">
 ${cards}
 </div>
