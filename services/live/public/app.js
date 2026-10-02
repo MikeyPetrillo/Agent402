@@ -64,8 +64,7 @@
   }
   function layout() {
     const now = Date.now(), tally = GATES.map(() => ({ n: 0, usd: 0 }));
-    // Gate tallies count outside payments only; our own walk past uncounted.
-    for (const p of payments) if (inRail(p) && !p.internal && now - p.ts <= 3600_000) { const t = tally[gateIndex(p.amountUsd)]; t.n++; t.usd += p.amountUsd; }
+    for (const p of payments) if (inRail(p) && now - p.ts <= 3600_000) { const t = tally[gateIndex(p.amountUsd)]; t.n++; t.usd += p.amountUsd; }
     const g = geometry(), gap = 8, h = (g.bottom - g.top - gap * (GATES.length - 1)) / GATES.length;
     const prev = gates;
     gates = GATES.map((x, i) => ({ i, label: x.label, x: g.gx, y: g.top + i * (h + gap), w: g.gw, h, n: tally[i].n, usd: tally[i].usd, hit: prev[i]?.hit || 0, hitRail: prev[i]?.hitRail || "x402" }));

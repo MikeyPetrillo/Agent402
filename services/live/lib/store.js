@@ -26,11 +26,6 @@ export function makeStore({ now = () => Date.now() } = {}) {
       while (lo < hi) { const mid = (lo + hi) >> 1; if (events[mid].ts <= ev.ts) lo = mid + 1; else hi = mid; }
       events.splice(lo, 0, ev);
     }
-    // Our own test and volume payments (ev.internal) stay in the event list,
-    // so they still walk across the page marked as ours, but never reach a
-    // count: payments per minute, USDC settled, buyers and top sellers are
-    // outside demand only.
-    if (ev.internal) { prune(); return true; }
     const m = Math.floor(ev.ts / 60_000);
     const b = minutes.get(m) || { x402: { n: 0, usd: 0 }, mpp: { n: 0, usd: 0 }, sellers: new Map() };
     b[ev.chain].n++; b[ev.chain].usd += ev.amountUsd;

@@ -30,13 +30,9 @@ const STATIC = {
   ...Object.fromEntries(["geist-400-latin", "geist-500-latin", "geist-600-latin", "geist-mono-400-latin", "geist-mono-700-latin"].map((f) => [`/fonts/${f}.woff2`, [`fonts/${f}.woff2`, "font/woff2"]])),
 };
 const files = Object.fromEntries(Object.entries(STATIC).map(([p, [f, type]]) => [p, { body: readFileSync(join(here, "public", f)), type }]));
-// The page's "how to read this" figures come from the same config the ingest
-// uses: the per-payment ceiling, and whether our own wallets are configured
-// (only then are their payments left out of the counts, so only then is it said).
-export const OWN_SENTENCE = " Payments from Agent402's own test and volume wallets walk past in grey and are left out of every count.";
+// The page's "how to read this" ceiling comes from the same config the ingest uses.
 files["/"].body = Buffer.from(files["/"].body.toString("utf8")
-  .replaceAll("<!--MAXUSD-->", String(MAX_PAYMENT_USD))
-  .replace("<!--OWN-->", INTERNAL_PAYERS.size ? OWN_SENTENCE : ""));
+  .replaceAll("<!--MAXUSD-->", String(MAX_PAYMENT_USD)));
 // The page references its script with a content hash, so a deploy is never
 // served a stale cached script.
 const appVersion = createHash("sha256").update(files["/app.js"].body).digest("hex").slice(0, 12);
@@ -103,7 +99,7 @@ function onEvents(evs, { backfill = false } = {}) {
     const s = directory.lookup(ev.chain, ev.payTo);
     if (!s.listed && !INCLUDE_UNLISTED) continue;
     ev.seller = s;
-    // Agent402's own canary and volume payments: shown, never counted.
+    // Agent402's own canary and volume payments: counted like any other, drawn in grey.
     ev.internal = INTERNAL_PAYERS.has(ev.payer);
     sellerByKey.set(s.key, sellerPublic(s));
     // Backfilled payments are history: they join the hour a page loads on
@@ -126,9 +122,7 @@ const keepAlive = setInterval(() => { for (const c of clients) c.write(": ping\n
 keepAlive.unref?.();
 
 function statsNow() {
-  // excludesOwnPayments: whether the wallet list that marks Agent402's own
-  // payments is configured on this service (the counts exclude them only then).
-  return { ...store.stats(sellerInfo), excludesOwnPayments: INTERNAL_PAYERS.size > 0, ingest: { base: pick(ingest.base?.status), tempo: pick(ingest.tempo?.status) } };
+  return { ...store.stats(sellerInfo), ingest: { base: pick(ingest.base?.status), tempo: pick(ingest.tempo?.status) } };
 }
 function pick(s) { return s ? { live: !!s.lastOkAt && Date.now() - s.lastOkAt < 60_000, backfilled: s.backfilled } : null; }
 
