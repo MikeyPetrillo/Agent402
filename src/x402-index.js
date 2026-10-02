@@ -7421,7 +7421,9 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
       name: t.name,
       method: t.method,
       route: t.route,
-      url: t.seller === LOCAL_SELLER ? `${baseUrl}${t.route}` : (sellerRouteUrl(t.seller, t.route) ?? `${t.seller}${t.route}`),
+      // The joined text as written (a template keeps its {param}); sellerRouteUrl
+      // only validates it, since its URL-parsed form percent-encodes the braces.
+      url: t.seller === LOCAL_SELLER ? `${baseUrl}${t.route}` : joinSellerRoute(t.seller, t.route),
       // A crawled OpenAPI path can carry template segments the seller never
       // substitutes ("/stock/{symbol}"). Handing an agent that URL as if it
       // were callable wastes its money and its time - measured 2026-08-28,
