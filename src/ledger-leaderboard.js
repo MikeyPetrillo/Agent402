@@ -196,7 +196,7 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
     },
     {
       q: "Why is Agent402 excluded from its own leaderboard?",
-      a: "The table above excludes our own wallet, the same filter /api/leaderboard applies with include=external. An index that ranks itself first is not evidence of anything, so the neutral view excludes the operator by default. Our own figures are published separately in the panel below the table, read from our sales ledger and counting outside buyers only. /api/leaderboard?include=all returns the board with our own row included and marked self.",
+      a: "The table above excludes our own wallet, the same filter /api/leaderboard applies with include=external. An index that ranks itself first is not evidence of anything, so the neutral view excludes the operator by default. Our own figures are published separately in the panel below the table, read from our sales ledger and counting outside buyers only.",
     },
     {
       q: "Can the leaderboard be gamed by self-dealing?",
