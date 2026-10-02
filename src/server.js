@@ -561,7 +561,7 @@ const MODEL_BACKED_KITS = [
   ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS,
   ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS,
   ...LINKEDIN_TOOLS,
-  ...DECIDE_TOOLS_ENABLED, // the plan is written by the decision service's model (services/decide/llm.js)
+  ...DECIDE_TOOLS_ENABLED, // decide: the plan is written by the decision service's model (services/decide/llm.js); decide-execute: its plan steps can run model-backed tools
 ];
 const MODEL_BACKED_SLUGS = new Set(MODEL_BACKED_KITS.map((t) => t.slug).filter(Boolean));
 // A tool that runs a model inside a kit of deterministic tools (`answer` in the
