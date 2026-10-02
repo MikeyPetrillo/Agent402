@@ -9,7 +9,7 @@ whole x402 ecosystem.
 > **Agent402 is the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance)** - agents that pay and get paid on their own over the two open wires, [x402](https://agent402.tools/what-is-x402) and [MPP](https://agent402.tools/what-is-mpp) (Machine Payments Protocol). Every paid endpoint answers both on the same 402; wallet-only tools take any payment-wrapped fetch (`@x402/fetch`, or a stock `mppx` fetch).
 
 ```bash
-npm install agent402-openai-agents @openai/agents zod
+npm install agent402-openai-agents @openai/agents
 ```
 
 ## Quickstart

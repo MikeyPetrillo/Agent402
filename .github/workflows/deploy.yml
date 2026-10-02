@@ -3148,6 +3148,7 @@ jobs:
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/ai-sdk/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/langchain/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/openai-agents/test.js
+          AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/openai-agents/test-real-sdk.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/llamaindex/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/strands/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/google-adk/test.js

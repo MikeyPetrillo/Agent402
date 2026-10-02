@@ -293,20 +293,11 @@ const tools = await agent402Tools({ fetch: payFetch });`,
     dir: "adapters/openai-agents",
     docsSlug: "openai-agents",
     what: "Tools for agents built with the OpenAI Agents SDK (`@openai/agents`). Pass them to `new Agent({ tools })` and the agent can find, route to and call any tool in the catalog.",
-    install: "npm install agent402-openai-agents @openai/agents zod",
-    example: `import { agent402ToolSpecs } from "agent402-openai-agents";
-import { Agent, run, tool } from "@openai/agents";
+    install: "npm install agent402-openai-agents @openai/agents",
+    example: `import { agent402Tools } from "agent402-openai-agents";
+import { Agent, run } from "@openai/agents";
 
-// The four specs as Agents SDK tools. strict: false because agent402_call's
-// "params" is optional and the SDK's strict schema mode requires every field.
-const toTools = (specs) => specs.map((s) => tool({
-  name: s.name,
-  description: s.description,
-  parameters: s.parametersJsonSchema,
-  strict: false,
-  execute: s.execute,
-}));
-const tools = toTools(agent402ToolSpecs());   // free tier: proof-of-work, no wallet
+const tools = await agent402Tools();   // free tier: proof-of-work, no wallet
 
 const agent = new Agent({
   name: "x402-agent",
@@ -317,7 +308,7 @@ const result = await run(agent, "Hash 'hello world' with sha256");`,
     walletExample: `${X402_FETCH}
 
 // agent402_call pays wallet-only tools through this fetch
-const tools = toTools(agent402ToolSpecs({ fetch: payFetch }));`,
+const tools = await agent402Tools({ fetch: payFetch });`,
     exposes: META_EXPOSES,
     payment: META_PAYMENT,
     tools: ["hash", "search", "answer", "extract", "route-execute"],
