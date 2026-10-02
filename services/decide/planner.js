@@ -121,13 +121,16 @@ export async function buildDecision({ task, constraints, depth }, deps) {
     // One retry while there is time: a single slow answer used to fold a
     // chained task into one step (2026-10-01 prod check, an ENS-then-count
     // task planned as one ENS lookup).
-    if (!(Array.isArray(out?.steps) && out.steps.length) && left() > 9000) out = await within(llm.call(p.system, p.user, { maxTokens: 700, timeoutMs: timeoutFor(0.3), meter, stage: "decompose_retry" }), timeoutFor(0.3) + 250);
-    const raw = Array.isArray(out?.steps) ? out.steps : null;
+    if (!decomposedSteps(out)?.length && left() > 9000) out = await within(llm.call(p.system, p.user, { maxTokens: 700, timeoutMs: timeoutFor(0.3), meter, stage: "decompose_retry" }), timeoutFor(0.3) + 250);
+    const raw = decomposedSteps(out);
     if (raw && raw.length) {
+      // Steps are numbered from 1; a model that numbers them from 0 (seen live:
+      // "dependsOn": [0] on step 2) would otherwise lose every link.
+      const zeroBased = raw.some((s) => Array.isArray(s?.dependsOn) && s.dependsOn.map(Number).includes(0));
       steps = raw.slice(0, cfg.maxSteps).map((s, i) => ({
         purpose: String(s?.purpose || "").slice(0, 300) || `step ${i + 1}`,
         query: String(s?.query || s?.purpose || "").slice(0, 300) || task,
-        dependsOn: Array.isArray(s?.dependsOn) ? s.dependsOn.map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= i) : [],
+        dependsOn: Array.isArray(s?.dependsOn) ? s.dependsOn.map(Number).map((n) => (zeroBased ? n + 1 : n)).filter((n) => Number.isInteger(n) && n >= 1 && n <= i) : [],
       }));
     } else { partial = true; notes.push("task decomposition unavailable: planned as one step"); }
   }
@@ -438,6 +441,15 @@ export function producesField(row, name) {
   const fields = (row?.outputFields || []).map(normField);
   if (fields.includes(normField(name))) return true;
   return (ADDRESS_PARAM.test(name) || normField(name) === "address") && fields.some((f) => f === "address" || f.endsWith("address"));
+}
+
+/** The steps of a decomposition answer: {"steps":[...]} as asked, or the bare
+ *  list a model sometimes returns instead (seen live, every time, for one
+ *  chained task: the planner read it as no answer and planned one step). */
+export function decomposedSteps(out) {
+  if (Array.isArray(out?.steps)) return out.steps;
+  if (Array.isArray(out) && out.every((s) => s && typeof s === "object" && ("purpose" in s || "query" in s))) return out;
+  return null;
 }
 
 /** "https://github.com" (or http, optional trailing slash) for a domain the

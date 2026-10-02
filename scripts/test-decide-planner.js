@@ -256,6 +256,22 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   ok(d.plan.length === 2 && !d.notes?.some((n) => /decomposition unavailable/.test(n)) && llm.calls[1].opts.stage === "decompose_retry", `a decomposition that fails once is retried, and the chain survives (${d.plan.length} steps)`);
 }
 
+// ---- a bare list of steps, numbered from 0, still plans the chain ----
+{
+  const { decomposedSteps } = await import("../services/decide/planner.js");
+  ok(decomposedSteps([{ purpose: "a" }])?.length === 1 && decomposedSteps({ steps: [{ purpose: "a" }] })?.length === 1 && decomposedSteps([1, 2]) === null && decomposedSteps(null) === null, "a decomposition is read as {steps:[...]} or a bare list of steps, nothing else");
+  const idx = new ToolIndex();
+  idx.upsert(mk("ens", { description: "resolve an ens name to an ethereum address", props: { name: { type: "string" } }, required: ["name"], row: { outputFields: ["address"] } }));
+  idx.upsert(mk("nonce", { description: "transaction count of an address", props: { address: { type: "string" } }, required: ["address"] }));
+  const llm = stubLlm([
+    [{ purpose: "resolve the ens name", query: "resolve ens name", dependsOn: [] }, { purpose: "transaction count", query: "transaction count address", dependsOn: [0] }],
+    (system, user) => { const fits = {}; for (const st of keysFor(user)) for (const c of st.candidates) fits[c.key] = /ENTIRE/.test(st.purpose) ? 0.1 : /resolve/.test(st.purpose) === /ens/.test(c.description) ? 0.95 : 0.05; return { fits }; },
+    { params: { "1": { name: "brantly.eth" }, "2": { address: "<address>" } } }]);
+  const d = await buildDecision({ task: "Resolve brantly.eth, then get that address's transaction count", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  const s2 = d.plan[1];
+  ok(d.plan.length === 2 && !d.notes?.some((n) => /decomposition unavailable/.test(n)) && s2?.dependsOn.includes(1) && s2.tool.exampleParams.address === "{{step 1}}", `a bare, zero-based step list keeps both steps and the link (${JSON.stringify(s2?.dependsOn)} ${JSON.stringify(s2?.tool.exampleParams)})`);
+}
+
 // ---- live window and schema filters ----
 {
   const { idx, stale, noschema } = buildIndex();
