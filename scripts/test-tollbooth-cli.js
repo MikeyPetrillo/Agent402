@@ -161,6 +161,10 @@ while (Date.now() < deadline && !childExit) {
   }
   try { await fetch(`${B}/__tollbooth/stats`); ready = true; break; } catch { await new Promise((r) => setTimeout(r, 100)); }
 }
+// PORT=0 must mean an OS-assigned port. `Number(PORT) || 4021` read 0 as unset
+// and bound the fixed 4021, so this comment's premise was false until
+// 2026-10-02 (truth audit) and two parallel runs could collide on 4021.
+if (PORT) ok(PORT !== 4021, `PORT=0 binds an OS-assigned port, not the 4021 default (bound :${PORT})`);
 if (childExit) await drained();
 const childState = () => `child ${childExit ? `EXITED code=${childExit.code} signal=${childExit.signal} (stdio ${childClosed ? "drained" : "NOT drained"})` : `alive pid=${child.pid}`}; log:\n${cliLog.trim() || "(empty)"}`;
 ok(ready, `CLI answered /__tollbooth/stats on :${PORT} within 30s (${childState()})`);
