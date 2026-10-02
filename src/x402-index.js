@@ -1209,6 +1209,13 @@ export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
   // Cap applies only to origins that would grow the submitted set. An origin
   // already on the list (retrying after a prior failure) is not new growth,
   // so it's exempt — it can still probe and update its own entry at cap.
+  if (!submittedSeeds.has(origin) && isEphemeralTunnelOrigin(origin)) {
+    let tunnels = 0;
+    for (const o of submittedSeeds) if (isEphemeralTunnelOrigin(o)) tunnels++;
+    if (tunnels >= tunnelSubmissionCap(submittedSeedsCap)) {
+      return { listed: false, origin, error: "tunnel submissions are full - quick-tunnel hostnames change every session, so their share of submission slots is capped; register a stable hostname, or retry after tunnel slots free up (a tunnel slot is released 3 days after its last successful probe)" };
+    }
+  }
   if (!submittedSeeds.has(origin) && submittedSeeds.size >= submittedSeedsCap) {
     return { listed: false, origin, error: "submission list is full - slots free up after 30 days with no successful probe; open a GitHub issue to get seeded sooner" };
   }
@@ -5378,6 +5385,31 @@ async function runCrawl() {
   }
 }
 
+// Quick-tunnel services hand out a random hostname per session, so a tunnel
+// origin that stops answering is gone for good: the next session is a new
+// hostname. Measured 2026-10-02: 1,753 of 2,432 self-serve registrations were
+// such hostnames, arriving 100-150 a day, which kept the submission door full
+// while a 30-day release drained it far slower. Named services only - a
+// tenant's own domain or a stable platform subdomain is never one of these.
+export const EPHEMERAL_TUNNEL_SUFFIXES = [
+  "lhr.life", "localhost.run", "trycloudflare.com", "loca.lt", "tunnelmole.net",
+  "ngrok-free.app", "ngrok-free.dev", "ngrok.app", "ngrok.io", "ngrok.dev",
+  "serveo.net", "serveousercontent.com", "pinggy.link", "pinggy.io",
+];
+export function isEphemeralTunnelOrigin(origin) {
+  let host;
+  try { host = new URL(origin).hostname.toLowerCase(); } catch { return false; }
+  return EPHEMERAL_TUNNEL_SUFFIXES.some((sfx) => host.endsWith(`.${sfx}`));
+}
+// A gone tunnel hostname never comes back, so its slot is released after days,
+// not a month, and a past settlement does not hold it: the seller, if still
+// selling, is already on a new hostname.
+const TUNNEL_RELEASE_AFTER_MS = Number(process.env.INDEX_TUNNEL_RELEASE_AFTER_DAYS || 3) * 86_400_000;
+// At most this share of the submission slots may be tunnel hostnames, so live
+// tunnels cannot fill the door for sellers on stable hostnames.
+const TUNNEL_SUBMISSION_SHARE = Number(process.env.INDEX_TUNNEL_SUBMISSION_SHARE || 0.25);
+export function tunnelSubmissionCap(cap) { return Math.floor(cap * (TUNNEL_SUBMISSION_SHARE >= 0 && TUNNEL_SUBMISSION_SHARE <= 1 ? TUNNEL_SUBMISSION_SHARE : 0.25)); }
+
 // How long an origin may go without a single successful crawl before its
 // submission slot is released. 30 days is deliberately far past any outage a
 // seller could be having: it is not a health signal, it is "this address has
@@ -5412,6 +5444,7 @@ export function selectReleasableOrigins({
   hasSettled = () => false,
   now = Date.now(),
   maxIdleMs = RELEASE_AFTER_MS,
+  tunnelMaxIdleMs = TUNNEL_RELEASE_AFTER_MS,
   cycleOkFraction = null,
   minCycleOkFraction = 0.5,
 } = {}) {
@@ -5429,12 +5462,13 @@ export function selectReleasableOrigins({
     // A seller who has ever been PAID through us is not a stale submission,
     // however long they have been down. Money is a stronger claim on a slot
     // than liveness, and releasing one would quietly drop a real counterparty.
-    if (row.last_settled_seen || hasSettled(origin)) continue;
+    const tunnel = isEphemeralTunnelOrigin(origin);
+    if (!tunnel && (row.last_settled_seen || hasSettled(origin))) continue;
     // No successful probe ever recorded falls back to first_seen, so a row
     // that predates this column cannot be immortal.
     const lastOk = Number(row.last_routable_seen || row.first_seen || 0);
     if (!lastOk) continue;
-    if (now - lastOk < maxIdleMs) continue;
+    if (now - lastOk < (tunnel ? tunnelMaxIdleMs : maxIdleMs)) continue;
     out.push(origin);
   }
   return out;

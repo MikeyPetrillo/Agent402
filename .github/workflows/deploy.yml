@@ -2336,6 +2336,7 @@ jobs:
           t node scripts/test-manifest-catalogue-payment.js
           # Submission slot release (30d dead, outage guard fails closed, settled sellers never released — offline)
           t node scripts/test-submission-release.js
+          t node scripts/test-tunnel-submissions.js
           # Browser pool admission (A402-08 bounded queue, deadline, disconnect-abort — offline)
           t node scripts/test-render-queue.js
           # MPP_CHALLENGE_NETWORKS default verified against installed mppx registry (drift guard — offline)
