@@ -659,11 +659,15 @@ export function canonicalModel(model) {
   // A retiring id is served by its named successor rather than refused: the
   // caller asked for a model, the successor is the provider's own replacement
   // on a tier we serve, and every wire names the swap in the reply
-  // (agent402_model_substituted). A variant suffix rides along.
+  // (agent402_model_substituted). A routing variant (:nitro, :floor) rides
+  // along; ":free" does not - a free endpoint belongs to the retiring model,
+  // and the successors carry none (laguna-*:free is live upstream until
+  // 2026-10-31, ministral-*:free never existed), so carrying it would send
+  // the caller to an id the upstream does not serve.
   const r = retiringModel(p);
   if (!r) return p;
   const variant = p.includes(":") ? p.slice(p.indexOf(":")) : "";
-  return `${r.use}${variant}`;
+  return `${r.use}${variant.toLowerCase() === ":free" ? "" : variant}`;
 }
 /** The retiring id a request named, when canonicalModel served its successor. */
 export function substitutedFrom(model) {

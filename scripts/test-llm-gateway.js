@@ -1610,8 +1610,8 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   for (const [id, use] of [["poolside/laguna-xs-2.1", "mistralai/ministral-3b-2512"], ["poolside/laguna-s-2.1", "mistralai/ministral-8b-2512"]]) {
     ok(RETIRING_MODELS[id]?.until === "2026-10-31" && RETIRING_MODELS[id]?.use === use && tierFor(use) === "v1-chat-nano", `${id}: retiring on 2026-10-31, served as ${use} on nano`);
     ok(!Object.values(TIERS).some((t) => (t.prefixes || []).includes(id) || (t.fallbacks || []).includes(id)) && !K.FLEX_MODELS.includes(id), `${id}: in no tier prefix, fallback or flex entry`);
-    for (const [m, want] of [[id, use], [id + ":free", use + ":free"]]) {
-      // A variant suffix rides onto the successor, as it does for every retiring id.
+    for (const [m, want] of [[id, use], [id + ":free", use], [id + ":nitro", use + ":nitro"]]) {
+      // A routing variant rides onto the successor; ":free" does not (no free successor exists upstream).
       const b = validateRequest({ model: m, messages: [{ role: "user", content: "hi" }] }, "v1-chat-nano");
       ok(b.model === want && b.__substitutedFrom === id, `${m}: served as ${want} with the swap named`);
     }
