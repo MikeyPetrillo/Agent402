@@ -447,9 +447,9 @@ async function callEndpoint(tool, args = {}) {
 async function callIndustrialPlatform(toolName, args = {}) {
   const tool = INDUSTRIAL_PLATFORM_TOOLS[toolName];
   if (!tool) throw new Error(`Unknown Industrial Platform tool "${toolName}"`);
-  if (!HAS_WALLET) {
+  if (!AGENT_KEY) {
     return {
-      content: [{ type: "text", text: `${toolName} requires a funded Agent402 wallet (AGENT_KEY or SOLANA_AGENT_KEY).` }],
+      content: [{ type: "text", text: `${toolName} requires AGENT_KEY: a funded EVM wallet with USDC on Base.` }],
       isError: true,
     };
   }
