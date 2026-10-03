@@ -20,6 +20,6 @@ ok(chargedFailuresGenuineSince(1e15) === 0, "the window bounds the count (nothin
 const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 const leg = src.slice(src.indexOf("chargedFailures: (() => {"), src.indexOf("chargedFailures: (() => {") + 600);
 ok(/const status = n == null \? "unknown" : n > 0 \? "recent" : "ok"/.test(leg), "gateway-status: recent / ok, and unknown when the store cannot be read");
-ok(/full \? \{ status, windowHours: hours, count: n \} : \{ status, windowHours: hours \}/.test(leg), "gateway-status: the count is operator-only; the public read gets the word");
+ok(/full \? \{ status, windowHours: hours, count: n \} : \{ status \}/.test(leg), "gateway-status: the count and window are operator-only; the public read gets the word");
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
