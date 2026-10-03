@@ -70,6 +70,77 @@ const MAX_PER_CALL = num(process.env.AGENT402_MAX_PER_CALL) ?? Infinity;
 const BUDGET = num(process.env.AGENT402_BUDGET) ?? Infinity;
 let spentUsd = 0;
 
+const INDUSTRIAL_PLATFORM_BASE =
+  (process.env.INDUSTRIAL_PLATFORM_URL ||
+   "https://x402-gateway-production-1f21.up.railway.app").replace(/\/$/, "");
+const industrialMonitorHashes = new Map();
+const INDUSTRIAL_PLATFORM_TOOLS = {
+  url_to_markdown: {
+    title: "Industrial Platform: URL to Markdown",
+    method: "POST",
+    path: "/web/markdown",
+    price: "$0.001",
+    description: "Convert a public webpage URL to clean Markdown for RAG, grounding, research, summarization and LLM context.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Public http(s) webpage URL." },
+        max_chars: { type: "number", description: "Maximum Markdown characters." },
+        timeout_seconds: { type: "number", description: "Fetch timeout in seconds." }
+      },
+      required: ["url"]
+    }
+  },
+  monitor_webpage: {
+    title: "Industrial Platform: Monitor webpage",
+    method: "POST",
+    path: "/change",
+    price: "$0.001",
+    description: "Detect meaningful webpage changes. Reuses the last successful current_hash for this URL as previous_hash during the same runtime session.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Public webpage URL." },
+        previous_hash: { type: "string", description: "Optional explicit previous hash." },
+        previous_text: { type: "string" },
+        include_current_text: { type: "boolean" },
+        timeout_seconds: { type: "number" }
+      },
+      required: ["url"]
+    }
+  },
+  extract_web_metadata: {
+    title: "Industrial Platform: Extract webpage metadata",
+    method: "POST",
+    path: "/metadata-single",
+    price: "$0.001",
+    description: "Extract title, canonical URL, robots directives, headings, OpenGraph, Twitter cards and JSON-LD for one public URL.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Public http(s) webpage URL." },
+        timeout_seconds: { type: "number" }
+      },
+      required: ["url"]
+    }
+  },
+  wallet_balance: {
+    title: "Industrial Platform: Wallet balance",
+    method: "GET",
+    path: "/wallet-balance/cdp",
+    price: "$0.001",
+    description: "Return native ETH and USDC balances for one wallet on Base or Ethereum.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "20-byte EVM wallet address." },
+        chain: { type: "string", description: "CAIP-2 chain id; defaults to eip155:8453." }
+      },
+      required: ["address"]
+    }
+  }
+};
+
 const DEFAULT_CURATED = [
   // Flagship demand set — keep aligned with src/mcp-flagship.js FLAGSHIP_SLUGS.
   // Search/answer is the front door; long tail stays behind catalog.search/catalog.call.
@@ -373,6 +444,63 @@ async function callEndpoint(tool, args = {}) {
   return { content: [{ type: "text", text }], structuredContent: structured };
 }
 
+async function callIndustrialPlatform(toolName, args = {}) {
+  const tool = INDUSTRIAL_PLATFORM_TOOLS[toolName];
+  if (!tool) throw new Error(`Unknown Industrial Platform tool "${toolName}"`);
+  if (!HAS_WALLET) {
+    return {
+      content: [{ type: "text", text: `${toolName} requires a funded Agent402 wallet (AGENT_KEY or SOLANA_AGENT_KEY).` }],
+      isError: true,
+    };
+  }
+
+  const url = new URL(`${INDUSTRIAL_PLATFORM_BASE}${tool.path}`);
+  const body = { ...args };
+  if (toolName === "monitor_webpage" && typeof body.url === "string" && !body.previous_hash) {
+    const remembered = industrialMonitorHashes.get(body.url);
+    if (remembered) body.previous_hash = remembered;
+  }
+
+  const init = { method: tool.method, headers: { Accept: "application/json" } };
+  if (tool.method === "GET") {
+    for (const [k, v] of Object.entries(body)) {
+      if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
+    }
+  } else {
+    init.headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(body);
+  }
+
+  const price = await quotedUsd(url, init, 0.001);
+  if (price > MAX_PER_CALL) {
+    return { content: [{ type: "text", text: `Refused: Industrial Platform quoted ${price}, above AGENT402_MAX_PER_CALL ${MAX_PER_CALL}.` }], isError: true };
+  }
+  if (spentUsd + price > BUDGET) {
+    return { content: [{ type: "text", text: `Refused: Agent402 session budget exhausted (${spentUsd.toFixed(4)} of ${BUDGET}).` }], isError: true };
+  }
+
+  const payFetch = await getPayFetch();
+  const res = await payFetch(url, init);
+  const text = await res.text();
+  if (!res.ok) return { content: [{ type: "text", text: failureText(res.status, text) }], isError: true };
+  spentUsd += price;
+
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
+  if (toolName === "monitor_webpage" && typeof body.url === "string" && typeof parsed?.current_hash === "string") {
+    industrialMonitorHashes.set(body.url, parsed.current_hash);
+  }
+  return {
+    content: [{ type: "text", text }],
+    structuredContent: {
+      provider: "industrial-platform",
+      endpoint: `${INDUSTRIAL_PLATFORM_BASE}${tool.path}`,
+      priceUsd: price,
+      result: parsed
+    }
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tool search over the full catalog (for everything not exposed first-class).
 // Front-door phrase boosts mirror src/find.js applyFrontDoorTerms so stdio
@@ -534,6 +662,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     };
   });
   tools.push(
+    ...Object.entries(INDUSTRIAL_PLATFORM_TOOLS).map(([name, tool]) => ({
+      name,
+      title: tool.title,
+      annotations: { title: tool.title, ...OPEN },
+      description: `[${tool.price}/call; native Industrial Platform provider] ${tool.description}`,
+      inputSchema: tool.inputSchema,
+      outputSchema: { type: "object", additionalProperties: true }
+    })),
     {
       name: META_MCP_NAMES.search_tools,
       title: "Search the Agent402 tool catalog",
@@ -646,6 +782,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name: rawName, arguments: args = {} } = req.params;
   const name = resolveListedName(rawName);
   try {
+    if (INDUSTRIAL_PLATFORM_TOOLS[name]) {
+      return await callIndustrialPlatform(name, args);
+    }
     if (name === "catalog.search") {
       const q = args.query ?? "";
       const results = searchTools(q, args.limit ?? 10);
