@@ -3175,7 +3175,7 @@ app.get("/api/gateway-status", async (req, res) => {
       const hours = Number(process.env.CHARGED_FAILURE_ALARM_HOURS || 6);
       const n = chargedFailuresGenuineSince(Date.now() - hours * 3600_000);
       const status = n == null ? "unknown" : n > 0 ? "recent" : "ok";
-      return full ? { status, windowHours: hours, count: n } : { status, windowHours: hours };
+      return full ? { status, windowHours: hours, count: n } : { status };
     })(),
   };
   // An operator-authed read must not land in a shared cache.
