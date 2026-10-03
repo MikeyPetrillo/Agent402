@@ -70,6 +70,212 @@ const MAX_PER_CALL = num(process.env.AGENT402_MAX_PER_CALL) ?? Infinity;
 const BUDGET = num(process.env.AGENT402_BUDGET) ?? Infinity;
 let spentUsd = 0;
 
+const INDUSTRIAL_PLATFORM_BASE =
+  (process.env.INDUSTRIAL_PLATFORM_URL ||
+   "https://x402-gateway-production-1f21.up.railway.app").replace(/\/$/, "");
+const industrialMonitorHashes = new Map();
+const INDUSTRIAL_PLATFORM_TOOLS = {
+  url_to_markdown: {
+    title: "Industrial Platform: URL to Markdown",
+    method: "POST",
+    path: "/web/markdown",
+    price: "$0.001",
+    description: "Convert a public webpage URL to clean Markdown for RAG, grounding, research, summarization and LLM context.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Public http(s) webpage URL." },
+        max_chars: { type: "number", description: "Maximum Markdown characters." },
+        timeout_seconds: { type: "number", description: "Fetch timeout in seconds." }
+      },
+      required: ["url"]
+    }
+  },
+  monitor_webpage: {
+    title: "Industrial Platform: Monitor webpage",
+    method: "POST",
+    path: "/change",
+    price: "$0.001",
+    description: "Detect meaningful webpage changes. Reuses the last successful current_hash for this URL as previous_hash during the same runtime session.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Public webpage URL." },
+        previous_hash: { type: "string", description: "Optional explicit previous hash." },
+        previous_text: { type: "string" },
+        include_current_text: { type: "boolean" },
+        timeout_seconds: { type: "number" }
+      },
+      required: ["url"]
+    }
+  },
+  extract_web_metadata: {
+    title: "Industrial Platform: Extract webpage metadata",
+    method: "POST",
+    path: "/metadata-single",
+    price: "$0.001",
+    description: "Extract title, canonical URL, robots directives, headings, OpenGraph, Twitter cards and JSON-LD for one public URL.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Public http(s) webpage URL." },
+        timeout_seconds: { type: "number" }
+      },
+      required: ["url"]
+    }
+  },
+  wallet_balance: {
+    title: "Industrial Platform: Wallet balance",
+    method: "GET",
+    path: "/wallet-balance/cdp",
+    price: "$0.001",
+    description: "Return native ETH and USDC balances for one wallet on Base or Ethereum.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "20-byte EVM wallet address." },
+        chain: { type: "string", description: "CAIP-2 chain id; defaults to eip155:8453." }
+      },
+      required: ["address"]
+    }
+  },
+  transaction_status: {
+    title: "Industrial Platform: Transaction status",
+    method: "GET",
+    path: "/transaction-status",
+    price: "$0.001",
+    description: "Check whether an EVM transaction is pending, confirmed or reverted, including confirmations and gas metadata.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tx_hash: { type: "string", description: "32-byte EVM transaction hash." },
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." }
+      },
+      required: ["tx_hash"]
+    }
+  },
+  gas_state: {
+    title: "Industrial Platform: Gas state",
+    method: "GET",
+    path: "/gas-state",
+    price: "$0.001",
+    description: "Return current gas price, latest block base fee and gas utilization on Base or Ethereum.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." }
+      }
+    }
+  },
+  erc20_allowance: {
+    title: "Industrial Platform: ERC-20 allowance",
+    method: "GET",
+    path: "/erc20-allowance",
+    price: "$0.001",
+    description: "Check an ERC-20 token allowance from owner to spender before swaps, payments or contract execution.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        owner: { type: "string", description: "Owner EVM wallet address." },
+        spender: { type: "string", description: "Spender/contract EVM address." },
+        contract: { type: "string", description: "ERC-20 token contract address." },
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." }
+      },
+      required: ["owner", "spender", "contract"]
+    }
+  },
+  wallet_activity: {
+    title: "Industrial Platform: Wallet activity",
+    method: "GET",
+    path: "/wallet-activity",
+    price: "$0.001",
+    description: "Return recent USDC or ERC-20 transfers for a wallet plus next_cursor for recurring payment and treasury monitoring.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "EVM wallet address." },
+        contract: { type: "string", description: "ERC-20 contract; defaults to USDC." },
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." },
+        cursor: { type: "number", description: "Previous next_cursor block number." },
+        lookback_blocks: { type: "number", description: "Initial scan lookback, up to 5000 blocks." }
+      },
+      required: ["address"]
+    }
+  },
+  monitor_wallet: {
+    title: "Industrial Platform: Monitor wallet",
+    method: "POST",
+    path: "/agent/wallet-monitor",
+    price: "$0.005",
+    description: "Recurring wallet monitor for balance changes and new USDC/ERC-20 transfers. Pass the prior next_cursor and current_state_hash into the next scheduled call.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "EVM wallet address." },
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." },
+        activity_contract: { type: "string", description: "ERC-20 activity contract; defaults to USDC." },
+        cursor: { type: "number", description: "Previous next_cursor block number." },
+        lookback_blocks: { type: "number", description: "Initial scan lookback, up to 5000 blocks." },
+        previous_state_hash: { type: "string", description: "Prior current_state_hash for change detection." }
+      },
+      required: ["address"]
+    }
+  },
+  treasury_snapshot: {
+    title: "Industrial Platform: Treasury snapshot",
+    method: "POST",
+    path: "/agent/treasury-snapshot",
+    price: "$0.01",
+    description: "One-call treasury snapshot: balances, gas/base fee and recent USDC/ERC-20 activity. Pass the returned activity cursor and state hash into the next scheduled call.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "EVM wallet address." },
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." },
+        activity_contract: { type: "string", description: "ERC-20 activity contract; defaults to USDC." },
+        activity_cursor: { type: "number", description: "Previous activity cursor block number." },
+        lookback_blocks: { type: "number", description: "Initial scan lookback, up to 5000 blocks." },
+        previous_state_hash: { type: "string", description: "Prior current_state_hash for change detection." }
+      },
+      required: ["address"]
+    }
+  },
+  pretrade_context: {
+    title: "Industrial Platform: Pre-trade context",
+    method: "POST",
+    path: "/agent/pretrade",
+    price: "$0.01",
+    description: "Data-only pre-trade bundle: wallet state, ERC-20 allowance, gas/base fee, realtime price, 24h stats and best bid/ask spread. Never submits a trade.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "EVM wallet address." },
+        spender: { type: "string", description: "Spender/contract EVM address." },
+        token_contract: { type: "string", description: "ERC-20 token contract address." },
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." },
+        product_id: { type: "string", description: "Coinbase Exchange market, e.g. BTC-USD." }
+      },
+      required: ["address", "spender", "token_contract", "product_id"]
+    }
+  },
+  watch_transaction: {
+    title: "Industrial Platform: Watch transaction",
+    method: "POST",
+    path: "/agent/transaction-watch",
+    price: "$0.003",
+    description: "Poll an EVM transaction until confirmed or reverted. Pass the prior current_state_hash into later checks.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tx_hash: { type: "string", description: "32-byte EVM transaction hash." },
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." },
+        previous_state_hash: { type: "string", description: "Prior current_state_hash for change detection." }
+      },
+      required: ["tx_hash"]
+    }
+  }
+};
+
 const DEFAULT_CURATED = [
   // Flagship demand set — keep aligned with src/mcp-flagship.js FLAGSHIP_SLUGS.
   // Search/answer is the front door; long tail stays behind catalog.search/catalog.call.
@@ -373,6 +579,63 @@ async function callEndpoint(tool, args = {}) {
   return { content: [{ type: "text", text }], structuredContent: structured };
 }
 
+async function callIndustrialPlatform(toolName, args = {}) {
+  const tool = INDUSTRIAL_PLATFORM_TOOLS[toolName];
+  if (!tool) throw new Error(`Unknown Industrial Platform tool "${toolName}"`);
+  if (!AGENT_KEY) {
+    return {
+      content: [{ type: "text", text: `${toolName} requires AGENT_KEY: a funded EVM wallet with USDC on Base.` }],
+      isError: true,
+    };
+  }
+
+  const url = new URL(`${INDUSTRIAL_PLATFORM_BASE}${tool.path}`);
+  const body = { ...args };
+  if (toolName === "monitor_webpage" && typeof body.url === "string" && !body.previous_hash) {
+    const remembered = industrialMonitorHashes.get(body.url);
+    if (remembered) body.previous_hash = remembered;
+  }
+
+  const init = { method: tool.method, headers: { Accept: "application/json" } };
+  if (tool.method === "GET") {
+    for (const [k, v] of Object.entries(body)) {
+      if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
+    }
+  } else {
+    init.headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(body);
+  }
+
+  const price = await quotedUsd(url, init, 0.001);
+  if (price > MAX_PER_CALL) {
+    return { content: [{ type: "text", text: `Refused: Industrial Platform quoted ${price}, above AGENT402_MAX_PER_CALL ${MAX_PER_CALL}.` }], isError: true };
+  }
+  if (spentUsd + price > BUDGET) {
+    return { content: [{ type: "text", text: `Refused: Agent402 session budget exhausted (${spentUsd.toFixed(4)} of ${BUDGET}).` }], isError: true };
+  }
+
+  const payFetch = await getPayFetch();
+  const res = await payFetch(url, init);
+  const text = await res.text();
+  if (!res.ok) return { content: [{ type: "text", text: failureText(res.status, text) }], isError: true };
+  spentUsd += price;
+
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
+  if (toolName === "monitor_webpage" && typeof body.url === "string" && typeof parsed?.current_hash === "string") {
+    industrialMonitorHashes.set(body.url, parsed.current_hash);
+  }
+  return {
+    content: [{ type: "text", text }],
+    structuredContent: {
+      provider: "industrial-platform",
+      endpoint: `${INDUSTRIAL_PLATFORM_BASE}${tool.path}`,
+      priceUsd: price,
+      result: parsed
+    }
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tool search over the full catalog (for everything not exposed first-class).
 // Front-door phrase boosts mirror src/find.js applyFrontDoorTerms so stdio
@@ -534,6 +797,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     };
   });
   tools.push(
+    ...Object.entries(INDUSTRIAL_PLATFORM_TOOLS).map(([name, tool]) => ({
+      name,
+      title: tool.title,
+      annotations: { title: tool.title, ...OPEN },
+      description: `[${tool.price}/call; native Industrial Platform provider] ${tool.description}`,
+      inputSchema: tool.inputSchema,
+      outputSchema: { type: "object", additionalProperties: true }
+    })),
     {
       name: META_MCP_NAMES.search_tools,
       title: "Search the Agent402 tool catalog",
@@ -646,6 +917,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name: rawName, arguments: args = {} } = req.params;
   const name = resolveListedName(rawName);
   try {
+    if (INDUSTRIAL_PLATFORM_TOOLS[name]) {
+      return await callIndustrialPlatform(name, args);
+    }
     if (name === "catalog.search") {
       const q = args.query ?? "";
       const results = searchTools(q, args.limit ?? 10);
