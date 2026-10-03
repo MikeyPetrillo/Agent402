@@ -913,6 +913,9 @@ export function __testResetSubmitted() { submittedSeeds.clear(); successions.cle
 /** Test hook: put entries in the crawl cache so cache-dependent paths can be driven. */
 export function __testSeedCache(entries = []) { for (const [o, e] of entries) cache.set(o, e); }
 
+/** Test hook: set (or, with no rows, clear) the registry rows held for one origin. */
+export function __testSetBazaarTools(origin, rows) { if (Array.isArray(rows)) bazaarToolsByOrigin.set(origin, rows); else bazaarToolsByOrigin.delete(origin); }
+
 /** Validate a raw submitted origin. Returns { origin } (normalized) or { error }. */
 export function validateOriginInput(raw, { selfOrigin, allowPath = false } = {}) {
   let u;
@@ -1017,15 +1020,10 @@ export const SUCCESSION_PATH = "/.well-known/agent402-succession";
 export function sharesPayTo(claimant, predecessor) {
   const a = cache.get(claimant), b = cache.get(predecessor);
   if (!a || !b || a.error || b.error) return null;
-  const payTos = (e) => {
-    const out = new Map(); // network -> lowercased payTo
-    for (const t of e.tools || []) {
-      for (const [net, v] of Object.entries(t?.payToByNetwork || {})) {
-        if (typeof v === "string" && v && !out.has(net)) out.set(net, v.toLowerCase());
-      }
-    }
-    return out;
-  };
+  // The seller-level payTo per network, the origin's own address first (see
+  // sellerPayToByNetwork): a wallet only a registry row still records is not
+  // the seller's payTo for a proof of common control.
+  const payTos = (e) => new Map(Object.entries(sellerPayToByNetwork(e.tools)).map(([net, v]) => [net, v.toLowerCase()]));
   const x = payTos(a), y = payTos(b);
   for (const [net, v] of x) if (y.get(net) === v) return { network: net, payTo: v };
   return null;
@@ -1835,6 +1833,65 @@ const NETWORK_SHORTHAND = new Map(Object.values(CHAIN_PAGES).map((C) => [C.netwo
 function normalizeNetwork(n) {
   if (typeof n !== "string") return n;
   return NETWORK_SHORTHAND.get(n.toLowerCase()) || n;
+}
+
+/**
+ * WHERE a row's payTo for one network came from (2026-10-03).
+ *
+ *   "live"     - the origin's own 402 named it (applyLivePayTo)
+ *   "origin"   - the origin's own documents named it (manifest, OpenAPI,
+ *                agents.json, a single-resource manifest)
+ *   "registry" - only a third party's listing carries it (a Bazaar row: the
+ *                address a payment settled to when the registry recorded it)
+ *
+ * Stamped explicitly in `payToSourceByNetwork` wherever a merge writes a payTo
+ * from a source other than the row's own; otherwise read from the row's
+ * provenance (a Bazaar row's addresses are the registry's, every other row was
+ * read from the origin). Rows persisted before the stamp existed read the same
+ * way, which is right for every one of them except a registry row a live read
+ * had corrected - that one is re-corrected by the origin's own documents on the
+ * next crawl, or by the next live read.
+ *
+ * Why it exists: the seller-level payTo was "first seen per network wins" over
+ * a tool list whose Bazaar rows come first, and a merge filled the origin's own
+ * address only where a row held none. A seller who moved to a new wallet kept
+ * the old one published as its Base payTo for as long as one Bazaar row still
+ * recorded a payment to it, and a re-registration that read the live 402 was
+ * undone by the next crawl (reported 2026-10-03: the router label then read the
+ * abandoned wallet as the seller's own and refused it as evidence_payto_mismatch).
+ * Same rule as the price: the origin's own current word wins over a registry's
+ * record, and a registry address only fills a network the origin names nothing on.
+ */
+export function payToSourceOf(row, net) {
+  const s = row?.payToSourceByNetwork?.[net];
+  if (s === "live" || s === "origin" || s === "registry") return s;
+  return row?.provenance === "bazaar" ? "registry" : "origin";
+}
+const ownPayToSource = (s) => s === "live" || s === "origin";
+
+/** Write one network's payTo onto a row with its source. Fresh objects only:
+ *  rows on one path can share their maps (see applyLivePayTo). */
+function setRowPayTo(row, net, addr, source) {
+  row.payToByNetwork = { ...(row.payToByNetwork || {}), [net]: addr };
+  row.payToSourceByNetwork = { ...(row.payToSourceByNetwork || {}), [net]: source };
+}
+
+/** The seller-level payTo per network over a tool list: an address the origin
+ *  itself named (its documents or its live 402) wins; an address only a
+ *  registry row carries fills a network the origin names nothing on. Within a
+ *  class the first seen still wins, as before. Every address stays listed in
+ *  `payTosByNetwork` (allPayTosByNetwork), so a wallet the seller once used
+ *  remains visible as the history it is. */
+export function sellerPayToByNetwork(tools) {
+  const own = {}, registry = {};
+  for (const t of tools || []) {
+    for (const [net, addr] of Object.entries(t?.payToByNetwork || {})) {
+      if (typeof addr !== "string" || !addr) continue;
+      const bucket = ownPayToSource(payToSourceOf(t, net)) ? own : registry;
+      if (!bucket[net]) bucket[net] = addr;
+    }
+  }
+  return { ...registry, ...own };
 }
 
 /**
@@ -2841,6 +2898,20 @@ export function mergeManifestIntoTools(manifestTools = [], existing = []) {
     if (!hit.networks?.length && m.networks?.length) hit.networks = [...m.networks];
     if (!Object.keys(hit.payToByNetwork || {}).length && Object.keys(m.payToByNetwork || {}).length) {
       hit.payToByNetwork = { ...m.payToByNetwork };
+      // Explicit, because the hit may be a Bazaar row whose provenance would
+      // otherwise read these manifest addresses as the registry's.
+      hit.payToSourceByNetwork = Object.fromEntries(Object.keys(m.payToByNetwork).map((net) => [net, "origin"]));
+    } else {
+      // The one exception to blank-fill: an address only a REGISTRY carries
+      // for a network the manifest names is replaced by the manifest's. The
+      // manifest is the origin's own current word on where it is paid; the
+      // registry row records where an earlier payment went, which is a wallet
+      // the seller may have since left (2026-10-03, see payToSourceOf). An
+      // address the origin's OpenAPI or live 402 gave the row is untouched.
+      for (const [net, addr] of Object.entries(m.payToByNetwork || {})) {
+        if (typeof addr !== "string" || !addr) continue;
+        if (hit.payToByNetwork?.[net] && payToSourceOf(hit, net) === "registry") setRowPayTo(hit, net, addr, "origin");
+      }
     }
     if (!hit.stellarPayTo && m.stellarPayTo) hit.stellarPayTo = m.stellarPayTo;
     if (!hit.algorandPayTo && m.algorandPayTo) hit.algorandPayTo = m.algorandPayTo;
@@ -3347,6 +3418,19 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     // unannotated (paid:false) that has real settled payments is buyable —
     // observed truth beats the doc's silence. An explicit zero price stays free.
     ...(b.price != null && b.price > 0 ? { paid: true } : o.paid !== undefined ? { paid: o.paid } : {}),
+    // The payTo the origin's own operation names wins over the one the
+    // registry recorded, network by network, like the price above: a seller
+    // that moved wallets is paid at the new one, and the registry's address is
+    // a record of where an earlier payment went (see payToSourceOf). The
+    // registry's address still fills a network the operation names nothing on.
+    ...(() => {
+      const own = Object.entries(o.payToByNetwork || {}).filter(([, a]) => typeof a === "string" && a);
+      if (!own.length) return {};
+      const sources = {};
+      for (const net of Object.keys(bazaar.payToByNetwork || {})) sources[net] = payToSourceOf(bazaar, net);
+      for (const [net] of own) sources[net] = "origin";
+      return { payToByNetwork: { ...(bazaar.payToByNetwork || {}), ...Object.fromEntries(own) }, payToSourceByNetwork: sources };
+    })(),
   });
   };
   const merged = bazaarTools.map((b) => {
@@ -3685,7 +3769,25 @@ export function carryForwardLearnedQuotes(tools, prev) {
       // origin wins, the remembered address fills the rest. Filtering the
       // remembered entries as well would make each guard unkillable by the
       // other, so a test could not tell either of them from a no-op.
-      if (remembered.length) t.payToByNetwork = { ...Object.fromEntries(remembered), ...(t.payToByNetwork || {}) };
+      // One exception, by SOURCE rather than by order (2026-10-03): a payTo
+      // this crawl took only from a REGISTRY row does not outrank a
+      // remembered address the origin itself named (its live 402 or its own
+      // documents). A Bazaar row is rebuilt into every crawl, so without this
+      // the wallet a seller had left came back on the first crawl after a
+      // re-registration had read the new one from the live 402.
+      if (remembered.length) {
+        const current = t.payToByNetwork || {};
+        const next = { ...current }, sources = {};
+        for (const net of Object.keys(current)) sources[net] = payToSourceOf(t, net);
+        for (const [net, addr] of remembered) {
+          const hitSource = payToSourceOf(hit, net);
+          if (!current[net] || (sources[net] === "registry" && ownPayToSource(hitSource))) {
+            next[net] = addr; sources[net] = hitSource;
+          }
+        }
+        t.payToByNetwork = next;
+        t.payToSourceByNetwork = sources;
+      }
     }
     // Verb change: see correctsVerb above. A learned verb that simply answered
     // on its own row is not evidence about a sibling verb - that reading is
@@ -3804,6 +3906,9 @@ function applyLivePayTo(row, payToByNetwork) {
   const live = Object.entries(payToByNetwork).filter(([net, addr]) => typeof net === "string" && net && typeof addr === "string" && addr);
   if (!live.length) return;
   row.payToByNetwork = { ...(row.payToByNetwork || {}), ...Object.fromEntries(live) };
+  // Stamped, so a later crawl can tell the origin's own live word from a
+  // registry's record of an earlier payment (payToSourceOf).
+  row.payToSourceByNetwork = { ...(row.payToSourceByNetwork || {}), ...Object.fromEntries(live.map(([net]) => [net, "live"])) };
 }
 
 /**
@@ -3830,6 +3935,11 @@ function applyLiveNetworks(row, liveNetworks) {
     const kept = { ...row.payToByNetwork };
     for (const n of withdrawn) delete kept[n];
     row.payToByNetwork = kept;
+    if (row.payToSourceByNetwork && typeof row.payToSourceByNetwork === "object") {
+      const keptSources = { ...row.payToSourceByNetwork };
+      for (const n of withdrawn) delete keptSources[n];
+      row.payToSourceByNetwork = keptSources;
+    }
   }
 }
 
@@ -6256,10 +6366,8 @@ function buildRoutableSellerSummaries() {
       // Omitting it silently broke the router's chain-derived proven-ness join:
       // baseNetworkPayTo() returned null for every seller, so the evidence
       // source contributed nothing, always, and looked identical to "no data".
-      payToByNetwork: (v.tools || []).reduce((acc, t) => {
-        for (const [net, addr] of Object.entries(t.payToByNetwork || {})) if (!acc[net]) acc[net] = addr;
-        return acc;
-      }, {}),
+      // The origin's own address first per network (sellerPayToByNetwork).
+      payToByNetwork: sellerPayToByNetwork(v.tools),
       // Every advertised payTo, not just the first (see allPayTosByNetwork).
       payTosByNetwork: allPayTosByNetwork(v.tools),
       evmDomainByNetwork: evmDomainUnion(v.tools),
@@ -6368,10 +6476,8 @@ export function sellerDetail(originOrHost) {
       // so baseNetworkPayTo() read undefined and the paid seller-trust tool
       // reported "advertises no payTo" for every seller, including the many that
       // plainly do.
-      payToByNetwork: (v.tools || []).reduce((acc, t) => {
-        for (const [net, addr] of Object.entries(t.payToByNetwork || {})) if (!acc[net]) acc[net] = addr;
-        return acc;
-      }, {}),
+      // The origin's own address first per network (sellerPayToByNetwork).
+      payToByNetwork: sellerPayToByNetwork(v.tools),
       // Every payee this origin advertises, so a venue hosting many authors is
       // not reported as a single seller (see allPayTosByNetwork).
       payTosByNetwork: allPayTosByNetwork(v.tools),
@@ -6538,14 +6644,13 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
       .map((t) => t.algorandPayTo)
       .find((w) => typeof w === "string" && /^[A-Z2-7]{58}$/.test(w)) || null,
     // Union of payTo-by-network across this seller's crawled + Bazaar tools
-    // (first payTo seen per network wins) — the EVM/Solana counterpart to the
+    // (the origin's own address first, see below) — the EVM/Solana counterpart to the
     // stellar/algorand wallets above, so the market pages can scope activity to
     // an external seller's advertised address on the chain being viewed.
-    payToByNetwork: [...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]
-      .reduce((acc, t) => {
-        for (const [net, addr] of Object.entries(t.payToByNetwork || {})) if (!acc[net]) acc[net] = addr;
-        return acc;
-      }, {}),
+    // The origin's own address first per network: the Bazaar rows listed first
+    // here are a registry's record and only fill a network the origin's own
+    // documents and live 402s name nothing on (sellerPayToByNetwork).
+    payToByNetwork: sellerPayToByNetwork([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
     payTosByNetwork: allPayTosByNetwork([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
     evmDomainByNetwork: evmDomainUnion([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
   }));
