@@ -160,7 +160,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The OpenRouter balance behind the /v1 gateway is below its configured low-water mark (OPENROUTER_LOW_CREDITS_USD) OR the production key's own monthly limit is nearly used (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is cancelled, so buyers are NOT charged but every /v1 sale is lost until it is topped up. Top up credits: https://openrouter.ai/settings/credits (manual - the programmatic top-up API is gone). Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402)."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The OpenRouter balance behind the /v1 gateway is below its configured low-water mark (OPENROUTER_LOW_CREDITS_USD) OR the production key's own monthly limit is nearly used (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is cancelled, so buyers are NOT charged but every /v1 sale is lost until it is topped up. Auto top-up is on for this account, so a low balance means a refill did not land (declined card, or auto top-up switched off): check https://openrouter.ai/settings/credits. Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402)."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi

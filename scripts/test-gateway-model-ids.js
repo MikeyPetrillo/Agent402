@@ -187,6 +187,9 @@ const admitted = models.filter((m) => {
   // refuseCostVariants on every wire, so their live prices bound nothing we
   // serve (qwen3.8-2.4t-a95b:batch listed ABOVE its own base model, 2026-08-28).
   if (/:(batch|online)$/.test(m.id)) return false;
+  // A retiring id is never sent upstream as itself: canonicalModel serves its
+  // successor, priced by the successor's row, so its own listing bounds nothing.
+  if (Object.hasOwn(RETIRING_MODELS, m.id.split(":")[0])) return false;
   return !!tierFor(m.id);
 });
 const under = [];

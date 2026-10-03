@@ -340,7 +340,7 @@ export const ALARMS = [
     title: "Gateway credits LOW (OpenRouter)",
     verdict: ({ gateway: b }) => (b.status === "low" ? "bad" : b.status === "ok" ? "good" : "quiet"),
     body: () =>
-      "The OpenRouter balance behind the /v1 gateway is below the low-water mark (OPENROUTER_LOW_CREDITS_USD, default $15) OR the production key's own monthly USD limit has under 25% left (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is cancelled, so buyers are NOT charged but every /v1 sale is lost until it is topped up. Top up credits: https://openrouter.ai/settings/credits (manual - the programmatic top-up API is gone). Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402).",
+      "The OpenRouter balance behind the /v1 gateway is below the low-water mark (OPENROUTER_LOW_CREDITS_USD) OR the production key's own monthly USD limit has under 25% left (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is cancelled, so buyers are NOT charged but every /v1 sale is lost until it is topped up. Auto top-up is on for this account, so a low balance means a refill did not land (declined card, or auto top-up switched off): check https://openrouter.ai/settings/credits. Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402).",
   },
   {
     title: "Gateway balance UNREADABLE (OpenRouter)",

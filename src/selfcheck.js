@@ -49,7 +49,7 @@ export const SELFCHECK_SLUGS = [
   "college-lookup",        // College Scorecard (api.data.gov key, DEMO fallback)
   "fec-candidates",        // FEC (api.data.gov key, DEMO fallback)
   "federal-awards",        // USAspending (POST search)
-  "geo-lookup",            // FCC Area API (lat/lon -> county/state)
+  "geo-lookup",            // Census geocoder, FCC fallback (lat/lon -> county/state)
   "fema-disasters",        // openFEMA disaster declarations
 ];
 // Semantic invariants — the teeth on the self-check. Running a tool's example

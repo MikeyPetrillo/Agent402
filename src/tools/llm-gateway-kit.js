@@ -328,7 +328,7 @@ export const TIERS = {
       "mistralai/ministral-3b-2512", "mistralai/ministral-8b-2512",
       "qwen/qwen-2.5-7b-instruct",
       "deepseek/deepseek-chat",
-      "poolside/laguna-xs-2.1", "poolside/laguna-s-2.1",
+      // poolside laguna-xs-2.1 / laguna-s-2.1 left 2026-10-03 (upstream expiration 2026-10-31): served by their successors via RETIRING_MODELS.
     ],
   },
   "v1-chat": {
@@ -659,11 +659,15 @@ export function canonicalModel(model) {
   // A retiring id is served by its named successor rather than refused: the
   // caller asked for a model, the successor is the provider's own replacement
   // on a tier we serve, and every wire names the swap in the reply
-  // (agent402_model_substituted). A variant suffix rides along.
+  // (agent402_model_substituted). A routing variant (:nitro, :floor) rides
+  // along; ":free" does not - a free endpoint belongs to the retiring model,
+  // and the successors carry none (laguna-*:free is live upstream until
+  // 2026-10-31, ministral-*:free never existed), so carrying it would send
+  // the caller to an id the upstream does not serve.
   const r = retiringModel(p);
   if (!r) return p;
   const variant = p.includes(":") ? p.slice(p.indexOf(":")) : "";
-  return `${r.use}${variant}`;
+  return `${r.use}${variant.toLowerCase() === ":free" ? "" : variant}`;
 }
 /** The retiring id a request named, when canonicalModel served its successor. */
 export function substitutedFrom(model) {
@@ -719,6 +723,11 @@ export const RETIRING_MODELS = Object.freeze({
   "google/gemini-2.5-flash-lite": { until: "2026-10-20", use: "google/gemini-3.1-flash-lite" },
   "google/gemini-2.5-flash": { until: "2026-10-20", use: "google/gemini-3.5-flash-lite" },
   "google/gemini-2.5-pro": { until: "2026-10-20", use: "google/gemini-3.1-pro-preview" },
+  // Laguna 2.1 (OpenRouter expiration_date 2026-10-31). Their ids left the
+  // nano tier 2026-10-03; each maps to the nano model of matching size class,
+  // both non-reasoning and priced inside the tier's max_price.
+  "poolside/laguna-xs-2.1": { until: "2026-10-31", use: "mistralai/ministral-3b-2512" },
+  "poolside/laguna-s-2.1": { until: "2026-10-31", use: "mistralai/ministral-8b-2512" },
 });
 export function retiringModel(model) {
   const id = canonicalModelRaw(model).toLowerCase().split(":")[0];

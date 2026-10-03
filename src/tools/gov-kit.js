@@ -12,7 +12,7 @@
 //   college-lookup      US colleges via the Dept of Ed College Scorecard
 //   fec-candidates      US federal election candidates (FEC)
 //   federal-awards      US federal contract awards (USAspending, POST search)
-//   geo-lookup          lat/lon -> county/state/census block (FCC Area API)
+//   geo-lookup          lat/lon -> county/state/census block (Census geocoder, FCC fallback)
 //   fema-disasters      FEMA disaster declarations by state (openFEMA)
 // All documented public APIs serving public-domain data; no scraping. gov-data,
 // College Scorecard + FEC use the api.data.gov key (DATA_GOV_API_KEY, DEMO_KEY
@@ -709,8 +709,8 @@ export const GOV_TOOLS = [
   {
     route: "GET /api/geo-lookup", name: "US location lookup (lat/lon)", slug: "geo-lookup", aliases: ["us-location-lookup", "lat-lon-lookup"], category: "data", price: "$0.003",
     description:
-      "Resolve a US latitude/longitude to its county, state, and census block FIPS via the FCC Area API - the geographic context agents need for any coordinate. Live gov data, no key. ?lat=34.0522&lon=-118.2437",
-    tags: ["geo", "location", "county", "census", "fips", "fcc", "government"],
+      "Resolve a US latitude/longitude to its county, state, and census block FIPS via the US Census Bureau geocoder - the geographic context agents need for any coordinate. Live gov data, no key. ?lat=34.0522&lon=-118.2437",
+    tags: ["geo", "location", "county", "census", "fips", "geocoder", "government"],
     discovery: {
       input: { lat: 34.0522, lon: -118.2437 },
       inputSchema: {
@@ -721,7 +721,7 @@ export const GOV_TOOLS = [
         required: ["lat", "lon"],
       },
       output: {
-        example: { lat: 34.0522, lon: -118.2437, county: "Los Angeles County", state: "CA", stateName: "California", blockFips: "060372074001024", source: "geo.fcc.gov (public domain)" },
+        example: { lat: 34.0522, lon: -118.2437, county: "Los Angeles County", state: "CA", stateName: "California", blockFips: "060372074001024", source: "geocoding.geo.census.gov (public domain)" },
       },
     },
     handler: async (i) => {
@@ -729,7 +729,31 @@ export const GOV_TOOLS = [
       if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
         throw bad('"lat" and "lon" must be valid coordinates (lat -90..90, lon -180..180)');
       }
-      const data = await getJson(`https://geo.fcc.gov/api/census/block/find?latitude=${lat}&longitude=${lon}&format=json`, { headers: { Accept: "application/json" } });
+      // The Census Bureau geocoder is the primary source: it is the official
+      // origin of these geographies. The FCC Area API wraps the same data and
+      // stays as the fallback; on 2026-10-03 it answered every request HTTP 400
+      // with a database login failure, so it cannot be the only source.
+      let census = null, censusErr = null;
+      try {
+        census = await getJson(`https://geocoding.geo.census.gov/geocoder/geographies/coordinates?x=${lon}&y=${lat}&benchmark=Public_AR_Current&vintage=Current_Current&layers=Counties,States,2020%20Census%20Blocks&format=json`, { headers: { Accept: "application/json" } });
+      } catch (e) { censusErr = e; }
+      const g = census?.result?.geographies;
+      if (g && typeof g === "object") {
+        const st = g.States?.[0], co = g.Counties?.[0], bl = g["2020 Census Blocks"]?.[0];
+        if (!st?.STUSAB) throw bad("no US location found for those coordinates (is the point inside the United States?)", 422);
+        return {
+          lat, lon,
+          county: co?.NAME ?? null,
+          state: st.STUSAB,
+          stateName: st.NAME ?? null,
+          blockFips: bl?.GEOID ?? null,
+          source: "geocoding.geo.census.gov (public domain)",
+        };
+      }
+      let data;
+      try {
+        data = await getJson(`https://geo.fcc.gov/api/census/block/find?latitude=${lat}&longitude=${lon}&format=json`, { headers: { Accept: "application/json" } });
+      } catch (e) { throw censusErr || e; }
       const state = data?.State?.code ?? null;
       if (!state) throw bad("no US location found for those coordinates (is the point inside the United States?)", 422);
       return {
