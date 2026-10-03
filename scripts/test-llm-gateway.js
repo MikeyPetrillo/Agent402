@@ -68,7 +68,7 @@ ok(!tierAllows("v1-chat", "openai/gpt-5.6-terra"), "the base tier refuses terra 
 ok(tierFor("openai/gpt-5.6-sol") === "v1-chat-premium", "gpt-5.6-sol homes on premium");
 ok(tierFor("anthropic/claude-sonnet-5") === "v1-chat-pro", "claude-sonnet-5 homes on pro via the sonnet prefix");
 ok(tierFor("anthropic/claude-opus-5") === "v1-chat-premium", "claude-opus-5 homes on premium via the opus prefix");
-ok(tierFor("poolside/laguna-xs-2.1") === "v1-chat-nano", "laguna-xs homes on nano");
+ok(tierFor("poolside/laguna-xs-2.1") === "v1-chat-nano", "laguna-xs (retiring) still resolves to nano, through its successor");
 ok(!tierAllows("v1-chat-premium", "openai/gpt-5.6-luna-pro") || tierFor("openai/gpt-5.6-luna-pro") === "v1-chat-nano", "luna-pro variant still resolves to nano first");
 
 // validateRequest — happy path clamps and passthrough.
@@ -1604,6 +1604,17 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
       ok(JSON.stringify(a) === JSON.stringify(b), `${id} on ${tier}: same outcome as ${RETIRING_MODELS[id].use} (${JSON.stringify(a)})`);
     }
     ok(tierFor(id + "-preview-09-2025") === null || !String(tierFor(id + "-preview-09-2025")).length, `${id}: dated/preview twins are not admitted by a family prefix either`);
+  }
+  // Laguna 2.1 (upstream expiration 2026-10-31): out of every tier list, each
+  // caller served the nano model of its size class, on every tier that serves it.
+  for (const [id, use] of [["poolside/laguna-xs-2.1", "mistralai/ministral-3b-2512"], ["poolside/laguna-s-2.1", "mistralai/ministral-8b-2512"]]) {
+    ok(RETIRING_MODELS[id]?.until === "2026-10-31" && RETIRING_MODELS[id]?.use === use && tierFor(use) === "v1-chat-nano", `${id}: retiring on 2026-10-31, served as ${use} on nano`);
+    ok(!Object.values(TIERS).some((t) => (t.prefixes || []).includes(id) || (t.fallbacks || []).includes(id)) && !K.FLEX_MODELS.includes(id), `${id}: in no tier prefix, fallback or flex entry`);
+    for (const [m, want] of [[id, use], [id + ":free", use + ":free"]]) {
+      // A variant suffix rides onto the successor, as it does for every retiring id.
+      const b = validateRequest({ model: m, messages: [{ role: "user", content: "hi" }] }, "v1-chat-nano");
+      ok(b.model === want && b.__substitutedFrom === id, `${m}: served as ${want} with the swap named`);
+    }
   }
   ok(tierFor("deepseek/deepseek-chat") === "v1-chat-nano" && tierAllows("v1-chat", "deepseek/deepseek-v4-flash"), "the deepseek family is otherwise unchanged");
   // deepseek-v3.2 left RETIRING_MODELS when its upstream expiration date was
