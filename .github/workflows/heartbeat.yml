@@ -12,24 +12,16 @@ name: Heartbeat
 # became a new comment on one issue, which becomes unreadable at volume.
 on:
   schedule:
-    # MEASURED 2026-08-30, and the reason this is not "*/15": GitHub delivered
-    # that schedule with gaps of 2h02, 2h18, 2h32, 3h16, 5h22, 7h00, 7h01,
-    # 7h57, 9h58 and 12h29 over the preceding twelve runs. Eighteen alarm
-    # checks ride this workflow - every wallet balance, the settlement
-    # freshness check, Postgres reachability, the quota watches - so at that
-    # cadence a drained wallet or a dead database can go unseen for half a day,
-    # and a resolved alarm (the credits issue on 08-30) stays open for hours
-    # after the operator has fixed it.
-    #
-    # GitHub throttles high-frequency schedules first, and "*/15" with its
-    # :00-aligned ticks is both the most aggressive ask and the most contended
-    # minute. Asking for less, on uncontended offsets, is the documented way to
-    # get MORE actual delivery. This is a mitigation, not a cure: re-measure
-    # the real gaps here before trusting any number in this comment.
-    #
-    # The structural fix, if this is still bad: trigger it from the Cloudflare
-    # status worker, which already runs every 5 minutes reliably on separate
-    # infra - it needs a GitHub token there, which is a blast-radius decision.
+    # Asked for every 15 minutes; DELIVERED every 4-7 hours (measured
+    # 2026-08-30 and again 2026-10-02 - GitHub throttles high-frequency
+    # schedules). "9,39" was tried 2026-08-30 and did not help, and the wallet
+    # balance, credits, drain and Postgres alarms moved to the Cloudflare status
+    # Worker (5-minute cron, issues-only token) the same day, which is why the
+    # schedule went back to */15. Every check that still lives ONLY here pages
+    # at this workflow's real cadence, hours late: production DOWN, settlement
+    # freshness, the quota watches, email, serving health and the Stellar legs.
+    # Moving more of them to the Worker is the fix; re-measure before trusting
+    # any number in this comment.
     - cron: "*/15 * * * *"
   push:
     branches:
@@ -189,36 +181,8 @@ jobs:
             gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Balance readable again at $(date -u +%FT%TZ)."
           fi
 
-      # Stellar facilitator XLM balance watch. This signer pays the network
-      # fee on every settlement it handles, so an empty balance means real
-      # settlement failures, not just a degraded feature. /health is
-      # deliberately unauthenticated (a public address + a balance number,
-      # nothing sensitive), so this needs no facilitator token.
-      - name: Stellar facilitator balance check (alarm on low XLM)
-        if: always()
-        continue-on-error: true
-        run: |
-          RESP=$(curl -s --max-time 15 "https://agent402-facilitator-production.up.railway.app/health" 2>/dev/null || echo '{}')
-          LOW=$(echo "$RESP" | jq -r '.low // "unknown"' 2>/dev/null || echo unknown)
-          BALANCE=$(echo "$RESP" | jq -r '.xlmBalance // "unknown"' 2>/dev/null || echo unknown)
-          echo "facilitator XLM balance low=$LOW"
-          # Unreadable is logged LOUDLY, never silently treated as "fine" -
-          # a silent skip is exactly what kept the charged-failure alarm dead
-          # for months (same doctrine as the canary burner watch below).
-          if [ "$LOW" = "unknown" ]; then
-            echo "::warning::facilitator /health UNREADABLE or missing .low - not silently skipping, investigate"
-          fi
-          TITLE="Stellar facilitator XLM LOW"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
-          if [ "$LOW" = "true" ]; then
-            if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The standalone Stellar facilitator's signer (facilitator/) is below its configured low-water mark (FACILITATOR_LOW_BALANCE_XLM). It pays the network fee on every settlement it handles, so an empty balance means real settlement failures. Top up the signer address at \`/health\` on the facilitator service."
-            else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
-            fi
-          elif [ "$LOW" = "false" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
-          fi
+      # (The direct facilitator /health XLM check that lived here duplicated the
+      # gateway-status leg below under a second issue title; removed 2026-10-02.)
 
       # Bazaar listing validation - Coinbase's keyless, read-only
       # POST /platform/v2/x402/validate probes our flagship routes the way the

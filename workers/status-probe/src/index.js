@@ -432,6 +432,18 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     },
   },
   {
+    // A buyer paid and got an error. The server keeps the log and publishes one
+    // word (chargedFailures on /api/gateway-status, 402 refusals excluded); the
+    // charged-failure workflow ran every 4-6 h in practice (measured
+    // 2026-10-02), so this Worker pages within minutes. Title matches that
+    // workflow's exactly; this Worker is the one that CLOSES it, when the
+    // server's window reads clear.
+    title: "Charged failure: a paid tool returned an error to a paying agent",
+    verdict: ({ gateway: b }) => (b.chargedFailures?.status === "recent" ? "bad" : b.chargedFailures?.status === "ok" ? "good" : "quiet"),
+    body: ({ gateway: b }) =>
+      `/api/gateway-status reports chargedFailures.status=recent: at least one paid call in the last ${Number(b.chargedFailures?.windowHours) || 6} h settled on chain and then answered an error, so a buyer paid and got nothing. The itemised rows (slug, status, time) are on /__operator/stats -> chargedFailures; each is also a debt in the refund ledger (/__operator/refunds.json). Fix the failing tool, then run the refund job for the owed rows. Auto-closes when the window reads clear.`,
+  },
+  {
     // Settlement freshness. The daily canary must actually BUY, not merely
     // conclude green: on 2026-08-02 a gate skipped every scheduled purchase for
     // five days while the workflow reported success, so this watches the
@@ -505,7 +517,7 @@ async function openIssues(token) {
  * Reconcile every alarm against GitHub issues.
  * @returns {{opened:string[], closed:string[], bad:string[], error?:string}}
  */
-export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), confirmDelayMs = CONFIRM_DELAY_MS } = {}) {
+export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), confirmDelayMs = CONFIRM_DELAY_MS, openList = null } = {}) {
   const token = env.GITHUB_ISSUES_TOKEN;
   if (!token) return { opened: [], closed: [], bad: [], error: "no GITHUB_ISSUES_TOKEN (alarms disabled)" };
   const prod = env.PROD || "https://agent402.tools";
@@ -553,9 +565,11 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
     verdicts = merged;
   }
 
-  let open;
-  try { open = await openIssues(token); } catch (e) {
-    return { opened: [], closed: [], bad: [], error: String(e?.message || e).slice(0, 100) };
+  let open = openList;
+  if (!open) {
+    try { open = await openIssues(token); } catch (e) {
+      return { opened: [], closed: [], bad: [], error: String(e?.message || e).slice(0, 100) };
+    }
   }
 
   const opened = [];
@@ -576,10 +590,9 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
       });
       if (r.ok) opened.push(a.title);
     } else if (v === "good" && existing) {
-      await gh(`/repos/${ISSUES_REPO}/issues/${existing}/comments`, token, {
-        method: "POST",
-        body: JSON.stringify({ body: `Recovered: the condition cleared at ${now} (observed by the status Worker).` }),
-      });
+      // One subrequest per close, not two: a Cloudflare invocation may make 50,
+      // and a worst-case run closes every alarm at once. The close itself is
+      // the recovery record (its timestamp is when the Worker saw it clear).
       const r = await gh(`/repos/${ISSUES_REPO}/issues/${existing}`, token, {
         method: "PATCH",
         body: JSON.stringify({ state: "closed" }),
@@ -588,6 +601,41 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
     }
   }
   return { opened, closed, bad };
+}
+
+// Production DOWN. The api check (GET /health) already failed twice 20 s apart
+// inside observe(); two more reads 45 s apart must fail too before anything
+// opens, so the whole window (~110 s) outlasts a deploy's 60-90 s no-container
+// gap. Title matches heartbeat.yml's exactly, and this Worker opens AND closes
+// it: heartbeat.yml ran every 4-7 h in practice (measured 2026-10-02), which
+// is how long an outage could go unpaged.
+export const DOWN_TITLE = "Heartbeat: production DOWN";
+export async function syncOutage(env, { apiFailed, detail = "", sleep = (ms) => new Promise((r) => setTimeout(r, ms)), confirmDelayMs = 45000, healthRead, openList = null } = {}) {
+  const token = env.GITHUB_ISSUES_TOKEN;
+  if (!token) return { action: "none", error: "no GITHUB_ISSUES_TOKEN" };
+  const prod = env.PROD || "https://agent402.tools";
+  const read = healthRead || (async () => { try { return (await grab(`${prod}/health`, {}, 15000)).ok; } catch { return false; } });
+  let down = false;
+  if (apiFailed) {
+    down = true;
+    for (let i = 0; i < 2 && down; i++) { await sleep(confirmDelayMs); if (await read()) down = false; }
+  }
+  let open = openList;
+  if (!open) { try { open = await openIssues(token); } catch (e) { return { action: "none", error: String(e?.message || e).slice(0, 100) }; } }
+  const existing = open.get(DOWN_TITLE);
+  const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  if (down && !existing) {
+    const r = await gh(`/repos/${ISSUES_REPO}/issues`, token, {
+      method: "POST",
+      body: JSON.stringify({ title: DOWN_TITLE, body: `GET ${prod}/health failed on four reads over about two minutes (${detail || "no detail"}).\n\nRailway dashboard: https://railway.app - check the agent402 service and its latest deployment. A deploy's no-container window is 60-90 s, shorter than this check.\n\n---\nObserved from outside production by the status Worker (Cloudflare cron) at ${now}. Auto-closes when /health answers again.` }),
+    });
+    return { action: r.ok ? "opened" : "open-failed" };
+  }
+  if (!apiFailed && existing) {
+    const r = await gh(`/repos/${ISSUES_REPO}/issues/${existing}`, token, { method: "PATCH", body: JSON.stringify({ state: "closed" }) });
+    return { action: r.ok ? "closed" : "close-failed" };
+  }
+  return { action: "none", down };
 }
 
 // The credential this Worker presents to /api/status/probe. STATUS_PROBE_TOKEN
@@ -622,9 +670,15 @@ export async function run(env, timing = {}) {
   // uptime, so there is nothing to fake here.
   const recorded = await record(prod, token, components, "https://github.com/MikeyPetrillo/Agent402/tree/main/workers/status-probe")
     .catch(() => false);
+  // One open-issues read serves both the outage and the alarm reconcile.
+  let openList = null;
+  if (env.GITHUB_ISSUES_TOKEN) { try { openList = await openIssues(env.GITHUB_ISSUES_TOKEN); } catch { openList = null; } }
+  const apiFailed = fails.some((f) => f.startsWith("api("));
+  const outage = await syncOutage(env, { apiFailed, detail: fails.join(" "), openList, ...(timing.sleep ? { sleep: timing.sleep, confirmDelayMs: 0 } : {}) })
+    .catch((e) => ({ action: "none", error: String(e?.message || e).slice(0, 100) }));
   // Independent of the probe result: the balance and reachability alarms are
   // healthy-path work too, and their only other observer runs every few hours.
-  const alarms = await syncAlarms(env, timing.sleep ? { sleep: timing.sleep, confirmDelayMs: 0 } : {})
+  const alarms = await syncAlarms(env, { openList, ...(timing.sleep ? { sleep: timing.sleep, confirmDelayMs: 0 } : {}) })
     .catch((e) => ({ opened: [], closed: [], bad: [], error: String(e?.message || e).slice(0, 100) }));
   const alarmLine = alarms.error
     ? `alarms skipped (${alarms.error})`
@@ -632,8 +686,9 @@ export async function run(env, timing = {}) {
   // A skipped paid-call is logged every time: the component simply ages on
   // /status, so this line is where the reason is readable.
   const paidLine = paidCall?.observed ? "paid-call observed" : `paid-call NOT observed (${paidCall?.reason || "check off"})`;
-  console.log(`status-probe: ${fails.length ? `FAILS ${fails.join(" ")}` : "all healthy"} | ${paidLine} | recorded=${recorded} | ${alarmLine}`);
-  return { ok: true, recorded, fails, components, paidCall, alarms };
+  const outageLine = outage.error ? `outage skipped (${outage.error})` : `outage ${outage.action}`;
+  console.log(`status-probe: ${fails.length ? `FAILS ${fails.join(" ")}` : "all healthy"} | ${paidLine} | recorded=${recorded} | ${alarmLine} | ${outageLine}`);
+  return { ok: true, recorded, fails, components, paidCall, alarms, outage };
 }
 
 export default {

@@ -763,7 +763,10 @@ export async function buildCliX402Middleware(env = process.env) {
 
 async function startCli() {
   const upstream = process.env.TOLLBOOTH_UPSTREAM;
-  const port = Number(process.env.PORT) || 4021;
+  // PORT=0 asks the OS for a free port (the banner prints the bound one); only
+  // an unset or unreadable PORT falls back to 4021.
+  const rawPort = String(process.env.PORT ?? "").trim();
+  const port = rawPort !== "" && Number.isInteger(Number(rawPort)) && Number(rawPort) >= 0 ? Number(rawPort) : 4021;
   const _secret = process.env.TOLLBOOTH_SECRET;
   if (!_secret) {
     console.warn("⚠ TOLLBOOTH_SECRET not set — proof-of-work tokens use a random per-process secret: they won't survive a restart and will be rejected across multiple workers/instances. Set a stable TOLLBOOTH_SECRET in production.");

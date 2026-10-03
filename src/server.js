@@ -507,7 +507,7 @@ import { workflowsPage } from "./workflows.js";
 import { badgesPage, badgeSvg } from "./badges.js";
 import { adapterDocsIndex, adapterDocPage, ADAPTERS } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
-import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml } from "./ledger-chrome.js";
+import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore } from "./ledger-chrome.js";
 import { ledgerHomePage } from "./ledger-home.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
@@ -665,7 +665,7 @@ import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledF
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
 import { recordRefundOwed, refundByEvidence, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, refundTotals, refundsCreatedBetween, refundsForPayer } from "./refund-ledger.js";
-import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend } from "./stats.js";
+import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
 const PORT = process.env.PORT || 3000;
@@ -2094,6 +2094,9 @@ const app = express();
 // Drop the Express fingerprint header (security audit A402-13): no reason to
 // advertise the stack to every caller.
 app.disable("x-powered-by");
+// Every request renders inside its own path so the page shell can tell a
+// bearer link from its section canonical (src/ledger-chrome.js renderPathStore).
+app.use((req, _res, next) => renderPathStore.run(req.path, next));
 // Behind Railway's single edge proxy: trust exactly that hop so req.ip is the
 // real client IP (the X-Forwarded-For entry the edge appends), not an
 // attacker-supplied XFF value. This is what the per-IP rate limiters key on,
@@ -3056,11 +3059,12 @@ app.get("/health", (req, res) => {
   res.status(ok ? 200 : 503).json({ ok, checks, flags, meta: { ...meta, ...diagnostics } });
 });
 // Security disclosure contact (RFC 9116, security audit A402-13). Expires is
-// computed ~1 year out on each request so the file is never stale. Contact
+// computed ~180 days out on each request so the file is never stale (RFC 9116
+// recommends under a year). Contact
 // override via SECURITY_CONTACT_EMAIL; defaults to the maintainer address.
 app.get("/.well-known/security.txt", (_req, res) => {
   const contact = (process.env.SECURITY_CONTACT_EMAIL || "").trim() || "mike@agent402.tools";
-  const expires = new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString();
+  const expires = new Date(Date.now() + 180 * 24 * 3600 * 1000).toISOString();
   const body = [
     `Contact: mailto:${contact}`,
     `Expires: ${expires}`,
@@ -3163,6 +3167,16 @@ app.get("/api/gateway-status", async (req, res) => {
     // recorded yet) / unconfigured; the operator also gets the last code and
     // counts. Never an address.
     email: (() => { try { return emailSendStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // A paid call that settled and then answered an error (402 refusals, where
+    // the buyer kept the money, excluded). One word publicly so the status
+    // Worker can page within minutes; heartbeat's charged-failure workflow runs
+    // every few hours. The itemised rows stay on /__operator/stats.
+    chargedFailures: (() => {
+      const hours = Number(process.env.CHARGED_FAILURE_ALARM_HOURS || 6);
+      const n = chargedFailuresGenuineSince(Date.now() - hours * 3600_000);
+      const status = n == null ? "unknown" : n > 0 ? "recent" : "ok";
+      return full ? { status, windowHours: hours, count: n } : { status };
+    })(),
   };
   // An operator-authed read must not land in a shared cache.
   res.set("Cache-Control", full ? "private, no-store" : "public, max-age=60").json(body);
@@ -5453,6 +5467,11 @@ function refreshPerf24hInBackground() {
             calls: t.calls,
             cacheHitRate: +((t.cached / t.calls) || 0).toFixed(4),
             errorRate: +((t.errored / t.calls) || 0).toFixed(4),
+            // Scope, said as a field: discovery calls refused by load shedding
+            // (503) are not recorded in this store, so they are not in calls or
+            // errorRate (~120 a day were missing from a published 0, truth
+            // audit 2026-10-02).
+            errorRateScope: "tool handler errors over recorded calls; discovery requests refused by load shedding (503) are not recorded and not counted",
             p50LatencyMs: t.p50_latency_ms,
             p95LatencyMs: t.p95_latency_ms,
             dashboardUrl: `${BASE_URL}/analytics`,
@@ -7932,7 +7951,7 @@ app.get("/api/pricing", (_req, res) => {
   const endpointCount = Object.keys(CATALOG).length;
   return res.json({
     name: "Agent402.Tools",
-    description: `Agent402.Tools - pay-per-call tools for AI agents over x402 or MPP (Machine Payments Protocol), both on the same 402; the applied layer of Agentic Finance - ${endpointCount} priced endpoints, most of them deterministic code (browser, search, PDFs, OCR, finance, EDGAR, crypto, macro, memory) and the model-backed ones marked modelBacked, an OpenAI-compatible LLM gateway at /v1 (flat-priced chat from $0.003, embeddings $0.002, images - no API key, the wallet is the account), plus ${SKILL_PACKS.length} curated multi-tool skill packs callable as MCP prompts. Free via in-process proof-of-work or pay per call in ${RAILS_OR}. Open-source and self-hostable. MCP connector: ${BASE_URL}/mcp.`,
+    description: `Agent402.Tools - pay-per-call tools for AI agents over x402 or MPP (Machine Payments Protocol), both on the same 402; the applied layer of Agentic Finance - ${endpointCount} priced endpoints, most of them deterministic code (browser, search, PDFs, OCR, finance, EDGAR, crypto, macro, memory) and the model-backed ones marked modelBacked, an OpenAI-compatible LLM gateway at /v1 (flat-priced chat from $0.003, embeddings $0.002, images - no API key, the wallet is the account); ${SKILL_PACKS.length} of those endpoints are curated multi-tool skill packs, also callable as MCP prompts. Free via in-process proof-of-work or pay per call in ${RAILS_OR}. Open-source and self-hostable. MCP connector: ${BASE_URL}/mcp.`,
     // The LLM gateway is the highest-frequency product agents buy — surface its
     // tiers at the top level instead of burying them among ${endpointCount}
     // endpoint rows. Flat per-call pricing (not token-metered): a buyer knows

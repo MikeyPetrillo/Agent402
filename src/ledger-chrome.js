@@ -2,6 +2,12 @@ import { RAILS, RAILS_AMP, RAILS_OS } from "./rails.js";
 import { metaTitle, metaDescription } from "./seo-meta.js";
 import { ogSectionFor } from "./og-cards.js";
 import { REPO_URL } from "./repo-link.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+// The path of the request a page is being rendered for. A page's canonical is
+// its SECTION (/reports for a paid report at /r/<id>), so analytics decisions
+// that depend on the URL being a bearer link read this instead (server.js runs
+// every request inside it).
+export const renderPathStore = new AsyncLocalStorage();
 // Machine Ledger design system — shared chrome for the Agent402 marketing site.
 // Exports the status line, nav, footers (full + compact), design-token CSS,
 // and a ledgerShell() wrapper that composes a full HTML page.
@@ -917,6 +923,7 @@ export function setOgImageVersion(v) { ogImageVersion = String(v || ""); }
 function posthogSnippet(baseUrl) {
   const key = process.env.POSTHOG_API_KEY || "";
   if (!key) return "";
+  const onBearer = GA_BEARER_PATH.test(renderPathStore.getStore() || "");
   const cfg = {
     api_host: `${baseUrl}/e`,
     ui_host: "https://us.posthog.com",
@@ -932,7 +939,9 @@ function posthogSnippet(baseUrl) {
     // /monitors/manage): those render bought content and the URL itself is the
     // bearer token. maskAllInputs is the belt on top of that, so an email or a
     // pasted key is never in a recording even on a page we do record.
-    disable_session_recording: false,
+    // The project's URL blocklist and the loader's own path check are the
+    // other two layers; the server decides first from the real request path.
+    disable_session_recording: onBearer,
     session_recording: { maskAllInputs: true, maskTextSelector: "[data-ph-mask]" },
     disable_surveys: true,
   };
@@ -953,7 +962,10 @@ export function gaSnippet(canonical) {
   if (!/^G-[A-Z0-9]{4,16}$/.test(id)) return "";
   let path = "/";
   try { path = new URL(canonical).pathname; } catch { /* default */ }
-  if (GA_BEARER_PATH.test(path)) return "";
+  // The canonical of a bearer page is its section (/reports for /r/<id>), so
+  // the request path decides too (truth audit 2026-10-02: the island shipped on
+  // every private-link page and only the browser loader kept Google away).
+  if (GA_BEARER_PATH.test(path) || GA_BEARER_PATH.test(renderPathStore.getStore() || "")) return "";
   return jsonScriptTag("ga-config", { id }) + '<script src="/js/ga-loader.js"></script>';
 }
 

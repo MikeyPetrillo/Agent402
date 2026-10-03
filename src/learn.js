@@ -4,6 +4,7 @@
 // from a local boot of this server (Base USDC entry kept, the payTo address
 // replaced with a placeholder); the live 402 lists one accepts entry per
 // accepted chain. Each entry's `summary` is reused verbatim by /llms-full.txt.
+import { creditsSalesEnabled } from "./credits-sales.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -255,7 +256,7 @@ export const LEARN = [
         `<ul><li>A successful answer is charged once, and carries a receipt.</li><li>A failed call (an error, a timeout, an upstream outage) is not charged, because settlement runs after the tool and only on success.</li><li>A retry with the same ${C("Idempotency-Key")} and the same credential replays the first answer instead of paying again.</li><li>Reading the 402 quote is free.</li></ul>`,
       ]],
       ["Paying at volume", [
-        P(`Signing and settling every request on chain is the right shape for occasional calls and the wrong one for thousands. Two options avoid it: a prepaid credits key (one card purchase, then a Bearer header on each call, debited per success) or, with a wallet on Base, a one-time Permit2 approval so metered calls settle at actual usage. Both keep the per-request price; only the settlement changes.`),
+        P(`Signing and settling every request on chain is the right shape for occasional calls and the wrong one for thousands. ${creditsSalesEnabled() ? "Two options avoid it: a prepaid credits key (one card purchase, then a Bearer header on each call, debited per success) or, with a wallet on Base, a one-time Permit2 approval so metered calls settle at actual usage. Both keep the per-request price; only the settlement changes." : "With a wallet on Base, a one-time Permit2 approval lets metered calls settle at actual usage under the quoted ceiling; the per-request price stays the same, only the settlement changes. A prepaid credits key bought earlier also avoids per-call signing (new keys are not on sale)."}`),
       ]],
     ],
     links: [["/pricing", "How this server prices"], ["/api/pricing", "Machine-readable prices"], ["/tools", "The catalog"], ["/integrations/client", "agent402-client"], ["/integrations/tollbooth", "Sell your own API per call"]],

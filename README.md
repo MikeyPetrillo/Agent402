@@ -97,7 +97,7 @@ quoted ceiling, or flat tiers) and the finished report products (`/v1/research`,
 
 🟢 **Hosted demo: [agent402.tools](https://agent402.tools)** · 📖 **[Wiki](https://github.com/MikeyPetrillo/Agent402/wiki)** · 📦 **[npm](https://www.npmjs.com/package/agent402-mcp)** · 🔌 **[MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)** · 🧩 **[Smithery](https://smithery.ai/servers/mike-kq9d/agent402)**
 
-[![HOL Registry](https://img.shields.io/endpoint?url=https%3A%2F%2Fhol.org%2Fapi%2Fregistry%2Fbadges%2Fplugin%3Fslug%3Dmikeypetrillo%252Fagent402%26metric%3Dstatus%26style%3Dflat)](https://hol.org/registry/plugins/mikeypetrillo%2Fagent402)
+[![HOL Registry](https://img.shields.io/endpoint?url=https%3A%2F%2Fhol.org%2Fapi%2Fregistry%2Fbadges%2Fplugin%3Fslug%3Dhavok-holdings-llc%252Fagent402%26metric%3Dstatus%26style%3Dflat)](https://hol.org/registry/plugins/havok-holdings-llc%2Fagent402)
 
 ## Run it yourself in 30 seconds
 
@@ -334,7 +334,7 @@ A task-shaped query to `catalog.search` (the hosted connector's search tool; the
 | [`document-intel`](https://agent402.tools/skills/document-intel) | pdf-info · pdf-to-markdown · pdf-extract-pages · image-ocr · barcode-decode · pdf-merge · images-to-pdf | PDF/OCR/barcode pipeline |
 | [`status-snapshot`](https://agent402.tools/skills/status-snapshot) | dns-lookup · http-check · http-headers · tls-cert · robots-check | One-shot service-health sweep |
 
-All 100+ packs at [`/skills`](https://agent402.tools/skills) · JSON index at [`/api/skill-packs.json`](https://agent402.tools/api/skill-packs.json) ·
+All 80+ packs at [`/skills`](https://agent402.tools/skills) · JSON index at [`/api/skill-packs.json`](https://agent402.tools/api/skill-packs.json) ·
 on MCP the packs appear under `prompts/list` so any MCP-aware client picks them up automatically.
 
 ## x402 Index - Find · Route · Leaderboard
@@ -549,7 +549,7 @@ Every claim links to the surface that proves it (the one-page version: [agent402
 
 1. **Pay for what the model used, with the ceiling quoted first.** The metered gateway (`POST /v1/metered/chat/completions`) quotes each 402 from the request's own body; a wallet paying `upto` settles actual usage under that ceiling, provider discounts such as prompt-cache reads pass through, and every settled x402 or MPP response carries a receipt; a JSON answer bought with an EVM wallet can be attested on Base by that wallet (`POST /api/attest`).
 2. **A failed call is not charged, and the response proves it.** Settlement runs after the handler and an error status cancels it, so a response with no payment receipt, or a receipt marked `success:false`, moved no money; a retry carrying the same `Idempotency-Key` and the same payment credential replays the paid answer instead of paying again; the one residual case (a settled receipt on an error response) is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently.
-3. **One key buys everything.** The same wallet pays for five LLM tiers on three wires (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools and finished reports, and an EVM wallet also keys its own memory.
+3. **One key buys everything.** The same wallet pays for five LLM tiers on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini generateContent), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools and finished reports, and an EVM wallet also keys its own memory.
 4. **No wallet required.** Proof-of-work pays for the pure-CPU tools, cards over MPP pay routes priced at $0.50 or more, and [card checkout](https://agent402.tools/reports) sells the finished reports, beside USDC or USDG on twelve chains and native MPP on Tempo.
 5. **Finished work, ready to use.** Dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a LinkedIn article package, grounded in live sources, most with a downloadable data appendix; [monitors](https://agent402.tools/monitors) check for free on a schedule and re-run the paid report when the facts change, up to 4 full reports in any 30 days.
 6. **We buy on your behalf.** `POST /api/route/execute` resolves a task to the best seller across the ecosystem, pays them from our wallet and relays the result under one receipt. Sellers are routable on proven on-chain settlement, with one bounded exception for a zero-history Solana seller under a small per-call ceiling.
@@ -557,8 +557,10 @@ Every claim links to the surface that proves it (the one-page version: [agent402
 
 ## Why it's solid
 
-- **Everything is tested** - CI calls all 500+ tools with their own documented
-  examples and blocks the release on any failure. Two independent probes outside
+- **Everything is tested** - CI calls every tool that needs no third-party key
+  with its own documented example and blocks the release on any failure; the
+  key-gated and model-backed tools are covered by input probes and a daily paid
+  canary instead, because CI holds no third-party keys. Two independent probes outside
   production watch the live instance (one every 5 minutes, on separate infra from
   the other), and what they observe is public at
   [`/status`](https://agent402.tools/status) - where a day with no observation
@@ -569,10 +571,11 @@ Every claim links to the surface that proves it (the one-page version: [agent402
   security headers. See [wiki: Security Model](https://github.com/MikeyPetrillo/Agent402/wiki/Security-Model).
 - **Deterministic utilities** - no model in the serving path of the utility tools, so the same input always
   gives the same output, with full OpenAPI schemas.
-- **Auditable, on-chain revenue** - every paid call settles in USDC to
+- **Auditable, on-chain revenue** - paid calls on Base settle in USDC to
   [`agent402.base.eth`](https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns)
-  (a Base name resolving to the public receiving wallet) - verifiable by anyone
-  on Basescan; live counts at [`/api/stats`](https://agent402.tools/api/stats).
+  (a Base name resolving to the public receiving wallet); every other chain's
+  receiving address is in the live 402 and at [`/.well-known/x402`](https://agent402.tools/.well-known/x402),
+  so anyone can verify on chain; live counts at [`/api/stats`](https://agent402.tools/api/stats).
 - **AGPL-3.0 licensed, self-host-friendly** - clone it, strip what you don't need, add
   what you do.
 

@@ -1,5 +1,6 @@
 {
   "name": "agent402-facilitator",
+  "private": true,
   "version": "0.1.0",
   "description": "Open-source, self-hostable x402 facilitator for Stellar: verify and settle exact-scheme USDC payments on Soroban yourself, with correct on-chain settlement confirmation. No third-party facilitator, no signup.",
   "type": "module",

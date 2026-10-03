@@ -112,6 +112,7 @@ const dailyUpstream = db.prepare("SELECT day, caller, n FROM daily_upstream_call
 const insertChargedFailure = db.prepare("INSERT INTO charged_failures (slug, status, ts) VALUES (?, ?, ?)");
 const pruneChargedFailures = db.prepare("DELETE FROM charged_failures WHERE id <= (SELECT MAX(id) FROM charged_failures) - ?");
 const getChargedFailures = db.prepare("SELECT slug, status, ts FROM charged_failures ORDER BY id DESC LIMIT ?");
+const countChargedFailuresGenuineSince = db.prepare("SELECT COUNT(*) AS n FROM charged_failures WHERE status <> 402 AND ts >= ?");
 const upsertSellerRegistration = db.prepare(`
   INSERT INTO seller_registrations (origin, first_seen, last_routable_seen, last_settled_seen)
   VALUES (?, ?, ?, ?)
@@ -366,6 +367,14 @@ const recordFailure = db.transaction((slug, status) => {
   insertChargedFailure.run(slug, status, Date.now());
   pruneChargedFailures.run(RECENT_KEEP);
 });
+
+// Genuine charged failures (a settled payment answered with an error; 402 rows
+// are settlement refusals where the buyer kept their money) since `sinceMs`.
+// Null when the store cannot be read, so a caller never reads "none" from a
+// broken query.
+export function chargedFailuresGenuineSince(sinceMs) {
+  try { return countChargedFailuresGenuineSince.get(Math.floor(Number(sinceMs) || 0))?.n ?? 0; } catch { return null; }
+}
 
 export function recordChargedFailure(slug, status) {
   try {

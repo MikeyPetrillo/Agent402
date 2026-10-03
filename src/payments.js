@@ -1766,7 +1766,9 @@ async function recordVerifyFailure(ctx, reason) {
     if (basis && idSecret) payerKey = `a402:${createHmac("sha256", idSecret).update(basis).digest("hex").slice(0, 32)}`;
   } catch { /* telemetry is best-effort */ }
   import("./posthog.js").then(({ capturePostHogVerifyFailed }) => capturePostHogVerifyFailed({
-    network: ctx?.requirements?.network, scheme: ctx?.requirements?.scheme, resource: ctx?.requirements?.resource, errorReason: reason, payerBalanceBucket: bucket, payerKey,
+    network: ctx?.requirements?.network, scheme: ctx?.requirements?.scheme, // v2 requirements carry no resource; the buyer's payload names it (2 of
+    // 7,103 verify_failed events had a path before this, 2026-10-02 audit).
+    resource: ctx?.paymentPayload?.resource?.url || ctx?.requirements?.resource, errorReason: reason, payerBalanceBucket: bucket, payerKey,
   })).catch(() => {});
 }
 

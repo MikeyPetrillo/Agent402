@@ -28,5 +28,10 @@
     if (props.$set_once) ["$initial_current_url", "$initial_referrer", "$initial_pathname"].forEach(function (k) { if (k in props.$set_once) props.$set_once[k] = redact(props.$set_once[k]); });
     return props;
   };
+  // No session replay on a page whose URL is a bearer link or a checkout
+  // return (same paths GA skips, src/ledger-chrome.js GA_BEARER_PATH; kept
+  // identical by scripts/test-ga-snippet.js). The project's URL blocklist is a
+  // second layer; this one ships with the code and cannot drift from it.
+  if (/^\/(r|m|reports\/public|alerts|followups|credits\/thanks|monitors\/manage|monitors\/thanks|digest)(\/|$)/.test(location.pathname)) data.cfg.disable_session_recording = true;
   posthog.init(data.key, data.cfg);
 })();

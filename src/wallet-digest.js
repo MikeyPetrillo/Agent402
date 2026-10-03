@@ -17,6 +17,7 @@
 // what keeps this from being a way to email a stranger: a wallet signature or
 // a live credits key is needed to point a digest at an address, and the
 // address itself still has to click.
+import { creditsSalesEnabled } from "./credits-sales.js";
 import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -219,7 +220,7 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
     const subject = d.calls ? `Agent402 this week: ${d.calls} call${d.calls === 1 ? "" : "s"}, ${money(d.paidUsd)}` : (Array.isArray(d.refunds) && d.refunds.length ? "Agent402 this week: a refund update" : "Agent402 this week: no calls yet");
     const topText = d.top.length ? d.top.map((t) => `  ${t.slug}: ${t.calls} call${t.calls === 1 ? "" : "s"}, ${money(t.usd)}`).join("\n") : "  (no calls this week)";
     const chainText = d.chains.length ? d.chains.map(([n, v]) => `  ${n}: ${v.calls} call${v.calls === 1 ? "" : "s"}, ${money(v.usd)}`).join("\n") : "";
-    const balanceText = d.balanceUsd == null ? "" : `\nCredits balance: ${money(d.balanceUsd)}. Top up: ${baseUrl}/credits\n`;
+    const balanceText = d.balanceUsd == null ? "" : `\nCredits balance: ${money(d.balanceUsd)}.${creditsSalesEnabled() ? ` Top up: ${baseUrl}/credits` : ""}\n`;
     const refundList = Array.isArray(d.refunds) ? d.refunds : [];
     const refundLine = (r) => r.status === "paid"
       ? `refunded ${money(r.amountUsd)} on ${r.chain || "chain"}${r.refundTxUrl ? `: ${r.refundTxUrl}` : r.refundTx ? `: ${r.refundTx}` : ""}`
@@ -236,7 +237,7 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
 ${rows ? `<h3 style="font-size:14px;margin:16px 0 6px;">Top tools</h3><table style="border-collapse:collapse;">${rows}</table>` : "<p>No calls this week.</p>"}
 ${chainRows ? `<h3 style="font-size:14px;margin:16px 0 6px;">Chains</h3><table style="border-collapse:collapse;">${chainRows}</table>` : ""}
 ${refundList.length ? `<h3 style="font-size:14px;margin:16px 0 6px;">Refunds</h3><ul style="margin:0;padding-left:18px;">${refundList.map((r) => `<li>${esc(refundLine(r).replace(/: https?:\/\/\S+$/, ""))}${r.status === "paid" && r.refundTxUrl ? ` (<a href="${esc(r.refundTxUrl)}">refund tx</a>)` : ""}${r.tx ? ` <span style="font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#5C6963;">for ${esc(r.tx.slice(0, 10))}…</span>` : ""}</li>`).join("")}</ul><p style="margin:6px 0 0;font-size:13px;color:#5C6963;">Look up any payment at ${esc(baseUrl)}/api/refunds/lookup?tx=&lt;settlement tx&gt;</p>` : ""}
-${d.balanceUsd == null ? "" : `<p style="margin:16px 0 0;">Credits balance: <b>${money(d.balanceUsd)}</b> &middot; <a href="${esc(baseUrl)}/credits">top up</a></p>`}
+${d.balanceUsd == null ? "" : `<p style="margin:16px 0 0;">Credits balance: <b>${money(d.balanceUsd)}</b>${creditsSalesEnabled() ? ` &middot; <a href="${esc(baseUrl)}/credits">top up</a>` : ""}</p>`}
 <p style="margin:18px 0 0;font-size:13px;color:#5C6963;">Full history, paid and wallet-keyed: <a href="${esc(baseUrl)}/tools/my-usage">my-usage</a>. <a href="${esc(unsub)}">Unsubscribe</a>.</p>`);
     return sendEmail({ to: rec.email, subject, html, text, headers: { "List-Unsubscribe": `<${unsub}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } });
   }

@@ -41,7 +41,7 @@ const SECTIONS = [
   {
     h: "Controls on the code",
     p: [
-      `The server is open source under AGPL-3.0, so every control on this page can be read. Every pull request runs CodeQL, gitleaks secret scanning with a planted-canary self-check, Socket dependency review, DCO sign-off and the full test lanes, and every one is a required check before merge; every GitHub Action is pinned to a full commit SHA; the payment, gating and CI paths require code-owner review; the container image is pinned by digest and runs as a non-root user.`,
+      `The server is open source under AGPL-3.0, so every control on this page can be read. Every pull request runs CodeQL, gitleaks secret scanning with a planted-canary self-check, Socket dependency review and the full test lanes, and every one is a required check before merge; outside contributions also need DCO sign-off and the maintainer's code-owner review on the payment, gating and CI paths; every GitHub Action is pinned to a full commit SHA; the container image is pinned by digest and runs as a non-root user.`,
     ],
     links: [[REPO_URL, "Source"], [repoUrl("wiki/Security-Model"), "Security model"]],
   },

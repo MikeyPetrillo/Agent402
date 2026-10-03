@@ -1623,6 +1623,10 @@ jobs:
           t node scripts/test-reliability-claims.js
           # Four false absolutes (a claim must stay true as the service widens)
           t node scripts/test-copy-absolutes.js
+          t node scripts/test-legal-dates.js
+          t node scripts/test-wire-count-copy.js
+          t node scripts/test-pack-copy-retired.js
+          t node scripts/test-sitemap-superset.js
           # Published SDK snippets never let the SDK send an environment credential to our host
           t node scripts/test-sdk-snippet-credentials.js
           t node scripts/test-plugin-manifests.js
@@ -2459,6 +2463,7 @@ jobs:
           t node scripts/test-llms-route-execute-tiers.js
           # Status probe worker (Cloudflare cron observer mapping; stubbed fetch — offline)
           t node scripts/test-status-probe-worker.js
+          t node scripts/test-charged-failure-leg.js
           # Render deadline cancellation (R-09 — timed-out contexts close before the slot frees; live contexts never exceed the limit — offline)
           t node scripts/test-render-cancel.js
           # Stripe MPP settlement (stripe/charge cards via SPT — mint/binding/settlement-ordering, $0.50 min — offline)

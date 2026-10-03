@@ -6,7 +6,7 @@ name: Charged-failure alert
 # When a tool settles USDC on-chain and the handler then returns non-200, the
 # server records it in /api/stats -> chargedFailures[] (the code calls this "an
 # operational red alert"). Nothing consumed it. This polls that surface every
-# 30 min and opens a GitHub issue if any tool charged-and-failed a paying agent
+# 30 min (delivered every 4-6 h) and opens a GitHub issue if any tool charged-and-failed a paying agent
 # in the recent window. It complements the synthetic self-check (which only covers
 # a curated set): this catches real paid failures on ANY of the ~1,400 tools,
 # with zero config — /api/stats is free and public.
@@ -24,6 +24,7 @@ on:
 permissions:
   contents: read
   issues: write
+  actions: read
 
 env:
   PROD: https://agent402.tools
@@ -64,28 +65,44 @@ jobs:
           # false-alert. A MISSING field is not treated as unreadable: that is
           # what hid the breakage last time.
           echo "$RESP" | jq -e 'has("chargedFailures")' >/dev/null 2>&1 || { echo "operator stats unreadable (HTTP $CODE) — skip"; echo "status=skip" >> "$GITHUB_OUTPUT"; exit 0; }
+          # The window starts where the previous run started (minus 10 min of
+          # overlap), not a fixed WINDOW_HOURS back: GitHub delivers this
+          # "every 30 min" schedule every 4-6 h in practice (measured
+          # 2026-10-02), so a fixed 2 h window left most of each day unchecked.
+          # Capped at 48 h; with no previous run it falls back to WINDOW_HOURS.
+          PREV="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow charged-failure-alert.yml --limit 5 --json databaseId,createdAt \
+            --jq "[.[] | select(.databaseId != $GITHUB_RUN_ID)][0].createdAt // empty" 2>/dev/null || true)"
           CUTOFF="$(date -u -d "$WINDOW_HOURS hours ago" +%Y-%m-%dT%H:%M:%SZ)"
+          if [ -n "$PREV" ]; then
+            FLOOR="$(date -u -d "48 hours ago" +%Y-%m-%dT%H:%M:%SZ)"
+            P="$(date -u -d "$PREV" +%s 2>/dev/null || echo "")"
+            C=""; [ -n "$P" ] && C="$(date -u -d "@$((P - 600))" +%Y-%m-%dT%H:%M:%SZ)"
+            if [ -n "$C" ] && [[ "$C" < "$CUTOFF" ]]; then CUTOFF="$C"; fi
+            if [[ "$CUTOFF" < "$FLOOR" ]]; then CUTOFF="$FLOOR"; fi
+          fi
+          echo "window starts $CUTOFF"
           # Charged failures in the window, summarized as "slug(httpStatus)xN".
           SUMMARY="$(echo "$RESP" | jq -r --arg cut "$CUTOFF" '
-            [.chargedFailures[] | select(.at > $cut)]
+            [.chargedFailures[] | select(.at > $cut and .status != 402)]
             | group_by(.slug + ":" + (.status|tostring))
             | map("\(.[0].slug)(\(.[0].status))x\(length)")
             | join(", ")')"
           if [ -z "$SUMMARY" ]; then
-            echo "no charged failures in the last ${WINDOW_HOURS}h"
+            echo "no charged failures since $CUTOFF"
             echo "status=clear" >> "$GITHUB_OUTPUT"
           else
             echo "charged failures: $SUMMARY"
             echo "status=alert" >> "$GITHUB_OUTPUT"
             { echo "detail<<EOF"; echo "$SUMMARY"; echo "EOF"; } >> "$GITHUB_OUTPUT"
           fi
+          echo "cutoff=$CUTOFF" >> "$GITHUB_OUTPUT"
       - name: Open, comment, or close the alert issue
         if: steps.check.outputs.status != 'skip'
         run: |
           TITLE="Charged failure: a paid tool returned an error to a paying agent"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "${{ steps.check.outputs.status }}" = "alert" ]; then
-            BODY="One or more paid tools settled USDC on-chain and then returned an error to the paying agent in the last ${WINDOW_HOURS}h — **they paid and got nothing.**
+            BODY="One or more paid tools settled USDC on-chain and then returned an error to the paying agent since ${{ steps.check.outputs.cutoff }} — **they paid and got nothing.**
 
           **Failing (slug(httpStatus)×count):** ${{ steps.check.outputs.detail }}
 
@@ -97,6 +114,8 @@ jobs:
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
             fi
             exit 1
-          elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "No charged failures in the last ${WINDOW_HOURS}h at $(date -u +%FT%TZ)."
           fi
+          # No close branch here: the status Worker (workers/status-probe, every
+          # 5 minutes) pages on the server's chargedFailures word and closes the
+          # issue when its window reads clear. Closing from this every-few-hours
+          # run as well made the two fight over the same issue.

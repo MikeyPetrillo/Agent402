@@ -130,7 +130,7 @@ export const SKILL_PACKS = [
     slug: "earnings-deep-dive",
     title: "Earnings deep-dive",
     tagline:
-      "Everything you need before a company reports: the upcoming earnings date, the latest financials, recent SEC filings, the latest close, and fresh analyst news - in one pass.",
+      "Everything you need before a company reports: the latest financials, recent SEC filings, the latest close, and fresh analyst news - in one pass.",
     useCase:
       "Prepping for an earnings call or positioning ahead of a print - you want the date, the fundamentals, any recent filings, the market's current read, and the news narrative without stitching five sources together by hand.",
     promptArgs: [
@@ -145,7 +145,7 @@ export const SKILL_PACKS = [
       "Search the web for analyst expectations and recent news to frame the whisper number and the key debates.",
     ],
     claudePrompt:
-      "Prepare an earnings deep-dive on TSLA using Agent402's earnings-deep-dive skill pack. (1) Get the next earnings date, (2) pull the latest financials, (3) list recent SEC filings, (4) get the latest close, (5) search for analyst expectations. Summarize as a pre-earnings brief: date, what to watch in fundamentals, filing flags, current positioning, and the key debate going into the print.",
+      "Prepare an earnings deep-dive on TSLA using Agent402's earnings-deep-dive skill pack. (1) pull the latest financials, (2) list recent SEC filings, (3) get the latest close, (4) search for analyst expectations. Summarize as a pre-earnings brief: date, what to watch in fundamentals, filing flags, current positioning, and the key debate going into the print.",
   },
   {
     slug: "options-analytics",
@@ -1024,7 +1024,7 @@ export const SKILL_PACKS = [
     tagline:
       "The 'is the economic backdrop you're modeling against still current?' pack. Pull the canonical macro signals - CPI year-over-year, unemployment, fed funds, the Treasury yield curve, a G10 FX dashboard, the Sahm Rule recession indicator, and the next scheduled economic releases - in one composed workflow. Seven egress tools, one composite snapshot the agent can cite before doing any forecast or investment math.",
     useCase:
-      "Every finance/forecast pack in Agent402 assumes the macro backdrop is known. This pack makes that assumption explicit and dated. Before you NPV a 10-year cashflow, before you forecast a revenue series, before you recommend a savings vehicle - pull this snapshot, cite the as-of date, and pin the assumptions. The Sahm Rule + yield curve combination is the canonical 'are we in or near a recession' diagnostic; CPI + fed funds gives you the real-rate environment; FX dashboard tells you whether your USD assumption is even the right denominator. Pairs with investment-decision, loan-comparison, savings-goal, and forecasting-bake-off - none of those packs check macro state themselves.",
+      "Every finance/forecast pack in Agent402 assumes the macro backdrop is known. This pack makes that assumption explicit and dated. Before you NPV a 10-year cashflow, before you forecast a revenue series, before you recommend a savings vehicle - pull this snapshot, cite the as-of date, and pin the assumptions. The Sahm Rule + yield curve combination is the canonical 'are we in or near a recession' diagnostic; CPI + fed funds gives you the real-rate environment; FX dashboard tells you whether your USD assumption is even the right denominator. Run it before any investment decision. Pairs with loan-comparison and forecasting-bake-off - neither pack checks macro state itself.",
     toolSlugs: [
       "cpi-yoy",
       "unemployment-rate",
@@ -1038,7 +1038,7 @@ export const SKILL_PACKS = [
     workflow: [
       "Pull current US CPI year-over-year with cpi-yoy. FRED series CPIAUCSL converted to YoY % change. This is the headline inflation number every cashflow assumption is implicitly indexed to - if you're discounting at a nominal rate, you need to know real-vs-nominal spread. Returns the latest observation date and value; flag if the latest observation is more than 45 days stale (BLS publishes monthly with ~2-week lag - anything older signals a FRED outage or a holiday).",
       "Pull current US unemployment rate with unemployment-rate. FRED series UNRATE. The level matters less than the trend: U3 going from 3.5 → 4.5 over 6 months is the historical recession signal (formalized as the Sahm Rule, called in step 6). Report both the latest level AND the 6-month delta. A rising-unemployment regime invalidates 'steady-state' forecasting assumptions in every downstream pack.",
-      "Pull effective federal funds rate with fed-funds. FRED series FEDFUNDS. This is the risk-free rate every NPV/IRR calc should be discounting against (or close to it - treasury yields are the more precise instrument but fed funds is the policy anchor). Report the latest level and the YoY delta. A rising-rate environment systematically biases NPV calculations toward 'reject the project' - make sure the loan-comparison / investment-decision packs are using a current rate, not a stale one.",
+      "Pull effective federal funds rate with fed-funds. FRED series FEDFUNDS. This is the risk-free rate every NPV/IRR calc should be discounting against (or close to it - treasury yields are the more precise instrument but fed funds is the policy anchor). Report the latest level and the YoY delta. A rising-rate environment systematically biases NPV calculations toward 'reject the project' - make sure the loan-comparison pack is using a current rate, not a stale one.",
       "Pull the current Treasury yield curve with treasury-yield-curve. Returns the daily snapshot of yields at 1M, 3M, 6M, 1Y, 2Y, 5Y, 10Y, 30Y maturities. This is the shape of the risk-free curve the entire fixed-income world prices off. The shape itself is the signal: upward-sloping = normal, flat = transitional, inverted = recession-priced. The next step quantifies the inversion explicitly.",
       "Compute yield-curve spreads with yield-curve-spread. Returns the canonical inversion gauges: 10Y-2Y (the academic favorite) and 10Y-3M (the Fed's preferred recession predictor per Estrella & Mishkin). Negative = inverted = market is pricing rate cuts = historical recession signal with 6-18 month lead. The tool returns both spreads plus a boolean isInverted flag per spread. Surface inversions prominently - every downstream forecast needs to know if the curve is signaling regime change.",
       "Compute the Sahm Rule with sahm-rule. Defined as: current 3-month moving average of UNRATE minus its 12-month minimum. Triggers when ≥ 0.5 percentage points. This is the most-cited contemporaneous recession indicator (it has historically triggered within the recession's first few months, not as a lagging confirmation). Returns the current value and the triggered boolean. Pair this with the yield-curve inversion from step 5 - the two together are the canonical 'recession probability is non-trivial' signal.",
@@ -1102,7 +1102,7 @@ export const SKILL_PACKS = [
     tagline:
       "The 'research a question, return an answer with citations' workflow. Brave answer for the AI-synthesized take with citations, Brave web for the canonical SERP, Brave news for time-sensitive context, then a deterministic web-fetch + extract pass on the top citations to verify the answer hasn't hallucinated. Five tools, one cited paragraph, every claim traced back to a fetched URL.",
     useCase:
-      "Most agent research workflows have the same failure mode: an LLM answer with confident-sounding citations that don't actually contain the claim. This pack solves that by separating the *answer-generating* surface (Brave's answer endpoint) from the *evidence-fetching* surface (web-fetch + extract on the citations). The agent's final response cites only claims that survive both the search-answer hit AND a deterministic re-fetch of the cited page. Pairs with rag-prep when the answer needs to be turned into a structured knowledge document; pairs with macro-context for time-sensitive 'is this still current' questions.",
+      "Most agent research workflows have the same failure mode: an LLM answer with confident-sounding citations that don't actually contain the claim. This pack solves that by separating the *answer-generating* surface (Brave's answer endpoint) from the *evidence-fetching* surface (web-fetch + extract on the citations). The agent's final response cites only claims that survive both the search-answer hit AND a deterministic re-fetch of the cited page. Pairs with macro-context for time-sensitive 'is this still current' questions.",
     toolSlugs: [
       "answer",
       "search",
@@ -2541,7 +2541,7 @@ export const SKILL_PACKS = [
     tagline:
       "The production ingest path for every incoming webhook: verify the provider signature (GitHub / Stripe / Shopify / Slack, constant-time, replay-window enforced), schema-validate the now-trusted body against the provider envelope, fingerprint the raw bytes for redelivery dedup, normalize the event timestamp to UTC + epoch, and redact PII before anything hits a log. Five pure-CPU tools - the accept-or-reject gate, run on every event.",
     useCase:
-      "webhook-debug answers 'why is my signature failing?' - this pack is what runs after that's solved: the gate an agent executes on EVERY incoming webhook in production. Step 1 is the security decision (reject on an invalid signature; Stripe and Slack timestamps get replay-window enforcement), and only then is the body treated as trusted: an envelope schema check catches provider API-version drift before it breaks your handler three layers down, a sha256 content fingerprint gives you the dedup key for provider redeliveries (or an Idempotency-Key for downstream calls), the event time is normalized to UTC ISO + epoch for storage, and PII is redacted so the audit log stays clean. One deterministic pass from raw bytes to a storable, loggable, deduplicated event.",
+      "This pack is the gate an agent executes on EVERY incoming webhook in production. Step 1 is the security decision (reject on an invalid signature; Stripe and Slack timestamps get replay-window enforcement), and only then is the body treated as trusted: an envelope schema check catches provider API-version drift before it breaks your handler three layers down, a sha256 content fingerprint gives you the dedup key for provider redeliveries (or an Idempotency-Key for downstream calls), the event time is normalized to UTC ISO + epoch for storage, and PII is redacted so the audit log stays clean. One deterministic pass from raw bytes to a storable, loggable, deduplicated event.",
     toolSlugs: [
       "webhook-verify",
       "json-validate",

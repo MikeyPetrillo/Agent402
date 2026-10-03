@@ -108,7 +108,7 @@ const out = await a.call("hash", { text: "hello", algo: "sha256" });</pre></div>
       <!-- FREE -->
       <section>
       <h2 id="free" style="font-family:var(--font-body);font-weight:800;font-size:32px;letter-spacing:-.02em;margin:0 0 14px;">Free tier - proof-of-work.</h2>
-      <p style="font-size:15.5px;line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">${fmtNum(freeCount)} of the ${fmtNum(totalCount)} pure-CPU tools work with no wallet. Instead of paying USDC, your machine solves a short sha256 puzzle - a fraction of a second of CPU - and the call goes through. Nothing here consumes AI tokens.</p>
+      <p style="font-size:15.5px;line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">The ${fmtNum(freeCount)} pure-CPU tools (of ${fmtNum(totalCount)} in the catalog) work with no wallet. Instead of paying USDC, your machine solves a short sha256 puzzle - a fraction of a second of CPU - and the call goes through. Nothing here consumes AI tokens.</p>
       <div style="border:1px solid var(--hairline);background:var(--card);padding:16px 20px;font-family:var(--font-mono);font-size:13px;margin-bottom:44px;"><span style="color:var(--green);font-weight:700;">GET</span> <span style="color:var(--ink);">/api/pow</span>  <span style="color:var(--faint);">&rarr; returns a challenge; solve and resubmit. Free, rate-limited.</span></div>
       </section>
 

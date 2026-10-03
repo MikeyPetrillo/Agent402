@@ -3,13 +3,13 @@
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
 **Do I need an account or API key?**
-No. Nothing here has a signup. Payment (USDC over x402 or MPP, or proof-of-work) is the only credential, per call. If you have a card and no wallet, prepaid credits from [`/credits`](https://agent402.tools/credits) give you an `a402_…` key that pays any tool with one header; it is a balance, not an account (see [[Reports, Monitors and Credits|Reports-and-Monitors]]).
+No. Nothing here has a signup. Payment (USDC over x402 or MPP, or proof-of-work) is the only credential, per call. A prepaid credits key (`a402_…`) bought earlier also pays any tool with one header; it is a balance, not an account. New credits are not on sale (see [[Reports, Monitors and Credits|Reports-and-Monitors]]).
 
 **What does it cost?**
 Flat per-call prices starting at **$0.001**. Most tools are $0.001–$0.02; premium inference, media, and multi-tool skill packs are priced from the tools they run ($0.003 to $0.101). Every price is published in [`/api/pricing`](https://agent402.tools/api/pricing) and quoted exactly in every 402 response. Report products (`/v1/research`, `/v1/dossier`, `/v1/ticker-pack`, `/v1/fund`, `/v1/filing-report`, `/v1/domain-audit`, `/v1/recall-report`, `/v1/insider-report`, `/v1/token-brief`, `/v1/token-risk`, `/v1/linkedin-article`) are priced per finished report, $0.60 to $2.00 over x402 or MPP ($0.05 for the deterministic `/v1/ipo-report` digest), or $2 to $5 by card at [`/reports`](https://agent402.tools/reports) - the card price includes payment processing, and an agent paying per call pays the lower tool price for the same report. Monitors at [`/monitors`](https://agent402.tools/monitors) are the one subscription, $5 per month per target. The LLM gateway's metered tier (`POST /v1/metered/chat/completions`) is the one route whose 402 quotes each request from its body rather than a flat price.
 
 **Can I pay by card?**
-Yes, three ways: a finished report at [`/reports`](https://agent402.tools/reports), a monitor at [`/monitors`](https://agent402.tools/monitors), or prepaid credits at [`/credits`](https://agent402.tools/credits) that spend on every tool (debited only on a successful call, never expire). Routes at or above the card minimum (fifty cents) also accept cards over the MPP wire (Stripe `stripe/charge`) when the operator enables it.
+Yes: a finished report at [`/reports`](https://agent402.tools/reports) or a monitor at [`/monitors`](https://agent402.tools/monitors). New prepaid credits are not on sale; a credits key bought earlier keeps spending on every tool (debited only on a successful call, never expires). Routes at or above the card minimum (fifty cents) also accept cards over the MPP wire (Stripe `stripe/charge`) when the operator enables it.
 Identity-bound tools (memory, `my-usage`) need a wallet payment because the wallet is the identity.
 
 **Can I use it without any money?**

@@ -118,7 +118,7 @@ export function tollboothCloudPage(baseUrl) {
 <h2>What the dashboard looks like</h2>
 <div class="preview" aria-hidden="true">
   <div class="ph">
-    <div><span class="dot"></span><span class="t">Live · last 24h · 4 sites</span></div>
+    <div><span class="dot"></span><span class="t">Example · last 24h · 4 sites</span></div>
     <div class="t">acme-agency.tollbooth.cloud</div>
   </div>
   <div class="row head"><div>Site</div><div>Charged</div><div class="hide-sm">Paid</div><div>USDC</div></div>
