@@ -138,6 +138,141 @@ const INDUSTRIAL_PLATFORM_TOOLS = {
       },
       required: ["address"]
     }
+  },
+  transaction_status: {
+    title: "Industrial Platform: Transaction status",
+    method: "GET",
+    path: "/transaction-status",
+    price: "$0.001",
+    description: "Check whether an EVM transaction is pending, confirmed or reverted, including confirmations and gas metadata.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tx_hash: { type: "string", description: "32-byte EVM transaction hash." },
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." }
+      },
+      required: ["tx_hash"]
+    }
+  },
+  gas_state: {
+    title: "Industrial Platform: Gas state",
+    method: "GET",
+    path: "/gas-state",
+    price: "$0.001",
+    description: "Return current gas price, latest block base fee and gas utilization on Base or Ethereum.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." }
+      }
+    }
+  },
+  erc20_allowance: {
+    title: "Industrial Platform: ERC-20 allowance",
+    method: "GET",
+    path: "/erc20-allowance",
+    price: "$0.001",
+    description: "Check an ERC-20 token allowance from owner to spender before swaps, payments or contract execution.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        owner: { type: "string", description: "Owner EVM wallet address." },
+        spender: { type: "string", description: "Spender/contract EVM address." },
+        contract: { type: "string", description: "ERC-20 token contract address." },
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." }
+      },
+      required: ["owner", "spender", "contract"]
+    }
+  },
+  wallet_activity: {
+    title: "Industrial Platform: Wallet activity",
+    method: "GET",
+    path: "/wallet-activity",
+    price: "$0.001",
+    description: "Return recent USDC or ERC-20 transfers for a wallet plus next_cursor for recurring payment and treasury monitoring.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "EVM wallet address." },
+        contract: { type: "string", description: "ERC-20 contract; defaults to USDC." },
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." },
+        cursor: { type: "number", description: "Previous next_cursor block number." },
+        lookback_blocks: { type: "number", description: "Initial scan lookback, up to 5000 blocks." }
+      },
+      required: ["address"]
+    }
+  },
+  monitor_wallet: {
+    title: "Industrial Platform: Monitor wallet",
+    method: "POST",
+    path: "/agent/wallet-monitor",
+    price: "$0.005",
+    description: "Recurring wallet monitor for balance changes and new USDC/ERC-20 transfers. Pass the prior next_cursor and current_state_hash into the next scheduled call.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "EVM wallet address." },
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." },
+        activity_contract: { type: "string", description: "ERC-20 activity contract; defaults to USDC." },
+        cursor: { type: "number", description: "Previous next_cursor block number." },
+        lookback_blocks: { type: "number", description: "Initial scan lookback, up to 5000 blocks." },
+        previous_state_hash: { type: "string", description: "Prior current_state_hash for change detection." }
+      },
+      required: ["address"]
+    }
+  },
+  treasury_snapshot: {
+    title: "Industrial Platform: Treasury snapshot",
+    method: "POST",
+    path: "/agent/treasury-snapshot",
+    price: "$0.01",
+    description: "One-call treasury snapshot: balances, gas/base fee and recent USDC/ERC-20 activity. Pass the returned activity cursor and state hash into the next scheduled call.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "EVM wallet address." },
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." },
+        activity_contract: { type: "string", description: "ERC-20 activity contract; defaults to USDC." },
+        activity_cursor: { type: "number", description: "Previous activity cursor block number." },
+        lookback_blocks: { type: "number", description: "Initial scan lookback, up to 5000 blocks." },
+        previous_state_hash: { type: "string", description: "Prior current_state_hash for change detection." }
+      },
+      required: ["address"]
+    }
+  },
+  pretrade_context: {
+    title: "Industrial Platform: Pre-trade context",
+    method: "POST",
+    path: "/agent/pretrade",
+    price: "$0.01",
+    description: "Data-only pre-trade bundle: wallet state, ERC-20 allowance, gas/base fee, realtime price, 24h stats and best bid/ask spread. Never submits a trade.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "EVM wallet address." },
+        spender: { type: "string", description: "Spender/contract EVM address." },
+        token_contract: { type: "string", description: "ERC-20 token contract address." },
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." },
+        product_id: { type: "string", description: "Coinbase Exchange market, e.g. BTC-USD." }
+      },
+      required: ["address", "spender", "token_contract", "product_id"]
+    }
+  },
+  watch_transaction: {
+    title: "Industrial Platform: Watch transaction",
+    method: "POST",
+    path: "/agent/transaction-watch",
+    price: "$0.003",
+    description: "Poll an EVM transaction until confirmed or reverted. Pass the prior current_state_hash into later checks.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tx_hash: { type: "string", description: "32-byte EVM transaction hash." },
+        network: { type: "string", enum: ["base", "ethereum"], description: "Network; defaults to base." },
+        previous_state_hash: { type: "string", description: "Prior current_state_hash for change detection." }
+      },
+      required: ["tx_hash"]
+    }
   }
 };
 
