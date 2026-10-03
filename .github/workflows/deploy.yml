@@ -2464,6 +2464,8 @@ jobs:
           # Status probe worker (Cloudflare cron observer mapping; stubbed fetch — offline)
           t node scripts/test-status-probe-worker.js
           t node scripts/test-charged-failure-leg.js
+          # 402 Index price sync (reprices only our own priced listings that drifted; other hosts, unpriced and unsold rows untouched - offline)
+          t node scripts/test-index402-sync.js
           # Render deadline cancellation (R-09 — timed-out contexts close before the slot frees; live contexts never exceed the limit — offline)
           t node scripts/test-render-cancel.js
           # Stripe MPP settlement (stripe/charge cards via SPT — mint/binding/settlement-ordering, $0.50 min — offline)

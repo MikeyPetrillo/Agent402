@@ -1,0 +1,59 @@
+name: Sync 402 Index listing prices
+
+# 402 Index never re-reads the MPP listings we registered, so a price change on
+# our side left them quoting the old figure. This reprices any of our listings
+# that carry a price which no longer matches the live catalog. It edits only
+# listings on our own domain, authenticated by the domain claim's token.
+permissions:
+  contents: read
+  issues: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Plan only, write nothing"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "41 8 * * *"
+  # After a deploy, which is when a price change goes live.
+  workflow_run:
+    workflows: ["Deploy to Railway"]
+    types: [completed]
+
+concurrency:
+  group: index402-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Reprice drifted listings
+        env:
+          INDEX402_TOKEN: ${{ secrets.INDEX402_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+        run: node scripts/index402-sync.js
+
+      - name: Page on failure / recover on success
+        if: always() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OUTCOME: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          TITLE="402 Index price sync FAILING"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number -q '.[0].number' || true)
+          if [ "$OUTCOME" = "success" ]; then
+            [ -n "$OPEN" ] && gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $(date -u +%FT%TZ). $RUN_URL" || true
+          elif [ -z "$OPEN" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The daily 402 Index price sync failed, so our listings there may quote a stale price. Check the run, and the INDEX402_TOKEN secret if the API answered 403: $RUN_URL"
+          fi
