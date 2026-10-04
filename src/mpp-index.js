@@ -187,7 +187,6 @@ export async function discoverMppRegistry() {
 // can't produce. Map<origin, registryServiceObject>.
 const registryByOrigin = new Map();
 let discoveryStatus = { url: MPP_DISCOVERY_URL, fetchedAt: null, services: 0, added: 0, error: null };
-export function mppDiscoveryStatus() { return discoveryStatus; }
 
 /** Pull the origin list MPPScan renders server-side. Pure; exported for tests.
  *  Tolerates both the raw HTML (JSON is escaped inside a script payload) and
@@ -212,7 +211,6 @@ export function parseMppScanOrigins(html) {
 }
 
 let mppScanStatus = { url: MPPSCAN_API_URL, fetchedAt: null, origins: 0, added: 0, error: null };
-export function mppScanDiscoveryStatus() { return mppScanStatus; }
 const seedSource = new Map(); // origin -> "registry" | "mppscan" | "submitted"
 // MPPScan's own metadata per origin (name/description/url/logo) - the display
 // fields for sellers the mpp.dev registry does not describe. Third-party
@@ -256,7 +254,6 @@ export function seedFromOrigins(origins, source = "x402-crawl") {
   return added;
 }
 let x402CrawlSeedStatus = { fetchedAt: null, origins: 0, added: 0 };
-export function x402CrawlSeedStatus_() { return x402CrawlSeedStatus; }
 export function discoverFromX402Crawl(origins = mppDualStackOrigins()) {
   const added = seedFromOrigins(origins, "x402-crawl");
   x402CrawlSeedStatus = { fetchedAt: Date.now(), origins: origins.length, added };

@@ -74,9 +74,6 @@ function stripeMethod() {
   cachedKeyProfile = sig;
   return cachedMethod;
 }
-// Test seam: inject a stub method (offline suite) and reset.
-export function __setStripeMethodForTest(m) { cachedMethod = m; cachedKeyProfile = `${stripeSecretKey()}|${stripeProfileId()}`; }
-export function __resetStripeMethodCache() { cachedMethod = null; cachedKeyProfile = ""; }
 
 const usdToCents = (usd) => Math.round(Number(usd) * 100);
 

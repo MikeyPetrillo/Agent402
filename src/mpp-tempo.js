@@ -919,7 +919,6 @@ export function tempoLeads(req, now = Date.now()) {
 }
 /** Test seam only. */
 export function _resetTempoDemotion() { tempoDemoted.clear(); }
-export function tempoDemotionStatus() { return { demotedClients: tempoDemoted.size, ttlMs: TEMPO_DEMOTE_MS }; }
 
 export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
   if (!tempoEnabled()) return null;

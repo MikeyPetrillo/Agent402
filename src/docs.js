@@ -403,4 +403,3 @@ ${sections}`;
 }
 
 export const docsSlugs = () => Object.keys(WIKI);
-export const docsHasSlug = (slug) => VALID_SLUGS.has(slug);

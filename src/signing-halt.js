@@ -32,6 +32,3 @@ export function assertSigningAllowed(what = "this payment") {
   e.statusCode = 503;
   throw e;
 }
-
-/** Counts only, for the public status surface. Never the env value itself. */
-export const signingHaltStatus = () => ({ halted: signingHalted() });

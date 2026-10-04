@@ -68,7 +68,6 @@ export function clientGoneSignal() {
 }
 
 export function inAbortableScope() { return scope.getStore()?.abortable === true; }
-export function drainSignal() { return controller.signal; }
 export function activeAbortableScopes() { return active; }
 
 /** Called by shutdown(): every composite in flight is cut off now. Returns how many were running. */

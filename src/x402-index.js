@@ -4748,7 +4748,6 @@ export function rememberValidator(originUrl, path, validators) {
   if (validators) crawlValidators.set(k, validators);
   else crawlValidators.delete(k);
 }
-export function __validatorCountForTest() { return crawlValidators.size; }
 /** Drop every stored validator for one origin, so its next probe is an
  *  UNCONDITIONAL read. Paired with the backoff clear on an explicit
  *  re-registration: a seller who edited a document and asks us to look again

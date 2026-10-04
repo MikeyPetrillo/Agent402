@@ -70,19 +70,6 @@ export const RAILS_NOTE =
  *  ?network= query params and CSS-class-safe identifiers. */
 export const railKey = (r) => r.name.replace(/ Chain$/, "").toLowerCase().replace(/\s+/g, "");
 
-/** Truncate a CAIP-2 id for tight UI cells (chain strip, index chips) — full
- *  value belongs in a title attribute, never dropped outright. Short ids
- *  (eip155:8453, stellar:pubnet) pass through whole; only ids that would
- *  blow out a grid column (solana's base58 pubkey, algorand's base64 genesis
- *  hash) get shortened to "namespace:first5…". */
-export function truncateCaip2(caip2, { max = 18, tail = 5 } = {}) {
-  const s = String(caip2 || "");
-  if (s.length <= max) return s;
-  const idx = s.indexOf(":");
-  if (idx === -1) return `${s.slice(0, tail)}…`;
-  return `${s.slice(0, idx + 1)}${s.slice(idx + 1, idx + 1 + tail)}…`;
-}
-
 /** True when a route's x402 offer is EVM `exact` only. ONE predicate, read by
  *  src/payments.js acceptsForItem (the live 402) and by every surface that
  *  names the rails a route takes (/openapi.json, /tools/<slug>), so the docs

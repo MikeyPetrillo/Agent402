@@ -48,9 +48,6 @@ export function stallsInWindow(windowMs = 3600_000, now = Date.now()) {
   return { count: rows.length, maxMs: rows.reduce((m, [, ms]) => Math.max(m, ms), 0) };
 }
 export function recentLagMs() { return Math.round(lagEwma); }
-/** How late the most recent tick ran. With recentLagMs it separates "lagging
- *  now" (both high) from "one freeze a moment ago" (the next tick on time). */
-export function lastTickLateMs() { return Math.round(lastLate); }
 /** How many of the last RECENT_TICKS ticks ran at least `ms` late. */
 export function lateTicksRecent(ms) { return recentLate.filter((x) => x >= ms).length; }
 // Garbage-collection pauses, from the runtime's own gc performance entries, so

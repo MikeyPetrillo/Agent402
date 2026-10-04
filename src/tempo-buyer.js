@@ -144,7 +144,6 @@ async function account() {
   accountCache = { key, acct };
   return acct;
 }
-export async function tempoBuyerAddress() { return (await account())?.address || null; }
 
 /** Bucketed status, numbers never exposed: unconfigured / ok / low / unknown. */
 export async function tempoBuyerStatus() {
