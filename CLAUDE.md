@@ -64,6 +64,11 @@ LLC: credit the entity, never a personal name.
   `scripts/published-slugs.json` records every route ever published; after adding a tool or
   pack run `node scripts/published-slugs.js --write` (`test-retired-routes.js` fails otherwise,
   and fails when a published route is neither live, key-gated nor retired).
+- **Upstream costs are private.** Model, speech, embedding, media and STT rates, fixed fees and
+  the meter markup live in `src/upstream-costs.js`'s table, loaded from `UPSTREAM_COSTS_JSON`
+  (Railway; Actions secret) or `UPSTREAM_COSTS_FILE`. Never commit a rate, never print one in a
+  CI log, never type one in a test (`scripts/test-upstream-costs.js` scans src/). A drifted
+  rate is a table edit, not a code change.
 - Prices quoted in prose are derived from the catalog, never typed
   (`scripts/test-price-prose.js`). Skill-pack prices are generated
   (`node scripts/pack-prices.js --write`).
