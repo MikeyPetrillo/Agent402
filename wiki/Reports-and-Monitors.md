@@ -2,7 +2,7 @@
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-Beside the 500+ per-call tools, Agent402 sells **outcome-priced report products** (one payment, one finished report), **monthly monitors** that re-run a report when something changes, and **prepaid card credits** that let a buyer without a wallet spend on the priced catalog. The same report endpoint serves two front doors:
+Beside the 500+ per-call tools, Agent402 sells **outcome-priced report products** (one payment, one finished report), **monthly monitors** that re-run a report when something changes, and accepts **prepaid card credits** keys already issued, which let a buyer without a wallet spend on the priced catalog (new credits are not on sale at the moment). The same report endpoint serves two front doors:
 
 - **Agents** call the `/v1/...` route directly and pay on the 402 - USDC over x402 or MPP, or a prepaid credits key.
 - **People** buy the same report by card at [`/reports`](https://agent402.tools/reports), subscribe to a monitor at [`/monitors`](https://agent402.tools/monitors), or (while credits are on sale) load credits at [`/credits`](https://agent402.tools/credits).
