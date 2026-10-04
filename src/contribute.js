@@ -1,4 +1,4 @@
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 
 import { repoUrl } from "./repo-link.js";
 export function contributePage(baseUrl) {

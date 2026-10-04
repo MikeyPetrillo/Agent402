@@ -1,4 +1,4 @@
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 import { RAILS_AMP } from "./rails.js";
 
 export function quickstartPage(baseUrl) {

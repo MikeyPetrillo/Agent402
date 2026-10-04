@@ -13,7 +13,7 @@ import { routingProofSentence } from "./routing-proof.js";
 import { powCostPhrase } from "./pow.js";
 import { LEARN_BY_GLOSSARY_ID, learnBySlug } from "./learn.js";
 
-import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
+import { ORG_SAME_AS } from "./repo-link.js";
 // { id, name, alt?: [names], def, see: [[href, label]] } - keep `def` a single
 // plain-text paragraph: it is rendered verbatim AND emitted as the DefinedTerm
 // description in JSON-LD, so no markup.

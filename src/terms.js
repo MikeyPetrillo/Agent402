@@ -1,7 +1,7 @@
 // Terms of Service — a stable, public ToS URL is a submission requirement for
 // the Anthropic connector directory. Kept short and honest: a no-account,
 // open-source, pay-per-call tool service.
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 
 import { REPO_URL, REPO_SLUG } from "./repo-link.js";
 export function termsPage(baseUrl) {

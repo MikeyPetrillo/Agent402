@@ -1,7 +1,7 @@
 // Kit 2 — 39 more pure-CPU tools (free via proof-of-work). All deterministic,
 // no network, ~zero cost to serve, and each covered by an exact-output test in
 // scripts/test-kit2.js.
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import { convertAnyUnit, UNIT_CATEGORIES } from "./convert-gen.js";
 

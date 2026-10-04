@@ -2,7 +2,7 @@ import "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST
 import { retiredEntryFor, assertRetiredRegistryConsistent } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
-import { RAILS_OR, RAILS_SHORT, RAILS } from "./rails.js";
+import { RAILS_OR, RAILS } from "./rails.js";
 // Railway's egress has NO working IPv6 (every AAAA is ENETUNREACH). Node's
 // happy-eyeballs races the IPv6 address on dual-stack upstreams and fails ~15% of
 // the time (UND_ERR_SOCKET / "could not connect"). Force IPv4 process-wide for the
@@ -60,7 +60,7 @@ import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerSt
 import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
 import { backfillBrokenPackRefunds } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
-import { meteredUsd, isMeterable, applyMeteredSettlement } from "./gateway-meter.js";
+import { applyMeteredSettlement } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
 import { shapeRefusal } from "./input-aliases.js";
 import { setSettlementOverrides } from "@x402/express";
@@ -275,7 +275,7 @@ import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
-import { sampleJson, sampleMeta, SAMPLE_PRODUCTS } from "./sample-reports.js";
+import { sampleJson, sampleMeta } from "./sample-reports.js";
 import { createFreeAlerts, alertFormHtml, ALERT_KIND_FOR_REPORT_KIND } from "./free-alerts.js";
 import { createWalletDigest } from "./wallet-digest.js";
 import { refundLookup, ownRefundsView } from "./refund-lookup.js";
@@ -452,7 +452,7 @@ import { TTS_TOOLS } from "./tools/tts-kit.js";
 // 2026-08-22 seller-landscape builds: keyless derivatives data + env-gated X data / B2B enrichment.
 import { DERIVATIVES_TOOLS } from "./tools/derivatives-kit.js";
 import { SOLANA_INTEL_TOOLS } from "./tools/solana-intel-kit.js";
-import { SANCTIONS_TOOLS, startSanctionsRefresh, sanctionsStatus } from "./tools/sanctions-kit.js";
+import { SANCTIONS_TOOLS, startSanctionsRefresh } from "./tools/sanctions-kit.js";
 import { IMAGES_FAST_TOOLS } from "./tools/llm-images-fast-kit.js";
 import { ALCHEMY_DATA_TOOLS } from "./tools/alchemy-data-kit.js";
 import { FARCASTER_SOCIAL_TOOLS, farcasterSocialEnabled } from "./tools/farcaster-social-kit.js";
@@ -499,13 +499,13 @@ import { useCasesPage } from "./use-cases.js";
 import { playgroundPage } from "./playground.js";
 import { apiExplorerPage } from "./api-explorer.js";
 import { sdkPlaygroundPage } from "./sdk-playground.js";
-import { blogIndex, blogPost, BLOG_POSTS } from "./blog.js";
+import { blogIndex, blogPost } from "./blog.js";
 import { comparePage } from "./compare.js";
 import { communityPage } from "./community.js";
 import { contributePage } from "./contribute.js";
 import { workflowsPage } from "./workflows.js";
 import { badgesPage, badgeSvg } from "./badges.js";
-import { adapterDocsIndex, adapterDocPage, ADAPTERS } from "./adapter-docs.js";
+import { adapterDocsIndex, adapterDocPage } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
 import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore } from "./ledger-chrome.js";
 import { ledgerHomePage } from "./ledger-home.js";

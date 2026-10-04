@@ -18,7 +18,7 @@
 // price instead.
 import { createHash } from "node:crypto";
 import { paymentHeaderOf, payerFromRequest } from "../payer.js";
-import { maySpend, noteSpend, adjustSpend, resolveSpend } from "../external-spend-guard.js";
+import { maySpend, noteSpend, adjustSpend } from "../external-spend-guard.js";
 import { findTools } from "../find.js";
 import { judgeTool, decide } from "../tool-judge.js";
 import { observeDelivery } from "../response-observation.js";

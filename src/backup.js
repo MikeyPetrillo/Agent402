@@ -38,11 +38,11 @@
 
 import { createHash, createHmac } from "node:crypto";
 import { createReadStream, createWriteStream, statSync, readdirSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
-import { createGzip, gunzipSync } from "node:zlib";
+import { createGzip } from "node:zlib";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { tmpdir } from "node:os";
-import { join, basename } from "node:path";
+import { join } from "node:path";
 
 const cfg = () => ({
   endpoint: (process.env.BACKUP_S3_ENDPOINT || "").trim().replace(/\/+$/, ""),

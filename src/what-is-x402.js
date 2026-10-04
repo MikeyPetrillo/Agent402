@@ -14,7 +14,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { RAILS } from "./rails.js";
 import { CAIP2_NAMES } from "./stats.js";
 
-import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
+import { ORG_SAME_AS } from "./repo-link.js";
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 const fmtUsd = (n) =>
   `$${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

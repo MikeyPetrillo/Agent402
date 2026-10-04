@@ -1,6 +1,6 @@
 // /digest - subscribe an email to the identity you already pay with.
 // Behaviour lives in /js/digest-signup.js (CSP: no inline scripts).
-import { ledgerShell, esc } from "./ledger-chrome.js";
+import { ledgerShell } from "./ledger-chrome.js";
 
 export function digestPage(baseUrl) {
   const body = `
