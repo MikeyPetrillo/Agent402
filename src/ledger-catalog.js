@@ -8,7 +8,7 @@ import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 import { RAILS_SHORT } from "./rails.js";
 
-import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
+import { ORG_SAME_AS } from "./repo-link.js";
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 
 const TABS = [

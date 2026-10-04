@@ -6,7 +6,7 @@
 // signature check: GitHub/Stripe/Shopify/Slack). All pure-CPU, no network, no
 // LLM — proof-of-work eligible. Covered by scripts/test-util-kit.js and
 // scripts/test-webhook-verify.js.
-import { createHmac, createHash, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 function bad(message) {
   const err = new Error(message);

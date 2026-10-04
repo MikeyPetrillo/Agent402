@@ -10,7 +10,7 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
 
-import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
+import { ORG_SAME_AS } from "./repo-link.js";
 const FAQS = [
   { q: "What is Agentic Finance (AIFI)?", a: "Agentic Finance, AIFI for short, is the practice of software agents transacting on their own: discovering a service, reading a machine-readable price, paying per request from a non-custodial wallet, receiving a verifiable receipt, and, on the other side, earning per request for what they serve. No accounts, no API keys, no invoices. The payment is the identity, and every settlement is on a public ledger." },
   { q: "How is agentic finance different from agentic payments or agentic commerce?", a: "Agentic payments is the plumbing: a wire format that lets a program pay another program (x402 and MPP are the two open ones). Agentic commerce usually means agents buying goods for humans through checkout flows. Agentic finance is the machine-to-machine economy that forms on top of the plumbing: price discovery, routing between competing sellers, reliability signals, treasury and spend controls, and transparent revenue, all operated by and for autonomous agents." },

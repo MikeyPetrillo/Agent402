@@ -11,7 +11,7 @@
 // more than these two follow-ups per purchase, never anything promotional
 // outside them. The store keeps the address (it has to send), the product,
 // the target and timestamps - operator surfaces report counts only.
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 

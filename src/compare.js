@@ -1,4 +1,4 @@
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 
 export function comparePage(baseUrl) {
   const canonical = `${baseUrl}/compare`;

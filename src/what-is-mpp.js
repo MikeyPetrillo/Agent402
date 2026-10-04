@@ -9,7 +9,7 @@
 // search intent, and the two cross-link rather than duplicate scope.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
-import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
+import { ORG_SAME_AS } from "./repo-link.js";
 import { mppFlagshipRows, mppFlagshipSnippet, mppFlagshipOffersPhrase, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
 const STEPS = [
   ["01", "The client requests a paid resource", "A plain HTTP request, no credentials attached. The server answers 402 Payment Required with a WWW-Authenticate: Payment challenge naming the price, the asset, the chain, and a one-time challenge id."],
