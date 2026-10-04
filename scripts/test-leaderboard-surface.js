@@ -3,7 +3,6 @@
 // server, no network, no secrets.
 import { robotsTxt, sitemapXml, llmsTxt } from "../src/seo.js";
 import { serviceManifest } from "../src/discovery.js";
-import { leaderboardPage, windowLabelFromBlocks } from "../src/leaderboard.js";
 
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
 const ok = (c, m) => { if (!c) fail(m); };
@@ -70,49 +69,5 @@ ok(manifest.discovery.leaderboardSurfaces.sdkMethod === "topSellers", "leaderboa
 ok(manifest.machineReadable.findTool && manifest.discovery.neutralRouter, "manifest still exposes find + router");
 // Must serialize (it is served as JSON).
 JSON.parse(JSON.stringify(manifest));
-
-// ---- windowLabelFromBlocks ----
-// Maps block count → human window label so the HTML page can say "24h" / "7d"
-// instead of "43200 blocks". Base block time is ~2s.
-ok(windowLabelFromBlocks(43200) === "24h", "43200 blocks → 24h");
-ok(windowLabelFromBlocks(302400) === "7d", "302400 blocks → 7d");
-ok(windowLabelFromBlocks(9000) === "5h", "9000 blocks → 5h");
-ok(windowLabelFromBlocks(0) === "-", "zero blocks → placeholder dash");
-
-// ---- HTML /leaderboard page ----
-// Cache-warming state (no scan run yet) — the page must still render cleanly.
-const warmingHtml = leaderboardPage(
-  { spec: "x402-leaderboard/1", asOf: new Date().toISOString(), warming: true, leaderboard: [] },
-  { baseUrl: BASE }
-);
-ok(/<title>[^<]*Leaderboard[^<]*<\/title>/i.test(warmingHtml), "leaderboardPage <title> mentions Leaderboard");
-ok(warmingHtml.includes("Warming the cache"), "warming snapshot renders a warming message");
-ok(warmingHtml.includes(`${BASE}/api/leaderboard`), "leaderboardPage links to /api/leaderboard JSON");
-ok(warmingHtml.includes('href="/leaderboard"'), "leaderboardPage header marks /leaderboard active");
-
-// Real snapshot with rows — verifies escaping + table render + basescan links.
-const snap = {
-  spec: "x402-leaderboard/1",
-  asOf: "2026-06-16T20:00:00.000Z",
-  scannedBlocks: 43200,
-  windowLabel: "24h",
-  maxCallUsd: 0.5,
-  scannedSellers: 12,
-  walletsQueried: 12,
-  bazaarTotal: 1234,
-  leaderboard: [
-    { rank: 1, name: "Acme x402", origins: ["https://acme.example"], homepage: "https://acme.example", endpoints: 4, wallet: "0xabcdef0000000000000000000000000000001234", network: "base", callsSettled: 42, totalUsd: 0.42, uniqueBuyers: 9 },
-    { rank: 2, name: "<script>x", origins: [], homepage: null, endpoints: 1, wallet: "0x1111111111111111111111111111111111111111", network: "base", callsSettled: 1, totalUsd: 0.001, uniqueBuyers: 1 },
-  ],
-};
-const html2 = leaderboardPage(snap, { baseUrl: BASE });
-ok(html2.includes("Acme x402"), "leaderboardPage renders seller names");
-ok(html2.includes("basescan.org/address/0xabcdef0000000000000000000000000000001234"), "leaderboardPage links wallet to Basescan");
-ok(!/<script>x</.test(html2), "leaderboardPage escapes HTML in seller names");
-ok(html2.includes("&lt;script&gt;x"), "leaderboardPage HTML-escapes hostile names");
-ok(html2.includes("$0.4200") || html2.includes("$0.420"), "leaderboardPage formats USDC totals");
-ok(html2.includes("Last 24h"), "leaderboardPage labels the active window in human terms");
-ok(html2.includes("USDC settled"), "leaderboardPage uses 'USDC settled' column header (clarity over raw 'USDC')");
-ok(html2.includes("$0 \u2260 no revenue"), "leaderboardPage explains that 0 in-window is not lifetime revenue");
 
 console.log("test-leaderboard-surface: OK");

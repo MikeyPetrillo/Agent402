@@ -50,8 +50,9 @@ ok(Object.isFrozen(NOTICE), "the notice is frozen: a caller cannot edit it out o
 // --- the leaderboard disclosure is asserted against the RENDERED PAGE ---
 //
 // The first cut of this guard read src/leaderboard.js and passed while
-// measuring nothing: `leaderboardPage` there is imported by server.js and never
-// invoked - dead, like src/pricing-page.js and src/landing.js. The live page is
+// measuring nothing: `leaderboardPage` there was imported by server.js and never
+// invoked - dead, like src/pricing-page.js and src/landing.js (all three since
+// removed). The live page is
 // ledgerLeaderboardPage. A guard that greps the module its author happened to
 // edit certifies only that module. Render the page a visitor gets instead.
 {
