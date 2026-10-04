@@ -32,6 +32,8 @@ import { PRIMARY_PREFERENCE } from "../openclaw/models.js";
 const STEALTH = new Set(STEALTH_MODEL_IDS);
 const isStealth = (p) => STEALTH.has(p);
 const warn = (m) => console.log(`WARN - ${m}`);
+// CI logs are public: name the model only. Run locally for the full detail.
+const brief = (short, full) => (process.env.CI ? short : full);
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -128,7 +130,7 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
     if (Number.isFinite(headline)) prices.push(headline);
     if (!prices.length) continue; // liveness already asserted above; an unpriced row is not an under-count
     const live = Math.max(...prices);
-    if (live > link.costPerChar) under.push(`${link.id}: row ${link.costPerChar} < dearest live endpoint ${live}/char (${prices.length} price(s) read)`);
+    if (live > link.costPerChar) under.push(brief(link.id, `${link.id}: row ${link.costPerChar} < dearest live endpoint ${live}/char (${prices.length} price(s) read)`));
   }
   ok(under.length === 0, `no speech costPerChar row is under its dearest live endpoint price${under.length ? `:\n    ${under.join("\n    ")}` : ""}`);
 }
@@ -227,18 +229,18 @@ let endpointReads = 0, headlineOnly = 0, priorityExcluded = 0, priorityChecked =
       }
       if (!prices.length && !priorityPrices.length) continue;
       const table = costFor(m.id);
-      if (!table) { under.push(`${m.id} (no MODEL_COST entry; dearest routable endpoint $${Math.max(...prices.map((e) => e.p))}/$${Math.max(...prices.map((e) => e.c))})`); continue; }
+      if (!table) { under.push(brief(`${m.id} (no MODEL_COST entry)`, `${m.id} (no MODEL_COST entry; dearest routable endpoint $${Math.max(...prices.map((e) => e.p))}/$${Math.max(...prices.map((e) => e.c))})`)); continue; }
       if (prices.length) {
         const p = Math.max(...prices.map((e) => e.p)), c = Math.max(...prices.map((e) => e.c));
         if (p > table.prompt + 1e-9 || c > table.completion + 1e-9) {
           const dearP = prices.find((e) => e.p === p)?.tag, dearC = prices.find((e) => e.c === c)?.tag;
-          under.push(`${m.id} dearest routable endpoint $${p} (${dearP}) / $${c} (${dearC}) vs table $${table.prompt}/$${table.completion} (${slug}; ${prices.length} endpoint price(s) read)`);
+          under.push(brief(`${m.id} (${slug})`, `${m.id} dearest routable endpoint $${p} (${dearP}) / $${c} (${dearC}) vs table $${table.prompt}/$${table.completion} (${slug}; ${prices.length} endpoint price(s) read)`));
         }
       }
       for (const e of priorityPrices) {
         priorityChecked++;
         if (e.p > table.prompt * PRIORITY_PRICE_FACTOR + 1e-9 || e.c > table.completion * PRIORITY_PRICE_FACTOR + 1e-9) {
-          under.push(`${m.id} PRIORITY endpoint ${e.tag} $${e.p}/$${e.c} over ${PRIORITY_PRICE_FACTOR}x the table row $${table.prompt}/$${table.completion} (${slug} sells service_tier priority at that factor)`);
+          under.push(brief(`${m.id} priority (${slug})`, `${m.id} PRIORITY endpoint ${e.tag} $${e.p}/$${e.c} over ${PRIORITY_PRICE_FACTOR}x the table row $${table.prompt}/$${table.completion} (${slug} sells service_tier priority at that factor)`));
         }
       }
       }
