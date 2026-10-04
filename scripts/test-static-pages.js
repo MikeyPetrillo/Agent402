@@ -5,7 +5,7 @@
 // "site is up" perception even when every API is fine.
 //
 // A render-time regression in any one page handler (e.g., an undefined
-// snapshot field in leaderboardPage) returns 500
+// snapshot field in ledgerLeaderboardPage) returns 500
 // in a way that the API-only health probe never sees. This smoke test boots
 // FREE_MODE and asserts each page:
 //

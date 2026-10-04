@@ -264,7 +264,7 @@ on depth. The card price includes payment processing; an agent paying per
 call over x402 or MPP pays the lower tool price for the same report.
 
 Two companion tools close the loop: `POST /api/route/execute` ($0.01, with
-`execute-plus` $0.05 and `execute-max` $0.55 tiers for pricier tools) resolves a task description to the
+`execute-plus` $0.05, `execute-max` $0.55 and `execute-pro` $3.30 tiers for pricier tools) resolves a task description to the
 best tool and runs it in one paid call, including, with `include:"external"`,
 tools sold by **other x402 sellers** (it routes on proven on-chain settled
 volume, with one exception - a Solana seller with no history yet is tried only

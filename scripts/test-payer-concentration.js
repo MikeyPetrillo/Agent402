@@ -192,19 +192,6 @@ const pm = (o) => new Map(Object.entries(o));
   ok(!JSON.stringify(rows).includes("0xwalker"), "no payer address reaches a row through the breadth path either");
 }
 
-// --- the HTML board shows both, and publishes what they mean --------------
-{
-  const src = readFileSync(new URL("../src/leaderboard.js", import.meta.url), "utf8");
-  ok(/concentrationBadge\(r\)/.test(src), "rows render the concentration badge");
-  ok(/cross-seller \$\{esc\(pct/.test(src), "and the cross-seller badge");
-  ok(/Payer addresses are never published on any of these surfaces/.test(src),
-     "the published method states the no-address rule");
-  ok(/Our own row is measured and flagged on identical terms/.test(src),
-     "and that our own row is held to it");
-  ok(/CONCENTRATION\.majority \* 100/.test(src),
-     "the method renders the live thresholds rather than a typed copy");
-}
-
 // --- the dossier carries it as a sentence, not a score --------------------
 // DRIVEN, not grepped: a source scan passes a disabled branch, which is
 // exactly what survived the first mutation pass here.

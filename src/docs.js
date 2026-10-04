@@ -349,28 +349,6 @@ export function docDescription(md, title) {
   return `Agent402 documentation: ${title}.`;
 }
 
-export function docsIndex(baseUrl) {
-  const home = WIKI["Home"];
-  if (!home) {
-    return shell(
-      baseUrl,
-      "Docs",
-      "Agent402 documentation.",
-      "/docs",
-      `<h1>Docs</h1><p class="muted">Wiki content unavailable.</p>`,
-      "Home"
-    );
-  }
-  return shell(
-    baseUrl,
-    "Agent402 Docs",
-    "Open-source x402 + MCP server: 500+ pay-per-call tools for AI agents. Browse the docs - getting started, paying with x402, MCP connector, Tollbooth pay-per-crawl, architecture, and security.",
-    "/docs",
-    renderMarkdown(home),
-    "Home"
-  );
-}
-
 export function docsPage(baseUrl, slug) {
   const md = Object.hasOwn(WIKI, slug) ? WIKI[slug] : null;
   if (!md) return null;
@@ -425,4 +403,3 @@ ${sections}`;
 }
 
 export const docsSlugs = () => Object.keys(WIKI);
-export const docsHasSlug = (slug) => VALID_SLUGS.has(slug);

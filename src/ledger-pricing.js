@@ -3,7 +3,7 @@
 // token math" comparison card, CTA, compact footer.
 
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
-import { toolList, CATEGORIES } from "./pages.js";
+import { toolList } from "./pages.js";
 import { isComputePayable, powCostPhrase } from "./pow.js";
 import { RAILS_OR, RAILS_SHORT } from "./rails.js";
 // Monitors cost what MONITOR_PRODUCTS says they cost. This page said "$3 a

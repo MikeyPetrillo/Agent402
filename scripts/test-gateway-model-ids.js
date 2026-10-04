@@ -21,6 +21,17 @@ import {
 import { IMAGE_TIERS } from "../src/tools/llm-images-fast-kit.js";
 import { PRIMARY_PREFERENCE } from "../openclaw/models.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
+import { DOMAIN_AUDIT_MODELS } from "../src/tools/domain-audit-kit.js";
+import { DOSSIER_MODELS } from "../src/tools/dossier-kit.js";
+import { FILING_MODELS } from "../src/tools/filing-watch-kit.js";
+import { FUND_MODELS } from "../src/tools/fund-report-kit.js";
+import { INSIDER_MODELS } from "../src/tools/insider-flow-kit.js";
+import { LINKEDIN_MODELS } from "../src/tools/linkedin-article-kit.js";
+import { RECALL_MODELS } from "../src/tools/recall-report-kit.js";
+import { RESEARCH_MODELS } from "../src/tools/research-deep-kit.js";
+import { TICKER_PACK_MODELS } from "../src/tools/ticker-pack-kit.js";
+import { TOKEN_BRIEF_MODELS } from "../src/tools/token-brief-kit.js";
+import { TOKEN_RISK_MODELS } from "../src/tools/token-risk-kit.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
 requireUpstreamCosts("test-gateway-model-ids");
 
@@ -294,6 +305,33 @@ for (const [id, r] of Object.entries(RETIRING_MODELS)) {
     if (!m) continue;
     const exp = expiryOf(m);
     ok(!exp, `default model ${id} carries no expiration/deprecation date upstream${exp ? ` (marked ${exp}: pick a successor - it is served to callers who name no model)` : ""}`);
+  }
+}
+
+// 5c. REPORT products call one fixed model per stage with no failover chain, so
+//     they sit with the defaults: a missing id fails, and so does any upstream
+//     expiration date (a report needs a decided successor before its model goes).
+//     Each kit exports its list "for the live-catalog guard"; until 2026-10-04
+//     nothing here imported them, so a retired report model would have surfaced
+//     only as a failed paid report.
+{
+  const REPORT_MODELS = {
+    "domain-audit": DOMAIN_AUDIT_MODELS, dossier: DOSSIER_MODELS, "filing-report": FILING_MODELS,
+    "fund-report": FUND_MODELS, "insider-report": INSIDER_MODELS, "linkedin-article": LINKEDIN_MODELS,
+    "recall-report": RECALL_MODELS, research: RESEARCH_MODELS, "ticker-pack": TICKER_PACK_MODELS,
+    "token-brief": TOKEN_BRIEF_MODELS, "token-risk": TOKEN_RISK_MODELS,
+  };
+  const reportIds = new Map();
+  for (const [kit, list] of Object.entries(REPORT_MODELS)) {
+    ok(Array.isArray(list) && list.length > 0, `report kit ${kit} exports its model list`);
+    for (const id of list || []) reportIds.set(id, [...(reportIds.get(id) || []), kit]);
+  }
+  for (const [id, kits] of reportIds) {
+    const m = models.find((x) => x.id === id);
+    ok(!!m, `report model ${id} is live upstream (${kits.join(", ")})`);
+    if (!m) continue;
+    const exp = expiryOf(m);
+    ok(!exp, `report model ${id} carries no expiration/deprecation date upstream${exp ? ` (marked ${exp}: pick a successor for ${kits.join(", ")})` : ""}`);
   }
 }
 

@@ -24,7 +24,7 @@
 // pruned past 31 days, plus the sync cursor (ISO timestamp of the newest
 // transfer seen, minus a small overlap on the next sync; ids dedupe the
 // overlap). Persisted to /data so a redeploy does not start blind.
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { timedSync } from "./boot-timing.js";
 import { writeFile } from "node:fs/promises";
 import { redactSecrets } from "./tools/redact.js";
@@ -190,9 +190,6 @@ export function feedHistoryDays(state) {
   return days;
 }
 
-export function persistFeedState(state, file = TEMPO_TRANSFERS_CACHE_FILE) {
-  try { writeFileSync(file, JSON.stringify(state)); return true; } catch { return false; }
-}
 /** Async variant for the scheduler: the stringify is still on-thread, but the
  *  write is not, and a failure never throws into the rebuild. */
 export async function persistFeedStateAsync(state, file = TEMPO_TRANSFERS_CACHE_FILE) {

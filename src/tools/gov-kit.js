@@ -150,6 +150,8 @@ const STATE_NAME_TO_CODE = {
   guam: "GU", "american samoa": "AS", "northern mariana islands": "MP",
 };
 
+const KNOWN_STATE_CODES = new Set(Object.values(STATE_NAME_TO_CODE));
+
 // openFDA: keyless is 1,000 req/day/IP (shared by every tool on this host and
 // the recall monitor's probes); OPENFDA_API_KEY raises it to 120k/day. Appended
 // as a query param only when set - never logged (the URL is never surfaced).
@@ -803,6 +805,29 @@ export const GOV_TOOLS = [
       const url = `https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?$filter=state eq '${st}'&$top=${window}&$orderby=declarationDate desc&$select=declarationTitle,incidentType,declarationType,declarationDate,disasterNumber`;
       const data = await getJson(encodeURI(url), { headers: { Accept: "application/json" } });
       const items = Array.isArray(data?.DisasterDeclarationsSummaries) ? data.DisasterDeclarationsSummaries : [];
+      // 2026-10-04: DisasterDeclarationsSummaries began answering count 0 for
+      // EVERY query (no filter at all included) while FemaWebDisasterDeclarations
+      // still served current rows, and this tool sold "CA: 0 disasters" as a 200.
+      // So an empty summaries read falls back to the other dataset (one row per
+      // disaster, so no de-duplication), and a state that has declarations on
+      // record but reads empty from both is FEMA's outage: a 502, never charged.
+      // A code outside the known list keeps the plain empty answer it always had.
+      if (!items.length) {
+        const webUrl = `https://www.fema.gov/api/open/v1/FemaWebDisasterDeclarations?$filter=stateCode eq '${st}'&$top=${limit}&$orderby=declarationDate desc&$select=disasterName,incidentType,declarationType,declarationDate,disasterNumber`;
+        const web = await getJson(encodeURI(webUrl), { headers: { Accept: "application/json" } });
+        const rows = Array.isArray(web?.FemaWebDisasterDeclarations) ? web.FemaWebDisasterDeclarations : [];
+        if (rows.length) {
+          const disasters = rows.slice(0, limit).map((r) => ({
+            title: r.disasterName ?? null,
+            incidentType: r.incidentType ?? null,
+            declarationType: r.declarationType ?? null,
+            declared: (r.declarationDate || "").slice(0, 10) || null,
+            disasterNumber: r.disasterNumber ?? null,
+          }));
+          return { state: st, count: disasters.length, disasters, source: "fema.gov openFEMA FemaWebDisasterDeclarations (public domain)" };
+        }
+        if (KNOWN_STATE_CODES.has(st)) throw bad(`openFEMA returned no disaster declarations for ${st} from either dataset; every state has declarations on record, so this is an outage at FEMA. Nothing was charged.`, 502);
+      }
       const seen = new Set();
       const disasters = [];
       for (const r of items) {

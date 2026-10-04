@@ -71,5 +71,3 @@ export function recordOutbound({ chain, payTo, amountAtomic, asset, usd, slug, o
     warnOnce(`write failed (${e?.code || e?.message}) - the payment itself is unaffected`);
   }
 }
-
-export const outboundLedgerFile = () => FILE;

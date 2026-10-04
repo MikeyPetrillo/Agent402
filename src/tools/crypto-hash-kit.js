@@ -5,10 +5,7 @@
 //
 // Built entirely on node:crypto (stdlib, no new deps). All pure CPU, no
 // network, no LLM -> automatically proof-of-work eligible (free tier).
-import {
-  createHash, createHmac,
-  pbkdf2Sync, scryptSync, hkdfSync, timingSafeEqual,
-} from "node:crypto";
+import { createHash } from "node:crypto";
 
 function bad(message) {
   const err = new Error(message);

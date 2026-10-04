@@ -1,7 +1,7 @@
 // Webhook/callback documentation page — explains async patterns and
 // planned webhook support for long-running tool chains.
 
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 
 import { REPO_URL } from "./repo-link.js";
 export function webhooksPage(baseUrl) {

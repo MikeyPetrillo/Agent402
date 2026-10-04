@@ -26,7 +26,7 @@
 import { resolveLocalRefs } from "./openapi-deref.js";
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { timedSync } from "./boot-timing.js";
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { esc } from "./ledger-chrome.js";
 // F23: seller-manifest homepages are external, attacker-controlled URLs. esc()
 // escapes HTML but does NOT constrain the scheme, so a `javascript:`/`data:`
 // homepage would become a clickable link if the legacy indexPage renderer is
@@ -41,7 +41,7 @@ import { deliveryProjection } from "./response-observation.js";
 import { requestContractOf, requestContractFromInputSchema, packRequestContract, requestContractProjection, requestContractStrength } from "./request-contract.js";
 import { toolList } from "./pages.js";
 import { fetchAllBazaarItems, isBazaarDiscoveryUrl } from "./bazaar-pager.js";
-import { RAILS, railKey, truncateCaip2 } from "./rails.js";
+import { RAILS, railKey } from "./rails.js";
 import { CHAIN_PAGES, marketSellers } from "./market-page.js";
 import { WELL_KNOWN_PATH, discoveryNote } from "./discovery-note.js";
 import { judgeFreeResponse } from "./tool-judge.js";
@@ -51,7 +51,7 @@ import { queryTerms, isCjkTerm, splitTokens } from "./query-terms.js";
 import { summarize, fmtUsd, fmtPct } from "./economy.js";
 import { rankBy, canonicalHost, getLeaderboardSnapshot, getLeaderboardCircularWallets } from "./leaderboard.js";
 import { routeExecuteHint } from "./tools/route-execute.js";
-import { sellerRegistrationFirstSeen, recordSellerRegistrationSeen, getSellerRegistrations, deleteSellerRegistration } from "./stats.js";
+import { recordSellerRegistrationSeen, getSellerRegistrations, deleteSellerRegistration } from "./stats.js";
 
 import { REPO_URL } from "./repo-link.js";
 // RAILS caip2 -> CHAIN_PAGES key, same join the homepage's by-chain strip uses
@@ -4748,7 +4748,6 @@ export function rememberValidator(originUrl, path, validators) {
   if (validators) crawlValidators.set(k, validators);
   else crawlValidators.delete(k);
 }
-export function __validatorCountForTest() { return crawlValidators.size; }
 /** Drop every stored validator for one origin, so its next probe is an
  *  UNCONDITIONAL read. Paired with the backoff clear on an explicit
  *  re-registration: a seller who edited a document and asks us to look again
@@ -7806,38 +7805,6 @@ export function economySectionHtml(snap, leaderboardSnap) {
     <div class="econ-bars">${bars || `<div class="pn">no daily history recorded yet</div>`}</div>
     ${day}
   </div>
-</div>`;
-}
-
-// "What agents actually buy" — the demand-composition panel. External tools
-// ranked by DISTINCT verified wallets (breadth of demand, not dollars): the
-// primitives the most independent agents reach for. Data from the sales ledger
-// via topByBuyers(); canary/burner traffic is already excluded there. Renders
-// an honest empty state before the first attributable external sale lands.
-export function whatAgentsBuyHtml(buyRows) {
-  const rows = Array.isArray(buyRows) ? buyRows.filter((r) => r && r.buyers > 0) : [];
-  const max = rows.reduce((m, r) => Math.max(m, r.buyers), 0) || 1;
-  const bars = rows.map((r) => {
-    const pct = Math.max(6, Math.round((r.buyers / max) * 100));
-    return `<div style="display:flex;align-items:center;gap:12px;font-family:var(--font-mono);font-size:13px;line-height:1.3;">
-      <a href="/tools/${esc(r.slug)}" style="flex:0 0 160px;color:var(--ink);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.slug)}</a>
-      <div style="flex:1;min-width:50px;height:15px;background:var(--hairline);position:relative;">
-        <div style="position:absolute;inset:0 auto 0 0;width:${pct}%;background:var(--accent);opacity:.82;"></div>
-      </div>
-      <span style="flex:0 0 92px;text-align:right;font-weight:700;white-space:nowrap;">${r.buyers} wallet${r.buyers === 1 ? "" : "s"}</span>
-      <span style="flex:0 0 52px;text-align:right;color:var(--muted);white-space:nowrap;">&times;${r.sales}</span>
-    </div>`;
-  }).join("");
-  const body = rows.length
-    ? `<div style="display:flex;flex-direction:column;gap:9px;">${bars}</div>
-       <p class="foot" style="margin:14px 0 0;">The tools the most independent agents reach for are live-data and compute primitives - things an LLM can't do itself. Ranked by distinct verified wallets on the money rails; our own canary and test traffic is excluded.</p>`
-    : `<div class="pn">No attributable external sales in the window yet - the first independent wallet purchase populates this.</div>`;
-  return `<div class="panel" id="demand">
-  <div class="ph">
-    <h2>What agents actually buy</h2>
-    <div class="pn">Every external paid call, ranked by how many distinct wallets bought each tool over the last 30 days - breadth of demand, not dollars.</div>
-  </div>
-  <div style="padding:14px 18px;">${body}</div>
 </div>`;
 }
 

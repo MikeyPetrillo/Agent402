@@ -55,7 +55,6 @@ import { join } from "node:path";
 
 export const TASKS_EXTENSION = "io.modelcontextprotocol/tasks";
 export const CLIENT_CAPABILITIES_META = "io.modelcontextprotocol/clientCapabilities";
-export const RELATED_TASK_META = "io.modelcontextprotocol/related-task";
 
 // JSON-RPC error codes the extension pins (ext-tasks "Error Handling").
 export const TASK_INVALID_PARAMS = -32602;      // unknown/expired taskId

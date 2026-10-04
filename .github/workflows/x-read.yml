@@ -3,18 +3,13 @@ name: X Read
 # Read-only: print a public X post's content (text, author, any quoted post)
 # by fetching the public fxtwitter/vxtwitter mirror APIs from the runner,
 # which has open egress (the Claude Code sandbox does not). No credentials,
-# posts nothing. Dispatch with a status id or full x.com URL; the push
-# trigger runs it once with the default status when this file changes on the
-# dev branch.
+# posts nothing. Dispatch with a status id or full x.com URL.
 on:
   workflow_dispatch:
     inputs:
       status:
         description: "Status id or full x.com/twitter.com URL of the post to read"
         required: true
-  push:
-    branches: ["claude/tweet-from-x-post-5r8j3x"]
-    paths: [".github/workflows/x-read.yml"]
 
 permissions:
   contents: read

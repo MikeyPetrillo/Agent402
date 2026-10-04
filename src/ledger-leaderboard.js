@@ -20,7 +20,7 @@ import { standingBand } from "./standing.js";
 import { rankBy } from "./leaderboard.js";
 import { hostRowHtml, HOST_EXCLUSION_NOTE, wideLabel } from "./host-entry.js";
 
-import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
+import { ORG_SAME_AS } from "./repo-link.js";
 const HTML_ROWS = 12;
 
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
