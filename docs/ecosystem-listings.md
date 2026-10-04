@@ -342,8 +342,8 @@ chain changes).
 ---
 
 Already listed (no action): official MCP Registry (with the hosted remote),
-npm, Coinbase CDP Bazaar discovery (verified 2026-06-16: 64 Agent402 endpoints
-in the public Bazaar index), Glama, mcp.so
+npm, Coinbase CDP Bazaar discovery (our routes are listed in the public Bazaar
+index; count them live rather than from this file), Glama, mcp.so
 (verified 2026-06-21: live at mcp.so/server/agent402).
 Pending review: Cline MCP Marketplace (filed 2026-06-21 as
 cline/mcp-marketplace#1849) - any follow-up copy on that issue should use the
