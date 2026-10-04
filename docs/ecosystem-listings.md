@@ -124,6 +124,8 @@ Coinbase reviews within ~5 business days. Category: **Services/Endpoints**.
 
 ## 3. Smithery (smithery.ai)
 
+**Status: listed** at https://smithery.ai/servers/mike-kq9d/agent402 (checked 2026-10-04). The steps below are kept for reference; do not re-submit.
+
 Smithery auto-scans MCP servers - no PR needed, no `smithery.yaml` required.
 The whole submission is one form post.
 
@@ -200,6 +202,8 @@ tollbooth-gated endpoint paid by an AgentCore agent.
 
 ## 5. mcpservers.org (Awesome MCP Servers - hosted site)
 
+**Status: listed** (search for "agent402" on mcpservers.org, checked 2026-10-04). Do not re-submit.
+
 A curated MCP server site (separate from `punkpeye/awesome-mcp-servers` -
 mcpservers.org maintains its own index). Submission is a single form post
 that takes a GitHub repo URL; no PR, no fork.
@@ -249,6 +253,8 @@ that takes a GitHub repo URL; no PR, no fork.
 
 ## 6. x402scan (x402scan.com) - the explorer featured on solana.com/x402
 
+**Status: listed** (checked 2026-10-04). Do not re-submit.
+
 Merit Systems' x402 ecosystem explorer; solana.com/x402 points buyers here.
 Registration is self-serve and automatic: submit a URL, and if it returns a
 valid x402 payment-required response it is indexed. Our 402s are v2
@@ -273,6 +279,8 @@ Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, Algorand, Rob
 ---
 
 ## 7. awesome-x402 (xpaysh/awesome-x402) - STALE ENTRY, needs 12-chain + The-500 update
+
+**Status: update PR filed** (xpaysh/awesome-x402#1181, open as of 2026-10-04). Do not open another.
 
 We are already listed, but the entry predates the full 12-chain roster and the
 500+ strong catalog. PR a one-word-class fix:
