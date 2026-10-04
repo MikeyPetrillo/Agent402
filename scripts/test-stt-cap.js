@@ -5,17 +5,19 @@
 // live per-minute rate (2026-09-18: the standard tier moved off
 // gpt-4o-mini-transcribe, which OpenAI retires 2027-02-26, onto gpt-transcribe,
 // and its cap dropped 5 -> 4 minutes to stay inside the margin rule). Offline: synthetic WAV buffers, no network.
-import { probeDurationSeconds, assertWithinDurationCap, STT_TIERS, UPSTREAM_USD_PER_MINUTE, STT_MARGIN, STT_TOOLS } from "../src/tools/stt-kit.js";
+import { probeDurationSeconds, assertWithinDurationCap, STT_TIERS, upstreamUsdPerMinute, STT_MARGIN, STT_TOOLS } from "../src/tools/stt-kit.js";
+import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+requireUpstreamCosts("test-stt-cap");
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
 
 // ---- the cap is a margin bound, derived from the model's rate ----
 for (const [slug, tier] of Object.entries(STT_TIERS)) {
-  const rate = UPSTREAM_USD_PER_MINUTE[tier.model];
+  const rate = upstreamUsdPerMinute(tier.model);
   ok(Number.isFinite(rate) && rate > 0, `${slug}: the model it sends (${tier.model}) has a known per-minute rate`);
   const worst = tier.maxMinutes * rate;
-  ok(worst <= STT_MARGIN * tier.priceUsd + 1e-12, `${slug}: worst case ${tier.maxMinutes} min x $${rate}/min = $${worst.toFixed(4)} is under ${STT_MARGIN * 100}% of $${tier.priceUsd} (a 5-min cap on gpt-transcribe would be 75%)`);
+  ok(worst <= STT_MARGIN * tier.priceUsd + 1e-12, `${slug}: worst case at the ${tier.maxMinutes}-min cap is under ${STT_MARGIN * 100}% of $${tier.priceUsd}`);
   const tool = STT_TOOLS.find((t) => t.slug === slug);
   ok(Math.abs(Number(tool.price.replace("$", "")) - tier.priceUsd) < 1e-9, `${slug}: the catalog price string matches the tier price the margin is computed on`);
   ok(new RegExp(`Max ${tier.maxMinutes} minutes`).test(tool.description) && tool.description.includes(tier.model) && tool.discovery.output.example.model === tier.model, `${slug}: description states the ${tier.maxMinutes}-minute cap and the model; the example names the model actually sent`);

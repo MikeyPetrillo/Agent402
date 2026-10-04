@@ -13,7 +13,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const base = process.env.AGENT402_BASE_URL || "http://localhost:3000";
 const dir = mkdtempSync(join(tmpdir(), "a402-oa-sdk-"));
 writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "oa-sdk-check", private: true, type: "module" }));
-execFileSync("npm", ["install", "--silent", "--no-audit", "--no-fund", "@openai/agents@latest"], { cwd: dir, stdio: "inherit" });
+execFileSync("npm", ["install", "--silent", "--ignore-scripts", "--no-audit", "--no-fund", "@openai/agents@latest"], { cwd: dir, stdio: "inherit" });
 copyFileSync(join(here, "index.js"), join(dir, "adapter.mjs"));
 
 const { agent402Tools } = await import(join(dir, "adapter.mjs"));

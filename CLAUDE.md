@@ -64,6 +64,15 @@ LLC: credit the entity, never a personal name.
   `scripts/published-slugs.json` records every route ever published; after adding a tool or
   pack run `node scripts/published-slugs.js --write` (`test-retired-routes.js` fails otherwise,
   and fails when a published route is neither live, key-gated nor retired).
+- **Upstream costs are private.** Model, speech, embedding, media and STT rates, vendor cards
+  (Exa, X), fixed fees and the meter markup live in `src/upstream-costs.js`'s table, loaded
+  from `UPSTREAM_COSTS_JSON` (Railway; Actions secret) or `UPSTREAM_COSTS_FILE`. Never commit a
+  rate, never print one in a CI log, never type one in a test (`scripts/test-upstream-costs.js`
+  scans the shipped trees and scripts). Blank the secret in every step that installs packages
+  (`scripts/test-ci-secretless-install.js`). A drifted rate is a table edit, not a code change.
+  A new key a serving path or a margin test reads goes in `REQUIRED` there, so a table
+  without it reads `partial` on `/api/gateway-status` and the heartbeat pages; add it to
+  `docs/example-upstream-costs.json` (placeholder numbers only) in the same change.
 - Prices quoted in prose are derived from the catalog, never typed
   (`scripts/test-price-prose.js`). Skill-pack prices are generated
   (`node scripts/pack-prices.js --write`).

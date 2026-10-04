@@ -167,6 +167,7 @@ jobs:
           STELLAR_BURNER_SECRET: ${{ secrets.STELLAR_BURNER_SECRET }}
           ALGORAND_BURNER_MNEMONIC: ${{ secrets.ALGORAND_BURNER_MNEMONIC }}
           POW_SECRET: ${{ secrets.POW_SECRET }}
+          UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
         run: |
           if [ -z "$BURNER_KEY" ]; then
             echo "No BURNER_KEY secret — canary cannot run (configure a funded test wallet)."

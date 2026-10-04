@@ -215,6 +215,7 @@ jobs:
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
@@ -818,6 +819,9 @@ jobs:
     # package cannot read them. That is the real F07 exposure; our own test
     # steps are trusted code from this repo.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -857,10 +861,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -951,6 +957,8 @@ jobs:
           # LLM gateway validation (OpenAI-compat tiers, caps, env-gated 503)
           t node scripts/test-llm-gateway.js
           t node scripts/test-llm-kit-spend.js
+          t node scripts/test-upstream-costs.js
+          t node scripts/test-ci-secretless-install.js
           # Gateway settle-failure breaker (per-payer + global refusal before any upstream call, finish-listener outcomes, source pins - offline)
           t node scripts/test-gateway-settle-breaker.js
 
@@ -1029,6 +1037,9 @@ jobs:
     # package cannot read them. That is the real F07 exposure; our own test
     # steps are trusted code from this repo.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -1068,10 +1079,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -1162,6 +1175,9 @@ jobs:
           --health-timeout 3s
           --health-retries 20
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -1195,10 +1211,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -1409,6 +1427,9 @@ jobs:
           --health-timeout 3s
           --health-retries 20
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -1442,10 +1463,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -1692,6 +1715,9 @@ jobs:
     # package cannot read them. That is the real F07 exposure; our own test
     # steps are trusted code from this repo.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -1731,10 +1757,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -1855,6 +1883,9 @@ jobs:
     # package cannot read them. That is the real F07 exposure; our own test
     # steps are trusted code from this repo.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -1894,10 +1925,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -2005,6 +2038,9 @@ jobs:
           --health-timeout 3s
           --health-retries 20
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -2038,10 +2074,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -2144,6 +2182,9 @@ jobs:
           --health-timeout 3s
           --health-retries 20
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -2177,10 +2218,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -2384,6 +2427,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -2419,10 +2465,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -2877,6 +2925,9 @@ jobs:
     # regression. Prod is not in-memory: REDIS_URL is set there, and the shared
     # limiter FAILS CLOSED, so a client regression refuses trials.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -2916,10 +2967,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       - name: Start server in free mode
         run: |
@@ -3090,6 +3143,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -3123,10 +3179,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       - name: Deep security audit (payment gate + PoW replay/slug-bind/tamper + SSRF + attribution; boots paid-mode)
         # No POW_SECRET here, on purpose: the audit only talks to the server it
@@ -3149,6 +3207,14 @@ jobs:
           exit $rc
 
       - name: Adapter tests (openai-tools + anthropic-tools + ai-sdk + langchain + openai-agents + llamaindex + strands + google-adk + langchain-py)
+        # Installs framework packages from the registry: no secret in this env.
+        env:
+          UPSTREAM_COSTS_JSON: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: |
           X402_SYNC_ON_START=false FREE_MODE=true PORT=3091 node src/server.js > /tmp/a402-test.log 2>&1 &
           ADAPTER_PID=$!
@@ -3160,7 +3226,7 @@ jobs:
           # spec path (no peer install needed); peer wrappers are checked in
           # consumers' projects via optional peerDeps.
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/openai-tools/test.js
-          ( cd adapters/anthropic-tools && npm install ../../client --no-save --silent )
+          ( cd adapters/anthropic-tools && npm install ../../client --no-save --silent --ignore-scripts )
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/anthropic-tools/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/ai-sdk/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/langchain/test.js
@@ -3346,6 +3412,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -3379,10 +3448,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # Moved here from test-unit-b (2026-08-25 rebalance): self-booting suites
       # that need no shared server; test-unit-b was the next-slowest lane.
@@ -3432,6 +3503,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -3467,10 +3541,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # Chromium is ~150 MB from Playwright's CDN plus an apt round for fonts,
       # 30 s on a good day and the step that stalled two runs for 28 min on a
@@ -3619,6 +3695,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -3652,10 +3731,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # Chromium is ~150 MB from Playwright's CDN plus an apt round for fonts,
       # 30 s on a good day and the step that stalled two runs for 28 min on a
@@ -3879,6 +3960,9 @@ jobs:
     # regression. Prod is not in-memory: REDIS_URL is set there, and the shared
     # limiter FAILS CLOSED, so a client regression refuses trials.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -3909,10 +3993,12 @@ jobs:
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
@@ -4060,6 +4146,9 @@ jobs:
     # regression. Prod is not in-memory: REDIS_URL is set there, and the shared
     # limiter FAILS CLOSED, so a client regression refuses trials.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -4090,10 +4179,12 @@ jobs:
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
 
       # A free-mode server for the link-integrity sweep below. This lane had
@@ -4191,6 +4282,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -4215,10 +4309,12 @@ jobs:
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
 
       # A free-mode server for the link-integrity sweep below. This lane had
@@ -4380,7 +4476,7 @@ jobs:
       - name: Gate agent402-anthropic-tools (tests run with NO npm token in env)
         run: |
           # Install agent402-client locally for the test (same self-bootstrap as openai-tools/test.js).
-          ( cd adapters/anthropic-tools && npm install ../../client --no-save --silent )
+          ( cd adapters/anthropic-tools && npm install ../../client --no-save --silent --ignore-scripts )
           AGENT402_BASE_URL=http://127.0.0.1:3090 node adapters/anthropic-tools/test.js
 
       - name: Gate agent402-ai-sdk (tests run with NO npm token in env)

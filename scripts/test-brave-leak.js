@@ -234,7 +234,7 @@ ok(!/caller = "unknown"/.test(searchSrc),
 //    EXA_KEY is not a GitHub Actions secret, so CI cannot spend it. That is an
 //    accident of configuration, not a guarantee - the day somebody adds the
 //    secret (to run a keyed corpus pass in CI, say) the sweeps would start
-//    buying $0.007 searches on every push with nothing to stop them.
+//    buying searches on every push with nothing to stop them.
 //
 //    So: the three Exa slugs must stay in METERED_SLUGS, which is what excludes
 //    them from BOTH catalog sweeps. If a future change lists them for the

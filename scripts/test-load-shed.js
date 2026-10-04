@@ -52,7 +52,10 @@ try {
   const alias = await fetch(`${base}/api/hash`, { ...from("203.0.113.5", { "payment-signature": "x".repeat(40) }) });
   ok(alias.status !== 503, `...through the method alias too (GET on a POST tool: ${alias.status})`);
   const gw = await fetch(`${base}/v1/metered/v1/messages`, { method: "POST", ...from("203.0.113.5", { "content-type": "application/json", authorization: "Bearer a402_" + "k".repeat(24) }), body: "{}" });
-  ok(gw.status !== 503, `a payment-bearing /v1 gateway call (SDK path alias) is not shed (${gw.status})`);
+  // Without the private cost table the metered tier itself answers 503
+  // (src/upstream-costs.js); that is a refusal by the route, not a shed.
+  const gwBody = gw.status === 503 ? await gw.text() : "";
+  ok(gw.status !== 503 || /metered tier is temporarily unavailable/.test(gwBody), `a payment-bearing /v1 gateway call (SDK path alias) is not shed (${gw.status})`);
   const forgedFree = await fetch(`${base}/api/find?q=hash`, from("203.0.113.5", { "payment-signature": "x".repeat(40) }));
   ok(forgedFree.status === 503, "a payment header on a FREE route buys nothing: still shed");
   const chainAlias = await fetch(`${base}/api/chain/eth_blocknumber`, from("203.0.113.5"));
@@ -71,7 +74,7 @@ try {
   const perf = await op.json();
   ok(op.status === 200 && perf.shed.shed >= 2, `operator reads are never shed, and the shed count is visible (${JSON.stringify(perf.shed)})`);
   const sh = await (await fetch(`${base}/__operator/serving-health.json`, from("203.0.113.5", { authorization: "Bearer shed-test-operator-token-0123456789" }))).json();
-  ok(["ok", "degraded"].includes(sh.status) && typeof sh.responses1h.total === "number" && sh.responses1h.s5xx === 0 && sh.responses1h.paid >= 1, `serving health counts responses; shed 503s are not counted as 5xx; paid calls are counted (${JSON.stringify(sh.responses1h)})`);
+  ok(["ok", "degraded"].includes(sh.status) && typeof sh.responses1h.total === "number" && sh.responses1h.s5xx === (gw.status === 503 ? 1 : 0) && sh.responses1h.paid >= 1, `serving health counts responses; shed 503s are not counted as 5xx (a metered refusal without the cost table is); paid calls are counted (${JSON.stringify(sh.responses1h)})`);
   ok(Array.isArray(sh.reasons) && sh.thresholds && sh.loop && "stalls1h" in sh.loop, "the verdict carries its reasons, thresholds and loop counts");
   const unauth = await fetch(`${base}/__operator/serving-health.json`, from("203.0.113.5"));
   ok(unauth.status === 404, "serving health is operator-only");

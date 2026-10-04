@@ -1,0 +1,19 @@
+{
+  "_readme": "FORMAT EXAMPLE ONLY. Every number here is a placeholder, not a real or suggested rate. Copy it outside the repo, replace every value with your own providers' list prices, and load it with UPSTREAM_COSTS_FILE=/path/to/file or UPSTREAM_COSTS_JSON (raw JSON or base64). Units: models in USD per 1M tokens (longest prefix wins), speech in USD per character, embeddings in USD per 1M input tokens, sttPerMinute in USD per audio minute, everything else in USD per call or unit. scripts/test-upstream-costs.js keeps this file in step with the loader's required keys.",
+  "models": [
+    ["openai/", { "prompt": 1, "completion": 2 }],
+    ["anthropic/", { "prompt": 1, "completion": 2 }],
+    ["google/", { "prompt": 1, "completion": 2 }]
+  ],
+  "speech": { "your/speech-model": 1 },
+  "fees": { "webSearchPerUse": 1, "groundedPerCall": 1, "rerankPerUnit": 1 },
+  "embeddings": { "text-embedding-3-small": 1 },
+  "openai": { "gpt-4o-mini": { "prompt": 1, "cached": 1, "completion": 2 } },
+  "sttPerMinute": { "gpt-transcribe": 1 },
+  "media": { "your/image-model": { "worstCaseUsd": 1, "listedMaxUsd": 1 } },
+  "meter": { "markup": 2 },
+  "vendor": {
+    "exa": { "search": 1, "instant": 1, "answer": 1, "content": 1 },
+    "x": { "postRead": 1, "userRead": 1 }
+  }
+}
