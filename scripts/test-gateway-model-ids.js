@@ -15,11 +15,14 @@
 // silent green that let every one of those ship.
 import { readFileSync } from "node:fs";
 import {
-  TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, MODEL_COST, FLEX_MODELS, REASONING_MODELS, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
+  TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, FLEX_MODELS, REASONING_MODELS, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
   IMAGES_MODEL,
 } from "../src/tools/llm-gateway-kit.js";
 import { IMAGE_TIERS } from "../src/tools/llm-images-fast-kit.js";
 import { PRIMARY_PREFERENCE } from "../openclaw/models.js";
+import { upstreamCosts } from "../src/upstream-costs.js";
+import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+requireUpstreamCosts("test-gateway-model-ids");
 
 // STEALTH listings (stealth/ox-alpha) are the ONE id class this guard must not
 // fail on. A cloaked model is published under a pseudonym while a lab collects
@@ -32,6 +35,8 @@ import { PRIMARY_PREFERENCE } from "../openclaw/models.js";
 const STEALTH = new Set(STEALTH_MODEL_IDS);
 const isStealth = (p) => STEALTH.has(p);
 const warn = (m) => console.log(`WARN - ${m}`);
+// CI logs are public: name the model only. Run locally for the full detail.
+const brief = (short, full) => (process.env.CI ? short : full);
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -109,7 +114,7 @@ for (const [q, byCat] of Object.entries(AUTO_RANKINGS)) {
 }
 // 3. TTS chain: every link is in the live speech list.
 for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link ${link.id} is live`);
-// 1b. Every speech row's costPerChar is at or above the DEAREST live endpoint
+// 1b. Every speech link's private per-char row is at or above the DEAREST live endpoint
 //     for that model, not the catalog headline. TTS bills per INPUT char, so
 //     this row IS the worst-case bound the $0.06 chain and the $0.005 lite tier
 //     are priced under, and the headline can be any one endpoint, not the
@@ -128,9 +133,11 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
     if (Number.isFinite(headline)) prices.push(headline);
     if (!prices.length) continue; // liveness already asserted above; an unpriced row is not an under-count
     const live = Math.max(...prices);
-    if (live > link.costPerChar) under.push(`${link.id}: row ${link.costPerChar} < dearest live endpoint ${live}/char (${prices.length} price(s) read)`);
+    const row = upstreamCosts().speech[link.id];
+    if (row == null) { under.push(`${link.id} (no private speech row)`); continue; }
+    if (live > row) under.push(brief(link.id, `${link.id}: row ${row} < dearest live endpoint ${live}/char (${prices.length} price(s) read)`));
   }
-  ok(under.length === 0, `no speech costPerChar row is under its dearest live endpoint price${under.length ? `:\n    ${under.join("\n    ")}` : ""}`);
+  ok(under.length === 0, `no speech row is under its dearest live endpoint price${under.length ? `:\n    ${under.join("\n    ")}` : ""}`);
 }
 // 4. Price floor: for every live model a tier admits, MODEL_COST must not price
 //    it UNDER the DEAREST endpoint a default-tier call can be routed to, prompt
@@ -187,6 +194,9 @@ const admitted = models.filter((m) => {
   // refuseCostVariants on every wire, so their live prices bound nothing we
   // serve (qwen3.8-2.4t-a95b:batch listed ABOVE its own base model, 2026-08-28).
   if (/:(batch|online)$/.test(m.id)) return false;
+  // A retiring id is never sent upstream as itself: canonicalModel serves its
+  // successor, priced by the successor's row, so its own listing bounds nothing.
+  if (Object.hasOwn(RETIRING_MODELS, m.id.split(":")[0])) return false;
   return !!tierFor(m.id);
 });
 const under = [];
@@ -224,18 +234,18 @@ let endpointReads = 0, headlineOnly = 0, priorityExcluded = 0, priorityChecked =
       }
       if (!prices.length && !priorityPrices.length) continue;
       const table = costFor(m.id);
-      if (!table) { under.push(`${m.id} (no MODEL_COST entry; dearest routable endpoint $${Math.max(...prices.map((e) => e.p))}/$${Math.max(...prices.map((e) => e.c))})`); continue; }
+      if (!table) { under.push(brief(`${m.id} (no MODEL_COST entry)`, `${m.id} (no MODEL_COST entry; dearest routable endpoint $${Math.max(...prices.map((e) => e.p))}/$${Math.max(...prices.map((e) => e.c))})`)); continue; }
       if (prices.length) {
         const p = Math.max(...prices.map((e) => e.p)), c = Math.max(...prices.map((e) => e.c));
         if (p > table.prompt + 1e-9 || c > table.completion + 1e-9) {
           const dearP = prices.find((e) => e.p === p)?.tag, dearC = prices.find((e) => e.c === c)?.tag;
-          under.push(`${m.id} dearest routable endpoint $${p} (${dearP}) / $${c} (${dearC}) vs table $${table.prompt}/$${table.completion} (${slug}; ${prices.length} endpoint price(s) read)`);
+          under.push(brief(`${m.id} (${slug})`, `${m.id} dearest routable endpoint $${p} (${dearP}) / $${c} (${dearC}) vs table $${table.prompt}/$${table.completion} (${slug}; ${prices.length} endpoint price(s) read)`));
         }
       }
       for (const e of priorityPrices) {
         priorityChecked++;
         if (e.p > table.prompt * PRIORITY_PRICE_FACTOR + 1e-9 || e.c > table.completion * PRIORITY_PRICE_FACTOR + 1e-9) {
-          under.push(`${m.id} PRIORITY endpoint ${e.tag} $${e.p}/$${e.c} over ${PRIORITY_PRICE_FACTOR}x the table row $${table.prompt}/$${table.completion} (${slug} sells service_tier priority at that factor)`);
+          under.push(brief(`${m.id} priority (${slug})`, `${m.id} PRIORITY endpoint ${e.tag} $${e.p}/$${e.c} over ${PRIORITY_PRICE_FACTOR}x the table row $${table.prompt}/$${table.completion} (${slug} sells service_tier priority at that factor)`));
         }
       }
       }

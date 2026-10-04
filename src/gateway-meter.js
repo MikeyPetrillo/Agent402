@@ -1,4 +1,5 @@
 import { paymentSchemeOf } from "./payer.js";
+import { upstreamCosts } from "./upstream-costs.js";
 
 // METERED SETTLEMENT for the LLM gateway: bill what a call actually cost,
 // not the flat tier price.
@@ -12,7 +13,7 @@ import { paymentSchemeOf } from "./payer.js";
 // seller names the settled amount afterwards, never above it. So the tier price
 // becomes a guaranteed maximum and the bill becomes the meter.
 //
-// The settled amount is upstream x METER_MARKUP, floored (see below). How much
+// The settled amount is upstream x the markup, floored (see below). How much
 // cheaper that is than the flat tier depends on METER_MIN_SETTLE_USD: the
 // facilitator refuses to settle small amounts, so the real multiple is
 // ceiling / max(floor, upstream x markup), per tier. Read any multiple quoted
@@ -21,7 +22,12 @@ import { paymentSchemeOf } from "./payer.js";
 //
 // What the buyer gets is access without credentials and a hard per-call
 // ceiling (see below), not a lower token price.
-export const METER_MARKUP = 1.15;
+// The markup is private (src/upstream-costs.js, `meter.markup`, never
+// committed). Without it nothing meters: the buyer settles the ceiling.
+export function meterMarkup() {
+  const m = upstreamCosts().meter?.markup;
+  return Number.isFinite(m) && m >= 1 ? m : null;
+}
 // Every request carries a fixed overhead no percentage of a tiny call can cover
 // (the paywall, the settle, egress). This floor is what a request is worth
 // before any model runs.
@@ -41,7 +47,7 @@ export const METER_FLOOR_USD = 0.0002;
 //     500 atomic  ($0.0005)   refused, amount_too_low
 //     750 atomic  ($0.00075)  refused, amount_too_low
 //   1,000 atomic  ($0.001)    SETTLED
-//   1,150 / 1,250 / 1,500 / 2,000 / 2,500 / 5,000 / 10,000  all SETTLED
+//   1,250 / 1,500 / 2,000 / 2,500 / 5,000 / 10,000  all SETTLED
 //
 // So the floor is in (750, 1000] and $0.001 is proven good - the same minimum
 // our `exact` routes have always settled at, which is the likely explanation:
@@ -52,9 +58,8 @@ export const METER_FLOOR_USD = 0.0002;
 // behaviour that only a real settle reveals.
 //
 // A correction, because it was briefly recorded as fact: the first failure was
-// reported here (and in a commit message) as a refusal of 1,150 atomic units.
-// It was not. That run proposed 200 - the old METER_FLOOR_USD - and 1,150 was a
-// number I derived from the markup rather than read from the wire. 1,150 in
+// once reported as a refusal of an amount derived from the markup. It was not.
+// That run proposed 200 - the old METER_FLOOR_USD - and the derived amount in
 // fact settles. The lesson is the one this file keeps relearning: a figure that
 // was computed is not a figure that was observed.
 //
@@ -93,9 +98,11 @@ export function meteredUsd({ upstreamUsd, ceilingUsd }) {
   // calls where we do not know what we spent.
   if (typeof upstreamUsd !== "number" || !Number.isFinite(upstreamUsd) || upstreamUsd < 0) return null;
   const up = upstreamUsd;
+  const markup = meterMarkup();
+  if (markup == null) return null;
   // Our floor (what a request is worth) and the rail's floor (what it will
   // accept) are different things and both apply.
-  const metered = Math.max(METER_FLOOR_USD, METER_MIN_SETTLE_USD, up * METER_MARKUP);
+  const metered = Math.max(METER_FLOOR_USD, METER_MIN_SETTLE_USD, up * markup);
   // Never above what the buyer authorized. The margin clamp already bounds
   // upstream well under the tier price, so this cap should never bind - it is here because "should never" is not
   // an argument to skip the check on something that moves money.

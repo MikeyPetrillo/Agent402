@@ -44,6 +44,8 @@ import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+requireUpstreamCosts("test-hangup-settlement");
 import { join } from "node:path";
 import express from "express";
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, CLIENT_GONE_TEXT } from "../src/hangup-settlement.js";

@@ -21,7 +21,6 @@ process.env.POSTHOG_TEST_CAPTURE = "1";
 
 const {
   TIERS,
-  MODEL_COST,
   MARGIN,
   worstCaseUpstreamCost,
   clampToMargin,
@@ -35,9 +34,13 @@ const {
   IMAGES_MAX_PROMPT_CHARS,
   meteredQuoteUsd,
 } = await import("../src/tools/llm-gateway-kit.js");
-const { METER_MARKUP } = await import("../src/gateway-meter.js");
+const { meterMarkup } = await import("../src/gateway-meter.js");
+const METER_MARKUP = meterMarkup();
 const { countTokens } = await import("gpt-tokenizer/model/gpt-4o");
-const { assertWithinDurationCap, probeDurationSeconds, STT_TIERS, UPSTREAM_USD_PER_MINUTE } = await import("../src/tools/stt-kit.js");
+const { assertWithinDurationCap, probeDurationSeconds, STT_TIERS, upstreamUsdPerMinute } = await import("../src/tools/stt-kit.js");
+const { upstreamCosts } = await import("../src/upstream-costs.js");
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+requireUpstreamCosts("test-pricing-margin");
 const { capturePostHogToolGone, _testEventsForTest, _flushPaywallRollupForTest } = await import("../src/posthog.js");
 
 let passed = 0, failed = 0;
@@ -147,7 +150,7 @@ console.log("\n# failover chain — every candidate model re-clamped at its own 
   ok(res.model === "deepseek/deepseek-chat", `failover still serves the buyer (served ${res.model})`);
   ok(outbounds[0].model === "mistralai/ministral-8b-2512" && outbounds[0].max_tokens === 768, "primary model keeps its own clamp (768 out — no behavior change)");
   const fb = outbounds[1];
-  ok(fb.model === "deepseek/deepseek-chat" && fb.max_tokens < 768, `fallback outbound is re-clamped at its own cost (max_tokens ${fb.max_tokens} < 768)`);
+  ok(fb.model === "deepseek/deepseek-chat" && fb.max_tokens < 768, "fallback outbound is re-clamped at its own cost (max_tokens below 768)");
   const fbWc = worstCaseUpstreamCost(fb, nano, 0);
   ok(fbWc.totalUsd < nano.price, `re-clamped fallback worst-case < price $${nano.price}`);
   globalThis.fetch = realFetch;
@@ -197,8 +200,8 @@ console.log("\n# /v1/embeddings — token-density margin clamp");
   // 2026-08-19) - the bound is structural, so the row is the measured unit price.
   {
     const { RERANK_PRICE, validateRerankRequest } = await import("../src/tools/llm-gateway-kit.js");
-    const RERANK_UNIT_USD = 0.001;
-    ok(RERANK_UNIT_USD <= RERANK_PRICE * MARGIN, `rerank: one search unit within the margin bound of $${RERANK_PRICE}`);
+    const RERANK_UNIT_USD = upstreamCosts().fees.rerankPerUnit;
+    ok(Number.isFinite(RERANK_UNIT_USD) && RERANK_UNIT_USD <= RERANK_PRICE * MARGIN, `rerank: one search unit within the margin bound of $${RERANK_PRICE}`);
     const maxed = validateRerankRequest({ query: "q".repeat(500), documents: Array.from({ length: 25 }, () => "x".repeat(1600)) });
     ok(maxed.documents.length <= 100 && maxed.documents.every((d) => d.length <= 1600), "rerank: the largest accepted body is still one Cohere search unit (<=100 docs, short docs)");
     table.push({ tier: "v1-rerank", price: RERANK_PRICE, worst: RERANK_UNIT_USD, model: "cohere/rerank-v3.5 (1 search unit)" });
@@ -221,13 +224,14 @@ console.log("\n# /v1/embeddings — token-density margin clamp");
 //    within MARGIN x the route price, like the fast/pro image tiers.
 console.log("\n# /v1/images/generations - per-link bounds");
 {
-  const { IMAGE_TIERS, withinMargin } = await import("../src/tools/llm-images-fast-kit.js");
+  const { IMAGE_TIERS, withinMargin, linkBounds } = await import("../src/tools/llm-images-fast-kit.js");
   const tier = IMAGE_TIERS["v1-images"];
   ok(tier && tier.price === IMAGES_PRICE && tier.chain.length >= 1, `images route price comes from the gateway constant ($${IMAGES_PRICE})`);
   for (const link of tier.chain) {
-    ok(withinMargin(IMAGES_PRICE, link.worstCaseUsd) && link.listed?.maxCostUsd > 0 && link.provider, `images link ${link.model}: bound $${link.worstCaseUsd} within ${MARGIN} x $${IMAGES_PRICE}, provider-pinned, live price re-checked`);
+    const b = linkBounds(link);
+    ok(b && withinMargin(IMAGES_PRICE, b.worstCaseUsd) && b.listedMaxUsd > 0 && link.provider, `images link ${link.model}: bound within ${MARGIN} x $${IMAGES_PRICE}, provider-pinned, live price re-checked`);
   }
-  const worst = Math.max(...tier.chain.map((l) => l.worstCaseUsd));
+  const worst = Math.max(...tier.chain.map((l) => linkBounds(l)?.worstCaseUsd ?? Infinity));
   table.push({ tier: "v1-images", price: IMAGES_PRICE, worst, model: tier.chain[0].model });
 
   // Cap-before-spend: over-cap prompt throws with zero fetches.
@@ -258,7 +262,7 @@ console.log("\n# STT — cap-before-spend (local duration probe)");
   const realFetch = globalThis.fetch;
   let fetches = 0;
   globalThis.fetch = async () => { fetches++; throw new Error("unexpected upstream fetch"); };
-  // Caps and rates are READ from the kit (STT_TIERS / UPSTREAM_USD_PER_MINUTE),
+  // Caps and rates are READ from the kit (STT_TIERS / upstreamUsdPerMinute),
   // never retyped here: this block once carried a stale cap and rate for the standard
   // tier after the kit had moved to gpt-transcribe at 4 min (2026-09-18), and a
   // hand copy of the truth is how a margin guard goes stale in the safe-looking
@@ -280,7 +284,7 @@ console.log("\n# STT — cap-before-spend (local duration probe)");
   // Margin rows from the enforced caps x OpenAI's published per-minute rate for
   // the model each tier actually sends (both gpt-transcribe since 2026-09-18).
   for (const [tier, t] of Object.entries(STT_TIERS)) {
-    const rate = UPSTREAM_USD_PER_MINUTE[t.model];
+    const rate = upstreamUsdPerMinute(t.model);
     ok(Number.isFinite(rate), `${tier}: per-minute rate known for ${t.model}`);
     const r = { tier, price: t.priceUsd, worst: t.maxMinutes * rate };
     ok(r.worst <= MARGIN * r.price + 1e-12, `${r.tier} worst-case within the margin bound of $${r.price}`);

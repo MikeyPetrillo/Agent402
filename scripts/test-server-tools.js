@@ -19,6 +19,9 @@ const {
   TIERS, MARGIN, validateRequest, worstCaseUpstreamCost, serverToolWorstCase, serverToolsIn,
   stopServerToolsFor, SERVER_TOOL_POLICY, modelsList, promptCacheKey, LLM_GATEWAY_TOOLS,
 } = await import("../src/tools/llm-gateway-kit.js");
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+requireUpstreamCosts("test-server-tools");
+const { upstreamCosts } = await import("../src/upstream-costs.js");
 const { _testEventsForTest } = await import("../src/posthog.js");
 
 let pass = 0, fail = 0;
@@ -49,7 +52,7 @@ for (const [slug, tier] of SELLING) {
   // engine is the dollar decision: "auto" falls back to NATIVE provider search,
   // which is priced by the provider and forwards max_uses only to Anthropic.
   ok(search.parameters.engine === "exa", `${slug} web_search engine pinned to exa (never auto/native)`);
-  ok(search.parameters.mode === "auto", `${slug} web_search mode pinned to auto ($0.007; deep-reasoning is $0.015)`);
+  ok(search.parameters.mode === "auto", `${slug} web_search mode pinned to auto (deep-reasoning is dearer)`);
   ok(search.parameters.max_uses === lim.max_uses, `${slug} web_search max_uses pinned to ${lim.max_uses}`);
   ok(search.parameters.max_characters === lim.max_characters, `${slug} web_search max_characters pinned (the token bound)`);
   ok(search.parameters.max_total_results === lim.max_uses * lim.max_results, `${slug} web_search max_total_results derived, not buyer-set`);
@@ -77,7 +80,7 @@ for (const [slug] of SELLING) {
   throws(() => validateRequest({ model, messages: msg(), tools: [{ ...WS, parameters: { engine: "native" } }] }, slug),
     "not accepted on server tool", `${slug} buyer engine:"native" refused (it changes the price)`);
   throws(() => validateRequest({ model, messages: msg(), tools: [{ ...WS, parameters: { mode: "deep-reasoning" } }] }, slug),
-    "not accepted on server tool", `${slug} buyer mode:"deep-reasoning" refused ($0.015 vs $0.007)`);
+    "not accepted on server tool", `${slug} buyer mode:"deep-reasoning" refused (a dearer mode)`);
   throws(() => validateRequest({ model, messages: msg(), tools: [{ ...WS, parameters: { max_results: 25, max_characters: 100000 } }] }, slug),
     "not accepted on server tool", `${slug} buyer result/character widening refused`);
   throws(() => validateRequest({ model, messages: msg(), tools: [{ ...WF, parameters: { max_content_tokens: 100000 } }] }, slug),
@@ -143,10 +146,10 @@ for (const [slug, tier] of NOT_SELLING) {
   throws(() => validateRequest(body, slug), "/v1/pro/chat/completions",
     `${slug} refuses web_search and names a route that sells it`);
 }
-// The economics behind that refusal, stated as an assertion: one Exa search is
-// $0.007, so the budget tiers cannot carry even a single step.
+// The economics behind that refusal, stated as an assertion: one search costs
+// more than the budget tiers can carry for even a single step.
 const searchFee = SERVER_TOOL_POLICY["openrouter:web_search"].feeUsdPerUse;
-ok(searchFee === 0.007, "web_search is priced at the verified Exa auto rate ($0.007/request)");
+ok(searchFee > 0 && searchFee === upstreamCosts().fees.webSearchPerUse, "web_search is priced at the private table's per-search fee");
 for (const [slug, tier] of NOT_SELLING) {
   if (tier.price === undefined || tier.price >= 0.1) continue;
   ok(searchFee * 2 > tier.price * MARGIN || tier.price * MARGIN - searchFee < 0.02,
@@ -166,13 +169,13 @@ for (const [slug, tier] of SELLING) {
   ok(st.turns === tier.serverTools.maxSteps + 1,
     `${slug} loop is priced at maxSteps+1 model turns (${st.turns}) - the documented "one final turn" after a stop condition`);
   ok(wcLoop.fixedUsd >= tier.serverTools.tools["openrouter:web_search"].max_uses * searchFee,
-    `${slug} the per-use execution fee is inside fixedUsd (${usd(wcLoop.fixedUsd)})`);
+    `${slug} the per-use execution fee is inside fixedUsd`);
   ok(st.injectedTokens > 0 && wcLoop.inTokens > wcPlain.inTokens,
     `${slug} tool results are priced as input tokens on every turn (${wcPlain.inTokens} -> ${wcLoop.inTokens})`);
   // THE invariant: worst case including server-tool spend is inside the price.
-  ok(wcLoop.totalUsd < tier.price, `${slug} loop worst-case ${usd(wcLoop.totalUsd)} < price $${tier.price}`);
-  ok(wcLoop.totalUsd <= tier.price * MARGIN + 1e-9, `${slug} loop worst-case ${usd(wcLoop.totalUsd)} <= ${MARGIN * 100}% bound ${usd(tier.price * MARGIN)}`);
-  ok(loop.max_tokens <= plain.max_tokens, `${slug} a loop never RAISES the output cap (${plain.max_tokens} -> ${loop.max_tokens})`);
+  ok(wcLoop.totalUsd < tier.price, `${slug} loop worst-case < price $${tier.price}`);
+  ok(wcLoop.totalUsd <= tier.price * MARGIN + 1e-9, `${slug} loop worst-case <= ${MARGIN * 100}% of the price`);
+  ok(loop.max_tokens <= plain.max_tokens, `${slug} a loop never RAISES the output cap`);
 
   // Exhaustive over the tier's own models: never over the price, and a model
   // too pricey to afford a loop is refused PRE-spend rather than served short.
@@ -188,7 +191,7 @@ for (const [slug, tier] of SELLING) {
       try { v = validateRequest({ ...req, tools: [WS, WF, DT] }, slug); }
       catch (e) { if (e.statusCode !== 400) throw e; refused++; continue; }
       const wc = worstCaseUpstreamCost(v, tier, 0);
-      if (wc.totalUsd >= tier.price) { ok(false, `${slug} ${m} loop worst-case ${usd(wc.totalUsd)} >= price $${tier.price}`); continue; }
+      if (wc.totalUsd >= tier.price) { ok(false, `${slug} ${m} loop worst-case >= price $${tier.price}`); continue; }
       if (v.max_tokens < validateRequest(req, slug).max_tokens) shrank++;
       served++;
     }
