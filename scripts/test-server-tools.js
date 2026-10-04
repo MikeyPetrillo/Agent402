@@ -168,13 +168,13 @@ for (const [slug, tier] of SELLING) {
   ok(st.turns === tier.serverTools.maxSteps + 1,
     `${slug} loop is priced at maxSteps+1 model turns (${st.turns}) - the documented "one final turn" after a stop condition`);
   ok(wcLoop.fixedUsd >= tier.serverTools.tools["openrouter:web_search"].max_uses * searchFee,
-    `${slug} the per-use execution fee is inside fixedUsd (${usd(wcLoop.fixedUsd)})`);
+    `${slug} the per-use execution fee is inside fixedUsd`);
   ok(st.injectedTokens > 0 && wcLoop.inTokens > wcPlain.inTokens,
     `${slug} tool results are priced as input tokens on every turn (${wcPlain.inTokens} -> ${wcLoop.inTokens})`);
   // THE invariant: worst case including server-tool spend is inside the price.
-  ok(wcLoop.totalUsd < tier.price, `${slug} loop worst-case ${usd(wcLoop.totalUsd)} < price $${tier.price}`);
-  ok(wcLoop.totalUsd <= tier.price * MARGIN + 1e-9, `${slug} loop worst-case ${usd(wcLoop.totalUsd)} <= ${MARGIN * 100}% bound ${usd(tier.price * MARGIN)}`);
-  ok(loop.max_tokens <= plain.max_tokens, `${slug} a loop never RAISES the output cap (${plain.max_tokens} -> ${loop.max_tokens})`);
+  ok(wcLoop.totalUsd < tier.price, `${slug} loop worst-case < price $${tier.price}`);
+  ok(wcLoop.totalUsd <= tier.price * MARGIN + 1e-9, `${slug} loop worst-case <= ${MARGIN * 100}% of the price`);
+  ok(loop.max_tokens <= plain.max_tokens, `${slug} a loop never RAISES the output cap`);
 
   // Exhaustive over the tier's own models: never over the price, and a model
   // too pricey to afford a loop is refused PRE-spend rather than served short.
@@ -190,7 +190,7 @@ for (const [slug, tier] of SELLING) {
       try { v = validateRequest({ ...req, tools: [WS, WF, DT] }, slug); }
       catch (e) { if (e.statusCode !== 400) throw e; refused++; continue; }
       const wc = worstCaseUpstreamCost(v, tier, 0);
-      if (wc.totalUsd >= tier.price) { ok(false, `${slug} ${m} loop worst-case ${usd(wc.totalUsd)} >= price $${tier.price}`); continue; }
+      if (wc.totalUsd >= tier.price) { ok(false, `${slug} ${m} loop worst-case >= price $${tier.price}`); continue; }
       if (v.max_tokens < validateRequest(req, slug).max_tokens) shrank++;
       served++;
     }

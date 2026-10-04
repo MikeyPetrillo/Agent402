@@ -64,13 +64,14 @@ ok(warns.length === 1 && !/not json/.test(warns[0]), "the warning names no value
 delete process.env.UPSTREAM_COSTS_JSON;
 U.setUpstreamCostsForTest(null);
 
-// ---- no upstream rate is committed: scan src/ for the shapes the tables had ----
+// ---- no upstream rate is committed: scan the shipped trees for the shapes the tables had ----
 {
   const { readdirSync, readFileSync, statSync } = await import("node:fs");
   const { join } = await import("node:path");
   const files = [];
-  const walk = (d) => { for (const n of readdirSync(d)) { const f = join(d, n); if (statSync(f).isDirectory()) walk(f); else if (f.endsWith(".js")) files.push(f); } };
-  walk(new URL("../src", import.meta.url).pathname);
+  const walk = (d) => { for (const n of readdirSync(d)) { if (n === "node_modules" || n.startsWith(".")) continue; const f = join(d, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(js|mjs|md|json)$/.test(f)) files.push(f); } };
+  const root = new URL("..", import.meta.url).pathname;
+  for (const d of ["src", "wiki", "docs", "openclaw", "mcp", "client", "adapters", "tollbooth", "workers"]) { try { if (statSync(join(root, d)).isDirectory()) walk(join(root, d)); } catch { /* absent */ } }
   const SHAPES = [
     [/\{ ?prompt: ?[0-9.]+, ?(cached: ?[0-9.]+, ?)?completion: ?[0-9.]+ ?\}/, (l) => !/maxPrice|max_price/.test(l)], // a model rate row (tier caps are ours)
     [/costPerChar: ?[0-9.]/, () => true],
@@ -78,13 +79,15 @@ U.setUpstreamCostsForTest(null);
     [/feeUsdPerUse: ?0\.[0-9]*[1-9]/, () => true], // a non-zero fee; zero means "no fee"
     [/fixedUpstreamUsd: ?[0-9.]/, () => true],
     [/METER_MARKUP ?= ?[0-9]/, () => true],
+    [/(usage|price|cost|quote|upstream)[^.]{0,60}\b(times|x|×) ?1\.\d{1,3}\b|\b(times|x|×) ?1\.\d{1,3}\b[^.]{0,80}(markup|usage|floor)|\bmarkup (of |is |= ?)?1\.\d+/i, () => true], // a written-out markup
   ];
   const hits = [];
   for (const f of files) {
     const lines = readFileSync(f, "utf8").split("\n");
-    lines.forEach((l, i) => { for (const [re, keep] of SHAPES) if (re.test(l) && keep(l)) hits.push(`${f.split("/src/")[1]}:${i + 1}`); });
+    lines.forEach((l, i) => { for (const [re, keep] of SHAPES) if (re.test(l) && keep(l)) hits.push(`${f.slice(root.length)}:${i + 1}`); });
   }
-  ok(hits.length === 0, `no upstream rate literal under src/ (the table is private)${hits.length ? `: ${hits.slice(0, 10).join(", ")}` : ""}`);
+  ok(files.length > 100, `the scan read the shipped trees (${files.length} files) - a handful would mean it is blind`);
+  ok(hits.length === 0, `no upstream rate literal in the shipped trees (the table is private)${hits.length ? `: ${hits.slice(0, 10).join(", ")}` : ""}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

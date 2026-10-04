@@ -720,7 +720,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const { meteredHintFor } = await import("../src/tools/llm-gateway-kit.js");
   const norm = (chars, mt, tier = "v1-chat", model = "gpt-4o-mini") => validateRequest({ model, messages: [{ role: "user", content: "x".repeat(chars) }], max_tokens: mt }, tier);
   const h = meteredHintFor(norm(200, 256), "v1-chat");
-  ok(h && h.endpoint === "/v1/metered/chat/completions" && h.wouldHaveCostUsd < h.youPaidUsd, `a small flat call discloses the metered quote ($${h?.wouldHaveCostUsd} vs $${h?.youPaidUsd})`);
+  ok(h && h.endpoint === "/v1/metered/chat/completions" && h.wouldHaveCostUsd < h.youPaidUsd, "a small flat call discloses the metered quote, under what it paid");
   ok(h.youPaidUsd === 0.02 && h.wouldHaveCostUsd >= 0.001, "it names what the buyer actually paid and never quotes below the settlement floor");
   ok(/base URL/.test(h.note), "and says how to switch");
   ok(meteredHintFor(norm(200, 256), "v1-chat-metered") === null, "the metered tier never hints at itself");
@@ -912,13 +912,13 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
 
   const ascii = "The quick brown fox jumps over the lazy dog. ".repeat(1300); // ~58k chars
   const opusFull = validateRequest({ model: "anthropic/claude-opus-4", messages: msg1(ascii), max_tokens: 8192 }, "v1-chat-premium");
-  ok(opusFull.max_tokens < 8192 && opusFull.max_tokens >= 64, `opus at full input is clamped below the tier cap (got ${opusFull.max_tokens})`);
+  ok(opusFull.max_tokens < 8192 && opusFull.max_tokens >= 64, "opus at full input is clamped below the tier cap");
   const gpt5Full = validateRequest({ model: "gpt-5", messages: msg1(ascii), max_tokens: 8192 }, "v1-chat-premium");
   ok(gpt5Full.max_tokens === 8192, "a cheap frontier model with the same input keeps the full tier cap");
 
   // Worst-case arithmetic: the clamped opus request must cost under the price.
   const worstUsd = (58_500 / 3 / 1e6) * 15 + (opusFull.max_tokens / 1e6) * 75;
-  ok(worstUsd < 0.5, `clamped opus worst case stays under the $0.50 price (est $${worstUsd.toFixed(3)})`);
+  ok(worstUsd < 0.5, "clamped opus worst case stays under the $0.50 price");
 
   // Token-dense text is priced by TOKENS, not chars — CJK that fits the char
   // cap but busts the token budget is rejected, not silently served at a loss.
@@ -936,7 +936,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   throws(() => validateRequest({ model: "gpt-4o-mini", messages: msg1(), n: 9 }, "v1-chat"), "between 1 and 4", "n is bounded at 4");
   const n1 = validateRequest({ model: "anthropic/claude-opus-4", messages: msg1("write a poem"), max_tokens: 8192 }, "v1-chat-premium");
   const n4 = validateRequest({ model: "anthropic/claude-opus-4", messages: msg1("write a poem"), max_tokens: 8192, n: 4 }, "v1-chat-premium");
-  ok(n4.max_tokens <= Math.ceil(n1.max_tokens / 4) + 1, `n=4 tightens the per-completion clamp ~4x (${n1.max_tokens} → ${n4.max_tokens})`);
+  ok(n4.max_tokens <= Math.ceil(n1.max_tokens / 4) + 1, "n=4 tightens the per-completion clamp ~4x");
 
   // Determinism: the clamp is part of the normalized body, so the prompt-cache
   // key must be identical across repeat validations.
@@ -1357,7 +1357,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(tiny.usd === M.price && !tiny.invalid, `a nano "hi" quotes the floor ($${M.price})`);
   const mid = meteredQuoteUsd({ model: "anthropic/claude-opus-5", messages: [{ role: "user", content: "write an essay" }], max_tokens: 2000 });
   const more = meteredQuoteUsd({ model: "anthropic/claude-opus-5", messages: [{ role: "user", content: "write an essay" }], max_tokens: 4000 });
-  ok(mid.usd > M.price && more.usd > mid.usd, `the quote grows with max_tokens on a priced model ($${mid.usd} -> $${more.usd})`);
+  ok(mid.usd > M.price && more.usd > mid.usd, "the quote grows with max_tokens on a priced model");
   // gpt-5-pro ($15/$120) is the priciest admitted row; the -fast Claude ids left the catalog 2026-07-24.
   const huge = meteredQuoteUsd({ model: "openai/gpt-5-pro", messages: [{ role: "user", content: "x ".repeat(95000) }], max_tokens: 8192, n: 2 });
   ok(huge.overCap === true && huge.usd === METERED_MAX_QUOTE_USD, `a body over the cap quotes the cap ($${METERED_MAX_QUOTE_USD}) and is flagged`);
@@ -1429,10 +1429,10 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   // Usable at premium's price: a 4k-char prompt leaves thousands of output tokens on either model.
   for (const m of [A, F]) {
     const b = validateRequest({ model: m, messages: [{ role: "user", content: "x".repeat(4000) }], max_tokens: 8192 }, "v1-chat-premium");
-    ok(b.max_tokens >= 4000, `${m}: at $0.50 with a 4k-char prompt the clamp leaves ${b.max_tokens} output tokens (usable, admitted)`);
+    ok(b.max_tokens >= 4000, `${m}: at $0.50 with a 4k-char prompt the clamp leaves a usable output budget`);
     const probe = { model: m, messages: [{ role: "user", content: "x".repeat(4000) }], max_tokens: 8192 };
     clampToMargin(probe, TIERS["v1-chat-premium"], 0);
-    ok(probe.max_tokens === b.max_tokens, `${m}: clampToMargin agrees with validateRequest (${probe.max_tokens})`);
+    ok(probe.max_tokens === b.max_tokens, `${m}: clampToMargin agrees with validateRequest`);
   }
   const listed = modelsList().data.map((m) => m.id);
   ok(listed.includes(A) && listed.includes(F) && modelsList().data.find((m) => m.id === A).x402.tier === "v1-chat-premium", "/v1/models lists both under premium");
@@ -1654,7 +1654,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const nb = validateRequest({ messages: [{ role: "user", content: "hi" }], max_tokens: 64 }, "v1-chat-nano");
   ok(nb.model === "openai/gpt-6-luna" && nb.max_tokens === 64, "nano with no model serves gpt-6-luna at the asked budget");
   const sb = validateRequest({ model: "openai/gpt-6-sol", messages: [{ role: "user", content: "x".repeat(4000) }], max_tokens: 4096 }, "v1-chat-pro");
-  ok(sb.max_tokens >= 1000, `gpt-6-sol at the pro price leaves a usable output budget on a 4k-char prompt (${sb.max_tokens})`);
+  ok(sb.max_tokens >= 1000, "gpt-6-sol at the pro price leaves a usable output budget on a 4k-char prompt");
   // Claude Sonnet 5.5 (2026-09-29): own dated row at the dearest endpoint, reasoning row (mandatory upstream).
   ok(tierFor("anthropic/claude-sonnet-5.5") === "v1-chat-pro" && cf("anthropic/claude-sonnet-5.5") === ROW("anthropic/claude-sonnet-5.5") && cf("anthropic/claude-sonnet-5.5").completion <= TIERS["v1-chat-pro"].maxPrice.completion, "sonnet-5.5 homes on pro with its own row, inside pro's bound");
   ok(tokenizerFactor("anthropic/claude-sonnet-5.5") === NEW_TOKENIZER_FACTOR && rp("anthropic/claude-sonnet-5.5")?.id === "anthropic/claude-sonnet-5.5" && JSON.stringify(dr("anthropic/claude-sonnet-5.5", "v1-chat-pro")) === '{"effort":"low"}', "sonnet-5.5: newer tokenizer, pro injects low (default high upstream)");

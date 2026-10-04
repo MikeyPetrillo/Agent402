@@ -47,7 +47,7 @@ export const METER_FLOOR_USD = 0.0002;
 //     500 atomic  ($0.0005)   refused, amount_too_low
 //     750 atomic  ($0.00075)  refused, amount_too_low
 //   1,000 atomic  ($0.001)    SETTLED
-//   1,150 / 1,250 / 1,500 / 2,000 / 2,500 / 5,000 / 10,000  all SETTLED
+//   1,250 / 1,500 / 2,000 / 2,500 / 5,000 / 10,000  all SETTLED
 //
 // So the floor is in (750, 1000] and $0.001 is proven good - the same minimum
 // our `exact` routes have always settled at, which is the likely explanation:
@@ -58,9 +58,8 @@ export const METER_FLOOR_USD = 0.0002;
 // behaviour that only a real settle reveals.
 //
 // A correction, because it was briefly recorded as fact: the first failure was
-// reported here (and in a commit message) as a refusal of 1,150 atomic units.
-// It was not. That run proposed 200 - the old METER_FLOOR_USD - and 1,150 was a
-// number I derived from the markup rather than read from the wire. 1,150 in
+// once reported as a refusal of an amount derived from the markup. It was not.
+// That run proposed 200 - the old METER_FLOOR_USD - and the derived amount in
 // fact settles. The lesson is the one this file keeps relearning: a figure that
 // was computed is not a figure that was observed.
 //

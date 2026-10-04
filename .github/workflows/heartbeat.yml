@@ -583,6 +583,35 @@ jobs:
               ;;
           esac
 
+      # Private upstream-cost table (src/upstream-costs.js). Without it the
+      # metered tier, embeddings, images, Exa and X reads refuse and the flat
+      # tiers price at their caps. One word only, never a value. Two readings
+      # 30 s apart, because a deploy's boot window can read "missing" once.
+      - name: Upstream cost table check (alarm when production runs without it)
+        if: always()
+        continue-on-error: true
+        run: |
+          read_uc() { curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamCosts.status // "unknown"' 2>/dev/null || echo unknown; }
+          WORD=$(read_uc)
+          if [ "$WORD" = "missing" ]; then sleep 30; WORD=$(read_uc); fi
+          echo "upstream costs: $WORD"
+          TITLE="Upstream cost table MISSING in production"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            missing)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports upstreamCosts.status=missing on two readings 30 s apart. Production is running without the private cost table: the metered tier, embeddings, images, video, Exa and X reads refuse (503, nobody is charged) and the flat chat tiers price at their caps, so some large requests are refused. Set the UPSTREAM_COSTS_JSON variable on Railway (same value as the Actions secret) and check the boot log line [upstream-costs]. Auto-closes when it reads ok." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still missing at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the cost table reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Serving health: event-loop stalls, 5xx and paid-call error rates, and
       # load shedding, from /__operator/serving-health.json (counts only). Two
       # readings 30 s apart must agree, because a deploy's no-container window

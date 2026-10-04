@@ -78,7 +78,10 @@ function capture(event, properties, distinctId = DISTINCT_ID) {
   if (TEST_MODE) {
     const e = { event, properties, distinctId };
     testEvents.push(e);
-    console.log(`[posthog-test] ${JSON.stringify(e)}`);
+    // The printed copy (CI logs are public) drops money fields derived from
+    // upstream cost; the in-memory event keeps them for the tests.
+    const shown = { ...e, properties: Object.fromEntries(Object.entries(properties).map(([k, v]) => [k, /upstream|margin|cost/i.test(k) ? "[redacted]" : v])) };
+    console.log(`[posthog-test] ${JSON.stringify(shown)}`);
     return;
   }
   if (!enabled || !client) return;

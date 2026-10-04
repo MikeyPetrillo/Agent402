@@ -42,7 +42,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 110
     env:
-      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
       GH_TOKEN: ${{ github.token }}
       TARGET_URL: https://agent402.tools
     steps:

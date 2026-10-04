@@ -122,7 +122,7 @@ await baseTool.handler({ model: "openai/gpt-4o-mini", input: "hi" }, fakeReq).th
   const small = { model: "anthropic/claude-haiku-4.5", max_output_tokens: 16, input: "hi" };
   const bigger = { model: "anthropic/claude-opus-5", max_output_tokens: 4096, instructions: "x ".repeat(20_000), input: "y ".repeat(5_000) };
   const qs = meteredResponsesQuoteUsd(small), qb = meteredResponsesQuoteUsd(bigger);
-  ok(!qs.invalid && !qb.invalid && qs.usd >= TIERS["v1-chat-metered"].price && qb.usd > qs.usd * 10, `quote grows with the body: small $${qs.usd}, bigger $${qb.usd}`);
+  ok(!qs.invalid && !qb.invalid && qs.usd >= TIERS["v1-chat-metered"].price && qb.usd > qs.usd * 10, "quote grows with the body");
   ok(metered.quote(small) === qs.usd && metered.quote(bigger) === qb.usd, "the tool's quote() is the same function payments.js prices the 402 from");
   const qi = meteredResponsesQuoteUsd({ max_output_tokens: 16 });
   ok(qi.invalid && qi.usd === TIERS["v1-chat-metered"].price, "an invalid body quotes the floor and says why (the handler's 400 refuses it)");

@@ -19,6 +19,7 @@
 // calls need a real bearer and are not exercised in CI.
 
 import { markUntrusted } from "./provenance.js";
+import { upstreamCosts } from "../upstream-costs.js";
 // The upstream bills per POST RETURNED, not per request, so the page size is
 // the real cost lever: a 100-post page at our per-call price would be sold far
 // below cost. Priced 2026-08-27 against X's published pay-per-use rate card
@@ -97,24 +98,29 @@ function takeBool(raw, field) {
 // AFTER the call at what X actually returned (it bills per item returned).
 // In memory: a restart resets the day, like the other spend guards; the
 // prepaid balance itself is the outer bound.
-const X_POST_READ_USD = 0.005;
-const X_USER_READ_USD = 0.010;
+// X's card (per post read, per user read) is private: src/upstream-costs.js,
+// `vendor.x`. Without it the cap cannot be enforced, so reads refuse 503.
+function xRate(k) {
+  const v = upstreamCosts().vendor?.x?.[k];
+  if (v == null) { const e = new Error("X data tools are temporarily unavailable. Nothing was charged for this request."); e.statusCode = 503; throw e; }
+  return v;
+}
 const X_DATA_DAILY_MAX_USD = () => { const n = Number(process.env.X_DATA_DAILY_MAX_USD); return Number.isFinite(n) && n >= 0 ? n : 1; };
 const xSpend = { day: "", micro: 0, refused: 0 };
 const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 const xSpendToday = (now = Date.now()) => { const d = utcDay(now); if (xSpend.day !== d) { xSpend.day = d; xSpend.micro = 0; xSpend.refused = 0; } return xSpend.micro / 1e6; };
 /** Worst-case cost of one read at X's card, from the path and params. */
 export function estimateXReadUsd(path, params = {}) {
-  if (/^\/tweets\/search\/recent$/.test(path) || /^\/users\/[^/]+\/tweets$/.test(path)) return (Math.max(1, Number(params.max_results) || 10)) * X_POST_READ_USD;
-  if (/^\/tweets\/[^/]+$/.test(path)) return X_POST_READ_USD;
-  if (path === "/users/by") return (String(params.usernames || "").split(",").filter(Boolean).length || 1) * X_USER_READ_USD;
-  if (/^\/users\/by\/username\//.test(path)) return X_USER_READ_USD;
-  return X_USER_READ_USD; // an endpoint this table does not know is priced as a user read
+  if (/^\/tweets\/search\/recent$/.test(path) || /^\/users\/[^/]+\/tweets$/.test(path)) return (Math.max(1, Number(params.max_results) || 10)) * xRate("postRead");
+  if (/^\/tweets\/[^/]+$/.test(path)) return xRate("postRead");
+  if (path === "/users/by") return (String(params.usernames || "").split(",").filter(Boolean).length || 1) * xRate("userRead");
+  if (/^\/users\/by\/username\//.test(path)) return xRate("userRead");
+  return xRate("userRead"); // an endpoint this table does not know is priced as a user read
 }
 /** Actual cost of what came back: X bills per item returned. */
 export function actualXReadUsd(path, data) {
   const n = Array.isArray(data?.data) ? data.data.length : (data?.data ? 1 : 0);
-  const perItem = (/^\/tweets/.test(path) || /\/tweets$/.test(path)) ? X_POST_READ_USD : X_USER_READ_USD;
+  const perItem = (/^\/tweets/.test(path) || /\/tweets$/.test(path)) ? xRate("postRead") : xRate("userRead");
   return n * perItem;
 }
 /** Counts only - never a token or a buyer. */

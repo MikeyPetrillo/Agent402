@@ -215,6 +215,7 @@ jobs:
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
@@ -860,10 +861,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -955,6 +958,7 @@ jobs:
           t node scripts/test-llm-gateway.js
           t node scripts/test-llm-kit-spend.js
           t node scripts/test-upstream-costs.js
+          t node scripts/test-ci-secretless-install.js
           # Gateway settle-failure breaker (per-payer + global refusal before any upstream call, finish-listener outcomes, source pins - offline)
           t node scripts/test-gateway-settle-breaker.js
 
@@ -1075,10 +1079,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -1205,10 +1211,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -1455,10 +1463,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -1747,10 +1757,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -1913,10 +1925,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -2060,10 +2074,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -2202,10 +2218,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -2447,10 +2465,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
@@ -2947,10 +2967,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       - name: Start server in free mode
         run: |
@@ -3157,10 +3179,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       - name: Deep security audit (payment gate + PoW replay/slug-bind/tamper + SSRF + attribution; boots paid-mode)
         # No POW_SECRET here, on purpose: the audit only talks to the server it
@@ -3416,10 +3440,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # Moved here from test-unit-b (2026-08-25 rebalance): self-booting suites
       # that need no shared server; test-unit-b was the next-slowest lane.
@@ -3507,10 +3533,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # Chromium is ~150 MB from Playwright's CDN plus an apt round for fonts,
       # 30 s on a good day and the step that stalled two runs for 28 min on a
@@ -3695,10 +3723,12 @@ jobs:
         # a malicious dependency lifecycle script running during `npm ci` cannot
         # read them. No server or tool runs here, so empty keys are harmless.
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
       # Chromium is ~150 MB from Playwright's CDN plus an apt round for fonts,
       # 30 s on a good day and the step that stalled two runs for 28 min on a
@@ -3955,10 +3985,12 @@ jobs:
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
@@ -4139,10 +4171,12 @@ jobs:
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
 
       # A free-mode server for the link-integrity sweep below. This lane had
@@ -4267,10 +4301,12 @@ jobs:
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: npm ci
 
       # A free-mode server for the link-integrity sweep below. This lane had

@@ -111,7 +111,7 @@ ok(chatToGemini({}, M).candidates[0].finishReason === "FINISH_REASON_UNSPECIFIED
 {
   const body = { contents: [{ role: "user", parts: [{ text: "hi" }] }], model: "openai/gpt-4o" };
   const a = meteredGeminiQuoteUsd(body), b = meteredGeminiQuoteUsd(body);
-  ok(a.usd === b.usd && a.usd > 0, `the same body quotes the same price twice ($${a.usd})`);
+  ok(a.usd === b.usd && a.usd > 0, "the same body quotes the same price twice");
   const big = meteredGeminiQuoteUsd({ contents: [{ role: "user", parts: [{ text: "word ".repeat(4000) }] }], model: "openai/gpt-4o" });
   ok(big.usd > a.usd, "a longer prompt quotes more (the price is read from the body, not the route)");
   ok(meteredGeminiQuoteUsd({ contents: [] }).invalid === true && meteredGeminiQuoteUsd({ contents: [] }).usd === TIERS["v1-chat-metered"].price,

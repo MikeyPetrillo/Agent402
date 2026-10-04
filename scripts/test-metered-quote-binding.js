@@ -32,7 +32,7 @@ ok(Object.keys(handlerInputOf({})).length === 0 && Object.keys(handlerInputOf(nu
 
 // 2. the quote of a wrapped body equals the quote of the flat body, never the floor
 const qFlat = meteredQuoteUsd(flat);
-ok(!qFlat.invalid && qFlat.usd > floor * 10, `the flat Opus body quotes well above the floor ($${qFlat.usd})`);
+ok(!qFlat.invalid && qFlat.usd > floor * 10, "the flat Opus body quotes well above the floor");
 const qRaw = meteredQuoteUsd({ input: flat });
 ok(qRaw.invalid && qRaw.usd === floor, "the RAW wrapped body is unreadable to the quoter (this is the hole: it quotes the floor)");
 const qServed = meteredQuoteUsd(handlerInputOf({ body: { input: flat } }));
@@ -48,7 +48,7 @@ globalThis.fetch = async () => { fetched++; throw new Error("SENTINEL upstream r
 try {
   let err = null;
   try { await metered.handler(handlerInputOf({ body: { input: flat } }), { __meteredQuoteUsd: floor, headers: {}, ip: "127.0.0.1", get: () => undefined, header: () => undefined }); } catch (e) { err = e; }
-  ok(err && err.statusCode === 400 && /quoted at \$0\.001 but/.test(err.message), `belt: a body quoting above the gated price is refused 400 (${err?.message?.slice(0, 80)})`);
+  ok(err && err.statusCode === 400 && /quoted at \$0\.001 but/.test(err.message), "belt: a body quoting above the gated price is refused 400");
   ok(fetched === 0, "belt fires BEFORE any upstream call - nothing spent, nothing charged");
   err = null;
   try { await metered.handler(flat, { __meteredQuoteUsd: qFlat.usd, headers: {}, ip: "127.0.0.1", get: () => undefined, header: () => undefined }); } catch (e) { err = e; }

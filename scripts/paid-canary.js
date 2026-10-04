@@ -1222,7 +1222,7 @@ async function main() {
   // llm-metered TOOL leg pays the per-request EXACT quote; this leg buys the
   // same body through the upto scheme (Permit2 allowance on the burner, granted
   // once), so the quote becomes a ceiling and the gateway settles actual usage
-  // x 1.15. It is the only live proof of what agent402-openclaw's upto path
+  // plus the markup. It is the only live proof of what agent402-openclaw's upto path
   // does for a real buyer: the OUTGOING credential must be scheme "upto" (a
   // client that quietly fell back to exact would still get a 200), the
   // response must carry X-Metered-Usd strictly UNDER the quote, and the

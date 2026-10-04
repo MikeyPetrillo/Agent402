@@ -42,6 +42,7 @@
 // Covered by scripts/test-exa-kit.js (offline, stubbed fetch).
 
 import { markUntrusted } from "./provenance.js";
+import { upstreamCosts } from "../upstream-costs.js";
 
 const EXA_API = "https://api.exa.ai";
 const TIMEOUT_MS = 30_000;
@@ -85,10 +86,14 @@ function requireKey() {
 // ever a gate, never the accounting. In memory: a restart resets the day,
 // exactly like the other spend guards, and the prepaid balance is the outer
 // bound.
-const EXA_SEARCH_USD = 0.007;   // per request, <= 10 results
-const EXA_INSTANT_USD = 0.004;  // per request, type "instant", <= 10 results
-const EXA_ANSWER_USD = 0.005;   // per request
-const EXA_CONTENT_USD = 0.001;  // per page, per content type
+// Exa's card (search and instant per request at <= 10 results, answer per
+// request, content per page per type) is private: src/upstream-costs.js,
+// `vendor.exa`. Without it the cap cannot be enforced, so calls refuse 503.
+function exaRate(k) {
+  const v = upstreamCosts().vendor?.exa?.[k];
+  if (v == null) throw bad("Exa tools are temporarily unavailable. Nothing was charged for this request.", 503);
+  return v;
+}
 const EXA_DAILY_MAX_USD = () => { const n = Number(process.env.EXA_DAILY_MAX_USD); return Number.isFinite(n) && n >= 0 ? n : 1; };
 
 // ---- prepaid allowance + low-water -----------------------------------------
@@ -121,16 +126,16 @@ export function estimateExaUsd(path, body = {}) {
     const n = Math.max(1, Number(body.numResults) || MAX_RESULTS);
     // Content types requested alongside a search bill per returned page.
     const types = ["text", "highlights", "summary"].filter((k) => body?.contents?.[k]).length;
-    const base = path === "/search" && body?.type === "instant" ? EXA_INSTANT_USD : EXA_SEARCH_USD;
-    return base + n * types * EXA_CONTENT_USD;
+    const base = path === "/search" && body?.type === "instant" ? exaRate("instant") : exaRate("search");
+    return base + n * types * exaRate("content");
   }
-  if (path === "/answer") return EXA_ANSWER_USD;
+  if (path === "/answer") return exaRate("answer");
   if (path === "/contents") {
     const n = Math.max(1, (Array.isArray(body.urls) ? body.urls.length : 0) || 1);
     const types = ["text", "highlights", "summary"].filter((k) => body[k]).length || 1;
-    return n * types * EXA_CONTENT_USD;
+    return n * types * exaRate("content");
   }
-  return EXA_SEARCH_USD; // an endpoint this table does not know is priced as a search
+  return exaRate("search"); // an endpoint this table does not know is priced as a search
 }
 
 /**

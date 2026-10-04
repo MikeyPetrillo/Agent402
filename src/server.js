@@ -518,7 +518,7 @@ import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPane
 import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
 import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
-import { upstreamCostsLoaded } from "./upstream-costs.js";
+import { upstreamCostsLoaded, upstreamCostsSummary } from "./upstream-costs.js";
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
@@ -9883,7 +9883,7 @@ app.use((err, req, res, _next) => {
 });
 
 // One word, never a value: whether the private upstream-cost table loaded.
-console.log(`[upstream-costs] ${upstreamCostsLoaded() ? "loaded" : "MISSING - metered tier refuses, flat tiers price at their bound"}`);
+console.log(`[upstream-costs] ${upstreamCostsLoaded() ? `loaded (${upstreamCostsSummary().models} model rows, fingerprint ${upstreamCostsSummary().fingerprint})` : "MISSING - metered tier refuses, flat tiers price at their bound"}`);
 const httpServer = app.listen(PORT, () =>
   console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`)
 );

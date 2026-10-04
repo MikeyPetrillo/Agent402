@@ -149,7 +149,7 @@ globalThis.fetch = realFetch;
   const small = { model: "anthropic/claude-haiku-4.5", max_tokens: 16, messages: msg("hi") };
   const bigger = { model: "anthropic/claude-opus-5", max_tokens: 4096, system: "x ".repeat(20_000), messages: msg("y ".repeat(5_000)) };
   const qs = meteredMessagesQuoteUsd(small), qb = meteredMessagesQuoteUsd(bigger);
-  ok(!qs.invalid && !qb.invalid && qs.usd >= TIERS["v1-chat-metered"].price && qb.usd > qs.usd * 10, `quote grows with the body: small $${qs.usd}, bigger $${qb.usd}`);
+  ok(!qs.invalid && !qb.invalid && qs.usd >= TIERS["v1-chat-metered"].price && qb.usd > qs.usd * 10, "quote grows with the body");
   ok(metered.quote(small) === qs.usd && metered.quote(bigger) === qb.usd, "the tool's quote() is the same function payments.js prices the 402 from");
   // The largest body validation admits (200k chars, Opus, 8192 tokens) quotes
   // under the $2 cap, so the cap is pinned on the shared probe-level quoter.
