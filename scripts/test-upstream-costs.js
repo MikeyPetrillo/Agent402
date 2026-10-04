@@ -53,11 +53,11 @@ ok(I.linkBounds(I.IMAGE_TIERS["v1-images-fast"].chain[0])?.worstCaseUsd === 0.5 
 ok(U.upstreamCostsStatus() === "partial", "a table missing required keys reads partial");
 {
   const g = U.upstreamCostsGaps();
-  ok(g.includes("meter.markup") && g.includes("vendor.exa.search") && g.includes("vendor.x.userRead") && g.includes("models[bad/]"), "gaps name the missing keys and the dropped row");
+  ok(g.includes("fees.rerankPerUnit") && g.includes("meter.markup") && g.includes("vendor.exa.search") && g.includes("vendor.x.userRead") && g.includes("models[bad/]"), "gaps name the missing keys and the dropped row");
   ok(!g.includes("fees.webSearchPerUse") && !g.includes("speech"), "gaps leave out what is present");
   ok(g.every((x) => !/[0-9]\.[0-9]/.test(x)), "gaps carry names, never a value");
 }
-const FULL = { ...FAKE, models: FAKE.models.slice(0, 2), meter: { markup: 1.25 }, vendor: { exa: { search: 0.5, instant: 0.5, answer: 0.5, content: 0.5 }, x: { postRead: 0.5, userRead: 0.5 } } };
+const FULL = { ...FAKE, models: FAKE.models.slice(0, 2), fees: { ...FAKE.fees, rerankPerUnit: 5 }, meter: { markup: 1.25 }, vendor: { exa: { search: 0.5, instant: 0.5, answer: 0.5, content: 0.5 }, x: { postRead: 0.5, userRead: 0.5 } } };
 U.setUpstreamCostsForTest(FULL);
 ok(U.upstreamCostsStatus() === "ok" && U.upstreamCostsGaps().length === 0, "a complete table reads ok");
 U.setUpstreamCostsForTest({ ...FULL, models: [...FULL.models, ["acme/big-pro", { prompt: 0, completion: 9 }]] });
@@ -67,6 +67,15 @@ ok(U.upstreamCostsStatus() === "ok", "a free stealth row is not a gap");
 U.setUpstreamCostsForTest(null);
 ok(U.upstreamCostsStatus() === "missing" && U.upstreamCostsGaps().length === 0, "no table reads missing");
 U.setUpstreamCostsForTest(FAKE);
+
+// ---- the published format example loads complete, so it cannot drift from REQUIRED ----
+{
+  const { readFileSync } = await import("node:fs");
+  const ex = JSON.parse(readFileSync(new URL("../docs/example-upstream-costs.json", import.meta.url), "utf8"));
+  U.setUpstreamCostsForTest(ex);
+  ok(U.upstreamCostsStatus() === "ok" && U.upstreamCostsGaps().length === 0, `docs/example-upstream-costs.json reads ok (gaps: ${U.upstreamCostsGaps().join(", ") || "none"})`);
+  U.setUpstreamCostsForTest(null);
+}
 
 // ---- environment parsing ----
 U.setUpstreamCostsForTest(null);

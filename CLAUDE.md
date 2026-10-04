@@ -70,8 +70,9 @@ LLC: credit the entity, never a personal name.
   rate, never print one in a CI log, never type one in a test (`scripts/test-upstream-costs.js`
   scans the shipped trees and scripts). Blank the secret in every step that installs packages
   (`scripts/test-ci-secretless-install.js`). A drifted rate is a table edit, not a code change.
-  A new key a serving path reads goes in `REQUIRED` there, so a table without it reads
-  `partial` on `/api/gateway-status` and the heartbeat pages.
+  A new key a serving path or a margin test reads goes in `REQUIRED` there, so a table
+  without it reads `partial` on `/api/gateway-status` and the heartbeat pages; add it to
+  `docs/example-upstream-costs.json` (placeholder numbers only) in the same change.
 - Prices quoted in prose are derived from the catalog, never typed
   (`scripts/test-price-prose.js`). Skill-pack prices are generated
   (`node scripts/pack-prices.js --write`).

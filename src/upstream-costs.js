@@ -5,13 +5,15 @@
 // Shape:
 //   { models: [[prefix, { prompt, completion }], ...],   USD per 1M tokens, longest prefix wins
 //     speech: { modelId: usdPerChar },
-//     fees: { webSearchPerUse, groundedPerCall },
+//     fees: { webSearchPerUse, groundedPerCall, rerankPerUnit },
 //     embeddings: { model: usdPer1MInputTokens },
 //     openai: { model: { prompt, cached, completion } },
 //     sttPerMinute: { model: usdPerMinute },
 //     media: { model: { worstCaseUsd, listedMaxUsd } },
 //     meter: { markup },
 //     vendor: { exa: { search, instant, answer, content }, x: { postRead, userRead } } }
+//
+// docs/example-upstream-costs.json shows the format with placeholder numbers.
 //
 // Without the table every lookup answers null and callers take their safe
 // path: flat tiers price at their own max_price bound, the metered tier
@@ -32,7 +34,7 @@ let dropped = [];
 // and a dropped model row lets a model fall back to a shorter, cheaper prefix,
 // so both count as gaps.
 const REQUIRED = [
-  ["fees", "webSearchPerUse"], ["fees", "groundedPerCall"], ["meter", "markup"],
+  ["fees", "webSearchPerUse"], ["fees", "groundedPerCall"], ["fees", "rerankPerUnit"], ["meter", "markup"],
   ["vendor", "exa", "search"], ["vendor", "exa", "instant"], ["vendor", "exa", "answer"], ["vendor", "exa", "content"],
   ["vendor", "x", "postRead"], ["vendor", "x", "userRead"],
 ];
