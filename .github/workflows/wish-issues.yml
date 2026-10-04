@@ -10,14 +10,13 @@
 # come sell" beacon), never per-cluster text/counts.
 #
 # The auto-open path is gated OFF behind the WISH_ISSUES_ENABLED repo variable
-# (default unset = off). If you ever want a demand tracker again, prefer a
+# (default unset = off), and the schedule was removed 2026-10-04 because every
+# run exited early on that gate. Dispatch it by hand if the variable is ever set. If you ever want a demand tracker again, prefer a
 # PRIVATE repo/board over re-enabling public issues here. Historical wish
 # issues (#461, #471, …) are already public and cannot be un-leaked; that is
 # exactly the exposure this change stops going forward.
 name: wish-issues
 on:
-  schedule:
-    - cron: "17 */6 * * *" # every 6h — demand review, not an alarm
   workflow_dispatch: {}
 
 permissions:
