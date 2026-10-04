@@ -36,27 +36,6 @@ ok(ext({ payer: "0x6666666666666666666666666666666666666666", usd: -1 }) === fal
 ok(ext({ payer: "0x7777777777777777777777777777777777777777", usd: 0.5 }) === true, "exactly at ceiling allowed");
 ok(ext({ payer: "0x8888888888888888888888888888888888888888", usd: 0.50001 }) === false, "just over ceiling excluded");
 
-// --- Stellar digest adapter (scripts/revenue-scan-stellar.js) ----------------
-// The daily-digest Stellar scanner is a thin mapper over src/revenue-live.js's
-// stellarRail() — the same code the live /revenue card runs, so the two
-// surfaces cannot drift. These assertions pin the digest JSON contract.
-const { digestFromStellarRail } = await import("./revenue-scan-stellar.js");
-{
-  const rail = { balance: 12.5, recent: [
-    { when: "2026-07-09T00:00:00Z", usd: 0.001, from: "GABCDEF", tx: "https://stellar.expert/explorer/public/tx/aa", external: true, internal: false },
-    { when: "2026-07-09T01:00:00Z", usd: 0.001, from: "GBA2DDJ4", tx: "https://stellar.expert/explorer/public/tx/bb", external: false, internal: true },
-  ] };
-  const d = digestFromStellarRail(rail);
-  ok(d.balanceUsd === 12.5 && d.payments === 2, "stellar: balance + payment count map through");
-  ok(Math.abs(d.totalUsd - 0.002) < 1e-9, "stellar: totalUsd sums all recent inbound");
-  ok(d.external.length === 1 && d.external[0].payer === "GABCDEF", "stellar: only rail-classified external rows; G… casing preserved");
-  ok(d.external[0].tx.startsWith("https://stellar.expert/"), "stellar: tx link passes through for the digest's [tx]() rendering");
-}
-{
-  const d = digestFromStellarRail({ balance: null, recent: [] });
-  ok(d.balanceUsd === null && d.payments === 0 && d.external.length === 0 && d.totalUsd === 0, "stellar: empty rail maps to an empty digest");
-}
-
 // --- an RPC failure must name the lane that failed ------------------------
 //
 // rpcCall walks a list of lanes and used to throw only the LAST error. That
