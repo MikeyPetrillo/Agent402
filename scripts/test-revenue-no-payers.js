@@ -59,7 +59,18 @@ ok(/const seen = newestOwnSettle\(r\.recent\);/.test(live), "the snapshot's last
     allTime: { perChain: {} },
     mpp: { count: 3, rails: { stripe: { count: 3, external: 3, externalUsd: 2, lastAt: null, txs: [] } } },
   });
-  ok(html.includes(OWN_TX) && !html.includes(OUTSIDE_TX) && !html.includes(OUTSIDE), "/revenue links our own settle, never an outside buyer's tx or address");
+  // Owner's call 2026-10-04: the rails table links the newest settlement on the
+  // rail whoever paid. Here the outside buyer's is newest; their address is
+  // still never printed on the page.
+  ok(/\$0\.002(<\/a>)? <span[^>]*>2026-10-01</.test(html) && !html.includes(OUTSIDE_TX) && !html.includes(OUTSIDE), "/revenue shows the newest settlement (an outside buyer's here) with no tx hash and no payer address");
+  const ownNewest = revenuePage("https://agent402.tools", {
+    asOf: "2026-10-02T00:00:00.000Z",
+    rails: [{ rail: "Base", asset: "USDC", balance: 1, recent: snap.rails[0].recent.map((t) => (t.internal ? { ...t, when: "2026-10-01T11:00:00Z" } : t)), lastInbound: snap.rails[0].lastInbound }],
+    allTime: { perChain: {} },
+  });
+  ok(/\$0\.001(<\/a>)? <span[^>]*>2026-10-01 · ours</.test(ownNewest) && !ownNewest.includes(OWN_TX), "when our own run is newest it is the row, marked ours, with no tx hash");
+  const linked = revenuePage("https://agent402.tools", { asOf: "2026-10-02T00:00:00.000Z", rails: [{ rail: "Base", asset: "USDC", balance: 1, explorer: "https://basescan.org/address/0xabf4", recent: snap.rails[0].recent, lastInbound: snap.rails[0].lastInbound }], allTime: { perChain: {} } });
+  ok(linked.includes('<a href="https://basescan.org/address/0xabf4" rel="noopener">$0.002</a>'), "the latest settle links to our wallet's explorer page");
   const mppSeg = html.slice(html.indexOf("MPP wire"), html.indexOf("MPP wire") + 4000);
   ok(/Card<\/strong> <span[^>]*>USD</.test(mppSeg) && !/stripe<\/strong> <span[^>]*>USDC/i.test(mppSeg), "card settlements over MPP are labelled USD, not USDC");
   ok(!/Blockscout kit/.test(html), "the SOR lane names no retired kit");
