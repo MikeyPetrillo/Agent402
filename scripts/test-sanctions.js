@@ -146,4 +146,19 @@ const CSV = [
   ok(/allTokensCount/.test(src), "the response and its published example carry the new counter");
 }
 
+// --- one public word on /api/gateway-status, driven not grepped ----------------
+// An unloaded list refuses every call; a STALE one answers from an old list,
+// which is the failure nothing else would notice, so the word must say "stale".
+{
+  const { loadSanctions, sanctionsHealth } = await import("../src/tools/sanctions-kit.js");
+  const H = 3600_000, boot = 1_000_000;
+  ok(sanctionsHealth(boot + 60_000, boot).status === "loading", "never loaded inside the boot grace: loading");
+  ok(sanctionsHealth(boot + 11 * 60_000, boot).status === "unloaded", "never loaded past the boot grace: unloaded");
+  const t0 = boot + 20 * 60_000;
+  await loadSanctions({ force: true, now: () => t0, fetchImpl: async () => new Response(CSV, { status: 200 }) });
+  ok(sanctionsHealth(t0 + H, boot).status === "ok", "a fresh load: ok");
+  ok(sanctionsHealth(t0 + 25 * H, boot).status === "stale", "two refresh cycles without a successful load: stale");
+  ok(Object.keys(sanctionsHealth(t0, boot)).join() === "status", "the public word carries no count, date or error text");
+}
+
 console.log(`test-sanctions: ${n} assertions OK`);

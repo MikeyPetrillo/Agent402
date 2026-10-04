@@ -53,6 +53,19 @@ export async function loadSanctions({ fetchImpl = fetch, now = () => Date.now(),
   return state.loading;
 }
 
+const LOADED_SINCE = Date.now();
+const BOOT_GRACE_MS = 10 * 60_000;
+
+/** One word for the public /api/gateway-status, so the heartbeat can page:
+ *  "ok" loaded within two refresh cycles; "stale" refreshes are failing and
+ *  screening answers from an old list (the case that is wrong without a
+ *  refusal - an unloaded list refuses every call); "unloaded" never loaded
+ *  past the boot grace; "loading" never loaded, still inside it. */
+export function sanctionsHealth(now = Date.now(), bootAt = LOADED_SINCE) {
+  if (state.fetchedAt) return { status: now - state.fetchedAt <= 2 * REFRESH_MS ? "ok" : "stale" };
+  return { status: now - bootAt > BOOT_GRACE_MS ? "unloaded" : "loading" };
+}
+
 /** Counts only, for the operator surface and /api/gateway-status. */
 export const sanctionsStatus = () => ({
   loaded: !!state.fetchedAt,
