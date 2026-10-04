@@ -44,13 +44,17 @@
   },
   "peerDependencies": {
     "@x402/evm": ">=2.20.0",
-    "@x402/fetch": ">=2.20.0"
+    "@x402/fetch": ">=2.20.0",
+    "viem": ">=2.48.11"
   },
   "peerDependenciesMeta": {
     "@x402/evm": {
       "optional": true
     },
     "@x402/fetch": {
+      "optional": true
+    },
+    "viem": {
       "optional": true
     }
   },
