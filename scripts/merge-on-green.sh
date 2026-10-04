@@ -162,6 +162,12 @@ MERGE=$(gh pr view "$PR" --json mergeCommit -q '.mergeCommit.oid // empty' || tr
 is_sha "$MERGE" || { echo "merged, but could not read the merge commit (got '${MERGE}'); check gh pr view $PR"; exit 1; }
 echo "merged: ${MERGE:0:8}"
 
+# Keep the dev branch from stranding work that reached main another way (the
+# 2026-10-04 incident: old dev commits blocked a later merge on main's subject
+# check). Moves the branch only when merging it would change nothing on main;
+# otherwise it says why and leaves it. Never fails the merge.
+bash scripts/sync-dev-branch.sh "$BRANCH" || echo "dev sync: did not run cleanly; check $BRANCH by hand"
+
 # Main deploys unconditionally. Report the run and, separately, what prod says:
 # the job can be red for a Railway race while prod is correct, and the reverse
 # has happened too, so the build hash on /health is the only proof.

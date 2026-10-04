@@ -101,7 +101,11 @@ Operator-only surfaces live under `/__operator/*` (token-authed).
 
 ## Dev / CI / deploy workflow
 - **Develop on branch `claude/sweet-brown-i99jl3`.** `main` is protected: PR required, never
-  force-push `main`, never delete the dev branch.
+  force-push `main`, never delete the dev branch. The dev branch is never force-pushed by hand;
+  the one exception is `scripts/sync-dev-branch.sh` (run by `merge-on-green.sh` after every
+  merge), which moves it to main's head only when no PR is open from it and merging it would
+  change nothing on main. Without that, commits that reach main through another branch stay
+  stranded on the dev branch and block its next merge on main's subject check (2026-10-04).
 - CI is `.github/workflows/deploy.yml`, triggered by pushes to the dev branch or `main`. Every
   dev push runs all test lanes. Jobs are gated by commit-message markers: `[test]` (tests),
   `[deploy]` (Railway), `[publish]` (npm + MCP Registry), plus `[probe]`, `[paytest]`,
