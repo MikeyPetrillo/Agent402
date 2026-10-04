@@ -26,7 +26,7 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 | [[Agentic Finance]] | What Agentic Finance is, the stack, and where Agent402 sits |
 | [[Why Pay Here|Why-Pay-Here]] | Seven things that are different about paying here, each linked to the surface that proves it |
 | [[Getting Started]] | Your first call in 60 seconds - free, no wallet |
-| [[Reports, Monitors and Credits|Reports-and-Monitors]] | Outcome-priced report products (`/v1/research`, `/v1/dossier`, `/v1/ticker-pack`, `/v1/fund`, `/v1/filing-report`, `/v1/domain-audit`, `/v1/recall-report`, `/v1/insider-report`, `/v1/token-brief`, `/v1/token-risk`, `/v1/linkedin-article`, `/v1/ipo-report`), the card front door (`/reports`, `/monitors`), and prepaid credits (`/credits`, `Authorization: Bearer a402_…`) |
+| [[Reports, Monitors and Credits|Reports-and-Monitors]] | Outcome-priced report products (`/v1/research`, `/v1/dossier`, `/v1/ticker-pack`, `/v1/fund`, `/v1/filing-report`, `/v1/domain-audit`, `/v1/recall-report`, `/v1/insider-report`, `/v1/token-brief`, `/v1/token-risk`, `/v1/linkedin-article`, `/v1/ipo-report`), the card front door (`/reports`, `/monitors`), and prepaid credits (`/credits`, `Authorization: Bearer a402_…`; not on sale at the moment, keys already issued keep working) |
 | [[Paying with x402]] | USDC payments: the 402 flow, code, spend controls, Stripe's `purl` |
 | [[Paying with MPP]] | The Machine Payments Protocol wire: `WWW-Authenticate: Payment`, mppx clients, Base/Celo, native Tempo settlement, cards over MPP, native MPP on the `/mcp` connector |
 | [[Paying with Compute]] | The proof-of-work tier: spec + reference solver |
