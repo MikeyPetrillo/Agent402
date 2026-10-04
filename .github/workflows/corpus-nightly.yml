@@ -132,7 +132,6 @@ jobs:
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
-      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -142,6 +141,9 @@ jobs:
         run: npm ci --ignore-scripts && npm rebuild better-sqlite3
       - name: Live catalog guard (ids, prices, speech cost rows)
         id: guard
+        # Step scope only: the install step above runs a native rebuild.
+        env:
+          UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
         run: |
           set +e
           node scripts/test-gateway-model-ids.js 2>&1 | tee guard.log

@@ -585,19 +585,28 @@ jobs:
 
       # Private upstream-cost table (src/upstream-costs.js). Without it the
       # metered tier, embeddings, images, Exa and X reads refuse and the flat
-      # tiers price at their caps. One word only, never a value. Two readings
-      # 30 s apart, because a deploy's boot window can read "missing" once.
+      # tiers price at their caps. "partial" means it loaded without a key some
+      # path reads (that path refuses) or with a model row that did not parse.
+      # One word only, never a value. Two readings 30 s apart, because a
+      # deploy's boot window can read "missing" once.
       - name: Upstream cost table check (alarm when production runs without it)
         if: always()
         continue-on-error: true
         run: |
           read_uc() { curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamCosts.status // "unknown"' 2>/dev/null || echo unknown; }
           WORD=$(read_uc)
-          if [ "$WORD" = "missing" ]; then sleep 30; WORD=$(read_uc); fi
+          if [ "$WORD" = "missing" ] || [ "$WORD" = "partial" ]; then sleep 30; WORD=$(read_uc); fi
           echo "upstream costs: $WORD"
-          TITLE="Upstream cost table MISSING in production"
+          TITLE="Upstream cost table missing or incomplete in production"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
+            partial)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports upstreamCosts.status=partial on two readings 30 s apart. The private cost table loaded but lacks a key a serving path reads (that path refuses with 503, nobody is charged) or has a model row that did not parse. The boot log line [upstream-costs] names what is missing. Update the UPSTREAM_COSTS_JSON variable on Railway (and the Actions secret). Auto-closes when it reads ok." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still partial at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
             missing)
               if [ -z "$OPEN" ]; then
                 gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports upstreamCosts.status=missing on two readings 30 s apart. Production is running without the private cost table: the metered tier, embeddings, images, video, Exa and X reads refuse (503, nobody is charged) and the flat chat tiers price at their caps, so some large requests are refused. Set the UPSTREAM_COSTS_JSON variable on Railway (same value as the Actions secret) and check the boot log line [upstream-costs]. Auto-closes when it reads ok." >/dev/null 2>&1 || echo "issue create failed"

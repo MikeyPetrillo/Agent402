@@ -49,6 +49,25 @@ ok(G.TIERS["v1-chat-grounded"].fixedUpstreamUsd === 0.125 && G.SERVER_TOOL_POLIC
 ok(K.openaiCostRow("gpt-4o").cached === 1, "an OpenAI row without a cached rate falls back to its prompt rate");
 ok(I.linkBounds(I.IMAGE_TIERS["v1-images-fast"].chain[0])?.worstCaseUsd === 0.5 && I.linkBounds(I.IMAGE_TIERS["v1-images-fast"].chain[1]) === null, "media bounds per model; a model without a row has none");
 
+// ---- gaps: a loaded table that lacks a key, or drops a model row, reads "partial" ----
+ok(U.upstreamCostsStatus() === "partial", "a table missing required keys reads partial");
+{
+  const g = U.upstreamCostsGaps();
+  ok(g.includes("meter.markup") && g.includes("vendor.exa.search") && g.includes("vendor.x.userRead") && g.includes("models[bad/]"), "gaps name the missing keys and the dropped row");
+  ok(!g.includes("fees.webSearchPerUse") && !g.includes("speech"), "gaps leave out what is present");
+  ok(g.every((x) => !/[0-9]\.[0-9]/.test(x)), "gaps carry names, never a value");
+}
+const FULL = { ...FAKE, models: FAKE.models.slice(0, 2), meter: { markup: 1.25 }, vendor: { exa: { search: 0.5, instant: 0.5, answer: 0.5, content: 0.5 }, x: { postRead: 0.5, userRead: 0.5 } } };
+U.setUpstreamCostsForTest(FULL);
+ok(U.upstreamCostsStatus() === "ok" && U.upstreamCostsGaps().length === 0, "a complete table reads ok");
+U.setUpstreamCostsForTest({ ...FULL, models: [...FULL.models, ["acme/big-pro", { prompt: 0, completion: 9 }]] });
+ok(U.upstreamCostsStatus() === "partial" && U.upstreamCostsGaps().join() === "models[acme/big-pro]", "a zero-rate model row (not stealth) is a gap, not a silent fallback to acme/big");
+U.setUpstreamCostsForTest({ ...FULL, models: [...FULL.models, ["stealth/x", { prompt: 0, completion: 0 }]] });
+ok(U.upstreamCostsStatus() === "ok", "a free stealth row is not a gap");
+U.setUpstreamCostsForTest(null);
+ok(U.upstreamCostsStatus() === "missing" && U.upstreamCostsGaps().length === 0, "no table reads missing");
+U.setUpstreamCostsForTest(FAKE);
+
 // ---- environment parsing ----
 U.setUpstreamCostsForTest(null);
 process.env.UPSTREAM_COSTS_JSON = Buffer.from(JSON.stringify(FAKE)).toString("base64");
@@ -71,7 +90,7 @@ U.setUpstreamCostsForTest(null);
   const files = [];
   const walk = (d) => { for (const n of readdirSync(d)) { if (n === "node_modules" || n.startsWith(".")) continue; const f = join(d, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(js|mjs|md|json)$/.test(f)) files.push(f); } };
   const root = new URL("..", import.meta.url).pathname;
-  for (const d of ["src", "wiki", "docs", "openclaw", "mcp", "client", "adapters", "tollbooth", "workers"]) { try { if (statSync(join(root, d)).isDirectory()) walk(join(root, d)); } catch { /* absent */ } }
+  for (const d of ["src", "scripts", "wiki", "docs", "openclaw", "mcp", "client", "adapters", "tollbooth", "workers"]) { try { if (statSync(join(root, d)).isDirectory()) walk(join(root, d)); } catch { /* absent */ } }
   const SHAPES = [
     [/\{ ?prompt: ?[0-9.]+, ?(cached: ?[0-9.]+, ?)?completion: ?[0-9.]+ ?\}/, (l) => !/maxPrice|max_price/.test(l)], // a model rate row (tier caps are ours)
     [/costPerChar: ?[0-9.]/, () => true],
@@ -82,9 +101,12 @@ U.setUpstreamCostsForTest(null);
     [/(usage|price|cost|quote|upstream)[^.]{0,60}\b(times|x|×) ?1\.\d{1,3}\b|\b(times|x|×) ?1\.\d{1,3}\b[^.]{0,80}(markup|usage|floor)|\bmarkup (of |is |= ?)?1\.\d+/i, () => true], // a written-out markup
   ];
   const hits = [];
+  // Fake tables in tests are named as such: this file, and rows under "fake/".
+  const self = new URL(import.meta.url).pathname;
   for (const f of files) {
+    if (f === self) continue;
     const lines = readFileSync(f, "utf8").split("\n");
-    lines.forEach((l, i) => { for (const [re, keep] of SHAPES) if (re.test(l) && keep(l)) hits.push(`${f.slice(root.length)}:${i + 1}`); });
+    lines.forEach((l, i) => { if (/["']fake\//.test(l)) return; for (const [re, keep] of SHAPES) if (re.test(l) && keep(l)) hits.push(`${f.slice(root.length)}:${i + 1}`); });
   }
   ok(files.length > 100, `the scan read the shipped trees (${files.length} files) - a handful would mean it is blind`);
   ok(hits.length === 0, `no upstream rate literal in the shipped trees (the table is private)${hits.length ? `: ${hits.slice(0, 10).join(", ")}` : ""}`);

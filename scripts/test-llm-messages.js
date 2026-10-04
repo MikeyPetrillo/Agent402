@@ -178,7 +178,7 @@ globalThis.fetch = realFetch;
   ok(seen.length === 1, "the refused request never reached upstream");
   // Over the per-call cap: the 402 quoted the CAP (not the cost), so the
   // handler must refuse - with a stashed quote, and with no request at all.
-  // Fable 5.1 ($10/$50, new tokenizer x1.35, cache write x1.25): the -fast Claude
+  // Fable 5.1 (dear rates, new tokenizer, cache write surcharge): the -fast Claude
   // ids left the catalog 2026-07-24 and a cheaper family row would quote under the cap.
   const overCap = { model: "anthropic/claude-fable-5.1", max_tokens: 8192, messages: msg("\u4e2d".repeat(190_000)) };
   const qo = meteredMessagesQuoteUsd(overCap);

@@ -141,7 +141,7 @@ await baseTool.handler({ model: "openai/gpt-4o-mini", input: "hi" }, fakeReq).th
   let belt = null;
   try { await metered.handler(bigger, { ...fakeReq, __meteredQuoteUsd: qs.usd }); } catch (e) { belt = e; }
   ok(belt?.statusCode === 400 && /quoted at/.test(belt.message) && seen.length === 1, "metered belt: a body quoting above the gated price is refused 400 before any upstream call");
-  // gpt-5-pro ($15/$120): the -fast Claude ids left the catalog 2026-07-24, and a
+  // gpt-5-pro (the priciest admitted row): the -fast Claude ids left the catalog 2026-07-24, and a
   // model that fell back to a cheaper family row would quote UNDER the cap here.
   const overCap = { model: "openai/gpt-5-pro", max_output_tokens: 8192, input: "\u4e2d".repeat(190_000) };
   const qo = meteredResponsesQuoteUsd(overCap);

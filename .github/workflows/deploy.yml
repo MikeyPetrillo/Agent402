@@ -3207,6 +3207,14 @@ jobs:
           exit $rc
 
       - name: Adapter tests (openai-tools + anthropic-tools + ai-sdk + langchain + openai-agents + llamaindex + strands + google-adk + langchain-py)
+        # Installs framework packages from the registry: no secret in this env.
+        env:
+          UPSTREAM_COSTS_JSON: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
         run: |
           X402_SYNC_ON_START=false FREE_MODE=true PORT=3091 node src/server.js > /tmp/a402-test.log 2>&1 &
           ADAPTER_PID=$!
@@ -3218,7 +3226,7 @@ jobs:
           # spec path (no peer install needed); peer wrappers are checked in
           # consumers' projects via optional peerDeps.
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/openai-tools/test.js
-          ( cd adapters/anthropic-tools && npm install ../../client --no-save --silent )
+          ( cd adapters/anthropic-tools && npm install ../../client --no-save --silent --ignore-scripts )
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/anthropic-tools/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/ai-sdk/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/langchain/test.js
@@ -4468,7 +4476,7 @@ jobs:
       - name: Gate agent402-anthropic-tools (tests run with NO npm token in env)
         run: |
           # Install agent402-client locally for the test (same self-bootstrap as openai-tools/test.js).
-          ( cd adapters/anthropic-tools && npm install ../../client --no-save --silent )
+          ( cd adapters/anthropic-tools && npm install ../../client --no-save --silent --ignore-scripts )
           AGENT402_BASE_URL=http://127.0.0.1:3090 node adapters/anthropic-tools/test.js
 
       - name: Gate agent402-ai-sdk (tests run with NO npm token in env)

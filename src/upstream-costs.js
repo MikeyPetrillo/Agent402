@@ -15,7 +15,9 @@
 //
 // Without the table every lookup answers null and callers take their safe
 // path: flat tiers price at their own max_price bound, the metered tier
-// refuses before any charge. Nothing here logs a value.
+// refuses before any charge. A table that loads but lacks a section, or has a
+// model row that did not parse, reads "partial" (upstreamCostsGaps) so the
+// heartbeat pages. Nothing here logs a value.
 
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -24,6 +26,17 @@ const EMPTY = Object.freeze({ models: [], speech: {}, fees: {}, embeddings: {}, 
 let table = null;
 let loaded = false;
 let warned = false;
+let dropped = [];
+
+// Every key a serving path reads. A missing one makes that path refuse (503),
+// and a dropped model row lets a model fall back to a shorter, cheaper prefix,
+// so both count as gaps.
+const REQUIRED = [
+  ["fees", "webSearchPerUse"], ["fees", "groundedPerCall"], ["meter", "markup"],
+  ["vendor", "exa", "search"], ["vendor", "exa", "instant"], ["vendor", "exa", "answer"], ["vendor", "exa", "content"],
+  ["vendor", "x", "postRead"], ["vendor", "x", "userRead"],
+];
+const NONEMPTY = ["speech", "embeddings", "openai", "sttPerMinute", "media"];
 
 function parse(text) {
   const raw = String(text || "").trim();
@@ -37,16 +50,19 @@ function parse(text) {
 function normalize(j) {
   // Only a real positive number is a rate. null, "", false and [] coerce to 0
   // under Number(), and a zero rate turns a margin clamp off or prices a fee
-  // at nothing, so anything else drops the entry and its caller refuses.
+  // at nothing, so anything else drops the entry. A dropped fee or vendor rate
+  // makes its caller refuse; a dropped model row is recorded as a gap, because
+  // the longest-prefix lookup would fall back to a shorter row.
   const pos = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null);
   // A model row may be exactly 0/0 only for a stealth listing that is free.
   const rate = (v, prefix) => (prefix.startsWith("stealth/") && v === 0 ? 0 : pos(v));
   const models = [];
+  dropped = [];
   for (const row of j.models || []) {
-    if (!Array.isArray(row) || typeof row[0] !== "string" || !row[0]) continue;
+    if (!Array.isArray(row) || typeof row[0] !== "string" || !row[0]) { dropped.push("(unnamed)"); continue; }
     const prefix = row[0].toLowerCase();
     const p = rate(row[1]?.prompt, prefix), c = rate(row[1]?.completion, prefix);
-    if (p == null || c == null) continue;
+    if (p == null || c == null) { dropped.push(prefix); continue; }
     models.push([prefix, Object.freeze({ prompt: p, completion: c })]);
   }
   const map = (o, f) => Object.freeze(Object.fromEntries(Object.entries(o && typeof o === "object" ? o : {}).map(([k, v]) => [k, f(v)]).filter(([, v]) => v != null)));
@@ -93,9 +109,27 @@ export function upstreamCostsSummary() {
 }
 export function upstreamCostsLoaded() { load(); return loaded; }
 
+/** Names (never values) of what a loaded table lacks: required keys, empty
+ *  sections, and model rows that did not parse. Empty when complete. */
+export function upstreamCostsGaps() {
+  const t = load();
+  if (!loaded) return [];
+  const gaps = [];
+  for (const path of REQUIRED) if (path.reduce((o, k) => (o == null ? o : o[k]), t) == null) gaps.push(path.join("."));
+  for (const k of NONEMPTY) if (!Object.keys(t[k]).length) gaps.push(k);
+  for (const p of dropped) gaps.push(`models[${p}]`);
+  return gaps;
+}
+
+/** "ok" | "partial" | "missing": one word for /api/gateway-status. */
+export function upstreamCostsStatus() {
+  return !upstreamCostsLoaded() ? "missing" : upstreamCostsGaps().length ? "partial" : "ok";
+}
+
 /** Tests only: install a table (or null to clear and re-read the environment). */
 export function setUpstreamCostsForTest(j) {
   warned = false;
+  dropped = [];
   if (j == null) { table = null; loaded = false; return; }
   table = normalize(j);
   loaded = table.models.length > 0;

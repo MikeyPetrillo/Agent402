@@ -66,7 +66,7 @@ ok(tierAllows("v1-chat", "openai/gpt-4o-mini-2024-07-18"), "dated gpt-4o-mini sn
 // and gpt-5.6 ids do NOT ride the "openai/gpt-5" prefix (boundary-aware
 // matching: "gpt-5" + "-" never matches "gpt-5.6-…").
 ok(tierFor("openai/gpt-5.6-luna") === "v1-chat-nano", "gpt-5.6-luna homes on nano");
-// gpt-5.6-terra came OFF the base tier 2026-08-28: it lists at $2/$12, over
+// gpt-5.6-terra came OFF the base tier 2026-08-28: its list price is over
 // that tier's completion bound, so max_price refused every non-flex attempt.
 ok(tierFor("openai/gpt-5.6-terra") === null || tierFor("openai/gpt-5.6-terra") !== "v1-chat", `gpt-5.6-terra no longer homes on base (got ${tierFor("openai/gpt-5.6-terra")})`);
 ok(!tierAllows("v1-chat", "openai/gpt-5.6-terra"), "the base tier refuses terra rather than sending a request max_price will reject");
@@ -917,7 +917,8 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(gpt5Full.max_tokens === 8192, "a cheap frontier model with the same input keeps the full tier cap");
 
   // Worst-case arithmetic: the clamped opus request must cost under the price.
-  const worstUsd = (58_500 / 3 / 1e6) * 15 + (opusFull.max_tokens / 1e6) * 75;
+  const opusRow = costFor("anthropic/claude-opus-4");
+  const worstUsd = (58_500 / 3 / 1e6) * opusRow.prompt + (opusFull.max_tokens / 1e6) * opusRow.completion;
   ok(worstUsd < 0.5, "clamped opus worst case stays under the $0.50 price");
 
   // Token-dense text is priced by TOKENS, not chars — CJK that fits the char
@@ -1022,7 +1023,8 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(grounded && grounded.route === "POST /v1/grounded/chat/completions" && grounded.price === "$0.03" && g.router === true && g.web?.id === "web" && g.noCache === true, "grounded tier registered: router, web plugin, no cache, $0.03");
   const wc = worstCaseUpstreamCost({ model: "openai/gpt-4o-mini", messages: msg1(), max_tokens: 1024 }, g);
   const plain = worstCaseUpstreamCost({ model: "openai/gpt-4o-mini", messages: msg1(), max_tokens: 1024 }, TIERS["v1-chat-auto"]);
-  ok(wc.fixedUsd === 0.007 && wc.inTokens - plain.inTokens === 4500 && wc.totalUsd > plain.totalUsd + 0.007, "worst-case cost on the grounded tier adds the search fee and the injected-result tokens");
+  const groundedFee = upstreamCosts().fees.groundedPerCall;
+  ok(groundedFee > 0 && wc.fixedUsd === groundedFee && wc.inTokens - plain.inTokens === 4500 && wc.totalUsd > plain.totalUsd + groundedFee, "worst-case cost on the grounded tier adds the search fee and the injected-result tokens");
   const big = worstCaseUpstreamCost({ model: "google/gemini-3.5-flash-lite", messages: [{ role: "user", content: "x ".repeat(8000) }], max_tokens: 1024 }, g);
   ok(big.totalUsd <= g.price * MARGIN, `largest grounded call (16k chars in on the priciest ranked model, 1024 out, 5 results) stays under the margin bound`);
   ok(pck("v1-chat-grounded", { messages: msg1(), cache: true }) === null, "grounded answers are never cacheable (the web moves)");
@@ -1358,7 +1360,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const mid = meteredQuoteUsd({ model: "anthropic/claude-opus-5", messages: [{ role: "user", content: "write an essay" }], max_tokens: 2000 });
   const more = meteredQuoteUsd({ model: "anthropic/claude-opus-5", messages: [{ role: "user", content: "write an essay" }], max_tokens: 4000 });
   ok(mid.usd > M.price && more.usd > mid.usd, "the quote grows with max_tokens on a priced model");
-  // gpt-5-pro ($15/$120) is the priciest admitted row; the -fast Claude ids left the catalog 2026-07-24.
+  // gpt-5-pro is the priciest admitted row; the -fast Claude ids left the catalog 2026-07-24.
   const huge = meteredQuoteUsd({ model: "openai/gpt-5-pro", messages: [{ role: "user", content: "x ".repeat(95000) }], max_tokens: 8192, n: 2 });
   ok(huge.overCap === true && huge.usd === METERED_MAX_QUOTE_USD, `a body over the cap quotes the cap ($${METERED_MAX_QUOTE_USD}) and is flagged`);
   let refused = null; try { validateRequest({ model: "openai/gpt-5-pro", messages: [{ role: "user", content: "x ".repeat(95000) }], max_tokens: 8192, n: 2 }, "v1-chat-metered"); } catch (e) { refused = e; }

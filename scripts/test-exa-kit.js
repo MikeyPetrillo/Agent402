@@ -19,6 +19,8 @@ requireUpstreamCosts("test-exa-kit");
 // Exa's card comes from the private table; no rate is typed here.
 const R = upstreamCosts().vendor.exa;
 const near = (a, b) => Math.abs(a - b) < 1e-9;
+// exaSpendStatus() rounds spentUsd to 4 places; compare it within that rounding.
+const nearSpent = (a, b) => Math.abs(a - b) <= 5e-5 + 1e-12;
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -88,14 +90,17 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
 // --- spend cap: booked BEFORE the call --------------------------------------
 {
   reset();
-  process.env.EXA_DAILY_MAX_USD = "0.02";
+  // A cap of a few searches, derived from the table so a rate change cannot
+  // put the first call over it.
+  const cap = R.search * 3;
+  process.env.EXA_DAILY_MAX_USD = String(cap);
   stub(200, { results: [], costDollars: { total: R.search } });
   await tool("exa-search").handler({ query: "one" });
   const after = exaSpendStatus();
   ok(after.spentUsd > 0, "a completed call books spend");
   eq(after.status, "ok", "and is under the cap");
   // Burn the rest of the cap, then the next call must be refused uncharged.
-  _exaSpendBook(0.02);
+  _exaSpendBook(cap);
   await throws(() => tool("exa-search").handler({ query: "two" }), /usage cap/, "past the cap the tool refuses");
   const s = exaSpendStatus();
   eq(s.status, "capped", "status says capped");
@@ -118,12 +123,12 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   eq(actualExaUsd({ costDollars: { total: 0.013 } }), 0.013, "actual cost read from Exa's own costDollars");
   eq(actualExaUsd({}), null, "absent costDollars reads null, never 0");
   eq(actualExaUsd({ costDollars: { total: -1 } }), null, "a negative cost is refused rather than credited");
-  reset(); stub(200, { results: [], costDollars: { total: 0.05 } });
+  reset(); stub(200, { results: [], costDollars: { total: R.search * 10 } });
   await tool("exa-search").handler({ query: "pricey" });
-  ok(exaSpendStatus().spentUsd >= 0.05, "a call that cost more than estimated books the HIGHER real figure");
+  ok(nearSpent(exaSpendStatus().spentUsd, R.search * 10), "a call that cost more than estimated books the HIGHER real figure");
   reset(); stub(200, { results: [] });
   await tool("exa-search").handler({ query: "unknown cost" });
-  ok(exaSpendStatus().spentUsd >= estimateExaUsd("/search", { numResults: 10 }) - 1e-9,
+  ok(nearSpent(exaSpendStatus().spentUsd, estimateExaUsd("/search", { numResults: 10 })),
      "and a response with no cost field keeps the estimate instead of booking zero");
 }
 
@@ -132,13 +137,13 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   reset(); stub(200, { results: [], resolvedSearchType: "instant" });
   await tool("exa-search").handler({ query: "fast answer", type: "instant", numResults: 10 });
   eq(JSON.parse(calls[0].opts.body).type, "instant", "type instant is sent to Exa as written");
-  ok(near(exaSpendStatus().spentUsd, R.instant), "an instant search with no costDollars books the instant estimate");
+  ok(nearSpent(exaSpendStatus().spentUsd, R.instant), "an instant search with no costDollars books the instant estimate");
   ok(near(estimateExaUsd("/search", { type: "instant", numResults: 10 }), R.instant) && near(estimateExaUsd("/search", { type: "instant", numResults: 3, contents: { text: true } }), R.instant + 3 * R.content), "instant estimate = the instant rate plus per-page content, like the other types");
   ok(near(estimateExaUsd("/search", { numResults: 10 }), R.search) && near(estimateExaUsd("/search", { type: "auto", numResults: 10 }), R.search) && near(estimateExaUsd("/search", { type: "fast", numResults: 10 }), R.search), "control: auto, fast and no type keep their estimate");
   ok(near(estimateExaUsd("/findSimilar", { type: "instant", numResults: 10 }), R.search), "instant pricing applies to /search only");
   reset(); stub(200, { results: [], costDollars: { total: R.instant * 1.3 } });
   await tool("exa-search").handler({ query: "fast answer", type: "instant" });
-  ok(near(exaSpendStatus().spentUsd, R.instant * 1.3), "Exa's own costDollars still corrects the instant estimate upward");
+  ok(nearSpent(exaSpendStatus().spentUsd, R.instant * 1.3), "Exa's own costDollars still corrects the instant estimate upward");
   await throws(() => tool("exa-search").handler({ query: "x", type: "deep" }), /auto, neural, keyword, fast or instant/, "an unlisted type is still refused, naming instant");
   eq(tool("exa-search").price, "$0.012", "the tool's price is unchanged");
 }

@@ -21,6 +21,7 @@ const {
 } = await import("../src/tools/llm-gateway-kit.js");
 const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
 requireUpstreamCosts("test-server-tools");
+const { upstreamCosts } = await import("../src/upstream-costs.js");
 const { _testEventsForTest } = await import("../src/posthog.js");
 
 let pass = 0, fail = 0;
@@ -51,7 +52,7 @@ for (const [slug, tier] of SELLING) {
   // engine is the dollar decision: "auto" falls back to NATIVE provider search,
   // which is priced by the provider and forwards max_uses only to Anthropic.
   ok(search.parameters.engine === "exa", `${slug} web_search engine pinned to exa (never auto/native)`);
-  ok(search.parameters.mode === "auto", `${slug} web_search mode pinned to auto ($0.007; deep-reasoning is $0.015)`);
+  ok(search.parameters.mode === "auto", `${slug} web_search mode pinned to auto (deep-reasoning is dearer)`);
   ok(search.parameters.max_uses === lim.max_uses, `${slug} web_search max_uses pinned to ${lim.max_uses}`);
   ok(search.parameters.max_characters === lim.max_characters, `${slug} web_search max_characters pinned (the token bound)`);
   ok(search.parameters.max_total_results === lim.max_uses * lim.max_results, `${slug} web_search max_total_results derived, not buyer-set`);
@@ -79,7 +80,7 @@ for (const [slug] of SELLING) {
   throws(() => validateRequest({ model, messages: msg(), tools: [{ ...WS, parameters: { engine: "native" } }] }, slug),
     "not accepted on server tool", `${slug} buyer engine:"native" refused (it changes the price)`);
   throws(() => validateRequest({ model, messages: msg(), tools: [{ ...WS, parameters: { mode: "deep-reasoning" } }] }, slug),
-    "not accepted on server tool", `${slug} buyer mode:"deep-reasoning" refused ($0.015 vs $0.007)`);
+    "not accepted on server tool", `${slug} buyer mode:"deep-reasoning" refused (a dearer mode)`);
   throws(() => validateRequest({ model, messages: msg(), tools: [{ ...WS, parameters: { max_results: 25, max_characters: 100000 } }] }, slug),
     "not accepted on server tool", `${slug} buyer result/character widening refused`);
   throws(() => validateRequest({ model, messages: msg(), tools: [{ ...WF, parameters: { max_content_tokens: 100000 } }] }, slug),
@@ -145,10 +146,10 @@ for (const [slug, tier] of NOT_SELLING) {
   throws(() => validateRequest(body, slug), "/v1/pro/chat/completions",
     `${slug} refuses web_search and names a route that sells it`);
 }
-// The economics behind that refusal, stated as an assertion: one Exa search is
-// $0.007, so the budget tiers cannot carry even a single step.
+// The economics behind that refusal, stated as an assertion: one search costs
+// more than the budget tiers can carry for even a single step.
 const searchFee = SERVER_TOOL_POLICY["openrouter:web_search"].feeUsdPerUse;
-ok(searchFee === 0.007, "web_search is priced at the verified Exa auto rate ($0.007/request)");
+ok(searchFee > 0 && searchFee === upstreamCosts().fees.webSearchPerUse, "web_search is priced at the private table's per-search fee");
 for (const [slug, tier] of NOT_SELLING) {
   if (tier.price === undefined || tier.price >= 0.1) continue;
   ok(searchFee * 2 > tier.price * MARGIN || tier.price * MARGIN - searchFee < 0.02,

@@ -1,6 +1,7 @@
 // Every job-level secret in deploy.yml is blanked in that job's secretless
-// install step. `npm ci` runs dependency lifecycle scripts, so a secret left
-// in the install env is readable by any postinstall a lockfile bump brings in.
+// install step and in the adapter step (it installs framework packages from
+// the registry). An install runs dependency lifecycle scripts, so a secret
+// left in its env is readable by any postinstall a version bump brings in.
 // Offline: reads the workflow text only.
 import { readFileSync } from "node:fs";
 
@@ -20,7 +21,8 @@ for (const l of lines) {
   if (cur) cur.lines.push(l);
 }
 
-let checkedSteps = 0;
+const INSTALLS = [/^- name: Install dependencies \(secretless\)$/, /^- name: Adapter tests\b/];
+let checkedSteps = 0, adapterSteps = 0;
 for (const job of jobs) {
   // Job-level env: the block right under "    env:".
   const secrets = new Set();
@@ -32,17 +34,20 @@ for (const job of jobs) {
     }
   }
   for (let i = 0; i < job.lines.length; i++) {
-    if (job.lines[i].trim() !== "- name: Install dependencies (secretless)") continue;
+    const t = job.lines[i].trim();
+    if (!INSTALLS.some((re) => re.test(t))) continue;
     checkedSteps++;
+    if (INSTALLS[1].test(t)) adapterSteps++;
     const blanked = new Set();
     for (let k = i + 1; k < job.lines.length && !/^ {6}- /.test(job.lines[k]); k++) {
       const b = /^\s+([A-Z0-9_]+): ""\s*$/.exec(job.lines[k]);
       if (b) blanked.add(b[1]);
     }
     const missing = [...secrets].filter((s) => !blanked.has(s));
-    ok(missing.length === 0, `${job.name}: the secretless install blanks every job-level secret${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
+    ok(missing.length === 0, `${job.name}: "${t.slice(8, 40)}" blanks every job-level secret${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
   }
 }
+ok(adapterSteps >= 1, `the scan found the adapter step (${adapterSteps})`);
 ok(checkedSteps >= 10, `the scan found the secretless install steps (${checkedSteps}) - zero would mean it is blind`);
 
 console.log(`\n${pass} passed, ${fail} failed`);
