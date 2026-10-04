@@ -14,10 +14,17 @@ const {
   IMAGES_FAST_TOOLS, IMAGE_TIERS, IMAGES_FAST_PATH, IMAGES_PRO_PATH, VIDEOS_PATH,
   OPENROUTER_IMAGES_URL, OPENROUTER_VIDEOS_URL,
   validateImageTierRequest, validateVideosRequest, linkRepriced, mediaMarginTable, withinMargin,
-  VIDEOS_MODEL, VIDEOS_PRICE, VIDEOS_DURATION_SECONDS, VIDEOS_WORST_CASE_USD, _resetListingCacheForTest,
+  VIDEOS_MODEL, VIDEOS_PRICE, VIDEOS_DURATION_SECONDS, videosWorstCaseUsd, linkBounds, _resetListingCacheForTest,
 } = await import("../src/tools/llm-images-fast-kit.js");
 const { MARGIN, IMAGES_MODEL, LLM_GATEWAY_TOOLS } = await import("../src/tools/llm-gateway-kit.js");
 const { _testEventsForTest } = await import("../src/posthog.js");
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+requireUpstreamCosts("test-images-fast-kit");
+// Bounds come from the private table; mocked upstream bills are derived from
+// them so no real rate is typed here.
+const KB = linkBounds(IMAGE_TIERS["v1-images-fast"].chain[0]), MB = linkBounds(IMAGE_TIERS["v1-images-fast"].chain[1]);
+const PB = linkBounds(IMAGE_TIERS["v1-images-pro"].chain[0]), QB = linkBounds(IMAGE_TIERS["v1-images-pro"].chain[1]);
+const VW = videosWorstCaseUsd();
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -33,7 +40,7 @@ ok(bySlug("v1-videos")?.route === `POST ${VIDEOS_PATH}` && bySlug("v1-videos").p
 ok(IMAGES_FAST_TOOLS.every((t) => t.discovery?.bodyType === "json" && t.discovery.input?.prompt && t.discovery.inputSchema?.required?.includes("prompt") && typeof t.handler === "function" && t.category === "llm"), "every tool carries a json discovery example with a prompt and a handler");
 ok(IMAGES_FAST_TOOLS.every((t) => !/\u2014/.test(t.description + t.name)), "no em dashes in tool copy");
 for (const [tier, t] of Object.entries(IMAGE_TIERS)) {
-  ok(t.chain.length === 2 && t.chain.every((l) => l.model && l.provider && typeof l.worstCaseUsd === "number" && l.listed?.unit && typeof l.listed.maxCostUsd === "number"), `${tier}: primary + one failover, each with a provider pin, a bound and a listed-price check`);
+  ok(t.chain.length === 2 && t.chain.every((l) => l.model && l.provider && linkBounds(l) && l.listed?.unit), `${tier}: primary + one failover, each with a provider pin, a bound and a listed-price check`);
   // Compare NUMBERS, not trimmed strings: a chain of trailing-zero replaces is
   // both fragile ("$10" would become "$1") and reads as a sanitizer.
   // v1-images is the flagship /v1/images/generations route, whose tool lives in the gateway kit.
@@ -44,8 +51,8 @@ ok(IMAGE_TIERS["v1-images"].chain[0].model === IMAGES_MODEL && IMAGE_TIERS["v1-i
 ok(IMAGE_TIERS["v1-images"].chain.every((l) => l.model !== "google/gemini-2.5-flash-image" && (l.params.output_format === "png" || l.model === "openai/gpt-5-image-mini")), "the route keeps its documented PNG output on every link (gpt-5-image-mini answers PNG natively)");
 const table = mediaMarginTable();
 ok(table.length === 7 && table.every((r) => withinMargin(r.price, r.worst)), `margin: every link's bound is within the margin share of its tier price (${table.map((r) => `${r.model}@$${r.price}`).join(", ")})`);
-ok(!withinMargin(0.02, 0.0141) && withinMargin(0.02, 0.014), "withinMargin compares in micro-dollars (an exact boundary is equal, not a float near-miss)");
-ok(Math.abs(VIDEOS_WORST_CASE_USD - 0.03 * VIDEOS_DURATION_SECONDS) < 1e-9 && VIDEOS_WORST_CASE_USD <= VIDEOS_PRICE * MARGIN + 1e-9, "video worst case is fixed by the locked 4 s duration and stays within bound");
+ok(!withinMargin(1, MARGIN + 0.000001) && withinMargin(1, MARGIN), "withinMargin compares in micro-dollars (an exact boundary is equal, not a float near-miss)");
+ok(VW > 0 && VW <= VIDEOS_PRICE * MARGIN + 1e-9, "video worst case is fixed by the locked 4 s duration and stays within bound");
 
 // ---- image validation ----
 ok(validateImageTierRequest({ prompt: " a fox " }, "v1-images-fast").prompt === "a fox", "prompt trims and validates");
@@ -63,12 +70,12 @@ await throws(() => validateImageTierRequest("nope", "v1-images-fast"), "JSON obj
 {
   const klein = IMAGE_TIERS["v1-images-fast"].chain[0];
   const listing = (cost, tag = "black-forest-labs") => [{ provider_tag: tag, pricing: [{ billable: "output_image", unit: "megapixel", cost_usd: cost }] }];
-  ok(!linkRepriced(klein, listing(0.014)) && !linkRepriced(klein, listing(0.01)), "listed price at or under the bound is not repriced");
-  ok(linkRepriced(klein, listing(0.015)), "listed price above the bound is repriced");
+  ok(!linkRepriced(klein, listing(KB.listedMaxUsd)) && !linkRepriced(klein, listing(KB.listedMaxUsd * 0.7)), "listed price at or under the bound is not repriced");
+  ok(linkRepriced(klein, listing(KB.listedMaxUsd * 1.07)), "listed price above the bound is repriced");
   ok(!linkRepriced(klein, null) && !linkRepriced(klein, []) && !linkRepriced(klein, listing(0.5, "someone-else")), "unreadable listing / provider gone -> fail-open (not repriced)");
   const qwen = IMAGE_TIERS["v1-images-pro"].chain[1];
-  ok(!linkRepriced(qwen, [{ provider_tag: "alibaba", pricing: [{ billable: "output_image", unit: "image", variant: "1k", cost_usd: 0.03 }, { billable: "output_image", unit: "image", variant: "2k", cost_usd: 0.9 }] }]), "variant-priced link checks ONLY its pinned variant (a 2K reprice does not trip the 1K pin)");
-  ok(linkRepriced(qwen, [{ provider_tag: "alibaba", pricing: [{ billable: "output_image", unit: "image", variant: "1k", cost_usd: 0.031 }] }]), "pinned-variant reprice trips");
+  ok(!linkRepriced(qwen, [{ provider_tag: "alibaba", pricing: [{ billable: "output_image", unit: "image", variant: "1k", cost_usd: QB.listedMaxUsd }, { billable: "output_image", unit: "image", variant: "2k", cost_usd: QB.listedMaxUsd * 30 }] }]), "variant-priced link checks ONLY its pinned variant (a 2K reprice does not trip the 1K pin)");
+  ok(linkRepriced(qwen, [{ provider_tag: "alibaba", pricing: [{ billable: "output_image", unit: "image", variant: "1k", cost_usd: QB.listedMaxUsd * 1.03 }] }]), "pinned-variant reprice trips");
 }
 
 // ---- image handler (stubbed fetch) ----
@@ -86,7 +93,7 @@ function installFetch() {
     }
     const body = init.body ? JSON.parse(init.body) : null;
     calls.push({ url: u, method: init.method || "GET", body, headers: init.headers || {} });
-    const cost = body?.model === "openai/gpt-5-image-mini" ? 0.0085 : 0.014;
+    const cost = body?.model === "openai/gpt-5-image-mini" ? MB.worstCaseUsd * 0.6 : KB.worstCaseUsd;
     const r = perModel[body?.model] ? perModel[body.model](body) : { status: 200, json: { created: 1, data: [{ b64_json: JPEG_B64, media_type: "image/jpeg" }], usage: { prompt_tokens: 11, completion_tokens: 4096, total_tokens: 4107, cost, is_byok: false, cost_details: { upstream_inference_cost: cost } } } };
     return { ok: r.status < 400, status: r.status, text: async () => JSON.stringify(r.json), json: async () => r.json, headers: { get: () => "application/json" } };
   };
@@ -113,15 +120,15 @@ process.env.OPENROUTER_API_KEY = "test-key";
   ok(String(c.headers.Authorization || "").startsWith("Bearer test-key"), "bearer key on the request");
   ok(out.data.length === 1 && out.data[0].b64_json === JPEG_B64 && out.data[0].media_type === "image/jpeg" && typeof out.created === "number" && out.model === "black-forest-labs/flux.2-klein-4b", "OpenAI images response shape: created/model/data[b64_json, media_type]");
   ok(out.usage && out.usage.cost === undefined && out.usage.cost_details === undefined && out.usage.is_byok === undefined && out.usage.total_tokens === 4107, "usage passes with cost/cost_details/is_byok stripped");
-  ok(!JSON.stringify(out).includes("0.014"), "the upstream bill appears nowhere in the response");
+  ok(!JSON.stringify(out).includes(String(KB.worstCaseUsd)), "the upstream bill appears nowhere in the response");
   const ev = lastGatewayEvent();
-  ok(ev?.properties.tier === "v1-images-fast" && ev?.properties.upstreamUsd === 0.014 && ev?.properties.priceUsd === 0.02 && ev?.properties.model === "black-forest-labs/flux.2-klein-4b", "gateway_usage telemetry: tier/price/upstream/model");
+  ok(ev?.properties.tier === "v1-images-fast" && ev?.properties.upstreamUsd === KB.worstCaseUsd && ev?.properties.priceUsd === 0.02 && ev?.properties.model === "black-forest-labs/flux.2-klein-4b", "gateway_usage telemetry: tier/price/upstream/model");
   ok(calls.length === 1, "exactly one upstream call on the happy path");
 }
 
 // pro tier happy path: pro primary + locked params
 {
-  calls = []; perModel = { "black-forest-labs/flux.2-pro": () => ({ status: 200, json: { data: [{ b64_json: JPEG_B64, media_type: "image/jpeg" }], usage: { cost: 0.03 } } }) };
+  calls = []; perModel = { "black-forest-labs/flux.2-pro": () => ({ status: 200, json: { data: [{ b64_json: JPEG_B64, media_type: "image/jpeg" }], usage: { cost: PB.worstCaseUsd } } }) };
   const out = await bySlug("v1-images-pro").handler({ prompt: "a desk" });
   ok(calls[0].body.model === "black-forest-labs/flux.2-pro" && calls[0].body.provider.only[0] === "black-forest-labs" && out.model === "black-forest-labs/flux.2-pro" && out.usage.cost === undefined, "pro tier serves flux.2-pro first, cost stripped");
 }
@@ -166,11 +173,11 @@ process.env.OPENROUTER_API_KEY = "test-key";
   _resetListingCacheForTest();
   calls = []; perModel = {};
   listingReply = (u) => u.includes("flux.2-klein-4b")
-    ? { data: { id: "black-forest-labs/flux.2-klein-4b", endpoints: [{ provider_tag: "black-forest-labs", pricing: [{ billable: "output_image", unit: "megapixel", cost_usd: 0.02 }] }] } }
-    : { data: { endpoints: [{ provider_tag: "openai", pricing: [{ billable: "output_image", unit: "token", cost_usd: 0.000008 }] }] } };
+    ? { data: { id: "black-forest-labs/flux.2-klein-4b", endpoints: [{ provider_tag: "black-forest-labs", pricing: [{ billable: "output_image", unit: "megapixel", cost_usd: KB.listedMaxUsd * 1.4 }] }] } }
+    : { data: { endpoints: [{ provider_tag: "openai", pricing: [{ billable: "output_image", unit: "token", cost_usd: MB.listedMaxUsd }] }] } };
   const out = await bySlug("v1-images-fast").handler({ prompt: "a fox" });
   ok(calls.length === 1 && calls[0].body.model === "openai/gpt-5-image-mini" && out.model === "openai/gpt-5-image-mini", "a primary repriced ABOVE its bound on the live listing is skipped before any spend; the failover serves");
-  listingReply = () => ({ data: { endpoints: [{ provider_tag: "black-forest-labs", pricing: [{ billable: "output_image", unit: "megapixel", cost_usd: 0.02 }] }, { provider_tag: "openai", pricing: [{ billable: "output_image", unit: "token", cost_usd: 0.00001 }] }] } });
+  listingReply = () => ({ data: { endpoints: [{ provider_tag: "black-forest-labs", pricing: [{ billable: "output_image", unit: "megapixel", cost_usd: KB.listedMaxUsd * 1.4 }] }, { provider_tag: "openai", pricing: [{ billable: "output_image", unit: "token", cost_usd: MB.listedMaxUsd * 1.25 }] }] } });
   _resetListingCacheForTest(); calls = [];
   const e = await throws(() => bySlug("v1-images-fast").handler({ prompt: "a fox" }), "repriced", "chain repriced end to end -> 503, nothing spent");
   ok(e?.statusCode === 503 && calls.length === 0, "…503 and zero upstream generation calls");
@@ -207,7 +214,7 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
     }
     seen.polls.push({ url: u, auth: init.headers?.Authorization });
     const s = statuses[Math.min(polls++, statuses.length - 1)];
-    const j = { id: "job1", status: s, ...(s === "completed" ? { unsigned_urls: [`${OPENROUTER_VIDEOS_URL}/job1/content?index=0`], usage: { cost: 0.12, is_byok: false } } : {}), ...(s === "failed" ? { error: failError ?? "content policy" } : {}) };
+    const j = { id: "job1", status: s, ...(s === "completed" ? { unsigned_urls: [`${OPENROUTER_VIDEOS_URL}/job1/content?index=0`], usage: { cost: VW, is_byok: false } } : {}), ...(s === "failed" ? { error: failError ?? "content policy" } : {}) };
     return { ok: true, status: 200, text: async () => JSON.stringify(j) };
   };
   return seen;
@@ -219,9 +226,9 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
   ok(seen.polls.length === 3 && seen.polls.every((p) => p.url === `${OPENROUTER_VIDEOS_URL}/job1` && String(p.auth).startsWith("Bearer ")), "polls the job with our key until completed");
   ok(seen.content && seen.content.url === `${OPENROUTER_VIDEOS_URL}/job1/content?index=0` && String(seen.content.auth).startsWith("Bearer "), "downloads the clip with our key (unsigned URLs 401 without it)");
   ok(out.data[0].b64_json === MP4.toString("base64") && out.data[0].media_type === "video/mp4" && out.data[0].duration_seconds === 4 && out.data[0].resolution === "720p" && out.data[0].aspect_ratio === "9:16" && out.model === VIDEOS_MODEL, "video response: inline mp4 base64 + the locked facts");
-  ok(out.usage && out.usage.cost === undefined && !JSON.stringify(out).includes("0.12") && !JSON.stringify(out).includes("job1"), "upstream cost and job id appear nowhere in the response");
+  ok(out.usage && out.usage.cost === undefined && !JSON.stringify(out).includes(String(VW)) && !JSON.stringify(out).includes("job1"), "upstream cost and job id appear nowhere in the response");
   const ev = lastGatewayEvent();
-  ok(ev?.properties.tier === "v1-videos" && ev?.properties.upstreamUsd === 0.12 && ev?.properties.priceUsd === VIDEOS_PRICE, "video telemetry: tier/price/upstream");
+  ok(ev?.properties.tier === "v1-videos" && ev?.properties.upstreamUsd === VW && ev?.properties.priceUsd === VIDEOS_PRICE, "video telemetry: tier/price/upstream");
 }
 {
   installVideoFetch({ statuses: ["failed"], failError: { message: "blocked by policy" } });

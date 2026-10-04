@@ -6,6 +6,9 @@
 // Live calls need a real X_BEARER_TOKEN and are not exercised here.
 
 import { X_DATA_TOOLS, xDataEnabled, __test } from "../src/tools/x-data-kit.js";
+import { upstreamCosts } from "../src/upstream-costs.js";
+import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+requireUpstreamCosts("test-x-data-kit");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`ASSERT FAIL - ${m}`); } };
@@ -31,7 +34,7 @@ const jsonRes = (status, body, headers = {}) => ({
 // ----------------------------------------------------------------------------
 // Catalog envelope
 // ----------------------------------------------------------------------------
-// Priced 2026-08-27 against X's published pay-per-use rate card ($0.005/post read, $0.010/user read; page cap 10).
+// Priced 2026-08-27 against X's pay-per-use rate card (private table; page cap 10).
 const EXPECTED = { "x-search-recent": "$0.08", "x-user": "$0.015", "x-user-tweets": "$0.08", "x-tweet": "$0.008", "x-users-lookup": "$0.15" };
 ok(X_DATA_TOOLS.length === 5, `5 tools exported (got ${X_DATA_TOOLS.length})`);
 for (const t of X_DATA_TOOLS) {
@@ -262,17 +265,21 @@ if (fail) process.exit(1);
 {
   const { estimateXReadUsd, actualXReadUsd, xDataSpendStatus, _xSpendReset, _xSpendBook } = await import("../src/tools/x-data-kit.js");
   let p = 0, f = 0; const ok = (c, m) => { if (c) { p++; console.log(`ok - cap: ${m}`); } else { f++; console.error(`FAIL - cap: ${m}`); } };
-  ok(Math.abs(estimateXReadUsd("/tweets/search/recent", { max_results: 10 }) - 0.05) < 1e-9, "10 posts estimate $0.05");
-  ok(Math.abs(estimateXReadUsd("/users/by", { usernames: "a,b,c" }) - 0.03) < 1e-9, "3 users estimate $0.03");
-  ok(Math.abs(estimateXReadUsd("/tweets/123") - 0.005) < 1e-9 && Math.abs(estimateXReadUsd("/users/by/username/x") - 0.01) < 1e-9, "single post / single user");
-  ok(Math.abs(actualXReadUsd("/tweets/search/recent", { data: [1, 2, 3] }) - 0.015) < 1e-9 && actualXReadUsd("/tweets/search/recent", { data: [] }) === 0, "actual bills per item returned, an empty page costs nothing");
-  process.env.X_BEARER_TOKEN = "test-bearer"; process.env.X_DATA_DAILY_MAX_USD = "0.06";
-  _xSpendReset(); _xSpendBook(0.02);
+  // X's card from the private table; every figure below is derived from it.
+  const P = upstreamCosts().vendor.x.postRead, U = upstreamCosts().vendor.x.userRead;
+  const near = (a, b, e = 1e-9) => Math.abs(a - b) < e;
+  ok(near(estimateXReadUsd("/tweets/search/recent", { max_results: 10 }), 10 * P), "10 posts estimate 10 post reads");
+  ok(near(estimateXReadUsd("/users/by", { usernames: "a,b,c" }), 3 * U), "3 users estimate 3 user reads");
+  ok(near(estimateXReadUsd("/tweets/123"), P) && near(estimateXReadUsd("/users/by/username/x"), U), "single post / single user");
+  ok(near(actualXReadUsd("/tweets/search/recent", { data: [1, 2, 3] }), 3 * P) && actualXReadUsd("/tweets/search/recent", { data: [] }) === 0, "actual bills per item returned, an empty page costs nothing");
+  // Cap at 12 post reads with 4 already booked: a 5-post estimate fits, a 10-post one does not.
+  process.env.X_BEARER_TOKEN = "test-bearer"; process.env.X_DATA_DAILY_MAX_USD = String(12 * P);
+  _xSpendReset(); _xSpendBook(4 * P);
   const realFetch = globalThis.fetch; let fetched = 0; globalThis.fetch = async () => { fetched++; return new Response(JSON.stringify({ data: [{ id: "1" }] }), { status: 200, headers: { "content-type": "application/json" } }); };
   try {
-    const r1 = await __test.xGet("/tweets/search/recent", { max_results: 5 }); // $0.025 estimate: 0.02 + 0.025 <= 0.06 -> allowed, books $0.005 actual
-    ok(Array.isArray(r1.data) && fetched === 1 && Math.abs(xDataSpendStatus().spentUsd - 0.025) < 1e-6, `under the cap: fetched, booked the actual ($${xDataSpendStatus().spentUsd})`);
-    let threw = null; try { await __test.xGet("/tweets/search/recent", { max_results: 10 }); } catch (e) { threw = e; } // 0.025 + 0.05 > 0.06 -> refused before fetch
+    const r1 = await __test.xGet("/tweets/search/recent", { max_results: 5 }); // 4P + 5P <= 12P -> allowed, books 1P actual
+    ok(Array.isArray(r1.data) && fetched === 1 && near(xDataSpendStatus().spentUsd, 5 * P, 1e-4), "under the cap: fetched, booked the actual");
+    let threw = null; try { await __test.xGet("/tweets/search/recent", { max_results: 10 }); } catch (e) { threw = e; } // 5P + 10P > 12P -> refused before fetch
     ok(threw?.statusCode === 503 && /usage cap/.test(threw.message) && !/\$\d/.test(threw.message) && fetched === 1, "over the cap: 503 before any fetch, names the cap");
     ok(xDataSpendStatus().refusedToday === 1 && xDataSpendStatus().status === "ok", "status counts the refusal; the cap is not yet reached by booked spend");
     process.env.X_DATA_DAILY_MAX_USD = "0"; threw = null; try { await __test.xGet("/tweets/1"); } catch (e) { threw = e; }

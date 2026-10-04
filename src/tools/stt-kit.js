@@ -25,6 +25,7 @@ import { parseMultipartFile } from "../multipart.js";
 import { parseBuffer } from "music-metadata";
 import { safeFetch } from "./fetch-guard.js";
 import { redactSecrets } from "./redact.js";
+import { upstreamCosts } from "../upstream-costs.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
@@ -35,11 +36,11 @@ function bad(message, statusCode = 400) {
 // Max audio file size in bytes (25 MB — OpenAI's limit).
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 
-/** OpenAI's per-audio-minute list price for the model each tier sends (their
- *  pricing page; gpt-transcribe read 2026-08-04, unchanged 2026-09-18). The
- *  margin test derives the cap bound from this: maxMinutes x rate <= STT_MARGIN
- *  x price. A model missing here fails that test rather than being assumed free. */
-export const UPSTREAM_USD_PER_MINUTE = Object.freeze({ "gpt-transcribe": 0.0045 });
+/** Per-audio-minute upstream rate for the model each tier sends, from the
+ *  private table (src/upstream-costs.js, never committed). The margin test
+ *  derives the cap bound from it: maxMinutes x rate <= STT_MARGIN x price. A
+ *  model missing there fails that test rather than being assumed free. */
+export function upstreamUsdPerMinute(model) { return upstreamCosts().sttPerMinute[model] ?? null; }
 /** Worst-case upstream spend may not exceed this share of the tier price - the
  *  same bound the LLM gateway's margin clamp holds. */
 export const STT_MARGIN = 0.7;

@@ -43,6 +43,7 @@
 // would expose our job ids.
 import { bad, fetchOpenRouter, throwUpstreamError, assertUpstreamBody, MARGIN, OPENROUTER_ATTRIBUTION, upstreamUserId, IMAGES_PATH, IMAGES_PRICE } from "./llm-gateway-kit.js";
 import { redactSecrets } from "./redact.js";
+import { upstreamCosts } from "../upstream-costs.js";
 
 export const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images";
 export const OPENROUTER_VIDEOS_URL = "https://openrouter.ai/api/v1/videos";
@@ -53,19 +54,23 @@ export const IMAGES_PRO_PATH = "/v1/images/pro";
 export const VIDEOS_PATH = "/v1/videos/generations";
 export const IMAGE_MAX_PROMPT_CHARS = 4_000;
 
-// One link = one model on one provider at a known listed price. `worstCaseUsd`
-// is the bound the tier price was set against (listed price x the locked
-// output, plus the prompt bill where the provider meters text); `listed` is
-// the live-listing check: the endpoint's `output_image` pricing line for that
-// unit (and variant, when priced by tier) must not exceed `maxCostUsd`.
+// One link = one model on one provider. Its bounds live in the private table
+// (src/upstream-costs.js, `media`, never committed): `worstCaseUsd` is the
+// bound the tier price was set against, `listedMaxUsd` the ceiling the live
+// listing's `output_image` line for `listed.unit` (and variant) must not
+// exceed. A link without bounds is skipped (503, never charged).
+export function linkBounds(link) {
+  const b = upstreamCosts().media?.[link.model];
+  return b && Number.isFinite(b.worstCaseUsd) && Number.isFinite(b.listedMaxUsd) ? b : null;
+}
 export const IMAGE_TIERS = {
   "v1-images-fast": {
     path: IMAGES_FAST_PATH,
     price: 0.02,
     chain: [
       // Per-megapixel pricing, locked 1024x1024 billed as 1 MP.
-      { model: "black-forest-labs/flux.2-klein-4b", provider: "black-forest-labs", params: {}, worstCaseUsd: 0.014,
-        listed: { unit: "megapixel", maxCostUsd: 0.014 } },
+      { model: "black-forest-labs/flux.2-klein-4b", provider: "black-forest-labs", params: {},
+        listed: { unit: "megapixel" } },
       // Token-priced: ~1568 image tokens at medium plus text prompt tokens.
       // gpt-5-image-mini replaced gpt-image-1-mini here 2026-09-02, ahead of the
       // latter's 2026-12-01 retirement: identical image_output and prompt
@@ -73,8 +78,8 @@ export const IMAGE_TIERS = {
       // gpt-image-2 does not fit under this tier's bound. Verified LIVE in the IMAGE catalog
       // (/api/v1/images/models); absent from the chat-model list, which is not
       // the same thing.
-      { model: "openai/gpt-5-image-mini", provider: "openai", params: { quality: "medium" }, worstCaseUsd: 0.013, // measured live 2026-09-02 at medium
-        listed: { unit: "token", maxCostUsd: 0.000008 } },
+      { model: "openai/gpt-5-image-mini", provider: "openai", params: { quality: "medium" },
+        listed: { unit: "token" } },
     ],
   },
   "v1-images-pro": {
@@ -82,12 +87,12 @@ export const IMAGE_TIERS = {
     price: 0.05,
     chain: [
       // Per-megapixel pricing, locked 1024x1024.
-      { model: "black-forest-labs/flux.2-pro", provider: "black-forest-labs", params: {}, worstCaseUsd: 0.03,
-        listed: { unit: "megapixel", maxCostUsd: 0.03 } },
+      { model: "black-forest-labs/flux.2-pro", provider: "black-forest-labs", params: {},
+        listed: { unit: "megapixel" } },
       // Flat per image (2K is the same price but 65 s and a 3 MB PNG, so the
       // fallback pins 1K).
-      { model: "qwen/qwen-image-3", provider: "alibaba", params: { resolution: "1K" }, worstCaseUsd: 0.03,
-        listed: { unit: "image", variant: "1k", maxCostUsd: 0.03 } },
+      { model: "qwen/qwen-image-3", provider: "alibaba", params: { resolution: "1K" },
+        listed: { unit: "image", variant: "1k" } },
     ],
   },
   // The flagship /v1/images/generations route (tool def in llm-gateway-kit.js,
@@ -102,10 +107,10 @@ export const IMAGE_TIERS = {
     price: IMAGES_PRICE,
     chain: [
       // Per-megapixel pricing; the locked 1024x1024 output bills as 1 MP (PNG).
-      { model: "black-forest-labs/flux.2-pro", provider: "black-forest-labs", params: { output_format: "png" }, worstCaseUsd: 0.03,
-        listed: { unit: "megapixel", maxCostUsd: 0.03 } },
-      { model: "openai/gpt-5-image-mini", provider: "openai", params: { quality: "medium" }, worstCaseUsd: 0.013,
-        listed: { unit: "token", maxCostUsd: 0.000008 } },
+      { model: "black-forest-labs/flux.2-pro", provider: "black-forest-labs", params: { output_format: "png" },
+        listed: { unit: "megapixel" } },
+      { model: "openai/gpt-5-image-mini", provider: "openai", params: { quality: "medium" },
+        listed: { unit: "token" } },
     ],
   },
 };
@@ -116,8 +121,11 @@ export const VIDEOS_DURATION_SECONDS = 4;
 export const VIDEOS_RESOLUTION = "720p";
 export const VIDEOS_ASPECT_RATIOS = ["16:9", "9:16"];
 export const VIDEOS_MAX_PROMPT_CHARS = 2_000;
-// Listed SKU `duration_seconds_without_audio_720p` x 4 s.
-export const VIDEOS_WORST_CASE_USD = 0.12;
+// Listed SKU `duration_seconds_without_audio_720p` x 4 s, from the private table.
+export function videosWorstCaseUsd() {
+  const v = upstreamCosts().media?.[VIDEOS_MODEL]?.worstCaseUsd;
+  return Number.isFinite(v) ? v : null;
+}
 const VIDEOS_POLL_MS = () => Math.max(100, parseInt(process.env.VIDEOS_POLL_MS || "5000", 10) || 5000);
 const VIDEOS_MAX_WAIT_MS = () => Math.max(1_000, parseInt(process.env.VIDEOS_MAX_WAIT_MS || "180000", 10) || 180_000);
 // Per-link generation timeout. Deliberately short: a timeout AFTER the image was
@@ -132,9 +140,9 @@ const IMAGE_LINK_TIMEOUT_MS = Math.max(5_000, parseInt(process.env.IMAGE_LINK_TI
 export function mediaMarginTable() {
   const rows = [];
   for (const [tier, t] of Object.entries(IMAGE_TIERS)) {
-    for (const link of t.chain) rows.push({ tier, price: t.price, model: link.model, worst: link.worstCaseUsd });
+    for (const link of t.chain) rows.push({ tier, price: t.price, model: link.model, worst: linkBounds(link)?.worstCaseUsd ?? null });
   }
-  rows.push({ tier: "v1-videos", price: VIDEOS_PRICE, model: VIDEOS_MODEL, worst: VIDEOS_WORST_CASE_USD });
+  rows.push({ tier: "v1-videos", price: VIDEOS_PRICE, model: VIDEOS_MODEL, worst: videosWorstCaseUsd() });
   return rows;
 }
 export function withinMargin(price, worst) {
@@ -203,7 +211,8 @@ export function linkRepriced(link, endpoints) {
     && (link.listed.variant ? p?.variant === link.listed.variant : true));
   if (!lines.length) return false;
   const max = Math.max(...lines.map((p) => Number(p.cost_usd) || 0));
-  return max > link.listed.maxCostUsd + 1e-12;
+  const b = linkBounds(link);
+  return !b || max > b.listedMaxUsd + 1e-12;
 }
 export function _resetListingCacheForTest() { listingCache.clear(); }
 
@@ -228,8 +237,12 @@ export async function imageTierHandler(tierSlug, input, req, { zdr = false } = {
   const { prompt } = validateImageTierRequest(input, tierSlug);
   let lastErr = null;
   for (const link of tier.chain) {
+    if (!linkBounds(link)) {
+      lastErr = bad("Image tier temporarily unavailable", 503);
+      continue;
+    }
     if (linkRepriced(link, await listedEndpoints(link.model))) {
-      console.warn(`[images-fast] ${link.model} on ${link.provider} is listed above its bound ($${link.listed.maxCostUsd}) - skipping`);
+      console.warn(`[images-fast] ${link.model} on ${link.provider} is listed above its bound - skipping`);
       lastErr = bad("Image tier temporarily unavailable - upstream repriced above the bound; the operator has been notified", 503);
       continue;
     }
@@ -248,8 +261,8 @@ export async function imageTierHandler(tierSlug, input, req, { zdr = false } = {
       if (usage) {
         const upstreamUsd = typeof usage.cost === "number" ? usage.cost : null;
         delete usage.cost; delete usage.cost_details; delete usage.is_byok; delete usage.cache_discount;
-        if (upstreamUsd != null && upstreamUsd > link.worstCaseUsd + 1e-9) {
-          console.warn(`[images-fast] ${link.model} billed $${upstreamUsd} above its bound $${link.worstCaseUsd} on ${tierSlug}`);
+        if (upstreamUsd != null && upstreamUsd > (linkBounds(link)?.worstCaseUsd ?? Infinity) + 1e-9) {
+          console.warn(`[images-fast] ${link.model} billed above its bound on ${tierSlug}`);
         }
         try {
           const { capturePostHogGatewayUsage } = await import("../posthog.js");
@@ -322,6 +335,7 @@ async function openRouterGet(url, { timeoutMs = 30_000, accept } = {}) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function videosHandler(input, req) {
+  if (videosWorstCaseUsd() == null) throw bad("/v1/videos is temporarily unavailable.", 503);
   const user = userOf(req);
   const { prompt, aspect_ratio } = validateVideosRequest(input);
   const body = { model: VIDEOS_MODEL, prompt, duration: VIDEOS_DURATION_SECONDS, resolution: VIDEOS_RESOLUTION, aspect_ratio, generate_audio: false, ...(user ? { user } : {}) };
@@ -360,8 +374,8 @@ async function videosHandler(input, req) {
 
   const rawUsage = st?.usage && typeof st.usage === "object" ? st.usage : null;
   const upstreamUsd = rawUsage && typeof rawUsage.cost === "number" ? rawUsage.cost : null;
-  if (upstreamUsd != null && upstreamUsd > VIDEOS_WORST_CASE_USD + 1e-9) {
-    console.warn(`[videos] ${VIDEOS_MODEL} billed $${upstreamUsd} above its bound $${VIDEOS_WORST_CASE_USD}`);
+  if (upstreamUsd != null && upstreamUsd > (videosWorstCaseUsd() ?? 0) + 1e-9) {
+    console.warn(`[videos] ${VIDEOS_MODEL} billed above its bound`);
   }
   try {
     const { capturePostHogGatewayUsage } = await import("../posthog.js");

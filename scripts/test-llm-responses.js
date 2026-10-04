@@ -3,6 +3,8 @@ process.env.POSTHOG_TEST_CAPTURE = "1";
 import { LLM_RESPONSES_TOOLS, validateResponsesRequest, isEmptyIncomplete, RESPONSES_PATH_BY_TIER } from "../src/tools/llm-responses-kit.js";
 import { TIERS, createSseUsageScrubber } from "../src/tools/llm-gateway-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+requireUpstreamCosts("test-llm-responses");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -120,7 +122,7 @@ await baseTool.handler({ model: "openai/gpt-4o-mini", input: "hi" }, fakeReq).th
   const small = { model: "anthropic/claude-haiku-4.5", max_output_tokens: 16, input: "hi" };
   const bigger = { model: "anthropic/claude-opus-5", max_output_tokens: 4096, instructions: "x ".repeat(20_000), input: "y ".repeat(5_000) };
   const qs = meteredResponsesQuoteUsd(small), qb = meteredResponsesQuoteUsd(bigger);
-  ok(!qs.invalid && !qb.invalid && qs.usd >= TIERS["v1-chat-metered"].price && qb.usd > qs.usd * 10, `quote grows with the body: small $${qs.usd}, bigger $${qb.usd}`);
+  ok(!qs.invalid && !qb.invalid && qs.usd >= TIERS["v1-chat-metered"].price && qb.usd > qs.usd * 10, "quote grows with the body");
   ok(metered.quote(small) === qs.usd && metered.quote(bigger) === qb.usd, "the tool's quote() is the same function payments.js prices the 402 from");
   const qi = meteredResponsesQuoteUsd({ max_output_tokens: 16 });
   ok(qi.invalid && qi.usd === TIERS["v1-chat-metered"].price, "an invalid body quotes the floor and says why (the handler's 400 refuses it)");
@@ -139,7 +141,7 @@ await baseTool.handler({ model: "openai/gpt-4o-mini", input: "hi" }, fakeReq).th
   let belt = null;
   try { await metered.handler(bigger, { ...fakeReq, __meteredQuoteUsd: qs.usd }); } catch (e) { belt = e; }
   ok(belt?.statusCode === 400 && /quoted at/.test(belt.message) && seen.length === 1, "metered belt: a body quoting above the gated price is refused 400 before any upstream call");
-  // gpt-5-pro ($15/$120): the -fast Claude ids left the catalog 2026-07-24, and a
+  // gpt-5-pro (the priciest admitted row): the -fast Claude ids left the catalog 2026-07-24, and a
   // model that fell back to a cheaper family row would quote UNDER the cap here.
   const overCap = { model: "openai/gpt-5-pro", max_output_tokens: 8192, input: "\u4e2d".repeat(190_000) };
   const qo = meteredResponsesQuoteUsd(overCap);

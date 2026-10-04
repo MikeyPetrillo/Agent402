@@ -37,7 +37,7 @@ export function resolveCreditsKey(pluginConfig = {}) {
 
 // x402 wallet payment - optional (peer deps) and, when the wallet has a
 // Permit2 allowance, METERED: the `upto` scheme authorizes a CEILING (the
-// per-request quote) and the gateway settles actual usage x 1.15, the way a
+// per-request quote) and the gateway settles actual usage plus a markup, the way a
 // per-token router bills. Without the allowance it pays `exact` (the quote).
 export const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 export const BASE_CAIP2 = "eip155:8453";

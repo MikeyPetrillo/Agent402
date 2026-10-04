@@ -31,7 +31,7 @@ import { createHash } from "node:crypto";
 import {
   substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor,
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
-  clampToMargin, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
+  clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, costFor,
   assertUpstreamBody, reasoningProfile, REASONING_EFFORTS,
@@ -145,6 +145,7 @@ function probeContent(content, where, acc) {
  *  Anthropic body (model resolved, caps applied), `probe` a token-estimate
  *  copy for the margin clamp. */
 export function validateMessagesRequest(input, tierSlug) {
+  assertMeteredAvailable(TIERS[tierSlug]);
   const tier = TIERS[tierSlug];
   if (!tier) throw bad(`unknown tier ${tierSlug}`, 500);
   if (!input || typeof input !== "object" || Array.isArray(input)) throw bad("Body must be a JSON object (Anthropic Messages request)");

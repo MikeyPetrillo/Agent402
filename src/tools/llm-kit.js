@@ -12,6 +12,7 @@
 //   llm-premium  $0.50  — o3, o3-mini         (32k input, 2048 output)
 
 import { redactSecrets } from "./redact.js";
+import { upstreamCosts } from "../upstream-costs.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
@@ -27,38 +28,28 @@ const TIERS = {
   "llm-premium": { prefixes: ["o3", "o3-mini"],     maxInputChars: 32_000, maxTokens: 2048 },
 };
 
-// OpenAI list prices, USD per 1M tokens (developers.openai.com/api/docs/pricing,
-// read 2026-09-15). Longest prefix wins, like the gateway's MODEL_COST. OpenAI
-// returns token counts and never a cost, so the spend meter and the PostHog
-// margin telemetry are fed from this table - before 2026-09-15 this kit
-// recorded nothing, and /__operator/margin.json showed a day of llm-pro sales
-// against zero upstream. Prices here are OBSERVATIONS: re-read the page when
-// a model is added, never tune them to make a margin look acceptable.
-const OPENAI_COST = {
-  "gpt-4o-mini":  { prompt: 0.15, cached: 0.075, completion: 0.60 },
-  "gpt-4o":       { prompt: 2.50, cached: 1.25,  completion: 10.00 },
-  "gpt-4.1-nano": { prompt: 0.10, cached: 0.025, completion: 0.40 },
-  "gpt-4.1-mini": { prompt: 0.40, cached: 0.10,  completion: 1.60 },
-  "gpt-4.1":      { prompt: 2.00, cached: 0.50,  completion: 8.00 },
-  "o3-mini":      { prompt: 1.10, cached: 0.55,  completion: 4.40 },
-  "o3":           { prompt: 2.00, cached: 0.50,  completion: 8.00 },
-};
-// A model the table does not know is priced at the DEAREST row so the meter
-// errs high, never silently low.
-const OPENAI_COST_UNKNOWN = OPENAI_COST["gpt-4o"];
-
+// OpenAI rates per 1M tokens, from the private table (src/upstream-costs.js,
+// never committed). OpenAI returns token counts and never a cost, so the
+// margin telemetry is fed from this table. Longest prefix wins; a model the
+// table does not know is priced at its DEAREST row so the meter errs high.
+// Without the table the cost is null and telemetry records tokens only.
 export function openaiCostRow(model) {
+  const table = upstreamCosts().openai;
+  const keys = Object.keys(table);
+  if (!keys.length) return null;
   const m = String(model || "");
   let best = null;
-  for (const k of Object.keys(OPENAI_COST)) {
+  for (const k of keys) {
     if ((m === k || m.startsWith(k + "-")) && (!best || k.length > best.length)) best = k;
   }
-  return best ? OPENAI_COST[best] : OPENAI_COST_UNKNOWN;
+  if (best) return table[best];
+  return keys.map((k) => table[k]).reduce((a, b) => (b.completion > a.completion ? b : a));
 }
 
 /** USD cost of one completion from OpenAI's usage block (cached prompt tokens at the cached rate). */
 export function openaiCostUsd(model, usage) {
   const row = openaiCostRow(model);
+  if (!row) return null;
   const prompt = Number(usage?.prompt_tokens) || 0;
   const cached = Math.min(prompt, Number(usage?.prompt_tokens_details?.cached_tokens) || 0);
   const completion = Number(usage?.completion_tokens) || 0;

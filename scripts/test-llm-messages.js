@@ -3,6 +3,8 @@ process.env.POSTHOG_TEST_CAPTURE = "1";
 import { LLM_MESSAGES_TOOLS, validateMessagesRequest, isEmptyMaxTokens, MESSAGES_PATH_BY_TIER, MESSAGES_TIER_BY_PATH } from "../src/tools/llm-messages-kit.js";
 import { TIERS, createSseUsageScrubber } from "../src/tools/llm-gateway-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+requireUpstreamCosts("test-llm-messages");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -147,7 +149,7 @@ globalThis.fetch = realFetch;
   const small = { model: "anthropic/claude-haiku-4.5", max_tokens: 16, messages: msg("hi") };
   const bigger = { model: "anthropic/claude-opus-5", max_tokens: 4096, system: "x ".repeat(20_000), messages: msg("y ".repeat(5_000)) };
   const qs = meteredMessagesQuoteUsd(small), qb = meteredMessagesQuoteUsd(bigger);
-  ok(!qs.invalid && !qb.invalid && qs.usd >= TIERS["v1-chat-metered"].price && qb.usd > qs.usd * 10, `quote grows with the body: small $${qs.usd}, bigger $${qb.usd}`);
+  ok(!qs.invalid && !qb.invalid && qs.usd >= TIERS["v1-chat-metered"].price && qb.usd > qs.usd * 10, "quote grows with the body");
   ok(metered.quote(small) === qs.usd && metered.quote(bigger) === qb.usd, "the tool's quote() is the same function payments.js prices the 402 from");
   // The largest body validation admits (200k chars, Opus, 8192 tokens) quotes
   // under the $2 cap, so the cap is pinned on the shared probe-level quoter.
@@ -176,7 +178,7 @@ globalThis.fetch = realFetch;
   ok(seen.length === 1, "the refused request never reached upstream");
   // Over the per-call cap: the 402 quoted the CAP (not the cost), so the
   // handler must refuse - with a stashed quote, and with no request at all.
-  // Fable 5.1 ($10/$50, new tokenizer x1.35, cache write x1.25): the -fast Claude
+  // Fable 5.1 (dear rates, new tokenizer, cache write surcharge): the -fast Claude
   // ids left the catalog 2026-07-24 and a cheaper family row would quote under the cap.
   const overCap = { model: "anthropic/claude-fable-5.1", max_tokens: 8192, messages: msg("\u4e2d".repeat(190_000)) };
   const qo = meteredMessagesQuoteUsd(overCap);

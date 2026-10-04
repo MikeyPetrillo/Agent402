@@ -65,6 +65,8 @@ import {
 import { LLM_MESSAGES_TOOLS } from "../src/tools/llm-messages-kit.js";
 import { LLM_RESPONSES_TOOLS } from "../src/tools/llm-responses-kit.js";
 import { LLM_TOOLS } from "../src/tools/llm-kit.js";
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+requireUpstreamCosts("test-leak-guard");
 import { EMBED_TOOLS } from "../src/tools/embed-kit.js";
 import { IMAGE_GEN_TOOLS } from "../src/tools/image-gen-kit.js";
 import { TTS_TOOLS } from "../src/tools/tts-kit.js";

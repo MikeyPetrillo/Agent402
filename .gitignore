@@ -115,3 +115,6 @@ coverage/
 
 # Internal review notes: cost and margin figures, never committed.
 docs/internal/
+
+# Private upstream-cost table (src/upstream-costs.js); never committed.
+upstream-costs*.json
