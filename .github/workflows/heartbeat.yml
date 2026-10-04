@@ -479,6 +479,29 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
           fi
 
+      # Sanctions lists (OFAC SDN) behind sanctions-wallet, sanctions-name and the
+      # router's payout screen. A list that never loads refuses every call, which
+      # is loud; a list whose refresh keeps failing keeps ANSWERING from an old
+      # copy, which is not. "stale" and "unloaded" page; "loading" (boot grace)
+      # and "unknown" never do.
+      - name: Sanctions list check (alarm on stale or unloaded)
+        if: always()
+        continue-on-error: true
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.sanctions.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "sanctions lists: $STATUS"
+          TITLE="Sanctions lists STALE or UNLOADED (OFAC SDN)"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [ "$STATUS" = "stale" ] || [ "$STATUS" = "unloaded" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The OFAC SDN list behind sanctions-wallet, sanctions-name and the router's payout screen reads $STATUS on /api/gateway-status. stale: the 12-hourly refresh has failed for over a day and screening is answering from an old copy. unloaded: it never loaded after boot and every screening call is refused 503. The operator view of /api/gateway-status carries the last error; the source is OFAC's sanctionslistservice export (src/tools/sanctions-kit.js). Auto-closes when it reads ok."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $STATUS at $(date -u +%FT%TZ)."
+            fi
+          elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the list reads ok at $(date -u +%FT%TZ)."
+          fi
+
       # Subscription gas sponsor - watches PATHUSD, not USDC.e. A sponsored
       # Tempo transaction pays its fee in the default token, so a sponsor full
       # of USDC.e and empty of PathUSD is EMPTY for this purpose and the chain

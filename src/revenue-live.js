@@ -1773,12 +1773,17 @@ export function revenuePage(baseUrl, snap) {
     // unreachable. Carried-forward reads say "cached" so freshness is honest.
     const hasBalance = r.balance != null;
     const status = !hasBalance ? `<span style="color:var(--accent);">unreachable</span>` : r.staleBalance ? `<span style="color:var(--green);">live</span> <span style="color:var(--muted);">cached</span>` : `<span style="color:var(--green);">live</span>`;
-    // The proof link is OUR OWN newest settle (canary or volume run): an
-    // outside buyer's tx hash resolves to that buyer's wallet on chain, so it
-    // is never published here (see publicRevenueSnapshot).
-    const own = r.lastInbound?.internal === true ? r.lastInbound : null;
-    const proof = own && own.tx
-      ? `<a href="${esc(own.tx)}" rel="noopener">${own.usd != null ? `$${esc(String(own.usd))}` : "settled"}</a>${own.when ? ` <span style="color:var(--muted);">${esc(String(own.when).slice(0, 10))}</span>` : ""}`
+    // The newest settlement on the rail, whoever paid (owner's call 2026-10-04:
+    // the column shows the latest payment through the rail, not only our own
+    // canary). Read from the recent rows and our own newest settle. The link is
+    // OUR wallet's explorer page, never the payment's own transaction: a tx hash
+    // names its payer on chain, and the amount and date already say which
+    // payment it is. Our own runs are marked "ours".
+    const candidates = [...(Array.isArray(r.recent) ? r.recent : []), r.lastInbound].filter((t) => t && t.when && Number.isFinite(Date.parse(t.when)));
+    const latest = candidates.reduce((best, t) => (!best || Date.parse(t.when) > Date.parse(best.when) ? t : best), null);
+    const ours = latest && (latest.internal === true || latest.external === false);
+    const proof = latest
+      ? `${r.explorer ? `<a href="${esc(r.explorer)}" rel="noopener">` : ""}${latest.usd != null ? `$${esc(String(latest.usd))}` : "settled"}${r.explorer ? "</a>" : ""} <span style="color:var(--muted);">${esc(String(latest.when).slice(0, 10))}${ours ? " · ours" : ""}</span>`
       : `<span style="color:var(--muted);">${hasBalance ? "none read yet" : "-"}</span>`;
     return `<tr>
       <td><strong>${esc(r.rail)}</strong> <span style="color:var(--muted);">${esc(r.asset)}</span></td>
@@ -1843,9 +1848,9 @@ export function revenuePage(baseUrl, snap) {
       <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0;">x402 rails <span style="color:var(--muted);font-weight:400;">· by chain</span></h2>
       <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><strong style="color:var(--ink);">${snap.rails.length}</strong> chains, ranked by transactions</span>
     </div>
-    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;max-width:70ch;">Transactions count every settlement on the rail, ours included. External is money from others. Proof is our own newest settle on the rail (a canary or volume run), linked to its explorer; outside buyers' transactions are counted, never listed, because a transaction hash names its payer on chain.</p>
+    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;max-width:70ch;">Transactions count every settlement on the rail, ours included. External is money from others. Latest settle is the newest payment on the rail, from an outside buyer or from our own canary and volume runs (marked ours), linked to our wallet on that chain's explorer.</p>
     <div class="rv-tablewrap"><table class="rv-table">
-      <thead><tr><th>Rail</th><th class="num">Transactions</th><th class="num">External</th><th class="num">External $</th><th>Our latest settle</th><th>Status</th><th>Wallet</th></tr></thead>
+      <thead><tr><th>Rail</th><th class="num">Transactions</th><th class="num">External</th><th class="num">External $</th><th>Latest settle</th><th>Status</th><th>Wallet</th></tr></thead>
       <tbody>${railsSorted.map(railRow).join("\n")}</tbody>
     </table></div>
     ${partialNotes ? `<p style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:8px 0 0;">${partialNotes} rail${partialNotes === 1 ? "" : "s"} read partially from public RPCs this refresh (balances are live; detail in <a href="/api/revenue">/api/revenue</a>).</p>` : ""}

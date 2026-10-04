@@ -452,7 +452,7 @@ import { TTS_TOOLS } from "./tools/tts-kit.js";
 // 2026-08-22 seller-landscape builds: keyless derivatives data + env-gated X data / B2B enrichment.
 import { DERIVATIVES_TOOLS } from "./tools/derivatives-kit.js";
 import { SOLANA_INTEL_TOOLS } from "./tools/solana-intel-kit.js";
-import { SANCTIONS_TOOLS, startSanctionsRefresh } from "./tools/sanctions-kit.js";
+import { SANCTIONS_TOOLS, startSanctionsRefresh, sanctionsStatus, sanctionsHealth } from "./tools/sanctions-kit.js";
 import { IMAGES_FAST_TOOLS } from "./tools/llm-images-fast-kit.js";
 import { ALCHEMY_DATA_TOOLS } from "./tools/alchemy-data-kit.js";
 import { FARCASTER_SOCIAL_TOOLS, farcasterSocialEnabled } from "./tools/farcaster-social-kit.js";
@@ -3154,6 +3154,9 @@ app.get("/api/gateway-status", async (req, res) => {
     jevSpend: full ? spend.jevSpend : publicBucket(spend.jevSpend),
     upstreamBudgets: full ? budgets : publicBudgets(budgets),
     stellarFacilitator, databases, operatorAuth: operatorAuthStatus(full),
+    // OFAC SDN list behind sanctions-wallet / sanctions-name and the router's
+    // payout screen: one word publicly, counts and the last error for the operator.
+    sanctions: full ? { ...sanctionsHealth(), ...sanctionsStatus() } : sanctionsHealth(),
     mppEvmDomainFallback: full ? mppFallbackStatus() : publicFallback(mppFallbackStatus()),
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),
     // Daily MPP reconciliation (src/mpp-reconcile.js): status words + counts,

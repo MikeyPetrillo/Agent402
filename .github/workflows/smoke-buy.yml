@@ -47,6 +47,8 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-24.04
+    # Spends the burner wallet: every run waits for the spending environment's approval.
+    environment: spending
     timeout-minutes: 8
     env:
       TARGET_URL: https://agent402.tools

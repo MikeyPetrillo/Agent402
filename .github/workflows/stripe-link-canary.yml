@@ -14,6 +14,15 @@ on:
         description: "Paid route (>= $0.50, stripe challenge offered)"
         default: "/v1/premium/chat/completions"
         required: false
+      spend_request_id:
+        description: "Reuse an already-approved Link spend request (rerun after a late approval)"
+        required: false
+        default: ""
+      probe_only:
+        description: "Only check that the 402 offers stripe/charge; buy nothing"
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   buy:
@@ -31,4 +40,6 @@ jobs:
           STRIPE_PROFILE_ID: ${{ secrets.STRIPE_PROFILE_ID }}
           POW_SECRET: ${{ secrets.POW_SECRET }}
           STRIPE_CANARY_ROUTE: ${{ inputs.route }}
+          STRIPE_CANARY_SPEND_REQUEST_ID: ${{ inputs.spend_request_id }}
+          STRIPE_CANARY_PROBE_ONLY: ${{ inputs.probe_only && '1' || '' }}
         run: node scripts/stripe-link-canary.mjs
