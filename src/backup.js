@@ -88,7 +88,6 @@ export function decryptBackupBuffer(buf, key) {
   const d = createDecipheriv("aes-256-gcm", key, iv); d.setAuthTag(tag);
   return Buffer.concat([d.update(body), d.final()]);
 }
-export const backupEncrypted = () => Boolean(cfg().encKey);
 
 export const backupConfigured = () => {
   const c = cfg();

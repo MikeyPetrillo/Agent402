@@ -64,7 +64,6 @@ export function meteredResponsesQuoteUsd(input) {
     return { usd: tier.price, invalid: true, reason: String(e?.message || e).slice(0, 160) };
   }
 }
-export const RESPONSES_TIER_BY_PATH = Object.fromEntries(Object.entries(RESPONSES_PATH_BY_TIER).map(([t, p]) => [p, t]));
 
 const ROLES = new Set(["user", "assistant", "system", "developer"]);
 const SERVER_TOOL_RE = /^(web_search|file_search|computer|mcp|code_interpreter|image_generation|local_shell|shell|apply_patch)/;

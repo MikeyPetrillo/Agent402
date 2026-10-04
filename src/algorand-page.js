@@ -5,11 +5,10 @@
 // the only listed seller. Listing for external sellers is automatic — the
 // index crawler picks up any origin whose 402s advertise an Algorand
 // mainnet network.
-import { marketSellers, marketTools, marketActivityHtml, marketPage } from "./market-page.js";
+import { marketSellers, marketTools, marketPage } from "./market-page.js";
 
 export const algorandSellers = (snapshot) => marketSellers("algorand", snapshot);
 export const algorandTools = (snapshot) => marketTools("algorand", snapshot);
-export const algorandActivityHtml = (activity, selected) => marketActivityHtml("algorand", activity, selected);
 
 export function algorandPage(baseUrl, { snapshot, rail, activity, selectedSeller, algorandWallet, host = null, payable = null } = {}) {
   return marketPage("algorand", baseUrl, { snapshot, rail, activity, selectedSeller, wallet: algorandWallet, host, payable });

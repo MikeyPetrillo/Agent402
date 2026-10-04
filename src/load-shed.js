@@ -84,4 +84,3 @@ export function shedResponse(res, retryAfter = 2) {
 
 /** Zero the counters (hourly from the server, so they read "since the last hour"). */
 export function resetShedCounters() { for (const k of Object.keys(counters)) counters[k] = k === "since" ? Date.now() : 0; }
-export const __resetShedForTest = resetShedCounters;

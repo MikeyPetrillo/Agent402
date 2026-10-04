@@ -19,7 +19,6 @@ import { logSafe } from "./log-safe.js";
 const HAS_DATA_DIR = existsSync("/data");
 const DATA_DIR = HAS_DATA_DIR ? "/data" : "/tmp";
 let WISH_FILE = join(DATA_DIR, "wishes.jsonl");
-export const wishStoragePersistent = HAS_DATA_DIR;
 
 const NEED_MAX = 500;
 const CONTEXT_MAX = 300;

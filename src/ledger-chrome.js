@@ -815,10 +815,6 @@ function nav(activePath) {
 // Footer - full 5-column (home page)
 // ---------------------------------------------------------------------------
 
-// One footer for every page (2026-09-09): the seven-column homepage footer
-// repeated the nav dropdowns link for link. Kept as a name so old imports resolve.
-export const ledgerFooterFull = () => ledgerFooterCompact();
-
 // ---------------------------------------------------------------------------
 // Footer - compact single-row (sub-pages)
 // ---------------------------------------------------------------------------

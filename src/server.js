@@ -6343,10 +6343,6 @@ function paidScanAllowed() {
   sqlScanCount++;
   return true;
 }
-/** Budget state, for the operator surface. */
-export function paidScanBudgetState() {
-  return { day: sqlScanDay, used: sqlScanCount, budget: SQL_SCAN_DAILY_BUDGET, skipped: sqlScanSkipped };
-}
 
 async function scanActivity(chainKey, wallet, prior = null) {
   if (chainKey === "solana") return solanaActivity(wallet);
@@ -6651,7 +6647,6 @@ function hostEntryFigures(chainKey = null) {
   hostFiguresCache.set(key, { at: Date.now(), value });
   return value;
 }
-export const _hostFiguresCacheForTest = hostFiguresCache;
 // The MPP marketplace - independent directory, synchronous snapshot (no
 // on-chain join, unlike /marketplace above), same cache window.
 app.get("/mpp-marketplace", (_req, res) => {
