@@ -3,7 +3,7 @@
 import { REPO_URL } from "./repo-link.js";
 import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { CHROME_HEAD_LINKS, CHROME_CSS } from "./chrome.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbLd } from "./ledger-chrome.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
 import { agentReportPriceRange, cardReportPriceRange } from "./report-tiers.js";
@@ -619,74 +619,6 @@ function ledgerPriceLine(tool) {
   return isComputePayable(tool)
     ? `<span style="background:var(--green);color:#08130b;font-weight:700;font-size:11px;padding:1px 6px;font-family:var(--font-mono);">FREE</span> w/ compute · or ${tool.price}`
     : `${tool.price}`;
-}
-
-export function toolsIndexPage(baseUrl, catalog) {
-  const tools = toolList(catalog);
-  const canonical = `${baseUrl}/tools`;
-  const title = `${tools.length} pay-per-call APIs for AI agents | Agent402 tool catalogue`;
-  const description = `${tools.length} machine-payable tools for AI agents: browser rendering, PDF extraction, wallet-keyed memory, conversions, validation, networking. USDC per call via x402 - no API keys.`;
-  const jsonLd = {
-    "@context": "https://schema.org",
-    "@type": "ItemList",
-    name: "Agent402 tool catalogue",
-    numberOfItems: tools.length,
-    itemListElement: tools.map((t, i) => ({
-      "@type": "ListItem",
-      position: i + 1,
-      name: t.name,
-      url: `${baseUrl}/tools/${t.slug}`,
-    })),
-  };
-  const freeCount = tools.filter(isComputePayable).length;
-  const sections = Object.entries(CATEGORIES)
-    .map(([key, { label, blurb }]) => {
-      const inCat = tools.filter((t) => t.category === key);
-      if (!inCat.length) return "";
-      const free = inCat.filter(isComputePayable).length;
-      const tag =
-        free === inCat.length
-          ? ` <span class="free">ALL FREE w/ compute</span>`
-          : free > 0
-            ? ` <span class="free">${free} FREE w/ compute</span>`
-            : ` <span class="paidtag">USDC only</span>`;
-      // Large families (e.g. the 100+ live-data tools) render as a compact
-      // sample + count, not hundreds of cards; each still has its own /tools page.
-      if (inCat.length > 40) {
-        const sample = inCat
-          .slice(0, 24)
-          .map((t) => `<a href="/tools/${t.slug}">${esc(t.name)}</a>`)
-          .join(" · ");
-        return `<h2><a href="/tools/category/${key}" style="color:inherit;text-decoration:none">${esc(label)}</a> <span style="color:var(--muted);font-size:.85rem">(${inCat.length})</span>${tag}</h2>
-<p class="cat-blurb">${esc(blurb)}</p>
-<p class="sub" style="font-size:.85rem">${sample} · <a href="/tools/category/${key}">…and ${inCat.length - 24} more →</a></p>`;
-      }
-      const cards = inCat.map(card).join("\n");
-      return `<h2><a href="/tools/category/${key}" style="color:inherit;text-decoration:none">${esc(label)}</a> <span style="color:var(--muted);font-size:.85rem">(${inCat.length})</span>${tag}</h2>
-<p class="cat-blurb">${esc(blurb)}</p>
-<div class="grid">${cards}</div>`;
-    })
-    .join("\n");
-
-  return `<!doctype html>
-<html lang="en">
-<head>
-${head({ title, description, canonical, jsonLd, image: `${baseUrl}/card.png` })}
-</head>
-<body>
-${renderHeader("/tools")}
-<div class="wrap">
-  <div class="crumb"><a href="/">Agent402</a> / tools</div>
-  <h1>${tools.length} tools, one base URL, zero API keys</h1>
-  <p class="sub">Call any endpoint, get an <code>HTTP 402</code> quote, and either pay a fraction of a cent in ${RAILS_PAREN} via <a href="https://x402.org" rel="noopener">x402</a> - or, on the <span class="free">FREE</span> tools, skip the wallet entirely. The catalog is capped - every tool here earns its place and answers its own example on every deploy. Machine-readable: <a href="/api/pricing">/api/pricing</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a>.</p>
-  <div style="margin:18px 0"><input id="tool-search" type="text" placeholder="Search ${tools.length} tools\u2026" style="width:100%;max-width:480px;padding:10px 16px;background:#0d1220;border:1px solid #1e2638;border-radius:10px;color:#e6e9f0;font-size:.95rem;outline:none;"><span id="tool-search-count" style="margin-left:12px;color:#8b93a7;font-size:.85rem"></span></div>
-  <div class="callout"><b>${freeCount} of ${tools.length} tools are free</b> - no wallet needed. Pay with a few seconds of <a href="/api/pow">proof-of-work</a> (CPU) instead of USDC. The other ${tools.length - freeCount} (browser, network, memory) settle in USDC because they cost real infrastructure to run. Look for the <span class="free">FREE</span> badge below.</div>
-  ${sections}
-  <script src="/js/pages-tool-search.js"></script>
-</div>
-${renderFooter()}
-</body>
-</html>`;
 }
 
 /** Category landing page — /tools/:category shows all tools in one category. */
