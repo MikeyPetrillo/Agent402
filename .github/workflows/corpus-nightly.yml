@@ -126,12 +126,13 @@ jobs:
   # speech and MODEL_COST rows are the worst-case bound every LLM/TTS price sits
   # under - a row that goes stale between pushes is a tool selling under cost until
   # somebody pushes. Found 2026-09-18: Kokoro's dearest endpoint had been 6.5x our
-  # row for some time and only an audit noticed. Network-only, no key, spends nothing.
+  # row for some time and only an audit noticed. Reads the private cost table; spends nothing.
   model-guard:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -165,7 +166,7 @@ jobs:
           $FAILS
           \`\`\`
 
-          Reproduce locally: \`node scripts/test-gateway-model-ids.js\` (network only, no key)."
+          Reproduce locally: \`node scripts/test-gateway-model-ids.js\` with the private cost table."
             if [ -n "$OPEN" ]; then
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ). Run: $RUN"
             else

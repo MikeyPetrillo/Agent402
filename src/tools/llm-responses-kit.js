@@ -26,7 +26,7 @@
 import {
   substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor, meteredQuoteForProbe, costFor,
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
-  clampToMargin, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
+  clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
   defaultReasoningFor, validateReasoning,
   refuseCostVariants,
@@ -100,6 +100,7 @@ function probeParts(parts, where, acc) {
 /** Validate an OpenAI Responses request for a tier. Returns
  *  { body, probe, imageCount, isRouted, routedCategory, routedQuality, chain }. */
 export function validateResponsesRequest(input, tierSlug) {
+  assertMeteredAvailable(TIERS[tierSlug]);
   const tier = TIERS[tierSlug];
   if (!tier) throw bad(`unknown tier ${tierSlug}`, 500);
   if (!input || typeof input !== "object" || Array.isArray(input)) throw bad("Body must be a JSON object (OpenAI Responses request)");

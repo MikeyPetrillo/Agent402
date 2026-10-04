@@ -127,6 +127,7 @@ jobs:
     # buy step only. GH_TOKEN (github.token, issue management) and the
     # non-secret TARGET_URL stay job-wide.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
       GH_TOKEN: ${{ github.token }}
       TARGET_URL: https://agent402.tools
     steps:

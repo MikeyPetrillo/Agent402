@@ -818,6 +818,9 @@ jobs:
     # package cannot read them. That is the real F07 exposure; our own test
     # steps are trusted code from this repo.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -951,6 +954,7 @@ jobs:
           # LLM gateway validation (OpenAI-compat tiers, caps, env-gated 503)
           t node scripts/test-llm-gateway.js
           t node scripts/test-llm-kit-spend.js
+          t node scripts/test-upstream-costs.js
           # Gateway settle-failure breaker (per-payer + global refusal before any upstream call, finish-listener outcomes, source pins - offline)
           t node scripts/test-gateway-settle-breaker.js
 
@@ -1029,6 +1033,9 @@ jobs:
     # package cannot read them. That is the real F07 exposure; our own test
     # steps are trusted code from this repo.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -1162,6 +1169,9 @@ jobs:
           --health-timeout 3s
           --health-retries 20
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -1409,6 +1419,9 @@ jobs:
           --health-timeout 3s
           --health-retries 20
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -1692,6 +1705,9 @@ jobs:
     # package cannot read them. That is the real F07 exposure; our own test
     # steps are trusted code from this repo.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -1855,6 +1871,9 @@ jobs:
     # package cannot read them. That is the real F07 exposure; our own test
     # steps are trusted code from this repo.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -2005,6 +2024,9 @@ jobs:
           --health-timeout 3s
           --health-retries 20
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -2144,6 +2166,9 @@ jobs:
           --health-timeout 3s
           --health-retries 20
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -2384,6 +2409,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -2877,6 +2905,9 @@ jobs:
     # regression. Prod is not in-memory: REDIS_URL is set there, and the shared
     # limiter FAILS CLOSED, so a client regression refuses trials.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -3090,6 +3121,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -3346,6 +3380,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -3432,6 +3469,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -3619,6 +3659,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -3879,6 +3922,9 @@ jobs:
     # regression. Prod is not in-memory: REDIS_URL is set there, and the shared
     # limiter FAILS CLOSED, so a client regression refuses trials.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -4060,6 +4106,9 @@ jobs:
     # regression. Prod is not in-memory: REDIS_URL is set there, and the shared
     # limiter FAILS CLOSED, so a client regression refuses trials.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
@@ -4191,6 +4240,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+      # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
+      UPSTREAM_COSTS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork && '1' || '' }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}

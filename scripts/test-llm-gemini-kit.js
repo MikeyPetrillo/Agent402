@@ -16,6 +16,8 @@ const {
 } = await import("../src/tools/llm-gemini-kit.js");
 const { TIERS } = await import("../src/tools/llm-gateway-kit.js");
 const { repointToGeminiWire } = await import("../src/tools/llm-gemini-kit.js");
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+requireUpstreamCosts("test-llm-gemini-kit");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };

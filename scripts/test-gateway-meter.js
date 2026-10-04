@@ -1,5 +1,10 @@
 // The metered-settlement pricing rule.
-import { meteredUsd, METER_MARKUP, METER_FLOOR_USD, METER_MIN_SETTLE_USD, isMeterable, applyMeteredSettlement } from "../src/gateway-meter.js";
+import { meteredUsd, meterMarkup, METER_FLOOR_USD, METER_MIN_SETTLE_USD, isMeterable, applyMeteredSettlement } from "../src/gateway-meter.js";
+import { setUpstreamCostsForTest } from "../src/upstream-costs.js";
+
+// The real markup is private; the rule is tested on a FAKE one.
+setUpstreamCostsForTest({ models: [["fake/", { prompt: 1, completion: 1 }]], meter: { markup: 1.2 } });
+const METER_MARKUP = meterMarkup();
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
@@ -221,7 +226,7 @@ ok(isMeterable({ x402: { scheme: "upto" } }) === false && isMeterable({ _x402Sch
   const overrides = [];
   const req = { ...reqWith({ "payment-signature": paymentHeader(uptoPayload) }), __meteredQuoteUsd: 0.058011 };
   const amount = applyMeteredSettlement({ result: data, req, tool: { slug: "v1-chat-metered", price: "$0.001" }, res: { headersSent: false, setHeader() {} }, enabled: true, setOverrides: (_r, o) => overrides.push(o) });
-  ok(typeof amount === "number" && amount > 0.0042 && amount < 0.0049 && !("__meterUpstreamUsd" in data) && overrides.length === 1, `applyMeteredSettlement reads the non-enumerable sentinel, meters, and deletes it`);
+  ok(typeof amount === "number" && amount > 0.0042 && amount <= 0.0042 * METER_MARKUP + 1e-6 && !("__meterUpstreamUsd" in data) && overrides.length === 1, `applyMeteredSettlement reads the non-enumerable sentinel, meters, and deletes it`);
 }
 
 // ---- metered tier: the ceiling is the per-request quote, not the catalog floor ----

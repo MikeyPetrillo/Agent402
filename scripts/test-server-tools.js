@@ -19,6 +19,8 @@ const {
   TIERS, MARGIN, validateRequest, worstCaseUpstreamCost, serverToolWorstCase, serverToolsIn,
   stopServerToolsFor, SERVER_TOOL_POLICY, modelsList, promptCacheKey, LLM_GATEWAY_TOOLS,
 } = await import("../src/tools/llm-gateway-kit.js");
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+requireUpstreamCosts("test-server-tools");
 const { _testEventsForTest } = await import("../src/posthog.js");
 
 let pass = 0, fail = 0;

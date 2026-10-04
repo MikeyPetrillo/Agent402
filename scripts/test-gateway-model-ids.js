@@ -15,11 +15,14 @@
 // silent green that let every one of those ship.
 import { readFileSync } from "node:fs";
 import {
-  TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, MODEL_COST, FLEX_MODELS, REASONING_MODELS, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
+  TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, FLEX_MODELS, REASONING_MODELS, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
   IMAGES_MODEL,
 } from "../src/tools/llm-gateway-kit.js";
 import { IMAGE_TIERS } from "../src/tools/llm-images-fast-kit.js";
 import { PRIMARY_PREFERENCE } from "../openclaw/models.js";
+import { upstreamCosts } from "../src/upstream-costs.js";
+import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+requireUpstreamCosts("test-gateway-model-ids");
 
 // STEALTH listings (stealth/ox-alpha) are the ONE id class this guard must not
 // fail on. A cloaked model is published under a pseudonym while a lab collects
@@ -111,7 +114,7 @@ for (const [q, byCat] of Object.entries(AUTO_RANKINGS)) {
 }
 // 3. TTS chain: every link is in the live speech list.
 for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link ${link.id} is live`);
-// 1b. Every speech row's costPerChar is at or above the DEAREST live endpoint
+// 1b. Every speech link's private per-char row is at or above the DEAREST live endpoint
 //     for that model, not the catalog headline. TTS bills per INPUT char, so
 //     this row IS the worst-case bound the $0.06 chain and the $0.005 lite tier
 //     are priced under, and the headline can be any one endpoint, not the
@@ -130,9 +133,11 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
     if (Number.isFinite(headline)) prices.push(headline);
     if (!prices.length) continue; // liveness already asserted above; an unpriced row is not an under-count
     const live = Math.max(...prices);
-    if (live > link.costPerChar) under.push(brief(link.id, `${link.id}: row ${link.costPerChar} < dearest live endpoint ${live}/char (${prices.length} price(s) read)`));
+    const row = upstreamCosts().speech[link.id];
+    if (row == null) { under.push(`${link.id} (no private speech row)`); continue; }
+    if (live > row) under.push(brief(link.id, `${link.id}: row ${row} < dearest live endpoint ${live}/char (${prices.length} price(s) read)`));
   }
-  ok(under.length === 0, `no speech costPerChar row is under its dearest live endpoint price${under.length ? `:\n    ${under.join("\n    ")}` : ""}`);
+  ok(under.length === 0, `no speech row is under its dearest live endpoint price${under.length ? `:\n    ${under.join("\n    ")}` : ""}`);
 }
 // 4. Price floor: for every live model a tier admits, MODEL_COST must not price
 //    it UNDER the DEAREST endpoint a default-tier call can be routed to, prompt

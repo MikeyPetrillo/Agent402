@@ -30,6 +30,7 @@ jobs:
     # them to the dependency-install step's environment. They are scoped to the
     # run step only. Non-secret config (TARGET_URL, matrix inputs) stays job-wide.
     env:
+      UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
       TARGET_URL: https://agent402.tools
       MATRIX_TOP_N: ${{ github.event.inputs.top_n }}
       MATRIX_DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '' }}

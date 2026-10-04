@@ -4,8 +4,7 @@
 // gateway_usage event, no daily_upstream_spend row. A buyer settled fifteen
 // $0.10 llm-pro calls in one evening and /__operator/margin.json showed the
 // revenue against $0 upstream. OpenAI returns token counts and never a cost,
-// so the kit prices the usage block itself from a table read off OpenAI's
-// pricing page, and feeds the SAME meter and PostHog event the gateway uses.
+// so the kit prices the usage block itself from the private rate table, and feeds the SAME meter and PostHog event the gateway uses.
 //
 // Offline: fetch is stubbed with an OpenAI-shaped body; the assertion on the
 // meter reads the stats DB's spend rows before and after, so a handler that
@@ -16,26 +15,30 @@ delete process.env.POSTHOG_API_KEY; // telemetry off; the METER must still run
 process.env.OPENAI_API_KEY = "sk-test-not-real";
 
 const { LLM_TOOLS, openaiCostUsd, openaiCostRow } = await import("../src/tools/llm-kit.js");
+const { upstreamCosts } = await import("../src/upstream-costs.js");
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+requireUpstreamCosts("test-llm-kit-spend");
 const stats = await import("../src/stats.js");
 
 let n = 0;
 const ok = (c, m) => { assert.ok(c, m); n++; };
 
-// --- the cost table: list prices, longest prefix, cached rate, unknown errs HIGH
+// --- the cost table: longest prefix, cached rate, unknown errs HIGH.
+// Expectations are computed from the private table, never typed here.
 {
+  const R = upstreamCosts().openai;
+  const both = (k) => Math.round((R[k].prompt + R[k].completion) * 1e6) / 1e6;
   const u = { prompt_tokens: 1_000_000, completion_tokens: 1_000_000 };
-  ok(openaiCostUsd("gpt-4o", u) === 12.5, "gpt-4o: list input + output rates");
-  ok(openaiCostUsd("gpt-4.1", u) === 10, "gpt-4.1: list rates");
-  ok(openaiCostUsd("gpt-4o-mini", u) === 0.75, "gpt-4o-mini: list rates");
-  ok(openaiCostUsd("gpt-4.1-mini-2025-04-14", u) === 2, "a dated id resolves by LONGEST prefix (mini, not 4.1)");
-  ok(openaiCostUsd("gpt-4o-2024-08-06", u) === 12.5, "gpt-4o dated id");
-  ok(openaiCostUsd("o3-mini", u) === 5.5 && openaiCostUsd("o3", u) === 10, "o3 family");
+  for (const k of ["gpt-4o", "gpt-4.1", "gpt-4o-mini", "o3-mini", "o3"]) ok(openaiCostUsd(k, u) === both(k), `${k}: input + output rates from its row`);
+  ok(openaiCostUsd("gpt-4.1-mini-2025-04-14", u) === both("gpt-4.1-mini"), "a dated id resolves by LONGEST prefix (mini, not 4.1)");
+  ok(openaiCostUsd("gpt-4o-2024-08-06", u) === both("gpt-4o"), "gpt-4o dated id");
   const cached = { prompt_tokens: 1_000_000, prompt_tokens_details: { cached_tokens: 1_000_000 }, completion_tokens: 0 };
-  ok(openaiCostUsd("gpt-4o", cached) === 1.25, "cached prompt tokens bill at the cached rate");
-  ok(openaiCostRow("gpt-9-unheard-of") === openaiCostRow("gpt-4o"),
+  ok(openaiCostUsd("gpt-4o", cached) === R["gpt-4o"].cached, "cached prompt tokens bill at the cached rate");
+  const dearest = Object.values(R).reduce((a, b) => (b.completion > a.completion ? b : a));
+  ok(openaiCostRow("gpt-9-unheard-of") === dearest,
      "a model the table does not know is priced at the DEAREST row - the meter errs high, never silently low");
-  ok(openaiCostUsd("gpt-4o", { prompt_tokens: 4000, completion_tokens: 300 }) === 0.013,
-     "a typical pro call: 4k in + 300 out on gpt-4o is ~$0.013 against the $0.10 price");
+  ok(openaiCostUsd("gpt-4o", { prompt_tokens: 4000, completion_tokens: 300 }) < 0.1 * 0.7,
+     "a typical pro call (4k in + 300 out on gpt-4o) stays inside the margin on the $0.10 price");
 }
 
 // --- the handler feeds the meter -------------------------------------------

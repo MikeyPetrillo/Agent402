@@ -6,7 +6,12 @@
 // suite exercises the full tier set, so switch it on before the kit loads.
 process.env.OX_ALPHA_ENABLED = "on";
 process.env.OPENROUTER_TTS_ENABLED = "true"; // modelsList lists the speech models only when the route is on (2026-09-06)
-import { TIERS, canonicalModel, PREFIX_CANONICAL, meteredQuoteUsd, METERED_MAX_QUOTE_USD, tierAllows, tierFor, validateRequest, modelsList, LLM_GATEWAY_TOOLS, stableStringify, promptCacheKey, promptCacheGet, promptCacheStore, GATEWAY_TIER_BY_PATH, AUTO_RANKINGS, classifyPrompt, validateEmbeddingsRequest, embeddingsCacheKey, EMBEDDINGS_PATH, isEmptyRefusal, tokenizerFactor, NEW_TOKENIZER_FACTOR } from "../src/tools/llm-gateway-kit.js";
+import { TIERS, canonicalModel, PREFIX_CANONICAL, meteredQuoteUsd, METERED_MAX_QUOTE_USD, tierAllows, tierFor, validateRequest, modelsList, LLM_GATEWAY_TOOLS, stableStringify, promptCacheKey, promptCacheGet, promptCacheStore, GATEWAY_TIER_BY_PATH, AUTO_RANKINGS, classifyPrompt, validateEmbeddingsRequest, embeddingsCacheKey, EMBEDDINGS_PATH, isEmptyRefusal, tokenizerFactor, NEW_TOKENIZER_FACTOR, costFor, modelCostRows } from "../src/tools/llm-gateway-kit.js";
+import { upstreamCosts } from "../src/upstream-costs.js";
+import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+requireUpstreamCosts("test-llm-gateway");
+// The private table's own row for an exact prefix (never a literal rate here).
+const ROW = (prefix) => modelCostRows().find(([p]) => p === prefix)?.[1];
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -901,8 +906,8 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
 // arbitrage on the pricey families (opus, o3-pro) without touching cheap ones.
 {
   const { costFor } = await import("../src/tools/llm-gateway-kit.js");
-  ok(costFor("claude-opus-4")?.completion === 75, "costFor resolves opus by prefix (bare name canonicalized)");
-  ok(costFor("openai/o3-pro-2026")?.prompt === 20, "longest prefix wins (o3-pro, not o3)");
+  ok(costFor("claude-opus-4") === ROW("anthropic/claude-opus"), "costFor resolves opus by prefix (bare name canonicalized)");
+  ok(costFor("openai/o3-pro-2026") === ROW("openai/o3-pro") && ROW("openai/o3-pro") !== ROW("openai/o3"), "longest prefix wins (o3-pro, not o3)");
   ok(costFor("acme/unknown-model") === null, "unknown family → null (callers fall back to the tier max_price bound)");
 
   const ascii = "The quick brown fox jumps over the lazy dog. ".repeat(1300); // ~58k chars
@@ -1044,7 +1049,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   // same prompt): the alternative returned archive pages for citations and a
   // wrong answer on a non-English prompt where Exa was right, so the tier keeps
   // Exa. Pinned so a silent switch needs the measurement redone.
-  ok(g.web.engine === "exa" && g.web.max_results === 5 && g.fixedUpstreamUsd === 0.007 && g.extraInputTokens === 4500, "grounded tier stays on Exa (pinned engine, fee and injected-token allowance) after the 2026-09-18 comparison");
+  ok(g.web.engine === "exa" && g.web.max_results === 5 && g.fixedUpstreamUsd === upstreamCosts().fees.groundedPerCall && g.fixedUpstreamUsd > 0 && g.extraInputTokens === 4500, "grounded tier stays on Exa (pinned engine, fee and injected-token allowance) after the 2026-09-18 comparison");
   globalThis.fetch = realFetch;
   delete process.env.OPENROUTER_API_KEY;
 }
@@ -1074,11 +1079,13 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const body = { model: "openai/gpt-4o", messages: msg1("x ".repeat(2000)), max_tokens: 1024 };
   const d = worstCaseUpstreamCost(body, pro), p = worstCaseUpstreamCost({ ...body, service_tier: "priority" }, pro);
   // (the field itself is counted as a few input tokens by the body estimate, so the per-token RATE is compared on the input side)
-  ok(p.cost.prompt === 5 && p.cost.completion === 20 && p.inTokens >= d.inTokens && Math.abs(p.inUsd / p.inTokens - (d.inUsd / d.inTokens) * PRIORITY_PRICE_FACTOR) < 1e-12 && Math.abs(p.outUsd - d.outUsd * PRIORITY_PRICE_FACTOR) < 1e-12 && p.totalUsd > d.totalUsd, `priority worst case is ${PRIORITY_PRICE_FACTOR}x the default row on both units`);
+  const r4o = costFor("openai/gpt-4o");
+  ok(p.cost.prompt === Math.min(r4o.prompt * PRIORITY_PRICE_FACTOR, pro.maxPrice.prompt) && p.cost.completion === Math.min(r4o.completion * PRIORITY_PRICE_FACTOR, pro.maxPrice.completion) && p.inTokens >= d.inTokens && Math.abs(p.inUsd / p.inTokens - (d.inUsd / d.inTokens) * PRIORITY_PRICE_FACTOR) < 1e-12 && Math.abs(p.outUsd - d.outUsd * PRIORITY_PRICE_FACTOR) < 1e-12 && p.totalUsd > d.totalUsd, `priority worst case is ${PRIORITY_PRICE_FACTOR}x the default row on both units`);
   const astra = worstCaseUpstreamCost({ model: "openai/gpt-6-astra", messages: msg1(), max_tokens: 64, service_tier: "priority" }, premium);
   ok(astra.cost.prompt === premium.maxPrice.prompt && astra.cost.completion === premium.maxPrice.completion, "the tier's max_price still bounds a priority row (capped at premium's bound, which rides upstream as provider.max_price)");
   const opus = worstCaseUpstreamCost({ model: "anthropic/claude-opus-5", messages: msg1(), max_tokens: 64, service_tier: "priority" }, premium);
-  ok(opus.cost.prompt === 11 && opus.cost.completion === 55, "opus-5 at priority prices factor x its regional row, which covers anthropic/fast's live endpoint");
+  const ro5 = costFor("anthropic/claude-opus-5");
+  ok(opus.cost.prompt === Math.min(ro5.prompt * PRIORITY_PRICE_FACTOR, premium.maxPrice.prompt) && opus.cost.completion === Math.min(ro5.completion * PRIORITY_PRICE_FACTOR, premium.maxPrice.completion), "opus-5 at priority prices factor x its regional row, which covers anthropic/fast's live endpoint");
   // Refused where it would breach: a 20k-char CJK prompt on gpt-4o clears the
   // budget at the default rate (output clamped) and busts it at priority - a
   // 400 before any spend, never a loss-making call.
@@ -1401,10 +1408,10 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(tierFor(A) === "v1-chat-premium" && tierFor(F) === "v1-chat-premium" && tierFor("openai/gpt-6-astra-pro") === "v1-chat-premium" && tierFor("anthropic/claude-fable-5") === null, "astra, astra-pro and fable-5.1 home on premium; fable-5 (a different model) is not admitted");
   ok(tierAllows("v1-chat-metered", A) && tierAllows("v1-chat-metered", F), "the metered tier admits both (union of the flat tiers)");
   const ca = costFor(A), cf = costFor(F);
-  ok(ca.prompt === 11 && ca.completion === 55, `astra has its own cost row at the dearest routable endpoint; the boundary-aware "openai/gpt-5" row never matched it`);
-  ok(cf.prompt === 10 && cf.completion === 50 && costFor("anthropic/claude-fable-5").prompt === 11, `fable-5.1 has its own row; the "anthropic/claude" haiku blanket would have under-priced it`);
-  ok(costFor("anthropic/claude-opus-5").prompt === 5.5 && costFor("openai/gpt-5.6-sol").prompt === 5.5 && costFor("openai/gpt-5.6-sol").completion === 33 && costFor("anthropic/claude-sonnet-5").prompt === 2.2 && costFor("anthropic/claude-haiku-4.5").completion === 5.5, "rows carry the dearest default-tier endpoint price, not the headline (sol, opus-5, sonnet-5, haiku-4.5)");
-  ok(costFor("anthropic/claude-opus-5-fast") === costFor("anthropic/claude-opus-5") && costFor("anthropic/claude-opus-4.7-fast").prompt === 5.5, "the -fast rows are gone (the ids left the catalog 2026-07-24); a stale -fast id falls to its base model's row");
+  ok(ca === ROW(A) && ca !== ROW("openai/gpt-5"), `astra has its own cost row at the dearest routable endpoint; the boundary-aware "openai/gpt-5" row never matched it`);
+  ok(cf === ROW(F) && costFor("anthropic/claude-fable-5") === ROW("anthropic/claude-fable") && cf !== ROW("anthropic/claude"), `fable-5.1 has its own row; the "anthropic/claude" haiku blanket would have under-priced it`);
+  ok(costFor("anthropic/claude-opus-5") === ROW("anthropic/claude-opus-5") && costFor("openai/gpt-5.6-sol") === ROW("openai/gpt-5.6-sol") && costFor("anthropic/claude-sonnet-5") === ROW("anthropic/claude-sonnet") && costFor("anthropic/claude-haiku-4.5") === ROW("anthropic/claude-haiku-4.5"), "sol, opus-5, sonnet-5 and haiku-4.5 resolve to their own rows (the live guard checks each against its dearest endpoint)");
+  ok(costFor("anthropic/claude-opus-5-fast") === costFor("anthropic/claude-opus-5") && costFor("anthropic/claude-opus-4.7-fast") === ROW("anthropic/claude-opus-4.7"), "the -fast rows are gone (the ids left the catalog 2026-07-24); a stale -fast id falls to its base model's row");
   ok(tokenizerFactor(F) === NEW_TOKENIZER_FACTOR && tokenizerFactor(A) === 1, "fable-5.1 is priced on the newer tokenizer; astra is o200k");
   ok(reasoningProfile(A)?.prefix === "openai/gpt-6-astra" && !reasoningProfile(A).efforts.includes("none") && reasoningProfile("openai/gpt-6-astra-pro")?.prefix === "openai/gpt-6-astra" && reasoningProfile(F)?.id === F, "reasoning rows: astra (prefix, covers -pro, no none), fable-5.1 (exact)");
   ok(defaultReasoningFor(A, "v1-chat-premium") === null && JSON.stringify(defaultReasoningFor(A, "v1-chat-metered")) === '{"effort":"low"}', "premium leaves the model default; metered injects low");
@@ -1580,7 +1587,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const K = await import("../src/tools/llm-gateway-kit.js");
   const { costFor: cf, reasoningProfile: rp, defaultReasoningFor: dr, flexEligible: fe, RETIRING_MODELS, retiringModel } = K;
   // qwen3.8-max-prime: its own row, so the metered tier's provider.max_price is not under its only endpoint.
-  ok(cf("qwen/qwen3.8-max-prime").prompt === 4 && cf("qwen/qwen3.8-max-prime").completion === 12 && cf("qwen/qwen3.8-max-0902").prompt === 2, "qwen3.8-max-prime has its own row; the qwen/ family row still prices the rest");
+  ok(cf("qwen/qwen3.8-max-prime") === ROW("qwen/qwen3.8-max-prime") && cf("qwen/qwen3.8-max-0902") === ROW("qwen/"), "qwen3.8-max-prime has its own row; the qwen/ family row still prices the rest");
   ok(tierAllows("v1-chat-metered", "qwen/qwen3.8-max-prime") && JSON.stringify(dr("qwen/qwen3.8-max-prime", "v1-chat-metered")) === '{"effort":"minimal"}', "qwen3.8-max-prime is metered-admitted and gets the lowest effort there (mandatory, default xhigh upstream)");
   // Retiring ids: served by their successor (since 2026-10-02; refused by name
   // before), the swap named in the reply, never priced as themselves.
@@ -1590,7 +1597,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     const b = validateRequest({ model: id, messages: [{ role: "user", content: "hi" }] }, tierFor(use));
     ok(b.model === use && b.__substitutedFrom === id && !Object.keys(b).includes("__substitutedFrom"), `${id}: served as ${use}, the requested id carried non-enumerably for the reply`);
   }
-  ok(!K.MODEL_COST.some(([p]) => Object.hasOwn(RETIRING_MODELS, p)), "no MODEL_COST row prices a retiring id");
+  ok(!K.modelCostRows().some(([p]) => Object.hasOwn(RETIRING_MODELS, p)), "no cost row prices a retiring id");
   // Gemini 2.5 (upstream expiration 2026-10-20): refused by name on every tier
   // and wire, the successor live on a tier we serve, gone from flex and pricing.
   for (const id of ["google/gemini-2.5-flash-lite", "google/gemini-2.5-flash", "google/gemini-2.5-pro"]) {
@@ -1622,15 +1629,16 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   {
     const id = "deepseek/deepseek-v3.2";
     ok(!retiringModel(id) && tierFor(id) === "v1-chat" && tierAllows("v1-chat-metered", id), "deepseek-v3.2: admitted again on base (its home) and metered");
-    ok(cf(id).prompt === 3 && cf(id).completion === 4.5 && cf("deepseek/deepseek-v4-flash").prompt === cf("deepseek/").prompt, "deepseek-v3.2 has its own row; the deepseek/ family row still prices the rest");
+    ok(cf(id) === ROW(id) && cf("deepseek/deepseek-v4-flash") === ROW("deepseek/"), "deepseek-v3.2 has its own row; the deepseek/ family row still prices the rest");
     let e = null; try { validateRequest({ model: id, messages: [{ role: "user", content: "hi" }] }, "v1-chat"); } catch (x) { e = x; }
     ok(e === null, "deepseek-v3.2 validates on the base tier (no retirement refusal)");
     const body = { model: id, messages: [{ role: "user", content: "hi" }], max_tokens: 64 };
     const base = K.worstCaseUpstreamCost(body, TIERS["v1-chat"]).cost, metered = K.worstCaseUpstreamCost(body, TIERS["v1-chat-metered"]).cost;
-    ok(base.prompt === TIERS["v1-chat"].maxPrice.prompt && base.completion === 4.5 && metered.prompt === 3 && metered.completion === 4.5, "deepseek-v3.2: base clamps at min(row, tier bound); metered prices the row it sends as provider.max_price");
+    const rv = ROW(id);
+    ok(base.prompt === Math.min(rv.prompt, TIERS["v1-chat"].maxPrice.prompt) && base.completion === Math.min(rv.completion, TIERS["v1-chat"].maxPrice.completion) && metered.prompt === rv.prompt && metered.completion === rv.completion, "deepseek-v3.2: base clamps at min(row, tier bound); metered prices the row it sends as provider.max_price");
   }
   // Opus 5.5 and Grok 4.5-4.7: own rows / reasoning rows.
-  ok(tierFor("anthropic/claude-opus-5.5") === "v1-chat-premium" && cf("anthropic/claude-opus-5.5").prompt === 4.4 && cf("anthropic/claude-opus-5.5").completion === 22 && cf("anthropic/claude-opus-5").prompt === 5.5, "opus-5.5 homes on premium with its own row; opus-5 keeps its row");
+  ok(tierFor("anthropic/claude-opus-5.5") === "v1-chat-premium" && cf("anthropic/claude-opus-5.5") === ROW("anthropic/claude-opus-5.5") && cf("anthropic/claude-opus-5") === ROW("anthropic/claude-opus-5"), "opus-5.5 homes on premium with its own row; opus-5 keeps its row");
   ok(tokenizerFactor("anthropic/claude-opus-5.5") === NEW_TOKENIZER_FACTOR && rp("anthropic/claude-opus-5.5")?.id === "anthropic/claude-opus-5.5" && dr("anthropic/claude-opus-5.5", "v1-chat-premium") === null && JSON.stringify(dr("anthropic/claude-opus-5.5", "v1-chat-metered")) === '{"effort":"low"}', "opus-5.5: newer tokenizer, reasoning row (premium leaves the default, metered injects low)");
   for (const g of ["x-ai/grok-4.5", "x-ai/grok-4.6", "x-ai/grok-4.7"]) {
     ok(tierFor(g) === "v1-chat-pro" && rp(g)?.id === g && JSON.stringify(dr(g, "v1-chat-pro")) === '{"effort":"low"}', `${g}: pro tier injects low (reasoning mandatory upstream, default high)`);
@@ -1638,7 +1646,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   // GPT-6 Luna (nano default, fast band lead) and Sol (pro).
   ok(tierFor("openai/gpt-6-luna") === "v1-chat-nano" && tierFor("openai/gpt-6-luna-pro") === "v1-chat-nano" && TIERS["v1-chat-nano"].defaultModel === "openai/gpt-6-luna", "gpt-6-luna (and -pro) home on nano; luna is the nano default");
   ok(tierFor("openai/gpt-6-sol") === "v1-chat-pro" && tierFor("openai/gpt-6-sol-pro") === "v1-chat-pro" && !tierAllows("v1-chat-premium", "openai/gpt-6-sol"), "gpt-6-sol (and -pro) home on pro");
-  ok(cf("openai/gpt-6-luna").prompt === 0.11 && cf("openai/gpt-6-luna").completion === 0.55 && cf("openai/gpt-6-sol").prompt === 2.2 && cf("openai/gpt-6-sol").completion === 11 && cf("openai/gpt-6-astra").prompt === 11, "gpt-6 luna and sol rows at the dearest default-tier endpoint; astra unchanged");
+  ok(cf("openai/gpt-6-luna") === ROW("openai/gpt-6-luna") && cf("openai/gpt-6-sol") === ROW("openai/gpt-6-sol") && cf("openai/gpt-6-astra") === ROW("openai/gpt-6-astra"), "gpt-6 luna, sol and astra each resolve to their own row");
   ok(cf("openai/gpt-6-luna").prompt <= TIERS["v1-chat-nano"].maxPrice.prompt && cf("openai/gpt-6-luna").completion <= TIERS["v1-chat-nano"].maxPrice.completion && cf("openai/gpt-6-sol").completion <= TIERS["v1-chat-pro"].maxPrice.completion, "both rows sit inside their tiers' max_price bounds");
   ok(Object.values(AUTO_RANKINGS.fast).every((l) => l[0] === "openai/gpt-6-luna") && TIERS["v1-chat-auto"].prefixes.includes("openai/gpt-6-luna"), "gpt-6-luna leads every fast-band category and is admitted on auto");
   ok(JSON.stringify(dr("openai/gpt-6-luna", "v1-chat-nano")) === '{"effort":"low"}' && JSON.stringify(dr("openai/gpt-6-sol", "v1-chat-pro")) === '{"effort":"low"}' && rp("openai/gpt-6-luna-pro")?.prefix === "openai/gpt-6-luna", "gpt-6 luna/sol: reasoning rows (budget tiers inject low, the -pro twins covered)");
@@ -1648,13 +1656,13 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const sb = validateRequest({ model: "openai/gpt-6-sol", messages: [{ role: "user", content: "x".repeat(4000) }], max_tokens: 4096 }, "v1-chat-pro");
   ok(sb.max_tokens >= 1000, `gpt-6-sol at the pro price leaves a usable output budget on a 4k-char prompt (${sb.max_tokens})`);
   // Claude Sonnet 5.5 (2026-09-29): own dated row at the dearest endpoint, reasoning row (mandatory upstream).
-  ok(tierFor("anthropic/claude-sonnet-5.5") === "v1-chat-pro" && K.MODEL_COST.some(([p]) => p === "anthropic/claude-sonnet-5.5") && cf("anthropic/claude-sonnet-5.5").prompt === 2.2 && cf("anthropic/claude-sonnet-5.5").completion === 11, "sonnet-5.5 homes on pro with its own row at 2.2/11");
+  ok(tierFor("anthropic/claude-sonnet-5.5") === "v1-chat-pro" && cf("anthropic/claude-sonnet-5.5") === ROW("anthropic/claude-sonnet-5.5") && cf("anthropic/claude-sonnet-5.5").completion <= TIERS["v1-chat-pro"].maxPrice.completion, "sonnet-5.5 homes on pro with its own row, inside pro's bound");
   ok(tokenizerFactor("anthropic/claude-sonnet-5.5") === NEW_TOKENIZER_FACTOR && rp("anthropic/claude-sonnet-5.5")?.id === "anthropic/claude-sonnet-5.5" && JSON.stringify(dr("anthropic/claude-sonnet-5.5", "v1-chat-pro")) === '{"effort":"low"}', "sonnet-5.5: newer tokenizer, pro injects low (default high upstream)");
   // Mercury 2.5 (2026-09-29): third fast-band link, nano-admitted, own row.
   const MER = "inception/mercury-2.5";
   ok(tierFor(MER) === "v1-chat-nano" && TIERS["v1-chat-auto"].prefixes.includes(MER) && tierAllows("v1-chat-metered", MER) && !tierFor("inception/mercury-2"), "mercury-2.5 homes on nano, admitted on auto and metered; mercury-2 is not admitted");
   ok(Object.values(AUTO_RANKINGS.fast).every((l) => l[2] === MER) && !Object.values(AUTO_RANKINGS.balanced).flat().includes(MER) && !Object.values(AUTO_RANKINGS.best).flat().includes(MER), "mercury-2.5 is the third link of every fast category and in no other band");
-  ok(cf(MER).prompt === 0.04 && cf(MER).completion === 0.15 && cf(MER).completion <= TIERS["v1-chat-nano"].maxPrice.completion && cf(MER).completion <= TIERS["v1-chat-auto"].maxPrice.completion, "mercury-2.5 row at its live endpoint price, inside the nano and auto bounds");
+  ok(cf(MER) === ROW(MER) && cf(MER).completion <= TIERS["v1-chat-nano"].maxPrice.completion && cf(MER).completion <= TIERS["v1-chat-auto"].maxPrice.completion, "mercury-2.5 has its own row, inside the nano and auto bounds");
   ok(JSON.stringify(dr(MER, "v1-chat-nano")) === '{"effort":"low"}' && JSON.stringify(dr(MER, "v1-chat-auto")) === '{"effort":"low"}' && !fe(MER), "mercury-2.5: budget tiers inject low (default medium upstream); not flex");
   ok(!tierFor("nvidia/nemotron-3.5-lightning"), "nemotron-3.5-lightning stays out (reasons by default with no effort knob in the catalog)");
 }

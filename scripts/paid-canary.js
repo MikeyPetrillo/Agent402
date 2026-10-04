@@ -25,6 +25,11 @@ import { subcentAcceptVerdict } from "./avm-canary-classify.js";
 import { readFileSync, existsSync, appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
+// Metered legs pay a per-request quote. It is computed here from the kit (the
+// private cost table), never typed: a typed quote would publish cost x markup.
+const { meteredQuoteUsd } = await import("../src/tools/llm-gateway-kit.js");
+const { meteredMessagesQuoteUsd } = await import("../src/tools/llm-messages-kit.js");
+const { meteredResponsesQuoteUsd } = await import("../src/tools/llm-responses-kit.js");
 // The x402 client + viem are imported dynamically inside main() so this module
 // can be imported for unit tests (of the pure decision logic) without those
 // packages installed — CI installs them just before the canary runs.
@@ -240,11 +245,11 @@ export const TOOLS = [
     path: "/v1/metered/chat/completions",
     method: "POST",
     // max_tokens 2000 on gpt-5-nano quotes ABOVE the $0.001 floor (the kit
-    // computes the exact figure; test-canary-coverage pins priceUsd to it), so a
+    // computes the figure at run time; test-canary-coverage pins it), so a
     // quote that silently collapses to the floor - an @x402 adapter change that
     // hides the body, say - changes what this leg pays and the pin fails.
     body: { model: "openai/gpt-5-nano", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 2000 },
-    priceUsd: 0.001215,
+    get priceUsd() { return meteredQuoteUsd(this.body).usd; },
     check: (r) => isExactOkReply(r.choices?.[0]?.message?.content) || `expected an exact "OK" reply, got ${JSON.stringify(r).slice(0, 100)}`,
   },
   {
@@ -257,7 +262,7 @@ export const TOOLS = [
     path: "/v1/metered/messages",
     method: "POST",
     body: { model: "anthropic/claude-haiku-4.5", max_tokens: 300, messages: [{ role: "user", content: "Reply with exactly: OK" }] },
-    priceUsd: 0.002155,
+    get priceUsd() { return meteredMessagesQuoteUsd(this.body).usd; },
     check: (r) =>
       (r.type === "message" && r.role === "assistant" && Array.isArray(r.content) && r.content.some((b) => b.type === "text" && typeof b.text === "string") &&
         r.usage && typeof r.usage.output_tokens === "number" && !("cost" in r.usage)) ||
@@ -271,7 +276,7 @@ export const TOOLS = [
     path: "/v1/metered/responses",
     method: "POST",
     body: { model: "anthropic/claude-haiku-4.5", max_output_tokens: 300, input: "Reply with exactly: OK" },
-    priceUsd: 0.002141,
+    get priceUsd() { return meteredResponsesQuoteUsd(this.body).usd; },
     check: (r) =>
       (r.object === "response" && r.status === "completed" && Array.isArray(r.output) && r.output.some((o) => o.type === "message" && Array.isArray(o.content) && o.content.some((c) => c.type === "output_text" && typeof c.text === "string")) &&
         r.usage && typeof r.usage.output_tokens === "number" && !("cost" in r.usage) && r.store !== true) ||

@@ -5,6 +5,9 @@
 // the money bound, never a live voice.
 import { TTS_TOOLS } from "../src/tools/tts-kit.js";
 import { SPEECH_MODELS } from "../src/tools/llm-gateway-kit.js";
+import { upstreamCosts } from "../src/upstream-costs.js";
+import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+requireUpstreamCosts("test-tts-lite");
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const bySlug = Object.fromEntries(TTS_TOOLS.map((t) => [t.slug, t]));
@@ -25,7 +28,7 @@ process.env.OPENROUTER_API_KEY = "test-key";
   const price = Number(lite.price.replace("$", ""));
   const cap = Number(lite.discovery.inputSchema.properties.text.description.match(/max (\d+) chars/)[1]);
   ok(cap === 800, `the lite cap is 800 chars (cut from 2,000 on 2026-09-18 when Kokoro gained a dearer endpoint we cannot route away from; got ${cap})`);
-  const worst = kokoro.costPerChar * cap;
+  const worst = upstreamCosts().speech[kokoro.id] * cap;
   ok(price === 0.005, `the lite tier is $0.005 (got ${lite.price})`);
   ok(worst <= price * 0.7, `worst case at the ${cap}-char cap is within the margin rule on $${price}`);
   ok(worst * 10 < Number(full.price.replace("$", "")), "and an order of magnitude under the premium tier it sits beside");

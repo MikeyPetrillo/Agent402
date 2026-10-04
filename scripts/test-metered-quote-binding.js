@@ -11,6 +11,8 @@
 process.env.OPENROUTER_API_KEY ||= "test-key-never-used";
 const { handlerInputOf } = await import("../src/handler-input.js");
 const { meteredQuoteUsd, LLM_GATEWAY_TOOLS, TIERS } = await import("../src/tools/llm-gateway-kit.js");
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+requireUpstreamCosts("test-metered-quote-binding");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };

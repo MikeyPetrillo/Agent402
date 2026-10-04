@@ -42,6 +42,8 @@ const {
   oxAlphaAvailable, probeOxAlphaAvailability, _setOxUpstreamMissingForTest,
   oxUpstreamIsFree, oxUpstreamPricing,
 } = await import("../src/tools/llm-gateway-kit.js");
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+requireUpstreamCosts("test-ox-tier");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
