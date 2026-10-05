@@ -15,6 +15,7 @@
 // (for replay protection), so an attacker must burn CPU before costing us any
 // storage. Tunable difficulty makes spam uneconomic while staying trivial for a
 // one-off legitimate call.
+import { FREE_TIER_SLUGS } from "./free-tier.js";
 import Database from "better-sqlite3";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -376,9 +377,11 @@ export const WALLET_ONLY_POLICY_REASON = new Map([
   ["action-gate", "is pure computation, but its verdict is what a caller relies on before a real action"],
 ]);
 
-/** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */
+/** A tool is compute-payable (PoW-eligible) only when src/free-tier.js lists it
+ *  (pure-CPU, ~free to serve) and WALLET_ONLY_SLUGS does not override it. A tool
+ *  on neither list is wallet-only: the safe default for anything new. */
 export function isComputePayable(tool) {
-  return !WALLET_ONLY_SLUGS.has(tool.slug);
+  return FREE_TIER_SLUGS.has(tool.slug) && !WALLET_ONLY_SLUGS.has(tool.slug);
 }
 
 function clampInt(value, dflt, min, max) {

@@ -73,17 +73,6 @@ function requireNumber(value, what) {
   return n;
 }
 
-// Sentinel error thrown by stub mapInput functions. The runner converts it to
-// a per-step partial-failure {ok:false, statusCode:501} so the rest of the
-// pack still runs and the envelope shape stays consistent. Reachable only
-// for any pack added to SKILL_PACKS without a corresponding PACK_STEPS entry.
-function todoError() {
-  return Object.assign(new Error("mapInput not yet implemented for this step"), {
-    statusCode: 501,
-  });
-}
-const TODO_MAPINPUT = () => { throw todoError(); };
-
 // Default fallback mapper: tries to match pack args to tool input schema keys
 // using common synonyms. Useful for fanout packs where one pack arg (domain,
 // url, ticker, coin) maps cleanly to each tool's input.
@@ -2599,17 +2588,13 @@ async function fetchAsBase64(url) {
   return buffer.toString("base64");
 }
 
-// Auto-generate a step config for any pack not explicitly in PACK_STEPS.
-// All steps get TODO_MAPINPUT — they fail cleanly with statusCode 501 but
-// the envelope is well-formed and other steps still execute.
-function getStepConfig(packSlug, packIndex) {
-  if (PACK_STEPS[packSlug]) return PACK_STEPS[packSlug];
-  const pack = packIndex.get(packSlug);
-  if (!pack) return null;
-  return {
-    mode: "fanout",
-    steps: pack.toolSlugs.map((slug) => ({ slug, mapInput: TODO_MAPINPUT })),
-  };
+// A pack runs only from its own PACK_STEPS entry. There is no stub fallback:
+// one used to fill a missing entry with steps that all failed, so a buyer got
+// HTTP 200 with 0/N steps and was charged for it (2026-07 to 2026-08). A pack
+// with no entry is refused (500, never charged); test-skill-pack-steps
+// requires every SKILL_PACKS slug to have one, so this cannot reach a sold pack.
+function getStepConfig(packSlug) {
+  return PACK_STEPS[packSlug] || null;
 }
 
 // Look up a handler for a tool slug. Tries inline handlers first (for routes
@@ -2643,7 +2628,10 @@ async function runPack(packSlug, args, ctx) {
   if (!pack) {
     throw Object.assign(new Error(`Unknown pack: ${packSlug}`), { statusCode: 404 });
   }
-  const config = getStepConfig(packSlug, ctx.packIndex);
+  const config = getStepConfig(packSlug);
+  if (!config) {
+    throw Object.assign(new Error(`Pack ${packSlug} has no steps configured on this server.`), { statusCode: 500 });
+  }
   const prior = {};
   // A step may declare `as`: the key its result is stored under in `prior`
   // (and reported beside the slug in the envelope). It lets one tool run
@@ -2822,5 +2810,4 @@ export const __test = {
   lookupHandler,
   getStepConfig,
   defaultMapInput,
-  todoError,
 };

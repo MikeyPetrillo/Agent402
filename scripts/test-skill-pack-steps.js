@@ -3,7 +3,8 @@
 // Four packs (earnings-deep-dive, options-analytics, fixed-income-desk,
 // defi-protocol-scanner) were listed in SKILL_PACKS with prices, catalog
 // entries and live tool pages, and no PACK_STEPS entry at all. getStepConfig
-// falls back to a stub whose every mapInput throws todoError(), so each call
+// fell back to a stub whose every mapInput threw (removed 2026-10-04: a pack
+// with no entry is now refused 500, never charged), so each call
 // returned HTTP 200 with "0/N steps succeeded" - deterministically, for every
 // buyer, from 2026-07-08 to 2026-08-31.
 //
@@ -17,10 +18,16 @@
 // a retirement cut would silently hollow out a pack that still sells.
 import assert from "node:assert/strict";
 import { SKILL_PACKS, PACK_PRICES } from "../src/skills.js";
-import { PACK_STEPS } from "../src/tools/skill-runner.js";
+import { PACK_STEPS, __test } from "../src/tools/skill-runner.js";
+const { getStepConfig } = __test;
 
 let passed = 0;
 const ok = (cond, msg) => { assert.ok(cond, msg); passed++; console.log("ok -", msg); };
+
+// No stub fallback: a slug with no PACK_STEPS entry gets no config at all, so
+// runPack refuses it instead of serving N failed steps as a 200.
+ok(getStepConfig("no-such-pack-slug") === null, "a pack with no PACK_STEPS entry gets no stub config");
+ok(getStepConfig(SKILL_PACKS[0].slug) === PACK_STEPS[SKILL_PACKS[0].slug], "a sold pack runs from its own PACK_STEPS entry");
 
 const missing = SKILL_PACKS.filter((p) => !PACK_STEPS[p.slug]);
 ok(
