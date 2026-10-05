@@ -53,8 +53,10 @@ LLC: credit the entity, never a personal name.
   deterministic"; `scripts/test-copy-absolutes.js` enforces this.
 - Every tool must answer its own published example (`scripts/test-all.js`), and an example that
   returns empty arrays where the docs show data is a failure.
-- Pure-CPU tools are PoW-eligible unless listed in `WALLET_ONLY_SLUGS`. Free-tier egress is a
-  tested invariant (`scripts/test-free-tier-egress.js`).
+- The free (PoW) tier is an allowlist: a tool is PoW-eligible only when `src/free-tier.js` lists
+  it and `WALLET_ONLY_SLUGS` (`src/pow.js`) does not override it, so a new tool is wallet-only by
+  default. Add a slug there only for pure-CPU tools (no egress, key or model). Free-tier egress is
+  a tested invariant (`scripts/test-free-tier-egress.js`).
 - **Identity-bound routes** (memory, my-usage, attest, feedback) are keyed on the signed
   EIP-3009 `authorization.from` (`src/payer.js`); they are EVM-exact only and refused on
   Tempo/credits gates. Never weaken payer attribution. Never case-fold base58/Stellar addresses.

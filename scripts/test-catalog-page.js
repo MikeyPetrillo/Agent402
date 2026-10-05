@@ -2,6 +2,7 @@
 // Fixture catalog — no server, no network.
 import { ledgerCatalogPage } from "../src/ledger-catalog.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
+import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { CATEGORIES } from "../src/pages.js";
 import { readFileSync } from "node:fs";
 
@@ -13,13 +14,11 @@ const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } el
 // block before that.
 const catalogSearchScript = readFileSync(new URL("../assets/js/catalog-search.js", import.meta.url), "utf8");
 
-// A fabricated slug is guaranteed NOT in WALLET_ONLY_SLUGS (a fixed set of
-// real production slugs), so isComputePayable() reliably reports it free —
-// no dependency on any real tool's current classification, which could
-// change. A real member of WALLET_ONLY_SLUGS is pulled for the guaranteed-
-// paid case, so this test can never drift out of sync with the actual set.
-const FREE_SLUG_A = "zzz-fixture-free-a";
-const FREE_SLUG_B = "zzz-fixture-free-b";
+// The free tier is an allowlist (src/free-tier.js, 2026-10-04): a slug is free
+// only when listed there, so a fabricated slug now reads wallet-only. The free
+// fixtures are real members of FREE_TIER_SLUGS; a real member of
+// WALLET_ONLY_SLUGS is the guaranteed-paid one.
+const [FREE_SLUG_A, FREE_SLUG_B, FREE_SLUG_C] = [...FREE_TIER_SLUGS];
 const PAID_SLUG = [...WALLET_ONLY_SLUGS][0];
 ok(typeof PAID_SLUG === "string" && PAID_SLUG.length > 0, "source: WALLET_ONLY_SLUGS has at least one real member to test against");
 
@@ -32,7 +31,7 @@ const catalog = {
   "GET /web-free": { slug: FREE_SLUG_A, category: "web", price: "$0.01", name: "web free fixture" },
   "GET /web-paid": { slug: PAID_SLUG, category: "web", price: "$0.01", name: "web paid fixture" },
   "GET /text-free-1": { slug: FREE_SLUG_B, category: "text", price: "$0.01", name: "text free fixture 1" },
-  "GET /text-free-2": { slug: "zzz-fixture-free-c", category: "text", price: "$0.01", name: "text free fixture 2" },
+  "GET /text-free-2": { slug: FREE_SLUG_C, category: "text", price: "$0.01", name: "text free fixture 2" },
   "GET /memory-paid": { slug: PAID_SLUG, category: "memory", price: "$0.01", name: "memory paid fixture" },
 };
 
