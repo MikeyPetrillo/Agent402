@@ -69,7 +69,35 @@ const ROUTES = [
   // that answers no 402 (2026-09-11). It now checks a $0.001 route on this
   // host, so the example is a healthy seller end to end.
   "POST /api/seller-payability",
+  // 2026-10-04: the OpenAI transcription wire (multipart, see MULTIPART_AUDIO
+  // below) and the memory writer, which read listed in one feed pass and not
+  // the next.
+  "POST /v1/audio/transcriptions", "POST /v1/pro/audio/transcriptions",
+  "POST /api/memory/remember",
 ];
+
+// Bought even when a feed read shows them listed: a row we saw in one pass and
+// not the next is not proof the listing holds, and a payment is what makes it.
+const ALWAYS_BUY = new Set(["/api/memory/remember"]);
+
+// Routes on the OpenAI transcription wire take a multipart `file` part, and
+// their published example is a placeholder that says so. They are paid with a
+// short public-domain clip as that part (the clip /api/transcribe's own example
+// uses); every other route keeps the challenge's JSON example.
+const MULTIPART_AUDIO = { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg", filename: "example.ogg", type: "audio/ogg" };
+let audioClip = null;
+async function multipartAudioBody(fields) {
+  if (!audioClip) {
+    const r = await fetch(MULTIPART_AUDIO.url, { headers: { "User-Agent": "agent402-base-list-sweep" }, signal: AbortSignal.timeout(30000) });
+    if (!r.ok) throw new Error(`audio clip fetch HTTP ${r.status}`);
+    audioClip = new Uint8Array(await r.arrayBuffer());
+  }
+  const form = new FormData();
+  form.append("file", new Blob([audioClip], { type: MULTIPART_AUDIO.type }), MULTIPART_AUDIO.filename);
+  for (const [k, v] of Object.entries(fields || {})) if (k !== "file" && v != null && typeof v !== "object") form.append(k, String(v));
+  return form;
+}
+const isMultipartExample = (body) => typeof body?.file === "string" && /multipart/i.test(body.file);
 
 const args = process.argv.slice(2);
 const arg = (n, d = null) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : d; };
@@ -141,7 +169,7 @@ let processed = 0;
 for (const entry of ROUTES) {
   if (processed >= LIMIT) break;
   const [method, path] = entry.split(" ");
-  if (listed.has(path)) { report.skipped.push({ entry, reason: "already listed" }); continue; }
+  if (listed.has(path) && !ALWAYS_BUY.has(path)) { report.skipped.push({ entry, reason: "already listed" }); continue; }
 
   let paymentRequired, example;
   try {
@@ -171,7 +199,10 @@ for (const entry of ROUTES) {
   // to the list's hint only when it does not.
   const payMethod = (typeof example.method === "string" && /^(GET|POST)$/i.test(example.method)) ? example.method.toUpperCase() : method;
   const init = { method: payMethod, headers: stamp({ "Content-Type": "application/json", Accept: "application/json" }), signal: AbortSignal.timeout(CALL_TIMEOUT_MS) };
-  if (payMethod === "POST") init.body = JSON.stringify(example.body || {});
+  if (payMethod === "POST" && isMultipartExample(example.body)) {
+    try { init.body = await multipartAudioBody(example.body); } catch (e) { report.failed.push({ entry, reason: `multipart body: ${e.message}` }); continue; }
+    delete init.headers["Content-Type"]; // fetch sets multipart/form-data with its boundary
+  } else if (payMethod === "POST") init.body = JSON.stringify(example.body || {});
   else if (example.queryParams) {
     const qs = new URLSearchParams();
     for (const [k, val] of Object.entries(example.queryParams)) if (val != null && typeof val !== "object") qs.set(k, String(val));
