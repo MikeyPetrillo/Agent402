@@ -242,7 +242,7 @@ Once you have the tool's method, path, and parameters from discovery:
 2. Use `include=external` to see only sellers other than Agent402.
 3. Use `sort=calls` to rank by usage volume instead of revenue.
 
-## Submission
+## Tool mapping
 
 This plugin uses `initiate_x402_request` and `complete_x402_request` for all paid tool calls. No `send_calls` mapping is needed -- x402 payments are handled natively by Base MCP's payment flow, not through raw calldata.
 

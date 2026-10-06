@@ -88,30 +88,12 @@ Then confirm the observation landed:
 curl -s https://agent402.tools/api/status | jq '.components[] | select(.key=="paid-call") | .current'
 ```
 
-## Rotating the token
+## Secrets
 
-`STATUS_PROBE_TOKEN` here and `STATUS_PROBE_TOKEN` on Railway are the same
-secret. Rotate Railway first, then `wrangler secret put STATUS_PROBE_TOKEN`.
-Between those two steps this Worker's observations are rejected and the
-paid-call check reports "not observed", so `/status` shows a gap rather than
-wrong data, which is the intended failure direction.
-
-## What this Worker deliberately cannot do
-
-It cannot start the GitHub heartbeat, and that is on purpose. A `workflow_dispatch`
-needs `Actions: Read and write`, which is repo-wide over Actions with no
-per-workflow scoping - so "let the Worker kick the heartbeat" is really "let a
-second platform deploy production, post as the company, and run the workflows
-that move money" (`deploy.yml`, `announce.yml`, `refund.yml`, `paid-canary.yml`,
-`tempo-volume.yml`, `algorand-external-buy.yml`). That was built on 2026-08-30
-and reverted the same hour for this reason.
-
-The Worker holds exactly two secrets: `STATUS_PROBE_TOKEN` (write to
-`POST /api/status/probe`, plus the low-difficulty challenge for the one
-paid-call slug, nothing else) and `GITHUB_ISSUES_TOKEN`
-(`Issues: write` on this repository only, so it can open and close its own alarm
-issues). If you find a `GITHUB_DISPATCH_TOKEN` on the Cloudflare account or a
-matching PAT on GitHub, nothing reads it - revoke it.
+The Worker holds two secrets: `STATUS_PROBE_TOKEN`, which writes to
+`POST /api/status/probe`, and an optional `GITHUB_ISSUES_TOKEN`
+(`Issues: write` on this repository only) for opening and closing its own
+status issues. It cannot start workflows.
 
 Verify the Worker with the probe token, not the operator token:
 

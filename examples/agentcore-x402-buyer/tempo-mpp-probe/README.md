@@ -14,12 +14,12 @@ They read the shared `.env` those tutorials write (`PAYMENT_MANAGER_ARN`,
 | File | What it does |
 |------|--------------|
 | `mpp_tempo_buy.py` | The **probe**. AgentCore agent buys `POST agent402.tools/api/hash` ($0.001) over MPP/Tempo mainnet; verifies the paid answer equals `sha256("hello world")`. $0.10 session cap. |
-| `mpp_tempo_buy_other_seller.py` | Same buy against an unrelated Tempo MPP seller (Alchemy) — the cross-seller control that shows the relay behavior is not specific to us. |
+| `mpp_tempo_buy_other_seller.py` | Same buy against an unrelated Tempo MPP seller, the cross-seller control that shows the relay behavior is not specific to us. |
 | `capture-402.mjs` | Local 402 replay server: serves agent402.tools' live tempo challenges to the plugin and captures the credential it mints, without broadcasting. |
 | `capture_credential_buy.py` | `mpp_tempo_buy.py` pointed at the local capture server — drives the plugin to mint a credential into a file. |
 | `relay_raw_repro.mjs` | Posts a captured credential **straight to Tempo's relay** over plain fetch — no seller code, no AWS SDK — and checks the chain. The definitive isolation of the bug. Needs `viem`. |
 
-## The relay bug (open, reported to Tempo 2026-08-20)
+## Relay behavior
 
 Tempo's relay `POST /v1/mpp/broadcast` returns
 `invalid_payment: "Broadcast transaction hash does not match the signed
@@ -44,11 +44,3 @@ currency, serve the response as paid. Verification only — nothing is
 re-broadcast, so it can never double-charge. That is why `mpp_tempo_buy.py`
 returns a verified answer with exactly one charge even while the relay reports
 failure.
-
-### Re-checking whether Tempo has fixed it
-
-Run `python mpp_tempo_buy.py`, then look at the server logs for
-`[mpp-tempo] relay reported settlement failure but ... SETTLED on-chain`.
-While that line appears, the relay is still broken and our fallback is
-carrying the buy. When broadcasts start succeeding (the line stops appearing),
-Tempo has shipped the fix.

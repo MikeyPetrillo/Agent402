@@ -197,8 +197,8 @@ Since v2.4.0 (2026-09-18).
 ### 2026-09-18 to 2026-09-20
 - Add Google's native `generateContent` wire on every gateway tier.
 - Add `POST /v1/audio/transcriptions` (OpenAI transcription wire, multipart).
-- Add `service_tier: "priority"` on the pro and premium tiers (2x list, sized by
-  the margin clamp); `:nitro` is pinned to the default tier.
+- Add `service_tier: "priority"` on the pro and premium tiers (2x list);
+  `:nitro` is pinned to the default tier.
 - Add `perp-dexs`, `perp-dex-markets` and `perp-dex-limits` on Hyperliquid
   builder-deployed (HIP-3) dexs.
 - Add `kalshi-live-data` and `kalshi-weather-index`.
@@ -256,8 +256,7 @@ Since v2.4.0 (2026-09-18).
 - Add `POST /api/seller-dossier` ($0.05).
 - Add `sanctions-wallet` and `sanctions-name` (OFAC SDN screening).
 - Upgrade `@x402/*` to 2.26.0 and `@solana/kit` to 8.3.0; Node 22.23.2.
-- Reorder settle fallback: Solvador first where it advertises the network, then
-  PayAI.
+- Reorder the settle fallback between the backup facilitators.
 - Packages: agent402-mcp 0.13.2, agent402-openclaw 0.4.3, elizaos-plugin-agent402
   0.2.3, agent402-agentkit 0.1.3, agent402-tollbooth 0.10.1 (CLI runs through the
   npm bin symlink again), agent402-client 0.8.4 to 0.8.6, agent402-ai-sdk 0.2.7,

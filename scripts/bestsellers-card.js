@@ -1,6 +1,6 @@
 // Announcement demo card for the bestsellers tool — renders the tool's actual
 // JSON response as a 1200×630 TERMINAL-WINDOW card, the accepted announcement
-// style (reference: docs/announcements/media/2026-07-16-tts-demo-card.png on
+// style (reference: the TTS demo card on
 // the dev branch / x.com status 2077707505405448409): warm cream paper, dark
 // charcoal terminal with traffic-light title bar, all Space Mono, green for
 // OK/status semantics, red reserved for the agent402.tools wordmark.

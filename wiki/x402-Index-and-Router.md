@@ -195,7 +195,7 @@ Returns an **object**, not a bare array. The matches are in `results`:
 
 ## What the router adds
 
-- **Neutral discovery layer.** `include:"external"` lets buyers explicitly route to non-Agent402 sellers. We list because we trust the ranking, not because we'd rig it for ourselves - and that makes the same endpoint usable as a public discovery API for the whole protocol, not just our catalog.
+- **Neutral discovery layer.** `include:"external"` lets buyers explicitly route to non-Agent402 sellers. The ranking has no first-party term, which makes the same endpoint usable as a public discovery API for the whole protocol, not just our catalog.
 - **One integration, the whole ecosystem.** A buyer that integrates Agent402's `agent402-client` SDK or the hosted `/mcp` connector already has access to 500+ local tools *and* can route across every other x402 seller without per-seller wiring.
 - **Discoverability that compounds.** Sellers don't have to register with Agent402 - appearing in any public x402 registry is enough. The Index pulls them in automatically.
 - **Trust signals are checkable.** Health scores are derived from real crawl outcomes, not self-reports. The `history` they are computed from is in `/api/index?seller=<host>` for anyone to verify, one origin at a time. Agent402 advertises this surface in its own [`/.well-known/x402` manifest](https://agent402.tools/.well-known/x402) under the `discovery` field so other indexes and agents can find the router programmatically.

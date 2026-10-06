@@ -1,7 +1,6 @@
 // Announcement demo card for the Celo marketplace - renders the live
 // /api/revenue Celo rail as a 1200×630 TERMINAL-WINDOW card, the accepted
-// announcement style (reference: docs/announcements/media/
-// 2026-07-16-tts-demo-card.png / scripts/robinhood-card.js): warm cream
+// announcement style (reference: the TTS demo card and scripts/robinhood-card.js): warm cream
 // paper, dark charcoal terminal with traffic-light title bar, all Space Mono,
 // green for OK/status semantics, red reserved for the agent402.tools wordmark.
 //

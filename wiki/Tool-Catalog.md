@@ -98,5 +98,5 @@ Three design points worth knowing:
 ## Quality guarantees
 
 - Every endpoint CI can call without a third-party key is re-tested **against its own documented example** before any deploy reaches production. The metered ones (LLM tiers, search, report products) are kept out of those sweeps so CI never spends upstream; their input probes run in CI instead.
-- Tools that can't be served honestly get removed rather than left to take money and 502 (this has happened - see [[Operations]]).
+- Tools that can't be served honestly get removed rather than left to take money and 502.
 - Input errors are structured: a 4xx naming the invalid field and the expected shape.

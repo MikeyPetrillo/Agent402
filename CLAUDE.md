@@ -1,7 +1,7 @@
 # Agent402.Tools: project map for Claude Code
 
 Agent402.Tools is an **open-source, self-hostable x402 + MCP server**: 500+ web tools an AI
-agent can call and pay for per request (USDC via x402, MPP, prepaid card credits, or free via
+agent can call and pay for per request (USDC via x402, MPP, card, or free via
 proof-of-work). It also ships `agent402-tollbooth` (pay-per-crawl for site owners) and
 `agent402-client` (a buyer SDK). Hosted at https://agent402.tools. Maintained by Havok Holdings
 LLC: credit the entity, never a personal name.
@@ -84,15 +84,10 @@ LLC: credit the entity, never a personal name.
 - Tests use port 0 (or a port below 32768) and read the bound port back
   (`scripts/test-port-hygiene.js`).
 - Public copy: first-party and affirmative, no competitor names, no em dashes.
-- **Truth audit 2026-10-02.** Every existing copy guard passed while seven pages and a share
-  card still sold prepaid credits two weeks after sales stopped, /terms carried a date three
-  edits old, copy said "three wires" after a fourth shipped, pack pages recommended retired
-  packs, and the home page counted skill packs twice. The guards checked prices and counts,
-  never whether the thing offered still exists. Copy that offers something reads the switch
-  that sells it (`creditsSalesEnabled()`), and these are now guarded: test-static-pages (no
-  credits sale while off), test-legal-dates (text hash pins the date), test-wire-count-copy,
-  test-pack-copy-retired, copy-absolutes ("never touches funds"). Lesson: when a product is
-  turned off, grep for every sentence that sells it, not only the route that serves it.
+- Copy that offers something reads the switch that sells it (`creditsSalesEnabled()`), and is
+  guarded by test-static-pages, test-legal-dates, test-wire-count-copy, test-pack-copy-retired
+  and copy-absolutes. No third-party seller or counterparty name in any tracked file
+  (`scripts/test-no-third-party-names.js`, also run by `.githooks/pre-push`).
 
 ## Key machine-readable surfaces (free)
 `/health`, `/api/pricing`, `/openapi.json`, `/llms.txt`, `/.well-known/x402`,
@@ -106,8 +101,7 @@ Operator-only surfaces live under `/__operator/*` (token-authed).
   force-push `main`, never delete the dev branch. The dev branch is never force-pushed by hand;
   the one exception is `scripts/sync-dev-branch.sh` (run by `merge-on-green.sh` after every
   merge), which moves it to main's head only when no PR is open from it and merging it would
-  change nothing on main. Without that, commits that reach main through another branch stay
-  stranded on the dev branch and block its next merge on main's subject check (2026-10-04).
+  change nothing on main.
 - CI is `.github/workflows/deploy.yml`, triggered by pushes to the dev branch or `main`. Every
   dev push runs all test lanes. Jobs are gated by commit-message markers: `[test]` (tests),
   `[deploy]` (Railway), `[publish]` (npm + MCP Registry), plus `[probe]`, `[paytest]`,
@@ -118,15 +112,9 @@ Operator-only surfaces live under `/__operator/*` (token-authed).
 - **A push to `main` tests and deploys unconditionally**; merging is shipping.
 - **Flow:** commit to the dev branch with `[test]` only (never `[deploy]` on dev), push, open a
   draft PR, let CI run, merge with `scripts/merge-on-green.sh <pr>` (push-event run, every
-  required check green, pinned to the tested SHA). Strip session-link footers from PR bodies.
-- **Batch the merges:** one PR per batch of related changes. Every merge deploys and each deploy
-  is a short no-container window (the service is volume-backed). Urgent production fixes ship
-  alone.
+  required check green, pinned to the tested SHA).
 - A merge to `main` is not a package release: check `npm view <pkg> version` against the local
   `package.json`.
-- Railway: any variable write or service-setting change redeploys `main`'s head. Change settings
-  right after a merge lands, never during a CI run, and re-read `/health` `build` afterwards.
-  The deploy job runs `scripts/deploy-quiet-gate.js` before its variable upsert.
 - `heartbeat.yml` probes prod on a schedule and opens issues for outages and low balances; a
   daily paid canary (`scripts/paid-canary.js`) buys across every rail. No open issues = healthy.
 - Other workflows gate on their own `.github/trigger-*` path filters, independent of deploy.yml.
@@ -184,7 +172,7 @@ whose effect outlives the answer never takes a ticket (`hasLastingEffect`: the m
   its own; every other facilitator billing refusal (`src/payment-reject.js`) counts in both
   breakers and the composite guard, with a 429 that names it instead of the wallet.
 - **Algorand sub-cent offer gate:** `src/avm-sponsorship.js` drops the Algorand accept from
-  sub-cent 402s while the facilitator's sponsored sub-cent allowance is spent (fails open;
+  sub-cent 402s while the facilitator cannot sponsor sub-cent settlement (fails open;
   a status row last updated in an earlier UTC month, or with an unreadable `updatedTs`, is
   not evidence; a pause a settle refusal set holds against headroom reads for
   `AVM_SPONSORSHIP_REFUSAL_HOLD_MS`; published on `/api/rails`, the only excuse the canaries
@@ -194,14 +182,8 @@ whose effect outlives the answer never takes a ticket (`hasLastingEffect`: the m
   `src/seller-funding.js` nets payments made with USDC the paid wallet itself sent the payer
   (each payer's history read once when it first pays, then incremental; state on `/data`);
   `src/shared-paytos.js` lists shared settlement contracts.
-  Operator levers: `/__operator/shared-paytos`, `/__operator/seller-funding`. The funding
-  reader's switch is `LEADERBOARD_FUNDING_SCAN=off` or `POST /__operator/seller-funding
-  {"action":"disable"}` (runtime, persisted); off, the router reads gross per-wallet evidence
-  with no netting and no verdict. Each wallet's history reads get a bounded share, kept with
-  their progress across scans; retries past a wallet's planned reads are capped per rolling
-  day (`LEADERBOARD_FUNDING_DAY_MAX_CALLS`), first reads are not. A wallet whose reads cannot
-  finish waits (see `src/seller-funding.js`). The scan's counts and log line name why a wallet
-  was not read.
+  The funding reader can be switched off (`LEADERBOARD_FUNDING_SCAN=off`); off, the router reads
+  gross per-wallet evidence with no netting and no verdict.
 - **Report products:** kits under `src/tools/*-report-kit.js`, `src/report-tiers.js`,
   house style in `src/house-style.js`, samples in `src/sample-reports.js`.
 - **Facilitators:** boot guard in `src/payments.js` and `src/x402-boot-init.js`; diagnostics in
@@ -223,24 +205,11 @@ whose effect outlives the answer never takes a ticket (`hasLastingEffect`: the m
   no `error`, so `error`-first clients read the explanation. Keyed on the header, so
   settle-failure, credits and Tempo/Stripe direct 402s are untouched. It wraps `res.send`, so it
   is mounted before the MPP shim and the Tempo/Stripe gates.
-- **X posting:** one-off posts go through `announce.yml` / `scripts/tweet.js` (dispatched via
-  Actions). The approved queue posts from the server (`src/tweet-queue.js`, Railway `TWEET_QUEUE`,
-  off unless set, `TWEET_QUEUE_POSTING=off` read-only, `GET /__operator/tweet-queue.json`): one
-  post per clock hour, recorded before it is sent; a post in doubt (5xx, timeout) gets one retry
-  ten minutes later (X's duplicate refusal records it posted), then never. `tweetQueue` on
-  `/api/gateway-status` is one word the status Worker pages on. Only the
-  production server posts: FREE_MODE, no `NODE_ENV=production` (`TWEET_QUEUE_FORCE=true`
-  overrides that check only) or no `/data` volume keeps it read-only. It replaces
-  `tweet-queue.yml`, which is disabled at cutover so exactly one poster runs. Both sign through
-  `src/x-oauth.js`. Tweet copy is never committed.
+- **X posting:** `announce.yml` / `scripts/tweet.js` (workflow dispatch only) and
+  `src/tweet-queue.js`; both sign through `src/x-oauth.js`. Tweet copy is never committed.
 
 ## Environment
 Configuration and secrets are set on Railway (and, where a workflow needs them, as GitHub
 Actions secrets), never in the repo. Rollout switches are generally "key present = feature on"
 (for example `MPP_SECRET_KEY`, `TEMPO_API_KEY`, `STRIPE_SECRET_KEY`, `OPENROUTER_API_KEY`,
 `X_BEARER_TOKEN`). Per-variable notes and thresholds live in `CLAUDE.local.md`.
-
-## This sandbox vs. prod
-The Claude Code web environment has an egress allowlist (npm and GitHub reachable;
-`agent402.tools` blocked). Verify prod via CI (`[probe]`, heartbeat, canary) or a local
-terminal.
