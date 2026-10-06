@@ -1103,7 +1103,7 @@ const math = [
     },
   },
   {
-    route: "POST /api/unit-convert", name: "Unit convert", slug: "unit-convert", category: "math", price: "$0.001",
+    route: "POST /api/unit-convert", name: "Unit convert", slug: "unit-convert", aliases: ["kilometres", "metres", "litres", "statute-miles", "horsepower", "kilowatts", "altitude", "elevation"], category: "math", price: "$0.001",
     description: "Convert a value between units of length, mass, temperature, volume, area, speed, time, data, pressure, energy, power, angle, frequency - every unit the retired convert-* endpoints handled (e.g. miles, kilometers, kilograms, pounds, stones, us-gallons, liters, fahrenheit, psi, bar, kilopascals, kilowatt-hours, joules, btu, horsepower, and imperial Russian versts, sazhens, arshins, poods and funts).",
     // The category tags are joined by the most-queried unit words so lexical
     // search surfaces ("convert miles to kilometers" via /api/find and the MCP
@@ -1129,7 +1129,7 @@ const math = [
     },
   },
   {
-    route: "POST /api/percentage", name: "Percentage", slug: "percentage", category: "math", price: "$0.001",
+    route: "POST /api/percentage", name: "Percentage", slug: "percentage", aliases: ["fraction", "proportion"], category: "math", price: "$0.001",
     description: 'Percentage helper. op: "of" (a% of b), "change" (% change a→b), "ratio" (a is what % of b).',
     tags: ["percentage", "percent", "math"],
     discovery: { bodyType: "json", input: { op: "change", a: 80, b: 100 }, inputSchema: { properties: { op: { type: "string", description: "of | change | ratio" }, a: { type: "number" }, b: { type: "number" } }, required: ["op", "a", "b"] }, output: { example: { result: 25 } } },

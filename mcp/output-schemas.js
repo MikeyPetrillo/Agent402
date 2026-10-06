@@ -510,7 +510,7 @@ export function mcpInitializeInstructions(baseUrl, { decide = false } = {}) {
   const hosted = install.hostedUrl;
   return [
     "Agent402 is a tools and models layer for AI agents (Havok Holdings LLC) - the applied layer of Agentic Finance: deterministic utilities, a metered model gateway and finished reports, paid per request over x402 or MPP, or free via proof-of-work on the pure-CPU tools.",
-    "Front door: call web.search or web.answer for live web search and cited answers.",
+    "One fact: call web.search or web.answer for live web search and cited answers.",
     "Also listed: web.news, browser.render, market.quote, audio.transcribe, memory.read, memory.write.",
     "Long catalog (500+ tools): call catalog.find with your task, or catalog.search then catalog.call.",
     // Only where the decide tools are listed: an instruction must never name a
@@ -518,8 +518,8 @@ export function mcpInitializeInstructions(baseUrl, { decide = false } = {}) {
     ...(decide ? ["A job that needs several tools: call decide.plan with the task for a call-ready plan (tools, order, fallbacks, inputs), then decide.execute to run it; the plan fee comes back as credit toward the run."] : []),
     "Orientation: call server.describe. Payment rails / wallet setup: call payment.info.",
     "Missing a tool: call demand.request. Ecosystem sellers: call sellers.list.",
-    `Install (hosted, zero wallet): ${install.claudeCodeHosted}`,
-    `Install (npm + wallet for paid flagships): ${install.claudeCodeNpm}`,
+    `Install (npm + wallet, pays for web.search, web.answer and the rest): ${install.claudeCodeNpm}`,
+    `No wallet yet (hosted, proof-of-work tools only): ${install.claudeCodeHosted}`,
     `Cursor mcp.json: { "mcpServers": { "agent402": { "url": "${hosted}" } } }`,
     `Why pay here (usage priced under a quoted ceiling, a failed call is not charged and the receipt proves it, keyed retries never pay twice, one key for tools + models + reports, no wallet needed for the proof-of-work tools or a report by card, proof at /status and /revenue): ${baseUrl}/why`,
     `Docs: ${baseUrl}/llms.txt · ${baseUrl}/api/find?q=… · status ${baseUrl}/status`,

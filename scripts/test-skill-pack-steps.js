@@ -3,10 +3,10 @@
 // Four packs (earnings-deep-dive, options-analytics, fixed-income-desk,
 // defi-protocol-scanner) were listed in SKILL_PACKS with prices, catalog
 // entries and live tool pages, and no PACK_STEPS entry at all. getStepConfig
-// fell back to a stub whose every mapInput threw (removed 2026-10-04: a pack
-// with no entry is now refused 500, never charged), so each call
-// returned HTTP 200 with "0/N steps succeeded" - deterministically, for every
-// buyer, from 2026-07-08 to 2026-08-31.
+// fell back to a stub whose every mapInput threw, so each call returned HTTP
+// 200 with "0/N steps succeeded" - deterministically, for every buyer, from
+// 2026-07-08 to 2026-08-31. (That stub was removed 2026-10-04: a pack with no
+// entry is now refused 500, never charged.)
 //
 // Nothing caught it because the partial-success envelope is valid whatever the
 // steps did: the "answers its own example" sweep asserts status and documented

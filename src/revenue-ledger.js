@@ -1333,6 +1333,56 @@ export function ledgerBuyerRetention(wallets, { events } = {}) {
   };
 }
 
+/**
+ * The batch goal's number: of outside buyers whose first payment is at least
+ * seven days old, how many paid again on a DIFFERENT day within seven days of
+ * their first. Days, not calls, for the reason retention gives: forty calls in
+ * one afternoon is one evaluation, not a return. Buyers whose first day is
+ * under seven days old are `pending` (their window is still open), never
+ * counted as not-returned.
+ *
+ * `byFirstWeek` groups the same count by the ISO week (Monday, UTC) of each
+ * buyer's first payment, newest first, so the history before a change is the
+ * baseline for the weeks after it. Counts only, never a wallet; the scope
+ * (including the rails whose payer we cannot see) rides beside the number.
+ */
+export function ledgerBuyerRepeat7(wallets, { events, now = Date.now(), weeks = 16 } = {}) {
+  const days = new Map(); // payer -> Set(day)
+  for (const { day, payer } of externalPaymentEvents(wallets, events)) {
+    if (!payer) continue;
+    if (!days.has(payer)) days.set(payer, new Set());
+    days.get(payer).add(day);
+  }
+  const DAY = 86_400_000;
+  const toMs = (d) => Date.parse(`${d}T00:00:00Z`);
+  const today = toMs(new Date(now).toISOString().slice(0, 10));
+  const weekOf = (ms) => { const d = new Date(ms); const back = (d.getUTCDay() + 6) % 7; return new Date(ms - back * DAY).toISOString().slice(0, 10); };
+  let eligible = 0, returned = 0, pending = 0;
+  const byWeek = new Map(); // week -> { firstTimeBuyers, returnedWithin7, pending }
+  for (const set of days.values()) {
+    const sorted = [...set].map(toMs).sort((a, b) => a - b);
+    const first = sorted[0];
+    const wk = weekOf(first);
+    if (!byWeek.has(wk)) byWeek.set(wk, { week: wk, firstTimeBuyers: 0, returnedWithin7: 0, pending: 0 });
+    const row = byWeek.get(wk);
+    row.firstTimeBuyers++;
+    const back = sorted.some((ms) => ms > first && ms - first <= 7 * DAY);
+    if (today - first < 7 * DAY && !back) { pending++; row.pending++; continue; }
+    eligible++;
+    if (back) { returned++; row.returnedWithin7++; }
+  }
+  const byFirstWeek = [...byWeek.values()].sort((a, b) => (a.week < b.week ? 1 : -1)).slice(0, weeks);
+  return {
+    definition: "outside buyers who paid again on a different day within 7 days of their first payment; buyers whose first payment is under 7 days old are pending",
+    eligible,
+    returnedWithin7: returned,
+    returnedWithin7Pct: eligible ? Math.round((returned / eligible) * 1000) / 10 : null,
+    pending,
+    byFirstWeek,
+    ...BUYER_SCOPE({ since: null }),
+  };
+}
+
 export function startRevenueLedger({ walletAddress, solanaWallet, stellarWallet, algorandWallet, baseExtraWallets = [], algorandExtraWallets = [] }) {
   const enabled = HAS_DATA_DIR || process.env.REVENUE_LEDGER === "true";
   if (loopStarted || !enabled || (!walletAddress && !solanaWallet && !stellarWallet && !algorandWallet)) return false;

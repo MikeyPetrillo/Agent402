@@ -8,7 +8,8 @@
 // ever read two of them side by side.
 //
 // Pairs (all free surfaces, FREE_MODE boot or TARGET_URL):
-//   1. /health.toolCount == /api/pricing endpoints == priced /openapi.json ops
+//   1. /health.toolCount == /api/pricing endpoints == priced /openapi.json ops;
+//      every FREE_TIER_SLUGS name is a catalog tool
 //   2. /api/pricing <-> /openapi.json: same method+path, same x-price, the MPP
 //      offer amount is the price in micro-USD, and every priced op maps back;
 //      and each operation's own query example validates against the type it
@@ -31,6 +32,9 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { getFreePort } from "./lib/free-port.js";
+import { FREE_TIER_SLUGS } from "../src/free-tier.js";
+import { PROBE_POW_SLUG } from "../src/pow.js";
+import { isIdentityBoundRoute } from "../src/payments.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -78,6 +82,21 @@ async function main() {
     for (const [p, ops] of Object.entries(openapi.paths)) for (const [m, op] of Object.entries(ops)) if (op && op["x-price"] !== undefined) pricedOps.push({ method: m.toUpperCase(), path: p, op });
     ok(health.meta?.toolCount === eps.length, `/health toolCount (${health.meta?.toolCount}) == /api/pricing endpoints (${eps.length})`);
     ok(pricedOps.length === eps.length, `priced /openapi.json operations (${pricedOps.length}) == /api/pricing endpoints (${eps.length})`);
+
+    // ---- 1b. the free-tier allowlist names catalog tools. A stale name is harmless (it
+    // makes nothing free); this keeps the list honest as tools are retired or renamed.
+    const liveSlugs = new Set(eps.map((e) => e.slug));
+    const strayFree = [...FREE_TIER_SLUGS].filter((s) => s !== PROBE_POW_SLUG && !liveSlugs.has(s));
+    ok(strayFree.length === 0, `every FREE_TIER_SLUGS name is a catalog tool${strayFree.length ? ` - not in the catalog: ${strayFree.join(", ")}` : ""}`);
+
+    // ---- 1c. /llms.txt names every identity-bound tool the gates refuse on credits and Tempo.
+    const llms = await fetch(`${base}/llms.txt`).then((r) => r.text());
+    const idLine = (llms.match(/Identity-bound tools \(([^)]*)\)/) || [])[1] || "";
+    const idNamed = new Set(idLine.split(",").map((x) => x.trim()).filter(Boolean));
+    const idWant = new Set(eps.filter((e) => isIdentityBoundRoute(e)).map((e) => (e.category === "memory" ? "memory" : e.slug)));
+    const idMissing = [...idWant].filter((x) => !idNamed.has(x));
+    const idExtra = [...idNamed].filter((x) => !idWant.has(x));
+    ok(idWant.size > 0 && !idMissing.length && !idExtra.length, `/llms.txt names the identity-bound tools the gates enforce${idMissing.length ? ` - missing: ${idMissing.join(", ")}` : ""}${idExtra.length ? ` - not identity-bound: ${idExtra.join(", ")}` : ""}`);
 
     // ---- 2. pricing <-> openapi
     let missingOp = [], priceDrift = [], offerDrift = [];

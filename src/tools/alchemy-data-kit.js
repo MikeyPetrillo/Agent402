@@ -459,7 +459,7 @@ export const ALCHEMY_DATA_TOOLS = [
   {
     route: "POST /api/asset-transfers",
     name: "Wallet token transfers (filtered)",
-    slug: "asset-transfers",
+    slug: "asset-transfers", aliases: ["blockchain-transfers"],
     category: "crypto",
     price: "$0.003",
     description:

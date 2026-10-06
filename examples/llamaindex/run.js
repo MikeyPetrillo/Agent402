@@ -9,7 +9,7 @@
 //
 // This demo uses agent402-client directly (the same dependency the adapter
 // uses internally) to keep the example runnable without pulling the full
-// LlamaIndex catalog. See "Using with real LlamaIndex" in README.md.
+// LlamaIndex catalog. See "Search the web, then answer" in README.md.
 
 import { Agent402 } from "agent402-client";
 

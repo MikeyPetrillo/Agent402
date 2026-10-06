@@ -3,7 +3,8 @@
 Strands agent on AWS Bedrock AgentCore that buys an Agent402 tool over x402.
 
 This is the SHOWCASE: a Strands agent with the AgentCore Payments plugin and an
-HTTP tool. You prompt it to call a paid endpoint; when the endpoint returns HTTP
+HTTP tool. You prompt it to run a web search and then a cited answer, two paid
+Agent402 tools; when each endpoint returns HTTP
 402, the plugin signs the x402 micropayment (from the AgentCore-managed wallet),
 retries, and the agent gets the paid result - no payment code in the agent.
 
@@ -28,7 +29,10 @@ PAYMENT_INSTRUMENT_ID = os.environ["PAYMENT_INSTRUMENT_ID"]
 PAYMENT_SESSION_ID = os.environ["PAYMENT_SESSION_ID"]
 USER_ID = os.environ.get("PAYMENT_USER_ID", "agent402-demo-user")
 
-TARGET_URL = os.environ.get("TARGET_URL", "https://agent402.tools/api/hash")
+BASE_URL = os.environ.get("AGENT402_BASE_URL", "https://agent402.tools")
+# Set TARGET_URL to point the agent at one other paid endpoint instead (for
+# example AWS's testnet sandbox merchant while you validate the wallet).
+TARGET_URL = os.environ.get("TARGET_URL")
 
 config = AgentCorePaymentsPluginConfig(
     payment_manager_arn=PAYMENT_MANAGER_ARN,
@@ -50,11 +54,15 @@ agent = Agent(
 )
 
 if __name__ == "__main__":
-    prompt = (
-        f"POST to {TARGET_URL} with JSON body "
-        f'{{"text": "hello world", "algo": "sha256"}} and tell me the "hash" field '
-        f"in the response."
-    )
+    if TARGET_URL:
+        prompt = f"GET {TARGET_URL} and report the JSON you get back."
+    else:
+        prompt = (
+            f"First GET {BASE_URL}/api/search?q=x402+payment+protocol+adoption&count=5 "
+            f"and list the result titles. Then GET "
+            f"{BASE_URL}/api/answer?q=what+is+the+x402+payment+protocol%3F "
+            f'and report the "answer" field with its citations.'
+        )
     print(f"Prompt: {prompt}\n")
     response = agent(prompt)
     print(response)

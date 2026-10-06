@@ -2,7 +2,7 @@
 // Every published package (one row per /integrations/<slug> page), shared code example, CTA, compact footer.
 
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
-import { INTEGRATIONS } from "./integration-pages.js";
+import { INTEGRATIONS, NO_WALLET_NOTE } from "./integration-pages.js";
 
 // Rows are derived from the per-package pages, so the hub lists exactly the
 // packages that have an /integrations/<slug> page.
@@ -52,13 +52,16 @@ export function ledgerIntegrationsPage(baseUrl) {
     <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">// same shape everywhere</div>
     <h2 style="font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 22px;">Install, get tools, pass them in.</h2>
     <div style="border:1px solid var(--hairline);background:var(--surface);"><pre style="margin:0;padding:18px;font-family:var(--font-mono);font-size:13px;line-height:1.85;color:var(--on-dark);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># pick your stack
-</span>npm install agent402-openai-tools
+</span>npm install agent402-openai-tools @x402/fetch @x402/core @x402/evm viem
 
 import { agent402Tools } from "agent402-openai-tools";
-const { tools, execute } = await agent402Tools({ slugs: ["hash","markdown-to-html","text-stats"] });
+<span style="color:var(--dk-muted3);">// web search, then a cited answer, paid per call from a wallet (payFetch: an @x402/fetch fetch)
+</span>const { tools, execute } = await agent402Tools({ slugs: ["search","answer"], freeOnly: false, fetch: payFetch });
 <span style="color:var(--dk-muted3);">// pass tools to openai.chat.completions.create({ tools })
-// call execute(name, args) on a tool_call. proof-of-work pays these underneath;
-// wallet-only tools need freeOnly: false plus a paying fetch.</span></pre></div>
+// call execute(name, args) on each tool_call; the wallet pays underneath.</span></pre></div>
+    <p style="font-size:14px;line-height:1.6;color:var(--muted);margin:14px 0 10px;"><strong style="color:var(--ink);">No wallet yet?</strong> ${NO_WALLET_NOTE}</p>
+    <div style="border:1px solid var(--hairline);background:var(--surface);"><pre style="margin:0;padding:18px;font-family:var(--font-mono);font-size:13px;line-height:1.85;color:var(--on-dark);white-space:pre-wrap;word-break:break-word;">const { tools, execute } = await agent402Tools({ slugs: ["hash","markdown-to-html","text-stats"] });
+<span style="color:var(--dk-muted3);">// no fetch: proof-of-work pays these underneath</span></pre></div>
     <div style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-top:12px;">the per-slug adapters (OpenAI, Anthropic, LlamaIndex, Strands) share this shape; the others expose four meta tools. See each package's page.</div>
   </section>
 

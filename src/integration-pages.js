@@ -23,6 +23,15 @@ const payClient = new x402Client();
 registerExactEvmScheme(payClient, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
 const payFetch = wrapFetchWithPayment(fetch, payClient);`;
 
+// The first example on each page is a web search followed by a cited answer,
+// paid per call from a wallet. The free tier sits directly under it.
+export const NO_WALLET_NOTE = "The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run free with proof-of-work and no wallet:";
+const SEARCH_THEN_ANSWER = "Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?";
+const PER_SLUG_PAID = `// web search, then a cited answer: both paid per call from the wallet
+const { tools, execute } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });`;
+const META_NO_WALLET = `// the same four tools with no fetch: agent402_call pays pure-CPU tools with proof-of-work
+const tools = await agent402Tools();`;
+
 // Shared descriptions of the two adapter shapes, so every page in a family
 // says the same true thing.
 const PER_SLUG_EXPOSES = [
@@ -59,33 +68,27 @@ export const INTEGRATIONS = [
     dir: "adapters/openai-tools",
     docsSlug: "openai",
     what: "Turns Agent402 tools into OpenAI function-calling definitions. The returned `tools` array is the same JSON used by chat.completions, Assistants v2 and the Responses API, and `execute` runs whatever tool call the model returns.",
-    install: "npm install openai agent402-openai-tools",
+    install: "npm install openai agent402-openai-tools @x402/fetch @x402/core @x402/evm viem",
     example: `import OpenAI from "openai";
 import { agent402Tools } from "agent402-openai-tools";
+${X402_FETCH}
 
 const openai = new OpenAI();
-// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
-const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "text-stats", "uuid"] });
+${PER_SLUG_PAID}
 
-const res = await openai.chat.completions.create({
-  model: "gpt-4o-mini",
-  messages: [{ role: "user", content: "What is the SHA-256 of 'hello world'?" }],
-  tools,
-});
-
-const call = res.choices[0].message.tool_calls?.[0];
-if (call) {
-  const result = await execute(call.function.name, JSON.parse(call.function.arguments));
-  console.log(result);
+const messages = [{ role: "user", content: "${SEARCH_THEN_ANSWER}" }];
+for (let turn = 0; turn < 4; turn++) {
+  const res = await openai.chat.completions.create({ model: "gpt-4o-mini", messages, tools });
+  const msg = res.choices[0].message;
+  messages.push(msg);
+  if (!msg.tool_calls?.length) { console.log(msg.content); break; }
+  for (const call of msg.tool_calls) {
+    const result = await execute(call.function.name, JSON.parse(call.function.arguments));
+    messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
+  }
 }`,
-    walletExample: `${X402_FETCH}
-
-// wallet-only tools (extract, render, screenshot, ...) need freeOnly: false and a paying fetch
-const { tools, execute } = await agent402Tools({
-  slugs: ["extract", "render", "hash"],
-  freeOnly: false,
-  fetch: payFetch,
-});`,
+    noWalletExample: `// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "text-stats", "uuid"] });`,
     exposes: PER_SLUG_EXPOSES,
     payment: PER_SLUG_PAYMENT,
     tools: ["extract", "hash", "render", "screenshot", "search", "answer"],
@@ -100,34 +103,26 @@ const { tools, execute } = await agent402Tools({
     dir: "adapters/anthropic-tools",
     docsSlug: "anthropic",
     what: "Turns Agent402 tools into Anthropic Messages API tool definitions (`input_schema` format) for server-side agents and custom tool loops. For Claude clients that speak MCP, the hosted connector at /mcp is the shorter path; this package is for direct Messages API integrations.",
-    install: "npm install @anthropic-ai/sdk agent402-anthropic-tools",
+    install: "npm install @anthropic-ai/sdk agent402-anthropic-tools @x402/fetch @x402/core @x402/evm viem",
     example: `import Anthropic from "@anthropic-ai/sdk";
 import { agent402Tools } from "agent402-anthropic-tools";
+${X402_FETCH}
 
 const client = new Anthropic();
-// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
-const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "text-stats", "uuid"] });
+${PER_SLUG_PAID}
 
-const res = await client.messages.create({
-  model: "claude-opus-5-5",
-  max_tokens: 1024,
-  tools,
-  messages: [{ role: "user", content: "What is the SHA-256 of 'hello world'?" }],
-});
-
-const block = res.content.find((b) => b.type === "tool_use");
-if (block) {
-  const result = await execute(block.name, block.input);
-  console.log(result);
+const messages = [{ role: "user", content: "${SEARCH_THEN_ANSWER}" }];
+for (let turn = 0; turn < 4; turn++) {
+  const res = await client.messages.create({ model: "claude-opus-5-5", max_tokens: 1024, tools, messages });
+  messages.push({ role: "assistant", content: res.content });
+  const uses = res.content.filter((b) => b.type === "tool_use");
+  if (!uses.length) { console.log(res.content.find((b) => b.type === "text")?.text); break; }
+  const results = [];
+  for (const b of uses) results.push({ type: "tool_result", tool_use_id: b.id, content: JSON.stringify(await execute(b.name, b.input)) });
+  messages.push({ role: "user", content: results });
 }`,
-    walletExample: `${X402_FETCH}
-
-// wallet-only tools (extract, render, screenshot, ...) need freeOnly: false and a paying fetch
-const { tools, execute } = await agent402Tools({
-  slugs: ["extract", "render", "hash"],
-  freeOnly: false,
-  fetch: payFetch,
-});`,
+    noWalletExample: `// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "text-stats", "uuid"] });`,
     exposes: PER_SLUG_EXPOSES,
     payment: PER_SLUG_PAYMENT,
     tools: ["extract", "hash", "render", "screenshot", "whois", "search"],
@@ -142,26 +137,25 @@ const { tools, execute } = await agent402Tools({
     dir: "adapters/ai-sdk",
     docsSlug: "ai-sdk",
     what: "Gives a Vercel AI SDK agent four meta tools that reach the whole catalog: the model describes a task, `agent402_find` or `agent402_route` picks the tool, and `agent402_call` runs and pays for it. Works with `generateText` and `streamText` on any provider the SDK supports.",
-    install: "npm install agent402-ai-sdk ai @ai-sdk/openai zod",
+    install: "npm install agent402-ai-sdk ai @ai-sdk/openai zod @x402/fetch @x402/core @x402/evm viem",
     example: `import { agent402Tools } from "agent402-ai-sdk";
 import { generateText, stepCountIs } from "ai";
 import { openai } from "@ai-sdk/openai";
+${X402_FETCH}
 
-const tools = await agent402Tools();   // an object keyed by tool name; free tier: proof-of-work, no wallet
+// an object keyed by tool name; agent402_call pays search and answer through this fetch
+const tools = await agent402Tools({ fetch: payFetch });
 
 const { text } = await generateText({
   model: openai("gpt-4o"),
   tools,
-  stopWhen: stepCountIs(3),   // let the model read the tool result and answer
-  prompt: "Hash 'hello world' with sha256",
+  stopWhen: stepCountIs(6),   // find, search, answer, then reply
+  prompt: "${SEARCH_THEN_ANSWER}",
 });`,
-    walletExample: `${X402_FETCH}
-
-// agent402_call pays wallet-only tools through this fetch
-const tools = await agent402Tools({ fetch: payFetch });`,
+    noWalletExample: META_NO_WALLET,
     exposes: META_EXPOSES,
     payment: META_PAYMENT,
-    tools: ["hash", "search", "extract", "render", "route-execute"],
+    tools: ["search", "answer", "extract", "render", "hash", "route-execute"],
     guides: ["smart-order-router", "x402-in-5-minutes"],
   },
   {
@@ -173,21 +167,21 @@ const tools = await agent402Tools({ fetch: payFetch });`,
     dir: "adapters/langchain",
     docsSlug: "langchain",
     what: "LangChain.js tool objects for Agent402, ready for any LangChain or LangGraph agent. Four meta tools cover the whole catalog, so the agent's tool budget stays small however many endpoints the catalog holds.",
-    install: "npm install agent402-langchain @langchain/core @langchain/langgraph @langchain/openai zod",
+    install: "npm install agent402-langchain @langchain/core @langchain/langgraph @langchain/openai zod @x402/fetch @x402/core @x402/evm viem",
     example: `import { agent402Tools } from "agent402-langchain";
 import { ChatOpenAI } from "@langchain/openai";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 
-const tools = await agent402Tools();   // an array of four tools; free tier: proof-of-work, no wallet
+${X402_FETCH}
+
+// an array of four tools; agent402_call pays search and answer through this fetch
+const tools = await agent402Tools({ fetch: payFetch });
 const agent = createReactAgent({ llm: new ChatOpenAI({ model: "gpt-4o-mini" }), tools });
 
 const result = await agent.invoke({
-  messages: [{ role: "user", content: "Hash 'hello world' with sha256" }],
+  messages: [{ role: "user", content: "${SEARCH_THEN_ANSWER}" }],
 });`,
-    walletExample: `${X402_FETCH}
-
-// agent402_call pays wallet-only tools through this fetch
-const tools = await agent402Tools({ fetch: payFetch });`,
+    noWalletExample: META_NO_WALLET,
     exposes: META_EXPOSES,
     payment: META_PAYMENT,
     tools: ["search", "answer", "extract", "hash", "route-execute"],
@@ -234,25 +228,20 @@ toolkit = Agent402Toolkit(base_url="https://agent402.tools", x402_fetch=my_signe
     dir: "adapters/llamaindex",
     docsSlug: "llamaindex",
     what: "Returns a `FunctionTool[]` array for any LlamaIndex TS agent or workflow, built from the catalog's raw JSON Schema, so there is no Zod or hand-written schema to maintain.",
-    install: "npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-llamaindex",
+    install: "npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-llamaindex @x402/fetch @x402/core @x402/evm viem",
     example: `import { agent } from "@llamaindex/workflow";
 import { openai } from "@llamaindex/openai";
 import { agent402Tools } from "agent402-llamaindex";
+${X402_FETCH}
 
-// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
-const { tools } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "text-stats", "uuid"] });
+// web search, then a cited answer: both paid per call from the wallet
+const { tools } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
 
 const myAgent = agent({ tools, llm: openai({ model: "gpt-4o-mini" }) });
-const res = await myAgent.run("What is the SHA-256 of 'hello world'?");
+const res = await myAgent.run("${SEARCH_THEN_ANSWER}");
 console.log(res.data.result);`,
-    walletExample: `${X402_FETCH}
-
-// wallet-only tools (extract, render, screenshot, ...) need freeOnly: false and a paying fetch
-const { tools } = await agent402Tools({
-  slugs: ["extract", "render", "hash"],
-  freeOnly: false,
-  fetch: payFetch,
-});`,
+    noWalletExample: `// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
+const { tools } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "text-stats", "uuid"] });`,
     exposes: PER_SLUG_EXPOSES,
     payment: PER_SLUG_PAYMENT,
     tools: ["extract", "hash", "render", "screenshot", "markdown-to-html"],
@@ -297,25 +286,24 @@ const tools = await agent402Tools({ fetch: payFetch });`,
     dir: "adapters/openai-agents",
     docsSlug: "openai-agents",
     what: "Tools for agents built with the OpenAI Agents SDK (`@openai/agents`). Pass them to `new Agent({ tools })` and the agent can find, route to and call any tool in the catalog.",
-    install: "npm install agent402-openai-agents @openai/agents",
+    install: "npm install agent402-openai-agents @openai/agents @x402/fetch @x402/core @x402/evm viem",
     example: `import { agent402Tools } from "agent402-openai-agents";
 import { Agent, run } from "@openai/agents";
+${X402_FETCH}
 
-const tools = await agent402Tools();   // free tier: proof-of-work, no wallet
+// agent402_call pays search and answer through this fetch
+const tools = await agent402Tools({ fetch: payFetch });
 
 const agent = new Agent({
   name: "x402-agent",
   instructions: "Use agent402 to find and call paid web tools when needed.",
   tools,
 });
-const result = await run(agent, "Hash 'hello world' with sha256");`,
-    walletExample: `${X402_FETCH}
-
-// agent402_call pays wallet-only tools through this fetch
-const tools = await agent402Tools({ fetch: payFetch });`,
+const result = await run(agent, "${SEARCH_THEN_ANSWER}");`,
+    noWalletExample: META_NO_WALLET,
     exposes: META_EXPOSES,
     payment: META_PAYMENT,
-    tools: ["hash", "search", "answer", "extract", "route-execute"],
+    tools: ["search", "answer", "extract", "hash", "route-execute"],
     guides: ["agent-hosts", "smart-order-router"],
   },
   {
@@ -327,25 +315,24 @@ const tools = await agent402Tools({ fetch: payFetch });`,
     dir: "adapters/strands",
     docsSlug: "strands",
     what: "Strands `tool({...})` instances for TypeScript agents, including Strands agents running on AWS Bedrock AgentCore. Pull a curated subset of the catalog into the agent; when it calls a tool, the adapter solves a proof-of-work or signs an x402 payment and returns the structured result.",
-    install: "npm install agent402-strands @strands-agents/sdk zod",
+    install: "npm install agent402-strands @strands-agents/sdk zod @x402/fetch @x402/core @x402/evm viem",
     lang: "ts",
     example: `import { Agent } from "@strands-agents/sdk";
 import { agent402Tools } from "agent402-strands";
+${X402_FETCH}
 
-// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
+// web search, then a cited answer: both paid per call from the wallet
 const { tools } = await agent402Tools({
-  slugs: ["hash", "markdown-to-html", "text-stats", "uuid"],
+  slugs: ["search", "answer"],
+  freeOnly: false,
+  fetch: payFetch,
 });
 
 const agent = new Agent({ tools });
-const out = await agent.invoke("What is the SHA-256 of 'hello world'?");`,
-    walletExample: `${X402_FETCH}
-
-// wallet-only tools (extract, render, screenshot, ...) need freeOnly: false and a paying fetch
+const out = await agent.invoke("${SEARCH_THEN_ANSWER}");`,
+    noWalletExample: `// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
 const { tools } = await agent402Tools({
-  slugs: ["extract", "render", "hash"],
-  freeOnly: false,
-  fetch: payFetch,
+  slugs: ["hash", "markdown-to-html", "text-stats", "uuid"],
 });`,
     exposes: [
       ...PER_SLUG_EXPOSES,
@@ -491,15 +478,21 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp`,
     pkg: "agent402-client",
     dir: "client",
     what: "A small buyer-side client: resolve a task to a tool with `find()`, then `call()` it with payment handled. Results are cached, spend is capped before anything is sent, and every send carries an `Idempotency-Key` that is stable per client and operation. Zero dependencies for the free tier.",
-    install: "npm install agent402-client",
+    install: "npm install agent402-client @x402/fetch @x402/core @x402/evm viem",
     example: `import { Agent402 } from "agent402-client";
+${X402_FETCH}
 
-const a = new Agent402();   // https://agent402.tools
+const a = new Agent402({ fetch: payFetch });   // https://agent402.tools, paying from the wallet
+
+// web search, then a cited answer: each call paid on its own
+const found = await a.call("search", { q: "x402 payment protocol adoption", count: 5 });
+const answer = await a.call("answer", { q: "what is the x402 payment protocol?" });
+console.log(found.results, answer.answer, answer.citations);
 
 const matches = await a.find("extract the article from a url");
-// [{ slug: "extract", route, price, inputSchema, example, ... }]
-
-const out = await a.call("hash", { text: "hello world", algo: "sha256" });
+// [{ slug: "extract", route, price, inputSchema, example, ... }]`,
+    noWalletExample: `const free = new Agent402();   // no fetch: pure-CPU tools pay with proof-of-work
+const out = await free.call("hash", { text: "hello world", algo: "sha256" });
 console.log(out.hex);`,
     walletExample: `import { Fetch, evm, tempo } from "mppx/client";
 import { privateKeyToAccount } from "viem/accounts";
@@ -694,6 +687,8 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
     <section style="margin-bottom:34px;">
       <h2 ${H2}>Example</h2>
       <pre ${PRE}><code>${esc(i.example)}</code></pre>
+      ${i.noWalletExample ? `<p style="color:var(--muted);font-size:.95rem;line-height:1.6;margin:16px 0 10px;"><strong style="color:var(--ink);">No wallet yet?</strong> ${inline(NO_WALLET_NOTE)}</p>
+      <pre ${PRE}><code>${esc(i.noWalletExample)}</code></pre>` : ""}
     </section>
 
     <section style="margin-bottom:34px;">

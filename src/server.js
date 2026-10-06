@@ -53,6 +53,7 @@ import { avmSubcentOfferStatus } from "./avm-sponsorship.js";
 import { translateV1Accepts, v1AcceptsTranslationEnabled } from "./x402-v1-accepts.js";
 import { mountShortlinks } from "./shortlinks.js";
 import { withHouseStyle } from "./house-style.js";
+import { withNextCall, nextCallFor } from "./next-call.js";
 import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS, reportHeadline, readPublicReport } from "./human-checkout.js";
 import { humanReportsPage, reportDeliveryPage } from "./human-reports-page.js";
 import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
@@ -517,7 +518,7 @@ import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml, catalogPayableOn } from "./market-page.js";
 import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
-import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
+import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerBuyerRepeat7, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
 import { upstreamCostsLoaded, upstreamCostsSummary, upstreamCostsGaps, upstreamCostsStatus } from "./upstream-costs.js";
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
@@ -578,6 +579,16 @@ export function isModelBacked(slugOrDef) {
 for (const def of ALL_KIT) if (MODEL_BACKED_SLUGS.has(def.slug)) def.modelBacked = true;
 
 for (const def of ALL_KIT) if (Object.hasOwn(REPORT_TIERS, def.slug) && typeof def.handler === "function" && !def.handler.__houseStyled) { def.handler = withHouseStyle(def.handler); def.handler.__houseStyled = true; }
+// web.search -> web.answer and decide.plan -> decide.execute: see src/next-call.js.
+const NEXT_CALL = { search: "answer", decide: "decide-execute" };
+{
+  const bySlug = new Map(ALL_KIT.map((d) => [d.slug, d]));
+  for (const [from, to] of Object.entries(NEXT_CALL)) {
+    const def = bySlug.get(from), nextDef = bySlug.get(to);
+    if (def && nextDef) def.handler = withNextCall(def.handler, nextCallFor(nextDef));
+  }
+}
+
 // Fold the chain namespace's verbs into the aliases of the tools that serve
 // them, so OUR OWN resolvers find what the namespace already answers. Without
 // this, `/api/chain/eth_getlogs` works and `/api/find?q=eth_getLogs` does not -
@@ -2057,6 +2068,9 @@ assertRetiredRegistryConsistent(new Set(Object.values(CATALOG).map((d) => d.slug
 const TOOL_PRICES = Object.fromEntries(
   Object.values(CATALOG).map((d) => [d.slug, parseFloat(String(d.price).replace(/[^0-9.]/g, "")) || 0])
 );
+// Paid catalog slugs (not PoW-eligible). The free tier is an allowlist, so this is
+// the complement of isComputePayable over the catalog, not WALLET_ONLY_SLUGS.
+const PAID_SLUGS = { has: (slug) => Object.hasOwn(TOOL_PRICES, slug) && !isComputePayable({ slug }) };
 // The cheapest priced tool is the floor under which an inbound transfer
 // cannot be a payment for a call (revenue-ledger's dust floor: a sub-cent
 // lookalike transfer is not a paying agent).
@@ -3452,7 +3466,8 @@ async function buildRevenueDaily() {
   const buyersWeekly = ledgerBuyersWeekly(w, { events }); await turn();
   const buyersMonthly = ledgerBuyersMonthly(w, { events }); await turn();
   const concentration = ledgerBuyerConcentration(w, { events }); await turn();
-  const retention = ledgerBuyerRetention(w, { events });
+  const retention = ledgerBuyerRetention(w, { events }); await turn();
+  const repeat7 = ledgerBuyerRepeat7(w, { events }); await turn();
   return {
     asOf: new Date().toISOString(),
     days: daily.days,
@@ -3472,6 +3487,9 @@ async function buildRevenueDaily() {
     // All-time: of everyone who ever paid us, how many came back (see
     // ledgerBuyerRetention - counted in DAYS, not payments).
     retention,
+    // Outside buyers who came back on another day within 7 days of their first
+    // payment, all-time and by the week they first paid (the before/after line).
+    repeat7,
   };
 }
 // Daily revenue series for the /revenue chart — external vs canary-sized
@@ -4673,7 +4691,7 @@ app.post("/__operator/logout", (req, res) => {
 });
 app.get("/__operator", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).type("html").send("<p>Not found.</p>");
-  res.type("html").send(operatorPage(BASE_URL, getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: WALLET_ONLY_SLUGS, offeredNetworks: enabledNetworks(NETWORK) })));
+  res.type("html").send(operatorPage(BASE_URL, getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: PAID_SLUGS, offeredNetworks: enabledNetworks(NETWORK) })));
 });
 app.get("/__operator/stats", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
@@ -4683,7 +4701,7 @@ app.get("/__operator/stats", (req, res) => {
   // PostHog. This is the number to compare against a provider's own dashboard.
   // `daily` is the deploy-proof series (stats DB, UTC day buckets): the number
   // to sum over a billing month; the in-memory fields reset on every redeploy.
-  res.json({ ...getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: WALLET_ONLY_SLUGS, offeredNetworks: enabledNetworks(NETWORK) }), upstreamCalls: { brave: { ...braveCallMeter(), daily: getDailyUpstreamCalls("brave") } } });
+  res.json({ ...getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: PAID_SLUGS, offeredNetworks: enabledNetworks(NETWORK) }), upstreamCalls: { brave: { ...braveCallMeter(), daily: getDailyUpstreamCalls("brave") } } });
 });
 // The intent pass is OPT-IN (?intent=1) and never runs on a default load.
 // It is a PAID third-party call per uncached row, on a request path, and the
@@ -9555,7 +9573,9 @@ for (const tool of ALL_KIT) {
       // global:false - per-wallet only. A catalog read costs a fraction of a
       // cent; pausing every paid tool over twelve of them would be a lever, not
       // a guard. The /v1 tiers keep their own global pause inside their handlers.
-      if (!FREE_MODE && WALLET_ONLY_SLUGS.has(tool.slug)) gatewaySettleBreakerCheck(req, { global: false });
+      // Keyed on "paid" (not PoW-eligible), not on WALLET_ONLY_SLUGS: the free tier is an
+      // allowlist, so a new tool on neither list is paid and must be covered here too.
+      if (!FREE_MODE && !isComputePayable(tool)) gatewaySettleBreakerCheck(req, { global: false });
 
       // A wallet's concurrent runs on the expensive routes must be covered by
       // its balance together (verify checks each authorization alone). A run

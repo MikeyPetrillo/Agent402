@@ -14,38 +14,50 @@ Drop-in **Anthropic tool-use tools** for [Agent402](https://agent402.tools) - th
 ## Install
 
 ```bash
-npm install @anthropic-ai/sdk agent402-anthropic-tools
+npm install @anthropic-ai/sdk agent402-anthropic-tools @x402/fetch @x402/core @x402/evm viem
 ```
+
+The `@x402/*` and `viem` packages pay wallet-only tools from your wallet; the free tier needs only the first two.
 
 ## Use with the Messages API
 
 ```js
 import Anthropic from "@anthropic-ai/sdk";
 import { agent402Tools } from "agent402-anthropic-tools";
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const payClient = new x402Client();
+registerExactEvmScheme(payClient, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const payFetch = wrapFetchWithPayment(fetch, payClient);
 
 const client = new Anthropic();
-// The default (freeOnly: true) keeps only compute-payable tools, so list free ones here;
-// wallet-only slugs such as "extract" or "render" need freeOnly: false and a paying fetch (below).
-const { tools, execute } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
+// Web search, then a cited answer: both wallet-only, paid per call through payFetch.
+const { tools, execute } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
 
-const res = await client.messages.create({
-  model: "claude-sonnet-4-6",
-  max_tokens: 1024,
-  tools,
-  messages: [{ role: "user", content: "What is the SHA-256 of 'hello world'?" }],
-});
-
-// Resolve tool_use blocks (free - paid via proof-of-work behind the scenes).
-const block = res.content.find((b) => b.type === "tool_use");
-if (block) {
-  const result = await execute(block.name, block.input);
-  console.log(result);
+const messages = [{ role: "user", content: "Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?" }];
+for (let turn = 0; turn < 4; turn++) {
+  const res = await client.messages.create({ model: "claude-sonnet-4-6", max_tokens: 1024, tools, messages });
+  messages.push({ role: "assistant", content: res.content });
+  const uses = res.content.filter((b) => b.type === "tool_use");
+  if (!uses.length) { console.log(res.content.find((b) => b.type === "text")?.text); break; }
+  const results = [];
+  for (const b of uses) results.push({ type: "tool_result", tool_use_id: b.id, content: JSON.stringify(await execute(b.name, b.input)) });
+  messages.push({ role: "user", content: results });
 }
 ```
 
-## Pay with USDC (wallet-only tools)
+**No wallet yet?** The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run free with proof-of-work and no wallet. Leave out `fetch`; the default (`freeOnly: true`) keeps only those tools:
 
-For the catalog's wallet-only tools (browser, network, memory), wrap your fetch with `@x402/fetch` and pass it in:
+```js
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
+```
+
+## More wallet-only tools
+
+The rest of the wallet-only catalog (browser, network, memory) is paid the same way, through the same `payFetch`:
 
 ```js
 const { tools, execute } = await agent402Tools({

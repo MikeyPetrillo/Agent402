@@ -78,7 +78,7 @@ const credential = (accepted, payer) => Buffer.from(JSON.stringify({
 })).toString("base64");
 // demand-radar is wallet-only and answers from local state - no upstream, so the
 // breaker's effect is observable without any key. hash is PoW-eligible: the
-// control that the consult is scoped to WALLET_ONLY_SLUGS.
+// control that the consult is scoped to paid (not PoW-eligible) tools.
 const WALLET_ONLY = { path: "/api/demand-radar?limit=1", method: "GET" };
 const POW_TOOL = { path: "/api/hash", method: "POST", body: JSON.stringify({ text: "x" }) };
 const accepts = {};
@@ -218,7 +218,7 @@ try {
     const txt = JSON.stringify(s);
     ok(!txt.includes(PAYER_A) && !txt.includes(PAYER_B), "/api/gateway-status never carries a wallet address");
   }
-  console.log(`\nPASS - ${pass} checks (settle-failure breaker on every wallet-only tool)`);
+  console.log(`\nPASS - ${pass} checks (settle-failure breaker on every paid tool)`);
   proc.kill("SIGKILL"); facilitator.close(); process.exit(0);
 } catch (e) {
   fail(`threw: ${e?.stack || e}`);

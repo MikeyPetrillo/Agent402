@@ -264,7 +264,7 @@ export const STATS_TOOLS = [
   },
   // ---------------------------------------------------------------------------
   {
-    route: "POST /api/moving-average", name: "Moving average (SMA + EMA)", slug: "moving-average",
+    route: "POST /api/moving-average", name: "Moving average (SMA + EMA)", slug: "moving-average", aliases: ["ema", "sma", "exponential-moving-average", "closing-prices"],
     category: "data", price: "$0.001",
     description:
       "Compute simple (SMA) and exponential (EMA) moving averages over a numeric series. Returns one value per input position - the first (window-1) SMA values are null since there isn't enough history. EMA uses the standard alpha = 2/(window+1) smoothing factor used in technical analysis.",
@@ -397,6 +397,95 @@ export const STATS_TOOLS = [
       }
 
       return out;
+    },
+  },
+  // ---------------------------------------------------------------------------
+  {
+    route: "POST /api/rsi", name: "RSI (relative strength index)", slug: "rsi",
+    aliases: ["relative-strength-index", "rsi-indicator", "overbought-oversold"],
+    category: "data", price: "$0.001",
+    description:
+      "Compute the relative strength index (Wilder's smoothing, default period 14) over a price series you supply, such as daily closes. Returns one value per input position (null until the first full period), the latest value, and a reading: overbought at 70 or above, oversold at 30 or below, else neutral. No market data is fetched: pass your own closes.",
+    tags: ["stats", "rsi", "technical-analysis", "momentum", "timeseries"],
+    discovery: {
+      bodyType: "json",
+      input: { values: [44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84, 46.08, 45.89, 46.03, 45.61, 46.28, 46.28, 46.00, 46.03, 46.41, 46.22, 45.64], period: 14 },
+      inputSchema: {
+        properties: {
+          values: { type: "array", description: "Price series, oldest first (closes), at least period + 1 values, max 10000" },
+          period: { type: "number", description: "Look-back period, 2 to 200 (default 14)" },
+        },
+        required: ["values"],
+      },
+      output: {
+        example: {
+          period: 14, count: 20,
+          rsi: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, 70.4641, 66.2496, 66.4809, 69.3469, 66.2947, 57.915],
+          latest: 57.915, reading: "neutral",
+        },
+      },
+    },
+    handler: (i) => {
+      const values = toNumbers(i.values, "values");
+      const period = i.period === undefined || i.period === null || i.period === "" ? 14 : Number(i.period);
+      if (!Number.isInteger(period) || period < 2 || period > 200) throw bad('"period" must be an integer between 2 and 200');
+      if (values.length < period + 1) throw bad(`"values" needs at least period + 1 (${period + 1}) prices; got ${values.length}`);
+      const rsi = new Array(values.length).fill(null);
+      let gain = 0, loss = 0;
+      for (let k = 1; k <= period; k++) {
+        const d = values[k] - values[k - 1];
+        if (d > 0) gain += d; else loss -= d;
+      }
+      let avgGain = gain / period, avgLoss = loss / period;
+      const rsiOf = () => (avgLoss === 0 ? (avgGain === 0 ? 50 : 100) : 100 - 100 / (1 + avgGain / avgLoss));
+      rsi[period] = round4(rsiOf());
+      for (let k = period + 1; k < values.length; k++) {
+        const d = values[k] - values[k - 1];
+        avgGain = (avgGain * (period - 1) + (d > 0 ? d : 0)) / period;
+        avgLoss = (avgLoss * (period - 1) + (d < 0 ? -d : 0)) / period;
+        rsi[k] = round4(rsiOf());
+      }
+      const latest = rsi[rsi.length - 1];
+      return { period, count: values.length, rsi, latest, reading: latest >= 70 ? "overbought" : latest <= 30 ? "oversold" : "neutral" };
+    },
+  },
+  // ---------------------------------------------------------------------------
+  {
+    route: "POST /api/gcd-lcm", name: "GCD + LCM", slug: "gcd-lcm",
+    aliases: ["greatest-common-divisor", "least-common-multiple", "gcd", "lcm", "hcf"],
+    category: "data", price: "$0.001",
+    description:
+      "Greatest common divisor and least common multiple of two or more integers, computed exactly (arbitrary precision). Useful for cycle alignment, scheduling periods and fraction work. Signs are ignored; a zero makes the LCM zero. Results beyond 2^53 come back as strings so no digit is lost.",
+    tags: ["math", "gcd", "lcm", "integers", "number-theory"],
+    discovery: {
+      bodyType: "json",
+      input: { numbers: [12, 18, 30] },
+      inputSchema: {
+        properties: {
+          numbers: { type: "array", description: "Two to 1000 integers (numbers or digit strings)" },
+        },
+        required: ["numbers"],
+      },
+      output: { example: { count: 3, gcd: 6, lcm: 180 } },
+    },
+    handler: (i) => {
+      const raw = Array.isArray(i.numbers) ? i.numbers : typeof i.numbers === "string" ? i.numbers.split(/[\s,]+/).filter(Boolean) : null;
+      if (!raw || raw.length < 2 || raw.length > 1000) throw bad('"numbers" must be an array of 2 to 1000 integers');
+      const nums = raw.map((v, k) => {
+        const t = typeof v === "number" ? (Number.isSafeInteger(v) ? String(v) : null) : String(v).trim();
+        if (!t || !/^[-+]?\d{1,300}$/.test(t)) throw bad(`numbers[${k}] is not an integer${typeof v === "number" ? " within 2^53 (send larger values as digit strings)" : ""}`);
+        const b = BigInt(t);
+        return b < 0n ? -b : b;
+      });
+      const gcd2 = (a, b) => { while (b) [a, b] = [b, a % b]; return a; };
+      let g = nums[0], l = nums[0];
+      for (const n of nums.slice(1)) {
+        g = gcd2(g, n);
+        l = l === 0n || n === 0n ? 0n : (l / gcd2(l, n)) * n;
+        if (l.toString().length > 1000) throw bad("the LCM exceeds 1000 digits");
+      }
+      const out = (b) => (b <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(b) : b.toString());
+      return { count: nums.length, gcd: out(g), lcm: out(l) };
     },
   },
 ];

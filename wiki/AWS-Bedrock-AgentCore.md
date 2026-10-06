@@ -10,7 +10,7 @@ This page is a 5-minute recipe to wire the two together - buy side (let an Agent
 
 AWS ships an agent-side **Payments plugin** that reads an x402 `402 Payment Required`, authorizes a USDC micropayment from an AgentCore-managed wallet, and retries the request with the payment proof. The agent code holds no keys and no payment logic, and spend is bounded by the Payment Session limit you set. It speaks both **x402 and MPP** - exactly the two wires every Agent402 endpoint serves.
 
-We publish a runnable sample: [`examples/agentcore-x402-buyer`](https://github.com/MikeyPetrillo/Agent402/tree/main/examples/agentcore-x402-buyer). It has a deterministic proof loop (`direct_buy.py`: fetch → 402 → sign → retry → verify the paid sha256 answer) and a Strands-agent showcase (`agent_buy.py`), with the full testnet (Base Sepolia faucet) → mainnet (Base USDC) path in its README. Validated live: an AgentCore agent bought `POST /api/hash` from agent402.tools for $0.001, settled on Base mainnet.
+We publish a runnable sample: [`examples/agentcore-x402-buyer`](https://github.com/MikeyPetrillo/Agent402/tree/main/examples/agentcore-x402-buyer). It has a deterministic proof loop (`direct_buy.py`: fetch → 402 → sign → retry → verify the paid sha256 answer) and a Strands-agent showcase (`agent_buy.py`: a web search, then a cited answer, each paid from the wallet), with the full testnet (Base Sepolia faucet) → mainnet (Base USDC) path in its README. Validated live: an AgentCore agent bought `POST /api/hash` from agent402.tools for $0.001, settled on Base mainnet.
 
 > **On Base, buys settle over x402, and that is handled for you.** AgentCore Payments signs the MPP `evm` path under EIP-712 domain name `"USDC"`, while Base USDC's contract domain is `"USD Coin"`, so that signature cannot verify on Base (reported upstream as [awslabs/agentcore-samples#2002](https://github.com/awslabs/agentcore-samples/issues/2002)). The same instrument settles our x402 path perfectly. Agent402 recognises the mismatch from the credential itself, answers with an RFC 9457 problem naming both domain names, and withholds the MPP challenge briefly so the Payments plugin falls through to the x402 offer in the same `402`. Nothing to configure: your buy goes through on x402. See [[Paying with MPP]] for the signing rule.
 
@@ -46,24 +46,27 @@ npm install agent402-strands @strands-agents/sdk zod
 import { Agent } from "@strands-agents/sdk";
 import { agent402Tools } from "agent402-strands";
 
-// The default (freeOnly: true) keeps only compute-payable tools, so list free ones here.
+// web search, then a cited answer: both wallet-only, paid per call through payFetch,
+// an @x402/fetch-wrapped fetch (the Adapters page builds one from a viem account)
 const { tools } = await agent402Tools({
-  slugs: ["hash", "uuid", "json-to-csv"],
+  slugs: ["search", "answer"],
+  freeOnly: false,
+  fetch: payFetch,
 });
 
 const agent = new Agent({ tools });
-const out = await agent.invoke("What is the SHA-256 of 'hello world'?");
+const out = await agent.invoke("Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?");
 ```
 
-Free-tier tools (150+ of them) pay automatically via proof-of-work - **no wallet required**. For the wallet-only tools (most of the catalog), pass `freeOnly: false` and an `@x402/fetch`-wrapped `fetch` (see [[Adapters]] for one built from a viem account).
+**No wallet yet?** The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run free with proof-of-work and no wallet. Leave out `fetch`; the default (`freeOnly: true`) keeps only those tools:
 
 ```ts
 const { tools } = await agent402Tools({
-  slugs: ["extract", "render", "screenshot"],
-  freeOnly: false,
-  fetch: payFetch,              // an @x402/fetch-wrapped fetch
+  slugs: ["hash", "uuid", "json-to-csv"],
 });
 ```
+
+More wallet-only tools (extract, render, screenshot and most of the catalog) go in the same `slugs` list beside `freeOnly: false`.
 
 That's the whole adapter. It has the same shape as the [OpenAI](https://www.npmjs.com/package/agent402-openai-tools), [Anthropic](https://www.npmjs.com/package/agent402-anthropic-tools) and [LlamaIndex](https://www.npmjs.com/package/agent402-llamaindex) adapters; the [LangChain](https://www.npmjs.com/package/agent402-langchain) and [Vercel AI SDK](https://www.npmjs.com/package/agent402-ai-sdk) adapters register four meta tools instead (see [[Adapters]]) - pick the one your code already uses.
 

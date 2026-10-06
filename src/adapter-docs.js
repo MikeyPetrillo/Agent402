@@ -1,6 +1,6 @@
 import { repoUrl } from "./repo-link.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
-import { INTEGRATIONS } from "./integration-pages.js";
+import { INTEGRATIONS, NO_WALLET_NOTE } from "./integration-pages.js";
 
 // The option tables are the adapters' own parameter lists, by shape:
 // per-slug adapters destructure { baseUrl, slugs, freeOnly, fetch } and return
@@ -57,6 +57,7 @@ export const ADAPTERS = BASE.map((a) => {
     install: i.install,
     quickstart: i.example,
     walletExample: i.walletExample || null,
+    noWalletExample: i.noWalletExample || null,
     config: a.shape === "per-slug" ? PER_SLUG_CONFIG : META_CONFIG,
     github: repoUrl(`tree/main/${i.dir}`),
   };
@@ -122,6 +123,7 @@ export function adapterDocPage(baseUrl, slug) {
     { id: "install", label: "install" },
     { id: "quickstart", label: "quick start" },
   ];
+  if (adapter.noWalletExample) tocItems.push({ id: "no-wallet", label: "no wallet yet?" });
   if (adapter.walletExample) tocItems.push({ id: "paid", label: "paid tools" });
   if (adapter.config && adapter.config.length) tocItems.push({ id: "config", label: "configuration" });
   if (adapter.worksWith && adapter.worksWith.length) tocItems.push({ id: "compat", label: "works with" });
@@ -185,6 +187,14 @@ export function adapterDocPage(baseUrl, slug) {
           <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--dark-border);border:1px solid var(--dark-border2);color:var(--dk-muted);font-size:.72rem;padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
         </div>
       </div>
+
+      ${adapter.noWalletExample ? `<div id="no-wallet" style="margin-bottom:36px;">
+        <p style="color:var(--muted);font-size:.95rem;line-height:1.6;margin:0 0 12px;"><strong style="color:var(--ink);">No wallet yet?</strong> ${esc(NO_WALLET_NOTE)}</p>
+        <div style="position:relative;">
+          <pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.noWalletExample)}</code></pre>
+          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--dark-border);border:1px solid var(--dark-border2);color:var(--dk-muted);font-size:.72rem;padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
+        </div>
+      </div>` : ""}
 
       ${adapter.walletExample ? `<div id="paid" style="margin-bottom:36px;">
         <h2 style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Paid tools</h2>

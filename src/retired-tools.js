@@ -70,7 +70,7 @@ export const RETIRED_TOOLS = Object.freeze({
   "xml-validate": { retiredAt: "2026-08-25", replacement: "xml-to-json" },
   ...Object.fromEntries([
     "base-detect", "binary-text", "braille-convert", "color-blindness", "color-contrast", "color-name",
-    "color-palette", "combinatorics", "constant-compare", "gcd-lcm", "group-by", "hkdf-expand", "ipv6-expand",
+    "color-palette", "combinatorics", "constant-compare", "group-by", "hkdf-expand", "ipv6-expand",
     "json-to-xml", "matrix-multiply", "mod-arithmetic", "nato-phonetic", "pbkdf2", "phone-format",
     "prime-factorize", "punycode-convert", "scrypt-derive", "soundex", "uuid-v5",
   ].map((s) => [s, { retiredAt: "2026-08-25", replacement: null }])),

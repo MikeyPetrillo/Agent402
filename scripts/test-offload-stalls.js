@@ -85,7 +85,7 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   const fn = srv.slice(srv.indexOf("async function buildRevenueDaily()"), srv.indexOf("// Daily revenue series for the /revenue chart"));
   ok((fn.match(/await turn\(\)/g) || []).length >= 5, "the /revenue series yields the event loop between each figure");
   ok(/memoSurfaceAsync\("revenue:daily"/.test(srv), "the /revenue series is served stale while it rebuilds");
-  ok(/const events = externalPaymentEventsFor\(w\)/.test(fn) && (fn.match(/\{ events \}/g) || []).length === 5, "the five buyer figures share one read of the payment history");
+  ok(/const events = externalPaymentEventsFor\(w\)/.test(fn) && (fn.match(/\{ events \}/g) || []).length === 6, "the six buyer figures share one read of the payment history");
   ok(/app\.get\("\/__operator\/heap\.json"[\s\S]{0,120}operatorAuthed\(req\)/.test(srv), "the heap read is operator-authed");
   const idx = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
   ok(/enumerable: false/.test(idx) && !/toolHome: new WeakMap/.test(idx), "per-tool router records are hidden properties, not WeakMap entries");
