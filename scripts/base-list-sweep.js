@@ -74,6 +74,8 @@ const ROUTES = [
   // the next.
   "POST /v1/audio/transcriptions", "POST /v1/pro/audio/transcriptions",
   "POST /api/memory/remember",
+  // 2026-10-06: shipped from the demand board's gaps; new routes list on first settlement.
+  "POST /api/rsi", "POST /api/gcd-lcm", "POST /api/fetch-json",
 ];
 
 // Bought even when a feed read shows them listed: a row we saw in one pass and

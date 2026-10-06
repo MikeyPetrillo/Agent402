@@ -311,6 +311,7 @@ import { runSelfCheck, createSelfCheckRoute } from "./selfcheck.js";
 import { installEgressMeter, egressReport } from "./egress-meter.js";
 import { acpFeed, acpManifest } from "./acp.js";
 import { findTools, findRelatedSellers } from "./find.js";
+import { buildPlanSketch } from "./plan-sketch.js";
 import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
 import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
@@ -5667,7 +5668,23 @@ const externalServes = async (q, meter = null) => {
   externalServesMemo.set(key, { at: Date.now(), val });
   return val;
 };
-const computeFind = async (q, k, meter = null) => {
+// Free multi-step sketch (src/plan-sketch.js): a task that names several steps
+// gets each step ranked by the same free lexical search, with no model call;
+// the judged plan with inputs filled in stays the paid decide tool.
+const decideUpgrade = () => {
+  const d = CATALOG["POST /api/decide"];
+  return d ? { tool: "decide", route: "POST /api/decide", mcp: "decide.plan", price: d.price, note: "a judged plan with your inputs filled in and fallbacks checked; the fee is credited toward running it with decide-execute" } : null;
+};
+const planSketchFor = (q) => {
+  try {
+    return buildPlanSketch(q, {
+      rank: (task) => findTools(CATALOG, task, { k: 3, baseUrl: BASE_URL, powSlugs: POW_SLUGS }),
+      weakScore: FIND_WEAK_SCORE,
+      upgrade: decideUpgrade(),
+    });
+  } catch { return null; } // a sketch is an extra; find and route answer regardless
+};
+const computeFind = async (q, k, meter = null, ip = null) => {
   const result = findTools(CATALOG, q, { k, baseUrl: BASE_URL, powSlugs: POW_SLUGS });
   // The seller bridge: a query that looks like an indexed seller's NAME gets
   // pointed at that seller - /api/find is catalog-only, and 25 recorded
@@ -5701,7 +5718,17 @@ const computeFind = async (q, k, meter = null) => {
   // the miss branch was unreachable for any real capability gap: every one of
   // eighteen impossible tasks scored 4-42 against a floor of 3.
   // The free single pick links to the paid multi-step decision when it runs here.
-  if (CATALOG["POST /api/decide"]) result.multiStep = { tool: "decide", route: "POST /api/decide", mcp: "decide.plan", note: "need a multi-step plan across this catalog and outside x402 sellers, with fallbacks and validated params? call decide" };
+  const plan = planSketchFor(q);
+  if (plan) {
+    result.plan = plan;
+    // A multi-step task is answered step by step, so the whole string is not a
+    // miss; a step with no strong match is recorded as its own need.
+    for (const st of plan.steps) {
+      if (st.match === "strong") continue;
+      try { recordWish({ need: st.task, source: "find-miss", ip: ip || "?" }); } catch { /* best-effort */ }
+    }
+    return result;
+  }
   if (result.count === 0 || topScore < FIND_WEAK_SCORE || result.rarestTermCovered === false) {
     if (result.relatedSellers) {
       // A seller-name match IS an answer - point at it instead of recording
@@ -5726,7 +5753,7 @@ const computeFind = async (q, k, meter = null) => {
       result.hint = "POST /api/wish with what you needed";
       const qStr = String(q ?? "").trim();
       if (qStr) {
-        try { recordWish({ need: qStr, source: "find-miss", ip: req?.ip || "?" }); } catch { /* best-effort; never break /api/find */ }
+        try { recordWish({ need: qStr, source: "find-miss", ip: ip || "?" }); } catch { /* best-effort; never break /api/find */ }
       }
     }
   }
@@ -5942,12 +5969,12 @@ app.get("/api/find", (req, res) => {
   // default and told `count: 5`. Same defect as the index listing taking only
   // `limit` while a consumer guessed `perPage` (2026-09-22).
   const k = req.query.k ?? req.query.top;
-  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter), "_find", req, res);
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip), "_find", req, res);
 });
 app.post("/api/find", (req, res) => {
   const q = req.body?.q ?? req.body?.task ?? req.body?.query;
   const k = req.body?.k ?? req.body?.top;
-  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter), "_find", req, res);
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip), "_find", req, res);
 });
 
 // Agent wish loop: free, pre-paywall, like /api/find. When an agent needs a
@@ -7001,6 +7028,8 @@ async function computeRouteJudged(q, k, include, net, ip = null, meter = null) {
   // One scored ranking serves both the page and the 50-row shortlist below.
   const scoredMemo = {};
   const out = await computeRoute(q, k, include, net, scoredMemo, meter);
+  const plan = q ? planSketchFor(q) : null;
+  if (plan) out.plan = plan;
   const rows = Array.isArray(out.results) ? out.results : [];
   if (out.indexing || rows.length < 1 || !q) return out;
   // Shortlist: at most two rows per seller, plus the local catalog's best

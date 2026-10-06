@@ -27,7 +27,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies (no secrets in scope for this step - audit R-07 pattern)
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/stellar@2.27.0 @stellar/stellar-sdk@16.2.0
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/stellar@2.28.0 @stellar/stellar-sdk@16.2.0
       - name: Settle one real payment through the new facilitator
         env:
           FACILITATOR_URL: https://agent402-facilitator-production.up.railway.app

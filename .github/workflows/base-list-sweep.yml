@@ -44,7 +44,7 @@ jobs:
         with:
           node-version: 22
       - name: Install x402 client
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.27.0 @x402/evm@2.27.0
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.28.0 @x402/evm@2.28.0
       - name: Run the sweep
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}

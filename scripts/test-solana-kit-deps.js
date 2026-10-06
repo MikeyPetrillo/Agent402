@@ -47,6 +47,12 @@ for (const name of ["@solana-program/token", "@solana-program/compute-budget"]) 
   ok(version(join(ROOT, "node_modules", name, "package.json")) === pkg.dependencies[name], `${name} installed at the pinned version`);
 }
 ok(typeof pkg.overrides["@solana-program/token-2022"] === "string", "token-2022 is overridden too (svm's third program dep)");
+// @x402/svm 2.28 added @solana/program-client-core ^6.1.0, which drags a nested kit-6 family in under svm
+// unless it is lifted to the kit-8 release of the same monorepo (2026-10-06).
+ok(pkg.overrides["@solana/program-client-core"] === version(join(ROOT, "node_modules/@solana/kit/package.json")),
+  `program-client-core is overridden to the installed kit version (${pkg.overrides["@solana/program-client-core"]})`);
+ok(pkgDir(svmDir, "@solana/program-client-core") === pkgDir(ROOT, "@solana/program-client-core"),
+  "@x402/svm resolves the root program-client-core, not a nested kit-6 copy");
 for (const name of ["@solana-program/token", "@solana-program/compute-budget", "@solana-program/token-2022"]) {
   const j = JSON.parse(readFileSync(join(pkgDir(svmDir, name), "package.json"), "utf8"));
   const peer = j.peerDependencies?.["@solana/kit"] || "";
@@ -57,12 +63,12 @@ for (const name of ["@solana-program/token", "@solana-program/compute-budget", "
 function* walk(d) { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) yield* walk(p); else if (p.endsWith(".mjs")) yield p; } }
 const need = {};
 for (const f of walk(join(svmDir, "dist/esm"))) {
-  for (const m of readFileSync(f, "utf8").matchAll(/import \{([^}]*)\} from "(@solana-program\/[a-z0-9-]+)"/g)) {
+  for (const m of readFileSync(f, "utf8").matchAll(/import \{([^}]*)\} from "(@solana-program\/[a-z0-9-]+|@solana\/program-client-core)"/g)) {
     (need[m[2]] ??= new Set());
     m[1].split(",").map((s) => s.trim().split(/\s+as\s+/)[0]).filter(Boolean).forEach((n) => need[m[2]].add(n));
   }
 }
-ok(Object.keys(need).length === 3, `svm imports from three program packages (${Object.keys(need).join(", ")})`);
+ok(Object.keys(need).length === 4, `svm imports from three program packages and program-client-core (${Object.keys(need).join(", ")})`);
 let checked = 0;
 for (const [name, names] of Object.entries(need)) {
   const mod = await import(svmReq.resolve(name));

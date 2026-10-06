@@ -240,7 +240,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.28.0 viem@2.52.2
 
       # Run FIRST (before the slow faucet-funding E2E) for fast iteration. Live
       # proof of the agent402-client 402-inspection preflight (v0.6.0): a real Base
@@ -512,7 +512,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 @x402/core@2.27.0 @x402/evm@2.27.0 @x402/svm@2.27.0 @solana/kit@8.4.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.28.0 @x402/core@2.28.0 @x402/evm@2.28.0 @x402/svm@2.28.0 @solana/kit@8.4.0 viem@2.52.2
       - name: Sweep the catalog via Solana settlement
         env:
           SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
@@ -537,7 +537,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 @x402/core@2.27.0 @x402/evm@2.27.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.28.0 @x402/core@2.28.0 @x402/evm@2.28.0 viem@2.52.2
       - name: Refresh stale Bazaar listings
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -575,7 +575,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 @x402/core@2.27.0 @x402/evm@2.27.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.28.0 @x402/core@2.28.0 @x402/evm@2.28.0 viem@2.52.2
       - name: Register missing Bazaar routes
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -609,7 +609,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 @x402/core@2.27.0 @x402/evm@2.27.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.28.0 @x402/core@2.28.0 @x402/evm@2.28.0 viem@2.52.2
       - name: Sweep the catalog via Base settlement (4 batches)
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -634,7 +634,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 @x402/core@2.27.0 @x402/evm@2.27.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.28.0 @x402/core@2.28.0 @x402/evm@2.28.0 viem@2.52.2
       - name: Drain the burner into the revenue wallet via paid tool calls
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -739,7 +739,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.28.0 viem@2.52.2
       - name: Run the demo (real paid buys from the burner)
         env:
           AGENT_KEY: ${{ secrets.BURNER_KEY }}
@@ -1538,6 +1538,7 @@ jobs:
           t node scripts/test-solana-router.js
           # Tool resolver (/api/find ranking, guards)
           t node scripts/test-find.js
+          t node scripts/test-plan-sketch.js
           # Unicode-aware query tokenization shared by /api/route, /api/find and the index search: CJK bigrams, short-Latin whole-token rule kept (offline)
           t node scripts/test-query-terms.js
           # Revenue ledger unit tests (all-time external accounting, idempotent rescans, CI self-gate)

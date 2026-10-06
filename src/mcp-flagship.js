@@ -176,6 +176,7 @@ export const META_OUTPUT_SCHEMAS = {
       workflows: { type: "array", items: workflowHit },
       workflowsUsage: { type: "string" },
       relatedSellers: { type: "array", items: { type: "object", additionalProperties: true } },
+      plan: { type: "object", additionalProperties: true, description: "Present when the task names several steps: each step ranked by this free search (no model), with an estimated total and the paid decide upgrade" },
       hint: { type: "string" },
       usage: { type: "string" },
       message: { type: "string" },
