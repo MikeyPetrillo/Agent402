@@ -201,6 +201,7 @@ export function validateMessagesRequest(input, tierSlug) {
   // max_tokens: required by the Anthropic wire; clamp to the tier cap (drop-in friendliness, like the chat wire)
   let maxTokens = parseInt(input.max_tokens, 10);
   if (!Number.isFinite(maxTokens) || maxTokens < 1) throw bad('"max_tokens" (positive integer) is required by the Messages API');
+  const requestedMaxTokens = maxTokens;
   if (maxTokens > tier.maxTokens) maxTokens = tier.maxTokens;
 
   const body = { model: isRouted ? undefined : model, max_tokens: maxTokens, messages };
@@ -258,12 +259,22 @@ export function validateMessagesRequest(input, tierSlug) {
   if (input.thinking !== undefined) {
     const th = input.thinking;
     if (!th || typeof th !== "object" || !["enabled", "disabled", "adaptive"].includes(th.type)) throw bad('"thinking" must be {type:"enabled", budget_tokens} | {type:"adaptive"} | {type:"disabled"}');
+    let thinking = th;
     if (th.type === "enabled") {
       const b = Number(th.budget_tokens);
       if (!Number.isInteger(b) || b < 1024) throw bad('"thinking.budget_tokens" must be an integer >= 1024');
-      if (b >= maxTokens) throw bad(`"thinking.budget_tokens" (${b}) must be below max_tokens (${maxTokens}) - thinking tokens are output tokens`);
+      if (b >= maxTokens) {
+        // A budget that only collides with OUR clamp of max_tokens (Claude
+        // Code on Haiku sends max_tokens 32000 with budget 31999) is clamped
+        // with it, keeping a quarter of the output for the answer, rather than
+        // refusing a request the buyer wrote correctly. A budget at or above
+        // the buyer's OWN max_tokens is still their error.
+        const fitted = maxTokens - Math.max(1024, Math.floor(maxTokens / 4));
+        if (b < requestedMaxTokens && fitted >= 1024) thinking = { ...th, budget_tokens: fitted };
+        else throw bad(`"thinking.budget_tokens" (${b}) must be below max_tokens (${maxTokens}) - thinking tokens are output tokens`);
+      }
     }
-    body.thinking = th;
+    body.thinking = thinking;
   }
   // `effort` - Anthropic's primary depth control on Opus 5 / Sonnet 5 / Fable
   // and every Claude 4.7+ (their 2026-07-24 release notes), accepted top-level
@@ -468,7 +479,7 @@ const INPUT_SCHEMA = {
     messages: { type: "array", description: "Anthropic messages: {role: user|assistant, content: string | [text|image|tool_use|tool_result blocks]}" },
     system: { type: "string", description: "Optional system prompt (string or text blocks)" },
     tools: { type: "array", description: "Optional client tools {name, description, input_schema}; server/built-in tools are not served" },
-    thinking: { type: "object", description: 'Optional {type:"enabled", budget_tokens} | {type:"adaptive"} | {type:"disabled"} - thinking tokens are output tokens. On Claude 4.7+ (Opus 5, Sonnet 5, Fable 5.1) thinking is adaptive and `effort` is the depth control; a budget_tokens value is advisory there' },
+    thinking: { type: "object", description: 'Optional {type:"enabled", budget_tokens} | {type:"adaptive"} | {type:"disabled"} - thinking tokens are output tokens; a budget is clamped along with max_tokens to fit the tier output cap. On Claude 4.7+ (Opus 5, Sonnet 5, Fable 5.1) thinking is adaptive and `effort` is the depth control; a budget_tokens value is advisory there' },
     effort: { type: "string", description: 'Optional depth control for Claude 4.7+ (Opus 5, Sonnet 5, Fable 5.1): low | medium | high | xhigh | max, validated against the model\'s own list (GET /v1/models). Not accepted on Haiku 4.5 and older, which take thinking.budget_tokens instead' },
     stream: { type: "boolean", description: "Anthropic SSE (message_start … message_stop)" },
     zdr: { type: "boolean", description: "Optional - zero-data-retention providers only" },

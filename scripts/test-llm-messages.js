@@ -208,6 +208,15 @@ globalThis.fetch = realFetch;
   ok(/must be one of/.test(t({ effort: "none" }).err || "") && /not supported by anthropic\/claude-sonnet-5/.test(t({ effort: "minimal" }).err || "") && /accepts: low, medium/.test(t({ effort: "minimal" }).err || ""), "an effort outside the model's own live-guarded list (none, minimal) is refused naming what it accepts");
   ok(/not supported by anthropic\/claude-haiku-4.5/.test(t({ model: "anthropic/claude-haiku-4.5", effort: "low" }, base).err || "") && /budget_tokens/.test(t({ model: "anthropic/claude-haiku-4.5", effort: "low" }, base).err || ""), "haiku-4.5 (no effort table) refuses effort and names the thinking form it does honour");
   ok(t({ thinking: { type: "enabled", budget_tokens: 1024 } }).body?.thinking?.budget_tokens === 1024 && t({ model: "anthropic/claude-haiku-4.5", thinking: { type: "enabled", budget_tokens: 1024 } }, base).body?.thinking?.type === "enabled", "thinking enabled + budget stays accepted on sonnet-5 (translated upstream) and haiku-4.5 (honoured)");
+  // Claude Code on Haiku (2026-10-06, real CLI 2.1.292 through the local
+  // proxy): max_tokens 32000 with thinking.budget_tokens 31999. The tier clamps
+  // max_tokens to its cap, which used to turn a correct request into a 400.
+  {
+    const cap = TIERS[base]?.maxTokens ?? base.maxTokens;
+    const cc = t({ model: "anthropic/claude-haiku-4.5", max_tokens: 32000, thinking: { type: "enabled", budget_tokens: 31999 } }, base);
+    ok(!cc.err && cc.body.max_tokens === cap && cc.body.thinking.budget_tokens >= 1024 && cc.body.thinking.budget_tokens <= cc.body.max_tokens - 1024, `a budget that only collides with the tier clamp is clamped with it, leaving room for the answer (got ${cc.err || JSON.stringify(cc.body?.thinking)} under max_tokens ${cc.body?.max_tokens})`);
+    ok(/must be below max_tokens/.test(t({ model: "anthropic/claude-haiku-4.5", max_tokens: 2000, thinking: { type: "enabled", budget_tokens: 2000 } }, base).err || ""), "a budget at or above the buyer's OWN max_tokens is still a 400");
+  }
   ok(/cannot be combined/.test(t({ thinking: { type: "disabled" }, effort: "max" }).err || "") && t({ thinking: { type: "disabled" }, effort: "low" }).body?.effort === "low", "thinking disabled + effort xhigh/max is refused (Anthropic's own 400); disabled + low passes");
   // Priority tier on the Messages wire (2026-09-18): Anthropic's `speed: "fast"`
   // and `service_tier: "priority"` / "fast" are accepted on pro/premium (the
