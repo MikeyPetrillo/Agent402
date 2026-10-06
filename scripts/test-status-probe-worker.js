@@ -368,7 +368,7 @@ for (const [name, over, detail] of failCases) {
   // times), the record, a confirmed alarm reading, and every other alarm
   // closing an open issue (a comment and a PATCH each).
   let calls = 0;
-  const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 } };
+  const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" } };
   const { ALARMS } = await import("../workers/status-probe/src/index.js");
   stub({ health: () => new Response("down", { status: 503 }) });
   const prodStub = globalThis.fetch;
@@ -605,6 +605,19 @@ for (const [name, over, detail] of failCases) {
     assert.equal(judge({ gateway: { chargedFailures: { status: "ok" } } })[T], "good");
     assert.equal(judge({ gateway: { chargedFailures: { status: "unknown" } } })[T], "quiet");
     assert.equal(judge({ gateway: {} })[T], "quiet");
+  });
+
+  await acheck("refunds owed: aging and stuck page, ok clears, unknown or absent does neither; body echoes only known words", async () => {
+    const { judge, ALARMS } = await import("../workers/status-probe/src/index.js");
+    const T = "Refunds owed to a buyer are waiting";
+    assert.equal(judge({ gateway: { refundsOwed: { status: "aging" } } })[T], "bad");
+    assert.equal(judge({ gateway: { refundsOwed: { status: "stuck" } } })[T], "bad");
+    assert.equal(judge({ gateway: { refundsOwed: { status: "ok" } } })[T], "good");
+    assert.equal(judge({ gateway: { refundsOwed: { status: "unknown" } } })[T], "quiet");
+    assert.equal(judge({ gateway: {} })[T], "quiet");
+    const a = ALARMS.find((x) => x.title === T);
+    assert.match(a.body({ gateway: { refundsOwed: { status: "stuck" } } }), /refundsOwed\.status=stuck/);
+    assert.doesNotMatch(a.body({ gateway: { refundsOwed: { status: "<script>" } } }), /<script>/);
   });
 
   await acheck("production DOWN: opens only after the confirm reads also fail; a blip opens nothing; recovery closes", async () => {

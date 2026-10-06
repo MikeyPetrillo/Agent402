@@ -444,6 +444,27 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
       `/api/gateway-status reports chargedFailures.status=recent: at least one paid call in the last ${Number(b.chargedFailures?.windowHours) || 6} h settled on chain and then answered an error, so a buyer paid and got nothing. The itemised rows (slug, status, time) are on /__operator/stats -> chargedFailures; each is also a debt in the refund ledger (/__operator/refunds.json). Fix the failing tool, then run the refund job for the owed rows. Auto-closes when the window reads clear.`,
   },
   {
+    // Money we owe a buyer (refundsOwed on /api/gateway-status). The refund
+    // job is dispatched by hand, so a debt can sit unpaid with nothing else
+    // noticing (2026-10-06: 44 debts to one buyer, found by reading the
+    // ledger). aging and stuck page; ok clears; unknown or absent does neither.
+    title: "Refunds owed to a buyer are waiting",
+    verdict: ({ gateway: b }) => {
+      const w = b.refundsOwed?.status;
+      if (w === "aging" || w === "stuck") return "bad";
+      return w === "ok" ? "good" : "quiet";
+    },
+    body: ({ gateway: b }) => {
+      const w = b.refundsOwed?.status === "stuck" ? "stuck" : "aging";
+      return `/api/gateway-status reports refundsOwed.status=${w}.
+
+- aging: a debt in the refund ledger has been owed longer than REFUND_OWED_ALARM_HOURS (default 48). Read /__operator/refunds.json, then dispatch refund.yml (dry run first; include_repeat_hangups for hang-up debts held for review). A debt that should not be paid is voided there with a note.
+- stuck: a row has been in "sending" for over 30 minutes, so a refund run stopped between claiming it and recording the transfer. Check the refund wallet on chain for a transfer to that payer. If one landed, mark the row paid with that tx; if not, release it back to owed (POST /__operator/refunds/update {"action":"release","note":...}).
+
+Auto-closes when the word is ok.`;
+    },
+  },
+  {
     // Settlement freshness. The daily canary must actually BUY, not merely
     // conclude green: on 2026-08-02 a gate skipped every scheduled purchase for
     // five days while the workflow reported success, so this watches the

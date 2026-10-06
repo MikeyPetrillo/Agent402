@@ -578,6 +578,32 @@ jobs:
               ;;
           esac
 
+      # Refunds owed (src/refund-ledger.js): one word on /api/gateway-status.
+      # aging / stuck page; ok closes; unknown does neither. The status Worker
+      # runs the same check every five minutes under the same title.
+      - name: Refunds owed check (alarm when a debt to a buyer is waiting)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.refundsOwed.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "refunds owed: $WORD"
+          TITLE="Refunds owed to a buyer are waiting"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            aging|stuck)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports refundsOwed.status=$WORD. aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48) - read /__operator/refunds.json and dispatch refund.yml (dry run first). stuck: a row has been in sending for over 30 minutes - check the refund wallet on chain, then mark it paid with the tx or release it back to owed. Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: refunds owed reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Transactional email (src/email.js): one word on /api/gateway-status,
       # recorded from real sends and kept on the volume. exhausted / failing
       # page; ok closes; unknown and unconfigured do neither. Built 2026-10-01
