@@ -22,7 +22,7 @@ process.env.REVENUE_DAILY_START = "2026-06-15";
 // Tempo MPP settlements are folded in from the sales ledger; keep it isolated.
 process.env.SALES_LEDGER_DB = join(dir, "sales.db");
 
-const { setPayerDustFloorUsd, getPayerDustFloorUsd, recordTransfer, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, weekStartOf, ledgerBuyerRetention, ledgerBuyerConcentration, ledgerSummary, ledgerDaily, ledgerSyncState, nextChunkSpan, LEDGER_BLOCK_MS } = await import("../src/revenue-ledger.js");
+const { setPayerDustFloorUsd, getPayerDustFloorUsd, recordTransfer, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, weekStartOf, ledgerBuyerRetention, ledgerBuyerRepeat7, ledgerBuyerConcentration, ledgerSummary, ledgerDaily, ledgerSyncState, nextChunkSpan, LEDGER_BLOCK_MS } = await import("../src/revenue-ledger.js");
 const { railThroughput } = await import("../src/revenue-live.js");
 const Database = (await import("better-sqlite3")).default;
 
@@ -429,6 +429,37 @@ check("the server derives the floor from the catalog's cheapest price, not an ad
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   assert.ok(/setPayerDustFloorUsd\(Math\.min\(\.\.\.Object\.values\(TOOL_PRICES\)/.test(src));
 });
+
+// --- 7-day repeat: the batch goal's number ---------------------------------
+{
+  const E = (day, payer) => ({ day, payer });
+  const events = [
+    E("2026-09-01", "back3"), E("2026-09-03", "back3"),           // returned on day 2: counts
+    E("2026-09-01", "once"),                                       // never again: eligible, not returned
+    E("2026-09-01", "late"), E("2026-09-15", "late"),             // came back after day 7: not within 7
+    ...Array.from({ length: 40 }, () => E("2026-09-02", "binge")), // 40 calls, one day: not a return
+    E("2026-09-29", "new"),                                        // first paid 2 days before now: pending
+    E("2026-09-08", "edge"), E("2026-09-15", "edge"),             // exactly 7 days later: counts
+  ];
+  const r = ledgerBuyerRepeat7(wallets, { events, now: Date.parse("2026-10-01T12:00:00Z") });
+  check("7-day repeat: a second DAY within 7 days counts, the same day does not", () => {
+    assert.equal(r.returnedWithin7, 2, `returned ${r.returnedWithin7}`);
+    assert.equal(r.eligible, 5, `eligible ${r.eligible}`);
+    assert.equal(r.returnedWithin7Pct, 40);
+  });
+  check("7-day repeat: a buyer still inside their first week is pending, not a non-return", () => {
+    assert.equal(r.pending, 1);
+  });
+  check("7-day repeat: grouped by the ISO week of the first payment, newest first", () => {
+    assert.deepEqual(r.byFirstWeek.map((w) => w.week), ["2026-09-28", "2026-09-07", "2026-08-31"]);
+    const w1 = r.byFirstWeek.find((w) => w.week === "2026-08-31");
+    assert.equal(w1.firstTimeBuyers, 4); assert.equal(w1.returnedWithin7, 1);
+  });
+  check("7-day repeat: carries the scope (what it cannot see) and no wallet", () => {
+    assert.ok(Array.isArray(r.scope?.excludes) && r.scope.excludes.some((e) => /payer is not exposed/.test(e)));
+    assert.ok(!JSON.stringify(r).includes("back3") && !JSON.stringify(r).includes("binge"));
+  });
+}
 
 salesDb.close();
 rmSync(dir, { recursive: true, force: true });

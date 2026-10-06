@@ -517,7 +517,7 @@ import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml, catalogPayableOn } from "./market-page.js";
 import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
-import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
+import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerBuyerRepeat7, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
 import { upstreamCostsLoaded, upstreamCostsSummary, upstreamCostsGaps, upstreamCostsStatus } from "./upstream-costs.js";
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
@@ -3452,7 +3452,8 @@ async function buildRevenueDaily() {
   const buyersWeekly = ledgerBuyersWeekly(w, { events }); await turn();
   const buyersMonthly = ledgerBuyersMonthly(w, { events }); await turn();
   const concentration = ledgerBuyerConcentration(w, { events }); await turn();
-  const retention = ledgerBuyerRetention(w, { events });
+  const retention = ledgerBuyerRetention(w, { events }); await turn();
+  const repeat7 = ledgerBuyerRepeat7(w, { events });
   return {
     asOf: new Date().toISOString(),
     days: daily.days,
@@ -3472,6 +3473,9 @@ async function buildRevenueDaily() {
     // All-time: of everyone who ever paid us, how many came back (see
     // ledgerBuyerRetention - counted in DAYS, not payments).
     retention,
+    // Outside buyers who came back on another day within 7 days of their first
+    // payment, all-time and by the week they first paid (the before/after line).
+    repeat7,
   };
 }
 // Daily revenue series for the /revenue chart — external vs canary-sized
