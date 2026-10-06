@@ -2377,6 +2377,8 @@ jobs:
           t node scripts/test-sync-dev-branch.js
           # Free tier is an allowlist: a tool on no list is wallet-only by default (offline)
           t node scripts/test-free-tier-allowlist.js
+          # Flagship answers carry an additive next call (search -> answer, plan -> execute) - offline
+          t node scripts/test-next-call.js
           # Licensing split stays legible: server AGPL, every published package MIT with its own LICENSE + repository.directory (offline)
           t node scripts/test-package-licenses.js
           # OFL 1.1 condition 2: a redistributed font ships its licence

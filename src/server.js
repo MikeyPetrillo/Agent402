@@ -53,6 +53,7 @@ import { avmSubcentOfferStatus } from "./avm-sponsorship.js";
 import { translateV1Accepts, v1AcceptsTranslationEnabled } from "./x402-v1-accepts.js";
 import { mountShortlinks } from "./shortlinks.js";
 import { withHouseStyle } from "./house-style.js";
+import { withNextCall, nextCallFor } from "./next-call.js";
 import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS, reportHeadline, readPublicReport } from "./human-checkout.js";
 import { humanReportsPage, reportDeliveryPage } from "./human-reports-page.js";
 import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
@@ -578,6 +579,16 @@ export function isModelBacked(slugOrDef) {
 for (const def of ALL_KIT) if (MODEL_BACKED_SLUGS.has(def.slug)) def.modelBacked = true;
 
 for (const def of ALL_KIT) if (Object.hasOwn(REPORT_TIERS, def.slug) && typeof def.handler === "function" && !def.handler.__houseStyled) { def.handler = withHouseStyle(def.handler); def.handler.__houseStyled = true; }
+// web.search -> web.answer and decide.plan -> decide.execute: see src/next-call.js.
+const NEXT_CALL = { search: "answer", decide: "decide-execute" };
+{
+  const bySlug = new Map(ALL_KIT.map((d) => [d.slug, d]));
+  for (const [from, to] of Object.entries(NEXT_CALL)) {
+    const def = bySlug.get(from), nextDef = bySlug.get(to);
+    if (def && nextDef) def.handler = withNextCall(def.handler, nextCallFor(nextDef));
+  }
+}
+
 // Fold the chain namespace's verbs into the aliases of the tools that serve
 // them, so OUR OWN resolvers find what the namespace already answers. Without
 // this, `/api/chain/eth_getlogs` works and `/api/find?q=eth_getLogs` does not -
