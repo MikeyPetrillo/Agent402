@@ -3467,7 +3467,7 @@ async function buildRevenueDaily() {
   const buyersMonthly = ledgerBuyersMonthly(w, { events }); await turn();
   const concentration = ledgerBuyerConcentration(w, { events }); await turn();
   const retention = ledgerBuyerRetention(w, { events }); await turn();
-  const repeat7 = ledgerBuyerRepeat7(w, { events });
+  const repeat7 = ledgerBuyerRepeat7(w, { events }); await turn();
   return {
     asOf: new Date().toISOString(),
     days: daily.days,
