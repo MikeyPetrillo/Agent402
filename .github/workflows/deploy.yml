@@ -1491,12 +1491,14 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (1 scripts, one process each)
+      - name: Offline suites (2 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Offsite backup (stub S3 — consistent sqlite snapshots, cache excluded, budget holds visibly, bill guard refuses over-cap, retention prunes date prefixes — offline)
           t node scripts/test-backup.js
+          # backup-restore.js gives back every object shape the nightly run writes (offline)
+          t node scripts/test-backup-restore.js
           t node scripts/test-dataset-snapshot.js
           t node scripts/test-dataset-health.js
           t node scripts/test-price-parse.js

@@ -35,7 +35,17 @@ if (name.endsWith(".enc")) {
 if (name.endsWith(".gz")) { buf = gunzipSync(buf); name = name.slice(0, -3); }
 
 const unbundle = opt("--unbundle");
-if (name.endsWith(".ndjson")) {
+// A directory bundle and a plain .ndjson FILE store (outbound-spend.ndjson)
+// share the suffix, so the name cannot decide. The content does: a bundle is
+// one {"path","body"} record per line. Deciding by name alone restored a
+// 176-line ledger as "0 records" (restore drill, 2026-10-06).
+const isBundle = (b) => {
+  const lines = b.toString("utf8").split("\n").filter((l) => l.trim());
+  if (!lines.length) return true; // an empty directory bundles to nothing
+  try { return lines.every((l) => { const r = JSON.parse(l); return r && typeof r === "object" && "path" in r && "body" in r; }); }
+  catch { return false; }
+};
+if (name.endsWith(".ndjson") && !opt("--out") && (unbundle || isBundle(buf))) {
   const target = unbundle || name.slice(0, -7);
   mkdirSync(target, { recursive: true });
   let n = 0;
