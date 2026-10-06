@@ -57,7 +57,7 @@ const stub = createServer((req, res) => {
       setTimeout(() => { res.write('data: {"choices":[{"delta":{"content":"K"}}]}\n\ndata: [DONE]\n\n'); res.end(); }, 30);
       return;
     }
-    res.writeHead(200, { "content-type": "application/json", "x-credits-balance": "19.99" });
+    res.writeHead(200, { "content-type": "application/json", "x-credits-balance": "19.99", "payment-response": "eyJzdWNjZXNzIjp0cnVlfQ" });
     res.end(JSON.stringify({ id: "gen-1", model: body.model || "routed", choices: [{ message: { role: "assistant", content: "OK" } }] }));
   });
 });
@@ -182,6 +182,7 @@ await p.close();
   ok(w.mode === "x402", "payFetch without a credits key -> x402 mode");
   const r = await fetch(`${w.baseUrl}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ messages: [] }) });
   ok(r.status === 200 && paid === 1, "the paying fetch is what reaches upstream");
+  ok(r.headers.get("payment-response") === "eyJzdWNjZXNzIjp0cnVlfQ", "the x402 settlement receipt (payment-response) reaches an OpenAI-wire client");
   await w.close();
 }
 
@@ -390,6 +391,8 @@ await p.close();
   const last = seen.at(-1);
   ok(r.status === 200 && paid === 1 && last.url === "/v1/metered/messages", `a Messages call is paid and forwarded to the metered Messages route (got ${r.status}, ${last.url})`);
   ok(last.body.model === "claude-sonnet-5" && last.body.max_tokens === 64, "the model id and body pass through unchanged");
+  ok(r.headers.get("payment-response") === "eyJzdWNjZXNzIjp0cnVlfQ", "the x402 settlement receipt (payment-response) reaches an Anthropic-wire client");
+
   ok(last.anthropicVersion === "2023-06-01" && last.anthropicBeta === "fine-grained-tool-streaming-2025-05-14", "anthropic-version and anthropic-beta are passed through");
   ok(/^[\w-]{8,}$/.test(last.idem || ""), "a forwarded call carries an idempotency key");
   const prefixed = await post({ model: "agent402/claude-sonnet-5", max_tokens: 8, messages: [] });

@@ -133,7 +133,9 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
     const up = await paid(`${upstream}${endpoint}`, { method: "POST", headers, body: JSON.stringify(outbound), signal: AbortSignal.timeout(300_000) });
     stats.forwarded++;
     const passthrough = {};
-    for (const h of ["content-type", "x-credits-balance", "payment-receipt", "x-cache", "cache-control"]) { const v = up.headers.get(h); if (v) passthrough[h] = v; }
+    // payment-response / x-payment-response carry the x402 settlement receipt
+    // (v2 / v1); payment-receipt is MPP's. The client sees what it paid.
+    for (const h of ["content-type", "x-credits-balance", "payment-response", "x-payment-response", "payment-receipt", "x-cache", "cache-control"]) { const v = up.headers.get(h); if (v) passthrough[h] = v; }
     if (!up.ok && /json/i.test(passthrough["content-type"] || "")) {
       const raw = await up.text();
       let doc = null;
