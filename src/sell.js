@@ -45,7 +45,7 @@ const COSTS = [
 
 // Lane-level only. Per-tool slugs and purchase counts are the paid
 // /api/bestsellers product and are deliberately never rendered here — they
-// are the one demand signal nobody can reconstruct from the chain alone.
+// are not derivable from the chain.
 const LANES = [
   ["Hashing & encoding", "sha256/sha512 digests, HMAC, base64, JWT decoding: called dozens of times inside a single job."],
   ["Market & financial data", "Live quotes, historical series, Treasury yield curves, SEC company lookups."],

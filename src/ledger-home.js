@@ -58,8 +58,8 @@ const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 const slugPrice = (tools, slug) => String(tools.find((t) => t.slug === slug)?.price || "");
 
 // Lane-level demand teaser only - see /sell's identical rule. Per-tool slugs
-// and purchase counts are the paid /api/bestsellers product and the one
-// demand signal no block explorer can reconstruct; the pre-revamp design
+// and purchase counts are the paid /api/bestsellers product, not derivable
+// from a block explorer; the pre-revamp design
 // draft for this section rendered exact slugs+counts sourced from a
 // topPaidTools field this session removed from /api/stats as a real
 // privacy fix (see PR #774) - ported here as lanes instead, matching /sell.

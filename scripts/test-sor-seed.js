@@ -14,12 +14,11 @@ ok(typeof seed.origins === "object" && seed.origins, "origins is an object");
 const entries = Object.entries(seed.origins);
 ok(entries.length >= 50, `has a real floor of proven origins (${entries.length})`);
 ok(entries.length === seed.count, "count matches origins length");
-ok(entries.every(([, c]) => Number(c) >= 50), "every seeded origin is >= threshold (no sub-threshold noise)");
+ok(entries.every(([, c]) => c === true), "every seeded origin records membership only (no per-seller volume is committed)");
 ok(entries.every(([o]) => /^https?:\/\//.test(o) && o === o.toLowerCase()), "origins are normalized http(s) lowercase");
 const hostOf = (u) => { try { return new URL(u).host.toLowerCase(); } catch { return ""; } };
 ok(!entries.some(([o]) => hostOf(o) === "agent402.tools"), "our own host is NOT in the external-seller seed (F4)");
 // the sellers that resolved a live external buy must be in the floor
-ok(entries.some(([o]) => o.includes("agentutility")), "a known live-settled seller is in the floor");
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

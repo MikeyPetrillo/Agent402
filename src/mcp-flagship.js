@@ -6,7 +6,7 @@
 // search_tools / call_tool. Keep this list aligned with mcp/index.js
 // DEFAULT_CURATED (stdio package cannot import this file when published).
 //
-// Chosen from live topPaidTools + front-door thesis (search/answer first):
+// Chosen from live topPaidTools + front-door choice (search/answer first):
 // search, answer, search-news, render, stock-quote, transcribe, memory-*.
 // Exactly 8 catalog flagships so hosted tools/list stays ~15 with meta tools
 // (Glama's well-scoped band is 3–15).

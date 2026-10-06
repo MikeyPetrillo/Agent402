@@ -1,6 +1,6 @@
 // Operator-published /.well-known documents (src/well-known-store.js + the
 // server wiring) — the runtime path for domain-verification files like
-// Talkshi's 15-minute challenge. Invariants:
+// a directory's 15-minute challenge. Invariants:
 //   - path traversal is structurally impossible (segment allowlist, no
 //     dot-prefixed segments, bounded depth/length)
 //   - reserved names (x402, security.txt, glama.json) are refused at write
@@ -23,7 +23,7 @@ const throws = (fn, substr, msg) => {
 };
 
 // --- module invariants -----------------------------------------------------
-ok(validWellKnownPath("talkshi-verification/2e6dd987-f1d5-4c3c-936d-e5aa5f802d90"), "challenge-shaped path accepted");
+ok(validWellKnownPath("example-verification/2e6dd987-f1d5-4c3c-936d-e5aa5f802d90"), "challenge-shaped path accepted");
 ok(!validWellKnownPath("../etc/passwd"), "dot-dot segment rejected");
 ok(!validWellKnownPath("a/../b"), "embedded dot-dot rejected");
 ok(!validWellKnownPath(".hidden"), "dot-prefixed segment rejected");
@@ -40,7 +40,7 @@ throws(() => registerWellKnown("ok-path", "<script>x</script>", "text/html"), "a
 ok(registerWellKnown("ok-plain", "hello", "text/plain").path === "ok-plain", "text/plain accepted");
 removeWellKnown("ok-plain");
 
-const reg = registerWellKnown("t/one", { service: "talkshi.com", challenge: "abc" });
+const reg = registerWellKnown("t/one", { service: "directory.example", challenge: "abc" });
 ok(reg.path === "t/one" && reg.bytes > 0, "registration returns path + bytes");
 ok(getWellKnown("t/one").body.includes('"challenge":"abc"'), "stored body readable");
 ok(getWellKnown("missing") === null, "miss returns null");
@@ -62,16 +62,16 @@ try {
   for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) { up = true; break; } } catch {} await sleep(500); }
   ok(up, "free-mode server booted");
 
-  const doc = { service: "talkshi.com", challenge_id: "test-123", challenge: "talkshi-domain-test", domain: "agent402.tools", agent_name: "agent402" };
-  const unauth = await fetch(`${B}/__operator/well-known`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "talkshi-verification/test-123", body: doc }) });
+  const doc = { service: "directory.example", challenge_id: "test-123", challenge: "directory-domain-test", domain: "agent402.tools", agent_name: "agent402" };
+  const unauth = await fetch(`${B}/__operator/well-known`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "example-verification/test-123", body: doc }) });
   ok(unauth.status === 404, `unauthenticated publish is a 404, the operator posture (got ${unauth.status})`);
 
-  const pub = await fetch(`${B}/__operator/well-known`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${OP}` }, body: JSON.stringify({ path: "talkshi-verification/test-123", body: doc }) });
+  const pub = await fetch(`${B}/__operator/well-known`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${OP}` }, body: JSON.stringify({ path: "example-verification/test-123", body: doc }) });
   ok(pub.status === 200 && (await pub.json()).ok === true, `operator publish accepted (got ${pub.status})`);
 
-  const read = await fetch(`${B}/.well-known/talkshi-verification/test-123`);
+  const read = await fetch(`${B}/.well-known/example-verification/test-123`);
   const readBody = await read.json();
-  ok(read.status === 200 && readBody.challenge === "talkshi-domain-test", "published document served publicly at the exact URL");
+  ok(read.status === 200 && readBody.challenge === "directory-domain-test", "published document served publicly at the exact URL");
   ok((read.headers.get("content-type") || "").includes("application/json"), "served as JSON");
   ok(read.headers.get("x-content-type-options") === "nosniff", "served with nosniff");
 
@@ -84,9 +84,9 @@ try {
   const miss = await fetch(`${B}/.well-known/never-registered`);
   ok(miss.status === 404, `unregistered path stays 404 (got ${miss.status})`);
 
-  const rm = await fetch(`${B}/__operator/well-known`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${OP}` }, body: JSON.stringify({ path: "talkshi-verification/test-123", remove: true }) });
+  const rm = await fetch(`${B}/__operator/well-known`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${OP}` }, body: JSON.stringify({ path: "example-verification/test-123", remove: true }) });
   ok(rm.status === 200 && (await rm.json()).removed === true, "operator remove works");
-  const gone = await fetch(`${B}/.well-known/talkshi-verification/test-123`);
+  const gone = await fetch(`${B}/.well-known/example-verification/test-123`);
   ok(gone.status === 404, "removed document stops serving");
 } catch (e) {
   ok(false, `booted-server leg threw: ${e.message}`);

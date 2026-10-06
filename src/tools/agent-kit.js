@@ -220,7 +220,7 @@ export const AGENT_TOOLS = [
     route: "POST /api/a2a-card-validate", name: "A2A Agent Card validate", slug: "a2a-card-validate", category: "data", price: "$0.002",
     description:
       "Validate an A2A (Agent2Agent protocol) Agent Card: required fields, skill shape, transport names, capability flags - spec v0.3 structural core. Returns errors, interop warnings, and a normalized summary (skills, interfaces, capabilities). Deterministic mini-A2A tooling - check a card before your agent trusts it.",
-    tags: ["a2a", "minia2a", "agent2agent", "agent-card", "validate", "interop", "protocol", "agents"],
+    tags: ["a2a", "agent2agent", "agent-card", "validate", "interop", "protocol", "agents"],
     discovery: {
       bodyType: "json",
       input: { card: SAMPLE_AGENT_CARD },

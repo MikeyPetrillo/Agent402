@@ -1824,9 +1824,8 @@ function priceRank(p) {
 // ("eip155:8453", "solana:5eykt4Us...") on some listings - every downstream
 // CHAIN_PAGES isNetwork exact-match then fails silently, so the seller is
 // indexed (shows on /marketplace) but invisible on its own chain's page.
-// Measured live 2026-08-13: bluepages.fyi (network:"base"),
-// 1mpixels-one.vercel.app (network:"solana"), ~72 of 1,000 sampled PayAI
-// resources affected. Built from CHAIN_PAGES itself (networkParam -> that
+// Measured live 2026-08-13: sellers publishing bare network names ("base",
+// "solana"), ~72 of 1,000 sampled discovery resources affected. Built from CHAIN_PAGES itself (networkParam -> that
 // chain's real mainnet id) rather than a hand-maintained list, so a future
 // chain addition is covered automatically with no second edit required here.
 const NETWORK_SHORTHAND = new Map(Object.values(CHAIN_PAGES).map((C) => [C.networkParam, C.acceptNetwork]));

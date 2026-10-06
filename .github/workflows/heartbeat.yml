@@ -877,9 +877,8 @@ jobs:
       # Solvador registry watch — their /discovery/resources speaks the
       # standard Bazaar shape but is EMPTY (total: 0, probed 2026-07-21). The
       # day it fills, it becomes the only discovery home for x402 sellers on
-      # Optimism/Unichain/World Chain/Linea, and we want to be the first
-      # aggregator to ingest it (one-line DISCOVERY_SOURCES entry, PayAI
-      # shape). One-shot informational signal: opens a single issue the first
+      # Optimism/Unichain/World Chain/Linea, and the index should ingest it
+      # (one-line DISCOVERY_SOURCES entry, PayAI shape). One-shot informational signal: opens a single issue the first
       # time total > 0, never re-opens, never alarms, never fails the run.
       - name: Solvador registry watch (one-shot signal when it goes non-empty)
         if: always()

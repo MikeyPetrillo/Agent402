@@ -80,7 +80,7 @@ const VERSION = `build-${(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_
 // below this, reads as "the catalog probably doesn't have this" — the
 // trigger for the request_tool hint + a fire-and-forget find-miss wish.
 // 3, not 5: a tag or slug-substring match is a SERVED query (see server.js -
-// the old 5 recorded a wish for every tag-served query, the minia2a ghost).
+// the old 5 recorded a wish for every tag-served query, a ghost cluster).
 const FIND_WEAK_SCORE = 3;
 const WISH_HINT_TEXT = "Nothing matched well? Tell us what you needed via POST /api/wish - we cluster demand and build what keeps coming up.";
 

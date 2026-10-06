@@ -1,7 +1,7 @@
 // Deterministic prod-sized synthetic index for the router performance pin
 // (scripts/test-route-perf.js). Shape measured on prod 2026-09-18: 4,224
 // sellers, 108,095 tools, 3,063 routable; one seller in fifty carries several
-// hundred routes (api.x402node.dev 543, mpp.hyreagent.fun 226). The vocabulary
+// hundred routes (api.nodeseller.example 543, mpp.hireseller.example 226). The vocabulary
 // is a hundred "hot" words every real query reaches for, a handful of
 // stopword-class words that sit in most descriptions (the "to" in "json to
 // csv" selects a third of the pool), and thousands of filler tokens so the

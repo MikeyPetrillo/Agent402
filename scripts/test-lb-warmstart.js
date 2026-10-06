@@ -30,8 +30,8 @@ try {
   writeFileSync(FILE, JSON.stringify({
     spec: "x402-leaderboard/1", asOf: "2026-07-20T00:00:00.000Z", windowLabel: "Last 7d",
     leaderboard: [
-      { rank: 1, homepage: "https://x402.agentutility.ai", origins: ["https://x402.agentutility.ai"], callsSettled: 6371 },
-      { rank: 2, homepage: "https://x402.ottoai.services", origins: ["https://x402.ottoai.services"], callsSettled: 47570 },
+      { rank: 1, homepage: "https://x402.alpha.example", origins: ["https://x402.alpha.example"], callsSettled: 6371 },
+      { rank: 2, homepage: "https://x402.beta.example", origins: ["https://x402.beta.example"], callsSettled: 47570 },
     ],
   }));
   ok((loadPersistedLeaderboardSnapshot()?.leaderboard || []).length === 2, "persisted file loads 2 rows");
@@ -43,7 +43,7 @@ try {
   const s = getLeaderboardSnapshot();
   ok(s.leaderboard.length === 2, `warm-start serves persisted rows at boot (got ${s.leaderboard.length})`);
   ok(s.staleFromDisk === true, "warm-started snapshot marked staleFromDisk");
-  ok(s.leaderboard[1].callsSettled === 47570 && s.leaderboard[1].origins[0] === "https://x402.ottoai.services",
+  ok(s.leaderboard[1].callsSettled === 47570 && s.leaderboard[1].origins[0] === "https://x402.beta.example",
     "origins + settled survive the round-trip (the SOR reliability join needs these)");
   stopLeaderboardRefresh();
 

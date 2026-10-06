@@ -276,7 +276,7 @@ export async function createSvmPaymentPayload(signer, paymentRequirements) {
   if (!feePayer) throw bad("feePayer is required in the accept's extra for SVM", 502);
   // Blockhash: prefer the one the facilitator's 402 already carries (a seller
   // does - then signing needs ZERO RPC, the whole point of this builder). When a
-  // seller's accept omits it (x402node.dev and most non-Pyth sellers), fetch it
+  // seller's accept omits it (most sellers do), fetch it
   // via the PLAIN-fetch `rpcCall` helper - NOT @solana/kit's RPC transport, which
   // manually sets a content-length header that undici validates strictly after
   // any custom-dispatcher (ssrf) fetch and rejects ("invalid content-length

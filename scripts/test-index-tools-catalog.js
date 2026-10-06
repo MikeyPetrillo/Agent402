@@ -126,7 +126,7 @@ const page = (results, extra = {}) =>
   check("and it is not re-stamped live-402, which made a nine-day-old price look fresh", kept.quoteSource !== "live-402");
   // Keyed by method + route (2026-09-02): a path with GET and POST keeps each
   // row's own verb. Before, the remembered row's verb was stamped onto every
-  // current row on the route, and minia2a.uk's POST operations came out GET.
+  // current row on the route, and acmeagent.example's POST operations came out GET.
   {
     const prev = { tools: [
       { method: "GET", route: "/x402/ip-geo", price: 0.5, networks: ["eip155:8453"], quoteSource: "live-402" },
@@ -663,7 +663,7 @@ const page = (results, extra = {}) =>
   // Measured on api.aurelianflo.com: 8 bare `resources` URLs inferred as GET
   // alongside the SAME 8 routes declared POST in `endpoints`, so every endpoint
   // was listed twice and half the buyers were sent to a verb the seller answers
-  // 405 to. jmt-x402-proxy carried 20 of these.
+  // 405 to. one seller carried 20 of these.
   const dup = {
     resources: ["https://seller.example/api/thing"],
     endpoints: [{ path: "/api/thing", method: "POST", name: "Thing" }],

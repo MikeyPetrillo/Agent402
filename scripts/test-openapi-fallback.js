@@ -637,7 +637,7 @@ console.log("openapi-fallback tests passed");
 }
 
 // ---- 8. per-instance registry rows collapse into templated operations ----
-// Found live 2026-07-27 (cloudworldmodel.ai): the PayAI registry records every
+// Found live 2026-07-27 (bigworldmodel.example): the PayAI registry records every
 // settled URL verbatim, so one templated operation appeared as 58 concrete
 // UUID rows and a 42-operation seller listed as "72 tools".
 {
@@ -682,7 +682,7 @@ console.log("openapi-fallback tests passed");
 }
 
 // ---- 9. x-x402-price-usdc counts as a payment annotation ----
-// 3 of cloudworldmodel's 17 paid operations carried ONLY this key and were
+// 3 of bigworldmodel's 17 paid operations carried ONLY this key and were
 // silently dropped from an annotated document.
 {
   const doc = {

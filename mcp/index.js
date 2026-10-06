@@ -737,7 +737,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           npm: "npx -y agent402-mcp",
           maintainer: "Havok Holdings LLC",
         },
-        positioning: `Deterministic tools layer beside LLM gateways: flagship search/answer first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
+        positioning: `Flagship search/answer first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
         ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog.",
       });
     }

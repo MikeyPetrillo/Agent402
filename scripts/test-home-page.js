@@ -42,9 +42,8 @@ const catalog = {
   ok(html.includes(">·<"), "a rail with zero recorded settlements renders as a dash placeholder, never a fabricated 0");
   ok(html.includes("69") && html.includes("settled over the MPP wire"), "MPP wire count renders");
   // The router share is GONE, not corrected. Even stated accurately it
-  // publishes what fraction of our traffic we monetize: a competitor's figure
-  // to have, answering a question no seller asked, on the page meant to
-  // persuade them. The architectural claim underneath needs no number, and a
+  // publishes what fraction of our traffic we monetize, answering a question
+  // no seller asked. The architectural claim underneath needs no number, and a
   // reader can verify it from any 402 on the site, which names the seller's
   // own payTo. Pinned as an absence because the tempting fix is to put a
   // "reassuring" small number back.

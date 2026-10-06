@@ -3248,7 +3248,7 @@ app.get("/.well-known/glama.json", (_req, res) => {
   });
 });
 // Operator-published verification documents (src/well-known-store.js) — e.g.
-// Talkshi's 15-minute domain challenge, which a deploy cycle cannot serve in
+// a directory's 15-minute domain challenge, which a deploy cycle cannot serve in
 // time. Falls through on a store miss, so the dedicated /.well-known routes
 // (x402, security.txt, glama.json — some registered LATER in this file) are
 // never shadowed; the store also refuses those names at write time.
@@ -5626,7 +5626,7 @@ app.get("/acp/manifest", (_req, res) =>
 // Threshold sits AT a single tag hit (score 3): an exact tag match to a
 // relevant tool is a SERVED query, not a miss. The old value (5) sat above
 // both a tag hit (3) and a slug-substring hit (4), so every tag-served
-// query ALSO recorded a wish - the "minia2a" cluster self-qualified on 25
+// query ALSO recorded a wish - one cluster self-qualified on 25
 // queries that each got the right tool back, ghost demand for tools that
 // shipped on 2026-07-20 for the very same wish (found 2026-07-28).
 const FIND_WEAK_SCORE = 3;
@@ -5692,8 +5692,8 @@ const planSketchFor = (q) => {
 const computeFind = async (q, k, meter = null, ip = null) => {
   const result = findTools(CATALOG, q, { k, baseUrl: BASE_URL, powSlugs: POW_SLUGS });
   // The seller bridge: a query that looks like an indexed seller's NAME gets
-  // pointed at that seller - /api/find is catalog-only, and 25 recorded
-  // "misses" for "minia2a" were agents hunting the indexed seller minia2a.uk.
+  // pointed at that seller - /api/find is catalog-only, and a cluster of
+  // recorded "misses" were agents hunting one indexed seller by name.
   // Only host/origin/toolCount ride along (never third-party display text),
   // plus ready-to-follow pointers into the drill-down and the router.
   try {

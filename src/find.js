@@ -404,17 +404,17 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
 /**
  * The find->seller bridge: does this query look like the NAME of an indexed
  * x402 seller rather than (or as well as) a task? Agents search /api/find for
- * sellers by name - 25 recorded "misses" for "minia2a" were hunts for the
- * indexed seller minia2a.uk (2026-07-28). Pure lexical matching over the
+ * sellers by name - a cluster of recorded "misses" were hunts for one indexed
+ * seller by its host label (2026-07-28). Pure lexical matching over the
  * routable-seller summaries; returns AT MOST max sellers as {host, origin,
  * toolCount} - no third-party display text rides along, by construction.
  *
  * Match rules (tuned against false positives on task-shaped queries):
- *  - exact host-label match at >=4 chars ("minia2a" === label of minia2a.uk),
+ *  - exact host-label match at >=4 chars ("acmeagent" === label of acmeagent.example),
  *    excluding generic labels: "api" exactly matches api.example.com's label
  *    but an agent searching "api" wants tools, not that seller
  *  - substring either way at >=5 chars against the compacted host or the
- *    compacted query ("cloudworldmodel" vs www.cloudworldmodel.ai)
+ *    compacted query ("bigworldmodel" vs www.bigworldmodel.example)
  * Exact label matches rank first, then higher toolCount.
  */
 const GENERIC_HOST_LABELS = new Set([

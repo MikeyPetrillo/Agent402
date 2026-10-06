@@ -5,9 +5,8 @@
 // /__operator/login session cookie (never a ?token= URL — audit A402-07).
 //
 // Why operator-only: the raw feed at /api/wishes is deliberately public (a
-// demand beacon that pulls sellers in), and the paid demand-radar tool sells
-// the analysis layer on top. This page is the OPERATOR's strategic read of the
-// same data — every cluster, ranked, with the qualification verdict spelled
+// aggregate demand signal), and the paid demand-radar tool sells the analysis
+// layer on top. This page is the OPERATOR's full view of the same data — every cluster, ranked, with the qualification verdict spelled
 // out — so it lives behind the token, not on a public route.
 //
 // aggregate is the getWishesAggregate() output. Its `text` field is already

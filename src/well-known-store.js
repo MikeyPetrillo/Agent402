@@ -1,20 +1,20 @@
 // Operator-published /.well-known documents — short-lived verification files
-// served WITHOUT a redeploy. The concrete need (2026-08-05): Talkshi's
-// domain-control challenge gives us 15 minutes to publish a JSON document at
-// /.well-known/talkshi-verification/<id>, and a deploy cycle cannot be on
+// served WITHOUT a redeploy. The concrete need (2026-08-05): a directory's
+// domain-control challenge gives 15 minutes to publish a JSON document at
+// /.well-known/<name>-verification/<id>, and a deploy cycle cannot be on
 // that critical path. The same shape covers any future "prove you control
 // this domain by serving a file" flow.
 //
 // Deliberately memory-only: verification documents are ephemeral by nature
-// (Talkshi's expire in 15 minutes; the TTL here is a generous 24h), so a
+// (such challenges expire in minutes; the TTL here is a generous 24h), so a
 // redeploy dropping them is fine — re-publish and re-verify. Nothing here
 // ever holds a secret: registration is operator-gated, and the documents are
-// meant to be world-readable the moment they exist (Talkshi explicitly warns
-// the claim_secret must NEVER appear in the hosted file — that secret stays
-// with the operator who requested the challenge).
+// meant to be world-readable the moment they exist (a challenge's own claim
+// secret must NEVER appear in the hosted file — it stays with the operator
+// who requested the challenge).
 
 const MAX_ENTRIES = 16;
-const MAX_BYTES = 16 * 1024; // Talkshi bounds its fetch to 8 KiB; 16K covers any similar flow
+const MAX_BYTES = 16 * 1024; // challenge fetchers bound their reads to a few KiB; 16K covers them
 const TTL_MS = 24 * 60 * 60 * 1000;
 
 // Paths with dedicated routes in server.js — refuse them here so an operator
@@ -41,7 +41,7 @@ export function validWellKnownPath(path) {
  *  invalid input — the operator route returns the message verbatim. */
 export function registerWellKnown(path, body, contentType = "application/json") {
   const bad = (m) => Object.assign(new Error(m), { statusCode: 400 });
-  if (!validWellKnownPath(path)) throw bad("path must be 1-4 clean segments (letters, digits, . _ -), e.g. talkshi-verification/<id>");
+  if (!validWellKnownPath(path)) throw bad("path must be 1-4 clean segments (letters, digits, . _ -), e.g. example-verification/<id>");
   if (RESERVED.has(path)) throw bad(`"${path}" has a dedicated route - the store cannot serve it`);
   const text = typeof body === "string" ? body : JSON.stringify(body);
   if (!text || Buffer.byteLength(text, "utf8") > MAX_BYTES) throw bad(`body required, max ${MAX_BYTES} bytes`);
