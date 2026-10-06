@@ -56,6 +56,8 @@ ok(withFreshRecent(null, ledger) === null && withFreshRecent(snap, null) === sna
 const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 const route = (p) => src.slice(src.indexOf(`app.get("${p}", async`), src.indexOf(`app.get("${p}", async`) + 600);
 ok(/withFreshRecent\(await revenueSnapshot\(revenueWallets\(\)\), ledgerRecent, ledgerNewestOwn\)/.test(route("/revenue")), "/revenue re-reads the recent rows and our newest settle");
+const revenueHandler = (() => { const i = src.indexOf('app.get("/revenue", async'); return src.slice(i, src.indexOf("\n});", i)); })();
+ok(/"Cache-Control", "no-cache"/.test(revenueHandler) && !/max-age/.test(revenueHandler), "/revenue tells the browser to revalidate, so one refresh shows the new reading");
 ok(/withFreshRecent\(await revenueSnapshot\(revenueWallets\(\)\), ledgerRecent, ledgerNewestOwn\)/.test(route("/api/revenue")), "/api/revenue re-reads the recent rows and our newest settle");
 ok(/revenueSnapshot\(revenueWallets\(\)\)\.then\(\(snap\) => withFreshRecent\(snap, ledgerRecent, ledgerNewestOwn\)\)/.test(src), "the chain pages re-read their rail's recent rows and our newest settle");
 

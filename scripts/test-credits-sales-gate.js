@@ -55,6 +55,15 @@ try {
   ok(/already issued/.test(String(pricingOff.credits.how)) && /balance/.test(String(pricingOff.credits.balance)), "...and still tells an existing key holder how to spend and read it");
   const pageOff = await (await fetch(`${B}/credits`)).text();
   ok(!/InStock/.test(pageOff) && !/Buy \$20/.test(pageOff) && !/data-pack-buy/.test(pageOff), "/credits carries no Offer, buy snippet or buy button while sales are off");
+  // A closed product is kept out of search: no sitemap slot, noindex on the
+  // page, while the page itself still answers 200 for key holders.
+  const robotsMeta = (html) => (html.match(/<meta name="robots" content="([^"]*)"/) || [])[1] || "";
+  ok((await fetch(`${B}/credits`)).status === 200, "/credits still answers 200 while sales are off");
+  ok(/noindex/.test(robotsMeta(pageOff)) && /(^|[ ,])follow/.test(robotsMeta(pageOff)), `/credits is noindex, follow while sales are off (got "${robotsMeta(pageOff)}")`);
+  for (const path of ["/sitemap.xml", "/sitemap-pages.xml"]) {
+    const xml = await (await fetch(`${B}${path}`)).text();
+    ok(/<loc>/.test(xml) && !/\/credits<\/loc>/.test(xml), `${path} does not list /credits while sales are off`);
+  }
   proc.kill("SIGKILL");
 
   // --- explicitly on: selling works again, so this is a switch and not a deletion
@@ -63,6 +72,13 @@ try {
   ok(on.status !== 503, `selling is reachable when explicitly enabled (got ${on.status}, not the 503 refusal)`);
   const pricingOn = await (await fetch(`${B}/api/pricing`)).json();
   ok(pricingOn.credits?.onSale === true && pricingOn.credits.checkout?.method === "POST", "/api/pricing advertises the checkout when sales are on");
+  const pageOnRes = await fetch(`${B}/credits`);
+  const pageOn = await pageOnRes.text();
+  ok(pageOnRes.status === 200 && !/noindex/.test(robotsMeta(pageOn)), `/credits is 200 and indexable when sales are on (got "${robotsMeta(pageOn)}")`);
+  for (const path of ["/sitemap.xml", "/sitemap-pages.xml"]) {
+    const xml = await (await fetch(`${B}${path}`)).text();
+    ok(/\/credits<\/loc>/.test(xml), `${path} lists /credits when sales are on`);
+  }
 
   // the gate must be read at call time, never latched at boot
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");

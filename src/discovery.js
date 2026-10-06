@@ -107,6 +107,9 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       currency: "USDC",
       protocol: "x402",
       note: RAILS_NOTE,
+      // The note above is catalog-wide; these routes take fewer chains, and an
+      // agent should learn that here rather than from a refused payment.
+      restrictedRoutes: "Identity-bound routes (the payer's signed EIP-3009 authorization is the identity) and long-running routes settle on EVM chains only; credits and Tempo are refused on the identity-bound ones. /api/pricing lists each restricted route's networks, and its 402 offers only those.",
     },
     // Positive, machine-readable summary of what Agent402 offers: open and
     // self-hostable, the whole catalog in one integration, and it owns the

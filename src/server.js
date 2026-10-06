@@ -2,7 +2,7 @@ import "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST
 import { retiredEntryFor, assertRetiredRegistryConsistent } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
-import { RAILS_OR, RAILS } from "./rails.js";
+import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
 // Railway's egress has NO working IPv6 (every AAAA is ENETUNREACH). Node's
 // happy-eyeballs races the IPv6 address on dual-stack upstreams and fails ~15% of
 // the time (UND_ERR_SOCKET / "could not connect"). Force IPv4 process-wide for the
@@ -26,6 +26,7 @@ import express from "express";
 import compression from "compression";
 import { readFileSync } from "node:fs";
 import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { llmsLinkMiddleware } from "./llms-link.js";
 import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
@@ -2673,6 +2674,8 @@ app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb" }), async (r
 // limiter and every payment gate - so a browser preflight is answered without
 // spending a limiter token or being asked to pay. See src/cors.js.
 app.use(corsMiddleware());
+// Every HTML page names /llms.txt in its head and a Link header (src/llms-link.js).
+app.use(llmsLinkMiddleware());
 
 app.use(compression({
   filter: (req, res) => {
@@ -3581,7 +3584,9 @@ app.get("/revenue", async (_req, res) => {
     // than typed into the copy: a framing paragraph that goes stale is worse
     // than none, because it is the sentence asking to be trusted.
     const ledger = memoSurface("revenue:page-ledger", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }), card: cardSales({ days: 30 }), decide: decideSales({ days: 30 }), agents: ledgerBuyerConcentration(revenueWallets()) }));
-    res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: standingFigures() }));
+    // no-cache: the body changes on every request, so a browser-cached
+    // copy showed the previous reading until a second refresh.
+    res.set("Cache-Control", "no-cache").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: standingFigures() }));
   } catch (e) {
     if (e?.snapshotWarming) {
       res.status(200).type("html").send('<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body style="font-family:system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 24px;color:#14201b"><h2 style="font-weight:500">Warming up…</h2><p style="color:#5d675f">The live on-chain transaction view is loading for the first time since a deploy. It refreshes here automatically in a few seconds.</p><p><a href="/" style="color:#15654a">Home</a></p></body>');
@@ -7995,6 +8000,16 @@ const V1_TIER_NOTES = {
   "/v1/images/generations": "b64_json out",
   "/v1/audio/speech": "OpenAI TTS wire, mp3/pcm bytes out",
 };
+// A restricted route's chains as its 402 offers them: the route's own rails
+// (x402RailsFor) narrowed to the rails this server is offering now. Before the
+// boot rail check has run (or in FREE_MODE) nothing is marked offered, so the
+// route's own rails stand alone.
+function pricingNetworksFor(def) {
+  const offered = new Set(railStatus().filter((r) => r.offered && r.caip2).map((r) => r.caip2));
+  const own = x402RailsFor(def).map((r) => r.caip2);
+  const live = offered.size ? own.filter((c) => offered.has(c)) : own;
+  return live.length ? live : own;
+}
 app.get("/api/pricing", (_req, res) => {
   const endpointCount = Object.keys(CATALOG).length;
   return res.json({
@@ -8066,7 +8081,8 @@ app.get("/api/pricing", (_req, res) => {
     baseUrl: BASE_URL,
     openapi: `${BASE_URL}/openapi.json`,
     categories: Object.fromEntries(Object.entries(CATEGORIES).map(([k, v]) => [k, v.label])),
-    endpoints: Object.entries(CATALOG).map(([route, { name, price, description, category, slug, tierQuote }]) => {
+    endpoints: Object.entries(CATALOG).map(([route, def]) => {
+      const { name, price, description, category, slug, tierQuote } = def;
       const [method, path] = route.split(" ");
       return {
         method,
@@ -8088,6 +8104,11 @@ app.get("/api/pricing", (_req, res) => {
         // marked: a consumer that wants only deterministic code should be able
         // to FILTER for it rather than take a sentence's word for it.
         modelBacked: MODEL_BACKED_SLUGS.has(slug),
+        // The chains a restricted route's 402 offers, so an agent on another
+        // rail learns it before paying (x402EvmOnly in rails.js decides; the
+        // 402 itself is unchanged). Absent on routes every rail can pay.
+        ...(x402EvmOnly(def) ? { networks: pricingNetworksFor(def) } : {}),
+        ...(def.identityBound ? { identityBound: true } : {}),
       };
     }),
   });
