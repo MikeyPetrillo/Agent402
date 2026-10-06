@@ -195,7 +195,7 @@ const encodingTools = [
   {
     route: "POST /api/base64",
     name: "Base64",
-    slug: "base64",
+    slug: "base64", aliases: ["utf-8", "base64-decode", "base64-encode"],
     category: "encoding",
     price: "$0.001",
     description: "Base64 encode or decode text. mode: encode (default) or decode. Handles URL-safe base64 on decode.",
@@ -334,7 +334,7 @@ const encodingTools = [
   {
     route: "GET /api/uuid",
     name: "Unique ID generator (UUID)",
-    slug: "uuid", aliases: ["unique-id", "unique-identifiers", "time-ordered-id", "sortable-id", "uuid-v7"],
+    slug: "uuid", aliases: ["unique-id", "unique-identifiers", "time-ordered-id", "sortable-id", "uuid-v7", "timestamp-id", "embedded-timestamp"],
     category: "identifiers",
     price: "$0.001",
     description: "Generate UUIDs: returns version and uuids[] (lowercase, hyphenated). ?version=4 (default, random) or 7 (time-ordered, sortable by creation time - the better choice for database keys), ?count=1..100.",
@@ -378,7 +378,7 @@ const encodingTools = [
   {
     route: "GET /api/password",
     name: "Password generator",
-    slug: "password",
+    slug: "password", aliases: ["join-code", "invite-code", "one-time-code", "random-code"],
     category: "identifiers",
     price: "$0.001",
     description: "Generate cryptographically random passwords. ?length=8..128 (default 24), ?symbols=true|false (default true), ?count=1..20.",
@@ -572,7 +572,7 @@ const dataTools = [
   {
     route: "POST /api/json-format",
     name: "JSON validate & format",
-    slug: "json-format",
+    slug: "json-format", aliases: ["pretty-print", "prettify", "minify", "indent"],
     category: "conversion",
     price: "$0.001",
     description: "Validate, pretty-print (any indentation, 0-8 spaces), or minify JSON, optionally with object keys sorted. canonical: true returns the RFC 8785 (JCS) canonical form - keys sorted, no whitespace, ECMAScript number and string serialization - plus its SHA-256, for hashing and signing. Numbers are read as IEEE-754 doubles and a duplicate key keeps its last value. Returns parse errors with position when invalid.",
@@ -656,7 +656,7 @@ const dataTools = [
   {
     route: "POST /api/csv-to-json",
     name: "CSV to JSON",
-    slug: "csv-to-json",
+    slug: "csv-to-json", aliases: ["csv-parse", "csv-column"],
     category: "conversion",
     price: "$0.002",
     description: "Parse CSV (quoted fields supported) into a JSON array of objects, using the first row as headers (header=false for arrays).",
@@ -2289,7 +2289,7 @@ const networkTools = [
   {
     route: "GET /api/qr",
     name: "QR code",
-    slug: "qr",
+    slug: "qr", aliases: ["qr-image", "qr-png", "pixels"],
     category: "identifiers",
     price: "$0.001",
     description: "Generate a QR code PNG from any text or URL. ?text=…&size=256 (128-1024).",

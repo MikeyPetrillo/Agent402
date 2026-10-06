@@ -14,6 +14,20 @@ import { UNIT_ALIASES } from "./tools/kit2.js";
 // Common English stopwords that contribute noise instead of intent. Kept short
 // on purpose — every word here matches many tool descriptions, so dropping it
 // from the query sharpens ranking without affecting recall on the intent words.
+// Words that are values rather than capabilities: anything carrying a digit,
+// a long unbroken token (an encoded payload), or a part of an IANA zone name.
+const TIMEZONE_WORDS = (() => {
+  const set = new Set();
+  try {
+    for (const z of Intl.supportedValuesOf("timeZone")) for (const w of z.toLowerCase().split(/[/_-]+/)) if (w.length > 2) set.add(w);
+  } catch { /* older runtimes: no zone list, nothing excluded */ }
+  return set;
+})();
+export function isValueTerm(term) {
+  const t = String(term || "");
+  return /\d/.test(t) || t.length >= 16 || TIMEZONE_WORDS.has(t);
+}
+
 const STOPWORDS = new Set([
   "a", "an", "the", "of", "in", "on", "to", "for", "with", "by", "and", "or",
   "is", "are", "was", "were", "be", "been", "this", "that", "it", "as", "at",
@@ -327,8 +341,14 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   // This is ADDITIVE. Ranking is untouched and every result is still returned;
   // it only lets the caller tell a real answer from a lexical coincidence.
   let rarestTerm = null, rarestTermCovered = true, coverageShare = null;
-  if (results.length && terms.length) {
-    rarestTerm = terms.reduce((a, b) => (idf.get(b) > idf.get(a) ? b : a));
+  // A DATA VALUE is never the word that defines a task: "1767200000" in
+  // "convert unix timestamp 1767200000 to ...", "400x400", an encoded payload,
+  // or a time-zone city ("auckland"). No tool describes those, so each made a
+  // correct top hit read as a miss and filed a wish (replayed from the demand
+  // board 2026-10-06). They still count toward ranking; they just never decide.
+  const defining = terms.filter((t) => !isValueTerm(t));
+  if (results.length && defining.length) {
+    rarestTerm = defining.reduce((a, b) => (idf.get(b) > idf.get(a) ? b : a));
     const top = all.find((e) => e.t.slug === results[0].slug);
     // Check the FULL catalog record. An earlier attempt tested the API response,
     // which omits `tags` — so tools whose match lives in a tag looked like

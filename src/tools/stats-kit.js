@@ -264,7 +264,7 @@ export const STATS_TOOLS = [
   },
   // ---------------------------------------------------------------------------
   {
-    route: "POST /api/moving-average", name: "Moving average (SMA + EMA)", slug: "moving-average",
+    route: "POST /api/moving-average", name: "Moving average (SMA + EMA)", slug: "moving-average", aliases: ["ema", "sma", "exponential-moving-average", "closing-prices"],
     category: "data", price: "$0.001",
     description:
       "Compute simple (SMA) and exponential (EMA) moving averages over a numeric series. Returns one value per input position - the first (window-1) SMA values are null since there isn't enough history. EMA uses the standard alpha = 2/(window+1) smoothing factor used in technical analysis.",

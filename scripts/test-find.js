@@ -294,6 +294,29 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   ok(f("call my mother").rarestTermCovered === false, "one covered word is still a miss (call my mother)");
 }
 
+// --- A data value never decides whether a query was served -----------------
+// Replayed from the demand board 2026-10-06: "convert unix timestamp 1767200000
+// to america/chicago", "generate qr code 400x400", "decode base32 jmsu6ubfru4s2gm"
+// and "convert timezone from auckland to sydney" all ranked the right tool first
+// and were still filed as misses, because the rarest term was the VALUE.
+{
+  const { isValueTerm } = await import("../src/find.js");
+  for (const t of ["1767200000", "400x400", "jmsu6ubfru4s2gm", "auckland", "pacific", "c2l0zs10cmfja2vyltiwmjy6"]) ok(isValueTerm(t), `"${t}" is a value, not a defining word`);
+  for (const t of ["pizza", "language", "mother", "timezone", "fleet"]) ok(!isValueTerm(t), `"${t}" can still define a task`);
+  const { KIT } = await import("../src/tools/kit.js");
+  const { STATS_TOOLS } = await import("../src/tools/stats-kit.js");
+  const { DATE_TIME_TOOLS } = await import("../src/tools/date-time-kit.js");
+  const V = Object.fromEntries([...KIT, ...STATS_TOOLS, ...DATE_TIME_TOOLS].map((t) => [t.route, t]));
+  const g = (q) => findTools(V, q, { baseUrl: "https://agent402.tools" });
+  const tz = g("convert timezone from auckland to sydney");
+  ok(tz.results[0]?.slug === "timezone-convert" && tz.rarestTermCovered === true, `a city name does not turn a served time-zone query into a miss (top ${tz.results[0]?.slug}, rarest ${tz.rarestTerm})`);
+  const qr = g("generate qr code from text string, 400x400 pixels");
+  ok(qr.results[0]?.slug === "qr" && qr.rarestTermCovered === true, `a size value does not turn a served QR query into a miss (rarest ${qr.rarestTerm})`);
+  const ema = g("compute ema from a list of closing prices");
+  ok(ema.results[0]?.slug === "moving-average", `"ema from closing prices" reaches moving-average (got ${ema.results[0]?.slug})`);
+  ok(g("call my mother").rarestTermCovered === false || g("call my mother").count === 0, "a real gap is still a miss");
+}
+
 // --- The catalog must answer in the ASKER's vocabulary ----------------------
 //
 // A tool we already ship is worth nothing if the words a domain-fluent agent
