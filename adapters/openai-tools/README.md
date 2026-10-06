@@ -12,54 +12,59 @@ Drop-in **OpenAI function-calling tools** for [Agent402](https://agent402.tools)
 ## Install
 
 ```bash
-npm install openai agent402-openai-tools
+npm install openai agent402-openai-tools @x402/fetch @x402/core @x402/evm viem
 ```
+
+The `@x402/*` and `viem` packages pay wallet-only tools from your wallet; the free tier needs only the first two.
 
 ## Use with `chat.completions`
 
 ```js
 import OpenAI from "openai";
 import { agent402Tools } from "agent402-openai-tools";
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const payClient = new x402Client();
+registerExactEvmScheme(payClient, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const payFetch = wrapFetchWithPayment(fetch, payClient);
 
 const openai = new OpenAI();
 
 // Pick the tools you want the model to know about. Smaller list = better tool-selection.
-// The default (freeOnly: true) keeps only compute-payable tools, so list free ones here;
-// wallet-only slugs such as "extract" or "render" need freeOnly: false and a paying fetch (below).
-const { tools, execute } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
+// Web search, then a cited answer: both wallet-only, paid per call through payFetch.
+const { tools, execute } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
 
-const res = await openai.chat.completions.create({
-  model: "gpt-4o-mini",
-  messages: [{ role: "user", content: "What is the SHA-256 of 'hello world'?" }],
-  tools,
-});
-
-// Resolve tool calls (free - paid via proof-of-work behind the scenes).
-const call = res.choices[0].message.tool_calls?.[0];
-if (call) {
-  const result = await execute(call.function.name, JSON.parse(call.function.arguments));
-  console.log(result);
+const messages = [{ role: "user", content: "Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?" }];
+for (let turn = 0; turn < 4; turn++) {
+  const res = await openai.chat.completions.create({ model: "gpt-4o-mini", messages, tools });
+  const msg = res.choices[0].message;
+  messages.push(msg);
+  if (!msg.tool_calls?.length) { console.log(msg.content); break; }
+  for (const call of msg.tool_calls) {
+    const result = await execute(call.function.name, JSON.parse(call.function.arguments));
+    messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
+  }
 }
+```
+
+**No wallet yet?** The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run free with proof-of-work and no wallet. Leave out `fetch`; the default (`freeOnly: true`) keeps only those tools:
+
+```js
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
 ```
 
 ## Use with Assistants v2 or the Responses API
 
 The shape returned by `agent402Tools()` is the same OpenAI function-calling JSON used by every flavor of the OpenAI API. Pass `tools` directly to `assistants.create({ tools })` or to `responses.create({ tools })`.
 
-## Pay with USDC (wallet-only tools)
+## More wallet-only tools
 
-For the catalog's wallet-only tools (browser, network, memory), wrap your fetch with `@x402/fetch` and pass it in:
+The rest of the wallet-only catalog (browser, network, memory) is paid the same way: list the slugs beside `freeOnly: false` and the same `payFetch`.
 
 ```js
-import { wrapFetchWithPayment } from "@x402/fetch";
-import { x402Client } from "@x402/core/client";
-import { registerExactEvmScheme } from "@x402/evm/exact/client";
-import { privateKeyToAccount } from "viem/accounts";
-
-const client = new x402Client();
-registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
-const payFetch = wrapFetchWithPayment(fetch, client);
-
 const { tools, execute } = await agent402Tools({
   slugs: ["extract", "render", "screenshot"],
   freeOnly: false,

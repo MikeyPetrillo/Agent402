@@ -53,6 +53,21 @@ agent402Tools(opts?: {
 
 `agent402ToolSpecs(opts)` returns the same four entries as framework-agnostic specs (plain JSON Schema plus an `execute`).
 
+## Pay with a wallet
+
+Every example below runs a web search (`search`) and then a cited answer (`answer`), two wallet-only tools paid per call in USDC. Wrap `fetch` once with `@x402/fetch` and pass it in as `fetch` (the meta-tool adapters take the same option):
+
+```js
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const client = new x402Client();
+registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const payFetch = wrapFetchWithPayment(fetch, client);
+```
+
 ## OpenAI
 
 ```js
@@ -60,16 +75,26 @@ import OpenAI from "openai";
 import { agent402Tools } from "agent402-openai-tools";
 
 const openai = new OpenAI();
-const { tools, execute } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
+// web search, then a cited answer: both paid per call through payFetch (above)
+const { tools, execute } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
 
-const res = await openai.chat.completions.create({
-  model: "gpt-4o-mini",
-  messages: [{ role: "user", content: "What is the SHA-256 of 'hello world'?" }],
-  tools,
-});
+const messages = [{ role: "user", content: "Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?" }];
+for (let turn = 0; turn < 4; turn++) {
+  const res = await openai.chat.completions.create({ model: "gpt-4o-mini", messages, tools });
+  const msg = res.choices[0].message;
+  messages.push(msg);
+  if (!msg.tool_calls?.length) { console.log(msg.content); break; }
+  for (const call of msg.tool_calls) {
+    const result = await execute(call.function.name, JSON.parse(call.function.arguments));
+    messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
+  }
+}
+```
 
-const call = res.choices[0].message.tool_calls?.[0];
-if (call) console.log(await execute(call.function.name, JSON.parse(call.function.arguments)));
+**No wallet yet?** The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run free with proof-of-work and no wallet:
+
+```js
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });   // freeOnly: true is the default
 ```
 
 Same `tools` array works for `assistants.create({ tools })` and `responses.create({ tools })`.
@@ -80,32 +105,34 @@ Same `tools` array works for `assistants.create({ tools })` and `responses.creat
 import Anthropic from "@anthropic-ai/sdk";
 import { agent402Tools } from "agent402-anthropic-tools";
 
-const client = new Anthropic();
-const { tools, execute } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
+const anthropic = new Anthropic();
+const { tools, execute } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
 
-const res = await client.messages.create({
-  model: "claude-sonnet-4-6",
-  max_tokens: 1024,
-  tools,
-  messages: [{ role: "user", content: "What is the SHA-256 of 'hello world'?" }],
-});
-
-const block = res.content.find((b) => b.type === "tool_use");
-if (block) console.log(await execute(block.name, block.input));
+const messages = [{ role: "user", content: "Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?" }];
+for (let turn = 0; turn < 4; turn++) {
+  const res = await anthropic.messages.create({ model: "claude-sonnet-4-6", max_tokens: 1024, tools, messages });
+  messages.push({ role: "assistant", content: res.content });
+  const uses = res.content.filter((b) => b.type === "tool_use");
+  if (!uses.length) { console.log(res.content.find((b) => b.type === "text")?.text); break; }
+  const results = [];
+  for (const b of uses) results.push({ type: "tool_result", tool_use_id: b.id, content: JSON.stringify(await execute(b.name, b.input)) });
+  messages.push({ role: "user", content: results });
+}
 ```
 
 ## Vercel AI SDK
 
 ```js
-import { generateText } from "ai";
+import { generateText, stepCountIs } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { agent402Tools } from "agent402-ai-sdk";
 
-const tools = await agent402Tools();   // or agent402Tools({ fetch: payFetch }) for wallet-only tools
+const tools = await agent402Tools({ fetch: payFetch });   // agent402Tools() alone: the proof-of-work free tier
 const { text } = await generateText({
   model: openai("gpt-4o-mini"),
   tools,
-  prompt: "Hash 'hello world' with sha256",
+  stopWhen: stepCountIs(6),
+  prompt: "Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?",
 });
 ```
 
@@ -116,13 +143,13 @@ import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { ChatOpenAI } from "@langchain/openai";
 import { agent402Tools } from "agent402-langchain";
 
-const tools = await agent402Tools();   // or agent402Tools({ fetch: payFetch }) for wallet-only tools
+const tools = await agent402Tools({ fetch: payFetch });   // agent402Tools() alone: the proof-of-work free tier
 const agent = createReactAgent({
   llm: new ChatOpenAI({ model: "gpt-4o-mini" }),
   tools,
 });
 const res = await agent.invoke({
-  messages: [{ role: "user", content: "Hash 'hello world' with sha256" }],
+  messages: [{ role: "user", content: "Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?" }],
 });
 ```
 
@@ -133,9 +160,9 @@ import { agent } from "@llamaindex/workflow";
 import { openai } from "@llamaindex/openai";
 import { agent402Tools } from "agent402-llamaindex";
 
-const { tools } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
+const { tools } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
 const myAgent = agent({ tools, llm: openai({ model: "gpt-4o-mini" }) });
-const res = await myAgent.run("Compute SHA-256 of 'hello world'");
+const res = await myAgent.run("Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?");
 ```
 
 ## elizaOS
@@ -164,29 +191,22 @@ Three actions: `agent402_find` (free discovery), `agent402_call` (pays: proof-of
 import { Agent } from "@strands-agents/sdk";
 import { agent402Tools } from "agent402-strands";
 
-const { tools } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
+const { tools } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
 const agent = new Agent({ tools });
-const res = await agent.invoke("What is the SHA-256 of 'hello world'?");
+const res = await agent.invoke("Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?");
 ```
 
-For an agent on [AWS Bedrock AgentCore](AWS-Bedrock-AgentCore), this adapter embeds a chosen subset of tools in a Strands agent; the hosted `/mcp` connector as a Gateway target is the other way in. Wallet-only tools are paid through the x402-wrapped `fetch` you pass, as in the next section.
+For an agent on [AWS Bedrock AgentCore](AWS-Bedrock-AgentCore), this adapter embeds a chosen subset of tools in a Strands agent; the hosted `/mcp` connector as a Gateway target is the other way in. Wallet-only tools are paid through the x402-wrapped `fetch` you pass, as in [Pay with a wallet](#pay-with-a-wallet).
 
-## Pay with USDC (wallet-only tools)
+## Free tier (no wallet)
 
-On the catalog-tools adapters, `freeOnly: true` (the default) restricts to compute-payable tools so no wallet is needed. For the wallet-only catalog (browser, network, memory), wrap your fetch with `@x402/fetch` and pass it in (the meta-tool adapters take the same `fetch` option):
+On the catalog-tools adapters, `freeOnly: true` (the default) restricts to compute-payable tools, paid with proof-of-work, so no wallet is needed. Leave out `fetch` and list pure-CPU slugs:
 
 ```js
-import { wrapFetchWithPayment } from "@x402/fetch";
-import { x402Client } from "@x402/core/client";
-import { registerExactEvmScheme } from "@x402/evm/exact/client";
-import { privateKeyToAccount } from "viem/accounts";
-
-const client = new x402Client();
-registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
-const payFetch = wrapFetchWithPayment(fetch, client);
-
-const { tools, execute } = await agent402Tools({ slugs: ["extract", "render"], freeOnly: false, fetch: payFetch });
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
 ```
+
+On the meta-tool adapters, `agent402Tools()` with no `fetch` gives the same four tools; `agent402_call` then pays the pure-CPU tools with proof-of-work. The rest of the wallet-only catalog (browser, network, memory) is reached the same way as the examples above: `freeOnly: false` plus a paying `fetch`.
 
 ## Self-hosted catalog
 

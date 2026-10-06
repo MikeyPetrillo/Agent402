@@ -12,11 +12,12 @@ Drop-in **LlamaIndex TS tools** for [Agent402](https://agent402.tools) - the ope
 ## Install
 
 ```bash
-npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-llamaindex
+npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-llamaindex @x402/fetch @x402/core @x402/evm viem
 ```
 
 `llamaindex` is what this adapter builds its tools with; `@llamaindex/workflow`
-(the agent) and `@llamaindex/openai` (an LLM) are what the example below runs on.
+(the agent) and `@llamaindex/openai` (an LLM) are what the example below runs on,
+and the `@x402/*` and `viem` packages pay wallet-only tools from your wallet.
 
 ## Use with an agent workflow
 
@@ -24,22 +25,35 @@ npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-llamaind
 import { agent } from "@llamaindex/workflow";
 import { openai } from "@llamaindex/openai";
 import { agent402Tools } from "agent402-llamaindex";
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
 
-// The default (freeOnly: true) keeps only compute-payable tools, so list free ones here;
-// wallet-only slugs such as "extract" or "render" need freeOnly: false and a paying fetch (below).
-const { tools } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
+const payClient = new x402Client();
+registerExactEvmScheme(payClient, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const payFetch = wrapFetchWithPayment(fetch, payClient);
+
+// Web search, then a cited answer: both wallet-only, paid per call through payFetch.
+const { tools } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
 
 const myAgent = agent({ tools, llm: openai({ model: "gpt-4o-mini" }) });
-const res = await myAgent.run("Compute SHA-256 of 'hello world'");
+const res = await myAgent.run("Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?");
 ```
 
-## Pay with USDC (wallet-only tools)
+**No wallet yet?** The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run free with proof-of-work and no wallet. Leave out `fetch`; the default (`freeOnly: true`) keeps only those tools:
+
+```js
+const { tools } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
+```
+
+## More wallet-only tools
 
 ```js
 const { tools } = await agent402Tools({
   slugs: ["extract", "render", "screenshot"],
   freeOnly: false,
-  fetch: payFetch, // your @x402/fetch-wrapped fetch
+  fetch: payFetch, // the @x402/fetch-wrapped fetch from above
 });
 ```
 

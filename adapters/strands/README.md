@@ -14,27 +14,46 @@ Works in a Strands agent anywhere it runs, including on AWS Bedrock AgentCore.
 ## Install
 
 ```bash
-npm install agent402-strands @strands-agents/sdk zod
+npm install agent402-strands @strands-agents/sdk zod @x402/fetch @x402/core @x402/evm viem
 ```
+
+The `@x402/*` and `viem` packages pay wallet-only tools from your wallet; the free tier needs only the first three.
 
 ## Use
 
 ```ts
 import { Agent } from "@strands-agents/sdk";
 import { agent402Tools } from "agent402-strands";
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
 
-// The default (freeOnly: true) keeps only compute-payable tools, so list free ones here;
-// wallet-only slugs such as "extract" or "render" need freeOnly: false and a paying fetch.
+const payClient = new x402Client();
+registerExactEvmScheme(payClient, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const payFetch = wrapFetchWithPayment(fetch, payClient);
+
+// Web search, then a cited answer: both wallet-only, paid per call through payFetch.
 const { tools } = await agent402Tools({
-  slugs: ["hash", "uuid", "json-to-csv"],   // pick what you need
+  slugs: ["search", "answer"],   // pick what you need
+  freeOnly: false,
+  fetch: payFetch,
 });
 
 const agent = new Agent({ tools });
-const out = await agent.invoke("What is the SHA-256 of 'hello world'?");
+const out = await agent.invoke("Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?");
+```
+
+**No wallet yet?** The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run free with proof-of-work and no wallet. Leave out `fetch`; the default (`freeOnly: true`) keeps only those tools:
+
+```ts
+const { tools } = await agent402Tools({
+  slugs: ["hash", "uuid", "json-to-csv"],
+});
 ```
 
 That's it. The agent now has those tools available; when it calls one, the
-adapter solves a proof-of-work (free tier) or signs an x402 payment (paid
+adapter signs an x402 payment (paid tier) or solves a proof-of-work (free
 tier) under the hood and returns the result as a structured object.
 
 ## On AWS Bedrock AgentCore

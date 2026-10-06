@@ -6,28 +6,35 @@ This example runs **locally** with a stubbed `@strands-agents/sdk` so you can ve
 
 ## Run it
 
+With a wallet (an EVM key holding USDC on Base), the agent runs a web search and then a cited answer, each paid per call over x402:
+
 ```bash
 cd examples/agentcore
-node run.js
+npm install
+AGENT_KEY=0x... node run.js
 ```
 
-You should see something like:
-
 ```
-[demo] catalog: 4 Agent402 tools wired into Strands
-[demo] agent picked tool: hash
-[demo] tool result: { algo: 'sha256', text: 'hello world',
-                       hex: 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9' }
-PASS — Strands → Agent402 round trip works end-to-end.
+[demo] catalog: 2 Agent402 tools wired into Strands
+[demo] search({"q":"x402 payment protocol adoption"}): { query: ..., results: [ ... ] }
+[demo] answer({"q":"what is the x402 payment protocol?"}): { answer: ..., citations: [ ... ] }
+PASS: Strands → Agent402 web search and answer, paid from the wallet.
 ```
 
 That's the full flow:
 1. `agent402Tools()` pulls the live Agent402 catalog
-2. The Strands Agent picks a tool from natural-language input
-3. The adapter solves a sha256 proof-of-work to pay for the call (~150ms)
-4. agent402.tools returns the real, structured result
+2. The Strands Agent picks the tools from natural-language input
+3. Each call answers 402 with its price; the x402 fetch signs the USDC payment and retries
+4. agent402.tools returns the real, structured result, and settles only on success
 
-No wallet, no AWS account, no API keys — just `node run.js`.
+**No wallet yet?** The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run free with proof-of-work and no wallet. Run `node run.js` with no `AGENT_KEY` and the demo calls `hash` instead:
+
+```
+[demo] agent picked tool: hash
+[demo] tool result: { algo: 'sha256', text: 'hello world',
+                       hex: 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9' }
+PASS: Strands → Agent402 round trip works end-to-end.
+```
 
 ## Deploying on AgentCore
 

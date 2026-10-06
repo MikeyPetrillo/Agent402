@@ -10,11 +10,20 @@ Two entry points:
 | File | What it is | Use it to |
 |------|------------|-----------|
 | `direct_buy.py` | Deterministic loop, no LLM: fetch → 402 → sign → retry → verify | **Prove the wallet works.** Reliable, scriptable. |
-| `agent_buy.py` | A Strands agent + the AgentCore Payments plugin + an HTTP tool | **Showcase.** The agent calls the paid API and the plugin settles the 402. |
+| `agent_buy.py` | A Strands agent + the AgentCore Payments plugin + an HTTP tool | **Showcase.** The agent runs a web search, then a cited answer, and the plugin settles each 402. |
 
-Default target: `POST https://agent402.tools/api/hash` with `{"text":"hello world","algo":"sha256"}`
-— $0.001, and deterministic, so `direct_buy.py` can verify the paid response equals
+`agent_buy.py` runs a web search and then a cited answer, each paid from the wallet:
+`GET https://agent402.tools/api/search?q=x402+payment+protocol+adoption&count=5`, then
+`GET https://agent402.tools/api/answer?q=what+is+the+x402+payment+protocol%3F`.
+
+`direct_buy.py` buys a deterministic target, `POST https://agent402.tools/api/hash` with
+`{"text":"hello world","algo":"sha256"}`, so it can verify the paid response equals
 `sha256("hello world")`.
+
+**No wallet yet?** The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run
+free with proof-of-work and no wallet, through the [adapters](../../adapters) or the
+hosted `/mcp` connector. This sample pays for `hash` from the wallet only so the
+proof loop has an answer it can check.
 
 ## How the payment works
 
