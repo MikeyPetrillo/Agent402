@@ -31,7 +31,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-10-02.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-10-06.</p>
 </section>
 
 <section>
@@ -92,9 +92,10 @@ User-Agent, the cadence, and how to have a service removed - by email or by disa
 with no reason required either way.</p>
 <p>What the index reports about a service is what that service advertises about itself, plus our own
 observations of it: whether our probe reached it, and what its own 402 challenges named. Settlement
-figures are counts read from public blockchains. <b>We publish counts of payments received per payee and
-never the identities of payers</b> - no roster of who paid whom leaves our systems, and that rule is
-enforced in the server, not by convention.</p>
+figures are counts read from public blockchains. <b>The index publishes counts of payments received per
+payee, and its buyer figures are counts.</b> Payments on public blockchains are public: some of our pages
+show individual payments as the chain records them, for example the live payments view on our home page,
+which shows shortened payer addresses with links to the public transactions. We do not sell payer data.</p>
 <p>We claim no rights in the underlying facts a service publishes about itself; those are its own. We do
 claim our compilation - the selection, arrangement, verification and history of the index - and our own
 measurements and probe results, and we license them on the terms we publish for whichever surface you
@@ -111,9 +112,12 @@ infringers.</p>
 <h2>Payments</h2>
 <p><b>On-chain (x402 / MPP).</b> Paid calls settle on public blockchains - USDC on Base and the other
 chains listed at <a href="/pricing">/pricing</a>, USDG on Robinhood Chain, and MPP settlement on Base,
-Celo or Tempo. Settlement happens only after your call has succeeded: a call that returns an error is
-not charged. Micropayments are per call and, once settled on-chain, are final and non-refundable except
-where required by law. Metered routes quote a ceiling before
+Celo or Tempo. An x402 payment settles only after your call returns a successful response; if the call
+returns an error, the payment is not settled and you are not charged. Some payments are final before the
+call runs, such as an MPP payment sent as a Tempo transfer; if that call then fails, or if your connection
+closes after a payment has settled and before the response is delivered, we record the amount as owed
+back to the paying wallet. Micropayments are per call and, once settled on-chain, are final and
+non-refundable except as described in these terms or where required by law. Metered routes quote a ceiling before
 payment and settle at or under it. You are responsible for your own wallet and keys; we never receive or
 hold your private key.</p>
 <p><b>Refunds on-chain.</b> Because settlement happens only after a call succeeds, the ordinary
@@ -122,7 +126,7 @@ something that did not deliver, we record the amount as owed and repay the walle
 chain it paid on. Repayment runs in batches rather than instantly; an amount under $0.05 may be held
 until it can be sent for less than it costs in network fees; and a payment whose paying wallet cannot
 be identified from its own settlement cannot be repaid. None of this reduces a right you have by law.</p>
-<p><b>By card.</b> Card payments for reports and monitors, and for prepaid credits issued before credit sales stopped, are processed by
+<p><b>By card.</b> Card payments for reports and monitors, for pay-per-call purchases made with a card over MPP, and for prepaid credits issued before credit sales stopped, are processed by
 <a href="https://stripe.com" rel="noopener">Stripe</a> under Stripe's terms; we never see card numbers. A
 report is generated only against a paid, Stripe-verified session, once; if generation fails, the charge
 is refunded automatically. A report that was delivered is final. Prepaid credits are consumed as you
