@@ -36,13 +36,23 @@ function addrFromTopic(topic) {
   return `0x${topic.slice(-40)}`.toLowerCase();
 }
 
-async function rpc(url, method, params, fetchImpl, timeoutMs) {
-  const res = await fetchImpl(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
+// Public RPCs answer bursts with 429 (a whole refund run held on it,
+// 2026-10-06). These are reads, so retrying them is always safe.
+const RPC_RETRY_STATUSES = new Set([429, 502, 503, 504]);
+export const RPC_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
+
+async function rpc(url, method, params, fetchImpl, timeoutMs, delays = RPC_RETRY_DELAYS_MS) {
+  let res;
+  for (let attempt = 0; ; attempt++) {
+    res = await fetchImpl(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.ok || !RPC_RETRY_STATUSES.has(res.status) || attempt >= delays.length) break;
+    await new Promise((r) => setTimeout(r, delays[attempt]));
+  }
   if (!res.ok) throw new Error(`rpc ${method} HTTP ${res.status}`);
   const j = await res.json();
   if (j.error) throw new Error(`rpc ${method}: ${j.error.message || "error"}`);

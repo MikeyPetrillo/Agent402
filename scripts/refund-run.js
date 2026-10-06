@@ -320,6 +320,8 @@ export function refundMemoHex(row) {
   return "0x" + Buffer.from(refundMemo(row), "utf8").toString("hex");
 }
 
+const decimalsCache = new Map();
+
 async function sendEvm(row, accepts) {
   const { createWalletClient, http, publicActions, defineChain } = await import("viem");
   const { privateKeyToAccount } = await import("viem/accounts");
@@ -331,18 +333,27 @@ async function sendEvm(row, accepts) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(String(row.payer))) throw new Error(`payer is not an EVM address (${tag(row.payer)})`);
   const account = privateKeyToAccount(process.env.REFUND_EVM_KEY.trim());
   const chain = defineChain({ id, name: row.network, nativeCurrency: { name: "n", symbol: "n", decimals: 18 }, rpcUrls: { default: { http: [rpc] } } });
-  const client = createWalletClient({ account, chain, transport: http(rpc) }).extend(publicActions);
+  // viem's default retry (3 tries, 150 ms) gives up inside a public RPC's 429
+  // window. Re-sending the same signed raw transaction is idempotent.
+  const client = createWalletClient({ account, chain, transport: http(rpc, { retryCount: 5, retryDelay: 1000 }) }).extend(publicActions);
   const erc20 = [
     { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
     { type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "bool" }] },
   ];
   // Read decimals from the token itself - assuming 6 and being wrong about a
   // future asset would refund a millionth (or a million times) the debt.
-  const decimals = await client.readContract({ address: token, abi: erc20, functionName: "decimals" });
+  const decKey = `${row.network}:${String(token).toLowerCase()}`;
+  if (!decimalsCache.has(decKey)) decimalsCache.set(decKey, await client.readContract({ address: token, abi: erc20, functionName: "decimals" }));
+  const decimals = decimalsCache.get(decKey);
   const amount = BigInt(Math.round(row.priceUsd * 10 ** Number(decimals)));
   const { encodeFunctionData, concat } = await import("viem");
   const data = concat([encodeFunctionData({ abi: erc20, functionName: "transfer", args: [row.payer, amount] }), refundMemoHex(row)]);
   const hash = await client.sendTransaction({ to: token, data });
+  // Wait for it to land before the next send picks a nonce: a load-balanced
+  // public RPC can hand back a stale pending nonce. A slow receipt is not a
+  // failure; the hash is broadcast and goes in the ledger either way.
+  try { await client.waitForTransactionReceipt({ hash, timeout: 60_000 }); }
+  catch (e) { console.warn(`      receipt wait for a sent refund: ${(e?.message || String(e)).slice(0, 120)}`); }
   return hash;
 }
 
@@ -472,6 +483,7 @@ async function main() {
         stellarConfirm: confirmStellarTransfer,
       });
       if (!proof.verified) {
+        await new Promise((r) => setTimeout(r, 1500));
         console.warn(`HOLD  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}: UNVERIFIED - ${proof.reason}`);
         unverified++;
         continue;
@@ -496,6 +508,7 @@ async function main() {
       await markPaid(row.id, String(tx));
       console.log(`PAID  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}  (tx in the ledger, not this log)`);
       ok++;
+      await new Promise((r) => setTimeout(r, 1500));
     } catch (e) {
       // If the failure came after the claim, the row is now stuck in `sending`
       // and will NOT be retried automatically - that is deliberate. Whether the

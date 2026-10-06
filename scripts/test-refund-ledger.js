@@ -6,7 +6,7 @@
 // silent write-offs, refunding the canary to ourselves, skipping caps, and
 // case-folding an address on a case-sensitive rail.
 process.env.REFUND_DB_DIR = process.env.TMPDIR || "/tmp";
-import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, refundTotals, __resetRefunds } from "../src/refund-ledger.js";
+import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundTotals, __resetRefunds } from "../src/refund-ledger.js";
 import { planRefunds, familyOf, ourPayToSet, LASTING_HANGUP_HOLD, isLastingEffectHangup, REPEAT_HANGUP_HOLD, isRepeatHangup, refundMemo, refundMemoHex } from "./refund-run.js";
 import { LASTING_EFFECT_SLUG_LIST } from "../src/hangup-forgiveness.js";
 import { readFileSync } from "node:fs";
@@ -205,6 +205,21 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
     "it is visible as sending - stuck, not lost");
   ok(markRefundPaid(r.id, "0xoutbound") === true, "the sender can complete it to paid");
   ok(refundTotals().paid.n === 1, "and it counts as paid");
+}
+
+// 16b. A stuck send a human checked on chain goes back to owed, with a note.
+{
+  __resetRefunds();
+  recordRefundOwed({ slug: "hash", network: "eip155:8453", payer: "0xE", priceUsd: 0.001, tx: "0xstuck" });
+  const r = listRefunds().find((x) => x.evidence === "0xstuck");
+  ok(releaseStuckSend(r.id, "chain checked") === false, "an owed row is not 'released' (only sending rows)");
+  claimRefundForSend(r.id);
+  ok(releaseStuckSend(r.id, "") === false, "release without a note is refused");
+  ok(releaseStuckSend(r.id, "chain checked: no transfer, nonce unchanged") === true, "a sending row with a note goes back to owed");
+  ok(listRefunds({ status: "owed" }).some((x) => x.id === r.id), "and is in the owed queue again");
+  ok(claimRefundForSend(r.id) === true, "so the next run can claim and pay it");
+  markRefundPaid(r.id, "0xout");
+  ok(releaseStuckSend(r.id, "oops") === false, "a paid row can never be released back to owed");
 }
 
 // 17. A claim cannot resurrect a resolved debt.

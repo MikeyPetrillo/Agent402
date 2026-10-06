@@ -103,6 +103,11 @@ const claimRow = db.prepare(`
   UPDATE refunds SET status = 'sending', note = @note, resolvedAt = NULL
   WHERE id = @id AND status = 'owed'
 `);
+// Release a stuck claim back to owed. See releaseStuckSend().
+const releaseRow = db.prepare(`
+  UPDATE refunds SET status = 'owed', note = @note, resolvedAt = NULL
+  WHERE id = @id AND status = 'sending'
+`);
 const totalsQ = db.prepare(`
   SELECT status, count(*) AS n, sum(priceUsd) AS usd, sum(synthetic) AS synth
   FROM refunds GROUP BY status
@@ -178,6 +183,18 @@ export function listRefunds({ status = "owed", limit = 200 } = {}) {
  */
 export function claimRefundForSend(id, note = null) {
   try { return claimRow.run({ id, note }).changes > 0; } catch { return false; }
+}
+
+/**
+ * Put a row stuck in `sending` back in the owed queue. Only for a human who
+ * has checked the chain and found that nothing left the wallet (no transfer to
+ * the payer, nonce not advanced): the next run then verifies and pays it like
+ * any other debt. Requires a note saying what was checked. Never touches an
+ * owed, paid or void row.
+ */
+export function releaseStuckSend(id, note) {
+  if (!note || typeof note !== "string" || !note.trim()) return false;
+  try { return releaseRow.run({ id, note: note.trim() }).changes > 0; } catch { return false; }
 }
 
 /** Mark a debt repaid. Requires the outbound transaction - a refund without

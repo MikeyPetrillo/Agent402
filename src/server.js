@@ -679,7 +679,7 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, refundTotals, refundsCreatedBetween, refundsForPayer } from "./refund-ledger.js";
+import { recordRefundOwed, refundByEvidence, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundTotals, refundsCreatedBetween, refundsForPayer } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
@@ -5335,8 +5335,11 @@ app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), (req, re
   // sending and marking paid cannot be re-sent by the next run. Only one
   // caller can win a given row.
   else if (action === "claim") ok = claimRefundForSend(rowId, note || null);
-  else return res.status(400).json({ error: 'action must be "claim", "paid" (requires tx) or "void" (requires note)' });
-  if (!ok) return res.status(409).json({ error: "not updated - row missing, already resolved, or evidence missing (paid needs tx, void needs note)" });
+  // `release` puts a row stuck in `sending` back to owed, after a human has
+  // checked the chain and found nothing was sent. It needs that note.
+  else if (action === "release") ok = releaseStuckSend(rowId, note);
+  else return res.status(400).json({ error: 'action must be "claim", "release" (requires note), "paid" (requires tx) or "void" (requires note)' });
+  if (!ok) return res.status(409).json({ error: "not updated - row missing, already resolved, not sending (release), or evidence missing (paid needs tx, void and release need a note)" });
   res.json({ ok: true, id: rowId, action, totals: refundTotals() });
 });
 app.get("/__operator/ledger-sync.json", async (req, res) => {
