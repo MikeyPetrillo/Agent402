@@ -198,11 +198,10 @@ export function advertisedMicroUsd(item, chain = { caip2: BASE_MAINNET, token: U
  *  flat MAX_CALL_USD ceiling, with the reasoning that "bigger transfers are
  *  funding/swaps, not tool buys". That was true when every x402 tool cost a
  *  fraction of a cent and it is not true now. Measured 2026-09-21 against a
- *  curated list of seven active services over the same 7-day window we scan:
- *  SIX were absent from our board entirely, and every one of those six has an
- *  average transfer above the ceiling - one of them by four cents (27,590
- *  transactions, 715 buyers, $0.79 each). We were not ranking them lower. We
- *  could not see them.
+ *  list of active services over the same 7-day window we scan: most were
+ *  absent from our board entirely, because their average transfer sat above
+ *  the ceiling, some by a few cents. We were not ranking them lower. We could
+ *  not see them.
  *
  *  The ceiling was not simply wrong, which is why this does not just raise it.
  *  Some of those services convert stablecoins or sell gift cards, so their

@@ -3,11 +3,8 @@
 // WHY THIS PAGE EXISTS. We built a full payment-refusal classifier in August
 // (src/payment-reject.js) and wired it into the 402 body, so a client that
 // cannot pay us already gets told which field is wrong, in that response,
-// free. Then we told nobody. Measured 2026-09-12: the busiest x402 seller by
-// buyer count is a test endpoint - most of its ~1,900 buyers are developers
-// paying a cent to check their client works - and being the endpoint people
-// test against is how it collected them. We have the better version of that
-// and no front door to it. This is the front door.
+// free. Nothing pointed developers at it: this page is where a developer
+// testing a client finds that diagnosis.
 //
 // The reason table is DERIVED from the classifier's own exported list, and a
 // test scans that module for `reason:` literals, so this page cannot end up

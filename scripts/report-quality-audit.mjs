@@ -26,9 +26,8 @@
 //
 // NOT a CI script. It spends real money on real upstreams. It runs WEEKLY on a
 // ROTATING SUBSET (see report-quality.yml) rather than the whole line, because
-// a full pass is ~$9 of synthesis against a business that earns ~$50/month -
-// the point is to notice a regression within a couple of weeks, not to audit
-// everything every time.
+// a full pass costs real synthesis spend - the point is to notice a regression
+// within a couple of weeks, not to audit everything every time.
 //
 //   TARGET_URL=http://127.0.0.1:PORT node scripts/report-quality-audit.mjs \
 //     [--only research-max,dossier] [--out report.json]

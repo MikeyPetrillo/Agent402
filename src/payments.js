@@ -1850,7 +1850,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
   const fallbackEnabled = /^(1|true|yes|on)$/i.test((process.env.PAYMENT_SETTLE_FALLBACK || "").trim());
   if (fallbackEnabled) {
     console.log(
-      `Settle fallback: ON - chain ${solvadorClient ? "Solvador (first on its advertised networks; free tier) -> " : ""}${payAiClient ? "PayAI (gas x 1.3 in credits)" : solvadorClient ? "(Solvador only)" : "(no candidates!)"}` +
+      `Settle fallback: ON - chain ${solvadorClient ? "Solvador (first on its advertised networks) -> " : ""}${payAiClient ? "PayAI" : solvadorClient ? "(Solvador only)" : "(no candidates!)"}` +
         "; fires ONLY on facilitator-thrown pre-broadcast rejections (HTTP 402 class), never on buyer-side or ambiguous failures"
     );
   }
@@ -2032,7 +2032,7 @@ async function resolvePayAIFacilitatorConfig() {
   // free_tier_exhausted. The keyed branch above bills prepaid credits instead;
   // heartbeat.yml's credit watch counts the draw-down either way.
   const { facilitator } = await import("@payai/facilitator");
-  console.log("Facilitator (Solana): PayAI (free tier)");
+  console.log("Facilitator (Solana): PayAI (keyless)");
   return facilitator;
 }
 

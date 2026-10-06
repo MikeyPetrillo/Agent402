@@ -144,17 +144,18 @@ export function violations(message) {
   return out;
 }
 
-// ---- Both directions, from REAL history. The fail cases are the exact
-// sentences that shipped; the pass cases are honest commits that name
-// sellers, use "competing" technically, or merely contain "arrival".
+// ---- Both directions. The fail cases are synthetic sentences in the shapes
+// that shipped before these rules existed (names and figures invented); the
+// pass cases are honest commits that name sellers, use "competing"
+// technically, or merely contain "arrival".
 const MUST_FAIL = [
-  ["our median external buyer settles twice, while a comparable seller's busiest single endpoint carries about 233 calls per buyer", "the 2026-09-19 comparison"],
-  ["They have 1,933 buyers against our 348, on $70 lifetime against our $145. They are out-acquiring us, not out-earning us.", "the 2026-09-12 note on the numbers"],
-  ["a rival board's top row is a gateway wallet with sixteen vendors behind it", "the 2026-09-11 seller sweep"],
-  ["The busiest seller on x402scan by buyer count sells one thing", "the 2026-09-12 namespace commit"],
-  ["Position #1 from the strategic plan: own the cross-seller discovery", "the June squash commits"],
-  ["Not a funding problem: the burner holds 386 ALGO and $10.66 USDC, and the rail is advertised and settling now.", "the 2026-09-21 balance disclosure"],
-  ["F-2 recommended rotating a key. The owner declined and set a usage alert instead; if the key did leak before the path closed, it is still valid.", "the 2026-09-21 rotation note"],
+  ["our median buyer settles twice, while a comparable seller sells the same tool all day", "ranked-seller framing"],
+  ["They have 9,999 buyers against our 1,234; they are out-acquiring us, not out-earning us.", "us-vs-them and our own numbers"],
+  ["a rival board's top row is a single gateway wallet", "rival as a framing noun"],
+  ["The busiest seller on the example index sells one thing", "ranked-seller framing"],
+  ["Item one from the strategic plan: own discovery", "strategy framing"],
+  ["Not a funding problem: the test wallet holds 12 ALGO and $3.45 USDC.", "wallet balance disclosure"],
+  ["Fixture: the acme.example token was not rotated and is still valid.", "credential decision"],
 ];
 const MUST_PASS = [
   ["SVM payload builder fetches a blockhash when the accept omits one\n\nacme's stock middleware tolerated it; api.xfuel.app's own verifier refused it.", "names sellers as mechanism"],

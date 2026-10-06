@@ -5,11 +5,10 @@
 // ($0.75), on the reasoning that "bigger transfers are funding/swaps, not tool
 // buys". True when every x402 tool cost a fraction of a cent; false now.
 //
-// MEASURED 2026-09-21 against a curated list of seven active services over the
-// same 7-day window this board scans: SIX were absent from our board entirely,
-// and every one of the six has an average transfer above the ceiling. One
-// missed by four cents - 27,590 transactions and 715 buyers at $0.79 each. We
-// were not ranking them low. We could not see them.
+// MEASURED 2026-09-21 against a list of active services over the same 7-day
+// window this board scans: most were absent from our board entirely, because
+// their average transfer sat above the ceiling, some by a few cents. We were
+// not ranking them low. We could not see them.
 //
 // The ceiling was not simply wrong, which is why the fix is not a bigger
 // number. Some of those services convert stablecoins or sell gift cards, so

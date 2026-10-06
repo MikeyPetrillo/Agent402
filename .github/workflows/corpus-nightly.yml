@@ -64,7 +64,7 @@ jobs:
           # getMultipleAccounts instead. Those cases declare
           # `requires: SOLANA_RPC_URL` and are reported SKIPPED, never passed,
           # while this is unset - so the corpus can never certify a table it
-          # did not see. Four reads a night against a PAYG CU plan.
+          # did not see. Four reads a night.
           SOLANA_RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
         run: |
           set +e

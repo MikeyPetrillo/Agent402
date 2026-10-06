@@ -4,10 +4,9 @@
 // and that query carries LIMIT 20; `distinctExternalBuyers` was the same shape
 // over LIMIT 10. Both were min(actual, limit) and could never report more,
 // however many tools sold or buyers paid. Both are published (host-entry.js ->
-// /marketplace, /leaderboard, every chain page, /api/index), and the capped
-// figure "20 of 627 priced tools had any external use, 10 buyers" was the
-// measurement that justified retiring 40 tools and 29 skill packs. Eleven of
-// those packs had real outside buyers inside the window.
+// /marketplace, /leaderboard, every chain page, /api/index), and a capped
+// figure was once read as the real count and acted on: tools and packs were
+// retired on it, some of which had real outside buyers inside the window.
 //
 // A ceiling that looks like a count is worse than no count: it reads as a
 // finding, and someone acts on it. This is a SOURCE scan because a fixture
