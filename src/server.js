@@ -316,6 +316,7 @@ import { buildPlanSketch } from "./plan-sketch.js";
 import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
 import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
+import { submissionSlotStatus } from "./x402-index.js";
 import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
@@ -5315,6 +5316,9 @@ app.get("/__operator/seller-registrations.json", (req, res) => {
   res.set("Cache-Control", "no-store").json({
     total: rows.length,
     everSettledCount: rows.filter((r) => r.everSettled).length,
+    // How full self-serve registration is, and what the last crawl cycle's
+    // slot-release pass did (or why it did not).
+    slots: submissionSlotStatus(),
     registrations: rows,
   });
 });

@@ -74,7 +74,7 @@ const index = readFileSync(new URL("../src/x402-index.js", import.meta.url), "ut
 // their PREVIOUS verdict - diluting the fraction with stale OKs in the unsafe
 // direction, so an egress outage could still clear the 0.5 floor and release
 // submission slots.
-ok(/releaseDeadSubmissions\(cycleOkFraction\(due\)\)/.test(index),
+ok(/const fraction = cycleOkFraction\(due\);/.test(index) && /releaseDeadSubmissions\(fraction\)/.test(index) && !/cycleOkFraction\(ordered\)/.test(index),
    "the outage guard scores the crawled set, not the full seed list");
 ok(/const due = originsDueThisCycle\(ordered, crawlCycle\)/.test(index),
    "runCrawl actually applies the per-operator filter");
