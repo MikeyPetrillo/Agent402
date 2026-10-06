@@ -26,7 +26,7 @@ ok(spendChainsOf(["eip155:8453", SOL, "eip155:1"]).join(",") === "base,solana", 
   const v = dispatchEligibility({ routable: false, networks: ["eip155:8453", SOL], settled: 38, payers: 7, spendChains: all });
   ok(v.eligible === false && v.reason === "crawl_failed" && v.chains.base?.reason === "crawl_failed", "settlement history + failed crawl -> crawl_failed (proven past activity is not current dispatchability)");
 }
-// strale (OCR, Base): routable, 3,769 calls, 5 payers -> eligible on Base.
+// an OCR seller (Base): routable, 3,769 calls, 5 payers -> eligible on Base.
 {
   const v = dispatchEligibility({ routable: true, networks: ["eip155:8453"], settled: 3769, payers: 5, spendChains: all });
   ok(v.eligible === true && v.reason === "eligible" && v.chain === "base" && v.chains.base.eligible, "Base seller above the floor with breadth -> eligible");
@@ -54,7 +54,7 @@ ok(spendChainsOf(["eip155:8453", SOL, "eip155:1"]).join(",") === "base,solana", 
 // Row-level blocks.
 {
   const a = dispatchEligibility({ routable: true, networks: ["eip155:8453"], settled: 999, payers: 9, priceUsd: 0, spendChains: all });
-  ok(a.eligible === false && a.reason === "price_unknown", "a route row with no known price -> price_unknown (strale's second OCR row)");
+  ok(a.eligible === false && a.reason === "price_unknown", "a route row with no known price -> price_unknown (the OCR seller's second row)");
   const b = dispatchEligibility({ routable: true, networks: ["eip155:8453"], settled: 999, payers: 9, priceUsd: 0.05, urlTemplate: true, spendChains: all });
   ok(b.eligible === false && b.reason === "url_template", "an unsubstituted path template is never spent against");
   const c = dispatchEligibility({ routable: true, networks: ["eip155:8453"], settled: 999, payers: 9, spendChains: all });

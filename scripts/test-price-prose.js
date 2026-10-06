@@ -181,9 +181,12 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
     "POST /api/extract": { slug: "extract", price: "$0.055", category: "web" },
     "POST /api/x402-quote": { slug: "x402-quote", price: "$0.006", category: "payments" },
     "POST /api/memory-write": { slug: "memory-write", price: "$0.009", category: "memory" },
+    "POST /v1/metered/chat/completions": { slug: "v1-chat-metered", price: "$0.0013", category: "llm" },
+    "GET /api/answer": { slug: "answer", price: "$0.081", category: "search" },
   };
   const home = ledgerHomePage("https://agent402.tools", odd, {}, null, [], {});
-  ok(/POST \/v1\/dossier<\/span><span[^>]*>\$9\.97</.test(home), "the homepage dossier row states the catalog price");
+  ok(/POST \/v1\/metered\/chat\/completions<\/span><span[^>]*>from \$0\.0013</.test(home), "the homepage gateway row states the catalog price");
+  ok(/GET \/api\/answer<\/span><span[^>]*>\$0\.081</.test(home), "...and the answer row");
   ok(/POST \/api\/route\/execute<\/span><span[^>]*>\$0\.077 \+ seller</.test(home), "...and the route-execute row");
   ok(home.includes("GET /api/bestsellers · $0.0071"), "...and the bestsellers kicker");
   const pricing = ledgerPricingPage("https://agent402.tools", odd);

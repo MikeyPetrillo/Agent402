@@ -144,7 +144,7 @@ const payHeaders = http.encodePaymentSignatureHeader(payload);
 // shape - so a seller that reads X-PAYMENT first (and takes the v1 path on it)
 // can be told apart from one that refuses the payment itself (2026-09-02).
 // Default: mirror only on a v1 challenge (a v2 seller reading X-PAYMENT first
-// takes its v1 path; xfuel's has no Solana branch). PAID_DEMO_MIRROR=on forces
+// takes its v1 path; one seller's has no Solana branch). PAID_DEMO_MIRROR=on forces
 // the mirror, =off never mirrors.
 // Default: no mirror (the stock client shape). PAID_DEMO_MIRROR=on forces it.
 const shouldMirror = process.env.PAID_DEMO_MIRROR === "on";

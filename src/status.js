@@ -265,7 +265,7 @@ export function statusSnapshot({ baseUrl = "", nowMs = Date.now(), historyDays =
 const DOT = { operational: "ok", degraded: "warn", outage: "bad", unknown: "unk" };
 const WORD = { operational: "Operational", degraded: "Degraded", outage: "Outage", unknown: "Not measured" };
 
-const fmtPct = (v) => (v === null || v === undefined ? "—" : `${v >= 99.995 ? "100" : v.toFixed(v >= 99.9 ? 3 : 2)}%`);
+const fmtPct = (v) => (v === null || v === undefined ? "n/a" : `${v >= 99.995 ? "100" : v.toFixed(v >= 99.9 ? 3 : 2)}%`);
 const plural = (n) => (n === 1 ? "" : "s");
 
 const agoStr = (iso) => {
@@ -301,7 +301,7 @@ function componentRow(c) {
   ${
     c.observed > 0
       ? `<div class="bars">${bars(c.daily)}</div>
-  <div class="comp-f"><span>${STRIP_DAYS} days ago</span><span class="up-n">${fmtPct(w.pct)} <em>of ${w.observed} probe${plural(w.observed)}</em></span><span>today</span></div>`
+  <div class="comp-f"><span>${STRIP_DAYS} days ago</span><span class="up-n">${w.observed ? `${fmtPct(w.pct)} <em>of ${w.observed} probe${plural(w.observed)}</em>` : "<em>no probes yet</em>"}</span><span>today</span></div>`
       : `<p class="nomeasure">Not yet measured. No observations are recorded for this check, so no availability is claimed for it.</p>`
   }
 </div>`;
@@ -491,7 +491,7 @@ export function statusPage(baseUrl, stats, snap) {
     api && api.observed
       ? `<ul class="wins">${WINDOWS.map((w) => {
         const u = api.windows[w.key];
-        return `<li><b>${esc(w.label)}</b> · ${fmtPct(u.pct)} <span class="faint">of ${u.observed} probe${plural(u.observed)}</span></li>`;
+        return `<li><b>${esc(w.label)}</b> · ${u.observed ? `${fmtPct(u.pct)} <span class="faint">of ${u.observed} probe${plural(u.observed)}</span>` : `<span class="faint">no probes yet</span>`}</li>`;
       }).join("")}</ul>`
       : "";
 

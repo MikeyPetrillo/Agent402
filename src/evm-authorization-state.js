@@ -2,7 +2,7 @@
 // signed ever USED?
 //
 // A seller's 402/401/4xx on the paid retry is their word, and they control
-// the status line: xfuel settled a payment and then answered 400 (2026-09-02),
+// the status line: one seller settled a payment and then answered 400 (2026-09-02),
 // while other sellers answer 402 to a payment nobody examined. Until now the
 // buyer treated any non-200 on Base as "maybe charged" and never tried another
 // seller (the post-commit rule); Solana got a chain read of the wallet's own

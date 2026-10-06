@@ -1,10 +1,9 @@
 # Wish bridge — DISABLED for public-issue creation (2026-07-21, owner call).
 #
 # The itemized agent-demand board (which unmet needs, how hot each is) is
-# strategic intel. This workflow used to auto-open a PUBLIC GitHub issue per
-# qualifying wish cluster on this PUBLIC repo — i.e. it broadcast our demand
-# signal to anyone watching the issues feed, which a competitor could build
-# against before we do. The confidential board now lives behind the operator
+# confidential. This workflow used to auto-open a PUBLIC GitHub issue per
+# qualifying wish cluster on this PUBLIC repo, broadcasting the per-cluster
+# text and counts to anyone watching the issues feed. The confidential board now lives behind the operator
 # token at /__operator/wishes (page) and /__operator/wishes.json (feed); the
 # public /api/wishes returns aggregate totals only (a "real demand exists,
 # come sell" beacon), never per-cluster text/counts.

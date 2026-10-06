@@ -1,7 +1,6 @@
 // Announcement demo card for the Robinhood Chain marketplace - renders the
 // live /api/revenue Robinhood rail as a 1200×630 TERMINAL-WINDOW card, the
-// accepted announcement style (reference: docs/announcements/media/
-// 2026-07-16-tts-demo-card.png / scripts/bestsellers-card.js): warm cream
+// accepted announcement style (reference: the TTS demo card and scripts/bestsellers-card.js): warm cream
 // paper, dark charcoal terminal with traffic-light title bar, all Space Mono,
 // green for OK/status semantics, red reserved for the agent402.tools wordmark.
 //

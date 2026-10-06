@@ -11,7 +11,7 @@ All of it is optional and env-gated on a self-hosted instance (see [[Self-Hostin
 
 ## Report products (agent path)
 
-Each report is a `POST` with a JSON body; the price is the whole outcome, not a per-call meter. The evidence stage is deterministic (live web search, SEC EDGAR, openFDA, DNS/TLS probes, on-chain reads), and the synthesis stage writes a cited report that is checked against the evidence it was given; the IPO digest has no synthesis stage at all. A run that cannot gather enough evidence fails with an error instead of shipping a thin report, and because settlement happens **after** the handler, an error is never charged (see [[Architecture]]).
+Each report is a `POST` with a JSON body; the price is the whole outcome, not a per-call meter. The evidence stage is deterministic (live web search, SEC EDGAR, openFDA, DNS/TLS probes, on-chain reads), and the synthesis stage writes a cited report that is checked against the evidence it was given; the IPO digest has no synthesis stage at all. A run that cannot gather enough evidence fails with an error instead of shipping a thin report, and because settlement happens **after** the handler, an error is not charged on x402 (see [[Architecture]]).
 
 | Route | Price | Input | What you get |
 |---|---|---|---|
@@ -86,7 +86,7 @@ curl -H 'Authorization: Bearer a402_…' 'https://agent402.tools/api/whois?domai
 # 200 … X-Credits-Balance: 19.999   (list price held before the call, debited only on a final 200)
 ```
 
-- **Debited only on success.** The gate holds the list price before the handler runs and converts the hold to a debit only when the final response is `200`; any error, client abort or settlement failure releases it. Amounts are exact to the micro-dollar, so a $0.001 tool costs exactly $0.001.
+- **Debited only on success.** The gate holds the list price before the handler runs and converts the hold to a debit only when the final response is `200`; any error or settlement failure releases it, and so does a client abort while the call holds a hang-up forgiveness ticket. Amounts are exact to the micro-dollar, so a $0.001 tool costs exactly $0.001.
 - **Credits never expire**, and `GET /api/credits/balance` (same header) returns the remaining balance. An insufficient or unknown key answers `402` with `{ reason, balanceUsd, topup }`.
 - **Identity-bound tools refuse credits.** The memory tools, `my-usage`, `receipts`, `attest` and `feedback` use the payer's signed wallet as identity; a credits key carries no verified wallet, so those routes answer `402` with `reason: "identity-bound"` and must be paid over an x402 rail.
 - Keys are stored hashed; a refund or dispute on the purchase disables the key.

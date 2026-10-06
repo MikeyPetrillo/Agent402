@@ -58,8 +58,8 @@ const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 const slugPrice = (tools, slug) => String(tools.find((t) => t.slug === slug)?.price || "");
 
 // Lane-level demand teaser only - see /sell's identical rule. Per-tool slugs
-// and purchase counts are the paid /api/bestsellers product and the one
-// demand signal no block explorer can reconstruct; the pre-revamp design
+// and purchase counts are the paid /api/bestsellers product, not derivable
+// from a block explorer; the pre-revamp design
 // draft for this section rendered exact slugs+counts sourced from a
 // topPaidTools field this session removed from /api/stats as a real
 // privacy fix (see PR #774) - ported here as lanes instead, matching /sell.
@@ -242,7 +242,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
     : "";
 
   const railRowsHtml = rails.map((r) =>
-    `<a href="${esc(r.href)}" title="${esc(r.title)}" style="display:flex;flex-direction:column;gap:9px;padding:15px 16px;text-decoration:none;color:var(--on-dark2);border-right:1px solid var(--dark-border);border-bottom:1px solid var(--dark-border);"><span style="display:flex;align-items:center;gap:9px;">${chainMark(r.slug, 19)}<span style="font-weight:500;font-size:14.5px;color:var(--on-dark);">${esc(r.name)}</span></span><span style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-family:var(--font-mono);"><span style="font-weight:500;font-size:17px;color:var(--on-dark);font-variant-numeric:tabular-nums;">${esc(r.calls)}</span><span style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dk-muted3);">${esc(r.asset)}</span></span></a>`
+    `<a href="${esc(r.href)}" title="${esc(r.title)}" style="display:flex;flex-direction:column;gap:9px;padding:15px 16px;text-decoration:none;color:var(--on-dark2);border-right:1px solid var(--dark-border);border-bottom:1px solid var(--dark-border);"><span style="display:flex;align-items:center;gap:9px;">${chainMark(r.slug, 19)}<span style="font-weight:500;font-size:14.5px;color:var(--on-dark);">${esc(r.name)}</span></span><span style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-family:var(--font-mono);"><span style="font-weight:500;font-size:17px;color:var(--on-dark);font-variant-numeric:tabular-nums;">${esc(r.calls)}</span><span style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dk-muted3);">calls · ${esc(r.asset)}</span></span></a>`
   ).join("");
 
   const leaderboardRowsHtml = board.length
@@ -332,7 +332,8 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
       <div style="font-family:var(--font-mono);display:flex;flex-direction:column;border:1px solid rgba(255,255,255,.08);border-radius:12px;overflow:hidden;font-size:12.5px;">
         <a href="/api/find?q=whois" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);text-decoration:none;color:var(--on-dark2);"><span>GET /api/find?q=</span><span style="color:var(--accent-lit);">free</span></a>
         <a href="/tools" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);text-decoration:none;color:var(--on-dark2);"><span>GET /api/&lt;tool&gt;</span><span style="color:var(--accent-lit);">from $0.001</span></a>
-        <a href="/tools/dossier" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);text-decoration:none;color:var(--on-dark2);"><span>POST /v1/dossier</span><span style="color:var(--accent-lit);">${esc(slugPrice(tools, "dossier"))}</span></a>
+        <a href="/guides/agent-hosts" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);text-decoration:none;color:var(--on-dark2);"><span>POST /v1/metered/chat/completions</span><span style="color:var(--accent-lit);">from ${esc(slugPrice(tools, "v1-chat-metered"))}</span></a>
+        <a href="/tools/answer" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);text-decoration:none;color:var(--on-dark2);"><span>GET /api/answer</span><span style="color:var(--accent-lit);">${esc(slugPrice(tools, "answer"))}</span></a>
         <a href="/guides/smart-order-router" style="display:flex;justify-content:space-between;padding:11px 16px;text-decoration:none;color:var(--on-dark2);"><span>POST /api/route/execute</span><span style="color:var(--accent-lit);">${esc(slugPrice(tools, "route-execute"))} + seller</span></a>
       </div>
       <div style="display:flex;gap:18px;font-family:var(--font-mono);font-size:12.5px;color:var(--dk-muted);flex-wrap:wrap;"><span title="POST-only JSON-RPC endpoint - not a browsable page">/mcp</span><a href="/api/pricing" style="color:var(--dk-muted);text-decoration:none;">/api/pricing</a><a href="/playground" style="color:var(--dk-muted);text-decoration:none;">playground · free</a></div>
@@ -405,7 +406,7 @@ curl -X POST /api/hash \\
       <pre class="hm-term" style="margin:0 0 14px;background:var(--surface);color:var(--on-dark);padding:14px;border-radius:12px;font-size:11.5px;"><span style="color:var(--dk-muted3);"># or paste your origin below - same call, no terminal needed
 </span>curl -X POST https://agent402.tools/api/index/register \\
   -H 'content-type: application/json' \\
-  -d '{"origin":"https://api.you.com"}'</pre>
+  -d '{"origin":"https://seller.example"}'</pre>
       <div class="hm-reg-row" style="display:flex;gap:10px;margin-top:auto;">
         <input id="hm-reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;min-width:0;font-family:var(--font-mono);font-size:13px;padding:11px 14px;border:1px solid var(--dash);border-radius:999px;background:var(--paper);color:var(--ink);">
         <button id="hm-reg-go" class="hm-btn hm-btn-dark" style="font-size:13.5px;padding:11px 18px;">List it →</button>

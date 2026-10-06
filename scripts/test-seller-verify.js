@@ -16,14 +16,14 @@ const eq = (a, b, m) => { assert.deepEqual(a, b, m); n++; };
 
 // --- reading the contract out of a real challenge ----------------------------
 {
-  // The shape agentoracle.co actually publishes (bazaar extension, example).
+  // The shape most live sellers publish (bazaar extension, example).
   const withExample = { accepts: [{ scheme: "exact", network: "eip155:8453", extra: {} }],
     extensions: { bazaar: { schema: { properties: { output: { type: "json", example: { summary: "…", key_facts: ["a"], sources: [{ title: "x" }] } } } } } } };
   const c1 = readOutputContract(withExample);
   eq(c1.kind, "example", "an output EXAMPLE nested anywhere in the challenge is found (31 of 46 live sellers publish this shape)");
   eq(Object.keys(c1.value).sort(), ["key_facts", "sources", "summary"], "...with its promised keys");
 
-  // The shape api.vibe.airforce publishes (properties, no example).
+  // The shape a few sellers publish (properties, no example).
   const withSchema = { accepts: [{}], extensions: { bazaar: { output: { type: "object", properties: { data: { type: "object" } } } } } };
   eq(readOutputContract(withSchema).kind, "schema", "an output SCHEMA is found too (5 of 46)");
 
@@ -93,7 +93,7 @@ const eq = (a, b, m) => { assert.deepEqual(a, b, m); n++; };
 // Our crawler already extracts responseContract.guaranteedPaths from each
 // seller's own OpenAPI. The row beside it says runtimeVerified:false, and has
 // on every row since it shipped, because nothing had ever paid a seller to
-// find out. These are the real paths from a live seller (agentoracle.co).
+// find out. These are the real paths from a live seller.
 {
   const paths = ["confidence", "query", "result", "result.confidence_score", "result.key_facts", "result.sources", "result.summary"];
   eq(missingGuaranteedPaths(paths, { confidence: 1, query: "q", result: { confidence_score: 1, key_facts: [], sources: [], summary: "" } }), [],

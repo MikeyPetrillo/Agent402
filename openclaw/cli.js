@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // agent402-openclaw <command>
 //   setup [--credits-key a402_...] [--write]   store the key, print (or merge) the openclaw.json block
-//   proxy [--port N] [--upstream URL]          run the local proxy on its own (no OpenClaw needed)
+//   proxy [--port N] [--upstream URL]          run the local proxy on its own (no OpenClaw needed;
+//                                              serves the OpenAI wire and Anthropic POST /v1/messages)
 //   doctor                                     show what is configured and whether the gateway answers
 import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, statSync, realpathSync, renameSync } from "node:fs";
 import { pathToFileURL } from "node:url";

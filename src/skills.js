@@ -1632,7 +1632,7 @@ export const SKILL_PACKS = [
       "Search the web for recent earnings-related coverage and analyst expectations.",
     ],
     claudePrompt:
-      "Check what AAPL has just reported using Agent402's earnings-watch skill pack. Get (1) the newest SEC filings, consensus, (2) the latest close, (3) recent search results for analyst expectations. Summarize the setup heading into the report.",
+      "Check what AAPL has just reported using Agent402's earnings-watch skill pack. Get (1) the newest SEC filings, (2) the latest close, (3) recent search results for analyst expectations. Summarize the setup heading into the report.",
   },
 
   {

@@ -196,7 +196,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   ok(proofChecked === sellerPayTo, "the proven-seller gate ran against the accept's OWN payTo before signing");
   ok(out.quote?.usd === 0.005 && out.quote?.network === MAINNET, "receipt quote carries the atomic amount and mainnet network");
   ok(seenHeaderNames && seenHeaderNames.sig === true && seenHeaderNames.xp === false,
-    "a v2 challenge is paid with PAYMENT-SIGNATURE ONLY - no X-PAYMENT mirror (a seller reading X-PAYMENT first takes its v1 path; xfuel's has no Solana branch, 2026-09-02)");
+    "a v2 challenge is paid with PAYMENT-SIGNATURE ONLY - no X-PAYMENT mirror (a seller reading X-PAYMENT first takes its v1 path; one seller's has no Solana branch, 2026-09-02)");
   {
     const decoded = JSON.parse(Buffer.from(seenPayment, "base64").toString("utf8"));
     const txB64 = decoded?.payload?.transaction;
@@ -237,14 +237,14 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 // --- a REFUSED payment falls through on chain truth (2026-09-02) -----------
 // A seller that answers 402 to the paid retry is refusing the payment. Its
 // status line is its own, so the buyer kept the hold and never tried another
-// seller - and api.xfuel.app refused the reference @x402/svm client the same
+// seller - and one chat seller refused the reference @x402/svm client the same
 // way, so every "chat completions" on Solana died on it. The wallet's own
 // USDC account answers the real question; the seller cannot influence it.
 {
   const { payX402, sellerRefusedRecently, noteSellerRefusal, __resetSellerRefusalsForTest, _spentThisWindow } = await import("../src/x402-buyer.js");
   const { confirmSvmNotDebited } = await import("../src/solana-buyer.js");
   __resetSellerRefusalsForTest();
-  // Stub seller that REFUSES every paid retry the way xfuel does.
+  // Stub seller that REFUSES every paid retry the way one live seller did.
   let refuserPaidAttempts = 0;
   const refuser = createServer((req, res) => {
     const pay = req.headers["payment-signature"] || req.headers["x-payment"];
@@ -453,7 +453,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
     "the payload still carries the signed base64 wire transaction");
   // The v2 wrap must match the STOCK client's: `resource` + `extensions` from
   // the 402 ride beside `accepted`. a seller's stock middleware tolerated
-  // their absence; xfuel's own verifier answered payment_payload_invalid to an
+  // their absence; one seller's own verifier answered payment_payload_invalid to an
   // otherwise identical transaction (2026-09-02).
   const resource = { url: "https://seller.example/v1/chat/completions", description: "chat", mimeType: "application/json" };
   const extensions = { bazaar: { info: { input: { type: "http" } } } };
@@ -487,11 +487,11 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   ok(modelsUrlFor("https://s.example/v1/messages") === "https://s.example/v1/models" && modelsUrlFor("https://s.example/v1/responses") === "https://s.example/v1/models", "messages + responses wires too");
   ok(modelsUrlFor("https://s.example/api/v1/exa/search") === null && modelsUrlFor("not a url") === null, "a non-chat route (or garbage) has no model list");
   ok(modelListed(["openai/gpt-4o-mini"], "gpt-4o-mini") && modelListed(["gpt-4o-mini"], "openai/gpt-4o-mini") && modelListed(["GPT-4o-mini"], "gpt-4o-mini"), "provider prefix and case are tolerated both ways");
-  ok(!modelListed(["xfuel/auto", "theta/glm_5_3"], "gpt-4o-mini") && !modelListed(["gpt-4o-mini-2024"], "gpt-4o-mini"), "a different id is not a match (no substring matching)");
+  ok(!modelListed(["sellerx/auto", "theta/glm_5_3"], "gpt-4o-mini") && !modelListed(["gpt-4o-mini-2024"], "gpt-4o-mini"), "a different id is not a match (no substring matching)");
   let hits = 0;
   const srv = createServer((req, res) => {
     hits++;
-    if (req.url === "/v1/models") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ object: "list", data: [{ id: "xfuel/auto" }, { id: "theta/glm_5_3" }] })); return; }
+    if (req.url === "/v1/models") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ object: "list", data: [{ id: "sellerx/auto" }, { id: "theta/glm_5_3" }] })); return; }
     if (req.url === "/wide/v1/models") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ data: [{ id: "openai/gpt-4o-mini" }] })); return; }
     if (req.url === "/empty/v1/models") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ data: [] })); return; }
     if (req.url === "/html/v1/models") { res.writeHead(200, { "content-type": "text/html" }); res.end("<html>"); return; }
@@ -501,7 +501,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   const base = `http://127.0.0.1:${srv.address().port}`;
   __resetModelListsForTest();
   const t = { trusted: true };
-  ok((await sellerServesModel(`${base}/v1/chat/completions`, "gpt-4o-mini", t)).verdict === "not-served", "a readable list without the model -> not-served (the xfuel shape)");
+  ok((await sellerServesModel(`${base}/v1/chat/completions`, "gpt-4o-mini", t)).verdict === "not-served", "a readable list without the model -> not-served (a real seller's shape)");
   ok((await sellerServesModel(`${base}/v1/chat/completions`, "theta/glm_5_3", t)).verdict === "served", "a listed model -> served");
   ok(hits === 1, "the list was read ONCE for both verdicts (cached per list URL)");
   ok((await sellerServesModel(`${base}/wide/v1/chat/completions`, "gpt-4o-mini", t)).verdict === "served", "prefix-listed model -> served");

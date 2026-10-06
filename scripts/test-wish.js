@@ -252,11 +252,11 @@ for (const f of tmpFiles) {
 // ---- served-overlay: a cluster the catalog can now answer is not demand ----
 {
   const clusters = [
-    { text: "minia2a", count: 25, qualified: true },
+    { text: "acmeagent", count: 25, qualified: true },
     { text: "quantum teleport tool", count: 7, qualified: true },
     { text: "broken&amp;query", count: 5 },
   ];
-  const scores = { "minia2a": { slug: "a2a-card-fetch", score: 3 }, "quantum teleport tool": { slug: "hash", score: 1 } };
+  const scores = { "acmeagent": { slug: "a2a-card-fetch", score: 3 }, "quantum teleport tool": { slug: "hash", score: 1 } };
   const out = annotateServed(clusters, (t) => scores[t] || null, 3);
   ok(out[0].closestMatch?.slug === "a2a-card-fetch", "a match at or above the floor is reported");
   ok(!out[1].closestMatch, "a match below the floor is not reported");

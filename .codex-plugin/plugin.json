@@ -21,7 +21,7 @@
     "type": "mcp",
     "displayName": "Agent402.Tools",
     "shortDescription": "500+ pay-per-call tools for AI agents over x402 or MPP",
-    "longDescription": "One MCP server with 500+ tools: web search and rendering, PDFs and OCR, SEC filings, market and crypto data, and utilities. The agent finds a tool with catalog.find and pays for that one call in USDC over x402 or MPP, by prepaid card credits, or free via proof-of-work for pure-compute tools. A failed call is never charged. Most tools are deterministic code; model-backed tools are marked as such.",
+    "longDescription": "One MCP server with 500+ tools: web search and rendering, PDFs and OCR, SEC filings, market and crypto data, and utilities. The agent finds a tool with catalog.find and pays for that one call in USDC over x402 or MPP, by card, or free via proof-of-work for pure-compute tools. A failed x402 call is not charged. Most tools are deterministic code; model-backed tools are marked as such.",
     "developerName": "Havok Holdings LLC",
     "category": "Developer Tools",
     "capabilities": [

@@ -19,7 +19,7 @@ const SECTIONS = [
   {
     h: "What we hold",
     p: [
-      `No accounts and no passwords. Agents pay per call from their own wallets; what we keep is the wallet address and transaction id, both already public on-chain. A card purchase leaves the email Stripe collected, the session id, the input and the finished report, held while the report link or subscription is live. Wallet-keyed memory belongs to its owner and lives until they delete it. Free email alerts hold an address only after it is confirmed by a signed link and drop it the moment it unsubscribes.`,
+      `No accounts and no passwords. Agents pay per call from their own wallets; what we keep is the wallet address and transaction id, both already public on-chain. A card purchase leaves the email Stripe collected, the session id, the input and the finished report, held while the report link or subscription is live. Wallet-keyed memory belongs to its owner and lives until they delete it. Free email alerts send a signed confirmation link to the address given, delete an unconfirmed signup after three days, and drop an address the moment it unsubscribes.`,
       `Operational logs carry request paths and status codes for days, not months. The full inventory, retention per class and the erasure path are in the privacy policy.`,
     ],
     links: [["/privacy", "Privacy policy"]],
@@ -34,7 +34,7 @@ const SECTIONS = [
   {
     h: "Controls in the serving path",
     p: [
-      `Every tool that fetches a caller-supplied URL goes through a DNS-pinned SSRF guard that refuses private, link-local and metadata addresses and re-validates on redirects; the headless browser runs in a separate secretless worker behind the same egress guard. The free tier is a signed, single-use, slug-scoped proof-of-work token. Settlement runs after the handler, so an error is never charged, and a settled receipt that arrives on a failed response is ledgered as a debt with an on-chain proof step before any refund leaves. Per-IP and shared rate limits fail closed; a wallet blocklist is enforced before settlement; every response carries a strict content security policy, HSTS and no inline scripts.`,
+      `Every tool that fetches a caller-supplied URL goes through a DNS-pinned SSRF guard that refuses private, link-local and metadata addresses and re-validates on redirects; the headless browser runs in a separate secretless worker behind the same egress guard. The free tier is a signed, single-use, slug-scoped proof-of-work token. Settlement runs after the handler, so on x402 an error is not charged, and a settled receipt that arrives on a failed response is ledgered as a debt with an on-chain proof step before any refund leaves. Per-IP and shared rate limits fail closed; a wallet blocklist is enforced before settlement; every response carries a strict content security policy, HSTS and no inline scripts.`,
     ],
     links: [["/why", "Why pay here"], ["/proof", "Receipts"]],
   },
@@ -48,7 +48,7 @@ const SECTIONS = [
   {
     h: "Availability",
     p: [
-      `Uptime is measured from outside production by two independent observers on separate infrastructure, and the status page renders only what they observed: a day with no observation is shown as no data, never as uptime. A real-money canary buys through every payment rail daily. Backups of the data volume go offsite nightly with bounded retention.`,
+      `Uptime is measured from outside production by two independent observers on separate infrastructure, and the status page renders only what they observed: a day with no observation is shown as no data, never as uptime. A real-money canary buys through every on-chain payment rail daily. Backups of the data volume go offsite nightly with bounded retention.`,
     ],
     links: [["/status", "Status"]],
   },

@@ -1612,7 +1612,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     if (failing) { console.log(`[sor] skipping ${chain} candidate ${r.seller}: its last paid call did not deliver ${Math.round((Date.now() - failing.at) / 60000)} min ago (${failing.status ? `HTTP ${failing.status}` : "no response"}${failing.ms ? `, ${Math.round(failing.ms / 1000)}s` : ""})`); continue; }
     // An LLM task names a model, and the model namespace is the seller's own:
     // a chat seller whose published model list is readable and does not carry
-    // it is skipped BEFORE the probe (api.xfuel.app settled and then 400'd
+    // it is skipped BEFORE the probe (one seller settled and then 400'd
     // model_not_found, keeping the $0.01, 2026-09-02). Unknown never skips.
     if (wantModel) {
       const served = await sellerServesModel(r.url, wantModel);
@@ -3248,7 +3248,7 @@ app.get("/.well-known/glama.json", (_req, res) => {
   });
 });
 // Operator-published verification documents (src/well-known-store.js) — e.g.
-// Talkshi's 15-minute domain challenge, which a deploy cycle cannot serve in
+// a directory's 15-minute domain challenge, which a deploy cycle cannot serve in
 // time. Falls through on a store miss, so the dedicated /.well-known routes
 // (x402, security.txt, glama.json — some registered LATER in this file) are
 // never shadowed; the store also refuses those names at write time.
@@ -5626,7 +5626,7 @@ app.get("/acp/manifest", (_req, res) =>
 // Threshold sits AT a single tag hit (score 3): an exact tag match to a
 // relevant tool is a SERVED query, not a miss. The old value (5) sat above
 // both a tag hit (3) and a slug-substring hit (4), so every tag-served
-// query ALSO recorded a wish - the "minia2a" cluster self-qualified on 25
+// query ALSO recorded a wish - one cluster self-qualified on 25
 // queries that each got the right tool back, ghost demand for tools that
 // shipped on 2026-07-20 for the very same wish (found 2026-07-28).
 const FIND_WEAK_SCORE = 3;
@@ -5692,8 +5692,8 @@ const planSketchFor = (q) => {
 const computeFind = async (q, k, meter = null, ip = null) => {
   const result = findTools(CATALOG, q, { k, baseUrl: BASE_URL, powSlugs: POW_SLUGS });
   // The seller bridge: a query that looks like an indexed seller's NAME gets
-  // pointed at that seller - /api/find is catalog-only, and 25 recorded
-  // "misses" for "minia2a" were agents hunting the indexed seller minia2a.uk.
+  // pointed at that seller - /api/find is catalog-only, and a cluster of
+  // recorded "misses" were agents hunting one indexed seller by name.
   // Only host/origin/toolCount ride along (never third-party display text),
   // plus ready-to-follow pointers into the drill-down and the router.
   try {
@@ -7551,7 +7551,7 @@ const gatewayIndex = (_req, res) => res.set("Cache-Control", "public, max-age=60
   models: `${BASE_URL}/v1/models`,
   metered: { chat: `${BASE_URL}/v1/metered/chat/completions`, messages: `${BASE_URL}/v1/metered/messages`, responses: `${BASE_URL}/v1/metered/responses`, pricing: "quoted per request from the body, settled at actual usage for credits and upto buyers" },
   flat: Object.values(TIERS).filter((t) => t.route && !t.metered).map((t) => ({ route: t.route, priceUsd: t.price })),
-  pay: { x402: "PAYMENT-SIGNATURE (USDC)", mpp: "Authorization: Payment", credits: "Authorization: Bearer a402_... (buy at /credits)" },
+  pay: { x402: "PAYMENT-SIGNATURE (USDC)", mpp: "Authorization: Payment", credits: creditsSalesEnabled() ? "Authorization: Bearer a402_... (buy at /credits)" : "Authorization: Bearer a402_... (a key already issued; new keys are not on sale)" },
   docs: `${BASE_URL}/guides/agent-hosts`,
 });
 for (const p of ["/v1", "/v1/info", "/v1/metered"]) app.get(p, gatewayIndex);
@@ -7578,7 +7578,7 @@ const chainIndex = (_req, res) => {
       };
     }),
     networks: ["ethereum", "base", "polygon", "arbitrum", "optimism"],
-    pay: { x402: "PAYMENT-SIGNATURE (USDC)", mpp: "Authorization: Payment", credits: "Authorization: Bearer a402_... (buy at /credits)", free: "most reads are also available over proof of work - see /api/pow/challenge" },
+    pay: { x402: "PAYMENT-SIGNATURE (USDC)", mpp: "Authorization: Payment", credits: creditsSalesEnabled() ? "Authorization: Bearer a402_... (buy at /credits)" : "Authorization: Bearer a402_... (a key already issued; new keys are not on sale)", free: "most reads are also available over proof of work - see /api/pow/challenge" },
     catalog: `${BASE_URL}/api/pricing`,
   });
 };

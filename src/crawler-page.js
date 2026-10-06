@@ -55,7 +55,7 @@ const SECTIONS = [
     h: "What we publish, and what we do not",
     p: [
       `The public index carries what a service advertises about itself: its endpoints, the prices and payment networks it declares, whether our own probe could reach it, and the payout addresses it names in its own challenges. Payout addresses are public infrastructure - they appear in every challenge the service hands to every buyer.`,
-      `We publish counts of settled payments per payee, read from public chains. We never publish who paid: buyer figures are counts only, and no roster of payers leaves our systems. That rule is enforced in code, not by convention.`,
+      `We publish counts of settled payments per payee, read from public chains, and buyer figures in the index are counts. Payments on public chains are public: some of our pages show individual payments as the chain records them, for example the live view on our home page, which shows shortened payer addresses with links to the public transactions. We do not sell payer data.`,
       `Measurements made by third parties are not redistributed. Where our pages display someone else's figures we label them as theirs, and they are excluded by name from any dataset we distribute.`,
     ],
     links: [["/api/index", "The index, free and unauthenticated"], ["/marketplace", "How it is rendered"]],

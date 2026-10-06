@@ -1,6 +1,6 @@
 // Renders the Agentic Finance (AIFI) card (src/aifi-card.js - the same SVG
 // served as /og/agentic-finance.png) to a PNG for announcements.
-//   node scripts/aifi-card.js --out docs/announcements/media/2026-08-18-aifi-card.png
+//   node scripts/aifi-card.js --out /tmp/aifi-card.png
 import { writeFileSync } from "node:fs";
 import { rasterizeSvg } from "../src/tools/render.js";
 import { aifiCardSvg } from "../src/aifi-card.js";

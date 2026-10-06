@@ -137,7 +137,7 @@ function sellerRowHtml(s, lbByRecipient) {
     : "";
   // Categories and tags overlap in real registry data (e.g. a service tagged
   // BOTH category "blockchain" and tag "blockchain" - live-verified against
-  // agents.allium.so during development) - dedup or the row shows the same
+  // one registry service during development) - dedup or the row shows the same
   // word twice.
   const tags = [...new Set([...(s.categories || []), ...(s.tags || [])])].slice(0, 6);
   const tagsHtml = tags.length ? `<div class="mpr-tags">${tags.map((t) => `<span class="mpr-tag">${esc(t)}</span>`).join("")}</div>` : "";

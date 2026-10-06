@@ -33,7 +33,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-02.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-06.</p>
 </section>
 
 <section>
@@ -134,7 +134,9 @@ so every claim below is verifiable in code.</p>
   <li>Tools that fetch external URLs (<code>extract</code>, <code>render</code>, <code>screenshot</code>, …)
   contact those sites from our server with the URL you provided. Tools that read a third-party data
   source send it what the lookup needs (a ticker, a token or wallet address, a domain, a query).</li>
-  <li><code>/api/search</code> and the other web search tools forward the query to the Brave Search API to produce results.</li>
+  <li><code>/api/search</code> and the other web search tools forward the query to the Brave Search API to produce results.
+  <code>/api/exa-search</code>, <code>/api/exa-answer</code> and <code>/api/exa-contents</code> send it to Exa, whose model
+  writes the <code>/api/exa-answer</code> response. The <code>/api/x-*</code> tools send the handle, post id or query to the X API.</li>
   <li>The <code>/api/code-run</code> tools run the code you send in a sandbox operated by E2B.</li>
   <li><code>/api/route</code>, <code>/api/route/execute</code> and <code>/api/decide</code> may send the
   task text you give them to a judgment model operated by TypeSafe to choose among candidate tools;

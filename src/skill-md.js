@@ -219,7 +219,7 @@ curl -s -X POST ${baseUrl}/v1/auto/chat/completions -H 'content-type: applicatio
   the handler and only for a successful response). Retry later.
 - **\`X-Cache: hit\`** - a cached repeat served free (prompt cache / embeddings).
 
-A failed call is never charged by construction: settlement happens AFTER the
+On x402 a failed call is not charged by construction: settlement happens AFTER the
 handler and only for a sub-400 response. You can verify that from the headers
 of the response you hold, without trusting this document.
 

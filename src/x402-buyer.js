@@ -281,7 +281,7 @@ let spendWindowStart = 0, spentThisWindow = 0n;
 // chain shows no debit). A seller whose verifier rejects stock x402 payments
 // on a chain will reject the next one too, and while it ranks first every
 // buyer's call spends one full 402 -> sign -> refuse round trip on it before
-// the fallthrough reaches a seller that works (api.xfuel.app on Solana,
+// the fallthrough reaches a seller that works (one Solana seller,
 // 2026-09-02: the reference @x402/svm client got the same refusal). Kept per
 // route and chain, TTL-bounded, size-bounded; consulted by the SOR resolver so
 // the refusing route is skipped at resolve time, and forgotten after the TTL
@@ -942,7 +942,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // sellers read only the X-PAYMENT name (Stelar, found 2026-07-23). Mirror
     // the identical value under both so either implementation sees the payment.
     // ...but ONLY for a v1 challenge. A v2 seller may read X-PAYMENT FIRST and
-    // treat its presence as "v1 client" - api.xfuel.app does, and its v1 path
+    // treat its presence as "v1 client" - one Solana seller does, and its v1 path
     // has no Solana branch, so every mirrored v2 SVM payment came back
     // "payment_payload_invalid" while the same credential under
     // PAYMENT-SIGNATURE alone cleared verification (measured 2026-09-02, both
@@ -1105,7 +1105,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // X-PAYMENT ("X-PAYMENT header required", Stelar 2026-07-23). That body is
     // the evidence; a seller that took the payment and failed says something
     // else. Resend the IDENTICAL credential under both names exactly once;
-    // any other 402 (xfuel's payment_payload_invalid included) never triggers
+    // any other 402 (a seller's payment_payload_invalid included) never triggers
     // it. Same credential, so no second authorization exists to double-spend.
     if ((paid.status === 402 || paid.status === 401) && payHeaders["PAYMENT-SIGNATURE"] && !paidHeaders["X-PAYMENT"]) {
       let sniff = "";
@@ -1207,7 +1207,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // Any non-200 on Solana is checked the same way: a seller's 400 on our
       // input, or its 5xx, after a payment that never settled is equally
       // provable from our wallet, and equally safe to try elsewhere (2026-09-02:
-      // xfuel answers 400 to a model id it does not serve, uncharged).
+      // a seller answers 400 to a model id it does not serve, uncharged).
       //
       // "NO DEBIT" IS FINAL ONLY ONCE THE CREDENTIAL HAS EXPIRED (2026-09-03).
       // The seller's answer does not retire the credential: an EIP-3009

@@ -30,9 +30,7 @@ name: Announce
 # runs only after any card/media is ready, so a failed render can never leave
 # no post at all.
 #
-# Push trigger (.github/trigger-announce): line 1 is the repo path of the
-# announcement text, an optional line 2 is a media URL/repo path — bump the
-# file to announce on push from the dev branch. Credentials are Actions
+# Dispatch only: post text is passed as an input and never committed. Credentials are Actions
 # secrets (X_API_KEY / X_API_SECRET / X_ACCESS_TOKEN / X_ACCESS_SECRET); the
 # script exits 1 without posting if any are missing, and enforces the
 # 280-char limit itself.
@@ -71,9 +69,6 @@ on:
         description: "Pass tweet.js --force to skip the local 280-char guard (raw length overcounts URLs, which X weights at 23 chars)."
         required: false
         default: ""
-  push:
-    branches: ["claude/sweet-brown-i99jl3"]
-    paths: [".github/trigger-announce"]
 
 permissions:
   contents: read
@@ -166,14 +161,7 @@ jobs:
             FILE=/tmp/announce-text.txt
           fi
           if [ -z "$FILE" ]; then
-            # The trigger-announce fallback is for the PUSH path only. A bare
-            # dispatch (neither text nor file) must refuse, not silently
-            # repost whatever stale announcement the trigger file points at.
-            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-              echo "Dispatch needs text or file."; exit 1
-            fi
-            FILE=$(sed -n 1p .github/trigger-announce)
-            MEDIA=$(sed -n 2p .github/trigger-announce)
+            echo "Dispatch needs text or file."; exit 1
           fi
           # A live-rendered card wins the media slot (mutual exclusion with a
           # user-supplied media input is enforced above).

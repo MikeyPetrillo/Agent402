@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // A seller that declares GET and POST on one path where only POST answers
-// (minia2a.uk declares both on ~1,700 paths; the case worth a test is the
+// (acmeagent.example declares both on ~1,700 paths; the case worth a test is the
 // seller whose POST route REJECTS GET). Before this, the live-402 probe
 // corrected the declared GET row to POST and left two identical POST rows on
 // the path; before 2026-09-02 it published the GET and buyers got 405. Now the

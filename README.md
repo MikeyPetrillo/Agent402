@@ -92,8 +92,8 @@ quoted ceiling, or flat tiers) and the finished report products (`/v1/research`,
 > Optionally, the same server can charge per call over the [x402
 > protocol](https://x402.org) (USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche,
 > Sei, Optimism, Stellar & Algorand, plus USDG on Robinhood Chain - 12 chains) - so the instance you
-> self-host for free can also be a hosted, monetized one. That part is opt-in;
-> **by default everything runs free.**
+> self-host for free can also be a hosted, monetized one. Free mode is one
+> setting (`FREE_MODE=true`); a paid instance needs a payout wallet.
 
 🟢 **Hosted demo: [agent402.tools](https://agent402.tools)** · 📖 **[Wiki](https://github.com/MikeyPetrillo/Agent402/wiki)** · 📦 **[npm](https://www.npmjs.com/package/agent402-mcp)** · 🔌 **[MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)** · 🧩 **[Smithery](https://smithery.ai/servers/mike-kq9d/agent402)**
 
@@ -233,8 +233,9 @@ Streaming (`stream: true`), full tools/function-calling passthrough, an opt-in
 prompt cache on the chat tiers (`cache: true` → byte-identical repeats free for
 10 minutes), upstream failover chains that end in a canary-proven model, and a
 free [`GET /v1/models`](https://agent402.tools/v1/models) listing every model with
-its tier and caps. A real-money canary buys from every one of these surfaces
-daily - streaming, routing disclosure, and both cache behaviors included.
+its tier and caps. A real-money canary buys the core surfaces daily (the chat
+tiers, the messages and responses wires, embeddings, rerank, image generation
+and speech) - streaming, routing disclosure, and both cache behaviors included.
 
 **Finished report products** live on the same `/v1` prefix: one paid call returns
 a complete, cited report (JSON, with a sources appendix) rather than a raw model
@@ -267,10 +268,10 @@ Two companion tools close the loop: `POST /api/route/execute` ($0.01, with
 `execute-plus` $0.05, `execute-max` $0.55 and `execute-pro` $3.30 tiers for pricier tools) resolves a task description to the
 best tool and runs it in one paid call, including, with `include:"external"`,
 tools sold by **other x402 sellers** (it routes on proven on-chain settled
-volume, with one exception - a Solana seller with no history yet is tried only
-after every proven candidate, under a small per-call ceiling, and flagged
-unproven on the receipt - pays them on your behalf **on the chain you paid on** -
-Base or Algorand - and relays the result; see the
+volume, with one exception - a Base or Solana seller with no history yet is
+tried only after every proven candidate, under a small per-call ceiling, and
+flagged unproven on the receipt - pays them on your behalf **on the chain you paid
+on** - Base, Solana, Algorand or Tempo - and relays the result; see the
 [Smart Order Router guide](https://agent402.tools/guides/smart-order-router)), and
 `POST /api/my-usage` ($0.005) returns the **paying wallet's own** purchase
 history - no wallet parameter; the x402 payment is the identity, so nobody can
@@ -552,8 +553,8 @@ Every claim links to the surface that proves it (the one-page version: [agent402
 3. **One key buys everything.** The same wallet pays for five LLM tiers on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini generateContent), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools and finished reports, and an EVM wallet also keys its own memory.
 4. **No wallet required.** Proof-of-work pays for the pure-CPU tools, cards over MPP pay routes priced at $0.50 or more, and [card checkout](https://agent402.tools/reports) sells the finished reports, beside USDC or USDG on twelve chains and native MPP on Tempo.
 5. **Finished work, ready to use.** Dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a LinkedIn article package, grounded in live sources, most with a downloadable data appendix; [monitors](https://agent402.tools/monitors) check for free on a schedule and re-run the paid report when the facts change, up to 4 full reports in any 30 days.
-6. **We buy on your behalf.** `POST /api/route/execute` resolves a task to the best seller across the ecosystem, pays them from our wallet and relays the result under one receipt. Sellers are routable on proven on-chain settlement, with one bounded exception for a zero-history Solana seller under a small per-call ceiling.
-7. **Everything is checkable.** Uptime observed by two probes outside production ([`/status`](https://agent402.tools/status)), a real-money canary through every rail daily, transactions published by rail and wire ([`/revenue`](https://agent402.tools/revenue)), open source and self-hostable. The deterministic tools run no model; the ones that do are named (the /v1 tiers, the report products, the image, speech, transcription, embedding and AI-answer tools, the Decide planner, and the judgment model that can pick among the router's shortlisted candidates). The operator is identified on-chain: Agent402 is agent 94639 in the ERC-8004 Identity Registry on Base, resolving to [`/.well-known/agent-registration.json`](https://agent402.tools/.well-known/agent-registration.json), with an A2A agent card at [`/.well-known/agent-card.json`](https://agent402.tools/.well-known/agent-card.json).
+6. **We buy on your behalf.** `POST /api/route/execute` resolves a task to the best seller across the ecosystem, pays them from our wallet and relays the result under one receipt. Sellers are routable on proven on-chain settlement, with one bounded exception for a zero-history Base or Solana seller under a small per-call ceiling.
+7. **Everything is checkable.** Uptime observed by two probes outside production ([`/status`](https://agent402.tools/status)), a real-money canary through every on-chain rail daily, transactions published by rail and wire ([`/revenue`](https://agent402.tools/revenue)), open source and self-hostable. The deterministic tools run no model; the ones that do are named (the /v1 tiers, the report products, the image, speech, transcription, embedding and AI-answer tools, the Decide planner, and the judgment model that can pick among the router's shortlisted candidates). The operator is identified on-chain: Agent402 is agent 94639 in the ERC-8004 Identity Registry on Base, resolving to [`/.well-known/agent-registration.json`](https://agent402.tools/.well-known/agent-registration.json), with an A2A agent card at [`/.well-known/agent-card.json`](https://agent402.tools/.well-known/agent-card.json).
 
 ## Why it's solid
 
@@ -569,8 +570,7 @@ Every claim links to the surface that proves it (the one-page version: [agent402
 - **Hardened** - connect-time SSRF guard on every URL tool (DNS-rebind safe),
   proof-of-work that's signed/single-use/slug-scoped, per-IP rate limits, and
   security headers. See [wiki: Security Model](https://github.com/MikeyPetrillo/Agent402/wiki/Security-Model).
-- **Deterministic utilities** - no model in the serving path of the utility tools, so the same input always
-  gives the same output, with full OpenAPI schemas.
+- **Deterministic utilities** - no model in the serving path of the utility tools: a pure-computation tool returns the same output for the same input, and a live-data tool returns its source's current reading, with full OpenAPI schemas.
 - **Auditable, on-chain revenue** - paid calls on Base settle in USDC to
   [`agent402.base.eth`](https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns)
   (a Base name resolving to the public receiving wallet); every other chain's

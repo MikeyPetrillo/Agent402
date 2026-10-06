@@ -1,3 +1,0 @@
-Text-to-speech is live on the /v1 gateway. OpenAI's audio.speech wire: any OpenAI SDK works by changing base_url. $0.06/call in USDC via x402, no API key, no signup.
-
-Five TTS models, one endpoint, automatic failover. A provider outage never becomes your error. agent402.tools

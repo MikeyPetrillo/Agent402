@@ -10,8 +10,8 @@
 // bucket lives here now and both kits draw from it; a caller that finds it
 // empty is refused 503 BEFORE any upstream call (a >= 400 cancels settlement,
 // nobody pays for the refusal). COINGECKO_MAX_PER_MIN tunes it (default 80,
-// under the plan's 100 so the retry-after-429 path keeps a little room; the
-// 10k credits/month quota is the real ceiling, and CI no longer draws on it).
+// under the plan's per-minute limit so the retry-after-429 path keeps a little
+// room; the monthly quota is the real ceiling, and CI no longer draws on it).
 const cgRatePerMin = () => Math.max(1, parseInt(process.env.COINGECKO_MAX_PER_MIN || "80", 10) || 80);
 let cgTokens = null, cgRefilledAt = 0;
 

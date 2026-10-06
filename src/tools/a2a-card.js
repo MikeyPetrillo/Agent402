@@ -1,6 +1,6 @@
 // A2A (Agent2Agent protocol) Agent Card validation — shared by the pure-CPU
 // a2a-card-validate tool (agent-kit) and the egress a2a-card-fetch tool
-// (network-kit). Built for the "minia2a" demand cluster (#461): agents keep
+// (network-kit). Built for an A2A demand cluster (#461): agents keep
 // asking the resolver for minimal A2A interop, and the deterministic slice of
 // that is card discovery + structural validation.
 //

@@ -150,7 +150,7 @@ const HEADER = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [REAL_ACCEP
   // The correction is evidence about GET on /a, and only that: a learned POST
   // with NO correction record is a row that answered on its own verb, and it
   // says nothing about a sibling GET (2026-09-02: route-keyed carry-forward
-  // stamped minia2a.uk's learned verb onto every row of the path).
+  // stamped acmeagent.example's learned verb onto every row of the path).
   const sibling = carryForwardLearnedQuotes([{ route: "/e", method: "GET", price: null, networks: [] }],
     { tools: [{ route: "/e", method: "POST", price: 0.5, networks: ["eip155:8453"], quoteSource: "live-402" }] })[0];
   ok(sibling.method === "GET" && sibling.price === 0.5, "a learned POST without a correction record never rewrites a declared GET on the same route (price still carried)");

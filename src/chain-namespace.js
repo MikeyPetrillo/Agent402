@@ -8,12 +8,9 @@
 // resource, and can never be a second listing for one capability - the thing we
 // object to when other sellers do it to an index.
 //
-// WHY IT EXISTS. Measured 2026-09-12 against the busiest seller on x402scan by
-// buyer count (1,933 buyers, 16,716 settlements, $70.83): all 25 of its
-// endpoints are one family, `/api/chain/*`, and they are the JSON-RPC verbs
-// spelled out. We already sold 20 of the 25 under our own names and the
-// remaining five arrived with this change. So nothing was missing except the
-// name a buyer would guess. An agent that knows `eth_getTransactionCount`
+// WHY IT EXISTS. Buyers look for chain reads under the JSON-RPC verbs
+// spelled out (`/api/chain/*`). We already sold those reads under our own
+// names, so nothing was missing except the name a buyer would guess. An agent that knows `eth_getTransactionCount`
 // cannot be expected to guess `wallet-transactions`; it can be expected to try
 // `/api/chain/nonce`.
 //

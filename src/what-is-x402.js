@@ -23,7 +23,7 @@ const STEPS = [
   ["01", "The agent asks for something", "A plain HTTP request, with no credentials attached. There is no account to authenticate against, so nothing to send."],
   ["02", "The server answers 402 with a price", "The response names the amount, the asset, the chain, and where to pay. This is machine-readable, so the caller does not need documentation to understand the terms."],
   ["03", "The agent signs a payment and retries", "It signs an EIP-3009 stablecoin transfer authorization with its own key and repeats the identical request, carrying the authorization in a header. Funds are never handed to the seller's server."],
-  ["04", "The server verifies, answers, then settles", "A facilitator verifies the authorization, the server runs the request, and the payment settles on chain only when the response succeeds; the receipt rides back in a PAYMENT-RESPONSE header. A failed call is never charged."],
+  ["04", "The server verifies, answers, then settles", "A facilitator verifies the authorization, the server runs the request, and the payment settles on chain only when the response succeeds; the receipt rides back in a PAYMENT-RESPONSE header. A failed call is not charged."],
 ];
 
 const COMPARE = [
@@ -44,9 +44,9 @@ const FAQS = [
   ["What are agentic payments?", "Agentic payments are purchases made by software rather than people. An AI agent cannot sign up for twenty APIs, because it has no email, no credit card and no way to accept terms, but it can pay a fraction of a cent per call from its own wallet. The wallet is the identity, so there is nothing to register and no key to rotate."],
   ["Why was HTTP 402 unused for thirty years?", "HTTP reserved 402 Payment Required in 1997 as a placeholder for a digital cash system that never arrived. Card payments needed a redirect, a session and a human, none of which fit inside a single HTTP response. Stablecoins made a one-round-trip machine payment practical, so the status code finally has a payment system to describe."],
   ["Do I need a wallet or crypto to call an x402 API?", "Not always. Some servers, including Agent402, offer a proof-of-work tier where your own machine solves a single-use sha256 puzzle instead of paying, costing about a second of CPU. A wallet is needed only for calls that cost the operator real money, and those quote their price in the 402 challenge before anything is charged."],
-  ["Which blockchains settle x402 payments?", "It depends on the server. Agent402 settles on twelve rails: USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar and Algorand, plus USDG on Robinhood Chain. Gas is sponsored by the facilitator on EVM chains, so callers need only the stablecoin. Base carries the most volume and is the chain most public x402 indexes measure."],
+  ["Which blockchains settle x402 payments?", "It depends on the server. Agent402 settles x402 on twelve chains: USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar and Algorand, plus USDG on Robinhood Chain. Gas is sponsored by the facilitator on EVM chains, so callers need only the stablecoin. Base carries the most volume and is the chain most public x402 indexes measure."],
   ["How do I sell an API over x402?", "Put an x402 paywall in front of your endpoint so unpaid requests answer 402 with your price and payment terms, then register the origin with a public index so buyers and routers can find you. See /sell for Agent402's own free, no-signup listing flow and how it prices routed calls."],
-  ["Is an x402 payment refundable if the call fails?", "On a correctly implemented server the payment only completes alongside a successful response, so a failed call is never charged. Because settlement happens on a public chain, both sides can verify independently what was actually paid rather than relying on an invoice."],
+  ["Is an x402 payment refundable if the call fails?", "On a correctly implemented server the payment only completes alongside a successful response, so a failed call is not charged. Because settlement happens on a public chain, both sides can verify independently what was actually paid rather than relying on an invoice."],
 ];
 
 const TOC = [
@@ -205,7 +205,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
 <span style="color:var(--faint);">{ "algo": "sha256", "hex": "&hellip;" }</span></pre>
     </div>
   </div>
-  <p style="font-size:15px;line-height:1.65;color:var(--faint);max-width:820px;margin:22px 0 0;">The payment settles only alongside a successful response, so a failed call is never charged. Because settlement lands on a public chain, both sides can check afterwards what was actually paid instead of trusting an invoice.</p>
+  <p style="font-size:15px;line-height:1.65;color:var(--faint);max-width:820px;margin:22px 0 0;">The payment settles only alongside a successful response, so a failed call is not charged. Because settlement lands on a public chain, both sides can check afterwards what was actually paid instead of trusting an invoice.</p>
 </section>
 
 <section id="compare" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
@@ -235,7 +235,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
 <section id="chains" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">05 / SETTLEMENT</div>
   <h2 style="font-weight:800;font-size:38px;line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">Which chains settle x402 payments?</h2>
-  <p style="font-size:17px;line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 30px;">The protocol is chain-agnostic; each server picks what it accepts. Agent402 settles on twelve rails, so a buyer pays on whichever chain it already holds stablecoins on. Gas is sponsored by the facilitator on EVM chains, which means a caller needs only the stablecoin and no native gas token. Counts below are real settled calls per rail.</p>
+  <p style="font-size:17px;line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 30px;">The protocol is chain-agnostic; each server picks what it accepts. Agent402 settles x402 on twelve chains, so a buyer pays on whichever chain it already holds stablecoins on. Gas is sponsored by the facilitator on EVM chains, which means a caller needs only the stablecoin and no native gas token. Counts below are real settled calls per rail.</p>
   <div class="wx-scroll">
     <table style="font-size:14.5px;border:1px solid var(--hairline);background:var(--card);">
       <thead><tr style="border-bottom:1px solid var(--hairline);font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);"><th scope="col" style="text-align:left;font-weight:700;padding:13px 18px;">chain</th><th scope="col" style="text-align:left;font-weight:700;padding:13px 18px;">asset</th><th scope="col" style="text-align:left;font-weight:700;padding:13px 18px;">caip-2</th><th scope="col" style="text-align:right;font-weight:700;padding:13px 18px;">calls settled</th></tr></thead>
@@ -276,7 +276,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
       <pre style="margin:0 0 18px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># we probe, you appear
 </span>curl -X POST https://agent402.tools/api/index/register \
   -H 'content-type: application/json' \
-  -d '{"origin":"https://api.you.com"}'</pre>
+  -d '{"origin":"https://seller.example"}'</pre>
       <a href="/sell" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:13px;text-decoration:none;padding:12px 18px;align-self:flex-start;">List your API →</a>
     </div>
     <div style="padding:26px;background:var(--card);display:flex;flex-direction:column;">

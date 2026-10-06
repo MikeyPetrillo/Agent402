@@ -1,9 +1,9 @@
 // Daily call budgets for every paid upstream.
 //
 // Nine upstreams had an alarm and seven did not, and the seven were not the
-// unimportant ones: Brave backs our best-selling tool, Alchemy is PAYG and can
-// bill with no revenue attached, CoinGecko's monthly quota has already been
-// exhausted once. This pins the properties that make the alarm honest rather
+// unimportant ones: an upstream behind a high-traffic tool, one billed per
+// call with no revenue attached, and one whose monthly quota has run out
+// before. This pins the properties that make the alarm honest rather
 // than decorative.
 import { upstreamBudgetStatus, UPSTREAM_BUDGETS } from "../src/upstream-budgets.js";
 import { readFileSync } from "node:fs";

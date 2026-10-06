@@ -137,7 +137,7 @@ export function clusterQualifies(c) {
 /**
  * Served-overlay for the operator board: mark every cluster whose text NOW
  * finds a real catalog tool. A qualified cluster is a demand signal only
- * while the catalog can't answer it - the "minia2a" cluster (2026-07-28)
+ * while the catalog can't answer it - one cluster (2026-07-28)
  * stayed qualified for 8 days AFTER the tools it asked for shipped, because
  * qualification looks at count/span/sources, never at the catalog. scoreFn
  * is injected (server wires findTools + CATALOG) so this stays pure and the

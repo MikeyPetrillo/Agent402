@@ -95,8 +95,8 @@ export const SLIDES = [
   {
     id: "money", kicker: "06 / the money",
     headline: "Dollars on a public ledger, and receipts anyone can check.",
-    body: `<p><strong>Stablecoins</strong> are dollars that live on a public ledger: USDC is one dollar, always. Payments here are USDC (or USDG on Robinhood Chain), so nobody prices anything in a volatile token.</p>
-<p><strong>Twelve rails.</strong> A buyer pays on whichever chain their wallet already uses; the 402 lists every rail with its own amount, the list price on most and a little more on a rail whose settlement carries a fee. On the EVM chains the buyer pays no network fee at all.</p>
+    body: `<p><strong>Stablecoins</strong> are dollars that live on a public ledger: USDC is designed to hold one dollar. Payments here are USDC (or USDG on Robinhood Chain), so nobody prices anything in a volatile token.</p>
+<p><strong>Twelve chains.</strong> A buyer pays on whichever chain their wallet already uses; the 402 lists every rail with its own amount, the list price on most and a little more on a rail whose settlement carries a fee. On the EVM chains the buyer pays no network fee at all.</p>
 <p><strong>Every payment is a public record.</strong> That is what makes this an economy rather than a wire: sellers can be ranked by settlements the chain actually shows, revenue can be published with proof, and a router can try sellers with proven settlement before anyone untested.</p>
 <p class="s101-links"><a href="/revenue">Live transactions with every figure linked to its receipt &rarr;</a></p>`,
     notes: "Anticipate 'is this crypto speculation?' - no: dollar stablecoins only, and no native token is required from the buyer on the EVM chains. The public-ledger point is the strategic one: it enables trust without accounts. Show /revenue if you have time; every number links to chain proof.",

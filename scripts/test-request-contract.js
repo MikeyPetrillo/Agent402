@@ -189,7 +189,7 @@ for (const kw of ["$ref", "allOf", "oneOf", "not"]) {
 
 // ---- optional inputs are kept beside the required ones ----
 {
-  // The 2s.io shape: two optional query parameters, nothing required.
+  // A common shape: two optional query parameters, nothing required.
   const op = { parameters: [{ name: "query", in: "query", required: false }, { name: "companyNumber", in: "query" }, { name: "X-Trace", in: "header" }] };
   const c = requestContractOf(op);
   ok(c.state === "absent" && c.optional?.query?.join() === "query,companyNumber" && !c.optional.header, `all-optional query parameters are kept as optional names (${JSON.stringify(c.optional)})`);

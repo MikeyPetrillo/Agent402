@@ -70,6 +70,7 @@ export function quickstartPage(baseUrl) {
   <button class="qs-tab active" role="tab" aria-selected="true" data-tab="mcp">Claude / MCP</button>
   <button class="qs-tab" role="tab" aria-selected="false" data-tab="curl">curl / HTTP</button>
   <button class="qs-tab" role="tab" aria-selected="false" data-tab="js">JavaScript</button>
+  <button class="qs-tab" role="tab" aria-selected="false" data-tab="models">Models (LLM gateway)</button>
   <button class="qs-tab" role="tab" aria-selected="false" data-tab="ai">OpenAI / Anthropic / Vercel AI SDK</button>
   <button class="qs-tab" role="tab" aria-selected="false" data-tab="usdc">Pay with USDC</button>
 </div>
@@ -199,6 +200,29 @@ console.log(result);</code></pre>
 </div>
 
 <!-- Panel: OpenAI / Anthropic / Vercel AI SDK -->
+<div class="qs-panel" id="panel-models" role="tabpanel">
+<h2>Use Agent402 as your model endpoint</h2>
+<p class="qs-oneliner">Chat, the Anthropic Messages wire and embeddings, paid per request. The metered tier quotes each call from its own body.</p>
+
+<span class="qs-label">Run the local wallet proxy (pays each call from your wallet over x402)</span>
+<div class="qs-code-wrap">
+<pre><code>npm i @x402/fetch @x402/evm viem
+export AGENT402_WALLET_KEY=0x...      # an EVM key holding USDC on Base
+export AGENT402_MAX_PER_CALL_USD=2    # per-call ceiling checked before signing
+npx agent402-openclaw proxy           # serves http://127.0.0.1:8412/v1</code></pre>
+<button class="qs-copy" aria-label="Copy">Copy</button>
+</div>
+
+<span class="qs-label">Point any OpenAI SDK at it</span>
+<div class="qs-code-wrap">
+<pre><code>from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:8412/v1", api_key="unused")
+r = client.chat.completions.create(model="auto", messages=[{"role": "user", "content": "hi"}])</code></pre>
+<button class="qs-copy" aria-label="Copy">Copy</button>
+</div>
+<p class="qs-alt">Every model id and its price: <code>GET https://agent402.tools/v1/models</code>. The proxy also answers the Anthropic wire: for Claude Code, set <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8412</code>. Every host's settings: <a href="/guides/agent-hosts">the agent-hosts guide</a>.</p>
+</div>
+
 <div class="qs-panel" id="panel-ai" role="tabpanel">
 <h2>Plug into any LLM framework</h2>
 <p class="qs-oneliner">Drop-in tool definitions for OpenAI, Anthropic, and Vercel AI SDK.</p>

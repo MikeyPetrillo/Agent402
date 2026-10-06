@@ -4,13 +4,13 @@
 
 // Flagship MCP surface — the small default tools/list agents see first.
 //
-// Product intent (competitive brief 2026-08): Agent402 wins as the deterministic
-// tools layer beside per-token LLM gateways. Default MCP exposure is a
-// tight flagship set; the long catalog stays callable via find_tool /
+// Product intent: Agent402 is a tools and models layer for agents -
+// deterministic utilities, a metered model gateway, finished reports. Default
+// MCP exposure is a tight flagship set; the long catalog stays callable via find_tool /
 // search_tools / call_tool. Keep this list aligned with mcp/index.js
 // DEFAULT_CURATED (stdio package cannot import this file when published).
 //
-// Chosen from live topPaidTools + front-door thesis (search/answer first):
+// Chosen from live topPaidTools + front-door choice (search/answer first):
 // search, answer, search-news, render, stock-quote, transcribe, memory-*.
 // Exactly 8 catalog flagships so hosted tools/list stays ~15 with meta tools
 // (Glama's well-scoped band is 3–15).

@@ -1282,9 +1282,8 @@ export function ledgerBuyerConcentration(wallets, { events } = {}) {
  * answers the question that decides whether this is a business: of everyone who
  * has ever paid us, how many tried it once and never returned.
  *
- * Measured 2026-09-11 by hand from the sales ledger: 92 of 250 buyers over 60
- * days paid exactly once. That is the single most important number about this
- * catalog and it lived nowhere any surface could show it.
+ * Measured once by hand from the sales ledger (2026-09-11), the share of
+ * buyers who paid exactly once lived nowhere any surface could show it.
  *
  * RETENTION IS COUNTED IN DAYS, NOT PAYMENTS. A buyer who made forty calls in
  * one afternoon and never came back is a one-time buyer, however impressive the

@@ -633,7 +633,9 @@ function ourToolsPanelNav() {
                 <a href="/tools" class="mlnav-row"><span style="font-weight:700;">catalog</span><span class="mlnav-faint">browse by category</span></a>
                 <a href="/skills" class="mlnav-row"><span style="font-weight:700;">skill packs</span><span class="mlnav-faint">one payment, N tools</span></a>
                 <a href="/tools/category/crypto" class="mlnav-row"><span style="font-weight:700;">crypto, DeFi &amp; Solana</span><span class="mlnav-faint">perps · yields · token risk</span></a>
-                <a href="/tools/category/llm" class="mlnav-row"><span style="font-weight:700;">images &amp; video</span><span class="mlnav-faint">flat per picture or clip</span></a>
+                <a href="/tools/category/llm" class="mlnav-row"><span style="font-weight:700;">LLM gateway</span><span class="mlnav-faint">chat · messages · metered · images</span></a>
+                <a href="/tools/category/ai" class="mlnav-row"><span style="font-weight:700;">speech &amp; transcription</span><span class="mlnav-faint">text-to-speech · audio to text</span></a>
+                <a href="/markets" class="mlnav-row"><span style="font-weight:700;">market data</span><span class="mlnav-faint">quotes · funding · on-chain</span></a>
                 <a href="/playground" class="mlnav-row"><span style="font-weight:700;">playground</span><span class="mlnav-faint">try free · PoW</span></a>
                 <a href="/pricing" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--surface);color:var(--on-dark);"><span style="font-weight:700;">pricing →</span><span style="color:var(--dk-muted);">/pricing</span></a>
               </span>

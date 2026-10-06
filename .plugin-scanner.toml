@@ -1,5 +1,5 @@
-# Configuration for hashgraph-online/ai-plugin-scanner, which grades this
-# repository for the awesome-ai-plugins catalog (their PR #414 review, 2026-09-22).
+# Configuration for the AI-plugin scanner that grades this repository for
+# plugin catalogs.
 #
 # Only test files are excluded, and only because of a naming mismatch: the
 # scanner's own secret rule already exempts test files, but recognizes them by

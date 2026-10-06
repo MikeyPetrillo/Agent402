@@ -224,8 +224,7 @@ check("fast chains are no longer dated with the 2000ms default", () => {
 // The daily series says how many bought today and splits them new/returning
 // FOR THAT DAY. This is the other question, and the one that decides whether
 // any of the rest is a business: of everyone who ever paid, how many returned.
-// Measured by hand 2026-09-11: 92 of 250 buyers paid exactly once, and no
-// surface could show it.
+// It was measured once by hand (2026-09-11) and no surface could show it.
 //
 // Asserted as DELTAS against whatever the earlier checks in this file already
 // seeded - absolute totals here would silently encode the rest of the suite,

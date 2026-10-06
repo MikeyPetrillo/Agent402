@@ -27,7 +27,7 @@ for (const junk of ["[object object]", "undefined", "null", "nan", "18", "0", "3
 }
 
 // --- kept: genuine needs, including the real ones seen on the board --------
-for (const real of ["captcha", "solidity auditor", "btc mempool backlog", "notary", "gpt55", "sqlguard",
+for (const real of ["captcha", "solidity auditor", "btc mempool backlog", "notary", "gpt55", "sqlwatch",
   "object", "function", "request", "connect", "ready", "a2a", "ocr"]) {
   ok(!isNonQuery(real), `kept as a real need: ${JSON.stringify(real)}`);
 }

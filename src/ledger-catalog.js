@@ -145,7 +145,7 @@ table{border-collapse:collapse;width:100%}
     <div style="padding:28px;background:var(--footer-bg);">
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">PAID TOOLS</div>
       <h2 style="font-weight:800;font-size:25px;margin:0 0 14px;color:var(--ink);">Quoted before you're charged</h2>
-      <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 16px;">Anything that costs us money to run - live search, browser rendering, inference, stored memory - is priced per call and states its price in the 402 challenge. A failed call is never charged, and there is no key to leak.</p>
+      <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 16px;">Anything that costs us money to run - live search, browser rendering, inference, stored memory - is priced per call and states its price in the 402 challenge. A failed x402 call is not charged, and there is no key to leak.</p>
       <pre style="margin:0 0 16px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># price, asset and rail, before paying
 </span>curl -i https://agent402.tools/api/search \
   -d '{"q":"x402 adoption"}'</pre>

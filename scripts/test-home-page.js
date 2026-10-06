@@ -30,7 +30,7 @@ const catalog = {
   const board = [
     { name: "Agent402.Tools", totalUsd: 900.5, callsSettled: 30000, uniqueBuyers: 300 },
     { name: "Seller-One.example", totalUsd: 21422.22932, callsSettled: 1127246, uniqueBuyers: 166 },
-    { name: "agents.chain.link", totalUsd: 103.432, callsSettled: 9711, uniqueBuyers: 2 },
+    { name: "seller-two.example", totalUsd: 103.432, callsSettled: 9711, uniqueBuyers: 2 },
   ];
   const leaderboardSnapshot = { leaderboard: board, windowLabel: "7d", totalSellers: 824 };
   const html = ledgerHomePage(BASE_URL, catalog, stats, leaderboardSnapshot, Array.from({ length: 42 }));
@@ -38,13 +38,12 @@ const catalog = {
   ok(html.includes("40,233"), "live counter seeds from the real server-rendered viaUSDC value");
   ok(html.includes("918,422") && html.includes("more served free over proof-of-work"), "free-tier (PoW) count renders");
   ok(html.includes("30,112") && html.includes(">Base<"), "per-rail settlement grid shows real per-network counts");
-  ok(html.includes("214") && html.includes(">Robinhood Chain<") && html.includes(">USDG<"), "Robinhood Chain renders with its real count and USDG asset, not USDC");
+  ok(html.includes("214") && html.includes(">Robinhood Chain<") && html.includes(">calls · USDG<"), "Robinhood Chain renders with its real count and USDG asset, not USDC");
   ok(html.includes(">·<"), "a rail with zero recorded settlements renders as a dash placeholder, never a fabricated 0");
   ok(html.includes("69") && html.includes("settled over the MPP wire"), "MPP wire count renders");
   // The router share is GONE, not corrected. Even stated accurately it
-  // publishes what fraction of our traffic we monetize: a competitor's figure
-  // to have, answering a question no seller asked, on the page meant to
-  // persuade them. The architectural claim underneath needs no number, and a
+  // publishes what fraction of our traffic we monetize, answering a question
+  // no seller asked. The architectural claim underneath needs no number, and a
   // reader can verify it from any 402 on the site, which names the seller's
   // own payTo. Pinned as an absence because the tempting fix is to put a
   // "reassuring" small number back.
@@ -67,7 +66,7 @@ const catalog = {
   ok(!html.includes("went buyer wallet to seller wallet"), "the claim that every other paid call bypassed us is gone");
   ok(/no commission/i.test(html) && /nothing is deducted/i.test(html), "the neutrality claim a seller is asking about is still made, plainly");
   ok(/names your payTo and not ours/i.test(html), "and it is made in a form the reader can check against a live 402, not asserted");
-  ok(html.includes("Seller-One.example") && html.includes("agents.chain.link"), "external leaderboard rows render");
+  ok(html.includes("Seller-One.example") && html.includes("seller-two.example"), "external leaderboard rows render");
   {
     // The five-column mono table is ~520px wide; at a 375px viewport the card's
     // overflow:hidden clipped the usdc/calls/buyers columns with no way to reach

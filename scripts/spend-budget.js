@@ -8,7 +8,7 @@
 //   status >= 400, so a 4xx/5xx is never charged — but it is NOT safe for a
 //   third party, whose server may settle first and fail afterwards.
 //
-//   That is exactly what happened: api.syraa.fun/insights/defi-tvl returned
+//   That is exactly what happened: a seller's paid endpoint returned
 //   HTTP 502 with no receipt header, the run logged it as "not charged", and
 //   $0.05 had in fact left the wallet on-chain. The run's true spend was $0.396
 //   against its own $0.35 cap. Small in absolute terms, but a cap that can be

@@ -47,18 +47,18 @@ assert.strictEqual(itemHasMainnetAccept(seiTestnet), false, "sei testnet (atlant
 // listings instead of proper CAIP-2 - every downstream CHAIN_PAGES isNetwork
 // exact-match then fails silently, so the seller is indexed (shows on
 // /marketplace) but invisible on its own chain's page. Fixtures modeled on
-// two real, currently-affected sellers found live 2026-08-13: bluepages.fyi
-// (network:"base") and 1mpixels-one.vercel.app (network:"solana").
+// two real, currently-affected sellers found live 2026-08-13: bluebook.example
+// (network:"base") and pixelboard.example (network:"solana").
 const shorthandBase = bazaarItemToTool(
-  { resource: "https://bluepages.fyi/api/lookup", accepts: [{ network: "base", amount: "1000", payTo: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }] },
-  "https://bluepages.fyi"
+  { resource: "https://bluebook.example/api/lookup", accepts: [{ network: "base", amount: "1000", payTo: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }] },
+  "https://bluebook.example"
 );
 assert.strictEqual(shorthandBase.networks[0], "eip155:8453", "shorthand \"base\" normalized to eip155:8453");
 assert.strictEqual(shorthandBase.payToByNetwork["eip155:8453"], "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "payToByNetwork keyed by the normalized CAIP-2 id, not the raw shorthand");
 
 const shorthandSolana = bazaarItemToTool(
-  { resource: "https://1mpixels-one.vercel.app/api/pixels", accepts: [{ network: "solana", amount: "1000", payTo: "9EMAayAfBR32J5d3ApEAG3NdKArRBtAqN7LA8c2WRM5o" }] },
-  "https://1mpixels-one.vercel.app"
+  { resource: "https://pixelboard.example/api/pixels", accepts: [{ network: "solana", amount: "1000", payTo: "9EMAayAfBR32J5d3ApEAG3NdKArRBtAqN7LA8c2WRM5o" }] },
+  "https://pixelboard.example"
 );
 assert.strictEqual(shorthandSolana.networks[0], "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "shorthand \"solana\" normalized to its real CAIP-2 id");
 
@@ -97,8 +97,8 @@ assert.strictEqual(isJunkOrigin("https://api.example.com"), true, "example.com d
 assert.strictEqual(isJunkOrigin("https://example.org"), true, "example.org dropped");
 assert.strictEqual(isJunkOrigin("http://test.dev"), true, "test.dev dropped");
 assert.strictEqual(isJunkOrigin("not a url"), true, "unparseable dropped");
-assert.strictEqual(isJunkOrigin("https://madeonsol.com"), false, "real host kept");
-assert.strictEqual(isJunkOrigin("https://x402email.com"), false, "real host kept");
-assert.strictEqual(isJunkOrigin("https://api.xcache.io"), false, "real host kept");
+assert.strictEqual(isJunkOrigin("https://solmaker.example"), false, "real host kept");
+assert.strictEqual(isJunkOrigin("https://mailseller.example"), false, "real host kept");
+assert.strictEqual(isJunkOrigin("https://api.cacheseller.example"), false, "real host kept");
 
 console.log("discovery-filter: all assertions passed");

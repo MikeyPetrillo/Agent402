@@ -74,7 +74,7 @@ export const USAGE_TOOLS = [
       const wallet = payerFromRequest(req);
       if (!wallet) {
         throw bad(
-          "This report is keyed to the wallet that PAYS for it. Pay via x402 with an EIP-3009 authorization (USDC on Base, Polygon, or Arbitrum) and the response covers that wallet's history. Solana/Stellar payments carry no signed payer the server can verify, so they cannot unlock a report."
+          "This report is keyed to the wallet that PAYS for it. Pay via x402 with an EIP-3009 authorization (USDC on any EVM chain this route offers) and the response covers that wallet's history. Solana/Stellar payments carry no signed payer the server can verify, so they cannot unlock a report."
         );
       }
       const days = input?.days === undefined ? 30 : parseInt(input.days, 10);
@@ -128,7 +128,7 @@ export const USAGE_TOOLS = [
       const wallet = payerFromRequest(req);
       if (!wallet) {
         throw bad(
-          "Receipts are keyed to the wallet that PAYS for the call. Pay via x402 with an EIP-3009 authorization (USDC on Base, Polygon, or Arbitrum) and the response covers that wallet's own payables. Solana/Stellar payments carry no signed payer the server can verify, so they cannot unlock receipts."
+          "Receipts are keyed to the wallet that PAYS for the call. Pay via x402 with an EIP-3009 authorization (USDC on any EVM chain this route offers) and the response covers that wallet's own payables. Solana/Stellar payments carry no signed payer the server can verify, so they cannot unlock receipts."
         );
       }
       const limit = input?.limit === undefined ? 500 : parseInt(input.limit, 10);

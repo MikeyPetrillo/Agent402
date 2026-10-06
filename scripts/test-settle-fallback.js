@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // Offline test for the settle-fallback chain in src/payments.js:
 // Solvador first on the networks it advertises, then PayAI on the networks it
-// can settle, then Solvador as the ungated last resort elsewhere (order decided
-// 2026-09-18: PayAI bills gas x 1.3 in prepaid credits per settlement, Solvador
-// is 1,000 a month free then $0.001, so the cheaper fallback runs first).
+// can settle, then Solvador as the ungated last resort elsewhere (order set
+// 2026-09-18: the cheaper fallback runs first).
 //
 // The property that must never regress is the double-settle gate: a fallback
 // facilitator is only tried when every earlier settler PROVABLY did not

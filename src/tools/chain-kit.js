@@ -806,10 +806,9 @@ export const CHAIN_TOOLS = [
   // Named chain-read primitives (2026-07-29). evm-rpc above already answers
   // eth_blockNumber etc., but an agent searching "block number" or "event logs"
   // never finds a whitelist parameter - it finds a TOOL. These are the
-  // first-buy primitives the market proves demand for (api.onesource.io:
-  // 319 distinct buyers/week on a bare page of exactly these reads, measured
-  // on our own leaderboard 2026-07-29), priced at the floor and riding the
-  // same keyless publicJsonRpc failover so they answer on every deployment.
+  // first-buy chain reads agents look for by name, priced at the floor and
+  // riding the same keyless publicJsonRpc failover so they answer on every
+  // deployment.
   // ===========================================================================
   {
     route: "GET /api/block-number",

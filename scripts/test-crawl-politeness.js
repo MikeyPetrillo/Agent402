@@ -21,7 +21,7 @@ ok(operatorKey("https://a.b.example.xyz") === "example.xyz", "subdomains of one 
 // SHARED HOSTING IS NOT ONE OPERATOR. "last two labels" made every Vercel seller
 // one operator, every Workers seller one operator, and handed each whole group a
 // single per-cycle budget - so an attacker could register throwaway origins under
-// the same suffix and starve a competitor's listing until its learned quote aged
+// the same suffix and starve another seller's listing until its learned quote aged
 // out (QUOTE_MAX_AGE_MS, 7 days). This file already knew better in one place:
 // railwayDeploymentOrigin exists because unrelated sellers publish on
 // *.up.railway.app.

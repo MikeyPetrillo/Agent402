@@ -181,7 +181,7 @@ export const LEARN = [
     term: "MPP (Machine Payments Protocol)",
     alt: ["Machine Payments Protocol", "Payment HTTP authentication scheme"],
     glossary: "mpp",
-    title: "What is MPP? The Machine Payments Protocol, explained",
+    title: "MPP challenges and credentials: the Payment auth scheme, header by header",
     description: "MPP carries pay-per-request payments in HTTP's standard authentication headers: WWW-Authenticate: Payment, Authorization: Payment and Payment-Receipt. How a challenge is built, with a real one from this server, and how to pay it.",
     summary: "MPP (the Machine Payments Protocol) carries pay-per-request payments through HTTP's standard authentication headers: a 402 challenges with WWW-Authenticate: Payment, the client answers with an Authorization: Payment credential, and the settled response returns a signed Payment-Receipt. Its evm method settles USDC by EIP-3009; its tempo method settles natively on Tempo.",
     sections: [
@@ -229,10 +229,10 @@ export const LEARN = [
         { code: CLIENT_CAPS },
       ]],
       ["No wallet yet", [
-        P(`Two paths need no wallet. Pure-CPU tools on this server accept a proof-of-work solve instead of money, a fraction of a second of CPU. For everything else, a prepaid card-credits key works on any paid tool: the price is held before the call and debited only on a successful response.`),
+        P(`Two paths need no wallet. Pure-CPU tools on this server accept a proof-of-work solve instead of money, a fraction of a second of CPU. ${creditsSalesEnabled() ? "For everything else, a prepaid card-credits key works on any paid tool: the price is held before the call and debited only on a successful response." : "Finished reports and monitors can be bought by card at /reports. Everything else is paid from a wallet, which takes a few minutes to create (see Create an agent wallet)."}`),
       ]],
     ],
-    links: [["/agentic-finance", "Agentic Finance"], ["/guides/create-agent-wallet", "Create an agent wallet"], ["/credits", "Prepaid card credits"], ["/integrations", "Framework integrations"], ["/tools/route-execute", "route-execute: buy from another seller in one call"]],
+    links: [["/agentic-finance", "Agentic Finance"], ["/guides/create-agent-wallet", "Create an agent wallet"], ["/integrations", "Framework integrations"], ["/tools/route-execute", "route-execute: buy from another seller in one call"]],
   },
   {
     slug: "pay-per-call-api",
