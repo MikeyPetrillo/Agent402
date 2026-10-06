@@ -7,11 +7,25 @@
 
 Pay-per-call inference and embeddings at the **OpenAI wire paths** - any OpenAI SDK, agent framework, or plain HTTP client adopts the gateway by changing one setting:
 
+A plain OpenAI SDK cannot sign a payment, so give it one of two payers. The
+simplest is the local wallet proxy, which signs an x402 payment per call from a
+wallet you hold and forwards to the gateway:
+
+```bash
+npm i @x402/fetch @x402/evm viem
+export AGENT402_WALLET_KEY=0x...   # an EVM key holding USDC on Base
+npx agent402-openclaw proxy        # serves http://127.0.0.1:8412/v1
+```
+
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="https://agent402.tools/v1", api_key="unused")
-# pay per call with USDC over x402 - no API key, no signup, no account
+client = OpenAI(base_url="http://127.0.0.1:8412/v1", api_key="unused")
+client.chat.completions.create(model="auto", messages=[{"role": "user", "content": "hi"}])
 ```
+
+Or pay in-process from JavaScript by wrapping fetch with an x402 payer
+(`wrapFetchWithPayment` from `@x402/fetch`) and handing it to the SDK's `fetch`
+option; `agent402-client` does the same with spend caps built in.
 
 Ordering, because it decides who eats an upstream failure: the handler runs **first**, and `@x402/express` settles **afterwards**, and only for a response below `400`. A `502` from a provider therefore **cancels settlement** and you are not charged; the failover chains below exist so a provider outage becomes a retry rather than your `502`. A `200` is charged once settlement succeeds, and streaming starts only after that (see **Streaming** below). Upstream is OpenRouter for chat, images and speech, and OpenAI for embeddings; per-tier model allowlists and input/output caps bound what one call can ask for. `GET /v1/models` (free) lists every model with its tier, price, and caps.
 

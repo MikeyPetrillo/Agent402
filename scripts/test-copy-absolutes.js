@@ -82,6 +82,14 @@ const USDC_RAILS = RAILS.filter((r) => r.asset === "USDC").length;
 const ALL_RAILS = RAILS.length;
 const FORBIDDEN = [
   {
+    // "Never charged" is true of x402 (settlement runs after the handler) and
+    // false for a Tempo push credential or a hang-up after settle, which are
+    // recorded as refunds owed. Say "not charged on x402" (or scope it).
+    re: /\b(?:failed|failing) (?:call|request|generation)s? (?:is|are) never charged\b|\ban error is never charged\b|\b4xx\S*\s*\S*5xx\S* never charges\b/i,
+    why: "unscoped: a Tempo push payment or a hang-up after settle is charged and recorded as owed; scope it to x402",
+    exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
+  },
+  {
     re: new RegExp(`\\bUSDC on (?!${USDC_RAILS}\\b)\\d+ chains\\b|\\bUSDC on Base \\+ (?!${USDC_RAILS - 1}\\b)\\d+ more chains\\b|\\b(?!${ALL_RAILS}\\b)\\d+ chains total\\b`, "i"),
     why: `src/rails.js lists ${USDC_RAILS} USDC chains and ${ALL_RAILS} chains in all; derive the figure from RAILS or drop it`,
     exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
@@ -275,6 +283,7 @@ function sweep(entries) {
 const control = sweep([["<control>", "Only sellers with proven on-chain settlement are routable."],
                        ["<control>", "Agent402 never holds funds."],
                        ["<control>", "The agent signs - Agent402 never touches funds."],
+                       ["<control>", "A failed call is never charged."],
                        ["<control>", "Flat pricing for ${n} deterministic web tools."],
                        ["<control>", "Every tool is deterministic."],
                        ["<control>", "If it was, the charge is recorded as owed and refunded automatically."],
@@ -282,8 +291,8 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "Pay in USDC on Base + 11 more chains, or USDG on Robinhood Chain (12 chains total)."],
                        ["<control>", "over x402 (USDC on 12 chains) or MPP"],
                        ["<control>", "500+ strong: 400+ pay-per-call tools (x402 or MPP) + 70+ skill packs"]]);
-const CONTROL_EXPECTED = 12;
-ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 10 planted lines (${CONTROL_EXPECTED} rule hits; a line can match more than one determinism rule) through its real code path (got ${control.length})`);
+const CONTROL_EXPECTED = 13;
+ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 11 planted lines (${CONTROL_EXPECTED} rule hits; a line can match more than one determinism rule) through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);

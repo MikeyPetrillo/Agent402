@@ -7551,7 +7551,7 @@ const gatewayIndex = (_req, res) => res.set("Cache-Control", "public, max-age=60
   models: `${BASE_URL}/v1/models`,
   metered: { chat: `${BASE_URL}/v1/metered/chat/completions`, messages: `${BASE_URL}/v1/metered/messages`, responses: `${BASE_URL}/v1/metered/responses`, pricing: "quoted per request from the body, settled at actual usage for credits and upto buyers" },
   flat: Object.values(TIERS).filter((t) => t.route && !t.metered).map((t) => ({ route: t.route, priceUsd: t.price })),
-  pay: { x402: "PAYMENT-SIGNATURE (USDC)", mpp: "Authorization: Payment", credits: "Authorization: Bearer a402_... (buy at /credits)" },
+  pay: { x402: "PAYMENT-SIGNATURE (USDC)", mpp: "Authorization: Payment", credits: creditsSalesEnabled() ? "Authorization: Bearer a402_... (buy at /credits)" : "Authorization: Bearer a402_... (a key already issued; new keys are not on sale)" },
   docs: `${BASE_URL}/guides/agent-hosts`,
 });
 for (const p of ["/v1", "/v1/info", "/v1/metered"]) app.get(p, gatewayIndex);
@@ -7578,7 +7578,7 @@ const chainIndex = (_req, res) => {
       };
     }),
     networks: ["ethereum", "base", "polygon", "arbitrum", "optimism"],
-    pay: { x402: "PAYMENT-SIGNATURE (USDC)", mpp: "Authorization: Payment", credits: "Authorization: Bearer a402_... (buy at /credits)", free: "most reads are also available over proof of work - see /api/pow/challenge" },
+    pay: { x402: "PAYMENT-SIGNATURE (USDC)", mpp: "Authorization: Payment", credits: creditsSalesEnabled() ? "Authorization: Bearer a402_... (buy at /credits)" : "Authorization: Bearer a402_... (a key already issued; new keys are not on sale)", free: "most reads are also available over proof of work - see /api/pow/challenge" },
     catalog: `${BASE_URL}/api/pricing`,
   });
 };

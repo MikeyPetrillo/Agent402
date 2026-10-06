@@ -38,7 +38,7 @@ const catalog = {
   ok(html.includes("40,233"), "live counter seeds from the real server-rendered viaUSDC value");
   ok(html.includes("918,422") && html.includes("more served free over proof-of-work"), "free-tier (PoW) count renders");
   ok(html.includes("30,112") && html.includes(">Base<"), "per-rail settlement grid shows real per-network counts");
-  ok(html.includes("214") && html.includes(">Robinhood Chain<") && html.includes(">USDG<"), "Robinhood Chain renders with its real count and USDG asset, not USDC");
+  ok(html.includes("214") && html.includes(">Robinhood Chain<") && html.includes(">calls · USDG<"), "Robinhood Chain renders with its real count and USDG asset, not USDC");
   ok(html.includes(">·<"), "a rail with zero recorded settlements renders as a dash placeholder, never a fabricated 0");
   ok(html.includes("69") && html.includes("settled over the MPP wire"), "MPP wire count renders");
   // The router share is GONE, not corrected. Even stated accurately it

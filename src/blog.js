@@ -44,7 +44,7 @@ export const BLOG_POSTS = [
 
 <h2>Connect</h2>
 
-<p>Decide is three routes: <code>POST /api/decide</code> for a plan, <code>POST /api/decide/execute</code> to run one, and <code>POST /api/decide/feedback</code> (free) to report whether a step worked, which feeds future rankings. Pay per request in USDC over x402 or MPP, or with prepaid card credits. On the hosted MCP connector they are the <code>decide</code> tools; add it with <code>claude mcp add --transport http agent402 https://agent402.tools/mcp</code>. Prices by depth, the full method and the FAQ are on the <a href="/decide">Decide page</a>, and the reference is on the <a href="${REPO_URL}/wiki/Decide">wiki</a>.</p>`,
+<p>Decide is three routes: <code>POST /api/decide</code> for a plan, <code>POST /api/decide/execute</code> to run one, and <code>POST /api/decide/feedback</code> (free) to report whether a step worked, which feeds future rankings. Pay per request in USDC over x402 or MPP. On the hosted MCP connector they are the <code>decide</code> tools; add it with <code>claude mcp add --transport http agent402 https://agent402.tools/mcp</code>. Prices by depth, the full method and the FAQ are on the <a href="/decide">Decide page</a>, and the reference is on the <a href="${REPO_URL}/wiki/Decide">wiki</a>.</p>`,
   },
   {
     slug: "what-is-agentic-finance-aifi",
@@ -95,7 +95,7 @@ export const BLOG_POSTS = [
   <li><strong>Prove:</strong> <a href="/revenue">live transactions</a> by rail and by wire (external revenue too), every figure linked to its on-chain receipt, an on-chain seller leaderboard, uptime measured from outside, and a ledger for the rare charged-but-failed call so it is refunded rather than forgotten.</li>
 </ul>
 
-<p>Settlement ordering is the detail we care most about, because it is where a marketplace can quietly cheat its buyers: Agent402 runs the tool first and settles only on a successful response, so a failed call is never charged. A daily canary buys real tools over both x402 and MPP so the claim is re-proven on mainnet rather than asserted once.</p>
+<p>Settlement ordering is the detail we care most about, because it is where a marketplace can quietly cheat its buyers: Agent402 runs the tool first and settles only on a successful response, so a failed x402 call is not charged. A daily canary buys real tools over both x402 and MPP so the claim is re-proven on mainnet rather than asserted once.</p>
 
 <h2>Do agents need crypto to take part?</h2>
 

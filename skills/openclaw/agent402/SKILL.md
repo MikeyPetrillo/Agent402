@@ -80,7 +80,7 @@ Send the request normally. A priced tool answers `402 Payment Required` with:
 - a `WWW-Authenticate: Payment` header: the MPP challenge.
 
 Pay one of them and retry: x402 clients send `PAYMENT-SIGNATURE`, MPP clients
-send `Authorization: Payment`. A failed call is never charged: payment settles
+send `Authorization: Payment`. On x402 a failed call is not charged: payment settles
 only after the tool returns a successful answer.
 
 With the JavaScript SDK (`agent402-client`) and a standard x402 client:

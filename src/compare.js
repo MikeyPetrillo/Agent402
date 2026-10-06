@@ -109,7 +109,6 @@ export function comparePage(baseUrl) {
 <div class="cmp-scroll"><table class="cmp-table">
 <thead><tr><th>Dimension</th><th class="col-a402">agent402-tollbooth</th><th>Platform-bound gateways</th></tr></thead>
 <tbody>
-<tr><td>Availability</td><td class="cmp-win"><span class="check">&#10003;</span> Live today - <code>npm i agent402-tollbooth</code></td><td class="cmp-lose">Waitlist / beta</td></tr>
 <tr><td>Where it runs</td><td class="cmp-win"><span class="check">&#10003;</span> Any origin - Express, Next.js, Docker, even a Cloudflare Worker</td><td class="cmp-lose">Only sites behind the platform's proxy</td></tr>
 <tr><td>Open source</td><td class="cmp-win"><span class="check">&#10003;</span> MIT - read every line, fork it</td><td class="cmp-lose"><span class="cross">&#10007;</span> Proprietary edge service</td></tr>
 <tr><td>Free tier for bots</td><td class="cmp-win"><span class="check">&#10003;</span> Proof-of-work - crawlers can pay with CPU instead of money</td><td class="cmp-lose"><span class="cross">&#10007;</span> Pay or blocked</td></tr>

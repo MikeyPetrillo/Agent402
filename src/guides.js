@@ -830,7 +830,7 @@ It's optionality. An agent doesn't get to choose what chain its wallet
 already holds USDC on - it was funded once, for some other reason, on
 whatever chain that happened to be. A seller who only accepts Base is
 invisible to every agent funded anywhere else, no matter how good the tool
-is. Twelve rails means twelve populations of already-funded buyers who never
+is. Twelve chains means twelve populations of already-funded buyers who never
 have to bridge, swap, or wait for a transfer just to pay for one API call.
 
 ## What's actually live, and who settles it
@@ -866,7 +866,7 @@ are unaffected.
 ## What doesn't change per chain
 
 The guarantee is identical everywhere: a failed or unmatched call never
-settles, regardless of which of the twelve rails it failed on. Chain choice
+settles, regardless of which of the twelve chains it failed on. Chain choice
 changes *where* the USDC moves, never *whether* a bad call gets charged.
 
 ## The Smart Order Router uses this directly
@@ -874,7 +874,7 @@ changes *where* the USDC moves, never *whether* a bad call gets charged.
 When [the router](/guides/smart-order-router) pays an external seller on
 your behalf, it settles on the SAME chain you paid it on - an Algorand
 payment funds an Algorand purchase, a Base payment funds a Base purchase.
-Twelve rails isn't just about who can pay us; it's what lets the router keep
+Twelve chains isn't just about who can pay us; it's what lets the router keep
 your money on the chain you already trusted it on, instead of quietly
 routing everything through one chain regardless of what you sent.
 `,
@@ -987,7 +987,7 @@ maxPerCallUsd: 0.05, dailyLimitUsd: 2 })\` from
 ## What you get back
 
 A \`200\` with JSON and a \`PAYMENT-RESPONSE\` header (the settle receipt).
-A \`4xx\`/\`5xx\` never charges: settlement runs after the handler and only
+A \`4xx\`/\`5xx\` is not charged on x402: settlement runs after the handler and only
 for a successful response, and you can verify that from the headers you hold
 (no \`PAYMENT-RESPONSE\` = nothing settled). Prefer MPP? The same 402 also
 carries a \`WWW-Authenticate: Payment\` challenge - see
@@ -1115,14 +1115,14 @@ its normal schedule.
     description:
       "Two doors into Agent402 from the agent host you already run: models through an OpenAI-compatible base URL (metered, from $" + TIERS["v1-chat-metered"].price + " a call, paid from a wallet over x402" + (CREDITS_ON ? " or with a prepaid credits key" : ", or with a credits key bought earlier") + "), and 500+ tools through MCP. Copy the block for your host.",
     md: `
-Agent402 opens two doors to an agent host, and both are paid with the same
-key:
+Agent402 opens two doors to an agent host:
 
-- **Models**: an OpenAI-compatible gateway. Point any client that accepts a
-  base URL at \`https://agent402.tools/v1/metered\` with a credits key as the API
-  key. Each request is quoted from its own body (input plus your \`max_tokens\`)
-  and a card or credits buyer settles what
-  the call actually used, from $${TIERS["v1-chat-metered"].price} a call.
+- **Models**: an OpenAI-compatible gateway. Run the local wallet proxy
+  (\`npx agent402-openclaw proxy\`, below) and point any client that accepts a
+  base URL at \`http://127.0.0.1:8412/v1\`: it pays each call from your wallet
+  over x402. A client can also use \`https://agent402.tools/v1/metered\` directly
+  with ${CREDITS_ON ? "a credits key" : "a credits key issued earlier"} as the API key. Each request is quoted from its own
+  body (input plus your \`max_tokens\`), from $${TIERS["v1-chat-metered"].price} a call.
   \`GET https://agent402.tools/v1/models\` lists every id with its price and
   input cap; \`auto\` (routed per prompt, flat
   $${TIERS["v1-chat-auto"].price}) lives at \`https://agent402.tools/v1/auto\`.
@@ -1135,12 +1135,32 @@ ${CREDITS_ON ? `Get the key once: buy a pack by card at
 [agent402.tools/credits](https://agent402.tools/credits); the key (\`a402_…\`)
 is shown once and emailed.` : `New credits keys are not on sale; a key (\`a402_…\`) bought earlier keeps
 working in every block below.`} \`GET /api/credits/balance\` (Bearer) reports what
-is left. Prefer a wallet? Every route also answers a stock x402 \`402\`
+is left. Every route also answers a stock x402 \`402\`
 (${RAILS_OR}) and an MPP challenge, so any x402 client pays per call with no key.
+
+## Pay from a wallet (local proxy)
+
+The proxy runs on your machine, signs an x402 payment for each call from a
+wallet you hold (the key never leaves the machine), and forwards to the
+gateway. Any OpenAI-compatible client then uses it as its base URL:
+
+\`\`\`bash
+npm i @x402/fetch @x402/evm viem
+export AGENT402_WALLET_KEY=0x...      # an EVM key holding USDC on Base
+export AGENT402_MAX_PER_CALL_USD=2    # per-call ceiling checked before signing
+npx agent402-openclaw proxy           # serves http://127.0.0.1:8412/v1
+\`\`\`
+
+Use model \`auto\` or any id from \`GET /v1/models\`. Run
+\`npx agent402-openclaw permit2-approve\` once to settle metered calls at actual
+usage instead of the quote. The proxy speaks the OpenAI wire; Anthropic-wire
+clients such as Claude Code use the gateway directly (next section).
 
 ## Claude Code
 
-Claude Code as an LLM client, billed per request under a quoted ceiling. Point
+Claude Code as an LLM client, billed per request under a quoted ceiling. Claude
+Code speaks the Anthropic wire, which the local proxy does not carry, so this
+block needs ${CREDITS_ON ? "a credits key" : "a credits key issued earlier"}; the tools below need none. Point
 it at the metered tier with your credits key as the auth token (Bearer), keep
 your usual model names - dated ids like \`claude-haiku-4-5-20251001\` resolve
 to the live model:

@@ -56,6 +56,10 @@ export function ledgerPricingPage(baseUrl, catalog) {
     ["Payments & x402 - decode, verify, quote, audit", priceLabel(tools, (t) => t.category === "payments" || t.category === "x402")],
     ["Article extract - clean markdown out", priceLabel(tools, (t) => t.slug === "extract")],
     ["Headless browser - render & screenshot (real Chromium)", priceLabel(tools, (t) => t.slug === "render" || t.slug === "screenshot")],
+    ["Web search & cited answers - search, news, answer", priceLabel(tools, (t) => ["search", "search-news", "answer"].includes(t.slug))],
+    ["Market data - stock and crypto quotes, perp funding", priceLabel(tools, (t) => ["stock-quote", "crypto-price", "perp-funding", "perp-basis"].includes(t.slug))],
+    ["Text to speech - three voice tiers", priceLabel(tools, (t) => ["tts-lite", "tts", "tts-hd"].includes(t.slug))],
+    ["Transcription - audio to text", priceLabel(tools, (t) => ["transcribe", "transcribe-pro"].includes(t.slug))],
   ].filter((r) => r[1]);
 
   // Prices read from the route itself; the metered route's catalog price is
@@ -63,6 +67,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
   const gatewayPrice = (path, prefix = "") => { const p = priceLabel(tools, (t) => t.path === path); return p ? `${prefix}${p}` : null; };
   const gatewayRows = [
     ["/v1/metered/chat/completions - quoted per request, settles actual usage under the quote", gatewayPrice("/v1/metered/chat/completions", "from ")],
+    ["/v1/metered/messages - Anthropic Messages wire, quoted per request", gatewayPrice("/v1/metered/messages", "from ")],
     ["/v1/embeddings - default-on cache, free repeat", gatewayPrice("/v1/embeddings")],
     ["/v1/nano/chat/completions - high-frequency agent loops", gatewayPrice("/v1/nano/chat/completions")],
     ["/v1/auto/chat/completions - model optional, eval-ranked routing", gatewayPrice("/v1/auto/chat/completions")],
@@ -120,12 +125,12 @@ export function ledgerPricingPage(baseUrl, catalog) {
       <!-- USDC -->
       <div style="padding:30px;background:var(--surface);position:relative;">
         <div style="position:absolute;top:14px;right:18px;font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;color:var(--accent-lit);border:1.5px solid var(--accent-lit);padding:3px 8px;">x402</div>
-        <div style="font-family:var(--font-mono);font-size:12px;color:var(--dk-muted);letter-spacing:.08em;margin-bottom:12px;">PAID \u00b7 USDC ON BASE</div>
+        <div style="font-family:var(--font-mono);font-size:12px;color:var(--dk-muted);letter-spacing:.08em;margin-bottom:12px;">PAID \u00b7 USDC OVER x402 OR MPP</div>
         <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px;">
           <span style="font-family:var(--font-body);font-weight:900;font-size:56px;letter-spacing:-.03em;color:var(--on-dark);">$0.001</span>
           <span style="font-family:var(--font-mono);font-size:13px;color:var(--dk-muted);">/ call &amp; up</span>
         </div>
-        <p style="font-size:14.5px;line-height:1.5;color:var(--dk-muted2);margin:0 0 20px;">An x402 client signs USDC from the agent's own wallet and retries. Settles on Base in seconds.</p>
+        <p style="font-size:14.5px;line-height:1.5;color:var(--dk-muted2);margin:0 0 20px;">An x402 client signs USDC from the agent's own wallet and retries. Settles in seconds on Base or any of the other x402 chains.</p>
         <div style="display:flex;flex-direction:column;gap:10px;font-size:14px;color:var(--on-dark);border-top:1px solid var(--dark-border2);padding-top:18px;">
           ${check(`All ${fmtNum(totalCount)} tools, including browser & memory`)}
           ${check("Flat per-call price - pay exactly what you use")}
@@ -194,6 +199,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
           <div style="font-family:var(--font-mono);font-size:12px;font-weight:700;margin-bottom:6px;">Keep the wallet &middot; approve once</div>
           <p style="font-size:14.5px;line-height:1.55;color:var(--muted);margin:0 0 10px;">A one-time Permit2 approval for USDC on Base turns every quote into a ceiling rather than a charge: the gateway settles the actual usage under it, per request, with no fixed tier to overpay into. Non-custodial on this rail, and the approval is yours to revoke.</p>
           <div style="font-family:var(--font-mono);font-size:13px;color:var(--muted);">npx agent402-openclaw permit2-approve</div>
+          <p style="font-size:13px;line-height:1.5;color:var(--faint);margin:8px 0 0;">The approval belongs to the wallet, so it applies to any client that pays from it, not only OpenClaw.</p>
         </div>
       </div>
     </div>

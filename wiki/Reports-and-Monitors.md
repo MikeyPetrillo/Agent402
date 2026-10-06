@@ -11,7 +11,7 @@ All of it is optional and env-gated on a self-hosted instance (see [[Self-Hostin
 
 ## Report products (agent path)
 
-Each report is a `POST` with a JSON body; the price is the whole outcome, not a per-call meter. The evidence stage is deterministic (live web search, SEC EDGAR, openFDA, DNS/TLS probes, on-chain reads), and the synthesis stage writes a cited report that is checked against the evidence it was given; the IPO digest has no synthesis stage at all. A run that cannot gather enough evidence fails with an error instead of shipping a thin report, and because settlement happens **after** the handler, an error is never charged (see [[Architecture]]).
+Each report is a `POST` with a JSON body; the price is the whole outcome, not a per-call meter. The evidence stage is deterministic (live web search, SEC EDGAR, openFDA, DNS/TLS probes, on-chain reads), and the synthesis stage writes a cited report that is checked against the evidence it was given; the IPO digest has no synthesis stage at all. A run that cannot gather enough evidence fails with an error instead of shipping a thin report, and because settlement happens **after** the handler, an error is not charged on x402 (see [[Architecture]]).
 
 | Route | Price | Input | What you get |
 |---|---|---|---|
