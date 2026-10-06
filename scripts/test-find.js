@@ -92,7 +92,7 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
     { host: "acmeagent.example", origin: "https://acmeagent.example", toolCount: 89 },
     { host: "www.bigworldmodel.example", origin: "https://www.bigworldmodel.example", toolCount: 42 },
     { host: "api.example.com", origin: "https://api.example.com", toolCount: 3 },
-    { host: "acmeagent.io", origin: "https://acmeagent.io", toolCount: 5 },
+    { host: "acmeagent.invalid", origin: "https://acmeagent.invalid", toolCount: 5 },
   ];
   const one = findRelatedSellers("acmeagent", sellers);
   ok(one.length === 2 && one[0].host === "acmeagent.example", `exact label match, tool-count ranked (got ${JSON.stringify(one.map((s) => s.host))})`);
