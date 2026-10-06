@@ -453,7 +453,7 @@ export const STATS_TOOLS = [
   {
     route: "POST /api/gcd-lcm", name: "GCD + LCM", slug: "gcd-lcm",
     aliases: ["greatest-common-divisor", "least-common-multiple", "gcd", "lcm", "hcf"],
-    category: "math", price: "$0.001",
+    category: "data", price: "$0.001",
     description:
       "Greatest common divisor and least common multiple of two or more integers, computed exactly (arbitrary precision). Useful for cycle alignment, scheduling periods and fraction work. Signs are ignored; a zero makes the LCM zero. Results beyond 2^53 come back as strings so no digit is lost.",
     tags: ["math", "gcd", "lcm", "integers", "number-theory"],
