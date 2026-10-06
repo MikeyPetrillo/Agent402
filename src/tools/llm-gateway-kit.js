@@ -405,6 +405,10 @@ export const TIERS = {
       // gpt-6-sol (live 2026-09-24): fits this tier's bound at its dearest
       // endpoint; the prefix also admits gpt-6-sol-pro (same price and efforts).
       "openai/gpt-6-sol",
+      // gpt-6.1-sol (live 2026-09-29, same list price as gpt-6-sol). A separate
+      // entry: prefix matching is boundary-aware, so gpt-6-sol does not admit it.
+      // The prefix also admits gpt-6.1-sol-pro (same price).
+      "openai/gpt-6.1-sol",
     ],
   },
   "v1-chat-premium": {
@@ -648,7 +652,9 @@ export const PREFIX_CANONICAL = Object.freeze({
   // Live ids under each family read from openrouter.ai/api/v1/models on
   // 2026-08-26; the guard's exact-id check fails CI if one of these dies.
   "anthropic/claude-opus": "anthropic/claude-opus-5",
-  "anthropic/claude-sonnet": "anthropic/claude-sonnet-5",
+  // 2026-10-06: the bare family name serves Sonnet 5.5 (live 2026-09-28, same
+  // list price as Sonnet 5); an explicit claude-sonnet-5 is still served as asked.
+  "anthropic/claude-sonnet": "anthropic/claude-sonnet-5.5",
   "anthropic/claude-haiku": "anthropic/claude-haiku-4.5",
   "x-ai/grok": "x-ai/grok-4.6",
   "google/gemini-3.1-pro": "google/gemini-3.1-pro-preview",
@@ -1653,6 +1659,8 @@ export const FLEX_MODELS = [
   "openai/gpt-5-nano", "openai/gpt-5.6-luna", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra",
   // Both carry an "openai/flex" endpoint tag (live endpoints 2026-09-24).
   "openai/gpt-6-luna", "openai/gpt-6-sol",
+  // openai/flex endpoint tag on gpt-6.1-sol (live endpoints 2026-10-06).
+  "openai/gpt-6.1-sol",
 ];
 const FLEX_ENABLED = () => String(process.env.OPENROUTER_FLEX || "on").toLowerCase() !== "off";
 export const PROVIDER_SORT_ENABLED = () => String(process.env.OPENROUTER_PROVIDER_SORT || "on").toLowerCase() !== "off";
@@ -1805,6 +1813,8 @@ export const REASONING_MODELS = [
   // (live catalog 2026-09-24). Prefix rows cover the -pro twins.
   { prefix: "openai/gpt-6-luna", efforts: ["none", "low", "medium", "high", "xhigh", "max"] },
   { prefix: "openai/gpt-6-sol", efforts: ["none", "low", "medium", "high", "xhigh", "max"] },
+  // gpt-6.1-sol and -pro: reasoning mandatory, no "none" (live catalog 2026-10-06).
+  { prefix: "openai/gpt-6.1-sol", efforts: ["low", "medium", "high", "xhigh", "max"] },
   // Grok 4.5 / 4.6 / 4.7 (pro, via the x-ai/grok prefix): reasoning MANDATORY,
   // default effort high (live catalog 2026-09-24). Without a row a small
   // budget is spent reasoning at "high" and comes back empty.
