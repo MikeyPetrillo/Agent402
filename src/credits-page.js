@@ -64,6 +64,8 @@ ${ledgerFooterCompact()}
     title: "Agent402 Credits: for keys already issued",
     description: "Prepaid credits are not on sale. Keys already issued keep working: send the key as a Bearer token on a paid route and it is debited only on success.",
     canonical: `${baseUrl}/credits`, baseUrl, activePath: "/credits", extraCss: REPORTS_CSS, body,
+    // Kept for key holders who follow a link, out of search results.
+    robots: "noindex, follow",
   });
   return ledgerShell({
     title: "Agent402 Credits: prepaid card credits for 500+ tools",

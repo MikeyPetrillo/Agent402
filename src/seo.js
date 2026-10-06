@@ -21,6 +21,7 @@ import { samplePaths } from "./sample-reports.js";
 import { listPublicReports } from "./human-checkout.js";
 
 import { REPO_URL } from "./repo-link.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
 /** The llms.txt "finished reports" paragraph, DERIVED from the live catalog
  *  (route + price per slug) and the product tables (card + monitor prices),
  *  so it cannot quote a ladder that has since moved: a hand-written copy sat a
@@ -155,7 +156,8 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/tools`, priority: "0.9" },
     { loc: `${baseUrl}/reports`, priority: "0.9" },
     { loc: `${baseUrl}/monitors`, priority: "0.8" },
-    { loc: `${baseUrl}/credits`, priority: "0.8" },
+    // A closed product takes no crawl slot: listed only while packs are on sale.
+    ...(creditsSalesEnabled() ? [{ loc: `${baseUrl}/credits`, priority: "0.8" }] : []),
     { loc: `${baseUrl}/shop`, priority: "0.9" },
     // Every x402 marketplace page (one per CHAIN_PAGES entry) - new chain
     // page = new sitemap entry, zero edits here.
@@ -272,7 +274,8 @@ export function sitemapPages(baseUrl, catalog) {
     { loc: `${baseUrl}/tools`, priority: "0.9" },
     { loc: `${baseUrl}/reports`, priority: "0.9" },
     { loc: `${baseUrl}/monitors`, priority: "0.8" },
-    { loc: `${baseUrl}/credits`, priority: "0.8" },
+    // A closed product takes no crawl slot: listed only while packs are on sale.
+    ...(creditsSalesEnabled() ? [{ loc: `${baseUrl}/credits`, priority: "0.8" }] : []),
     { loc: `${baseUrl}/shop`, priority: "0.9" },
     { loc: `${baseUrl}/quickstart`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
