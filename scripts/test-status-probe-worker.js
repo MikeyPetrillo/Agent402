@@ -617,7 +617,8 @@ for (const [name, over, detail] of failCases) {
     assert.equal(judge({ gateway: {} })[T], "quiet");
     const a = ALARMS.find((x) => x.title === T);
     assert.match(a.body({ gateway: { refundsOwed: { status: "stuck" } } }), /refundsOwed\.status=stuck/);
-    assert.doesNotMatch(a.body({ gateway: { refundsOwed: { status: "<script>" } } }), /<script>/);
+    // An unexpected word is never echoed: the body names only a known word.
+    assert.match(a.body({ gateway: { refundsOwed: { status: "<b>x</b>" } } }), /refundsOwed\.status=aging\./);
   });
 
   await acheck("production DOWN: opens only after the confirm reads also fail; a blip opens nothing; recovery closes", async () => {
