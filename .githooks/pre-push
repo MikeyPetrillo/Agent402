@@ -1,0 +1,9 @@
+#!/bin/sh
+# Refuse a push whose commits break the commit-message rules or whose tree names
+# a third-party seller or counterparty. Same checks CI runs, run before the push
+# so a failing commit never reaches the remote (a pushed commit on the dev branch
+# cannot be amended: that branch is never force-pushed by hand).
+# Enable once per clone: git config core.hooksPath .githooks
+out=$(node scripts/test-commit-message-framing.js 2>&1) || { echo "$out" | tail -20; echo "pre-push: commit-message check failed"; exit 1; }
+out=$(node scripts/test-no-third-party-names.js 2>&1) || { echo "$out" | tail -20; echo "pre-push: third-party name check failed"; exit 1; }
+exit 0

@@ -31,7 +31,7 @@ const sellers = (opts) => routeQuery({ query: "chat completions", top: 10, inclu
 const has = (list, origin) => list.some((x) => x === origin);
 
 // A row with no observed accepts inherits its SELLER's known networks
-// (2026-09-02: strale's priced OpenAPI row ranked with networks [] while its
+// (2026-09-02: an OCR seller's priced OpenAPI row ranked with networks [] while its
 // manifest rows beside it said Base, so the router never dispatched to a
 // seller with thousands of settled calls). A seller that knows nothing
 // anywhere stays unknown - inheritance never invents a chain.

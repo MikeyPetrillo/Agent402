@@ -44,7 +44,7 @@ const TOP1 = [
   ["make a qr code",                "qr"],
   // Named chain-read primitives (2026-07-29): before these existed, "block
   // number" ranked number-format and "event logs" ranked kalshi-event - the
-  // first-buy queries the OneSource cohort proves agents actually type.
+  // first-buy chain-read queries agents actually type.
   ["block number",                  "block-number"],
   ["latest block",                  "block-number"],
   ["event logs",                    "event-logs"],

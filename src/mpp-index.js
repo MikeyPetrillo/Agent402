@@ -375,9 +375,9 @@ function noteProbeOutcome(origin, ok, now = Date.now()) {
  *  So a self-serve submission for a genuinely NEW seller not yet in the
  *  mpp.dev registry can only be verified at the bare origin root, which fails
  *  for any seller whose paywall is scoped to specific API paths rather than
- *  the root itself (live-verified: api.apex-db.org, a REAL, working MPP
- *  seller, correctly fails root-only verification and only succeeds once its
- *  real endpoint - /v1/apex - is known from the registry). Self-serve
+ *  the root itself (live-verified: a REAL, working MPP seller correctly fails
+ *  root-only verification and only succeeds once its real endpoint is known
+ *  from the registry). Self-serve
  *  registration today works well for registry-known sellers (the common
  *  case) but is honestly limited for brand-new ones; the natural follow-up is
  *  accepting an optional path in the registration request so a submitter can

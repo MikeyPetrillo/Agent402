@@ -158,7 +158,7 @@ const MUST_FAIL = [
   ["Fixture: the acme.example token was not rotated and is still valid.", "credential decision"],
 ];
 const MUST_PASS = [
-  ["SVM payload builder fetches a blockhash when the accept omits one\n\nacme's stock middleware tolerated it; api.xfuel.app's own verifier refused it.", "names sellers as mechanism"],
+  ["SVM payload builder fetches a blockhash when the accept omits one\n\nacme's stock middleware tolerated it; seller.example's own verifier refused it.", "names sellers as mechanism"],
   ["bound the paywall probe; it was competing with it for the runner's network", "'competing' in the technical sense"],
   ["chain names live in one place (this can't drift into a second, competing list)", "a competing LIST, not a competitor"],
   ["Insider flow report + watch, market/competitor brief; card sales ledgered", "market/competitor brief is a product we sell"],

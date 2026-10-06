@@ -261,7 +261,7 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
       <pre style="margin:0 0 18px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:15px;font-family:var(--font-mono);font-size:11.5px;line-height:1.8;white-space:pre-wrap;word-break:break-word;">curl -X POST \\
   https://agent402.tools/api/index/register \\
   -H 'content-type: application/json' \\
-  -d '{"origin":"https://api.you.com"}'</pre>
+  -d '{"origin":"https://seller.example"}'</pre>
       ${formHtml}
       <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:18px 0 12px;">What we read from you</div>
       <table style="font-family:var(--font-mono);font-size:12px;border:1px solid var(--hairline);"><tbody>${whatWeReadHtml}</tbody></table>

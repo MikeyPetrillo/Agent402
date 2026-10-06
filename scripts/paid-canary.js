@@ -174,7 +174,7 @@ export const TOOLS = [
     // "non-empty for a real origin" assertion, the demand-radar lesson (it
     // sold an empty radar for six weeks because every shape check excused an
     // empty answer as a cold boot). A keyless CI boot indexes nothing, so only
-    // prod can prove the assembled answer. api.strale.io is a large, indexed,
+    // prod can prove the assembled answer. The origin below is a large, indexed,
     // dispatch-eligible seller with settlement evidence; the check asserts the
     // INDEXED shape with a priced catalog and at least one evidence source
     // observed, never merely a 200.

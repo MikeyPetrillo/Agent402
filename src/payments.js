@@ -1346,8 +1346,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           // Measured 2026-08-31: our 168 Bazaar listings all read
           // "Agent402.tools", so an agent browsing or searching the index sees
           // 168 identical rows. The sellers with the largest presence name each
-          // resource for what it does - delx.ai carries 971 distinct
-          // serviceNames across 995 listings, agentstools.dev 347 across 347.
+          // resource for what it does, close to one distinct serviceName per
+          // listing.
           // Being IN the index and being FINDABLE in it are different things,
           // and a row that says only "Agent402.tools" answers no query an agent
           // would type.

@@ -405,7 +405,7 @@ curl -X POST /api/hash \\
       <pre class="hm-term" style="margin:0 0 14px;background:var(--surface);color:var(--on-dark);padding:14px;border-radius:12px;font-size:11.5px;"><span style="color:var(--dk-muted3);"># or paste your origin below - same call, no terminal needed
 </span>curl -X POST https://agent402.tools/api/index/register \\
   -H 'content-type: application/json' \\
-  -d '{"origin":"https://api.you.com"}'</pre>
+  -d '{"origin":"https://seller.example"}'</pre>
       <div class="hm-reg-row" style="display:flex;gap:10px;margin-top:auto;">
         <input id="hm-reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;min-width:0;font-family:var(--font-mono);font-size:13px;padding:11px 14px;border:1px solid var(--dash);border-radius:999px;background:var(--paper);color:var(--ink);">
         <button id="hm-reg-go" class="hm-btn hm-btn-dark" style="font-size:13.5px;padding:11px 18px;">List it →</button>

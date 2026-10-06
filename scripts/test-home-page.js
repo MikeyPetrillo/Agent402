@@ -30,7 +30,7 @@ const catalog = {
   const board = [
     { name: "Agent402.Tools", totalUsd: 900.5, callsSettled: 30000, uniqueBuyers: 300 },
     { name: "Seller-One.example", totalUsd: 21422.22932, callsSettled: 1127246, uniqueBuyers: 166 },
-    { name: "agents.chain.link", totalUsd: 103.432, callsSettled: 9711, uniqueBuyers: 2 },
+    { name: "seller-two.example", totalUsd: 103.432, callsSettled: 9711, uniqueBuyers: 2 },
   ];
   const leaderboardSnapshot = { leaderboard: board, windowLabel: "7d", totalSellers: 824 };
   const html = ledgerHomePage(BASE_URL, catalog, stats, leaderboardSnapshot, Array.from({ length: 42 }));
@@ -66,7 +66,7 @@ const catalog = {
   ok(!html.includes("went buyer wallet to seller wallet"), "the claim that every other paid call bypassed us is gone");
   ok(/no commission/i.test(html) && /nothing is deducted/i.test(html), "the neutrality claim a seller is asking about is still made, plainly");
   ok(/names your payTo and not ours/i.test(html), "and it is made in a form the reader can check against a live 402, not asserted");
-  ok(html.includes("Seller-One.example") && html.includes("agents.chain.link"), "external leaderboard rows render");
+  ok(html.includes("Seller-One.example") && html.includes("seller-two.example"), "external leaderboard rows render");
   {
     // The five-column mono table is ~520px wide; at a 375px viewport the card's
     // overflow:hidden clipped the usdc/calls/buyers columns with no way to reach

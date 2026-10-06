@@ -10,7 +10,7 @@ const stats = { toolCallsServed: { viaUSDCByNetwork: { base: 7619, solana: 3025,
 const board = [
   { name: "Agent402.Tools", totalUsd: 900.5, callsSettled: 30000, uniqueBuyers: 300 },
   { name: "Seller-One.example", totalUsd: 21422.22932, callsSettled: 1127246, uniqueBuyers: 166 },
-  { name: "agents.chain.link", totalUsd: 103.432, callsSettled: 9711, uniqueBuyers: 2 },
+  { name: "seller-two.example", totalUsd: 103.432, callsSettled: 9711, uniqueBuyers: 2 },
 ];
 const leaderboardSnapshot = { leaderboard: board, windowLabel: "7d", totalSellers: 824 };
 let html = whatIsX402Page("https://agent402.tools", { stats, leaderboardSnapshot });
@@ -30,7 +30,7 @@ ok(html.includes("69") && html.includes("settled over the MPP wire"), "MPP wire 
   const end = html.indexOf('id="start"');
   const whoSection = html.slice(start, end);
   ok(!whoSection.includes("Agent402.Tools"), "Agent402's own row is excluded from the third-party adoption table");
-  ok(whoSection.includes(">Seller-One.example<") && whoSection.includes(">agents.chain.link<"), "external sellers appear in the adoption table");
+  ok(whoSection.includes(">Seller-One.example<") && whoSection.includes(">seller-two.example<"), "external sellers appear in the adoption table");
   ok(whoSection.includes("824") && whoSection.includes("sellers scanned"), "seller-scanned count renders from the live snapshot");
 }
 

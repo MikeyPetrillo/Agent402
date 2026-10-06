@@ -1612,7 +1612,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     if (failing) { console.log(`[sor] skipping ${chain} candidate ${r.seller}: its last paid call did not deliver ${Math.round((Date.now() - failing.at) / 60000)} min ago (${failing.status ? `HTTP ${failing.status}` : "no response"}${failing.ms ? `, ${Math.round(failing.ms / 1000)}s` : ""})`); continue; }
     // An LLM task names a model, and the model namespace is the seller's own:
     // a chat seller whose published model list is readable and does not carry
-    // it is skipped BEFORE the probe (api.xfuel.app settled and then 400'd
+    // it is skipped BEFORE the probe (one seller settled and then 400'd
     // model_not_found, keeping the $0.01, 2026-09-02). Unknown never skips.
     if (wantModel) {
       const served = await sellerServesModel(r.url, wantModel);

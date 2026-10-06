@@ -2,7 +2,7 @@
 // third-party x402 sellers.
 //
 // The bug this pins: the old code counted a buy against its cap only when the
-// seller returned a `payment-response` receipt. api.syraa.fun returned HTTP 502
+// seller returned a `payment-response` receipt. One seller returned HTTP 502
 // with no receipt, the run recorded "not charged", and $0.05 had already left
 // the wallet on-chain — pushing that run's true spend to $0.396 against its own
 // $0.35 cap.
@@ -36,8 +36,8 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
 {
   const b = makeBudget(0.35);
   b.reserve(0.346);
-  check("syraa replay: the silent $0.05 is refused, cap holds", !b.canAfford(0.05));
-  check("syraa replay: committed stays at or under the cap", b.committedUsd <= 0.35 + 1e-9);
+  check("replay: the silent $0.05 is refused, cap holds", !b.canAfford(0.05));
+  check("replay: committed stays at or under the cap", b.committedUsd <= 0.35 + 1e-9);
 }
 
 {

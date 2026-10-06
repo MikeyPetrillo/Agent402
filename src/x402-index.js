@@ -1614,7 +1614,7 @@ async function discoverOneSource(source, selfOrigin) {
     // Small niche-chain registries (GoPlausible's AVM feed) seed a bazaar-
     // fallback cache entry IMMEDIATELY, so their sellers appear the moment we
     // discover them instead of waiting for a crawl cycle to reach them. Many
-    // AVM sellers publish no /.well-known/x402 (oyapicks.app 404s), so without
+    // AVM sellers publish no /.well-known/x402 (it 404s), so without
     // this they only surfaced when a crawl happened to run while their tools
     // were populated — flickering across restarts. We never do this for the
     // 1,477-origin CDP Bazaar (crawl-gated by design); only for the handful of
@@ -2179,7 +2179,7 @@ function normaliseOpenapiToolsUnscoped(openapi, originUrl) {
 // ALL catalogue keys are read, not just the first non-empty. Taking only
 // `resources` when `endpoints` also exists (first-wins) threw away names,
 // prices and descriptions on sellers that publish both — measured on
-// agente.revenuerecoveryai.app: thin "POST /v1/…" strings shadowed a rich
+// one seller: thin "POST /v1/…" strings shadowed a rich
 // endpoints[] catalogue, so the index showed payable tools with empty
 // descriptions. Merge every dialect; when the same method+route appears
 // twice, keep the richer row and fill blanks from the other. Path-level

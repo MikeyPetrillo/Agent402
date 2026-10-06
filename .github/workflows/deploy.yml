@@ -1133,7 +1133,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (8 scripts, one process each)
+      - name: Offline suites (9 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1141,6 +1141,8 @@ jobs:
           t node scripts/test-llms-txt.js
           # Every HTML page names /llms.txt (head link + Link header); /api/pricing and the x402 manifest name EVM-only routes
           t node scripts/test-llms-link.js
+          # No third-party seller host or counterparty name in any tracked file (hashed list)
+          t node scripts/test-no-third-party-names.js
           # Well-known store (operator-published domain-verification docs; traversal impossible, reserved names refused, no shadowing of /.well-known/x402 — offline)
           t node scripts/test-well-known-store.js
           # /api/reliability envelope (guarantees claim+verify pairing — every listing portal reads this)

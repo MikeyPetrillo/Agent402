@@ -276,7 +276,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
       <pre style="margin:0 0 18px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># we probe, you appear
 </span>curl -X POST https://agent402.tools/api/index/register \
   -H 'content-type: application/json' \
-  -d '{"origin":"https://api.you.com"}'</pre>
+  -d '{"origin":"https://seller.example"}'</pre>
       <a href="/sell" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:13px;text-decoration:none;padding:12px 18px;align-self:flex-start;">List your API →</a>
     </div>
     <div style="padding:26px;background:var(--card);display:flex;flex-direction:column;">

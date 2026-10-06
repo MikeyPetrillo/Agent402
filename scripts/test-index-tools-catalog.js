@@ -660,7 +660,7 @@ const page = (results, extra = {}) =>
 // --- an inferred verb must not publish a seller's route twice -----------------
 {
   const { normaliseManifestTools } = await import("../src/x402-index.js");
-  // Measured on api.aurelianflo.com: 8 bare `resources` URLs inferred as GET
+  // Measured on one seller: 8 bare `resources` URLs inferred as GET
   // alongside the SAME 8 routes declared POST in `endpoints`, so every endpoint
   // was listed twice and half the buyers were sent to a verb the seller answers
   // 405 to. one seller carried 20 of these.

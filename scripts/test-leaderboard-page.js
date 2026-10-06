@@ -21,7 +21,7 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
       // Our own row - highest volume, must be excluded from the ranked table.
       { rank: 1, name: "Agent402.Tools", wallet: SELF_WALLET.toLowerCase(), homepage: "https://agent402.tools", totalUsd: 900.5, callsSettled: 30000, uniqueBuyers: 300 },
       { rank: 2, name: "Seller-One.example", wallet: "0xbbb", homepage: "https://seller-one.example", totalUsd: 21422.22932, callsSettled: 1127246, uniqueBuyers: 166 },
-      { rank: 3, name: "agents.chain.link", wallet: "0xccc", homepage: "https://agents.chain.link", totalUsd: 103.432, callsSettled: 9711, uniqueBuyers: 2 },
+      { rank: 3, name: "seller-two.example", wallet: "0xccc", homepage: "https://seller-two.example", totalUsd: 103.432, callsSettled: 9711, uniqueBuyers: 2 },
     ],
   };
   const stats = { toolCallsServed: { viaUSDC: 28200, viaProofOfWork: 7608, viaMPPWire: 69, viaUSDCByNetwork: { base: 28200 } } };
@@ -30,14 +30,14 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
 
   ok(html.includes("Who is actually") && html.includes("settling <span"), "hero H1 renders");
   ok(!html.slice(0, html.indexOf("Agent402, for comparison")).includes(">Agent402.Tools<"), "Agent402's own row is excluded from the ranked table (wallet-matched)");
-  ok(html.includes(">Seller-One.example<") && html.includes(">agents.chain.link<"), "external sellers render in the ranked table");
+  ok(html.includes(">Seller-One.example<") && html.includes(">seller-two.example<"), "external sellers render in the ranked table");
   // Re-ranked after exclusion: Seller-One.example (was rank 2) must now read 01.
   const sellerOneRow = html.split("lb-row").find((s) => s.includes("Seller-One.example"));
   ok(sellerOneRow && />01</.test(sellerOneRow), "ranks are consecutive after Agent402's row is filtered out, not left with a gap");
   ok(html.includes("$21,422.23"), "real USDC settled renders with real formatting");
   // avg ticket = totalUsd / callsSettled = 21422.22932 / 1127246 = 0.0190...
   ok(/\$0\.0190/.test(html), "avg ticket is computed from real totalUsd/callsSettled");
-  // organic = uniqueBuyers/callsSettled*100: Seller-One 166/1127246*100 = 0.0147 -> "0.01"; agents.chain.link 2/9711*100=0.0206 -> "0.02"
+  // organic = uniqueBuyers/callsSettled*100: Seller-One 166/1127246*100 = 0.0147 -> "0.01"; seller-two.example 2/9711*100=0.0206 -> "0.02"
   ok(html.includes("0.01"), "organic ratio for a high-volume, low-buyer seller computes correctly");
   ok(html.includes("0.02"), "organic ratio for a low-buyer seller computes correctly");
   ok(html.includes("824") && html.includes("1,040") && html.includes("14,866") && html.includes("302,400"), "snapshot meta table renders real scan figures");

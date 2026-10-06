@@ -336,7 +336,7 @@ export async function createSvmPaymentPayload(signer, paymentRequirements) {
   // `accepted` (client/index.mjs createPaymentPayload). A seller running the
   // stock middleware tolerated their absence (a seller settled two buys
   // without them, 2026-09-02); a seller with its own verifier did not -
-  // api.xfuel.app answered `payment_payload_invalid` to a transaction that was
+  // one seller answered `payment_payload_invalid` to a transaction that was
   // byte-for-byte the shape of the ones it settles for stock clients. Same
   // lesson as the Tempo relay wire: hand-assemble nothing the library would
   // have filled in.
