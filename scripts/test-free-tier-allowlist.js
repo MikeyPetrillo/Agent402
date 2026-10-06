@@ -19,5 +19,15 @@ const overridden = [...WALLET_ONLY_SLUGS][0];
 ok(!isComputePayable({ slug: overridden }), `WALLET_ONLY_SLUGS wins (${overridden})`);
 ok(isComputePayable({ slug: PROBE_POW_SLUG }), `the PoW probe slug (${PROBE_POW_SLUG}) stays free`);
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// The settle-failure breaker and the operator view key on "paid" (not PoW-eligible),
+// not on WALLET_ONLY_SLUGS: with an allowlist, a new tool on neither list is paid,
+// and a WALLET_ONLY_SLUGS-keyed breaker would leave it uncovered.
+import("node:fs").then(({ readFileSync }) => {
+  const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/!FREE_MODE && !isComputePayable\(tool\)\) gatewaySettleBreakerCheck\(req, \{ global: false \}\)/.test(src), "the catalog settle breaker is keyed on !isComputePayable(tool)");
+  ok(!/WALLET_ONLY_SLUGS\.has\(tool\.slug\)\) gatewaySettleBreakerCheck/.test(src), "the catalog settle breaker is not keyed on WALLET_ONLY_SLUGS");
+  ok(!/walletOnlySet: WALLET_ONLY_SLUGS/.test(src), "the operator breakdown is not keyed on WALLET_ONLY_SLUGS");
+  ok(/const PAID_SLUGS = \{ has: \(slug\) => Object\.hasOwn\(TOOL_PRICES, slug\) && !isComputePayable\(\{ slug \}\) \}/.test(src), "PAID_SLUGS is the catalog complement of isComputePayable");
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+});

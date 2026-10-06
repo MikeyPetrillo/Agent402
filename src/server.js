@@ -2068,6 +2068,9 @@ assertRetiredRegistryConsistent(new Set(Object.values(CATALOG).map((d) => d.slug
 const TOOL_PRICES = Object.fromEntries(
   Object.values(CATALOG).map((d) => [d.slug, parseFloat(String(d.price).replace(/[^0-9.]/g, "")) || 0])
 );
+// Paid catalog slugs (not PoW-eligible). The free tier is an allowlist, so this is
+// the complement of isComputePayable over the catalog, not WALLET_ONLY_SLUGS.
+const PAID_SLUGS = { has: (slug) => Object.hasOwn(TOOL_PRICES, slug) && !isComputePayable({ slug }) };
 // The cheapest priced tool is the floor under which an inbound transfer
 // cannot be a payment for a call (revenue-ledger's dust floor: a sub-cent
 // lookalike transfer is not a paying agent).
@@ -4688,7 +4691,7 @@ app.post("/__operator/logout", (req, res) => {
 });
 app.get("/__operator", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).type("html").send("<p>Not found.</p>");
-  res.type("html").send(operatorPage(BASE_URL, getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: WALLET_ONLY_SLUGS, offeredNetworks: enabledNetworks(NETWORK) })));
+  res.type("html").send(operatorPage(BASE_URL, getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: PAID_SLUGS, offeredNetworks: enabledNetworks(NETWORK) })));
 });
 app.get("/__operator/stats", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
@@ -4698,7 +4701,7 @@ app.get("/__operator/stats", (req, res) => {
   // PostHog. This is the number to compare against a provider's own dashboard.
   // `daily` is the deploy-proof series (stats DB, UTC day buckets): the number
   // to sum over a billing month; the in-memory fields reset on every redeploy.
-  res.json({ ...getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: WALLET_ONLY_SLUGS, offeredNetworks: enabledNetworks(NETWORK) }), upstreamCalls: { brave: { ...braveCallMeter(), daily: getDailyUpstreamCalls("brave") } } });
+  res.json({ ...getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: PAID_SLUGS, offeredNetworks: enabledNetworks(NETWORK) }), upstreamCalls: { brave: { ...braveCallMeter(), daily: getDailyUpstreamCalls("brave") } } });
 });
 // The intent pass is OPT-IN (?intent=1) and never runs on a default load.
 // It is a PAID third-party call per uncached row, on a request path, and the
@@ -9570,7 +9573,9 @@ for (const tool of ALL_KIT) {
       // global:false - per-wallet only. A catalog read costs a fraction of a
       // cent; pausing every paid tool over twelve of them would be a lever, not
       // a guard. The /v1 tiers keep their own global pause inside their handlers.
-      if (!FREE_MODE && WALLET_ONLY_SLUGS.has(tool.slug)) gatewaySettleBreakerCheck(req, { global: false });
+      // Keyed on "paid" (not PoW-eligible), not on WALLET_ONLY_SLUGS: the free tier is an
+      // allowlist, so a new tool on neither list is paid and must be covered here too.
+      if (!FREE_MODE && !isComputePayable(tool)) gatewaySettleBreakerCheck(req, { global: false });
 
       // A wallet's concurrent runs on the expensive routes must be covered by
       // its balance together (verify checks each authorization alone). A run

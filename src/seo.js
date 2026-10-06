@@ -370,6 +370,13 @@ const decideRoutingFeePct = () => _decideConfig().routingFeePct;
 const decideCreditHours = () => _decideConfig().credit.ttlHours;
 
 export function llmsTxt(baseUrl, catalog) {
+  // Identity-bound routes, read from the same flag the gates and tool pages read
+  // (isIdentityBoundRoute, stamped on each def at catalog build), never typed.
+  const identityBoundDefs = Object.values(catalog || {}).filter((d) => d && d.identityBound);
+  const identityBoundList = [
+    ...(identityBoundDefs.some((d) => d.category === "memory") ? ["memory"] : []),
+    ...[...new Set(identityBoundDefs.filter((d) => d.category !== "memory").map((d) => d.slug))].sort(),
+  ].join(", ");
   // Route prices in this text are READ FROM THE CATALOG at render time. They
   // used to be typed by hand and eleven of thirty-eight were stale after two
   // repricings (found 2026-09-10); a price beside a route in llms.txt is a
@@ -458,7 +465,7 @@ Base URL: ${baseUrl}
 
 **Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin. Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result without paying again.
 
-**Already hold a prepaid credits key?** New credits are not on sale; a key already issued keeps working. Send it as \`Authorization: Bearer a402_...\` on any paid tool - the list price is held before the call and debited only on a successful (200) response; \`X-Credits-Balance\` rides on every answer and \`GET ${baseUrl}/api/credits/balance\` reports the key. agent402-mcp (AGENT402_CREDITS_KEY) and agent402-client ({ creditsKey }) support it. Identity-bound tools (memory, my-usage) still need an x402 wallet - the payment is the identity there.
+**Already hold a prepaid credits key?** New credits are not on sale; a key already issued keeps working. Send it as \`Authorization: Bearer a402_...\` on any paid tool - the list price is held before the call and debited only on a successful (200) response; \`X-Credits-Balance\` rides on every answer and \`GET ${baseUrl}/api/credits/balance\` reports the key. agent402-mcp (AGENT402_CREDITS_KEY) and agent402-client ({ creditsKey }) support it. Identity-bound tools (${identityBoundList}) still need an EVM x402 wallet - the payment is the identity there, so credits keys and Tempo are refused on them.
 
 ${reportsParagraph(baseUrl, tools)}
 
