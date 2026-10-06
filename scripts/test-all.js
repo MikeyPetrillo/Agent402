@@ -90,7 +90,7 @@ const NETWORK = new Set([
   "/api/exa-search", "/api/exa-answer", "/api/exa-contents",
   "/api/hunter-domain-search", "/api/hunter-email-finder", "/api/hunter-email-verify", "/api/hunter-company", "/api/apollo-people-search", "/api/apollo-org-enrich", "/api/apollo-person-match",
   "/api/extract", "/api/meta", "/api/dns", "/api/render", "/api/screenshot", "/api/pdf",
-  "/api/http-check", "/api/tls-cert", "/api/whois", "/api/robots-check", "/api/sitemap",
+  "/api/http-check", "/api/fetch-json", "/api/tls-cert", "/api/whois", "/api/robots-check", "/api/sitemap",
   "/api/email-validate", "/api/ip-info", "/api/search", "/api/search-lite", "/api/search-news", "/api/search-images", "/api/search-videos", "/api/search-suggest", "/api/answer", "/api/multi-search",
   "/api/llm-context",  // llm-context-kit.js (Brave grounding context - live egress, skipped by BRAVE_ROUTES)
   // Web-content kit: archive.org (archive-snapshot), caller feed URLs
