@@ -933,7 +933,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             // Flagship-first positioning: search/answer as the default job,
             // evergreen 500+ catalog, models and reports named beside the tools.
             startHere: {
-              firstJob: "Search the web and answer questions. Call web.search or web.answer directly, or catalog.find with your task. Agent402 sells three things on one key: deterministic utilities (no model in that serving path), a metered model gateway on the OpenAI and Anthropic wires (/v1/metered), and finished report products. Flagship tools first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call.",
+              firstJob: `One fact: call web.search or web.answer.${catalog["POST /api/decide"] ? " A job with more than one step: call decide.plan, then decide.execute (the plan fee is credited toward the run)." : ""} Otherwise catalog.find with your task. Agent402 sells three things on one key: deterministic utilities (no model in that serving path), a metered model gateway on the OpenAI and Anthropic wires (/v1/metered), and finished report products. Flagship tools first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call.`,
               flagships: [...flagshipSet].map((slug) => ({
                 mcpName: mcpNameOf(slug),
                 slug,
