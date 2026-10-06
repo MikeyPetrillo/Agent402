@@ -320,7 +320,7 @@ Then call `complete_x402_request` with the returned `requestId` to get the resul
 ## Notes
 
 - **No signup or API key required.** The USDC payment via x402 is the only credential. The wallet address is the identity.
-- **Deterministic utilities.** No LLM in the serving path of the utility tools -- same input always yields the same output. The `/v1` model gateway and the report products are model-backed and say so.
+- **Deterministic utilities.** No LLM in the serving path of the utility tools: a pure-computation tool returns the same output for the same input, and a live-data tool returns its source's current reading. The `/v1` model gateway and the report products are model-backed and say so.
 - **Idempotency.** For safe retries, pass an `Idempotency-Key` header. If the same key + endpoint is replayed, the cached result is returned without re-charging.
 - **Price range.** Most single tools cost $0.001--$0.02; the routing tiers top out at $3.30 (`route-execute-pro`), multi-tool skill packs run $0.003 to $0.101, and the report products run $0.60 to $2.00 (`POST /v1/domain-audit` $0.60 through `POST /v1/ticker-pack` $2.00 - same endpoints a human buys by card at https://agent402.tools/reports for $2 to $5, a price that includes payment processing). **Don't hardcode a `maxPayment` cap** - read the exact price from `/api/pricing` (or the `402` quote) before paying, so you never under-cap and fail a legitimate call.
 - **Free discovery.** The endpoints `/api/find`, `/api/pricing`, `/api/route`, `/api/leaderboard`, `/.well-known/x402`, and `/api/reliability` are all free and require no payment.

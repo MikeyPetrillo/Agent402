@@ -86,7 +86,7 @@ curl -H 'Authorization: Bearer a402_…' 'https://agent402.tools/api/whois?domai
 # 200 … X-Credits-Balance: 19.999   (list price held before the call, debited only on a final 200)
 ```
 
-- **Debited only on success.** The gate holds the list price before the handler runs and converts the hold to a debit only when the final response is `200`; any error, client abort or settlement failure releases it. Amounts are exact to the micro-dollar, so a $0.001 tool costs exactly $0.001.
+- **Debited only on success.** The gate holds the list price before the handler runs and converts the hold to a debit only when the final response is `200`; any error or settlement failure releases it, and so does a client abort while the call holds a hang-up forgiveness ticket. Amounts are exact to the micro-dollar, so a $0.001 tool costs exactly $0.001.
 - **Credits never expire**, and `GET /api/credits/balance` (same header) returns the remaining balance. An insufficient or unknown key answers `402` with `{ reason, balanceUsd, topup }`.
 - **Identity-bound tools refuse credits.** The memory tools, `my-usage`, `receipts`, `attest` and `feedback` use the payer's signed wallet as identity; a credits key carries no verified wallet, so those routes answer `402` with `reason: "identity-bound"` and must be paid over an x402 rail.
 - Keys are stored hashed; a refund or dispute on the purchase disables the key.

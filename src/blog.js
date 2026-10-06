@@ -125,7 +125,7 @@ export const BLOG_POSTS = [
 
 <p>An agent that calls a tool needs to know what it will get back. If a "summarize" endpoint silently calls an LLM, the output varies on every call. That makes testing impossible, caching meaningless, and debugging a nightmare.</p>
 
-<p>The utility tools are deterministic: same input, same output, every time. This means agents can cache results, retry safely, and CI can verify them automatically. Our test suite calls each tool with its example input and checks the response.</p>
+<p>The pure-computation tools are deterministic: same input, same output, every time. This means agents can cache results, retry safely, and CI can verify them automatically. Our test suite calls each tool with its example input and checks the response.</p>
 
 <h2>Why x402 over API keys?</h2>
 

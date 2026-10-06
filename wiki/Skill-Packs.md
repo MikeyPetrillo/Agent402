@@ -73,7 +73,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**financial-research**](https://agent402.tools/skills/financial-research) | $0.024 | SEC filings + real-time quotes + history + macro context for a single ticker. |
 | [**financial-analysis**](https://agent402.tools/skills/financial-analysis) | $0.024 | Quick company snapshot: live quote, 9 key financial metrics, and upcoming earnings. |
 | [**company-dossier**](https://agent402.tools/skills/company-dossier) | $0.037 | Comprehensive company research in one call: quote, financials, filings, insider trades, news. |
-| [**earnings-watch**](https://agent402.tools/skills/earnings-watch) | $0.015 | Is this company reporting soon and what's the consensus? Earnings calendar, quote, recent results. |
+| [**earnings-watch**](https://agent402.tools/skills/earnings-watch) | $0.015 | Has this company just reported? Newest SEC filings, the latest close, and recent coverage of analyst expectations. |
 | [**earnings-deep-dive**](https://agent402.tools/skills/earnings-deep-dive) | $0.033 | Everything before a company reports: the upcoming date, latest financials, recent filings, live quote, and fresh news in one pass. |
 | [**insider-alert**](https://agent402.tools/skills/insider-alert) | $0.01 | Insider buying/selling for a stock: Form 4 trades, live quote, and recent SEC filings. |
 | [**price-monitor**](https://agent402.tools/skills/price-monitor) | $0.021 | Side-by-side snapshot of a stock and a crypto asset: live quotes, 1-year history, date-stamped compare. |

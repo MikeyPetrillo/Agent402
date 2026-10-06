@@ -476,7 +476,7 @@ ${reportsParagraph(baseUrl, tools)}
 
 **Images and video, flat per call.** Text-to-image and text-to-video on the OpenAI wire, priced per picture or per clip rather than per token: \`POST /v1/images/fast\` ($0.02, budget), \`POST /v1/images/pro\` ($0.05, higher fidelity), \`POST /v1/images/generations\` ($0.08, flagship) and \`POST /v1/videos/generations\` ($0.20, one silent 4-second 720p clip, MP4 inline base64). Point any OpenAI SDK at base_url ${baseUrl}/v1 and call the path you want; a failed or timed-out generation is never charged.
 
-**A failed call is not charged - structurally, and you can check it per response rather than trust us.** Settlement runs AFTER the tool handler and only completes for a successful (under-400) response: an error, a capacity 503, or an upstream 502 cancels settlement inside the payment middleware itself, so no money moves and there is nothing to claim.
+**A failed call is not charged - structurally, and you can check it per response rather than trust us.** Settlement runs AFTER the tool handler and only completes for a successful (under-400) response: an error, a capacity 503, or an upstream 502 cancels settlement inside the payment middleware itself, so no money moves and there is nothing to claim. The exception is a Tempo push payment, sent before the call runs: if the call then fails, it is recorded as a refund owed to the paying wallet.
 
 Determine it from the response you already hold, without asking us:
 

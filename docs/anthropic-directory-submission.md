@@ -39,8 +39,9 @@ privacy policy, public docs, and a no-auth streamable-HTTP endpoint.
 > payable on the connector itself over MPP (a paid call answers JSON-RPC error
 > -32042 with the challenges; an mppx-wrapped client pays and retries), or run
 > the npm server with a funded wallet or a card-credits key bought earlier. No LLM is
-> involved in serving the utility tools: same input, same output, with full
-> input schemas. Report products (deep research, company dossier, 13F fund
+> involved in serving the utility tools: a pure-computation tool returns the
+> same output for the same input, a live-data tool its source's current
+> reading, with full input schemas. Report products (deep research, company dossier, 13F fund
 > report, SEC filing report, domain audit, token risk, FDA recall, insider flow,
 > $0.60 to $2.00 each) are catalog slugs too. Open source. Also reachable over the x402 and MPP payment protocols for
 > autonomous agents with their own wallets.
