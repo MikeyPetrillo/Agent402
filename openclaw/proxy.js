@@ -1,5 +1,9 @@
-// Local OpenAI-compatible proxy: OpenClaw (or any client) talks to
-// http://127.0.0.1:<port>/v1, the proxy pays Agent402 and forwards.
+// Local proxy: OpenClaw (or any client) talks to http://127.0.0.1:<port>, the
+// proxy pays Agent402 and forwards. Two wires:
+//   OpenAI     POST /v1/chat/completions -> the tier the model id names
+//   Anthropic  POST /v1/messages         -> the gateway's metered Messages
+//              route (/v1/metered/messages), so Claude Code and the Anthropic
+//              SDK pay from a wallet too (ANTHROPIC_BASE_URL=http://127.0.0.1:<port>).
 //
 // Two ways to pay, chosen at start:
 //   creditsKey  - a prepaid card-credits key (a402_...) sent as a Bearer; the
@@ -79,6 +83,20 @@ export function refusalAsOpenAIError(status, doc) {
   };
 }
 
+/** The same refusal in the Anthropic error shape ({type:"error", error:{type,
+ *  message}}), which Anthropic clients read their error text from. Null for any
+ *  other body, which the caller relays unchanged. */
+export function refusalAsAnthropicError(status, doc) {
+  const o = refusalAsOpenAIError(status, doc);
+  if (!o) return null;
+  const { error, ...fields } = o;
+  return { type: "error", error: { type: status === 402 ? "payment_required" : "api_error", message: error.message }, ...fields };
+}
+
+// The gateway's metered Anthropic Messages route: quoted per request from the
+// body, any model id the gateway lists (dated Claude ids resolve to the live one).
+export const MESSAGES_UPSTREAM_PATH = "/v1/metered/messages";
+
 const json = (res, status, obj, headers = {}) => {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...headers });
   res.end(JSON.stringify(obj));
@@ -104,6 +122,37 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
   const mode = key ? "credits" : payFetch ? "x402" : "unpaid";
   let table = routes || await loadRoutes(upstream, fetchImpl, { pricing });
   const stats = { requests: 0, forwarded: 0, errors: 0, startedAt: new Date().toISOString() };
+
+  // Pays and forwards one call. Streams pass through byte for byte; a refused
+  // paid call's offer-carrying JSON body is answered in the client wire's own
+  // error shape (mapRefusal); every other upstream body is relayed as sent.
+  async function forward(req, res, endpoint, outbound, extraHeaders, mapRefusal) {
+    const clientIdem = typeof req.headers["idempotency-key"] === "string" && /^[\w.:-]{8,128}$/.test(req.headers["idempotency-key"]) ? req.headers["idempotency-key"] : null;
+    const headers = { "content-type": "application/json", accept: req.headers.accept || "application/json", "idempotency-key": clientIdem || randomUUID(), "user-agent": `agent402-openclaw/${PKG_VERSION}`, ...extraHeaders };
+    if (key) headers.authorization = `Bearer ${key}`;
+    const up = await paid(`${upstream}${endpoint}`, { method: "POST", headers, body: JSON.stringify(outbound), signal: AbortSignal.timeout(300_000) });
+    stats.forwarded++;
+    const passthrough = {};
+    for (const h of ["content-type", "x-credits-balance", "payment-receipt", "x-cache", "cache-control"]) { const v = up.headers.get(h); if (v) passthrough[h] = v; }
+    if (!up.ok && /json/i.test(passthrough["content-type"] || "")) {
+      const raw = await up.text();
+      let doc = null;
+      try { doc = JSON.parse(raw); } catch { /* not JSON after all: relayed as sent */ }
+      const mapped = mapRefusal(up.status, doc);
+      if (mapped) {
+        const { "content-type": _ct, ...rest } = passthrough;
+        return json(res, up.status, mapped, rest);
+      }
+      res.writeHead(up.status, passthrough);
+      return res.end(raw);
+    }
+    res.writeHead(up.status, passthrough);
+    if (!up.body) return res.end();
+    const reader = up.body.getReader();
+    req.on("close", () => { reader.cancel().catch(() => {}); });
+    for (;;) { const { done, value } = await reader.read(); if (done) break; res.write(Buffer.from(value)); }
+    return res.end();
+  }
 
   const server = createServer(async (req, res) => {
     stats.requests++;
@@ -136,31 +185,22 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
         }
         const outbound = { ...body };
         if (requested === AUTO_ID) delete outbound.model; else outbound.model = route.id;
-        const clientIdem = typeof req.headers["idempotency-key"] === "string" && /^[\w.:-]{8,128}$/.test(req.headers["idempotency-key"]) ? req.headers["idempotency-key"] : null;
-        const headers = { "content-type": "application/json", accept: req.headers.accept || "application/json", "idempotency-key": clientIdem || randomUUID(), "user-agent": `agent402-openclaw/${PKG_VERSION}` };
-        if (key) headers.authorization = `Bearer ${key}`;
-        const up = await paid(`${upstream}${route.endpoint}`, { method: "POST", headers, body: JSON.stringify(outbound), signal: AbortSignal.timeout(300_000) });
-        stats.forwarded++;
-        const passthrough = {};
-        for (const h of ["content-type", "x-credits-balance", "payment-receipt", "x-cache", "cache-control"]) { const v = up.headers.get(h); if (v) passthrough[h] = v; }
-        if (!up.ok && /json/i.test(passthrough["content-type"] || "")) {
-          const raw = await up.text();
-          let doc = null;
-          try { doc = JSON.parse(raw); } catch { /* not JSON after all: relayed as sent */ }
-          const mapped = refusalAsOpenAIError(up.status, doc);
-          if (mapped) {
-            const { "content-type": _ct, ...rest } = passthrough;
-            return json(res, up.status, mapped, rest);
-          }
-          res.writeHead(up.status, passthrough);
-          return res.end(raw);
+        return forward(req, res, route.endpoint, outbound, {}, refusalAsOpenAIError);
+      }
+      if (req.method === "POST" && url.pathname === "/v1/messages") {
+        const raw = await readBody(req);
+        let body;
+        try { body = JSON.parse(raw.toString("utf8") || "{}"); } catch { return json(res, 400, { type: "error", error: { type: "invalid_request_error", message: "Request body must be JSON" } }); }
+        if (typeof body.model !== "string" || !body.model.trim()) {
+          return json(res, 400, { type: "error", error: { type: "invalid_request_error", message: "\"model\" is required (any id from GET /v1/models, or a Claude id such as claude-sonnet-5)" } });
         }
-        res.writeHead(up.status, passthrough);
-        if (!up.body) return res.end();
-        const reader = up.body.getReader();
-        req.on("close", () => { reader.cancel().catch(() => {}); });
-        for (;;) { const { done, value } = await reader.read(); if (done) break; res.write(Buffer.from(value)); }
-        return res.end();
+        if (!paid) {
+          return json(res, 402, { type: "error", error: { type: "payment_required", message: "No payment method configured. Set AGENT402_WALLET_KEY to an EVM key holding USDC on Base (or run `agent402-openclaw setup`), or set AGENT402_CREDITS_KEY to a credits key already issued." } });
+        }
+        const outbound = { ...body, model: body.model.trim().replace(/^agent402\//, "") };
+        const extra = {};
+        for (const h of ["anthropic-version", "anthropic-beta"]) { const v = req.headers[h]; if (typeof v === "string" && v.length <= 512) extra[h] = v; }
+        return forward(req, res, MESSAGES_UPSTREAM_PATH, outbound, extra, refusalAsAnthropicError);
       }
       return json(res, 404, { error: { message: `No route for ${req.method} ${url.pathname}`, type: "invalid_request_error" } });
     } catch (e) {

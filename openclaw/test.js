@@ -45,7 +45,7 @@ const stub = createServer((req, res) => {
   req.on("end", () => {
     if (req.method === "GET" && req.url === "/v1/models") { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify(catalog)); }
     const body = raw ? JSON.parse(raw) : {};
-    seen.push({ url: req.url, auth: req.headers.authorization || null, idem: req.headers["idempotency-key"] || null, body });
+    seen.push({ url: req.url, auth: req.headers.authorization || null, idem: req.headers["idempotency-key"] || null, anthropicVersion: req.headers["anthropic-version"] || null, anthropicBeta: req.headers["anthropic-beta"] || null, body });
     if (!req.headers.authorization) { res.writeHead(402, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: "Payment required" })); }
     if (req.headers.authorization === "Bearer refuse-hint") { res.writeHead(402, { "content-type": "application/json; charset=utf-8" }); return res.end(JSON.stringify(REFUSED_HINT)); }
     if (req.headers.authorization === "Bearer refuse-problem") { res.writeHead(402, { "content-type": "application/problem+json" }); return res.end(JSON.stringify(REFUSED_PROBLEM)); }
@@ -375,6 +375,56 @@ await p.close();
   await fetch(`${p3.baseUrl}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "openai/gpt-5", messages: [] }) });
   ok(seen.at(-1).url === "/v1/premium/chat/completions", "pricing: flat forwards to the home tier");
   await p3.close();
+}
+
+// ---- Anthropic wire (0.5.0): POST /v1/messages pays and forwards ------------
+// Claude Code and the Anthropic SDK send Messages requests; the proxy forwards
+// them to the gateway's metered Messages route and pays from the wallet, so an
+// Anthropic-wire client needs no credits key.
+{
+  let paid = 0;
+  const payFetch = async (url, init) => { paid++; return fetch(url, { ...init, headers: { ...init.headers, authorization: `Bearer ${key}` } }); };
+  const w = await startProxy({ upstream, payFetch, port: 0 });
+  const post = (body, headers = {}) => fetch(`${w.baseUrl}/v1/messages?beta=true`, { method: "POST", headers: { "content-type": "application/json", "anthropic-version": "2023-06-01", "anthropic-beta": "fine-grained-tool-streaming-2025-05-14", ...headers }, body: JSON.stringify(body) });
+  const r = await post({ model: "claude-sonnet-5", max_tokens: 64, messages: [{ role: "user", content: "hi" }] });
+  const last = seen.at(-1);
+  ok(r.status === 200 && paid === 1 && last.url === "/v1/metered/messages", `a Messages call is paid and forwarded to the metered Messages route (got ${r.status}, ${last.url})`);
+  ok(last.body.model === "claude-sonnet-5" && last.body.max_tokens === 64, "the model id and body pass through unchanged");
+  ok(last.anthropicVersion === "2023-06-01" && last.anthropicBeta === "fine-grained-tool-streaming-2025-05-14", "anthropic-version and anthropic-beta are passed through");
+  ok(/^[\w-]{8,}$/.test(last.idem || ""), "a forwarded call carries an idempotency key");
+  const prefixed = await post({ model: "agent402/claude-sonnet-5", max_tokens: 8, messages: [] });
+  ok(prefixed.status === 200 && seen.at(-1).body.model === "claude-sonnet-5", "an agent402/ prefix on the model id is stripped, as on the OpenAI wire");
+
+  const s = await post({ model: "claude-sonnet-5", max_tokens: 8, stream: true, messages: [] });
+  const streamed = await s.text();
+  ok(s.status === 200 && /text\/event-stream/.test(s.headers.get("content-type") || "") && streamed.includes('"O"') && streamed.includes('"K"'), "a streamed reply passes through byte for byte");
+
+  const noModel = await post({ max_tokens: 8, messages: [] });
+  const nm = await noModel.json();
+  ok(noModel.status === 400 && nm.type === "error" && nm.error?.type === "invalid_request_error" && /model/.test(nm.error.message), "a request with no model is refused in the Anthropic error shape");
+  const bad = await fetch(`${w.baseUrl}/v1/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: "{not json" });
+  ok(bad.status === 400 && (await bad.json()).type === "error", "a non-JSON body is refused in the Anthropic error shape");
+  const browser = await post({ model: "claude-sonnet-5", messages: [] }, { origin: "https://evil.example" });
+  ok(browser.status === 403, "a browser-origin Messages request is refused before anything is forwarded");
+  await w.close();
+
+  const u = await startProxy({ upstream, port: 0 });
+  const un = await fetch(`${u.baseUrl}/v1/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-5", messages: [] }) });
+  const uj = await un.json();
+  ok(un.status === 402 && uj.type === "error" && uj.error?.type === "payment_required" && /AGENT402_WALLET_KEY/.test(uj.error.message), "with no payment method the Messages route answers a 402 that says how to set one up");
+  await u.close();
+
+  const viaRefusal = async (bearer) => {
+    const pf = async (url, init) => fetch(url, { ...init, headers: { ...init.headers, authorization: `Bearer ${bearer}` } });
+    const x = await startProxy({ upstream, payFetch: pf, port: 0 });
+    try { const rr = await fetch(`${x.baseUrl}/v1/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-5", messages: [] }) }); return { status: rr.status, j: await rr.json() }; }
+    finally { await x.close(); }
+  };
+  const rf = await viaRefusal("refuse-hint");
+  ok(rf.status === 402 && rf.j.type === "error" && rf.j.error?.type === "payment_required" && rf.j.error.message === REFUSED_HINT.hint, "a refused payment reads as its hint in the Anthropic error shape");
+  ok(["x402Version", "resource", "accepts", "extensions"].every((k) => !(k in rf.j)), "...and the payment offer is not relayed to the client");
+  const pl = await viaRefusal("plain-400");
+  ok(pl.status === 400 && pl.j.error === "bad input", "an upstream error with no offer is relayed as sent");
 }
 
 stub.close();

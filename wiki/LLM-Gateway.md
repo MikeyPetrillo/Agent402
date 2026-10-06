@@ -23,6 +23,9 @@ client = OpenAI(base_url="http://127.0.0.1:8412/v1", api_key="unused")
 client.chat.completions.create(model="auto", messages=[{"role": "user", "content": "hi"}])
 ```
 
+The same proxy answers the Anthropic wire (`POST /v1/messages`), so Claude
+Code pays from the wallet too: `ANTHROPIC_BASE_URL=http://127.0.0.1:8412`.
+
 Or pay in-process from JavaScript by wrapping fetch with an x402 payer
 (`wrapFetchWithPayment` from `@x402/fetch`) and handing it to the SDK's `fetch`
 option; `agent402-client` does the same with spend caps built in.

@@ -220,7 +220,7 @@ client = OpenAI(base_url="http://127.0.0.1:8412/v1", api_key="unused")
 r = client.chat.completions.create(model="auto", messages=[{"role": "user", "content": "hi"}])</code></pre>
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
-<p class="qs-alt">Every model id and its price: <code>GET https://agent402.tools/v1/models</code>. The proxy speaks the OpenAI wire; for Claude Code and other Anthropic-wire clients, and for every host's settings, see <a href="/guides/agent-hosts">the agent-hosts guide</a>.</p>
+<p class="qs-alt">Every model id and its price: <code>GET https://agent402.tools/v1/models</code>. The proxy also answers the Anthropic wire: for Claude Code, set <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8412</code>. Every host's settings: <a href="/guides/agent-hosts">the agent-hosts guide</a>.</p>
 </div>
 
 <div class="qs-panel" id="panel-ai" role="tabpanel">

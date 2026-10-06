@@ -2,6 +2,14 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-10-06",
+    title: "Claude Code pays from a wallet",
+    items: [
+      "The local proxy (agent402-openclaw 0.5.0, `npx agent402-openclaw proxy`) now answers the Anthropic Messages wire too: point Claude Code at it with ANTHROPIC_BASE_URL and each turn is paid from your wallet over x402, no key to buy.",
+      "The metered Messages route no longer refuses a thinking budget that only collides with its output cap: the budget is clamped along with max_tokens, so Claude Code on Haiku works.",
+    ],
+  },
+  {
     date: "2026-09-30",
     title: "Live payments view",
     items: [

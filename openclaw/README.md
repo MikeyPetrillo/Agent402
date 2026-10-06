@@ -43,6 +43,16 @@ model listing, gateway boot and one agent turn (`test-real-install.js`).
 No OpenClaw? `agent402-openclaw proxy` runs the proxy alone; point any OpenAI
 client at `http://127.0.0.1:8412/v1` with model `auto`.
 
+**Claude Code and other Anthropic-wire clients** (0.5.0): the proxy also answers
+`POST /v1/messages` and forwards it to the gateway's metered Messages route,
+paid from the same wallet:
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8412
+export ANTHROPIC_AUTH_TOKEN=unused     # the proxy pays; this value is ignored
+claude --model claude-sonnet-5
+```
+
 ## Pay from a wallet instead
 
 ```bash

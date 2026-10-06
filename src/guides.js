@@ -1153,15 +1153,23 @@ npx agent402-openclaw proxy           # serves http://127.0.0.1:8412/v1
 
 Use model \`auto\` or any id from \`GET /v1/models\`. Run
 \`npx agent402-openclaw permit2-approve\` once to settle metered calls at actual
-usage instead of the quote. The proxy speaks the OpenAI wire; Anthropic-wire
-clients such as Claude Code use the gateway directly (next section).
+usage instead of the quote. The proxy also answers the Anthropic wire
+(\`POST /v1/messages\`), so Claude Code pays from the same wallet (next section).
 
 ## Claude Code
 
-Claude Code as an LLM client, billed per request under a quoted ceiling. Claude
-Code speaks the Anthropic wire, which the local proxy does not carry, so this
-block needs ${CREDITS_ON ? "a credits key" : "a credits key issued earlier"}; the tools below need none. Point
-it at the metered tier with your credits key as the auth token (Bearer), keep
+Claude Code as an LLM client, billed per request under a quoted ceiling. With
+the local proxy running (above), point Claude Code at it and it pays each turn
+from your wallet:
+
+\`\`\`bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8412
+export ANTHROPIC_AUTH_TOKEN=unused    # the proxy pays; this value is ignored
+claude --model claude-sonnet-5
+\`\`\`
+
+${CREDITS_ON ? "Or" : "With a credits key issued earlier, you can instead"} point
+it at the metered tier with the credits key as the auth token (Bearer), keep
 your usual model names - dated ids like \`claude-haiku-4-5-20251001\` resolve
 to the live model:
 
