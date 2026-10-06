@@ -39,6 +39,7 @@ import { tempoEnabled } from "./mpp-tempo.js";
 import { mppFlagshipRows, mppFlagshipOffersPhrase } from "./mpp-flagship.js";
 import { stripeEnabled } from "./mpp-stripe.js";
 import { findTools, findRelatedSellers, applyFrontDoorTerms } from "./find.js";
+import { buildPlanSketch } from "./plan-sketch.js";
 import { partialFields, clampFields } from "./partial-answer.js";
 import { routableSellerSummaries } from "./x402-index.js";
 import { logSafe } from "./log-safe.js";
@@ -877,8 +878,27 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // so this signal only ever captured gibberish. The rarest-term check
           // is what makes a genuine miss observable.
           const weak = r.count === 0 || topScore < FIND_WEAK_SCORE || r.rarestTermCovered === false;
-          if (weak && taskStr.trim() && !relatedSellers) {
+          // Free multi-step sketch (src/plan-sketch.js), the same one /api/find
+          // returns: each named step ranked by this search, no model call.
+          let plan = null;
+          try {
+            const d = catalog["POST /api/decide"];
+            plan = buildPlanSketch(taskStr, {
+              rank: (task) => findTools(catalog, task, { k: 3, baseUrl, powSlugs: freeSlugs }),
+              weakScore: FIND_WEAK_SCORE,
+              upgrade: d ? { tool: "decide", route: "POST /api/decide", mcp: "decide.plan", price: d.price, note: "a judged plan with your inputs filled in and fallbacks checked; the fee is credited toward running it with decide.execute" } : null,
+            });
+          } catch { plan = null; }
+          if (plan) {
+            for (const st of plan.steps) {
+              if (st.match === "strong") continue;
+              try { recordWish({ need: st.task, source: "find-miss", ip }); } catch { /* best-effort */ }
+            }
+          } else if (weak && taskStr.trim() && !relatedSellers) {
             try { recordWish({ need: taskStr.trim(), source: "find-miss", ip }); } catch { /* best-effort */ }
+          }
+          if (plan && !results.length && !r.packs?.length) {
+            return mcpJsonResult({ task: taskStr, results: [], plan, usage: "Run each plan step with catalog.call { slug, params } in order." });
           }
           if (!results.length && !r.packs?.length) {
             return mcpJsonResult({
@@ -906,7 +926,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             complete: r.complete,
             ...(r.packs?.length ? { workflows: r.packs, workflowsUsage: "One call: catalog.call { slug: 'skill-' + workflows[i].slug, params: { …promptArgs } } (or POST workflows[i].route) runs every step for the single price in workflows[i].price. To orchestrate the steps yourself instead: prompts/get { name: workflows[i].promptName, arguments: { …promptArgs } } - that bills each underlying tool separately." } : {}),
             ...(relatedSellers ? { relatedSellers } : {}),
-            ...(weak && !relatedSellers ? { hint: WISH_HINT_TEXT } : {}),
+            ...(plan ? { plan } : {}),
+            ...(weak && !relatedSellers && !plan ? { hint: WISH_HINT_TEXT } : {}),
             usage: "Run catalog.call with the chosen {slug, params}. Free results execute here; paid tools are payable here over MPP or via the agent402-mcp npm server (a wallet, or a prepaid credits key already issued).",
           });
         }
