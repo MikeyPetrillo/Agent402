@@ -291,5 +291,23 @@ const run = (over = {}, rpcOpts = {}) => verifyInboundPayment({
   ok(stranger.verified === false, "widening to our own wallets does not accept a transfer to a stranger");
 }
 
+// A public RPC's 429 burst is retried, not turned into a HOLD (2026-10-06:
+// a whole refund run held on "could not read token decimals: HTTP 429").
+{
+  let n429 = 0;
+  const inner = evmRpc();
+  const flaky = async (url, init) => {
+    if (JSON.parse(init.body).method === "eth_call" && n429 < 2) { n429++; return { ok: false, status: 429 }; }
+    return inner(url, init);
+  };
+  const r = await run({ fetchImpl: flaky });
+  ok(r.verified === true && n429 === 2, `two 429s on decimals() are retried and the payment verifies (${r.reason || "ok"})`);
+  const always = async (url, init) => JSON.parse(init.body).method === "eth_call" ? { ok: false, status: 429 } : inner(url, init);
+  const r2 = await run({ fetchImpl: always });
+  ok(r2.verified === false && /429/.test(r2.reason), "a 429 that never clears still fails closed");
+  const r3 = await run({ fetchImpl: async (url, init) => JSON.parse(init.body).method === "eth_call" ? { ok: false, status: 400 } : inner(url, init) });
+  ok(r3.verified === false && /400/.test(r3.reason), "a 400 is not retried and fails closed");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

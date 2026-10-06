@@ -51,7 +51,7 @@ import { queryTerms, isCjkTerm, splitTokens } from "./query-terms.js";
 import { summarize, fmtUsd, fmtPct } from "./economy.js";
 import { rankBy, canonicalHost, getLeaderboardSnapshot, getLeaderboardCircularWallets } from "./leaderboard.js";
 import { routeExecuteHint } from "./tools/route-execute.js";
-import { recordSellerRegistrationSeen, getSellerRegistrations, deleteSellerRegistration } from "./stats.js";
+import { recordSellerRegistrationSeen, getSellerRegistrations, deleteSellerRegistration, ensureSellerRegistrations } from "./stats.js";
 
 import { REPO_URL } from "./repo-link.js";
 // RAILS caip2 -> CHAIN_PAGES key, same join the homepage's by-chain strip uses
@@ -5486,14 +5486,25 @@ async function runCrawl() {
     // sellers - almost all of them - are untouched.
     const due = originsDueThisCycle(ordered, crawlCycle);
     await runPool(due, CRAWL_CONCURRENCY, crawlSeller);
-    recordSubmittedSellerObservations();
+    // Each step is guarded on its own: a throw in one used to skip the release
+    // silently for every later cycle, and the slots it should have freed stayed
+    // held with nothing in the log to say why.
+    try { recordSubmittedSellerObservations(); } catch (e) { console.log(`[x402-index] observation pass failed: ${String(e?.message || e).slice(0, 160)}`); }
+    let rowsAdded = 0;
+    try { const known = registeredOrigins(); rowsAdded = ensureSellerRegistrations([...submittedSeeds].filter((o) => !known.has(o))); } catch { /* counted as 0 */ }
     // `due`, not `ordered`: cycleOkFraction's own contract is that it measures
     // THIS pass. Once the per-operator cap made the crawled set a subset, passing
     // the full list let every origin held back this cycle contribute its previous
     // cached verdict - diluting the denominator with stale OKs in the UNSAFE
     // direction, so during an egress outage the fraction could stay above the
     // 0.5 floor and slots would be released anyway.
-    releaseDeadSubmissions(cycleOkFraction(due));
+    const fraction = cycleOkFraction(due);
+    let release;
+    try { release = releaseDeadSubmissions(fraction); } catch (e) { release = { released: 0, reason: `error: ${String(e?.message || e).slice(0, 120)}` }; }
+    lastCycleSummary = { at: new Date().toISOString(), cycle: crawlCycle, due: due.length, okFraction: fraction === null ? null : Number(fraction.toFixed(3)), rowsAdded, ...release };
+    // One line per cycle (every ~30 min): the only way to tell from the log
+    // whether the release ran, freed slots, or why it did not.
+    console.log(`[x402-index] cycle ${crawlCycle}: probed ${due.length}, ok ${fraction === null ? "n/a" : (fraction * 100).toFixed(1) + "%"}, release ${release.released ? `freed ${release.released}` : `none (${release.reason})`}${rowsAdded ? `, ${rowsAdded} registration row(s) added` : ""}`);
   } finally {
     crawlInFlight = false;
     crawlsCompleted += 1;
@@ -5619,11 +5630,25 @@ export function cycleOkFraction(visited = [], lookup = (o) => cache.get(o)) {
   return seen ? ok / seen : null;
 }
 
+// The release pass's health floor (see selectReleasableOrigins' outage guard).
+const RELEASE_MIN_CYCLE_OK = 0.5;
+let lastCycleSummary = null;
+let lastReleaseAt = null;
+function registeredOrigins() { return new Set(getSellerRegistrations().map((r) => r.origin)); }
+/** Slot usage for the operator view: how full the submission list is, the
+ *  tunnel share, and what the last crawl cycle's release pass did. */
+export function submissionSlotStatus() {
+  let tunnels = 0;
+  for (const o of submittedSeeds) if (isEphemeralTunnelOrigin(o)) tunnels++;
+  return { submitted: submittedSeeds.size, cap: submittedSeedsCap, tunnels, tunnelCap: tunnelSubmissionCap(submittedSeedsCap), lastReleaseAt, lastCycle: lastCycleSummary };
+}
+
 // Release submission slots held by origins that have been gone for a month.
 // Called once per crawl cycle, after the observation pass has advanced
 // last_routable_seen for everything that answered - so an origin released here
 // definitively did not answer this cycle either.
 function releaseDeadSubmissions(okFraction) {
+  if (okFraction === null || !(okFraction >= RELEASE_MIN_CYCLE_OK)) return { released: 0, reason: `outage guard: cycle ok ${okFraction === null ? "unknown" : (okFraction * 100).toFixed(1) + "%"} below ${RELEASE_MIN_CYCLE_OK * 100}%` };
   let releasable;
   try {
     releasable = selectReleasableOrigins({
@@ -5631,9 +5656,10 @@ function releaseDeadSubmissions(okFraction) {
       isSubmitted: (o) => submittedSeeds.has(o),
       hasSettled: (o) => originHasSettled(o),
       cycleOkFraction: okFraction,
+      minCycleOkFraction: RELEASE_MIN_CYCLE_OK,
     });
-  } catch { return 0; }
-  if (!releasable.length) return 0;
+  } catch (e) { return { released: 0, reason: `error: ${String(e?.message || e).slice(0, 120)}` }; }
+  if (!releasable.length) return { released: 0, reason: "nothing past its idle window" };
   for (const origin of releasable) {
     submittedSeeds.delete(origin);
     // Stop crawling it too, otherwise the slot is free but the fetches are not.
@@ -5648,7 +5674,8 @@ function releaseDeadSubmissions(okFraction) {
   // never happen quietly. seller_registrations still holds every one of them.
   const tunnels = releasable.filter(isEphemeralTunnelOrigin).length;
   console.log(`[x402-index] released ${releasable.length} submission slot(s) with no successful probe (${tunnels} quick-tunnel after ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)}d, ${releasable.length - tunnels} after ${Math.round(RELEASE_AFTER_MS / 86400000)}d): ${releasable.slice(0, 10).join(", ")}${releasable.length > 10 ? ", ..." : ""}`);
-  return releasable.length;
+  lastReleaseAt = new Date().toISOString();
+  return { released: releasable.length, reason: "released" };
 }
 
 // Post-cycle churn/conversion pass over ONLY self-serve-submitted origins

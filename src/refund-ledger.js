@@ -65,6 +65,11 @@ try { db.exec("ALTER TABLE refunds ADD COLUMN wire TEXT"); } catch { /* exists *
 // (scripts/refund-run.js). NULL on every other debt and on rows written before
 // the column existed.
 try { db.exec("ALTER TABLE refunds ADD COLUMN hangupReason TEXT"); } catch { /* exists */ }
+// Additive column (2026-10-06): when a row was claimed for sending, so the
+// refund alarm can tell a run in progress (seconds) from a row stuck mid-send.
+// NULL on a sending row means it was claimed before the column existed:
+// treated as stuck.
+try { db.exec("ALTER TABLE refunds ADD COLUMN claimedAt INTEGER"); } catch { /* exists */ }
 
 const insertOwed = db.prepare(`
   INSERT OR IGNORE INTO refunds (evidence, slug, network, payer, priceUsd, httpStatus, synthetic, createdAt, wire, hangupReason, note)
@@ -100,9 +105,16 @@ const resolveRow = db.prepare(`
 `);
 // Claim a row BEFORE money moves. See claimRefundForSend().
 const claimRow = db.prepare(`
-  UPDATE refunds SET status = 'sending', note = @note, resolvedAt = NULL
+  UPDATE refunds SET status = 'sending', note = @note, resolvedAt = NULL, claimedAt = @claimedAt
   WHERE id = @id AND status = 'owed'
 `);
+// Release a stuck claim back to owed. See releaseStuckSend().
+const releaseRow = db.prepare(`
+  UPDATE refunds SET status = 'owed', note = @note, resolvedAt = NULL, claimedAt = NULL
+  WHERE id = @id AND status = 'sending'
+`);
+const oldestOwedQ = db.prepare("SELECT count(*) AS n, min(createdAt) AS oldest FROM refunds WHERE status = 'owed' AND createdAt < ?");
+const stuckSendingQ = db.prepare("SELECT count(*) AS n FROM refunds WHERE status = 'sending' AND (claimedAt IS NULL OR claimedAt < ?)");
 const totalsQ = db.prepare(`
   SELECT status, count(*) AS n, sum(priceUsd) AS usd, sum(synthetic) AS synth
   FROM refunds GROUP BY status
@@ -177,7 +189,19 @@ export function listRefunds({ status = "owed", limit = 200 } = {}) {
  * Returns true only for the claimer that won the row.
  */
 export function claimRefundForSend(id, note = null) {
-  try { return claimRow.run({ id, note }).changes > 0; } catch { return false; }
+  try { return claimRow.run({ id, note, claimedAt: Date.now() }).changes > 0; } catch { return false; }
+}
+
+/**
+ * Put a row stuck in `sending` back in the owed queue. Only for a human who
+ * has checked the chain and found that nothing left the wallet (no transfer to
+ * the payer, nonce not advanced): the next run then verifies and pays it like
+ * any other debt. Requires a note saying what was checked. Never touches an
+ * owed, paid or void row.
+ */
+export function releaseStuckSend(id, note) {
+  if (!note || typeof note !== "string" || !note.trim()) return false;
+  try { return releaseRow.run({ id, note: note.trim() }).changes > 0; } catch { return false; }
 }
 
 /** Mark a debt repaid. Requires the outbound transaction - a refund without
@@ -257,6 +281,26 @@ export function refundTotals() {
     }
     return out;
   } catch { return { owed: { n: 0, usd: 0 }, paid: { n: 0, usd: 0 }, void: { n: 0, usd: 0 } }; }
+}
+
+/**
+ * One word for the alarm: is anyone waiting on money we owe them?
+ *  - "stuck": a row has sat in `sending` past `stuckMinutes` (a run takes
+ *    seconds per row), so a human must check the chain and resolve it.
+ *  - "aging": a debt has been owed longer than `owedHours`. Debts held for
+ *    review (hang-up budget denials) count too: 44 of them sat unnoticed for
+ *    a day before this alarm existed.
+ *  - "ok" otherwise; "unknown" if the ledger cannot be read.
+ * Counts are for the operator view only; the public view is the word.
+ */
+export function refundAlarmStatus({ owedHours = 48, stuckMinutes = 30, now = Date.now() } = {}) {
+  try {
+    const owed = oldestOwedQ.get(now - owedHours * 3600_000);
+    const stuck = stuckSendingQ.get(now - stuckMinutes * 60_000);
+    const status = stuck.n > 0 ? "stuck" : owed.n > 0 ? "aging" : "ok";
+    return { status, owedHours, stuckMinutes, agingCount: owed.n, stuckCount: stuck.n,
+      oldestOwedHours: owed.oldest ? Math.floor((now - owed.oldest) / 3600_000) : null };
+  } catch { return { status: "unknown" }; }
 }
 
 const selectCreatedBetween = db.prepare(

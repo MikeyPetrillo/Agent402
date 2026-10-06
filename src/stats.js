@@ -169,6 +169,18 @@ export function recordSellerRegistrationSeen(origin, { settled = false, inheritF
   }
 }
 
+// A submitted origin that has never answered a probe has no row, and the
+// release pass only looks at rows, so it held its slot forever. This gives it
+// one (first_seen = now, never routable) without touching an existing row, so
+// it ages out under the same rule as everyone else.
+const insertSellerRegistrationIfAbsent = db.prepare("INSERT OR IGNORE INTO seller_registrations (origin, first_seen, last_routable_seen, last_settled_seen) VALUES (?, ?, NULL, NULL)");
+/** Ensure a registration row exists for each origin; returns how many were added. */
+export function ensureSellerRegistrations(origins) {
+  let added = 0;
+  try { const now = Date.now(); for (const o of origins) added += insertSellerRegistrationIfAbsent.run(String(o), now).changes; } catch { /* telemetry, never break the crawl */ }
+  return added;
+}
+
 const deleteSellerRegistrationStmt = db.prepare("DELETE FROM seller_registrations WHERE origin = ?");
 /** Forget one origin's registration row (operator removal only). */
 export function deleteSellerRegistration(origin) {

@@ -2334,7 +2334,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (23 scripts, one process each)
+      - name: Offline suites (24 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2398,6 +2398,8 @@ jobs:
           t node scripts/test-manifest-catalogue-payment.js
           # Submission slot release (30d dead, outage guard fails closed, settled sellers never released — offline)
           t node scripts/test-submission-release.js
+          # Slot release: rowless submissions age out, each cycle logs the release outcome (offline)
+          t node scripts/test-slot-release-health.js
           t node scripts/test-tunnel-submissions.js
           # Browser pool admission (A402-08 bounded queue, deadline, disconnect-abort — offline)
           t node scripts/test-render-queue.js
