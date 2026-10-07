@@ -2362,6 +2362,8 @@ jobs:
           # Index warm-start (crawl cache survives a redeploy; no half-crawled marketplace — offline)
           t node scripts/test-index-warmstart.js
           t node scripts/test-index-persist-last-good.js
+          # A seller without /.well-known/x402 keeps its catalogue when its /openapi.json, /agents.json or /llms.txt answers 304 (offline)
+          t node scripts/test-index-fallback-304.js
           # A seller's own payTo outranks a registry's record of an old wallet, across re-crawls (offline)
           t node scripts/test-seller-payto-precedence.js
           # Crawl load is per operator, not per origin; the register global cap is a backstop (offline)
