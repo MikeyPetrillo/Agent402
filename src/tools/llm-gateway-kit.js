@@ -750,8 +750,18 @@ export function retiringModel(model) {
  *  test-gateway-model-ids checks each entry against the live catalog. A buyer
  *  who needs the exact model sends model_fallback:false and gets the error. */
 export const AVAILABILITY_SUCCESSORS = Object.freeze({
-  "deepseek/deepseek-chat": "deepseek/deepseek-v4-flash",
+  // Each value is an ordered list: the first entry the serving tier admits is used.
+  "deepseek/deepseek-chat": ["deepseek/deepseek-v4-flash"],
+  "qwen/qwen-2.5-7b-instruct": ["qwen/qwen3-235b-a22b-2507"],
+  // Not gpt-4.1-nano: OpenAI removes it 2026-10-23. Pro admits no current
+  // OpenAI model at or under gpt-4o-mini's cost, so pro keeps no successor.
+  "openai/gpt-4o-mini": ["openai/gpt-5-nano"],
+  "openai/gpt-4o": ["openai/gpt-4.1"],
 });
+const successorsOf = (model) => {
+  const id = String(model || "").toLowerCase().split(":")[0];
+  return Object.hasOwn(AVAILABILITY_SUCCESSORS, id) ? AVAILABILITY_SUCCESSORS[id] : [];
+};
 
 /** The buyer's fallback preference: true unless they sent model_fallback:false. */
 export function modelFallbackPref(input) {
@@ -766,16 +776,14 @@ export function modelFallbackPref(input) {
  *  fallbacks. model_fallback:false keeps only the requested model. */
 export function failoverChain(model, tierSlug, { fallback = true } = {}) {
   if (!fallback) return [model];
-  const id = String(model || "").toLowerCase().split(":")[0];
-  const succ = Object.hasOwn(AVAILABILITY_SUCCESSORS, id) ? AVAILABILITY_SUCCESSORS[id] : null;
-  const head = succ && succ !== model && tierAllows(tierSlug, succ) ? [model, succ] : [model];
+  const succ = successorsOf(model).find((m) => m !== model && tierAllows(tierSlug, m));
+  const head = succ ? [model, succ] : [model];
   return [...head, ...((TIERS[tierSlug] && TIERS[tierSlug].fallbacks) || []).filter((m) => !head.includes(m))];
 }
 
 /** The disclosure for a reply served by an availability successor, or null. */
 export function availabilitySubstitution(requested, served) {
-  const id = String(requested || "").toLowerCase().split(":")[0];
-  if (!served || !Object.hasOwn(AVAILABILITY_SUCCESSORS, id) || AVAILABILITY_SUCCESSORS[id] !== served) return null;
+  if (!served || !successorsOf(requested).includes(served)) return null;
   return { requested, served, reason: "the requested model had no available upstream host; its same-family successor, costing no more, served instead (send model_fallback:false to get the error instead)" };
 }
 
