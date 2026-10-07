@@ -2,6 +2,15 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-10-07",
+    title: "ElevenLabs voices and speaker labels",
+    items: [
+      "/api/tts now speaks with ElevenLabs Eleven v4 Turbo and /api/tts-hd with Eleven v4: each of the ten voice names has its own voice, 21 ElevenLabs voices can be named directly, and all six formats (mp3, opus, aac, flac, wav, pcm) are served.",
+      "Transcription takes diarize:true for speaker labels and word timestamps from ElevenLabs Scribe v2, on /api/transcribe, /api/transcribe-pro and the OpenAI transcription wire, at the same price and cap.",
+      "Published examples fetch from agent402.tools and its own sample files, so they work the same for every buyer.",
+    ],
+  },
+  {
     date: "2026-10-06",
     title: "Claude Code pays from a wallet",
     items: [
