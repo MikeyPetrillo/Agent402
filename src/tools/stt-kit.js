@@ -31,6 +31,7 @@ import { parseBuffer } from "music-metadata";
 import { safeFetch } from "./fetch-guard.js";
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
+import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
@@ -205,7 +206,7 @@ async function callScribe(audioBuffer, filename, model, language, probedDuration
   if (language) form.append("language", language);
   let res;
   try {
-    res = await fetch(OPENROUTER_STT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}` }, body: form, signal: AbortSignal.timeout(120_000) });
+    res = await fetch(OPENROUTER_STT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, ...OPENROUTER_ATTRIBUTION }, body: form, signal: AbortSignal.timeout(120_000) });
   } catch (e) {
     throw bad(`Transcription upstream request failed: ${String(e?.message || e).slice(0, 120)}`, 504);
   }
