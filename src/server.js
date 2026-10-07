@@ -4831,6 +4831,20 @@ function operatorHeavyLimited(req, res) {
   });
   return true;
 }
+// The refund ledger's read and write get their own budget. They are local
+// reads and writes, not a fan-out, and their main caller is a script, not a
+// human: refund-run makes one list call plus a claim and a mark-paid per row,
+// back to back. Sharing the 30/min diagnostics budget refused a mark-paid
+// AFTER its refund had been sent (run 37541505396, call 31 in under a minute),
+// stranding the row in `sending`. Sized for a full run (one 200-row page is
+// 401 calls) with headroom, and still a bound for the auth check.
+const operatorLedgerLimiter = createRateLimiter("operator-ledger", { perMin: 240, perHour: 2400 });
+function operatorLedgerLimited(req, res) {
+  const ip = (req.ip || req.socket?.remoteAddress || "?").trim();
+  if (!operatorLedgerLimiter.check(ip).limited) return false;
+  res.status(429).set("Retry-After", "60").json({ error: "Too many refund-ledger requests. Retry in a minute." });
+  return true;
+}
 
 const LEDGER_SYNC_TTL_MS = 15_000;
 let ledgerSyncCache = { at: 0, value: null };
@@ -5127,7 +5141,7 @@ app.get("/__operator/refunds.json", (req, res) => {
   // (js/missing-rate-limiting #84/#85). Added anyway rather than dismissed:
   // these are the money path's read and write, and a second bound on the
   // authorization check of a route that can void a debt is cheap.
-  if (operatorHeavyLimited(req, res)) return;
+  if (operatorLedgerLimited(req, res)) return;
   // "sending" must be listable: a row stranded mid-send is exactly what a human
   // has to resolve, and omitting it meant ?status=sending silently returned the
   // OWED list - the stuck rows were invisible except by paging status=all.
@@ -5331,7 +5345,7 @@ app.get("/__operator/seller-registrations.json", (req, res) => {
 });
 app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-  if (operatorHeavyLimited(req, res)) return;   // see refunds.json above
+  if (operatorLedgerLimited(req, res)) return;   // see refunds.json above
   const { id, action, tx, note } = req.body || {};
   const rowId = Number(id);
   if (!Number.isInteger(rowId) || rowId <= 0) return res.status(400).json({ error: "id required" });

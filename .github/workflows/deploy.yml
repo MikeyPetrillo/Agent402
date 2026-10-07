@@ -2612,6 +2612,8 @@ jobs:
           t node scripts/test-refund-ledger.js
           # Refund lookup (exact tx only, unknown == no refund, no payer leak, own rows on my-usage, rate limited - boots its own server)
           t node scripts/test-refund-lookup.js
+          # Refund ledger routes: a full refund run's call burst is never refused; the runner resends only a 429 (boots its own server)
+          t node scripts/test-refund-ledger-limiter.js
           # Daily MPP reconciliation (every mismatch category, unknown never ok, idempotent reruns, words-only public status, operator-only routes — offline)
           t node scripts/test-mpp-reconcile.js
           # Refund pre-send proof (same payer, our payTo, enough value, on a transaction that actually succeeded — offline)
