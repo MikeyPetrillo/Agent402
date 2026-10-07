@@ -156,6 +156,11 @@ async function xGet(path, params = {}) {
     xSpend.refused++;
     throw bad(`X data tools have reached today's usage cap - retry after 00:00 UTC. Nothing was charged for this request.`, 503);
   }
+  // Reserve the estimate before the call so concurrent reads cannot all pass
+  // the check above; corrected to the actual cost after, released on a clean
+  // refusal. A timeout or 5xx keeps the reservation.
+  _xSpendBook(estimate);
+  const release = () => _xSpendBook(-estimate);
   const url = new URL(X_API + path);
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
@@ -171,10 +176,11 @@ async function xGet(path, params = {}) {
     throw bad("X API did not respond in time - try again shortly", 504);
   }
 
+  if (res.status >= 400 && res.status < 500) release();
   if (res.status === 401 || res.status === 403) {
     // The bearer was refused or the app's access level does not cover this
     // endpoint. Either way it is our configuration, not the buyer's request.
-    throw bad("X data tools are not configured on this deployment (bearer rejected upstream)", 503);
+    throw bad("X data tools are not configured on this deployment", 503);
   }
   if (res.status === 429) {
     const reset = Number(res.headers?.get?.("x-rate-limit-reset"));
@@ -189,7 +195,7 @@ async function xGet(path, params = {}) {
   let data;
   try { data = await res.json(); } catch { throw bad("X API returned non-JSON", 502); }
   if (!data || typeof data !== "object") throw bad("X API returned an unexpected payload", 502);
-  _xSpendBook(actualXReadUsd(path, data));
+  _xSpendBook(actualXReadUsd(path, data) - estimate);
   return data;
 }
 

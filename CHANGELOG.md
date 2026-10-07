@@ -4,9 +4,119 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
-## Unreleased
+## v2.5.0 - 2026-10-07
 
 Since v2.4.0 (2026-09-18).
+
+### 2026-10-07
+- `/api/tts` speaks with ElevenLabs Eleven v4 Turbo and `/api/tts-hd` with
+  Eleven v4: each of the ten voice names has its own voice, 21 ElevenLabs
+  voices can be named directly, and all six formats are served. When the
+  primary model is busy, a backup model serves and the answer names it.
+- Transcription takes `diarize: true` for speaker labels and word timestamps
+  (ElevenLabs Scribe v2) on `/api/transcribe`, `/api/transcribe-pro` and the
+  OpenAI transcription wire, at the same price and cap.
+- A speech failure with no backup left reads "temporarily unavailable" and
+  carries no upstream error text.
+- Most published examples fetch from agent402.tools and its own sample files.
+- `/api/find` marks a row weak when only an indexed outside seller does the task.
+- Multi-search whose every query is empty is a 400 before any upstream call.
+- Seller index: a fallback seller (no `/.well-known/x402`) keeps its catalog
+  across a 304, and its `/openapi.json`, `/agents.json` and `/llms.txt` are
+  read once per crawl.
+- Gateway: more successors for thinly hosted models, served on every wire and
+  named in `agent402_model_substituted`.
+- Flight search and flight status from outside sellers, off unless configured;
+  an answer that cannot be read is an uncharged 502.
+- jsdom 30.1.2.
+
+### 2026-10-06
+- The local proxy (`npx agent402-openclaw proxy`, agent402-openclaw 0.5.0)
+  answers the Anthropic Messages wire: point Claude Code at it with
+  `ANTHROPIC_BASE_URL` and each turn is paid from a wallet over x402. The proxy
+  relays the x402 settlement receipt to the client.
+- The Messages route clamps a thinking budget along with `max_tokens` instead of
+  refusing it.
+- When every host of a requested model is down, its same-family successor
+  serves, on chat, Messages and Responses, named in
+  `agent402_model_substituted`.
+- `exa-contents` is repriced to cover its largest accepted call.
+- Refund runs survive RPC rate limits: verification retries 429/5xx reads with
+  backoff, and the refund ledger routes get their own operator limiter.
+- Connector instructions (hosted and stdio, identical) start one fact at
+  `web.search` / `web.answer` and a multi-step job at `decide.plan` then
+  `decide.execute`.
+- `search` answers carry `next` naming `answer`, and `decide` answers name
+  `decide-execute`, with route and price from the catalog.
+- A task that names several steps gets a free `plan` on `/api/find`,
+  `/api/route` and `catalog.find`: each step ranked, with fallbacks.
+- New tools: `rsi`, `gcd-lcm` (both free tier) and `fetch-json`.
+- `/api/revenue/daily` adds `repeat7`, buyers who paid again within 7 days.
+- Every HTML page links `/llms.txt` (`<link rel="alternate">` and a `Link`
+  header); `/api/pricing` rows for EVM-only routes carry `networks`.
+- `/credits` is `noindex` and out of the sitemaps while credit sales are off;
+  `/revenue` is served `no-cache`.
+- Public copy, comments and terms match what the code does.
+- @x402/* 2.28, @modelcontextprotocol/sdk 1.32.0, viem 2.57.3; agent402-mcp 0.13.9.
+
+### 2026-10-05
+- The free (proof-of-work) tier is an allowlist: a new tool is wallet-only by
+  default.
+- A skill pack with no step config is refused with a 500, never charged.
+- `routerDispatchEligible` names the Base unproven-tier exception;
+  such rows carry `executeViaCallableNow: true` and `executeViaLane: "unproven"`.
+
+### 2026-10-04
+- `/revenue` shows the newest settle on each rail whoever paid, with our own
+  runs marked `ours`; each row links to our wallet, never a buyer's transaction.
+- `/api/gateway-status` gains a `sanctions` field (`ok`, `stale`, `unloaded`,
+  `loading`).
+- Upstream rates load from a private table instead of the source.
+
+### 2026-10-03
+- Retiring model ids are served by their successors; a `:free` suffix is not
+  carried to the successor.
+- Our own 402 Index listings are repriced daily when they drift from the catalog.
+
+### 2026-10-02
+- A seller can be registered as host plus path prefix; each prefix lists as its
+  own seller.
+- Header: a "live" link to live.agent402.tools.
+- A seller whose crawl is failing keeps its last good catalog across restarts,
+  as unhealthy and unroutable.
+- Site, machine-readable surfaces and package READMEs corrected to match the
+  code; counts, prices, rails and cadences in copy are derived from the catalog.
+- Free filing alerts watch 10-K, 10-Q and 8-K and list the filings in the email.
+- `/algorand` renders within 8 s when the indexer stalls.
+- Index submissions: a quick-tunnel origin's slot is released 3 days after its
+  last successful probe, and tunnels hold at most a quarter of the slots.
+- Tool pages name MPP only where it is offered; credits refusals point at
+  `/api/pricing` while packs are off sale.
+- Packages: agent402-mcp 0.13.7, agent402-client 0.8.11, agent402-openclaw
+  0.4.5, agent402-tollbooth 0.10.3, ten JS adapters, elizaos-plugin-agent402
+  0.2.4, agent402-langchain (PyPI) 0.1.4.
+
+### 2026-10-01
+- live.agent402.tools shows x402 payments on Base and MPP payments on Tempo as
+  they settle; the home page hero links to it.
+- Decide: `POST /api/decide` turns a task into a plan of tools (ours and outside
+  sellers with a recently verified 402), with fallbacks and schema-checked
+  params; `POST /api/decide/execute` runs it within a budget and returns unspent
+  money as a credit. `decide.feedback` records whether a step worked.
+- `/revenue` serves its saved reading after a restart and bounds each rail.
+
+### 2026-09-29 to 2026-09-30
+- The router may pay a Base seller below the settlement-history floor, under a
+  one-cent ceiling, after every proven seller and only at the wallet its own
+  live 402 names; the receipt flags it unproven.
+- route-execute and seller-payability pay another seller only while the buyer's
+  own authorization can still settle afterwards; otherwise they answer 504
+  before paying anyone.
+- `/revenue` and the chain pages read recent transfers from the settlement
+  ledger on every load.
+- `/status`: the paid path is observed every 5 minutes by two independent
+  observers.
+- Seller index: `fallbackErrors` names each fallback file that gave nothing.
 
 ### 2026-09-28
 - The JSON body of every paywall 402 also carries the PaymentRequired object

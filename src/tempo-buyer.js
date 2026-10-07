@@ -35,6 +35,8 @@ export const TEMPO_USDC = "0x20C000000000000000000000b9537d11c60E8b50";
 const TEMPO_USDC_LC = TEMPO_USDC.toLowerCase();
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const DEFAULT_MAX_BYTES = 512 * 1024;
+// Least time left at which a credential is still minted and sent.
+const MIN_MINT_MS = 3000;
 
 const rpcUrl = () => process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz";
 export const tempoBuyerConfigured = () => !!(process.env.TEMPO_UPSTREAM_BUYER_KEY || "").trim();
@@ -177,6 +179,15 @@ export async function payTempo(url, {
   assertSigningAllowed("a Tempo payment");
   if (maxAtomic == null) throw bad("payTempo requires maxAtomic (the margin-guard ceiling)", 500);
   if (!tempoBuyerConfigured() && !createCredential) throw bad("Tempo spending wallet not configured (TEMPO_UPSTREAM_BUYER_KEY)", 409);
+  // ONE deadline for the whole purchase: each step gets what is left of
+  // timeoutMs, so the steps together cannot outlive the caller's budget.
+  const deadlineAt = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+  const leftMs = () => deadlineAt - Date.now();
+  const withinDeadline = (p, what) => {
+    let timer;
+    const stop = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} ran past the deadline`)), Math.max(0, leftMs())); });
+    return Promise.race([p, stop]).finally(() => clearTimeout(timer));
+  };
   if (!trusted) await assertPublicUrl(url);
   const init = (extra = {}) => ({
     method,
@@ -193,7 +204,7 @@ export async function payTempo(url, {
     },
     ...(body !== undefined ? { body: typeof body === "string" ? body : JSON.stringify(body) } : {}),
     redirect: "manual",
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: AbortSignal.timeout(Math.max(1, leftMs())),
     // Pin the resolved address on every hop (the one-shot assertPublicUrl above is
     // TOCTOU-rebindable), exactly as src/x402-buyer.js does.
     dispatcher: ssrfDispatcher,
@@ -225,7 +236,7 @@ export async function payTempo(url, {
   let inbound;
   let inboundPayers;
   try {
-    const ev = await proof(recipient);
+    const ev = await withinDeadline(Promise.resolve().then(() => proof(recipient)), "the settlement history read");
     // A proof may answer a bare count (the older interface) or { count, payers }.
     if (ev && typeof ev === "object") { inbound = Number(ev.count) || 0; inboundPayers = ev.payers; }
     else inbound = ev;
@@ -238,9 +249,21 @@ export async function payTempo(url, {
   // the count, as before.
   if (Number.isFinite(inboundPayers) && inboundPayers < minPayers) throw bad(`Seller recipient ${recipient.slice(0, 8)}… has ${inboundPayers} distinct recent payers on Tempo (floor ${minPayers}) - not routable yet`, 409);
   // 4. Sign a credential (validBefore = now + 25s in mppx) and send it at once.
+  //    Not minted when too little time is left for the seller to answer: an
+  //    unsent pull credential moves nothing, a sent one may.
+  if (leftMs() < MIN_MINT_MS) throw bad("Too little of this call's time budget is left to pay the seller; nothing was signed", 504);
   const mint = createCredential || (await defaultCredentialFactory());
-  const credential = await mint(new Response(null, { status: 402, headers: { "WWW-Authenticate": Challenge.serialize(ch) } }));
+  let credential;
+  try { credential = await withinDeadline(Promise.resolve().then(() => mint(new Response(null, { status: 402, headers: { "WWW-Authenticate": Challenge.serialize(ch) } }))), "credential signing"); }
+  catch (e) {
+    const why = String(e?.message || e);
+    if (/does not support pull mode/i.test(why)) throw bad("Seller accepts only push-mode Tempo payment, which this wallet does not send; nothing was signed", 409);
+    throw bad(`Could not create an MPP credential (${why.slice(0, 120)}); nothing was sent`, 502);
+  }
   if (typeof credential !== "string" || !/^Payment\s/i.test(credential)) throw bad("Could not create an MPP credential", 502);
+  // A pull credential moves nothing until the seller submits it, so when
+  // signing used up the budget the request is not sent at all.
+  if (leftMs() < MIN_MINT_MS) throw bad("Too little of this call's time budget is left to wait for the seller; the payment was not sent", 504);
   // From here the credential has been handed to the seller, and nothing on
   // this rail can prove afterwards that it was not broadcast: every failure
   // below is stamped `committed`, with the amount the credential carries
@@ -277,8 +300,12 @@ export async function payTempo(url, {
     // payment and delivers.
     if (memoizeDelivery && reference) { try { clearSellerDeliveryFailure(new URL(url).origin, "tempo"); } catch { /* unparseable url: nothing to clear */ } }
     recordUpstreamSpend("tempo-buyer", Number(quotedAtomic) / 1e6);
+    // A paid 200 is relayed even when its body cannot be read: the payment
+    // went through, so this never throws (the x402 readAfterSpend rule).
+    let result;
+    try { result = await readCapped(paid, maxBytes); } catch { result = { relayError: "upstream body unreadable" }; }
     return {
-      result: await readCapped(paid, maxBytes),
+      result,
       quote: { atomic: String(quotedAtomic), usd: Number(quotedAtomic) / 1e6, network: TEMPO_CAIP2 },
       receipt: { transaction: reference, network: TEMPO_CAIP2, wire: "mpp" },
     };
@@ -295,7 +322,9 @@ async function defaultCredentialFactory() {
   const acct = await account();
   if (!acct) throw bad("Tempo spending wallet not configured (TEMPO_UPSTREAM_BUYER_KEY)", 409);
   const { Mppx, tempo } = await import("mppx/client");
-  const client = Mppx.create({ methods: [tempo.charge({ account: acct })], polyfill: false });
+  // Pull only: a push credential is a transaction we broadcast ourselves
+  // before the seller answers, so a push-only challenge is refused unsigned.
+  const client = Mppx.create({ methods: [tempo.charge({ account: acct, mode: "pull" })], polyfill: false });
   return (res402) => client.createCredential(res402);
 }
 

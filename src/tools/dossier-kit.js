@@ -74,7 +74,7 @@ async function settle(fn, input, timeoutMs) {
     const p = fn(input);
     const data = timeoutMs ? await Promise.race([p, new Promise((_, r) => setTimeout(() => r(bad("timeout", 504)), timeoutMs))]) : await p;
     return { ok: true, data };
-  } catch (e) { return { ok: false, error: e?.message || String(e) }; }
+  } catch (e) { return { ok: false, error: e?.message || String(e), status: Number.isInteger(e?.statusCode) ? e.statusCode : null }; }
 }
 
 function fmtUsd(v) {
@@ -314,6 +314,11 @@ function makeDossierHandlerInner(tierSlug) {
     // If EDGAR gave us nothing at all, this isn't a US-listed company we can
     // do diligence on - fail (no charge) rather than sell a web-only "dossier".
     const anyFilings = [k10, q10, k8].some((r) => r.ok && (r.data?.filings?.length || 0) > 0);
+    // A read that failed on SEC's side (5xx, timeout) says nothing about the
+    // ticker: retryable 502, not a 422 that blames the input. A 4xx (unknown
+    // ticker) still falls through to the 422 below.
+    const secDown = [k10, q10, k8].some((r) => r.ok === false && !(r.status >= 400 && r.status < 500));
+    if (!anyFilings && secDown) throw bad("SEC EDGAR unavailable, retry shortly. Not charged.", 502);
     if (!anyFilings) throw bad(`No SEC EDGAR filings found for "${ticker}" - this product covers US-listed companies (try a ticker like AAPL). Not charged.`, 422);
 
     // 1b) FILING EXCERPTS - the newest 10-Q's own words on the items that move

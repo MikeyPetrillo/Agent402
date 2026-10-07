@@ -20,14 +20,24 @@
 // 2027-02-26 and names gpt-transcribe the successor. The two tiers now run
 // the SAME model and differ only in the duration cap (and price); the pro
 // tier is the longer-recording tier, not a higher-accuracy one.
+//
+// SPEAKERS AND WORD TIMES (2026-10-07): `diarize: true` sends the audio to
+// ElevenLabs Scribe v2 over OpenRouter instead and adds `words` (each with
+// start, end and a speaker number) and `speakers` to the answer. Same caps and
+// prices; its per-minute rate row is pinned by the same margin test.
 
 import { parseMultipartFile } from "../multipart.js";
 import { parseBuffer } from "music-metadata";
 import { safeFetch } from "./fetch-guard.js";
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
+import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
+import { assertUpstreamBody } from "./llm-gateway-kit.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
+const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
+const OPENROUTER_STT_URL = "https://openrouter.ai/api/v1/audio/transcriptions";
+export const DIARIZE_MODEL = "elevenlabs/scribe-v2";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -45,8 +55,8 @@ export function upstreamUsdPerMinute(model) { return upstreamCosts().sttPerMinut
  *  same bound the LLM gateway's margin clamp holds. */
 export const STT_MARGIN = 0.7;
 export const STT_TIERS = Object.freeze({
-  transcribe:       Object.freeze({ model: "gpt-transcribe", maxMinutes: 4, priceUsd: 0.03 }),
-  "transcribe-pro": Object.freeze({ model: "gpt-transcribe", maxMinutes: 10, priceUsd: 0.10 }),
+  transcribe:       Object.freeze({ model: "gpt-transcribe", diarizeModel: DIARIZE_MODEL, maxMinutes: 4, priceUsd: 0.03 }),
+  "transcribe-pro": Object.freeze({ model: "gpt-transcribe", diarizeModel: DIARIZE_MODEL, maxMinutes: 10, priceUsd: 0.10 }),
 });
 const TIERS = STT_TIERS;
 
@@ -56,7 +66,15 @@ function validateInput(input) {
   if (!/^https?:\/\//i.test(url)) throw bad('"url" must be an HTTP(S) URL');
 
   const language = typeof input.language === "string" ? input.language.trim().toLowerCase() : undefined;
-  return { url, language };
+  return { url, language, diarize: diarizeFlag(input.diarize) };
+}
+
+/** `diarize` as JSON true or the multipart string "true". Anything else that
+ *  is set is a 400, so a typo never silently drops the speaker labels. */
+function diarizeFlag(v) {
+  if (v === undefined || v === null || v === "" || v === false || v === "false") return false;
+  if (v === true || v === "true") return true;
+  throw bad('"diarize" must be true or false');
 }
 
 function guessFilename(url, contentType) {
@@ -161,6 +179,7 @@ async function callOpenAI(audioBuffer, filename, model, language, probedDuration
 
   let data;
   try { data = JSON.parse(text); } catch { throw bad("OpenAI returned non-JSON", 502); }
+  if (typeof data?.text !== "string") throw bad("OpenAI returned no transcript - retry", 502);
 
   return {
     model,
@@ -173,13 +192,72 @@ async function callOpenAI(audioBuffer, filename, model, language, probedDuration
   };
 }
 
+/** ElevenLabs Scribe v2 over OpenRouter, asked for speaker labels and word
+ *  timestamps. Same answer fields as the default path plus `words` and
+ *  `speakers`; a failure is a 4xx/5xx that cancels settlement, never a quiet
+ *  fall back to a transcript without the speakers the buyer asked for. */
+async function callScribe(audioBuffer, filename, model, language, probedDuration = null) {
+  const key = OPENROUTER_KEY();
+  if (!key) throw bad("Speech gateway not configured (OPENROUTER_API_KEY unset)", 503);
+  const form = new FormData();
+  form.append("file", new Blob([audioBuffer]), filename);
+  form.append("model", model);
+  form.append("response_format", "verbose_json");
+  form.append("diarize", "true");
+  form.append("timestamp_granularities[]", "word");
+  if (language) form.append("language", language);
+  let res;
+  try {
+    res = await fetch(OPENROUTER_STT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, ...OPENROUTER_ATTRIBUTION }, body: form, signal: AbortSignal.timeout(120_000) });
+  } catch (e) {
+    throw bad(`Transcription upstream request failed: ${String(e?.message || e).slice(0, 120)}`, 504);
+  }
+  const text = await res.text();
+  if (!res.ok) {
+    const safe = redactSecrets(text);
+    let msg = safe.slice(0, 200);
+    try { msg = JSON.parse(safe).error?.message || msg; } catch {}
+    if (res.status === 429) throw bad("Transcription upstream rate-limited - retry shortly", 503);
+    if (res.status === 402) throw bad("Transcription gateway temporarily unavailable - retry shortly", 503);
+    if (res.status >= 500 || res.status === 401 || res.status === 403) throw bad(`Transcription upstream error (HTTP ${res.status})`, 502);
+    throw bad(`Transcription upstream rejected the request: ${msg}`, 400);
+  }
+  let data;
+  try { data = JSON.parse(text); } catch { throw bad("Transcription upstream returned non-JSON", 502); }
+  assertUpstreamBody(data);
+  // Silent audio is an empty transcript; a body with no transcript field is not an answer.
+  if (typeof data.text !== "string") throw bad("Transcription upstream returned no transcript - retry", 502);
+  const words = (Array.isArray(data.words) ? data.words : []).map((w) => ({
+    word: String(w.word ?? ""),
+    start: Number.isFinite(w.start) ? w.start : null,
+    end: Number.isFinite(w.end) ? w.end : null,
+    speaker: Number.isInteger(w.speaker) ? w.speaker : null,
+  }));
+  const speakers = new Set(words.map((w) => w.speaker).filter((n) => n !== null)).size;
+  return {
+    model,
+    provider: "openrouter",
+    text: data.text ?? "",
+    language: data.language ?? null,
+    duration: Number.isFinite(data.duration) ? data.duration : (Number.isFinite(probedDuration) ? Math.round(probedDuration * 100) / 100 : null),
+    speakers,
+    words,
+  };
+}
+
+function transcribeBuffer(buf, filename, tierSlug, language, diarize, probedDuration) {
+  const tier = TIERS[tierSlug];
+  return diarize
+    ? callScribe(buf, filename, tier.diarizeModel, language, probedDuration)
+    : callOpenAI(buf, filename, tier.model, language, probedDuration);
+}
+
 function makeHandler(tierSlug) {
   return async (input) => {
-    const { url, language } = validateInput(input);
+    const { url, language, diarize } = validateInput(input);
     const { buf, filename } = await fetchAudio(url);
     const probedDuration = await assertWithinDurationCap(buf, filename, tierSlug); // measured for the margin cap; also the answer's duration
-    const tier = TIERS[tierSlug];
-    return callOpenAI(buf, filename, tier.model, language, probedDuration);
+    return transcribeBuffer(buf, filename, tierSlug, language, diarize, probedDuration);
   };
 }
 
@@ -206,9 +284,9 @@ export function makeMultipartHandler(tierSlug) {
     const { fields, file } = parseMultipartFile(body, ct);
     if (!file) throw bad('multipart body has no "file" part');
     const language = typeof fields.language === "string" && fields.language ? fields.language : undefined;
+    const diarize = diarizeFlag(fields.diarize);
     const probedDuration = await assertWithinDurationCap(file.buf, file.filename, tierSlug);
-    const tier = TIERS[tierSlug];
-    return callOpenAI(file.buf, file.filename, tier.model, language, probedDuration);
+    return transcribeBuffer(file.buf, file.filename, tierSlug, language, diarize, probedDuration);
   };
 }
 
@@ -222,7 +300,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.030",
     description:
-      "Transcribe audio to text using OpenAI (gpt-transcribe). Provide a URL to an audio file (mp3, wav, m4a, etc.) and get back the transcript. No API key needed; pay per call via x402. Max 4 minutes of audio, 25 MB file size; /api/transcribe-pro takes the same model to 10 minutes.",
+      "Transcribe audio to text using OpenAI (gpt-transcribe). Provide a URL to an audio file (mp3, wav, m4a, etc.) and get back the transcript. Add diarize:true for speaker labels and word timestamps (ElevenLabs Scribe v2, same price). No API key needed; pay per call via x402. Max 4 minutes of audio, 25 MB file size; /api/transcribe-pro takes the same models to 10 minutes.",
     tags: [...SHARED_TAGS, "gpt-transcribe"],
     discovery: {
       bodyType: "json",
@@ -231,6 +309,7 @@ export const STT_TOOLS = [
         properties: {
           url: { type: "string", description: "URL of the audio file to transcribe (mp3, wav, m4a, ogg, flac, webm)" },
           language: { type: "string", description: "Optional ISO-639-1 language code (e.g. 'en', 'es', 'fr') for better accuracy" },
+          diarize: { type: "boolean", description: "true: transcribe with ElevenLabs Scribe v2 and add speaker labels and word timestamps (`words`, `speakers`). Same price and cap. Default false" },
         },
         required: ["url"],
       },
@@ -253,7 +332,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.100",
     description:
-      "Transcribe audio to text using OpenAI (gpt-transcribe) - the same model as /api/transcribe with a longer cap. Provide a URL to an audio file and get back the transcript. No API key needed; pay per call via x402. Max 10 minutes of audio, 25 MB file size.",
+      "Transcribe audio to text using OpenAI (gpt-transcribe) - the same model as /api/transcribe with a longer cap. Provide a URL to an audio file and get back the transcript; add diarize:true for speaker labels and word timestamps (ElevenLabs Scribe v2). No API key needed; pay per call via x402. Max 10 minutes of audio, 25 MB file size.",
     tags: [...SHARED_TAGS, "gpt-transcribe", "pro"],
     discovery: {
       bodyType: "json",
@@ -262,6 +341,7 @@ export const STT_TOOLS = [
         properties: {
           url: { type: "string", description: "URL of the audio file to transcribe (mp3, wav, m4a, ogg, flac, webm)" },
           language: { type: "string", description: "Optional ISO-639-1 language code (e.g. 'en', 'es', 'fr') for better accuracy" },
+          diarize: { type: "boolean", description: "true: transcribe with ElevenLabs Scribe v2 and add speaker labels and word timestamps (`words`, `speakers`). Same price and cap. Default false" },
         },
         required: ["url"],
       },
@@ -289,7 +369,7 @@ export const STT_TOOLS = [
     discovery: {
       bodyType: "form-data",
       input: { file: "<audio bytes, multipart part named file>", language: "en" },
-      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" } } },
+      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels and word timestamps (ElevenLabs Scribe v2)" } } },
       output: { example: { text: "Example transcript.", duration: 3.2, model: "gpt-transcribe" } },
     },
     handler: makeMultipartHandler("transcribe"),
@@ -306,7 +386,7 @@ export const STT_TOOLS = [
     discovery: {
       bodyType: "form-data",
       input: { file: "<audio bytes, multipart part named file>" },
-      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" } } },
+      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels and word timestamps (ElevenLabs Scribe v2)" } } },
       output: { example: { text: "Example transcript.", duration: 420.5, model: "gpt-transcribe" } },
     },
     handler: makeMultipartHandler("transcribe-pro"),

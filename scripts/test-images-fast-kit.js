@@ -199,7 +199,8 @@ await throws(() => validateVideosRequest({ prompt: "x".repeat(2001) }), "Prompt 
 
 // ---- video handler (stubbed fetch): submit -> poll -> download ----
 const MP4 = Buffer.from("\0\0\0 ftypisom-fake-mp4-bytes");
-function installVideoFetch({ statuses = ["pending", "in_progress", "completed"], contentStatus = 200, pollingUrl, submitStatus = 202, failError } = {}) {
+function installVideoFetch({ statuses = ["pending", "in_progress", "completed"], contentStatus = 200, contentStatuses, pollHttp = [], pollingUrl, submitStatus = 202, failError } = {}) {
+  let contentCalls = 0, pollCalls = 0;
   let polls = 0; const seen = { submit: null, polls: [], content: null };
   globalThis.fetch = async (url, init = {}) => {
     const u = String(url);
@@ -210,9 +211,17 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
     }
     if (u.includes("/content")) {
       seen.content = { url: u, auth: init.headers?.Authorization };
+      seen.contentCalls = ++contentCalls;
+      const cs = contentStatuses ? contentStatuses[Math.min(contentCalls - 1, contentStatuses.length - 1)] : contentStatus;
+      if (cs === "throw") throw new TypeError("fetch failed");
+      if (cs !== contentStatus) return { ok: cs < 400, status: cs, headers: { get: (h) => (h === "content-type" ? "video/mp4" : null) }, arrayBuffer: async () => MP4.buffer.slice(MP4.byteOffset, MP4.byteOffset + MP4.byteLength), text: async () => "" };
       return { ok: contentStatus < 400, status: contentStatus, headers: { get: (h) => (h === "content-type" ? "video/mp4" : null) }, arrayBuffer: async () => MP4.buffer.slice(MP4.byteOffset, MP4.byteOffset + MP4.byteLength), text: async () => "" };
     }
     seen.polls.push({ url: u, auth: init.headers?.Authorization });
+    const h = pollHttp[pollCalls++];
+    if (h === "throw") throw new TypeError("fetch failed");
+    if (h === "garbled") return { ok: true, status: 200, text: async () => "<html>" };
+    if (typeof h === "number") return { ok: false, status: h, text: async () => JSON.stringify({ error: { message: "upstream hiccup" } }) };
     const s = statuses[Math.min(polls++, statuses.length - 1)];
     const j = { id: "job1", status: s, ...(s === "completed" ? { unsigned_urls: [`${OPENROUTER_VIDEOS_URL}/job1/content?index=0`], usage: { cost: VW, is_byok: false } } : {}), ...(s === "failed" ? { error: failError ?? "content policy" } : {}) };
     return { ok: true, status: 200, text: async () => JSON.stringify(j) };
@@ -250,6 +259,37 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
   installVideoFetch({ contentStatus: 500 });
   const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "Upstream error", "content download failure -> 502");
   ok(e?.statusCode === 502, "…502");
+}
+{
+  // Transient poll failures keep polling; the clip is still delivered.
+  const seen = installVideoFetch({ pollHttp: [500, "throw", 429, "garbled"] });
+  const out = await bySlug("v1-videos").handler({ prompt: "a boat" });
+  ok(out?.data?.[0]?.b64_json === MP4.toString("base64") && seen.polls.length === 7, "transient poll failures (5xx, network, 429, garbled) keep polling to completion");
+}
+{
+  const seen = installVideoFetch({ pollHttp: [502, 502, 502, 502, 502, 502, 502] });
+  const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "Upstream error", "five consecutive poll failures end the request");
+  ok(e?.statusCode === 502 && seen.polls.length === 5, "…502 after exactly five failed polls");
+}
+{
+  const seen = installVideoFetch({ pollHttp: [401] });
+  const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "auth", "a non-transient poll status (401) still ends the request at once");
+  ok(e?.statusCode === 502 && seen.polls.length === 1, "…on the first poll");
+}
+{
+  const seen = installVideoFetch({ contentStatuses: [503, "throw", 200] });
+  const out = await bySlug("v1-videos").handler({ prompt: "a boat" });
+  ok(out?.data?.[0]?.b64_json === MP4.toString("base64") && seen.contentCalls === 3, "the content download is retried twice on transient failures");
+}
+{
+  const seen = installVideoFetch({ contentStatuses: [500, 500, 500, 200] });
+  const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "Upstream error", "content download retries are capped at two extra");
+  ok(e?.statusCode === 502 && seen.contentCalls === 3, "…three content requests in all");
+}
+{
+  const seen = installVideoFetch({ contentStatuses: [404, 200] });
+  await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "Upstream error", "a non-transient content status is not retried");
+  ok(seen.contentCalls === 1, "…one content request");
 }
 {
   installVideoFetch({ submitStatus: 402 });

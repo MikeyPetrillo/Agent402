@@ -35,9 +35,10 @@
 //
 // Also soft-skip LOUDLY (after retry) free-public flakes that are NOT the
 // dead-tool class and would otherwise thrash [test]:
-//   • media-info / audio-convert / audio-normalize — example URLs are third-
-//     party Wikimedia; handlers are covered by scripts/test-media.js on a
-//     local ffmpeg tone. A 422 "media could not be processed" / content-type
+//   • media-info / audio-convert / audio-normalize: handlers are covered by
+//     scripts/test-media.js on a local ffmpeg tone. Their examples fetch our
+//     own /fixtures/sample-audio.wav since 2026-10-07 (third-party Wikimedia
+//     before); the soft-skip stays for a fixture fetch that flakes. A 422 "media could not be processed" / content-type
 //     paste-error after retry is "source host flaked", not "tool is gone".
 //   • price-feed kit 502 "malformed JSON" — DeFiLlama/CoinGecko occasionally
 //     return garbage bodies; a bare outage 502 without that wording still fails.

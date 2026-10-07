@@ -276,14 +276,20 @@ export function makeAttestHandler(deps = {}) {
     const allowed = spend.maySpend(null, MAX_GAS_USD(), { chain: "base" });
     if (!allowed.ok) throw bad(`Attestations are briefly paused: ${allowed.reason} Nothing was charged; retry later.`, 503);
     const handle = spend.noteSpend(null, MAX_GAS_USD(), { chain: "base" });
+    // Where the call failed decides the booking: before the attest send no
+    // transaction of ours exists, so the booking is released. A schema step
+    // may have sent its own registration, so it keeps the booking.
+    let stage = "schema";
     try {
       await chain.ensureSchema(uid);
+      stage = "estimate";
       const data = await encodeAttestationData(fields);
       const estimate = await chain.estimateUsd(uid, fields.recipient, data);
       if (!(estimate <= MAX_GAS_USD())) {
         throw bad(`Base gas is high right now: this attestation would cost about $${Number(estimate).toFixed(4)}, over the $${MAX_GAS_USD()} ceiling. Nothing was charged; retry later.`, 503);
       }
       spend.adjustSpend(handle, estimate);
+      stage = "send";
       const written = await chain.attest(uid, fields.recipient, data);
       // Write-once on the row: if a concurrent call won, the chain now carries
       // two attestations of one sale and the ledger keeps the first. Harmless
@@ -295,9 +301,12 @@ export function makeAttestHandler(deps = {}) {
         data: publicFields, verify,
       };
     } catch (e) {
-      if (e?.statusCode) throw e;
       const msg = String(e?.shortMessage || e?.message || e);
-      if (/insufficient funds/i.test(msg)) throw bad("The attestation wallet has no ETH for Base gas right now. Nothing was charged; retry later.", 503);
+      // The node refuses an unfunded send before broadcast, so no hash exists.
+      const noFunds = /insufficient funds/i.test(msg);
+      if (stage === "estimate" || noFunds) spend.adjustSpend(handle, 0);
+      if (e?.statusCode) throw e;
+      if (noFunds) throw bad("Attestation is temporarily unavailable. Nothing was charged; retry later.", 503);
       throw bad(`Attestation failed before it could be confirmed (${msg.slice(0, 140)}). Nothing was charged.`, 502);
     }
   };

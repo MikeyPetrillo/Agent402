@@ -61,6 +61,62 @@ for (const [slug, args, label] of [
   }
 }
 
+// --- word limit, per-query multi-search results, and a cut-off answer stream
+// (stubbed upstream: no key spent, no network) ---
+{
+  const realFetch = globalThis.fetch, realKey = process.env.BRAVE_API_KEY, realAns = process.env.BRAVE_ANSWERS_API_KEY;
+  process.env.BRAVE_API_KEY = "stub-not-a-real-key";
+  delete process.env.BRAVE_ANSWERS_API_KEY;
+  let calls = 0;
+  const long = Array.from({ length: 51 }, (_, k) => `w${k}`).join(" ");
+  const fifty = Array.from({ length: 50 }, (_, k) => `w${k}`).join(" ");
+  const web = () => new Response(JSON.stringify({ web: { results: [{ title: "t", url: "https://example.org/", description: "d" }] } }), { status: 200, headers: { "content-type": "application/json" } });
+  try {
+    globalThis.fetch = async () => { calls++; return web(); };
+    let e = await h("search")({ q: long }).catch((x) => x);
+    ok(e?.statusCode === 400 && /50/.test(e.message) && calls === 0, "search: a query over 50 words is a 400 before any upstream call");
+    const fine = await h("search")({ q: fifty }).catch((x) => x);
+    ok(Array.isArray(fine?.results) && calls === 1, "search: exactly 50 words still goes upstream");
+    calls = 0;
+    e = await h("multi-search")({ queries: ["a", "b", long] }).catch((x) => x);
+    ok(e?.statusCode === 400 && /queries\[2\]/.test(e.message) && calls === 0, "multi-search: one query over 50 words is a 400 naming it, before any upstream call");
+
+    calls = 0;
+    globalThis.fetch = async (url) => { calls++; return new URL(String(url)).searchParams.get("q") === "bad" ? new Response("{}", { status: 500 }) : web(); };
+    const part = await h("multi-search")({ queries: ["good one", "bad", "good two"] });
+    ok(part.searches.length === 3 && part.searches[0].count === 1 && part.searches[2].count === 1, "multi-search: the queries that succeeded are returned");
+    ok(part.searches[1].count === 0 && /HTTP 500/.test(part.searches[1].error || ""), "multi-search: the failed query carries its own error");
+    ok(part.totalResults === 2 && calls === 3, "multi-search: totals count only what came back");
+    globalThis.fetch = async () => new Response("{}", { status: 500 });
+    e = await h("multi-search")({ queries: ["x", "y"] }).catch((x) => x);
+    ok(e?.statusCode === 502, "multi-search: every query failing is still a failed (uncharged) call");
+    calls = 0;
+    e = await h("multi-search")({ queries: ["", "  "] }).catch((x) => x);
+    ok(e?.statusCode === 400 && calls === 0, "multi-search: only empty queries is a 400 before any upstream call, never a charged 200");
+    ok(/every query fails is not charged/.test(SEARCH_TOOLS.find((t) => t.slug === "multi-search").description), "multi-search: the description discloses that a partial answer is charged");
+
+    const sse = (body) => async () => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(body)); c.close(); } }), { status: 200, headers: { "content-type": "text/event-stream" } });
+    globalThis.fetch = sse('data: {"choices":[{"delta":{"content":"partial"}}]}\ndata: {"error":{"message":"upstream failed"}}\n');
+    e = await h("answer")({ q: "what is x402" }).catch((x) => x);
+    ok(e?.statusCode === 502, "answer: a stream carrying an error event is a 502, never a charged answer");
+    globalThis.fetch = sse('data: [DONE]\n');
+    e = await h("answer")({ q: "what is x402" }).catch((x) => x);
+    ok(e?.statusCode === 502, "answer: a stream with no answer text is a 502");
+    globalThis.fetch = sse('data: {"choices":[{"delta":{"content":"x402 is a payment protocol."}}]}\n');
+    ok((await h("answer")({ q: "what is x402" })).answer === "x402 is a payment protocol.", "answer: a stream that closes without [DONE] but carries an answer is served");
+    globalThis.fetch = sse('data: {"choices":[{"delta":{"content":"ok"}}]}\ndata: [DONE]\n');
+    const longQ = Array.from({ length: 60 }, (_, k) => `w${k}`).join(" ");
+    ok((await h("answer")({ q: longQ })).answer === "ok", "answer: a 60-word question is not held to the search word limit");
+    globalThis.fetch = sse('data: {"choices":[{"delta":{"content":"x402 is a payment protocol."}}]}\ndata: [DONE]\n');
+    const a = await h("answer")({ q: "what is x402" });
+    ok(a.answer === "x402 is a payment protocol.", "answer: a complete stream still answers");
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.BRAVE_API_KEY; else process.env.BRAVE_API_KEY = realKey;
+    if (realAns !== undefined) process.env.BRAVE_ANSWERS_API_KEY = realAns;
+  }
+}
+
 // --- live calls (tolerant of missing key / upstream rate-limiting) ---
 async function live(slug, args, check, label) {
   try {

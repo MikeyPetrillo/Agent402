@@ -62,12 +62,19 @@ function bad(message, statusCode = 400) {
 }
 
 // Trim+cap user-supplied query strings the same way for every Brave route.
-// Brave's documented limits: 400 chars and 50 words; we enforce chars here
-// (50-word check is upstream's problem and surfaces as a 422).
-function takeQuery(raw) {
+// Brave's documented limits: 400 chars and 50 words. Characters are trimmed;
+// a query over the word limit is a 400 here, before any upstream call.
+const MAX_QUERY_WORDS = 50;
+function assertWordLimit(q, field = "q") {
+  const words = q.split(/\s+/).filter(Boolean).length;
+  if (words > MAX_QUERY_WORDS) throw bad(`"${field}" has ${words} words; web search accepts at most ${MAX_QUERY_WORDS}`);
+  return q;
+}
+// The word limit is the web search endpoint's; answers and suggestions have none.
+function takeQuery(raw, { wordLimit = true } = {}) {
   const q = typeof raw === "string" ? raw.trim().slice(0, 400) : "";
   if (!q) throw bad('"q" is required');
-  return q;
+  return wordLimit ? assertWordLimit(q) : q;
 }
 
 // Domain allow/deny lists, accepted in the field names common search APIs use
@@ -188,6 +195,7 @@ async function braveAnswerPost(query, opts = {}) {
   const decoder = new TextDecoder();
   let buf = "";
   let content = "";
+  let upstreamError = false;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -201,11 +209,14 @@ async function braveAnswerPost(query, opts = {}) {
       if (data === "[DONE]") continue;
       try {
         const chunk = JSON.parse(data);
+        if (chunk?.error) upstreamError = true;
         const delta = chunk?.choices?.[0]?.delta?.content;
         if (typeof delta === "string") content += delta;
       } catch { /* ignore malformed chunks — Brave occasionally emits keep-alives */ }
     }
   }
+  // An error event in the stream, or no answer text at all, is not an answer.
+  if (upstreamError || !content.trim()) throw bad("Web answer upstream returned no answer - retry", 502);
   return content;
 }
 
@@ -620,7 +631,7 @@ export const SEARCH_TOOLS = [
       },
     },
     handler: async (i) => {
-      const q = takeQuery(i.q);
+      const q = takeQuery(i.q, { wordLimit: false });
       const count = Math.min(Math.max(parseInt(i.count, 10) || 5, 1), 20);
       // Brave issues distinct subscription tokens per product SKU; Suggest
       // may need its own key, same pattern as Answers (BRAVE_ANSWERS_API_KEY).
@@ -677,7 +688,7 @@ export const SEARCH_TOOLS = [
       },
     },
     handler: async (i) => {
-      const q = takeQuery(i.q);
+      const q = takeQuery(i.q, { wordLimit: false });
       const country = typeof i.country === "string" && /^[A-Za-z]{2}$/.test(i.country) ? i.country.toLowerCase() : undefined;
       const language = typeof i.language === "string" && /^[A-Za-z]{2}$/.test(i.language) ? i.language.toLowerCase() : undefined;
       // Clamp caller-supplied max_tokens into a sane range. 64 floor prevents
@@ -706,7 +717,7 @@ export const SEARCH_TOOLS = [
     category: "web",
     price: "$0.08",
     description:
-      "Run 2-5 web searches in one call with a 20% volume discount vs. individual searches. Each query returns ranked results (title, URL, snippet). Ideal for multi-faceted research or comparing sources on different aspects of a topic.",
+      "Run 2-5 web searches in one call with a 20% volume discount vs. individual searches. Each query returns ranked results (title, URL, snippet). Ideal for multi-faceted research or comparing sources on different aspects of a topic. If some queries fail upstream, the call returns the ones that succeeded with an error on each failed query and is charged; a call where every query fails is not charged.",
     tags: ["search", "batch", "multi-search", "research", "parallel"],
     discovery: {
       bodyType: "json",
@@ -751,9 +762,15 @@ export const SEARCH_TOOLS = [
       // query they sent, in the order they sent it. Only the number of times we
       // PAY for the same answer changes.
       const normalized = queries.map((raw) => (typeof raw === "string" ? raw.trim().slice(0, 400) : ""));
+      normalized.forEach((q, n) => { if (q) assertWordLimit(q, `queries[${n}]`); });
       const unique = [...new Set(normalized.filter(Boolean))];
+      // Nothing left to search is the request's fault, and never a charged 200.
+      if (!unique.length) throw bad('every entry in "queries" is empty; send 2-5 non-empty strings');
       const fetched = new Map();
-      await Promise.all(unique.map(async (q) => {
+      const failed = new Map();
+      // Each query settles on its own: one upstream failure does not discard
+      // the searches that succeeded. Every query failing is a failed call.
+      const settled = await Promise.allSettled(unique.map(async (q) => {
         const data = await braveGet("/web/search", { q, count, freshness }, undefined, "multi-search");
         const results = (data.web?.results ?? []).slice(0, count).map((r) => ({
           title: r.title ?? null,
@@ -763,8 +780,11 @@ export const SEARCH_TOOLS = [
         }));
         fetched.set(q, results);
       }));
+      settled.forEach((r, n) => { if (r.status === "rejected") failed.set(unique[n], r.reason); });
+      if (unique.length && failed.size === unique.length) throw settled[0].reason;
       const searches = normalized.map((q) => {
         if (!q) return { query: "", count: 0, results: [], error: "empty query skipped" };
+        if (failed.has(q)) return { query: q, count: 0, results: [], error: String(failed.get(q)?.message || "search failed") };
         const results = fetched.get(q) || [];
         return markUntrusted({ query: q, count: results.length, results });
       });

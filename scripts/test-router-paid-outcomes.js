@@ -24,7 +24,7 @@
 //      for a 4xx or offer-less 402/401 the caller's own input produced.
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -88,6 +88,8 @@ const SELLERS = {
   "picky422.example": { paid: () => new Response(JSON.stringify({ error: "invalid params" }), { status: 422, headers: { "content-type": "application/json" } }) },
   // fails after payment with no receipt
   "broken.example": { paid: () => new Response("Internal Server Error", { status: 500, headers: { "content-type": "text/plain" } }) },
+  // takes the payment (its own receipt says so) and answers 403
+  "charged403.example": { paid: () => new Response("{}", { status: 403, headers: { "content-type": "application/json", "payment-response": receipt } }) },
   // fail BEFORE anything is signed
   "bare500.example": { bare: () => new Response("down", { status: 500 }) },
   "notfound.example": { bare: () => new Response("nope", { status: 404 }) },
@@ -179,6 +181,18 @@ quiet();
     const { e } = await buy("refused-conn.example");
     ok(e && e.committed !== true && e.paidUnanswered !== true && buyer._spentThisWindow() === held, "CONTROL: a refused connection on the paid leg sent nothing -> no stamp, hold released");
   }
+  // A paid leg that did not deliver is recorded in the outbound ledger for
+  // every caller, not only the router (the memo stays the router's own).
+  {
+    const rows = () => (existsSync(process.env.OUTBOUND_LEDGER_FILE) ? readFileSync(process.env.OUTBOUND_LEDGER_FILE, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+    for (const host of ["broken.example", "charged403.example"]) {
+      const before = rows().filter((r) => r.origin === host && r.result === "undelivered").length;
+      const { e } = await buy(host);
+      const after = rows().filter((r) => r.origin === host && r.result === "undelivered").length;
+      ok(e && after === before + 1, `${host} without the router's memo flag: the undelivered payment is still recorded (${before} -> ${after})`);
+      ok(!buyer.sellerDeliveryMemoEntries().some((m) => String(m.origin || m.key || "").includes(host)), `${host} without the router's memo flag: no steering memo written`);
+    }
+  }
   // CONTROL: a delivered purchase is unchanged.
   {
     const { r, e } = await buy("good.example");
@@ -225,6 +239,36 @@ quiet();
   ok(e2 && e2.committed === true && e2.paidUnanswered === true && buyer._spentThisWindow() === held2 + 1000n, `fallback transport: an unanswered retry is committed and keeps the hold (committed=${e2?.committed})`);
   for (const s of sockets) s.destroy();
   srv.close();
+
+  // The first attempt got response headers back, so the credential reached
+  // the seller: a connect-phase error on the retry proves nothing, and the
+  // leg stays committed.
+  {
+    const srv2 = createServer((req, res) => {
+      res.writeHead(402, { "payment-required": b64({ x402Version: 2, accepts: [accept()] }), "content-type": "application/json" });
+      res.end("{}");
+    });
+    const socks2 = new Set();
+    srv2.on("connection", (s) => { socks2.add(s); s.on("close", () => socks2.delete(s)); });
+    await new Promise((r) => srv2.listen(0, "127.0.0.1", r));
+    const port2 = srv2.address().port;
+    globalThis.fetch = async (url, init = {}) => {
+      const h = init.headers || {};
+      if (h["PAYMENT-SIGNATURE"] || h["X-PAYMENT"]) {
+        // The seller goes away between the two attempts: the retry is refused.
+        for (const s of socks2) s.destroy();
+        await new Promise((r) => srv2.close(r));
+        throw Object.assign(new TypeError("fetch failed"), { cause: new Error("invalid content-length header") });
+      }
+      return origFetch(url, init);
+    };
+    chainReader = CHAIN.consumed;
+    const held3 = buyer._spentThisWindow();
+    let e3 = null;
+    try { await buyer.payX402(`http://127.0.0.1:${port2}/x`, { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", timeoutMs: 2000, notDebited }); } catch (x) { e3 = x; }
+    ok(e3 && e3.cause && buyer.neverLeftUs(e3.cause), `fallback refused at connect: the retry's own error is connect-phase (${e3?.cause?.code || e3?.cause?.cause?.code || e3?.message})`);
+    ok(e3 && e3.committed === true && e3.paidUnanswered === true && buyer._spentThisWindow() === held3 + 1000n, `fallback refused at connect after the first attempt saw headers: committed, hold stands (committed=${e3?.committed}, held ${buyer._spentThisWindow() - held3})`);
+  }
   globalThis.fetch = stubFetch;
 
   // The payability check reports an unanswered paid request in the payer's
@@ -387,7 +431,7 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   const tsock = new Set();
   tsrv.on("connection", (s) => { tsock.add(s); s.on("close", () => tsock.delete(s)); });
   await new Promise((r) => tsrv.listen(0, "127.0.0.1", r));
-  const tempoBuy = () => payTempo(`http://127.0.0.1:${tsrv.address().port}/v1/scrape`, { method: "POST", body: {}, maxAtomic: 5000n, trusted: true, timeoutMs: 400, createCredential: async () => "Payment ZmFrZQ", proof: async () => 4000 }).then(() => null, (e) => e);
+  const tempoBuy = () => payTempo(`http://127.0.0.1:${tsrv.address().port}/v1/scrape`, { method: "POST", body: {}, maxAtomic: 5000n, trusted: true, timeoutMs: 3500, createCredential: async () => "Payment ZmFrZQ", proof: async () => 4000 }).then(() => null, (e) => e);
   for (const mode of ["reject", "fail", "hang"]) {
     tempoMode = mode;
     const e = await tempoBuy();

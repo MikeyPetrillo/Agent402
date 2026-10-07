@@ -2,6 +2,16 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-10-07",
+    title: "ElevenLabs voices and speaker labels",
+    items: [
+      "/api/tts now speaks with ElevenLabs Eleven v4 Turbo and /api/tts-hd with Eleven v4: each of the ten voice names has its own voice, 21 ElevenLabs voices can be named directly, and all six formats (mp3, opus, aac, flac, wav, pcm) are served.",
+      "Transcription takes diarize:true for speaker labels and word timestamps from ElevenLabs Scribe v2, on /api/transcribe, /api/transcribe-pro and the OpenAI transcription wire, at the same price and cap.",
+      "/api/tts and /api/tts-hd are repriced for the ElevenLabs models; current prices are on /pricing and in every 402.",
+      "Most published examples now fetch from agent402.tools and its own sample files, so they work the same for every buyer; the rest follow as their sample files go live.",
+    ],
+  },
+  {
     date: "2026-10-06",
     title: "Claude Code pays from a wallet",
     items: [
@@ -393,7 +403,7 @@ export function changelogRss(baseUrl) {
     <link>${baseUrl}/changelog</link>
     <guid isPermaLink="false">agent402-changelog-${e.date}</guid>
     <pubDate>${new Date(e.date + "T12:00:00Z").toUTCString()}</pubDate>
-    <description>${xmlEsc(e.items.join(". ") + ".")}</description>
+    <description>${xmlEsc(e.items.map((s) => s.trim().replace(/\.+$/, "")).join(". ") + ".")}</description>
   </item>`
   ).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>

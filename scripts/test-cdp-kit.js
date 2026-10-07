@@ -94,12 +94,70 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
   ok(faucetGate(a, t0).ok && faucetGate(a, t0 + 1).ok, "two drips per address allowed");
   ok(!faucetGate(a, t0 + 2).ok, "third drip within 24h refused");
   ok(faucetGate(a, t0 + 25 * 60 * 60 * 1000).ok, "window rolls over after 24h");
-  // Two global slots are already occupied (the rollover grant above + the
-  // solana-devnet valid-input test, which passes the gate before hitting the
-  // env gate), so exactly 6 of these 12 fresh addresses fit under 8/day.
+  // One global slot is already occupied (the rollover grant above; the
+  // solana-devnet valid-input test passed the gate, hit the env gate, and its
+  // failed drip gave the slot back), so exactly 7 of these 12 fit under 8/day.
   let granted = 0;
   for (let i = 0; i < 12; i++) if (faucetGate("0x" + String(i).padStart(40, "0"), t0 + 10).ok) granted++;
-  ok(granted === 6, `global 8/day budget enforced across addresses (granted ${granted}/12, 2 slots already used)`);
+  ok(granted === 7, `global 8/day budget enforced across addresses (granted ${granted}/12, 1 slot already used)`);
+}
+
+// --- upstream mapping: 429, auth, timeouts, the faucet slot (stubbed fetch) ----
+{
+  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  process.env.CDP_API_KEY_ID = "organizations/test/apiKeys/test";
+  process.env.CDP_API_KEY_SECRET = privateKey.export({ type: "pkcs8", format: "pem" });
+  const realFetch = globalThis.fetch;
+  let calls = [];
+  let reply = null;
+  globalThis.fetch = async (url, init = {}) => { calls.push({ url: String(url), method: init.method || "GET" }); return reply(calls.length); };
+  const J = (status, body, headers = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
+  const timeout = () => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); };
+  const addr = (c) => "0x" + c.repeat(40);
+  const bal = () => tool("wallet-balances").handler({ address: addr("1"), network: "base" });
+  const fund = (a) => tool("testnet-fund").handler({ address: a });
+  try {
+    // 429: retried once, honoring a short Retry-After, then a 503 with no CDP detail.
+    calls = []; reply = () => J(429, { errorMessage: "SECRET-UPSTREAM-DETAIL" }, { "retry-after": "0" });
+    const t = Date.now();
+    let e = await bal().catch((x) => x);
+    ok(e?.statusCode === 503 && !/SECRET/.test(e.message) && calls.length === 2, `a 429 is retried once, then an uncharged 503 without the upstream detail (attempts ${calls.length}, status ${e?.statusCode})`);
+    ok(Date.now() - t < 1500, "Retry-After 0 is honored instead of the long backoff");
+    calls = []; reply = (n) => (n === 1 ? J(429, {}) : J(200, { balances: [] }));
+    const r = await bal();
+    ok(r.count === 0 && calls.length === 2, "a single 429 then 200 recovers");
+    // 401/403: this server's configuration.
+    for (const st of [401, 403]) {
+      calls = []; reply = () => J(st, { errorMessage: "SECRET-UPSTREAM-DETAIL key organizations/test" });
+      e = await bal().catch((x) => x);
+      ok(e?.statusCode === 503 && /not configured/.test(e.message) && !/SECRET|organizations/.test(e.message) && calls.length === 1, `${st} -> 503 not configured, not retried, no upstream text`);
+    }
+    // A faucet POST that timed out is never resent, and its slot is kept (it may have dripped).
+    calls = []; reply = timeout;
+    e = await fund(addr("b")).catch((x) => x);
+    ok(e?.statusCode === 504 && calls.length === 1, `a faucet POST that timed out is not retried (attempts ${calls.length})`);
+    calls = []; reply = () => J(200, { transactionHash: "0xabc" });
+    const f1 = await fund(addr("b"));
+    const f2 = await fund(addr("b")).catch((x) => x);
+    ok(f1.funded && f2?.statusCode === 429, "a timed-out drip keeps its slot: the address gets one more drip, not two");
+    // A drip refused outright gives its slot back.
+    calls = []; reply = () => J(400, { errorMessage: "bad request" });
+    await fund(addr("d")).catch(() => {});
+    reply = () => J(200, { transactionHash: "0xabd" });
+    ok((await fund(addr("d"))).funded && (await fund(addr("d"))).funded, "a refused drip gave its slot back: the address still gets its two drips");
+    // A response with no transaction is a failed drip: 502, slot returned.
+    calls = []; reply = () => J(200, {});
+    e = await fund(addr("c")).catch((x) => x);
+    ok(e?.statusCode === 502, "a faucet answer with no transaction hash is a 502, never a charged funded:false");
+    reply = () => J(200, { transactionHash: "0xdef" });
+    ok((await fund(addr("c"))).funded && (await fund(addr("c"))).funded, "and its slot was returned");
+    // Control: a GET that timed out is still retried.
+    calls = []; reply = (n) => (n === 1 ? timeout() : J(200, { balances: [] }));
+    ok((await bal()).count === 0 && calls.length === 2, "a GET that timed out is retried");
+  } finally {
+    globalThis.fetch = realFetch;
+    delete process.env.CDP_API_KEY_ID; delete process.env.CDP_API_KEY_SECRET;
+  }
 }
 
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);

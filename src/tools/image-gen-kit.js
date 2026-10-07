@@ -95,7 +95,10 @@ async function callOpenAI(prompt, size, tierSlug) {
     // err.message verbatim to buyers and logs it.
     const safe = redactSecrets(text);
     let msg = safe.slice(0, 200);
-    try { msg = JSON.parse(safe).error?.message || msg; } catch {}
+    let code = null;
+    try { const j = JSON.parse(safe); msg = j.error?.message || msg; code = j.error?.code ?? null; } catch {}
+    // An account-level billing or account state is the upstream's, not the request's.
+    if (["billing_hard_limit_reached", "billing_not_active", "account_deactivated"].includes(code)) throw bad("OpenAI upstream unavailable", 502);
     // Reaching here means a remaining 4xx - the REQUEST was invalid (bad
     // temperature, unknown language code, oversized input), not the upstream.
     // Surfacing it as 502 taught buyers to retry the identical bad request
@@ -113,12 +116,13 @@ async function callOpenAI(prompt, size, tierSlug) {
     console.warn(`[image-gen] ${tierSlug} render billed above its bound (${billed} > ${tier.outputTokenBound} output tokens)`);
   }
   const img = data.data?.[0];
+  if (typeof img?.b64_json !== "string" || !img.b64_json) throw bad("OpenAI returned no image - retry", 502);
   return {
     model: tier.model,
     provider: "openai",
     quality: tier.quality,
     size,
-    image: img?.b64_json ?? "",
+    image: img.b64_json,
     revised_prompt: img?.revised_prompt ?? prompt,
   };
 }

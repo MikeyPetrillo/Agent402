@@ -692,8 +692,10 @@ async function fredGetJsonOnce(url, extraHeaders = {}, timeoutMs = 15_000) {
     // it: a 503 that says so, never a 422 with a schema hint pointing the buyer
     // at their own request. Every refusal is uncharged either way.
     if (res.status === 401 || res.status === 403 || /api_key|credential/i.test(msg)) {
-      throw Object.assign(bad("FRED rejected this server's API key. This is our configuration, not your input; you were not charged.", 503), { noRetry: true });
+      throw Object.assign(bad("FRED is not configured on this deployment. This is our configuration, not your input; you were not charged.", 503), { noRetry: true });
     }
+    // Throttling or a locked key is not the buyer's input: retryable, uncharged.
+    if (res.status === 429 || res.status === 423) throw Object.assign(bad("FRED is temporarily unavailable (rate limited) - retry shortly. You were not charged.", 503), { noRetry: true });
     throw bad(`FRED upstream HTTP ${res.status}: ${msg}`, res.status >= 500 ? 502 : 422);
   }
   if (!body) throw bad("FRED returned non-JSON response", 502);

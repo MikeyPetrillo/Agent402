@@ -218,7 +218,8 @@ export async function publicJsonRpc(network, method, params) {
         // block on the keyless path - the nightly corpus, 2026-09-10); "forbidden"/
         // "unauthorized"/"quota" are left out because contracts revert with
         // exactly those words (independent review, 2026-09-06).
-        if (!isRevert && /api key|tenant disabled|\b403\b|rate limit|too many requests|archive requests require|personal token/i.test(msg)) { lastErr = new Error(`provider refused: ${msg}`); continue; }
+        // HTTP 429 or JSON-RPC code 429 is the provider throttling us, whatever the message says.
+      if (!isRevert && (res.status === 429 || data.error.code === 429 || /api key|tenant disabled|\b403\b|rate limit|too many requests|archive requests require|personal token/i.test(msg))) { lastErr = new Error(`provider refused: ${msg}`); continue; }
         const err = bad(`Node error: ${msg}`, 502);
         // Carry the JSON-RPC error code so callers (tx-simulate) can tell a
         // revert verdict (code 3) from node-side failures like rate limits.

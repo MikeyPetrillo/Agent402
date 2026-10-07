@@ -172,6 +172,8 @@ export const WALLET_ONLY_SLUGS = new Set([
   // argument as bestsellers: the inputs cost us to collect, so the read is
   // metered rather than proof-of-work farmable.
   "seller-dossier", "seller-payability",
+  // flights-kit.js pays outside sellers from our wallet per call.
+  "flight-search", "flight-status",
   // B20 kit — RPC egress against Base (b20-feature-id is pure CPU and stays PoW-eligible).
   "b20-activation-check", "b20-token-info", "b20-verify", "b20-new-tokens", "b20-memos",
   // Chain-kit: tools talk to Alchemy (compute-unit quota) or, for evm-rpc,
@@ -352,7 +354,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Code execution kit: every call spins up an E2B sandbox (compute cost).
   // PoW would let one client farm our E2B quota for free.
   "code-run", "code-run-pro",
-  // TTS kit: every call burns OpenAI TTS credit.
+  // TTS kit: every call burns upstream speech credit (ElevenLabs, Kokoro, OpenAI fallback).
   "tts", "tts-hd", "tts-lite",
   // STT kit: fetches external audio + burns OpenAI transcription credit.
   "transcribe", "transcribe-pro",

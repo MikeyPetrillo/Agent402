@@ -414,5 +414,115 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   } finally { if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey; }
 }
 
+// Tools that spend before settlement are never dispatched: the executor runs
+// them with no request, so their own credential bounds and spend keying are lost.
+{
+  const { dispatchable } = await import("../src/tools/route-execute.js");
+  const { executableStep } = await import("../src/decide/index-export.js");
+  const { buildSellerPayabilityTool } = await import("../src/tools/seller-payability-kit.js");
+  const { RESEARCH_DEEP_TOOLS } = await import("../src/tools/research-deep-kit.js");
+  const sp = buildSellerPayabilityTool({ pay: async () => { throw new Error("must not pay"); }, fetchImpl: async () => { throw new Error("must not fetch"); }, assertPublicUrl: async () => {} });
+  const flight = { route: "POST /api/flight-search", slug: "flight-search", price: "$0.03", spendsOwnWallet: true, discovery: { bodyType: "json" }, handler: async () => ({}) };
+  // Same slug without the flag: the long-running list alone must refuse it.
+  const flightNoFlag = { ...flight, spendsOwnWallet: undefined };
+  const research = RESEARCH_DEEP_TOOLS.find((d) => d.slug === "research");
+  for (const [label, def] of [["seller-payability", sp], ["flight-search", flight], ["flight-search (long-running list only)", flightNoFlag], ["research composite", research]]) {
+    ok(dispatchable(def).ok === false, `${label} is not dispatchable (${dispatchable(def).why})`);
+    ok(executableStep(def) === false, `${label} is not an executable decide step`);
+  }
+  ok(dispatchable(CATALOG["POST /api/hash"]).ok === true && executableStep(CATALOG["POST /api/hash"]) === true, "CONTROL: an ordinary tool is still dispatchable and executable");
+  // Through every tier, by slug: refused 409 before the handler runs.
+  for (const t of (await import("../src/tools/route-execute.js")).EXEC_TIERS) {
+    let ran = false;
+    const f = { ...flight, handler: async () => { ran = true; return {}; } };
+    const exec = buildRouteExecuteTool({ getCatalog: () => ({ [f.route]: f }), tier: t });
+    let e = null; try { await exec.handler({ slug: "flight-search", params: {} }, { headers: {} }); } catch (x) { e = x; }
+    ok(e?.statusCode === 409 && ran === false, `${t.slug}: flight-search refused 409 and never run (${e?.statusCode})`);
+  }
+}
+
+// External legs: wallet reading, Solana refusal, and status mapping.
+{
+  const { EXEC_TIERS } = await import("../src/tools/route-execute.js");
+  const PRO = EXEC_TIERS.find((t) => t.slug === "route-execute-pro");
+  const guard = await import("../src/external-spend-guard.js");
+  const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+  const cand = (host, networks = ["eip155:8453"]) => ({ seller: `https://${host}`, slug: host, url: `https://${host}/x`, method: "POST", price: "$0.001", networks });
+  const reqOn = (network) => ({ ip: "198.51.100.77", header: (n) => (n === "payment-signature" ? Buffer.from(JSON.stringify({ network, payload: {} })).toString("base64") : undefined) });
+  const run = async ({ list, pay, chains = ["base"], network = "eip155:8453", wallet = () => null }) => {
+    guard.__reset();
+    const calls = [];
+    const exec = buildRouteExecuteTool({
+      getCatalog: () => ({}), tier: PRO, resolveExternal: async () => list,
+      payExternal: async (url, opts) => { calls.push(url); return pay(url, opts); },
+      externalEnabled: () => true, externalChains: () => chains, spendingWalletStatus: wallet,
+    });
+    try { return { r: await exec.handler({ task: "t", include: "external" }, reqOn(network)), calls }; }
+    catch (e) { return { e, calls }; }
+  };
+  const good = async () => ({ result: { ok: 1 }, quote: { usd: 0.001 }, receipt: { transaction: "0xab" } });
+
+  // The default reader answers within one event-loop turn from the status
+  // module's own cache (keyless here: "unconfigured", never low).
+  {
+    const { cachedSpendingWalletStatus, spendingWalletReadsLow } = await import("../src/tools/route-execute.js");
+    const t0 = Date.now();
+    const st = await cachedSpendingWalletStatus();
+    ok(st?.status === "unconfigured" && Date.now() - t0 < 200 && (await spendingWalletReadsLow()) === false, `default wallet reader: ${st?.status}, not low, no wait`);
+  }
+  // A Base spending wallet that reads low: refused before anything is signed.
+  {
+    const { e, calls } = await run({ list: [cand("a.example")], pay: good, wallet: async () => ({ status: "low" }) });
+    ok(e?.statusCode === 503 && /temporarily unavailable/.test(e.message) && /Nothing was charged/.test(e.message) && calls.length === 0, `wallet low: 503 before any payment (status ${e?.statusCode}, paid ${calls.length}x)`);
+    ok(guard.walletDailySpentUsd("base") === 0, "wallet low: nothing booked on the chain's day");
+    for (const st of [{ status: "ok" }, { status: "unknown" }, null]) {
+      const c = await run({ list: [cand("a.example")], pay: good, wallet: async () => st });
+      ok(c.r?.receipt?.external === true && c.calls.length === 1, `CONTROL: wallet reading ${JSON.stringify(st)} pays as before`);
+    }
+    const thrown = await run({ list: [cand("a.example")], pay: good, wallet: async () => { throw new Error("read failed"); } });
+    ok(thrown.r?.receipt?.external === true, "CONTROL: an unreadable wallet status never blocks");
+  }
+  // Solana: a refusal proven only after waiting out the credential is not
+  // followed by a second seller in the same request.
+  {
+    const refused = async () => { throw Object.assign(new Error("Seller refused the payment (HTTP 402); the credential expired unused, nothing charged"), { statusCode: 502, refused: true, committed: false }); };
+    const { e, calls } = await run({ list: [cand("s1.example", [SOL]), cand("s2.example", [SOL])], pay: refused, chains: ["solana"], network: SOL });
+    ok(e?.statusCode === 502 && calls.length === 1, `Solana refusal after the wait: no second seller (paid ${calls.length}x)`);
+    const pre = async (url) => { if (url.includes("s1")) throw Object.assign(new Error("Seller unreachable"), { statusCode: 502 }); return good(); };
+    const c = await run({ list: [cand("s1.example", [SOL]), cand("s2.example", [SOL])], pay: pre, chains: ["solana"], network: SOL });
+    ok(c.r?.receipt?.seller === "https://s2.example" && c.calls.length === 2, "CONTROL: a Solana pre-payment failure still tries the next seller");
+    const b = await run({ list: [cand("b1.example"), cand("b2.example")], pay: async (url) => (url.includes("b1") ? refused() : good()) });
+    ok(b.r?.receipt?.seller === "https://b2.example", "CONTROL: a Base refusal the chain proved unpaid still tries the next seller");
+  }
+  // Algorand: the external leg gets a timeout inside the payment's short window.
+  {
+    const ALGO = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
+    let seen = null;
+    const c = await run({ list: [cand("g.example", [ALGO])], pay: async (url, opts) => { seen = opts; return good(); }, chains: ["algorand"], network: ALGO });
+    ok(c.r?.receipt?.external === true && Number.isFinite(seen?.timeoutMs) && seen.timeoutMs <= 16000, `Algorand payer: the seller call is budgeted (timeoutMs ${seen?.timeoutMs})`);
+    let base = null;
+    await run({ list: [cand("h.example")], pay: async (url, opts) => { base = opts; return good(); } });
+    ok(base && base.timeoutMs === undefined, "CONTROL: a Base payer keeps the payer's own timeout");
+  }
+  // A payer 402 (quote over the cap) or 400 (seller address not public) is
+  // never relayed to a paying buyer as is.
+  {
+    const q = await run({ list: [cand("q.example")], pay: async () => { throw Object.assign(new Error("Seller quote 9000000 atomic exceeds the 3000000 cap - refusing to pay"), { statusCode: 402 }); } });
+    ok(q.e?.statusCode === 409, `over-cap seller quote -> 409, never a challenge-less 402 (got ${q.e?.statusCode})`);
+    const p = await run({ list: [cand("p.example")], pay: async () => { throw Object.assign(new Error("Seller URL resolves to a private/blocked address"), { statusCode: 400 }); } });
+    ok(p.e?.statusCode === 502, `private seller address -> 502, not a 400 blaming the buyer (got ${p.e?.statusCode})`);
+    const n = await run({ list: [cand("n.example")], pay: async () => { throw Object.assign(new Error("Seller returned 404 for that request"), { statusCode: 404 }); } });
+    ok(n.e?.statusCode === 404, "CONTROL: other payer statuses are relayed unchanged");
+  }
+  // An internal tool's 402 is not relayed as a challenge-less 402 either.
+  {
+    const t402 = { route: "POST /api/t402", slug: "t402", price: "$0.001", discovery: { bodyType: "json" }, handler: async () => { throw Object.assign(new Error("upstream wants payment"), { statusCode: 402 }); } };
+    const exec = buildRouteExecuteTool({ getCatalog: () => ({ [t402.route]: t402 }) });
+    let e = null; try { await exec.handler({ slug: "t402", params: {} }); } catch (x) { e = x; }
+    ok(e?.statusCode === 502, `internal tool 402 -> 502 (got ${e?.statusCode})`);
+  }
+  guard.__reset();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

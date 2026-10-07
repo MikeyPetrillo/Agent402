@@ -1014,8 +1014,10 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // the credential expired unused. The second releases the hold and says so
     // on the error (`committed:false`), but the error still carries
     // `paidUnanswered`, which tells a caller not to try another seller here.
-    const unansweredPaidLeg = async (err) => {
-      if (neverLeftUs(err)) return err;
+    // `delivered`: an earlier attempt already received response headers, so
+    // the credential reached the seller whatever this error says.
+    const unansweredPaidLeg = async (err, { delivered = false } = {}) => {
+      if (!delivered && neverLeftUs(err)) return err;
       const where = (() => { try { return new URL(url).host; } catch { return "seller"; } })();
       const what = String(err?.name === "TimeoutError" ? "no answer before the timeout" : (err?.cause?.code || err?.code || err?.message || err)).slice(0, 80);
       committed = true;
@@ -1087,8 +1089,10 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
         const bodyBuf = Buffer.concat(chunks);
         paid = new Response(r.statusCode >= 200 && ![204, 304].includes(r.statusCode) ? bodyBuf : null, { status: r.statusCode, headers: flat });
       } catch (fallbackErr) {
-        // The retry carried the same payment header, so the same rule holds.
-        throw await unansweredPaidLeg(fallbackErr);
+        // The retry carried the same payment header, so the same rule holds,
+        // and the first attempt already got response headers back: the
+        // credential was delivered, so a connect-phase error here proves nothing.
+        throw await unansweredPaidLeg(fallbackErr, { delivered: true });
       }
     } finally {
       // close() waits for in-flight bodies; never block the buy on teardown.
@@ -1159,15 +1163,18 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // seller that 500s after payment would otherwise be recorded nowhere.
       // A 402/401 is the refusal shape and is handled by its own memo further
       // down; the two are kept separate because they need different answers.
-      if (memoizeDelivery && paid.status >= 500 && !(paid.headers.get("payment-response") || paid.headers.get("x-payment-response"))) {
-        noteSellerDeliveryFailure(sellerOrigin, chain, { status: paid.status, ms: Date.now() - sentAtMs });
-        // The money left and nothing came back. Before this, the case with the
-        // most to explain afterwards was the one that recorded least.
+      // The money left and nothing came back. Before this, the case with the
+      // most to explain afterwards was the one that recorded least. Recorded
+      // for every caller; only the steering memo is the router's own.
+      if (paid.status >= 500 && !(paid.headers.get("payment-response") || paid.headers.get("x-payment-response"))) {
         recordOutbound({
           chain, payTo: payable?.payTo ?? null, amountAtomic: quotedAtomic,
           asset: payable?.asset ?? null, usd: Number(quotedAtomic) / 1e6,
           slug: slug || null, origin: sellerOrigin, result: "undelivered", tx: null,
         });
+      }
+      if (memoizeDelivery && paid.status >= 500 && !(paid.headers.get("payment-response") || paid.headers.get("x-payment-response"))) {
+        noteSellerDeliveryFailure(sellerOrigin, chain, { status: paid.status, ms: Date.now() - sentAtMs });
         console.warn(`[x402-buyer] ${where} failed to deliver after payment (HTTP ${paid.status}, no receipt, ${Date.now() - sentAtMs}ms) - memoized as failing on ${chain}, the resolver will skip it`);
       }
       // A 4xx AFTER A CHARGE (2026-09-28). The memo above sees only a 5xx, so a
@@ -1184,14 +1191,15 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // seller takes the payment before reading the body the caller wrote.
       let deliveryStruck = false;
       const strikeChargedFailure = (how) => {
-        if (!memoizeDelivery || deliveryStruck || !(paid.status >= 400 && paid.status < 500) || isCallerInputStatus(paid.status)) return;
+        if (deliveryStruck || !(paid.status >= 400 && paid.status < 500) || isCallerInputStatus(paid.status)) return;
         deliveryStruck = true;
-        noteSellerDeliveryFailure(sellerOrigin, chain, { status: paid.status, ms: Date.now() - sentAtMs });
         recordOutbound({
           chain, payTo: payable?.payTo ?? null, amountAtomic: quotedAtomic,
           asset: payable?.asset ?? null, usd: Number(quotedAtomic) / 1e6,
           slug: slug || null, origin: sellerOrigin, result: "undelivered", tx: null,
         });
+        if (!memoizeDelivery) return;
+        noteSellerDeliveryFailure(sellerOrigin, chain, { status: paid.status, ms: Date.now() - sentAtMs });
         console.warn(`[x402-buyer] ${where} took the payment and answered HTTP ${paid.status} (${how}) - memoized as failing on ${chain}`);
       };
       if (receiptSaysSettled(paid.headers)) strikeChargedFailure("its own settle receipt");

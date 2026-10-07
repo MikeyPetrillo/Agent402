@@ -47,6 +47,8 @@ export const METERED_SLUGS = new Set([
   "code-run", "code-run-pro",
   // Route-and-execute can buy external sellers
   "route-execute", "seller-payability", "route-execute-max", "route-execute-plus",
+  // Flights buy from outside sellers (flights-kit.js).
+  "flight-search", "flight-status",
   // Identity-bound (payment = identity)
   "memory-write", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-revoke",
   "memory-grants", "memory-log", "memory-remember", "memory-recall", "memory-forget",

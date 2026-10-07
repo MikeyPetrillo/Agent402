@@ -1,0 +1,79 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /Lang (en) >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
+endobj
+5 0 obj
+<< /Length 892 >>
+stream
+BT /F1 20 Tf 72 720 Td (Paying for Tools per Request) Tj ET
+BT /F1 12 Tf 72 672 Td (An agent that needs one answer should be able to buy one answer.) Tj ET
+BT /F1 12 Tf 72 654 Td (This sample report describes how a tool server can price each call,) Tj ET
+BT /F1 12 Tf 72 636 Td (ask for payment in the HTTP 402 response, and serve the result once) Tj ET
+BT /F1 12 Tf 72 618 Td (the payment is proven. No account is created and no key is shared.) Tj ET
+BT /F1 12 Tf 72 582 Td (The buyer sends a request and receives a price. It signs a payment) Tj ET
+BT /F1 12 Tf 72 564 Td (for that exact amount and sends the request again. The server checks) Tj ET
+BT /F1 12 Tf 72 546 Td (the signature, runs the tool, and settles the payment only when the) Tj ET
+BT /F1 12 Tf 72 528 Td (tool succeeded. A failed call is never charged.) Tj ET
+BT /F1 9 Tf 72 60 Td (Agent402 sample report, page 1 of 3) Tj ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 7 0 R >>
+endobj
+7 0 obj
+<< /Length 658 >>
+stream
+BT /F1 20 Tf 72 720 Td (How a Price Is Chosen) Tj ET
+BT /F1 12 Tf 72 672 Td (Most tools are deterministic code with a fixed price per call.) Tj ET
+BT /F1 12 Tf 72 654 Td (Model-backed tools are metered: the server quotes a ceiling first) Tj ET
+BT /F1 12 Tf 72 636 Td (and charges the measured usage, never more than the quote.) Tj ET
+BT /F1 12 Tf 72 600 Td (Prices are published in a machine-readable catalog so an agent can) Tj ET
+BT /F1 12 Tf 72 582 Td (compare tools before it calls one. The same catalog lists which) Tj ET
+BT /F1 12 Tf 72 564 Td (payment networks each tool accepts.) Tj ET
+BT /F1 9 Tf 72 60 Td (Agent402 sample report, page 2 of 3) Tj ET
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 9 0 R >>
+endobj
+9 0 obj
+<< /Length 480 >>
+stream
+BT /F1 20 Tf 72 720 Td (What the Buyer Keeps) Tj ET
+BT /F1 12 Tf 72 672 Td (Every paid answer carries a receipt that names the payment, so a) Tj ET
+BT /F1 12 Tf 72 654 Td (buyer can match its spending to the calls it made. A retry with) Tj ET
+BT /F1 12 Tf 72 636 Td (the same idempotency key returns the first answer instead of paying) Tj ET
+BT /F1 12 Tf 72 618 Td (twice. This page closes the sample report.) Tj ET
+BT /F1 9 Tf 72 60 Td (Agent402 sample report, page 3 of 3) Tj ET
+endstream
+endobj
+10 0 obj
+<< /Title (Paying for Tools per Request) /Author (Agent402) >>
+endobj
+xref
+0 11
+0000000000 65535 f 
+0000000009 00000 n 
+0000000069 00000 n 
+0000000138 00000 n 
+0000000208 00000 n 
+0000000334 00000 n 
+0000001277 00000 n 
+0000001403 00000 n 
+0000002112 00000 n 
+0000002238 00000 n 
+0000002769 00000 n 
+trailer
+<< /Size 11 /Root 1 0 R /Info 10 0 R>>
+startxref
+2848
+%%EOF

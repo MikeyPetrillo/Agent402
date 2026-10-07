@@ -956,6 +956,7 @@ jobs:
           t node scripts/test-trial.js
           # LLM gateway validation (OpenAI-compat tiers, caps, env-gated 503)
           t node scripts/test-llm-gateway.js
+          t node scripts/test-gateway-resilience.js
           t node scripts/test-llm-kit-spend.js
           t node scripts/test-upstream-costs.js
           t node scripts/test-ci-secretless-install.js
@@ -2362,6 +2363,8 @@ jobs:
           # Index warm-start (crawl cache survives a redeploy; no half-crawled marketplace — offline)
           t node scripts/test-index-warmstart.js
           t node scripts/test-index-persist-last-good.js
+          # A seller without /.well-known/x402 keeps its catalog when its /openapi.json, /agents.json or /llms.txt answers 304 (offline)
+          t node scripts/test-index-fallback-304.js
           # A seller's own payTo outranks a registry's record of an old wallet, across re-crawls (offline)
           t node scripts/test-seller-payto-precedence.js
           # Crawl load is per operator, not per origin; the register global cap is a backstop (offline)
@@ -2582,6 +2585,8 @@ jobs:
           t node scripts/test-llm-messages.js
           # Availability failover: a model with no live host is served by its same-family successor (named in the reply), model_fallback:false opts out, rate limits retry the same model first (offline, every wire)
           t node scripts/test-gateway-availability.js
+          # Flight search and status: sellers are config, payTo pinned and capped, no second seller after a payment may have left, spend guard first (offline)
+          t node scripts/test-flights-kit.js
           # Google's native generateContent wire (translation, not a relay)
           t node scripts/test-llm-gemini-kit.js
           # The CLASS of a 4xx in telemetry, and the promise no buyer text rides with it
@@ -2606,6 +2611,7 @@ jobs:
           t node scripts/test-stt-cap.js
           # TTS lite tier (Kokoro over OpenRouter): contract parity, the margin bound, refusals (offline)
           t node scripts/test-tts-lite.js
+          t node scripts/test-tts-elevenlabs.js
           # Stellar late-settle confirmation (a confirmed transfer overrides the facilitator; a payment to anyone else never does — offline)
           t node scripts/test-stellar-confirm.js
           # SVM settle-reason clarity (a measured empty wallet becomes "insufficient_funds"; specific reasons and funded wallets never rewritten — offline)
@@ -3650,6 +3656,16 @@ jobs:
       # it every route it covers (TEST_ALL_SKIP_STRICT_COVERED) and sweeps the rest.
       - name: Non-metered paid examples (strict — 502/503/504 fail; NETWORK leniency hole)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-non-metered-examples.js
+
+      # Published examples fetch from agent402.tools or our /fixtures/, never
+      # another site that can refuse a CI runner (seo-audit, 2026-10-07).
+      - name: Published examples name only our own hosts
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-example-hosts.js
+
+      # A price the wiki quotes for an endpoint is the catalog's (wiki/TTS.md
+      # kept old TTS prices after a reprice, 2026-10-07).
+      - name: Wiki endpoint prices match the catalog
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-wiki-prices.js
 
       # Every skill pack must WORK on its own published example, not merely
       # return a well-shaped envelope. Nine packs sold for two months answering

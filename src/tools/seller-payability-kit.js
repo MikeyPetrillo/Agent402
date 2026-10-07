@@ -52,6 +52,7 @@ import { usdcDomainVerdict, usdcDomainMismatchDetail } from "../evm-usdc-domain.
 import { payerFromRequest } from "../payer.js";
 import { acceptsFromLive402, quoteFromAccepts } from "../x402-live-quote.js";
 import { readTextCapped } from "../capped-body.js";
+import { cachedSpendingWalletStatus, spendingWalletReadsLow, WALLET_LOW_MESSAGE } from "./route-execute.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -169,6 +170,7 @@ export function payabilityFlags({ bare, challenge, domains, paid, receipt, settl
 export function buildSellerPayabilityTool({
   pay, spendChain = "base", fetchImpl, assertPublicUrl, now = () => Date.now(),
   maySpend = realMaySpend, noteSpend = realNoteSpend, adjustSpend = realAdjustSpend,
+  spendingWalletStatus = cachedSpendingWalletStatus,
 } = {}) {
   async function handler(input, req) {
     const url = normalizeTarget(input?.url);
@@ -274,6 +276,11 @@ export function buildSellerPayabilityTool({
       if (settleableMs != null && settleableMs < EVM_SELLER_ALLOWANCE_MS) {
         adjustSpend(spendHandle, 0);
         throw bad("Too little of your payment authorization's life is left to pay the seller and still settle this check (EVM credentials expire at their validBefore, and must still be valid 6 s after the check ends). Nothing was spent and nothing is charged. Retry with a fresh authorization: a stock client signs 300 s ahead.", 504);
+      }
+      // Nothing is signed from a wallet that reads low (a cached reading).
+      if (spendChain === "base" && await spendingWalletReadsLow(spendingWalletStatus)) {
+        adjustSpend(spendHandle, 0);
+        throw bad(WALLET_LOW_MESSAGE, 503);
       }
       const t1 = now();
       try {

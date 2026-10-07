@@ -91,9 +91,9 @@ ok(rankTempoResources(cat, "", { capUsd: 1 }).length === 0, "empty task ranks no
 // ---- stub MPP seller ----
 const RECIPIENT = "0x1111111111111111111111111111111111111111";
 let sellerMode = "ok"; let paidHits = 0; let lastAuth = null;
-const challengeHeader = ({ currency = TEMPO_USDC, amount = "2000", chainId = 4217 } = {}) => Challenge.serialize(Challenge.from({
+const challengeHeader = ({ currency = TEMPO_USDC, amount = "2000", chainId = 4217, supportedModes } = {}) => Challenge.serialize(Challenge.from({
   realm: "seller.test", method: "tempo", intent: "charge", expires: new Date(Date.now() + 60_000),
-  request: { amount, currency, recipient: RECIPIENT, methodDetails: { chainId, feePayer: true } }, secretKey: "seller-secret",
+  request: { amount, currency, recipient: RECIPIENT, methodDetails: { chainId, feePayer: true, ...(supportedModes ? { supportedModes } : {}) } }, secretKey: "seller-secret",
 }));
 const seller = createServer((req, res) => {
   let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
@@ -104,13 +104,16 @@ const seller = createServer((req, res) => {
       const rcpt = Buffer.from(JSON.stringify({ method: "tempo", status: "success", reference: "0xbeef", timestamp: new Date().toISOString() })).toString("base64url");
       if (sellerMode === "fail-500") { res.writeHead(500, { "content-type": "text/plain" }); return res.end("boom"); }
       if (sellerMode === "fail-400") { res.writeHead(400, { "content-type": "application/json" }); return res.end("{}"); }
+      // A paid 200 whose body breaks off mid-read.
+      if (sellerMode === "broken-body") { res.writeHead(200, { "content-type": "application/json", "content-length": "5000" }); res.write('{"partial":'); return setTimeout(() => res.destroy(), 20); }
       // Charge-first, the stock mppx shape: the receipt rides on every status.
       const charged = /^fail-(\d{3})-receipt$/.exec(sellerMode);
       if (charged) { res.writeHead(Number(charged[1]), { "content-type": "application/json", "payment-receipt": rcpt }); return res.end("{}"); }
       res.writeHead(200, { "content-type": "application/json", "payment-receipt": Buffer.from(JSON.stringify({ method: "tempo", status: "success", reference: "0xfeed", timestamp: new Date().toISOString() })).toString("base64url") });
       return res.end(JSON.stringify({ scraped: true, echo: body ? JSON.parse(body) : null }));
     }
-    const opts = sellerMode === "pathusd" ? { currency: PATH_USD } : sellerMode === "expensive" ? { amount: "900000" } : sellerMode === "wrong-chain" ? { chainId: 42431 } : {};
+    const opts = sellerMode === "pathusd" ? { currency: PATH_USD } : sellerMode === "expensive" ? { amount: "900000" } : sellerMode === "wrong-chain" ? { chainId: 42431 }
+      : sellerMode === "push-only" ? { supportedModes: ["push"] } : sellerMode === "pull-push" ? { supportedModes: ["pull", "push"] } : {};
     res.writeHead(402, { "www-authenticate": challengeHeader(opts) });
     res.end("{}");
   });
@@ -146,6 +149,64 @@ await refuse("ok", { proof: proofDown }, /refusing to spend/, "proof RPC down (f
 sellerMode = "reject-paid";
 let rej = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: proofOk }); } catch (e) { rej = e; }
 ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502, "seller 402 after payment -> 502 (buyer's settlement cancels; our exposure is bounded by cap)");
+
+// ---- one deadline for the whole purchase ----
+{
+  // A settlement-history read that never answers is cut at the deadline.
+  sellerMode = "ok";
+  const before = minted;
+  const t0 = Date.now();
+  const hang = new Promise(() => {});
+  const guard = new Promise((r) => setTimeout(() => r("test guard fired"), 8000));
+  const out = await Promise.race([payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: () => hang, timeoutMs: 4000 }).then(() => "paid", (e) => e), guard]);
+  ok(out instanceof Error && out.statusCode === 503 && /deadline/.test(out.message) && minted === before && Date.now() - t0 < 6000, `a hanging settlement-history read ends at the deadline, nothing minted (${out instanceof Error ? out.statusCode : out})`);
+  // Too little time left after the read: refused before minting.
+  const slow = async () => { await new Promise((r) => setTimeout(r, 1500)); return 4000; };
+  let e = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: slow, timeoutMs: 4000 }); } catch (x) { e = x; }
+  ok(e && e.statusCode === 504 && minted === before && e.committed !== true, `under 3 s left before minting -> 504, nothing signed (${e?.statusCode}: ${String(e?.message).slice(0, 60)})`);
+  // Signing that uses up the budget: the credential is not sent.
+  const slowMint = async (resp) => { await new Promise((r) => setTimeout(r, 1500)); return mint(resp); };
+  let late = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: slowMint, proof: proofOk, timeoutMs: 4000 }); } catch (x) { late = x; }
+  ok(late && late.statusCode === 504 && /not sent/.test(late.message) && late.committed !== true, `under 3 s left after signing -> 504, the payment is not sent (${late?.statusCode}: ${String(late?.message).slice(0, 60)})`);
+  const mintedBeforeControl = minted;
+  const r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: proofOk, timeoutMs: 4000 });
+  ok(r.result?.scraped === true && minted === mintedBeforeControl + 1, "CONTROL: a quick purchase inside the same budget pays as before");
+}
+
+// ---- pull mode only: a push-only seller is refused before any broadcast ----
+{
+  const savedKey = process.env.TEMPO_UPSTREAM_BUYER_KEY;
+  process.env.TEMPO_UPSTREAM_BUYER_KEY = "0x" + "42".repeat(32);
+  const realFetch = globalThis.fetch;
+  const outside = [];
+  globalThis.fetch = async (u, init) => {
+    const href = String(u?.url || u);
+    if (!href.startsWith("http://127.0.0.1")) { outside.push(href); throw new Error("offline test: no chain RPC"); }
+    return realFetch(u, init);
+  };
+  try {
+    for (const [mode, label] of [["push-only", "push-only"], ["pull-push", "pull or push"]]) {
+      sellerMode = mode; outside.length = 0;
+      const hitsBefore = paidHits;
+      let e = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, proof: proofOk }); } catch (x) { e = x; }
+      ok(e && e.committed !== true && paidHits === hitsBefore, `${label} challenge with the real credential factory: no paid request sent (${e?.statusCode}: ${String(e?.message).slice(0, 80)})`);
+      if (mode === "push-only") ok(e?.statusCode === 409 && /push-mode/.test(e.message) && outside.length === 0, `push-only seller refused 409 before any chain call (chain calls: ${outside.length})`);
+      else ok(e?.statusCode === 502 && /nothing was sent/.test(e.message) && outside.length > 0, "CONTROL: a pull-capable challenge reaches the pull credential's own preparation");
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    if (savedKey === undefined) delete process.env.TEMPO_UPSTREAM_BUYER_KEY; else process.env.TEMPO_UPSTREAM_BUYER_KEY = savedKey;
+  }
+}
+
+// ---- a paid 200 whose body cannot be read is relayed, never a 502 ----
+{
+  sellerMode = "broken-body";
+  let e = null, r = null;
+  try { r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: proofOk }); } catch (x) { e = x; }
+  ok(!e && r && r.result?.relayError === "upstream body unreadable" && r.quote?.usd === 0.002, `paid 200 with a broken body -> relayed with relayError (${e ? `threw ${e.statusCode}` : JSON.stringify(r?.result)})`);
+  sellerMode = "ok";
+}
 
 // ---- the distinct-payer floor at pay time (2026-09-28) ----
 // The count alone was cheap to reach from wallets the seller holds. A proof

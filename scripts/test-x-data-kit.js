@@ -289,3 +289,41 @@ if (fail) process.exit(1);
   } finally { globalThis.fetch = realFetch; delete process.env.X_BEARER_TOKEN; delete process.env.X_DATA_DAILY_MAX_USD; _xSpendReset(); }
   console.log(`cap: ${p} passed, ${f} failed`); if (f) process.exitCode = 1;
 }
+
+// --- the estimate is reserved before the call: concurrent reads cannot overshoot the cap --
+{
+  const { estimateXReadUsd, xDataSpendStatus, _xSpendReset } = await import("../src/tools/x-data-kit.js");
+  let p = 0, f = 0; const ok = (c, m) => { if (c) { p++; console.log(`ok - reserve: ${m}`); } else { f++; console.error(`FAIL - reserve: ${m}`); } };
+  const est = estimateXReadUsd("/tweets/search/recent", { max_results: 10 });
+  process.env.X_BEARER_TOKEN = "test-bearer";
+  process.env.X_DATA_DAILY_MAX_USD = String(est * 1.01);
+  const realFetch = globalThis.fetch; let fetched = 0;
+  const page = () => new Response(JSON.stringify({ data: Array.from({ length: 10 }, (_, i) => ({ id: String(1e10 + i), text: "t" })), meta: {} }), { status: 200, headers: { "content-type": "application/json" } });
+  try {
+    _xSpendReset();
+    globalThis.fetch = async () => { fetched++; await new Promise((r) => setTimeout(r, 30)); return page(); };
+    const rs = await Promise.allSettled(Array.from({ length: 6 }, () => __test.xGet("/tweets/search/recent", { max_results: 10 })));
+    ok(rs.filter((r) => r.status === "fulfilled").length === 1 && fetched === 1, `with room for one read, six concurrent reads send one upstream call (sent ${fetched})`);
+    ok(xDataSpendStatus().spentUsd <= xDataSpendStatus().capUsd + 1e-4, "booked spend stays inside the cap");
+    // A clean 4xx releases the reservation; a 5xx and a timeout keep it.
+    for (const [label, reply, keep] of [
+      ["400", () => new Response("{}", { status: 400 }), false],
+      ["404", () => new Response("{}", { status: 404 }), false],
+      ["429", () => new Response("{}", { status: 429 }), false],
+      ["500", () => new Response("{}", { status: 500 }), true],
+      ["timeout", () => { throw Object.assign(new Error("aborted"), { name: "TimeoutError" }); }, true],
+    ]) {
+      _xSpendReset();
+      globalThis.fetch = async () => reply();
+      await __test.xGet("/tweets/search/recent", { max_results: 10 }).catch(() => {});
+      const spent = xDataSpendStatus().spentUsd;
+      ok(keep ? spent > 0 : spent === 0, `${label}: reservation ${keep ? "kept" : "released"}`);
+    }
+    // A 200 corrects the reservation to the actual items returned.
+    _xSpendReset();
+    globalThis.fetch = async () => new Response(JSON.stringify({ data: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    await __test.xGet("/tweets/search/recent", { max_results: 10 });
+    ok(xDataSpendStatus().spentUsd === 0, "an empty page corrects the reservation down to zero");
+  } finally { globalThis.fetch = realFetch; delete process.env.X_BEARER_TOKEN; delete process.env.X_DATA_DAILY_MAX_USD; _xSpendReset(); }
+  console.log(`reserve: ${p} passed, ${f} failed`); if (f) process.exitCode = 1;
+}

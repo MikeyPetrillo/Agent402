@@ -4694,7 +4694,7 @@ export async function __crawlSellerForTest(originUrl) { return crawlSeller(origi
 /** Fetch `path` on `originUrl` unless it is backed off, recording the outcome.
  *  Every per-origin probe in the crawl goes through here so a new one cannot be
  *  added ungated the way /agents.json and /llms.txt were. */
-async function probePath(originUrl, path, { manifestPublished = false, ...opts } = {}) {
+async function probePath(originUrl, path, { manifestPublished = false, conditional = true, ...opts } = {}) {
   if (!probeDue(originUrl, path)) throw new Error(`probe backed off: ${path}`);
   // Every per-origin probe already funnels through here, so this is the one
   // place robots has to be checked for it to be checked everywhere.
@@ -4713,8 +4713,10 @@ async function probePath(originUrl, path, { manifestPublished = false, ...opts }
     // Validators are stored per (origin, path) and a 304 leaves them alone -
     // RFC 9110 allows a 304 to omit the ETag it matched on, so overwriting them
     // with a null read would disable revalidation from the second cycle on.
-    const stored = validatorFor(originUrl, path);
-    const res = await crawlFetch(`${originUrl}${path}`, { ...opts, validators: stored, allowNotModified: true });
+    // A fallback document is read unconditionally: that branch keeps no parsed
+    // copy, so a 304 would only be followed by a second, full fetch.
+    const stored = conditional ? validatorFor(originUrl, path) : null;
+    const res = await crawlFetch(`${originUrl}${path}`, { ...opts, validators: stored, allowNotModified: conditional });
     // A path seller's document must be served from under its own prefix. A
     // redirect to another path on the same host is another app's document,
     // and reading it as this seller's would attribute that app to it.
@@ -4726,7 +4728,7 @@ async function probePath(originUrl, path, { manifestPublished = false, ...opts }
       if (res.validators) rememberValidator(originUrl, path, res.validators);
       return res;
     }
-    rememberValidator(originUrl, path, res.validators || null);
+    rememberValidator(originUrl, path, conditional ? res.validators || null : null);
     return res;
   } catch (e) {
     noteProbeOutcome(originUrl, path, false);
@@ -4769,6 +4771,20 @@ export function clearValidatorsFor(originUrl) {
  *  produces: the origin is fine, we hold a validator, and we have nothing to
  *  pair it with.
  */
+/** The body of a fallback document. The manifest branch keeps what its last
+ *  fetch derived, but the fallback branch (no /.well-known/x402: /openapi.json,
+ *  /agents.json, /llms.txt) keeps nothing, so a 304 there parsed an empty body
+ *  and the seller lost every tool from its second crawl on: "\"undefined\" is
+ *  not valid JSON" on 8 of 66 crawl_failed origins, 2026-10-07. Fallback reads
+ *  are therefore unconditional; a 304 arrives here only when the manifest
+ *  branch already fetched /openapi.json conditionally this crawl, and that one
+ *  is re-read in full. */
+async function fallbackBody(originUrl, path, res, opts) {
+  if (!res?.notModified) return res?.html;
+  rememberValidator(originUrl, path, null);
+  return (await probePath(originUrl, path, opts)).html;
+}
+
 async function probeDoc(originUrl, path, opts, prevParsed) {
   const res = await probePath(originUrl, path, opts);
   if (!res.notModified) return { parsed: JSON.parse(res.html), reused: false, finalUrl: res.finalUrl || null };
@@ -4947,8 +4963,8 @@ async function crawlSeller(originUrl) {
     const fallbackErrors = [];
     const noteFallback = (path, e) => fallbackErrors.push({ path, error: String(e?.message || e).slice(0, 160) });
     try {
-      const openapiRes = await fetchOpenapi();
-      const parsed = JSON.parse(openapiRes.html);
+      const openapiRes = await fetchOpenapi({ conditional: false });
+      const parsed = JSON.parse(await fallbackBody(originUrl, "/openapi.json", openapiRes, { maxBytes: MAX_OPENAPI_BYTES }));
       if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
         openapi = parsed;
         openapiTools = normaliseOpenapiTools(parsed, originUrl);
@@ -4971,8 +4987,8 @@ async function crawlSeller(originUrl) {
     //    carries a payment signal. A plain JSON file is not an x402 seller.
     if (!openapiTools.length) {
       try {
-        const agentsRes = await probePath(originUrl, "/agents.json", { maxBytes: MAX_OPENAPI_BYTES });
-        const parsed = JSON.parse(agentsRes.html);
+        const agentsRes = await probePath(originUrl, "/agents.json", { maxBytes: MAX_OPENAPI_BYTES, conditional: false });
+        const parsed = JSON.parse(await fallbackBody(originUrl, "/agents.json", agentsRes, { maxBytes: MAX_OPENAPI_BYTES }));
         if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
           const fromAgents = normaliseOpenapiTools(parsed, originUrl);
           if (fromAgents.length) { openapi = openapi || parsed; openapiTools = fromAgents; openapiPath = "/agents.json"; }
@@ -4992,8 +5008,8 @@ async function crawlSeller(originUrl) {
     //    is no separate document-level check to apply.
     if (!openapiTools.length) {
       try {
-        const llmsRes = await probePath(originUrl, "/llms.txt", { maxBytes: MAX_OPENAPI_BYTES });
-        const fromLlms = normaliseLlmsTxtTools(llmsRes.html, originUrl);
+        const llmsRes = await probePath(originUrl, "/llms.txt", { maxBytes: MAX_OPENAPI_BYTES, conditional: false });
+        const fromLlms = normaliseLlmsTxtTools(await fallbackBody(originUrl, "/llms.txt", llmsRes, { maxBytes: MAX_OPENAPI_BYTES }), originUrl);
         if (fromLlms.length) { openapiTools = fromLlms; openapiPath = "/llms.txt"; }
       } catch (e) {
         /* no llms.txt either */

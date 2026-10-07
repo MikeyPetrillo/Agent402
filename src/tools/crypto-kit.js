@@ -17,7 +17,7 @@
 // use the same assertPublicUrl + native fetch pattern as finance-kit for
 // consistency and to keep the per-host UA option open.
 import { assertPublicUrl } from "./fetch-guard.js";
-import { takeCgToken, isCoinGeckoHost } from "./coingecko-rate.js";
+import { cgTokenRefusal, cgRefusalMessage, isCoinGeckoHost } from "./coingecko-rate.js";
 import { redactSecrets } from "./redact.js";
 
 function bad(message, statusCode = 400) {
@@ -90,22 +90,60 @@ function normalizeCurrency(raw, dflt = "usd") {
   return s;
 }
 
+// Short in-process cache for CoinGecko reads, keyed on the exact URL. An
+// identical request inside the window gets the same answer the upstream gave
+// moments ago and spends no key budget. Text is stored, so every caller
+// parses its own copy.
+const CG_CACHE_TTL_MS = 30_000;
+const CG_CACHE_MAX = 200;
+const cgCache = new Map();
+/** Test seam: drop every cached CoinGecko answer. */
+export function clearCryptoCache() { cgCache.clear(); }
+function cgCacheGet(key, now = Date.now()) {
+  const hit = cgCache.get(key);
+  if (!hit) return null;
+  if (hit.expiresAt <= now) { cgCache.delete(key); return null; }
+  return hit.text;
+}
+// A body larger than this is served but not kept, so the cache stays small.
+const CG_CACHE_MAX_BODY = 256 * 1024;
+function cgCachePut(key, text, now = Date.now()) {
+  if (text.length > CG_CACHE_MAX_BODY) return;
+  if (cgCache.size >= CG_CACHE_MAX) { const oldest = cgCache.keys().next().value; if (oldest !== undefined) cgCache.delete(oldest); }
+  cgCache.set(key, { text, expiresAt: now + CG_CACHE_TTL_MS });
+}
+
+// CoinGecko error codes on a 401/403. Plan/range codes are about the request
+// (an endpoint or a date range the key does not serve); everything else on a
+// 401/403 is this server's key, which no buyer input can fix.
+const CG_PLAN_CODES = new Set([10005, 10012]);
+function cgErrorCode(text) {
+  try { const b = JSON.parse(text); const c = b?.status?.error_code ?? b?.error?.status?.error_code; return c != null && Number.isFinite(Number(c)) ? Number(c) : null; } catch { return null; }
+}
+
 async function jsonGet(url, host = "CoinGecko") {
   const safeUrl = await assertPublicUrl(url);
   // CoinGecko Demo key (env-gated; keyless works too, just worse): keyless
   // requests are rate-limited PER IP — and Railway egress IPs are shared, so
   // the effective quota is whatever other tenants left. A key moves metering
-  // to our own ~30 req/min quota. Gated to CoinGecko hosts only: this shared
+  // to our own quota. Gated to CoinGecko hosts only: this shared
   // helper also hits Coinbase Exchange (crypto-orderbook), and the key must
   // never ride a request to another host.
   const cgKey = process.env.COINGECKO_API_KEY;
-  const sendCgKey = Boolean(cgKey) && isCoinGeckoHost(safeUrl.hostname);
-  // The key's minute budget is ONE bucket shared with crypto-markets-kit
+  const isCg = isCoinGeckoHost(safeUrl.hostname);
+  const sendCgKey = Boolean(cgKey) && isCg;
+  const cacheKey = isCg ? safeUrl.toString() : null;
+  if (cacheKey) {
+    const hit = cgCacheGet(cacheKey);
+    if (hit !== null) return JSON.parse(hit);
+  }
+  // The key's budget is ONE bucket shared with crypto-markets-kit
   // (coingecko-rate.js). Refuse before the upstream call when it is spent:
-  // 503 is never charged, and a call that went out anyway would only spend
-  // the 429 retry both kits then pay for.
-  if (isCoinGeckoHost(safeUrl.hostname) && !takeCgToken(Date.now())) {
-    throw bad("CoinGecko is rate limited right now, retry in a few seconds. You were not charged.", 503);
+  // 503 is never charged. Every request that goes out takes a token,
+  // retries included.
+  if (isCg) {
+    const why = cgTokenRefusal(Date.now());
+    if (why) throw bad(cgRefusalMessage(why), 503);
   }
   const attempt = (timeout) =>
     fetch(safeUrl, {
@@ -116,11 +154,13 @@ async function jsonGet(url, host = "CoinGecko") {
       },
       signal: AbortSignal.timeout(timeout),
     });
+  const mayRetry = () => !isCg || cgTokenRefusal(Date.now()) === null;
   let res;
   try {
     res = await attempt(10000);
   } catch (e) {
     // Single retry on network/timeout failure (same pattern as finance-kit).
+    if (!mayRetry()) throw bad(`${host} request failed: ${e.message}`, 504);
     try {
       res = await attempt(12000);
     } catch (e2) {
@@ -134,10 +174,12 @@ async function jsonGet(url, host = "CoinGecko") {
   // overall time budget. (finance-kit/gov-kit carry the same 5xx retry.)
   if (res.status === 429 || res.status >= 500) {
     await new Promise((r) => setTimeout(r, 2500));
-    try {
-      const retryRes = await attempt(12000);
-      if (retryRes.ok || retryRes.status !== res.status) res = retryRes;
-    } catch { /* fall through with the original response */ }
+    if (mayRetry()) {
+      try {
+        const retryRes = await attempt(12000);
+        if (retryRes.ok || retryRes.status !== res.status) res = retryRes;
+      } catch { /* fall through with the original response */ }
+    }
   }
   const text = await res.text();
   if (!res.ok) {
@@ -145,13 +187,19 @@ async function jsonGet(url, host = "CoinGecko") {
     if (s === 404) throw bad(`${host} returned 404 - unknown coin or market`, 422);
     if (s === 429) throw bad(`${host} rate-limited the request - retry shortly`, 503);
     if (s >= 500) throw bad(`${host} upstream HTTP ${s} - try again later`, 502);
+    if (isCg && (s === 401 || s === 403) && !CG_PLAN_CODES.has(cgErrorCode(text))) {
+      throw bad(`${host} is not configured on this deployment. You were not charged.`, 503);
+    }
     // Redact the FULL upstream body before slicing (a secret straddling the
     // 200-char cut would otherwise leave an unredactable prefix): the CoinGecko
     // demo key rides this request and there is no 401/403 shield above.
     throw bad(`${host} HTTP ${s}: ${redactSecrets(text).slice(0, 200)}`, 422);
   }
-  try { return JSON.parse(text); }
+  let parsed;
+  try { parsed = JSON.parse(text); }
   catch { throw bad(`${host} returned non-JSON response`, 502); }
+  if (cacheKey) cgCachePut(cacheKey, text);
+  return parsed;
 }
 
 const CG = "https://api.coingecko.com/api/v3";

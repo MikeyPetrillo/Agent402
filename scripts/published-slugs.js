@@ -59,6 +59,12 @@ export async function envGatedSegments() {
     import("../src/tools/exa-kit.js").then((m) => m.EXA_TOOLS),
     import("../src/tools/judge-kit.js").then((m) => m.JUDGE_TOOLS),
     import("../src/tools/b2b-enrich-kit.js").then((m) => m.B2B_ENRICH_TOOLS),
+    // Listed only when FLIGHT_SELLERS_JSON names sellers; built here with a
+    // placeholder seller per kind just to read the route names.
+    import("../src/tools/flights-kit.js").then((m) => m.buildFlightTools({
+      sellers: Object.fromEntries(["search", "status"].map((k) => [k, [{ url: "https://flights.example.invalid/x", method: "GET", format: k === "search" ? "fare-search-v1" : "flight-track-v1", maxUsd: 0.001, payTo: "0x" + "0".repeat(40), body: null }]])),
+      pay: async () => { throw new Error("route listing only"); },
+    })),
   ]);
   return segmentsOf(kits.flat().map((t) => t.route));
 }

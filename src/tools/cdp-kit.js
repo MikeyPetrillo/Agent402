@@ -73,28 +73,39 @@ export async function mintCdpJwt({ method, path, apiKeyId = keyId(), apiKeySecre
 
 /** One authenticated CDP REST call with repo-standard error attribution.
  *
- * Retries on transient failures — a network error / timeout, an HTTP 5xx
- * (a gateway 502/504 is normal on the heavier SQL-observatory aggregations),
- * or a 429 — with exponential backoff and a freshly-minted JWT per attempt.
- * A single blip from a busy upstream should never surface to a buyer (or a CI
- * gate) as a hard failure; only a sustained fault does. Client errors
- * (400/404/422) and auth/config issues are returned immediately — retrying
- * them just wastes time. Mirrors the 5xx-retry the finance/gov/crypto kits use. */
-async function cdpFetch(method, path, body) {
+ * Retries transient failures with backoff and a fresh JWT per attempt: an
+ * HTTP 5xx or a network error up to ATTEMPTS times, a 429 at most once
+ * (honoring a short Retry-After). A request that may have taken effect (a
+ * non-idempotent POST: faucet, onramp session) is never retried after a
+ * transport timeout. Client errors fail fast; 401/403 is this server's
+ * configuration and answers "not configured"; a final 429 is a 503 with no
+ * upstream detail. Every refusal here is >= 400, so the buyer is not charged. */
+const RETRY_AFTER_CAP_MS = 2000;
+function retryAfterMs(res) {
+  const raw = res?.headers?.get?.("retry-after");
+  if (raw == null || raw === "") return null;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n >= 0) return Math.min(RETRY_AFTER_CAP_MS, n * 1000);
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.min(RETRY_AFTER_CAP_MS, Math.max(0, at - Date.now())) : null;
+}
+
+async function cdpFetch(method, path, body, { idempotent = method === "GET" } = {}) {
   if (!keyId() || !keySecret()) {
     throw bad("This tool is temporarily unavailable: the operator has not configured Coinbase Developer Platform credentials (CDP_API_KEY_ID / CDP_API_KEY_SECRET).", 503);
   }
   // Ride out a transient CDP-side blip (a 5xx from their indexer, a timeout)
-  // rather than surfacing it to the caller: 5 attempts with exponential +
-  // jittered backoff (~0.4s, 0.8s, 1.6s, 3.2s, capped 4s; ~6s total worst case).
-  // A shallow 3x/~0.9s retry once let a brief indexer hiccup fail a live check.
-  // Our-fault errors (4xx) still fail fast below — only 429/5xx/network retry.
+  // rather than surfacing it to the caller: up to 5 attempts with exponential +
+  // jittered backoff (~0.4s, 0.8s, 1.6s, 3.2s, capped 4s).
   const ATTEMPTS = 5;
   let lastErr;
+  let rateLimited = 0;
+  let waitMs = null;
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     if (attempt > 0) {
-      const backoff = Math.min(4000, 400 * 2 ** (attempt - 1));
-      await new Promise((r) => setTimeout(r, backoff + Math.floor(Math.random() * 250)));
+      const backoff = waitMs ?? (Math.min(4000, 400 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 250));
+      waitMs = null;
+      await new Promise((r) => setTimeout(r, backoff));
     }
     const jwt = await mintCdpJwt({ method, path });
     let res;
@@ -107,18 +118,28 @@ async function cdpFetch(method, path, body) {
       });
     } catch (e) {
       lastErr = bad(`Coinbase Developer Platform did not respond: ${String(e?.message || e).slice(0, 80)}`, 504);
+      // The request may have reached CDP and taken effect: never resend it.
+      if (!idempotent) throw lastErr;
       continue; // network error / timeout — retry
     }
     const json = await res.json().catch(() => ({}));
     if (res.ok) return json;
+    if (res.status === 401 || res.status === 403) {
+      throw bad("This tool is temporarily unavailable: Coinbase Developer Platform access is not configured on this deployment.", 503);
+    }
+    if (res.status === 429) {
+      lastErr = bad("Coinbase Developer Platform is busy right now - retry shortly. Nothing was charged.", 503);
+      if (++rateLimited > 1) throw lastErr;
+      waitMs = retryAfterMs(res);
+      continue;
+    }
     // Redact any configured secret from the upstream error text before echoing
     // it — the request's JWT carries CDP_API_KEY_ID as its issuer/subject, so a
     // "key <id> not found"-style upstream message could otherwise reflect it.
     const detail = redactSecrets(String(json?.errorMessage || json?.message || json?.errorType || res.statusText)).slice(0, 200);
     if (res.status === 400 || res.status === 404 || res.status === 422) throw bad(`CDP rejected the request: ${detail}`, 422);
-    if (res.status === 429) { lastErr = bad(`CDP rate limit: ${detail}`, 429); continue; } // transient — back off + retry
     lastErr = bad(`CDP upstream error (HTTP ${res.status}): ${detail}`, 502);
-    if (res.status < 500) throw lastErr; // other non-5xx (e.g. 401/403 auth) — not retryable
+    if (res.status < 500) throw lastErr; // other non-5xx - not retryable
     // 5xx — fall through to retry
   }
   throw lastErr;
@@ -139,7 +160,7 @@ export async function cdpSql(sql, { cacheSeconds } = {}) {
   if (Number.isFinite(cacheSeconds) && cacheSeconds > 0) {
     body.cache = { maxAgeMs: Math.min(Math.floor(cacheSeconds), 900) * 1000 };
   }
-  const res = await cdpFetch("POST", "/platform/v2/data/query/run", body);
+  const res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true });
   const rows = res?.result ?? res?.rows ?? res?.data ?? res;
   return Array.isArray(rows) ? rows : [];
 }
@@ -167,7 +188,15 @@ export function faucetGate(address, now = Date.now()) {
   if (faucetLog.all.length >= 8) return { ok: false, reason: "The shared faucet budget for this service is exhausted for the next 24h (CDP caps faucet volume per account). Try again later." };
   forAddr.push(now);
   faucetLog.all.push(now);
-  return { ok: true };
+  // A drip that did not happen gives its slot back.
+  const release = () => {
+    const a = faucetLog.byAddress.get(address);
+    const i = a ? a.lastIndexOf(now) : -1;
+    if (i >= 0) a.splice(i, 1);
+    const j = faucetLog.all.lastIndexOf(now);
+    if (j >= 0) faucetLog.all.splice(j, 1);
+  };
+  return { ok: true, release };
 }
 
 const SHARED_TAGS = ["cdp", "coinbase", "wallet", "onboarding", "x402", "agent-wallet"];
@@ -259,12 +288,23 @@ export const CDP_TOOLS = [
       if (!FAUCET_TOKENS[network].has(token)) throw bad(`"token" must be one of: ${[...FAUCET_TOKENS[network]].join(", ")} on ${network}`);
       const gate = faucetGate(isSolana ? address : address.toLowerCase());
       if (!gate.ok) throw bad(gate.reason, 429);
-      const res = isSolana
-        ? await cdpFetch("POST", "/platform/v2/solana/faucet", { address, token })
-        : await cdpFetch("POST", "/platform/v2/evm/faucet", { address, network, token });
+      let res;
+      try {
+        res = isSolana
+          ? await cdpFetch("POST", "/platform/v2/solana/faucet", { address, token })
+          : await cdpFetch("POST", "/platform/v2/evm/faucet", { address, network, token });
+      } catch (e) {
+        // A timeout may still have dripped: keep the slot. Any other failure did not.
+        if (e?.statusCode !== 504) gate.release();
+        throw e;
+      }
       const tx = res?.transactionHash || res?.transactionSignature || null;
+      if (!tx) {
+        gate.release();
+        throw bad("The faucet did not return a transaction - retry shortly. Nothing was charged.", 502);
+      }
       return {
-        funded: Boolean(tx),
+        funded: true,
         network,
         token,
         transactionHash: tx,
@@ -386,7 +426,7 @@ export const CDP_TOOLS = [
       if (Number.isFinite(cacheSeconds) && cacheSeconds > 0) {
         body.cache = { maxAgeMs: Math.min(Math.floor(cacheSeconds), 900) * 1000 };
       }
-      const res = await cdpFetch("POST", "/platform/v2/data/query/run", body);
+      const res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true });
       const rows = res?.result ?? res?.rows ?? res?.data ?? res;
       const list = Array.isArray(rows) ? rows : [];
       return { rows: list, rowCount: list.length, ...(Array.isArray(rows) ? {} : { raw: res }) };

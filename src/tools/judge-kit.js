@@ -119,6 +119,7 @@ async function call(body, fetchImpl = fetch) {
   if (!res.ok) {
     // Relay the CLASS, never the body: it can echo the buyer's own state back.
     if (res.status === 401 || res.status === 403) { const e = new Error("Judgment upstream rejected our credentials."); e.statusCode = 503; throw e; }
+    if (res.status === 402) { const e = new Error("Judgment upstream is unavailable."); e.statusCode = 503; throw e; }
     if (res.status === 429) { const e = new Error("Judgment upstream is rate limiting. Retry shortly."); e.statusCode = 503; throw e; }
     if (res.status >= 400 && res.status < 500) throw bad(`Judgment upstream refused the request (${res.status}). Check the question shapes against /v1/judge's schema.`);
     const e = new Error(`Judgment upstream returned ${res.status}.`); e.statusCode = 502; throw e;

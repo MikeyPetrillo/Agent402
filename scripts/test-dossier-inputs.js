@@ -58,5 +58,20 @@ const facts = {
   ok(EXCERPT_TERMS[0] === "mark-to-market" && EXCERPT_TERMS.includes("going concern") && EXCERPT_TERMS.includes("material weakness"), "vocabulary leads with the bottom-line movers and carries the diligence disclosures");
   ok(extractFilingExcerpts("nothing here").length === 0, "no vocabulary hit -> no excerpts (the prompt then says the text was silent)");
 }
+// ---- SEC outage vs unknown ticker (stubbed fetch, no network) --------------------
+{
+  const { DOSSIER_TOOLS } = await import("../src/tools/dossier-kit.js");
+  const run = DOSSIER_TOOLS.find((t) => t.slug === "dossier").handler;
+  const realFetch = globalThis.fetch;
+  const J = (status, body) => new Response(typeof body === "string" ? body : JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  try {
+    globalThis.fetch = async () => J(503, "unavailable");
+    let e = await run({ ticker: "AAPL" }).catch((x) => x);
+    ok(e?.statusCode === 502 && /SEC EDGAR unavailable/.test(e.message), `SEC reads failing upstream -> 502 retry, not a 422 that blames the ticker (got ${e?.statusCode}: ${String(e?.message).slice(0, 80)})`);
+    globalThis.fetch = async (url) => (String(url).includes("company_tickers") ? J(200, { 0: { cik_str: 320193, ticker: "AAPL", title: "Apple Inc." } }) : J(503, "unavailable"));
+    e = await run({ ticker: "ZZZZQ" }).catch((x) => x);
+    ok(e?.statusCode === 422 && /No SEC EDGAR filings found/.test(e.message), `an unknown ticker still answers the 422 that names it (got ${e?.statusCode})`);
+  } finally { globalThis.fetch = realFetch; }
+}
 console.log(`${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

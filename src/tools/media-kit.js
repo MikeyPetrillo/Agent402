@@ -95,6 +95,43 @@ export async function toMp3(buffer, { bitrate = "192k" } = {}) {
   });
 }
 
+// Speech PCM (16-bit little-endian, mono) to a container format. The speech
+// wire we buy from serves mp3 and pcm only, so /api/tts encodes the other four
+// formats it has always offered here. Its own small pool: a transcode of known,
+// bounded input takes milliseconds and must not queue behind a 30 MB media job.
+const PCM_FORMATS = {
+  wav: ["-c:a", "pcm_s16le", "-f", "wav"],
+  flac: ["-c:a", "flac", "-f", "flac"],
+  opus: ["-c:a", "libopus", "-b:a", "64k", "-f", "ogg"],
+  aac: ["-c:a", "aac", "-b:a", "128k", "-f", "adts"],
+};
+//
+// A full pool QUEUES, it never refuses: the speech was already bought when this
+// runs, so a "busy" refusal would discard paid-for audio. A slot is handed straight to
+// the next waiter on release.
+const PCM_MAX_CONCURRENT = 4;
+let pcmActive = 0;
+const pcmWaiters = [];
+const pcmAcquire = () => (pcmActive < PCM_MAX_CONCURRENT ? (pcmActive++, Promise.resolve()) : new Promise((resolve) => pcmWaiters.push(resolve)));
+const pcmRelease = () => { const next = pcmWaiters.shift(); if (next) next(); else pcmActive--; };
+export const __pcmPoolForTest = () => ({ active: pcmActive, waiting: pcmWaiters.length });
+export async function transcodePcm(buffer, format, { sampleRate = 24000 } = {}) {
+  const out = PCM_FORMATS[format];
+  if (!out) throw bad(`Cannot encode speech as "${format}"`);
+  await pcmAcquire();
+  const dir = await mkdtemp(join(tmpdir(), "a402-pcm-"));
+  try {
+    const inPath = join(dir, "in.pcm");
+    const outPath = join(dir, `out.${format}`);
+    await writeFile(inPath, buffer);
+    await run("ffmpeg", ["-y", "-f", "s16le", "-ar", String(sampleRate), "-ac", "1", "-i", inPath, "-vn", "-map_metadata", "-1", ...out, outPath]);
+    return await readFile(outPath);
+  } finally {
+    pcmRelease();
+    rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 export async function normalizeAudio(buffer, { targetLufs = -16 } = {}) {
   const lufs = Number(targetLufs);
   if (!Number.isFinite(lufs) || lufs < -36 || lufs > -8) throw bad('"targetLufs" must be between -36 and -8 (default -16)');
@@ -168,9 +205,9 @@ export const MEDIA_TOOLS = [
     tags: ["ffmpeg", "ffprobe", "audio", "video", "metadata"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" },
+      input: { url: "https://agent402.tools/fixtures/sample-audio.wav" },
       inputSchema: { properties: { url: { type: "string", description: "Public URL of the media file (max 30MB)" } }, required: ["url"] },
-      output: { example: { formatName: "mp3", durationSec: 1832.4, bitrate: 192000, bytes: 4404000, streams: [{ type: "audio", codec: "mp3", sampleRate: 44100, channels: 2 }] } },
+      output: { example: { formatName: "wav", durationSec: 2, bitrate: 128312, bytes: 32078, streams: [{ type: "audio", codec: "pcm_s16le", sampleRate: 8000, channels: 1 }] } },
     },
     handler: async (i) => probeMedia(await fetchMedia(need(i, "url"))),
   },
@@ -181,7 +218,7 @@ export const MEDIA_TOOLS = [
     tags: ["ffmpeg", "mp4-to-mp3", "audio", "convert", "mp3"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" },
+      input: { url: "https://agent402.tools/fixtures/sample-audio.wav" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Public URL of the media file (max 30MB)" },
@@ -189,7 +226,7 @@ export const MEDIA_TOOLS = [
         },
         required: ["url"],
       },
-      output: { example: { format: "mp3", bitrate: "192k", bytes: 2210000, mp3Base64: "SUQzBAAAAA…" } },
+      output: { example: { format: "mp3", bitrate: "192k", bytes: 18765, mp3Base64: "SUQzBAAAAA…" } },
     },
     handler: async (i) => toMp3(await fetchMedia(need(i, "url")), { bitrate: i.bitrate ?? "192k" }),
   },
@@ -200,7 +237,7 @@ export const MEDIA_TOOLS = [
     tags: ["ffmpeg", "normalize", "loudnorm", "audio", "lufs"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" },
+      input: { url: "https://agent402.tools/fixtures/sample-audio.wav" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Public URL of the media file (max 30MB)" },
@@ -208,7 +245,7 @@ export const MEDIA_TOOLS = [
         },
         required: ["url"],
       },
-      output: { example: { format: "mp3", targetLufs: -16, truePeakDb: -1.5, bytes: 2210000, mp3Base64: "SUQzBAAAAA…" } },
+      output: { example: { format: "mp3", targetLufs: -16, truePeakDb: -1.5, bytes: 49581, mp3Base64: "SUQzBAAAAA…" } },
     },
     handler: async (i) => normalizeAudio(await fetchMedia(need(i, "url")), { targetLufs: i.targetLufs ?? -16 }),
   },

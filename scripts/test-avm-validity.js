@@ -95,4 +95,10 @@ ok("requiredSecondsFor: slow map + default", () => {
   assert.strictEqual(requiredSecondsFor("hash"), 20);
 });
 
+ok("route-execute keeps the default window (its external leg runs under its own budget)", () => {
+  assert.strictEqual(requiredSecondsFor("route-execute-pro"), 20);
+  const h = makeHeader({ firstValid: ROUND, lastValid: ROUND + 10 });
+  assert.doesNotThrow(() => checkAvmValidity(h, "route-execute-pro", ROUND));
+});
+
 console.log(`\ntest-avm-validity: ${passed} passed`);

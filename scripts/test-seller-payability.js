@@ -30,7 +30,7 @@ const delay = (ms, signal) => new Promise((resolve, reject) => {
 /** A tool wired to stubs; `spent` records what the guard was asked for. The
  *  unpaid call may take `bareDelayMs` of real time (honouring its abort
  *  signal) and move the tool's clock on by `bareAdvanceMs`. */
-function toolWith({ bare, pay, spendOk = true, bareDelayMs = 0, bareAdvanceMs = 0 } = {}) {
+function toolWith({ bare, pay, spendOk = true, bareDelayMs = 0, bareAdvanceMs = 0, wallet = async () => null } = {}) {
   const spent = { may: [], note: [], adjust: [], payOpts: [] };
   let clock = 1_757_000_000_000;
   const tool = buildSellerPayabilityTool({
@@ -45,6 +45,7 @@ function toolWith({ bare, pay, spendOk = true, bareDelayMs = 0, bareAdvanceMs = 
     noteSpend: (p, usd, o) => { spent.note.push({ usd, chain: o?.chain, payer: p }); return { handle: 1 }; },
     adjustSpend: (h, usd) => spent.adjust.push(usd),
     now: () => clock,
+    spendingWalletStatus: wallet,
   });
   return { tool, spent };
 }
@@ -245,6 +246,21 @@ function toolWith({ bare, pay, spendOk = true, bareDelayMs = 0, bareAdvanceMs = 
     "and the slug is long-running, so the paywall offers EVM exact only - the short-lived rails cannot settle a 55 s handler that already paid a seller");
   ok(requiredSecondsFor("seller-payability") >= 55,
     `the AVM guard demands a window that outlives the handler, so a HAND-BUILT Algorand payment is refused before the spend, not after (got ${requiredSecondsFor("seller-payability")}s)`);
+}
+
+// A Base spending wallet that reads low: nothing is signed, the booking is
+// released, and the buyer gets an uncharged 503.
+{
+  let paid = 0;
+  const { tool, spent } = toolWith({ wallet: async () => ({ status: "low" }), pay: async () => { paid++; return { result: {}, quote: { usd: 0.01 } }; } });
+  let e = null; try { await tool.handler({ url: "https://seller.example/x" }, { ip: "192.0.2.5" }); } catch (x) { e = x; }
+  ok(e?.statusCode === 503 && /temporarily unavailable/.test(e.message) && /Nothing was charged/.test(e.message) && paid === 0, `wallet low: 503 before signing (status ${e?.statusCode}, paid ${paid}x)`);
+  ok(spent.adjust.length === 1 && spent.adjust[0] === 0, `wallet low: the day's booking is given back (${JSON.stringify(spent.adjust)})`);
+  for (const st of [{ status: "ok" }, { status: "unknown" }, null]) {
+    const c = toolWith({ wallet: async () => st });
+    const out = await c.tool.handler({ url: "https://seller.example/x" }, { ip: "192.0.2.5" });
+    ok(out?.payment?.attempted === true && out.payable === true, `CONTROL: wallet reading ${JSON.stringify(st)} checks as before`);
+  }
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

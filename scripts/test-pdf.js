@@ -23,6 +23,21 @@ const info = await pdfInfo(a);
 if (info.pages !== 3 || info.title !== "Doc A") fail(`pdf-info wrong: ${JSON.stringify(info)}`);
 console.log("pdf-info ✓ (3 pages, title)");
 
+// A read reports the document's own metadata. pdf-lib stamps itself as
+// Creator/Producer and the dates as now on load unless told not to, so every
+// PDF used to read as made by pdf-lib a moment ago.
+{
+  const doc = await PDFDocument.create();
+  doc.addPage([300, 400]);
+  doc.setCreator("Fixture Writer");
+  doc.setProducer("Fixture Press");
+  doc.setCreationDate(new Date("2020-01-02T03:04:05Z"));
+  const own = await pdfInfo(Buffer.from(await doc.save({ updateFieldAppearances: false })));
+  if (own.creator !== "Fixture Writer" || own.producer !== "Fixture Press") fail(`pdf-info overwrote creator/producer: ${JSON.stringify(own)}`);
+  if (own.created !== "2020-01-02T03:04:05.000Z") fail(`pdf-info overwrote the creation date: ${own.created}`);
+  console.log("pdf-info ✓ (reports the document's own creator, producer and date)");
+}
+
 const merged = await mergePdfs([a, b]);
 if (merged.pages !== 5) fail(`pdf-merge wrong: ${merged.pages}`);
 if ((await PDFDocument.load(Buffer.from(merged.pdfBase64, "base64"))).getPageCount() !== 5) fail("merged base64 did not reload as 5 pages");

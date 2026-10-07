@@ -57,6 +57,10 @@ process.env.OPENROUTER_API_KEY = "test-key";
   };
   await throws({ text: "hi", format: "flac" }, "/api/tts", "a format Kokoro cannot serve is a 400 naming the tier that can, never a silent mp3");
   await throws({ text: "x".repeat(801) }, "800", "the 800-char cap is enforced before any upstream call");
+  for (const [status, code] of [[401, 502], [403, 502], [402, 503]]) {
+    const e = await throws({ text: "hi" }, "", `our key or credit refused (${status}) is ours`, err(status, { error: { message: "nope" } }));
+    ok(e?.statusCode === code, `a ${status} from the speech gateway is a ${code}, never a 400 blaming the request (got ${e?.statusCode})`);
+  }
   ok((await call({ text: "x".repeat(800) }, audio())).chars === 800, "and exactly 800 chars is served");
   await throws({ text: "hi", voice: "bogus" }, "Unknown voice", "an unknown voice is refused by name");
   await throws({}, '"text" is required', "empty input is refused");
@@ -74,11 +78,11 @@ process.env.OPENROUTER_API_KEY = "test-key";
   ok(noKey?.statusCode === 503, "with no key configured it is a 503 (our configuration, uncharged), not a 4xx blaming the buyer");
 }
 
-// --- the premium tiers are untouched --------------------------------------
+// --- the premium tiers (ElevenLabs since 2026-10-07; test-tts-elevenlabs.js) --
 {
-  ok(full.price === "$0.050" && bySlug["tts-hd"].price === "$0.100", "the OpenAI tiers keep their prices");
+  ok(Number(full.price.replace("$", "")) > Number(lite.price.replace("$", "")) * 10, "the premium tier stays well above the lite tier");
   ok(/tts-lite/.test(full.description), "the premium description names the cheaper sibling, so a buyer can find it");
-  ok(full.discovery.output.example.provider === "openai", "and still documents the OpenAI provider");
+  ok(full.discovery.output.example.model.startsWith("elevenlabs/"), "and documents the ElevenLabs model it serves");
 }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

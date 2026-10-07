@@ -9,7 +9,7 @@
 // rate limit), never PoW-eligible. Covered by scripts/test-price-feed-kit.js.
 
 import { protocols as llamaProtocols } from "./defi-kit.js";
-import { takeCgToken, isCoinGeckoHost } from "./coingecko-rate.js";
+import { cgTokenRefusal, cgRefusalMessage, isCoinGeckoHost } from "./coingecko-rate.js";
 const TIMEOUT_MS = 10_000;
 
 function bad(message, statusCode = 400) {
@@ -23,9 +23,24 @@ function bad(message, statusCode = 400) {
 // never charged, so waiting longer costs the buyer nothing but the wait.
 const LLAMA_DOC_TIMEOUT_MS = 25_000;
 
+// Short in-process cache for CoinGecko reads, keyed on the exact URL: an
+// identical request inside the window gets the answer fetched moments ago and
+// spends no key budget. Text is stored, so every caller parses its own copy.
+const CG_CACHE_TTL_MS = 30_000;
+const CG_CACHE_MAX = 200;
+const cgCache = new Map();
+/** Test seam: drop every cached CoinGecko answer. */
+export function clearPriceFeedCache() { cgCache.clear(); }
+
 async function feedFetch(url, { timeout = TIMEOUT_MS } = {}) {
   const host = new URL(url).hostname;
   const headers = { Accept: "application/json" };
+  const cacheKey = isCoinGeckoHost(host) ? String(url) : null;
+  if (cacheKey) {
+    const hit = cgCache.get(cacheKey);
+    if (hit && hit.expiresAt > Date.now()) return JSON.parse(hit.text);
+    if (hit) cgCache.delete(cacheKey);
+  }
   // CoinGecko demo key rides along when configured (call-time read, same header
   // as crypto-kit's jsonGet). Keyless CoinGecko is metered per IP — and our
   // egress IP is shared with every other Railway tenant.
@@ -36,7 +51,8 @@ async function feedFetch(url, { timeout = TIMEOUT_MS } = {}) {
     // no bucket at all (the 2026-08-28 fix reached the other two kits only), so
     // under load it overran the key for every caller. Refuse before the call
     // when the minute is spent: 503 is never charged.
-    if (!takeCgToken(Date.now())) throw bad("CoinGecko is rate limited right now, retry in a few seconds. You were not charged.", 503);
+    const why = cgTokenRefusal(Date.now());
+    if (why) throw bad(cgRefusalMessage(why), 503);
   }
   let res;
   try {
@@ -60,8 +76,15 @@ async function feedFetch(url, { timeout = TIMEOUT_MS } = {}) {
   if (!ct.includes("json")) {
     throw bad(`Price feed upstream returned non-JSON (${ct.split(";")[0] || "unknown"})`, 502);
   }
-  try { return await res.json(); }
+  let text, parsed;
+  try { text = await res.text(); parsed = JSON.parse(text); }
   catch { throw bad("Price feed upstream returned malformed JSON", 502); }
+  // A body over 256 KB is served but not kept, so the cache stays small.
+  if (cacheKey && text.length <= 256 * 1024) {
+    if (cgCache.size >= CG_CACHE_MAX) { const oldest = cgCache.keys().next().value; if (oldest !== undefined) cgCache.delete(oldest); }
+    cgCache.set(cacheKey, { text, expiresAt: Date.now() + CG_CACHE_TTL_MS });
+  }
+  return parsed;
 }
 
 // Pyth quotes prices as { price, expo } where the human value is price * 10**expo.

@@ -16,7 +16,7 @@ let assertFail = 0, liveOk = 0, liveErr = 0;
 const liveErrors = [];
 // An upstream that cannot mint a sandbox at all (E2B 5xx / their own timeouts) is THEIR outage, not a broken
 // integration: the same 502-is-not-ours rule the probe lanes use. Anything else (401, unexpected shape) stays fatal.
-const isSandboxOutage = (e) => Number(e.statusCode) >= 502 && /Sandbox creation failed|connection pool timeout|aborted due to timeout|Failed to create sandbox/i.test(String(e.message));
+const isSandboxOutage = (e) => Number(e.statusCode) >= 502 && /Sandbox creation failed|sandbox could not start|connection pool timeout|aborted due to timeout|Failed to create sandbox/i.test(String(e.message));
 const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; console.error(`ASSERT FAIL - ${m}`); } };
 
 // --- deterministic validation (no E2B key, no network) ---

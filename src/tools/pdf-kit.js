@@ -20,9 +20,12 @@ function need(input, field) {
 }
 const b64 = (bytes) => Buffer.from(bytes).toString("base64");
 
-async function load(buffer, label = "url") {
+// pdf-lib stamps itself as Creator and Producer and sets both dates to now on
+// load unless told not to. Harmless for a PDF we produce, wrong for a read:
+// pdf-info reported every document as made by pdf-lib a moment ago.
+async function load(buffer, label = "url", { readOnly = false } = {}) {
   try {
-    return await PDFDocument.load(buffer, { ignoreEncryption: true });
+    return await PDFDocument.load(buffer, { ignoreEncryption: true, ...(readOnly ? { updateMetadata: false } : {}) });
   } catch {
     throw bad(`"${label}" is not a readable PDF`);
   }
@@ -50,7 +53,7 @@ export function parsePages(spec, pageCount) {
 
 // ---- pure transforms over Buffers (no network) ----------------------------
 export async function pdfInfo(buffer) {
-  const doc = await load(buffer);
+  const doc = await load(buffer, "url", { readOnly: true });
   const d = (fn) => { try { const v = fn(); return v instanceof Date ? v.toISOString() : v || null; } catch { return null; } };
   return {
     pages: doc.getPageCount(),
@@ -124,9 +127,9 @@ export const PDF_TOOLS = [
     tags: ["pdf", "documents", "metadata", "convert-pdf"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://arxiv.org/pdf/1706.03762" },
+      input: { url: "https://agent402.tools/fixtures/sample-invoice.pdf" },
       inputSchema: { properties: { url: { type: "string", description: "Public URL of the PDF" } }, required: ["url"] },
-      output: { example: { pages: 15, title: "Attention Is All You Need", encrypted: false, bytes: 2215244 } },
+      output: { example: { pages: 1, title: null, encrypted: false, bytes: 634 } },
     },
     handler: async (i) => pdfInfo(await fetchBuf(need(i, "url"))),
   },
@@ -137,9 +140,9 @@ export const PDF_TOOLS = [
     tags: ["pdf", "merge", "combine", "convert-pdf", "documents"],
     discovery: {
       bodyType: "json",
-      input: { urls: ["https://arxiv.org/pdf/1706.03762", "https://arxiv.org/pdf/1706.03762"] },
+      input: { urls: ["https://agent402.tools/fixtures/sample-invoice.pdf", "https://agent402.tools/fixtures/sample-invoice.pdf"] },
       inputSchema: { properties: { urls: { type: "array", description: "2–20 public PDF URLs, merged in order" } }, required: ["urls"] },
-      output: { example: { pages: 8, bytes: 51234, pdfBase64: "JVBERi0xLjcK…" } },
+      output: { example: { pages: 2, bytes: 944, pdfBase64: "JVBERi0xLjcK…" } },
     },
     handler: async (i) => {
       const urls = i.urls;
@@ -157,7 +160,7 @@ export const PDF_TOOLS = [
     tags: ["pdf", "split", "extract", "pages", "convert-pdf", "documents"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://arxiv.org/pdf/1706.03762", pages: "1-2" },
+      input: { url: "https://agent402.tools/fixtures/sample-invoice.pdf", pages: "1" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Public URL of the PDF" },
@@ -165,7 +168,7 @@ export const PDF_TOOLS = [
         },
         required: ["url", "pages"],
       },
-      output: { example: { pages: 2, bytes: 12044, pdfBase64: "JVBERi0xLjcK…" } },
+      output: { example: { pages: 1, bytes: 772, pdfBase64: "JVBERi0xLjcK…" } },
     },
     handler: async (i) => extractPages(await fetchBuf(need(i, "url")), need(i, "pages")),
   },
@@ -176,7 +179,7 @@ export const PDF_TOOLS = [
     tags: ["pdf", "rotate", "convert-pdf", "documents"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://arxiv.org/pdf/1706.03762", degrees: 90 },
+      input: { url: "https://agent402.tools/fixtures/sample-invoice.pdf", degrees: 90 },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Public URL of the PDF" },
@@ -185,7 +188,7 @@ export const PDF_TOOLS = [
         },
         required: ["url", "degrees"],
       },
-      output: { example: { pages: 15, bytes: 2215300, pdfBase64: "JVBERi0xLjcK…" } },
+      output: { example: { pages: 1, bytes: 774, pdfBase64: "JVBERi0xLjcK…" } },
     },
     handler: async (i) => rotatePdf(await fetchBuf(need(i, "url")), parseInt(i.degrees, 10), i.pages),
   },
@@ -196,9 +199,9 @@ export const PDF_TOOLS = [
     tags: ["pdf", "images", "convert", "convert-pdf", "documents"],
     discovery: {
       bodyType: "json",
-      input: { urls: ["https://tesseract.projectnaptha.com/img/eng_bw.png", "https://tesseract.projectnaptha.com/img/eng_bw.png"] },
+      input: { urls: ["https://agent402.tools/fixtures/sample-image.png", "https://agent402.tools/fixtures/sample-image.png"] },
       inputSchema: { properties: { urls: { type: "array", description: "1–20 public PNG/JPEG image URLs" } }, required: ["urls"] },
-      output: { example: { pages: 2, bytes: 88123, pdfBase64: "JVBERi0xLjcK…" } },
+      output: { example: { pages: 2, bytes: 16753, pdfBase64: "JVBERi0xLjcK…" } },
     },
     handler: async (i) => {
       const urls = i.urls;

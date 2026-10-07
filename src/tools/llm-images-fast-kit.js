@@ -333,6 +333,12 @@ async function openRouterGet(url, { timeoutMs = 30_000, accept } = {}) {
   }
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const VIDEOS_MAX_POLL_FAILURES = 5;
+const VIDEOS_CONTENT_RETRIES = 2;
+const videoTransientStatus = (s) => s === 429 || s >= 500;
+// openRouterGet throws 504 on a network error or timeout (503 when unconfigured).
+const videoTransientError = (e) => e?.statusCode === 504;
+const videoContentBackoffMs = (attempt) => Math.min(VIDEOS_POLL_MS(), 1_000) * (attempt + 1);
 
 async function videosHandler(input, req) {
   if (videosWorstCaseUsd() == null) throw bad("/v1/videos is temporarily unavailable.", 503);
@@ -350,7 +356,7 @@ async function videosHandler(input, req) {
   // on some other host.
   const pollUrl = typeof job.polling_url === "string" && job.polling_url.startsWith(`${OPENROUTER_VIDEOS_URL}/`) ? job.polling_url : `${OPENROUTER_VIDEOS_URL}/${encodeURIComponent(id)}`;
 
-  let status = job.status || "pending", st = job;
+  let status = job.status || "pending", st = job, pollFailures = 0;
   while (status !== "completed") {
     if (status === "failed") {
       const why = typeof st?.error === "string" ? st.error : (st?.error?.message || "");
@@ -360,14 +366,46 @@ async function videosHandler(input, req) {
       throw bad(`Video generation did not finish within ${Math.round(VIDEOS_MAX_WAIT_MS() / 1000)} s - not charged; retry`, 504);
     }
     await sleep(VIDEOS_POLL_MS());
-    const p = await openRouterGet(pollUrl, { timeoutMs: 20_000 });
-    if (!p.ok) await throwUpstreamError(p);
-    try { st = JSON.parse(await p.text()); } catch { throw bad("Upstream returned non-JSON while polling", 502); }
+    // A transient poll failure (5xx, 429, network, timeout, garbled body)
+    // keeps polling until the deadline; a run of them, or any other status,
+    // ends the request.
+    let next = null, failure = null;
+    try {
+      const p = await openRouterGet(pollUrl, { timeoutMs: 20_000 });
+      if (!p.ok && !videoTransientStatus(p.status)) await throwUpstreamError(p);
+      if (!p.ok) {
+        await p.text().catch(() => "");
+        failure = bad(`Upstream error while polling (HTTP ${p.status})`, p.status === 429 ? 503 : 502);
+      } else {
+        try { next = JSON.parse(await p.text()); } catch { failure = bad("Upstream returned non-JSON while polling", 502); }
+      }
+    } catch (e) {
+      if (!videoTransientError(e)) throw e;
+      failure = e;
+    }
+    if (failure) {
+      if (++pollFailures >= VIDEOS_MAX_POLL_FAILURES) throw failure;
+      continue;
+    }
+    pollFailures = 0;
+    st = next;
     status = st?.status || status;
   }
 
-  const c = await openRouterGet(`${OPENROUTER_VIDEOS_URL}/${encodeURIComponent(id)}/content?index=0`, { timeoutMs: 60_000 });
-  if (!c.ok) await throwUpstreamError(c);
+  const contentUrl = `${OPENROUTER_VIDEOS_URL}/${encodeURIComponent(id)}/content?index=0`;
+  let c;
+  for (let attempt = 0; ; attempt++) {
+    const canRetry = attempt < VIDEOS_CONTENT_RETRIES && Date.now() - started < VIDEOS_MAX_WAIT_MS();
+    try {
+      c = await openRouterGet(contentUrl, { timeoutMs: 60_000 });
+    } catch (e) {
+      if (canRetry && videoTransientError(e)) { await sleep(videoContentBackoffMs(attempt)); continue; }
+      throw e;
+    }
+    if (c.ok) break;
+    if (canRetry && videoTransientStatus(c.status)) { await c.text().catch(() => ""); await sleep(videoContentBackoffMs(attempt)); continue; }
+    await throwUpstreamError(c);
+  }
   const bytes = Buffer.from(await c.arrayBuffer());
   if (!bytes.length) throw bad("Upstream returned an empty clip - retry", 502);
   const mediaType = (c.headers?.get?.("content-type") || "video/mp4").split(";")[0].trim() || "video/mp4";

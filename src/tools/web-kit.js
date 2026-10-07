@@ -363,7 +363,7 @@ export const WEB_TOOLS = [
     tags: ["web", "rss", "atom", "feed", "parse", "monitoring", "news"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://hnrss.org/frontpage", limit: 5 },
+      input: { url: "https://agent402.tools/changelog.xml", limit: 5 },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Feed URL (RSS 2.0, Atom, or RSS 1.0/RDF)" },
@@ -373,15 +373,15 @@ export const WEB_TOOLS = [
       },
       output: {
         example: {
-          url: "https://hnrss.org/frontpage",
+          url: "https://agent402.tools/changelog.xml",
           format: "rss2",
-          title: "Hacker News: Front Page",
-          description: "Hacker News RSS",
-          link: "https://news.ycombinator.com/",
+          title: "Agent402 Changelog",
+          description: "Recent additions to Agent402: new tools, skill packs, framework adapters, and platform features.",
+          link: "https://agent402.tools/changelog",
           updated: null,
-          itemCount: 30,
+          itemCount: 36,
           items: [
-            { title: "Show HN: …", link: "https://example.com/post", id: "https://news.ycombinator.com/item?id=1", published: "Mon, 13 Jul 2026 12:00:00 +0000", author: "someone", summary: "Article summary…", categories: [] },
+            { title: "Live payments view", link: "https://agent402.tools/changelog", id: "agent402-changelog-2026-09-30", published: "Wed, 30 Sep 2026 12:00:00 GMT", author: null, summary: "Item summary…", categories: [] },
           ],
           warnings: [],
         },
@@ -463,7 +463,7 @@ export const WEB_TOOLS = [
     tags: ["web", "url", "redirect", "unshorten", "short-link", "safety", "preflight"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://youtu.be/dQw4w9WgXcQ" },
+      input: { url: "https://www.agent402.tools/" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "The (short) URL whose redirect chain to follow" },
@@ -472,14 +472,14 @@ export const WEB_TOOLS = [
       },
       output: {
         example: {
-          url: "https://youtu.be/dQw4w9WgXcQ",
-          finalUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ&feature=youtu.be",
+          url: "https://www.agent402.tools/",
+          finalUrl: "https://agent402.tools/",
           finalStatus: 200,
           redirects: 1,
           truncated: false,
           hops: [
-            { url: "https://youtu.be/dQw4w9WgXcQ", status: 303, location: "https://www.youtube.com/watch?v=dQw4w9WgXcQ&feature=youtu.be" },
-            { url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ&feature=youtu.be", status: 200, location: null },
+            { url: "https://www.agent402.tools/", status: 301, location: "https://agent402.tools/" },
+            { url: "https://agent402.tools/", status: 200, location: null },
           ],
         },
       },

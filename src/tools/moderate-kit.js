@@ -50,7 +50,10 @@ async function callOpenAI(text) {
     // err.message verbatim to buyers and logs it.
     const safe = redactSecrets(body);
     let msg = safe.slice(0, 200);
-    try { msg = JSON.parse(safe).error?.message || msg; } catch {}
+    let code = null;
+    try { const j = JSON.parse(safe); msg = j.error?.message || msg; code = j.error?.code ?? null; } catch {}
+    // An account-level billing or account state is the upstream's, not the request's.
+    if (["billing_hard_limit_reached", "billing_not_active", "account_deactivated"].includes(code)) throw bad("OpenAI upstream unavailable", 502);
     // Reaching here means a remaining 4xx - the REQUEST was invalid (bad
     // temperature, unknown language code, oversized input), not the upstream.
     // Surfacing it as 502 taught buyers to retry the identical bad request

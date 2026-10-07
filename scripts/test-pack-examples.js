@@ -37,9 +37,6 @@ const EXPECTED_MISSES = {
   // A stock ticker is legitimately not a FRED series id.
   "trend-analysis": ["fred-series"],
   "forecasting-bake-off": ["fred-series"],
-  // example.com publishes no sitemap; an SEO audit of a site without one is a
-  // real finding, but the tool reports it as an error rather than a result.
-  "seo-audit": ["sitemap"],
 };
 
 // Not our defect and never fatal: a missing third-party key on this deployment,
@@ -63,11 +60,27 @@ const EXPECTED_MISSES = {
 // corrected once for matching "upstream"/"timeout"/"aborted" inside a 4xx,
 // because our own messages carry those words, and a classifier that excuses
 // too much stops being able to fail.
-const NOT_OURS = /not configured|rate.?limited|HTTP 5\d\d|upstream|timed? out|ECONN|ENOTFOUND|socket hang up|temporarily|HTTP 429|did not respond within|ERR_SSL|ERR_TLS|TLS_ALERT|EPROTO|handshake failure|^terminated$/i;
+//
+// 2026-10-07: a site answering the CI runner 403 was graded as OUR defect
+// (seo-audit's meta step), while the non-metered sweep already reads the same
+// refusal as upstream. fetch-guard words an access refusal by a third-party
+// host in one fixed sentence (attribution "upstream-access"); that sentence,
+// anchored to its start, is excused here and nothing broader. A 4xx that
+// means the URL is wrong ("Source URL returned HTTP 404") still fails.
+const NOT_OURS_BASE = /not configured|rate.?limited|HTTP 5\d\d|upstream|timed? out|ECONN|ENOTFOUND|socket hang up|temporarily|HTTP 429|did not respond within|ERR_SSL|ERR_TLS|TLS_ALERT|EPROTO|handshake failure|^terminated$/i;
+const ACCESS_REFUSED = /^The host refused this server's request \(HTTP (401|403|407|451)\)/i;
+// Most examples now target agent402.tools: an access refusal from our own site
+// is our defect and is NOT excused for a pack whose input names it.
+let NOT_OURS = NOT_OURS_BASE;
+const notOursFor = (body) => {
+  const ours = /agent402\.tools/i.test(JSON.stringify(body));
+  return { test: (s) => NOT_OURS_BASE.test(s) || (!ours && ACCESS_REFUSED.test(s)) };
+};
 
 let failed = 0, reported = 0, checked = 0;
 for (const pack of SKILL_PACKS) {
   const body = Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute]));
+  NOT_OURS = notOursFor(body);
   // Single retry, the doctrine the heartbeat, the Algorand canary and
   // probe-classify all use: this sweep drives ~53 live third-party hosts, so a
   // one-off blip is guaranteed eventually. Only what SURVIVES a retry is
