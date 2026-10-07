@@ -412,7 +412,7 @@ export const SKILL_PACKS = [
     useCase:
       "Investigating a DNS-related outage, debugging propagation after a record change, or onboarding a new domain and checking the operator chain.",
     promptArgs: [
-      { name: "domain", description: "Domain to check (e.g. stripe.com)", required: true, substitute: "example.com" },
+      { name: "domain", description: "Domain to check (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "dns-lookup",
@@ -431,7 +431,7 @@ export const SKILL_PACKS = [
       "Spot-check robots.txt with robots-check to make sure a redeploy didn't accidentally Disallow: / the whole site.",
     ],
     claudePrompt:
-      "Run a DNS health check on example.com. Use Agent402 to: pull the apex DNS records, check propagation across major public resolvers, look up the ASN/prefix, pull whois for ownership and expiry, run an HTTP reachability check, and confirm robots.txt isn't broken. Report any inconsistency or near-expiry.",
+      "Run a DNS health check on agent402.tools. Use Agent402 to: pull the apex DNS records, check propagation across major public resolvers, look up the ASN/prefix, pull whois for ownership and expiry, run an HTTP reachability check, and confirm robots.txt isn't broken. Report any inconsistency or near-expiry.",
   },
   {
     slug: "crypto-research",
@@ -801,7 +801,7 @@ export const SKILL_PACKS = [
     useCase:
       "You got a link from email, a webhook, a referral, or a search result and you need to decide whether to trust it before authenticating, paying, or downloading. The security-audit pack tells you whether a domain you own is configured securely; fraud-signals tells you whether a domain you don't own is who it says it is. Newly registered domain + Let's Encrypt cert from yesterday + hosted on a bulletproof ASN + WordPress restaurant theme imitating a bank = the agent should refuse, not click.",
     promptArgs: [
-      { name: "domain", description: "Domain to evaluate (e.g. example.com or suspicious-bank-login.com)", required: true, substitute: "example.com" },
+      { name: "domain", description: "Domain to evaluate (e.g. example.com or suspicious-bank-login.com)", required: true, substitute: "agent402.tools" },
     ],
     // Seven tools, ordered by signal strength: whois first (domain age is
     // the single best predictor), then certificate evidence (transparency
@@ -829,7 +829,7 @@ export const SKILL_PACKS = [
       "Pull the page content with extract and scan for fraud-pattern keywords. Phishing kits use predictable language: urgency ('act now', 'limited time'), unsolicited payment requests, crypto-only payment ('USDT only'), dubious testimonials, broken English on a site claiming to be US-headquartered, gift-card payment instructions. Combine all 7 signal sources into a single rollup: low / medium / high fraud likelihood with each piece of cited evidence - let the user see exactly which signals fired, not just a black-box score.",
     ],
     claudePrompt:
-      "Evaluate example.com for fraud signals using Agent402. (1) whois - record the domain creation date and the registrar. If age < 90 days, flag as a strong fraud signal. (2) cert-transparency - pull the cert log. Count entries; first issuance date should match (or predate) the whois creation date by at most a few days. (3) tls-cert - inspect the live cert: issuer (Let's Encrypt is fine, self-signed is a hard red flag), validity window, wildcard scope. (4) asn-info - resolve the A record, pull the ASN: is it a mainstream cloud (Cloudflare/AWS/GCP) or a known abuse-friendly hoster? Surface country. (5) dns-lookup - MX records (a 'business' with no MX is suspicious), CNAMEs (shared-hosting CNAMEs on a brand-impersonator site are a red flag). (6) tech-stack - fingerprint the running stack; flag mismatches with the claimed brand (e.g., a 'bank' on a WordPress restaurant theme). (7) extract - pull the home-page text, scan for urgency language, crypto-only payment requests, gift-card mentions, broken English. Return: {domain, age_days, certHistoryCount, hostingProvider, hostingCountry, hasMX, techStack, redFlags: [{signal, evidence}], fraudLikelihood: \"low\"|\"medium\"|\"high\", oneLineRecommendation}. All seven tools are wallet-only (egress) - budget ≤ $0.05 per domain check.",
+      "Evaluate agent402.tools for fraud signals using Agent402. (1) whois - record the domain creation date and the registrar. If age < 90 days, flag as a strong fraud signal. (2) cert-transparency - pull the cert log. Count entries; first issuance date should match (or predate) the whois creation date by at most a few days. (3) tls-cert - inspect the live cert: issuer (Let's Encrypt is fine, self-signed is a hard red flag), validity window, wildcard scope. (4) asn-info - resolve the A record, pull the ASN: is it a mainstream cloud (Cloudflare/AWS/GCP) or a known abuse-friendly hoster? Surface country. (5) dns-lookup - MX records (a 'business' with no MX is suspicious), CNAMEs (shared-hosting CNAMEs on a brand-impersonator site are a red flag). (6) tech-stack - fingerprint the running stack; flag mismatches with the claimed brand (e.g., a 'bank' on a WordPress restaurant theme). (7) extract - pull the home-page text, scan for urgency language, crypto-only payment requests, gift-card mentions, broken English. Return: {domain, age_days, certHistoryCount, hostingProvider, hostingCountry, hasMX, techStack, redFlags: [{signal, evidence}], fraudLikelihood: \"low\"|\"medium\"|\"high\", oneLineRecommendation}. All seven tools are wallet-only (egress) - budget ≤ $0.05 per domain check.",
   },
   {
     slug: "api-investigation",
@@ -1559,7 +1559,7 @@ export const SKILL_PACKS = [
     useCase:
       "Evaluating a domain for acquisition, investigating a phishing site, auditing a competitor's infrastructure, or preparing a security review - one call gives you the complete external footprint.",
     promptArgs: [
-      { name: "domain", description: "Domain to investigate (e.g. stripe.com)", required: true, substitute: "stripe.com" },
+      { name: "domain", description: "Domain to investigate (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "whois",
@@ -1578,7 +1578,7 @@ export const SKILL_PACKS = [
       "Check robots.txt for crawl directives - reveals hidden paths and bot policies.",
     ],
     claudePrompt:
-      "Run a full domain intelligence report on stripe.com using Agent402's domain-intel skill pack: (1) WHOIS - age, registrar, expiry. (2) DNS A records - hosting/CDN. (3) TLS cert - issuer, expiry, SANs. (4) HTTP headers - security headers score. (5) Tech stack - frameworks, CDN, analytics. (6) robots.txt - hidden paths. Output a structured report with a risk summary.",
+      "Run a full domain intelligence report on agent402.tools using Agent402's domain-intel skill pack: (1) WHOIS - age, registrar, expiry. (2) DNS A records - hosting/CDN. (3) TLS cert - issuer, expiry, SANs. (4) HTTP headers - security headers score. (5) Tech stack - frameworks, CDN, analytics. (6) robots.txt - hidden paths. Output a structured report with a risk summary.",
   },
 
   {
@@ -1852,7 +1852,7 @@ export const SKILL_PACKS = [
     useCase:
       "Verifying a domain's TLS posture - cert validity, security headers, and who's authorized to issue certs.",
     promptArgs: [
-      { name: "domain", description: "Domain to audit (e.g. stripe.com)", required: true, substitute: "stripe.com" },
+      { name: "domain", description: "Domain to audit (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "tls-cert",
@@ -1865,7 +1865,7 @@ export const SKILL_PACKS = [
       "Check CAA DNS records to see which CAs are authorized to issue certs for this domain.",
     ],
     claudePrompt:
-      "Run an SSL audit on stripe.com using Agent402's ssl-audit skill pack. Get (1) TLS cert details - issuer, expiry, SANs, (2) HTTP security headers - HSTS, CSP, (3) CAA DNS records. Flag any near-expiry or missing HSTS.",
+      "Run an SSL audit on agent402.tools using Agent402's ssl-audit skill pack. Get (1) TLS cert details - issuer, expiry, SANs, (2) HTTP security headers - HSTS, CSP, (3) CAA DNS records. Flag any near-expiry or missing HSTS.",
   },
 
   {
@@ -1902,7 +1902,7 @@ export const SKILL_PACKS = [
     useCase:
       "Evaluating a suspicious domain - checking registration age, hosting, web mentions, and security posture.",
     promptArgs: [
-      { name: "domain", description: "Domain to investigate (e.g. stripe.com)", required: true, substitute: "stripe.com" },
+      { name: "domain", description: "Domain to investigate (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "whois",
@@ -1917,7 +1917,7 @@ export const SKILL_PACKS = [
       "Fetch HTTP headers for security posture and server fingerprint.",
     ],
     claudePrompt:
-      "Investigate whether stripe.com is legitimate using Agent402's brand-protection skill pack. Get (1) WHOIS - age and registrar, (2) DNS A records, (3) search for scam/phishing reports, (4) HTTP headers. Rate the domain's trustworthiness.",
+      "Investigate whether agent402.tools is legitimate using Agent402's brand-protection skill pack. Get (1) WHOIS - age and registrar, (2) DNS A records, (3) search for scam/phishing reports, (4) HTTP headers. Rate the domain's trustworthiness.",
   },
 
   {
@@ -1928,7 +1928,7 @@ export const SKILL_PACKS = [
     useCase:
       "Competitive intelligence - fingerprint their infrastructure, hosting, frameworks, and page metadata.",
     promptArgs: [
-      { name: "url", description: "Competitor URL (e.g. https://stripe.com)", required: true, substitute: "https://stripe.com" },
+      { name: "url", description: "Competitor URL (e.g. https://stripe.com)", required: true, substitute: "https://agent402.tools" },
     ],
     toolSlugs: [
       "tech-stack",
@@ -1943,7 +1943,7 @@ export const SKILL_PACKS = [
       "Get page metadata - title, description, OG tags for their positioning.",
     ],
     claudePrompt:
-      "Scan the competitor at https://stripe.com using Agent402's competitor-scan skill pack. Get (1) tech stack, (2) HTTP headers, (3) WHOIS, (4) page metadata. Summarize their infrastructure and positioning.",
+      "Scan the competitor at https://agent402.tools using Agent402's competitor-scan skill pack. Get (1) tech stack, (2) HTTP headers, (3) WHOIS, (4) page metadata. Summarize their infrastructure and positioning.",
   },
 
   {
@@ -1954,7 +1954,7 @@ export const SKILL_PACKS = [
     useCase:
       "Comprehensive page review - content quality, metadata completeness, security headers, crawlability, and sitemap status.",
     promptArgs: [
-      { name: "url", description: "Page URL to audit (e.g. https://stripe.com)", required: true, substitute: "https://stripe.com" },
+      { name: "url", description: "Page URL to audit (e.g. https://stripe.com)", required: true, substitute: "https://agent402.tools" },
     ],
     toolSlugs: [
       "extract",
@@ -1971,7 +1971,7 @@ export const SKILL_PACKS = [
       "Probe the sitemap for the site.",
     ],
     claudePrompt:
-      "Audit the page at https://stripe.com using Agent402's page-audit skill pack. Get (1) extracted content, (2) metadata, (3) HTTP headers, (4) robots policy, (5) sitemap. Summarize SEO completeness and security posture.",
+      "Audit the page at https://agent402.tools using Agent402's page-audit skill pack. Get (1) extracted content, (2) metadata, (3) HTTP headers, (4) robots policy, (5) sitemap. Summarize SEO completeness and security posture.",
   },
 
 
@@ -2012,7 +2012,7 @@ export const SKILL_PACKS = [
     useCase:
       "An agent receives a PDF URL and needs to understand it quickly: what's the page count and metadata, what does the full text say (as markdown), and what's on page 1? Running three separate tools is three payments; this pack does it in one.",
     promptArgs: [
-      { name: "url", description: "URL of the PDF to process", required: true, substitute: "https://arxiv.org/pdf/1706.03762" },
+      { name: "url", description: "URL of the PDF to process", required: true, substitute: `${FIXTURE_BASE}/fixtures/sample-invoice.pdf` },
     ],
     toolSlugs: ["pdf-info", "pdf-to-markdown", "pdf-extract-pages"],
     workflow: [
@@ -2021,7 +2021,7 @@ export const SKILL_PACKS = [
       "Call pdf-extract-pages with pages='1' to get just the first page as a separate document.",
     ],
     claudePrompt:
-      "Process the PDF at https://arxiv.org/pdf/1706.03762 using Agent402's pdf-pipeline skill pack: (1) pdf-info for metadata, (2) pdf-to-markdown for full text, (3) pdf-extract-pages for page 1. Summarize the document structure and first-page content.",
+      "Process the PDF at https://agent402.tools/fixtures/sample-invoice.pdf using Agent402's pdf-pipeline skill pack: (1) pdf-info for metadata, (2) pdf-to-markdown for full text, (3) pdf-extract-pages for page 1. Summarize the document structure and first-page content.",
   },
 
   {
@@ -2032,7 +2032,7 @@ export const SKILL_PACKS = [
     useCase:
       "An agent needs to verify a URL is live and understand what's behind it before recommending it, embedding it, or crawling it. Combines structural parsing (protocol, host, path), liveness check (status, latency, redirects), and metadata extraction (title, description, OG tags).",
     promptArgs: [
-      { name: "url", description: "URL to inspect (https://…)", required: true, substitute: "https://stripe.com" },
+      { name: "url", description: "URL to inspect (https://…)", required: true, substitute: "https://agent402.tools" },
     ],
     toolSlugs: ["url-parse", "http-check", "meta"],
     workflow: [
@@ -2041,7 +2041,7 @@ export const SKILL_PACKS = [
       "Call meta to pull the page's title, description, canonical URL, and OpenGraph/Twitter card tags.",
     ],
     claudePrompt:
-      "Inspect https://stripe.com using Agent402's url-inspector skill pack: (1) url-parse for structure, (2) http-check for reachability and latency, (3) meta for page metadata and OG tags. Report the URL health status and key metadata.",
+      "Inspect https://agent402.tools using Agent402's url-inspector skill pack: (1) url-parse for structure, (2) http-check for reachability and latency, (3) meta for page metadata and OG tags. Report the URL health status and key metadata.",
   },
 
   {
@@ -2052,7 +2052,7 @@ export const SKILL_PACKS = [
     useCase:
       "An SEO agent or content reviewer needs to evaluate a page: extract the clean text and then run keyword analysis to assess topic focus and density. Chain mode ensures keywords runs on the extracted text, not raw HTML.",
     promptArgs: [
-      { name: "url", description: "URL of the page to grade", required: true, substitute: "https://blog.cloudflare.com/x402/" },
+      { name: "url", description: "URL of the page to grade", required: true, substitute: "https://agent402.tools/why" },
     ],
     toolSlugs: ["extract", "keywords", "readability-score"],
     workflow: [
@@ -2061,7 +2061,7 @@ export const SKILL_PACKS = [
       "Call readability-score on the extracted text - Flesch reading ease and grade level put a number on how accessible the writing is, the other half of a content grade beyond topic focus.",
     ],
     claudePrompt:
-      "Grade the content quality of https://blog.cloudflare.com/x402/ using Agent402's content-grade skill pack: (1) extract the readable content, (2) run keyword analysis on the extracted text, (3) score readability with readability-score. Report the top keywords, density, reading-ease/grade level, and whether the content is well-focused.",
+      "Grade the content quality of https://agent402.tools/why using Agent402's content-grade skill pack: (1) extract the readable content, (2) run keyword analysis on the extracted text, (3) score readability with readability-score. Report the top keywords, density, reading-ease/grade level, and whether the content is well-focused.",
   },
 
 
@@ -2075,7 +2075,7 @@ export const SKILL_PACKS = [
     useCase:
       "An agent needs to verify an API is up and properly configured before making production calls: is it reachable (status + latency), what do the response headers say (rate limits, auth requirements, CORS), and is the TLS cert valid and not expiring soon?",
     promptArgs: [
-      { name: "url", description: "API endpoint URL to check (https://…)", required: true, substitute: "https://api.github.com" },
+      { name: "url", description: "API endpoint URL to check (https://…)", required: true, substitute: "https://agent402.tools/health" },
     ],
     toolSlugs: ["http-check", "http-headers", "tls-cert"],
     workflow: [
@@ -2084,7 +2084,7 @@ export const SKILL_PACKS = [
       "Call tls-cert with the host extracted from the URL to check certificate validity, issuer, expiry, and chain trust.",
     ],
     claudePrompt:
-      "Check the health of https://api.github.com using Agent402's api-health skill pack: (1) http-check for liveness and latency, (2) http-headers for rate limits and security headers, (3) tls-cert for certificate status. Report whether the endpoint is production-ready.",
+      "Check the health of https://agent402.tools/health using Agent402's api-health skill pack: (1) http-check for liveness and latency, (2) http-headers for rate limits and security headers, (3) tls-cert for certificate status. Report whether the endpoint is production-ready.",
   },
 
   {
@@ -2254,7 +2254,7 @@ export const SKILL_PACKS = [
     useCase:
       "An agent on a monitoring loop - news, changelogs, security advisories, competitor blogs - needs each run to answer: what changed since last time, and what is it about?",
     promptArgs: [
-      { name: "url", description: "RSS/Atom feed URL to monitor", required: true, substitute: "https://hnrss.org/frontpage" },
+      { name: "url", description: "RSS/Atom feed URL to monitor", required: true, substitute: "https://agent402.tools/changelog.xml" },
       { name: "previous", description: "The item-title list from your previous run (one per line) to diff against", required: false, substitute: "PREVIOUS_SNAPSHOT" },
     ],
     toolSlugs: ["feed-parse", "extract", "keywords", "text-diff"],
@@ -2265,7 +2265,7 @@ export const SKILL_PACKS = [
       "Diff the current item list against your previous snapshot with text-diff - the added lines are the new items since last run.",
     ],
     claudePrompt:
-      "Monitor the feed https://hnrss.org/frontpage using Agent402's feed-watch skill pack. (1) Parse the feed for the latest items, (2) extract the top story's full text, (3) pull keywords from the titles and summaries, (4) diff the current item-title list against PREVIOUS_SNAPSHOT (paste your last run's list; leave empty on the first run). Report: new items since last run, the dominant topics, and a two-sentence summary of the top story.",
+      "Monitor the feed https://agent402.tools/changelog.xml using Agent402's feed-watch skill pack. (1) Parse the feed for the latest items, (2) extract the top story's full text, (3) pull keywords from the titles and summaries, (4) diff the current item-title list against PREVIOUS_SNAPSHOT (paste your last run's list; leave empty on the first run). Report: new items since last run, the dominant topics, and a two-sentence summary of the top story.",
   },
 
   {

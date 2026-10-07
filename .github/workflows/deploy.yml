@@ -3655,6 +3655,11 @@ jobs:
       - name: Non-metered paid examples (strict — 502/503/504 fail; NETWORK leniency hole)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-non-metered-examples.js
 
+      # Published examples fetch from agent402.tools or our /fixtures/, never
+      # another site that can refuse a CI runner (seo-audit, 2026-10-07).
+      - name: Published examples name only our own hosts
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-example-hosts.js
+
       # Every skill pack must WORK on its own published example, not merely
       # return a well-shaped envelope. Nine packs sold for two months answering
       # "0/N steps succeeded" because every guard asserted SHAPE and none

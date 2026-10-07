@@ -168,9 +168,9 @@ export const MEDIA_TOOLS = [
     tags: ["ffmpeg", "ffprobe", "audio", "video", "metadata"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" },
+      input: { url: "https://agent402.tools/fixtures/sample-audio.wav" },
       inputSchema: { properties: { url: { type: "string", description: "Public URL of the media file (max 30MB)" } }, required: ["url"] },
-      output: { example: { formatName: "mp3", durationSec: 1832.4, bitrate: 192000, bytes: 4404000, streams: [{ type: "audio", codec: "mp3", sampleRate: 44100, channels: 2 }] } },
+      output: { example: { formatName: "wav", durationSec: 2, bitrate: 128312, bytes: 32078, streams: [{ type: "audio", codec: "pcm_s16le", sampleRate: 8000, channels: 1 }] } },
     },
     handler: async (i) => probeMedia(await fetchMedia(need(i, "url"))),
   },
@@ -181,7 +181,7 @@ export const MEDIA_TOOLS = [
     tags: ["ffmpeg", "mp4-to-mp3", "audio", "convert", "mp3"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" },
+      input: { url: "https://agent402.tools/fixtures/sample-audio.wav" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Public URL of the media file (max 30MB)" },
@@ -189,7 +189,7 @@ export const MEDIA_TOOLS = [
         },
         required: ["url"],
       },
-      output: { example: { format: "mp3", bitrate: "192k", bytes: 2210000, mp3Base64: "SUQzBAAAAA…" } },
+      output: { example: { format: "mp3", bitrate: "192k", bytes: 18765, mp3Base64: "SUQzBAAAAA…" } },
     },
     handler: async (i) => toMp3(await fetchMedia(need(i, "url")), { bitrate: i.bitrate ?? "192k" }),
   },
@@ -200,7 +200,7 @@ export const MEDIA_TOOLS = [
     tags: ["ffmpeg", "normalize", "loudnorm", "audio", "lufs"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" },
+      input: { url: "https://agent402.tools/fixtures/sample-audio.wav" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Public URL of the media file (max 30MB)" },
@@ -208,7 +208,7 @@ export const MEDIA_TOOLS = [
         },
         required: ["url"],
       },
-      output: { example: { format: "mp3", targetLufs: -16, truePeakDb: -1.5, bytes: 2210000, mp3Base64: "SUQzBAAAAA…" } },
+      output: { example: { format: "mp3", targetLufs: -16, truePeakDb: -1.5, bytes: 49581, mp3Base64: "SUQzBAAAAA…" } },
     },
     handler: async (i) => normalizeAudio(await fetchMedia(need(i, "url")), { targetLufs: i.targetLufs ?? -16 }),
   },

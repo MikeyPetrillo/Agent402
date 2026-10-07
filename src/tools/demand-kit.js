@@ -53,9 +53,9 @@ export const DEMAND_TOOLS = [
     tags: ["pdf", "markdown", "convert-pdf", "pdf-to-markdown", "documents"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://arxiv.org/pdf/1706.03762" },
+      input: { url: "https://agent402.tools/fixtures/sample-invoice.pdf" },
       inputSchema: { properties: { url: { type: "string", description: "Public URL of the PDF" } }, required: ["url"] },
-      output: { example: { pages: 15, wordCount: 4500, markdown: "## Attention Is All You Need\n\nThe dominant sequence…" } },
+      output: { example: { pages: 1, wordCount: 13, markdown: "Agent402 sample invoice. Invoice 402-0001. Total 12.34 USD.\n\n## -- 1 of 1 --" } },
     },
     handler: async (i) => {
       const r = await pdfToText(need(i, "url"));

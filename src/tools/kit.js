@@ -2007,7 +2007,7 @@ const networkTools = [
     tags: ["uptime", "monitoring", "http", "headers", "latency", "website", "site", "up", "down", "status", "reachable"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://example.com" },
+      input: { url: "https://agent402.tools" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Public http(s) URL" },
@@ -2015,7 +2015,7 @@ const networkTools = [
         },
         required: ["url"],
       },
-      output: { example: { up: true, status: 200, latencyMs: 87, finalUrl: "https://example.com/", headers: { "content-type": "text/html" } } },
+      output: { example: { up: true, status: 200, latencyMs: 87, finalUrl: "https://agent402.tools/", headers: { "content-type": "text/html; charset=utf-8" } } },
     },
     handler: async (input) => {
       const url = await assertPublicUrl(need(input, "url"));
@@ -2057,14 +2057,14 @@ const networkTools = [
     tags: ["http", "fetch", "json", "api", "get"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://registry.npmjs.org/agent402-client/latest" },
+      input: { url: "https://agent402.tools/health" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Public http(s) URL that answers JSON" },
         },
         required: ["url"],
       },
-      output: { example: { url: "https://registry.npmjs.org/agent402-client/latest", finalUrl: "https://registry.npmjs.org/agent402-client/latest", contentType: "application/json", bytes: 2048, json: { name: "agent402-client", version: "0.8.11" }, untrustedContent: true } },
+      output: { example: { url: "https://agent402.tools/health", finalUrl: "https://agent402.tools/health", contentType: "application/json; charset=utf-8", bytes: 54, json: { ok: true, meta: { build: "9c963ab" } }, untrustedContent: true } },
     },
     handler: async (input) => {
       const url = String(need(input, "url"));
@@ -2257,7 +2257,7 @@ const networkTools = [
     tags: ["robots", "crawling", "scraping", "compliance"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://www.wikipedia.org/wiki/Robots.txt", userAgent: "MyAgent" },
+      input: { url: "https://agent402.tools/api/pricing", userAgent: "MyAgent" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "URL whose path to check" },
@@ -2265,7 +2265,7 @@ const networkTools = [
         },
         required: ["url"],
       },
-      output: { example: { allowed: true, matchedRule: null, sitemaps: ["https://example.com/sitemap.xml"] } },
+      output: { example: { allowed: true, matchedRule: "Allow: /", userAgent: "MyAgent", path: "/api/pricing", sitemaps: ["https://agent402.tools/sitemap.xml", "https://agent402.tools/sitemapindex.xml"] } },
     },
     handler: async (input) => {
       const target = await assertPublicUrl(need(input, "url"));

@@ -735,18 +735,19 @@ const CATALOG = {
       "Fetch page metadata for a URL: title, description, OpenGraph, Twitter cards, canonical URL, favicon.",
     tags: ["metadata", "opengraph", "seo"],
     discovery: {
-      input: { url: "https://example.com" },
+      input: { url: "https://agent402.tools" },
       inputSchema: {
         properties: { url: { type: "string", description: "Public http(s) URL" } },
         required: ["url"],
       },
       output: {
         example: {
-          url: "https://example.com",
-          title: "Example",
-          description: "Example site",
-          og: { title: "Example" },
-          twitter: {},
+          url: "https://agent402.tools/",
+          title: "Agent402: 500+ pay-per-call tools for AI agents over x402 and MPP",
+          description: "Agentic Finance for AI agents: 500+ pay-per-call tools, metered models and finished reports over x402 and MPP, or by card.",
+          canonical: "https://agent402.tools/",
+          og: { type: "website", site_name: "Agent402", title: "Agent402: 500+ pay-per-call tools for AI agents over x402 and MPP" },
+          twitter: { card: "summary_large_image" },
         },
       },
     },
@@ -780,13 +781,13 @@ const CATALOG = {
     tags: ["browser", "javascript", "spa", "scraping", "markdown"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://example.com/spa-page" },
+      input: { url: "https://agent402.tools/playground" },
       inputSchema: {
         properties: { url: { type: "string", description: "Public http(s) URL to render" } },
         required: ["url"],
       },
       output: {
-        example: { url: "https://example.com/spa-page", title: "Page title", wordCount: 500, markdown: "…", rendered: true, untrustedContent: true },
+        example: { url: "https://agent402.tools/playground", title: "Page title", wordCount: 500, markdown: "…", rendered: true, untrustedContent: true },
       },
     },
   },
@@ -800,7 +801,7 @@ const CATALOG = {
     tags: ["browser", "screenshot", "png", "visual"],
     mimeType: "image/png",
     discovery: {
-      input: { url: "https://example.com", fullPage: "false" },
+      input: { url: "https://agent402.tools", fullPage: "false" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Public http(s) URL to screenshot" },
@@ -821,14 +822,14 @@ const CATALOG = {
     tags: ["pdf", "documents", "text-extraction"],
     discovery: {
       bodyType: "json",
-      // A real, famously stable whitepaper URL — example.com/whitepaper.pdf 404s.
-      input: { url: "https://bitcoin.org/bitcoin.pdf" },
+      // A fixture we serve ourselves, so the example never depends on another site.
+      input: { url: "https://agent402.tools/fixtures/sample-invoice.pdf" },
       inputSchema: {
         properties: { url: { type: "string", description: "Public http(s) URL of a PDF" } },
         required: ["url"],
       },
       output: {
-        example: { url: "https://bitcoin.org/bitcoin.pdf", pages: 9, info: { title: null }, wordCount: 3604, text: "Bitcoin: A Peer-to-Peer Electronic Cash System\n…" },
+        example: { url: "https://agent402.tools/fixtures/sample-invoice.pdf", pages: 1, info: { title: null }, wordCount: 13, text: "Agent402 sample invoice. Invoice 402-0001. Total 12.34 USD.\n…" },
       },
     },
   },
@@ -7348,6 +7349,10 @@ const FIXTURE_FILES = {
   "sample-image.png": "image/png",
   // 2 s 440 Hz sine, 8 kHz mono PCM: the paid canary's media-info leg probes it with ffprobe on prod (2026-09-06)
   "sample-audio.wav": "audio/wav",
+  "sample-report.pdf": "application/pdf",
+  "sample-text.png": "image/png",
+  "sample-photo.jpg": "image/jpeg",
+  "sample-openapi.json": "application/json",
 };
 app.get("/fixtures/:file", (req, res) => {
   const file = String(req.params.file || "");
