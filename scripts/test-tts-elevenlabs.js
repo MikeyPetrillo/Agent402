@@ -14,7 +14,8 @@
 //   - an ElevenLabs outage falls back to the OpenAI model the tier replaced,
 //     named in the answer, and never after OpenAI's shutdown date; a bad
 //     request is a 400 and never falls back.
-import { TTS_TOOLS, TTS_TIERS, ELEVENLABS_VOICE_MAP, ELEVENLABS_VOICES, OPENAI_TTS_SHUTDOWN, __makeHandlerForTest } from "../src/tools/tts-kit.js";
+import { TTS_TOOLS, TTS_TIERS, ELEVENLABS_VOICE_MAP, ELEVENLABS_VOICES, OPENAI_TTS_SHUTDOWN, TTS_BACKUP_MODELS, ELEVEN_MAX_IN_FLIGHT, __makeHandlerForTest, __resetTtsBreakerForTest, __ttsBreakerForTest, elevenLabsBreakerState } from "../src/tools/tts-kit.js";
+import { SPEECH_MODELS } from "../src/tools/llm-gateway-kit.js";
 import { STT_TIERS, STT_MARGIN, STT_TOOLS, upstreamUsdPerMinute } from "../src/tools/stt-kit.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
@@ -35,7 +36,9 @@ const err = (status, body = { error: { message: "nope" } }) => ({ ok: false, sta
 const calls = [];
 const hostOf = (u) => new URL(u).host;
 const stub = (routes) => { globalThis.fetch = async (url, init) => { const u = String(url); calls.push({ url: u, init }); const hp = (() => { const x = new URL(u); return x.host + x.pathname; })(); for (const [m, r] of routes) if (hp === m || hp.startsWith(m.endsWith("/") ? m : `${m}/`) || (!m.includes("/") && hp.split("/")[0] === m)) return typeof r === "function" ? r(u, init) : r; throw new Error(`unexpected fetch ${u}`); }; };
-const run = async (slug, input, opts) => { calls.length = 0; try { return await (opts ? __makeHandlerForTest(slug, opts) : bySlug[slug].handler)(input); } finally { globalThis.fetch = realFetch; } };
+// Each case starts with a closed breaker unless it says otherwise.
+let keepBreaker = false;
+const run = async (slug, input, opts) => { calls.length = 0; if (!keepBreaker) __resetTtsBreakerForTest(); try { return await (opts ? __makeHandlerForTest(slug, opts) : bySlug[slug].handler)(input); } finally { globalThis.fetch = realFetch; } };
 const throwsWith = async (fn) => { try { await fn(); return null; } catch (e) { return e; } };
 
 // --- the money bound -------------------------------------------------------
@@ -116,13 +119,13 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   ok(r.provider === "openai" && r.model === "tts-1-hd" && oa.model === "tts-1-hd", "an ElevenLabs 503 falls back to the OpenAI model the tier replaced, named in the answer");
   ok(oa.voice === "fable" && oa.response_format === "flac", "the fallback sends the OpenAI name for the voice asked for (george -> fable) and the format natively");
   stub([["openrouter.ai", err(429)], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
-  ok((await run("tts", { text: "hi" }, { now: before })).model === "tts-1", "a 429 on every link falls back too");
+  ok((await run("tts", { text: "hi" }, { now: before })).model === "tts-1", "a 429 falls back to OpenAI");
   const tried = calls.filter((c) => hostOf(c.url) === "openrouter.ai").map((c) => JSON.parse(c.init.body).model);
-  ok(tried.join(",") === TTS_TIERS.tts.chain.join(","), `every ElevenLabs link is tried in order before OpenAI (${tried.join(" > ")})`);
+  ok(tried.length === 1, `a 429 is never answered with another ElevenLabs call: one ElevenLabs request, not one per link (${tried.join(" > ")})`);
   let n = 0;
-  stub([["openrouter.ai", () => (n++ === 0 ? err(429) : audio(Buffer.from("ID3second")))], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
+  stub([["openrouter.ai", () => (n++ === 0 ? err(503) : audio(Buffer.from("ID3second")))], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
   const second = await run("tts-hd", { text: "hi" }, { now: before });
-  ok(second.model === TTS_TIERS["tts-hd"].chain[1] && second.provider === "openrouter" && !calls.some((c) => hostOf(c.url) === "api.openai.com"), `a 429 on the first link is served by the second (${second.model}), named in the answer`);
+  ok(second.model === TTS_TIERS["tts-hd"].chain[1] && second.provider === "openrouter" && !calls.some((c) => hostOf(c.url) === "api.openai.com"), `a server error on the first link (unbilled) is served by the second (${second.model}), named in the answer`);
   stub([["openrouter.ai", err(401)], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
   ok((await run("tts", { text: "hi" }, { now: before })).model === "tts-1", "our key refused (401) is an outage, not the buyer's 400: it falls back");
   stub([["openrouter.ai", () => { throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } }); }], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
@@ -151,6 +154,92 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   stub([["openrouter.ai", err(503)]]);
   const nokey = await throwsWith(() => run("tts", { text: "hi" }, { now: before }));
   ok(nokey?.statusCode === 502, "without an OpenAI key an outage is an uncharged 502");
+}
+
+// --- the breaker: a throttle never becomes more ElevenLabs traffic ----------
+{
+  const before = () => OPENAI_TTS_SHUTDOWN - 86_400_000;
+  const after = () => OPENAI_TTS_SHUTDOWN + 1;
+  const elevenCalls = () => calls.filter((c) => hostOf(c.url) === "openrouter.ai" && String(JSON.parse(c.init.body).model).startsWith("elevenlabs/")).length;
+  process.env.OPENAI_API_KEY = "test-openai-key";
+  for (const [status, label] of [[429, "a 429"], [401, "a 401 (our credential refused)"]]) {
+    __resetTtsBreakerForTest(); keepBreaker = true;
+    stub([["openrouter.ai", err(status)], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
+    await run("tts", { text: "hi" }, { now: before });
+    ok(elevenLabsBreakerState() === "cooling", `${label} opens the breaker`);
+    stub([["openrouter.ai", audio(Buffer.from("ID3eleven"))], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
+    const during = await run("tts-hd", { text: "hi" }, { now: before });
+    ok(elevenCalls() === 0 && during.model === "tts-1-hd", `while it is open, both tiers skip ElevenLabs entirely and serve from the backup (${during.model})`);
+    keepBreaker = false;
+  }
+  // Retry-After is honored when it asks for longer than the cooldown.
+  __resetTtsBreakerForTest(); keepBreaker = true;
+  stub([["openrouter.ai", () => ({ ...err(429), headers: { get: (h) => (h.toLowerCase() === "retry-after" ? "600" : null) } })], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
+  await run("tts", { text: "hi" }, { now: before });
+  ok(__ttsBreakerForTest().openUntil - Date.now() > 590_000, "a Retry-After longer than the cooldown is honored");
+  // After the cooldown exactly one call probes; a success closes the breaker.
+  __resetTtsBreakerForTest(); keepBreaker = true;
+  stub([["openrouter.ai", err(429)], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
+  await run("tts", { text: "hi" }, { now: before });
+  const b = __ttsBreakerForTest();
+  ok(b.trips === 1, "one trip recorded");
+  let release;
+  const slow = new Promise((r) => { release = r; });
+  stub([["openrouter.ai", async () => { await slow; return audio(Buffer.from("ID3eleven")); }], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
+  const realNow = Date.now; Date.now = () => realNow() + 10 * 60_000; // past a 60 s cooldown
+  const probe = run("tts", { text: "probe" }, { now: before });
+  await new Promise((r) => setTimeout(r, 10));
+  ok(elevenLabsBreakerState(Date.now()) === "probing", "after the cooldown the breaker lets a probe through");
+  release();
+  const probed = await probe;
+  Date.now = realNow;
+  ok(probed.model === "elevenlabs/eleven-v4-turbo" && elevenLabsBreakerState() === "ok", "a successful probe closes the breaker");
+  keepBreaker = false;
+  // Three server errors in a row open it; fewer do not.
+  __resetTtsBreakerForTest(); keepBreaker = true;
+  stub([["openrouter.ai", err(503)], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
+  await run("tts", { text: "hi" }, { now: before });
+  ok(elevenLabsBreakerState() === "ok", "a single server error does not open the breaker");
+  for (let i = 0; i < 2; i++) { stub([["openrouter.ai", err(503)], ["api.openai.com", audio(Buffer.from("ID3openai"))]]); await run("tts", { text: "hi" }, { now: before }); }
+  ok(elevenLabsBreakerState() === "cooling", "three server errors in a row do");
+  keepBreaker = false;
+  // Burst cap: calls beyond ELEVEN_MAX_IN_FLIGHT use a backup instead of piling on.
+  __resetTtsBreakerForTest(); keepBreaker = true;
+  let open = 0, peak = 0, gateRelease; const gate = new Promise((r) => { gateRelease = r; });
+  calls.length = 0;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url); calls.push({ url: u, init });
+    if (hostOf(u) === "api.openai.com") return audio(Buffer.from("ID3openai"));
+    open++; peak = Math.max(peak, open); await gate; open--; return audio(Buffer.from("ID3eleven"));
+  };
+  const handler = __makeHandlerForTest("tts", { now: before });
+  const burst = Array.from({ length: ELEVEN_MAX_IN_FLIGHT + 4 }, () => handler({ text: "hi" }));
+  await new Promise((r) => setTimeout(r, 20));
+  gateRelease();
+  const outs = await Promise.all(burst);
+  globalThis.fetch = realFetch;
+  ok(peak <= ELEVEN_MAX_IN_FLIGHT, `never more than ${ELEVEN_MAX_IN_FLIGHT} ElevenLabs calls in flight (peak ${peak})`);
+  ok(outs.every((o) => o.audio) && outs.filter((o) => o.model === "tts-1").length === 4, "the overflow is served by the backup, not refused");
+  keepBreaker = false;
+  // An OpenAI timeout may have been billed: final, no further backup.
+  __resetTtsBreakerForTest();
+  stub([["openrouter.ai", (_u, init) => (JSON.parse(init.body).model.startsWith("elevenlabs/") ? err(429) : audio(Buffer.from("ID3backup")))], ["api.openai.com", () => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); }]]);
+  const oaSlow = await throwsWith(() => run("tts", { text: "hi" }, { now: before }));
+  ok(oaSlow?.statusCode === 504 && !calls.some((c) => hostOf(c.url) === "openrouter.ai" && TTS_BACKUP_MODELS.includes(JSON.parse(c.init.body).model)), "an OpenAI fallback that timed out is final: no non-ElevenLabs backup is called after it");
+  // After OpenAI's shutdown the non-ElevenLabs backups serve, within price.
+  __resetTtsBreakerForTest();
+  stub([["openrouter.ai", (_u, init) => (JSON.parse(init.body).model.startsWith("elevenlabs/") ? err(429) : audio(Buffer.from("ID3backup")))]]);
+  const late = await run("tts", { text: "hi", voice: "nova" }, { now: after });
+  const backup = SPEECH_MODELS.find((m) => m.id === TTS_BACKUP_MODELS[0]);
+  ok(late.model === TTS_BACKUP_MODELS[0] && late.voice === backup.map.nova, `after the shutdown date a throttle is served by ${late.model} (voice ${late.voice}), never an error`);
+  for (const slug of ["tts", "tts-hd"]) {
+    const price = Number(bySlug[slug].price.replace("$", ""));
+    for (const id of TTS_BACKUP_MODELS) {
+      const row = upstreamCosts().speech[id];
+      ok(Number.isFinite(row) && row * TTS_TIERS[slug].maxChars <= price * 0.7 + 1e-12, `${slug}: backup ${id} fits within 70% of $${price}`);
+    }
+  }
+  delete process.env.OPENAI_API_KEY;
 }
 
 // --- diarize ---------------------------------------------------------------

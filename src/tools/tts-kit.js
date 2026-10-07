@@ -223,25 +223,82 @@ async function callKokoro(text, voice, format, tierSlug) {
 export const TTS_DEADLINE_MS = 40_000;
 const TTS_LINK_TIMEOUT_MS = 25_000;
 const CONNECT_FAILURES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "UND_ERR_CONNECT_TIMEOUT"]);
+
+// --- never get our account blocked, never leave a buyer without speech ------
+// 2026-10-07: a burst of our own calls (retries, and a chain that turned one
+// throttled call into three) had ElevenLabs refuse every call from our
+// account for about 30 minutes; it accepted again minutes after the traffic
+// stopped. So a throttle is never answered with more ElevenLabs calls:
+//   - a 429 or an auth refusal (401/403) stops the ElevenLabs walk at once and
+//     opens a breaker shared by both tiers (one credential): for the cooldown
+//     every call goes straight to the backups, then ONE call probes;
+//   - three server errors in a row open it too; a server error or a connection
+//     that never opened still tries the next ElevenLabs model (unbilled);
+//   - at most ELEVEN_MAX_IN_FLIGHT calls run at once; the rest use a backup.
+// Backups, in order: the OpenAI model the tier replaced (until OpenAI's
+// shutdown date), then non-ElevenLabs speech models priced well inside the tier
+// (pinned by test-tts-elevenlabs.js). The answer always names the model.
+export const ELEVEN_MAX_IN_FLIGHT = 6;
+const BREAKER_BASE_MS = 60_000;
+const BREAKER_MAX_MS = 15 * 60_000;
+const breaker = { openUntil: 0, trips: 0, serverErrors: 0, probing: false };
+let elevenInFlight = 0;
+export const TTS_BACKUP_MODELS = ["microsoft/mai-voice-2", "x-ai/grok-voice-tts-1.0"];
+
+/** Whether this call may use ElevenLabs, and if so whether it is the probe. */
+function elevenGate(now = Date.now()) {
+  if (elevenInFlight >= ELEVEN_MAX_IN_FLIGHT) return { ok: false, why: "busy" };
+  if (now < breaker.openUntil) return { ok: false, why: "cooling" };
+  if (breaker.trips > 0) {
+    if (breaker.probing) return { ok: false, why: "probing" };
+    breaker.probing = true;
+    return { ok: true, probe: true };
+  }
+  return { ok: true, probe: false };
+}
+function tripBreaker(retryAfterMs = 0, now = Date.now()) {
+  breaker.trips++;
+  const cooldown = Math.max(retryAfterMs || 0, Math.min(BREAKER_BASE_MS * 2 ** (breaker.trips - 1), BREAKER_MAX_MS));
+  breaker.openUntil = now + cooldown;
+  breaker.serverErrors = 0;
+  breaker.probing = false;
+}
+function noteElevenOutcome(e) {
+  if (!e) { breaker.trips = 0; breaker.serverErrors = 0; breaker.probing = false; breaker.openUntil = 0; return; }
+  if (e.throttle) return tripBreaker(e.retryAfterMs);
+  if (e.outage && ++breaker.serverErrors >= 3) return tripBreaker();
+  if (breaker.probing) tripBreaker(); // a failed probe re-opens, longer
+}
+/** Bucketed state for status surfaces: ok | cooling | probing. */
+export function elevenLabsBreakerState(now = Date.now()) {
+  if (now < breaker.openUntil) return "cooling";
+  return breaker.trips > 0 ? "probing" : "ok";
+}
+export function __resetTtsBreakerForTest() { Object.assign(breaker, { openUntil: 0, trips: 0, serverErrors: 0, probing: false }); elevenInFlight = 0; }
+export function __ttsBreakerForTest() { return { ...breaker, inFlight: elevenInFlight }; }
+
 async function callElevenLabs(text, voice, format, tierSlug, deadline) {
   let last;
   for (const model of TIERS[tierSlug].chain) {
     const left = deadline - Date.now();
     if (left < 3_000) break;
     try {
-      return await callElevenLabsModel(model, text, voice, format, Math.min(TTS_LINK_TIMEOUT_MS, left));
+      return await callSpeechModel(model, ELEVENLABS_VOICE_MAP[voice] || voice, text, format, Math.min(TTS_LINK_TIMEOUT_MS, left));
     } catch (e) {
-      if (!e?.outage) throw e;
+      // A throttle or a refusal is never answered with another ElevenLabs call.
+      if (!e?.outage || e.throttle) throw e;
       last = e;
     }
   }
   throw last || Object.assign(bad("Speech upstream did not answer in time - retry shortly", 504), { outage: false });
 }
 
-async function callElevenLabsModel(model, text, voice, format, timeoutMs) {
+/** One model over OpenRouter's speech wire. mp3 and pcm come back as is; wav,
+ *  flac, opus and aac are encoded here from the PCM. Errors carry `outage`
+ *  (certainly unbilled: may try elsewhere) and `throttle` (429/401/403). */
+async function callSpeechModel(model, nativeVoice, text, format, timeoutMs) {
   const key = OPENROUTER_KEY();
   if (!key) throw Object.assign(bad("Speech gateway not configured (OPENROUTER_API_KEY unset)", 503), { outage: true });
-  const nativeVoice = ELEVENLABS_VOICE_MAP[voice] || voice;
   const wireFormat = WIRE_FORMATS.has(format) ? format : "pcm";
   let res;
   try {
@@ -265,9 +322,12 @@ async function callElevenLabsModel(model, text, voice, format, timeoutMs) {
     const safe = redactSecrets(errText);
     let msg = safe.slice(0, 200);
     try { msg = JSON.parse(safe).error?.message || msg; } catch {}
+    const ra = Number(res.headers?.get?.("retry-after"));
+    const retryAfterMs = Number.isFinite(ra) && ra > 0 ? Math.min(ra, 3600) * 1000 : 0;
     // Our key refused (401/403) is our configuration, not the buyer's request.
-    if (res.status === 401 || res.status === 403) throw Object.assign(bad("Speech upstream auth failed", 502), { outage: true });
-    if (res.status >= 500 || res.status === 429) throw Object.assign(bad(`Speech upstream error (HTTP ${res.status}): ${msg}`, 502), { outage: true });
+    if (res.status === 401 || res.status === 403) throw Object.assign(bad("Speech upstream auth failed", 502), { outage: true, throttle: true, retryAfterMs });
+    if (res.status === 429) throw Object.assign(bad("Speech upstream rate-limited - retry shortly", 503), { outage: true, throttle: true, retryAfterMs });
+    if (res.status >= 500) throw Object.assign(bad(`Speech upstream error (HTTP ${res.status}): ${msg}`, 502), { outage: true });
     throw bad(`Upstream rejected the request: ${msg}`, 400);
   }
   let buf = Buffer.from(await res.arrayBuffer());
@@ -284,19 +344,49 @@ function openAiVoiceFor(voice) {
   return Object.entries(ELEVENLABS_VOICE_MAP).find(([, v]) => v === voice)?.[0] || "alloy";
 }
 
+/** The backups after ElevenLabs, in order, each tried only after the one
+ *  before failed in a way that was certainly unbilled. */
+async function callBackups(text, voice, format, tier, deadline, now, first) {
+  let last = first;
+  const name = openAiVoiceFor(voice);
+  if (tier.fallback && OPENAI_KEY() && now() < OPENAI_TTS_SHUTDOWN) {
+    const left = deadline - Date.now();
+    if (left >= 3_000) {
+      try { return await callOpenAI(text, name, format, null, tier.fallback, left); }
+      catch (e) { if (e?.statusCode !== 502 && e?.statusCode !== 503) throw e; last = e; }
+    }
+  }
+  for (const id of TTS_BACKUP_MODELS) {
+    const entry = SPEECH_MODELS.find((m) => m.id === id);
+    const left = deadline - Date.now();
+    if (!entry || left < 3_000) continue;
+    try { return await callSpeechModel(id, entry.map?.[name] || entry.map?.alloy, text, format, Math.min(TTS_LINK_TIMEOUT_MS, left)); }
+    catch (e) { if (!e?.outage) throw e; last = e; }
+  }
+  throw last || Object.assign(bad("Speech upstream unavailable - retry shortly", 503), { outage: false });
+}
+
 function makeHandler(tierSlug, { now = () => Date.now() } = {}) {
   return async (input) => {
     const { text, voice, format } = validateInput(input, tierSlug);
     const tier = TIERS[tierSlug];
     if (tier.provider === "openrouter") return callKokoro(text, voice, format, tierSlug);
     const deadline = Date.now() + TTS_DEADLINE_MS;
+    const gate = elevenGate();
+    if (!gate.ok) return callBackups(text, voice, format, tier, deadline, now, null);
+    elevenInFlight++;
+    let failure = null;
     try {
       return await callElevenLabs(text, voice, format, tierSlug, deadline);
     } catch (e) {
-      if (!e?.outage || !tier.fallback || !OPENAI_KEY() || now() >= OPENAI_TTS_SHUTDOWN) throw e;
-      const left = deadline - Date.now();
-      if (left < 3_000) throw e;
-      return callOpenAI(text, openAiVoiceFor(voice), format, tierSlug, tier.fallback, left);
+      failure = e;
+      if (!e?.outage) throw e;
+      return callBackups(text, voice, format, tier, deadline, now, e);
+    } finally {
+      elevenInFlight--;
+      if (!failure) noteElevenOutcome(null); // served: the breaker closes
+      else if (failure.outage || failure.throttle) noteElevenOutcome(failure);
+      else if (gate.probe) breaker.probing = false; // the request's own fault says nothing about ElevenLabs
     }
   };
 }
