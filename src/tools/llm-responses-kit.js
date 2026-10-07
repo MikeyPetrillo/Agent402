@@ -28,6 +28,7 @@ import {
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
   clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
+  failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   defaultReasoningFor, validateReasoning,
   refuseCostVariants,
   assertUpstreamBody,
@@ -226,7 +227,7 @@ export function validateResponsesRequest(input, tierSlug) {
   const routedCategory = isRouted ? classifyPrompt(probeMessages) : null;
   const routedQuality = isRouted ? (input.quality === undefined ? "balanced" : String(input.quality)) : null;
   if (isRouted && !AUTO_RANKINGS[routedQuality]) throw bad('"quality" must be "fast", "balanced", or "best"');
-  const chain = isRouted ? [...AUTO_RANKINGS[routedQuality][routedCategory]] : [model, ...(tier.fallbacks || []).filter((m) => m !== model)];
+  const chain = isRouted ? [...AUTO_RANKINGS[routedQuality][routedCategory]] : failoverChain(model, tierSlug, { fallback: modelFallbackPref(input) });
   return { body, probe, imageCount: acc.images, isRouted, routedCategory, routedQuality, chain, defaultedModel, substituted: isRouted ? null : substituted, namespaceOf };
 }
 
@@ -312,10 +313,10 @@ export function makeResponsesHandler(routeTier) {
             let outbound;
             try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
             try {
-              return await streamOpenRouterTo(outbound, res, {
+              return await retryRateLimited(() => streamOpenRouterTo(outbound, res, {
                 url: OPENROUTER_RESPONSES_URL,
                 onUsage: (usage, cost, frame) => recordUsage(usage, cost, frame?.response?.model || model, frame?.response?.service_tier || (flex ? "flex" : "default")),
-              });
+              }), { canRetry: () => !res.headersSent });
             } catch (e) {
               if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
               lastErr = e;
@@ -333,12 +334,14 @@ export function makeResponsesHandler(routeTier) {
       let outbound;
       try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
       try {
-        const res = await fetchOpenRouter(outbound, { url: OPENROUTER_RESPONSES_URL });
-        if (!res.ok) await throwUpstreamError(res);
-        const text = await res.text();
-        let data;
-        try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
-        assertUpstreamBody(data);
+        const data = await retryRateLimited(async () => {
+          const res = await fetchOpenRouter(outbound, { url: OPENROUTER_RESPONSES_URL });
+          if (!res.ok) await throwUpstreamError(res);
+          const text = await res.text();
+          let parsed;
+          try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
+          return assertUpstreamBody(parsed);
+        });
         if (data?.status === "failed" || data?.error) {
           lastErr = bad(`Upstream error: ${String(data?.error?.message || data?.error?.code || "response failed").slice(0, 200)}`, 502);
           continue;
@@ -353,6 +356,7 @@ export function makeResponsesHandler(routeTier) {
         if (routerNote) data.agent402_router = { ...routerNote, served: data.model || model };
         if (defaultedModel) data.agent402_default_model = defaultedModel;
         if (substituted) data.agent402_model_substituted = { requested: substituted, served: body.model, reason: "the requested model is retired upstream; its named successor served instead" };
+        else { const sub = availabilitySubstitution(body.model, model); if (sub) data.agent402_model_substituted = sub; }
         if (tierSlug !== routeTier) data.agent402_tier = { ...crossTierDisclosure(routeTier, tierSlug), route: RESPONSES_PATH_BY_TIER[routeTier] };
         if (namespaceOf) attributeNamespaces(data.output, namespaceOf);
         // Metered settlement sentinel (chat-wire parity): the route binder

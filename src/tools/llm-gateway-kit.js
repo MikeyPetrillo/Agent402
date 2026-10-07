@@ -741,6 +741,63 @@ export function retiringModel(model) {
   return Object.hasOwn(RETIRING_MODELS, id) ? { id, ...RETIRING_MODELS[id] } : null;
 }
 
+/** Same-family successors for models whose whole upstream can vanish at once.
+ *  2026-10-06 14:06-14:11Z: deepseek/deepseek-chat had two hosts, both stalled,
+ *  and a buyer's agent got 147 "No endpoints found" 502s plus 14 rate-limit 503s
+ *  (uncharged, but nothing served). A successor is tried only AFTER the
+ *  requested model failed upstream (502/503/504), costs no more than the model
+ *  it stands in for (so the requested model's max_price cap and the metered
+ *  quote still cover it), supports tools whenever the requested model does, and
+ *  is named in agent402_model_substituted. test-gateway-model-ids checks each
+ *  entry against the live catalog. A buyer who needs the exact model sends
+ *  model_fallback:false and gets the error instead. */
+export const AVAILABILITY_SUCCESSORS = Object.freeze({
+  "deepseek/deepseek-chat": "deepseek/deepseek-v4-flash",
+});
+
+/** The buyer's fallback preference: true unless they sent model_fallback:false. */
+export function modelFallbackPref(input) {
+  const v = input?.model_fallback;
+  if (v === undefined || v === null) return true;
+  if (typeof v !== "boolean") throw bad('"model_fallback" must be true or false (false: serve only the requested model, never a fallback)');
+  return v;
+}
+
+/** The ordered models a request may be served by: the requested model, its
+ *  availability successor when the tier serves it, then the tier's static
+ *  fallbacks. model_fallback:false keeps only the requested model. */
+export function failoverChain(model, tierSlug, { fallback = true } = {}) {
+  if (!fallback) return [model];
+  const id = String(model || "").toLowerCase().split(":")[0];
+  const succ = Object.hasOwn(AVAILABILITY_SUCCESSORS, id) ? AVAILABILITY_SUCCESSORS[id] : null;
+  const head = succ && succ !== model && tierAllows(tierSlug, succ) ? [model, succ] : [model];
+  return [...head, ...((TIERS[tierSlug] && TIERS[tierSlug].fallbacks) || []).filter((m) => !head.includes(m))];
+}
+
+/** The disclosure for a reply served by an availability successor, or null. */
+export function availabilitySubstitution(requested, served) {
+  const id = String(requested || "").toLowerCase().split(":")[0];
+  if (!served || !Object.hasOwn(AVAILABILITY_SUCCESSORS, id) || AVAILABILITY_SUCCESSORS[id] !== served) return null;
+  return { requested, served, reason: "the requested model had no available upstream host; its same-family successor, costing no more, served instead (send model_fallback:false to get the error instead)" };
+}
+
+/** One upstream attempt, retried briefly when the upstream rate-limited it.
+ *  A 503 we raise for a 429 (or a 200 carrying a rate-limit error) means the
+ *  request was refused before any work, so a short retry is safe and usually
+ *  lands; anything else returns to the caller's chain untouched. `canRetry`
+ *  lets a stream refuse once bytes have gone out. */
+export async function retryRateLimited(fn, { delays = [700, 1500], canRetry = () => true, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const limited = e?.statusCode === 503 && /rate.?limit/i.test(String(e?.message || ""));
+      if (!limited || i >= delays.length || !canRetry()) throw e;
+      await sleep(delays[i]);
+    }
+  }
+}
+
 export function tierAllows(tierSlug, model) {
   const tier = TIERS[tierSlug];
   if (!tier) return false;
@@ -1416,6 +1473,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   const tier = TIERS[tierSlug];
   assertMeteredAvailable(tier);
   if (input == null || typeof input !== "object") throw bad("Request body must be a JSON object");
+  modelFallbackPref(input); // shape-validate before payment; read again at serve time
 
   let model = canonicalModel(input.model);
   const substituted = substitutedFrom(input.model);
@@ -2870,7 +2928,7 @@ function makeHandler(routeTier) {
     const routedQuality = isRouted ? (input.quality === undefined ? "balanced" : String(input.quality)) : null;
     const chain = routedCategory
       ? [...AUTO_RANKINGS[routedQuality][routedCategory]]
-      : [body.model, ...(TIERS[tierSlug].fallbacks || []).filter((m) => m !== body.model)];
+      : failoverChain(body.model, tierSlug, { fallback: modelFallbackPref(input) });
     // Hard upstream price cap (see the maxPrice note on TIERS): rides on every
     // call, buyer-invisible, and never part of the cache key (validateRequest
     // output stays the normalized body). A cap-excluded provider surfaces as
@@ -2980,7 +3038,7 @@ function makeHandler(routeTier) {
             try {
               // Streams now carry margin telemetry too: the scrubber hands us
               // the upstream cost it strips from the final usage frame.
-              return await streamOpenRouterTo(outbound, res, { onUsage: (usage, cost, frame) => recordUsage(usage, cost, frame?.model || model, frame?.service_tier || (flex ? "flex" : "default")) });
+              return await retryRateLimited(() => streamOpenRouterTo(outbound, res, { onUsage: (usage, cost, frame) => recordUsage(usage, cost, frame?.model || model, frame?.service_tier || (flex ? "flex" : "default")) }), { canRetry: () => !res.headersSent });
             } catch (e) {
               if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
               lastErr = e;
@@ -3004,7 +3062,7 @@ function makeHandler(routeTier) {
         // injected at call time (like provider), never part of the normalized
         // body or cache keys. Streams get the same accounting via the SSE
         // scrubber in streamOpenRouterTo.
-        const data = await callOpenRouter({ ...outbound, usage: { include: true } });
+        const data = await retryRateLimited(() => callOpenRouter({ ...outbound, usage: { include: true } }));
         // An empty safety refusal (HTTP 200, no content) walks the chain like
         // a provider error — a buyer must never pay for nothing. See
         // isEmptyRefusal above. Streams can't be inspected this way; there
@@ -3048,6 +3106,7 @@ function makeHandler(routeTier) {
         }
         if (body.__defaultedModel) data.agent402_default_model = body.__defaultedModel; // the caller sent no model; say what served
         if (body.__substitutedFrom) data.agent402_model_substituted = { requested: body.__substitutedFrom, served: body.model, reason: "the requested model is retired upstream; its named successor served instead" };
+        else { const sub = availabilitySubstitution(body.model, model); if (sub) data.agent402_model_substituted = sub; }
         // Served under another flat tier's config at that tier's price: say
         // which, beside the standard `model` field (additive, non-stream).
         if (tierSlug !== routeTier && data && typeof data === "object") data.agent402_tier = crossTierDisclosure(routeTier, tierSlug);
@@ -3188,6 +3247,7 @@ const INPUT_SCHEMA = {
     messages: { type: "array", description: "OpenAI chat messages: [{role, content}] - text and image_url content blocks supported" },
     max_tokens: { type: "number", description: "Output token cap (clamped to the tier maximum)" },
     zdr: { type: "boolean", description: "Optional - true routes only to zero-data-retention providers (OpenRouter provider.zdr); the only provider preference a caller may set." },
+    model_fallback: { type: "boolean", description: "Optional, default true - when the requested model has no available upstream host, a same-family successor costing no more serves instead and the reply names it in agent402_model_substituted. false: serve only the requested model and return the error." },
     cache_control: { description: 'Optional - prompt caching preference. Default ON ({type:"ephemeral"}, 5-minute TTL): repeated prefixes across your turns are served from the provider cache (same price to you). Send false to disable. ttl:"1h" is not offered.' },
     reasoning: { type: "object", description: 'Optional - {effort: "none"|"minimal"|"low"|"medium"|"high"|"xhigh"|"max", max_tokens?, exclude?, enabled?}. Reasoning tokens count against max_tokens. Omitted: low effort on the budget tiers, the model default on premium. reasoning_effort (string) is accepted as an alias.' },
     max_completion_tokens: { type: "integer", description: "Optional - alias of max_tokens (newer OpenAI SDKs send this)." },

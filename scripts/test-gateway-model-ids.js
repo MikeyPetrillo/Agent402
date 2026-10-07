@@ -16,7 +16,7 @@
 import { readFileSync } from "node:fs";
 import {
   TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, FLEX_MODELS, REASONING_MODELS, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
-  IMAGES_MODEL,
+  IMAGES_MODEL, AVAILABILITY_SUCCESSORS,
 } from "../src/tools/llm-gateway-kit.js";
 import { IMAGE_TIERS, IMAGES_FAST_TOOLS } from "../src/tools/llm-images-fast-kit.js";
 import { LLM_GATEWAY_TOOLS } from "../src/tools/llm-gateway-kit.js";
@@ -390,6 +390,28 @@ for (const row of REASONING_MODELS) {
     ok(r.mandatory === true || r.default_enabled === true, `reasoning: ${m.id} still reasons by default (mandatory=${r.mandatory}, default_enabled=${r.default_enabled}) - else drop it from the table`);
   }
 }
+// Availability successors (AVAILABILITY_SUCCESSORS) stand in for a requested
+// model whose hosts are all down. Each must be live, support tools whenever the
+// requested model does (the 2026-10-06 outage was a tool-using agent), and cost
+// no more at its DEAREST live endpoint than the requested model's private row:
+// that row is the max_price cap and the metered quote the successor serves under.
+for (const [requested, succ] of Object.entries(AVAILABILITY_SUCCESSORS)) {
+  ok(ids.has(succ), `availability successor ${succ} (for ${requested}) is live`);
+  ok(Object.keys(TIERS).some((t) => tierAllows(t, requested) && tierAllows(t, succ)), `${succ} is served on a tier that serves ${requested}`);
+  const endpoints = async (id) => {
+    try { return (await (await fetch(`https://openrouter.ai/api/v1/models/${id}/endpoints`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json())?.data?.endpoints || []; } catch { return null; }
+  };
+  const [reqEps, succEps] = [await endpoints(requested), await endpoints(succ)];
+  ok(Array.isArray(succEps) && succEps.length > 0, `${succ}: live endpoints readable`);
+  if (!Array.isArray(succEps) || !succEps.length) continue;
+  const tools = (eps) => (eps || []).some((e) => (e.supported_parameters || []).includes("tools"));
+  ok(!tools(reqEps) || tools(succEps), `${succ} supports tools wherever ${requested} does`);
+  const row = costFor(requested);
+  const dear = (k) => Math.max(...succEps.map((e) => Number(e?.pricing?.[k])).filter(Number.isFinite)) * 1e6;
+  const cheaper = dear("prompt") <= row.prompt + 1e-9 && dear("completion") <= row.completion + 1e-9;
+  ok(cheaper, `${succ}'s dearest live endpoint costs no more than ${requested}'s row${cheaper ? "" : brief(" (it costs more; amounts withheld in CI)", ` (live ${dear("prompt")}/${dear("completion")} per 1M vs row ${row.prompt}/${row.completion})`)}`);
+}
+
 // Published examples name a real model. The tier tables above can be clean
 // while a route's discovery example still names an id that left the catalog
 // (v1-chat-premium shipped "anthropic/claude-opus-4" after it was gone, which

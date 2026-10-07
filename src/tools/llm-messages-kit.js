@@ -33,6 +33,7 @@ import {
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
   clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
+  failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, costFor,
   assertUpstreamBody, reasoningProfile, REASONING_EFFORTS,
 } from "./llm-gateway-kit.js";
@@ -319,7 +320,7 @@ export function validateMessagesRequest(input, tierSlug) {
   const routedCategory = isRouted ? classifyPrompt([...(typeof system === "string" ? [{ role: "user", content: system }] : []), ...probeMessages]) : null;
   const routedQuality = isRouted ? (input.quality === undefined ? "balanced" : String(input.quality)) : null;
   if (isRouted && !AUTO_RANKINGS[routedQuality]) throw bad('"quality" must be "fast", "balanced", or "best"');
-  const chain = isRouted ? [...AUTO_RANKINGS[routedQuality][routedCategory]] : [model, ...(tier.fallbacks || []).filter((m) => m !== model)];
+  const chain = isRouted ? [...AUTO_RANKINGS[routedQuality][routedCategory]] : failoverChain(model, tierSlug, { fallback: modelFallbackPref(input) });
   return { body, probe, imageCount: acc.images, isRouted, routedCategory, routedQuality, chain, defaultedModel, substituted: isRouted ? null : substituted };
 }
 
@@ -412,10 +413,10 @@ export function makeMessagesHandler(routeTier) {
             let outbound;
             try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
             try {
-              return await streamOpenRouterTo(outbound, res, {
+              return await retryRateLimited(() => streamOpenRouterTo(outbound, res, {
                 url: OPENROUTER_MESSAGES_URL,
                 onUsage: (usage, cost, frame) => recordUsage(usage, cost, frame?.message?.model || model, frame?.usage?.service_tier || (flex ? "flex" : "default")),
-              });
+              }), { canRetry: () => !res.headersSent });
             } catch (e) {
               if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
               lastErr = e;
@@ -433,12 +434,14 @@ export function makeMessagesHandler(routeTier) {
       let outbound;
       try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
       try {
-        const res = await fetchOpenRouter(outbound, { url: OPENROUTER_MESSAGES_URL });
-        if (!res.ok) await throwUpstreamError(res);
-        const text = await res.text();
-        let data;
-        try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
-        assertUpstreamBody(data);
+        const data = await retryRateLimited(async () => {
+          const res = await fetchOpenRouter(outbound, { url: OPENROUTER_MESSAGES_URL });
+          if (!res.ok) await throwUpstreamError(res);
+          const text = await res.text();
+          let parsed;
+          try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
+          return assertUpstreamBody(parsed);
+        });
         if (data?.stop_reason === "refusal" && isEmptyMaxTokens({ ...data, stop_reason: "max_tokens" })) {
           lastErr = bad("Upstream declined the request (safety filter) - rephrase the prompt, or pick a different model", 502);
           refusedModel = model;
@@ -454,6 +457,7 @@ export function makeMessagesHandler(routeTier) {
         if (routerNote) data.agent402_router = { ...routerNote, served: data.model || model };
         if (defaultedModel) data.agent402_default_model = defaultedModel; // the caller sent no model; say what served
         if (substituted) data.agent402_model_substituted = { requested: substituted, served: body.model, reason: "the requested model is retired upstream; its named successor served instead" };
+        else { const sub = availabilitySubstitution(body.model, model); if (sub) data.agent402_model_substituted = sub; }
         if (tierSlug !== routeTier) data.agent402_tier = { ...crossTierDisclosure(routeTier, tierSlug), route: MESSAGES_PATH_BY_TIER[routeTier] };
         // Metered settlement sentinel (chat-wire parity): the route binder
         // settles actual x markup for upto/credits buyers and strips this
