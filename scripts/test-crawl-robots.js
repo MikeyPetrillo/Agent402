@@ -158,8 +158,8 @@ const fetcher = (body) => async () => { hits++; if (body instanceof Error) throw
   ok(calls.filter((c) => /manifestPublished:\s*true/.test(c)).length === 1,
     "exactly ONE of them (the manifest branch) passes manifestPublished: the no-manifest fallback stays robots-honoured");
   const wk = src.indexOf("fetchOpenapi({ manifestPublished: true })");
-  const fb = src.indexOf("fetchOpenapi()");
-  ok(wk > -1 && fb > wk, "and the flagged call is the manifest branch's, which runs before the fallback's bare call");
+  const fb = src.indexOf("fetchOpenapi({ conditional: false })");
+  ok(wk > -1 && fb > wk, "and the flagged call is the manifest branch's, which runs before the fallback's unflagged call");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
