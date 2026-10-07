@@ -4769,6 +4769,18 @@ export function clearValidatorsFor(originUrl) {
  *  produces: the origin is fine, we hold a validator, and we have nothing to
  *  pair it with.
  */
+/** The body of a fallback document, re-read in full when the conditional request
+ *  answered 304. The manifest branch keeps what its last fetch derived, but the
+ *  fallback branch (no /.well-known/x402: /openapi.json, /agents.json, /llms.txt)
+ *  keeps nothing, so a 304 there parsed an empty body and the seller lost every
+ *  tool from its second crawl on: "\"undefined\" is not valid JSON" on 8 of 66
+ *  crawl_failed origins, 2026-10-07. */
+async function fallbackBody(originUrl, path, res, opts) {
+  if (!res?.notModified) return res?.html;
+  rememberValidator(originUrl, path, null);
+  return (await probePath(originUrl, path, opts)).html;
+}
+
 async function probeDoc(originUrl, path, opts, prevParsed) {
   const res = await probePath(originUrl, path, opts);
   if (!res.notModified) return { parsed: JSON.parse(res.html), reused: false, finalUrl: res.finalUrl || null };
@@ -4948,7 +4960,7 @@ async function crawlSeller(originUrl) {
     const noteFallback = (path, e) => fallbackErrors.push({ path, error: String(e?.message || e).slice(0, 160) });
     try {
       const openapiRes = await fetchOpenapi();
-      const parsed = JSON.parse(openapiRes.html);
+      const parsed = JSON.parse(await fallbackBody(originUrl, "/openapi.json", openapiRes, { maxBytes: MAX_OPENAPI_BYTES }));
       if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
         openapi = parsed;
         openapiTools = normaliseOpenapiTools(parsed, originUrl);
@@ -4972,7 +4984,7 @@ async function crawlSeller(originUrl) {
     if (!openapiTools.length) {
       try {
         const agentsRes = await probePath(originUrl, "/agents.json", { maxBytes: MAX_OPENAPI_BYTES });
-        const parsed = JSON.parse(agentsRes.html);
+        const parsed = JSON.parse(await fallbackBody(originUrl, "/agents.json", agentsRes, { maxBytes: MAX_OPENAPI_BYTES }));
         if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
           const fromAgents = normaliseOpenapiTools(parsed, originUrl);
           if (fromAgents.length) { openapi = openapi || parsed; openapiTools = fromAgents; openapiPath = "/agents.json"; }
@@ -4993,7 +5005,7 @@ async function crawlSeller(originUrl) {
     if (!openapiTools.length) {
       try {
         const llmsRes = await probePath(originUrl, "/llms.txt", { maxBytes: MAX_OPENAPI_BYTES });
-        const fromLlms = normaliseLlmsTxtTools(llmsRes.html, originUrl);
+        const fromLlms = normaliseLlmsTxtTools(await fallbackBody(originUrl, "/llms.txt", llmsRes, { maxBytes: MAX_OPENAPI_BYTES }), originUrl);
         if (fromLlms.length) { openapiTools = fromLlms; openapiPath = "/llms.txt"; }
       } catch (e) {
         /* no llms.txt either */
