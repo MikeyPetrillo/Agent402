@@ -14,8 +14,9 @@
 // (media-kit transcodePcm). The prices moved with the change and the cap
 // stayed; the margin bound is pinned in scripts/test-tts-elevenlabs.js against
 // the private rate rows.
-// Until the OpenAI shutdown, an ElevenLabs outage (5xx, 429, timeout) falls
-// back to the OpenAI model this tier used to serve, named in the answer.
+// When ElevenLabs is busy, throttling or erroring, a backup serves the call
+// (see the breaker below); a timeout or empty answer is final instead, since
+// it may have been billed. The answer always names the model that spoke.
 //
 // WHY A LITE TIER (2026-09-11): a cheaper MODEL - Kokoro-82M, already a
 // proven link in the /v1/audio/speech failover chain (SPEECH_MODELS,
@@ -57,9 +58,9 @@ const TIERS = {
   // provider "openrouter" reaches Kokoro; "elevenlabs" is ElevenLabs over the
   // same OpenRouter speech wire, with the OpenAI model it replaced as fallback.
   "tts-lite": { model: "hexgrad/kokoro-82m",         provider: "openrouter", maxChars: 800 },
-  // `chain`: ElevenLabs models at the SAME per-char rate, tried in order on an
-  // outage (launch day, 2026-10-07: v4 Turbo answered about half of calls 429
-  // while the older models answered every one). Same 21 voices on every link.
+  // `chain`: ElevenLabs models at the SAME per-char rate, tried in order after
+  // a server error or a connection that never opened (both unbilled). A 429
+  // or a refusal stops the walk and opens the breaker. Same 21 voices on every link.
   tts:        { model: "elevenlabs/eleven-v4-turbo", provider: "elevenlabs", maxChars: 2000, fallback: "tts-1",
                 chain: ["elevenlabs/eleven-v4-turbo", "elevenlabs/eleven-turbo-v2.5", "elevenlabs/eleven-flash-v2.5"] },
   "tts-hd":   { model: "elevenlabs/eleven-v4",       provider: "elevenlabs", maxChars: 2000, fallback: "tts-1-hd",
@@ -73,6 +74,12 @@ export const TTS_TIERS = TIERS;
 export const ELEVENLABS_VOICE_MAP = Object.freeze({
   alloy: "river", ash: "chris", ballad: "callum", coral: "jessica", echo: "eric",
   fable: "george", nova: "sarah", onyx: "brian", sage: "matilda", shimmer: "lily",
+});
+// The OpenAI voice name a backup uses for each ElevenLabs voice: the ten
+// mapped ones invert ELEVENLABS_VOICE_MAP; the rest by voice character.
+const ELEVEN_TO_OPENAI = Object.freeze({
+  adam: "onyx", alice: "shimmer", bella: "coral", bill: "ash", charlie: "echo", daniel: "fable",
+  harry: "echo", laura: "sage", liam: "ash", roger: "onyx", will: "echo",
 });
 export const ELEVENLABS_VOICES = new Set([
   "george", "sarah", "adam", "alice", "bella", "bill", "brian", "callum", "charlie", "chris", "daniel",
@@ -161,6 +168,8 @@ async function callOpenAI(text, voice, format, tierSlug, model, timeoutMs = 30_0
   }
 
   const buf = Buffer.from(await res.arrayBuffer());
+  // A 200 with no audio is not an answer; it may have been billed, so final.
+  if (buf.length === 0) throw bad("OpenAI returned no audio - retry, or rephrase the input", 504);
   return {
     model,
     provider: "openai",
@@ -241,9 +250,13 @@ const CONNECT_FAILURES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENE
 export const ELEVEN_MAX_IN_FLIGHT = 6;
 const BREAKER_BASE_MS = 60_000;
 const BREAKER_MAX_MS = 15 * 60_000;
-const breaker = { openUntil: 0, trips: 0, serverErrors: 0, probing: false };
+// `epoch` bumps on every trip: an outcome from a call that passed the gate
+// before the latest trip says nothing about ElevenLabs now and is ignored
+// (a call in flight when another tripped must not close the breaker).
+const breaker = { openUntil: 0, trips: 0, serverErrors: 0, probing: false, epoch: 0 };
 let elevenInFlight = 0;
-export const TTS_BACKUP_MODELS = ["microsoft/mai-voice-2", "x-ai/grok-voice-tts-1.0"];
+// Grok first: five distinct voices; MAI-Voice-2 has one English voice.
+export const TTS_BACKUP_MODELS = ["x-ai/grok-voice-tts-1.0", "microsoft/mai-voice-2"];
 
 /** Whether this call may use ElevenLabs, and if so whether it is the probe. */
 function elevenGate(now = Date.now()) {
@@ -252,29 +265,41 @@ function elevenGate(now = Date.now()) {
   if (breaker.trips > 0) {
     if (breaker.probing) return { ok: false, why: "probing" };
     breaker.probing = true;
-    return { ok: true, probe: true };
+    return { ok: true, probe: true, epoch: breaker.epoch };
   }
-  return { ok: true, probe: false };
+  return { ok: true, probe: false, epoch: breaker.epoch };
 }
 function tripBreaker(retryAfterMs = 0, now = Date.now()) {
+  // Already open (a burst of failures from calls in flight together): one
+  // trip, not one per call. A longer Retry-After still extends it.
+  if (now < breaker.openUntil) { breaker.openUntil = Math.max(breaker.openUntil, now + (retryAfterMs || 0)); return; }
   breaker.trips++;
+  breaker.epoch++;
   const cooldown = Math.max(retryAfterMs || 0, Math.min(BREAKER_BASE_MS * 2 ** (breaker.trips - 1), BREAKER_MAX_MS));
   breaker.openUntil = now + cooldown;
   breaker.serverErrors = 0;
   breaker.probing = false;
 }
-function noteElevenOutcome(e) {
-  if (!e) { breaker.trips = 0; breaker.serverErrors = 0; breaker.probing = false; breaker.openUntil = 0; return; }
+/** `e` null = served. Throttles trip at once; server errors, timeouts and
+ *  empty answers (`unhealthy`) trip after three in a row, so a hanging
+ *  ElevenLabs moves later buyers to the backups. */
+function noteElevenOutcome(gate, e) {
+  const stale = gate.epoch !== breaker.epoch;
+  if (!e) {
+    if (gate.probe || (!stale && breaker.trips === 0)) Object.assign(breaker, { trips: 0, serverErrors: 0, probing: false, openUntil: 0 });
+    return;
+  }
   if (e.throttle) return tripBreaker(e.retryAfterMs);
-  if (e.outage && ++breaker.serverErrors >= 3) return tripBreaker();
-  if (breaker.probing) tripBreaker(); // a failed probe re-opens, longer
+  if (stale && !gate.probe) return;
+  if (gate.probe) return tripBreaker(); // a failed probe re-opens, longer
+  if ((e.outage || e.unhealthy) && ++breaker.serverErrors >= 3) tripBreaker();
 }
 /** Bucketed state for status surfaces: ok | cooling | probing. */
 export function elevenLabsBreakerState(now = Date.now()) {
   if (now < breaker.openUntil) return "cooling";
   return breaker.trips > 0 ? "probing" : "ok";
 }
-export function __resetTtsBreakerForTest() { Object.assign(breaker, { openUntil: 0, trips: 0, serverErrors: 0, probing: false }); elevenInFlight = 0; }
+export function __resetTtsBreakerForTest() { Object.assign(breaker, { openUntil: 0, trips: 0, serverErrors: 0, probing: false, epoch: 0 }); elevenInFlight = 0; }
 export function __ttsBreakerForTest() { return { ...breaker, inFlight: elevenInFlight }; }
 
 async function callElevenLabs(text, voice, format, tierSlug, deadline) {
@@ -315,13 +340,16 @@ async function callSpeechModel(model, nativeVoice, text, format, timeoutMs) {
     const code = e?.cause?.code || e?.code;
     const neverConnected = CONNECT_FAILURES.has(code);
     const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError";
-    throw Object.assign(bad(timedOut ? "Speech upstream timed out - retry shortly" : `Upstream request failed: ${String(e?.message || e).slice(0, 120)}`, 504), { outage: neverConnected });
+    throw Object.assign(bad(timedOut ? "Speech upstream timed out - retry shortly" : `Upstream request failed: ${String(e?.message || e).slice(0, 120)}`, 504), { outage: neverConnected, unhealthy: true });
   }
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
     const safe = redactSecrets(errText);
     let msg = safe.slice(0, 200);
     try { msg = JSON.parse(safe).error?.message || msg; } catch {}
+    // 402 is our gateway credit running out: ours, unbilled, and every
+    // OpenRouter model shares it, so stop and use what does not.
+    if (res.status === 402) throw Object.assign(bad("Speech gateway is out of credit - retry shortly", 503), { outage: true, throttle: true, credit: true });
     const ra = Number(res.headers?.get?.("retry-after"));
     const retryAfterMs = Number.isFinite(ra) && ra > 0 ? Math.min(ra, 3600) * 1000 : 0;
     // Our key refused (401/403) is our configuration, not the buyer's request.
@@ -332,8 +360,10 @@ async function callSpeechModel(model, nativeVoice, text, format, timeoutMs) {
   }
   let buf = Buffer.from(await res.arrayBuffer());
   // A 200 with no audio may still have been billed: final, no next link.
-  if (buf.length === 0) throw bad("Upstream returned no audio - retry, or rephrase the input", 502);
-  if (wireFormat !== format) buf = await transcodePcm(buf, format);
+  if (buf.length === 0) throw Object.assign(bad("Upstream returned no audio - retry, or rephrase the input", 502), { unhealthy: true });
+  // Encode at the rate the wire reports (every speech model checked answers 24 kHz).
+  const rate = Number(/rate=(\d+)/.exec(res.headers?.get?.("content-type") || "")?.[1]) || 24000;
+  if (wireFormat !== format) buf = await transcodePcm(buf, format, { sampleRate: rate });
   return { model, provider: "openrouter", voice: nativeVoice, format, audio: buf.toString("base64"), chars: text.length };
 }
 
@@ -341,7 +371,7 @@ async function callSpeechModel(model, nativeVoice, text, format, timeoutMs) {
  *  OpenAI name mapped to the ElevenLabs voice they named directly. */
 function openAiVoiceFor(voice) {
   if (VOICES.has(voice)) return voice;
-  return Object.entries(ELEVENLABS_VOICE_MAP).find(([, v]) => v === voice)?.[0] || "alloy";
+  return Object.entries(ELEVENLABS_VOICE_MAP).find(([, v]) => v === voice)?.[0] || ELEVEN_TO_OPENAI[voice] || "alloy";
 }
 
 /** The backups after ElevenLabs, in order, each tried only after the one
@@ -384,8 +414,7 @@ function makeHandler(tierSlug, { now = () => Date.now() } = {}) {
       return callBackups(text, voice, format, tier, deadline, now, e);
     } finally {
       elevenInFlight--;
-      if (!failure) noteElevenOutcome(null); // served: the breaker closes
-      else if (failure.outage || failure.throttle) noteElevenOutcome(failure);
+      if (!failure || failure.outage || failure.throttle || failure.unhealthy) noteElevenOutcome(gate, failure);
       else if (gate.probe) breaker.probing = false; // the request's own fault says nothing about ElevenLabs
     }
   };
@@ -438,7 +467,7 @@ export const TTS_TOOLS = [
     category: "ai",
     price: "$0.120",
     description:
-      `Convert text to speech with ElevenLabs Eleven v4 Turbo: returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). The ten OpenAI voice names each map to their own ElevenLabs voice, or name one of 21 ElevenLabs voices directly; the answer names the voice that spoke. 90+ languages. If ElevenLabs is busy, a backup speech model serves the call and the answer's model field names it. No API key needed; pay per call over x402 or MPP. Text capped at 2000 chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at ${TTS_LITE_PRICE}.`,
+      `Convert text to speech with ElevenLabs Eleven v4 Turbo: returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). The ten OpenAI voice names each map to their own ElevenLabs voice, or name one of 21 ElevenLabs voices directly; the answer names the voice that spoke. 90+ languages on ElevenLabs. If ElevenLabs is busy, throttling or down, a backup speech model with fewer voices and languages serves the call and the answer's model field names it. No API key needed; pay per call over x402 or MPP. Text capped at 2000 chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at ${TTS_LITE_PRICE}.`,
     tags: [...SHARED_TAGS, "elevenlabs", "eleven-v4-turbo"],
     discovery: {
       bodyType: "json",

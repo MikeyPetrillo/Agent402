@@ -452,7 +452,7 @@ const GATEWAY_TOOLS_ENABLED = [
 ];
 import { IMAGE_GEN_TOOLS } from "./tools/image-gen-kit.js";
 import { CODE_RUN_TOOLS } from "./tools/code-run-kit.js";
-import { TTS_TOOLS } from "./tools/tts-kit.js";
+import { TTS_TOOLS, elevenLabsBreakerState } from "./tools/tts-kit.js";
 // 2026-08-22 seller-landscape builds: keyless derivatives data + env-gated X data / B2B enrichment.
 import { DERIVATIVES_TOOLS } from "./tools/derivatives-kit.js";
 import { SOLANA_INTEL_TOOLS } from "./tools/solana-intel-kit.js";
@@ -3201,6 +3201,9 @@ app.get("/api/gateway-status", async (req, res) => {
     tweetQueue: (() => { try { return _tweetQueue.alarmStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // One word, never a value: whether the private upstream-cost table loaded.
     upstreamCosts: { status: upstreamCostsStatus() },
+    // The ElevenLabs breaker on /api/tts and /api/tts-hd (src/tools/tts-kit.js):
+    // ok / cooling (a throttle sent calls to the backups) / probing. One word.
+    speechUpstream: { status: (() => { try { return elevenLabsBreakerState(); } catch { return "unknown"; } })() },
     // Transactional email (src/email.js): one word publicly - ok / exhausted
     // (the provider refused for credits or quota) / failing / unknown (no send
     // recorded yet) / unconfigured; the operator also gets the last code and
