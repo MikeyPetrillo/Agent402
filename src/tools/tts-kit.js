@@ -438,7 +438,7 @@ export const TTS_TOOLS = [
     category: "ai",
     price: "$0.120",
     description:
-      `Convert text to speech with ElevenLabs Eleven v4 Turbo: returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). The ten OpenAI voice names each map to their own ElevenLabs voice, or name one of 21 ElevenLabs voices directly; the answer names the voice that spoke. 90+ languages. No API key needed; pay per call over x402 or MPP. Text capped at 2000 chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at ${TTS_LITE_PRICE}.`,
+      `Convert text to speech with ElevenLabs Eleven v4 Turbo: returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). The ten OpenAI voice names each map to their own ElevenLabs voice, or name one of 21 ElevenLabs voices directly; the answer names the voice that spoke. 90+ languages. If ElevenLabs is busy, a backup speech model serves the call and the answer's model field names it. No API key needed; pay per call over x402 or MPP. Text capped at 2000 chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at ${TTS_LITE_PRICE}.`,
     tags: [...SHARED_TAGS, "elevenlabs", "eleven-v4-turbo"],
     discovery: {
       bodyType: "json",
@@ -471,7 +471,7 @@ export const TTS_TOOLS = [
     category: "ai",
     price: "$0.240",
     description:
-      "Convert text to speech with ElevenLabs Eleven v4, its most expressive model (inline audio tags such as [whispering] are read as delivery cues). Returns base64-encoded audio. Same interface, voices and formats as /api/tts. No API key needed; pay per call via x402 or MPP. Text capped at 2000 chars. Model-backed.",
+      "Convert text to speech with ElevenLabs Eleven v4, its most expressive model (inline audio tags such as [whispering] are read as delivery cues). Returns base64-encoded audio. Same interface, voices, formats and backups as /api/tts. No API key needed; pay per call via x402 or MPP. Text capped at 2000 chars. Model-backed.",
     tags: [...SHARED_TAGS, "elevenlabs", "eleven-v4", "hd"],
     discovery: {
       bodyType: "json",

@@ -15,7 +15,7 @@ Three tiers of text-to-speech, paywalled via x402. Send text, get back base64-en
 | `POST /api/tts` | $0.12 | `elevenlabs/eleven-v4-turbo` | Natural, low latency | all six | 2,000 chars |
 | `POST /api/tts-hd` | $0.24 | `elevenlabs/eleven-v4` | Most expressive; reads audio tags such as `[whispering]` | all six | 2,000 chars |
 
-Each ElevenLabs tier tries same-rate ElevenLabs models in turn if the first is unavailable (`tts`: Eleven v4 Turbo, Turbo v2.5, Flash v2.5; `tts-hd`: Eleven v4, v3, Multilingual v2). The `model` field in the answer names the one that spoke.
+Each ElevenLabs tier tries same-rate ElevenLabs models in turn if the first is unavailable (`tts`: Eleven v4 Turbo, Turbo v2.5, Flash v2.5; `tts-hd`: Eleven v4, v3, Multilingual v2). If ElevenLabs is busy or throttling, the call is served by a backup instead of failing: OpenAI `tts-1` / `tts-1-hd` until OpenAI retires them on 2027-01-06, then MAI-Voice-2 or Grok voice. The `model` field in the answer always names the one that spoke.
 
 **Which to use.** The lite tier is for high-volume narration, notifications and agent speech, where the cost per call matters more than the timbre; the voice is audibly synthetic next to the ElevenLabs tiers, which is the trade. It takes the same ten voice names and maps each to the nearest Kokoro voice, naming the one that spoke in the response. Ask for a format it cannot serve and you get a 400 pointing at `/api/tts`, never a silent downgrade.
 
