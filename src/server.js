@@ -311,7 +311,7 @@ import { meteredSkip } from "./metered-slugs.js";
 import { runSelfCheck, createSelfCheckRoute } from "./selfcheck.js";
 import { installEgressMeter, egressReport } from "./egress-meter.js";
 import { acpFeed, acpManifest } from "./acp.js";
-import { findTools, findRelatedSellers } from "./find.js";
+import { findTools, findRelatedSellers, markWeakMatches } from "./find.js";
 import { buildPlanSketch } from "./plan-sketch.js";
 import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
@@ -5780,8 +5780,7 @@ const computeFind = async (q, k, meter = null, ip = null) => {
       // board takes a find-miss for a capability the ecosystem already has,
       // which is a false signal in the one dataset we use to decide what to
       // build next.
-      result.hint = "no catalog tool matched, but an indexed seller serves this - see routeAcross";
-      result.routeAcross = `${BASE_URL}/api/route?q=${encodeURIComponent(String(q ?? ""))}&include=external`;
+      markWeakMatches(result, `${BASE_URL}/api/route?q=${encodeURIComponent(String(q ?? ""))}&include=external`);
     } else {
       result.hint = "POST /api/wish with what you needed";
       const qStr = String(q ?? "").trim();
