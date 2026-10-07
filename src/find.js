@@ -402,6 +402,22 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
 }
 
 /**
+ * When no catalog tool does the task but an indexed seller does, the rows /api/find
+ * still returns are its nearest word matches, not answers ("book a flight" ranked
+ * the order-book tools on the word "book"). An agent that reads only `results`
+ * would pay for one. Mark every row weak and lead the hint with the router link;
+ * the rows stay, so a client that reads them keeps working.
+ */
+export function markWeakMatches(result, routeAcross) {
+  if (!result || typeof result !== "object") return result;
+  result.weakMatches = true;
+  result.results = (Array.isArray(result.results) ? result.results : []).map((r) => ({ ...r, weak: true }));
+  result.hint = "none of these results does this task; an indexed seller does - call routeAcross";
+  result.routeAcross = routeAcross;
+  return result;
+}
+
+/**
  * The find->seller bridge: does this query look like the NAME of an indexed
  * x402 seller rather than (or as well as) a task? Agents search /api/find for
  * sellers by name - a cluster of recorded "misses" were hunts for one indexed

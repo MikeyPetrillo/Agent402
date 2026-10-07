@@ -112,9 +112,22 @@ const get = async (p) => (await fetch(`${base}${p}`)).json();
   const missBranch = src.slice(src.indexOf("} else if (await externalServes(q, meter)) {"), src.indexOf('result.hint = "POST /api/wish'));
   ok(!/recordWish/.test(missBranch),
      "a query an indexed seller serves records NO wish - a false demand signal steers what we build next");
-  ok(/routeAcross/.test(missBranch), "...and the caller is handed the router link instead of being told nothing exists");
+  ok(/routeAcross|markWeakMatches\(result, `\$\{BASE_URL\}\/api\/route/.test(missBranch), "...and the caller is handed the router link instead of being told nothing exists");
+  ok(/markWeakMatches\(result, /.test(missBranch), "...and every catalog row it still returns is marked weak (markWeakMatches)");
   ok(/include: "external"/.test(src.slice(src.indexOf("const externalServes"), src.indexOf("const computeFind"))),
      "the consult asks the EXTERNAL pool, which is the half /api/find does not search");
+}
+
+// --- 3. rows that only share a word with the task are marked weak -----------
+{
+  const { markWeakMatches } = await import("../src/find.js");
+  const link = "https://agent402.tools/api/route?q=book%20a%20flight&include=external";
+  const out = markWeakMatches({ query: "book a flight", count: 2, results: [{ slug: "perp-orderbook" }, { slug: "crypto-orderbook" }], hint: "old" }, link);
+  ok(out.weakMatches === true && out.results.every((r) => r.weak === true), "every row a weak answer carries is marked weak, with weakMatches on the envelope");
+  ok(out.results.length === 2 && out.results[0].slug === "perp-orderbook", "...and the rows stay, so a client reading results keeps working");
+  ok(out.routeAcross === link && /does this task; an indexed seller does - call routeAcross/.test(out.hint), "the hint leads with the router link");
+  const empty = markWeakMatches({ query: "x", count: 0, hint: "old" }, link);
+  ok(Array.isArray(empty.results) && empty.results.length === 0 && empty.weakMatches === true, "an answer with no rows still carries the link and an empty list");
 }
 
 child.kill("SIGTERM");
