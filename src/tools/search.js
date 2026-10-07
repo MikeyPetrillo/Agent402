@@ -764,6 +764,8 @@ export const SEARCH_TOOLS = [
       const normalized = queries.map((raw) => (typeof raw === "string" ? raw.trim().slice(0, 400) : ""));
       normalized.forEach((q, n) => { if (q) assertWordLimit(q, `queries[${n}]`); });
       const unique = [...new Set(normalized.filter(Boolean))];
+      // Nothing left to search is the request's fault, and never a charged 200.
+      if (!unique.length) throw bad('every entry in "queries" is empty; send 2-5 non-empty strings');
       const fetched = new Map();
       const failed = new Map();
       // Each query settles on its own: one upstream failure does not discard

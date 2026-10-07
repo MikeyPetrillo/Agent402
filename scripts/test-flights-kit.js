@@ -132,18 +132,24 @@ const committed = () => Object.assign(new Error("seller returned 500 after payme
 {
   // A garbled body after a successful payment: booked once, not twice, and no second seller.
   const h = harness({ script: () => ({ result: "<html>oops</html>", quote: { usd: 0.02 } }) });
-  const out = await h.search.handler({ from: "BER", to: "BCN", date: "2026-11-12" }, req);
-  ok(out.unreadable === true && out.offerCount === 0, "a non-JSON answer after payment is a 200 saying so, never a 5xx that leaves the buyer unbilled for a paid seller");
-  ok(h.calls.length === 1 && h.booked.at(-1) === 0.02, "...booked once at the signed amount, and no second seller is paid");
+  const e = await throws(() => h.search.handler({ from: "BER", to: "BCN", date: "2026-11-12" }, req), /could not be read/, "a non-JSON answer after payment is refused");
+  ok(e?.statusCode === 502, "...as an uncharged 502: the buyer never pays for an answer we could not read");
+  ok(h.calls.length === 1 && h.booked.at(-1) === 0.02, "...our seller spend is booked once at the signed amount, and no second seller is paid");
 }
 {
   // Paid, then a JSON body in a shape neither normalizer reads (e.g. an error object).
   const hs = harness({ script: () => ({ result: ["not", "an", "object"], quote: { usd: 0.02 } }) });
-  const fs = await hs.search.handler({ from: "BER", to: "BCN", date: "2026-11-12" }, req);
-  ok(fs.unreadable === true && fs.offerCount === 0, "search: an unreadable paid answer is a 200 with no offers");
+  const fs = await throws(() => hs.search.handler({ from: "BER", to: "BCN", date: "2026-11-12" }, req), /could not be read/, "search: an unreadable paid answer is refused");
+  ok(fs?.statusCode === 502 && hs.booked.at(-1) === 0.02, "search: ...an uncharged 502, our seller spend still booked");
   const ht = harness({ script: () => ({ result: { error: "unknown flight" }, quote: { usd: 0.01 } }) });
-  const ts = await ht.status.handler({ flight: "LH400", date: "2026-10-12" }, req);
-  ok(ts.found === false && ts.unreadable === true && ht.calls.length === 1, "status: a paid answer with no flights list is found:false, a 200, one seller paid");
+  const ts = await throws(() => ht.status.handler({ flight: "LH400", date: "2026-10-12" }, req), /could not be read/, "status: a paid answer with no flights list is refused");
+  ok(ts?.statusCode === 502 && ht.calls.length === 1, "status: ...an uncharged 502, one seller paid");
+}
+{
+  // A seller that answers 200 without asking for payment spent nothing.
+  const h = harness({ script: () => ({ result: fares, quote: null }) });
+  await h.search.handler({ from: "BER", to: "BCN", date: "2026-11-12" }, req);
+  ok(h.booked.at(-1) === 0, "a free seller answer books nothing against the spend ceilings");
 }
 {
   const h = harness({ script: () => ({ result: fares }), guard: { ok: false, code: "wallet_daily_ceiling" } });

@@ -90,6 +90,9 @@ for (const [slug, args, label] of [
     globalThis.fetch = async () => new Response("{}", { status: 500 });
     e = await h("multi-search")({ queries: ["x", "y"] }).catch((x) => x);
     ok(e?.statusCode === 502, "multi-search: every query failing is still a failed (uncharged) call");
+    calls = 0;
+    e = await h("multi-search")({ queries: ["", "  "] }).catch((x) => x);
+    ok(e?.statusCode === 400 && calls === 0, "multi-search: only empty queries is a 400 before any upstream call, never a charged 200");
     ok(/every query fails is not charged/.test(SEARCH_TOOLS.find((t) => t.slug === "multi-search").description), "multi-search: the description discloses that a partial answer is charged");
 
     const sse = (body) => async () => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(body)); c.close(); } }), { status: 200, headers: { "content-type": "text/event-stream" } });

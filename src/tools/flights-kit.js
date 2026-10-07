@@ -138,9 +138,9 @@ const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 const s = (v, max = 120) => (typeof v === "string" ? v.slice(0, max) : null);
 
 /** The fare-search answer format: best and other itineraries with legs. */
-// Both normalizers run after the seller was paid, so an answer they cannot read
-// is a 200 that says so (unreadable:true, no offers or flights), never a 5xx:
-// a 5xx cancels the buyer's settlement after we paid the seller.
+// Both normalizers mark an answer they cannot read (unreadable:true); the
+// handler turns that into an uncharged 502. The seller was already paid, and
+// that cost is ours: a buyer never pays for an answer we could not read.
 export function normalizeFareSearch(data, params) {
   if (!data || typeof data !== "object" || Array.isArray(data) || (!Array.isArray(data.best_flights) && !Array.isArray(data.other_flights))) data = { unreadable: true };
   const pick = (list, best) => (Array.isArray(list) ? list : []).map((o) => {
@@ -236,7 +236,8 @@ async function buyFirst(sellers, params, { req, pay, kind, spend, now }) {
         slug: kind === "search" ? "flight-search" : "flight-status",
         ...(signBy != null ? { signBy } : {}),
       });
-      const signedUsd = Number(out?.quote?.usd);
+      // No quote means the seller answered without asking for payment: nothing spent.
+      const signedUsd = out?.quote == null ? 0 : Number(out.quote.usd);
       spend.paid += Number.isFinite(signedUsd) ? signedUsd : seller.maxUsd;
       paidOut = out;
     } catch (e) {
@@ -289,6 +290,7 @@ export function buildFlightTools({ sellers, pay, now = () => Date.now(), maySpen
       try {
         const got = await buyFirst(list, params, { req, pay, kind, spend, now });
         const answer = got.format === "fare-search-v1" ? normalizeFareSearch(got.data, params) : normalizeFlightTrack(got.data, params, now());
+        if (answer.unreadable) throw bad("the flight data seller's answer could not be read; nothing was charged to you", 502);
         return markUntrusted({ ...answer, servedBy: got.servedBy, fetchedAt: new Date(now()).toISOString() });
       } finally {
         adjustSpend(handle, spend.paid);
