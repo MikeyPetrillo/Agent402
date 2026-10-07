@@ -170,7 +170,7 @@ export async function cachedSpendingWalletStatus() {
 export async function spendingWalletReadsLow(read = cachedSpendingWalletStatus) {
   try { return (await read())?.status === "low"; } catch { return false; }
 }
-export const WALLET_LOW_MESSAGE = "Paying outside sellers is temporarily unavailable while our spending wallet is topped up. Nothing was charged; retry later.";
+export const WALLET_LOW_MESSAGE = "Paying outside sellers is temporarily unavailable. Nothing was charged; retry later.";
 
 // Buyer payment network (CAIP-2) -> the external settlement chain it can fund.
 // External routing is SELF-FUNDING per chain: the buyer's settlement lands on
