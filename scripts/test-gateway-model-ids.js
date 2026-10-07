@@ -18,7 +18,13 @@ import {
   TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, FLEX_MODELS, REASONING_MODELS, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
   IMAGES_MODEL,
 } from "../src/tools/llm-gateway-kit.js";
-import { IMAGE_TIERS } from "../src/tools/llm-images-fast-kit.js";
+import { IMAGE_TIERS, IMAGES_FAST_TOOLS } from "../src/tools/llm-images-fast-kit.js";
+import { LLM_GATEWAY_TOOLS } from "../src/tools/llm-gateway-kit.js";
+import { LLM_MESSAGES_TOOLS } from "../src/tools/llm-messages-kit.js";
+import { LLM_RESPONSES_TOOLS } from "../src/tools/llm-responses-kit.js";
+import { LLM_GEMINI_TOOLS } from "../src/tools/llm-gemini-kit.js";
+import { LLM_CONTEXT_TOOLS } from "../src/tools/llm-context-kit.js";
+import { LLM_TOOLS } from "../src/tools/llm-kit.js";
 import { PRIMARY_PREFERENCE } from "../openclaw/models.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
 import { DOMAIN_AUDIT_MODELS } from "../src/tools/domain-audit-kit.js";
@@ -61,12 +67,13 @@ async function catalog(url, minEntries) {
   if (!Array.isArray(j?.data) || j.data.length < minEntries) throw new Error(`${url} -> implausible catalog (${j?.data?.length} entries)`);
   return j.data;
 }
-let models, speech, imageModels;
+let models, speech, imageModels, videoModels;
 try {
-  [models, speech, imageModels] = await Promise.all([
+  [models, speech, imageModels, videoModels] = await Promise.all([
     catalog("https://openrouter.ai/api/v1/models", 100),
     catalog("https://openrouter.ai/api/v1/models?output_modalities=speech", 5),
     catalog("https://openrouter.ai/api/v1/images/models", 10),
+    catalog("https://openrouter.ai/api/v1/videos/models", 5),
   ]);
 } catch (e) {
   console.error(`FAIL - could not read the live OpenRouter catalog (${e.message}); refusing to report green`);
@@ -75,6 +82,7 @@ try {
 const ids = new Set(models.map((m) => m.id));
 const speechIds = new Set(speech.map((m) => m.id));
 const imageIds = new Set(imageModels.map((m) => m.id));
+const videoIds = new Set(videoModels.map((m) => m.id));
 console.log(`live catalog: ${ids.size} models, ${speechIds.size} speech models`);
 
 // 1. Every advertised concrete prefix resolves to at least one live id under
@@ -380,6 +388,22 @@ for (const row of REASONING_MODELS) {
     const missing = row.efforts.filter((e) => !live.includes(e));
     ok(missing.length === 0, `reasoning: ${m.id} supports every effort we list${missing.length ? ` (missing upstream: ${missing.join(", ")}; live: ${live.join(", ")})` : ""}`);
     ok(r.mandatory === true || r.default_enabled === true, `reasoning: ${m.id} still reasons by default (mandatory=${r.mandatory}, default_enabled=${r.default_enabled}) - else drop it from the table`);
+  }
+}
+// Published examples name a real model. The tier tables above can be clean
+// while a route's discovery example still names an id that left the catalog
+// (v1-chat-premium shipped "anthropic/claude-opus-4" after it was gone, which
+// the tier's "anthropic/claude-opus" prefix still admits): a buyer who copies
+// the example gets an upstream failure. Only "vendor/model" ids are checked;
+// bare ids go to a first-party API, not OpenRouter.
+{
+  const anyLive = (m) => ids.has(m) || speechIds.has(m) || imageIds.has(m) || videoIds.has(m);
+  const kits = [LLM_GATEWAY_TOOLS, LLM_MESSAGES_TOOLS, LLM_RESPONSES_TOOLS, LLM_GEMINI_TOOLS, LLM_CONTEXT_TOOLS, LLM_TOOLS, IMAGES_FAST_TOOLS];
+  for (const tool of kits.flat()) {
+    const named = [tool.discovery?.input?.model, tool.discovery?.output?.example?.model]
+      .filter((m) => typeof m === "string" && m.includes("/") && !isStealth(m));
+    const dead = [...new Set(named)].filter((m) => !anyLive(m));
+    if (named.length) ok(dead.length === 0, `${tool.slug}: the published example names a live model${dead.length ? ` (dead: ${dead.join(", ")})` : ""}`);
   }
 }
 // Informational: ranked/fallback models that reason by default but are NOT in the table
