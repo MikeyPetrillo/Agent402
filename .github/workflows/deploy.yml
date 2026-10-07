@@ -3661,6 +3661,11 @@ jobs:
       - name: Published examples name only our own hosts
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-example-hosts.js
 
+      # A price the wiki quotes for an endpoint is the catalog's (wiki/TTS.md
+      # kept old TTS prices after a reprice, 2026-10-07).
+      - name: Wiki endpoint prices match the catalog
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-wiki-prices.js
+
       # Every skill pack must WORK on its own published example, not merely
       # return a well-shaped envelope. Nine packs sold for two months answering
       # "0/N steps succeeded" because every guard asserted SHAPE and none
