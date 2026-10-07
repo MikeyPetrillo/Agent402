@@ -192,6 +192,8 @@
     "fema-disasters",
     "fetch-json",
     "finance",
+    "flight-search",
+    "flight-status",
     "food-recalls",
     "forecast-eval",
     "forecast-holt",

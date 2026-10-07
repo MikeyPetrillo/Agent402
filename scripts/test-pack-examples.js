@@ -67,11 +67,20 @@ const EXPECTED_MISSES = {
 // host in one fixed sentence (attribution "upstream-access"); that sentence,
 // anchored to its start, is excused here and nothing broader. A 4xx that
 // means the URL is wrong ("Source URL returned HTTP 404") still fails.
-const NOT_OURS = /not configured|rate.?limited|HTTP 5\d\d|upstream|timed? out|ECONN|ENOTFOUND|socket hang up|temporarily|HTTP 429|did not respond within|ERR_SSL|ERR_TLS|TLS_ALERT|EPROTO|handshake failure|^terminated$|^The host refused this server's request \(HTTP (401|403|407|451)\)/i;
+const NOT_OURS_BASE = /not configured|rate.?limited|HTTP 5\d\d|upstream|timed? out|ECONN|ENOTFOUND|socket hang up|temporarily|HTTP 429|did not respond within|ERR_SSL|ERR_TLS|TLS_ALERT|EPROTO|handshake failure|^terminated$/i;
+const ACCESS_REFUSED = /^The host refused this server's request \(HTTP (401|403|407|451)\)/i;
+// Most examples now target agent402.tools: an access refusal from our own site
+// is our defect and is NOT excused for a pack whose input names it.
+let NOT_OURS = NOT_OURS_BASE;
+const notOursFor = (body) => {
+  const ours = /agent402\.tools/i.test(JSON.stringify(body));
+  return { test: (s) => NOT_OURS_BASE.test(s) || (!ours && ACCESS_REFUSED.test(s)) };
+};
 
 let failed = 0, reported = 0, checked = 0;
 for (const pack of SKILL_PACKS) {
   const body = Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute]));
+  NOT_OURS = notOursFor(body);
   // Single retry, the doctrine the heartbeat, the Algorand canary and
   // probe-classify all use: this sweep drives ~53 live third-party hosts, so a
   // one-off blip is guaranteed eventually. Only what SURVIVES a retry is

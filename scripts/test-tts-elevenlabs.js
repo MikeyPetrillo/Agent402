@@ -4,8 +4,8 @@
 // stubbed fetch; the format encoding runs the real local ffmpeg.
 //
 // What it pins:
-//   - the money bound: 2,000 chars at the private per-char row (the rate
-//     after the launch discount ends) stays within 70% of each tier's price,
+//   - the money bound: 2,000 chars at the private per-char row stays within
+//     70% of each tier's price,
 //     and each Scribe-backed duration cap within 70% of its tier;
 //   - the ten voice names map to ten DISTINCT ElevenLabs voices (the first
 //     replacement chain was turned down for folding them onto five or one);
@@ -124,19 +124,25 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   ok(second.model === TTS_TIERS["tts-hd"].chain[1] && second.provider === "openrouter" && !calls.some((c) => c.url.includes("openai.com")), `a 429 on the first link is served by the second (${second.model}), named in the answer`);
   stub([["openrouter.ai", err(401)], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
   ok((await run("tts", { text: "hi" }, { now: before })).model === "tts-1", "our key refused (401) is an outage, not the buyer's 400: it falls back");
+  stub([["openrouter.ai", () => { throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } }); }], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
+  ok((await run("tts", { text: "hi" }, { now: before })).model === "tts-1", "a DNS failure (never connected) falls back too");
   stub([["openrouter.ai", () => { throw new Error("socket hang up"); }], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
-  ok((await run("tts", { text: "hi" }, { now: before })).model === "tts-1", "a network failure falls back too");
+  const dropped = await throwsWith(() => run("tts", { text: "hi" }, { now: before }));
+  ok(dropped?.statusCode === 504 && calls.length === 1, "a socket dropped mid-answer may have been billed: final, one upstream call");
   stub([["openrouter.ai", err(400)], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
   const bad = await throwsWith(() => run("tts", { text: "hi" }, { now: before }));
   ok(bad?.statusCode === 400 && !calls.some((c) => c.url.includes("openai.com")), "a 400 is the request's fault: no fallback, a 400 back");
   ok(calls.filter((c) => c.url.includes("openrouter.ai")).length === 1, "and the chain is not walked: one upstream call, not one per link");
-  let e1 = 0;
-  stub([["openrouter.ai", () => (e1++ === 0 ? audio(Buffer.alloc(0)) : audio(Buffer.from("ID3second")))], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
-  const afterEmpty = await run("tts", { text: "hi" }, { now: before });
-  ok(afterEmpty.model === TTS_TIERS.tts.chain[1] && Buffer.from(afterEmpty.audio, "base64").length > 0, "empty audio from a link is an outage: the next link serves, never an empty 200");
-  stub([["openrouter.ai", audio(Buffer.alloc(0))]]);
-  const allEmpty = await throwsWith(() => run("tts", { text: "hi" }, { now: () => OPENAI_TTS_SHUTDOWN }));
-  ok(allEmpty?.statusCode === 502, "empty audio on every link, no fallback left: an uncharged 502");
+  // Empty audio and a timeout may already have been billed upstream: each is
+  // final, one upstream call and an uncharged 5xx, never another link or OpenAI.
+  stub([["openrouter.ai", audio(Buffer.alloc(0))], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
+  const empty = await throwsWith(() => run("tts", { text: "hi" }, { now: before }));
+  ok(empty?.statusCode === 502 && calls.length === 1, `empty audio is a final uncharged 502 after one upstream call (calls: ${calls.length})`);
+  stub([["openrouter.ai", () => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); }], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
+  const slow = await throwsWith(() => run("tts-hd", { text: "hi" }, { now: before }));
+  ok(slow?.statusCode === 504 && calls.length === 1, `a timeout is a final uncharged 504 after one upstream call (calls: ${calls.length})`);
+  stub([["openrouter.ai", () => { throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }); }], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
+  ok((await run("tts", { text: "hi" }, { now: before })).model === "tts-1", "a connection that never reached the upstream is an outage: the chain and fallback run");
   stub([["openrouter.ai", err(503)], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
   const after = await throwsWith(() => run("tts", { text: "hi" }, { now: () => OPENAI_TTS_SHUTDOWN }));
   ok(after?.statusCode === 502 && !calls.some((c) => c.url.includes("openai.com")), "from OpenAI's shutdown date there is no fallback: an uncharged 502");

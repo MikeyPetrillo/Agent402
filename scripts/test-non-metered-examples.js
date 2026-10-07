@@ -35,7 +35,7 @@
 //
 // Also soft-skip LOUDLY (after retry) free-public flakes that are NOT the
 // dead-tool class and would otherwise thrash [test]:
-//   • media-info / audio-convert / audio-normalize — handlers are covered by
+//   • media-info / audio-convert / audio-normalize: handlers are covered by
 //     scripts/test-media.js on a local ffmpeg tone. Their examples fetch our
 //     own /fixtures/sample-audio.wav since 2026-10-07 (third-party Wikimedia
 //     before); the soft-skip stays for a fixture fetch that flakes. A 422 "media could not be processed" / content-type
