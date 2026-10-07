@@ -393,7 +393,7 @@ export function changelogRss(baseUrl) {
     <link>${baseUrl}/changelog</link>
     <guid isPermaLink="false">agent402-changelog-${e.date}</guid>
     <pubDate>${new Date(e.date + "T12:00:00Z").toUTCString()}</pubDate>
-    <description>${xmlEsc(e.items.join(". ") + ".")}</description>
+    <description>${xmlEsc(e.items.map((s) => s.trim().replace(/\.+$/, "")).join(". ") + ".")}</description>
   </item>`
   ).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>

@@ -649,8 +649,9 @@ export const ENRICH_TOOLS = [
       // `declared` came back empty, and the /favicon.ico fallback still
       // succeeded, so the tool reported found:true with nothing declared and
       // the sweep rightly failed the example. Wikipedia serves the same page
-      // to everyone and declares two icons.
-      input: { url: "https://www.wikipedia.org" },
+      // to everyone and declares two icons. Since 2026-10-07 the example is our
+      // own home page, which declares four, so it never depends on another site.
+      input: { url: "https://agent402.tools" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Site URL or bare domain (https:// is assumed when omitted)." },
@@ -660,15 +661,17 @@ export const ENRICH_TOOLS = [
       output: {
         example: {
           found: true,
-          url: "https://www.wikipedia.org/",
-          iconUrl: "https://www.wikipedia.org/static/apple-touch/wikipedia.png",
-          finalIconUrl: "https://www.wikipedia.org/static/apple-touch/wikipedia.png",
+          url: "https://agent402.tools/",
+          iconUrl: "https://agent402.tools/favicon.ico?v=3",
+          finalIconUrl: "https://agent402.tools/favicon.ico?v=3",
           contentType: "image/png",
-          bytes: 1313,
+          bytes: 76462,
           dataUri: "data:image/png;base64,iVBORw0KGgo…",
           declared: [
-            { href: "https://www.wikipedia.org/static/apple-touch/wikipedia.png", rel: "apple-touch-icon", sizes: null, type: null, mask: false },
-            { href: "https://www.wikipedia.org/static/favicon/wikipedia.ico", rel: "shortcut icon", sizes: null, type: null, mask: false },
+            { href: "https://agent402.tools/favicon.svg?v=3", rel: "icon", sizes: null, type: "image/svg+xml", mask: false },
+            { href: "https://agent402.tools/favicon.ico?v=3", rel: "icon", sizes: "512x512", type: "image/png", mask: false },
+            { href: "https://agent402.tools/favicon.ico?v=3", rel: "shortcut icon", sizes: null, type: null, mask: false },
+            { href: "https://agent402.tools/logo.png?v=2", rel: "apple-touch-icon", sizes: null, type: null, mask: false },
           ],
         },
       },

@@ -724,7 +724,7 @@ export const CRAWL_TOOLS = [
     tags: ["web", "sitemap", "crawl", "urls", "discovery", "seo", "robots", "site"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://www.iana.org", limit: 50 },
+      input: { url: "https://agent402.tools", limit: 50 },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Start URL (the site's homepage or any page on it)" },
@@ -736,15 +736,15 @@ export const CRAWL_TOOLS = [
       },
       output: {
         example: {
-          url: "https://www.iana.org/",
-          host: "www.iana.org",
-          total: 120,
-          urls: ["https://www.iana.org/", "https://www.iana.org/domains", "https://www.iana.org/numbers", "https://www.iana.org/protocols"],
-          sources: { sitemap: 96, links: 24 },
-          sitemapsRead: 1,
+          url: "https://agent402.tools/",
+          host: "agent402.tools",
+          total: 1106,
+          urls: ["https://agent402.tools/", "https://agent402.tools/decide", "https://agent402.tools/reports", "https://agent402.tools/monitors"],
+          sources: { sitemap: 1028, links: 78 },
+          sitemapsRead: 4,
           truncated: true,
           search: null,
-          fetches: 3,
+          fetches: 6,
           warnings: [],
           source: "robots.txt, sitemap(s) and start-page links, fetched live",
           fetchedAt: "2026-08-22T00:00:00.000Z",
@@ -764,7 +764,7 @@ export const CRAWL_TOOLS = [
     tags: ["web", "crawl", "scrape", "markdown", "pages", "site", "spider", "robots"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://example.com", limit: 3, maxDepth: 1 },
+      input: { url: "https://agent402.tools", limit: 3, maxDepth: 1 },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Start URL" },
@@ -780,26 +780,28 @@ export const CRAWL_TOOLS = [
       },
       output: {
         example: {
-          url: "https://example.com/",
+          url: "https://agent402.tools/",
           format: "markdown",
           pages: [
             {
-              url: "https://example.com/",
+              url: "https://agent402.tools/",
               status: 200,
-              title: "Example Domain",
+              title: "Agent402: 500+ pay-per-call tools for AI agents over x402 and MPP",
               depth: 0,
-              content: "# Example Domain\n\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\n\n[Learn more](https://iana.org/domains/example)",
-              contentChars: 166,
-              links: [],
+              content: "# Agent402: 500+ pay-per-call tools for AI agents over x402 and MPP\n\nNo account. No API key. No card on file.\n…",
+              contentChars: 8000,
+              links: ["https://agent402.tools/", "https://agent402.tools/decide", "https://agent402.tools/reports"],
             },
+            { url: "https://agent402.tools/reports", status: 200, title: "Agent402 Reports: research, 13F, insider flow, audits", depth: 1, content: "…", contentChars: 5104, links: ["https://agent402.tools/"] },
+            { url: "https://agent402.tools/decide", status: 200, title: "Agent402 Decide: a plan for any job", depth: 1, content: "…", contentChars: 5880, links: ["https://agent402.tools/"] },
           ],
-          crawled: 1,
-          skipped: { robots: 0, offsite: 1, unsafe: 0, limit: 0, depth: 0, pattern: 0, binary: 0, error: 0 },
-          truncated: false,
-          queued: 0,
-          robotsTxt: "not readable",
-          fetches: 2,
-          elapsedMs: 420,
+          crawled: 3,
+          skipped: { robots: 0, offsite: 4, unsafe: 0, limit: 75, depth: 22, pattern: 0, binary: 0, error: 0 },
+          truncated: true,
+          queued: 75,
+          robotsTxt: "honoured",
+          fetches: 4,
+          elapsedMs: 645,
           source: "live fetch over internal links (breadth-first), robots.txt honoured for Agent402Bot",
           fetchedAt: "2026-08-22T00:00:00.000Z",
           untrustedContent: true,
