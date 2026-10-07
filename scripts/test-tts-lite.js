@@ -74,11 +74,11 @@ process.env.OPENROUTER_API_KEY = "test-key";
   ok(noKey?.statusCode === 503, "with no key configured it is a 503 (our configuration, uncharged), not a 4xx blaming the buyer");
 }
 
-// --- the premium tiers are untouched --------------------------------------
+// --- the premium tiers (ElevenLabs since 2026-10-07; test-tts-elevenlabs.js) --
 {
-  ok(full.price === "$0.050" && bySlug["tts-hd"].price === "$0.100", "the OpenAI tiers keep their prices");
+  ok(Number(full.price.replace("$", "")) > Number(lite.price.replace("$", "")) * 10, "the premium tier stays well above the lite tier");
   ok(/tts-lite/.test(full.description), "the premium description names the cheaper sibling, so a buyer can find it");
-  ok(full.discovery.output.example.provider === "openai", "and still documents the OpenAI provider");
+  ok(full.discovery.output.example.model.startsWith("elevenlabs/"), "and documents the ElevenLabs model it serves");
 }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

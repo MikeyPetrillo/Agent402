@@ -38,6 +38,9 @@ RUN npm ci --omit=dev && npx playwright install --with-deps chromium \
   # unexploitable path. scripts/check-ffmpeg-cve.sh reads the recorded status.
   && { command -v ffmpeg >/dev/null || { echo "FATAL: ffmpeg missing from image"; exit 1; }; } \
   && { command -v ffprobe >/dev/null || { echo "FATAL: ffprobe missing from image"; exit 1; }; } \
+  # /api/tts encodes opus and aac from speech PCM (media-kit transcodePcm).
+  && { ffmpeg -hide_banner -encoders 2>/dev/null | grep -q " libopus " || { echo "FATAL: ffmpeg lacks the libopus encoder"; exit 1; }; } \
+  && { ffmpeg -hide_banner -encoders 2>/dev/null | grep -q " aac " || { echo "FATAL: ffmpeg lacks the aac encoder"; exit 1; }; } \
   && ffmpeg -version | head -1 > /app/.ffmpeg-version \
   && (ffmpeg -hide_banner -decoders 2>/dev/null | grep -i magicyuv >> /app/.ffmpeg-version || echo "magicyuv-decoder: absent" >> /app/.ffmpeg-version)
 

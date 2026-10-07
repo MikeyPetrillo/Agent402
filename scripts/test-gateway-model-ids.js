@@ -158,6 +158,32 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
   }
   ok(under.length === 0, `no speech row is under its dearest live endpoint price${under.length ? `:\n    ${under.join("\n    ")}` : ""}`);
 }
+// 1d. /api/tts and /api/tts-hd on ElevenLabs (2026-10-07), and the Scribe
+//     model diarize:true sends: each model is live, every voice the ten names
+//     map to is still one it serves, and each private row is at or above the
+//     DEAREST live endpoint, launch discounts ignored (a discount ends; the
+//     row is the rate after it). Scribe is billed per second, the row per minute.
+{
+  const { TTS_TIERS, ELEVENLABS_VOICE_MAP } = await import("../src/tools/tts-kit.js");
+  const { DIARIZE_MODEL } = await import("../src/tools/stt-kit.js");
+  const all = (await (await fetch("https://openrouter.ai/api/v1/models?output_modalities=all", { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json())?.data || [];
+  const dearest = async (id) => {
+    const j = await (await fetch(`https://openrouter.ai/api/v1/models/${id}/endpoints`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json().catch(() => null);
+    const p = (j?.data?.endpoints || []).map((e) => { const r = Number(e?.pricing?.prompt); const d = Number(e?.pricing?.discount) || 0; return d > 0 && d < 1 ? r / (1 - d) : r; }).filter(Number.isFinite);
+    return p.length ? Math.max(...p) : null;
+  };
+  for (const id of Object.values(TTS_TIERS).filter((x) => x.provider === "elevenlabs").flatMap((x) => x.chain)) {
+    const m = all.find((x) => x.id === id);
+    ok(!!m, `${id} is live`);
+    const missing = Object.values(ELEVENLABS_VOICE_MAP).filter((v) => !(m?.supported_voices || []).includes(v));
+    ok(m && missing.length === 0, `${id} still serves every mapped voice${missing.length ? ` (gone: ${missing.join(", ")})` : ""}`);
+    const live = await dearest(id), row = upstreamCosts().speech[id];
+    ok(live !== null && Number.isFinite(row) && row >= live - 1e-12, brief(id, `${id}: private row ${row} covers the dearest endpoint before discount ${live}/char`));
+  }
+  ok(all.some((x) => x.id === DIARIZE_MODEL), `${DIARIZE_MODEL} is live`);
+  const liveSec = await dearest(DIARIZE_MODEL), perMin = upstreamCosts().sttPerMinute[DIARIZE_MODEL];
+  ok(liveSec !== null && Number.isFinite(perMin) && perMin >= liveSec * 60 - 1e-9, brief(DIARIZE_MODEL, `${DIARIZE_MODEL}: private per-minute row ${perMin} covers ${liveSec}/s before discount`));
+}
 // 4. Price floor: for every live model a tier admits, MODEL_COST must not price
 //    it UNDER the DEAREST endpoint a default-tier call can be routed to, prompt
 //    and completion taken separately, while that endpoint sits inside the

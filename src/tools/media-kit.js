@@ -95,6 +95,44 @@ export async function toMp3(buffer, { bitrate = "192k" } = {}) {
   });
 }
 
+// Speech PCM (16-bit little-endian, mono) to a container format. The speech
+// wire we buy from serves mp3 and pcm only, so /api/tts encodes the other four
+// formats it has always offered here. Its own small pool: a transcode of known,
+// bounded input takes milliseconds and must not queue behind a 30 MB media job.
+const PCM_FORMATS = {
+  wav: ["-c:a", "pcm_s16le", "-f", "wav"],
+  flac: ["-c:a", "flac", "-f", "flac"],
+  opus: ["-c:a", "libopus", "-b:a", "64k", "-f", "ogg"],
+  aac: ["-c:a", "aac", "-b:a", "128k", "-f", "adts"],
+};
+//
+// A full pool QUEUES, it never refuses: the speech was already bought when this
+// runs, so a "busy" refusal would throw away audio we paid for and leave the
+// buyer uncharged (security review, 2026-10-07). A slot is handed straight to
+// the next waiter on release.
+const PCM_MAX_CONCURRENT = 4;
+let pcmActive = 0;
+const pcmWaiters = [];
+const pcmAcquire = () => (pcmActive < PCM_MAX_CONCURRENT ? (pcmActive++, Promise.resolve()) : new Promise((resolve) => pcmWaiters.push(resolve)));
+const pcmRelease = () => { const next = pcmWaiters.shift(); if (next) next(); else pcmActive--; };
+export const __pcmPoolForTest = () => ({ active: pcmActive, waiting: pcmWaiters.length });
+export async function transcodePcm(buffer, format, { sampleRate = 24000 } = {}) {
+  const out = PCM_FORMATS[format];
+  if (!out) throw bad(`Cannot encode speech as "${format}"`);
+  await pcmAcquire();
+  const dir = await mkdtemp(join(tmpdir(), "a402-pcm-"));
+  try {
+    const inPath = join(dir, "in.pcm");
+    const outPath = join(dir, `out.${format}`);
+    await writeFile(inPath, buffer);
+    await run("ffmpeg", ["-y", "-f", "s16le", "-ar", String(sampleRate), "-ac", "1", "-i", inPath, "-vn", "-map_metadata", "-1", ...out, outPath]);
+    return await readFile(outPath);
+  } finally {
+    pcmRelease();
+    rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 export async function normalizeAudio(buffer, { targetLufs = -16 } = {}) {
   const lufs = Number(targetLufs);
   if (!Number.isFinite(lufs) || lufs < -36 || lufs > -8) throw bad('"targetLufs" must be between -36 and -8 (default -16)');

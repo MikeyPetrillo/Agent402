@@ -1,10 +1,21 @@
 // Text-to-speech kit — three tiers of x402-paywalled TTS, one interface.
 // Returns base64-encoded audio.
 //
-// Tiers:
-//   tts-lite $0.005 — Kokoro-82M via OpenRouter (800 chars)   [OPENROUTER_API_KEY]
-//   tts      $0.05  — OpenAI tts-1              (2000 chars)  [OPENAI_API_KEY]
-//   tts-hd   $0.10  — OpenAI tts-1-hd           (2000 chars)  [OPENAI_API_KEY]
+// Tiers (prices live on each tool below):
+//   tts-lite — Kokoro-82M via OpenRouter          (800 chars)   [OPENROUTER_API_KEY]
+//   tts      — ElevenLabs Eleven v4 Turbo via OpenRouter (2000 chars), OpenAI tts-1 fallback
+//   tts-hd   — ElevenLabs Eleven v4 via OpenRouter       (2000 chars), OpenAI tts-1-hd fallback
+//
+// ELEVENLABS (2026-10-07): OpenAI shuts tts-1 and tts-1-hd down on 2027-01-06.
+// The first replacement chain was turned down because it folded the ten voice
+// names onto five or one and served two of the six formats. ElevenLabs gives
+// each of the ten names its own voice (21 to choose from), and the four
+// formats the speech wire does not serve are encoded here from its PCM
+// (media-kit transcodePcm). Its per-character rate is well above tts-1's, so
+// the prices rose with the move rather than the cap falling; the margin bound
+// is pinned in scripts/test-tts-elevenlabs.js against the private rate rows.
+// Until the OpenAI shutdown, an ElevenLabs outage (5xx, 429, timeout) falls
+// back to the OpenAI model this tier used to serve, named in the answer.
 //
 // WHY A LITE TIER (2026-09-11): a cheaper MODEL - Kokoro-82M, already a
 // proven link in the /v1/audio/speech failover chain (SPEECH_MODELS,
@@ -25,6 +36,7 @@
 
 import { redactSecrets } from "./redact.js";
 import { SPEECH_MODELS, OPENROUTER_ATTRIBUTION } from "./llm-gateway-kit.js";
+import { transcodePcm } from "./media-kit.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
@@ -42,11 +54,34 @@ const VOICES = new Set(["alloy", "ash", "ballad", "coral", "echo", "fable", "nov
 const FORMATS = new Set(["mp3", "opus", "aac", "flac", "wav", "pcm"]);
 
 const TIERS = {
-  // provider "openrouter" reaches Kokoro; "openai" is the original pair.
-  "tts-lite": { model: "hexgrad/kokoro-82m", provider: "openrouter", maxChars: 800 },
-  tts:        { model: "tts-1",              provider: "openai",     maxChars: 2000 },
-  "tts-hd":   { model: "tts-1-hd",           provider: "openai",     maxChars: 2000 },
+  // provider "openrouter" reaches Kokoro; "elevenlabs" is ElevenLabs over the
+  // same OpenRouter speech wire, with the OpenAI model it replaced as fallback.
+  "tts-lite": { model: "hexgrad/kokoro-82m",         provider: "openrouter", maxChars: 800 },
+  // `chain`: ElevenLabs models at the SAME per-char rate, tried in order on an
+  // outage (launch day, 2026-10-07: v4 Turbo answered about half of calls 429
+  // while the older models answered every one). Same 21 voices on every link.
+  tts:        { model: "elevenlabs/eleven-v4-turbo", provider: "elevenlabs", maxChars: 2000, fallback: "tts-1",
+                chain: ["elevenlabs/eleven-v4-turbo", "elevenlabs/eleven-turbo-v2.5", "elevenlabs/eleven-flash-v2.5"] },
+  "tts-hd":   { model: "elevenlabs/eleven-v4",       provider: "elevenlabs", maxChars: 2000, fallback: "tts-1-hd",
+                chain: ["elevenlabs/eleven-v4", "elevenlabs/eleven-v3", "elevenlabs/eleven-multilingual-v2"] },
 };
+export const TTS_TIERS = TIERS;
+
+// One distinct ElevenLabs voice per OpenAI voice name, chosen by character
+// (neutral, warm, deep, British, bright...). Buyers may also name any of the
+// ElevenLabs voices directly; the answer always names the voice that spoke.
+export const ELEVENLABS_VOICE_MAP = Object.freeze({
+  alloy: "river", ash: "chris", ballad: "callum", coral: "jessica", echo: "eric",
+  fable: "george", nova: "sarah", onyx: "brian", sage: "matilda", shimmer: "lily",
+});
+export const ELEVENLABS_VOICES = new Set([
+  "george", "sarah", "adam", "alice", "bella", "bill", "brian", "callum", "charlie", "chris", "daniel",
+  "eric", "harry", "jessica", "laura", "liam", "lily", "matilda", "river", "roger", "will",
+]);
+// OpenAI retires tts-1 and tts-1-hd on this date; after it the fallback is gone.
+export const OPENAI_TTS_SHUTDOWN = Date.parse("2027-01-06T00:00:00Z");
+// The speech wire serves these natively; the rest are encoded from PCM here.
+const WIRE_FORMATS = new Set(["mp3", "pcm"]);
 // OpenRouter's speech wire serves mp3 and pcm only; the OpenAI tiers keep the
 // full set. A format this tier cannot serve is a self-explaining 400, never a
 // silent downgrade to mp3 (a documented default is a contract - 2026-09-06).
@@ -61,8 +96,10 @@ function validateInput(input, tierSlug) {
   }
 
   const voice = typeof input.voice === "string" ? input.voice.trim().toLowerCase() : "alloy";
-  if (!VOICES.has(voice)) {
-    throw bad(`Unknown voice "${voice}". Supported: ${[...VOICES].join(", ")}`);
+  const elevenTier = TIERS[tierSlug].provider === "elevenlabs";
+  if (!VOICES.has(voice) && !(elevenTier && ELEVENLABS_VOICES.has(voice))) {
+    const extra = elevenTier ? `, or an ElevenLabs voice: ${[...ELEVENLABS_VOICES].join(", ")}` : "";
+    throw bad(`Unknown voice "${voice}". Supported: ${[...VOICES].join(", ")}${extra}`);
   }
 
   const format = typeof input.format === "string" ? input.format.trim().toLowerCase() : "mp3";
@@ -79,11 +116,10 @@ function validateInput(input, tierSlug) {
   return { text, voice, format };
 }
 
-async function callOpenAI(text, voice, format, tierSlug) {
+async function callOpenAI(text, voice, format, tierSlug, model) {
   const key = OPENAI_KEY();
   if (!key) throw bad("OpenAI not configured", 503);
 
-  const tier = TIERS[tierSlug];
   let res;
   try {
     res = await fetch("https://api.openai.com/v1/audio/speech", {
@@ -93,7 +129,7 @@ async function callOpenAI(text, voice, format, tierSlug) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: tier.model,
+        model,
         input: text,
         voice,
         response_format: format,
@@ -126,7 +162,7 @@ async function callOpenAI(text, voice, format, tierSlug) {
 
   const buf = Buffer.from(await res.arrayBuffer());
   return {
-    model: tier.model,
+    model,
     provider: "openai",
     voice,
     format,
@@ -174,16 +210,78 @@ async function callKokoro(text, voice, format, tierSlug) {
   return { model: tier.model, provider: "openrouter", voice: nativeVoice, format, audio: buf.toString("base64"), chars: text.length };
 }
 
-function makeHandler(tierSlug) {
-  return async (input) => {
-    const { text, voice, format } = validateInput(input, tierSlug);
-    return TIERS[tierSlug].provider === "openrouter"
-      ? callKokoro(text, voice, format, tierSlug)
-      : callOpenAI(text, voice, format, tierSlug);
-  };
+/** ElevenLabs over OpenRouter's speech wire. mp3 and pcm come back as is;
+ *  wav, flac, opus and aac are encoded here from the PCM. An outage (5xx, 429,
+ *  timeout, empty audio) is marked `outage` so the caller may fall back; a
+ *  4xx is this request being wrong and is a 400, never retried elsewhere. */
+async function callElevenLabs(text, voice, format, tierSlug) {
+  let last;
+  for (const model of TIERS[tierSlug].chain) {
+    try {
+      return await callElevenLabsModel(model, text, voice, format);
+    } catch (e) {
+      if (!e?.outage) throw e;
+      last = e;
+    }
+  }
+  throw last;
 }
 
-const SHARED_TAGS = ["tts", "text-to-speech", "audio", "voice", "speech", "openai"];
+async function callElevenLabsModel(model, text, voice, format) {
+  const key = OPENROUTER_KEY();
+  if (!key) throw Object.assign(bad("Speech gateway not configured (OPENROUTER_API_KEY unset)", 503), { outage: true });
+  const nativeVoice = ELEVENLABS_VOICE_MAP[voice] || voice;
+  const wireFormat = WIRE_FORMATS.has(format) ? format : "pcm";
+  let res;
+  try {
+    res = await fetch(OPENROUTER_SPEECH_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...OPENROUTER_ATTRIBUTION },
+      body: JSON.stringify({ model, input: text, voice: nativeVoice, response_format: wireFormat }),
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (e) {
+    throw Object.assign(bad(`Upstream request failed: ${String(e?.message || e).slice(0, 120)}`, 504), { outage: true });
+  }
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    const safe = redactSecrets(errText);
+    let msg = safe.slice(0, 200);
+    try { msg = JSON.parse(safe).error?.message || msg; } catch {}
+    // Our key refused (401/403) is our configuration, not the buyer's request.
+    if (res.status === 401 || res.status === 403) throw Object.assign(bad("Speech upstream auth failed", 502), { outage: true });
+    if (res.status >= 500 || res.status === 429) throw Object.assign(bad(`Speech upstream error (HTTP ${res.status}): ${msg}`, 502), { outage: true });
+    throw bad(`Upstream rejected the request: ${msg}`, 400);
+  }
+  let buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length === 0) throw Object.assign(bad("Upstream returned no audio - retry, or rephrase the input", 502), { outage: true });
+  if (wireFormat !== format) buf = await transcodePcm(buf, format);
+  return { model, provider: "openrouter", voice: nativeVoice, format, audio: buf.toString("base64"), chars: text.length };
+}
+
+/** The OpenAI voice name for a fallback call: the name the buyer gave, or the
+ *  OpenAI name mapped to the ElevenLabs voice they named directly. */
+function openAiVoiceFor(voice) {
+  if (VOICES.has(voice)) return voice;
+  return Object.entries(ELEVENLABS_VOICE_MAP).find(([, v]) => v === voice)?.[0] || "alloy";
+}
+
+function makeHandler(tierSlug, { now = () => Date.now() } = {}) {
+  return async (input) => {
+    const { text, voice, format } = validateInput(input, tierSlug);
+    const tier = TIERS[tierSlug];
+    if (tier.provider === "openrouter") return callKokoro(text, voice, format, tierSlug);
+    try {
+      return await callElevenLabs(text, voice, format, tierSlug);
+    } catch (e) {
+      if (!e?.outage || !tier.fallback || !OPENAI_KEY() || now() >= OPENAI_TTS_SHUTDOWN) throw e;
+      return callOpenAI(text, openAiVoiceFor(voice), format, tierSlug, tier.fallback);
+    }
+  };
+}
+export const __makeHandlerForTest = makeHandler;
+
+const SHARED_TAGS = ["tts", "text-to-speech", "audio", "voice", "speech"];
 
 export const TTS_TOOLS = [
   {
@@ -194,7 +292,7 @@ export const TTS_TOOLS = [
     category: "ai",
     price: "$0.005",
     description:
-      "Convert text to speech with Kokoro-82M, ten times cheaper than /api/tts. Returns base64-encoded mp3 or pcm. The same request shape and the same ten OpenAI voice names as /api/tts, mapped to Kokoro's own voices; the voice is synthetic-sounding where the OpenAI tiers are not, which is the whole trade. Use this for high-volume narration, notifications and agent speech where the cost per call matters more than the timbre; use /api/tts or /api/tts-hd when it does not. No API key needed; pay per call via x402. Text capped at 800 chars.",
+      "Convert text to speech with Kokoro-82M, a fraction of the price of /api/tts. Returns base64-encoded mp3 or pcm. The same request shape and the same ten voice names as /api/tts, mapped to Kokoro's own voices; the voice is synthetic-sounding where the ElevenLabs tiers are not, which is the whole trade. Use this for high-volume narration, notifications and agent speech where the cost per call matters more than the timbre; use /api/tts or /api/tts-hd when it does not. No API key needed; pay per call via x402. Text capped at 800 chars.",
     tags: [...SHARED_TAGS, "kokoro", "cheap", "lite"],
     discovery: {
       bodyType: "json",
@@ -225,26 +323,26 @@ export const TTS_TOOLS = [
     name: "Text-to-speech",
     slug: "tts",
     category: "ai",
-    price: "$0.050",
+    price: "$0.120",
     description:
-      "Convert text to speech using OpenAI TTS-1: returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). 10 voices available. No API key needed; pay per call over x402 or MPP. Text capped at 2000 chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at $0.005.",
-    tags: [...SHARED_TAGS, "tts-1"],
+      "Convert text to speech with ElevenLabs Eleven v4 Turbo: returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). The ten OpenAI voice names each map to their own ElevenLabs voice, or name one of 21 ElevenLabs voices directly; the answer names the voice that spoke. 90+ languages. No API key needed; pay per call over x402 or MPP. Text capped at 2000 chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at $0.005.",
+    tags: [...SHARED_TAGS, "elevenlabs", "eleven-v4-turbo"],
     discovery: {
       bodyType: "json",
       input: { text: "Hello from Agent402!", voice: "alloy", format: "mp3" },
       inputSchema: {
         properties: {
           text: { type: "string", description: "Text to convert to speech (max 2000 chars)" },
-          voice: { type: "string", description: "Voice: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer (default: alloy)" },
+          voice: { type: "string", description: "Voice: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer (default: alloy), each mapped to its own ElevenLabs voice, or an ElevenLabs voice by name (george, sarah, adam, alice, bella, bill, brian, callum, charlie, chris, daniel, eric, harry, jessica, laura, liam, lily, matilda, river, roger, will)" },
           format: { type: "string", description: "Audio format: mp3, opus, aac, flac, wav, pcm (default: mp3)" },
         },
         required: ["text"],
       },
       output: {
         example: {
-          model: "tts-1",
-          provider: "openai",
-          voice: "alloy",
+          model: "elevenlabs/eleven-v4-turbo",
+          provider: "openrouter",
+          voice: "river",
           format: "mp3",
           audio: "<base64-encoded audio>",
           chars: 20,
@@ -258,26 +356,26 @@ export const TTS_TOOLS = [
     name: "Text-to-speech (HD)",
     slug: "tts-hd",
     category: "ai",
-    price: "$0.100",
+    price: "$0.240",
     description:
-      "Convert text to speech using OpenAI TTS-1-HD (higher fidelity). Returns base64-encoded audio. Same interface as /api/tts but with better audio quality. No API key needed; pay per call via x402. Text capped at 2000 chars.",
-    tags: [...SHARED_TAGS, "tts-1-hd", "hd"],
+      "Convert text to speech with ElevenLabs Eleven v4, its most expressive model (inline audio tags such as [whispering] are read as delivery cues). Returns base64-encoded audio. Same interface, voices and formats as /api/tts. No API key needed; pay per call via x402 or MPP. Text capped at 2000 chars. Model-backed.",
+    tags: [...SHARED_TAGS, "elevenlabs", "eleven-v4", "hd"],
     discovery: {
       bodyType: "json",
       input: { text: "Hello from Agent402!", voice: "alloy", format: "mp3" },
       inputSchema: {
         properties: {
           text: { type: "string", description: "Text to convert to speech (max 2000 chars)" },
-          voice: { type: "string", description: "Voice: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer (default: alloy)" },
+          voice: { type: "string", description: "Voice: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer (default: alloy), each mapped to its own ElevenLabs voice, or an ElevenLabs voice by name (george, sarah, adam, alice, bella, bill, brian, callum, charlie, chris, daniel, eric, harry, jessica, laura, liam, lily, matilda, river, roger, will)" },
           format: { type: "string", description: "Audio format: mp3, opus, aac, flac, wav, pcm (default: mp3)" },
         },
         required: ["text"],
       },
       output: {
         example: {
-          model: "tts-1-hd",
-          provider: "openai",
-          voice: "alloy",
+          model: "elevenlabs/eleven-v4",
+          provider: "openrouter",
+          voice: "river",
           format: "mp3",
           audio: "<base64-encoded audio>",
           chars: 20,
