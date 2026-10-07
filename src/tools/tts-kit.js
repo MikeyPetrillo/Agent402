@@ -2,18 +2,18 @@
 // Returns base64-encoded audio.
 //
 // Tiers (prices live on each tool below):
-//   tts-lite — Kokoro-82M via OpenRouter          (800 chars)   [OPENROUTER_API_KEY]
-//   tts      — ElevenLabs Eleven v4 Turbo via OpenRouter (2000 chars), OpenAI tts-1 fallback
-//   tts-hd   — ElevenLabs Eleven v4 via OpenRouter       (2000 chars), OpenAI tts-1-hd fallback
+//   tts-lite: Kokoro-82M via OpenRouter (800 chars) [OPENROUTER_API_KEY]
+//   tts:      ElevenLabs Eleven v4 Turbo via OpenRouter (2000 chars), OpenAI tts-1 fallback
+//   tts-hd:   ElevenLabs Eleven v4 via OpenRouter (2000 chars), OpenAI tts-1-hd fallback
 //
 // ELEVENLABS (2026-10-07): OpenAI shuts tts-1 and tts-1-hd down on 2027-01-06.
 // The first replacement chain was turned down because it folded the ten voice
 // names onto five or one and served two of the six formats. ElevenLabs gives
 // each of the ten names its own voice (21 to choose from), and the four
 // formats the speech wire does not serve are encoded here from its PCM
-// (media-kit transcodePcm). Its per-character rate is well above tts-1's, so
-// the prices rose with the move rather than the cap falling; the margin bound
-// is pinned in scripts/test-tts-elevenlabs.js against the private rate rows.
+// (media-kit transcodePcm). The prices moved with the change and the cap
+// stayed; the margin bound is pinned in scripts/test-tts-elevenlabs.js against
+// the private rate rows.
 // Until the OpenAI shutdown, an ElevenLabs outage (5xx, 429, timeout) falls
 // back to the OpenAI model this tier used to serve, named in the answer.
 //
@@ -116,7 +116,7 @@ function validateInput(input, tierSlug) {
   return { text, voice, format };
 }
 
-async function callOpenAI(text, voice, format, tierSlug, model) {
+async function callOpenAI(text, voice, format, tierSlug, model, timeoutMs = 30_000) {
   const key = OPENAI_KEY();
   if (!key) throw bad("OpenAI not configured", 503);
 
@@ -134,7 +134,7 @@ async function callOpenAI(text, voice, format, tierSlug, model) {
         voice,
         response_format: format,
       }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
     throw bad(`OpenAI request failed: ${e.message}`, 504);
@@ -211,23 +211,34 @@ async function callKokoro(text, voice, format, tierSlug) {
 }
 
 /** ElevenLabs over OpenRouter's speech wire. mp3 and pcm come back as is;
- *  wav, flac, opus and aac are encoded here from the PCM. An outage (5xx, 429,
- *  timeout, empty audio) is marked `outage` so the caller may fall back; a
- *  4xx is this request being wrong and is a 400, never retried elsewhere. */
-async function callElevenLabs(text, voice, format, tierSlug) {
+ *  wav, flac, opus and aac are encoded here from the PCM.
+ *
+ *  Only a failure the upstream did not bill moves to the next link or the
+ *  OpenAI fallback: a 429, a 5xx, our key refused (401/403), or a connection
+ *  that never reached it. Those are marked `outage`. A timeout or an empty
+ *  answer may already have been generated and billed, so each is final: an
+ *  uncharged 5xx with no further upstream call, which keeps one paid call to
+ *  at most one billed generation. A 4xx is the request's fault: a 400.
+ *  The whole call, fallback included, runs inside TTS_DEADLINE_MS. */
+export const TTS_DEADLINE_MS = 40_000;
+const TTS_LINK_TIMEOUT_MS = 25_000;
+const CONNECT_FAILURES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "UND_ERR_CONNECT_TIMEOUT"]);
+async function callElevenLabs(text, voice, format, tierSlug, deadline) {
   let last;
   for (const model of TIERS[tierSlug].chain) {
+    const left = deadline - Date.now();
+    if (left < 3_000) break;
     try {
-      return await callElevenLabsModel(model, text, voice, format);
+      return await callElevenLabsModel(model, text, voice, format, Math.min(TTS_LINK_TIMEOUT_MS, left));
     } catch (e) {
       if (!e?.outage) throw e;
       last = e;
     }
   }
-  throw last;
+  throw last || Object.assign(bad("Speech upstream did not answer in time - retry shortly", 504), { outage: false });
 }
 
-async function callElevenLabsModel(model, text, voice, format) {
+async function callElevenLabsModel(model, text, voice, format, timeoutMs) {
   const key = OPENROUTER_KEY();
   if (!key) throw Object.assign(bad("Speech gateway not configured (OPENROUTER_API_KEY unset)", 503), { outage: true });
   const nativeVoice = ELEVENLABS_VOICE_MAP[voice] || voice;
@@ -238,10 +249,16 @@ async function callElevenLabsModel(model, text, voice, format) {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...OPENROUTER_ATTRIBUTION },
       body: JSON.stringify({ model, input: text, voice: nativeVoice, response_format: wireFormat }),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
-    throw Object.assign(bad(`Upstream request failed: ${String(e?.message || e).slice(0, 120)}`, 504), { outage: true });
+    // Only a connection that was never set up is certainly unbilled: an outage.
+    // Anything later (a timeout, a socket dropped mid-answer) may have been
+    // generated and billed, so it is final.
+    const code = e?.cause?.code || e?.code;
+    const neverConnected = CONNECT_FAILURES.has(code);
+    const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError";
+    throw Object.assign(bad(timedOut ? "Speech upstream timed out - retry shortly" : `Upstream request failed: ${String(e?.message || e).slice(0, 120)}`, 504), { outage: neverConnected });
   }
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
@@ -254,7 +271,8 @@ async function callElevenLabsModel(model, text, voice, format) {
     throw bad(`Upstream rejected the request: ${msg}`, 400);
   }
   let buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length === 0) throw Object.assign(bad("Upstream returned no audio - retry, or rephrase the input", 502), { outage: true });
+  // A 200 with no audio may still have been billed: final, no next link.
+  if (buf.length === 0) throw bad("Upstream returned no audio - retry, or rephrase the input", 502);
   if (wireFormat !== format) buf = await transcodePcm(buf, format);
   return { model, provider: "openrouter", voice: nativeVoice, format, audio: buf.toString("base64"), chars: text.length };
 }
@@ -271,16 +289,21 @@ function makeHandler(tierSlug, { now = () => Date.now() } = {}) {
     const { text, voice, format } = validateInput(input, tierSlug);
     const tier = TIERS[tierSlug];
     if (tier.provider === "openrouter") return callKokoro(text, voice, format, tierSlug);
+    const deadline = Date.now() + TTS_DEADLINE_MS;
     try {
-      return await callElevenLabs(text, voice, format, tierSlug);
+      return await callElevenLabs(text, voice, format, tierSlug, deadline);
     } catch (e) {
       if (!e?.outage || !tier.fallback || !OPENAI_KEY() || now() >= OPENAI_TTS_SHUTDOWN) throw e;
-      return callOpenAI(text, openAiVoiceFor(voice), format, tierSlug, tier.fallback);
+      const left = deadline - Date.now();
+      if (left < 3_000) throw e;
+      return callOpenAI(text, openAiVoiceFor(voice), format, tierSlug, tier.fallback, left);
     }
   };
 }
 export const __makeHandlerForTest = makeHandler;
 
+// The lite price, read by the /api/tts description so it is never typed twice.
+const TTS_LITE_PRICE = "$0.005";
 const SHARED_TAGS = ["tts", "text-to-speech", "audio", "voice", "speech"];
 
 export const TTS_TOOLS = [
@@ -290,7 +313,7 @@ export const TTS_TOOLS = [
     slug: "tts-lite",
     aliases: ["cheap-tts", "tts-cheap", "speech-lite"],
     category: "ai",
-    price: "$0.005",
+    price: TTS_LITE_PRICE,
     description:
       "Convert text to speech with Kokoro-82M, a fraction of the price of /api/tts. Returns base64-encoded mp3 or pcm. The same request shape and the same ten voice names as /api/tts, mapped to Kokoro's own voices; the voice is synthetic-sounding where the ElevenLabs tiers are not, which is the whole trade. Use this for high-volume narration, notifications and agent speech where the cost per call matters more than the timbre; use /api/tts or /api/tts-hd when it does not. No API key needed; pay per call via x402. Text capped at 800 chars.",
     tags: [...SHARED_TAGS, "kokoro", "cheap", "lite"],
@@ -325,7 +348,7 @@ export const TTS_TOOLS = [
     category: "ai",
     price: "$0.120",
     description:
-      "Convert text to speech with ElevenLabs Eleven v4 Turbo: returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). The ten OpenAI voice names each map to their own ElevenLabs voice, or name one of 21 ElevenLabs voices directly; the answer names the voice that spoke. 90+ languages. No API key needed; pay per call over x402 or MPP. Text capped at 2000 chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at $0.005.",
+      `Convert text to speech with ElevenLabs Eleven v4 Turbo: returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). The ten OpenAI voice names each map to their own ElevenLabs voice, or name one of 21 ElevenLabs voices directly; the answer names the voice that spoke. 90+ languages. No API key needed; pay per call over x402 or MPP. Text capped at 2000 chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at ${TTS_LITE_PRICE}.`,
     tags: [...SHARED_TAGS, "elevenlabs", "eleven-v4-turbo"],
     discovery: {
       bodyType: "json",

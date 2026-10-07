@@ -132,8 +132,18 @@ const committed = () => Object.assign(new Error("seller returned 500 after payme
 {
   // A garbled body after a successful payment: booked once, not twice, and no second seller.
   const h = harness({ script: () => ({ result: "<html>oops</html>", quote: { usd: 0.02 } }) });
-  await throws(() => h.search.handler({ from: "BER", to: "BCN", date: "2026-11-12" }, req), /not JSON/, "a non-JSON answer after payment is a 502");
+  const out = await h.search.handler({ from: "BER", to: "BCN", date: "2026-11-12" }, req);
+  ok(out.unreadable === true && out.offerCount === 0, "a non-JSON answer after payment is a 200 saying so, never a 5xx that leaves the buyer unbilled for a paid seller");
   ok(h.calls.length === 1 && h.booked.at(-1) === 0.02, "...booked once at the signed amount, and no second seller is paid");
+}
+{
+  // Paid, then a JSON body in a shape neither normalizer reads (e.g. an error object).
+  const hs = harness({ script: () => ({ result: ["not", "an", "object"], quote: { usd: 0.02 } }) });
+  const fs = await hs.search.handler({ from: "BER", to: "BCN", date: "2026-11-12" }, req);
+  ok(fs.unreadable === true && fs.offerCount === 0, "search: an unreadable paid answer is a 200 with no offers");
+  const ht = harness({ script: () => ({ result: { error: "unknown flight" }, quote: { usd: 0.01 } }) });
+  const ts = await ht.status.handler({ flight: "LH400", date: "2026-10-12" }, req);
+  ok(ts.found === false && ts.unreadable === true && ht.calls.length === 1, "status: a paid answer with no flights list is found:false, a 200, one seller paid");
 }
 {
   const h = harness({ script: () => ({ result: fares }), guard: { ok: false, code: "wallet_daily_ceiling" } });

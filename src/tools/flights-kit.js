@@ -14,9 +14,9 @@
 // on its price, and which answer format to translate:
 //
 //   {"search": [{"url": "https://host/path?a={from}&b={to}&d={date}", "method": "GET",
-//                "format": "fare-search-v1", "maxUsd": 0.02, "payTo": "0x..."}],
+//                "format": "fare-search-v1", "maxUsd": 0.001, "payTo": "0x..."}],
 //    "status": [{"url": "https://host/flights/{flight}?x=1", "method": "GET",
-//                "format": "flight-track-v1", "maxUsd": 0.01, "payTo": "0x..."}]}
+//                "format": "flight-track-v1", "maxUsd": 0.001, "payTo": "0x..."}]}
 //
 // MONEY. The seller is paid from our Base spending wallet BEFORE the buyer's own
 // payment settles, the same exposure as seller-payability, bounded the same way:
@@ -139,8 +139,11 @@ const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 const s = (v, max = 120) => (typeof v === "string" ? v.slice(0, max) : null);
 
 /** The fare-search answer format: best and other itineraries with legs. */
+// Both normalizers run after the seller was paid, so an answer they cannot read
+// is a 200 that says so (unreadable:true, no offers or flights), never a 5xx:
+// a 5xx cancels the buyer's settlement after we paid the seller.
 export function normalizeFareSearch(data, params) {
-  if (!data || typeof data !== "object") throw bad("the flight seller answered in an unexpected format", 502);
+  if (!data || typeof data !== "object" || Array.isArray(data) || (!Array.isArray(data.best_flights) && !Array.isArray(data.other_flights))) data = { unreadable: true };
   const pick = (list, best) => (Array.isArray(list) ? list : []).map((o) => {
     const legs = (Array.isArray(o?.flights) ? o.flights : []).map((l) => ({
       airline: s(l?.airline, 60),
@@ -165,6 +168,7 @@ export function normalizeFareSearch(data, params) {
     lowestPrice: n(insights.lowest_price) ?? (offers.length ? Math.min(...offers.map((o) => o.price)) : null),
     typicalPriceRange: Array.isArray(insights.typical_price_range) ? insights.typical_price_range.map(n).filter((x) => x != null).slice(0, 2) : null,
     priceLevel: s(insights.price_level, 20),
+    ...(data.unreadable ? { unreadable: true, note: "the flight data seller's answer could not be read" } : {}),
   };
 }
 
@@ -174,7 +178,7 @@ const stamp = (v) => s(v, 25);
  *  else the most recent. */
 export function normalizeFlightTrack(data, params, now = Date.now()) {
   const list = Array.isArray(data?.flights) ? data.flights : null;
-  if (!list) throw bad("the flight seller answered in an unexpected format", 502);
+  if (!list) return { found: false, flight: params.flight, date: params.date, reason: "the flight data seller's answer could not be read", otherDays: [], unreadable: true };
   const rows = list.map((f) => ({
     flight: s(f?.ident_iata, 10) || params.flight,
     operator: s(f?.operator_iata || f?.operator, 10),
@@ -191,9 +195,8 @@ export function normalizeFlightTrack(data, params, now = Date.now()) {
     gateArrival: s(f?.gate_destination, 10), terminalArrival: s(f?.terminal_destination, 10),
     aircraft: s(f?.aircraft_type, 10),
   })).filter((r) => r.scheduledDeparture);
-  // This runs AFTER the seller was paid, so "not found" is an answer, never a
-  // 4xx: a 4xx cancels the buyer's settlement and would let a buyer make us pay
-  // a seller for nothing on demand (security review 2026-10-07).
+  // This runs after the seller was paid, so "not found" is an answer with
+  // found:false, the same as any other answer the seller gave.
   const notFound = (why) => ({ found: false, flight: params.flight, date: params.date, reason: why, otherDays: rows.map((r) => r.scheduledDeparture).slice(0, 10) });
   if (!rows.length) return notFound(`no tracked flight ${params.flight} in the window the seller covers`);
   const t = (r) => Date.parse(r.scheduledDeparture);
@@ -255,7 +258,7 @@ async function buyFirst(sellers, params, { req, pay, kind, spend, now }) {
     // Paid and answered. Outside the try: a garbled body here was paid once and
     // is booked once; it never falls through to a second seller.
     let data = paidOut?.result;
-    if (typeof data === "string") { try { data = JSON.parse(data); } catch { throw bad("the flight data seller answered with something that is not JSON; nothing was charged to you", 502); } }
+    if (typeof data === "string") { try { data = JSON.parse(data); } catch { data = null; } }
     return { data, servedBy: new URL(url).host, format: seller.format };
   }
   // The cause stays in our log: payX402's messages can carry the seller's quote,

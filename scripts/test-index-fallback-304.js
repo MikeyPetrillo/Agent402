@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// A seller with no /.well-known/x402 keeps its catalogue when its fallback
+// A seller with no /.well-known/x402 keeps its catalog when its fallback
 // documents answer 304 Not Modified.
 //
 // The crawler sends the ETag it holds, and a seller that has not changed
@@ -9,7 +9,7 @@
 // had no tools and read crawl_failed ("\"undefined\" is not valid JSON").
 // Measured 2026-10-07: 8 of the 66 crawl_failed origins, among them a travel
 // seller with 45 paid routes. Offline: the real crawl pipeline through the
-// __setCrawlFetchForTest seam, with a stub that honours If-None-Match.
+// __setCrawlFetchForTest seam, with a stub that honors If-None-Match.
 process.env.X402_INDEX_CRAWL = "off";
 const { mkdtempSync, rmSync } = await import("node:fs");
 const { tmpdir } = await import("node:os");
@@ -52,12 +52,12 @@ for (const [origin, label, min] of [[OA, "openapi", 2], [LL, "llms.txt", 1]]) {
   __resetRobotsCacheForTest();
   await __crawlSellerForTest(origin);
   const first = sellerDetail(origin);
-  ok(first?.toolCount >= min, `${label}: the first crawl reads the catalogue (${first?.toolCount} tools)`);
+  ok(first?.toolCount >= min, `${label}: the first crawl reads the catalog (${first?.toolCount} tools)`);
   const before = notModifiedAnswers;
   await __crawlSellerForTest(origin);
   const second = sellerDetail(origin);
   ok(notModifiedAnswers > before, `${label}: the second crawl revalidates and the seller answers 304`);
-  ok(second?.toolCount === first?.toolCount, `${label}: the catalogue survives the 304 (${second?.toolCount} tools)`);
+  ok(second?.toolCount === first?.toolCount, `${label}: the catalog survives the 304 (${second?.toolCount} tools)`);
   ok(!JSON.stringify(second?.fallbackErrors || []).includes("is not valid JSON"), `${label}: no "not valid JSON" fallback error after a 304`);
   ok(second?.originResponded !== false, `${label}: the origin still reads as responding`);
 }

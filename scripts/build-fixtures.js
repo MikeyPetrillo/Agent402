@@ -105,7 +105,7 @@ function pdfFromObjects(objs, trailerExtra = "") {
   return Buffer.from(out, "latin1");
 }
 
-// --- a 64x64 truecolour PNG, hand-encoded (no image dependency) ------------
+// --- a 64x64 truecolor PNG, hand-encoded (no image dependency) ------------
 function buildPng() {
   const W = 64, H = 64;
   const raw = Buffer.alloc(H * (1 + W * 3));
@@ -134,7 +134,7 @@ function buildPng() {
   };
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(H, 4);
-  ihdr[8] = 8; ihdr[9] = 2; // 8-bit, truecolour
+  ihdr[8] = 8; ihdr[9] = 2; // 8-bit, truecolor
   return Buffer.concat([
     Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
     chunk("IHDR", ihdr),
@@ -153,7 +153,7 @@ async function buildTextPng() {
 }
 
 // --- a JPEG carrying EXIF: camera, timestamps and a GPS fix ------------------
-// Three colour bands (60/30/10) so a dominant-colour read has an answer. The
+// Three color bands (60/30/10) so a dominant-color read has an answer. The
 // GPS fix is the Royal Observatory, Greenwich: a public landmark, no one's home.
 async function buildExifJpeg() {
   const W = 120, H = 80;
