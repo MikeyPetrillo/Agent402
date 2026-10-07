@@ -7,8 +7,7 @@
 // derived; the fallback branch (/openapi.json, /agents.json, /llms.txt) kept
 // nothing and parsed the empty body, so from its second crawl on the seller
 // had no tools and read crawl_failed ("\"undefined\" is not valid JSON").
-// Measured 2026-10-07: 8 of the 66 crawl_failed origins, among them a travel
-// seller with 45 paid routes. Offline: the real crawl pipeline through the
+// Offline: the real crawl pipeline through the
 // __setCrawlFetchForTest seam, with a stub that honors If-None-Match.
 process.env.X402_INDEX_CRAWL = "off";
 const { mkdtempSync, rmSync } = await import("node:fs");

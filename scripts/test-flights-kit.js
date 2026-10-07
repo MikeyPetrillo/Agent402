@@ -71,7 +71,7 @@ ok(normalizeFlightTrack(track, { flight: "LH400", date: null }, NOW).scheduledDe
 ok(normalizeFlightTrack(track, { flight: "LH400", date: "2026-10-06" }, NOW).departureDelayMin === 10, "a date picks that day's flight, delay in minutes");
 {
   // After the seller is paid, "not found" must be a charged answer, never a 4xx:
-  // a 4xx cancels the buyer's settlement (security review 2026-10-07).
+  // a 4xx cancels the buyer's settlement.
   const nf = normalizeFlightTrack(track, { flight: "LH400", date: "2026-10-10" }, NOW);
   ok(nf.found === false && /no departure scheduled/.test(nf.reason) && nf.otherDays.length === 3, "a date with no flight is a found:false answer listing the days that do fly, not another day's flight");
   const none = normalizeFlightTrack({ flights: [] }, { flight: "LH400", date: null }, NOW);

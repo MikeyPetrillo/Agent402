@@ -161,8 +161,8 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
 // 1d. /api/tts and /api/tts-hd on ElevenLabs (2026-10-07), and the Scribe
 //     model diarize:true sends: each model is live, every voice the ten names
 //     map to is still one it serves, and each private row is at or above the
-//     DEAREST live endpoint, launch discounts ignored (a discount ends; the
-//     row is the rate after it). Scribe is billed per second, the row per minute.
+//     DEAREST live endpoint at its undiscounted price. Scribe is billed per
+//     second, the row per minute.
 {
   const { TTS_TIERS, ELEVENLABS_VOICE_MAP } = await import("../src/tools/tts-kit.js");
   const { DIARIZE_MODEL } = await import("../src/tools/stt-kit.js");
@@ -178,11 +178,11 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
     const missing = Object.values(ELEVENLABS_VOICE_MAP).filter((v) => !(m?.supported_voices || []).includes(v));
     ok(m && missing.length === 0, `${id} still serves every mapped voice${missing.length ? ` (gone: ${missing.join(", ")})` : ""}`);
     const live = await dearest(id), row = upstreamCosts().speech[id];
-    ok(live !== null && Number.isFinite(row) && row >= live - 1e-12, brief(id, `${id}: private row ${row} covers the dearest endpoint before discount ${live}/char`));
+    ok(live !== null && Number.isFinite(row) && row >= live - 1e-12, brief(id, `${id}: private row ${row} covers the dearest endpoint ${live}/char`));
   }
   ok(all.some((x) => x.id === DIARIZE_MODEL), `${DIARIZE_MODEL} is live`);
   const liveSec = await dearest(DIARIZE_MODEL), perMin = upstreamCosts().sttPerMinute[DIARIZE_MODEL];
-  ok(liveSec !== null && Number.isFinite(perMin) && perMin >= liveSec * 60 - 1e-9, brief(DIARIZE_MODEL, `${DIARIZE_MODEL}: private per-minute row ${perMin} covers ${liveSec}/s before discount`));
+  ok(liveSec !== null && Number.isFinite(perMin) && perMin >= liveSec * 60 - 1e-9, brief(DIARIZE_MODEL, `${DIARIZE_MODEL}: private per-minute row ${perMin} covers ${liveSec}/s`));
 }
 // 4. Price floor: for every live model a tier admits, MODEL_COST must not price
 //    it UNDER the DEAREST endpoint a default-tier call can be routed to, prompt

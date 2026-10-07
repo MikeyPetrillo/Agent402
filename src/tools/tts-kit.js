@@ -233,20 +233,17 @@ export const TTS_DEADLINE_MS = 40_000;
 const TTS_LINK_TIMEOUT_MS = 25_000;
 const CONNECT_FAILURES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "UND_ERR_CONNECT_TIMEOUT"]);
 
-// --- never get our account blocked, never leave a buyer without speech ------
-// 2026-10-07: a burst of our own calls (retries, and a chain that turned one
-// throttled call into three) had ElevenLabs refuse every call from our
-// account for about 30 minutes; it accepted again minutes after the traffic
-// stopped. So a throttle is never answered with more ElevenLabs calls:
+// --- ElevenLabs traffic control --------------------------------------------
+// A throttle is never answered with more ElevenLabs calls:
 //   - a 429 or an auth refusal (401/403) stops the ElevenLabs walk at once and
 //     opens a breaker shared by both tiers (one credential): for the cooldown
 //     every call goes straight to the backups, then ONE call probes;
-//   - three server errors in a row open it too; a server error or a connection
+//   - three failed calls in a row open it too; a server error or a connection
 //     that never opened still tries the next ElevenLabs model (unbilled);
 //   - at most ELEVEN_MAX_IN_FLIGHT calls run at once; the rest use a backup.
 // Backups, in order: the OpenAI model the tier replaced (until OpenAI's
-// shutdown date), then non-ElevenLabs speech models priced well inside the tier
-// (pinned by test-tts-elevenlabs.js). The answer always names the model.
+// shutdown date), then non-ElevenLabs speech models. The answer always names
+// the model that spoke.
 export const ELEVEN_MAX_IN_FLIGHT = 6;
 const BREAKER_BASE_MS = 60_000;
 const BREAKER_MAX_MS = 15 * 60_000;

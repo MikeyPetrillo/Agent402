@@ -107,8 +107,7 @@ const PCM_FORMATS = {
 };
 //
 // A full pool QUEUES, it never refuses: the speech was already bought when this
-// runs, so a "busy" refusal would throw away audio we paid for and leave the
-// buyer uncharged (security review, 2026-10-07). A slot is handed straight to
+// runs, so a "busy" refusal would discard paid-for audio. A slot is handed straight to
 // the next waiter on release.
 const PCM_MAX_CONCURRENT = 4;
 let pcmActive = 0;
