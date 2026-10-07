@@ -33,7 +33,8 @@ const err = (status, body = { error: { message: "nope" } }) => ({ ok: false, sta
 
 // Routes each outbound call: OpenRouter speech, OpenAI speech, OpenRouter STT.
 const calls = [];
-const stub = (routes) => { globalThis.fetch = async (url, init) => { const u = String(url); calls.push({ url: u, init }); for (const [m, r] of routes) if (u.includes(m)) return typeof r === "function" ? r(u, init) : r; throw new Error(`unexpected fetch ${u}`); }; };
+const hostOf = (u) => new URL(u).host;
+const stub = (routes) => { globalThis.fetch = async (url, init) => { const u = String(url); calls.push({ url: u, init }); const hp = (() => { const x = new URL(u); return x.host + x.pathname; })(); for (const [m, r] of routes) if (hp === m || hp.startsWith(m.endsWith("/") ? m : `${m}/`) || (!m.includes("/") && hp.split("/")[0] === m)) return typeof r === "function" ? r(u, init) : r; throw new Error(`unexpected fetch ${u}`); }; };
 const run = async (slug, input, opts) => { calls.length = 0; try { return await (opts ? __makeHandlerForTest(slug, opts) : bySlug[slug].handler)(input); } finally { globalThis.fetch = realFetch; } };
 const throwsWith = async (fn) => { try { await fn(); return null; } catch (e) { return e; } };
 
@@ -111,17 +112,17 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   const before = () => OPENAI_TTS_SHUTDOWN - 86_400_000;
   stub([["openrouter.ai", err(503)], ["api.openai.com/v1/audio/speech", audio(Buffer.from("ID3openai"))]]);
   const r = await run("tts-hd", { text: "hi", voice: "george", format: "flac" }, { now: before });
-  const oa = JSON.parse(calls.find((c) => c.url.includes("openai.com")).init.body);
+  const oa = JSON.parse(calls.find((c) => hostOf(c.url) === "api.openai.com").init.body);
   ok(r.provider === "openai" && r.model === "tts-1-hd" && oa.model === "tts-1-hd", "an ElevenLabs 503 falls back to the OpenAI model the tier replaced, named in the answer");
   ok(oa.voice === "fable" && oa.response_format === "flac", "the fallback sends the OpenAI name for the voice asked for (george -> fable) and the format natively");
   stub([["openrouter.ai", err(429)], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
   ok((await run("tts", { text: "hi" }, { now: before })).model === "tts-1", "a 429 on every link falls back too");
-  const tried = calls.filter((c) => c.url.includes("openrouter.ai")).map((c) => JSON.parse(c.init.body).model);
+  const tried = calls.filter((c) => hostOf(c.url) === "openrouter.ai").map((c) => JSON.parse(c.init.body).model);
   ok(tried.join(",") === TTS_TIERS.tts.chain.join(","), `every ElevenLabs link is tried in order before OpenAI (${tried.join(" > ")})`);
   let n = 0;
   stub([["openrouter.ai", () => (n++ === 0 ? err(429) : audio(Buffer.from("ID3second")))], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
   const second = await run("tts-hd", { text: "hi" }, { now: before });
-  ok(second.model === TTS_TIERS["tts-hd"].chain[1] && second.provider === "openrouter" && !calls.some((c) => c.url.includes("openai.com")), `a 429 on the first link is served by the second (${second.model}), named in the answer`);
+  ok(second.model === TTS_TIERS["tts-hd"].chain[1] && second.provider === "openrouter" && !calls.some((c) => hostOf(c.url) === "api.openai.com"), `a 429 on the first link is served by the second (${second.model}), named in the answer`);
   stub([["openrouter.ai", err(401)], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
   ok((await run("tts", { text: "hi" }, { now: before })).model === "tts-1", "our key refused (401) is an outage, not the buyer's 400: it falls back");
   stub([["openrouter.ai", () => { throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } }); }], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
@@ -131,8 +132,8 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   ok(dropped?.statusCode === 504 && calls.length === 1, "a socket dropped mid-answer may have been billed: final, one upstream call");
   stub([["openrouter.ai", err(400)], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
   const bad = await throwsWith(() => run("tts", { text: "hi" }, { now: before }));
-  ok(bad?.statusCode === 400 && !calls.some((c) => c.url.includes("openai.com")), "a 400 is the request's fault: no fallback, a 400 back");
-  ok(calls.filter((c) => c.url.includes("openrouter.ai")).length === 1, "and the chain is not walked: one upstream call, not one per link");
+  ok(bad?.statusCode === 400 && !calls.some((c) => hostOf(c.url) === "api.openai.com"), "a 400 is the request's fault: no fallback, a 400 back");
+  ok(calls.filter((c) => hostOf(c.url) === "openrouter.ai").length === 1, "and the chain is not walked: one upstream call, not one per link");
   // Empty audio and a timeout may already have been billed upstream: each is
   // final, one upstream call and an uncharged 5xx, never another link or OpenAI.
   stub([["openrouter.ai", audio(Buffer.alloc(0))], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
@@ -145,7 +146,7 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   ok((await run("tts", { text: "hi" }, { now: before })).model === "tts-1", "a connection that never reached the upstream is an outage: the chain and fallback run");
   stub([["openrouter.ai", err(503)], ["api.openai.com", audio(Buffer.from("ID3openai"))]]);
   const after = await throwsWith(() => run("tts", { text: "hi" }, { now: () => OPENAI_TTS_SHUTDOWN }));
-  ok(after?.statusCode === 502 && !calls.some((c) => c.url.includes("openai.com")), "from OpenAI's shutdown date there is no fallback: an uncharged 502");
+  ok(after?.statusCode === 502 && !calls.some((c) => hostOf(c.url) === "api.openai.com"), "from OpenAI's shutdown date there is no fallback: an uncharged 502");
   delete process.env.OPENAI_API_KEY;
   stub([["openrouter.ai", err(503)]]);
   const nokey = await throwsWith(() => run("tts", { text: "hi" }, { now: before }));
@@ -167,7 +168,7 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   const scribe = { text: "Hello there. Hi.", language: "eng", duration: 1, words: [
     { word: "Hello", start: 0, end: 0.3, speaker: 0 }, { word: "there.", start: 0.3, end: 0.5, speaker: 0 }, { word: "Hi.", start: 0.6, end: 0.9, speaker: 1 }] };
   let form = null;
-  globalThis.fetch = async (url, init) => { if (String(url).includes("openrouter.ai/api/v1/audio/transcriptions")) { form = init.body; return { ok: true, status: 200, text: async () => JSON.stringify(scribe) }; } throw new Error(`unexpected ${url}`); };
+  globalThis.fetch = async (url, init) => { const x = new URL(String(url)); if (x.host === "openrouter.ai" && x.pathname === "/api/v1/audio/transcriptions") { form = init.body; return { ok: true, status: 200, text: async () => JSON.stringify(scribe) }; } throw new Error(`unexpected ${url}`); };
   const r = await makeMultipartHandler("transcribe")({}, { headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, body });
   globalThis.fetch = realFetch;
   ok(form?.get("model") === "elevenlabs/scribe-v2" && form.get("diarize") === "true" && form.get("response_format") === "verbose_json", "diarize sends Scribe v2 with speaker labels and verbose output");
