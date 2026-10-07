@@ -49,6 +49,8 @@ export const SLOW_TOOL_SECONDS = {
   // that refuses a hand-built AVM payment before the upstream spend, the same
   // reasoning as the composites above.
   "seller-payability": 60,
+  // flights-kit.js: same shape, its own 50 s deadline.
+  "flight-search": 55, "flight-status": 55,
 };
 
 export const requiredSecondsFor = (slug) => SLOW_TOOL_SECONDS[slug] ?? DEFAULT_REQUIRED_SECONDS;

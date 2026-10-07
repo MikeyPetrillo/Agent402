@@ -90,7 +90,7 @@ export const EXPENSIVE_COMPOSITE_SLUGS = new Set([
  *  we would have paid the seller and earned nothing. EVM exact only.
  *  `image-gen-premium` (2026-09-29) renders the larger frame under a 75 s
  *  upstream bound, past what an SVM or Tempo credential reliably covers. */
-export const LONG_RUNNING_SLUGS = new Set(["v1-videos", "seller-payability", "image-gen-premium", "decide-execute"]);
+export const LONG_RUNNING_SLUGS = new Set(["v1-videos", "seller-payability", "image-gen-premium", "decide-execute", "flight-search", "flight-status"]);
 
 /** True when a route runs long enough that only EVM `exact` can settle it.
  *

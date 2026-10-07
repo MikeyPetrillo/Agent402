@@ -477,6 +477,9 @@ const bootServer = () => spawn("node", ["--import", "./scripts/lib/openrouter-st
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_STUB_URL: `http://127.0.0.1:${OR_PORT}`, OPENROUTER_FLEX: "off",
+    // The flight routes exist only while their seller list is set (key-gated);
+    // a placeholder list registers them so the lasting-effect check covers them.
+    FLIGHT_SELLERS_JSON: JSON.stringify({ search: [{ url: "https://fares.example.invalid/s?d={from}", method: "GET", format: "fare-search-v1", maxUsd: 0.02, payTo: "0x" + "a1".repeat(20) }], status: [{ url: "https://track.example.invalid/f/{flight}", method: "GET", format: "flight-track-v1", maxUsd: 0.01, payTo: "0x" + "b2".repeat(20) }] }),
     GATEWAY_SETTLE_BREAKER_MAX: "3", GATEWAY_SETTLE_BREAKER_WINDOW_MS: "600000", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "3",
     COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_GLOBAL_MAX_FAILS: "3",
     HANGUP_FORGIVE: "", HANGUP_FORGIVE_KEY_USD: "0.1", HANGUP_FORGIVE_GLOBAL_USD: "0.4", HANGUP_FORGIVE_WINDOW_MS: "86400000",
