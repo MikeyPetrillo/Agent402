@@ -7,6 +7,8 @@
 // derived; the fallback branch (/openapi.json, /agents.json, /llms.txt) kept
 // nothing and parsed the empty body, so from its second crawl on the seller
 // had no tools and read crawl_failed ("\"undefined\" is not valid JSON").
+// The fix reads fallback documents unconditionally, so each crawl fetches
+// them once and never pairs a 304 with nothing.
 // Offline: the real crawl pipeline through the
 // __setCrawlFetchForTest seam, with a stub that honors If-None-Match.
 process.env.X402_INDEX_CRAWL = "off";
@@ -34,7 +36,9 @@ const served = new Map([
 ]);
 const etag = (url) => `"${Buffer.from(url).toString("base64").slice(-12)}"`;
 let notModifiedAnswers = 0;
+const fetches = new Map();
 __setCrawlFetchForTest(async (url, opts = {}) => {
+  fetches.set(url, (fetches.get(url) || 0) + 1);
   const body = served.get(url);
   if (body === undefined) throw Object.assign(new Error(`Upstream returned HTTP 404 for ${url}`), { statusCode: 422 });
   const sent = opts.validators?.etag || opts.validators?.ETag;
@@ -53,9 +57,12 @@ for (const [origin, label, min] of [[OA, "openapi", 2], [LL, "llms.txt", 1]]) {
   const first = sellerDetail(origin);
   ok(first?.toolCount >= min, `${label}: the first crawl reads the catalog (${first?.toolCount} tools)`);
   const before = notModifiedAnswers;
+  fetches.clear();
   await __crawlSellerForTest(origin);
   const second = sellerDetail(origin);
-  ok(notModifiedAnswers > before, `${label}: the second crawl revalidates and the seller answers 304`);
+  const doc = `${origin}${label === "openapi" ? "/openapi.json" : "/llms.txt"}`;
+  ok(notModifiedAnswers === before, `${label}: the fallback read is unconditional, so no 304 is asked for`);
+  ok(fetches.get(doc) === 1, `${label}: the second crawl fetches the document once, not twice (${fetches.get(doc)})`);
   ok(second?.toolCount === first?.toolCount, `${label}: the catalog survives the 304 (${second?.toolCount} tools)`);
   ok(!JSON.stringify(second?.fallbackErrors || []).includes("is not valid JSON"), `${label}: no "not valid JSON" fallback error after a 304`);
   ok(second?.originResponded !== false, `${label}: the origin still reads as responding`);
