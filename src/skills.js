@@ -216,7 +216,7 @@ export const SKILL_PACKS = [
     useCase:
       "Before a pentest, an acquisition diligence call, or a quarterly review - you want a fast read on what an attacker sees from the outside.",
     promptArgs: [
-      { name: "domain", description: "Target domain to audit (e.g. stripe.com)", required: true, substitute: "example.com" },
+      { name: "domain", description: "Target domain to audit (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "cert-transparency",
@@ -236,7 +236,7 @@ export const SKILL_PACKS = [
       "Fingerprint the tech stack so you know what CMS/framework/CDN to research for known CVEs.",
     ],
     claudePrompt:
-      'Run a security audit on example.com. Use Agent402 to: (1) pull the certificate transparency log, (2) check SPF and DMARC on the apex, (3) fetch HTTP security headers and the TLS cert, (4) fingerprint the tech stack. Report findings ranked by severity, and call out anything that would block a SOC 2 review.',
+      'Run a security audit on agent402.tools. Use Agent402 to: (1) pull the certificate transparency log, (2) check SPF and DMARC on the apex, (3) fetch HTTP security headers and the TLS cert, (4) fingerprint the tech stack. Report findings ranked by severity, and call out anything that would block a SOC 2 review.',
   },
   {
     slug: "email-deliverability",
@@ -1234,13 +1234,13 @@ export const SKILL_PACKS = [
       "Call extract-entities on the markdown body from step 2. Returns deduped lists of URLs, emails, IPv4s, @mentions, and #hashtags. The URLs list is the highest-value output here: it's the 'related links' set most card surfaces show beneath the main preview (e.g. 'this article links to 3 other sources'). The @mentions and #hashtags lists are exactly the metadata social embed builders surface for X/Bluesky-style cards. Final payload shape: { canonical, title, description, hero: <1200×630 base64>, thumbnail: <400×400 base64>, favicon, relatedUrls: [...], mentions: [...], hashtags: [...] } - a single object the caller's embed builder or CDN-upload step consumes.",
     ],
     claudePrompt:
-      "Build a structured link-preview card for https://example.com using Agent402.\n\n(1) meta with url=https://example.com - return {title, description, og: {image, title, description, type}, twitter: {card, image, title}, canonical, favicon}. (2) extract with url=https://example.com - return {title, byline, excerpt, wordCount, markdown}. Use the markdown's first paragraph as the description fallback if og.description and twitter.title are both empty or shorter than 60 chars. (3) image-resize with imageUrl=<og.image or twitter.image>, width=1200, height=630, fit='cover' - return {base64, contentType, width, height}. Skip this step (set hero=null) if no source image is available. (4) image-thumbnail with imageUrl=<same source image>, size=400 - return {base64, contentType, width, height}. Same skip rule. (5) extract-entities with text=<markdown body from step 2> - return {urls: [], emails: [], ips: [], mentions: [], hashtags: []}. Final return: {url: 'https://example.com', canonical: <step 1 canonical || input>, title: <og.title || meta.title>, description: <og.description || twitter.description || first-paragraph-of-markdown || ''>, hero: {base64, width: 1200, height: 630} | null, thumbnail: {base64, width: 400, height: 400} | null, favicon: <step 1 favicon || null>, relatedUrls: <step 5 urls, filtered to exclude same-host as canonical, max 8>, mentions: <step 5 mentions>, hashtags: <step 5 hashtags>, oneLineSummary: '<plain-text card description, ~140 chars, no markdown>'}. Budget ~$0.024 paid; 4 of 5 tools are PoW-eligible (extract is wallet-only).",
+      "Build a structured link-preview card for https://agent402.tools using Agent402.\n\n(1) meta with url=https://agent402.tools - return {title, description, og: {image, title, description, type}, twitter: {card, image, title}, canonical, favicon}. (2) extract with url=https://agent402.tools - return {title, byline, excerpt, wordCount, markdown}. Use the markdown's first paragraph as the description fallback if og.description and twitter.title are both empty or shorter than 60 chars. (3) image-resize with imageUrl=<og.image or twitter.image>, width=1200, height=630, fit='cover' - return {base64, contentType, width, height}. Skip this step (set hero=null) if no source image is available. (4) image-thumbnail with imageUrl=<same source image>, size=400 - return {base64, contentType, width, height}. Same skip rule. (5) extract-entities with text=<markdown body from step 2> - return {urls: [], emails: [], ips: [], mentions: [], hashtags: []}. Final return: {url: 'https://agent402.tools', canonical: <step 1 canonical || input>, title: <og.title || meta.title>, description: <og.description || twitter.description || first-paragraph-of-markdown || ''>, hero: {base64, width: 1200, height: 630} | null, thumbnail: {base64, width: 400, height: 400} | null, favicon: <step 1 favicon || null>, relatedUrls: <step 5 urls, filtered to exclude same-host as canonical, max 8>, mentions: <step 5 mentions>, hashtags: <step 5 hashtags>, oneLineSummary: '<plain-text card description, ~140 chars, no markdown>'}. Budget ~$0.024 paid; 4 of 5 tools are PoW-eligible (extract is wallet-only).",
     promptArgs: [
       {
         name: "url",
         description: "Public http(s) URL to build a preview card for (e.g. https://example.com/article)",
         required: true,
-        substitute: "https://example.com",
+        substitute: "https://agent402.tools",
       },
     ],
   },
@@ -1269,13 +1269,13 @@ export const SKILL_PACKS = [
       "Finalize - call text-stats with the markdown body to compute word count, character count, and estimated token count (≈chars/4). This is a budget step: it tells the caller whether the result fits in a single LLM call (<32k tokens), needs chunking (32k-200k), or warrants a RAG-style ingestion (>200k). Final payload: { url, contentType, branch: 'html'|'pdf'|'image'|'html-raw', markdown: '<body>', stats: { chars, words, est_tokens } } - a single object the caller's LLM-input layer consumes directly.",
     ],
     claudePrompt:
-      "Convert https://example.com to clean markdown using Agent402, branching on content-type.\n\n(1) http-headers with url=https://example.com - return {status, headers}. Read headers['content-type']. If status >= 400, abort with {error: 'unreachable', status}. (2) Branch: if content-type starts with 'text/html' → call extract with url=https://example.com, return {title, markdown}. If empty markdown, retry with html-to-markdown (url=https://example.com). If content-type is 'application/pdf' or the path ends in .pdf → call pdf-to-markdown with url=https://example.com, return {markdown}. If content-type starts with 'image/' or the path ends in .png/.jpg/.jpeg/.gif/.webp → call image-ocr with imageUrl=https://example.com, return {text, confidence}. Wrap the text in a single fenced code block as the markdown. (3) text-stats with text=<markdown from step 2> - return {chars, words}. Compute est_tokens = Math.ceil(chars/4). Final return: {url: 'https://example.com', contentType: <from step 1>, branch: 'html'|'pdf'|'image'|'html-raw', markdown: <step 2 result>, stats: {chars, words, est_tokens}, warnings: [<'low OCR confidence' if image branch and confidence<60, 'empty extract - used raw html-to-markdown' if html-raw fallback>]}. Budget ~$0.018 paid; 4 of 6 tools are PoW-eligible (extract and pdf-to-markdown are wallet-only).",
+      "Convert https://agent402.tools to clean markdown using Agent402, branching on content-type.\n\n(1) http-headers with url=https://agent402.tools - return {status, headers}. Read headers['content-type']. If status >= 400, abort with {error: 'unreachable', status}. (2) Branch: if content-type starts with 'text/html' → call extract with url=https://agent402.tools, return {title, markdown}. If empty markdown, retry with html-to-markdown (url=https://agent402.tools). If content-type is 'application/pdf' or the path ends in .pdf → call pdf-to-markdown with url=https://agent402.tools, return {markdown}. If content-type starts with 'image/' or the path ends in .png/.jpg/.jpeg/.gif/.webp → call image-ocr with imageUrl=https://agent402.tools, return {text, confidence}. Wrap the text in a single fenced code block as the markdown. (3) text-stats with text=<markdown from step 2> - return {chars, words}. Compute est_tokens = Math.ceil(chars/4). Final return: {url: 'https://agent402.tools', contentType: <from step 1>, branch: 'html'|'pdf'|'image'|'html-raw', markdown: <step 2 result>, stats: {chars, words, est_tokens}, warnings: [<'low OCR confidence' if image branch and confidence<60, 'empty extract - used raw html-to-markdown' if html-raw fallback>]}. Budget ~$0.018 paid; 4 of 6 tools are PoW-eligible (extract and pdf-to-markdown are wallet-only).",
     promptArgs: [
       {
         name: "url",
         description: "Public http(s) URL to convert to markdown. Can point at an HTML article, a PDF, or an image - the workflow auto-detects.",
         required: true,
-        substitute: "https://example.com",
+        substitute: "https://agent402.tools",
       },
     ],
   },
@@ -1302,13 +1302,13 @@ export const SKILL_PACKS = [
       "Call robots-check with url=<URL> and userAgent=<caller's agent token> to verify the agent is actually allowed to crawl the path. Returns {allowed, matchedRule, sitemaps}. This is the policy gate that should run *before* the caller spends money on extract/render - calling extract on a Disallow'd path is wasteful at best, hostile at worst. The sitemaps[] list is a bonus side-benefit: hand it to the caller's crawl planner so it doesn't have to discover sitemaps separately. Final payload: { url, host, ok: true|false, rollup: 'ok'|'warn'|'fail', dns: {...}, http: {status, latencyMs, finalUrl}, headers: {securityScore, hsts, csp, server, cacheControl}, tls: {daysRemaining, issuer, altNames} | null, robots: {allowed, matchedRule, sitemaps}, warnings: [<string flags>] } - a single object the caller's monitor/gate consumes directly.",
     ],
     claudePrompt:
-      "Run a status snapshot for https://example.com using Agent402. Derive host = new URL(url).host. Initialize warnings = [].\n\n(1) dns-lookup with host=<host>, type='A' - return {answers}. If answers is empty, return {url, host, ok: false, rollup: 'fail', stage: 'dns', warnings: ['NXDOMAIN or no A records']}. (2) http-check with url=https://example.com - return {status, latencyMs, finalUrl}. If status >= 500, push warnings += ['origin 5xx']. If latencyMs > 3000, push warnings += ['slow response (>3s)']. (3) http-headers with url=https://example.com - return {headers}. Compute securityScore = ['strict-transport-security','content-security-policy','x-content-type-options'].filter(h => headers[h]).length / 3. If securityScore < 0.67, push warnings += ['weak security headers']. (4) tls-cert with host=<host> ONLY if URL starts with 'https://' - return {daysRemaining, issuer, altNames}. If daysRemaining < 14, push warnings += ['cert expires in <14 days']. If daysRemaining < 30, push warnings += ['cert renewal window (<30 days)']. (5) robots-check with url=https://example.com, userAgent='*' - return {allowed, matchedRule, sitemaps}. If !allowed, push warnings += ['robots.txt disallows this path']. Compute rollup: 'fail' if step 2 status>=500 OR step 4 daysRemaining<14 OR step 5 !allowed; 'warn' if any warnings remain; else 'ok'. Final return: {url: 'https://example.com', host, ok: rollup !== 'fail', rollup, dns: {answers: <step 1>}, http: {status, latencyMs, finalUrl}, headers: {securityScore, hsts: !!headers['strict-transport-security'], csp: !!headers['content-security-policy'], server: headers.server || null, cacheControl: headers['cache-control'] || null}, tls: <step 4 or null>, robots: {allowed, matchedRule, sitemaps}, warnings}. Budget ~$0.013 paid; all 5 tools are PoW-eligible (pure network I/O, free here on the hosted connector after a small PoW).",
+      "Run a status snapshot for https://agent402.tools using Agent402. Derive host = new URL(url).host. Initialize warnings = [].\n\n(1) dns-lookup with host=<host>, type='A' - return {answers}. If answers is empty, return {url, host, ok: false, rollup: 'fail', stage: 'dns', warnings: ['NXDOMAIN or no A records']}. (2) http-check with url=https://agent402.tools - return {status, latencyMs, finalUrl}. If status >= 500, push warnings += ['origin 5xx']. If latencyMs > 3000, push warnings += ['slow response (>3s)']. (3) http-headers with url=https://agent402.tools - return {headers}. Compute securityScore = ['strict-transport-security','content-security-policy','x-content-type-options'].filter(h => headers[h]).length / 3. If securityScore < 0.67, push warnings += ['weak security headers']. (4) tls-cert with host=<host> ONLY if URL starts with 'https://' - return {daysRemaining, issuer, altNames}. If daysRemaining < 14, push warnings += ['cert expires in <14 days']. If daysRemaining < 30, push warnings += ['cert renewal window (<30 days)']. (5) robots-check with url=https://agent402.tools, userAgent='*' - return {allowed, matchedRule, sitemaps}. If !allowed, push warnings += ['robots.txt disallows this path']. Compute rollup: 'fail' if step 2 status>=500 OR step 4 daysRemaining<14 OR step 5 !allowed; 'warn' if any warnings remain; else 'ok'. Final return: {url: 'https://agent402.tools', host, ok: rollup !== 'fail', rollup, dns: {answers: <step 1>}, http: {status, latencyMs, finalUrl}, headers: {securityScore, hsts: !!headers['strict-transport-security'], csp: !!headers['content-security-policy'], server: headers.server || null, cacheControl: headers['cache-control'] || null}, tls: <step 4 or null>, robots: {allowed, matchedRule, sitemaps}, warnings}. Budget ~$0.013 paid; all 5 tools are PoW-eligible (pure network I/O, free here on the hosted connector after a small PoW).",
     promptArgs: [
       {
         name: "url",
         description: "Public http(s) URL to snapshot (e.g. https://example.com/path)",
         required: true,
-        substitute: "https://example.com",
+        substitute: "https://agent402.tools",
       },
     ],
   },
@@ -1480,13 +1480,13 @@ export const SKILL_PACKS = [
       "http-headers with the page URL - the response headers search engines act on. Flag: an X-Robots-Tag: noindex (silently removes the page from every index regardless of robots.txt), a missing/short Cache-Control on static assets, and a Content-Type without charset. Summarize as a pass/warn/fail card per check with the two highest-impact fixes on top.",
     ],
     claudePrompt:
-      "Run a technical SEO audit of https://example.com with Agent402: (1) http-check {url} - status + latency + redirects. (2) tls-cert {host: \"example.com\"} - expiry + trust. (3) robots-check {url, userAgent: \"Googlebot\"} and again with \"GPTBot\" - crawlability for search AND answer engines. (4) sitemap {url: \"https://example.com/sitemap.xml\"} - parses, URL count. (5) meta {url} - title/description/OG completeness, title ≤ 60 chars. (6) http-headers {url} - flag X-Robots-Tag: noindex and cache policy. Return a card: {reachability, tls, robots: {googlebot, gptbot}, sitemap, meta, headers, topFixes: [two highest-impact items]}.",
+      "Run a technical SEO audit of https://agent402.tools with Agent402: (1) http-check {url} - status + latency + redirects. (2) tls-cert {host: \"agent402.tools\"} - expiry + trust. (3) robots-check {url, userAgent: \"Googlebot\"} and again with \"GPTBot\" - crawlability for search AND answer engines. (4) sitemap {url: \"https://agent402.tools/sitemap.xml\"} - parses, URL count. (5) meta {url} - title/description/OG completeness, title ≤ 60 chars. (6) http-headers {url} - flag X-Robots-Tag: noindex and cache policy. Return a card: {reachability, tls, robots: {googlebot, gptbot}, sitemap, meta, headers, topFixes: [two highest-impact items]}.",
     promptArgs: [
       {
         name: "url",
         description: "The page URL to audit (https://…)",
         required: true,
-        substitute: "https://example.com",
+        substitute: "https://agent402.tools",
       },
     ],
   },
