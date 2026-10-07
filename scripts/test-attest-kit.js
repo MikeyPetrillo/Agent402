@@ -125,13 +125,37 @@ estimateUsd = 0.002;
 const paused = makeAttestHandler({ chain, ...asBuyer, spend: { maySpend: () => ({ ok: false, reason: "wallet daily ceiling reached." }), noteSpend: () => null, adjustSpend: () => {} } });
 await rejects(() => paused({ tx: "0x" + "ee".repeat(32) }), 503, /paused/);
 const broke = makeAttestHandler({ chain: { ...chain, attest: async () => { throw new Error("insufficient funds for gas * price + value"); } }, ...asBuyer });
-await rejects(() => broke({ tx: "0x" + "ee".repeat(32) }), 503, /no ETH/);
+await rejects(() => broke({ tx: "0x" + "ee".repeat(32) }), 503, /temporarily unavailable/);
 eq(ledger.saleByTx("0x" + "ee".repeat(32)).attestUid, null, "a failed send persists nothing");
 // the spend is booked against the base wallet and corrected to the estimate
 guard.__reset();
 await handler({ tx: "0x" + "ee".repeat(32) });
 const spent = guard.walletDailySpentUsd("base");
 ok(spent > 0 && spent <= 0.0021, `base wallet booked the estimate (${spent})`);
+
+// --- 7a. a failure before any attest transaction exists releases the booking;
+// one after the send keeps it.
+{
+  const TXR = "0x" + "e1".repeat(32);
+  ledger.recordSale({ slug: "uuid", priceUsd: 0.001, rail: "usdc", network: "eip155:8453", payer: BUYER, tx: TXR, wire: "x402", responseSha256: responseDigest({ u: 2 }) });
+  const run = async (chainOver) => {
+    const log = [];
+    const spend = { maySpend: () => ({ ok: true }), noteSpend: () => "h1", adjustSpend: (h, usd) => log.push(usd) };
+    let e = null; try { await makeAttestHandler({ chain: { ...chain, ...chainOver }, ...asBuyer, spend })({ tx: TXR }); } catch (x) { e = x; }
+    return { e, log };
+  };
+  const hi = await run({ estimateUsd: async () => 0.5 });
+  ok(hi.e?.statusCode === 503 && hi.log.at(-1) === 0, `gas over the ceiling: booking released (${JSON.stringify(hi.log)})`);
+  const est = await run({ estimateUsd: async () => { throw new Error("rpc timeout"); } });
+  ok(est.e?.statusCode === 502 && est.log.at(-1) === 0, `estimate failed: booking released (${JSON.stringify(est.log)})`);
+  const nofunds = await run({ attest: async () => { throw new Error("insufficient funds for gas * price + value"); } });
+  ok(nofunds.e?.statusCode === 503 && nofunds.log.at(-1) === 0, `unfunded send refused by the node: booking released (${JSON.stringify(nofunds.log)})`);
+  const sent = await run({ attest: async () => { throw new Error("receipt wait timed out"); } });
+  ok(sent.e?.statusCode === 502 && sent.log.length === 1 && sent.log[0] === 0.002, `CONTROL: a failure after the send keeps the estimate booked (${JSON.stringify(sent.log)})`);
+  const schema = await run({ ensureSchema: async () => { throw new Error("registration receipt timed out"); } });
+  ok(schema.e?.statusCode === 502 && schema.log.length === 0, `CONTROL: a schema step failure keeps the booking (${JSON.stringify(schema.log)})`);
+  eq(ledger.saleByTx(TXR).attestUid, null, "no attestation persisted on any of these");
+}
 
 // --- 7b. binding: only the buyer, never a wallet-scoped sale, never an unsigned caller
 {

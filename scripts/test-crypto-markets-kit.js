@@ -193,6 +193,24 @@ reset();
 routes = { "/api/v3/coins/bitcoin/history": jsonRes(401, { error: { status: { error_code: 10012, error_message: "SECRET-UPSTREAM-TEXT" } } }) };
 await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 10 }), 422, "401 (plan limit) -> 422", /^((?!SECRET).)*$/);
 reset();
+routes = { "/api/v3/coins/bitcoin/history": jsonRes(401, { status: { error_code: 10010, error_message: "SECRET-UPSTREAM-TEXT" } }) };
+await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 10 }), 503, "401 (key refused, not a plan code) -> 503 not configured", /^((?!SECRET).)*not configured((?!SECRET).)*$/);
+reset();
+routes = { "/api/v3/coins/bitcoin/history": jsonRes(403, {}) };
+await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 10 }), 503, "403 with no recognizable code -> 503 not configured", /not configured/);
+{
+  // The retry is a second upstream request and takes its own token.
+  reset();
+  process.env.COINGECKO_MAX_PER_MIN = "1";
+  resetCgRateLimit();
+  routes = { "/api/v3/coins/bitcoin/ohlc": jsonRes(429, {}) };
+  const raw = CRYPTO_MARKETS_TOOLS.find((t) => t.slug === "coin-ohlc").handler;
+  await throws(raw({ coin: "bitcoin", days: 1 }), 503, "429 with the bucket spent: refused");
+  ok(calls.length === 1, `429 retry takes a token: one token, one upstream request (got ${calls.length})`);
+  delete process.env.COINGECKO_MAX_PER_MIN;
+  resetCgRateLimit();
+}
+reset();
 routes = { "/api/v3/global/decentralized_finance_defi": jsonRes(200, "not-json") };
 await throws(h("global-defi")({}), 502, "non-JSON 200 -> 502");
 reset();

@@ -12,9 +12,9 @@
 //   POST /v1/premium/chat/completions  $0.50  — frontier models
 //   GET  /v1/models                    free   — served by server.js from TIERS
 //
-// Upstream: OpenRouter (one key, hundreds of models). x402 settles BEFORE the
-// handler runs, so the buyer's USDC always arrives before a single upstream
-// token is spent — no credit risk beyond one in-flight call. Env-gated:
+// Upstream: OpenRouter (one key, hundreds of models). x402 settles AFTER the
+// handler and only for a <400 response, so an upstream failure surfaced as a
+// 5xx is not charged, and a 200 is charged only if it then settles. Env-gated:
 // missing OPENROUTER_API_KEY → 503 at call time, not boot failure.
 //
 // Pricing is deterministic by design (flat per tier): model allowlists +
@@ -52,6 +52,8 @@ import { payerFromRequest, paymentHeaderOf } from "../payer.js";
 // module header) - refuses before any upstream call, arms the outcome listener.
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { clientGoneSignal } from "../drain-abort.js";
+import { clientGoneError } from "../hangup-settlement.js";
+import { evmCredentialSettleableMs } from "../evm-validity.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -802,6 +804,48 @@ export async function retryRateLimited(fn, { delays = [700, 1500], canRetry = ()
       await sleep(delays[i]);
     }
   }
+}
+
+/** Rate-limit retry delays for one attempt: none on a flex attempt, whose
+ *  own fallback is the same model's default attempt right after it. */
+export function rateLimitDelaysFor(flex) {
+  return flex ? [] : undefined;
+}
+
+/** An attempt is not started with less settleable life than this left on the
+ *  buyer's EVM authorization, and each one ends this long before it. */
+export const PAYMENT_WINDOW_MIN_START_MS = 15_000;
+export const PAYMENT_WINDOW_TAIL_MS = 5_000;
+
+/** Per-attempt upstream timeout bounded by the buyer's EVM authorization:
+ *  `defaultMs` when the request carries none; throws a 504 (not charged)
+ *  when too little is left to start another attempt. */
+const windowAttempted = new WeakSet();
+export function paymentWindowTimeoutMs(req, defaultMs) {
+  const left = evmCredentialSettleableMs(req);
+  if (left == null) return defaultMs;
+  // The first attempt of a request always starts while any window is left (a
+  // fast call settles inside a short one); a further attempt needs enough
+  // window left to be worth starting.
+  const first = req && typeof req === "object" && !windowAttempted.has(req);
+  if (first) windowAttempted.add(req);
+  if (left <= PAYMENT_WINDOW_TAIL_MS || (!first && left < PAYMENT_WINDOW_MIN_START_MS)) {
+    throw bad("The call did not finish within the payment window - not charged; retry with a fresh payment", 504);
+  }
+  return Math.min(defaultMs, left - PAYMENT_WINDOW_TAIL_MS);
+}
+
+/** Tracks the buyer's connection across a stream chain walk: once it closed,
+ *  no further attempt starts and the walk ends with a 499 (not charged). */
+export function streamClientWatch(res) {
+  let closed = false;
+  const mark = () => { closed = true; };
+  res?.once?.("close", mark);
+  return {
+    gone: () => closed || res?.destroyed === true || res?.writableEnded === true,
+    assertPresent() { if (this.gone()) throw clientGoneError(); },
+    done: () => res?.off?.("close", mark),
+  };
 }
 
 export function tierAllows(tierSlug, model) {
@@ -2091,6 +2135,7 @@ export function createSseUsageScrubber({ onUsage } = {}) {
  * src/ reaches openrouter.ai without them.
  */
 
+export const UPSTREAM_TIMEOUT_MS = 90_000;
 export async function fetchOpenRouter(body, { timeoutMs, signal, url = OPENROUTER_URL } = {}) {
   const key = OPENROUTER_KEY();
   if (!key) throw bad("LLM gateway not configured (OPENROUTER_API_KEY unset)", 503);
@@ -2103,7 +2148,7 @@ export async function fetchOpenRouter(body, { timeoutMs, signal, url = OPENROUTE
   // a scope this is null and nothing changes.
   const gone = clientGoneSignal();
   if (gone?.aborted) throw gone.reason;
-  const own = signal ?? AbortSignal.timeout(timeoutMs ?? 90_000);
+  const own = signal ?? AbortSignal.timeout(timeoutMs ?? UPSTREAM_TIMEOUT_MS);
   try {
     return await fetch(url, {
       method: "POST",
@@ -2158,16 +2203,24 @@ export function assertUpstreamBody(data) {
   throw bad(`Upstream error: ${msg}`, rateLimited ? 503 : 502);
 }
 
-async function callOpenRouter(body) {
-  const res = await fetchOpenRouter(body);
+async function callOpenRouter(body, { timeoutMs } = {}) {
+  const res = await fetchOpenRouter(body, { timeoutMs });
   if (!res.ok) await throwUpstreamError(res);
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
   assertUpstreamBody(data);
+  if (!hasChatMessage(data)) throw bad("Upstream returned no answer (no message) - not charged", 502);
   // Full OpenAI wire shape passes through untouched (id, object, created,
   // model, choices incl. tool_calls, usage) — drop-in fidelity is the product.
   return data;
+}
+
+/** True when a chat completion carries a first choice with a message object.
+ *  An empty message (a tool-loop end) still counts; no message at all does not. */
+export function hasChatMessage(data) {
+  const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
+  return !!choice && typeof choice === "object" && !!choice.message && typeof choice.message === "object";
 }
 
 /** A safety-classifier refusal that produced NOTHING. Claude 5-class models
@@ -2197,11 +2250,17 @@ export function isEmptyRefusal(data) {
  *  headers are written — once streaming starts, an upstream drop just ends
  *  the stream. Output cost stays bounded: max_tokens was clamped server-side
  *  before the upstream call, so the provider stops the stream at the cap. */
-export async function streamOpenRouterTo(body, res, { onUsage, url } = {}) {
+export const STREAM_TIMEOUT_MS = 180_000;
+export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = STREAM_TIMEOUT_MS } = {}) {
   // One controller covers connect AND the whole body read; client disconnect
   // aborts the upstream so a closed tab never keeps burning tokens.
+  // `timeoutMs` bounds the wait for the first data frame (it may be shorter
+  // than STREAM_TIMEOUT_MS when the payment window is); once the stream is
+  // committed it runs to the usual overall limit, so an answer that started
+  // is never cut short and charged.
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 180_000);
+  const startedAt = Date.now();
+  let timer = setTimeout(() => ctrl.abort(), timeoutMs);
   res.on?.("close", () => ctrl.abort());
   try {
     const upstream = await fetchOpenRouter(body, { signal: ctrl.signal, url });
@@ -2227,6 +2286,10 @@ export async function streamOpenRouterTo(body, res, { onUsage, url } = {}) {
       });
       res.flushHeaders?.();
       committed = true;
+      if (timeoutMs < STREAM_TIMEOUT_MS) {
+        clearTimeout(timer);
+        timer = setTimeout(() => ctrl.abort(), Math.max(0, STREAM_TIMEOUT_MS - (Date.now() - startedAt)));
+      }
       if (pending) { res.write(pending); pending = ""; }
     };
     const offer = (out) => {
@@ -2518,6 +2581,7 @@ async function embeddingsHandler(input, req) {
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
   assertUpstreamBody(data);
+  if (!Array.isArray(data?.data) || data.data.length === 0) throw bad("Upstream returned no embeddings - retry", 502);
   // Full OpenAI wire shape passes through untouched (object, data[], model,
   // usage). Store unless the buyer opted out; oversized batches are skipped
   // by the store's own per-entry byte cap. FR4-01 class: defer the write to
@@ -2691,8 +2755,8 @@ async function imagesHandler(input, req) {
 // entry, 2026-07-16 — says otherwise), so the tier serves a SIX-model
 // failover chain across five independent providers (Microsoft twice: the
 // cheaper -flash variant, then MAI-Voice-2), every link proven with a real
-// buy — latest sweep: probe run 30971572514, 2026-08-05. Payment settles BEFORE this handler runs, so a provider
-// outage must never become the buyer's 502: the chain walks on ANY upstream
+// buy. Payment settles AFTER this handler, and only
+// for a <400 answer, so the chain walks on ANY upstream
 // failure (5xx, network error, empty audio), and only exhausting every
 // link surfaces an error. Buyers keep the OpenAI wire: the 11 OpenAI voice
 // names map per-model to each provider's own voice ids, and any native id
@@ -2826,6 +2890,7 @@ export function validateSpeechRequest(input) {
   return { bodies, contentType: SPEECH_FORMATS[format] };
 }
 
+const SPEECH_TIMEOUT_MS = 60_000;
 async function speechHandler(input, req) {
   gatewaySettleBreakerCheck(req);
   const { bodies, contentType } = validateSpeechRequest(input);
@@ -2840,6 +2905,7 @@ async function speechHandler(input, req) {
   const user = upstreamUserId(req);
   let lastErr;
   for (const body of bodies) {
+    const timeoutMs = paymentWindowTimeoutMs(req, SPEECH_TIMEOUT_MS);
     try {
       let res;
       try {
@@ -2851,7 +2917,7 @@ async function speechHandler(input, req) {
             ...OPENROUTER_ATTRIBUTION,
           },
           body: JSON.stringify(user ? { ...body, user } : body),
-          signal: AbortSignal.timeout(60_000),
+          signal: AbortSignal.timeout(timeoutMs),
         });
       } catch (e) {
         throw bad(`Upstream request failed: ${e.message}`, 504);
@@ -3038,19 +3104,25 @@ function makeHandler(routeTier) {
       return {
         __sse: async (res) => {
           let lastErr;
-          for (const { model, flex } of attempts) {
-            let outbound;
-            try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
-            try {
-              // Streams now carry margin telemetry too: the scrubber hands us
-              // the upstream cost it strips from the final usage frame.
-              return await retryRateLimited(() => streamOpenRouterTo(outbound, res, { onUsage: (usage, cost, frame) => recordUsage(usage, cost, frame?.model || model, frame?.service_tier || (flex ? "flex" : "default")) }), { canRetry: () => !res.headersSent });
-            } catch (e) {
-              if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
-              lastErr = e;
+          const client = streamClientWatch(res);
+          try {
+            for (const { model, flex } of attempts) {
+              client.assertPresent();
+              let outbound;
+              try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
+              const timeoutMs = paymentWindowTimeoutMs(req, STREAM_TIMEOUT_MS);
+              try {
+                // Streams now carry margin telemetry too: the scrubber hands us
+                // the upstream cost it strips from the final usage frame.
+                return await retryRateLimited(() => streamOpenRouterTo(outbound, res, { timeoutMs, onUsage: (usage, cost, frame) => recordUsage(usage, cost, frame?.model || model, frame?.service_tier || (flex ? "flex" : "default")) }), { delays: rateLimitDelaysFor(flex), canRetry: () => !res.headersSent && !client.gone() });
+              } catch (e) {
+                if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
+                lastErr = e;
+              }
             }
-          }
-          throw lastErr;
+            client.assertPresent();
+            throw lastErr;
+          } finally { client.done(); }
         },
       };
     }
@@ -3061,6 +3133,7 @@ function makeHandler(routeTier) {
       if (model === refusedModel) continue;
       let outbound;
       try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
+      const timeoutMs = paymentWindowTimeoutMs(req, UPSTREAM_TIMEOUT_MS);
       try {
         // usage.include once asked OpenRouter for the exact upstream bill;
         // OpenRouter now returns it on every response regardless (2026-08),
@@ -3068,7 +3141,7 @@ function makeHandler(routeTier) {
         // injected at call time (like provider), never part of the normalized
         // body or cache keys. Streams get the same accounting via the SSE
         // scrubber in streamOpenRouterTo.
-        const data = await retryRateLimited(() => callOpenRouter({ ...outbound, usage: { include: true } }));
+        const data = await retryRateLimited(() => callOpenRouter({ ...outbound, usage: { include: true } }, { timeoutMs }), { delays: rateLimitDelaysFor(flex) });
         // An empty safety refusal (HTTP 200, no content) walks the chain like
         // a provider error — a buyer must never pay for nothing. See
         // isEmptyRefusal above. Streams can't be inspected this way; there

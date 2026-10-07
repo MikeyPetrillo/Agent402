@@ -57,6 +57,10 @@ process.env.OPENROUTER_API_KEY = "test-key";
   };
   await throws({ text: "hi", format: "flac" }, "/api/tts", "a format Kokoro cannot serve is a 400 naming the tier that can, never a silent mp3");
   await throws({ text: "x".repeat(801) }, "800", "the 800-char cap is enforced before any upstream call");
+  for (const [status, code] of [[401, 502], [403, 502], [402, 503]]) {
+    const e = await throws({ text: "hi" }, "", `our key or credit refused (${status}) is ours`, err(status, { error: { message: "nope" } }));
+    ok(e?.statusCode === code, `a ${status} from the speech gateway is a ${code}, never a 400 blaming the request (got ${e?.statusCode})`);
+  }
   ok((await call({ text: "x".repeat(800) }, audio())).chars === 800, "and exactly 800 chars is served");
   await throws({ text: "hi", voice: "bogus" }, "Unknown voice", "an unknown voice is refused by name");
   await throws({}, '"text" is required', "empty input is refused");

@@ -76,7 +76,7 @@ const RULES = [
   [/\bexternal routing settles on\b|\bpay on a supported (chain|network)\b/i, "network_unsupported"],
   [/\bexternal routing is not enabled on this host\b/i, "routing_disabled"],
   [/\bexternal routing on .{0,24} is paused\b|\bexternal routing is paused\b/i, "routing_paused"],
-  [/\bused the Tempo time budget\b|\bcredentials expire\b/i, "routing_budget_spent"],
+  [/\bused (?:the Tempo|this payment's) time budget\b|\bcredentials expire\b/i, "routing_budget_spent"],
   [/\bis not in the gateway allowlist\b/i, "model_not_allowed"],
   [/\bis served by the .* tier\b|\bcall \/v1\/[a-z0-9/-]+ .*instead\b/i, "model_wrong_tier"],
   [/\bbut the body being served quotes\b|\bresend the request exactly as it should be served\b/i, "quote_mismatch"],

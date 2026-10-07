@@ -956,6 +956,7 @@ jobs:
           t node scripts/test-trial.js
           # LLM gateway validation (OpenAI-compat tiers, caps, env-gated 503)
           t node scripts/test-llm-gateway.js
+          t node scripts/test-gateway-resilience.js
           t node scripts/test-llm-kit-spend.js
           t node scripts/test-upstream-costs.js
           t node scripts/test-ci-secretless-install.js

@@ -29,6 +29,7 @@ import {
   clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
+  rateLimitDelaysFor, paymentWindowTimeoutMs, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   defaultReasoningFor, validateReasoning,
   refuseCostVariants,
   assertUpstreamBody,
@@ -235,9 +236,19 @@ export function validateResponsesRequest(input, tierSlug) {
  *  the cap was spent reasoning; a paid empty answer, walk the chain. */
 export function isEmptyIncomplete(data) {
   if (!data || data.status !== "incomplete" || data.incomplete_details?.reason !== "max_output_tokens") return false;
+  return !saidAnything(data);
+}
+
+/** status incomplete for content_filter with no text/function output = an
+ *  empty safety refusal; walk the chain like the chat wire does. */
+export function isEmptyFilteredIncomplete(data) {
+  if (!data || data.status !== "incomplete" || data.incomplete_details?.reason !== "content_filter") return false;
+  return !saidAnything(data);
+}
+
+function saidAnything(data) {
   const out = Array.isArray(data.output) ? data.output : [];
-  const said = out.some((o) => o?.type === "function_call" || (o?.type === "message" && Array.isArray(o.content) && o.content.some((c) => c?.type === "output_text" && typeof c.text === "string" && c.text.trim() !== "")));
-  return !said;
+  return out.some((o) => o?.type === "function_call" || (o?.type === "message" && Array.isArray(o.content) && o.content.some((c) => c?.type === "output_text" && typeof c.text === "string" && c.text.trim() !== "")));
 }
 
 function stripBilling(usage) {
@@ -309,20 +320,26 @@ export function makeResponsesHandler(routeTier) {
       return {
         __sse: async (res) => {
           let lastErr;
-          for (const { model, flex } of attempts) {
-            let outbound;
-            try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
-            try {
-              return await retryRateLimited(() => streamOpenRouterTo(outbound, res, {
-                url: OPENROUTER_RESPONSES_URL,
-                onUsage: (usage, cost, frame) => recordUsage(usage, cost, frame?.response?.model || model, frame?.response?.service_tier || (flex ? "flex" : "default")),
-              }), { canRetry: () => !res.headersSent });
-            } catch (e) {
-              if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
-              lastErr = e;
+          const client = streamClientWatch(res);
+          try {
+            for (const { model, flex } of attempts) {
+              client.assertPresent();
+              let outbound;
+              try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
+              const timeoutMs = paymentWindowTimeoutMs(req, STREAM_TIMEOUT_MS);
+              try {
+                return await retryRateLimited(() => streamOpenRouterTo(outbound, res, {
+                  url: OPENROUTER_RESPONSES_URL, timeoutMs,
+                  onUsage: (usage, cost, frame) => recordUsage(usage, cost, frame?.response?.model || model, frame?.response?.service_tier || (flex ? "flex" : "default")),
+                }), { delays: rateLimitDelaysFor(flex), canRetry: () => !res.headersSent && !client.gone() });
+              } catch (e) {
+                if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
+                lastErr = e;
+              }
             }
-          }
-          throw lastErr || bad("No upstream model could serve this request", 502);
+            client.assertPresent();
+            throw lastErr || bad("No upstream model could serve this request", 502);
+          } finally { client.done(); }
         },
       };
     }
@@ -333,17 +350,23 @@ export function makeResponsesHandler(routeTier) {
       if (model === refusedModel) continue;
       let outbound;
       try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
+      const timeoutMs = paymentWindowTimeoutMs(req, UPSTREAM_TIMEOUT_MS);
       try {
         const data = await retryRateLimited(async () => {
-          const res = await fetchOpenRouter(outbound, { url: OPENROUTER_RESPONSES_URL });
+          const res = await fetchOpenRouter(outbound, { url: OPENROUTER_RESPONSES_URL, timeoutMs });
           if (!res.ok) await throwUpstreamError(res);
           const text = await res.text();
           let parsed;
           try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
           return assertUpstreamBody(parsed);
-        });
+        }, { delays: rateLimitDelaysFor(flex) });
         if (data?.status === "failed" || data?.error) {
           lastErr = bad(`Upstream error: ${String(data?.error?.message || data?.error?.code || "response failed").slice(0, 200)}`, 502);
+          continue;
+        }
+        if (isEmptyFilteredIncomplete(data)) {
+          lastErr = bad("Upstream declined the request (safety filter) - rephrase the prompt, or pick a different model", 502);
+          refusedModel = model;
           continue;
         }
         if (isEmptyIncomplete(data)) {

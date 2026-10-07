@@ -32,6 +32,7 @@ import { safeFetch } from "./fetch-guard.js";
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
+import { assertUpstreamBody } from "./llm-gateway-kit.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
@@ -178,6 +179,7 @@ async function callOpenAI(audioBuffer, filename, model, language, probedDuration
 
   let data;
   try { data = JSON.parse(text); } catch { throw bad("OpenAI returned non-JSON", 502); }
+  if (typeof data?.text !== "string") throw bad("OpenAI returned no transcript - retry", 502);
 
   return {
     model,
@@ -216,11 +218,15 @@ async function callScribe(audioBuffer, filename, model, language, probedDuration
     let msg = safe.slice(0, 200);
     try { msg = JSON.parse(safe).error?.message || msg; } catch {}
     if (res.status === 429) throw bad("Transcription upstream rate-limited - retry shortly", 503);
+    if (res.status === 402) throw bad("Transcription gateway temporarily unavailable - retry shortly", 503);
     if (res.status >= 500 || res.status === 401 || res.status === 403) throw bad(`Transcription upstream error (HTTP ${res.status})`, 502);
     throw bad(`Transcription upstream rejected the request: ${msg}`, 400);
   }
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Transcription upstream returned non-JSON", 502); }
+  assertUpstreamBody(data);
+  // Silent audio is an empty transcript; a body with no transcript field is not an answer.
+  if (typeof data.text !== "string") throw bad("Transcription upstream returned no transcript - retry", 502);
   const words = (Array.isArray(data.words) ? data.words : []).map((w) => ({
     word: String(w.word ?? ""),
     start: Number.isFinite(w.start) ? w.start : null,

@@ -77,7 +77,7 @@ ok(judgeEnabled() === false, "control: no key, feature off");
 process.env.TYPESAFE_API_KEY = "ts_test";
 const CANARY = "the buyer's own confidential state echoed back";
 const stubStatus = (status) => async () => ({ ok: false, status, text: async () => CANARY });
-for (const [status, want, why] of [[401, 503, "a refused key is OUR problem, a 503"], [403, 503, "same for a forbidden"], [429, 503, "upstream throttling is a 503, retryable"], [400, 400, "an upstream 4xx is the caller's request shape"], [500, 502, "an upstream 5xx is a 502"]]) {
+for (const [status, want, why] of [[401, 503, "a refused key is OUR problem, a 503"], [403, 503, "same for a forbidden"], [402, 503, "an upstream billing refusal is ours too, a 503, not the buyer's request shape"], [429, 503, "upstream throttling is a 503, retryable"], [400, 400, "an upstream 4xx is the caller's request shape"], [500, 502, "an upstream 5xx is a 502"]]) {
   let e = null;
   try { await judge(base, { fetchImpl: stubStatus(status) }); } catch (err) { e = err; }
   ok(e?.statusCode === want, `${why} (${status} -> ${e?.statusCode})`);

@@ -196,6 +196,8 @@ export function exaAllowanceStatus(now = Date.now()) {
 }
 export function _exaLifetimeReset() { lifetime.micro = 0; lifetime.since = Date.now(); }
 
+const EXA_RELEASE_STATUSES = new Set([400, 401, 402, 403, 404, 429]);
+
 async function exaPost(path, body) {
   const key = requireKey();
   const cap = EXA_DAILY_MAX_USD();
@@ -229,8 +231,11 @@ async function exaPost(path, body) {
   // Never relay an upstream error body to the buyer: it can carry our own key
   // material, account identifiers or another tenant's text.
   if (!res.ok) {
-    if (res.status === 401 || res.status === 403) throw bad("Exa rejected this deployment's API key", 503);
-    if (res.status === 402) throw bad("the Exa account is out of credits", 503);
+    // A clean refusal did no billable work: release the booked estimate so
+    // refused calls cannot fill the day's cap. Timeouts and 5xx keep it.
+    if (EXA_RELEASE_STATUSES.has(res.status)) _exaSpendBook(-estimate);
+    if (res.status === 401 || res.status === 403) throw bad("Exa tools are not configured on this deployment. Nothing was charged for this request.", 503);
+    if (res.status === 402) throw bad("Exa tools are temporarily unavailable. Nothing was charged for this request.", 503);
     if (res.status === 429) throw bad("Exa is rate-limiting this deployment right now - retry shortly", 503);
     if (res.status === 404) throw bad("Exa has nothing for that request", 404);
     if (res.status >= 500) throw bad(`Exa upstream error (HTTP ${res.status})`, 502);
@@ -254,6 +259,22 @@ function takeQuery(raw, field = "query", max = 1000) {
   if (!q) throw bad(`"${field}" is required - the text to search for`);
   if (q.length > max) throw bad(`"${field}" is too long (${q.length} chars, max ${max})`);
   return q;
+}
+
+// ISO 8601 date or date-time, checked locally so a malformed filter is a 400
+// before any upstream call.
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})?)?$/;
+export function takeIsoDate(raw, field) {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "string") throw bad(`"${field}" must be an ISO 8601 date such as 2025-01-31`);
+  const v = raw.trim();
+  if (!v) return null;
+  const m = ISO_DATE_RE.exec(v);
+  const t = m ? Date.parse(v) : NaN;
+  const real = m && Number.isFinite(t)
+    && new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toISOString().slice(0, 10) === `${m[1]}-${m[2]}-${m[3]}`;
+  if (!real) throw bad(`"${field}" must be an ISO 8601 date such as 2025-01-31 (got ${JSON.stringify(v.slice(0, 40))})`);
+  return v;
 }
 
 function takeNumResults(raw) {
@@ -371,7 +392,11 @@ export const EXA_TOOLS = [
         }
       }
       for (const k of ["startPublishedDate", "endPublishedDate"]) {
-        if (typeof i[k] === "string" && i[k].trim()) body[k] = i[k].trim();
+        const v = takeIsoDate(i[k], k);
+        if (v) body[k] = v;
+      }
+      if (body.startPublishedDate && body.endPublishedDate && Date.parse(body.startPublishedDate) > Date.parse(body.endPublishedDate)) {
+        throw bad('"startPublishedDate" is after "endPublishedDate"');
       }
       const data = await exaPost("/search", body);
       const results = Array.isArray(data?.results) ? data.results.map(shapeResult) : [];
@@ -475,16 +500,21 @@ export const EXA_TOOLS = [
       }
       const data = await exaPost("/contents", body);
       const results = Array.isArray(data?.results) ? data.results.map(shapeResult) : [];
+      const errText = (e) => (e && typeof e === "object" ? String(e.tag || e.message || e.httpStatusCode || "error") : String(e)).slice(0, 200);
       const statuses = Array.isArray(data?.statuses)
-        ? data.statuses.map((s) => ({ id: s?.id ?? null, status: s?.status ?? null, ...(s?.error ? { error: String(s.error).slice(0, 200) } : {}) }))
+        ? data.statuses.map((s) => ({ id: s?.id ?? null, status: s?.status ?? null, ...(s?.error ? { error: errText(s.error) } : {}) }))
         : [];
+      // Nothing readable came back: a failed call, never a charged empty 200.
+      if (!results.length) {
+        const named = statuses.slice(0, MAX_URLS).map((s) => `${String(s.id ?? "?").slice(0, 120)}: ${s.status ?? "unknown"}${s.error ? ` (${s.error})` : ""}`);
+        throw bad(`Exa could not read any of these URLs${named.length ? ` - ${named.join("; ")}` : ""}`, 502);
+      }
       return {
         source: "exa",
         fetchedAt: new Date().toISOString(),
         count: results.length,
         results,
         statuses,
-        ...(results.length ? {} : { note: "Exa could not read any of these URLs - see statuses" }),
       };
     },
   },

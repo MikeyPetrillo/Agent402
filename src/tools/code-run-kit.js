@@ -8,6 +8,7 @@
 //   code-run-pro  $0.05  — 60s timeout, 50k chars, Python/JS
 
 import { redactSecrets } from "./redact.js";
+import { payerFromRequest } from "../payer.js";
 
 let Sandbox;
 
@@ -30,6 +31,23 @@ const TIERS = {
 // start one we can't afford.
 const E2B_MAX_CONCURRENT = Number(process.env.E2B_MAX_CONCURRENT) || 8;
 let e2bInFlight = 0;
+
+// Per-payer concurrency: one caller cannot hold every sandbox slot. Keyed on
+// the payer's own identity where the request carries one (signed EVM payer,
+// credits key, Tempo sender); otherwise on the client IP, with a looser limit
+// because many callers can share one address.
+const PER_PAYER_MAX_CONCURRENT = 2;
+const PER_IP_MAX_CONCURRENT = 4;
+const payerInFlight = new Map();
+function payerKeyOf(req) {
+  if (!req) return null;
+  const payer = payerFromRequest(req);
+  if (payer) return `payer:${payer}`;
+  if (req.creditsKeyId) return `credits:${req.creditsKeyId}`;
+  if (req.mppTempoSender) return `tempo:${String(req.mppTempoSender).toLowerCase()}`;
+  return req.ip ? `ip:${req.ip}` : null;
+}
+const limitFor = (key) => (key?.startsWith("ip:") ? PER_IP_MAX_CONCURRENT : PER_PAYER_MAX_CONCURRENT);
 
 // F12: aggregate UTF-8 output cap. stdout/stderr/result/traceback are otherwise
 // returned unbounded — a one-line `print("x"*10**9)` would balloon the response
@@ -89,16 +107,20 @@ async function runInSandbox(code, language, tierSlug) {
     try {
       sbx = await Sandbox.create({ apiKey: key, timeoutMs: tier.timeoutMs + 10_000 });
     } catch (e) {
-      // e.message is E2B-SDK text wrapping the upstream API error body, and the
-      // E2B_API_KEY rides this request — redact before echoing (the route binder
-      // returns err.message verbatim to buyers and logs it).
-      throw bad(`Sandbox creation failed: ${redactSecrets(e.message)}`, 502);
+      // The SDK text wraps the upstream error body (account state, the key):
+      // log it redacted, answer the buyer generically.
+      console.warn(`[code-run] sandbox creation failed: ${redactSecrets(String(e?.message || e)).slice(0, 300)}`);
+      throw bad("Code execution is temporarily unavailable (the sandbox could not start) - retry shortly. Nothing was charged.", 503);
     }
 
+    // Output streamed so far, kept for a run that hits the time limit.
+    const partial = { stdout: [], stderr: [], bytes: 0 };
     try {
       const execution = await sbx.runCode(code, {
         language,
         timeoutMs: tier.timeoutMs,
+        onStdout: (m) => { if (partial.bytes < tier.maxOutputBytes) { const l = String(m?.line ?? m ?? ""); partial.bytes += l.length; partial.stdout.push(l); } },
+        onStderr: (m) => { if (partial.bytes < tier.maxOutputBytes) { const l = String(m?.line ?? m ?? ""); partial.bytes += l.length; partial.stderr.push(l); } },
       });
 
       // F12: budget the output byte cap across the fields, in priority order,
@@ -128,6 +150,24 @@ async function runInSandbox(code, language, tierSlug) {
       };
     } catch (e) {
       if (e.statusCode) throw e;
+      // The buyer's code ran to the time limit: the sandbox did the work, so
+      // the run is answered (and charged) with what it printed.
+      if (/^Execution timed out/i.test(String(e?.message))) {
+        let budget = tier.maxOutputBytes;
+        const take = (v) => { const c = capUtf8(v, Math.max(0, budget)); budget -= c.used; return c; };
+        const stdout = take(partial.stdout.join(partial.stdout.every((l) => l.endsWith("\n")) ? "" : "\n"));
+        const stderr = take(partial.stderr.join(partial.stderr.every((l) => l.endsWith("\n")) ? "" : "\n"));
+        return {
+          language,
+          stdout: stdout.text,
+          stderr: stderr.text,
+          result: null,
+          error: null,
+          timedOut: true,
+          timeLimitSeconds: tier.timeoutMs / 1000,
+          ...(stdout.truncated || stderr.truncated ? { truncated: true } : {}),
+        };
+      }
       // Timeout or SDK error
       const isTimeout = /timeout/i.test(e.message);
       // Non-timeout branch echoes E2B-SDK-derived text (upstream error body) —
@@ -145,9 +185,22 @@ async function runInSandbox(code, language, tierSlug) {
 }
 
 function makeHandler(tierSlug) {
-  return async (input) => {
+  return async (input, req) => {
     const { code, language } = validateInput(input, tierSlug);
-    return runInSandbox(code, language, tierSlug);
+    const who = payerKeyOf(req);
+    if (who) {
+      const n = payerInFlight.get(who) || 0;
+      if (n >= limitFor(who)) throw bad(`Too many concurrent runs: at most ${limitFor(who)} at a time per caller. Nothing was charged.`, 429);
+      payerInFlight.set(who, n + 1);
+    }
+    try {
+      return await runInSandbox(code, language, tierSlug);
+    } finally {
+      if (who) {
+        const n = (payerInFlight.get(who) || 1) - 1;
+        if (n > 0) payerInFlight.set(who, n); else payerInFlight.delete(who);
+      }
+    }
   };
 }
 
@@ -161,7 +214,7 @@ export const CODE_RUN_TOOLS = [
     category: "ai",
     price: "$0.020",
     description:
-      "Execute Python or JavaScript code in a secure, isolated cloud sandbox. Returns stdout, stderr, and the expression result. No setup needed; pay per call via x402. 30s timeout, 10k char code limit.",
+      "Execute Python or JavaScript code in a secure, isolated cloud sandbox. Returns stdout, stderr, and the expression result. No setup needed; pay per call via x402. 30s timeout, 10k char code limit. A run that hits the time limit is returned with timedOut: true and the output it printed, and is charged.",
     tags: [...SHARED_TAGS],
     discovery: {
       bodyType: "json",
@@ -192,7 +245,7 @@ export const CODE_RUN_TOOLS = [
     category: "ai",
     price: "$0.050",
     description:
-      "Execute Python or JavaScript code in a secure, isolated cloud sandbox (Pro tier). Same as /api/code-run but with 60s timeout and 50k char code limit for longer computations. Returns stdout, stderr, and the expression result.",
+      "Execute Python or JavaScript code in a secure, isolated cloud sandbox (Pro tier). Same as /api/code-run but with 60s timeout and 50k char code limit for longer computations. Returns stdout, stderr, and the expression result. A run that hits the time limit is returned with timedOut: true and the output it printed, and is charged.",
     tags: [...SHARED_TAGS, "pro"],
     discovery: {
       bodyType: "json",
@@ -221,4 +274,4 @@ export const CODE_RUN_TOOLS = [
 // Test hooks (F12): the aggregate-output cap logic + tier budgets, exercised
 // offline without an E2B sandbox. Concurrency gating (E2B_MAX_CONCURRENT) is a
 // straight-line counter checked before Sandbox.create.
-export const __test = { capUtf8, TIERS, E2B_MAX_CONCURRENT };
+export const __test = { capUtf8, TIERS, E2B_MAX_CONCURRENT, PER_PAYER_MAX_CONCURRENT, PER_IP_MAX_CONCURRENT, setSandbox: (S) => { Sandbox = S; } };

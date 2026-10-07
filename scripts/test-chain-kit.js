@@ -182,6 +182,17 @@ if (process.env.ALCHEMY_LIVE_TEST === "1" && process.env.ALCHEMY_API_KEY) {
     globalThis.fetch = answers([{ jsonrpc: "2.0", id: 1, error: { message: "tenant disabled" } }, { jsonrpc: "2.0", id: 1, error: { message: "Archive requests require a personal token" } }, { jsonrpc: "2.0", id: 1, error: { message: "Archive requests require a personal token" } }]);
     let f = null; try { await publicJsonRpc(net, "eth_getBlockByNumber", ["0x10", false]); } catch (x) { f = x; }
     ok(f && f.statusCode === 502 && /RPC upstream unavailable/.test(f.message), "every node refusing ends in a 502 naming the last refusal, never a hollow answer");
+    // A throttle is a refusal whatever its wording: JSON-RPC code 429, or HTTP 429.
+    const throttleMsg = "Your app has exceeded its compute units per second capacity.";
+    globalThis.fetch = answers([{ jsonrpc: "2.0", id: 1, error: { code: 429, message: throttleMsg } }, { jsonrpc: "2.0", id: 1, result: "0x10" }]);
+    let g = null; try { g = await publicJsonRpc(net, "eth_blockNumber", []); } catch (x) { g = x; }
+    ok(g === "0x10", "a JSON-RPC 429 falls through to the next node");
+    let i = 0;
+    globalThis.fetch = async () => (i++ === 0
+      ? { status: 429, text: async () => JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32005, message: throttleMsg } }) }
+      : { status: 200, text: async () => JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x11" }) });
+    let k = null; try { k = await publicJsonRpc(net, "eth_blockNumber", []); } catch (x) { k = x; }
+    ok(k === "0x11", "an HTTP 429 carrying a JSON-RPC error falls through to the next node");
   } finally { globalThis.fetch = realFetch; if (savedKey !== undefined) process.env.ALCHEMY_API_KEY = savedKey; }
 }
 console.log(`\n${pass} passed, ${fail} failed, live: ${liveOk} ok / ${liveErr} err`);

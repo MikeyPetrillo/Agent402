@@ -86,7 +86,7 @@ function headers() {
 // charged; a cache hit never takes a token.
 // The bucket is SHARED with crypto-kit since 2026-09-03 (src/tools/coingecko-rate.js):
 // one Demo key, one minute budget, whichever kit spends it.
-import { takeCgToken, resetCgRateLimit } from "./coingecko-rate.js";
+import { cgTokenRefusal, cgRefusalMessage, resetCgRateLimit } from "./coingecko-rate.js";
 export { resetCgRateLimit };
 
 async function cgGet(path, params, ttlMs) {
@@ -99,7 +99,8 @@ async function cgGet(path, params, ttlMs) {
   const hit = cacheGet(key);
   if (hit) return { data: hit.data, fetchedAt: hit.fetchedAt, cached: true };
 
-  if (!takeCgToken(Date.now())) throw bad("Market data is rate limited right now, retry in a few seconds. You were not charged.", 503);
+  const why = cgTokenRefusal(Date.now());
+  if (why) throw bad(cgRefusalMessage(why, "Market data"), 503);
   const attempt = () => fetch(key, { headers: headers(), signal: AbortSignal.timeout(TIMEOUT_MS) });
   let res;
   try {
@@ -110,18 +111,28 @@ async function cgGet(path, params, ttlMs) {
   // One retry on 429/5xx after a short backoff: the Demo bucket is 30/min and
   // a chained agent call can brush it; a second failure of the same class maps
   // below.
+  // The retry is a second request, so it takes its own token.
   if (res.status === 429 || res.status >= 500) {
     await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
-    try {
-      const again = await attempt();
-      if (again.ok || again.status !== res.status) res = again;
-    } catch { /* keep the first response */ }
+    if (cgTokenRefusal(Date.now()) === null) {
+      try {
+        const again = await attempt();
+        if (again.ok || again.status !== res.status) res = again;
+      } catch { /* keep the first response */ }
+    }
   }
   if (!res.ok) {
     const s = res.status;
     if (s === 404) throw bad("Unknown id: the coin, exchange or platform is not tracked upstream", 422);
-    if (s === 429) throw bad("Market data upstream rate-limited this request (30/min shared budget) - retry in about 60 seconds", 503);
-    if (s === 401 || s === 403) throw bad("Market data upstream refused the request: outside the plan's allowed range (history is limited to the past 365 days) or an endpoint this plan does not serve", 422);
+    if (s === 429) throw bad("Market data upstream rate-limited this request - retry in about 60 seconds", 503);
+    if (s === 401 || s === 403) {
+      // Plan/range codes are about the request; any other 401/403 is this
+      // server's key, which no buyer input can fix.
+      let code = null;
+      try { const b = await res.json(); code = Number(b?.status?.error_code ?? b?.error?.status?.error_code); } catch { /* no body */ }
+      if (code === 10005 || code === 10012) throw bad("Market data upstream refused the request: outside the plan's allowed range (history is limited to the past 365 days) or an endpoint this plan does not serve", 422);
+      throw bad("Market data is not configured on this deployment. You were not charged.", 503);
+    }
     if (s >= 500) throw bad(`Market data upstream HTTP ${s} - try again later`, 502);
     throw bad(`Market data upstream rejected the request (HTTP ${s}) - check the inputs`, 422);
   }

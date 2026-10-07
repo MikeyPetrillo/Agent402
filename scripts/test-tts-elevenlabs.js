@@ -318,6 +318,19 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   ok(form?.get("model") === "elevenlabs/scribe-v2" && form.get("diarize") === "true" && form.get("response_format") === "verbose_json", "diarize sends Scribe v2 with speaker labels and verbose output");
   ok(r.model === "elevenlabs/scribe-v2" && r.speakers === 2 && r.words.length === 3 && r.words[2].speaker === 1 && r.words[0].end === 0.3, "the answer carries words with times and speakers, and the speaker count");
   ok(r.text === scribe.text && r.duration === 1, "and the transcript and duration, like the default path");
+  const scribeWith = async (status, answer) => {
+    globalThis.fetch = async (url) => { const x = new URL(String(url)); if (x.host === "openrouter.ai") return { ok: status === 200, status, text: async () => JSON.stringify(answer) }; throw new Error("unexpected"); };
+    try { return await makeMultipartHandler("transcribe")({}, { headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, body }); }
+    catch (x) { return x; } finally { globalThis.fetch = realFetch; }
+  };
+  const c402 = await scribeWith(402, { error: { message: "Insufficient credits" } });
+  ok(c402?.statusCode === 503 && !/credit/i.test(c402.message), `a gateway 402 is a 503 that names no account state (got ${c402?.statusCode})`);
+  const errBody = await scribeWith(200, { error: { message: "provider failed", code: 502 } });
+  ok(errBody?.statusCode >= 500, "a 200 carrying an error body is a 5xx, not a charged empty transcript");
+  const noText = await scribeWith(200, { words: [] });
+  ok(noText?.statusCode === 502, "a 200 with no transcript field is a 502");
+  const silent = await scribeWith(200, { text: "", words: [], duration: 1 });
+  ok(silent?.text === "" && silent?.speakers === 0, "silent audio is still a valid empty transcript");
   const e = await throwsWith(() => transcribe.handler({ url: "https://agent402.tools/fixtures/sample-audio.wav", diarize: "yes" }));
   ok(e?.statusCode === 400 && /diarize/.test(e.message), "a diarize value that is not true/false is a 400 before any fetch");
 }

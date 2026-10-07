@@ -34,6 +34,7 @@ import {
   clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
+  rateLimitDelaysFor, paymentWindowTimeoutMs, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, costFor,
   assertUpstreamBody, reasoningProfile, REASONING_EFFORTS,
 } from "./llm-gateway-kit.js";
@@ -409,20 +410,26 @@ export function makeMessagesHandler(routeTier) {
       return {
         __sse: async (res) => {
           let lastErr;
-          for (const { model, flex } of attempts) {
-            let outbound;
-            try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
-            try {
-              return await retryRateLimited(() => streamOpenRouterTo(outbound, res, {
-                url: OPENROUTER_MESSAGES_URL,
-                onUsage: (usage, cost, frame) => recordUsage(usage, cost, frame?.message?.model || model, frame?.usage?.service_tier || (flex ? "flex" : "default")),
-              }), { canRetry: () => !res.headersSent });
-            } catch (e) {
-              if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
-              lastErr = e;
+          const client = streamClientWatch(res);
+          try {
+            for (const { model, flex } of attempts) {
+              client.assertPresent();
+              let outbound;
+              try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
+              const timeoutMs = paymentWindowTimeoutMs(req, STREAM_TIMEOUT_MS);
+              try {
+                return await retryRateLimited(() => streamOpenRouterTo(outbound, res, {
+                  url: OPENROUTER_MESSAGES_URL, timeoutMs,
+                  onUsage: (usage, cost, frame) => recordUsage(usage, cost, frame?.message?.model || model, frame?.usage?.service_tier || (flex ? "flex" : "default")),
+                }), { delays: rateLimitDelaysFor(flex), canRetry: () => !res.headersSent && !client.gone() });
+              } catch (e) {
+                if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
+                lastErr = e;
+              }
             }
-          }
-          throw lastErr || bad("No upstream model could serve this request", 502);
+            client.assertPresent();
+            throw lastErr || bad("No upstream model could serve this request", 502);
+          } finally { client.done(); }
         },
       };
     }
@@ -433,15 +440,18 @@ export function makeMessagesHandler(routeTier) {
       if (model === refusedModel) continue;
       let outbound;
       try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
+      const timeoutMs = paymentWindowTimeoutMs(req, UPSTREAM_TIMEOUT_MS);
       try {
         const data = await retryRateLimited(async () => {
-          const res = await fetchOpenRouter(outbound, { url: OPENROUTER_MESSAGES_URL });
+          const res = await fetchOpenRouter(outbound, { url: OPENROUTER_MESSAGES_URL, timeoutMs });
           if (!res.ok) await throwUpstreamError(res);
           const text = await res.text();
           let parsed;
           try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
-          return assertUpstreamBody(parsed);
-        });
+          assertUpstreamBody(parsed);
+          if (!Array.isArray(parsed?.content)) throw bad("Upstream returned no answer (no content) - not charged", 502);
+          return parsed;
+        }, { delays: rateLimitDelaysFor(flex) });
         if (data?.stop_reason === "refusal" && isEmptyMaxTokens({ ...data, stop_reason: "max_tokens" })) {
           lastErr = bad("Upstream declined the request (safety filter) - rephrase the prompt, or pick a different model", 502);
           refusedModel = model;

@@ -211,6 +211,9 @@ async function callKokoro(text, voice, format, tierSlug) {
     // 5xx and 429 are the provider's; anything else is this request being
     // wrong, and a 400 teaches the agent to fix it (same rule as the OpenAI
     // tiers). Either way a >= 400 cancels settlement: nobody is charged.
+    // Our key refused or our gateway credit gone is ours, not the request's.
+    if (res.status === 401 || res.status === 403) throw bad("Speech upstream temporarily unavailable - retry shortly", 502);
+    if (res.status === 402) throw bad("Speech gateway temporarily unavailable - retry shortly", 503);
     if (res.status >= 500 || res.status === 429) throw bad(`Speech upstream error (HTTP ${res.status}): ${msg}`, 502);
     throw bad(`Upstream rejected the request: ${msg}`, 400);
   }
@@ -350,7 +353,7 @@ async function callSpeechModel(model, nativeVoice, text, format, timeoutMs) {
     const ra = Number(res.headers?.get?.("retry-after"));
     const retryAfterMs = Number.isFinite(ra) && ra > 0 ? Math.min(ra, 3600) * 1000 : 0;
     // Our key refused (401/403) is our configuration, not the buyer's request.
-    if (res.status === 401 || res.status === 403) throw Object.assign(bad("Speech upstream auth failed", 502), { outage: true, throttle: true, retryAfterMs });
+    if (res.status === 401 || res.status === 403) throw Object.assign(bad("Speech upstream temporarily unavailable - retry shortly", 502), { outage: true, throttle: true, retryAfterMs });
     if (res.status === 429) throw Object.assign(bad("Speech upstream rate-limited - retry shortly", 503), { outage: true, throttle: true, retryAfterMs });
     if (res.status >= 500) throw Object.assign(bad(`Speech upstream error (HTTP ${res.status}): ${msg}`, 502), { outage: true });
     throw bad(`Upstream rejected the request: ${msg}`, 400);

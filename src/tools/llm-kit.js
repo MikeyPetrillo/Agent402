@@ -225,7 +225,10 @@ async function callOpenAI(model, messages, maxTokens, responseFormat, opts, tier
     // err.message verbatim to buyers and logs it.
     const safe = redactSecrets(text);
     let msg = safe.slice(0, 200);
-    try { msg = JSON.parse(safe).error?.message || msg; } catch {}
+    let code = null;
+    try { const j = JSON.parse(safe); msg = j.error?.message || msg; code = j.error?.code ?? null; } catch {}
+    // An account-level billing or account state is the upstream's, not the request's.
+    if (["billing_hard_limit_reached", "billing_not_active", "account_deactivated"].includes(code)) throw bad("OpenAI upstream unavailable", 502);
     // Reaching here means a remaining 4xx - the REQUEST was invalid (bad
     // temperature, unknown language code, oversized input), not the upstream.
     // Surfacing it as 502 taught buyers to retry the identical bad request
@@ -239,6 +242,7 @@ async function callOpenAI(model, messages, maxTokens, responseFormat, opts, tier
   try { data = JSON.parse(text); } catch { throw bad("OpenAI returned non-JSON", 502); }
 
   const choice = data.choices?.[0];
+  if (!choice || typeof choice !== "object") throw bad("OpenAI returned no answer - retry", 502);
   // Same meter and same PostHog event as the /v1 gateway, so margin.json and
   // the gateway_usage insights see this kit's spend beside OpenRouter's.
   const upstreamUsd = openaiCostUsd(data.model || model, data.usage);
@@ -257,8 +261,12 @@ async function callOpenAI(model, messages, maxTokens, responseFormat, opts, tier
       total_tokens: data.usage?.total_tokens ?? 0,
     },
     choices: [{
-      message: { role: "assistant", content: choice?.message?.content ?? "" },
-      finish_reason: choice?.finish_reason ?? "stop",
+      message: {
+        role: "assistant", content: choice.message?.content ?? "",
+        // A refusal with no content is passed through, not served as a silent "".
+        ...(typeof choice.message?.refusal === "string" && choice.message.refusal && !choice.message?.content ? { refusal: choice.message.refusal } : {}),
+      },
+      finish_reason: choice.finish_reason ?? "stop",
     }],
   };
 }

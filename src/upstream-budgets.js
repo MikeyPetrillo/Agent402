@@ -50,6 +50,10 @@ export const UPSTREAM_BUDGETS = [
     why: "the nine Farcaster tools" },
   { match: "api.exa.ai", name: "exa", env: "BUDGET_EXA_CALLS", dflt: 500,
     why: "beside exaAllowance, which tracks dollars - this tracks call volume" },
+  { match: "api.hunter.io", name: "hunter", env: "BUDGET_HUNTER_CALLS", dflt: 200,
+    why: "the b2b enrichment tools; billed per lookup" },
+  { match: "api.apollo.io", name: "apollo", env: "BUDGET_APOLLO_CALLS", dflt: 200,
+    why: "the b2b enrichment tools; billed per lookup" },
 ];
 
 // A budget whose vendor is ALSO an indexed seller cannot be read off host

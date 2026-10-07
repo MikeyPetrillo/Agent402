@@ -94,5 +94,17 @@ const rep = (hosts) => ({ day: "2026-09-14", hosts });
   ok(/registerUpstreamCounter\("exa", exaCallsToday\)/.test(server), "the server registers the Exa kit's own counter");
 }
 
+// --- the per-lookup enrichment vendors are budgeted too ---------------------
+{
+  const quiet = upstreamBudgetStatus(rep([{ host: "api.hunter.io", calls: 3 }, { host: "api.apollo.io", calls: 2 }]));
+  eq([quiet.upstreams.hunter?.callsToday, quiet.upstreams.apollo?.callsToday], [3, 2], "Hunter and Apollo calls are counted from host traffic");
+  eq([quiet.upstreams.hunter?.status, quiet.upstreams.apollo?.status], ["ok", "ok"], "normal enrichment traffic reads ok");
+  const hot = upstreamBudgetStatus(rep([{ host: "api.hunter.io", calls: 1e6 }, { host: "api.apollo.io", calls: 1e6 }]));
+  eq([hot.upstreams.hunter?.status, hot.upstreams.apollo?.status], ["elevated", "elevated"], "a step change in either trips its alarm");
+  process.env.BUDGET_HUNTER_CALLS = "off";
+  eq(upstreamBudgetStatus(rep([])).upstreams.hunter?.status, "disabled", "and each has its own env switch");
+  delete process.env.BUDGET_HUNTER_CALLS;
+}
+
 console.log(`\ntest-upstream-budgets: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -152,8 +152,8 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
 {
   const secret = "sk-live-EXAMPLE-KEY-MATERIAL";
   for (const [status, re, label] of [
-    [401, /rejected this deployment's API key/, "401 is our own misconfiguration, a 503"],
-    [402, /out of credits/, "402 says the account is empty"],
+    [401, /not configured/, "401 is our own misconfiguration, a 503 that says not configured"],
+    [402, /temporarily unavailable/, "402 is a 503 that says temporarily unavailable, never the account state"],
     [429, /rate-limiting/, "429 is a 503 with a retry hint"],
     [404, /nothing for that request/, "404 stays a 404"],
     [500, /upstream error/, "5xx is a 502"],
@@ -187,9 +187,45 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   // twice for the same fetch through a caching layer that keys on the string.
   eq(JSON.parse(calls[0].opts.body).urls, ["https://p.example/"], "contents posts `urls`, normalised");
   eq(c.statuses[0].status, "success", "per-URL status is surfaced so an unread page is named");
-  reset(); stub(200, { results: [], statuses: [] });
-  const empty = await tool("exa-contents").handler({ urls: ["https://p.example"] });
-  ok(typeof empty.note === "string", "an empty read carries an honest note rather than a bare empty array");
+  reset(); stub(200, { results: [], statuses: [{ id: "https://p.example/", status: "error", error: { tag: "CRAWL_NOT_FOUND", httpStatusCode: 404 } }] });
+  const empty = await tool("exa-contents").handler({ urls: ["https://p.example"] }).catch((e) => e);
+  eq(empty?.statusCode, 502, "no URL could be read: a 502, never a charged empty 200");
+  ok(/https:\/\/p\.example\/: error \(CRAWL_NOT_FOUND\)/.test(String(empty?.message)), "and the failure names each URL's status");
+}
+
+// --- a clean upstream refusal releases the booked estimate -----------------
+{
+  for (const status of [400, 401, 402, 403, 404, 429]) {
+    reset(); stub(status, { error: "x" });
+    await tool("exa-search").handler({ query: "x" }).catch(() => {});
+    eq(exaSpendStatus().spentUsd, 0, `an upstream ${status} releases the booked estimate`);
+  }
+  reset(); stub(500, { error: "x" });
+  await tool("exa-search").handler({ query: "x" }).catch(() => {});
+  ok(exaSpendStatus().spentUsd > 0, "control: a 5xx keeps the estimate booked");
+  // Refused calls can no longer fill the cap and lock out valid ones.
+  reset();
+  process.env.EXA_DAILY_MAX_USD = String(estimateExaUsd("/search", { numResults: 10 }) * 2.5);
+  stub(400, { error: "bad filter" });
+  for (let k = 0; k < 10; k++) await tool("exa-search").handler({ query: "x" }).catch(() => {});
+  stub(200, { results: [{ url: "https://a.example", title: "t" }] });
+  const good = await tool("exa-search").handler({ query: "x" }).catch((e) => e);
+  ok(Array.isArray(good?.results), "ten refused calls later, a valid search still runs under the cap");
+}
+
+// --- date filters are validated locally ------------------------------------
+{
+  reset(); stub(200, { results: [] });
+  for (const bad of ["not-a-date", "2025-02-30", "2025-13-01", "31/01/2025", 20250101]) {
+    const e = await tool("exa-search").handler({ query: "x", startPublishedDate: bad }).catch((x) => x);
+    eq(e?.statusCode, 400, `startPublishedDate ${JSON.stringify(bad)} is a 400`);
+  }
+  const inverted = await tool("exa-search").handler({ query: "x", startPublishedDate: "2025-06-01", endPublishedDate: "2025-01-01" }).catch((x) => x);
+  eq(inverted?.statusCode, 400, "a start after the end is a 400");
+  eq(calls.length, 0, "and none of them reached Exa");
+  await tool("exa-search").handler({ query: "x", startPublishedDate: "2025-01-31", endPublishedDate: "2025-06-01T12:00:00.000Z" });
+  const sent = JSON.parse(calls[0].opts.body);
+  ok(sent.startPublishedDate === "2025-01-31" && sent.endPublishedDate === "2025-06-01T12:00:00.000Z", "valid ISO dates are sent as written");
 }
 
 // --- third-party text is marked untrusted -----------------------------------

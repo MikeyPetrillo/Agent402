@@ -26,6 +26,31 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   ok(onceCount === 1, `a deterministic 4xx is never retried (called ${onceCount}× of a possible 3)`);
 }
 
+// --- FRED throttling is a retryable 503, never a 422 that blames the input
+// (stubbed fetch; no key spent) ---
+{
+  const realFetch = globalThis.fetch, realKey = process.env.FRED_API_KEY;
+  process.env.FRED_API_KEY = "fred-test-not-a-key";
+  let calls = 0;
+  try {
+    for (const st of [429, 423]) {
+      calls = 0;
+      globalThis.fetch = async () => { calls++; return new Response(JSON.stringify({ error_code: st, error_message: "Too Many Requests.  Exceeded Rate Limit" }), { status: st, headers: { "content-type": "application/json" } }); };
+      let e = null;
+      try { await h("fred-series")({ seriesId: "UNRATE" }); } catch (x) { e = x; }
+      ok(e?.statusCode === 503 && /temporarily unavailable/.test(e.message), `FRED ${st} -> 503 temporarily unavailable (got ${e?.statusCode})`);
+      ok(calls === 1, `FRED ${st} is not hammered with retries (calls ${calls})`);
+    }
+    globalThis.fetch = async () => new Response(JSON.stringify({ error_code: 400, error_message: "Bad Request.  The value for variable api_key is not registered." }), { status: 400, headers: { "content-type": "application/json" } });
+    let e = null;
+    try { await h("fred-series")({ seriesId: "UNRATE" }); } catch (x) { e = x; }
+    ok(e?.statusCode === 503 && /not configured/.test(e.message) && !/registered|api_key/.test(e.message), "a key refusal says not configured and relays no key detail");
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.FRED_API_KEY; else process.env.FRED_API_KEY = realKey;
+  }
+}
+
 // --- stale fallback (offline, deterministic) — locks the fix for the
 // 2026-07-16 FRED /releases/dates outage: a transient upstream failure serves
 // the last-good snapshot (marked stale), a deterministic 4xx never does, and
