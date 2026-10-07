@@ -27,8 +27,24 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const rejects = async (fn, re, m) => { try { await fn(); ok(false, `${m} (resolved)`); } catch (e) { ok(re.test(String(e?.message)) , `${m}${re.test(String(e?.message)) ? "" : ` (got ${e?.statusCode} ${e?.message})`}`); } };
 
 const REQ = "deepseek/deepseek-chat";
-const SUCC = AVAILABILITY_SUCCESSORS[REQ];
+const SUCC = AVAILABILITY_SUCCESSORS[REQ][0];
 ok(SUCC === "deepseek/deepseek-v4-flash", "deepseek-chat names its successor");
+// Every table entry: each requested model maps to at least one successor, and
+// the chain on each tier that serves the requested model picks the first
+// successor that tier admits, never one it refuses.
+{
+  const { TIERS, tierAllows } = await import("../src/tools/llm-gateway-kit.js");
+  for (const [req, list] of Object.entries(AVAILABILITY_SUCCESSORS)) {
+    ok(Array.isArray(list) && list.length > 0, `${req}: has at least one successor`);
+    for (const tier of Object.keys(TIERS).filter((t) => tierAllows(t, req))) {
+      const chain = failoverChain(req, tier);
+      const want = list.find((m) => tierAllows(tier, m));
+      ok(want ? chain[1] === want : !list.includes(chain[1]), `${req} on ${tier}: successor ${want || "none (tier admits none)"}`);
+    }
+  }
+  ok(failoverChain("openai/gpt-4o-mini", "v1-chat")[1] === "openai/gpt-5-nano" && failoverChain("openai/gpt-4o-mini", "v1-chat-metered")[1] === "openai/gpt-5-nano", "gpt-4o-mini: base and metered fall back to gpt-5-nano");
+  ok(!Object.values(AVAILABILITY_SUCCESSORS).flat().includes("openai/gpt-4.1-nano"), "no successor is a model OpenAI removes 2026-10-23 (gpt-4.1-nano)");
+}
 
 // ---- the chain itself
 ok(JSON.stringify(failoverChain(REQ, "v1-chat-metered")) === JSON.stringify([REQ, SUCC]), "metered chain: requested model, then its successor");

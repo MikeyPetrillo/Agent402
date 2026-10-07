@@ -395,7 +395,7 @@ for (const row of REASONING_MODELS) {
 // requested model does (the 2026-10-06 outage was a tool-using agent), and cost
 // no more at its DEAREST live endpoint than the requested model's private row:
 // that row is the max_price cap and the metered quote the successor serves under.
-for (const [requested, succ] of Object.entries(AVAILABILITY_SUCCESSORS)) {
+for (const [requested, succ] of Object.entries(AVAILABILITY_SUCCESSORS).flatMap(([r, list]) => list.map((m) => [r, m]))) {
   ok(ids.has(succ), `availability successor ${succ} (for ${requested}) is live`);
   ok(Object.keys(TIERS).some((t) => tierAllows(t, requested) && tierAllows(t, succ)), `${succ} is served on a tier that serves ${requested}`);
   const endpoints = async (id) => {
