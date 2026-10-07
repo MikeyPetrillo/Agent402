@@ -105,7 +105,10 @@ function cgCacheGet(key, now = Date.now()) {
   if (hit.expiresAt <= now) { cgCache.delete(key); return null; }
   return hit.text;
 }
+// A body larger than this is served but not kept, so the cache stays small.
+const CG_CACHE_MAX_BODY = 256 * 1024;
 function cgCachePut(key, text, now = Date.now()) {
+  if (text.length > CG_CACHE_MAX_BODY) return;
   if (cgCache.size >= CG_CACHE_MAX) { const oldest = cgCache.keys().next().value; if (oldest !== undefined) cgCache.delete(oldest); }
   cgCache.set(key, { text, expiresAt: now + CG_CACHE_TTL_MS });
 }

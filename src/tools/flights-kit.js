@@ -73,9 +73,8 @@ export function parseFlightSellers(raw) {
   const price = { search: FLIGHT_SEARCH_PRICE_USD, status: FLIGHT_STATUS_PRICE_USD };
   for (const kind of ["search", "status"]) {
     for (const s of out[kind]) {
-      // Every seller in a chain must fit the route's price with margin, so a
-      // fallback never serves at a loss.
-      if (s.maxUsd > price[kind] * 0.7 + 1e-9) throw new Error(`FLIGHT_SELLERS_JSON.${kind}: a seller cap of $${s.maxUsd} leaves no margin under the $${price[kind]} route price`);
+      // Every seller in a chain must fit under the route's seller ceiling.
+      if (s.maxUsd > price[kind] * 0.7 + 1e-9) throw new Error(`FLIGHT_SELLERS_JSON.${kind}: a seller cap of $${s.maxUsd} exceeds the route's seller ceiling`);
     }
   }
   return out;
@@ -297,6 +296,9 @@ export function buildFlightTools({ sellers, pay, now = () => Date.now(), maySpen
     };
   }
   const tools = [];
+  // The search example is dated five weeks ahead of boot, so it never falls
+  // into the past that validateSearch refuses.
+  const exampleDate = todayUtc(Date.now() + 35 * 86_400_000);
   const search = make("search");
   if (search) tools.push({
     route: "POST /api/flight-search",
@@ -322,8 +324,8 @@ export function buildFlightTools({ sellers, pay, now = () => Date.now(), maySpen
         },
         required: ["from", "to", "date"],
       },
-      input: { from: "BER", to: "BCN", date: "2026-11-12" },
-      output: { example: { from: "BER", to: "BCN", date: "2026-11-12", return: null, adults: 1, travelClass: "economy", currency: "USD", offerCount: 1, offers: [{ price: 53, totalDurationMin: 155, stops: 0, best: true, legs: [{ airline: "Ryanair", flightNumber: "FR 132", from: "BER", departs: "2026-11-12 21:20", to: "BCN", arrives: "2026-11-12 23:55", durationMin: 155, aircraft: "Boeing 737MAX 8 Passenger", cabin: "Economy" }] }], lowestPrice: 53, typicalPriceRange: [50, 90], priceLevel: "low", servedBy: "flights.example.invalid", fetchedAt: "2026-10-07T14:00:00.000Z" } },
+      input: { from: "BER", to: "BCN", date: exampleDate },
+      output: { example: { from: "BER", to: "BCN", date: exampleDate, return: null, adults: 1, travelClass: "economy", currency: "USD", offerCount: 1, offers: [{ price: 53, totalDurationMin: 155, stops: 0, best: true, legs: [{ airline: "Ryanair", flightNumber: "FR 132", from: "BER", departs: `${exampleDate} 21:20`, to: "BCN", arrives: `${exampleDate} 23:55`, durationMin: 155, aircraft: "Boeing 737MAX 8 Passenger", cabin: "Economy" }] }], lowestPrice: 53, typicalPriceRange: [50, 90], priceLevel: "low", servedBy: "flights.example.invalid", fetchedAt: "2026-10-07T14:00:00.000Z" } },
     },
     handler: search,
   });

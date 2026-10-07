@@ -119,6 +119,16 @@ const J = (status, body) => new Response(typeof body === "string" ? body : JSON.
     const pf = PRICE_FEED_TOOLS.find((t) => t.slug === "price-coingecko").handler;
     await pf({ ids: ["bitcoin"] }); await pf({ ids: ["bitcoin"] });
     eq(fetched, 1, "price-feed-kit: an identical CoinGecko request inside the window is served from the short cache");
+
+    // A body over 256 KB is served but not kept, in both caches.
+    const pad = "x".repeat(300 * 1024);
+    rate.resetCgRateLimit(); clearCryptoCache(); clearPriceFeedCache(); fetched = 0;
+    reply = () => J(200, { bitcoin: { usd: 1, usd_24h_change: 0, usd_24h_vol: 0, usd_market_cap: 0, last_updated_at: 0 }, pad });
+    await price({ coins: "BTC" }); await price({ coins: "BTC" });
+    eq(fetched, 2, "crypto-kit: a body over 256 KB is not cached");
+    fetched = 0;
+    await pf({ ids: ["bitcoin"] }); await pf({ ids: ["bitcoin"] });
+    eq(fetched, 2, "price-feed-kit: a body over 256 KB is not cached");
   } finally { globalThis.fetch = orig; delete process.env.COINGECKO_MAX_PER_MIN; rate.resetCgRateLimit(); clearCryptoCache(); clearPriceFeedCache(); }
 }
 console.log(`test-coingecko-rate: ${n} assertions ok`);

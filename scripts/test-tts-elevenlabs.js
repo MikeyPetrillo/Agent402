@@ -154,6 +154,13 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   stub([["openrouter.ai", err(503)]]);
   const nokey = await throwsWith(() => run("tts", { text: "hi" }, { now: before }));
   ok(nokey?.statusCode === 502, "without an OpenAI key an outage is an uncharged 502");
+  // With no backup left, what the buyer reads names no account state and no vendor text.
+  stub([["openrouter.ai", err(402, { error: { message: "Insufficient credits on account" } })]]);
+  const broke = await throwsWith(() => run("tts", { text: "hi" }, { now: before }));
+  ok(broke?.statusCode >= 500 && !/credit/i.test(broke.message), `a gateway 402 with no backup names no account state (got ${broke?.statusCode} "${broke?.message}")`);
+  stub([["openrouter.ai", err(503, { error: { message: "vendor-internal-detail" } })]]);
+  const down = await throwsWith(() => run("tts", { text: "hi" }, { now: before }));
+  ok(down?.statusCode === 502 && !/vendor-internal-detail/.test(down.message), `a 5xx with no backup does not pass the vendor's error text through (got "${down?.message}")`);
 }
 
 // --- the breaker: a throttle never becomes more ElevenLabs traffic ----------

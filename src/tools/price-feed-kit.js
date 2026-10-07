@@ -79,7 +79,8 @@ async function feedFetch(url, { timeout = TIMEOUT_MS } = {}) {
   let text, parsed;
   try { text = await res.text(); parsed = JSON.parse(text); }
   catch { throw bad("Price feed upstream returned malformed JSON", 502); }
-  if (cacheKey) {
+  // A body over 256 KB is served but not kept, so the cache stays small.
+  if (cacheKey && text.length <= 256 * 1024) {
     if (cgCache.size >= CG_CACHE_MAX) { const oldest = cgCache.keys().next().value; if (oldest !== undefined) cgCache.delete(oldest); }
     cgCache.set(cacheKey, { text, expiresAt: Date.now() + CG_CACHE_TTL_MS });
   }

@@ -4,7 +4,7 @@
 // The kit pays outside sellers from our wallet before the buyer's payment
 // settles, so what is pinned is the money path first:
 //  - the seller list is configuration, refused when malformed or when a
-//    seller's cap leaves no margin under the route price;
+//    seller's cap exceeds the route's seller ceiling;
 //  - every payment carries the seller's cap and its pinned payTo;
 //  - the next seller is tried only when the failed attempt never sent our
 //    authorization; one that may have collected ends the call;
@@ -37,7 +37,7 @@ for (const [bad, re, m] of [
   [JSON.stringify({ search: [{ url: "http://x.example.invalid/{from}", format: "fare-search-v1", maxUsd: 0.02, payTo: A }] }), /https/, "an http seller is refused"],
   [JSON.stringify({ search: [{ url: "https://x.example.invalid/", format: "other", maxUsd: 0.02, payTo: A }] }), /format/, "an unknown answer format is refused"],
   [JSON.stringify({ search: [{ url: "https://x.example.invalid/", format: "fare-search-v1", maxUsd: 0.02, payTo: "0x12" }] }), /payTo/, "a seller without a pinned Base address is refused"],
-  [JSON.stringify({ search: [{ url: "https://x.example.invalid/", format: "fare-search-v1", maxUsd: 0.025, payTo: A }] }), /no margin/, "a seller cap that leaves no margin under the route price is refused"],
+  [JSON.stringify({ search: [{ url: "https://x.example.invalid/", format: "fare-search-v1", maxUsd: 0.025, payTo: A }] }), /seller ceiling/, "a seller cap above the route's seller ceiling is refused"],
 ]) await throws(() => parseFlightSellers(bad), re, m);
 ok(buildFlightTools({ sellers: null }).length === 0, "no config: no routes registered");
 
