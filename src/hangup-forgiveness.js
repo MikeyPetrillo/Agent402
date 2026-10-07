@@ -90,6 +90,7 @@ const LASTING_EFFECT_SLUGS = new Set([
   "feedback",
   "route-execute", "route-execute-plus", "route-execute-max", "route-execute-pro",
   "seller-payability",
+  "flight-search", "flight-status",
 ]);
 export const LASTING_EFFECT_SLUG_LIST = Object.freeze([...LASTING_EFFECT_SLUGS]);
 

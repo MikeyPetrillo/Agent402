@@ -614,6 +614,7 @@ import { buildRouteExecuteTool, EXEC_TIERS } from "./tools/route-execute.js";
 import { buildSellerTrustTool } from "./tools/seller-trust.js";
 import { buildSellerDossierTool } from "./tools/seller-dossier.js";
 import { buildSellerPayabilityTool } from "./tools/seller-payability-kit.js";
+import { buildFlightTools, parseFlightSellers } from "./tools/flights-kit.js";
 import { deliveryObservation } from "./response-observation.js";
 import { payX402, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerRouteRefusedRecently as routeRefusedNow, sellerDeliveryFailingRecently, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
 import { readTextCapped } from "./capped-body.js";
@@ -2015,6 +2016,18 @@ let operatorDossier = null;
     },
     assertPublicUrl: async (url) => (await import("./tools/fetch-guard.js")).assertPublicUrl(url),
   });
+  if (CATALOG[tool.route]) throw new Error(`Duplicate route: ${tool.route}`);
+  CATALOG[tool.route] = tool;
+  ALL_KIT.push(tool);
+}
+
+// Flight search and status, bought from outside x402 sellers (flights-kit.js).
+// The sellers are configuration (FLIGHT_SELLERS_JSON on Railway), so the routes
+// exist only while it is set; a malformed value fails the boot loudly.
+for (const tool of buildFlightTools({
+  sellers: parseFlightSellers(process.env.FLIGHT_SELLERS_JSON),
+  pay: async (url, opts) => (await import("./x402-buyer.js")).payX402(url, opts),
+})) {
   if (CATALOG[tool.route]) throw new Error(`Duplicate route: ${tool.route}`);
   CATALOG[tool.route] = tool;
   ALL_KIT.push(tool);
