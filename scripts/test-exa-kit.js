@@ -281,6 +281,38 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   await throws(async () => takeCategory(7), /must be a string/, "a non-string category is refused");
 }
 
+// ---- every price covers its most expensive accepted call
+// The body is the one each handler actually sends for its largest input, read
+// off the wire, so a new option that bills more cannot slip past a fixed
+// example. exa-contents was a flat $0.006 while ten URLs with highlights cost
+// twenty page reads.
+{
+  _exaSpendReset();
+  const sent = [];
+  globalThis.fetch = async (url, init) => {
+    sent.push({ path: new URL(url).pathname, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({ results: [], statuses: [], answer: "ok", citations: [] }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const urls = Array.from({ length: 10 }, (_, n) => `https://e${n}.example/`);
+  const largest = {
+    "exa-search": { query: "q", numResults: 10, type: "neural", includeDomains: ["a.example"] },
+    "exa-answer": { query: "q", text: true },
+    "exa-contents": { urls, highlights: true, query: "q" },
+  };
+  for (const t of EXA_TOOLS) {
+    sent.length = 0;
+    const input = largest[t.slug];
+    ok(!!input, `${t.slug}: has a largest-call case in this test`);
+    if (!input) continue;
+    // Only the outgoing body matters here; a shaping error on the stub reply is not the point.
+    try { await t.handler(input); } catch { /* body already captured */ }
+    const price = Number(String(t.price).replace("$", ""));
+    const cost = sent.reduce((s, c) => s + estimateExaUsd(c.path, c.body), 0);
+    ok(sent.length > 0 && cost <= price + 1e-12, `${t.slug}: price ${t.price} covers its largest call at Exa's card${cost > price ? " (the call costs more than the price; amount withheld, the card is private)" : ""}`);
+  }
+  _exaSpendReset();
+}
+
 globalThis.fetch = realFetch;
 console.log(`\ntest-exa-kit: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

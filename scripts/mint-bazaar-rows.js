@@ -133,7 +133,7 @@ const LEGS = [
     path: "/api/exa-answer", body: { query: "What is the x402 payment protocol?" },
     check: (r) => (typeof r.answer === "string" && r.answer.length > 40 && r.citationCount > 0) || `expected a written answer with citations, got ${JSON.stringify(r).slice(0, 200)}` },
 
-  { slug: "exa-contents", priceUsd: 0.006, method: "POST",
+  { slug: "exa-contents", priceUsd: 0.02, method: "POST",
     path: "/api/exa-contents", body: { urls: ["https://x402.org/"] },
     check: (r) => (r.count > 0 && typeof r.results?.[0]?.text === "string" && r.results[0].text.length > 50) || `expected page text, got ${JSON.stringify(r).slice(0, 200)}` },
 

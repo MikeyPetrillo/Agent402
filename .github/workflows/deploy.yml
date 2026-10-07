@@ -2580,6 +2580,8 @@ jobs:
           t node scripts/test-bazaar-validate.js
           # Anthropic Messages wire on the five tiers (validation, probe clamp, outbound prefs, billing strip, failover, paid-empty guard, SSE scrub - offline)
           t node scripts/test-llm-messages.js
+          # Availability failover: a model with no live host is served by its same-family successor (named in the reply), model_fallback:false opts out, rate limits retry the same model first (offline, every wire)
+          t node scripts/test-gateway-availability.js
           # Google's native generateContent wire (translation, not a relay)
           t node scripts/test-llm-gemini-kit.js
           # The CLASS of a 4xx in telemetry, and the promise no buyer text rides with it
@@ -2612,6 +2614,8 @@ jobs:
           t node scripts/test-refund-ledger.js
           # Refund lookup (exact tx only, unknown == no refund, no payer leak, own rows on my-usage, rate limited - boots its own server)
           t node scripts/test-refund-lookup.js
+          # Refund ledger routes: a full refund run's call burst is never refused; the runner resends only a 429 (boots its own server)
+          t node scripts/test-refund-ledger-limiter.js
           # Daily MPP reconciliation (every mismatch category, unknown never ok, idempotent reruns, words-only public status, operator-only routes — offline)
           t node scripts/test-mpp-reconcile.js
           # Refund pre-send proof (same payer, our payTo, enough value, on a transaction that actually succeeded — offline)

@@ -33,10 +33,10 @@
     "axios": "1.20.0"
   },
   "dependencies": {
-    "express": "^5.0.0",
-    "@x402/core": "2.27.0",
-    "@x402/stellar": "2.27.0",
-    "@stellar/stellar-sdk": "16.3.0"
+    "@stellar/stellar-sdk": "16.3.0",
+    "@x402/core": "2.28.0",
+    "@x402/stellar": "2.28.0",
+    "express": "^5.0.0"
   },
   "keywords": [
     "x402",

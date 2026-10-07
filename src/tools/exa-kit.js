@@ -440,7 +440,7 @@ export const EXA_TOOLS = [
     name: "Exa page contents",
     slug: "exa-contents",
     category: "web",
-    price: "$0.006",
+    price: "$0.02",
     description:
       "Retrieve the readable text of up to 10 web pages by URL, with optional query-focused highlights. Exa serves from its crawl cache when the page is fresh enough and live-crawls otherwise, so this answers for pages a plain fetch would be blocked from. Returns per-URL status so a page that could not be read is named rather than silently missing.",
     tags: [...SHARED_TAGS, "contents", "extract"],

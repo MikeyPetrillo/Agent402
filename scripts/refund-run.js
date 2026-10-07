@@ -404,21 +404,36 @@ async function sendAlgorand(row) {
   return txid;
 }
 
+// A ledger write, retried only on 429. The server's limiter answers 429
+// before the handler touches the ledger, so a 429 means nothing was written
+// and resending is safe. Any other failure is returned as-is: a network error or a 5xx may
+// have landed, and guessing there is how a row gets resolved twice.
+export async function ledgerUpdate(body, { fetchImpl = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), attempts = 4 } = {}) {
+  for (let i = 1; ; i++) {
+    const res = await fetchImpl(`${TARGET}/__operator/refunds/update`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify(body),
+    });
+    if (res.status !== 429 || i >= attempts) return res;
+    const wait = Math.min(120, Math.max(1, Number(res.headers?.get?.("retry-after")) || 60));
+    console.warn(`      ledger ${body.action} #${body.id}: HTTP 429, retrying in ${wait}s (${i}/${attempts - 1})`);
+    await sleep(wait * 1000);
+  }
+}
+
+// true when this run owns the row. 409 is the server's "not updated" answer:
+// another runner holds it or it is resolved. Anything else is not a lost race
+// and must not be logged as one.
 async function claimForSend(id) {
-  const res = await fetch(`${TARGET}/__operator/refunds/update`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
-    body: JSON.stringify({ id, action: "claim", note: "refund-run: claimed before broadcast" }),
-  });
-  return res.ok;
+  const res = await ledgerUpdate({ id, action: "claim", note: "refund-run: claimed before broadcast" });
+  if (res.ok) return true;
+  if (res.status === 409) return false;
+  throw new Error(`claim failed for row ${id}: HTTP ${res.status} (nothing was sent)`);
 }
 
 async function markPaid(id, tx) {
-  const res = await fetch(`${TARGET}/__operator/refunds/update`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
-    body: JSON.stringify({ id, action: "paid", tx }),
-  });
+  const res = await ledgerUpdate({ id, action: "paid", tx });
   if (!res.ok) throw new Error(`mark-paid failed for row ${id}: HTTP ${res.status}`);
 }
 
