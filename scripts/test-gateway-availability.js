@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // Availability failover on the LLM gateway (offline, stubbed upstream).
 //
-// 2026-10-06 14:00-14:11Z: both hosts of deepseek/deepseek-chat stalled. A
-// buyer's tool-using agent on the metered tier got 14 "Upstream rate-limited"
-// 503s and then 147 "No endpoints found that support tool use" 502s. None were
-// charged, and none were served.
+// A model with one or two upstream hosts can lose all of them at once; the
+// gateway then answered "No endpoints found" or "Upstream rate-limited" and
+// served nothing (uncharged).
 //
 // What is pinned, on every wire (chat, Messages, Responses):
 //  - when the requested model has no available host, its same-family successor
@@ -104,6 +103,20 @@ for (const [wire, call] of wires) {
   seen = [];
   await rejects(() => call({ model_fallback: "no" }), /model_fallback/, `${wire}: a non-boolean model_fallback is a 400`);
   ok(seen.length === 0, `${wire}: ...with no upstream call`);
+}
+
+// ---- the prompt cache only ever holds the model the buyer asked for
+{
+  const base = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat");
+  const body = { model: REQ, max_tokens: 32, messages: [{ role: "user", content: "cache me" }], cache: true };
+  const req1 = { ...fakeReq };
+  behaviour = { [REQ]: ["noendpoints"] }; seen = [];
+  const sub = await base.handler(body, req1);
+  ok(sub?.model === SUCC && (req1.__deferredCache || []).length === 0, "a reply served by the successor is never queued for the cache");
+  const req2 = { ...fakeReq };
+  behaviour = {}; seen = [];
+  const own = await base.handler(body, req2);
+  ok(own?.model === REQ && (req2.__deferredCache || []).length === 1, "control: the requested model's own reply is queued for the cache");
 }
 
 // ---- a model with no successor still fails as before

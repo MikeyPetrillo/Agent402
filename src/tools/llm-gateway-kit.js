@@ -741,16 +741,14 @@ export function retiringModel(model) {
   return Object.hasOwn(RETIRING_MODELS, id) ? { id, ...RETIRING_MODELS[id] } : null;
 }
 
-/** Same-family successors for models whose whole upstream can vanish at once.
- *  2026-10-06 14:06-14:11Z: deepseek/deepseek-chat had two hosts, both stalled,
- *  and a buyer's agent got 147 "No endpoints found" 502s plus 14 rate-limit 503s
- *  (uncharged, but nothing served). A successor is tried only AFTER the
- *  requested model failed upstream (502/503/504), costs no more than the model
- *  it stands in for (so the requested model's max_price cap and the metered
- *  quote still cover it), supports tools whenever the requested model does, and
- *  is named in agent402_model_substituted. test-gateway-model-ids checks each
- *  entry against the live catalog. A buyer who needs the exact model sends
- *  model_fallback:false and gets the error instead. */
+/** Same-family successors for models whose whole upstream can vanish at once
+ *  (a model with one or two hosts can lose all of them together). A successor
+ *  is tried only AFTER the requested model failed upstream (502/503/504), costs
+ *  no more than the model it stands in for (so the requested model's max_price
+ *  cap and the metered quote still cover it), supports tools whenever the
+ *  requested model does, and is named in agent402_model_substituted.
+ *  test-gateway-model-ids checks each entry against the live catalog. A buyer
+ *  who needs the exact model sends model_fallback:false and gets the error. */
 export const AVAILABILITY_SUCCESSORS = Object.freeze({
   "deepseek/deepseek-chat": "deepseek/deepseek-v4-flash",
 });
@@ -3119,7 +3117,10 @@ function makeHandler(routeTier) {
         }
         // A request served under another tier's config is never cached: the
         // pre-paywall read keys on the ROUTE tier, which refuses this model.
-        if (input.cache === true && !TIERS[tierSlug].noCache && tierSlug === routeTier) {
+        // Only the model the buyer asked for is ever cached: a reply from a
+        // successor or a tier fallback must not be replayed to a buyer who sent
+        // model_fallback:false for the same body (the key does not carry it).
+        if (input.cache === true && !TIERS[tierSlug].noCache && tierSlug === routeTier && model === body.model) {
           // FR4-01 class: defer the cache write to AFTER settlement. @x402/express
           // settles after this handler, so writing now would cache an
           // unsettled 200. Stash on req; the route binder commits on a final 200.
@@ -3247,7 +3248,7 @@ const INPUT_SCHEMA = {
     messages: { type: "array", description: "OpenAI chat messages: [{role, content}] - text and image_url content blocks supported" },
     max_tokens: { type: "number", description: "Output token cap (clamped to the tier maximum)" },
     zdr: { type: "boolean", description: "Optional - true routes only to zero-data-retention providers (OpenRouter provider.zdr); the only provider preference a caller may set." },
-    model_fallback: { type: "boolean", description: "Optional, default true - when the requested model has no available upstream host, a same-family successor costing no more serves instead and the reply names it in agent402_model_substituted. false: serve only the requested model and return the error." },
+    model_fallback: { type: "boolean", description: "Optional, default true - when the requested model has no available upstream host, a same-family successor costing no more (or the tier's own fallback model) serves instead, and the reply names a successor in agent402_model_substituted. false: serve only the requested model, never a fallback, and return the error." },
     cache_control: { description: 'Optional - prompt caching preference. Default ON ({type:"ephemeral"}, 5-minute TTL): repeated prefixes across your turns are served from the provider cache (same price to you). Send false to disable. ttl:"1h" is not offered.' },
     reasoning: { type: "object", description: 'Optional - {effort: "none"|"minimal"|"low"|"medium"|"high"|"xhigh"|"max", max_tokens?, exclude?, enabled?}. Reasoning tokens count against max_tokens. Omitted: low effort on the budget tiers, the model default on premium. reasoning_effort (string) is accepted as an alias.' },
     max_completion_tokens: { type: "integer", description: "Optional - alias of max_tokens (newer OpenAI SDKs send this)." },
