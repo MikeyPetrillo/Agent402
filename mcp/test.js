@@ -172,6 +172,10 @@ try {
   // (external routing is wallet-only) rather than a crash. Both are non-throwing.
   const rNoTask = await client.callTool({ name: "router.execute", arguments: {} });
   if (!rNoTask.isError || !/requires a 'task'/i.test(text(rNoTask))) fail(`router.execute without task should self-explain, got: ${text(rNoTask).slice(0, 200)}`);
+  // The old name is a CallTool alias: it must reach the same handler, so with no
+  // task it gives router.execute's own refusal, not an unknown-tool error.
+  const rAliasNoTask = await client.callTool({ name: "route_and_execute", arguments: {} });
+  if (!rAliasNoTask.isError || text(rAliasNoTask) !== text(rNoTask)) fail(`route_and_execute must alias router.execute (same no-task refusal), got: ${text(rAliasNoTask).slice(0, 200)}`);
   const rTask = await client.callTool({ name: "route_and_execute", arguments: { task: "crypto news headlines" } });
   if (/Agent402 call failed|is not in the catalog/i.test(text(rTask))) fail(`route_and_execute with a task should reach the endpoint (wallet-required or a result), got: ${text(rTask).slice(0, 240)}`);
   console.log("router.execute self-explains without a task, and the route_and_execute alias reaches the SOR endpoint ✓");
