@@ -268,12 +268,19 @@ ${Array.from({ length: 15 }, (_, i) => `<nonDerivativeTransaction><securityTitle
       accessionNumber: ["a1", "a2", "a3", "a4", "a5"],
     } },
   };
-  let asked = 0;
+  let asked = 0, conceptReads = 0;
+  const notFound = () => Object.assign(new Error("EDGAR returned 404"), { statusCode: 422, upstreamStatus: 404 });
   const d = await buildDossierTeaser("EXMP", {
     resolveCompany: async () => ({ cik: "0000000042", name: "Example Corp" }),
-    edgarGetJson: async (url) => { asked++; ok(url.includes("0000000042"), "dossier reads the submissions index for the resolved CIK"); return SUB; },
+    edgarGetJson: async (url) => {
+      asked++; ok(url.includes("0000000042"), "every dossier read is for the resolved CIK");
+      if (url.includes("/companyconcept/")) { conceptReads++; throw notFound(); }
+      return SUB;
+    },
   });
-  eq(asked, 1, "the dossier teaser costs EXACTLY ONE EDGAR request");
+  eq(asked - conceptReads, 1, "the dossier teaser reads the submissions index exactly once");
+  ok(conceptReads <= 6, `XBRL concept reads are bounded (${conceptReads} <= 6: four revenue tags, net income, assets)`);
+  ok(d.financials.rows.length === 0 && d.partial === false, "a company with no XBRL concepts (404s) gets no financials and is NOT marked partial");
   eq(d.cik, "0000000042", "dossier carries the CIK");
   eq(d.industry, "Electronic Computers", "dossier carries the SIC description");
   eq(d.latest10K.filingDate, "2025-10-31", "dossier finds the latest 10-K");

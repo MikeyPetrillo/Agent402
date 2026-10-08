@@ -2,13 +2,15 @@
 //
 //   /reports/insider/:ticker   free teaser: the latest Form 4 filings, parsed
 //   /reports/fund/:manager     free teaser: the latest 13F, top holdings
-//   /reports/dossier/:ticker   free teaser: EDGAR company identity + filings
+//   /reports/dossier/:ticker   free teaser: EDGAR company identity, filing activity,
+//                              and annual revenue / net income / assets from XBRL
 //   /reports/insider|fund|dossier   crawlable hubs listing the seeded entities
 //
 // These pages are FREE and PUBLIC, so the cost discipline is the design:
 //
 //   1. SEC EDGAR is the only upstream, and a page makes at most a handful of
-//      requests (dossier 1, fund 3, insider 1-2 + up to 4 filing XMLs).
+//      requests (dossier 1 + up to 6 small XBRL concept reads, fund 3, insider
+//      1-2 + up to 4 filing XMLs).
 //   2. Every result is cached in-process for 12 hours in a BOUNDED map with
 //      oldest-first eviction, so a crawler walking 100 tickers pays EDGAR once
 //      per entity per half-day, not once per hit.
@@ -39,6 +41,7 @@ import { resolveCompany, resolveManager, edgarGetJson, fetchXmlText, findInforma
 import { SEED_TICKERS, SEED_MANAGERS, seededManager, isSeededTicker } from "./programmatic-seeds.js";
 import { alertFormHtml } from "./free-alerts.js";
 import { fitTitle } from "./seo-meta.js";
+import { keyFinancials, filingActivity, dossierNarrative, insiderSummary, insiderNarrative, fundNarrative, fmtMoney, formLabel, stateName, isOfferingNoise } from "./edgar-summary.js";
 
 // --- validation -------------------------------------------------------------
 // Shape first, upstream second. Anything that fails here costs one regex.
@@ -199,7 +202,7 @@ export function isUnresolvable(e) {
 
 // --- teaser builders --------------------------------------------------------
 const TEASER_FILINGS = 4;             // Form 4 XMLs read per insider page
-const TEASER_HOLDINGS = 5;
+const TEASER_HOLDINGS = 10;
 // One Form 4 can report a dozen sale lines from a single VWAP fill. Without a
 // per-filing cap that one person fills the whole teaser and the page reads as
 // "one insider trades here" (measured on a real issuer, 2026-08-22).
@@ -318,7 +321,9 @@ export async function buildFundTeaser(slug, deps = {}) {
   };
 }
 
-/** Company identity straight off EDGAR's submissions index: ONE request. */
+/** Company identity and filing activity off EDGAR's submissions index (one
+ *  request), plus annual financials from up to six small XBRL concept reads
+ *  (src/edgar-summary.js keyFinancials). */
 export async function buildDossierTeaser(ticker, deps = {}) {
   const resolve = deps.resolveCompany || resolveCompany;
   const getJson = deps.edgarGetJson || edgarGetJson;
@@ -335,8 +340,17 @@ export async function buildDossierTeaser(ticker, deps = {}) {
   };
   const counts = {};
   for (const f of forms) { const k = String(f).toUpperCase(); counts[k] = (counts[k] || 0) + 1; }
+  const now = deps.now ? deps.now() : Date.now();
+  const financials = await keyFinancials(who.cik, getJson, { now });
   return {
     kind: "dossier", ticker, cik: who.cik,
+    // A throttled XBRL read leaves a gap; cache that page only briefly.
+    partial: financials.partial,
+    asOf: new Date(now).toISOString().slice(0, 10),
+    category: sub?.category ? String(sub.category).replace(/<br\s*\/?>/gi, ", ").trim() : null,
+    formerNames: Array.isArray(sub?.formerNames) ? sub.formerNames.filter((f) => f?.name).map((f) => ({ name: f.name, from: f.from || null, to: f.to || null })) : [],
+    activity: filingActivity(sub, who.cik, { now }),
+    financials,
     name: sub?.name || who.name || ticker,
     sic: sub?.sic || null, industry: sub?.sicDescription || null,
     state: sub?.addresses?.business?.stateOrCountry || sub?.stateOfIncorporation || null,
@@ -408,6 +422,11 @@ export const FAMILIES = {
 
 // --- shared page furniture --------------------------------------------------
 export const PROGRAMMATIC_CSS = `
+.pg-glance{margin:18px 0 22px;}
+.pg-glance h2{font-size:18px;margin:0 0 8px;}
+.pg-glance p{margin:0 0 10px;line-height:1.6;}
+.pg-chg{color:var(--muted);font-size:12px;}
+
   .pg-meta{font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-top:12px;line-height:1.6}
   .pg-table-wrap{overflow-x:auto;border:1px solid var(--hairline);border-radius:14px;background:var(--card);margin-top:18px}
   .pg-table{border-collapse:collapse;width:100%;min-width:640px;font-size:14px}
@@ -522,6 +541,7 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
 </section>
 <section>
   ${table}
+  ${(() => { const paras = insiderNarrative(name, ticker, data, insiderSummary(rows)); return paras.length ? `<div class="pg-glance"><h2>What the filings show</h2>${paras.map((p) => `<p>${esc(p)}</p>`).join("")}</div>` : ""; })()}
   ${rows.length ? `<div class="pg-meta">Transaction codes: P is an open-market purchase, S an open-market sale, A a grant or award, M an option exercise, F shares surrendered for tax. ${buys} open-market buy${buys === 1 ? "" : "s"} and ${sells} open-market sale${sells === 1 ? "" : "s"} in the rows above.</div>` : ""}
   ${buySection({ family, alertKind: "insider", input: ticker, headline: `The Form 4 flow against ${name}, parsed and explained`, blurb: `The free view above is the newest few filings. The paid report reads the newest Form 4 filings of the last ${INSIDER_DEFAULT_DAYS} days (up to ${INSIDER_TIERS["insider-report"].maxFilings}), separates open-market buys and sales from awards, exercises and tax withholding, totals the flow per insider, flags 10b5-1 plans where the filing notes them, and hands you a cited write-up plus a downloadable transactions table.` })}
   ${crossLinks([
@@ -574,6 +594,7 @@ export function fundPage({ slug, data, baseUrl, degraded = false }) {
 </section>
 <section>
   ${facts}
+  ${(() => { const paras = fundNarrative(name, data); return paras.length ? `<div class="pg-glance"><h2>Portfolio shape</h2>${paras.map((p) => `<p>${esc(p)}</p>`).join("")}</div>` : ""; })()}
   ${table}
   ${holdings.length ? `<div class="pg-meta">Positions are folded by CUSIP: this filing lists ${esc(fmtInt(data.lineItems))} line items across ${esc(fmtInt(data.totalHoldings))} securities. A 13F reports long US-listed equity positions held at the period end, filed up to 45 days later. It is a snapshot, not a live portfolio, and it excludes shorts, cash and most non-US holdings.</div>` : ""}
   ${buySection({ family, alertKind: "fund", input: name, headline: `What ${name} bought, added, trimmed and exited`, blurb: `The free view above is the top of one quarter's filing. The paid report diffs the two most recent 13F filings, so you see new positions, adds, trims and exits with the size of each move, a cited write-up, and the full holdings plus changes table to download.` })}
@@ -596,21 +617,44 @@ export function fundPage({ slug, data, baseUrl, degraded = false }) {
 }
 
 // --- dossier page -----------------------------------------------------------
+function dossierAtAGlance(data) {
+  const paras = dossierNarrative(data);
+  return paras.length ? `<div class="pg-glance"><h2>At a glance</h2>${paras.map((p) => `<p>${esc(p)}</p>`).join("")}</div>` : "";
+}
+function dossierFinancials(data) {
+  const f = data?.financials;
+  if (!f?.rows?.length) return "";
+  const yoy = (i, k) => { const c = f.rows[i]?.[k], p = f.rows[i + 1]?.[k]; return Number.isFinite(c) && Number.isFinite(p) && p !== 0 ? ` <span class="pg-chg">${c >= p ? "+" : "-"}${Math.abs(((c - p) / Math.abs(p)) * 100).toFixed(1)}%</span>` : ""; };
+  const cell = (v) => (Number.isFinite(v) ? esc(fmtMoney(v)) : "not reported");
+  return `<h2>Annual results</h2><div class="pg-table-wrap"><table class="pg-table"><thead><tr><th>Fiscal year ended</th><th>Revenue</th><th>Net income</th><th>Total assets</th></tr></thead><tbody>${f.rows.map((r, i) => `<tr><td class="num">${esc(r.end)}</td><td class="num">${cell(r.revenue)}${yoy(i, "revenue")}</td><td class="num">${cell(r.netIncome)}${yoy(i, "netIncome")}</td><td class="num">${cell(r.assets)}</td></tr>`).join("")}</tbody></table></div>
+<div class="pg-meta">As reported in each 10-K's XBRL data on SEC EDGAR${f.revenueTag ? ` (revenue tag ${esc(f.revenueTag)})` : ""}; a later 10-K's restatement replaces the earlier figure.${f.stale ? " The newest annual figure here is more than a year old." : ""}</div>`;
+}
+function dossierActivity(data) {
+  const a = data?.activity;
+  if (!a?.recent?.length) return "";
+  const forms = (a.byForm || []).filter(({ form }) => !isOfferingNoise(form)).slice(0, 8).map(({ form, n }) => `<div class="pg-fact"><div class="l">${esc(form)}</div><div class="v">${esc(String(n))}</div></div>`).join("");
+  const items = (a.eightKItems || []).length ? `<p class="pg-meta">8-K items in the last 12 months: ${(a.eightKItems || []).map(({ item, label, n }) => `${esc(label)} (Item ${esc(item)}, ${esc(String(n))})`).join(" · ")}.</p>` : "";
+  return `<h2>Filing activity</h2>${a.total ? `<p class="pg-meta">${esc(a.total.toLocaleString("en-US"))} filings since ${esc(a.since)}${a.offeringNoise ? `, ${esc(a.offeringNoise.toLocaleString("en-US"))} of them prospectus supplements and free writing prospectuses (not listed below)` : ""}. By form:</p><div class="pg-facts">${forms}</div>` : ""}${items}
+<div class="pg-table-wrap"><table class="pg-table"><thead><tr><th>Filed</th><th>Form</th><th>Document</th><th>Period</th></tr></thead><tbody>${a.recent.map((r) => `<tr><td class="num">${esc(r.filingDate || "")}</td><td class="num">${esc(r.form)}</td><td>${r.url ? `<a href="${esc(r.url)}" rel="nofollow">${esc(r.description || formLabel(r.form, 1))}</a>` : esc(r.description || formLabel(r.form, 1))}</td><td class="num">${esc(r.reportDate || "")}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
 export function dossierPage({ ticker, data, baseUrl, degraded = false }) {
   const family = FAMILIES.dossier;
   const name = data?.name || ticker;
   const canonical = `${baseUrl}/reports/dossier/${ticker}`;
   const title = fitTitle([`${ticker} due diligence: SEC filing profile for ${name}`, `${ticker} due diligence: ${name} SEC profile`, `${ticker} due diligence: SEC filing profile`]);
+  const fin0 = data?.financials?.rows?.[0] || null;
   const description = data
-    ? `Due-diligence starting point for ${name} (${ticker}): CIK ${data.cik}${data.industry ? `, ${data.industry}` : ""}${data.latest10K?.filingDate ? `, latest 10-K filed ${data.latest10K.filingDate}` : ""}. Company identity and filing dates from SEC EDGAR, free.`
+    ? `${name} (${ticker}) from its SEC filings: ${fin0 && Number.isFinite(fin0.revenue) ? `revenue ${fmtMoney(fin0.revenue)} for the fiscal year ended ${fin0.end}, ` : ""}${data.industry ? `${data.industry}, ` : ""}CIK ${data.cik}${data.activity?.total ? `, ${data.activity.total} filings in the last 12 months` : ""}${data.latest10K?.filingDate ? `, latest 10-K filed ${data.latest10K.filingDate}` : ""}. Free, from SEC EDGAR.`
     : `Due-diligence starting point for ${ticker}: company identity, industry classification and the latest 10-K and 10-Q dates from SEC EDGAR.`;
   const fact = (l, v) => (v ? `<div class="pg-fact"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>` : "");
   const facts = data ? `<div class="pg-facts">
   ${fact("CIK", data.cik)}
+  ${fact("Filer status", data.category || "")}
   ${fact("Industry (SIC)", data.industry ? `${data.industry}${data.sic ? ` (${data.sic})` : ""}` : "")}
-  ${fact("Incorporated", data.stateOfIncorporation || "")}
-  ${fact("Listed on", data.exchanges.join(", "))}
-  ${fact("Tickers", data.tickers.join(", "))}
+  ${fact("Incorporated", stateName(data.stateOfIncorporation) || data.stateOfIncorporation || "")}
+  ${fact("Listed on", [...new Set(data.exchanges)].join(", "))}
+  ${fact("Tickers", [...new Set(data.tickers)].join(", "))}
   ${fact("Fiscal year end", data.fiscalYearEnd ? `${data.fiscalYearEnd.slice(0, 2)}-${data.fiscalYearEnd.slice(2)}` : "")}
 </div>` : "";
   const filingRow = (f, label) => (f ? `<tr><td class="who">${esc(label)}</td><td class="num">${esc(f.filingDate || "")}</td><td class="num">${esc(f.reportDate || "")}</td><td class="num">${esc(f.accession || "")}</td></tr>` : "");
@@ -622,12 +666,15 @@ export function dossierPage({ ticker, data, baseUrl, degraded = false }) {
 <section class="hero">
   <div class="eyebrow">SEC EDGAR · company profile · free</div>
   <h1>${esc(name)} <em>due diligence</em></h1>
-  <p class="lede">${data ? `Who ${esc(name)} (${esc(ticker)}) is on the public record: identity, industry classification and the most recent periodic filings, straight from SEC EDGAR.` : `Who ${esc(ticker)} is on the public record: identity, industry classification and the most recent periodic filings from SEC EDGAR.`}</p>
-  <div class="pg-meta">${data ? `${esc(String(data.filingsIndexed))} filings in EDGAR's recent index${data.form4Count ? `, ${esc(String(data.form4Count))} of them Form 4 insider filings` : ""} · <a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=${esc(data.cik)}&amp;type=10-K&amp;dateb=&amp;owner=include&amp;count=10" rel="nofollow">view the filings on SEC EDGAR</a> · ` : ""}source: SEC EDGAR submissions index</div>
+  <p class="lede">${data ? `Who ${esc(name)} (${esc(ticker)}) is on the public record: identity, annual results, what it filed in the last year and why, straight from SEC EDGAR.` : `Who ${esc(ticker)} is on the public record: identity, industry classification and the most recent periodic filings from SEC EDGAR.`}</p>
+  <div class="pg-meta">${data ? `${esc(String(data.filingsIndexed))} filings in EDGAR's recent index${data.form4Count ? `, ${esc(String(data.form4Count))} of them Form 4 insider filings` : ""} · <a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=${esc(data.cik)}&amp;type=10-K&amp;dateb=&amp;owner=include&amp;count=10" rel="nofollow">view the filings on SEC EDGAR</a> · ` : ""}source: SEC EDGAR submissions index and XBRL financial data</div>
 </section>
 <section>
+  ${dossierAtAGlance(data)}
   ${facts}
+  ${dossierFinancials(data)}
   ${table}
+  ${dossierActivity(data)}
   ${buySection({ family, alertKind: "filing", input: ticker, headline: `The full due-diligence dossier on ${name}`, blurb: `The free view above is identity and filing dates. The paid dossier reads the filings: business and segments, financial trend, insider and institutional activity, litigation and risk-factor themes, recent news, and the red flags, every claim cited and delivered with a data appendix.` })}
   ${crossLinks([
     { href: `/reports/insider/${ticker}`, label: `${ticker} insider filings` },
@@ -665,9 +712,9 @@ const HUBS = {
   },
   dossier: {
     title: "Company profiles by ticker: SEC EDGAR filing identity",
-    description: "Free SEC EDGAR company profiles for 100 US public companies: CIK, industry classification, exchange listings and the latest 10-K, 10-Q and 8-K dates.",
+    description: "Free SEC EDGAR company profiles for 100 US public companies: annual revenue, net income and assets, filing activity and 8-K reasons, industry and listings.",
     h1: "Company profiles", em: "by ticker",
-    lede: "Every page below shows a company's public identity on SEC EDGAR: CIK, industry classification, where it lists, and when it last filed a 10-K, 10-Q and 8-K. Free.",
+    lede: "Every page below shows a company on SEC EDGAR: its last three years of revenue, net income and assets from its 10-K data, what it filed in the last twelve months and why, its industry and where it lists. Free.",
     eyebrow: "SEC EDGAR · free company profiles",
   },
 };

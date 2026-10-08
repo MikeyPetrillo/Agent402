@@ -1307,6 +1307,7 @@ jobs:
           t node scripts/test-marketplace-provenance.js
           # programmatic report pages (offline)
           t node scripts/test-programmatic-pages.js
+          t node scripts/test-edgar-summary.js
           # Programmatic page gate wait (a queued EDGAR build cannot hang a crawler; abandoned waiters freed — offline)
           t node scripts/test-programmatic-gate-wait.js
           # Seller registration conversion/churn table (first_seen immutable, last_settled_seen sticky — offline)
