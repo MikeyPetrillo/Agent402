@@ -1368,6 +1368,7 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Composite-spend guard (research/dossier upstream-drain protection)
           t node scripts/test-composite-guard.js
+          t node scripts/test-run-time-note.js
           # x402-market-pulse supply-mix per-seller tool cap
           t node scripts/test-ecosystem-supply.js
           # "Cache hygiene (M5 — Attack III: paid responses no-store, free discovery stays cacheable)"

@@ -246,7 +246,7 @@ import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
 import { datasetStatus, datasetRecorded, runDatasetSnapshot, startDatasetScheduler } from "./dataset-snapshot.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
-import { assertEvmValidityCovers } from "./evm-validity.js";
+import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
 import { admitCoveredRun } from "./inflight-cover.js";
 import { paymentReplayKey, createReplayGuard } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
@@ -2047,6 +2047,14 @@ for (const def of Object.values(CATALOG)) {
   // Long-running composites settle AFTER a 2-4 min handler: EVM exact only
   // (see acceptsForItem) and no Tempo challenge (see mpp-tempo).
   if (isLongRunningSlug(def.slug)) def.longRunning = true;
+  // A slow route says how long it can take, from the same run budget the
+  // payment window is sized to (EVM_RUN_SECONDS), so an agent sets a client
+  // timeout that outlasts it instead of hanging up and losing the answer.
+  const runS = EVM_RUN_SECONDS[def.slug];
+  if (runS && !def.runSeconds) {
+    def.runSeconds = runS;
+    def.description = `${String(def.description || "").trim()} ${runTimeNote(runS)}`;
+  }
 }
 // Routes priced per request publish a RANGE in /openapi.json (price.mode
 // "dynamic", offer amount null), never the catalog floor as if it were the
