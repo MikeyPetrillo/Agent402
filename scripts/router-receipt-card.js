@@ -82,8 +82,8 @@ function cardSvg(data) {
   <text x="152" y="68" font-size="20" font-weight="700" font-family=${mono} fill="${B.text}">one payment, one wallet · the router receipt</text>
   <text x="96" y="130" font-size="22" font-family=${mono}><tspan font-weight="700" fill="${B.text}">Agent402 POST /api/route/execute</tspan><tspan fill="${B.muted}"> · routed buy${liveDate ? ` · ${esc(liveDate)} UTC` : ""}</tspan></text>
   ${okRow(180, "resolve", "best proven seller in the index", esc(sellerHost))}
-  ${okRow(214, "settle", `chain-matched · ${esc(r.settleNetwork || "internal")}`, r.external ? "paid on your behalf" : "internal dispatch")}
-  ${okRow(248, "price", `$${r.paidUsd} flat · $${r.underlyingPriceUsd} to seller`, `routing fee $${r.routingFeeUsd}`)}
+  ${okRow(214, "settle", `chain-matched · ${esc(r.settleNetwork || "internal")}`, r.external ? "bought from seller, resold" : "internal dispatch")}
+  ${okRow(248, "price", `$${r.paidUsd} flat · $${r.underlyingPriceUsd} to seller`, `markup $${r.routingFeeUsd}`)}
   ${okRow(282, "verify", "every field recomputable offline", "receipt below")}
   <rect x="96" y="312" width="1008" height="212" rx="12" fill="${B.inset}" stroke="${B.insetLine}" stroke-width="1"/>
   <text x="126" y="344" font-size="18" font-family=${mono}><tspan fill="${B.muted}">$ </tspan><tspan fill="${B.text}">curl -X POST agent402.tools/api/route/execute  </tspan><tspan fill="${B.text}">→ HTTP </tspan><tspan font-weight="700" fill="${B.green}">200</tspan></text>

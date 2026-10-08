@@ -51,7 +51,7 @@ const ENTRIES = [
     title: "Decide: a call-ready plan for any job, and a way to run it",
     items: [
       "POST /api/decide turns a task into a plan: which tools, from this catalog and from outside x402 sellers with a recently verified 402, in what order, with fallbacks and input params that validate against each tool's schema. Priced by depth (quick, plan, full); every tool in a plan says whether it is ours, and the ranking has no first-party term. See /decide.",
-      "The fee comes back as an execution credit. POST /api/decide/execute runs the plan: our tools directly, outside steps paid on your behalf on Base at the seller's price plus a disclosed routing fee. Spend stops at the budget, fallbacks are tried in order, unspent money returns as a credit, and a run where no step succeeds is not charged.",
+      "The fee comes back as an execution credit. POST /api/decide/execute runs the plan: our tools directly, outside steps bought from the seller on Base and resold at the seller's price plus a disclosed markup. Spend stops at the budget, fallbacks are tried in order, unspent money returns as a credit, and a run where no step succeeds is not charged.",
       "A parameter the plan could not take from the task is left as a <placeholder> for the agent to fill, and execute never sends a placeholder to a paid tool. Each written value is checked against the task before it is kept.",
       "Outside sellers whose inputs are all optional are now indexed with those inputs named, so a plan can fill them instead of calling the route empty.",
       "decide.feedback on the MCP connector (and POST /api/decide/feedback) records whether a step worked; it is free and feeds the ranking.",
@@ -128,7 +128,7 @@ const ENTRIES = [
     title: "Typed judgments, a router that says who it is, and a leaderboard that reads the seller's own prices",
     items: [
       "POST /v1/judge ($0.001): a typed judgment over supplied state - a choice from your named options with a probability for each, a position on levels you describe, or a yes/no as a probability. Model-backed, declared as such, input bounded by bytes so the worst case is knowable before the call.",
-      "The router identifies itself on every paid call it makes on a buyer's behalf: User-Agent Mozilla/5.0 (compatible; Agent402-Router/1.0; +https://agent402.tools/crawler) and X-Agent402-Via: router; /crawler documents both.",
+      "The router identifies itself on every paid call it makes to an outside seller: User-Agent Mozilla/5.0 (compatible; Agent402-Router/1.0; +https://agent402.tools/crawler) and X-Agent402-Via: router; /crawler documents both.",
       "A seller origin on a non-default port is accepted at x402 registration, MPP registration and MPP discovery, and the port is carried through every later fetch.",
       "Seller leaderboard: a transfer that matches a price the seller publishes counts as a settlement above the flat $0.75 ceiling, up to a $25 price-match ceiling; rows carry settlementsAbovePerCallCeiling and transfersSkippedOverCeiling, and GET /api/leaderboard accepts ?limit= as an alias of ?top=.",
       "priceKnown on every /api/index seller row, /api/route row and seller detail: whether the published price could be read as a number. priceUsd is unchanged.",
@@ -238,7 +238,7 @@ const ENTRIES = [
     date: "2026-07-21",
     title: "Smart Order Router - external execution",
     items: [
-      "POST /api/route/execute ($0.01) can buy from external x402 sellers on the buyer's behalf: one payment in, result plus receipt out",
+      "POST /api/route/execute ($0.01) can buy from external x402 sellers and resell the result: one payment in, result plus receipt out",
       "Only sellers with verified on-chain settlement history are eligible - unproven or unhealthy sellers are never routed to",
     ],
   },

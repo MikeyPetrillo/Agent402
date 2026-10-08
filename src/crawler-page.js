@@ -39,7 +39,7 @@ const SECTIONS = [
   {
     h: "The other thing that visits you",
     p: [
-      `A crawl and a purchase are different acts and this page is linked from both, so it should say so. When our router buys from a service on a caller's behalf it sends a real HTTP 402 payment, which is not a crawl: it is a customer.`,
+      `A crawl and a purchase are different acts and this page is linked from both, so it should say so. When our router buys from a service to resell the result to a caller it sends a real HTTP 402 payment, which is not a crawl: it is a customer.`,
       `Those requests identify themselves as <code>${esc(ROUTER_UA)}</code> and carry <code>X-Agent402-Via: router</code>. Either one separates a purchase from a probe in your logs. Until 2026-09-21 they carried neither and arrived as <code>node</code>, which we fixed when a seller pointed out they could not tell our traffic apart.`,
       `<code>robots.txt</code> does not govern these. A purchase is a request for a service you advertised a price for, and declining one is a matter for your own endpoint, not for a crawl directive. If you would rather we did not buy from you at all, say so and we will stop.`,
     ],

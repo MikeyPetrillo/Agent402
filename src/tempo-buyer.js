@@ -1,5 +1,5 @@
-// Tempo (MPP) buyer — the server's DEDICATED spending wallet for paying OTHER
-// MPP sellers on a buyer's behalf, the Tempo counterpart of x402-buyer.js's
+// Tempo (MPP) buyer: the server's DEDICATED spending wallet for buying from OTHER
+// MPP sellers and reselling the result for a buyer's request, the Tempo counterpart of x402-buyer.js's
 // Base/Algorand spending wallets. Same doctrine throughout:
 //
 //   - a DEDICATED hot wallet (TEMPO_UPSTREAM_BUYER_KEY, an EVM private key -

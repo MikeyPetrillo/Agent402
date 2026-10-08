@@ -113,7 +113,7 @@ Anthropic Messages wires, embeddings, rerank, images, video, speech,
 transcription, grounded answers with citations, 500+ tools over
 MCP or HTTP, wallet-keyed memory, finished reports (dossiers, insider flow, 13F,
 domain audits, token risk, deep research) and monitors, plus routing that buys
-from external sellers on the agent's behalf.
+from external sellers and resells the result.
 
 Why pay here, with every claim linked to its proof: https://agent402.tools/why.
 Usage is priced under a ceiling quoted before you pay, a failed call is not

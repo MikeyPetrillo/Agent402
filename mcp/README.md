@@ -90,7 +90,7 @@ so set `AGENT402_MAX_PER_CALL` if you want a hard per-call ceiling.
 - `payment.info` tells the model which mode it's in and what a wallet or a credits key would unlock.
 - `server.describe` returns orientation (flagship-first tools, install one-liners, free vs paid, discovery URLs). Call it first.
 - `sellers.list` returns the live leaderboards - `wire: "x402"` (default) ranks x402 sellers settling the most USDC (primarily on Base) in the last ~24h from on-chain transfers; `wire: "mpp"` ranks live-verified MPP sellers by inbound USDC.e transfers on Tempo. Free to call (no payment, no proof-of-work). Useful for agents discovering the wider x402 / MPP economy beyond this single service's catalog.
-- `route_and_execute` reaches tools **outside** this catalog in one call: give it a plain-language `task` and Agent402 resolves a proven external x402 seller (one with real on-chain settled volume), pays that seller on your behalf, and relays the result marked `untrustedContent`. Wallet-only. Flat routing fee, cheapest covering tier chosen from `maxUsd`:
+- `route_and_execute` reaches tools **outside** this catalog in one call: give it a plain-language `task` and Agent402 resolves a proven external x402 seller (one with real on-chain settled volume), buys the result from that seller and sells it to you, marked `untrustedContent`. Wallet-only. Flat price, cheapest covering tier chosen from `maxUsd`:
 
   | Underlying seller price | Fee | Route |
   | --- | --- | --- |

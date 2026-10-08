@@ -20,9 +20,9 @@ export const BLOG_POSTS = [
 
 <p>The plan came back with two steps. Step 1 resolves the ENS name, with <code>vitalik.eth</code> filled in from the job. Step 2 reads token balances on Base, and its address input is written as <code>{{step 1}}</code>: the plan knows the address does not exist yet and will come from step 1.</p>
 
-<p>Then we sent the plan to <code>POST /api/decide/execute</code>, which runs it on the buyer's behalf. Step 1, an outside x402 seller, returned <code>0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045</code>. Execute put that address into step 2, another outside x402 seller, which returned the wallet's holdings on Base: about 3.13 ETH, 43.29 USDC, 0.20 WETH and a handful of other tokens. Both steps succeeded, the run finished in about eight seconds, and it stayed inside its budget.</p>
+<p>Then we sent the plan to <code>POST /api/decide/execute</code>, which runs it and buys the outside steps from their sellers. Step 1, an outside x402 seller, returned <code>0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045</code>. Execute put that address into step 2, another outside x402 seller, which returned the wallet's holdings on Base: about 3.13 ETH, 43.29 USDC, 0.20 WETH and a handful of other tokens. Both steps succeeded, the run finished in about eight seconds, and it stayed inside its budget.</p>
 
-<p>The agent paid once for the plan and once for the run. The plan's fee came back as credit toward running it, the run charged both outside sellers' prices plus a disclosed routing fee, and the part of the budget it did not use came back as credit too. Both payments settled on Base: the <a href="https://basescan.org/tx/0xbb9a93aaed27794e8019d855c9f49fa8a998f6671b9feec198460055b2a6a74c">plan</a> and the <a href="https://basescan.org/tx/0x268742f84f5116c3712dc0c9f51e47ae4e29b0c0244a04afd90d8b0aebc71ace">run</a>.</p>
+<p>The agent paid once for the plan and once for the run. The plan's fee came back as credit toward running it, the run charged both outside sellers' prices plus a disclosed markup, and the part of the budget it did not use came back as credit too. Both payments settled on Base: the <a href="https://basescan.org/tx/0xbb9a93aaed27794e8019d855c9f49fa8a998f6671b9feec198460055b2a6a74c">plan</a> and the <a href="https://basescan.org/tx/0x268742f84f5116c3712dc0c9f51e47ae4e29b0c0244a04afd90d8b0aebc71ace">run</a>.</p>
 
 <h2>How it chooses</h2>
 
@@ -36,7 +36,7 @@ export const BLOG_POSTS = [
 
 <ul>
   <li>The decision fee comes back as a credit worth all of it, valid for 24 hours, toward running that plan.</li>
-  <li>Our tools run at list price. Outside tools are paid on your behalf at the seller's price plus a disclosed routing fee.</li>
+  <li>Our tools run at list price. Outside tools are bought from the seller and resold at the seller's price plus a disclosed markup.</li>
   <li>Backups run in order. A backup that names an input differently gets it under its own name.</li>
   <li>Spend stops at your budget, and a run where no step succeeds is not charged.</li>
   <li>Every step comes back with its own receipt.</li>
@@ -90,7 +90,7 @@ export const BLOG_POSTS = [
 
 <ul>
   <li><strong>Buy:</strong> a catalog of 500+ pay-per-call tools - search, browser rendering, PDFs, OCR, financial and chain data, an OpenAI-compatible LLM gateway - each priced, tested against its own example in CI, and settled on chain over x402 or MPP. <a href="/tools">Browse the catalog</a>.</li>
-  <li><strong>Route:</strong> an open <a href="/marketplace">cross-seller index</a> and a <a href="/guides/smart-order-router">Smart Order Router</a> that resolves a task to the best seller across the ecosystem - ours or anyone's - pays them on the agent's behalf on the same chain the agent paid on, and relays the result with a receipt. ${routingProofSentence()}</li>
+  <li><strong>Route:</strong> an open <a href="/marketplace">cross-seller index</a> and a <a href="/guides/smart-order-router">Smart Order Router</a> that resolves a task to the best seller across the ecosystem - ours or anyone's - buys the result from that seller on the same chain the agent paid on, and sells it to the agent with a receipt. ${routingProofSentence()}</li>
   <li><strong>Sell:</strong> the open-source <a href="/sell">tollbooth</a> that lets any site or API charge agents per request over both wires while humans browse free. Non-custodial, no signup.</li>
   <li><strong>Prove:</strong> <a href="/revenue">live transactions</a> by rail and by wire (external revenue too), every figure linked to its on-chain receipt, an on-chain seller leaderboard, uptime measured from outside, and a ledger for the rare charged-but-failed call so it is refunded rather than forgotten.</li>
 </ul>

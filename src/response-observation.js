@@ -5,14 +5,14 @@
 // declared schema and a delivered payload are different things, and only one of
 // them costs a buyer money.
 //
-// The router already pays external sellers on a buyer's behalf and already sees
+// The router already buys from external sellers to resell and already sees
 // what comes back. So the verification is free: on a settled 200, check whether
 // the paths the seller guaranteed were actually present, and remember only the
 // verdict.
 //
 // WHAT THIS DELIBERATELY NEVER STORES: the response. Not the values, not the
 // undeclared keys, not a sample, not a hash of one. That payload is what the
-// buyer paid for; we are the intermediary that happened to fetch it, and
+// buyer paid for; we are the reseller that happened to fetch it, and
 // keeping any of it would be a leak dressed up as telemetry. The only thing
 // recorded is, for each path the SELLER ITSELF chose to promise, whether it was
 // there. A seller who declares nothing is never observed at all - there is no

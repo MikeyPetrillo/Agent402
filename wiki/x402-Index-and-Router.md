@@ -26,7 +26,7 @@ And one **paid** executing surface built on the same resolver:
 
 ### The execution tier ladder
 
-Four rungs, because one flat routing fee cannot cover both a $0.001 utility and
+Four rungs, because one flat price cannot cover both a $0.001 utility and
 a $3 report without overcharging almost every buyer:
 
 | Route | You pay | Covers an underlying tool priced |
@@ -177,7 +177,7 @@ Returns an **object**, not a bare array. The matches are in `results`:
   that number could actually be read from what the seller published. When it is
   `false`, `priceUsd` is a placeholder and must not be compared.
 - `routerDispatchEligible` / `routerDispatchReason` say whether this host's
-  router will pay the seller on your behalf right now and why not otherwise
+  router will buy from the seller right now and why not otherwise
   (`crawl_failed`, `network_unknown`, `no_supported_route`, `url_template`,
   `price_unknown`, `settlement_required`, `settlement_checked_at_pay_time`,
   `eligible`, `local_catalog`); `routable` and `health` are crawl readiness,

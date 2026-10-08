@@ -28,7 +28,7 @@ import { EXTERNAL_CHAIN_BY_NETWORK } from "./tools/route-execute.js";
 const CHAIN_LABEL = { base: "Base", solana: "Solana", algorand: "Algorand", tempo: "Tempo" };
 const ROUTER_PAY_CHAINS = [...new Set(Object.values(EXTERNAL_CHAIN_BY_NETWORK))].map((c) => CHAIN_LABEL[c] || c);
 const listJoin = (a) => (a.length < 2 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`);
-const ROUTER_CHAIN_SENTENCE = `When the router buys on an agent's behalf it pays the seller on the chain the agent paid on, so it reaches you only on chains you accept; it holds spending wallets for ${listJoin(ROUTER_PAY_CHAINS)}.`;
+const ROUTER_CHAIN_SENTENCE = `When the router buys from a seller to resell the result to an agent, it pays the seller on the chain the agent paid on, so it reaches you only on chains you accept; it holds spending wallets for ${listJoin(ROUTER_PAY_CHAINS)}.`;
 
 import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
 const REPO = REPO_URL;
@@ -71,7 +71,7 @@ const WHAT_WE_READ = [
 ];
 
 const SURFACES = [
-  ["Smart Order Router", "A buyer describes a task in words; the router resolves it to a tool and runs it. It does not care whose tool it is, and it will pay an external seller on the buyer's behalf.", "/api/route"],
+  ["Smart Order Router", "A buyer describes a task in words; the router resolves it to a tool and runs it. It does not care whose tool it is, and it will buy from an external seller and resell the result to the buyer.", "/api/route"],
   ["Marketplace directory", "Every indexed seller with tool count, advertised networks, last crawl and rolling health - browsable by humans and machines.", "/marketplace"],
   ["Per-chain market pages", "One page per settlement rail, so a buyer on Solana or Algorand can find sellers who take their chain.", "/solana"],
   ["On-chain leaderboard", "Ranked by real Base USDC settled. Once you have volume, you get a public row - and the row carries buyer diversity, not just dollars.", "/leaderboard"],
@@ -86,7 +86,7 @@ const COMMITMENTS = [
 ];
 
 const FAQS = [
-  ["What does it cost to list?", "Nothing. Listing is free, there is no signup and no review queue, and no commission is deducted from your price. Buyers pay your wallet directly and Agent402 never holds seller funds. We earn on the buyer side only, on the spread when a buyer asks the router to execute a call on their behalf."],
+  ["What does it cost to list?", "Nothing. Listing is free, there is no signup and no review queue, and no commission is deducted from your price. Buyers pay your wallet directly and Agent402 never holds seller funds. We earn on the buyer side only, on the spread when the router buys from a seller and resells the result to a buyer."],
   ["How do agents find my API?", `Four surfaces: the marketplace directory, the per-chain market pages, the Smart Order Router which resolves a described task to a tool, and the public on-chain leaderboard once you have settled volume. ${routerRankingSentence()}`],
   ["What if my site is not an API?", "Use agent402-tollbooth - the pay-per-crawl mechanism is explained above under \"Charge the crawlers instead\". It ships as an open MIT middleware for Express, Next.js, Cloudflare Workers, a reverse proxy or WordPress: drop it in front of any site, no rebuild required."],
   ["Which chains can I get paid on?", `Advertise whichever you support. Agent402 itself accepts ${RAILS.length} rails: ${RAILS_AMP}. ${ROUTER_CHAIN_SENTENCE}`],
@@ -303,7 +303,7 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">HOW WE MAKE MONEY</div>
       <h2 style="font-weight:800;font-size:26px;margin:0 0 14px;color:var(--ink);">Buyer side, and only there</h2>
       <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 14px;">A buyer who discovers you and pays you directly costs you nothing and earns us nothing. That is most traffic, and it is the point.</p>
-      <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 14px;">We earn when a buyer asks the <strong style="color:var(--ink);">router</strong> to execute on their behalf: they pay one flat fee for the convenience of not integrating you, and out of it you receive your full advertised price. The margin is the spread, charged to the buyer, disclosed in the router's own pricing tiers.</p>
+      <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 14px;">We earn when the <strong style="color:var(--ink);">router</strong> buys from you and resells the result to a buyer: the buyer pays us one flat price for the convenience of not integrating you, and we pay you your full advertised price. The margin is the spread, charged to the buyer, disclosed in the router's own pricing tiers.</p>
       <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0;">We would rather write that down than let you find it out. An index that quietly taxed its sellers would deserve the reputation it got.</p>
     </div>
     <div style="padding:30px;background:var(--footer-bg);">

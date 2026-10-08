@@ -196,9 +196,9 @@ Example: `https://agent402.tools/api/extract` with body `{"url": "https://exampl
 Instead of discovering a tool and then calling it, hand the router a task and it
 resolves the best-matching tool and runs it in the same paid request, returning
 `{ result, receipt }`. With `include: "external"` the underlying tool may belong
-to another x402 seller, which the router pays on your behalf and relays.
+to another x402 seller; the router buys the result from that seller and sells it to you.
 
-There are four rungs, so the flat routing fee stays proportional to what is
+There are four rungs, so the flat price stays proportional to what is
 being bought. Pick the cheapest rung that covers the underlying tool's price:
 
 | Underlying tool price | Fee | Route |

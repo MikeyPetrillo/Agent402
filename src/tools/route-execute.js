@@ -217,7 +217,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
     // spendsBeforeSettlement (composite-spend-guard.js).
     spendsOwnWallet: true,
     description:
-      `Describe a task (or name a slug) and the Smart Order Router resolves the best-matching tool and RUNS it in the same call - flat $${EXEC_PRICE_USD} covering any tool listed at $${UNDERLYING_MAX_USD} or less, from THIS host's catalog or any external seller in the open index - x402 sellers, or MPP sellers on Tempo (paid on your behalf over x402 or MPP, result relayed). One payment, one request, result + receipt. /api/route quotes which tier a task needs; pricier tools return a self-correcting 409 with their direct route.`,
+      `Describe a task (or name a slug) and the Smart Order Router resolves the best-matching tool and RUNS it in the same call - flat $${EXEC_PRICE_USD} covering any tool listed at $${UNDERLYING_MAX_USD} or less, from THIS host's catalog or any external seller in the open index - x402 sellers, or MPP sellers on Tempo (Agent402 buys the result over x402 or MPP and sells it to you). One payment, one request, result + receipt. /api/route quotes which tier a task needs; pricier tools return a self-correcting 409 with their direct route.`,
     // Tags are the discoverability surface: a tag hit scores +3 in the ranker
     // (vs +1 for a description substring), and an audit on 2026-07-28 found
     // the natural phrasings agents actually use - "buy a tool from another
@@ -236,7 +236,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           task: { type: "string", description: "Plain-language task, e.g. \"sha256 hash of a string\" - resolved via the same ranker as /api/find. Provide task OR slug." },
           slug: { type: "string", description: "Exact tool slug to execute (skips ranking). Provide task OR slug." },
           params: { type: "object", description: "Input for the resolved tool, matching its inputSchema (default {})" },
-          include: { type: "string", description: 'Where to route: default runs a tool from THIS host\'s catalog; "external" routes to the best-matching x402 seller in the OPEN index and pays it on your behalf (result relayed, marked untrustedContent). Requires task (not slug).' },
+          include: { type: "string", description: 'Where to route: default runs a tool from THIS host\'s catalog; "external" routes to the best-matching x402 seller in the OPEN index, buys the result from it and sells it to you (marked untrustedContent). Requires task (not slug).' },
           maxUsd: { type: "number", description: `Refuse tools listed above this underlying price (default and ceiling: $${UNDERLYING_MAX_USD})` },
         },
       },
@@ -289,7 +289,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
         // First-class, not a fallback: with 500+ internal tools a loose ranker
         // always matches SOMETHING, so external must be a deliberate buyer
         // choice to fire reliably. We resolve the best external Base-payable
-        // seller, pay it on the buyer's behalf via x402, and relay the result.
+        // seller, buy from it via x402, and resell the result.
         // Spend stays bounded to when the buyer asked for it. Gated on
         // SOR_EXTERNAL_ENABLED until a real external buy proves it live.
         if (input.include === "external") {

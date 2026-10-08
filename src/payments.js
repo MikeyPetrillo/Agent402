@@ -395,7 +395,7 @@ export function acceptsForItem(item, rails) {
     burner && caip2 === "eip155:8453" && SELF_FUNDING_SLUGS.has(item.slug) ? burner : walletAddress;
   // Chain-matched self-funding for Algorand (2026-07-29, same rule as Base):
   // an Algorand buyer's route-execute payment funds the AVM spending wallet
-  // that pays Algorand sellers on their behalf. ROUTER TIERS ONLY: a tool
+  // that buys from Algorand sellers to resell. ROUTER TIERS ONLY: a tool
   // whose upstream spend is pinned to Base must not route its Algorand
   // revenue to the AVM wallet, which would fund the wrong wallet.
   const avmPayToFor = () =>

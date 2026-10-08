@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The router must never sign a payment to a sanctioned address.
 //
-// We pay external sellers from our own wallet on a buyer's behalf, and until
+// We buy from external sellers with our own wallet to resell, and until
 // now nothing asked where that money was going. This is the check, placed
 // against the ONE accept about to be signed rather than against an origin's
 // advertised address - the 402 is the instruction, the listing is a claim.

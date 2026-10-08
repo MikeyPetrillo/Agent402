@@ -126,7 +126,7 @@ export function buildOurAgentCard({ baseUrl, version, toolCount } = {}) {
       {
         id: "route-execute",
         name: "Route and execute a paid call",
-        description: "Resolve a task, pay the seller on the caller's behalf over x402, and return the result with a receipt.",
+        description: "Resolve a task, buy the result from the seller over x402, and sell it to the caller with a receipt.",
         tags: ["routing", "x402", "payments", "execution"],
       },
       {

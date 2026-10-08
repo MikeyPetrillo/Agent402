@@ -19,6 +19,9 @@ Since v2.5.0 (2026-10-07).
 - MPP on Tempo: a paid call answers as soon as its payment is finalized on
   chain, instead of waiting for the relay's reply; the relay still sends
   every payment (`TEMPO_EARLY_CONFIRM=off` restores relay-only).
+- Copy states plainly that the router and `/api/decide/execute` buy results
+  from outside sellers and resell them; packages agent402-mcp 0.13.10 and
+  agent402-openclaw 0.5.1 carry the same wording.
 - Add `/fixtures/sample-speech.wav`, a two-voice clip; the `transcribe` and
   `transcribe-pro` examples use it, and `diarize: true` names two speakers.
 - The `image-exif`, `image-dominant-color`, `image-crop`, `image-ocr` and

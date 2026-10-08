@@ -33,7 +33,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-06.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-08.</p>
 </section>
 
 <section>
@@ -141,8 +141,8 @@ so every claim below is verifiable in code.</p>
   <li><code>/api/route</code>, <code>/api/route/execute</code> and <code>/api/decide</code> may send the
   task text you give them to a judgment model operated by TypeSafe to choose among candidate tools;
   <code>/api/decide</code> also sends it to AI models via OpenRouter and to an OpenAI embedding model to
-  build the plan. When route-and-execute or a decision's execution buys from an outside seller on your
-  behalf, that seller receives the request it needs to answer, sent and paid for by us.</li>
+  build the plan. When route-and-execute or a decision's execution buys from an outside seller to resell
+  the result to you, that seller receives the request it needs to answer, sent and paid for by us.</li>
   <li>Card payments and subscriptions are processed by Stripe; transactional email (report links,
   monitor and free alerts, the weekly digest) is sent through ZeptoMail, with Resend as a fallback. Report products read public sources named in each
   report (for example SEC EDGAR, openFDA, DNS and certificate-transparency logs, public blockchain

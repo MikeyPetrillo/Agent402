@@ -167,7 +167,7 @@ ${data.results.map(row).join("\n")}
 </div>`
       : `<div class="ix-empty">Nothing matched${search ? ` “${esc(search)}”` : ""}. <a href="/marketplace/tools">Clear the filters</a>, or ask <a href="/api/route">the router</a> to pick across every seller for you.</div>`}
 
-<p class="ix-sub" style="margin-top:30px">Want your endpoints here? Serve an x402 challenge on a stable https origin and register it at <a href="/sell">/sell</a>. Listing is free and the crawler does the rest. To have us buy on a caller's behalf, see <a href="/api/route">the router</a>.</p>
+<p class="ix-sub" style="margin-top:30px">Want your endpoints here? Serve an x402 challenge on a stable https origin and register it at <a href="/sell">/sell</a>. Listing is free and the crawler does the rest. To have us buy from outside sellers and resell the result, see <a href="/api/route">the router</a>.</p>
 </div>
 ${ledgerFooterCompact()}`;
 
