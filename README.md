@@ -10,8 +10,6 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 
 **Who pays:** agents pay per call (from $0.001; models metered under a quoted ceiling and settled at actual usage); people buy finished reports ($2 to $5) and monitors ($5 a month) by card; sites charge crawlers with the tollbooth.
 
-**Selling an x402 API?** List it on the index for free at [`/sell`](https://agent402.tools/sell) (`POST /api/index/register`: self-serve, no signup, 0% take). The router sends buyers to a seller once its routes show settled payments from several independent buyers; calls priced at $0.01 or less can be tried before that, marked unproven on the buyer's receipt. Charging crawlers on your own site instead? [`agent402-tollbooth`](tollbooth) puts a 402 gate in front of it.
-
 [![Live](https://img.shields.io/website?url=https%3A%2F%2Fagent402.tools%2Fhealth&label=agent402.tools&up_message=live)](https://agent402.tools)
 [![Wellknown](https://wellknown.network/agents/agent402-mcp/badge.svg)](https://wellknown.network/agents/agent402-mcp)
 [![MCP Queen operational grade](https://mcpqueen.com/badge/io.github.MikeyPetrillo/agent402.svg)](https://mcpqueen.com/s/io.github.MikeyPetrillo/agent402)
@@ -30,6 +28,14 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > own: discovering a service, paying per request from a wallet over open protocols
 > (x402, MPP), receiving a verifiable receipt, and earning per request in return.
 > Agent402 is its **applied layer** - explainer: [agent402.tools/agentic-finance](https://agent402.tools/agentic-finance) · [glossary](https://agent402.tools/glossary).
+>
+> **Selling an x402 API?** List it on the index for free at
+> [`/sell`](https://agent402.tools/sell) (`POST /api/index/register`:
+> self-serve, no signup, 0% take). The router sends buyers to a seller once its
+> routes show settled payments from several independent buyers; calls priced at
+> $0.01 or less can be tried before that, marked unproven on the buyer's
+> receipt. Charging crawlers on your own site instead?
+> [`agent402-tollbooth`](tollbooth) puts a 402 gate in front of it.
 >
 > **What makes it different:** Agent402 is **open-source and self-hostable** - and a
 > single integration gives a buyer **three free primitives over the whole x402
