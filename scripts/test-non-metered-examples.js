@@ -513,6 +513,8 @@ export function strictScope(spec, pricing) {
     for (const [method, op] of Object.entries(methods)) {
       const cat = (op.tags && op.tags[0]) || "other";
       if (cat === "workflows") continue;
+      // GET /api/jobs/{id}: a bearer job link a sweep cannot have (test-async-jobs covers it).
+      if (cat === "jobs") continue;
       const ep = byPath.get(path);
       const slug = ep?.slug || path.replace(/^\/api\//, "").replace(/^\/v1\//, "v1-").replace(/\//g, "-");
       const priceUsd = parsePrice(ep?.price ?? op["x-price"] ?? 0);

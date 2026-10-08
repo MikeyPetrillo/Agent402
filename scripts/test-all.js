@@ -439,6 +439,10 @@ for (const [path, methods] of paths) {
     // take a path param (slug) the generic sweep can't substitute. The
     // dedicated skill-pack tests in test-mcp-all.js exercise the prompts.
     if (cat === "workflows") continue;
+    // GET /api/jobs/{id} reads a job a paid async call created; the id is a
+    // bearer link this sweep cannot have, so the only honest answer here is
+    // 404. scripts/test-async-jobs.js drives it end to end against a real job.
+    if (cat === "jobs") continue;
     if (strictCovered.has(`${method} ${path}`)) { strictSkipped++; continue; }
     if (coingeckoHanded.has(`${method} ${path}`)) { coingeckoSkipped++; continue; }
     cats[cat] = cats[cat] || { pass: 0, total: 0 };
