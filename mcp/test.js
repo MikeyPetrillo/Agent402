@@ -82,7 +82,7 @@ try {
   const names = tools.map((t) => t.name);
   for (const required of [
     "catalog.search", "catalog.find", "catalog.call", "payment.info", "server.describe",
-    "sellers.list", "route_and_execute",
+    "sellers.list", "router.execute",
     "web.search", "web.answer", "web.news", "browser.render", "market.quote",
     "audio.transcribe", "memory.read", "memory.write",
   ]) {
@@ -98,8 +98,8 @@ try {
   ) {
     fail("legacy snake/digit names must not be listed (aliases only)");
   }
-  if (!names.every((n) => n === "route_and_execute" || /^[a-z]+(\.[a-z]+)+$/.test(n))) {
-    fail("every listed tool name must be dotted domain.action (route_and_execute is the stdio-only exception)");
+  if (!names.every((n) => /^[a-z]+(\.[a-z]+)+$/.test(n))) {
+    fail("every listed tool name must be dotted domain.action");
   }
   // backward-compat: the raw kebab slug must still resolve on call.
   const kebabCall = await client.callTool({ name: "memory-write", arguments: { key: "k", value: "v" } });
@@ -167,14 +167,18 @@ try {
   }
   console.log("list_top_sellers proxies the leaderboard with limit/sort/include ✓");
 
-  // route_and_execute: the SOR external router. Without a task it self-explains;
+  // router.execute: the SOR external router (route_and_execute stays a CallTool alias). Without a task it self-explains;
   // with a task in PoW mode (no wallet) it returns the wallet-required guide
   // (external routing is wallet-only) rather than a crash. Both are non-throwing.
-  const rNoTask = await client.callTool({ name: "route_and_execute", arguments: {} });
-  if (!rNoTask.isError || !/requires a 'task'/i.test(text(rNoTask))) fail(`route_and_execute without task should self-explain, got: ${text(rNoTask).slice(0, 200)}`);
+  const rNoTask = await client.callTool({ name: "router.execute", arguments: {} });
+  if (!rNoTask.isError || !/requires a 'task'/i.test(text(rNoTask))) fail(`router.execute without task should self-explain, got: ${text(rNoTask).slice(0, 200)}`);
+  // The old name is a CallTool alias: it must reach the same handler, so with no
+  // task it gives router.execute's own refusal, not an unknown-tool error.
+  const rAliasNoTask = await client.callTool({ name: "route_and_execute", arguments: {} });
+  if (!rAliasNoTask.isError || text(rAliasNoTask) !== text(rNoTask)) fail(`route_and_execute must alias router.execute (same no-task refusal), got: ${text(rAliasNoTask).slice(0, 200)}`);
   const rTask = await client.callTool({ name: "route_and_execute", arguments: { task: "crypto news headlines" } });
   if (/Agent402 call failed|is not in the catalog/i.test(text(rTask))) fail(`route_and_execute with a task should reach the endpoint (wallet-required or a result), got: ${text(rTask).slice(0, 240)}`);
-  console.log("route_and_execute self-explains without a task and reaches the SOR endpoint with one ✓");
+  console.log("router.execute self-explains without a task, and the route_and_execute alias reaches the SOR endpoint ✓");
 
   // prompts/list: every skill pack registered with typed args; prompts/get
   // delegates rendering to the hosted service and substitutes args correctly.

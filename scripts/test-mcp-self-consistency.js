@@ -254,6 +254,7 @@ const listedNames = new Set((listed.tools || []).map((t) => t.name));
 const NOT_A_TOOL = new Set([
   // Tools on the STDIO npm package (agent402-mcp), named in our copy as the
   // wallet-holding alternative to this authless connector. Real, just not here.
+  "router.execute",
   "route_and_execute",
 ]);
 

@@ -3,6 +3,17 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-10-08",
+    title: "Collect slow reports later, and richer free SEC pages",
+    items: [
+      "A paid call to a slow route (reports, video, the premium image, decide execute) can send Prefer: respond-async: it answers 202 with a job link at once, and GET /api/jobs/{id} returns the answer when it is ready. Payment still settles only on a delivered answer; each slow route now says how long it can take.",
+      "An Idempotency-Key call sent again while its first copy is still running gets 409 with Retry-After instead of running twice.",
+      "On the chat wires, a model provider refusing the request itself answers 400 with the reason, after failover has tried the next model.",
+      "The free SEC company pages add three years of revenue, net income and assets, twelve months of filing activity with the reasons for each 8-K, and recent filings; insider pages total the open-market flow and fund pages show ten holdings.",
+      "agent402-mcp 0.13.11 lists route_and_execute as router.execute (the old name still works), and its Docker images include every file the server loads.",
+    ],
+  },
+  {
+    date: "2026-10-08",
     title: "Decisions on the OpenAI wire, and two models behind every judgment",
     items: [
       "/v1/judge falls back to OpenAI's Decisions API (gpt-6-luna) when Jev is unavailable. The answer shape is unchanged; it names the model that served, and fallbackFrom when the first was unavailable.",

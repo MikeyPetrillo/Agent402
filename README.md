@@ -29,6 +29,14 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > (x402, MPP), receiving a verifiable receipt, and earning per request in return.
 > Agent402 is its **applied layer** - explainer: [agent402.tools/agentic-finance](https://agent402.tools/agentic-finance) · [glossary](https://agent402.tools/glossary).
 >
+> **Selling an x402 API?** List it on the index for free at
+> [`/sell`](https://agent402.tools/sell) (`POST /api/index/register`:
+> self-serve, no signup, 0% take). The router sends buyers to a seller once its
+> routes show settled payments from several independent buyers; calls priced at
+> $0.01 or less can be tried before that, marked unproven on the buyer's
+> receipt. Charging crawlers on your own site instead?
+> [`agent402-tollbooth`](tollbooth) puts a 402 gate in front of it.
+>
 > **What makes it different:** Agent402 is **open-source and self-hostable** - and a
 > single integration gives a buyer **three free primitives over the whole x402
 > ecosystem**:

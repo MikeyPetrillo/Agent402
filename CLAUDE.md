@@ -159,6 +159,7 @@ whose effect outlives the answer never takes a ticket (`hasLastingEffect`: the m
 `attest`, `feedback`, the route-execute tiers, `seller-payability`); add a new one there.
 
 ## Subsystem pointers
+- **Async jobs:** `Prefer: respond-async` on a paid slow route (`runSeconds`, from `EVM_RUN_SECONDS`) answers 202 and a job link (`src/async-jobs.js`, mounted before every payment gate); the call is replayed over 127.0.0.1 with the buyer's payment and settles only on a final 200; `GET /api/jobs/:id` serves it.
 - **Idempotency:** opt-in `Idempotency-Key` (and x402 `payment-identifier` as an alias), bound
   to credential + route + body, committed only after a settled 200.
 - **LLM gateway:** `src/tools/llm-gateway-kit.js` (OpenAI chat wire), `llm-messages-kit.js`

@@ -183,6 +183,9 @@ invisible - you just see the result.
 3. **Call:** resend with payment (your client does this) and the same JSON body.
 4. **Retry safely:** send an \`Idempotency-Key\` header; a retry of an
    already-served paid call replays the result instead of charging again.
+5. **Slow routes:** reports and media take minutes. Send the paid call with
+   \`Prefer: respond-async\` to get \`202\` and a job link, then collect the
+   answer from \`GET /api/jobs/{id}\` (free); payment settles only on the answer.
 
 ### Request Templates
 

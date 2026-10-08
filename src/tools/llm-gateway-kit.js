@@ -2166,7 +2166,10 @@ export async function fetchOpenRouter(body, { timeoutMs, signal, url = OPENROUTE
   }
 }
 
-export async function throwUpstreamError(res) {
+/** refusal: the caller sent the buyer's own request (a chat call), so an
+ *  upstream 4xx means the provider refused that request. Other callers (a
+ *  content download, a poll) keep a plain upstream error: a 4xx there is ours. */
+export async function throwUpstreamError(res, { refusal = false } = {}) {
   const text = await res.text().catch(() => "");
   if (res.status === 401 || res.status === 403) throw bad("Gateway upstream auth failed", 502);
   if (res.status === 402) throw bad("Gateway upstream balance exhausted - the operator has been notified", 502);
@@ -2178,7 +2181,23 @@ export async function throwUpstreamError(res) {
   const safe = redactSecrets(text);
   let msg = safe.slice(0, 200);
   try { msg = JSON.parse(safe).error?.message || msg; } catch { /* keep raw slice */ }
-  throw bad(`Upstream error: ${msg}`, 502);
+  // On a chat call (refusal) an upstream 4xx is the model provider refusing THIS
+  // request (a model with no tool-capable endpoint, a context too long for it).
+  // It stays a 502 here so the failover chains still walk it to the next model;
+  // the route binder answers the buyer 400 if no model took it (upstreamRejected).
+  // The provider's own links are dropped: the buyer acts through our API.
+  if (refusal) throw Object.assign(bad(`The model provider refused this request: ${upstreamRefusalText(msg)}`, 502), { upstreamRejected: true });
+  throw bad(`Upstream error: ${upstreamRefusalText(msg)}`, 502);
+}
+
+/** The actionable part of an upstream refusal: no URLs, no "learn more" tail. */
+export function upstreamRefusalText(msg) {
+  const t = String(msg || "")
+    .replace(/\s*To learn more[^]*$/i, "")
+    .replace(/\s*\(?https?:\/\/\S+\)?/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return t || "the request is not supported by the chosen model";
 }
 
 /** OpenRouter can answer HTTP 200 with an error object and NO output - a
@@ -2205,7 +2224,7 @@ export function assertUpstreamBody(data) {
 
 async function callOpenRouter(body, { timeoutMs } = {}) {
   const res = await fetchOpenRouter(body, { timeoutMs });
-  if (!res.ok) await throwUpstreamError(res);
+  if (!res.ok) await throwUpstreamError(res, { refusal: true });
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
@@ -2264,7 +2283,7 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
   res.on?.("close", () => ctrl.abort());
   try {
     const upstream = await fetchOpenRouter(body, { signal: ctrl.signal, url });
-    if (!upstream.ok) await throwUpstreamError(upstream);
+    if (!upstream.ok) await throwUpstreamError(upstream, { refusal: true });
     // The 200 is NOT committed until the first `data:` frame arrives. Measured
     // live (paid canary 2026-08-27 20:06:42Z): OpenRouter answered a nano
     // stream with only ": OPENROUTER PROCESSING" keep-alive comments and then

@@ -125,6 +125,7 @@ export function robotsTxt(baseUrl) {
     "Disallow: /monitors/manage",
     "Disallow: /credits/thanks",
     "Disallow: /api/r/",
+    "Disallow: /api/jobs/",
     "Disallow: /api/m/",
     "Disallow: /api/credits/",
     "Disallow: /api/convert/",

@@ -212,6 +212,25 @@ Cache key formula: `sha256(METHOD + path + Idempotency-Key + gate-credential + s
 
 The cache is **settlement-aware**: a response body is captured when the handler produces it but is only committed to the cache once the *final* status is `200`, i.e. after settlement succeeded. A `200` whose settlement then failed (and therefore became a `402`) is never cached and never replayed. Streamed responses are never replayable.
 
+A copy of a keyed call sent while the first is still running (a client that timed out and retried early) gets `409` with `Retry-After` and does not run; retry after that and you get the first call's answer.
+
+## Async jobs (slow routes)
+
+Reports, video, the premium image and `/api/decide/execute` can take one to four minutes; each one's description says how long. Send the **paid** call with `Prefer: respond-async` and it answers `202` at once with a job link instead of holding the connection:
+
+```bash
+curl -X POST https://agent402.tools/v1/research \
+  -H 'Content-Type: application/json' \
+  -H 'Prefer: respond-async' \
+  -H 'PAYMENT-SIGNATURE: <your payment>' \
+  -d '{"query":"x402 adoption"}'
+# 202 {"jobId":"…","status":"working","statusUrl":"/api/jobs/…","pollIntervalSeconds":5}
+
+curl https://agent402.tools/api/jobs/<jobId>   # free; poll until completed or failed
+```
+
+The call runs on the server with your payment and **settles only when the answer is ready**: a failed run is not charged, and a refused payment ends the job with its `402`. A completed job carries the route's answer in `result.body` and its payment receipt in `result.headers`. The link is the job's only key and expires after one hour; a client may run four jobs at once. Without the header, or without a payment, the route behaves exactly as before.
+
 ## Rate limits
 
 | Surface | Limit | Notes |
@@ -235,12 +254,13 @@ All errors return a JSON body with an `error` string field.
 | `400` | Bad request -- missing or invalid input parameters |
 | `402` | Payment required -- x402 quote in the `payment-required` header, mirrored as the same object in the JSON body (MPP challenges in `WWW-Authenticate: Payment`); for a prepaid credits key, a JSON body with `reason` (`insufficient`, `unknown`, `disabled`, `identity-bound`) and `topup` |
 | `404` | Tool not found |
-| `409` | Conflict -- the request cannot be served as asked, and the body says how to fix it. Two cases: an execution tier too small for the resolved tool (retry on the rung named in the error, or call the tool directly), and external routing on a chain with no spending wallet (the error names the chains that are supported) |
+| `202` | Accepted -- a paid call sent with `Prefer: respond-async` to a slow route; collect the answer from the job link (see Async jobs). Nothing is charged until the answer is ready |
+| `409` | Conflict -- the request cannot be served as asked, and the body says how to fix it. Three cases: a keyed call whose first copy is still running (retry after `Retry-After`), an execution tier too small for the resolved tool (retry on the rung named in the error, or call the tool directly), and external routing on a chain with no spending wallet (the error names the chains that are supported) |
 | `413` | Payload too large -- for the memory tools, the namespace quota is full: either the per-namespace key count (`MEMORY_MAX_NS_KEYS`, default 10,000) or the total-value byte budget (`MEMORY_MAX_NS_BYTES`, default 32 MB). Delete keys or shrink values |
 | `422` | Unprocessable -- the payment itself is structurally unusable. On Algorand, a signed transaction whose validity window cannot outlive the tool is rejected *before* the handler runs, so a dead transaction is never started. Re-sign with a longer validity window |
 | `429` | Rate limited -- retry after the `Retry-After` header value |
 | `500` | Internal server error |
-| `502` | Bad gateway -- upstream dependency failed |
+| `502` | Bad gateway -- upstream dependency failed. On the chat wires, a model provider that refuses the request itself (for example a model with no endpoint for the request's tools) answers `400` with the reason instead, once failover has tried the next model |
 | `503` | Service unavailable -- upstream temporarily unreachable, or an optional integration is unconfigured on this instance |
 | `504` | Gateway timeout -- upstream timed out |
 

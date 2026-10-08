@@ -79,6 +79,8 @@ const BOOT_ID = randomBytes(8).toString("hex");
 
 const DATA_ROOT = () => (existsSync("/data") ? "/data" : "/tmp");
 const DEFAULT_DIR = () => join(DATA_ROOT(), "mcp-tasks");
+/** A sibling store directory on the same volume (the HTTP async jobs use "async-jobs"). */
+export const taskDataDir = (name) => join(DATA_ROOT(), name);
 
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
 
@@ -161,17 +163,17 @@ function writeJsonAtomic(path, obj) {
  *        record claimed by another boot" mean "its run died"). Overridable so a
  *        test can simulate a restart without forking a process.
  */
-export function createTaskStore({ dir, now = () => Date.now(), log = console.log, onChargedFailure = null, bootId = BOOT_ID } = {}) {
+export function createTaskStore({ dir, now = () => Date.now(), log = console.log, onChargedFailure = null, bootId = BOOT_ID, limits = {}, label = "mcp-tasks" } = {}) {
   const root = dir || DEFAULT_DIR();
   try { mkdirSync(root, { recursive: true }); } catch { /* writes fail loudly below */ }
 
   // Bounds. TTL is deliberately short: with no auth context the id IS the
   // credential, so the exposure window is part of the security posture.
-  const TTL_MS = num(process.env.AGENT402_MCP_TASK_TTL_MS, 60 * 60_000);          // 1h
-  const POLL_MS = num(process.env.AGENT402_MCP_TASK_POLL_MS, 5_000);
-  const RUN_TIMEOUT_MS = num(process.env.AGENT402_MCP_TASK_RUN_MS, 6 * 60_000);   // > the 4 min worst case
-  const MAX_ACTIVE = num(process.env.AGENT402_MCP_TASK_MAX_ACTIVE, 64);
-  const MAX_RESULT_BYTES = num(process.env.AGENT402_MCP_TASK_MAX_RESULT_BYTES, 8 * 1024 * 1024);
+  const TTL_MS = num(limits.ttlMs ?? process.env.AGENT402_MCP_TASK_TTL_MS, 60 * 60_000);          // 1h
+  const POLL_MS = num(limits.pollMs ?? process.env.AGENT402_MCP_TASK_POLL_MS, 5_000);
+  const RUN_TIMEOUT_MS = num(limits.runMs ?? process.env.AGENT402_MCP_TASK_RUN_MS, 6 * 60_000);   // > the 4 min worst case
+  const MAX_ACTIVE = num(limits.maxActive ?? process.env.AGENT402_MCP_TASK_MAX_ACTIVE, 64);
+  const MAX_RESULT_BYTES = num(limits.maxResultBytes ?? process.env.AGENT402_MCP_TASK_MAX_RESULT_BYTES, 8 * 1024 * 1024);
 
   // THE ID IS VALIDATED HERE, at the one place a path is built from it, not at
   // each caller. Every current caller does check first, so this changes no
@@ -217,7 +219,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
         orphaned++;
       }
     }
-    if (orphaned || pruned) log(`[mcp-tasks] boot sweep: ${orphaned} interrupted run(s) resolved as failed, ${pruned} expired task(s) pruned`);
+    if (orphaned || pruned) log(`[${label}] boot sweep: ${orphaned} interrupted run(s) resolved as failed, ${pruned} expired task(s) pruned`);
     return { orphaned, pruned };
   }
 
@@ -300,7 +302,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
       rec.error = { code: TASK_INTERNAL_ERROR, message: "Result could not be retained." };
       write(rec);
       try { onChargedFailure?.({ slug: rec.slug, receipt, priceUsd }); } catch { /* never break the path */ }
-      log(`[mcp-tasks] result for ${rec.slug} could not be retained (${bytes} bytes); recorded for refund review`);
+      log(`[${label}] result for ${rec.slug} could not be retained (${bytes} bytes); recorded for refund review`);
       return true;
     }
     if (status === "failed") rec.error = error || { code: TASK_INTERNAL_ERROR, message: "Task failed." };

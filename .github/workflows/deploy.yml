@@ -957,6 +957,7 @@ jobs:
           # LLM gateway validation (OpenAI-compat tiers, caps, env-gated 503)
           t node scripts/test-llm-gateway.js
           t node scripts/test-gateway-resilience.js
+          t node scripts/test-upstream-refusal.js
           t node scripts/test-llm-kit-spend.js
           t node scripts/test-upstream-costs.js
           t node scripts/test-ci-secretless-install.js
@@ -1306,6 +1307,7 @@ jobs:
           t node scripts/test-marketplace-provenance.js
           # programmatic report pages (offline)
           t node scripts/test-programmatic-pages.js
+          t node scripts/test-edgar-summary.js
           # Programmatic page gate wait (a queued EDGAR build cannot hang a crawler; abandoned waiters freed — offline)
           t node scripts/test-programmatic-gate-wait.js
           # Seller registration conversion/churn table (first_seen immutable, last_settled_seen sticky — offline)
@@ -1366,6 +1368,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Composite-spend guard (research/dossier upstream-drain protection)
           t node scripts/test-composite-guard.js
+          t node scripts/test-run-time-note.js
+          t node scripts/test-async-jobs.js
           # x402-market-pulse supply-mix per-seller tool cap
           t node scripts/test-ecosystem-supply.js
           # "Cache hygiene (M5 — Attack III: paid responses no-store, free discovery stays cacheable)"
@@ -2139,6 +2143,7 @@ jobs:
           t node scripts/test-find-envelope.js
           # Settlement-aware idempotency (FR4-01 — a non-200/unsettled response is NOT cached; @x402/express settles AFTER the handler)
           t node scripts/test-idempotency-settlement.js
+          t node scripts/test-idempotency-inflight.js
           # Image-kit tests (resize, convert, thumbnail — jimp, exact dims)
           t node scripts/test-image.js
           # MCP search_tools — live-catalog smoke test (locks top-1 for agent queries)
