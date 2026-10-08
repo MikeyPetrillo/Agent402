@@ -622,7 +622,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       outputSchema: META_OUTPUT_SCHEMAS["sellers.list"],
     },
     {
-      name: "route_and_execute",
+      // Dotted like every other listed tool; route_and_execute stays a CallTool alias.
+      name: "router.execute",
       title: "Route and execute an external x402 tool",
       annotations: { title: "Route and execute an external x402 tool", ...OPEN },
       description:
@@ -636,7 +637,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
         required: ["task"],
       },
-      outputSchema: META_OUTPUT_SCHEMAS.route_and_execute,
+      outputSchema: META_OUTPUT_SCHEMAS["router.execute"],
     }
   );
   return { tools };
@@ -854,9 +855,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         source: `${BASE}/api/leaderboard`,
       });
     }
-    if (name === "route_and_execute") {
+    if (name === "router.execute") {
       const task = String(args.task ?? "").trim();
-      if (!task) return { content: [{ type: "text", text: "route_and_execute requires a 'task' (plain-language description of what you need)." }], isError: true };
+      if (!task) return { content: [{ type: "text", text: "router.execute requires a 'task' (plain-language description of what you need)." }], isError: true };
       const maxUsd = Number(args.maxUsd) > 0 ? Number(args.maxUsd) : 0.005;
       // Pick the CHEAPEST tier whose underlying cap covers maxUsd. The ladder
       // has three rungs; skipping the middle one billed 11x for a mid-priced

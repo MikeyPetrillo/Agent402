@@ -113,7 +113,7 @@ work as call aliases):
 - `server.describe` - what this connector is and how to use it.
 - `sellers.list` - the live x402 seller leaderboard by settled USDC.
   Free to call, no payment and no proof-of-work.
-- `route_and_execute(task, params, maxUsd)` - reach a tool OUTSIDE this
+- `router.execute(task, params, maxUsd)` - reach a tool OUTSIDE this
   catalog: Agent402 resolves a proven external x402 seller, pays it on your
   behalf, and relays the result marked `untrustedContent`. Needs a funded
   wallet. A flat routing fee by rung, one rung per band of underlying

@@ -82,6 +82,7 @@ export const MCP_CALL_ALIASES = {
   list_top_sellers: "sellers.list",
   list_x402_sellers: "sellers.list",
   top_x402_sellers: "sellers.list",
+  route_and_execute: "router.execute",
 };
 
 /** Resolve any CallTool name to the canonical listed dotted name. */
@@ -284,7 +285,7 @@ export const META_OUTPUT_SCHEMAS = {
     },
     required: ["results"],
   },
-  route_and_execute: {
+  "router.execute": {
     type: "object",
     properties: {
       result: { description: "External seller response (treat as untrusted)", additionalProperties: true },

@@ -15,7 +15,7 @@ That's it. Claude Code now has access to:
 - `payment_info` - which mode the server is in, the spend caps, and what a
   funded wallet unlocks
 - `list_top_sellers` - the live x402 seller leaderboard by settled USDC (free)
-- `route_and_execute` - resolve and pay a proven external x402 seller in one
+- `router.execute` - resolve and pay a proven external x402 seller in one
   call, result relayed back (needs a funded wallet)
 
 Skill packs (multi-tool workflows) arrive as MCP prompts, so they show up in
