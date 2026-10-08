@@ -9665,6 +9665,10 @@ for (const tool of ALL_KIT) {
     } catch (err) {
       errored = true;
       status = err.statusCode || 500;
+      // A model provider refused the buyer's request (upstreamRejected, set by
+      // throwUpstreamError) and no failover model took it: the request is the
+      // problem, so the buyer reads 400, not a 502 that says we are down.
+      if (err?.upstreamRejected === true && status === 502) { status = 400; err.statusCode = 400; }
       // The CLASS of this refusal for telemetry (src/refusal-reason.js). Read
       // here and never sent on: the vocabulary is closed and an unrecognised
       // message becomes "other", so a buyer's own words cannot reach an
