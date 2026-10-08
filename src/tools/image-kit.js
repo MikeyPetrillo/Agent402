@@ -209,7 +209,7 @@ function gpsDecimal(gps) {
   return out;
 }
 
-const EXAMPLE_IMAGE_URL = "https://raw.githubusercontent.com/ianare/exif-samples/master/jpg/Canon_40D.jpg";
+const EXAMPLE_IMAGE_URL = "https://agent402.tools/fixtures/sample-photo.jpg";
 
 export const IMAGE_TOOLS = [
   {
@@ -295,7 +295,7 @@ export const IMAGE_TOOLS = [
           image: { type: "string", description: "alternative: base64 image, optionally a data: URL" },
         },
       },
-      output: { example: { format: "jpeg", width: 100, height: 68, bytes: 7958, hasExif: true, exif: { Make: "Canon", Model: "Canon EOS 40D", Orientation: 1, DateTimeOriginal: "2008:05:30 15:56:01" }, gps: null } },
+      output: { example: { format: "jpeg", width: 120, height: 80, bytes: 1654, hasExif: true, exif: { Make: "Agent402", Model: "Fixture Camera", Orientation: 1, DateTime: "2026:10:07 12:00:00", DateTimeOriginal: "2026:10:07 12:00:00" }, gps: { latitude: 51.477222, longitude: -0.0005 } } },
     },
     handler: async (i) => {
       const buf = await inputBuffer(i);
@@ -324,7 +324,7 @@ export const IMAGE_TOOLS = [
           colors: { type: "number", description: "palette size, 1-10 (default 5)" },
         },
       },
-      output: { example: { width: 100, height: 68, sampled: 6240, colors: [{ hex: "#181708", rgb: [24, 23, 8], ratio: 0.078 }] } },
+      output: { example: { width: 120, height: 80, sampled: 6144, colors: [{ hex: "#1f7a8b", rgb: [31, 122, 139], ratio: 0.5938 }, { hex: "#df7a1e", rgb: [223, 122, 30], ratio: 0.2813 }, { hex: "#22223a", rgb: [34, 34, 58], ratio: 0.0938 }] } },
     },
     handler: async (i) => {
       const img = await readImage(await inputBuffer(i));
@@ -378,7 +378,7 @@ export const IMAGE_TOOLS = [
           dataUri: { type: "boolean", description: "return JSON {dataUri, width, height, bytes} instead of binary" },
         },
       },
-      output: { example: { dataUri: "data:image/png;base64,iVBORw0KG…", width: 60, height: 40, bytes: 4242 } },
+      output: { example: { dataUri: "data:image/png;base64,iVBORw0KG…", width: 60, height: 40, bytes: 144 } },
     },
     handler: async (i) => {
       const img = await readImage(await inputBuffer(i));

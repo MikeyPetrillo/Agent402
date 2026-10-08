@@ -43,11 +43,6 @@ const ALLOWED = {
 // fetches it from prod). Bound to the exact routes, so the list cannot grow;
 // each entry is removed in the batch after its fixture deploys.
 const PENDING = {
-  "bitcoin.org": { fixture: "sample-report.pdf", routes: ["POST /api/pdf-summarize", "POST /api/skill/document-brief"] },
-  "petstore3.swagger.io": { fixture: "sample-openapi.json", routes: ["POST /api/skill/openapi-audit"] },
-  "raw.githubusercontent.com": { fixture: "sample-photo.jpg", routes: ["POST /api/image-exif", "POST /api/image-dominant-color", "POST /api/image-crop"] },
-  "tesseract.projectnaptha.com": { fixture: "sample-text.png", routes: ["POST /api/image-ocr"] },
-  "upload.wikimedia.org": { fixture: null, routes: ["POST /api/transcribe", "POST /api/transcribe-pro", "POST /api/skill/subtitle-pipeline"] },
 };
 
 // Bare domains count when they look like a site (a common TLD), so a JWT, an
