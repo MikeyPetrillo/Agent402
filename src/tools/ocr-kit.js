@@ -104,7 +104,7 @@ export const OCR_TOOLS = [
     tags: ["ocr", "image", "text-extraction", "tesseract", "scanned-document", "receipt", "extract", "text"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://tesseract.projectnaptha.com/img/eng_bw.png" },
+      input: { url: "https://agent402.tools/fixtures/sample-text.png" },
       inputSchema: {
         properties: {
           image: { type: "string", description: "Base64 PNG/JPEG (data: URL prefix accepted). Either this or url is required." },
@@ -114,13 +114,13 @@ export const OCR_TOOLS = [
       },
       output: {
         example: {
-          text: "Mild Splendour of the various-vested Night!\nMother of wildly-working visions! hail!",
-          confidence: 91.8,
+          text: "Agent402 sample text for OCR.\nInvoice 402-0001 total 12.34 USD.",
+          confidence: 94,
           lang: "eng",
           lineCount: 2,
           lines: [
-            { text: "Mild Splendour of the various-vested Night!", confidence: 92.1, bbox: { x0: 24, y0: 12, x1: 658, y1: 48 } },
-            { text: "Mother of wildly-working visions! hail!", confidence: 91.5, bbox: { x0: 24, y0: 56, x1: 612, y1: 92 } },
+            { text: "Agent402 sample text for OCR.", confidence: 94.34, bbox: { x0: 24, y0: 29, x1: 469, y1: 60 } },
+            { text: "Invoice 402-0001 total 12.34 USD.", confidence: 96.31, bbox: { x0: 27, y0: 81, x1: 514, y1: 106 } },
           ],
           source: "tesseract.js (Tesseract WASM, Apache-2.0)",
         },

@@ -978,7 +978,7 @@ export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
  *  free handler executions before Tempo's relay rejects the (N-1) duplicate
  *  broadcasts at settlement time — the same "Five Attacks on x402" Attack II
  *  class replay-guard.js documents, just unguarded on this second path. */
-export function createTempoGate({ validate = validateTempoCredential, broadcast = broadcastTempoCredential, confirmSettlement = null, replayGuard, secretKey, realm, priceFor, preValidate = null, verifyKeychainSender = verifyTempoKeychainSender, pushSender = tempoPushSender, onPushNotClaimed = null, onPushInputRefused = null, pushClaimAllowed = null } = {}) {
+export function createTempoGate({ validate = validateTempoCredential, broadcast = broadcastTempoCredential, confirmSettlement = null, earlyConfirm = null, replayGuard, secretKey, realm, priceFor, preValidate = null, verifyKeychainSender = verifyTempoKeychainSender, pushSender = tempoPushSender, onPushNotClaimed = null, onPushInputRefused = null, pushClaimAllowed = null } = {}) {
   if (!tempoEnabled()) return null;
   // Fail CLOSED on the binding inputs: a gate that cannot verify "we minted
   // this challenge for this price" must not exist, because its existence is
@@ -1344,9 +1344,34 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         return;
       }
       const tHandled = Date.now();
-      let b = await broadcast(auth);
+      // EARLY CONFIRM. The relay answers a broadcast ~2 s after the payment is
+      // in a block (measured 2026-10-08: broadcast p50 ~4.1 s, inclusion ~1.5 s
+      // after submit). The relay stays the only broadcaster; alongside it,
+      // the chain is read for THIS credential's own transaction (the txid
+      // commits to the signed bytes, the memo to this challenge, the log to
+      // currency, recipient and amount, and its block must be finalized:
+      // tempo-confirm.js), and whichever proves settlement first answers. Nothing is submitted, so
+      // this can never charge twice; the watcher stops when the relay answers.
+      let b;
+      let early = false;
+      if (earlyConfirm) {
+        let relayAnswered = false;
+        const relayP = Promise.resolve(broadcast(auth)).then((r) => { relayAnswered = true; return r; }, (e) => { relayAnswered = true; throw e; });
+        const chainP = Promise.resolve(earlyConfirm(auth, () => relayAnswered)).catch(() => null)
+          .then((c) => (c ? c : new Promise(() => {})));
+        const first = await Promise.race([relayP.then((r) => ({ relay: r })), chainP.then((c) => ({ chain: c }))]);
+        if (first.chain) {
+          early = true;
+          b = { ok: true, receipt: { method: "tempo", status: "success", reference: first.chain.txId, timestamp: new Date().toISOString() } };
+          // The relay finishes on its own; its verdict no longer decides
+          // anything, but a disagreement is worth seeing.
+          relayP.then((r) => { if (!r?.ok) console.warn(`[mpp-tempo] relay answered after the chain had confirmed ${req.method} ${req.path} tx=${first.chain.txId}: ${String(r?.error || "?").slice(0, 160)}`); }, () => {});
+        } else b = first.relay;
+      } else {
+        b = await broadcast(auth);
+      }
       const tBroadcast = Date.now();
-      const timing = `validate=${tValidated - t0}ms handler=${tHandled - tValidated}ms broadcast=${tBroadcast - tHandled}ms`;
+      const timing = `validate=${tValidated - t0}ms handler=${tHandled - tValidated}ms broadcast=${tBroadcast - tHandled}ms${early ? " (chain-confirmed)" : ""}`;
       if (!b.ok && confirmSettlement) {
         // The relay's verdict and the chain's truth can diverge: on
         // 2026-08-20 the relay reported "Broadcast transaction hash does not

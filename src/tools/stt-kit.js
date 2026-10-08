@@ -304,7 +304,7 @@ export const STT_TOOLS = [
     tags: [...SHARED_TAGS, "gpt-transcribe"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" },
+      input: { url: "https://agent402.tools/fixtures/sample-speech.wav" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "URL of the audio file to transcribe (mp3, wav, m4a, ogg, flac, webm)" },
@@ -317,9 +317,9 @@ export const STT_TOOLS = [
         example: {
           model: "gpt-transcribe",
           provider: "openai",
-          text: "Hello, this is a sample transcription.",
+          text: "Hi, this is the Agent402 sample recording. Can you hear me clearly? Yes, loud and clear. There are two of us on this clip, so the transcript can tell us apart.",
           language: "en",
-          duration: 3.5,
+          duration: 12.6,
         },
       },
     },
@@ -336,7 +336,7 @@ export const STT_TOOLS = [
     tags: [...SHARED_TAGS, "gpt-transcribe", "pro"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" },
+      input: { url: "https://agent402.tools/fixtures/sample-speech.wav" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "URL of the audio file to transcribe (mp3, wav, m4a, ogg, flac, webm)" },
@@ -349,9 +349,9 @@ export const STT_TOOLS = [
         example: {
           model: "gpt-transcribe",
           provider: "openai",
-          text: "Hello, this is a sample transcription.",
+          text: "Hi, this is the Agent402 sample recording. Can you hear me clearly? Yes, loud and clear. There are two of us on this clip, so the transcript can tell us apart.",
           language: "en",
-          duration: 3.5,
+          duration: 12.6,
         },
       },
     },

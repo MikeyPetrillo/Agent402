@@ -1122,8 +1122,8 @@ for (const slug of modelBackedPackSlugs(SKILL_PACKS, isModelBacked)) {
 }
 
 // Route-and-execute: the SOR's executing surface. Internal dispatch always;
-// EXTERNAL dispatch (pay an indexed x402 seller on the buyer's behalf, relay
-// the result) is gated on SOR_EXTERNAL_ENABLED until a real external buy proves
+// EXTERNAL dispatch (buy from an indexed x402 seller for a buyer's request,
+// resell the result) is gated on SOR_EXTERNAL_ENABLED until a real external buy proves
 // it. resolveExternalSeller ranks the task with the index-aware routeQuery and
 // returns the top EXTERNAL, Base-payable, in-budget candidate (url/method/
 // price/networks) for payX402. Registered after the skill tools so the runtime
@@ -3752,18 +3752,11 @@ app.get("/reports/dossier", (req, res) => { if (_pgLimited(req, res)) return; re
 app.get("/reports/insider/:ticker", (req, res, next) => { _programmaticEntity(req, res, next, "insider").catch(next); });
 app.get("/reports/fund/:manager", (req, res, next) => { _programmaticEntity(req, res, next, "fund").catch(next); });
 app.get("/reports/dossier/:ticker", (req, res, next) => { _programmaticEntity(req, res, next, "dossier").catch(next); });
-// SELLING prepaid credits means accepting a third party's funds and holding
-// them against future redemption, which is the activity state money
-// transmitter statutes are written about. Closed-loop balances like this one
-// are exempt in many states, but that determination needs a lawyer and we do
-// not have one, so the safe default is not to create the obligation at all.
-//
-// OFF unless CREDITS_SALES=on, and off by DEFAULT so a host that never sets
-// the variable is in the safe state rather than the exposed one. Redemption
-// is deliberately untouched: existing keys keep spending their balance, so
-// nobody's money is stranded by this switch. Nothing has ever been sold to an
-// outside buyer (one key has ever existed, bought by the operator and gifted
-// unused), so no refund is owed and no customer is disrupted.
+// Selling prepaid credits creates a held balance kept against future
+// redemption, so sales are OFF unless CREDITS_SALES=on (off by default, so a
+// host that never sets the variable sells none). Redemption is deliberately
+// untouched: existing keys keep spending their balance, so nobody's balance is
+// stranded by this switch.
 app.get("/credits", (_req, res) => res.set("Cache-Control", "public, max-age=120").type("html").send(creditsPage(BASE_URL, creditsSalesEnabled())));
 app.get("/credits/thanks", (req, res) => res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(creditsThanksPage(String(req.query.session || ""), BASE_URL)));
 if (_credits) {
@@ -7343,15 +7336,18 @@ app.get("/fonts/:file", (req, res) => {
 //
 // Hosted here rather than pointed at a third party on purpose: an example in
 // our own catalog should not break because someone else moved a file, and CI
-// runs these examples on every push. Both files are GENERATED, not vendored
-// (see scripts/build-fixtures.js) - the repo carries no binary blob whose
-// provenance we cannot state. Same safety shape as /fonts/:file: a strict
+// runs these examples on every push. Every file is made by a script in
+// scripts/ (build-fixtures.js, build-speech-fixture.js) - the repo carries no
+// binary blob whose provenance we cannot state. Same safety shape as /fonts/:file: a strict
 // filename allowlist, no path traversal, no directory listing.
 const FIXTURE_FILES = {
   "sample-invoice.pdf": "application/pdf",
   "sample-image.png": "image/png",
   // 2 s 440 Hz sine, 8 kHz mono PCM: the paid canary's media-info leg probes it with ffprobe on prod (2026-09-06)
   "sample-audio.wav": "audio/wav",
+  // Two voices, 12.6 s, 16 kHz mono: the transcription examples (diarize:true
+  // names two speakers). Spoken by Kokoro-82M, see scripts/build-speech-fixture.js
+  "sample-speech.wav": "audio/wav",
   "sample-report.pdf": "application/pdf",
   "sample-text.png": "image/png",
   "sample-photo.jpg": "image/jpeg",
@@ -8324,6 +8320,10 @@ if (!FREE_MODE) {
     // that reports failure for a settled payment must not turn into a
     // buyer-facing 402 + double-charge loop. See tempo-confirm.js.
     confirmSettlement: confirmTempoSettlement,
+    // Answer as soon as the chain shows this payment, instead of waiting for
+    // the relay's reply (TEMPO_EARLY_CONFIRM=off restores relay-only).
+    earlyConfirm: String(process.env.TEMPO_EARLY_CONFIRM || "").toLowerCase() === "off" ? null
+      : (auth, relayAnswered) => confirmTempoSettlement(auth, { initialDelayMs: 600, delayMs: 300, attempts: 16, rpcTimeoutMs: 2000, stop: relayAnswered, requireFinalized: true }),
     secretKey: process.env.MPP_SECRET_KEY || "",
     realm: new URL(BASE_URL).host,
     priceFor: (method, path, req) => {

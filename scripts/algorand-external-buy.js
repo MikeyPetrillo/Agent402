@@ -7,7 +7,7 @@
 //   catalog. That is two-sided proof of the machine-to-machine economy, it is
 //   what the x402 Global Challenge actually measures, and it exercises the same
 //   discovery surface (src/algorand-sellers.js) the Smart Order Router uses to
-//   pick external Algorand sellers on a buyer's behalf.
+//   pick external Algorand sellers to buy from and resell.
 //
 // THIS SPENDS REAL MONEY THAT DOES NOT COME BACK. Unlike the canaries, these
 // payments leave our wallets for good, to third parties, with no refund path

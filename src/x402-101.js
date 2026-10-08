@@ -106,7 +106,7 @@ export const SLIDES = [
     headline: "Most of the ecosystem ships the protocol. Agent402 ships the market that runs on it.",
     body: `<div class="s101-grid">
 <div><div class="s101-tag">Buy</div><strong>500+ pay-per-call tools</strong><p>Web search with citations, headless browser, PDFs, OCR, financial and SEC data, an OpenAI-compatible LLM gateway. Every one priced per call and settled on chain over x402 or MPP; the model-backed ones are marked as such.</p></div>
-<div><div class="s101-tag">Route</div><strong>An open index and a Smart Order Router</strong><p>One call resolves a task to the best seller across the whole ecosystem, ours or anyone's, pays them on the agent's behalf and relays the result. ${routingProofSentence()}</p></div>
+<div><div class="s101-tag">Route</div><strong>An open index and a Smart Order Router</strong><p>One call resolves a task to the best seller across the whole ecosystem, ours or anyone's, buys the result from that seller and sells it to the agent. ${routingProofSentence()}</p></div>
 <div><div class="s101-tag">Sell</div><strong>The tollbooth</strong><p>One line in front of any site or API: humans browse free, agents pay per request over both wires, straight to your wallet. Non-custodial, no signup, nothing deducted from your price.</p></div>
 <div><div class="s101-tag">Prove</div><strong>Numbers you can check</strong><p>Live transaction counts by rail and wire (external revenue underneath), an on-chain seller leaderboard, uptime measured from outside, refunds ledgered.</p></div>
 </div>`,

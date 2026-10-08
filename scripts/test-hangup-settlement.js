@@ -380,9 +380,12 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   ok(/res\.once\("close", \(\) => settleHangupTicket\(req, \{ abandoned: clientGoneBeforeFirstByte\(req\) \}\)\);/.test(server), "the ticket is settled on close (abandoned when gone before the first byte)");
   ok(/const who = payer \|\| \(req\.mppTempoSender \? `tempo:\$\{req\.mppTempoSender\}` : req\.creditsKeyId \? `credits:\$\{req\.creditsKeyId\}` : null\);\s*\n\s*return \[who, `ip:\$\{clientIp\(req\)\}`\];/.test(server), "ticket keys: the verified payer (never the Tempo source hint) AND always the client IP");
   ok(!/mppTempoPayer/.test(server.slice(server.indexOf("function hangupForgivenessKeys("), server.indexOf("function hangupForgivenessKeys(") + 600)), "the ticket keys never read the client-supplied Tempo payer hint");
-  for (const [name, src, call] of [["mpp-tempo", tempo, "let b = await broadcast(auth);"], ["mpp-stripe", stripeGate, "const b = await settle(auth);"]]) {
+  // Both post-handler broadcasts (the early-confirm race and the relay-only
+  // path) come after the check; the push-credential finalize earlier in the
+  // file runs before any handler and is covered by the tempoSettled rule.
+  for (const [name, src, calls] of [["mpp-tempo", tempo, ["Promise.resolve(broadcast(auth))", "b = await broadcast(auth);"]], ["mpp-stripe", stripeGate, ["const b = await settle(auth);"]]]) {
     const check = src.indexOf("if (chargeCancelledForClientGone(req)) {");
-    ok(check > 0 && src.indexOf(call) > check && src.indexOf(call) - check < 1200, `${name}: the cancelled-charge check precedes the ${call.includes("broadcast") ? "broadcast" : "capture"}`);
+    ok(check > 0 && calls.every((c) => src.indexOf(c) > check && src.indexOf(c) - check < 2500), `${name}: the cancelled-charge check precedes the ${name === "mpp-tempo" ? "broadcast" : "capture"}`);
   }
   ok(/\} else if \(req\.creditsSettled && Number\(req\.creditsChargedOnClose\) > 0\) \{/.test(server), "the debt recorder books a credits hold settled on an abandoned run");
   ok(/const denied = hangupTicketDenial\(req\);[\s\S]{0,800}\$\{denied \? `; not forgiven: \$\{denied\}` : ""\}/.test(server), "the owed line names why the run was not forgiven");

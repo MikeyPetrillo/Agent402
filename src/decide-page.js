@@ -53,7 +53,7 @@ export function decidePage(baseUrl, catalog) {
     { q: "Which outside sellers can appear?", a: `Outside x402 sellers (including sellers that also accept MPP) whose route answered a live 402 within the last ${liveDays} days and whose input schema is known. Anything the index cannot cover is listed in gaps.` },
     { q: "Can a step use what an earlier step returned?", a: "Yes. When a later step needs a value an earlier step produces (the address an ENS lookup resolved, say), the plan writes {{step N}} for it and lists that step in dependsOn. Run through POST /api/decide/execute, Agent402 fills it in from the earlier step's answer: a field with the parameter's name, or the one address or IP it returned. A value it cannot name without guessing skips that step, and nothing is paid for it." },
     { q: "How does the credit work?", a: `The decision fee comes back as a credit worth ${c.credit.percentOfFee}% of it, valid ${c.credit.ttlHours} hours, toward running that plan with POST /api/decide/execute. Unspent budget from a run returns as credit until the same window closes.` },
-    { q: "What does running a plan cost?", a: `Our tools at list price. Outside tools at the seller's price plus a ${c.routingFeePct}% routing fee, paid on your behalf. Spend stops at your budget, fallbacks run in order, and a run where no step succeeds is not charged.` },
+    { q: "What does running a plan cost?", a: `Our tools at list price. Outside tools at the seller's price plus a ${c.routingFeePct}% markup: we buy the result from the seller and sell it to you. Spend stops at your budget, fallbacks run in order, and a run where no step succeeds is not charged.` },
   ];
   const faqLd = { "@type": "FAQPage", mainEntity: faqs.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
@@ -83,7 +83,7 @@ export function decidePage(baseUrl, catalog) {
     ["01 · Index", "This catalog and outside sellers", `This catalog plus outside x402 sellers, each with its price, rails, chains and input schema. Outside tools need a live 402 in the last ${liveDays} days.`],
     ["02 · Rank", "One formula for every seller", "Fit to the job, observed reliability, price, schema quality and a freshness pass mark, with the same weights for every tool and no term for who sells it."],
     ["03 · Plan", "Steps you can call", "The job split into steps, each with a primary tool and fallbacks, params that validate against the tool's schema, and a cost and latency estimate. Gaps are named."],
-    ["04 · Run", "Yourself, or through us", `Call the plan directly, or send it to /api/decide/execute. Outside steps are paid on your behalf at the seller's price plus ${c.routingFeePct}%, and the decision fee comes back as credit.`],
+    ["04 · Run", "Yourself, or through us", `Call the plan directly, or send it to /api/decide/execute. Outside steps are bought from the seller and resold at the seller's price plus a ${c.routingFeePct}% markup, and the decision fee comes back as credit.`],
   ];
   const depths = [
     ["quick", p.quick, "The single best tool for the whole job, with fallbacks."],
@@ -124,7 +124,7 @@ ${sec(`<h2 class="dc-h2">Three depths.</h2><p class="dc-lede">Priced by how much
 ${sec(`<div style="background:var(--surface);border:1px solid var(--hairline);padding:40px;">
   <h2 class="dc-h2" style="color:var(--on-dark);">One formula, disclosed.</h2>
   <p style="font-size:16px;line-height:1.6;color:var(--dk-muted2);margin:0 0 14px;max-width:760px;">Our tools and every outside seller's are scored on the same five signals with the same weights, and the formula has no term for who sells a tool. The model that judges fit sees the same bounded description for every tool, and every tool in a plan carries <code>firstParty</code>, so the source is disclosed.</p>
-  <p style="font-size:16px;line-height:1.6;color:var(--dk-muted2);margin:0;max-width:760px;">What we charge is on the page: the decision fee by depth, our tools at list price when a plan runs through us, and outside tools at the seller's price plus a disclosed ${c.routingFeePct}% routing fee. Reliability counts what we observe, one observation per payer per day, and reports through <code>/api/decide/feedback</code> can move a tool only within a bounded range.</p>
+  <p style="font-size:16px;line-height:1.6;color:var(--dk-muted2);margin:0;max-width:760px;">What we charge is on the page: the decision fee by depth, our tools at list price when a plan runs through us, and outside tools at the seller's price plus a disclosed ${c.routingFeePct}% markup. Reliability counts what we observe, one observation per payer per day, and reports through <code>/api/decide/feedback</code> can move a tool only within a bounded range.</p>
 </div>`)}
 ${sec(`<div id="connect"><h2 class="dc-h2">Connect.</h2><p class="dc-lede">Three routes, the same on every surface.</p>
   <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:13px;">

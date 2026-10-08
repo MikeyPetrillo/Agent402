@@ -137,7 +137,7 @@ export function evmCredentialSettleableMs(req, { nowMs = Date.now() } = {}) {
   return exp.expiresAt * 1000 - nowMs - SETTLE_RULE_SECONDS * 1000;
 }
 
-/** A handler that pays an outside seller on a buyer's behalf SIGNS only while
+/** A handler that buys from an outside seller for a buyer's request SIGNS only while
  *  the buyer's authorization keeps at least this much settleable life: the
  *  settle margin (SETTLE_MARGIN_SECONDS) plus a few seconds for the seller to
  *  answer. Checked before resolution AND again at the moment of signing

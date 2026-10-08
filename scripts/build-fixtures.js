@@ -17,6 +17,7 @@
 // someone else's uptime. scripts/test-example-hosts.js keeps it that way.
 // The text image uses jimp's bundled Open Sans bitmap font (Apache-2.0).
 // sample-audio.wav predates this script: a 2 s 440 Hz sine, 8 kHz mono.
+// sample-speech.wav (two voices) is made by scripts/build-speech-fixture.js.
 import { writeFileSync, mkdirSync } from "node:fs";
 import { Jimp } from "jimp";
 import { loadFont } from "jimp";

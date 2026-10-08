@@ -171,7 +171,7 @@ function chainCard(html, slug) {
   ];
   const html = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] } });
   ok(/mfb-legend/.test(html) && /the last crawl of the origin succeeded, nothing more/.test(html) && /routerDispatchReason/.test(html), "the roster carries a legend saying healthy is crawl readiness and naming the API field");
-  ok(/Eligible Co[\s\S]{0,600}class="mlr-dispatch" title="the router will pay/.test(html), "an eligible seller shows the dispatch badge");
+  ok(/Eligible Co[\s\S]{0,600}class="mlr-dispatch" title="the router will buy from this seller/.test(html), "an eligible seller shows the dispatch badge");
   ok(/NoNet Co[\s\S]{0,600}class="mlr-dispatch off"[^>]*>no dispatch &middot; network unknown</.test(html), "a non-eligible seller shows the reason in words");
   const unl = html.slice(html.indexOf("Unlabelled Co"), html.indexOf("Unlabelled Co") + 900);
   ok(!/mlr-dispatch/.test(unl), "a seller the handler did not label gets NO badge (never a guessed one)");

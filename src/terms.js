@@ -31,7 +31,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-10-06.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-10-08.</p>
 </section>
 
 <section>
@@ -120,6 +120,14 @@ back to the paying wallet. Micropayments are per call and, once settled on-chain
 non-refundable except as described in these terms or where required by law. Metered routes quote a ceiling before
 payment and settle at or under it. You are responsible for your own wallet and keys; we never receive or
 hold your private key.</p>
+<p><b>Results from other sellers.</b> Some routes, such as <code>/api/route/execute</code> and
+<code>/api/decide/execute</code>, can return a result that Agent402 obtained from a third-party seller.
+Agent402 buys that result from the seller for its own account, with its own funds, and sells it to you;
+your payment is a payment to Agent402 for the result, at the price shown before you pay. Agent402 does not
+send, hold or exchange funds for you on these routes, and you have no account with the seller through us.
+Where a route returns part of a payment as a service credit (for example the unspent budget of
+<code>/api/decide/execute</code>), that credit is redeemable only for Agent402 services, for the period
+stated on that route.</p>
 <p><b>Refunds on-chain.</b> Because settlement happens only after a call succeeds, the ordinary
 failure case costs nothing and needs no refund. Where a defect on our side means you were charged for
 something that did not deliver, we record the amount as owed and repay the wallet that paid, on the

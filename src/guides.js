@@ -397,8 +397,7 @@ curl "https://agent402.tools/api/x402-verify?hash=0xTXHASH&network=base&to=0xREC
 
 ## Why non-custodial matters
 
-Custodial "pay for me" services have to hold your funds - which means money
-transmission, KYC/AML, and trust in a middleman. These tools never touch your
+These tools never touch your
 money: you keep your key, you sign, you send. That's the right architecture for
 agent payments, and it's the one Agent402 ships. The whole kit is
 [open source](${REPO_URL}) and priced per call in
@@ -605,7 +604,7 @@ provably.
     slug: "smart-order-router",
     title: "One payment, any proven seller: the x402 Smart Order Router",
     description:
-      "Describe a task, pay once, and the router resolves the best tool - from Agent402's own 500+ catalog or from any PROVEN external x402 seller in the open economy - pays it on your behalf on the chain you paid on, and relays the result with an on-chain receipt.",
+      "Describe a task, pay once, and the router resolves the best tool - from Agent402's own 500+ catalog or from any PROVEN external x402 seller in the open economy - buys the result from that seller on the chain you paid on and sells it to you with an on-chain receipt.",
     md: `
 The open x402 economy has a discovery problem and a trust problem. Hundreds of
 sellers advertise endpoints; some deliver, some 402 you and then 404 the paid
@@ -616,8 +615,8 @@ once.
 **Route-and-execute** collapses all of that into one call: describe the task,
 pay a single flat price, get the result and a receipt. If the best tool is in
 Agent402's own 500+ catalog, it runs internally. If it lives with an external
-seller in the open index, **we pay that seller from our own wallet on your
-behalf** and relay the output. Two on-chain settlements, one request, and the
+seller in the open index, **we buy the result from that seller with our own
+wallet and sell it to you**. Two on-chain settlements, one request, and the
 counterparty risk stays on our side of the fee.
 
 ## The three tiers
@@ -637,7 +636,7 @@ curl -X POST https://agent402.tools/api/route/execute \\
 \`\`\`
 
 The receipt itemizes what you paid vs. what the tool lists for - the spread is
-the routing fee, stated, never hidden.
+the markup, stated, never hidden.
 
 ## External dispatch (the marketable half)
 
@@ -871,8 +870,8 @@ changes *where* the USDC moves, never *whether* a bad call gets charged.
 
 ## The Smart Order Router uses this directly
 
-When [the router](/guides/smart-order-router) pays an external seller on
-your behalf, it settles on the SAME chain you paid it on - an Algorand
+When [the router](/guides/smart-order-router) buys from an external seller
+to resell the result to you, it settles on the SAME chain you paid it on - an Algorand
 payment funds an Algorand purchase, a Base payment funds a Base purchase.
 Twelve chains isn't just about who can pay us; it's what lets the router keep
 your money on the chain you already trusted it on, instead of quietly
@@ -1100,7 +1099,7 @@ its normal schedule.
   from, with no card network, no invoices and no agent accounts.
 - Discoverable: list the endpoint on Agent402's open index ([/sell](/sell));
   agents can find it at once, and once it shows settled transactions the
-  router at [/api/route](/api/route) can pay you on their behalf;
+  router at [/api/route](/api/route) can buy from you and resell the result;
   a route can also carry the x402 Bazaar discovery extension for Coinbase's
   own directory.
 - The rest of the tollbooth: proof-of-work for callers with no wallet,
@@ -1562,8 +1561,8 @@ not as its model host.
 The credits key that pays for chat pays for the rest: four wires on every
 tier (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini generateContent), embeddings, rerank,
 images, speech and transcription, 500+ tools, finished reports
-and monitors, and a router that buys from other sellers on your agent's
-behalf, proven sellers first. Why pay here, with the proof links:
+and monitors, and a router that buys from other sellers and resells the
+result, proven sellers first. Why pay here, with the proof links:
 [agent402.tools/why](https://agent402.tools/why).
 `,
   },
@@ -1692,7 +1691,7 @@ stays the simplest path for a credits key.
 
 The same key and the same base URL reach the rest of the catalog: 500+
 tools (search, extract, render, PDF, EDGAR, openFDA, on-chain data), the [smart order router](https://agent402.tools/guides/smart-order-router)
-that pays other x402 sellers on your agent's behalf, and receipts for every
+that buys from other x402 sellers and resells the result, and receipts for every
 call. Every price on this page is rendered from the live gateway configuration.
 
 ## What else the same key buys
@@ -1710,9 +1709,9 @@ receipt shape:
 - **Finished reports and monitors**: dossiers, insider flow, 13F holdings,
   domain audits, token risk, deep research, market briefs, a LinkedIn article
   package; monitors that re-run a report only when the facts change.
-- **Routing that buys on your behalf**: \`POST /api/route/execute\` pays the
-  best-matching external seller for a task, proven sellers first, and relays
-  the result.
+- **Routing that sources from other sellers**: \`POST /api/route/execute\` buys
+  the result from the best-matching external seller for a task, proven sellers
+  first, and sells it to you.
 
 Why pay here, in one page with the proof links:
 [agent402.tools/why](https://agent402.tools/why). The short version: usage is

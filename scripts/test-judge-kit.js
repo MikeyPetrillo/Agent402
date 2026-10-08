@@ -104,7 +104,8 @@ for (const [status, want, why] of [[401, 503, "a refused key is OUR problem, a 5
 // --- the answer passes through intact -----------------------------------------
 {
   const live = { model: "jev-1.13.0", answers: { severity: { type: "score", score: 1.46, probabilities: [0.1, 0.5, 0.4], confidence: 0.3 } }, usage: { input_tokens: 363, output_tokens: 37 } };
-  const out = await judge(base, { fetchImpl: async () => ({ ok: true, status: 200, text: async () => JSON.stringify(live) }) });
+  const asked = { state: "x", questions: { severity: { type: "score", instructions: "How severe?", criteria: ["low", "mid", "high"] } } };
+  const out = await judge(asked, { fetchImpl: async () => ({ ok: true, status: 200, text: async () => JSON.stringify(live) }) });
   ok(out.answers.severity.score === 1.46 && out.answers.severity.confidence === 0.3, "the typed answer reaches the buyer unchanged");
   ok(out.usage.input_tokens === 363, "usage rides along so a buyer can budget their own calls");
   ok(/noul carries/.test(out.note) && /no confidence/.test(out.note),

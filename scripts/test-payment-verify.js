@@ -270,7 +270,7 @@ const run = (over = {}, rpcOpts = {}) => verifyInboundPayment({
 //     explorer-data tools retired 2026-09-22) pay into the SPENDING wallet, not the treasury, so
 //     verifying every row against one /api/hash payTo made exactly those debts
 //     unverifiable forever - and they are the routes most likely to
-//     charged-fail, since they spend upstream on the buyer's behalf.
+//     charged-fail, since they spend upstream for the buyer's request.
 {
   const SPEND = "0x7706000000000000000000000000000000004121";
   const toSpend = [defaultLog({ topics: [TRANSFER, topic(PAYER), topic(SPEND)] })];

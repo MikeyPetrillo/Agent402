@@ -434,7 +434,7 @@ curl -X POST /api/hash \\
       <tr><th scope="row" style="text-align:left;font-weight:500;padding:13px 18px;color:var(--ink);">Cross-chain buyers</th><td style="padding:13px 18px;text-align:right;color:var(--muted);white-space:nowrap;">Base · Algorand</td></tr>
     </tbody>
   </table>
-  <p style="font-family:var(--font-mono);font-size:12.5px;line-height:1.6;color:var(--faint);margin:14px 0 0;">No listing fee and no commission. A buyer pays your wallet directly from your own 402, which names your payTo and not ours, so nothing is deducted and nothing routes through us unless a buyer asks us to buy on their behalf.</p>
+  <p style="font-family:var(--font-mono);font-size:12.5px;line-height:1.6;color:var(--faint);margin:14px 0 0;">No listing fee and no commission. A buyer pays your wallet directly from your own 402, which names your payTo and not ours, so nothing is deducted and nothing routes through us unless a buyer asks our router to buy from you and resell the result.</p>
   <div style="margin-top:16px;font-family:var(--font-mono);font-size:13px;"><a href="/sell" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">everything for sellers → /sell</a></div>
 </section>
 

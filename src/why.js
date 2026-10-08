@@ -49,8 +49,8 @@ export const WHY_POINTS = [
   {
     id: "route",
     kicker: "06 / ROUTING",
-    h: "We buy on your behalf.",
-    p: `Route-and-execute resolves a task to the best seller across the whole ecosystem, ours or anyone else's, pays them from our own wallet on the agent's behalf and relays the result under one receipt. ${routingProofSentence()}`,
+    h: "We source from other sellers.",
+    p: `Route-and-execute resolves a task to the best seller across the whole ecosystem, ours or anyone else's, buys the result from that seller with our own wallet and sells it to the agent under one receipt. ${routingProofSentence()}`,
     links: [["/tools/route-execute", "route-and-execute"], ["/marketplace", "the seller index"]],
   },
   {
@@ -71,7 +71,7 @@ export function whyPage(baseUrl) {
   const canonical = `${baseUrl}/why`;
   const title = "Why pay here: seven things that are different about Agent402";
   const description =
-    "What is different about buying tools, models and reports from Agent402: pay actual usage under a quoted ceiling, failed calls not charged with the receipt as proof, one key for everything, no wallet needed, finished reports, routing that buys on your behalf, and proof you can check.";
+    "What is different about buying tools, models and reports from Agent402: pay actual usage under a quoted ceiling, failed calls not charged with the receipt as proof, one key for everything, no wallet needed, finished reports, routing that sources from other sellers, and proof you can check.";
 
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },

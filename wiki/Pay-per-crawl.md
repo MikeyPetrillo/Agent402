@@ -55,8 +55,8 @@ curl -A "ClaudeBot/1.0" localhost:4021/article   # bot   -> 402 Payment Required
   crawler (GPTBot, ClaudeBot, CCBot, PerplexityBot, Bytespider, Google-Extended,
   …). Classic search indexers (Googlebot, Bingbot) are **not** charged, so SEO
   stays free. Override with `botUserAgents`, or a custom `charge(req)` predicate.
-- **This host's own router** is not a crawler: when it buys from you on a
-  buyer's behalf it identifies itself with `User-Agent: Mozilla/5.0 (compatible;
+- **This host's own router** is not a crawler: when it buys from you to
+  resell the result it identifies itself with `User-Agent: Mozilla/5.0 (compatible;
   Agent402-Router/1.0; +https://agent402.tools/crawler)` and
   `X-Agent402-Via: router`, and pays your quote. See
   [agent402.tools/crawler](https://agent402.tools/crawler).

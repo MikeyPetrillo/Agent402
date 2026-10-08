@@ -311,7 +311,7 @@ function liveSection(live, stats) {
   const rows = [];
   const bucket = (v) => (v === "ok" ? "ok" : v === "low" ? "warn" : "unk");
   if (live.gateway) rows.push(["LLM gateway credit", bucket(live.gateway), esc(String(live.gateway)), "Bucketed upstream balance. The amount is never exposed."]);
-  if (live.upstreamBuyer) rows.push(["Upstream buyer wallet, Base", bucket(live.upstreamBuyer), esc(live.upstreamBuyer), "Funds paid upstream calls made on a buyer's behalf."]);
+  if (live.upstreamBuyer) rows.push(["Upstream buyer wallet, Base", bucket(live.upstreamBuyer), esc(live.upstreamBuyer), "Funds the router's purchases from outside sellers for resale."]);
   if (live.upstreamBuyerAvm) rows.push(["Upstream buyer wallet, Algorand", bucket(live.upstreamBuyerAvm), esc(live.upstreamBuyerAvm), "Funds Algorand-side external routing."]);
   const last = stats?.recentCalls?.[0];
   if (last) {

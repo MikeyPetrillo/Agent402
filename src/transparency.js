@@ -195,8 +195,8 @@ and these are the receipts:</p>
   translates the credential), so they are already inside the on-chain count; only Tempo, MPP's native rail, is
   added on top. The sales ledger began recording the wire on 2026-07-24, so earlier days read as x402 because
   the wire was not recorded, not because no MPP traffic existed.</li>
-  <li><strong>Self-funded (SOR)</strong> revenue is settled to the dedicated spending wallet that pays outside
-  sellers and upstream data on a buyer's behalf. It is real revenue from others and the chart can split it out
+  <li><strong>Self-funded (SOR)</strong> revenue is settled to the dedicated spending wallet that buys from outside
+  sellers and upstream data for resale. It is real revenue from others and the chart can split it out
   by receiving wallet.</li>
   <li><strong>x402scan</strong> indexes our settlements independently. Their totals count all traffic to our
   wallets, our own canary and test buys included, and their seller row groups the spending wallet with the

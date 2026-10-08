@@ -41,7 +41,7 @@ One formula for every seller, ours included: fit to the step, observed reliabili
 ## Running a plan through Agent402
 
 - The decision fee comes back as a credit worth 100% of it, valid 24 hours, toward running that plan.
-- Our tools run at list price. Outside tools are paid on your behalf at the seller's price plus a disclosed 5% routing fee.
+- Our tools run at list price. Outside tools are bought from the seller and resold at the seller's price plus a disclosed 5% markup.
 - Spend stops at your budget, fallbacks run in order, and a run where no step succeeds is not charged.
 - Every step returns its own receipt; outside results are marked as untrusted content.
 

@@ -270,8 +270,8 @@ best tool and runs it in one paid call, including, with `include:"external"`,
 tools sold by **other x402 sellers** (it routes on proven on-chain settled
 volume, with one exception - a Base or Solana seller with no history yet is
 tried only after every proven candidate, under a small per-call ceiling, and
-flagged unproven on the receipt - pays them on your behalf **on the chain you paid
-on** - Base, Solana, Algorand or Tempo - and relays the result; see the
+flagged unproven on the receipt - buys the result from them **on the chain you paid
+on** - Base, Solana, Algorand or Tempo - and sells it to you; see the
 [Smart Order Router guide](https://agent402.tools/guides/smart-order-router)), and
 `POST /api/my-usage` ($0.005) returns the **paying wallet's own** purchase
 history - no wallet parameter; the x402 payment is the identity, so nobody can
@@ -309,8 +309,8 @@ curl -X POST https://agent402.tools/api/decide \
   schema quality, freshness) with no term for who sells the tool, and every step says whether
   the tool is ours (`firstParty`).
 - **The fee comes back.** The decision fee is returned as a 24-hour credit toward
-  `POST /api/decide/execute`, which runs the plan: our tools directly, outside steps paid on your
-  behalf at the seller's price plus a disclosed 5% routing fee. Spend stops at the budget,
+  `POST /api/decide/execute`, which runs the plan: our tools directly, outside steps bought from the
+  seller and resold at the seller's price plus a disclosed 5% markup. Spend stops at the budget,
   fallbacks are tried in order, and a run where no step succeeds is not charged.
 - **On MCP** the same pair is `decide.plan` and `decide.execute`; `decide.feedback` (free) records
   whether a step worked. Page: [agent402.tools/decide](https://agent402.tools/decide).
@@ -553,7 +553,7 @@ Every claim links to the surface that proves it (the one-page version: [agent402
 3. **One key buys everything.** The same wallet pays for five LLM tiers on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini generateContent), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools and finished reports, and an EVM wallet also keys its own memory.
 4. **No wallet required.** Proof-of-work pays for the pure-CPU tools, cards over MPP pay routes priced at $0.50 or more, and [card checkout](https://agent402.tools/reports) sells the finished reports, beside USDC or USDG on twelve chains and native MPP on Tempo.
 5. **Finished work, ready to use.** Dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a LinkedIn article package, grounded in live sources, most with a downloadable data appendix; [monitors](https://agent402.tools/monitors) check for free on a schedule and re-run the paid report when the facts change, up to 4 full reports in any 30 days.
-6. **We buy on your behalf.** `POST /api/route/execute` resolves a task to the best seller across the ecosystem, pays them from our wallet and relays the result under one receipt. Sellers are routable on proven on-chain settlement, with one bounded exception for a zero-history Base or Solana seller under a small per-call ceiling.
+6. **We source from other sellers.** `POST /api/route/execute` resolves a task to the best seller across the ecosystem, buys the result from that seller with our wallet and sells it to you under one receipt. Sellers are routable on proven on-chain settlement, with one bounded exception for a zero-history Base or Solana seller under a small per-call ceiling.
 7. **Everything is checkable.** Uptime observed by two probes outside production ([`/status`](https://agent402.tools/status)), a real-money canary through every on-chain rail daily, transactions published by rail and wire ([`/revenue`](https://agent402.tools/revenue)), open source and self-hostable. The deterministic tools run no model; the ones that do are named (the /v1 tiers, the report products, the image, speech, transcription, embedding and AI-answer tools, the Decide planner, and the judgment model that can pick among the router's shortlisted candidates). The operator is identified on-chain: Agent402 is agent 94639 in the ERC-8004 Identity Registry on Base, resolving to [`/.well-known/agent-registration.json`](https://agent402.tools/.well-known/agent-registration.json), with an A2A agent card at [`/.well-known/agent-card.json`](https://agent402.tools/.well-known/agent-card.json).
 
 ## Why it's solid

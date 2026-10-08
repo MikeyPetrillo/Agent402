@@ -127,7 +127,7 @@ Keys are computed over the *normalized* body (model aliases and field order coll
 
 ## Related paid surfaces
 
-- `POST /api/route/execute` ($0.01; `execute-plus` $0.05, `execute-max` $0.55 and `execute-pro` $3.30 for pricier tools) - resolve a task description to the best-matching tool and run it in the same call, returning `{result, receipt}`. With `include:"external"` it can pay a proven external x402 seller on your behalf and relay the result. See [[x402 Index and Router|x402-Index-and-Router]].
+- `POST /api/route/execute` ($0.01; `execute-plus` $0.05, `execute-max` $0.55 and `execute-pro` $3.30 for pricier tools) - resolve a task description to the best-matching tool and run it in the same call, returning `{result, receipt}`. With `include:"external"` it can buy the result from a proven external x402 seller and sell it to you. See [[x402 Index and Router|x402-Index-and-Router]].
 - `POST /api/my-usage` ($0.005) - your wallet's own purchase history (totals, per-tool counts, per-chain breakdown, receipts with settle txs). No wallet parameter: the x402 payment that buys the report determines whose report it is - nobody can read another wallet's profile.
 - The older custom-JSON proxies remain available: [[LLM Proxy Gateway|LLM-Proxy]] (`/api/llm*`) and [[Text Embeddings|Embeddings]] (`/api/embed*`).
 

@@ -52,8 +52,8 @@ export const PDF_SUMMARIZE_TOOLS = [
     tags: ["pdf", "summarize", "summary", "documents", "ai", "text-extraction"],
     discovery: {
       bodyType: "json",
-      // Same real, stable whitepaper URL the deterministic "pdf" tool uses.
-      input: { url: "https://bitcoin.org/bitcoin.pdf", maxWords: 150 },
+      // Our own three-page sample report (scripts/build-fixtures.js).
+      input: { url: "https://agent402.tools/fixtures/sample-report.pdf", maxWords: 150 },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Public http(s) URL of a PDF" },
@@ -63,11 +63,11 @@ export const PDF_SUMMARIZE_TOOLS = [
       },
       output: {
         example: {
-          url: "https://bitcoin.org/bitcoin.pdf",
-          pages: 9,
-          wordCount: 3604,
-          summary: "The paper proposes a peer-to-peer electronic cash system that lets online payments move directly between parties without a financial institution, using a proof-of-work chain as a timestamp server to prevent double-spending…",
-          summaryWordCount: 148,
+          url: "https://agent402.tools/fixtures/sample-report.pdf",
+          pages: 3,
+          wordCount: 247,
+          summary: "The document outlines a system for agents to purchase single answers from a tool server. Agents can request information, receive a price, and then pay for the answer by signing a payment for that exact amount. Payment is processed only after the tool successfully completes its operation; if the tool fails, no charge is applied…",
+          summaryWordCount: 112,
           model: "openai/gpt-4o-mini",
           truncatedInput: false,
         },

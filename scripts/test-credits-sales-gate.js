@@ -1,9 +1,6 @@
 #!/usr/bin/env node
-// Selling prepaid credits creates a held balance - a third party's money kept
-// against future redemption, which is the activity money transmitter statutes
-// regulate. Closed-loop balances are exempt in many states, but that is a
-// lawyer's call and we do not have one, so the product does not create the
-// obligation at all: sales are OFF unless CREDITS_SALES is explicitly on.
+// Selling prepaid credits creates a held balance kept against future
+// redemption, so sales are OFF unless CREDITS_SALES is explicitly on.
 //
 // REDEMPTION IS NOT GATED, and that is the point of the test. Existing keys
 // must keep spending their balance, or turning sales off would strand money

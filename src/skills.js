@@ -773,7 +773,7 @@ export const SKILL_PACKS = [
         name: "url",
         description: "PDF URL to summarize (e.g. https://example.com/report.pdf)",
         required: true,
-        substitute: "https://bitcoin.org/bitcoin.pdf",
+        substitute: "https://agent402.tools/fixtures/sample-report.pdf",
       },
     ],
     // Three complementary, independent views of the same document - all fanout
@@ -787,7 +787,7 @@ export const SKILL_PACKS = [
       "Run pdf-extract-pages for a quick visual preview of the opening pages (default \"1-2\") - useful when you want to show the document's actual formatting/layout alongside the summary, not just prose about it.",
     ],
     claudePrompt:
-      "Give me a brief on this PDF: https://bitcoin.org/bitcoin.pdf. Use Agent402's document-brief skill pack to get (1) the document's metadata and page count, (2) a ~150-word AI summary of what it actually says, and (3) the first two pages as a preview PDF. Present the summary first, then the metadata, and note the preview is available if I want to see the original formatting.",
+      "Give me a brief on this PDF: https://agent402.tools/fixtures/sample-report.pdf. Use Agent402's document-brief skill pack to get (1) the document's metadata and page count, (2) a ~150-word AI summary of what it actually says, and (3) the first two pages as a preview PDF. Present the summary first, then the metadata, and note the preview is available if I want to see the original formatting.",
   },
 
 
@@ -2420,7 +2420,7 @@ export const SKILL_PACKS = [
     useCase:
       "A developer has an OpenAPI spec URL and wants a quick quality check: does it lint cleanly (missing descriptions, unused schemas, invalid refs) and does a sample payload pass validation? Useful before publishing to a marketplace or generating client SDKs.",
     promptArgs: [
-      { name: "url", description: "URL of the OpenAPI spec (JSON or YAML)", required: true, substitute: "https://petstore3.swagger.io/api/v3/openapi.json" },
+      { name: "url", description: "URL of the OpenAPI spec (JSON or YAML)", required: true, substitute: "https://agent402.tools/fixtures/sample-openapi.json" },
     ],
     toolSlugs: ["openapi-lint", "openapi-validate-payload", "openapi-security-summary"],
     workflow: [
@@ -2429,7 +2429,7 @@ export const SKILL_PACKS = [
       "Call openapi-security-summary to map the spec's auth posture - which security schemes are declared, which operations require them, and which are left unprotected. A clean lint on an endpoint that forgot its auth requirement is the audit finding that matters most.",
     ],
     claudePrompt:
-      "Audit the OpenAPI spec at https://petstore3.swagger.io/api/v3/openapi.json using Agent402's openapi-audit skill pack: (1) lint it for warnings and errors, (2) validate an empty payload against the first endpoint, (3) summarize the security posture with openapi-security-summary. Report lint issues, validation failures, and any unprotected operations.",
+      "Audit the OpenAPI spec at https://agent402.tools/fixtures/sample-openapi.json using Agent402's openapi-audit skill pack: (1) lint it for warnings and errors, (2) validate an empty payload against the first endpoint, (3) summarize the security posture with openapi-security-summary. Report lint issues, validation failures, and any unprotected operations.",
   },
   {
     slug: "text-hygiene",

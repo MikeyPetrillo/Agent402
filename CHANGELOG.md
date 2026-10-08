@@ -4,6 +4,32 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## Unreleased
+
+Since v2.5.0 (2026-10-07).
+
+### 2026-10-08
+- `/v1/judge` falls back to OpenAI's Decisions API (`gpt-6-luna`) when Jev is
+  unavailable; `model` names which one answers first (default `jev-latest`),
+  the answer names the model that served, and `fallbackFrom` says when the
+  first was unavailable. The answer shape is unchanged.
+- Add `POST /v1/decisions`: OpenAI's Decisions wire, so an OpenAI SDK pointed
+  here calls `decisions.create` unchanged and pays per call. Text input;
+  `gpt-6-luna` answers first, with Jev as the fallback (`fallback_from`).
+- MPP on Tempo: a paid call answers as soon as its payment is finalized on
+  chain, instead of waiting for the relay's reply; the relay still sends
+  every payment (`TEMPO_EARLY_CONFIRM=off` restores relay-only).
+- Terms: a "Results from other sellers" paragraph states that Agent402 buys
+  such results for its own account and sells them to you.
+- Copy states plainly that the router and `/api/decide/execute` buy results
+  from outside sellers and resell them; packages agent402-mcp 0.13.10 and
+  agent402-openclaw 0.5.1 carry the same wording.
+- Add `/fixtures/sample-speech.wav`, a two-voice clip; the `transcribe` and
+  `transcribe-pro` examples use it, and `diarize: true` names two speakers.
+- The `image-exif`, `image-dominant-color`, `image-crop`, `image-ocr` and
+  `pdf-summarize` examples and the document-brief and openapi-audit packs read
+  this site's own sample files.
+
 ## v2.5.0 - 2026-10-07
 
 Since v2.4.0 (2026-09-18).

@@ -1654,6 +1654,8 @@ jobs:
           t node scripts/test-reliability-claims.js
           # Four false absolutes (a claim must stay true as the service widens)
           t node scripts/test-copy-absolutes.js
+          # The router and decide execute are described as buying from sellers and reselling (copy, tags, terms; offline)
+          t node scripts/test-resale-copy.js
           t node scripts/test-legal-dates.js
           t node scripts/test-wire-count-copy.js
           t node scripts/test-pack-copy-retired.js
@@ -2833,6 +2835,8 @@ jobs:
           t node scripts/test-discovery-rerank.js
           # Typed judgment tool: the input caps ARE the margin guard, upstream bodies never reach the buyer, model-backed is declared (offline, stubbed)
           t node scripts/test-judge-kit.js
+          # Judgment backends: order, the private-table bound on Luna, one answer shape per route, /v1/decisions wire (offline, stubbed)
+          t node scripts/test-judge-luna.js
           # Wish-board input hygiene (a client bug is not market demand)
           t node scripts/test-wish-hygiene.js
 

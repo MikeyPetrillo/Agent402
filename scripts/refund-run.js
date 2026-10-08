@@ -275,7 +275,7 @@ async function liveAcceptsByNetwork() {
 // SPENDING wallet, not the treasury,
 // so verifying every row against /api/hash's treasury payTo made those debts
 // permanently unverifiable - and they are the routes most likely to
-// charged-fail, since they spend upstream on the buyer's behalf. Probing the
+// charged-fail, since they spend upstream for the buyer's request. Probing the
 // row's own route is the precise fix; accepting any wallet WE control on that
 // network is the safe one, and it needs no slug->route map to drift.
 export function ourPayToSet(accepts, env = process.env) {

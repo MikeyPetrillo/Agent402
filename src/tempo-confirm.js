@@ -71,11 +71,12 @@ export function candidateTxIds(signedTx) {
   return out;
 }
 
-async function rpcCall(fetchImpl, rpcUrl, method, params) {
+async function rpcCall(fetchImpl, rpcUrl, method, params, timeoutMs = 0) {
   const res = await fetchImpl(rpcUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    ...(timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
   });
   if (!res.ok) throw new Error(`rpc ${method} HTTP ${res.status}`);
   const body = await res.json();
@@ -94,6 +95,17 @@ export async function confirmTempoSettlement(authorizationHeader, {
   fetchImpl = fetch,
   attempts = 4,
   delayMs = 2000,
+  // The early watcher (createTempoGate's earlyConfirm) waits before its first
+  // read, bounds each read, and stops as soon as the relay has answered.
+  initialDelayMs = 0,
+  rpcTimeoutMs = 0,
+  stop = null,
+  // Answer only once the payment's block is FINALIZED. Tempo's consensus is
+  // deterministic (a finalized block cannot be reverted) and its docs say to
+  // treat finalized blocks as settled; a receipt can be visible a block
+  // earlier. The early watcher sets this; the post-failure check keeps its
+  // original behavior.
+  requireFinalized = false,
 } = {}) {
   try {
     const credential = Credential.deserialize(authorizationHeader);
@@ -110,10 +122,12 @@ export async function confirmTempoSettlement(authorizationHeader, {
     if (!candidates.length) return null;
 
     for (let i = 0; i < attempts; i++) {
-      if (i > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const wait = i > 0 ? delayMs : initialDelayMs;
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+      if (stop?.()) return null;
       for (const txId of candidates) {
         let receipt;
-        try { receipt = await rpcCall(fetchImpl, rpcUrl, "eth_getTransactionReceipt", [txId]); } catch { continue; }
+        try { receipt = await rpcCall(fetchImpl, rpcUrl, "eth_getTransactionReceipt", [txId], rpcTimeoutMs); } catch { continue; }
         if (!receipt || receipt.status !== "0x1") continue;
         for (const log of receipt.logs || []) {
           if (String(log.address || "").toLowerCase() !== currency) continue;
@@ -123,7 +137,14 @@ export async function confirmTempoSettlement(authorizationHeader, {
           if (!memoBoundToChallenge(log.topics[3], ch.id)) continue;
           let value;
           try { value = BigInt(log.data); } catch { continue; }
-          if (value >= minAmount) return { txId, amountAtomic: value };
+          if (value < minAmount) continue;
+          if (requireFinalized) {
+            let fin;
+            try { fin = await rpcCall(fetchImpl, rpcUrl, "eth_getBlockByNumber", ["finalized", false], rpcTimeoutMs); } catch { continue; }
+            const finalized = Number.parseInt(String(fin?.number || ""), 16), included = Number.parseInt(String(receipt.blockNumber || ""), 16);
+            if (!Number.isFinite(finalized) || !Number.isFinite(included) || included > finalized) continue;
+          }
+          return { txId, amountAtomic: value };
         }
       }
     }
