@@ -8323,7 +8323,7 @@ if (!FREE_MODE) {
     // Answer as soon as the chain shows this payment, instead of waiting for
     // the relay's reply (TEMPO_EARLY_CONFIRM=off restores relay-only).
     earlyConfirm: String(process.env.TEMPO_EARLY_CONFIRM || "").toLowerCase() === "off" ? null
-      : (auth, relayAnswered) => confirmTempoSettlement(auth, { initialDelayMs: 600, delayMs: 300, attempts: 16, rpcTimeoutMs: 2000, stop: relayAnswered, requireFinalized: true }),
+      : (auth, relayAnswered, trace) => confirmTempoSettlement(auth, { initialDelayMs: 600, delayMs: 300, attempts: 16, rpcTimeoutMs: 2000, stop: relayAnswered, requireFinalized: true, trace }),
     secretKey: process.env.MPP_SECRET_KEY || "",
     realm: new URL(BASE_URL).host,
     priceFor: (method, path, req) => {

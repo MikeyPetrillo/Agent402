@@ -336,6 +336,33 @@ async function listen(app) {
   ok(legacy?.txId === REAL_TXID, "finality: the post-failure check keeps its original behavior");
 }
 
+{
+  // Diagnostics: the trace records reads, when the payment was seen, the finality lag and the first error.
+  const fin = (n) => ({ number: "0x" + n.toString(16) });
+  const t1 = {};
+  await confirmTempoSettlement(buildCredential(), { fetchImpl: stubFetch({ [REAL_TXID]: receiptFor(REAL_TXID), finalized: fin(0x0f) }), attempts: 1, requireFinalized: true, trace: t1 });
+  ok(t1.reads >= 1 && typeof t1.seenAt === "number" && t1.finalizedLag === 1 && !t1.error, `trace: reads, seen time and a one-block finality lag are recorded (${JSON.stringify(t1)})`);
+  const t2 = {};
+  await confirmTempoSettlement(buildCredential(), { fetchImpl: async () => { throw new Error("rpc 403"); }, attempts: 1, requireFinalized: true, trace: t2 });
+  ok(t2.reads >= 1 && /rpc 403/.test(t2.error || "") && t2.seenAt == null, "trace: a failing read is recorded as the error, nothing seen");
+}
+{
+  // The settle line says what the watcher saw when the relay answered first.
+  const logs = []; const orig = console.log; console.log = (...a) => { logs.push(a.join(" ")); };
+  const app = express();
+  app.use(createTempoGate({
+    ...GATE,
+    validate: async () => ({ ok: true, validation: {} }),
+    broadcast: async () => { await new Promise((r) => setTimeout(r, 60)); return { ok: true, receipt: { method: "tempo", status: "success", reference: "0xrelay", timestamp: new Date().toISOString() } }; },
+    earlyConfirm: async (auth, relayAnswered, trace) => { trace.reads = 2; trace.error = "rpc 403"; return null; },
+  }));
+  app.get("/paid", (req, res) => res.status(200).json({ result: "ok" }));
+  const { server, url } = await listen(app);
+  await fetch(`${url}/paid`, { headers: { Authorization: buildCredential() } });
+  console.log = orig; server.close();
+  ok(logs.some((l) => /settled GET \/paid .* watch=reads:2 err:rpc 403/.test(l)), "trace: the settle log names the watcher's reads and error when the relay answered first");
+}
+
 // ---------------------------------------------------------------------------
 // Wiring pin: server.js must actually pass confirmSettlement to the gate —
 // the gate's default is null (so offline tests never hit the network), which
@@ -345,7 +372,7 @@ async function listen(app) {
 {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/confirmSettlement:\s*confirmTempoSettlement/.test(src), "wiring: server.js passes confirmSettlement: confirmTempoSettlement to createTempoGate");
-  ok(/earlyConfirm:[\s\S]{0,200}confirmTempoSettlement\(auth, \{[^}]*stop: relayAnswered, requireFinalized: true/.test(src), "wiring: server.js passes an earlyConfirm that reads the chain, waits for finality and stops when the relay answers");
+  ok(/earlyConfirm:[\s\S]{0,200}confirmTempoSettlement\(auth, \{[^}]*stop: relayAnswered, requireFinalized: true, trace/.test(src), "wiring: server.js passes an earlyConfirm that reads the chain, waits for finality, stops when the relay answers and reports what it saw");
   ok(/from "\.\/tempo-confirm\.js"/.test(src), "wiring: server.js imports tempo-confirm.js");
 }
 

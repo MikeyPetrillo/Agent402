@@ -106,6 +106,8 @@ export async function confirmTempoSettlement(authorizationHeader, {
   // earlier. The early watcher sets this; the post-failure check keeps its
   // original behavior.
   requireFinalized = false,
+  // Optional: filled with what the reads saw, for the settle log line.
+  trace = null,
 } = {}) {
   try {
     const credential = Credential.deserialize(authorizationHeader);
@@ -127,7 +129,10 @@ export async function confirmTempoSettlement(authorizationHeader, {
       if (stop?.()) return null;
       for (const txId of candidates) {
         let receipt;
-        try { receipt = await rpcCall(fetchImpl, rpcUrl, "eth_getTransactionReceipt", [txId], rpcTimeoutMs); } catch { continue; }
+        if (trace) trace.reads = (trace.reads || 0) + 1;
+        try { receipt = await rpcCall(fetchImpl, rpcUrl, "eth_getTransactionReceipt", [txId], rpcTimeoutMs); }
+        catch (e) { if (trace && !trace.error) trace.error = String(e?.name === "TimeoutError" ? "timeout" : e?.message || e).slice(0, 60); continue; }
+        if (trace && receipt && trace.seenAt == null) trace.seenAt = Date.now();
         if (!receipt || receipt.status !== "0x1") continue;
         for (const log of receipt.logs || []) {
           if (String(log.address || "").toLowerCase() !== currency) continue;
@@ -140,8 +145,10 @@ export async function confirmTempoSettlement(authorizationHeader, {
           if (value < minAmount) continue;
           if (requireFinalized) {
             let fin;
-            try { fin = await rpcCall(fetchImpl, rpcUrl, "eth_getBlockByNumber", ["finalized", false], rpcTimeoutMs); } catch { continue; }
+            try { fin = await rpcCall(fetchImpl, rpcUrl, "eth_getBlockByNumber", ["finalized", false], rpcTimeoutMs); }
+            catch (e) { if (trace && !trace.error) trace.error = String(e?.message || e).slice(0, 60); continue; }
             const finalized = Number.parseInt(String(fin?.number || ""), 16), included = Number.parseInt(String(receipt.blockNumber || ""), 16);
+            if (trace) trace.finalizedLag = Number.isFinite(finalized) && Number.isFinite(included) ? included - finalized : null;
             if (!Number.isFinite(finalized) || !Number.isFinite(included) || included > finalized) continue;
           }
           return { txId, amountAtomic: value };

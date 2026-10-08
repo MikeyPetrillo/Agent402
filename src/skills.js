@@ -2276,7 +2276,7 @@ export const SKILL_PACKS = [
     useCase:
       "An agent processing podcasts, voice notes, or video audio needs shippable subtitle files plus the stats to budget downstream steps (summarization, translation, chapters) - without stitching three tools by hand.",
     promptArgs: [
-      { name: "url", description: "Public URL of the audio file to transcribe", required: true, substitute: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" },
+      { name: "url", description: "Public URL of the audio file to transcribe", required: true, substitute: "https://agent402.tools/fixtures/sample-speech.wav" },
       { name: "format", description: "Subtitle output format: srt | vtt | text | json (default vtt)", required: false, substitute: "vtt" },
     ],
     toolSlugs: ["transcribe", "srt-convert", "text-stats"],
@@ -2286,7 +2286,7 @@ export const SKILL_PACKS = [
       "Run text-stats over the transcript - word count, sentence count, and estimated reading time for downstream budgeting.",
     ],
     claudePrompt:
-      "Turn the audio at https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg into subtitles using Agent402's subtitle-pipeline skill pack. (1) Transcribe the audio, (2) convert the transcript to vtt subtitles, (3) get the text statistics. Return the subtitle file content, the detected language and duration, and the word count.",
+      "Turn the audio at https://agent402.tools/fixtures/sample-speech.wav into subtitles using Agent402's subtitle-pipeline skill pack. (1) Transcribe the audio, (2) convert the transcript to vtt subtitles, (3) get the text statistics. Return the subtitle file content, the detected language and duration, and the word count.",
   },
   {
     slug: "locale-brief",

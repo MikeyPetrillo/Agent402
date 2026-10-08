@@ -43,8 +43,6 @@ const ALLOWED = {
 // fetches it from prod). Bound to the exact routes, so the list cannot grow;
 // each entry is removed in the batch after its fixture deploys.
 const PENDING = {
-  // sample-speech.wav ships in this batch; the pack sweep fetches from prod.
-  "upload.wikimedia.org": { fixture: "sample-speech.wav", routes: ["POST /api/skill/subtitle-pipeline"] },
 };
 
 // Bare domains count when they look like a site (a common TLD), so a JWT, an
