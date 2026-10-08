@@ -1354,10 +1354,11 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // this can never charge twice; the watcher stops when the relay answers.
       let b;
       let early = false;
+      const watch = {};
       if (earlyConfirm) {
         let relayAnswered = false;
         const relayP = Promise.resolve(broadcast(auth)).then((r) => { relayAnswered = true; return r; }, (e) => { relayAnswered = true; throw e; });
-        const chainP = Promise.resolve(earlyConfirm(auth, () => relayAnswered)).catch(() => null)
+        const chainP = Promise.resolve(earlyConfirm(auth, () => relayAnswered, watch)).catch((e) => { watch.error = watch.error || String(e?.message || e).slice(0, 60); return null; })
           .then((c) => (c ? c : new Promise(() => {})));
         const first = await Promise.race([relayP.then((r) => ({ relay: r })), chainP.then((c) => ({ chain: c }))]);
         if (first.chain) {
@@ -1371,7 +1372,8 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         b = await broadcast(auth);
       }
       const tBroadcast = Date.now();
-      const timing = `validate=${tValidated - t0}ms handler=${tHandled - tValidated}ms broadcast=${tBroadcast - tHandled}ms${early ? " (chain-confirmed)" : ""}`;
+      const watched = earlyConfirm && !early ? ` watch=reads:${watch.reads || 0}${watch.seenAt ? ` seen:+${watch.seenAt - tHandled}ms` : ""}${watch.finalizedLag != null ? ` lag:${watch.finalizedLag}` : ""}${watch.error ? ` err:${watch.error}` : ""}` : "";
+      const timing = `validate=${tValidated - t0}ms handler=${tHandled - tValidated}ms broadcast=${tBroadcast - tHandled}ms${early ? " (chain-confirmed)" : ""}${watched}`;
       if (!b.ok && confirmSettlement) {
         // The relay's verdict and the chain's truth can diverge: on
         // 2026-08-20 the relay reported "Broadcast transaction hash does not
