@@ -28,10 +28,16 @@ import { createHmac } from "node:crypto";
 
 // A failed leg names the network cause too: undici reports a bare "fetch
 // failed" and keeps the code and host in e.cause.
-function errText(e) {
+export function errText(e) {
   const c = e?.cause;
   const cause = c ? ` (cause: ${[c.code, c.message || String(c)].filter(Boolean).join(" ")})` : "";
   return `${e?.message || String(e)}${cause}`.slice(0, 220);
+}
+
+// A cached repeat is right when the unpaid try got the 402 and the paid try
+// got a cache hit with the same answer and nothing settled.
+export function cacheRepeatOk({ unpaidStatus, paidStatus, xCache, sameAnswer, settled }) {
+  return unpaidStatus === 402 && paidStatus === 200 && xCache === "hit" && sameAnswer === true && settled === false;
 }
 // Metered legs pay a per-request quote. It is computed here from the kit (the
 // private cost table), never typed: a typed quote would publish cost x markup.
@@ -1769,7 +1775,7 @@ async function main() {
       const free = await payFetch(`${TARGET}/v1/nano/chat/completions`, init);
       const freeBody = await free.json().catch(() => ({}));
       const settled = !!(free.headers.get("payment-response") || free.headers.get("x-payment-response"));
-      if (unpaid.status === 402 && free.status === 200 && free.headers.get("x-cache") === "hit" && freeBody.id === paidBody.id && !settled) {
+      if (cacheRepeatOk({ unpaidStatus: unpaid.status, paidStatus: free.status, xCache: free.headers.get("x-cache"), sameAnswer: freeBody.id === paidBody.id, settled })) {
         console.log(`\nOK    prompt-cache /v1/nano/chat/completions  → paid once ($0.003); unpaid repeat 402; paid repeat served FREE from cache (X-Cache: hit, not settled)`);
       } else {
         console.warn(`\nWARN  prompt-cache leg: unpaid repeat HTTP ${unpaid.status} (want 402); paid repeat HTTP ${free.status}, X-Cache=${free.headers.get("x-cache")}, sameId=${freeBody.id === paidBody.id}, settled=${settled}`);
@@ -1795,7 +1801,7 @@ async function main() {
       const free = await payFetch(`${TARGET}/v1/embeddings`, init);
       const freeBody = await free.json().catch(() => ({}));
       const settled = !!(free.headers.get("payment-response") || free.headers.get("x-payment-response"));
-      if (unpaid.status === 402 && free.status === 200 && free.headers.get("x-cache") === "hit" && Array.isArray(freeBody.data?.[0]?.embedding) && !settled) {
+      if (cacheRepeatOk({ unpaidStatus: unpaid.status, paidStatus: free.status, xCache: free.headers.get("x-cache"), sameAnswer: Array.isArray(freeBody.data?.[0]?.embedding), settled })) {
         console.log(`\nOK    embed-cache /v1/embeddings  → paid once ($0.002); unpaid repeat 402; paid repeat served FREE from cache (X-Cache: hit, not settled)`);
       } else {
         console.warn(`\nWARN  embed-cache leg: unpaid repeat HTTP ${unpaid.status} (want 402); paid repeat HTTP ${free.status}, X-Cache=${free.headers.get("x-cache")}, settled=${settled}`);

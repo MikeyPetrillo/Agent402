@@ -1,7 +1,7 @@
 // Unit tests for the paid-canary's decision logic — proves the canary pages on
 // real BUYING failures and only warns on upstream/data hiccups (the chronic
 // false-alarm fix). Pure, no network, no wallet.
-import { classifyResult, decideCanary, settleRejectReason, settleRejectDetail, classifyRailOutcome } from "./paid-canary.js";
+import { classifyResult, decideCanary, settleRejectReason, settleRejectDetail, classifyRailOutcome, errText, cacheRepeatOk } from "./paid-canary.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -115,5 +115,21 @@ ok(classifyRailOutcome({ toolBroken: false, railFailures: ["stellar: simulation_
 ok(classifyRailOutcome({ toolBroken: true, railFailures: ["stellar: simulation_failed"] }) === "broken", "tools broken + rail fail → broken (systemic wins)");
 ok(classifyRailOutcome({ toolBroken: true, railFailures: [] }) === "broken", "tools broken alone → broken");
 
+// A failed leg's text carries undici's network cause.
+{
+  const e = new TypeError("fetch failed", { cause: Object.assign(new Error("connect ETIMEDOUT 10.0.0.1:443"), { code: "ETIMEDOUT" }) });
+  const t = errText(e);
+  ok(/fetch failed/.test(t) && /ETIMEDOUT/.test(t) && /10\.0\.0\.1:443/.test(t), "a failed leg's error names the network cause");
+  ok(errText(new Error("plain")) === "plain", "an error without a cause is reported as is");
+}
+// The cache legs pass only when unpaid -> 402 and paid -> an unsettled cache hit.
+{
+  const good = { unpaidStatus: 402, paidStatus: 200, xCache: "hit", sameAnswer: true, settled: false };
+  ok(cacheRepeatOk(good), "a cached repeat passes when unpaid gets 402 and paid gets an unsettled hit");
+  ok(!cacheRepeatOk({ ...good, unpaidStatus: 200 }), "an unpaid repeat answered 200 fails the cache leg");
+  ok(!cacheRepeatOk({ ...good, settled: true }), "a settled paid repeat fails the cache leg");
+  ok(!cacheRepeatOk({ ...good, xCache: "miss" }), "a miss on the paid repeat fails the cache leg");
+  ok(!cacheRepeatOk({ ...good, sameAnswer: false }), "a different answer fails the cache leg");
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
