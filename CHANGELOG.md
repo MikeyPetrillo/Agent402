@@ -16,6 +16,9 @@ Since v2.5.0 (2026-10-07).
 - Add `POST /v1/decisions`: OpenAI's Decisions wire, so an OpenAI SDK pointed
   here calls `decisions.create` unchanged and pays per call. Text input;
   `gpt-6-luna` answers first, with Jev as the fallback (`fallback_from`).
+- MPP on Tempo: a paid call answers as soon as its payment is confirmed on
+  chain, instead of waiting for the relay's reply; the relay still sends
+  every payment (`TEMPO_EARLY_CONFIRM=off` restores relay-only).
 - Add `/fixtures/sample-speech.wav`, a two-voice clip; the `transcribe` and
   `transcribe-pro` examples use it, and `diarize: true` names two speakers.
 - The `image-exif`, `image-dominant-color`, `image-crop`, `image-ocr` and
