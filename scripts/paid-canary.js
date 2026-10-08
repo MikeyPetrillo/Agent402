@@ -437,6 +437,31 @@ export const TOOLS = [
       `expected a non-empty transcript from gpt-transcribe, got ${JSON.stringify(r).slice(0, 120)}`,
   },
   {
+    // Typed judgment (2026-10-08): Jev answers first, gpt-6-luna is the
+    // fallback. The leg proves a paid call returns a typed answer from one of
+    // the two models, in the route's published shape.
+    kit: "judge",
+    path: "/v1/judge",
+    method: "POST",
+    body: { state: "The export button crashes the settings page in Safari. It works in Chrome.", questions: { severity: { type: "score", instructions: "How severe is the reported issue?", criteria: ["Cosmetic", "Workaround exists", "Blocking"] } } },
+    priceUsd: 0.001,
+    check: (r) =>
+      (/^(jev|gpt-6-luna)/.test(String(r.model)) && typeof r.answers?.severity?.score === "number") ||
+      `expected a scored answer from jev or gpt-6-luna, got ${JSON.stringify(r).slice(0, 120)}`,
+  },
+  {
+    // OpenAI's Decisions wire (2026-10-08): gpt-6-luna first, Jev as the
+    // fallback, answers in the Decisions shape.
+    kit: "decisions",
+    path: "/v1/decisions",
+    method: "POST",
+    body: { input: "I was charged twice for my order.", questions: [{ type: "choice", name: "department", instructions: "Which department should handle this complaint?", choices: [{ value: "billing", description: "Payments and refunds." }, { value: "technical", description: "Problems using the product." }] }] },
+    priceUsd: 0.001,
+    check: (r) =>
+      (Array.isArray(r.answers) && r.answers[0]?.name === "department" && typeof r.answers[0]?.choice === "string") ||
+      `expected a Decisions choice answer, got ${JSON.stringify(r).slice(0, 120)}`,
+  },
+  {
     // Derivatives leg (2026-08-22) - a keyless public upstream, so the only cost
     // is the settle itself. Two jobs: it seeds the new family into the
     // settlement-driven explorers (they index routes that get PAID, the way the
