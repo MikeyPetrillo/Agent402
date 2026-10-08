@@ -3493,7 +3493,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.002",
     description:
-      "OpenAI-compatible text embeddings over x402 - point any OpenAI SDK at base_url https://agent402.tools/v1 and pay $0.002 per call in USDC, no API key, no signup. Batch up to 64 inputs / 16k chars per request; text-embedding-3-small by default (3-large and ada-002 supported; dimensions and encoding_format pass through). Embeddings are deterministic, so a byte-identical repeat within 10 minutes that carries your payment is served FREE from cache and the payment is not charged (X-Cache: hit; opt out with cache:false).",
+      "OpenAI-compatible text embeddings over x402 - point any OpenAI SDK at base_url https://agent402.tools/v1 and pay $0.002 per call in USDC, no API key, no signup. Batch up to 64 inputs / 16k chars per request; text-embedding-3-small by default (3-large and ada-002 supported; dimensions and encoding_format pass through). Embeddings are deterministic, so a byte-identical repeat within 10 minutes that carries your payment is served FREE from cache and the payment is not charged, except a Tempo transfer you send before the call, which is final when sent (X-Cache: hit; opt out with cache:false).",
     tags: ["embeddings", "vector", "rag", "semantic-search", ...SHARED_TAGS],
     discovery: {
       bodyType: "json",
@@ -3517,7 +3517,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.002",
     description:
-      "Rerank documents against a query over x402 - the Cohere /rerank wire ({query, documents[], top_n} -> results with relevance_score), served by cohere/rerank-v3.5, $0.002 per call in USDC, no API key, no signup. Up to 50 documents (1,600 chars each, 40k total) and a 500-char query per call. Deterministic, so a byte-identical repeat within 10 minutes that carries your payment is served FREE from cache and the payment is not charged (X-Cache: hit; opt out with cache:false). The retrieval companion to /v1/embeddings - embed and recall, then rerank the top candidates.",
+      "Rerank documents against a query over x402 - the Cohere /rerank wire ({query, documents[], top_n} -> results with relevance_score), served by cohere/rerank-v3.5, $0.002 per call in USDC, no API key, no signup. Up to 50 documents (1,600 chars each, 40k total) and a 500-char query per call. Deterministic, so a byte-identical repeat within 10 minutes that carries your payment is served FREE from cache and the payment is not charged, except a Tempo transfer you send before the call, which is final when sent (X-Cache: hit; opt out with cache:false). The retrieval companion to /v1/embeddings - embed and recall, then rerank the top candidates.",
     tags: ["rerank", "reranking", "retrieval", "rag", "semantic-search", "cohere", ...SHARED_TAGS],
     discovery: {
       bodyType: "json",

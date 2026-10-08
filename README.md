@@ -221,7 +221,7 @@ already issued also works, see [For humans](#for-humans-reports-monitors-and-pre
 | `POST /v1/grounded/chat/completions` | $0.03 | the auto router plus a live web search on every call - answers carry OpenAI-wire `url_citation` annotations; never cached |
 | `POST /v1/{nano,auto,pro,premium}/messages`, `POST /v1/messages` | tier price | the **Anthropic Messages wire** on every tier (same allowlist, caps and failover as the chat route); `effort` (low to max) is the depth control on Claude 4.7+, older Claude takes `thinking.budget_tokens` |
 | `POST /v1/{nano,auto,pro,premium}/responses`, `POST /v1/responses` | tier price | the **OpenAI Responses wire** on every tier (function tools only, no server state) |
-| `POST /v1/embeddings` | $0.002 | OpenAI embeddings, batch up to 64 inputs - identical repeats are **free**: the repeat's payment is not charged (deterministic output, cache default-on) |
+| `POST /v1/embeddings` | $0.002 | OpenAI embeddings, batch up to 64 inputs - identical repeats are **free**: the repeat's payment is not charged, except a Tempo transfer sent before the call, which is final when sent (deterministic output, cache default-on) |
 | `POST /v1/rerank` | $0.002 | Cohere-compatible rerank (`{query, documents[], top_n}`), up to 50 documents, cache default-on |
 | `POST /v1/images/generations` | $0.08 | image generation (FLUX.2 Pro, 1024x1024 PNG) - OpenAI images wire, inline base64 out |
 | `POST /v1/images/fast` | $0.02 | budget text-to-image, same OpenAI images wire, about two seconds a picture |
@@ -231,7 +231,8 @@ already issued also works, see [For humans](#for-humans-reports-monitors-and-pre
 
 Streaming (`stream: true`), full tools/function-calling passthrough, an opt-in
 prompt cache on the chat tiers (`cache: true` → byte-identical repeats free for
-10 minutes; the repeat's payment is not charged), upstream failover chains that end in a canary-proven model, and a
+10 minutes; the repeat's payment is not charged, except a Tempo transfer sent before
+the call, which is final when sent), upstream failover chains that end in a canary-proven model, and a
 free [`GET /v1/models`](https://agent402.tools/v1/models) listing every model with
 its tier and caps. A real-money canary buys the core surfaces daily (the chat
 tiers, the messages and responses wires, embeddings, rerank, image generation
