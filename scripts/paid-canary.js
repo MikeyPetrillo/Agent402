@@ -1739,10 +1739,11 @@ async function main() {
     }
   })();
 
-  // Prompt-cache leg — pays once with cache:true, then repeats the IDENTICAL
-  // request unpaid: the pre-paywall cache must answer 200 + X-Cache: hit with
-  // the same response object. Real-money proof that opted-in repeats are
-  // free. Informational: failures WARN, never page.
+  // Prompt-cache leg - pays once with cache:true, then repeats the IDENTICAL
+  // request: unpaid it gets the 402 (a cached answer is never handed to a
+  // request that carries no payment), and with the payment wallet the
+  // pre-paywall cache answers 200 + X-Cache: hit with the same response
+  // object and nothing is settled. Informational: failures WARN, never page.
   await (async () => {
     try {
       const init = {
@@ -1755,34 +1756,41 @@ async function main() {
         console.warn(`\nWARN  prompt-cache leg: priming buy failed — HTTP ${paid.status} ${JSON.stringify(paidBody).slice(0, 100)}`);
         return;
       }
-      const free = await synthFetch(`${TARGET}/v1/nano/chat/completions`, init); // NO payment wrapper — must not need one
+      const unpaid = await synthFetch(`${TARGET}/v1/nano/chat/completions`, init);
+      await unpaid.text().catch(() => "");
+      const free = await payFetch(`${TARGET}/v1/nano/chat/completions`, init);
       const freeBody = await free.json().catch(() => ({}));
-      if (free.status === 200 && free.headers.get("x-cache") === "hit" && freeBody.id === paidBody.id) {
-        console.log(`\nOK    prompt-cache /v1/nano/chat/completions  → paid once ($0.003), identical repeat served FREE (X-Cache: hit)`);
+      const settled = !!(free.headers.get("payment-response") || free.headers.get("x-payment-response"));
+      if (unpaid.status === 402 && free.status === 200 && free.headers.get("x-cache") === "hit" && freeBody.id === paidBody.id && !settled) {
+        console.log(`\nOK    prompt-cache /v1/nano/chat/completions  → paid once ($0.003); unpaid repeat 402; paid repeat served FREE from cache (X-Cache: hit, not settled)`);
       } else {
-        console.warn(`\nWARN  prompt-cache leg: repeat was NOT a free hit — HTTP ${free.status}, X-Cache=${free.headers.get("x-cache")}, sameId=${freeBody.id === paidBody.id}`);
+        console.warn(`\nWARN  prompt-cache leg: unpaid repeat HTTP ${unpaid.status} (want 402); paid repeat HTTP ${free.status}, X-Cache=${free.headers.get("x-cache")}, sameId=${freeBody.id === paidBody.id}, settled=${settled}`);
       }
     } catch (e) {
       console.warn(`\nWARN  prompt-cache leg errored: ${(e?.message || String(e)).slice(0, 140)}`);
     }
   })();
 
-  // Embeddings cache — DEFAULT-ON (no cache flag anywhere): the llm-embed leg
-  // above already paid for this exact body, so an unpaid identical repeat must
-  // come back 200 + X-Cache: hit with the same response object. This is the
-  // billing-relevant promise in the tool description — prove it daily.
+  // Embeddings cache - DEFAULT-ON (no cache flag anywhere): the llm-embed leg
+  // above already paid for this exact body. Unpaid, the repeat gets the 402;
+  // with the payment wallet it comes back 200 + X-Cache: hit and nothing is
+  // settled. This is the billing-relevant promise in the tool description -
+  // prove it daily.
   await (async () => {
     try {
       const init = {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ input: EMBED_CANARY_INPUT, model: "text-embedding-3-small" }),
       };
-      const free = await synthFetch(`${TARGET}/v1/embeddings`, init); // NO payment wrapper — must not need one
+      const unpaid = await synthFetch(`${TARGET}/v1/embeddings`, init);
+      await unpaid.text().catch(() => "");
+      const free = await payFetch(`${TARGET}/v1/embeddings`, init);
       const freeBody = await free.json().catch(() => ({}));
-      if (free.status === 200 && free.headers.get("x-cache") === "hit" && Array.isArray(freeBody.data?.[0]?.embedding)) {
-        console.log(`\nOK    embed-cache /v1/embeddings  → paid once ($0.002), identical repeat served FREE (X-Cache: hit, default-on)`);
+      const settled = !!(free.headers.get("payment-response") || free.headers.get("x-payment-response"));
+      if (unpaid.status === 402 && free.status === 200 && free.headers.get("x-cache") === "hit" && Array.isArray(freeBody.data?.[0]?.embedding) && !settled) {
+        console.log(`\nOK    embed-cache /v1/embeddings  → paid once ($0.002); unpaid repeat 402; paid repeat served FREE from cache (X-Cache: hit, not settled)`);
       } else {
-        console.warn(`\nWARN  embed-cache leg: repeat was NOT a free hit — HTTP ${free.status}, X-Cache=${free.headers.get("x-cache")}`);
+        console.warn(`\nWARN  embed-cache leg: unpaid repeat HTTP ${unpaid.status} (want 402); paid repeat HTTP ${free.status}, X-Cache=${free.headers.get("x-cache")}, settled=${settled}`);
       }
     } catch (e) {
       console.warn(`\nWARN  embed-cache leg errored: ${(e?.message || String(e)).slice(0, 140)}`);

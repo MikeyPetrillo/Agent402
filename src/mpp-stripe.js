@@ -321,6 +321,14 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
         releaseReplay();
         return;
       }
+      // A gateway cache hit repeats an answer someone already paid for, and is
+      // free on every rail: never capture, and release the credential unused.
+      if (req.gatewayCacheHit === true) {
+        restore();
+        replay();
+        releaseReplay();
+        return;
+      }
       // The buyer left before anything could reach them and the request holds
       // a granted forgiveness ticket (src/hangup-settlement.js): do not
       // capture. The credential stays spent, so it cannot buy a second run.

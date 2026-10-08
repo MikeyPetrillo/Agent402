@@ -88,6 +88,18 @@ const GATE = { secretKey: SECRET, realm: REALM, priceFor };
   ok(res.status === 500 && settleCalled === false, "gate B: a failed handler is NEVER settled (card not charged)");
   s.close();
 }
+// B2) a gateway cache hit (an answer someone already paid for) -> card NEVER charged.
+{
+  let settleCalled = false;
+  const app = express();
+  app.use(createStripeGate({ ...GATE, validate: async () => ({ ok: true }), settle: async () => { settleCalled = true; return { ok: true, receipt: {} }; } }));
+  app.post("/paid", (req, res) => { req.gatewayCacheHit = true; res.setHeader("X-Cache", "hit"); res.status(200).json({ cached: true }); });
+  const { s, url } = await listen(app);
+  const res = await fetch(`${url}/paid`, { method: "POST", headers: { Authorization: credFor() } });
+  const body = await res.json().catch(() => ({}));
+  ok(res.status === 200 && body.cached === true && settleCalled === false, "gate B2: a gateway cache hit is delivered and the card is NEVER charged");
+  s.close();
+}
 // C) settle fails after a 200 -> 402, handler body discarded.
 {
   const app = express();

@@ -1331,6 +1331,14 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         releaseReplay();
         return;
       }
+      // A gateway cache hit repeats an answer someone already paid for, and is
+      // free on every rail: never broadcast, and release the credential unused.
+      if (req.gatewayCacheHit === true) {
+        restore();
+        replay();
+        releaseReplay();
+        return;
+      }
       // The buyer left before anything could reach them and the run holds a
       // forgiveness ticket: do not broadcast. The credential stays spent (it
       // cannot buy a second run); the 499 goes through the hang-up hook's

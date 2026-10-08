@@ -9,6 +9,10 @@ carries its own version on npm.
 Since v2.5.0 (2026-10-07).
 
 ### 2026-10-08
+- A cached repeat on `/v1/embeddings`, `/v1/rerank` or an opted-in chat
+  tier is served only to a request that carries a payment, and that payment
+  is not charged on any rail (x402, MPP on Tempo, card, credits). A request
+  with no payment gets the route's 402.
 - `/v1/judge` falls back to OpenAI's Decisions API (`gpt-6-luna`) when Jev is
   unavailable; `model` names which one answers first (default `jev-latest`),
   the answer names the model that served, and `fallbackFrom` says when the
