@@ -106,6 +106,8 @@ for (const [why, lunaReply, code] of [
   ["a Luna choice outside the options", json(200, { answers: [LUNA_ANSWERS.answers[0], LUNA_ANSWERS.answers[1], { ...LUNA_ANSWERS.answers[2], choice: "zzz" }] }), 502],
   ["a Luna answer missing a question", json(200, { answers: LUNA_ANSWERS.answers.slice(0, 2) }), 502],
   ["a Luna probability above 1", json(200, { answers: [LUNA_ANSWERS.answers[0], { type: "predicate", name: "q1", probability: 1.4 }, LUNA_ANSWERS.answers[2]] }), 502],
+  ["a Luna score past the last level", json(200, { answers: [{ ...LUNA_ANSWERS.answers[0], score: 7 }, LUNA_ANSWERS.answers[1], LUNA_ANSWERS.answers[2]] }), 502],
+  ["a Luna score below the first level", json(200, { answers: [{ ...LUNA_ANSWERS.answers[0], score: -1 }, LUNA_ANSWERS.answers[1], LUNA_ANSWERS.answers[2]] }), 502],
 ]) {
   const s = stub({ [OPENAI]: lunaReply, [TYPESAFE]: json(200, JEV_ANSWERS) });
   let e = null; try { await judge(LUNA_IN, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
@@ -185,6 +187,7 @@ for (const [why, input] of [
   const s = stub({});
   let e = null; try { await decisions(input, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
   ok(e?.statusCode === 400 && s.calls.length === 0, `the Decisions wire refuses ${why} with a 400 before any upstream call`);
+  if (why === "an image part") ok(/Images are not accepted/.test(e?.message || ""), "...and an image is refused by name, so the buyer knows to send text");
 }
 {
   const s = stub({ [OPENAI]: json(200, {}) });
