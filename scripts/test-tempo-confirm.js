@@ -372,7 +372,8 @@ async function listen(app) {
 {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/confirmSettlement:\s*confirmTempoSettlement/.test(src), "wiring: server.js passes confirmSettlement: confirmTempoSettlement to createTempoGate");
-  ok(/earlyConfirm:[\s\S]{0,200}confirmTempoSettlement\(auth, \{[^}]*stop: relayAnswered, requireFinalized: true, trace/.test(src), "wiring: server.js passes an earlyConfirm that reads the chain, waits for finality, stops when the relay answers and reports what it saw");
+  ok(/earlyConfirm:[\s\S]{0,300}confirmTempoSettlement\(auth, \{[^}]*stop: relayAnswered, requireFinalized: true, trace/.test(src), "wiring: server.js passes an earlyConfirm that reads the chain, waits for finality, stops when the relay answers and reports what it saw");
+  ok(/earlyConfirm: String\(process\.env\.TEMPO_EARLY_CONFIRM \|\| ""\)\.toLowerCase\(\) !== "on" \? null/.test(src), "wiring: the early watcher is off unless TEMPO_EARLY_CONFIRM=on");
   ok(/from "\.\/tempo-confirm\.js"/.test(src), "wiring: server.js imports tempo-confirm.js");
 }
 
