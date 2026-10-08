@@ -35,8 +35,11 @@ for (const f of files) {
     if (AGENCY.test(line) && !NOT_AGENCY.test(line)) agency.push(`${rel}:${i + 1}`);
     // Prose only: code comments may still name the internal routingFee figure.
     if (/routing fee/i.test(line) && !/^\s*(\/\/|\*|\/\*)/.test(line)) fee.push(`${rel}:${i + 1}`);
-    if (/\btags:\s*\[[^\]]*"(?:broker|delegate|behalf)"/.test(line)) tags.push(`${rel}:${i + 1}`);
   });
+  // Tag lists span lines, so they are read whole.
+  for (const m of readFileSync(f, "utf8").matchAll(/\btags:\s*\[([^\]]*)\]/g)) {
+    if (/"(?:broker|delegate|behalf)"/.test(m[1])) tags.push(rel);
+  }
 }
 ok(agency.length === 0, `no published text says we act on a buyer's behalf${agency.length ? `: ${agency.slice(0, 8).join(", ")}` : ""}`);
 ok(fee.length === 0, `published prose calls the router's margin a markup, not a routing fee${fee.length ? `: ${fee.slice(0, 8).join(", ")}` : ""}`);
