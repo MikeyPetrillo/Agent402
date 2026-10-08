@@ -25,6 +25,14 @@ import { subcentAcceptVerdict } from "./avm-canary-classify.js";
 import { readFileSync, existsSync, appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
+
+// A failed leg names the network cause too: undici reports a bare "fetch
+// failed" and keeps the code and host in e.cause.
+function errText(e) {
+  const c = e?.cause;
+  const cause = c ? ` (cause: ${[c.code, c.message || String(c)].filter(Boolean).join(" ")})` : "";
+  return `${e?.message || String(e)}${cause}`.slice(0, 220);
+}
 // Metered legs pay a per-request quote. It is computed here from the kit (the
 // private cost table), never typed: a typed quote would publish cost x markup.
 const { meteredQuoteUsd } = await import("../src/tools/llm-gateway-kit.js");
@@ -1034,8 +1042,8 @@ async function main() {
         console.warn(`\nWARN  solana leg: HTTP ${res.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
     } catch (e) {
-      noteRail("solana", false, `errored: ${(e?.message || String(e)).slice(0, 160)}`);
-      console.warn(`\nWARN  solana leg errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      noteRail("solana", false, `errored: ${errText(e)}`);
+      console.warn(`\nWARN  solana leg errored: ${errText(e)}`);
     }
   })();
 
@@ -1108,8 +1116,8 @@ async function main() {
         console.warn(`\nWARN  robinhood leg: HTTP ${paid.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
     } catch (e) {
-      noteRail("robinhood", false, `errored: ${(e?.message || String(e)).slice(0, 160)}`);
-      console.warn(`\nWARN  robinhood leg errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      noteRail("robinhood", false, `errored: ${errText(e)}`);
+      console.warn(`\nWARN  robinhood leg errored: ${errText(e)}`);
     }
   })();
 
@@ -1238,7 +1246,7 @@ async function main() {
         railFail("mpp-celo", `HTTP ${celoPaid.status} ${JSON.stringify(celoBody).slice(0, 120)}`);
       }
     } catch (e) {
-      railFail("mpp", `errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      railFail("mpp", `errored: ${errText(e)}`);
     }
   })();
   }
@@ -1306,7 +1314,7 @@ async function main() {
         noteRail("metered-upto", true);
       }
     } catch (e) {
-      railFail("metered-upto", `errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      railFail("metered-upto", `errored: ${errText(e)}`);
     }
   })();
 
@@ -1436,7 +1444,7 @@ async function main() {
         railFail("mpp-tempo", `HTTP ${paid.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
     } catch (e) {
-      railFail("mpp-tempo", `errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      railFail("mpp-tempo", `errored: ${errText(e)}`);
     }
   })();
 
@@ -1503,7 +1511,7 @@ async function main() {
         railFail(leg.key, `HTTP ${paid.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
     } catch (e) {
-      railFail(leg.key, `errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      railFail(leg.key, `errored: ${errText(e)}`);
     }
   }
 
@@ -1588,7 +1596,7 @@ async function main() {
         railFail("stellar", `HTTP ${res.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
     } catch (e) {
-      railFail("stellar", `errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      railFail("stellar", `errored: ${errText(e)}`);
     }
   })();
 
@@ -1734,8 +1742,8 @@ async function main() {
         console.warn(`\nWARN  algorand leg: HTTP ${res.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
     } catch (e) {
-      noteRail("algorand", false, `errored: ${(e?.message || String(e)).slice(0, 160)}`);
-      console.warn(`\nWARN  algorand leg errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      noteRail("algorand", false, `errored: ${errText(e)}`);
+      console.warn(`\nWARN  algorand leg errored: ${errText(e)}`);
     }
   })();
 
