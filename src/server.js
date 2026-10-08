@@ -247,6 +247,8 @@ import { operatorSearchPage } from "./operator-search.js";
 import { datasetStatus, datasetRecorded, runDatasetSnapshot, startDatasetScheduler } from "./dataset-snapshot.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
+import { createAsyncJobs } from "./async-jobs.js";
+import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
 import { admitCoveredRun } from "./inflight-cover.js";
 import { paymentReplayKey, createReplayGuard } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
@@ -8216,6 +8218,27 @@ app.get("/api/cache-stats", (_req, res) => res.json(cacheCounters()));
 // @x402/express) reads the same header it always has — settlement authority
 // stays solely with the paywall. Env-gated: no MPP_SECRET_KEY (or FREE_MODE)
 // → not mounted, server stays pure-x402.
+// Submit now, collect later (src/async-jobs.js): a PAID call to a slow route
+// with "Prefer: respond-async" gets 202 and a job link here, BEFORE any payment
+// gate, so nothing settles on the 202. The call is replayed to this server over
+// 127.0.0.1 with the buyer's own payment headers and runs through the normal
+// chain below, settling only on a final 200; GET /api/jobs/:id serves the result.
+const asyncJobStore = createTaskStore({
+  dir: taskDataDir("async-jobs"), label: "async-jobs",
+  onChargedFailure: async ({ slug, receipt, priceUsd }) => {
+    try {
+      if (!receiptProvesCharge(receipt)) return;
+      recordRefundOwed({ slug, network: receipt?.network ?? null, payer: receipt?.payer ?? null, priceUsd, tx: receipt?.transaction ?? null, httpStatus: 500 });
+    } catch { /* recording a debt must never break the serving path */ }
+  },
+});
+const asyncJobs = createAsyncJobs({
+  port: PORT, store: asyncJobStore,
+  asyncRouteOf: (req) => { const def = CATALOG[`POST ${req.path}`]; return def && def.runSeconds ? def : null; },
+});
+app.use(asyncJobs.middleware);
+app.get("/api/jobs/:id", asyncJobs.statusHandler);
+
 // Tempo push-transfer debts (src/tempo-push-debts.js), built with the Tempo
 // gate below; read again at finish to void a debt whose transfer was served.
 let tempoPushDebts = null;

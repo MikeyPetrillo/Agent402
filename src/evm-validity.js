@@ -62,7 +62,7 @@ export const EVM_RUN_SECONDS = Object.freeze({
 export function runTimeNote(seconds) {
   const s = Number(seconds);
   const span = s >= 120 && s % 60 === 0 ? `${s / 60} minutes` : `${s} seconds`;
-  return `Takes up to ${span} to answer: keep the connection open for at least ${s + 30} seconds, because a client that disconnects first loses the answer.`;
+  return `Takes up to ${span} to answer: keep the connection open for at least ${s + 30} seconds, because a client that disconnects first loses the answer, or send the paid call with "Prefer: respond-async" to get a job link at once and collect the answer from it (payment still settles only on a delivered result).`;
 }
 
 const UINT = /^\d{1,20}$/;
