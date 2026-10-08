@@ -9,6 +9,26 @@ carries its own version on npm.
 Since v2.5.0 (2026-10-07).
 
 ### 2026-10-08
+- Slow routes (reports, video, the premium image, `/api/decide/execute`)
+  accept `Prefer: respond-async` on a paid call: it answers `202` with a job
+  link at once, and `GET /api/jobs/{id}` (free) returns the answer when it is
+  ready. Payment still settles only on a delivered answer; a failed run is not
+  charged. Each of these routes now states how long it can take.
+- An `Idempotency-Key` call sent again while the first copy is still running
+  gets `409` with `Retry-After` and does not run; a retry after the first
+  finishes replays its answer.
+- On the chat wires, a model provider that refuses the request itself (for
+  example a model with no endpoint for the request's tools) answers `400` with
+  the reason instead of `502`, after failover has tried the next model.
+- The free SEC company pages show three years of revenue, net income and
+  total assets from each 10-K, twelve months of filing activity with the
+  reasons for each 8-K, and recent filings; insider pages total the
+  open-market flow they show, and fund pages show ten holdings and their
+  concentration.
+- agent402-mcp 0.13.11 lists `route_and_execute` as `router.execute` (the old
+  name still works), and both MCP Docker images include every file the server
+  loads.
+- The README names the free seller listing at `/sell` near the top.
 - A cached repeat on `/v1/embeddings`, `/v1/rerank` or an opted-in chat
   tier is served only to a request that carries a payment, and that payment
   is not charged (x402, card, credits, and Tempo payments the server sends;
