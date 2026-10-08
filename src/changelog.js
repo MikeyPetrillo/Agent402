@@ -7,7 +7,7 @@ const ENTRIES = [
     items: [
       "/v1/judge falls back to OpenAI's Decisions API (gpt-6-luna) when Jev is unavailable. The answer shape is unchanged; it names the model that served, and fallbackFrom when the first was unavailable.",
       "POST /v1/decisions speaks OpenAI's Decisions wire: point an OpenAI SDK here and decisions.create works unchanged, paid per call, answered by gpt-6-luna with Jev as the fallback.",
-      "MPP on Tempo answers a paid call as soon as its payment is confirmed on chain, rather than after the relay replies.",
+      "MPP on Tempo answers a paid call as soon as its payment is finalized on chain, rather than after the relay replies.",
       "The transcription examples use a new two-voice sample, so diarize:true shows two speakers, and the image, OCR, PDF and OpenAPI examples read this site's own sample files.",
     ],
   },

@@ -79,11 +79,12 @@ function buildCredential(o = {}) {
 
 // A TIP-20 transferWithMemo emits Transfer and TransferWithMemo; the confirm
 // reads the memo event. `memo` defaults to one bound to the last credential.
-function receiptFor(txId, { status = "0x1", token = CURRENCY, to = TREASURY, amount = 1000n, memo = memoFor(lastChallengeId), withMemoEvent = true } = {}) {
+function receiptFor(txId, { status = "0x1", token = CURRENCY, to = TREASURY, amount = 1000n, memo = memoFor(lastChallengeId), withMemoEvent = true, blockNumber = "0x10" } = {}) {
   const from = pad32("0x24E6A249111aE0CC8ea09f487A114f7e7Ef15e12");
   const data = "0x" + amount.toString(16).padStart(64, "0");
   return {
     status,
+    blockNumber,
     transactionHash: txId,
     logs: [
       { address: token, topics: [TRANSFER_TOPIC, from, pad32(to)], data },
@@ -319,6 +320,22 @@ async function listen(app) {
   ok(Date.now() - t0 >= 110 && reads > 0, "early: the first read waits initialDelayMs");
 }
 
+{
+  // Finality: the early watcher answers only once the payment's block is finalized.
+  const fin = (n) => ({ number: "0x" + n.toString(16) });
+  const notYet = await confirmTempoSettlement(buildCredential(), { fetchImpl: stubFetch({ [REAL_TXID]: receiptFor(REAL_TXID), finalized: fin(0x0f) }), attempts: 1, requireFinalized: true });
+  ok(notYet === null, "finality: a payment in a block past the finalized head is not yet settled");
+  const done = await confirmTempoSettlement(buildCredential(), { fetchImpl: stubFetch({ [REAL_TXID]: receiptFor(REAL_TXID), finalized: fin(0x10) }), attempts: 1, requireFinalized: true });
+  ok(done?.txId === REAL_TXID, "finality: a payment in a finalized block is settled");
+  let head = 0x0f;
+  const later = await confirmTempoSettlement(buildCredential(), { fetchImpl: stubFetch({ [REAL_TXID]: receiptFor(REAL_TXID), finalized: () => fin(head++) }), attempts: 3, delayMs: 1, requireFinalized: true });
+  ok(later?.txId === REAL_TXID, "finality: the watcher answers once finality catches up with the payment's block");
+  const blind = await confirmTempoSettlement(buildCredential(), { fetchImpl: stubFetch({ [REAL_TXID]: receiptFor(REAL_TXID) }), attempts: 1, requireFinalized: true });
+  ok(blind === null, "finality: an unreadable finalized head never counts as settled");
+  const legacy = await confirmTempoSettlement(buildCredential(), { fetchImpl: stubFetch({ [REAL_TXID]: receiptFor(REAL_TXID) }), attempts: 1 });
+  ok(legacy?.txId === REAL_TXID, "finality: the post-failure check keeps its original behavior");
+}
+
 // ---------------------------------------------------------------------------
 // Wiring pin: server.js must actually pass confirmSettlement to the gate —
 // the gate's default is null (so offline tests never hit the network), which
@@ -328,7 +345,7 @@ async function listen(app) {
 {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/confirmSettlement:\s*confirmTempoSettlement/.test(src), "wiring: server.js passes confirmSettlement: confirmTempoSettlement to createTempoGate");
-  ok(/earlyConfirm:[\s\S]{0,200}confirmTempoSettlement\(auth, \{[^}]*stop: relayAnswered/.test(src), "wiring: server.js passes an earlyConfirm that reads the chain and stops when the relay answers");
+  ok(/earlyConfirm:[\s\S]{0,200}confirmTempoSettlement\(auth, \{[^}]*stop: relayAnswered, requireFinalized: true/.test(src), "wiring: server.js passes an earlyConfirm that reads the chain, waits for finality and stops when the relay answers");
   ok(/from "\.\/tempo-confirm\.js"/.test(src), "wiring: server.js imports tempo-confirm.js");
 }
 

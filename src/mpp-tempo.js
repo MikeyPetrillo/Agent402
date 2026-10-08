@@ -1349,8 +1349,8 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // after submit). The relay stays the only broadcaster; alongside it,
       // the chain is read for THIS credential's own transaction (the txid
       // commits to the signed bytes, the memo to this challenge, the log to
-      // currency, recipient and amount: tempo-confirm.js), and whichever
-      // proves settlement first answers the buyer. Nothing is submitted, so
+      // currency, recipient and amount, and its block must be finalized:
+      // tempo-confirm.js), and whichever proves settlement first answers. Nothing is submitted, so
       // this can never charge twice; the watcher stops when the relay answers.
       let b;
       let early = false;

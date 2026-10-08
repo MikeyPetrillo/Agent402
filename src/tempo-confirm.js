@@ -100,6 +100,12 @@ export async function confirmTempoSettlement(authorizationHeader, {
   initialDelayMs = 0,
   rpcTimeoutMs = 0,
   stop = null,
+  // Answer only once the payment's block is FINALIZED. Tempo's consensus is
+  // deterministic (a finalized block cannot be reverted) and its docs say to
+  // treat finalized blocks as settled; a receipt can be visible a block
+  // earlier. The early watcher sets this; the post-failure check keeps its
+  // original behavior.
+  requireFinalized = false,
 } = {}) {
   try {
     const credential = Credential.deserialize(authorizationHeader);
@@ -131,7 +137,14 @@ export async function confirmTempoSettlement(authorizationHeader, {
           if (!memoBoundToChallenge(log.topics[3], ch.id)) continue;
           let value;
           try { value = BigInt(log.data); } catch { continue; }
-          if (value >= minAmount) return { txId, amountAtomic: value };
+          if (value < minAmount) continue;
+          if (requireFinalized) {
+            let fin;
+            try { fin = await rpcCall(fetchImpl, rpcUrl, "eth_getBlockByNumber", ["finalized", false], rpcTimeoutMs); } catch { continue; }
+            const finalized = Number.parseInt(String(fin?.number || ""), 16), included = Number.parseInt(String(receipt.blockNumber || ""), 16);
+            if (!Number.isFinite(finalized) || !Number.isFinite(included) || included > finalized) continue;
+          }
+          return { txId, amountAtomic: value };
         }
       }
     }
