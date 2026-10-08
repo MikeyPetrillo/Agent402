@@ -16,9 +16,9 @@ Since v2.5.0 (2026-10-07).
 - Add `POST /v1/decisions`: OpenAI's Decisions wire, so an OpenAI SDK pointed
   here calls `decisions.create` unchanged and pays per call. Text input;
   `gpt-6-luna` answers first, with Jev as the fallback (`fallback_from`).
-- MPP on Tempo: a paid call answers as soon as its payment is finalized on
-  chain, instead of waiting for the relay's reply; the relay still sends
-  every payment (`TEMPO_EARLY_CONFIRM=off` restores relay-only).
+- MPP on Tempo: the gate can read the chain for a payment alongside the
+  relay (`TEMPO_EARLY_CONFIRM=on`, off by default), and the settle log
+  records what that read saw.
 - Terms: a "Results from other sellers" paragraph states that Agent402 buys
   such results for its own account and sells them to you.
 - Copy states plainly that the router and `/api/decide/execute` buy results

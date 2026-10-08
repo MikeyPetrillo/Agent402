@@ -8320,9 +8320,10 @@ if (!FREE_MODE) {
     // that reports failure for a settled payment must not turn into a
     // buyer-facing 402 + double-charge loop. See tempo-confirm.js.
     confirmSettlement: confirmTempoSettlement,
-    // Answer as soon as the chain shows this payment, instead of waiting for
-    // the relay's reply (TEMPO_EARLY_CONFIRM=off restores relay-only).
-    earlyConfirm: String(process.env.TEMPO_EARLY_CONFIRM || "").toLowerCase() === "off" ? null
+    // Off unless TEMPO_EARLY_CONFIRM=on. Measured 2026-10-08: a receipt is
+    // readable about 0.7 s after its block's timestamp and the relay answers
+    // at that same moment, so reading the chain alongside it gains nothing.
+    earlyConfirm: String(process.env.TEMPO_EARLY_CONFIRM || "").toLowerCase() !== "on" ? null
       : (auth, relayAnswered, trace) => confirmTempoSettlement(auth, { initialDelayMs: 600, delayMs: 300, attempts: 16, rpcTimeoutMs: 2000, stop: relayAnswered, requireFinalized: true, trace }),
     secretKey: process.env.MPP_SECRET_KEY || "",
     realm: new URL(BASE_URL).host,
