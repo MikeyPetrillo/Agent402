@@ -363,6 +363,36 @@ async function listen(app) {
   ok(logs.some((l) => /settled GET \/paid .* watch=reads:2 err:rpc 403/.test(l)), "trace: the settle log names the watcher's reads and error when the relay answered first");
 }
 
+{
+  // A gateway cache hit (an answer someone already paid for) is never broadcast.
+  let broadcastCalled = false;
+  const app = express();
+  app.use(createTempoGate({
+    ...GATE,
+    validate: async () => ({ ok: true, validation: {} }),
+    broadcast: async () => { broadcastCalled = true; return { ok: true, receipt: { method: "tempo", status: "success", reference: "0xrelay", timestamp: new Date().toISOString() } }; },
+  }));
+  app.get("/paid", (req, res) => { req.gatewayCacheHit = true; res.setHeader("X-Cache", "hit"); res.status(200).json({ cached: true }); });
+  const { server, url } = await listen(app);
+  const res = await fetch(`${url}/paid`, { headers: { Authorization: buildCredential() } });
+  const body = await res.json().catch(() => ({}));
+  ok(res.status === 200 && body.cached === true && broadcastCalled === false, "cache: a gateway cache hit is delivered and never broadcast (not charged)");
+  server.close();
+}
+{
+  const { carriesPaymentAttempt } = await import("../src/payment-attempt.js");
+  const R = (h) => ({ header: (n) => h[n.toLowerCase()] });
+  ok(!carriesPaymentAttempt(R({})), "attempt: an unpaid request carries none");
+  ok(!carriesPaymentAttempt(R({ authorization: "Bearer sk-something" })), "attempt: an unrelated bearer token is not a payment");
+  ok(carriesPaymentAttempt(R({ "payment-signature": "x" })) && carriesPaymentAttempt(R({ "x-payment": "x" })), "attempt: an x402 payment header is one");
+  ok(carriesPaymentAttempt(R({ authorization: "Payment id=\"a\"" })), "attempt: an MPP credential is one");
+  ok(carriesPaymentAttempt(R({ authorization: "Bearer a402_abcdef0123456789" })), "attempt: a prepaid credits key is one");
+  ok(carriesPaymentAttempt(R({ "x-pow-solution": "abc" })), "attempt: a proof-of-work solution is one");
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/if \(req\.method !== "POST" \|\| !carriesPaymentAttempt\(req\)\) return next\(\);[\s\S]{0,900}req\.gatewayCacheHit = true;/.test(src), "wiring: the gateway cache serves only a request that carries a payment, and flags the hit for the earlier gates");
+}
+
 // ---------------------------------------------------------------------------
 // Wiring pin: server.js must actually pass confirmSettlement to the gate —
 // the gate's default is null (so offline tests never hit the network), which

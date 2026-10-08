@@ -1,4 +1,5 @@
 import "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
+import { carriesPaymentAttempt } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
@@ -8724,13 +8725,15 @@ if (FREE_MODE) {
   // Gateway response cache, served HERE — before the paywall — so a
   // byte-identical repeat of an already-paid generation is free. Pre-payment
   // means buyer-agnostic by construction; only non-streamed 200s are ever
-  // stored (see llm-gateway-kit.js). Two policies share the store:
+  // stored (see llm-gateway-kit.js). A hit is served only to a request that
+  // carries a payment (src/payment-attempt.js), which is then never settled;
+  // an unpaid request gets the route's 402. Two policies share the store:
   //   chat tiers   — explicit `cache: true` opt-in (LLM output is sampled;
   //                  a resend usually WANTS a fresh sample)
   //   /v1/embeddings — default-ON (deterministic output; `cache: false` opts out)
   // Invalid bodies fall through so the normal path produces the real 402/400.
   app.use((req, res, next) => {
-    if (req.method !== "POST") return next();
+    if (req.method !== "POST" || !carriesPaymentAttempt(req)) return next();
     try {
       let key = null;
       if (req.path === EMBEDDINGS_PATH) {
@@ -8744,6 +8747,9 @@ if (FREE_MODE) {
       if (key) {
         const hit = promptCacheGet(key);
         if (hit) {
+          // Read by the Tempo and Stripe gates, which run earlier: a gateway
+          // cache hit is never settled on any rail.
+          req.gatewayCacheHit = true;
           res.setHeader("X-Cache", "hit");
           res.setHeader("Cache-Control", "no-store, private");
           return res.status(200).json(hit);

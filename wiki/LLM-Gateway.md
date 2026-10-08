@@ -120,8 +120,8 @@ Add `stream: true` on any chat tier for standard OpenAI SSE framing (`data: {chu
 
 Two policies over one cache (10-minute TTL, served **before** the paywall - a hit costs nothing):
 
-- **Chat tiers - opt-in.** LLM output is sampled, and a resend usually wants a fresh sample, so nothing is cached unless the request carries `cache: true`. A byte-identical opted-in repeat returns the stored response free with `X-Cache: hit`.
-- **Embeddings - default-on.** Embeddings are deterministic per model, so identical repeats are free automatically; opt out with `cache: false`.
+- **Chat tiers - opt-in.** LLM output is sampled, and a resend usually wants a fresh sample, so nothing is cached unless the request carries `cache: true`. A byte-identical opted-in repeat that carries your payment returns the stored response with `X-Cache: hit`, and the payment is not charged (a Tempo transfer sent before the call is final when sent, so it counts); without a payment the request gets the usual 402.
+- **Embeddings - default-on.** Embeddings are deterministic per model, so an identical repeat is free automatically: it carries your payment as usual and the payment is not charged (a Tempo transfer sent before the call is final when sent, so it counts). Opt out with `cache: false`.
 
 Keys are computed over the *normalized* body (model aliases and field order collapse; every sampling-relevant field is included), so equivalent requests share one entry.
 

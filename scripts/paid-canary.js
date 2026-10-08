@@ -25,6 +25,20 @@ import { subcentAcceptVerdict } from "./avm-canary-classify.js";
 import { readFileSync, existsSync, appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
+
+// A failed leg names the network cause too: undici reports a bare "fetch
+// failed" and keeps the code and host in e.cause.
+export function errText(e) {
+  const c = e?.cause;
+  const cause = c ? ` (cause: ${[c.code, c.message || String(c)].filter(Boolean).join(" ")})` : "";
+  return `${e?.message || String(e)}${cause}`.slice(0, 220);
+}
+
+// A cached repeat is right when the unpaid try got the 402 and the paid try
+// got a cache hit with the same answer and nothing settled.
+export function cacheRepeatOk({ unpaidStatus, paidStatus, xCache, sameAnswer, settled }) {
+  return unpaidStatus === 402 && paidStatus === 200 && xCache === "hit" && sameAnswer === true && settled === false;
+}
 // Metered legs pay a per-request quote. It is computed here from the kit (the
 // private cost table), never typed: a typed quote would publish cost x markup.
 const { meteredQuoteUsd } = await import("../src/tools/llm-gateway-kit.js");
@@ -1034,8 +1048,8 @@ async function main() {
         console.warn(`\nWARN  solana leg: HTTP ${res.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
     } catch (e) {
-      noteRail("solana", false, `errored: ${(e?.message || String(e)).slice(0, 160)}`);
-      console.warn(`\nWARN  solana leg errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      noteRail("solana", false, `errored: ${errText(e)}`);
+      console.warn(`\nWARN  solana leg errored: ${errText(e)}`);
     }
   })();
 
@@ -1108,8 +1122,8 @@ async function main() {
         console.warn(`\nWARN  robinhood leg: HTTP ${paid.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
     } catch (e) {
-      noteRail("robinhood", false, `errored: ${(e?.message || String(e)).slice(0, 160)}`);
-      console.warn(`\nWARN  robinhood leg errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      noteRail("robinhood", false, `errored: ${errText(e)}`);
+      console.warn(`\nWARN  robinhood leg errored: ${errText(e)}`);
     }
   })();
 
@@ -1238,7 +1252,7 @@ async function main() {
         railFail("mpp-celo", `HTTP ${celoPaid.status} ${JSON.stringify(celoBody).slice(0, 120)}`);
       }
     } catch (e) {
-      railFail("mpp", `errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      railFail("mpp", `errored: ${errText(e)}`);
     }
   })();
   }
@@ -1306,7 +1320,7 @@ async function main() {
         noteRail("metered-upto", true);
       }
     } catch (e) {
-      railFail("metered-upto", `errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      railFail("metered-upto", `errored: ${errText(e)}`);
     }
   })();
 
@@ -1436,7 +1450,7 @@ async function main() {
         railFail("mpp-tempo", `HTTP ${paid.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
     } catch (e) {
-      railFail("mpp-tempo", `errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      railFail("mpp-tempo", `errored: ${errText(e)}`);
     }
   })();
 
@@ -1503,7 +1517,7 @@ async function main() {
         railFail(leg.key, `HTTP ${paid.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
     } catch (e) {
-      railFail(leg.key, `errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      railFail(leg.key, `errored: ${errText(e)}`);
     }
   }
 
@@ -1588,7 +1602,7 @@ async function main() {
         railFail("stellar", `HTTP ${res.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
     } catch (e) {
-      railFail("stellar", `errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      railFail("stellar", `errored: ${errText(e)}`);
     }
   })();
 
@@ -1734,15 +1748,16 @@ async function main() {
         console.warn(`\nWARN  algorand leg: HTTP ${res.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
     } catch (e) {
-      noteRail("algorand", false, `errored: ${(e?.message || String(e)).slice(0, 160)}`);
-      console.warn(`\nWARN  algorand leg errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      noteRail("algorand", false, `errored: ${errText(e)}`);
+      console.warn(`\nWARN  algorand leg errored: ${errText(e)}`);
     }
   })();
 
-  // Prompt-cache leg — pays once with cache:true, then repeats the IDENTICAL
-  // request unpaid: the pre-paywall cache must answer 200 + X-Cache: hit with
-  // the same response object. Real-money proof that opted-in repeats are
-  // free. Informational: failures WARN, never page.
+  // Prompt-cache leg - pays once with cache:true, then repeats the IDENTICAL
+  // request: unpaid it gets the 402 (a cached answer is never handed to a
+  // request that carries no payment), and with the payment wallet the
+  // pre-paywall cache answers 200 + X-Cache: hit with the same response
+  // object and nothing is settled. Informational: failures WARN, never page.
   await (async () => {
     try {
       const init = {
@@ -1755,34 +1770,41 @@ async function main() {
         console.warn(`\nWARN  prompt-cache leg: priming buy failed — HTTP ${paid.status} ${JSON.stringify(paidBody).slice(0, 100)}`);
         return;
       }
-      const free = await synthFetch(`${TARGET}/v1/nano/chat/completions`, init); // NO payment wrapper — must not need one
+      const unpaid = await synthFetch(`${TARGET}/v1/nano/chat/completions`, init);
+      await unpaid.text().catch(() => "");
+      const free = await payFetch(`${TARGET}/v1/nano/chat/completions`, init);
       const freeBody = await free.json().catch(() => ({}));
-      if (free.status === 200 && free.headers.get("x-cache") === "hit" && freeBody.id === paidBody.id) {
-        console.log(`\nOK    prompt-cache /v1/nano/chat/completions  → paid once ($0.003), identical repeat served FREE (X-Cache: hit)`);
+      const settled = !!(free.headers.get("payment-response") || free.headers.get("x-payment-response"));
+      if (cacheRepeatOk({ unpaidStatus: unpaid.status, paidStatus: free.status, xCache: free.headers.get("x-cache"), sameAnswer: freeBody.id === paidBody.id, settled })) {
+        console.log(`\nOK    prompt-cache /v1/nano/chat/completions  → paid once ($0.003); unpaid repeat 402; paid repeat served FREE from cache (X-Cache: hit, not settled)`);
       } else {
-        console.warn(`\nWARN  prompt-cache leg: repeat was NOT a free hit — HTTP ${free.status}, X-Cache=${free.headers.get("x-cache")}, sameId=${freeBody.id === paidBody.id}`);
+        console.warn(`\nWARN  prompt-cache leg: unpaid repeat HTTP ${unpaid.status} (want 402); paid repeat HTTP ${free.status}, X-Cache=${free.headers.get("x-cache")}, sameId=${freeBody.id === paidBody.id}, settled=${settled}`);
       }
     } catch (e) {
       console.warn(`\nWARN  prompt-cache leg errored: ${(e?.message || String(e)).slice(0, 140)}`);
     }
   })();
 
-  // Embeddings cache — DEFAULT-ON (no cache flag anywhere): the llm-embed leg
-  // above already paid for this exact body, so an unpaid identical repeat must
-  // come back 200 + X-Cache: hit with the same response object. This is the
-  // billing-relevant promise in the tool description — prove it daily.
+  // Embeddings cache - DEFAULT-ON (no cache flag anywhere): the llm-embed leg
+  // above already paid for this exact body. Unpaid, the repeat gets the 402;
+  // with the payment wallet it comes back 200 + X-Cache: hit and nothing is
+  // settled. This is the billing-relevant promise in the tool description -
+  // prove it daily.
   await (async () => {
     try {
       const init = {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ input: EMBED_CANARY_INPUT, model: "text-embedding-3-small" }),
       };
-      const free = await synthFetch(`${TARGET}/v1/embeddings`, init); // NO payment wrapper — must not need one
+      const unpaid = await synthFetch(`${TARGET}/v1/embeddings`, init);
+      await unpaid.text().catch(() => "");
+      const free = await payFetch(`${TARGET}/v1/embeddings`, init);
       const freeBody = await free.json().catch(() => ({}));
-      if (free.status === 200 && free.headers.get("x-cache") === "hit" && Array.isArray(freeBody.data?.[0]?.embedding)) {
-        console.log(`\nOK    embed-cache /v1/embeddings  → paid once ($0.002), identical repeat served FREE (X-Cache: hit, default-on)`);
+      const settled = !!(free.headers.get("payment-response") || free.headers.get("x-payment-response"));
+      if (cacheRepeatOk({ unpaidStatus: unpaid.status, paidStatus: free.status, xCache: free.headers.get("x-cache"), sameAnswer: Array.isArray(freeBody.data?.[0]?.embedding), settled })) {
+        console.log(`\nOK    embed-cache /v1/embeddings  → paid once ($0.002); unpaid repeat 402; paid repeat served FREE from cache (X-Cache: hit, not settled)`);
       } else {
-        console.warn(`\nWARN  embed-cache leg: repeat was NOT a free hit — HTTP ${free.status}, X-Cache=${free.headers.get("x-cache")}`);
+        console.warn(`\nWARN  embed-cache leg: unpaid repeat HTTP ${unpaid.status} (want 402); paid repeat HTTP ${free.status}, X-Cache=${free.headers.get("x-cache")}, settled=${settled}`);
       }
     } catch (e) {
       console.warn(`\nWARN  embed-cache leg errored: ${(e?.message || String(e)).slice(0, 140)}`);
