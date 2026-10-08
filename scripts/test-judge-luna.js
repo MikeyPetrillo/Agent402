@@ -25,8 +25,9 @@ function stub(routes) {
   const fetchImpl = async (url, init) => {
     const host = new URL(url).host;
     calls.push({ host, body: JSON.parse(init.body) });
+    if (!(host in routes)) throw new Error(`unexpected ${host}`);
     const r = routes[host];
-    if (!r) throw new Error(`unexpected ${host}`);
+    if (r === null) throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
     return typeof r === "function" ? r(JSON.parse(init.body)) : r;
   };
   return { calls, fetchImpl, hosts: () => calls.map((c) => c.host) };
@@ -83,13 +84,36 @@ const JEV_ANSWERS = { model: "jev-1.13.0", answers: {
 for (const [why, lunaReply] of [
   ["a Luna 5xx", json(503, { error: { message: "down" } })],
   ["a Luna 429", json(429, { error: { message: "slow down" } })],
-  ["a Luna refusal answer", json(200, { answers: [{ type: "refusal", name: "q0" }, ...LUNA_ANSWERS.answers.slice(1)] })],
-  ["an unreadable Luna body", { ok: true, status: 200, text: async () => "not json" }],
+  ["a Luna 401", json(401, {})],
+  ["a refused Luna connection", null],
 ]) {
   const s = stub({ [OPENAI]: lunaReply, [TYPESAFE]: json(200, JEV_ANSWERS) });
   const r = await judge(JUDGE_IN, { fetchImpl: s.fetchImpl });
   ok(s.hosts().join() === `${OPENAI},${TYPESAFE}` && r.model === "jev-1.13.0" && r.fallbackFrom === LUNA, `${why} falls back to Jev, named in fallbackFrom`);
   ok(s.calls[1].body.model === "jev-latest", "...and Jev is asked as jev-latest, never with Luna's name");
+}
+// After Luna answered 200 (billed) or timed out (maybe billed), the call ends
+// as an uncharged 502/504 and Jev is never asked: one sale, one upstream.
+for (const [why, lunaReply, code] of [
+  ["a Luna refusal answer", json(200, { answers: [{ type: "refusal", name: "q0" }, ...LUNA_ANSWERS.answers.slice(1)] }), 502],
+  ["an unreadable Luna body", { ok: true, status: 200, text: async () => "not json" }, 502],
+  ["a Luna choice outside the options", json(200, { answers: [LUNA_ANSWERS.answers[0], LUNA_ANSWERS.answers[1], { ...LUNA_ANSWERS.answers[2], choice: "zzz" }] }), 502],
+  ["a Luna answer missing a question", json(200, { answers: LUNA_ANSWERS.answers.slice(0, 2) }), 502],
+  ["a Luna probability above 1", json(200, { answers: [LUNA_ANSWERS.answers[0], { type: "predicate", name: "q1", probability: 1.4 }, LUNA_ANSWERS.answers[2]] }), 502],
+]) {
+  const s = stub({ [OPENAI]: lunaReply, [TYPESAFE]: json(200, JEV_ANSWERS) });
+  let e = null; try { await judge(JUDGE_IN, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
+  ok(e?.statusCode === code && s.hosts().join() === OPENAI, `${why} is an uncharged ${code} and Jev is not called`);
+}
+{
+  const s = stub({ [OPENAI]: () => { throw Object.assign(new Error("timeout"), { name: "TimeoutError" }); }, [TYPESAFE]: json(200, JEV_ANSWERS) });
+  let e = null; try { await judge(JUDGE_IN, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
+  ok(e?.statusCode === 504 && s.hosts().join() === OPENAI, "a Luna timeout is an uncharged 504 and Jev is not called (the timed-out call may be billed)");
+}
+{
+  const s = stub({ [TYPESAFE]: json(200, { model: "jev-1.13.0", answers: {} }) });
+  let e = null; try { await judge({ ...JUDGE_IN, model: "jev-latest" }, { fetchImpl: (u, i) => new URL(u).host === OPENAI ? Promise.reject(new Error("no")) : s.fetchImpl(u, i) }); } catch (x) { e = x; }
+  ok(e?.statusCode === 502, "an empty Jev answer is an uncharged 502, never a charged 200");
 }
 {
   const s = stub({ [OPENAI]: json(200, LUNA_ANSWERS), [TYPESAFE]: json(503, {}) });
@@ -147,6 +171,10 @@ for (const [why, input] of [
   ["another model", { ...DEC_IN, model: "gpt-6" }],
   ["an unknown type", { ...DEC_IN, questions: [{ type: "rank", name: "x", instructions: "?" }] }],
   ["no questions", { input: "x", questions: [] }],
+  ["non-string instructions", { ...DEC_IN, questions: [{ type: "predicate", name: "x", instructions: { a: 1 } }] }],
+  ["string levels", { ...DEC_IN, questions: [{ type: "score", name: "x", instructions: "?", levels: ["low", "high"] }] }],
+  ["a duplicate choice value", { ...DEC_IN, questions: [{ type: "choice", name: "x", instructions: "?", choices: [{ value: "a" }, { value: "a" }, { value: "b" }] }] }],
+  ["an over-long description", { ...DEC_IN, questions: [{ type: "choice", name: "x", instructions: "?", choices: [{ value: "a", description: "d".repeat(5000) }, { value: "b" }] }] }],
 ]) {
   const s = stub({});
   let e = null; try { await decisions(input, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
@@ -157,6 +185,16 @@ for (const [why, input] of [
   const r = await decisions({ input: [{ role: "user", content: [{ type: "input_text", text: "Part one." }, { type: "input_text", text: "Part two." }] }], questions: [DEC_IN.questions[1]] }, { fetchImpl: s.fetchImpl }).catch((e) => e);
   ok(s.calls[0]?.body.input === "Part one.\n\nPart two.", "message parts are joined into one text input");
   ok(r?.statusCode >= 500, "a Luna body with no answers is a failure, not an empty 200");
+}
+
+for (const [why, answers] of [
+  ["an empty answer list", []],
+  ["a refusal", [{ type: "refusal", name: "department" }, { type: "predicate", name: "angry", probability: 0.4 }, { type: "score", name: "urgency", score: 0.7, probabilities: [], confidence: 0.4 }]],
+  ["a missing question", [{ type: "predicate", name: "angry", probability: 0.4 }]],
+]) {
+  const s = stub({ [OPENAI]: json(200, { answers }), [TYPESAFE]: json(200, {}) });
+  let e = null; try { await decisions(DEC_IN, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
+  ok(e?.statusCode === 502 && s.hosts().join() === OPENAI, `the Decisions wire turns ${why} into an uncharged 502, without a second upstream`);
 }
 
 // ---- registration ----------------------------------------------------------

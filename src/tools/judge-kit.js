@@ -145,6 +145,9 @@ async function post(url, key, body, fetchImpl, hasAnswers) {
     const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
     const e = new Error(timedOut ? "Judgment upstream timed out." : "Judgment upstream is unreachable.");
     e.statusCode = timedOut ? 504 : 502;
+    // A timed-out call may still have been billed upstream; a refused
+    // connection was not.
+    if (timedOut) e.mayBeBilled = true;
     throw e;
   }
   const text = await res.text();
@@ -156,13 +159,15 @@ async function post(url, key, body, fetchImpl, hasAnswers) {
     if (res.status >= 400 && res.status < 500) throw bad(`Judgment upstream refused the request (${res.status}). Check the question shapes against /v1/judge's schema.`);
     const e = new Error(`Judgment upstream returned ${res.status}.`); e.statusCode = 502; throw e;
   }
-  let j; try { j = JSON.parse(text); } catch { const e = new Error("Judgment upstream returned an unreadable body."); e.statusCode = 502; throw e; }
-  if (!hasAnswers(j)) { const e = new Error("Judgment upstream returned no answers."); e.statusCode = 502; throw e; }
+  // From here the upstream answered 200 and billed the call.
+  let j; try { j = JSON.parse(text); } catch { const e = new Error("Judgment upstream returned an unreadable body."); e.statusCode = 502; e.mayBeBilled = true; throw e; }
+  if (!hasAnswers(j)) { const e = new Error("Judgment upstream returned no answers."); e.statusCode = 502; e.mayBeBilled = true; throw e; }
   return j;
 }
 
-const unreadable = () => { const e = new Error("Judgment upstream returned an answer this route cannot read."); e.statusCode = 502; return e; };
+const unreadable = () => { const e = new Error("Judgment upstream returned an answer this route cannot read."); e.statusCode = 502; e.mayBeBilled = true; return e; };
 const num = (v) => typeof v === "number" && Number.isFinite(v);
+const prob = (v) => num(v) && v >= 0 && v <= 1;
 const byValue = (list, key = "value") => Object.fromEntries((Array.isArray(list) ? list : []).map((p) => [p?.[key], p?.probability]));
 
 /** A validated /v1/judge body as a Decisions request. Question names are
@@ -186,13 +191,24 @@ export function fromDecisions(j, body, ids) {
   const answers = {};
   ids.forEach((id, i) => {
     const a = byName.get(`q${i}`), q = body.questions[id];
-    if (q.type === "noul" && a?.type === "predicate" && num(a.probability)) answers[id] = { type: "noul", noul: a.probability };
-    else if (q.type === "choice" && a?.type === "choice" && typeof a.choice === "string") {
+    if (q.type === "noul" && a?.type === "predicate" && prob(a.probability)) answers[id] = { type: "noul", noul: a.probability };
+    else if (q.type === "choice" && a?.type === "choice" && Object.hasOwn(q.criteria, a.choice)) {
       answers[id] = { type: "choice", choice: a.choice, confidence: a.confidence, probabilities: byValue(a.probabilities) };
-    } else if (q.type === "score" && a?.type === "score" && num(a.score)) {
+    } else if (q.type === "score" && a?.type === "score" && num(a.score) && a.score >= 0 && a.score <= q.criteria.length - 1) {
       answers[id] = { type: "score", score: a.score, confidence: a.confidence, legend: Object.fromEntries(q.criteria.map((d, n) => [n, d])), probabilities: byValue(a.probabilities) };
     } else throw unreadable();
   });
+  return answers;
+}
+
+/** Jev's answers, only when every question has one of its own type: an empty
+ *  or partial answer is an uncharged 502, never a charged 200. */
+function checkJev(answers, body) {
+  for (const [id, q] of Object.entries(body.questions)) {
+    const a = answers?.[id];
+    const good = a?.type === q.type && (q.type === "noul" ? prob(a.noul) : q.type === "choice" ? Object.hasOwn(q.criteria, a.choice) : num(a.score));
+    if (!good) throw unreadable();
+  }
   return answers;
 }
 
@@ -204,13 +220,20 @@ function backends(body, lunaBytes) {
   return body.model === LUNA ? [...luna, ...jev] : [...jev, ...luna];
 }
 
-/** Try each backend in order; the first answer wins. Every failure is ours or
- *  the upstream's and settles nothing, so trying the next one is safe. */
+/** Try each backend in order; the first answer wins. A failure settles
+ *  nothing for the buyer, but the next backend is tried only when the failed
+ *  one certainly did not bill us (refused, 5xx, 429, credentials, a request
+ *  error). After a timeout or a 200 we could not use, the call ends as an
+ *  uncharged 5xx, so one sale never pays two upstreams. */
 async function firstAnswer(order, attempt) {
   let last = null;
   for (const b of order) {
     try { return { backend: b, out: await attempt(b) }; }
-    catch (e) { last = e; console.warn(`[judge] ${b} failed: ${String(e?.message || e).slice(0, 120)}`); }
+    catch (e) {
+      last = e;
+      console.warn(`[judge] ${b} failed: ${String(e?.message || e).slice(0, 120)}`);
+      if (e?.mayBeBilled) break;
+    }
   }
   throw last || Object.assign(new Error("Judgment is not configured on this server."), { statusCode: 503 });
 }
@@ -221,7 +244,7 @@ export async function judge(input, { fetchImpl = fetch } = {}) {
   const { ids, request } = toDecisions(body);
   const order = backends(body, Buffer.byteLength(JSON.stringify(request)));
   const { backend, out } = await firstAnswer(order, async (b) => {
-    if (b === "jev") { const j = await callJev(body, fetchImpl); return { j, answers: j.answers, model: j.model || "jev-latest" }; }
+    if (b === "jev") { const j = await callJev(body, fetchImpl); return { j, answers: checkJev(j.answers, body), model: j.model || "jev-latest" }; }
     const j = await callLuna(request, fetchImpl);
     return { j, answers: fromDecisions(j, body, ids), model: j.model || LUNA };
   });
@@ -268,19 +291,33 @@ export function validateDecisionsRequest(input = {}) {
     if (!NAME.test(name)) throw bad(`Each question needs a "name" of letters, digits, "_", "-" or "." (1-64 characters); got ${JSON.stringify(q?.name)}.`);
     if (names.has(name)) throw bad(`Question name "${name}" is used twice.`);
     names.add(name);
+    if (typeof q.instructions !== "string") throw bad(`Question "${name}" needs "instructions" as a string.`);
     const base = { instructions: q.instructions };
+    const text = (v, field) => {
+      if (v == null) return "";
+      if (typeof v !== "string") throw bad(`Question "${name}": "${field}" must be a string.`);
+      if (v.length > LIMITS.criteriaChars) throw bad(`Question "${name}": "${field}" is ${v.length} characters; the limit is ${LIMITS.criteriaChars}.`);
+      return v;
+    };
     if (q.type === "predicate") judgeQuestions[name] = { type: "noul", ...base };
     else if (q.type === "choice") {
       if (!Array.isArray(q.choices)) throw bad(`Question "${name}" is a choice and needs "choices": [{"value","description"}].`);
       const criteria = {};
       for (const c of q.choices) {
         if (typeof c?.value !== "string" || !c.value) throw bad(`Question "${name}": each choice needs a string "value".`);
-        criteria[c.value] = String(c.description ?? "");
+        if (Object.hasOwn(criteria, c.value)) throw bad(`Question "${name}": choice value "${c.value}" is used twice.`);
+        criteria[text(c.value, "value")] = text(c.description, "description");
       }
       judgeQuestions[name] = { type: "choice", ...base, criteria };
     } else if (q.type === "score") {
       if (!Array.isArray(q.levels)) throw bad(`Question "${name}" is a score and needs "levels": [{"label","description"}], lowest first.`);
-      judgeQuestions[name] = { type: "score", ...base, criteria: q.levels.map((l) => [l?.label, l?.description].filter((x) => typeof x === "string" && x).join(": ")) };
+      const criteria = q.levels.map((l) => {
+        if (!l || typeof l !== "object" || typeof l.label !== "string" || !l.label) throw bad(`Question "${name}": each level is {"label","description"} with a string label.`);
+        const line = [text(l.label, "label"), text(l.description, "description")].filter(Boolean).join(": ");
+        if (line.length > LIMITS.criteriaChars) throw bad(`Question "${name}": level "${l.label}" is ${line.length} characters with its description; the limit is ${LIMITS.criteriaChars}.`);
+        return line;
+      });
+      judgeQuestions[name] = { type: "score", ...base, criteria };
     } else throw bad(`Question "${name}" has type ${JSON.stringify(q?.type)}; must be "predicate", "choice" or "score".`);
   }
   // The same bounds as /v1/judge, applied to the translated request.
@@ -292,6 +329,21 @@ export function validateDecisionsRequest(input = {}) {
     return out;
   }) };
   return { body, request, levels: Object.fromEntries(questions.filter((q) => q.type === "score").map((q) => [q.name, q.levels])) };
+}
+
+/** Luna's answers on the Decisions wire, only when every question has a
+ *  usable answer of its own type (a refusal or a missing name is an uncharged
+ *  502); returned in the buyer's question order. */
+function checkLuna(answers, request) {
+  const byName = new Map(answers.map((a) => [a?.name, a]));
+  return request.questions.map((q) => {
+    const a = byName.get(q.name);
+    const good = a?.type === q.type && (q.type === "predicate" ? prob(a.probability)
+      : q.type === "choice" ? q.choices.some((c) => c.value === a.choice)
+      : num(a.score) && a.score >= 0 && a.score <= q.levels.length - 1);
+    if (!good) throw unreadable();
+    return a;
+  });
 }
 
 /** Jev answers in the Decisions shape, for when Jev served this route. */
@@ -314,9 +366,9 @@ export async function decisions(input, { fetchImpl = fetch } = {}) {
   const { body, request, levels } = validateDecisionsRequest(input);
   const order = backends(body, Buffer.byteLength(JSON.stringify(request)));
   const { backend, out } = await firstAnswer(order, async (b) => {
-    if (b === "luna") { const j = await callLuna(request, fetchImpl); return { j, answers: j.answers, model: j.model || LUNA }; }
+    if (b === "luna") { const j = await callLuna(request, fetchImpl); return { j, answers: checkLuna(j.answers, request), model: j.model || LUNA }; }
     const j = await callJev(body, fetchImpl);
-    return { j, answers: toDecisionsAnswers(j.answers, request, levels), model: j.model || "jev-latest" };
+    return { j, answers: toDecisionsAnswers(checkJev(j.answers, body), request, levels), model: j.model || "jev-latest" };
   });
   return {
     model: out.model,
