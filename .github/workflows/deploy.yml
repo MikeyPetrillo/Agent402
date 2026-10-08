@@ -2833,6 +2833,8 @@ jobs:
           t node scripts/test-discovery-rerank.js
           # Typed judgment tool: the input caps ARE the margin guard, upstream bodies never reach the buyer, model-backed is declared (offline, stubbed)
           t node scripts/test-judge-kit.js
+          # Judgment backends: Luna first within the price's margin, Jev fallback, one answer shape per route, /v1/decisions wire (offline, stubbed)
+          t node scripts/test-judge-luna.js
           # Wish-board input hygiene (a client bug is not market demand)
           t node scripts/test-wish-hygiene.js
 

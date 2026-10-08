@@ -57,7 +57,7 @@ ok(U.upstreamCostsStatus() === "partial", "a table missing required keys reads p
   ok(!g.includes("fees.webSearchPerUse") && !g.includes("speech"), "gaps leave out what is present");
   ok(g.every((x) => !/[0-9]\.[0-9]/.test(x)), "gaps carry names, never a value");
 }
-const FULL = { ...FAKE, models: FAKE.models.slice(0, 2), fees: { ...FAKE.fees, rerankPerUnit: 5 }, meter: { markup: 1.25 }, vendor: { exa: { search: 0.5, instant: 0.5, answer: 0.5, content: 0.5 }, x: { postRead: 0.5, userRead: 0.5 } } };
+const FULL = { ...FAKE, models: FAKE.models.slice(0, 2), fees: { ...FAKE.fees, rerankPerUnit: 5 }, meter: { markup: 1.25 }, vendor: { exa: { search: 0.5, instant: 0.5, answer: 0.5, content: 0.5 }, x: { postRead: 0.5, userRead: 0.5 }, decisions: { luna: 0.5 } } };
 U.setUpstreamCostsForTest(FULL);
 ok(U.upstreamCostsStatus() === "ok" && U.upstreamCostsGaps().length === 0, "a complete table reads ok");
 U.setUpstreamCostsForTest({ ...FULL, models: [...FULL.models, ["acme/big-pro", { prompt: 0, completion: 9 }]] });
