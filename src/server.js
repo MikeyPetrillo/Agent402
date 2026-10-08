@@ -38,7 +38,7 @@ import {
   grant, revoke, listGrants, getLog, remember, recall, forget,
   PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
-import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf, paymentIdentifierOf } from "./payer.js";
+import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./payer.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort } from "./drain-abort.js";
 import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
@@ -493,7 +493,7 @@ import { corsMiddleware } from "./cors.js";
 import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
-import { IDEM_MAX_BODY_BYTES } from "./idempotency-limits.js";
+import { createIdempotency } from "./idempotency.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
@@ -8393,136 +8393,9 @@ if (!FREE_MODE) {
   }
 }
 
-// Opt-in idempotency (safe retry for paid/proven calls). If a client sends an
-// `Idempotency-Key`, a successful gated call is cached keyed by that key + the
-// gate credential it presented (the x402 payment authorization or the
-// proof-of-work token — both single-use). A retry with the SAME Idempotency-Key
-// AND the SAME credential replays the stored result WITHOUT re-charging — so an
-// agent that paid but lost the response doesn't pay twice. Because the cache key
-// includes the credential (which only the original payer/solver holds), it can
-// never serve a paid result to a non-payer; requests without the header are
-// completely unaffected (default behavior, normal billing). Runs before the
-// paywall so a replay hit skips settlement.
-const idemStore = new Map(); // hashKey -> { at, body, bytes }
-const IDEM_TTL_MS = 10 * 60 * 1000;
-const IDEM_MAX_ENTRIES = 5000;
-// Cap total cached body bytes — a single tool returning a large blob shouldn't
-// pin tens of megabytes per slot. 32 MB total, ~1 MB per entry max; oversize
-// responses skip the cache entirely (retry will re-run the tool, no charge
-// because PoW/x402 credentials are single-use anyway).
-const IDEM_MAX_BYTES = 32 * 1024 * 1024;
-// IDEM_MAX_BODY_BYTES lives in src/idempotency-limits.js (the tool pages quote it).
-let idemBytes = 0;
-// Background sweep: entries expire on read at IDEM_TTL_MS, but on a quiet
-// service stale bodies (some kits return large blobs) would sit in memory
-// until pushed out by FIFO. Prune by age every minute so memory tracks
-// actual recent traffic. .unref() so this never blocks process exit.
-setInterval(() => {
-  const cutoff = Date.now() - IDEM_TTL_MS;
-  for (const [k, v] of idemStore) {
-    if (v.at < cutoff) { idemBytes -= v.bytes; idemStore.delete(k); }
-  }
-}, 60_000).unref();
-const idemHashKey = (req) => {
-  // The x402 `payment-identifier` extension (declared on every route's 402) is
-  // honoured as an ALIAS of the Idempotency-Key header under the SAME binding
-  // rules below (exact credential + route + body) - so a stock x402 client that
-  // attaches a payment id gets the paid-retry replay without knowing our
-  // header. It is NOT a cross-authorization dedupe: the id is client-chosen
-  // text on a payload nothing has verified yet at this point in the chain, so
-  // only the exact original credential can replay (a fresh authorization with
-  // the same id is a new payment). Header wins when both are present.
-  const idem = req.header("idempotency-key") || paymentIdentifierOf(req);
-  if (!idem || idem.length > 256) return null;
-  // Must match @x402/express's OWN precedence exactly (payment-signature wins
-  // when both are present, verified against node_modules/@x402/express) - the
-  // credential that actually settles the payment is the only one allowed to
-  // seed the cache key. Checking x-payment first let an attacker settle for
-  // real via a valid Payment-Signature while binding the cache entry to a
-  // SELF-CHOSEN, non-secret X-Payment string - any third party who later knew
-  // that string (the payer can simply publish it) could replay the same
-  // Idempotency-Key + that string + the same body and hit the cache BEFORE
-  // the paywall middleware below ever runs, with no payment of their own.
-  // A prepaid credits key is a credential too (it authorizes and debits the
-  // call): bind its HASH so a credits buyer's retry replays the paid answer
-  // instead of re-debiting, exactly like an x402 buyer's (audit 2026-08-26 -
-  // the plugin README promised this and the server ignored the header).
-  const creditsCred = /^Bearer a402_[A-Za-z0-9_-]{16,80}$/.test(String(req.headers?.authorization || ""))
-    ? "credits:" + createHash("sha256").update(req.headers.authorization.slice(7)).digest("hex") : null;
-  // A credits-settled request binds to its key hash FIRST: the gate already
-  // authorized it, and an unverified x-pow-solution riding alongside would
-  // otherwise bind a paid entry to a public string anyone could replay.
-  const cred = paymentHeaderOf(req) || (req.creditsSettled === true ? creditsCred : null) || req.header("x-pow-solution") || creditsCred;
-  if (!cred) return null; // nothing to securely bind the key to → don't cache
-  // Bind to the exact route AND the request body, so the same key+credential
-  // can't be used to retrieve a cached response from a different payload or
-  // different endpoint. Body is hashed (not stored) so the key stays compact.
-  const bodyHash = req.body && Object.keys(req.body).length
-    ? createHash("sha256").update(JSON.stringify(req.body)).digest("hex")
-    : "-";
-  return createHash("sha256").update(`${req.method} ${req.path}\n${idem}\n${cred}\n${bodyHash}`).digest("hex");
-};
-app.use((req, res, next) => {
-  if (!CATALOG[`${req.method} ${req.path}`]) return next();
-  const key = idemHashKey(req);
-  if (!key) return next();
-  const hit = idemStore.get(key);
-  if (hit && Date.now() - hit.at < IDEM_TTL_MS) {
-    res.setHeader("X-Idempotent-Replay", "true");
-    return res.status(200).json(hit.body);
-  }
-  // Settlement-aware caching (FR4-01). @x402/express (v2.16) runs the handler
-  // FIRST, then settles, and ONLY on a <400 response; on settlement FAILURE it
-  // replaces the buffered 200 with a 402. So committing to the cache at
-  // res.json() time (handler completion, BEFORE settlement) would store a result
-  // whose payment never settled, and a retry could replay it for free. Capture
-  // the body at res.json() but COMMIT only on 'finish', when res.statusCode is
-  // the post-settlement reality: a final 200 means settlement succeeded (the
-  // paywall would have written a 402 otherwise). PoW (free) requests never enter
-  // the settle path, so their 200 is final at finish too — cached correctly.
-  let captured;
-  const origJson = res.json.bind(res);
-  res.json = (body) => { captured = body; return origJson(body); };
-  res.on("finish", () => {
-    if (res.statusCode !== 200 || captured === undefined) return;
-    // Only a credential the server actually VERIFIED may seed the cache.
-    //
-    // idemHashKey binds the entry to `x-pow-solution` as presented, and this
-    // middleware runs BEFORE the PoW gate, so at key time that header is just
-    // an attacker-chosen string. That was safe only because an unauthenticated
-    // caller could never reach a 200 to seed anything - the bogus solution
-    // produced X-Pow-Error and a 402. The trial changed that: it returns 200
-    // with no credential at all, so one trial plus a made-up solution seeded an
-    // entry that ANY client could then replay, unpaid, for the whole TTL -
-    // defeating the "1 per tool per hour" bound the trial advertises.
-    //
-    // At finish the verdict is known, so require it here: a settled payment, or
-    // a PoW the gate accepted. A trial NEVER seeds the cache - it is one call,
-    // not a reusable receipt. (FREE_MODE has no paywall to bind to and is
-    // dev/test only, so it keeps caching.)
-    if (res.getHeader("X-Trial-Accepted") === "true") return;
-    const powVerified = res.getHeader("X-Pow-Accepted") === "true";
-    const paid = Boolean(paymentHeaderOf(req)) || req.creditsSettled === true || req.tempoSettled === true;
-    if (!FREE_MODE && !paid && !powVerified) return;
-    let bytes = 0;
-    try { bytes = Buffer.byteLength(JSON.stringify(captured), "utf8"); } catch { bytes = 0; }
-    if (!bytes || bytes > IDEM_MAX_BODY_BYTES) return;
-    // Evict oldest entries (Map preserves insertion order → FIFO ≈ LRU for
-    // write-heavy access) until we fit by entries AND by bytes.
-    while (
-      (idemStore.size >= IDEM_MAX_ENTRIES || idemBytes + bytes > IDEM_MAX_BYTES)
-      && idemStore.size > 0
-    ) {
-      const firstKey = idemStore.keys().next().value;
-      const ev = idemStore.get(firstKey);
-      if (ev) idemBytes -= ev.bytes;
-      idemStore.delete(firstKey);
-    }
-    idemStore.set(key, { at: Date.now(), body: captured, bytes });
-    idemBytes += bytes;
-  });
-  next();
-});
+// Opt-in idempotency (safe paid retry): src/idempotency.js. Mounted after the
+// credits gate and before the paywall, so a replay hit skips settlement.
+app.use(createIdempotency({ isCatalogRoute: (req) => Boolean(CATALOG[`${req.method} ${req.path}`]), freeMode: FREE_MODE }));
 
 // x402 paywall for the catalog routes
 // POST on a GET-only tool is served, not 405'd (2026-08-28): agents POST
