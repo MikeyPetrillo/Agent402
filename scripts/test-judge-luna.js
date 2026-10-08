@@ -64,6 +64,8 @@ const JEV_ANSWERS = { model: "jev-1.13.0", answers: {
   ok(upstreamCostsGaps().includes("vendor.decisions.luna") && upstreamCostsGaps().includes("vendor.decisions.maxShare"), "a table without the Luna rows reads partial (both are gaps)");
   setUpstreamCostsForTest({ models: [["fake/model", { prompt: 1, completion: 1 }]], vendor: { decisions: { luna: RATE } } });
   ok(!lunaEnabled() && !lunaFits(1), "a rate without the share is not enough: Luna stays off");
+  setUpstreamCostsForTest({ models: [["fake/model", { prompt: 1, completion: 1 }]], vendor: { decisions: { maxShare: SHARE } } });
+  ok(!lunaEnabled() && !lunaFits(1), "a share without the rate is not enough either: Luna stays off");
   setUpstreamCostsForTest(table(RATE));
 }
 
