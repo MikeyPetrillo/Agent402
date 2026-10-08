@@ -1654,6 +1654,8 @@ jobs:
           t node scripts/test-reliability-claims.js
           # Four false absolutes (a claim must stay true as the service widens)
           t node scripts/test-copy-absolutes.js
+          # The router and decide execute are described as buying from sellers and reselling (copy, tags, terms; offline)
+          t node scripts/test-resale-copy.js
           t node scripts/test-legal-dates.js
           t node scripts/test-wire-count-copy.js
           t node scripts/test-pack-copy-retired.js

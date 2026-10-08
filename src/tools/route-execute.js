@@ -225,7 +225,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
     // tools because none of those words were tags. Each word below is a term
     // a buyer would type for THIS capability, not a synonym grab.
     tags: ["router", "sor", "execute", "dispatch", "meta", "agent", "x402",
-      "buy", "purchase", "seller", "external", "behalf", "broker", "delegate",
+      "buy", "purchase", "seller", "external", "resell", "source", "third-party",
       "outsource", "marketplace", "cross-seller",
       ...(routeSuffix ? [`${routeSuffix.slice(1)}-tier`] : [])],
     discovery: {
