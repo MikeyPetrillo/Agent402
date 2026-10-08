@@ -41,6 +41,7 @@ const JUDGE_IN = {
     team: { type: "choice", instructions: "Which team?", criteria: { frontend: "UI", backend: "APIs" } },
   },
 };
+const LUNA_IN = { ...JUDGE_IN, model: "gpt-6-luna" };
 const LUNA_ANSWERS = { answers: [
   { type: "score", name: "q0", score: 1.27, probabilities: [{ value: 0, label: "0", probability: 0.15 }, { value: 1, label: "1", probability: 0.43 }, { value: 2, label: "2", probability: 0.42 }], confidence: 0.15 },
   { type: "predicate", name: "q1", probability: 0.02 },
@@ -63,11 +64,16 @@ const JEV_ANSWERS = { model: "jev-1.13.0", answers: {
   setUpstreamCostsForTest(table(RATE));
 }
 
-// ---- /v1/judge: Luna first ------------------------------------------------
+// ---- /v1/judge: Jev first by default, Luna when named ---------------------
+{
+  const s = stub({ [TYPESAFE]: json(200, JEV_ANSWERS) });
+  const r = await judge(JUDGE_IN, { fetchImpl: s.fetchImpl });
+  ok(s.hosts().join() === TYPESAFE && r.model === "jev-1.13.0" && !("fallbackFrom" in r), "the default call goes to Jev only");
+}
 {
   const s = stub({ [OPENAI]: json(200, LUNA_ANSWERS) });
-  const r = await judge(JUDGE_IN, { fetchImpl: s.fetchImpl });
-  ok(s.hosts().join() === OPENAI, "the default call goes to Luna only");
+  const r = await judge(LUNA_IN, { fetchImpl: s.fetchImpl });
+  ok(s.hosts().join() === OPENAI, "a call naming gpt-6-luna goes to Luna only");
   const sent = s.calls[0].body;
   ok(sent.model === LUNA && sent.input === JUDGE_IN.state, "Luna receives the state as input");
   ok(sent.questions.map((q) => `${q.name}:${q.type}`).join() === "q0:score,q1:predicate,q2:choice", "question ids go positional (q0..), noul becomes predicate");
@@ -88,7 +94,7 @@ for (const [why, lunaReply] of [
   ["a refused Luna connection", null],
 ]) {
   const s = stub({ [OPENAI]: lunaReply, [TYPESAFE]: json(200, JEV_ANSWERS) });
-  const r = await judge(JUDGE_IN, { fetchImpl: s.fetchImpl });
+  const r = await judge(LUNA_IN, { fetchImpl: s.fetchImpl });
   ok(s.hosts().join() === `${OPENAI},${TYPESAFE}` && r.model === "jev-1.13.0" && r.fallbackFrom === LUNA, `${why} falls back to Jev, named in fallbackFrom`);
   ok(s.calls[1].body.model === "jev-latest", "...and Jev is asked as jev-latest, never with Luna's name");
 }
@@ -102,12 +108,12 @@ for (const [why, lunaReply, code] of [
   ["a Luna probability above 1", json(200, { answers: [LUNA_ANSWERS.answers[0], { type: "predicate", name: "q1", probability: 1.4 }, LUNA_ANSWERS.answers[2]] }), 502],
 ]) {
   const s = stub({ [OPENAI]: lunaReply, [TYPESAFE]: json(200, JEV_ANSWERS) });
-  let e = null; try { await judge(JUDGE_IN, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
+  let e = null; try { await judge(LUNA_IN, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
   ok(e?.statusCode === code && s.hosts().join() === OPENAI, `${why} is an uncharged ${code} and Jev is not called`);
 }
 {
   const s = stub({ [OPENAI]: () => { throw Object.assign(new Error("timeout"), { name: "TimeoutError" }); }, [TYPESAFE]: json(200, JEV_ANSWERS) });
-  let e = null; try { await judge(JUDGE_IN, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
+  let e = null; try { await judge(LUNA_IN, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
   ok(e?.statusCode === 504 && s.hosts().join() === OPENAI, "a Luna timeout is an uncharged 504 and Jev is not called (the timed-out call may be billed)");
 }
 {
@@ -126,7 +132,7 @@ for (const [why, lunaReply, code] of [
   ok(e?.statusCode >= 500 && s.calls.length === 2, "both down is an uncharged 5xx after one try each");
 }
 {
-  const big = { ...JUDGE_IN, state: "x".repeat(7500) };
+  const big = { ...LUNA_IN, state: "x".repeat(7500) };
   const s = stub({ [OPENAI]: json(200, LUNA_ANSWERS), [TYPESAFE]: json(200, JEV_ANSWERS) });
   const r = await judge(big, { fetchImpl: s.fetchImpl });
   ok(s.hosts().join() === TYPESAFE && r.model === "jev-1.13.0" && !("fallbackFrom" in r), "a request too large for Luna's margin goes to Jev only, and is not a fallback");

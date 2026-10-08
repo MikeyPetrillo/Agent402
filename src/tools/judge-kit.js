@@ -21,11 +21,12 @@
 
 import { upstreamCosts } from "../upstream-costs.js";
 
-// TWO BACKENDS, one answer shape. OpenAI's Decisions API (gpt-6-luna) answers
-// first and TypeSafe's Jev is the fallback; the buyer can name either one
-// first with "model". Both return probabilities over the same three question
-// kinds, so a Luna answer is translated into the shape this route has always
-// published, and the answer names the model that served.
+// TWO BACKENDS, one answer shape. On /v1/judge TypeSafe's Jev answers first
+// and OpenAI's Decisions API (gpt-6-luna) is the fallback; on /v1/decisions,
+// OpenAI's own wire, Luna answers first. A buyer of /v1/judge can name either
+// one first with "model". Both return probabilities over the same three
+// question kinds, so a Luna answer is translated into the shape /v1/judge has
+// always published, and the answer names the model that served.
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 const keyOf = () => (process.env.TYPESAFE_API_KEY || "").trim();
 export const LUNA = "gpt-6-luna";
@@ -65,7 +66,7 @@ const bad = (msg) => { const e = new Error(msg); e.statusCode = 400; return e; }
 /** Validate and normalise. Throws a self-explaining 400 the caller can act on:
  *  a >= 400 cancels settlement, so a refused request is free to the buyer. */
 export function validateJudgeRequest(input = {}) {
-  const { state, questions, model = LUNA } = input;
+  const { state, questions, model = "jev-latest" } = input;
   if (!MODELS.has(String(model))) throw bad(`"model" must be one of: ${[...MODELS].join(", ")}`);
 
   const stateStr = typeof state === "string" ? state : state == null ? "" : JSON.stringify(state);
@@ -384,7 +385,7 @@ export const JUDGE_TOOLS = [{
   slug: "judge",
   category: "ai",
   price: "$0.001",
-  description: "Ask a typed question about any content and get an answer your code can branch on, not prose to parse. Send state (the content, a string or object) and questions (your own ids mapped to question objects); get back answers keyed by those ids. Three question types: choice (pick one of your named options: returns choice, probabilities per option and confidence), score (a position on levels you describe, lowest first: returns score as a fractional level index, probabilities per level index, confidence and a legend naming each level), and noul (a yes/no: returns noul, the probability of yes from 0 to 1). Up to 8 questions per call, answered in parallel over one piece of state. Use it for routing, triage, classification and gating decisions. Served by gpt-6-luna with jev-latest as fallback (name either first with model); the answer names the model that served, and fallbackFrom when the first was unavailable. Model-backed, not deterministic.",
+  description: "Ask a typed question about any content and get an answer your code can branch on, not prose to parse. Send state (the content, a string or object) and questions (your own ids mapped to question objects); get back answers keyed by those ids. Three question types: choice (pick one of your named options: returns choice, probabilities per option and confidence), score (a position on levels you describe, lowest first: returns score as a fractional level index, probabilities per level index, confidence and a legend naming each level), and noul (a yes/no: returns noul, the probability of yes from 0 to 1). Up to 8 questions per call, answered in parallel over one piece of state. Use it for routing, triage, classification and gating decisions. Served by jev-latest with gpt-6-luna as fallback (name either first with model); the answer names the model that served, and fallbackFrom when the first was unavailable. Model-backed, not deterministic.",
   tags: ["ai", "classify", "judgment", "routing", "extraction"],
   discovery: {
     bodyType: "json",
@@ -393,7 +394,7 @@ export const JUDGE_TOOLS = [{
       required: ["state", "questions"],
       properties: {
         state: { type: ["string", "object", "array"], description: `The content to judge. Up to ${LIMITS.stateChars} characters.` },
-        model: { type: "string", enum: [...MODELS], description: `Which model answers first; the other is the fallback. Defaults to ${LUNA}.` },
+        model: { type: "string", enum: [...MODELS], description: "Which model answers first; the other is the fallback. Defaults to jev-latest." },
         questions: { type: "object", description: "Your own ids mapped to question objects. Each has type (choice/score/noul), instructions, and criteria for choice/score." },
       },
     },
@@ -404,20 +405,20 @@ export const JUDGE_TOOLS = [{
         is_reproducible: { type: "noul", instructions: "Does this report describe steps that would let an engineer reproduce the problem?" },
       },
     },
-    // The live answer shape (read from a real call 2026-10-07, served by Luna):
-    // score probabilities are keyed by level INDEX with a legend beside them,
-    // not an array. Jev answers in the same shape and echoes its version.
+    // The live answer shape (read from a real call 2026-09-24): score
+    // probabilities are keyed by level INDEX with a legend beside them, not an
+    // array, and the model echoes its concrete version.
     example: {
-      model: "gpt-6-luna",
+      model: "jev-1.13.0",
       answers: {
         severity: {
-          type: "score", score: 1, confidence: 0.97,
+          type: "score", score: 1.48, confidence: 0.27,
           legend: { 0: "Cosmetic; no impact to functionality", 1: "Broken or degraded feature, but a workaround exists", 2: "Blocking issue; no workaround exists" },
-          probabilities: { 0: 0.01, 1: 0.98, 2: 0.01 },
+          probabilities: { 0: 0, 1: 0.52, 2: 0.48 },
         },
-        is_reproducible: { type: "noul", noul: 0 },
+        is_reproducible: { type: "noul", noul: 0.3 },
       },
-      usage: { input_tokens: 322, output_tokens: 0 },
+      usage: { input_tokens: 363, output_tokens: 37 },
       note: "Typed judgment. choice/score answers carry `probabilities` and `confidence`; a noul carries `noul`, a probability from 0 to 1, and no confidence. Gate on confidence for choice/score and on distance from 0.5 for a noul.",
     },
   },

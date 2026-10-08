@@ -5,8 +5,8 @@ const ENTRIES = [
     date: "2026-10-08",
     title: "Decisions on the OpenAI wire, and two models behind every judgment",
     items: [
-      "/v1/judge is answered by OpenAI's Decisions API (gpt-6-luna) first, with Jev as the fallback. The answer shape is unchanged; it names the model that served, and fallbackFrom when the first was unavailable.",
-      "POST /v1/decisions speaks OpenAI's Decisions wire: point an OpenAI SDK here and decisions.create works unchanged, paid per call, with the same fallback.",
+      "/v1/judge falls back to OpenAI's Decisions API (gpt-6-luna) when Jev is unavailable. The answer shape is unchanged; it names the model that served, and fallbackFrom when the first was unavailable.",
+      "POST /v1/decisions speaks OpenAI's Decisions wire: point an OpenAI SDK here and decisions.create works unchanged, paid per call, answered by gpt-6-luna with Jev as the fallback.",
       "The transcription examples use a new two-voice sample, so diarize:true shows two speakers, and the image, OCR, PDF and OpenAPI examples read this site's own sample files.",
     ],
   },

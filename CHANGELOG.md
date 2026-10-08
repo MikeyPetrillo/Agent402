@@ -9,13 +9,13 @@ carries its own version on npm.
 Since v2.5.0 (2026-10-07).
 
 ### 2026-10-08
-- `/v1/judge` is answered by OpenAI's Decisions API (`gpt-6-luna`) first, with
-  Jev as the fallback; `model` names which one answers first, the answer names
-  the model that served, and `fallbackFrom` says when the first was
-  unavailable. The answer shape is unchanged.
+- `/v1/judge` falls back to OpenAI's Decisions API (`gpt-6-luna`) when Jev is
+  unavailable; `model` names which one answers first (default `jev-latest`),
+  the answer names the model that served, and `fallbackFrom` says when the
+  first was unavailable. The answer shape is unchanged.
 - Add `POST /v1/decisions`: OpenAI's Decisions wire, so an OpenAI SDK pointed
-  here calls `decisions.create` unchanged and pays per call. Text input; same
-  backends and fallback (`fallback_from`).
+  here calls `decisions.create` unchanged and pays per call. Text input;
+  `gpt-6-luna` answers first, with Jev as the fallback (`fallback_from`).
 - Add `/fixtures/sample-speech.wav`, a two-voice clip; the `transcribe` and
   `transcribe-pro` examples use it, and `diarize: true` names two speakers.
 - The `image-exif`, `image-dominant-color`, `image-crop`, `image-ocr` and
