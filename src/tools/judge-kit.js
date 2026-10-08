@@ -32,20 +32,21 @@ const keyOf = () => (process.env.TYPESAFE_API_KEY || "").trim();
 export const LUNA = "gpt-6-luna";
 const LUNA_ENDPOINT = (process.env.OPENAI_DECISIONS_URL || "https://api.openai.com/v1/decisions").trim();
 const openaiKey = () => (process.env.OPENAI_API_KEY || "").trim();
-// Luna's input rate (USD per 1M tokens) from the private table. Without it
-// Luna is not offered: the route never sends a call it cannot price.
+// Luna's input rate (USD per 1M tokens) and the largest share of the price a
+// call may cost, both from the private table. Without them Luna is not
+// offered: the route never sends a call it cannot price.
 const lunaRate = () => upstreamCosts().vendor?.decisions?.luna ?? null;
+const lunaMaxShare = () => upstreamCosts().vendor?.decisions?.maxShare ?? null;
 export const jevEnabled = () => !!keyOf();
-export const lunaEnabled = () => !!openaiKey() && lunaRate() != null;
+export const lunaEnabled = () => !!openaiKey() && lunaRate() != null && lunaMaxShare() != null;
 export const judgeEnabled = () => jevEnabled() || lunaEnabled();
 // Both routes sell at this price. Luna is tried only when the request's worst
-// case (one token per byte of the body we send) fits it with margin; a larger
-// request goes to Jev, whose rate fits the full byte cap.
+// case (one token per byte of the body we send) stays within the table's
+// share of it; a larger request goes to Jev, whose rate fits the byte cap.
 export const JUDGE_PRICE_USD = 0.001;
-const MARGIN = 0.7;
 export function lunaFits(bytes) {
-  const r = lunaRate();
-  return r != null && (bytes * r) / 1e6 <= MARGIN * JUDGE_PRICE_USD;
+  const r = lunaRate(), share = lunaMaxShare();
+  return r != null && share != null && (bytes * r) / 1e6 <= share * JUDGE_PRICE_USD;
 }
 
 // Every bound below exists to make the upstream token count knowable in advance.

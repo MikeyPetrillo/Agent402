@@ -15,7 +15,8 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const quiet = console.warn; console.warn = () => {};
 
 const RATE = 1; // placeholder, the same as docs/example-upstream-costs.json
-const table = (luna) => ({ models: [["fake/model", { prompt: 1, completion: 1 }]], vendor: luna == null ? {} : { decisions: { luna } } });
+const SHARE = 1; // placeholder, the same as docs/example-upstream-costs.json
+const table = (luna) => ({ models: [["fake/model", { prompt: 1, completion: 1 }]], vendor: luna == null ? {} : { decisions: { luna, maxShare: SHARE } } });
 setUpstreamCostsForTest(table(RATE));
 
 const OPENAI = "api.openai.com", TYPESAFE = "api.typesafe.ai";
@@ -56,11 +57,13 @@ const JEV_ANSWERS = { model: "jev-1.13.0", answers: {
 // ---- configuration and the cost bound -------------------------------------
 {
   ok(judgeEnabled() && lunaEnabled(), "with both keys and the Luna rate, both backends are enabled");
-  const cap = Math.floor((0.7 * JUDGE_PRICE_USD * 1e6) / RATE);
-  ok(lunaFits(cap) && !lunaFits(cap + 1), `Luna is tried only while its worst case fits the price with 30% margin (${cap} bytes at the test rate)`);
+  const cap = Math.floor((SHARE * JUDGE_PRICE_USD * 1e6) / RATE);
+  ok(lunaFits(cap) && !lunaFits(cap + 1), `Luna is tried only while its worst case stays within the table's share of the price (${cap} bytes at the test values)`);
   setUpstreamCostsForTest(table(null));
   ok(!lunaEnabled() && judgeEnabled(), "without the Luna rate Luna is not offered, and Jev still serves");
-  ok(upstreamCostsGaps().includes("vendor.decisions.luna"), "a table without the Luna rate reads partial (vendor.decisions.luna is a gap)");
+  ok(upstreamCostsGaps().includes("vendor.decisions.luna") && upstreamCostsGaps().includes("vendor.decisions.maxShare"), "a table without the Luna rows reads partial (both are gaps)");
+  setUpstreamCostsForTest({ models: [["fake/model", { prompt: 1, completion: 1 }]], vendor: { decisions: { luna: RATE } } });
+  ok(!lunaEnabled() && !lunaFits(1), "a rate without the share is not enough: Luna stays off");
   setUpstreamCostsForTest(table(RATE));
 }
 
@@ -137,7 +140,7 @@ for (const [why, lunaReply, code] of [
   const big = { ...LUNA_IN, state: "x".repeat(7500) };
   const s = stub({ [OPENAI]: json(200, LUNA_ANSWERS), [TYPESAFE]: json(200, JEV_ANSWERS) });
   const r = await judge(big, { fetchImpl: s.fetchImpl });
-  ok(s.hosts().join() === TYPESAFE && r.model === "jev-1.13.0" && !("fallbackFrom" in r), "a request too large for Luna's margin goes to Jev only, and is not a fallback");
+  ok(s.hosts().join() === TYPESAFE && r.model === "jev-1.13.0" && !("fallbackFrom" in r), "a request too large for Luna's bound goes to Jev only, and is not a fallback");
 }
 {
   const s = stub({ [OPENAI]: json(400, { error: { message: "bad" } }) });
