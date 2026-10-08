@@ -16,7 +16,8 @@ COPY mcp/package.json mcp/package-lock.json ./
 # @solana/kit, @x402/*), so no dependency lifecycle script needs to run during
 # install and none can execute during it (audit F16 / R-07).
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
-COPY mcp/index.js ./
+# Every file index.js imports (scripts/test-mcp-dockerfiles.js checks this list).
+COPY mcp/index.js mcp/networks.js mcp/output-schemas.js ./
 # F16: run as the built-in unprivileged `node` user (UID 1000), not root. The
 # stdio server writes nothing to disk and has no volume, so the copied files
 # stay root-owned and world-readable and no ownership fixup is needed.

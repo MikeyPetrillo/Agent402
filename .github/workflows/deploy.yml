@@ -1656,6 +1656,7 @@ jobs:
           t node scripts/test-copy-absolutes.js
           # The router and decide execute are described as buying from sellers and reselling (copy, tags, terms; offline)
           t node scripts/test-resale-copy.js
+          t node scripts/test-mcp-dockerfiles.js
           # A cached repeat's "payment is not charged" copy names the Tempo transfer exception (offline)
           t node scripts/test-cache-repeat-copy.js
           t node scripts/test-legal-dates.js

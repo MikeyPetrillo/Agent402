@@ -12,5 +12,5 @@ FROM node:22-slim
 WORKDIR /app
 COPY mcp/package.json mcp/package-lock.json ./
 RUN npm ci --omit=dev
-COPY mcp/index.js mcp/networks.js mcp/README.md ./
+COPY mcp/index.js mcp/networks.js mcp/output-schemas.js mcp/README.md ./
 ENTRYPOINT ["node", "index.js"]
