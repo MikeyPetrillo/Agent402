@@ -13,6 +13,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 [![Live](https://img.shields.io/website?url=https%3A%2F%2Fagent402.tools%2Fhealth&label=agent402.tools&up_message=live)](https://agent402.tools)
 [![Wellknown](https://wellknown.network/agents/agent402-mcp/badge.svg)](https://wellknown.network/agents/agent402-mcp)
 [![MCP Queen operational grade](https://mcpqueen.com/badge/io.github.MikeyPetrillo/agent402.svg)](https://mcpqueen.com/s/io.github.MikeyPetrillo/agent402)
+[![agent402-mcp on Glama](https://glama.ai/mcp/servers/MikeyPetrillo/Agent402/badges/score.svg)](https://glama.ai/mcp/servers/MikeyPetrillo/Agent402)
 [![CodeQL](https://github.com/MikeyPetrillo/Agent402/actions/workflows/codeql.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/codeql.yml)
 [![Secret scan](https://github.com/MikeyPetrillo/Agent402/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/secret-scan.yml)
 [![npm](https://img.shields.io/npm/v/agent402-mcp?label=agent402-mcp)](https://www.npmjs.com/package/agent402-mcp)
