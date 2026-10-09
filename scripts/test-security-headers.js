@@ -87,6 +87,18 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
   // A402-13: no X-Powered-By on any response.
   const home = await fetch(`${base}/`);
   ok(!home.headers.get("x-powered-by"), "no X-Powered-By header (fingerprint disabled)");
+  // Document-only headers stay on pages and off the JSON API paths, where
+  // they govern nothing and cost header bytes on every 402.
+  const DOC = ["content-security-policy", "x-frame-options", "permissions-policy", "x-permitted-cross-domain-policies"];
+  const ALWAYS = ["x-content-type-options", "strict-transport-security", "referrer-policy"];
+  ok(DOC.every((h) => home.headers.get(h)) && ALWAYS.every((h) => home.headers.get(h)), "the home page carries every security header");
+  for (const p of ["/api/hash", "/v1/chat/completions", "/mcp"]) {
+    const r = await fetch(`${base}${p}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    ok(DOC.every((h) => !r.headers.get(h)) && ALWAYS.every((h) => r.headers.get(h)), `${p}: no document-only headers, the always-on ones kept`);
+  }
+  const sts = await fetch(`${base}/.well-known/mta-sts.txt`);
+  const stsText = await sts.text();
+  ok(sts.status === 200 && (sts.headers.get("content-type") || "").includes("text/plain") && /^version: STSv1\r\nmode: (testing|enforce|none)\r\n(mx: [a-z0-9.*-]+\r\n)+max_age: \d+\r\n$/.test(stsText), "the MTA-STS policy is served as text/plain in RFC 8461 form");
 
   // A402-13: RFC 9116 security.txt.
   const sec = await fetch(`${base}/.well-known/security.txt`);
