@@ -507,6 +507,21 @@ export const BAZAAR_INPUT_SCHEMA_MAX_BYTES = Number(process.env.BAZAAR_INPUT_SCH
 // schemas) has a budget too; past it the output example gives way to the
 // truncation note first, then the output schema. A small example stays.
 export const BAZAAR_DISCOVERY_MAX_BYTES = Number(process.env.BAZAAR_DISCOVERY_MAX_BYTES) || 2_000;
+/** The whole discovery block under a byte budget. The output schema goes
+ *  first (it is derived from the example, which stays readable), then the
+ *  example gives way to the truncation note; a schema never outlives the
+ *  example it was read from. A block inside the budget is returned as is. */
+export function boundDiscoveryBlock(block, maxBytes = BAZAAR_DISCOVERY_MAX_BYTES) {
+  if (!block || typeof block !== "object") return block;
+  const bytes = (b) => JSON.stringify(b).length;
+  if (bytes(block) <= maxBytes) return block;
+  let out = { ...block };
+  if (out.output?.schema) { const { schema: _dropped, ...rest } = out.output; out = { ...out, output: rest }; }
+  if (bytes(out) > maxBytes && out.output?.example !== undefined && !out.output.example?.truncated) {
+    out = { ...out, output: { ...out.output, example: { truncated: true, note: "full example in /openapi.json" } } };
+  }
+  return out;
+}
 
 export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
   if (!s) return s;
@@ -1330,18 +1345,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         ...(schema ? { schema } : {}),
       };
     }
-    // Whole-block budget. The output schema goes first (it is derived from
-    // the example, which stays readable), then the example gives way to the
-    // truncation note; a schema never outlives the example it was read from.
-    const bytes = () => JSON.stringify(slim).length;
-    if (bytes() > BAZAAR_DISCOVERY_MAX_BYTES && slim.output?.schema) {
-      const { schema: _dropped, ...rest } = slim.output;
-      slim.output = rest;
-    }
-    if (bytes() > BAZAAR_DISCOVERY_MAX_BYTES && slim.output?.example !== undefined && !slim.output.example?.truncated) {
-      slim.output = { ...slim.output, example: { truncated: true, note: "full example in /openapi.json" } };
-    }
-    return slim;
+    return boundDiscoveryBlock(slim, BAZAAR_DISCOVERY_MAX_BYTES);
   };
 
   const builderCode = process.env.BASE_BUILDER_CODE || null;

@@ -2,6 +2,7 @@
 // boundedSchema trims a JSON schema to a byte budget for the 402 challenge:
 // descriptions first, then nested detail, down to names and types. Offline.
 import { boundedSchema } from "../src/openapi-schema.js";
+import { boundDiscoveryBlock } from "../src/payments.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const size = (s) => JSON.stringify(s).length;
@@ -33,5 +34,18 @@ ok(be && be.properties.n.enum.length === 12, `a long enum is cut to twelve value
 const proto = JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string","description":"' + "p".repeat(400) + '"},"a":{"type":"string"}}}');
 const bp = boundedSchema(proto, 200);
 ok(bp && Object.hasOwn(bp.properties, "__proto__") && ({}).type === undefined && Object.getPrototypeOf(bp.properties) === Object.prototype, "a __proto__ property name stays an own key and pollutes nothing");
+
+// ---- the whole discovery block: schema first, then the example, never a schema without its example
+{
+  const example = { plan: Array.from({ length: 12 }, (_, i) => ({ step: i + 1, tool: "t".repeat(60) })) };
+  const block = { bodyType: "json", input: { task: "x" }, inputSchema: { type: "object", properties: { task: { type: "string" } } }, output: { type: "json", example, schema: { type: "object", properties: { plan: { type: "array" } } } } };
+  ok(boundDiscoveryBlock(block, 5000) === block, "a block inside the budget is returned untouched");
+  const mid = boundDiscoveryBlock(block, size(block) - 20);
+  ok(mid.output.schema === undefined && mid.output.example === example, "just over the budget: the output schema goes, the example stays");
+  const tight = boundDiscoveryBlock(block, 300);
+  ok(tight.output.schema === undefined && tight.output.example.truncated === true && /openapi\.json/.test(tight.output.example.note), "well over the budget: the example becomes the truncation note and no schema survives");
+  ok(block.output.schema && block.output.example === example, "the caller's block is not mutated");
+  ok(boundDiscoveryBlock(null, 100) === null, "no block, no change");
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

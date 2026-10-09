@@ -99,7 +99,7 @@ const WARN_HEADER_BYTES = Number(process.env.WARN_CHALLENGE_HEADER_BYTES) || 9_0
 // on 2026-10-09 and the buyer saw a header overflow, not a paywall). The
 // challenge shares that budget with the MPP challenge, CORS and the
 // security headers, so the bound is on the total, with room for more rails.
-const MAX_TOTAL_HEADER_BYTES = Number(process.env.MAX_TOTAL_HEADER_BYTES) || 14_000;
+const MAX_TOTAL_HEADER_BYTES = Number(process.env.MAX_TOTAL_HEADER_BYTES) || 13_800;
 const WARN_TOTAL_HEADER_BYTES = Number(process.env.WARN_TOTAL_HEADER_BYTES) || 12_500;
 // The body that provokes the largest challenge on the gateway: a priced
 // model widens the MPP challenge (its quote rides in every method's request).

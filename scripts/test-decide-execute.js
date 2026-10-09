@@ -620,6 +620,8 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   await throwsWith(() => exec({ steps: ["s1"] }, mkReq("0xs")), 400, "2 to 5", "one step is not a plan");
   await throwsWith(() => exec({ steps: ["s1", "nope"] }, mkReq("0xs")), 400, 'no tool "nope"', "an unknown slug is refused before anything runs");
   await throwsWith(() => exec({ steps: ["s1", "route-execute-pro"] }, mkReq("0xs")), 400, "route-execute", "a tool execute may not dispatch is refused by name");
+  catalog.s3 = { slug: "s3", route: "POST /api/s3", price: "$0.01", quote: () => 0.01, discovery: { bodyType: "json" }, handler: async (p) => { calls.push(["s3", p]); return { s3: true }; } };
+  await throwsWith(() => exec({ steps: ["s1", "s3"], params: { 1: { text: "hi" } } }, mkReq("0xs")), 400, "step 2 (s3)", "a per-request-priced tool is refused by name before step 1 runs");
   ok(!calls.length, "no refused sketch ran a step");
   await throwsWith(() => exec({ steps: ["s1", "s2"] }, mkReq("0xs2")), 400, "needs text", "without step-1 params nothing runs and the refusal names the field");
   ok(!calls.length, "the placeholder is never sent to a tool");
