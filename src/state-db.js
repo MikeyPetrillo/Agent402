@@ -370,6 +370,40 @@ export async function stateStoresReady({ timeoutMs = 15_000 } = {}) {
 }
 
 /**
+ * Run `fn(client)` inside one transaction on a dedicated connection; commits
+ * on return, rolls back on throw. The client's query() is the pg client's.
+ */
+export async function withStateTx(fn) {
+  const p = await stateDb();
+  if (!p) throw new Error("state database not configured");
+  const client = await p.connect();
+  try {
+    await client.query("BEGIN");
+    const out = await fn(client);
+    await client.query("COMMIT");
+    return out;
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch { /* the connection is gone */ }
+    throw e;
+  } finally { client.release(); }
+}
+
+/**
+ * Run an import exactly once per name (the imports table remembers it):
+ * `run()` is called when no mark exists and the mark is written after it
+ * returns, so a crash mid-import runs it again at the next boot. Two
+ * containers booting at once both see no mark; `run` must therefore be
+ * idempotent (insert-if-absent), which the SQLite-to-table imports are.
+ */
+export async function importOnce(name, { source = "", run }) {
+  if (typeof run !== "function") throw new Error("importOnce needs run()");
+  if (await imports.done(name)) return { imported: false };
+  const out = await run();
+  await imports.mark(name, { source, bytes: Number(out?.bytes) || 0 });
+  return { imported: true, ...(out && typeof out === "object" ? out : {}) };
+}
+
+/**
  * Wrap a scheduled tick so it runs under a lease: `leased(name, opts, fn)`
  * returns a function with fn's signature that answers `{ skipped: "leased" }`
  * when another holder has the lease (or the database could not say), and
