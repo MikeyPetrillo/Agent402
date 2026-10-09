@@ -842,7 +842,7 @@ const CATALOG = {
     category: "memory",
     price: "$0.001",
     description:
-      "Persistent key-value memory for agents, scoped to the paying wallet. Your x402 payment IS your authentication: the wallet that pays owns the namespace. No signup, no API keys. Exact-key storage for structured state - when you want retrieval by MEANING rather than key, use memory-remember + memory-recall instead. Body: {\"key\":\"…\",\"value\":any JSON,\"ttlSeconds\":3600?} to write (optional TTL), or {\"key\":\"…\",\"delete\":true} to remove. Add \"owner\":\"0x…\" to write into another wallet's namespace you've been granted. Values up to 64KB.",
+      "Persistent key-value memory for agents, scoped to the paying wallet. Your x402 payment IS your authentication: the wallet that pays owns the namespace. No signup, no API keys. Exact-key storage for structured state. For retrieval by MEANING rather than key, use the catalog slugs memory-remember and memory-recall (on MCP, through catalog.call with that slug). Body: {\"key\":\"…\",\"value\":any JSON,\"ttlSeconds\":3600?} to write (optional TTL), or {\"key\":\"…\",\"delete\":true} to remove. Add \"owner\":\"0x…\" to write into another wallet's namespace you've been granted. Values up to 64KB.",
     // Agents phrase this as "store data between sessions" / "remember this
     // across runs". None of those words appeared anywhere in the tool, so
     // the query matched `gov-data` on the word "data" instead. Memory is our
@@ -871,7 +871,7 @@ const CATALOG = {
     category: "memory",
     price: "$0.001",
     description:
-      "Read from a wallet-scoped namespace. ?key=… returns the stored value; omit key to list keys. The read half of memory-write's exact-key store - for similarity retrieval over remembered text use memory-recall. Reads your own namespace by default; add ?owner=0x… to read a namespace you've been granted access to.",
+      "Read from a wallet-scoped namespace. ?key=… returns the stored value; omit key to list keys. The read half of memory-write's exact-key store. For similarity retrieval over remembered text, call the catalog slug memory-recall (on MCP, through catalog.call). Reads your own namespace by default; add ?owner=0x… to read a namespace you've been granted access to.",
     tags: ["memory", "storage", "state", "key-value"],
     discovery: {
       // List mode ({} = no key), not a hardcoded key read: memory is
