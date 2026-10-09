@@ -57,7 +57,7 @@ ok(/googletagmanager\.com\/gtag\/js\?id=/.test(loader), "loader: loads Google's 
   ok(/page_location: location\.origin \+ location\.pathname/.test(loader) && /\^utm_\[a-z_\]\+\$/.test(loader), "loader: the URL sent drops every query parameter but utm_*");
 }
 
-const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+const server = readFileSync(new URL("../src/security-headers.js", import.meta.url), "utf8");
 const csp = /"default-src 'self';[^"]*"/.exec(server)?.[0] || "";
 ok(/script-src 'self' https:\/\/www\.googletagmanager\.com;/.test(csp), "CSP: script-src adds exactly www.googletagmanager.com");
 ok(!/script-src[^;]*('unsafe-inline'|'unsafe-eval'|\*)/.test(csp), "CSP: no unsafe-inline, unsafe-eval or wildcard in script-src");
