@@ -31,7 +31,7 @@ try {
     const fu2 = createFollowups({ storePath: join(D2, "followups.json"), sendEmail, secret: "s", log: quiet });
     await fu2.ready();
     ok(Object.keys(fu2._store().seqs).sort().join(",") === "cs_new,cs_old", "followups: a fresh instance reads the row (both records), not its missing file");
-    ok(!existsSync(join(D2, "followups.json")) && Object.keys(JSON.parse(readFileSync(file, "utf8")).seqs).length === 1, "followups: no file is written in database mode");
+    ok(!existsSync(join(D2, "followups.json")) && Object.keys(JSON.parse(readFileSync(file, "utf8")).seqs).length === 2, "followups: the row is read, and the original file is kept current by write-through");
   }
   // ---- free alerts ------------------------------------------------------------
   {
@@ -151,12 +151,12 @@ try {
     await new Promise((r) => setTimeout(r, 300));
     const lines = await sdb.logLines.read(OUTBOUND_STREAM);
     ok(lines.length === 1 && lines[0].body.chain === "base" && lines[0].body.origin === "seller.test", "outbound ledger: one row per signed payment, host only");
-    ok(!existsSync(join(D1, "outbound-spend.ndjson")), "outbound ledger: no file is written in database mode");
+    ok(existsSync(join(D1, "outbound-spend.ndjson")), "outbound ledger: the file is written through as well");
 
     const wishFile = join(D1, "wishes.jsonl");
     writeFileSync(wishFile, [JSON.stringify({ need: "old wish one", source: "api", ts: 1 }), JSON.stringify({ need: "old wish one", source: "mcp", ts: 2 }), "{not json"].join("\n") + "\n");
+    process.env.WISH_FILE = wishFile; // read at import: the module imports its file on first load
     const wish = await import("../src/wish.js");
-    wish.__testSetFilePath(wishFile); wish.__testReset?.();
     const wishTest = true;
     if (wishTest) {
       await sdb.stateStoresReady();

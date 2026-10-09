@@ -441,14 +441,16 @@ export function startBackupScheduler({ log = console.log } = {}) {
     log("[backup] not configured (BACKUP_S3_* unset) - nightly offsite backup disabled, plan endpoint still live");
     return null;
   }
-  const timer = setInterval(() => void leased("backup-nightly", { ttlMs: 60 * 60_000, log }, () => {
+  // The run itself is awaited under the lease, so two containers inside the
+  // same hour do not both upload; the day is taken only once the lease is held.
+  const nightly = leased("backup-nightly", { ttlMs: 60 * 60_000, log }, async () => {
     const now = new Date();
     const day = now.toISOString().slice(0, 10);
-    if (now.getUTCHours() === cfg().utcHour && lastDay !== day) {
-      lastDay = day;
-      runBackup({ log }).catch((e) => log(`[backup] scheduler run threw: ${e.message}`));
-    }
-  })(), 10 * 60 * 1000);
+    if (now.getUTCHours() !== cfg().utcHour || lastDay === day) return;
+    lastDay = day;
+    await runBackup({ log }).catch((e) => log(`[backup] scheduler run threw: ${e.message}`));
+  });
+  const timer = setInterval(() => { nightly().catch(() => {}); }, 10 * 60 * 1000);
   timer.unref?.(); // never keep the process alive for the backup timer
   log(`[backup] nightly scheduler armed (UTC hour ${cfg().utcHour}, keep ${cfg().keepDays} days, run cap ${cfg().maxRunMb}MB, bill guard ${cfg().maxTotalGb}GB, ${cfg().encKey ? "AES-256-GCM client-side encryption ON" : "WARNING: BACKUP_ENCRYPTION_KEY unset - objects upload as plain gzip"})`);
   return timer;

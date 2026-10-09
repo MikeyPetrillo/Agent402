@@ -38,6 +38,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok((await s.get("x")).v === 9 && (await local.get("x")).v === 9, "shared without Redis: the local store serves");
   ok(await s.claim("y") === true && await s.claim("y") === false, "shared without Redis: claims are local");
   await s.release("y");
+  // A Redis that answers but misses (an answer stored during its cooldown lives locally) still replays.
+  const missing = createIdempotencyStore({ redis: async () => ({ get: async () => null, set: async () => "OK", del: async () => 1, expire: async () => 1 }), local });
+  await local.set("cool", { v: 7 }, 10);
+  ok((await missing.get("cool")).v === 7, "a Redis miss falls through to the local store");
+  ok(await missing.renew("any") === true && await local.renew("any") === true, "renew is accepted by both stores");
   const failing = createIdempotencyStore({ redis: async () => { throw new Error("down"); }, local });
   await failing.set("z", { v: 1 }, 10);
   ok((await failing.get("z")).v === 1, "a Redis client that throws falls back to local, never to no guard");
@@ -61,6 +66,10 @@ if (!url) {
   await A.release(key + "f");
   ok(await B.claim(key + "f") === true, "after release the other container can claim");
   await B.release(key + "f");
+  await A.claim(key + "r"); await c.expire("idem:f:" + key + "r", 5);
+  await A.renew(key + "r");
+  ok((await c.ttl("idem:f:" + key + "r")) > 60, "renew extends a live claim");
+  await A.release(key + "r");
   const ttl = await c.pTTL("idem:b:" + key);
   ok(ttl > 0 && ttl <= IDEM_TTL_MS, `the Redis entry carries the ttl (${ttl} ms)`);
   await c.del("idem:b:" + key);

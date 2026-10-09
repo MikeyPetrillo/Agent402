@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { paymentHeaderOf, paymentIdentifierOf } from "./payer.js";
 import { IDEM_MAX_BODY_BYTES } from "./idempotency-limits.js";
-import { createIdempotencyStore, IDEM_TTL_MS } from "./idempotency-store.js";
+import { createIdempotencyStore, IDEM_TTL_MS, INFLIGHT_RENEW_MS } from "./idempotency-store.js";
 
 /** isCatalogRoute(req): true for a priced catalog route. freeMode: dev/test boot with no paywall. */
 export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore() }) {
@@ -88,7 +88,9 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
         hint: "A call with this Idempotency-Key, credential and body is still running. Retry shortly with the same Idempotency-Key to receive its answer; this request was not charged.",
       });
     }
-    res.once("close", () => { store.release(key).catch(() => {}); });
+    const renew = setInterval(() => { store.renew(key).catch(() => {}); }, INFLIGHT_RENEW_MS);
+    renew.unref?.();
+    res.once("close", () => { clearInterval(renew); store.release(key).catch(() => {}); });
     // Settlement-aware caching (FR4-01). @x402/express (v2.16) runs the handler
     // FIRST, then settles, and ONLY on a <400 response; on settlement FAILURE it
     // replaces the buffered 200 with a 402. So committing to the cache at

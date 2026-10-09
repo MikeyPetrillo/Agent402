@@ -136,6 +136,14 @@ export const documents = {
     );
     return Number(r.rows[0].version);
   },
+  /** Insert only when no row exists (the import path). Resolves true when this call created the row. */
+  async putIfAbsent(name, body) {
+    const r = await stateQuery(
+      `INSERT INTO ${T("documents")} (name, body) VALUES ($1, $2::jsonb) ON CONFLICT (name) DO NOTHING RETURNING version`,
+      [checkName(name), JSON.stringify(body ?? null)],
+    );
+    return r.rowCount > 0;
+  },
   /** Shallow-merge object keys into the body; `dropKeys` are removed. The body is created as {} when absent. */
   async mergeKeys(name, patch = {}, dropKeys = []) {
     const r = await stateQuery(

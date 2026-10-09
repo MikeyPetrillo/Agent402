@@ -1387,7 +1387,10 @@ export function startRevenueLedger({ walletAddress, solanaWallet, stellarWallet,
   const enabled = HAS_DATA_DIR || process.env.REVENUE_LEDGER === "true";
   if (loopStarted || !enabled || (!walletAddress && !solanaWallet && !stellarWallet && !algorandWallet)) return false;
   loopStarted = true;
-  const tick = leased("revenue-ledger-tick", { ttlMs: 10 * 60_000 }, async () => {
+  // The sync work runs under a lease (two containers never advance the
+  // cursors at once); the re-arm is outside it, so a skipped tick (another
+  // holder, a database error) tries again rather than ending the loop.
+  const syncOnce = leased("revenue-ledger-tick", { ttlMs: 10 * 60_000 }, async () => {
     let allCaughtUp = true;
     if (walletAddress) {
       for (const chain of Object.keys(EVM)) {
@@ -1452,8 +1455,14 @@ export function startRevenueLedger({ walletAddress, solanaWallet, stellarWallet,
         console.warn(`revenue-ledger: algorand extra-wallet sync tick failed (will retry): ${String(e?.message || e).slice(0, 100)}`);
       }
     }
-    setTimeout(tick, allCaughtUp ? 300_000 : 20_000).unref?.();
+    return allCaughtUp;
   });
+  const tick = async () => {
+    let allCaughtUp = false;
+    try { const r = await syncOnce(); allCaughtUp = r === true; }
+    catch (e) { console.warn(`revenue-ledger: sync tick threw (will retry): ${String(e?.message || e).slice(0, 100)}`); }
+    setTimeout(tick, allCaughtUp ? 300_000 : 20_000).unref?.();
+  };
   setTimeout(tick, 5_000).unref?.(); // let boot settle first
   console.log(`revenue-ledger: sync loop started (db: ${DB_PATH})`);
   return true;

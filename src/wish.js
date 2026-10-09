@@ -19,7 +19,7 @@ import { logLines, imports, stateDbEnabled, trackStoreReady } from "./state-db.j
 
 const HAS_DATA_DIR = existsSync("/data");
 const DATA_DIR = HAS_DATA_DIR ? "/data" : "/tmp";
-let WISH_FILE = join(DATA_DIR, "wishes.jsonl");
+let WISH_FILE = process.env.WISH_FILE || join(DATA_DIR, "wishes.jsonl");
 // In the state database the log is the "wishes" stream of log_lines (one row
 // per line, imported from the file once); the file stays the record without one.
 export const WISH_STREAM = "wishes";
@@ -262,7 +262,8 @@ function appendLine(obj) {
   if (capReached) return;
   if (stateDbEnabled()) {
     lineCount++;
-    logLines.append(WISH_STREAM, obj).catch(() => { /* best-effort write-through; never throw from the write path */ });
+    logLines.append(WISH_STREAM, obj).catch(() => { /* best-effort; never throw from the write path */ });
+    try { appendFileSync(WISH_FILE, JSON.stringify(obj) + "\n"); } catch { /* no volume: the row is the record */ }
     if (lineCount >= MAX_LINES) { capReached = true; console.warn(`[wish] line cap (${MAX_LINES}) reached - further wishes are still counted/clustered but no longer stored.`); }
     return;
   }

@@ -10,6 +10,12 @@
 //
 // Writes are awaited by callers that must know (an operator listing answers
 // 503 when its write failed) and fire-and-forget elsewhere, logged either way.
+//
+// Write-through: with a database, a saved body is also written to the file
+// when the volume is there (best effort, never the verdict), so the nightly
+// backup of the volume stays complete and a rollback to the previous build
+// reads current files. The row is what a load reads. This ends when the
+// volume is removed and the backup dumps the database instead.
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { documents, imports, stateDbEnabled } from "./state-db.js";
@@ -39,7 +45,7 @@ function writeJsonFile(file, body) {
  * @param {(e:string)=>void} [o.log]
  * @param {boolean} [o.importFromFile=true]  read the file once when the database has no row
  */
-export function createJsonDocument({ name = null, file = null, log = console.warn, importFromFile = true } = {}) {
+export function createJsonDocument({ name = null, file = null, log = console.warn, importFromFile = true, writeThroughFiles = true } = {}) {
   const docName = name || documentNameOf(file);
   if (!NAME_RE.test(docName)) throw new Error(`document name "${docName}" must match ${NAME_RE}`);
   const usePg = stateDbEnabled();
@@ -52,11 +58,20 @@ export function createJsonDocument({ name = null, file = null, log = console.war
   let pendingBody = undefined;
   const say = (m) => { try { log(`[json-document] ${docName}: ${m}`); } catch { /* logging never throws */ } };
 
+  let writeThroughWarned = false;
+  function writeThrough(body) {
+    if (!file || !writeThroughFiles) return;
+    try { if (existsSync(dirname(file))) writeJsonFile(file, body); }
+    catch (e) { if (!writeThroughWarned) { writeThroughWarned = true; say(`write-through to ${file} failed: ${String(e?.message || e).slice(0, 120)}`); } }
+  }
+
   async function importOnce() {
     if (!importFromFile || !file || !existsSync(file)) return null;
     try {
       const { body, bytes } = readJsonFile(file);
-      await documents.put(docName, body);
+      // Put-if-absent: two containers booting at once cannot overwrite a row
+      // the other one already imported and advanced.
+      await documents.putIfAbsent(docName, body);
       await imports.mark(docName, { source: file, bytes });
       say(`imported ${bytes} bytes from ${file}`);
       return body;
@@ -123,7 +138,7 @@ export function createJsonDocument({ name = null, file = null, log = console.war
           let okAll = true;
           while (pendingBody !== undefined) {
             const next = pendingBody; pendingBody = undefined;
-            try { await documents.put(docName, next); lastError = null; }
+            try { await documents.put(docName, next); lastError = null; writeThrough(next); }
             catch (e) { okAll = false; lastError = String(e?.message || e).slice(0, 160); say(`save failed: ${lastError}`); }
           }
           inFlight = null;
@@ -162,6 +177,7 @@ export function createJsonDocument({ name = null, file = null, log = console.war
           if (!row) await importOnce();
           const out = await documents.mergeKeys(docName, patch, dropKeys);
           lastError = null;
+          writeThrough(out.body);
           return out.body;
         }
         let cur = {};

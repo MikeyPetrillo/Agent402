@@ -15,7 +15,10 @@ export const IDEM_TTL_MS = 10 * 60 * 1000;
 const IDEM_MAX_ENTRIES = 5000;
 const IDEM_MAX_BYTES = 32 * 1024 * 1024;
 const PREFIX = "idem:";
-const INFLIGHT_TTL_SECONDS = 120; // the longest handler clears this; a crashed holder self-heals
+// Renewed every INFLIGHT_RENEW_MS while the handler runs (the slow routes run
+// for minutes); a crashed holder's claim lapses within this.
+const INFLIGHT_TTL_SECONDS = 120;
+export const INFLIGHT_RENEW_MS = 30_000;
 
 export function createLocalIdempotencyStore({ ttlMs = IDEM_TTL_MS, maxEntries = IDEM_MAX_ENTRIES, maxBytes = IDEM_MAX_BYTES } = {}) {
   const entries = new Map(); // key -> { at, body, bytes }
@@ -48,6 +51,7 @@ export function createLocalIdempotencyStore({ ttlMs = IDEM_TTL_MS, maxEntries = 
     },
     /** True when this call now owns the in-flight claim; false when another copy holds it. */
     async claim(key) { if (inFlight.has(key)) return false; inFlight.add(key); return true; },
+    async renew() { return true; },
     async release(key) { inFlight.delete(key); },
     size() { return entries.size; },
     stop() { clearInterval(sweep); },
@@ -70,7 +74,8 @@ export function createIdempotencyStore({ ttlMs = IDEM_TTL_MS, redis = getSharedR
         try {
           const raw = await c.get(PREFIX + "b:" + key);
           if (raw != null) return JSON.parse(raw);
-          return null;
+          // A miss in Redis is not a miss: an answer stored while Redis was on
+          // cooldown lives in the local store, and must still replay.
         } catch { /* fall through to local */ }
       }
       return local.get(key);
@@ -92,6 +97,12 @@ export function createIdempotencyStore({ ttlMs = IDEM_TTL_MS, redis = getSharedR
         } catch { /* fall through to local */ }
       }
       return local.claim(key);
+    },
+    /** Keep a claim alive while its handler runs: the longest routes outlive INFLIGHT_TTL_SECONDS. */
+    async renew(key) {
+      const c = await client();
+      if (c) { try { await c.expire(PREFIX + "f:" + key, INFLIGHT_TTL_SECONDS); } catch { /* the next renew retries */ } }
+      return true;
     },
     async release(key) {
       const c = await client();

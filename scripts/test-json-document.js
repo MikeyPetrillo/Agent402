@@ -59,7 +59,14 @@ if (String(process.env.STATE_DATABASE_URL || "").trim()) {
     writeFileSync(file, JSON.stringify({ from: "file-later" }));
     ok((await doc.load()).from === "file", "a later file change is not re-imported: the row wins");
     ok(await doc.save({ from: "pg" }) === true && (await doc.load()).from === "pg", "save writes the row");
-    ok(JSON.parse(readFileSync(file, "utf8")).from === "file-later", "the file is left alone");
+    ok(JSON.parse(readFileSync(file, "utf8")).from === "pg", "write-through: the file now carries the saved body (the backup stays complete)");
+    const nowt = createJsonDocument({ file: join(DIR, "nowt.json"), writeThroughFiles: false, log: () => {} });
+    await nowt.save({ x: 1 });
+    ok(!existsSync(join(DIR, "nowt.json")), "writeThroughFiles:false writes no file");
+    await sdb.documents.put("imp2.json", { row: "first" });
+    writeFileSync(join(DIR, "imp2.json"), JSON.stringify({ row: "file" }));
+    const imp2 = createJsonDocument({ file: join(DIR, "imp2.json"), log: () => {} });
+    ok((await imp2.load()).row === "first", "an existing row is never overwritten by a file import");
     const m = await doc.mergeKeys({ extra: 1 }, ["from"]);
     ok(m.extra === 1 && m.from === undefined, "mergeKeys works on the row");
     const fresh = createJsonDocument({ name: "fresh-doc", log: () => {} });

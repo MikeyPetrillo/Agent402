@@ -69,6 +69,9 @@ export function recordOutbound({ chain, payTo, amountAtomic, asset, usd, slug, o
       // One row per payment in the state database; a failed insert is warned
       // about like a failed append and never reaches the payment path.
       logLines.append(OUTBOUND_STREAM, JSON.parse(line)).catch((e) => warnOnce(`write failed (${e?.code || e?.message}) - the payment itself is unaffected`));
+      // Write-through to the volume while it exists, so the nightly backup
+      // keeps the record of money paid out; best effort, never the verdict.
+      try { appendFileSync(FILE, line); } catch { /* no volume */ }
       return;
     }
     try { appendFileSync(FILE, line); }
