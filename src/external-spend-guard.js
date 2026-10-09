@@ -1,4 +1,8 @@
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { randomBytes } from "node:crypto";
+import { createJsonDocument, documentNameOf } from "./json-document.js";
+import { stateDbEnabled, stateDbSchema, withStateTx, trackStoreReady } from "./state-db.js";
 // Bound what a single buyer can make us spend upstream before they have paid us.
 //
 // THE HOLE. @x402/express runs the handler FIRST and settles AFTER, and a <400
@@ -109,6 +113,30 @@ const chainLedger = new Map();
 const CHAIN_LEDGER_FILE = (process.env.WALLET_DAILY_LEDGER_FILE || "/data/wallet-daily-spend.json").trim();
 let persistTimer = null;
 
+// --- the state database (2026-10-09) ------------------------------------------
+//
+// With STATE_DATABASE_URL set (src/state-db.js) the chain ledger is one JSON
+// document named after the file ("wallet-daily-spend.json"), imported from the
+// file once and written through to it. Two containers overlap during a deploy
+// and both can spend, so the document is the sum of BOTH: every row carries
+// the tag of the process that booked it (`o`), a write merges this process's
+// rows into the stored body under a row lock (never replaces another
+// container's rows), and a ceiling check reads the stored body first so the
+// other container's spend counts. maySpend and noteSpend therefore return
+// promises in that mode (the same objects, synchronously, without it).
+const PG = stateDbEnabled();
+const PROC = `${process.pid}-${randomBytes(3).toString("hex")}`;
+const DOC_NAME = documentNameOf(CHAIN_LEDGER_FILE);
+const chainDoc = PG ? createJsonDocument({ file: CHAIN_LEDGER_FILE, log: console.warn, writeThroughFiles: false }) : null;
+let pgReady = Promise.resolve();
+let pgWriting = null;
+let pgWriteAgain = false;
+let pgLastReadWarn = 0;
+
+const freshRows = (rows, now) => (Array.isArray(rows) ? rows : []).filter(
+  (r) => r && Number.isFinite(Number(r.usd)) && now - Number(r.at || 0) < WALLET_DAY_MS,
+);
+
 function loadChainLedger() {
   try {
     const raw = JSON.parse(readFileSync(CHAIN_LEDGER_FILE, "utf8"));
@@ -117,9 +145,7 @@ function loadChainLedger() {
     for (const [chain, rows] of Object.entries(raw?.chains || {})) {
       // Re-filter against the window rather than trusting the file's own view
       // of time: a file written before a clock change must not extend the day.
-      const fresh = (Array.isArray(rows) ? rows : []).filter(
-        (r) => r && Number.isFinite(Number(r.usd)) && now - Number(r.at || 0) < WALLET_DAY_MS,
-      );
+      const fresh = freshRows(rows, now);
       if (fresh.length) { chainLedger.set(chain, fresh); restored += fresh.length; }
     }
     if (restored) console.log(`[spend-guard] restored ${restored} in-window spend record(s) from ${CHAIN_LEDGER_FILE}`);
@@ -131,10 +157,115 @@ function loadChainLedger() {
   }
 }
 
+/** Merge a stored body into memory: rows other processes booked replace the
+ *  foreign rows held here (so spend aged out or lowered elsewhere follows),
+ *  this process's own rows are kept as they are here (a pending lowering
+ *  must not be undone by a stale read). */
+function adoptStoredBody(body, now = Date.now()) {
+  const stored = body && typeof body === "object" ? body.chains || {} : {};
+  const chains = new Set([...Object.keys(stored), ...chainLedger.keys()]);
+  for (const chain of chains) {
+    const own = (chainLedger.get(chain) || []).filter((r) => r.o === PROC && now - r.at < WALLET_DAY_MS);
+    const foreign = freshRows(stored[chain], now).filter((r) => r.o !== PROC);
+    const rows = [...foreign, ...own];
+    if (rows.length) chainLedger.set(chain, rows); else chainLedger.delete(chain);
+  }
+}
+
+async function loadChainLedgerPg() {
+  const body = await chainDoc.load(null);
+  if (body === null) {
+    if (chainDoc.lastError) {
+      console.warn(`[spend-guard] could not read the ${DOC_NAME} document (${chainDoc.lastError}); `
+        + "THE DAY STARTS AT ZERO SPENT - the 24h ceiling is not enforced against earlier spend in this window");
+    }
+    return;
+  }
+  adoptStoredBody(body);
+  let restored = 0;
+  for (const rows of chainLedger.values()) restored += rows.length;
+  if (restored) console.log(`[spend-guard] restored ${restored} in-window spend record(s) from the state database`);
+}
+
+/** Read the stored body before a decision (one SELECT). A failed read decides
+ *  on this process's own view and says so, at most once a minute. */
+async function refreshFromPg() {
+  await pgReady;
+  try {
+    const body = await chainDoc.load(null);
+    if (body !== null) adoptStoredBody(body);
+    else if (chainDoc.lastError) throw new Error(chainDoc.lastError);
+    return true;
+  } catch (e) {
+    const t = Date.now();
+    if (t - pgLastReadWarn > 60_000) {
+      pgLastReadWarn = t;
+      console.warn(`[spend-guard] could not read the ${DOC_NAME} document (${String(e?.message || e).slice(0, 80)}); deciding on this container's own records`);
+    }
+    return false;
+  }
+}
+
+function writeFileThrough(body) {
+  try {
+    if (!existsSync(dirname(CHAIN_LEDGER_FILE))) return;
+    const tmp = `${CHAIN_LEDGER_FILE}.tmp`;
+    writeFileSync(tmp, JSON.stringify(body));
+    renameSync(tmp, CHAIN_LEDGER_FILE);
+  } catch { /* best effort; the row is what a load reads */ }
+}
+
+/** Merge this process's rows into the stored document under a row lock, so
+ *  two containers' bookings add up instead of overwriting each other.
+ *  Resolves true once stored; never throws. One write in flight, the newest
+ *  state waiting (order kept). */
+function writeChainLedgerPg() {
+  if (pgWriting) { pgWriteAgain = true; return pgWriting; }
+  pgWriting = (async () => {
+    await pgReady;
+    let okAll = true;
+    do {
+      pgWriteAgain = false;
+      try {
+        const T = (t) => `${stateDbSchema()}.${t}`;
+        const merged = await withStateTx(async (client) => {
+          const cur = await client.query(`SELECT body FROM ${T("documents")} WHERE name = $1 FOR UPDATE`, [DOC_NAME]);
+          const now = Date.now();
+          const stored = cur.rows[0]?.body && typeof cur.rows[0].body === "object" ? cur.rows[0].body.chains || {} : {};
+          const chains = {};
+          for (const chain of new Set([...Object.keys(stored), ...chainLedger.keys()])) {
+            const foreign = freshRows(stored[chain], now).filter((r) => r.o !== PROC);
+            const own = (chainLedger.get(chain) || []).filter((r) => r.o === PROC && now - r.at < WALLET_DAY_MS);
+            const rows = [...foreign, ...own];
+            if (rows.length) chains[chain] = rows;
+          }
+          const body = { chains, at: now };
+          await client.query(
+            `INSERT INTO ${T("documents")} (name, body) VALUES ($1, $2::jsonb)
+             ON CONFLICT (name) DO UPDATE SET body = EXCLUDED.body, version = ${T("documents")}.version + 1, updated_at = now()`,
+            [DOC_NAME, JSON.stringify(body)],
+          );
+          return body;
+        });
+        adoptStoredBody(merged);
+        writeFileThrough(merged);
+      } catch (e) {
+        okAll = false;
+        // Bookkeeping must never break a spend decision that already happened.
+        console.warn(`[spend-guard] persist to the state database failed (${String(e?.message || e).slice(0, 80)}) - the in-memory ceiling still holds`);
+      }
+    } while (pgWriteAgain);
+    pgWriting = null;
+    return okAll;
+  })();
+  return pgWriting;
+}
+
 function persistChainLedgerSoon() {
   if (persistTimer) return;
   persistTimer = setTimeout(() => {
     persistTimer = null;
+    if (PG) { void writeChainLedgerPg(); return; }
     try {
       const chains = Object.fromEntries([...chainLedger.entries()]);
       const tmp = `${CHAIN_LEDGER_FILE}.tmp`;
@@ -148,7 +279,8 @@ function persistChainLedgerSoon() {
   persistTimer.unref?.();
 }
 
-loadChainLedger();
+if (PG) pgReady = trackStoreReady(loadChainLedgerPg().catch(() => {}));
+else loadChainLedger();
 
 const chainKeyOf = (chain) => (typeof chain === "string" && chain.trim() ? chain.trim().toLowerCase() : null);
 
@@ -213,7 +345,13 @@ export function payerExposureUsd(payer, now = Date.now()) {
  * payer we cannot read, and the tier cap still bounds a single call. This is a
  * per-payer debt ceiling, not an identity requirement.
  */
-export function maySpend(payer, usd, { maxUnsettledUsd = DEFAULT_MAX_UNSETTLED_USD, now = Date.now(), chain = null, walletDailyMaxUsd } = {}) {
+export function maySpend(payer, usd, opts = {}) {
+  if (!PG) return decideSpend(payer, usd, opts);
+  // With the state database: the stored body (both containers' bookings) is
+  // read before the ceiling is applied. One small read per spend decision.
+  return refreshFromPg().then(() => decideSpend(payer, usd, opts));
+}
+function decideSpend(payer, usd, { maxUnsettledUsd = DEFAULT_MAX_UNSETTLED_USD, now = Date.now(), chain = null, walletDailyMaxUsd } = {}) {
   // The chain-wallet ceiling is checked FIRST and for every caller, attributable
   // payer or not: it bounds the wallet, not the buyer. `code` is the field a
   // caller branches on - the per-payer refusal below carries none.
@@ -264,7 +402,7 @@ export function noteSpend(payer, usd, opts = undefined) {
   const now = Number.isFinite(o.now) ? o.now : Date.now();
   const k = keyOf(payer);
   const ck = chainKeyOf(o.chain);
-  if (!k && !ck) return null;
+  if (!k && !ck) return PG ? Promise.resolve(null) : null;
   const id = ++seq;
   const amount = Number(usd) || 0;
   if (k) {
@@ -274,11 +412,16 @@ export function noteSpend(payer, usd, opts = undefined) {
   }
   if (ck) {
     const rows = pruneChain(ck, now);
-    rows.push({ id, usd: amount, at: now });
+    rows.push(PG ? { id, usd: amount, at: now, o: PROC } : { id, usd: amount, at: now });
     chainLedger.set(ck, rows);
-    persistChainLedgerSoon();
+    if (!PG) persistChainLedgerSoon();
   }
-  return { payer: k, id, chain: ck };
+  const handle = { payer: k, id, chain: ck };
+  if (!PG) return handle;
+  // The booking reaches the database BEFORE the buy, so the other container's
+  // next ceiling check counts it. A failed write is logged by the writer and
+  // retried with the next one; the spend still counts here meanwhile.
+  return (ck ? writeChainLedgerPg() : Promise.resolve(true)).then(() => handle);
 }
 
 /**
@@ -299,12 +442,14 @@ export function adjustSpend(handle, usd) {
   if (!handle || typeof handle !== "object") return;
   const actual = Number(usd);
   if (!Number.isFinite(actual) || actual < 0) return;
-  const lower = (rows) => {
-    const row = rows?.find((r) => r.id === handle.id);
+  const lower = (rows, own = false) => {
+    // On the database every process numbers its own rows, so a chain row is
+    // matched by this process's tag as well as its id.
+    const row = rows?.find((r) => r.id === handle.id && (!own || r.o === PROC));
     if (row && actual < row.usd) row.usd = actual;
   };
   if (handle.payer) lower(ledger.get(handle.payer));
-  if (handle.chain) { lower(chainLedger.get(handle.chain)); persistChainLedgerSoon(); }
+  if (handle.chain) { lower(chainLedger.get(handle.chain), PG); persistChainLedgerSoon(); }
 }
 
 /**
@@ -359,5 +504,15 @@ export function walletDailyStatus(now = Date.now()) {
 }
 
 /** Test-only. */
-export function __reset() { ledger.clear(); chainLedger.clear(); seq = 0; }
+export function __reset() {
+  ledger.clear(); chainLedger.clear(); seq = 0;
+  if (!PG) return undefined;
+  // With the state database the document row goes too, so a test starts clean.
+  return pgReady.then(() => withStateTx((c) => c.query(`DELETE FROM ${stateDbSchema()}.documents WHERE name = $1`, [DOC_NAME]))).catch(() => {});
+}
+/** Resolves once the first load from the state database is done (at once without one). */
+export function __ready() { return pgReady; }
+/** Resolves once every queued ledger write has landed (at once without a database). */
+export async function __flush() { while (pgWriting) await pgWriting; }
+export const __backend = PG ? "pg" : "file";
 export const __config = { DEFAULT_MAX_UNSETTLED_USD, STALE_MS, DEFAULT_WALLET_DAILY_MAX_USD, WALLET_DAY_MS };

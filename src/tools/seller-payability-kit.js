@@ -218,13 +218,13 @@ export function buildSellerPayabilityTool({
     const spendPayer = payerFromRequest(req)
       || (req?.mppTempoSender ? `tempo:${req.mppTempoSender}` : null)
       || (req?.ip ? `ip:${req.ip}` : null);
-    const allowed = maySpend(spendPayer, maxUsd, { chain: spendChain });
+    const allowed = await maySpend(spendPayer, maxUsd, { chain: spendChain });
     if (!allowed?.ok) {
       throw bad(allowed?.code === "wallet_daily_ceiling"
         ? "The Base spending wallet has reached its daily ceiling; payability checks resume tomorrow (nobody was charged)"
         : "Upstream spend is paused right now; try again shortly (nobody was charged)", 429);
     }
-    const spendHandle = noteSpend(spendPayer, maxUsd, { chain: spendChain });
+    const spendHandle = await noteSpend(spendPayer, maxUsd, { chain: spendChain });
     // server.js resolves this on the post-settlement finish hook; without it
     // the worst-case booking stands for the whole window whatever happened.
     if (spendHandle && req && typeof req === "object") req.__externalSpend = spendHandle;

@@ -73,7 +73,9 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
   const perIp = new Map();
   const dec = (ip) => { const n = (perIp.get(ip) || 1) - 1; if (n <= 0) perIp.delete(ip); else perIp.set(ip, n); };
 
-  function middleware(req, res, next) {
+  // The store's durable methods resolve at once on the file backend and after
+  // the row is stored on the state database; the handlers await either way.
+  async function middleware(req, res, next) {
     // Our own replay: pass it through to the normal paid chain. A forged marker
     // is stripped and the request is served as an ordinary synchronous call.
     if (req.headers[LOOPBACK_HEADER] !== undefined) {
@@ -94,7 +96,8 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     if ((perIp.get(ip) || 0) >= maxPerIp) return res.status(429).set("Retry-After", "30").json({ error: "async_jobs_per_client", hint: `At most ${maxPerIp} jobs may run at once per client. Collect a finished one first. Nothing was charged.` });
 
     const ctl = new AbortController();
-    const rec = store.create({ slug: def.slug, controller: ctl });
+    let rec = null;
+    try { rec = await store.create({ slug: def.slug, controller: ctl }); } catch { rec = null; }
     if (!rec) return res.status(503).json({ error: "async_unavailable", hint: "A job could not be recorded. Send the call without Prefer: respond-async. Nothing was charged." });
     perIp.set(ip, (perIp.get(ip) || 0) + 1);
 
@@ -117,14 +120,14 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
         const kept = {};
         for (const h of KEEP) { const v = r.headers.get(h); if (v) kept[h] = v; }
         if (r.status === 200) {
-          store.complete(rec.taskId, { httpStatus: 200, headers: kept, body: payload }, { receipt: decodeReceipt(kept["payment-response"]), priceUsd: def.priceUsd ?? null });
+          await store.complete(rec.taskId, { httpStatus: 200, headers: kept, body: payload }, { receipt: decodeReceipt(kept["payment-response"]), priceUsd: def.priceUsd ?? null });
         } else {
-          store.fail(rec.taskId, { httpStatus: r.status, body: payload, ...(Object.keys(kept).length ? { headers: kept } : {}) },
+          await store.fail(rec.taskId, { httpStatus: r.status, body: payload, ...(Object.keys(kept).length ? { headers: kept } : {}) },
             r.status === 402 ? "The payment was not accepted, so the call did not run and nothing was charged. The 402 is in error.body." : `The call ended with HTTP ${r.status} and nothing was charged.`);
         }
       } catch (e) {
         const aborted = e?.name === "AbortError" || e?.name === "TimeoutError";
-        store.fail(rec.taskId, { httpStatus: 504, message: aborted ? "The run did not finish in time." : "The run could not be completed." },
+        await store.fail(rec.taskId, { httpStatus: 504, message: aborted ? "The run did not finish in time." : "The run could not be completed." },
           "The call did not finish. If it had already been paid and settled, the charge is recorded as owed in our refund ledger and repaid; otherwise nothing was charged.");
         log(`[async-jobs] ${def.slug} job ended without an answer (${aborted ? "timeout" : "error"})`);
       } finally { dec(ip); }
@@ -136,9 +139,10 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
   }
 
   /** GET /api/jobs/:id - free. */
-  function statusHandler(req, res) {
+  async function statusHandler(req, res) {
     const id = String(req.params.id || "");
-    const rec = /^[0-9a-f]{48}$/.test(id) ? store.get(id) : null;
+    let rec = null;
+    try { rec = /^[0-9a-f]{48}$/.test(id) ? await store.get(id) : null; } catch { return res.status(503).set("Cache-Control", "no-store").json({ error: "job_store_unavailable", hint: "The job store could not be read. Retry shortly." }); }
     res.set("Cache-Control", "no-store");
     if (!rec) return res.status(404).json({ error: "job_not_found", hint: "Unknown job id. Job links are valid for one hour." });
     if (rec === "expired") return res.status(410).json({ error: "job_expired", hint: "This job link has expired. Job links are valid for one hour." });

@@ -273,9 +273,9 @@ export function makeAttestHandler(deps = {}) {
     // Bound the gas before anything is signed. The worst case is booked
     // against the Base wallet's daily ceiling first (a refusal there is a
     // pause, not a charge), then corrected to the estimate.
-    const allowed = spend.maySpend(null, MAX_GAS_USD(), { chain: "base" });
+    const allowed = await spend.maySpend(null, MAX_GAS_USD(), { chain: "base" });
     if (!allowed.ok) throw bad(`Attestations are briefly paused: ${allowed.reason} Nothing was charged; retry later.`, 503);
-    const handle = spend.noteSpend(null, MAX_GAS_USD(), { chain: "base" });
+    const handle = await spend.noteSpend(null, MAX_GAS_USD(), { chain: "base" });
     // Where the call failed decides the booking: before the attest send no
     // transaction of ours exists, so the booking is released. A schema step
     // may have sent its own registration, so it keeps the booking.

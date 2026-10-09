@@ -499,12 +499,12 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // books against that wallet's rolling 24 h ceiling (external-spend-
           // guard.js). A `wallet_daily_ceiling` refusal is a GLOBAL pause on
           // that chain and is worded so, not as this buyer's own limit.
-          const allowed = maySpend(spendPayer, cap, { chain });
+          const allowed = await maySpend(spendPayer, cap, { chain });
           if (!allowed.ok) {
             if (allowed.code === "wallet_daily_ceiling") throw bad(`External routing on ${chain} is paused for everyone right now, not for this wallet in particular: ${allowed.reason} Nothing was charged.`, 429);
             throw bad(`External routing is paused for this wallet: ${allowed.reason}`, 429);
           }
-          const spendHandle = noteSpend(spendPayer, cap, { chain });
+          const spendHandle = await noteSpend(spendPayer, cap, { chain });
           // Handed to server.js on the REQUEST, because a tool handler is called
           // as handler(input, req) and never receives `res`. The first draft
           // registered res.on("finish") here, where `res` is undefined - a guard

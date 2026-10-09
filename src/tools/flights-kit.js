@@ -278,13 +278,13 @@ export function buildFlightTools({ sellers, pay, now = () => Date.now(), maySpen
     return async (input, req) => {
       const params = kind === "search" ? validateSearch(input, now()) : validateStatus(input, now());
       const spendPayer = payerFromRequest(req) || (req?.mppTempoSender ? `tempo:${req.mppTempoSender}` : null) || (req?.ip ? `ip:${req.ip}` : null);
-      const allowed = maySpend(spendPayer, worst, { chain: "base" });
+      const allowed = await maySpend(spendPayer, worst, { chain: "base" });
       if (!allowed?.ok) {
         throw bad(allowed?.code === "wallet_daily_ceiling"
           ? "Flight data purchases have reached today's ceiling; they resume tomorrow (nothing was charged)"
           : "Flight data purchases are paused right now; try again shortly (nothing was charged)", 429);
       }
-      const handle = noteSpend(spendPayer, worst, { chain: "base" });
+      const handle = await noteSpend(spendPayer, worst, { chain: "base" });
       if (handle && req && typeof req === "object") req.__externalSpend = handle;
       const spend = { paid: 0 };
       try {
