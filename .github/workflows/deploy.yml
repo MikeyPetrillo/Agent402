@@ -1322,6 +1322,25 @@ jobs:
           t node scripts/test-stores-pg.js
           t node scripts/test-leased-loops.js
           t node scripts/test-idempotency-store.js
+          # Every store that left the volume: file imported once, rows win, invariant on Postgres.
+          t node scripts/test-stats-pg.js
+          t node scripts/test-status-store-pg.js
+          t node scripts/test-x402-economy-pg.js
+          t node scripts/test-pow-pg.js
+          t node scripts/test-memory-pg.js
+          t node scripts/test-stripe-shadow-ledger-pg.js
+          t node scripts/test-traffic-classifier-pg.js
+          t node scripts/test-tweet-queue-pg.js
+          t node scripts/test-x402-index-pg.js
+          t node scripts/test-revenue-ledger-pg.js
+          t node scripts/test-refund-ledger-pg.js
+          t node scripts/test-sales-ledger-pg.js
+          t node scripts/test-mcp-tasks-pg.js
+          t node scripts/test-hangup-forgiveness-pg.js
+          t node scripts/test-external-spend-guard-pg.js
+          t node scripts/test-mpp-subscriptions-pg.js
+          # The nightly backup stages every state table and the restore brings one back.
+          t node scripts/test-backup-state.js
           # The file/memory half runs without the database; the Postgres half with it.
           t node scripts/test-json-document.js
 
