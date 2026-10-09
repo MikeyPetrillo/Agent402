@@ -1,4 +1,5 @@
 import "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
+import { mtaStsPolicy } from "./mta-sts.js";
 import { carriesPaymentAttempt } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
@@ -3113,6 +3114,11 @@ app.get("/health", (req, res) => {
 // computed ~180 days out on each request so the file is never stale (RFC 9116
 // recommends under a year). Contact
 // override via SECURITY_CONTACT_EMAIL; defaults to the maintainer address.
+// MTA-STS policy (RFC 8461), read by sending mail servers from the mta-sts
+// host; the DNS record that points at it is published separately.
+app.get("/.well-known/mta-sts.txt", (_req, res) => {
+  res.set("Cache-Control", "public, max-age=3600").type("text/plain").send(mtaStsPolicy());
+});
 app.get("/.well-known/security.txt", (_req, res) => {
   const contact = (process.env.SECURITY_CONTACT_EMAIL || "").trim() || "mike@agent402.tools";
   const expires = new Date(Date.now() + 180 * 24 * 3600 * 1000).toISOString();
