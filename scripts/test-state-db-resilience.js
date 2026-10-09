@@ -59,27 +59,29 @@ let exited = null;
 child.on("exit", (code, signal) => { exited = { code, signal, at: Date.now() }; });
 const base = `http://127.0.0.1:${PORT}`;
 const get = async (p, ms = 8000) => { try { const r = await fetch(base + p, { signal: AbortSignal.timeout(ms) }); return { status: r.status, body: await r.text() }; } catch (e) { return { status: 0, body: String(e?.message || e) }; } };
-const callTool = async (ms = 8000) => { try { const r = await fetch(`${base}/api/hash`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "resilience", algo: "sha256" }), signal: AbortSignal.timeout(ms) }); return r.status; } catch { return 0; } };
+const callTool = async (ms = 8000) => { try { const r = await fetch(`${base}/api/hash`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "resilience", algo: "sha256" }), signal: AbortSignal.timeout(ms) }); return r.status; } catch (e) { return `0:${String(e?.cause?.code || e?.name || e?.message || e).slice(0, 40)}`; } };
 const stateWord = async () => { try { return JSON.parse((await get("/api/gateway-status")).body)?.stateDb?.status; } catch { return "?"; } };
 const T = (t) => `${sdb.stateDbSchema()}.${t}`;
-const recentCalls = async () => Number((await sdb.stateQuery(`SELECT count(*)::bigint AS n FROM ${T("stats_recent_calls")}`)).rows[0].n);
+// The per-tool counter is exact and uncapped (the recent-calls ring keeps 200), so a dropped batch is visible.
+const hashCount = async () => Number((await sdb.stateQuery(`SELECT coalesce(max(n), 0)::bigint AS n FROM ${T("stats_tool_counts")} WHERE slug = 'hash'`)).rows[0].n);
 
 try {
   ok(await until(async () => (await get("/health", 2000)).status === 200, 120_000, 500), "the server boots in database mode behind the relay");
   ok(await until(async () => (await stateWord()) === "on", 20_000), "the status word reads on while the database answers");
-  const callsBefore = await recentCalls();
+  const callsBefore = await hashCount();
   ok(await callTool() === 200, "a deterministic tool answers 200");
-  ok(await until(async () => (await recentCalls()) > callsBefore, 15_000), "the call's stats row lands in Postgres");
+  ok(await until(async () => (await hashCount()) === callsBefore + 1, 15_000), "the call's stats bump lands in Postgres");
 
   // ---- burst ------------------------------------------------------------------
   const t0 = Date.now();
   const statuses = await Promise.all(Array.from({ length: 150 }, () => callTool(20_000)));
   const burstMs = Date.now() - t0;
-  ok(statuses.every((s) => s === 200), `150 concurrent calls all answer 200 (${burstMs} ms for the burst)`);
-  ok(await until(async () => (await recentCalls()) >= Math.min(200, callsBefore + 151), 30_000), "the burst's stats rows land (the recent ring keeps the newest 200)");
+  const notOk = statuses.filter((s) => s !== 200);
+  ok(notOk.length === 0, `150 concurrent calls all answer 200 (${burstMs} ms for the burst)${notOk.length ? `; ${notOk.length} did not: ${JSON.stringify([...new Set(notOk)].slice(0, 4))}` : ""}`);
+  ok(await until(async () => (await hashCount()) === callsBefore + 151, 30_000), "the burst's 150 bumps land, exactly");
 
   // ---- outage -----------------------------------------------------------------
-  const landedBeforeCut = await recentCalls();
+  const landedBeforeCut = await hashCount();
   cutRelay();
   const during = [];
   for (let i = 0; i < 5; i++) during.push(await callTool());
@@ -87,12 +89,18 @@ try {
   ok((await get("/health")).status === 200, "/health stays 200 during the outage");
   ok(await until(async () => (await stateWord()) === "degraded", 30_000), "the status word turns degraded once a query fails");
   ok(exited === null, "the process is still alive");
+  // Hold the outage past the write queue's retry interval: the bumps made
+  // during it must stay queued (the counter cannot move) and the flush must
+  // have failed at least once, so a retry that drops its batch is caught.
+  await sleep(7_000);
+  ok((await hashCount()) === landedBeforeCut, "while cut, no bump reaches Postgres (the queue holds them)");
+  ok(/write failed, kept for retry/.test(log), "the stats flush failed during the outage and kept its batch");
 
   // ---- recovery ---------------------------------------------------------------
   healRelay();
   ok(await until(async () => (await stateWord()) === "on", 60_000, 500), "the status word returns to on after the relay heals");
   ok(await callTool() === 200, "a call after recovery answers 200");
-  ok(await until(async () => (await recentCalls()) >= Math.min(200, landedBeforeCut + 6) || (await recentCalls()) === 200, 60_000), "the calls made during the outage reach Postgres once it is back (queued, retried)");
+  ok(await until(async () => (await hashCount()) === landedBeforeCut + 6, 60_000), "the five outage calls and the recovery call all land, exactly (queued, retried)");
 
   // ---- drain ------------------------------------------------------------------
   const tKill = Date.now();
