@@ -3552,7 +3552,7 @@ app.get("/api/revenue/decide", (_req, res) => {
     res.set("Cache-Control", "public, max-age=60").json(memoSurface("revenue:decide", 60_000, () => ({
       asOf: new Date().toISOString(),
       ...decideSales({ days: 30 }),
-      note: "Paid settlements of POST /api/decide and POST /api/decide/execute. internal = our own canaries and tests; external = outside buyers, less catalog sweeps (a wallet that bought " + SWEEP_DISTINCT_TOOLS_PER_DAY + " or more distinct tools in one UTC day, counted under sweeps). externalUsd is what outside buyers paid us for these two routes; an execute run's pass-through payments to outside sellers are not included.",
+      note: "Paid settlements of POST /api/decide and POST /api/decide/execute. internal = our own canaries and tests; external = outside buyers, catalog sweepers included (a wallet that bought " + SWEEP_DISTINCT_TOOLS_PER_DAY + " or more distinct tools in one UTC day; sweeps says how many external settlements came from such wallets). externalUsd is what outside buyers paid us for these two routes; an execute run's pass-through payments to outside sellers are not included.",
     })));
   } catch (e) {
     res.status(500).json({ error: "decide revenue failed", detail: String(e?.message || e).slice(0, 120) });
