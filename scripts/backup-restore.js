@@ -14,7 +14,7 @@
 // agent402-sales.db, unbundle credits/ and human-checkout/, write the JSON
 // stores, start the app. Dependency-free on purpose: a restore must not need
 // npm install to succeed.
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { decryptBackupBuffer, parseEncKey } from "../src/backup.js";
@@ -61,6 +61,12 @@ if (name.endsWith(".ndjson") && !opt("--out") && (unbundle || isBundle(buf))) {
 } else {
   const out = opt("--out") || name;
   mkdirSync(dirname(out) || ".", { recursive: true });
+  // A SQLite file restored beside a stale -wal or -shm sidecar from an earlier
+  // process reads as a corrupt or empty database (the sidecars belong to the
+  // old file, not this one); remove them before the write.
+  for (const sfx of ["-wal", "-shm", "-journal"]) {
+    if (existsSync(out + sfx)) { unlinkSync(out + sfx); console.log(`removed stale ${basename(out + sfx)}`); }
+  }
   writeFileSync(out, buf);
   console.log(`restored ${buf.length} bytes to ${out}`);
 }

@@ -252,7 +252,7 @@ export async function objectExists(key) {
   return found.some((o) => o.key === key);
 }
 
-async function listAll(prefix) {
+export async function listAll(prefix) {
   // ListObjectsV2, paginated. Returns [{key, size}].
   const out = [];
   let token = "";

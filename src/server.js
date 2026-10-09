@@ -353,6 +353,9 @@ const decideLedger = () => {
   try { _decideLedger = openDecideLedger(); } catch (e) { console.error("[decide] ledger failed to open - decide stays off:", String(e?.message || e).slice(0, 200)); _decideLedger = false; }
   return _decideLedger || null;
 };
+// With the state database on, open the ledger at boot so its one-time import
+// from the file runs before the first request, not inside it.
+if (stateDbEnabled()) decideLedger();
 import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums } from "./payments.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
@@ -541,7 +544,7 @@ import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, econom
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
-import { stateStoresReady, stateDbStatus } from "./state-db.js";
+import { stateStoresReady, stateDbStatus, stateDbEnabled } from "./state-db.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
