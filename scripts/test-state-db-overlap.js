@@ -18,8 +18,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const until = async (fn, ms, step = 250) => { const t0 = Date.now(); for (;;) { if (await fn()) return true; if (Date.now() - t0 > ms) return false; await sleep(step); } };
 const [PA, PB] = await getFreePorts(2);
 const DIR = mkdtempSync(join(tmpdir(), "overlap-"));
-// A seed file for one store, so the first boot imports it and the second must not.
-writeFileSync(join(DIR, "free-alerts.json"), JSON.stringify({ alerts: { fa_seed: { id: "fa_seed", email: "s@x.test", kind: "insider", target: "T", status: "active", createdAt: 1 } } }));
+// A seed file for one store whose path the environment sets (the per-chain
+// spend ledger), so the first boot imports it and the second must not.
+writeFileSync(join(DIR, "spend.json"), JSON.stringify({ chains: { base: [{ usd: 0.01, at: Date.now() }] }, at: Date.now() }));
 
 function boot(port, tag) {
   let log = "";
@@ -48,13 +49,13 @@ const recentCalls = async () => Number((await sdb.stateQuery(`SELECT count(*)::b
 const A = boot(PA, "old"); let B = null;
 try {
   ok(await until(async () => (await get(PA, "/health", 2000)).status === 200, 120_000, 500), "A boots");
-  ok(await until(async () => /free-alerts\.json: imported/.test(A.log), 15_000), "A imports the seed file");
-  const imported = await sdb.imports.done("free-alerts.json");
+  ok(await until(async () => /spend\.json: imported/.test(A.log), 15_000), "A imports the seed file");
+  const imported = await sdb.imports.done("spend.json");
   ok(!!imported, "the import is marked");
 
   B = boot(PB, "new");
   ok(await until(async () => (await get(PB, "/health", 2000)).status === 200, 120_000, 500), "B boots beside A on the same schema");
-  ok(!/free-alerts\.json: imported/.test(B.log), "B does not re-import the seed file");
+  ok(!/spend\.json: imported/.test(B.log), "B does not re-import the seed file");
   ok((await get(PA, "/health")).status === 200 && (await get(PB, "/health")).status === 200, "both answer while they overlap");
   const before = await recentCalls();
   ok(await callTool(PA, "from-A") === 200 && await callTool(PB, "from-B") === 200, "a call to each lands");
