@@ -3117,7 +3117,9 @@ app.get("/health", (req, res) => {
 // MTA-STS policy (RFC 8461), read by sending mail servers from the mta-sts
 // host; the DNS record that points at it is published separately.
 app.get("/.well-known/mta-sts.txt", (_req, res) => {
-  res.set("Cache-Control", "public, max-age=3600").type("text/plain").send(mtaStsPolicy());
+  const policy = mtaStsPolicy();
+  if (!policy) return res.status(404).type("text/plain").send("no MTA-STS policy is configured on this host\n");
+  res.set("Cache-Control", "public, max-age=3600").type("text/plain").send(policy);
 });
 app.get("/.well-known/security.txt", (_req, res) => {
   const contact = (process.env.SECURITY_CONTACT_EMAIL || "").trim() || "mike@agent402.tools";

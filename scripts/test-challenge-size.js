@@ -49,6 +49,9 @@ if (LOCAL_BOOT) {
   const { spawn } = await import("node:child_process");
   const { createServer } = await import("node:http");
   const { getFreePorts } = await import("./lib/free-port.js");
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
   const [PORT, FAC_PORT] = await getFreePorts(2);
   localFac = createServer((req, res) => {
     res.writeHead(req.url === "/supported" ? 200 : 404, { "Content-Type": "application/json" });
@@ -62,7 +65,7 @@ if (LOCAL_BOOT) {
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     // Mount the Decide routes too (their challenge is among the largest), with
     // a placeholder service that is never called: only the 402 is read.
-    DECIDE_SERVICE_URL: "http://127.0.0.1:9", DECIDE_INTERNAL_TOKEN: "challenge-size-local-placeholder-token-0000", DECIDE_LEDGER_DB: `/tmp/challenge-size-decide-${process.pid}.db`,
+    DECIDE_SERVICE_URL: "http://127.0.0.1:9", DECIDE_INTERNAL_TOKEN: "challenge-size-local-placeholder-token-0000", DECIDE_LEDGER_DB: join(mkdtempSync(join(tmpdir(), "challenge-size-")), "decide.db"),
   }, stdio: ["ignore", "ignore", "pipe"] });
   localProc.stderr.on("data", () => {});
   localBase = `http://127.0.0.1:${PORT}`;
@@ -95,10 +98,9 @@ function projectBytes(prodHeader, localHeader) {
 const MAX_HEADER_BYTES = Number(process.env.MAX_CHALLENGE_HEADER_BYTES) || 12_000;
 const WARN_HEADER_BYTES = Number(process.env.WARN_CHALLENGE_HEADER_BYTES) || 9_000;
 // The whole 402, every header: a Node fetch client reads at most 16 KB of
-// response headers (the gateway's challenge for a gpt-5 request crossed it
-// on 2026-10-09 and the buyer saw a header overflow, not a paywall). The
-// challenge shares that budget with the MPP challenge, CORS and the
-// security headers, so the bound is on the total, with room for more rails.
+// response headers, and past that the buyer sees a header overflow, not a
+// paywall. The challenge shares that budget with the MPP challenge, CORS and
+// the security headers, so the bound is on the total, with room for more rails.
 const MAX_TOTAL_HEADER_BYTES = Number(process.env.MAX_TOTAL_HEADER_BYTES) || 13_800;
 const WARN_TOTAL_HEADER_BYTES = Number(process.env.WARN_TOTAL_HEADER_BYTES) || 12_500;
 // The body that provokes the largest challenge on the gateway: a priced

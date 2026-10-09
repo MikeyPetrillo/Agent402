@@ -4,13 +4,12 @@
 // run records and feedback. Pure: the caller hands in the catalog and the rule
 // that says which tools execute may not run.
 //
-// Params: step 1 carries a placeholder for each required field (the caller
-// passes them); a later step whose tool has exactly one required field takes
-// it from the step before ("{{step N}}", resolved at run time by the same
-// rules a judged plan uses). Anything else is a placeholder the run reports as
-// "pass params for this step" instead of guessing.
+// Params: every required field is a "<name>" placeholder, whatever its
+// declared type, except that a later step whose tool has exactly one required
+// field takes it from the step before ("{{step N}}", resolved at run time by
+// the same rules a judged plan uses). The run reports a placeholder as "pass
+// params for this step" and never sends a guessed value to a paid tool.
 import { localToolRow } from "./tool-rows.js";
-import { skeletonParams } from "./params.js";
 
 export const SKETCH_MIN_STEPS = 2;
 export const SKETCH_MAX_STEPS = 5;
@@ -68,7 +67,7 @@ export function sketchPlan(steps, { catalog, refuse = () => null, baseUrl = "htt
     const row = localToolRow(def, { baseUrl });
     if (!row) return { ok: false, error: `step ${n} (${slug}): this tool cannot be run through execute; call it directly` };
     const required = Array.isArray(row.inputSchema?.required) ? row.inputSchema.required : [];
-    const params = skeletonParams(row.inputSchema);
+    const params = Object.fromEntries(required.map((k) => [k, `<${k}>`]));
     if (n > 1 && required.length === 1) params[required[0]] = `{{step ${n - 1}}}`;
     row.exampleParams = params;
     plan.push({ step: n, purpose: row.name, tool: row, fallbacks: [], dependsOn: n > 1 ? [n - 1] : [], source: "sketch" });

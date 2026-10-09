@@ -201,8 +201,13 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     if (input.params != null && (typeof input.params !== "object" || Array.isArray(input.params))) throw bad('"params" must be an object keyed by step number');
     const payer = payerOf(req);
     const t = now();
+    // One run per (decision, runKey): a client that timed out and paid again
+    // gets the first run's id back, not a second run (a 409 is not charged).
+    const runKey = typeof input?.runKey === "string" && input.runKey ? input.runKey.slice(0, 128)
+      : typeof req?.headers?.["idempotency-key"] === "string" && req.headers["idempotency-key"] ? String(req.headers["idempotency-key"]).slice(0, 128) : null;
     let decisionId = String(input?.decisionId || "");
     let d = null;
+    let persistSketch = null, sketchFeedbackToken = null;
     if (decisionId) {
       d = ledger.getDecision(decisionId);
       if (!d) throw bad("Unknown decisionId - decisions are kept for this server's own answers only", 404);
@@ -220,10 +225,26 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       };
       const sk = sketchPlan(input.steps, { catalog: getCatalog(), refuse });
       if (!sk.ok) throw bad(sk.error, 400);
-      decisionId = `skt_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-      ledger.saveDecision({ decisionId, depth: "sketch", priceUsd: 0, payer, plan: sk.plan, costViaUsd: sk.costUsd, now: t });
-      ledger.markDecisionSettled(decisionId);
-      d = ledger.getDecision(decisionId);
+      // With a run key the decision id is derived from payer, key and steps,
+      // so a paid retry finds the first run (the guard below) instead of
+      // minting a second decision. Without one, the id is random.
+      decisionId = runKey
+        ? `skt_${createHash("sha256").update(`${payer || ""}|${runKey}|${sk.plan.map((p) => p.tool.slug).join(",")}`).digest("hex").slice(0, 24)}`
+        : `skt_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      const prior = runKey ? ledger.getDecision(decisionId) : null;
+      if (prior) d = prior;
+      else {
+        // Kept like a paid decision (feedback token included), priced at zero
+        // and settled at once since the sketch cost nothing; written only once
+        // the run is booked, so a refused attempt leaves no row.
+        const feedbackToken = `fb_${randomBytes(18).toString("base64url")}`;
+        sketchFeedbackToken = feedbackToken;
+        d = { id: decisionId, createdAt: t, depth: "sketch", priceUsd: 0, payer, plan: sk.plan, costViaUsd: sk.costUsd, settled: true };
+        persistSketch = () => {
+          ledger.saveDecision({ decisionId, depth: "sketch", priceUsd: 0, payer, plan: sk.plan, costViaUsd: sk.costUsd, feedbackHash: hashToken(feedbackToken), now: t });
+          ledger.markDecisionSettled(decisionId);
+        };
+      }
     } else {
       throw bad(`"decisionId" (from POST /api/decide) or "steps" (the tool slugs of a free plan sketch from /api/find or /api/route, ${SKETCH_MIN_STEPS} to ${SKETCH_MAX_STEPS}, in order) is required`);
     }
@@ -237,10 +258,6 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     const quoted = Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0 ? req.__meteredQuoteUsd : executeQuoteUsd(input, { ledger, now: t, getCatalog });
     const creditAssumed = roundUsd(Math.max(0, budget - quoted));
 
-    // One run per (decision, runKey): a client that timed out and paid again
-    // gets the first run's id back, not a second run (a 409 is not charged).
-    const runKey = typeof input?.runKey === "string" && input.runKey ? input.runKey.slice(0, 128)
-      : typeof req?.headers?.["idempotency-key"] === "string" && req.headers["idempotency-key"] ? String(req.headers["idempotency-key"]).slice(0, 128) : null;
     const prior = ledger.runByKey(d.id, runKey);
     if (prior) {
       // The payer that ran it gets that run's outcome back with the refusal
@@ -284,6 +301,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       }
     }
     const spendable = roundUsd(Math.min(budget, quoted + redeemed));
+    if (persistSketch) { persistSketch(); persistSketch = null; }
     if (!ledger.createRun({ runId, decisionId: d.id, payer, budgetUsd: spendable, creditUsd: redeemed, runKey, now: t })) {
       // Lost a race with a concurrent request carrying the same key.
       if (redeemed) ledger.restoreCredit(input.creditToken, runId);
@@ -462,6 +480,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     const firstPartyUsd = roundUsd(okResults.filter((r) => r.tool.firstParty).reduce((a, r) => a + (r.costUsd || 0), 0));
     return {
       runId, decisionId: d.id, status: okSteps === results.length ? "complete" : "partial",
+      ...(sketchFeedbackToken ? { feedbackToken: sketchFeedbackToken, feedback: "POST /api/decide/feedback { decisionId, feedbackToken, step, outcome: success|failure, quality?: 1-5, latencyMs? } - free, one verdict per step" } : {}),
       steps: results, budgetUsd: spendable, spentUsd: spent, paidUsd: quoted, creditAppliedUsd: redeemed,
       charges: { firstPartyUsd, passThroughUsd, routingFeesUsd, uncertainUsd: roundUsd(Math.max(0, spent - firstPartyUsd - passThroughUsd - routingFeesUsd)) },
       routingFeePct: cfg.routingFeePct, leftoverCredit,

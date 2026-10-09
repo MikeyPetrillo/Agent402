@@ -11,7 +11,7 @@ import { decideConfig } from "../src/decide/config.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { buildDecideTools } from "../src/tools/decide-kit.js";
 import { buildRouteExecuteTool, EXEC_TIERS } from "../src/tools/route-execute.js";
-import { makeExecuteHandler, executeQuoteUsd, executeBudgetUsd, makeDecideHandler } from "../src/tools/decide-kit.js";
+import { makeExecuteHandler, executeQuoteUsd, executeBudgetUsd, makeDecideHandler, makeFeedbackHandler } from "../src/tools/decide-kit.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -637,6 +637,26 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   const both = await exec({ decisionId: out.decisionId, steps: ["s2", "s1"], params: { 1: { text: "id" } } }, mkReq("0xs"));
   ok(both.decisionId === out.decisionId && both.steps[0].tool.slug === "s1", "a decisionId wins over steps");
   ok(!("sweeps" in out), "no sweep bookkeeping leaks into a run answer");
+  ok(typeof out.feedbackToken === "string" && out.feedbackToken.startsWith("fb_"), "the first run of a sketch hands back a feedback token");
+  const fb = makeFeedbackHandler({ ledger, send: async () => {}, now })({ decisionId: out.decisionId, feedbackToken: out.feedbackToken, step: 1, outcome: "success" });
+  ok(fb.ok === true && fb.decisionId === out.decisionId, "a sketch decision takes feedback like a paid one");
+  // a run key makes a paid retry find the first run instead of minting a second decision
+  const k1 = await exec({ steps: ["s1", "s2"], params: { 1: { text: "k" } }, runKey: "sketch-key-1" }, mkReq("0xk"));
+  await throwsWith(() => exec({ steps: ["s1", "s2"], params: { 1: { text: "k" } }, runKey: "sketch-key-1" }, mkReq("0xk")), 409, k1.runId, "the same payer, key and steps again is the first run's id, not a second run");
+  const k2 = await exec({ steps: ["s1", "s2"], params: { 1: { text: "k" } }, runKey: "sketch-key-1" }, mkReq("0xother"));
+  ok(k2.decisionId !== k1.decisionId, "another payer with the same key gets its own decision");
+  // a typed required field is a placeholder too, never a guessed default
+  catalog.s4 = { slug: "s4", route: "POST /api/s4", price: "$0.002", discovery: { bodyType: "json", inputSchema: { properties: { n: { type: "number" }, flag: { type: "boolean" } }, required: ["n", "flag"] } }, handler: async (p) => { calls.push(["s4", p]); return { n: p.n }; } };
+  calls.length = 0;
+  await throwsWith(() => exec({ steps: ["s4", "s2"] }, mkReq("0xt")), 400, "needs n, flag", "typed required fields without params are reported, not filled with defaults");
+  ok(!calls.length, "no guessed default reached the tool");
+  // a refused or unrunnable sketch leaves no decision row
+  const rows = () => ledger.db.prepare("SELECT COUNT(*) AS n FROM decisions WHERE depth = 'sketch'").get().n;
+  const before = rows();
+  await throwsWith(() => exec({ steps: ["s1", "nope"] }, mkReq("0xr")), 400, "nope", "refused again");
+  ok(rows() === before, "a refused sketch writes no decision row");
+  await throwsWith(() => exec({ steps: ["s1", "s2"] }, mkReq("0xr2")), 400, "needs text", "unrunnable again");
+  ok(rows() === before + 1, "a sketch that was booked and then could not run keeps its row, like a paid decision");
 }
 
 console.log(`\ntest-decide-execute: ${pass} passed, ${fail} failed`);

@@ -24,7 +24,7 @@ const base = `http://127.0.0.1:${PORT}`;
 let childLog = "";
 const T_SPAWN = Date.now();
 const child = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" },
+  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MTA_STS_MX: "mx1.example,mx2.example" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 const stamp = (d) => String(d).split(/\r?\n/).filter(Boolean).map((l) => `[+${((Date.now() - T_SPAWN) / 1000).toFixed(1)}s] ${l}`).join("\n") + "\n";

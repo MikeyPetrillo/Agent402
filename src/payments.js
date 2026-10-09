@@ -499,8 +499,8 @@ export const BAZAAR_DESCRIPTION_MAX = 500;
 export const BAZAAR_SCHEMA_MAX_BYTES = Number(process.env.BAZAAR_SCHEMA_MAX_BYTES) || 500;
 // The input schema in the discovery extension is bounded the same way: a
 // buyer's HTTP client has a fixed header budget (Node's fetch reads at most
-// 16 KB of response headers), and the challenge shares it with thirteen
-// chain offers, the MPP challenge and the security headers. The full input
+// 16 KB of response headers), and the challenge shares it with
+// every chain offer, the MPP challenge and the security headers. The full input
 // schema with its descriptions is in /openapi.json.
 export const BAZAAR_INPUT_SCHEMA_MAX_BYTES = Number(process.env.BAZAAR_INPUT_SCHEMA_MAX_BYTES) || 900;
 // The discovery block as a whole (input example, output example, both
