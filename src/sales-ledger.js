@@ -811,11 +811,14 @@ function decideWindow(since) {
     if (!e) continue;
     e.count += r.n;
     if (r.internal) { e.internal += r.n; continue; }
+    // An outside wallet is an outside buyer whatever else it bought that day:
+    // a catalog sweeper's plan counts as external like any other. The sweeps
+    // sub-object says how many of those external settlements came from
+    // sweepers, as information, never as a subtraction.
     if (r.payer && sweeps.has(r.payer)) {
       e.sweeps.count += r.n;
       e.sweeps.usd = +(e.sweeps.usd + Number(r.usd || 0)).toFixed(6);
       e.sweeps.buyers += 1;
-      continue;
     }
     e.external += r.n;
     e.externalUsd = +(e.externalUsd + Number(r.usd || 0)).toFixed(6);
@@ -830,7 +833,7 @@ function decideWindow(since) {
 export function decideSales({ days = 30 } = {}) {
   return {
     days,
-    sweepRule: `a wallet that bought ${SWEEP_DISTINCT_TOOLS_PER_DAY} or more distinct tools in one UTC day is a catalog sweep: its plans and runs are counted under sweeps, not external`,
+    sweepRule: `a wallet that bought ${SWEEP_DISTINCT_TOOLS_PER_DAY} or more distinct tools in one UTC day is a catalog sweep; its plans and runs count as external like any other outside buyer, and sweeps says how many of the external settlements came from such wallets`,
     window: decideWindow(Date.now() - days * 86_400_000),
     allTime: decideWindow(0),
   };

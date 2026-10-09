@@ -1533,9 +1533,9 @@ const netName = (n) => NET_ALIAS[n] || n;
 // mostly canary-proven so far; the page must not imply parity of volume).
 // ---------------------------------------------------------------------------
 const MPP_RAIL_META = {
-  base: { label: "Base", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://basescan.org/address/" },
-  celo: { label: "Celo", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://celoscan.io/address/" },
-  tempo: { label: "Tempo", asset: "USDC.e / PathUSD", how: "native tempo/charge via Tempo's relay", explorer: "https://explore.tempo.xyz/address/" },
+  base: { label: "Base", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://basescan.org/address/", tx: "https://basescan.org/tx/" },
+  celo: { label: "Celo", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://celoscan.io/address/", tx: "https://celoscan.io/tx/" },
+  tempo: { label: "Tempo", asset: "USDC.e / PathUSD", how: "native tempo/charge via Tempo's relay", explorer: "https://explore.tempo.xyz/address/", tx: "https://explore.tempo.xyz/tx/" },
   // Card payments over MPP settle in US dollars, not a stablecoin.
   stripe: { label: "Card", asset: "USD", how: "card over MPP" },
 };
@@ -1588,13 +1588,17 @@ function mppRailsSection(mpp, { wallets = {} } = {}) {
   const entries = Object.entries(rails).sort((a, b) => (b[1].count - a[1].count) || a[0].localeCompare(b[0]));
   const rows = entries.map(([n, r]) => {
     const meta = MPP_RAIL_META[n] || { label: mppRailLabel(n), asset: "USDC", how: "" };
-    // The proof is the receiving wallet's explorer page, the same rule the
-    // x402 table uses: every settlement on the rail is there, and a single
-    // transaction would name its payer. Card payments have no public ledger.
+    // Explorer: the rail's newest settlement on its block explorer (the
+    // transaction page shows the transfer itself), with the receiving wallet's
+    // page as the fallback when no transaction is on record. Card payments
+    // have no public ledger.
     const addr = wallets[n] || null;
-    const proof = meta.explorer && addr
-      ? `<a href="${esc(meta.explorer + addr)}" rel="noopener" title="${esc(addr)}">${esc(addr.slice(0, 6))}…${esc(addr.slice(-4))}</a>`
-      : n === "stripe" ? `<span style="color:var(--muted);">card, no public ledger</span>` : `<span style="color:var(--muted);">-</span>`;
+    const newestTx = Array.isArray(r.txs) ? r.txs.find((t) => /^0x[0-9a-fA-F]{64}$/.test(String(t || ""))) : null;
+    const proof = meta.tx && newestTx
+      ? `<a href="${esc(meta.tx + newestTx)}" rel="noopener" title="newest settlement ${esc(newestTx)}">tx ${esc(newestTx.slice(0, 8))}…${esc(newestTx.slice(-4))}</a>`
+      : meta.explorer && addr
+        ? `<a href="${esc(meta.explorer + addr)}" rel="noopener" title="${esc(addr)}">${esc(addr.slice(0, 6))}…${esc(addr.slice(-4))}</a>`
+        : n === "stripe" ? `<span style="color:var(--muted);">card, no public ledger</span>` : `<span style="color:var(--muted);">-</span>`;
     return `<tr>
       <td><strong>${esc(meta.label)}</strong> <span style="color:var(--muted);">${esc(meta.asset)}</span></td>
       <td class="num">${Number(r.count).toLocaleString()}</td>
@@ -1611,7 +1615,7 @@ function mppRailsSection(mpp, { wallets = {} } = {}) {
     </div>
     <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;max-width:70ch;">Payments whose credential arrived over the <strong>MPP</strong> wire. Throughput, ours included: most of it is our own daily volume exercising the rails; the external columns are money from others. On Base and Celo an MPP payment settles as ordinary USDC through x402, so its dollars are already in the x402 table above; Tempo and card payments settle off that ledger and are counted here.</p>
     <div class="rv-tablewrap"><table class="rv-table">
-      <thead><tr><th>Rail</th><th class="num">Settlements</th><th class="num">External</th><th class="num">External $</th><th>Last settled</th><th>Proof</th></tr></thead>
+      <thead><tr><th>Rail</th><th class="num">Settlements</th><th class="num">External</th><th class="num">External $</th><th>Last settled</th><th>Explorer</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
 }
@@ -1627,7 +1631,7 @@ export function decideSection(d) {
     return `<tr>
       <td><strong>${esc(label)}</strong> <span style="color:var(--muted);"><code>${esc(route)}</code></span></td>
       <td class="num">${Number(a.count || 0).toLocaleString()}</td>
-      <td class="num">${Number(a.external || 0).toLocaleString()}${a.sweeps?.count ? ` <span style="color:var(--muted);font-size:12px;">+${Number(a.sweeps.count).toLocaleString()} sweep${a.sweeps.count === 1 ? "" : "s"}</span>` : ""}</td>
+      <td class="num">${Number(a.external || 0).toLocaleString()}</td>
       <td class="num">${money(a.externalUsd)}</td>
       <td class="num">${Number(w.external || 0).toLocaleString()}</td>
       <td class="num">${Number(w.externalBuyers || 0).toLocaleString()}</td>
