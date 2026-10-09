@@ -4,9 +4,10 @@
 import { createHash } from "node:crypto";
 import { paymentHeaderOf, paymentIdentifierOf } from "./payer.js";
 import { IDEM_MAX_BODY_BYTES } from "./idempotency-limits.js";
+import { createIdempotencyStore, IDEM_TTL_MS } from "./idempotency-store.js";
 
 /** isCatalogRoute(req): true for a priced catalog route. freeMode: dev/test boot with no paywall. */
-export function createIdempotency({ isCatalogRoute, freeMode = false }) {
+export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore() }) {
   // Opt-in idempotency (safe retry for paid/proven calls). If a client sends an
   // `Idempotency-Key`, a successful gated call is cached keyed by that key + the
   // gate credential it presented (the x402 payment authorization or the
@@ -17,26 +18,11 @@ export function createIdempotency({ isCatalogRoute, freeMode = false }) {
   // never serve a paid result to a non-payer; requests without the header are
   // completely unaffected (default behavior, normal billing). Runs before the
   // paywall so a replay hit skips settlement.
-  const idemStore = new Map(); // hashKey -> { at, body, bytes }
-  const IDEM_TTL_MS = 10 * 60 * 1000;
-  const IDEM_MAX_ENTRIES = 5000;
-  // Cap total cached body bytes — a single tool returning a large blob shouldn't
-  // pin tens of megabytes per slot. 32 MB total, ~1 MB per entry max; oversize
-  // responses skip the cache entirely (retry will re-run the tool, no charge
-  // because PoW/x402 credentials are single-use anyway).
-  const IDEM_MAX_BYTES = 32 * 1024 * 1024;
-  // IDEM_MAX_BODY_BYTES lives in src/idempotency-limits.js (the tool pages quote it).
-  let idemBytes = 0;
-  // Background sweep: entries expire on read at IDEM_TTL_MS, but on a quiet
-  // service stale bodies (some kits return large blobs) would sit in memory
-  // until pushed out by FIFO. Prune by age every minute so memory tracks
-  // actual recent traffic. .unref() so this never blocks process exit.
-  setInterval(() => {
-    const cutoff = Date.now() - IDEM_TTL_MS;
-    for (const [k, v] of idemStore) {
-      if (v.at < cutoff) { idemBytes -= v.bytes; idemStore.delete(k); }
-    }
-  }, 60_000).unref();
+  // The answers and the in-flight claims live in src/idempotency-store.js:
+  // Redis when one is reachable (so a retry that lands on another container
+  // still replays), else this process. IDEM_MAX_BODY_BYTES lives in
+  // src/idempotency-limits.js (the tool pages quote it); IDEM_TTL_MS in the store.
+  void IDEM_TTL_MS;
   const idemHashKey = (req) => {
     // The x402 `payment-identifier` extension (declared on every route's 402) is
     // honoured as an ALIAS of the Idempotency-Key header under the SAME binding
@@ -76,16 +62,15 @@ export function createIdempotency({ isCatalogRoute, freeMode = false }) {
       : "-";
     return createHash("sha256").update(`${req.method} ${req.path}\n${idem}\n${cred}\n${bodyHash}`).digest("hex");
   };
-  // Keys whose first call is still running (see the in-flight check below).
-  const inFlight = new Set();
-  return (req, res, next) => {
+  return async (req, res, next) => {
     if (!isCatalogRoute(req)) return next();
     const key = idemHashKey(req);
     if (!key) return next();
-    const hit = idemStore.get(key);
-    if (hit && Date.now() - hit.at < IDEM_TTL_MS) {
+    let hit;
+    try { hit = await store.get(key); } catch { hit = null; }
+    if (hit !== null && hit !== undefined) {
       res.setHeader("X-Idempotent-Replay", "true");
-      return res.status(200).json(hit.body);
+      return res.status(200).json(hit);
     }
     // The same keyed call is still running (a client that timed out and retried
     // before the first answer finished). A single-use credential (an x402
@@ -94,15 +79,16 @@ export function createIdempotency({ isCatalogRoute, freeMode = false }) {
     // would be debited. Refuse the copy before its handler runs; the gate ahead of
     // us releases its hold on a non-200, so it is never charged, and a retry after
     // the first finishes replays the stored answer.
-    if (inFlight.has(key)) {
+    let claimed = false;
+    try { claimed = await store.claim(key); } catch { claimed = true; }
+    if (!claimed) {
       res.setHeader("Retry-After", "2");
       return res.status(409).json({
         error: "idempotent_request_in_flight",
         hint: "A call with this Idempotency-Key, credential and body is still running. Retry shortly with the same Idempotency-Key to receive its answer; this request was not charged.",
       });
     }
-    inFlight.add(key);
-    res.once("close", () => inFlight.delete(key));
+    res.once("close", () => { store.release(key).catch(() => {}); });
     // Settlement-aware caching (FR4-01). @x402/express (v2.16) runs the handler
     // FIRST, then settles, and ONLY on a <400 response; on settlement FAILURE it
     // replaces the buffered 200 with a 402. So committing to the cache at
@@ -139,19 +125,7 @@ export function createIdempotency({ isCatalogRoute, freeMode = false }) {
       let bytes = 0;
       try { bytes = Buffer.byteLength(JSON.stringify(captured), "utf8"); } catch { bytes = 0; }
       if (!bytes || bytes > IDEM_MAX_BODY_BYTES) return;
-      // Evict oldest entries (Map preserves insertion order → FIFO ≈ LRU for
-      // write-heavy access) until we fit by entries AND by bytes.
-      while (
-        (idemStore.size >= IDEM_MAX_ENTRIES || idemBytes + bytes > IDEM_MAX_BYTES)
-        && idemStore.size > 0
-      ) {
-        const firstKey = idemStore.keys().next().value;
-        const ev = idemStore.get(firstKey);
-        if (ev) idemBytes -= ev.bytes;
-        idemStore.delete(firstKey);
-      }
-      idemStore.set(key, { at: Date.now(), body: captured, bytes });
-      idemBytes += bytes;
+      store.set(key, captured, bytes).catch(() => {});
     });
     next();
   };

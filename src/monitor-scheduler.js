@@ -27,7 +27,9 @@
 // Nothing here charges the subscriber: billing is Stripe's recurring invoice;
 // this is fulfilment only. Rollout: mounts only when subscriptions are enabled;
 // MONITOR_SCHEDULER=off disables the timer (manual runs still work).
-import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { createJsonDocument } from "./json-document.js";
+import { leases, trackStoreReady } from "./state-db.js";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
@@ -58,19 +60,14 @@ const MAX_RUNS_KEPT = 24;
 
 const STORE_PATH = () => join(existsSync("/data") ? "/data" : "/tmp", "monitor-runs.json");
 
-function loadStore(path) {
-  try {
-    const j = JSON.parse(readFileSync(path, "utf8"));
-    return { lock: j.lock || null, subs: j.subs || {}, reports: j.reports || {}, lastTickAt: j.lastTickAt || null, lastTick: j.lastTick || null };
-  } catch { return { lock: null, subs: {}, reports: {}, lastTickAt: null, lastTick: null }; }
-}
-function saveStore(path, store) {
-  try {
-    const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(store));
-    renameSync(tmp, path);
-  } catch { /* best-effort; in-memory still works this process */ }
-}
+const shapeStore = (j) => (j && typeof j === "object"
+  ? { lock: j.lock || null, subs: j.subs || {}, reports: j.reports || {}, lastTickAt: j.lastTickAt || null, lastTick: j.lastTick || null }
+  : { lock: null, subs: {}, reports: {}, lastTickAt: null, lastTick: null });
+// The lease that keeps two schedulers (two replicas, or the old and the new
+// container during a deploy) from running the same tick. On the volume it is
+// the `lock` field inside the store file; in the state database it is a row
+// in the leases table, so it holds across containers that share nothing else.
+const LEASE_NAME = "monitor-scheduler";
 const newReportId = () => randomBytes(16).toString("base64url");
 const errMsg = (e) => String(e?.message || e).replace(/[A-Za-z0-9_-]{32,}/g, "[redacted]").slice(0, 200);
 
@@ -125,24 +122,48 @@ export function describeDomainChanges(prev, next) {
  */
 export function createMonitorScheduler({ subs, generate, probeDomain, normDomain, latestFiling, resolveManager, notify, baseUrl, storePath, now = () => Date.now(), ownerId, log = console.log, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), manageUrlFor = () => `${baseUrl}/monitors`, refreshStatus = null, probeRecalls = null, probeIpos = null, probeInsiderFilings = null, probeTokenBrief = null, describeTokenChanges = null, probeCompanyFilings = null, describeFilingChanges = null }) {
   const path = storePath || STORE_PATH();
-  let store = loadStore(path);
+  const doc = createJsonDocument({ file: path, log });
+  const usePg = doc.backend === "pg";
+  let store = shapeStore(doc.loadSync(null));
+  const ready = trackStoreReady(usePg ? doc.load(null).then((j) => { store = shapeStore(j); }) : Promise.resolve());
   const me = ownerId || `${process.env.RAILWAY_REPLICA_ID || "local"}:${process.pid}:${randomBytes(3).toString("hex")}`;
-  const persist = () => saveStore(path, store);
+  const persist = () => { void doc.save(store); };
   const stateOf = (subId) => (store.subs[subId] ||= { failures: 0, runs: [] });
 
   // --- shared-store lock -----------------------------------------------------
-  function acquireLock() {
-    const disk = loadStore(path);
+  async function acquireLock() {
+    await ready;
+    if (usePg) {
+      let held = false;
+      try { held = await leases.acquire(LEASE_NAME, { owner: me, ttlMs: LOCK_STALE_MS }); } catch (e) { log(`[monitors] lease: ${errMsg(e)}`); return false; }
+      if (!held) return false;
+      // The row is the freshest view: only a lease holder writes state, so
+      // another container's results win over our stale memory.
+      const row = shapeStore(await doc.load(null));
+      store = { ...store, lock: { owner: me, at: now() }, subs: { ...store.subs, ...row.subs }, reports: { ...store.reports, ...row.reports } };
+      return true;
+    }
+    const disk = shapeStore(doc.loadSync(null));
     const l = disk.lock;
     if (l && l.owner !== me && now() - l.at < LOCK_STALE_MS) return false;
     // Disk is the freshest view: only a lock holder writes state, and we are
     // not one yet - so another replica's results win over our stale memory.
     store = { ...store, lock: { owner: me, at: now() }, subs: { ...store.subs, ...disk.subs }, reports: { ...store.reports, ...disk.reports } };
     persist();
-    const check = loadStore(path).lock;
+    const check = shapeStore(doc.loadSync(null)).lock;
     return !!(check && check.owner === me);
   }
-  function releaseLock() { if (store.lock?.owner === me) { store.lock = null; persist(); } }
+  async function renewLock() {
+    if (store.lock?.owner !== me) return;
+    store.lock.at = now();
+    if (usePg) { try { await leases.renew(LEASE_NAME, { owner: me, ttlMs: LOCK_STALE_MS }); } catch { /* the next renew retries */ } }
+    persist();
+  }
+  async function releaseLock() {
+    if (store.lock?.owner !== me) return;
+    store.lock = null; persist();
+    if (usePg) { try { await leases.release(LEASE_NAME, { owner: me }); } catch { /* it expires on its own */ } }
+  }
 
   // --- delivery ---------------------------------------------------------------
   function pruneReports(subId) {
@@ -489,7 +510,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   let ticking = false;
   async function tick({ force = false, subId = null } = {}) {
     if (ticking) return { skipped: "busy" };
-    if (!acquireLock()) return { skipped: "locked" };
+    if (!(await acquireLock())) return { skipped: "locked" };
     ticking = true;
     const started = now();
     const summary = { full: 0, alert: 0, checked: 0, skip: 0, error: 0, deferred: 0, active: 0 };
@@ -505,7 +526,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
         summary[r] = (summary[r] || 0) + 1;
         // Keep the lock fresh ON DISK during long ticks (10 paid reports can
         // take longer than LOCK_STALE_MS) so another replica does not reclaim it.
-        if (store.lock?.owner === me) { store.lock.at = now(); persist(); }
+        await renewLock();
         await sleep(0);
       }
       // Drop state for subscriptions that no longer exist at all (not merely
@@ -513,7 +534,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
       store.lastTickAt = new Date(now()).toISOString();
       store.lastTick = { ...summary, ms: now() - started, owner: me };
       persist();
-    } finally { ticking = false; releaseLock(); }
+    } finally { ticking = false; await releaseLock(); }
     log(`[monitors] tick: ${summary.active} active, ${summary.full} full, ${summary.alert} alerts, ${summary.checked} checked, ${summary.error} errors, ${summary.deferred} deferred (${now() - started}ms)`);
     return summary;
   }
@@ -522,11 +543,18 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   // The delivered-report shape the report page polls (same as /api/r/:id).
   // A miss re-reads the shared store at most once per 5s (another replica may
   // have just delivered it) - an id scanner cannot turn every miss into a read.
+  // In the state database the store is read asynchronously: a miss schedules
+  // one re-read (throttled the same way) and the next poll of the report page
+  // sees it; on the volume the re-read is immediate.
   let lastMissReadAt = 0;
   function fromDisk(reportId) {
     if (now() - lastMissReadAt < 5000) return null;
     lastMissReadAt = now();
-    return loadStore(path).reports[reportId] || null;
+    if (usePg) {
+      void doc.load(null).then((j) => { const row = shapeStore(j); for (const [id, r] of Object.entries(row.reports)) if (!store.reports[id]) store.reports[id] = r; });
+      return null;
+    }
+    return shapeStore(doc.loadSync(null)).reports[reportId] || null;
   }
   function reportView(reportId) {
     const r = (Object.hasOwn(store.reports, reportId) ? store.reports[reportId] : null) || fromDisk(reportId);
@@ -571,5 +599,5 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   }
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
-  return { tick, reportView, subIdOfReport, status, start, stop, _store: () => store };
+  return { tick, reportView, subIdOfReport, status, start, stop, ready: () => ready, flush: () => doc.flush(), _store: () => store };
 }

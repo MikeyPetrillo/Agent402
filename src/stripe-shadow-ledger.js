@@ -63,6 +63,7 @@
 // fields would be fought rather than helped. A plain fetch with the version
 // header also gives us an explicit timeout and zero uncontrolled SDK retries.
 import Database from "better-sqlite3";
+import { leased } from "./state-db.js";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { logSafe } from "./log-safe.js";
@@ -310,7 +311,10 @@ export function createShadowLedger(deps = {}) {
   }
 
   /** Drain up to `batchSize` due rows. Never throws, never runs concurrently. */
-  async function drain() {
+  // Under a lease: two containers (a deploy's overlap, a second replica)
+  // never run this tick at once; without a database it is the plain tick.
+  const drain = leased("stripe-shadow-drain", { ttlMs: 300000, log: console.warn }, drainUnleased);
+  async function drainUnleased() {
     if (!live() || draining) return { attempted: 0 };
     draining = true;
     let attempted = 0;

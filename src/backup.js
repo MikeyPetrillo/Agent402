@@ -43,6 +43,8 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady, leased } from "./state-db.js";
 
 const cfg = () => ({
   endpoint: (process.env.BACKUP_S3_ENDPOINT || "").trim().replace(/\/+$/, ""),
@@ -281,14 +283,23 @@ const status = {
 // until 2026-10-02). Best-effort both ways: a status file is never worth a
 // failed backup.
 const statusFile = () => join(cfg().dataDir, "backup-status.json");
+let statusDoc = null;
+const statusStore = () => (statusDoc ||= createJsonDocument({ file: statusFile(), log: () => {} }));
 let statusLoaded = false;
+const absorbStatus = (saved) => {
+  if (!saved || typeof saved !== "object") return;
+  for (const k of Object.keys(status)) if (k in saved && status[k] == null) status[k] = saved[k];
+  if (saved?.encrypted !== undefined && status.encrypted === undefined) status.encrypted = saved.encrypted;
+};
 function loadStatus() {
   if (statusLoaded) return;
   statusLoaded = true;
-  try { const saved = JSON.parse(readFileSync(statusFile(), "utf8")); if (saved && typeof saved === "object") for (const k of Object.keys(status)) if (k in saved && status[k] == null) status[k] = saved[k]; if (saved?.encrypted !== undefined && status.encrypted === undefined) status.encrypted = saved.encrypted; } catch { /* no saved status yet */ }
+  const d = statusStore();
+  absorbStatus(d.loadSync(null));
+  if (d.backend === "pg") trackStoreReady(d.load(null).then(absorbStatus));
 }
 function saveStatus() {
-  try { writeFileSync(statusFile(), JSON.stringify(status)); } catch { /* best-effort */ }
+  void statusStore().save(status); // best-effort
 }
 export const backupStatus = () => { loadStatus(); return { ...status, configured: backupConfigured() }; };
 
@@ -430,14 +441,14 @@ export function startBackupScheduler({ log = console.log } = {}) {
     log("[backup] not configured (BACKUP_S3_* unset) - nightly offsite backup disabled, plan endpoint still live");
     return null;
   }
-  const timer = setInterval(() => {
+  const timer = setInterval(() => void leased("backup-nightly", { ttlMs: 60 * 60_000, log }, () => {
     const now = new Date();
     const day = now.toISOString().slice(0, 10);
     if (now.getUTCHours() === cfg().utcHour && lastDay !== day) {
       lastDay = day;
       runBackup({ log }).catch((e) => log(`[backup] scheduler run threw: ${e.message}`));
     }
-  }, 10 * 60 * 1000);
+  })(), 10 * 60 * 1000);
   timer.unref?.(); // never keep the process alive for the backup timer
   log(`[backup] nightly scheduler armed (UTC hour ${cfg().utcHour}, keep ${cfg().keepDays} days, run cap ${cfg().maxRunMb}MB, bill guard ${cfg().maxTotalGb}GB, ${cfg().encKey ? "AES-256-GCM client-side encryption ON" : "WARNING: BACKUP_ENCRYPTION_KEY unset - objects upload as plain gzip"})`);
   return timer;

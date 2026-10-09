@@ -4,7 +4,8 @@
 // (recommended - the domain is already on Zoho) and Resend. Gated on the
 // provider's key + EMAIL_FROM - a no-op that returns false when unconfigured, so
 // nothing breaks before email is set up. NEVER throws into the caller.
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady } from "./state-db.js";
 import { upgradeOffer } from "./report-upgrade.js";
 
 const RESEND_URL = "https://api.resend.com/emails";
@@ -23,14 +24,18 @@ const key = (n) => (process.env[n] || "").trim();
 // page on it across restarts.
 const EMAIL_STATUS_FILE = process.env.EMAIL_STATUS_FILE || "/data/email-status.json";
 let outcome = null; // { ok, at, status, code, provider, failuresSinceOk, sentTotal, failedTotal }
+let outcomeDoc = null;
+const outcomeStore = () => (outcomeDoc ||= createJsonDocument({ file: EMAIL_STATUS_FILE, log: () => {} }));
 function loadOutcome() {
   if (outcome) return outcome;
-  try { outcome = JSON.parse(readFileSync(EMAIL_STATUS_FILE, "utf8")); } catch { outcome = null; }
+  const d = outcomeStore();
+  outcome = d.loadSync(null);
+  if (d.backend === "pg") trackStoreReady(d.load(null).then((j) => { if (j && typeof j === "object" && outcome && outcome.at === null) Object.assign(outcome, j); }));
   if (!outcome || typeof outcome !== "object") outcome = { ok: null, at: null, status: null, code: null, provider: null, failuresSinceOk: 0, sentTotal: 0, failedTotal: 0 };
   return outcome;
 }
 function persistOutcome() {
-  try { const tmp = EMAIL_STATUS_FILE + ".tmp"; writeFileSync(tmp, JSON.stringify(outcome)); renameSync(tmp, EMAIL_STATUS_FILE); } catch { /* no volume: memory only */ }
+  void outcomeStore().save(outcome); // no volume and no database: memory only
 }
 /** Provider error code from a refusal body, bounded and code-shaped only. */
 export function providerErrorCode(bodyText) {

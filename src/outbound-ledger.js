@@ -17,6 +17,9 @@
 // it, and how it ended.
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { logLines, stateDbEnabled } from "./state-db.js";
+
+export const OUTBOUND_STREAM = "outbound-spend";
 
 const FILE = (process.env.OUTBOUND_LEDGER_FILE || "/data/outbound-spend.ndjson").trim();
 const DISABLED = /^(0|false|off|no)$/i.test((process.env.OUTBOUND_LEDGER ?? "").trim());
@@ -62,6 +65,12 @@ export function recordOutbound({ chain, payTo, amountAtomic, asset, usd, slug, o
       result: result || "unknown",
       tx: tx || null,
     }) + "\n";
+    if (stateDbEnabled()) {
+      // One row per payment in the state database; a failed insert is warned
+      // about like a failed append and never reaches the payment path.
+      logLines.append(OUTBOUND_STREAM, JSON.parse(line)).catch((e) => warnOnce(`write failed (${e?.code || e?.message}) - the payment itself is unaffected`));
+      return;
+    }
     try { appendFileSync(FILE, line); }
     catch (e) {
       if (e?.code === "ENOENT") { mkdirSync(dirname(FILE), { recursive: true }); appendFileSync(FILE, line); }

@@ -1,7 +1,7 @@
 // Offline unit tests for the x402-trending momentum tool (src/tools/x402-kit.js
 // computeTrending) and its history persistence hooks (src/leaderboard.js
 // persistLeaderboardHistoryPoint / readLeaderboardHistory). No network, no boot.
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { computeTrending } from "../src/tools/x402-kit.js";
@@ -151,8 +151,10 @@ const snap = (leaderboard, over = {}) => ({
   ok(hist.length === 2 && hist[0].day === "2026-07-13" && hist[1].day === "2026-07-14", "next-day persist appends, sorted oldest-first");
   // scanSkipped snapshots are never persisted (an empty RPC-outage snapshot would poison WoW).
   ok(persistLeaderboardHistoryPoint({ scanSkipped: true, leaderboard: [] }, file) === false, "scanSkipped snapshot is not persisted");
-  // Unwritable path → false, never throws.
-  ok(persistLeaderboardHistoryPoint(s1, join(dir, "no-such-dir", "x.json")) === false, "unwritable path returns false (no throw)");
+  // Unwritable path → false, never throws. (A path beneath a regular file:
+  // a missing parent directory is created now, so it is no longer unwritable.)
+  writeFileSync(join(dir, "a-file"), "");
+  ok(persistLeaderboardHistoryPoint(s1, join(dir, "a-file", "x.json")) === false, "unwritable path returns false (no throw)");
   rmSync(dir, { recursive: true, force: true });
 }
 

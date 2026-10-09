@@ -18,6 +18,7 @@
 // REVENUE_LEDGER=true forces it (local/dev); CI test boots have neither, so
 // tests never hammer public RPCs.
 import Database from "better-sqlite3";
+import { leased } from "./state-db.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -1386,7 +1387,7 @@ export function startRevenueLedger({ walletAddress, solanaWallet, stellarWallet,
   const enabled = HAS_DATA_DIR || process.env.REVENUE_LEDGER === "true";
   if (loopStarted || !enabled || (!walletAddress && !solanaWallet && !stellarWallet && !algorandWallet)) return false;
   loopStarted = true;
-  const tick = async () => {
+  const tick = leased("revenue-ledger-tick", { ttlMs: 10 * 60_000 }, async () => {
     let allCaughtUp = true;
     if (walletAddress) {
       for (const chain of Object.keys(EVM)) {
@@ -1452,7 +1453,7 @@ export function startRevenueLedger({ walletAddress, solanaWallet, stellarWallet,
       }
     }
     setTimeout(tick, allCaughtUp ? 300_000 : 20_000).unref?.();
-  };
+  });
   setTimeout(tick, 5_000).unref?.(); // let boot settle first
   console.log(`revenue-ledger: sync loop started (db: ${DB_PATH})`);
   return true;

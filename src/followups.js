@@ -12,8 +12,10 @@
 // outside them. The store keeps the address (it has to send), the product,
 // the target and timestamps - operator surfaces report counts only.
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady, leased } from "./state-db.js";
 
 const DAY = 24 * 60 * 60_000;
 export const STEP_DELAYS_MS = Object.freeze({ monitor: 2 * DAY, another: 7 * DAY });
@@ -32,13 +34,16 @@ export function defaultStorePath() {
  * @param {(m:{to:string,subject:string,html:string,text:string,headers?:object})=>Promise<boolean>} deps.sendEmail
  */
 export function createFollowups({ storePath = defaultStorePath(), sendEmail, monitorFor = () => null, samples = () => [], secret = "", baseUrl = "https://agent402.tools", now = () => Date.now(), log = console.log, onEvent = null } = {}) {
-  let store = load();
-  let ticking = false;
-  function load() { try { const j = JSON.parse(readFileSync(storePath, "utf8")); return j && typeof j === "object" && j.seqs ? j : { seqs: {} }; } catch { return { seqs: {} }; } }
+  // The store is one JSON document: on the volume as a file, in the state
+  // database when one is configured (first load imports the file once).
+  const doc = createJsonDocument({ file: storePath, log });
+  const shape = (j) => (j && typeof j === "object" && j.seqs ? j : { seqs: {} });
+  let store = shape(doc.loadSync(null));
+  const ready = trackStoreReady(doc.backend === "pg" ? doc.load(null).then((j) => { store = shape(j); }) : Promise.resolve());
   function persist() {
-    try { mkdirSync(dirname(storePath), { recursive: true }); const tmp = `${storePath}.${process.pid}.tmp`; writeFileSync(tmp, JSON.stringify(store)); renameSync(tmp, storePath); }
-    catch (e) { log(`[followups] persist failed: ${String(e?.message || e).slice(0, 120)}`); }
+    void doc.save(store).then((stored) => { if (!stored) log(`[followups] persist failed: ${String(doc.lastError || "").slice(0, 120)}`); });
   }
+  let ticking = false;
   const emit = (step, extra = {}) => { try { onEvent?.({ step, ...extra }); } catch { /* telemetry never breaks delivery */ } };
   const sign = (id) => createHmac("sha256", secret).update(`stop:${id}`).digest("base64url").slice(0, 32);
   const verify = (id, k) => { if (!secret || !id || typeof k !== "string") return false; const a = Buffer.from(sign(id)); const b = Buffer.from(k); return a.length === b.length && timingSafeEqual(a, b); };
@@ -92,7 +97,11 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
   }
 
   /** One pass over the queue: send whichever steps are due. */
-  async function tick({ limit = 200 } = {}) {
+  // Under a lease: two containers (a deploy's overlap, a second replica)
+  // never run this tick at once; without a database it is the plain tick.
+  const tick = leased("followups-tick", { ttlMs: 600000, log: log }, tickUnleased);
+  async function tickUnleased({ limit = 200 } = {}) {
+    await ready;
     if (ticking || !enabled()) return { skipped: "ticking-or-disabled" };
     ticking = true;
     const out = { monitor: 0, another: 0, skipped: 0, failed: 0 };
@@ -174,5 +183,5 @@ ${footer(r)}`);
   }
   function stopTimer() { if (timer) clearInterval(timer); timer = null; }
 
-  return { enqueue, markRepeat, stop, sendFailed, tick, prune, stats, start, stopTimer, enabled, _store: () => store };
+  return { enqueue, markRepeat, stop, sendFailed, tick, prune, stats, start, stopTimer, enabled, ready: () => ready, flush: () => doc.flush(), _store: () => store };
 }

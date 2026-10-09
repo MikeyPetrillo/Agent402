@@ -9,7 +9,9 @@
 // "unavailable" for that rail instead of breaking the page. Balances and
 // transfers are public on-chain data — this page just saves the tab-cycling.
 import { tempoSelfRecipient } from "./mpp-tempo.js";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady } from "./state-db.js";
 import { standingBand } from "./standing.js";
 import { join } from "node:path";
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
@@ -1342,14 +1344,15 @@ let refreshing = null;
 // balances keep their original balanceAsOf, so the card honestly shows
 // "live · cached" rather than a fake-fresh reading.
 const LASTGOOD_PATH = join(existsSync("/data") ? "/data" : "/tmp", "revenue-lastgood.json");
-let diskLastGood = null;
-try { diskLastGood = JSON.parse(readFileSync(LASTGOOD_PATH, "utf8")); } catch { /* first boot or unreadable — in-memory behavior */ }
+const lastGoodDoc = createJsonDocument({ file: LASTGOOD_PATH, log: () => {} });
+let diskLastGood = lastGoodDoc.loadSync(null); // first boot or unreadable: in-memory behavior
+if (lastGoodDoc.backend === "pg") trackStoreReady(lastGoodDoc.load(null).then((j) => { if (j && !diskLastGood) diskLastGood = j; }));
 function persistLastGood(rails) {
   try {
     const keep = rails
       .filter((r) => Number.isFinite(r.balance))
       .map((r) => ({ rail: r.rail, balance: r.balance, balanceAsOf: r.balanceAsOf || null, recent: (r.recent || []).slice(0, 10), lastInbound: r.lastInbound || null }));
-    if (keep.length) writeFileSync(LASTGOOD_PATH, JSON.stringify({ asOf: new Date().toISOString(), rails: keep }));
+    if (keep.length) void lastGoodDoc.save({ asOf: new Date().toISOString(), rails: keep });
   } catch { /* persistence must never break the snapshot */ }
 }
 // Snapshot freshness. 10 minutes (was 60s): the refresh fans out ~100 chunked

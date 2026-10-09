@@ -818,6 +818,20 @@ jobs:
     # lifecycle scripts execute — SHADOWS them to empty (below), so a malicious
     # package cannot read them. That is the real F07 exposure; our own test
     # steps are trusted code from this repo.
+      # A REAL Postgres for the state-database suites (src/state-db.js): the
+      # stores that left the /data volume. Each suite makes and drops its own
+      # schema. Under CI a missing database FAILS those suites (scripts/lib/test-pg.js).
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
       # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
@@ -1295,6 +1309,21 @@ jobs:
         env:
           REDIS_URL: redis://127.0.0.1:6379
         run: node scripts/test-replay-guard-redis.js
+
+      - name: "State database (REAL postgres: documents/records/log lines/leases; every migrated store imports its file once and reads the row; loops skip under another holder's lease; idempotency answers and claims shared over REAL redis)"
+        env:
+          REDIS_URL: redis://127.0.0.1:6379
+          STATE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+          STATE_DATABASE_URL_FOR_TEST: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+        run: |
+          set -euo pipefail
+          t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
+          t node scripts/test-state-db.js
+          t node scripts/test-stores-pg.js
+          t node scripts/test-leased-loops.js
+          t node scripts/test-idempotency-store.js
+          # The file/memory half runs without the database; the Postgres half with it.
+          t node scripts/test-json-document.js
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still

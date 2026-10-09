@@ -19,8 +19,10 @@
 // address itself still has to click.
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
-import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady, leased } from "./state-db.js";
 
 const DAY = 86_400_000;
 export const DIGEST_PERIOD_MS = 7 * DAY;
@@ -55,20 +57,17 @@ const money = (n) => `$${Number(n || 0).toFixed(Number(n || 0) >= 1 ? 2 : 4)}`;
  * @param {(key:string)=>string|null} [deps.creditsKeyId] resolves a presented credits key to its id (null = unknown key)
  */
 export function createWalletDigest({ storePath = defaultDigestStorePath(), sendEmail, secret = "", baseUrl = "https://agent402.tools", now = () => Date.now(), log = console.log, usage, refunds = null, creditsBalance = null, verifySignature, creditsKeyId = null, onEvent = null } = {}) {
-  let store = load();
+  // The store is one JSON document: on the volume as a file, in the state
+  // database when one is configured (first load imports the file once).
+  const doc = createJsonDocument({ file: storePath, log });
+  const shape = (j) => (j && typeof j === "object" && j.subs ? j : { subs: {} });
+  let store = shape(doc.loadSync(null));
+  const ready = trackStoreReady(doc.backend === "pg" ? doc.load(null).then((j) => { store = shape(j); }) : Promise.resolve());
+  function persist() {
+    void doc.save(store).then((stored) => { if (!stored) log(`[wallet-digest] persist failed: ${String(doc.lastError || "").slice(0, 120)}`); });
+  }
   let ticking = false;
 
-  function load() {
-    try { const j = JSON.parse(readFileSync(storePath, "utf8")); return j && typeof j === "object" && j.subs ? j : { subs: {} }; } catch { return { subs: {} }; }
-  }
-  function persist() {
-    try {
-      mkdirSync(dirname(storePath), { recursive: true });
-      const tmp = `${storePath}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify(store));
-      renameSync(tmp, storePath);
-    } catch (e) { log(`[wallet-digest] persist failed: ${String(e?.message || e).slice(0, 120)}`); }
-  }
   const emit = (step, extra = {}) => { try { onEvent?.({ step, ...extra }); } catch { /* telemetry never breaks a signup */ } };
   const sign = (id, purpose) => createHmac("sha256", secret).update(`digest:${purpose}:${id}`).digest("base64url").slice(0, 32);
   const verify = (id, purpose, k) => {
@@ -116,6 +115,7 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
   /** Public signup: a wallet proves itself with a signature over
    *  digestProofMessage; a credits key proves itself by being presented. */
   async function signup({ email, wallet, message, signature, creditsKey, source = "" } = {}) {
+    await ready;
     if (!enabled()) throw bad("Digests are not available right now.", 503);
     const mail = normEmail(email);
     if (!EMAIL_RE.test(mail)) throw bad("Enter a valid email address.");
@@ -243,7 +243,11 @@ ${d.balanceUsd == null ? "" : `<p style="margin:16px 0 0;">Credits balance: <b>$
   }
 
   /** Weekly cadence per record: a digest is due 7 days after the last one (or at once for a fresh confirmation). */
-  async function tick({ limit = TICK_SEND_CAP, force = false } = {}) {
+  // Under a lease: two containers (a deploy's overlap, a second replica)
+  // never run this tick at once; without a database it is the plain tick.
+  const tick = leased("wallet-digest-tick", { ttlMs: 900000, log: log }, tickUnleased);
+  async function tickUnleased({ limit = TICK_SEND_CAP, force = false } = {}) {
+    await ready;
     if (ticking) return { skipped: "busy" };
     ticking = true;
     const out = { due: 0, sent: 0, quiet: 0, failed: 0 };
@@ -290,5 +294,5 @@ ${inner}
   }
   function stop() { if (timer) clearInterval(timer); timer = null; }
 
-  return { signup, preEnrolCredits, confirm, unsubscribe, tick, stats, start, stop, enabled, sign, _store: () => store };
+  return { signup, preEnrolCredits, confirm, unsubscribe, tick, stats, start, stop, enabled, sign, ready: () => ready, flush: () => doc.flush(), _store: () => store };
 }

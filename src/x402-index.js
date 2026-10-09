@@ -25,6 +25,12 @@
 //     are consistent whether a buyer searches local-only or cross-seller.
 import { resolveLocalRefs } from "./openapi-deref.js";
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady, leased } from "./state-db.js";
+// Each store is one JSON document: on the volume, or in the state database
+// when one is configured (imported from the file once).
+const docs = new Map();
+const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
 import { timedSync } from "./boot-timing.js";
 import { esc } from "./ledger-chrome.js";
 // F23: seller-manifest homepages are external, attacker-controlled URLs. esc()
@@ -400,20 +406,23 @@ export function __testSetSubmittedCap(n) {
 }
 
 export function loadSubmittedSeeds() {
-  try {
-    const arr = JSON.parse(readFileSync(SUBMITTED_SEEDS_FILE, "utf8"));
+  const d = docFor(SUBMITTED_SEEDS_FILE);
+  const apply = (arr) => {
     // Respect the cap even if the file was hand-edited or corrupted into
     // something oversized — the ceiling has to hold on load, not just on write.
     for (const o of Array.isArray(arr) ? arr : []) {
       if (submittedSeeds.size >= submittedSeedsCap) break;
       if (typeof o === "string") { submittedSeeds.add(o); discoveredSeeds.add(o); }
     }
-  } catch { /* absent file / no volume — in-memory only */ }
+  };
+  if (d.backend === "pg") return trackStoreReady(d.load(null).then(apply));
+  try { apply(d.loadSync(null)); } catch { /* absent file / no volume — in-memory only */ }
+  return Promise.resolve();
 }
 
 function persistSubmittedSeeds() {
   try {
-    writeFileSync(SUBMITTED_SEEDS_FILE, JSON.stringify([...submittedSeeds], null, 2));
+    void docFor(SUBMITTED_SEEDS_FILE).save([...submittedSeeds]);
   } catch { /* best-effort — no volume in local/dev */ }
 }
 
@@ -440,8 +449,13 @@ const SUCCESSION_MAX_CHAIN = 16;
 const successions = new Map(); // old origin -> { to: new origin, at: recordedAt }
 
 export function loadSuccessions() {
+  const d = docFor(SUCCESSIONS_FILE);
+  if (d.backend === "pg") return trackStoreReady(d.load(null).then(applySuccessions));
+  applySuccessions(d.loadSync(null));
+  return Promise.resolve();
+}
+function applySuccessions(obj) {
   try {
-    const obj = JSON.parse(readFileSync(SUCCESSIONS_FILE, "utf8"));
     for (const [oldO, newO] of Object.entries(obj || {})) {
       if (successions.size >= SUCCESSIONS_MAX) break; // the ceiling holds on load, not only on write
       // Two shapes: the bare string this file wrote before re-verification
@@ -461,9 +475,7 @@ function persistSuccessions() {
   // truncated file here reads as "no successions", silently restoring every
   // duplicate this exists to hide.
   try {
-    const tmp = `${SUCCESSIONS_FILE}.tmp`;
-    writeFileSync(tmp, JSON.stringify(Object.fromEntries(successions), null, 2));
-    renameSync(tmp, SUCCESSIONS_FILE);
+    void docFor(SUCCESSIONS_FILE).save(Object.fromEntries(successions));
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -495,8 +507,13 @@ export const LIVE_PROOF_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 const goneKey = (origin, method, route) => `${origin} ${String(method || "GET").toUpperCase()} ${route}`;
 
 export function loadGoneRoutes() {
+  const d = docFor(GONE_ROUTES_FILE);
+  if (d.backend === "pg") return trackStoreReady(d.load(null).then(applyGoneRoutes));
+  applyGoneRoutes(d.loadSync(null));
+  return Promise.resolve();
+}
+function applyGoneRoutes(obj) {
   try {
-    const obj = JSON.parse(readFileSync(GONE_ROUTES_FILE, "utf8"));
     for (const [k, v] of Object.entries(obj || {})) {
       if (goneRoutes.size >= GONE_ROUTES_MAX) break;
       if (typeof k === "string" && v && Number(v.at) > 0) goneRoutes.set(k, { at: Number(v.at), kind: ["410", "miss", "pending"].includes(v.kind) ? v.kind : "miss" });
@@ -506,9 +523,7 @@ export function loadGoneRoutes() {
 
 function persistGoneRoutes() {
   try {
-    const tmp = `${GONE_ROUTES_FILE}.tmp`;
-    writeFileSync(tmp, JSON.stringify(Object.fromEntries(goneRoutes)));
-    renameSync(tmp, GONE_ROUTES_FILE);
+    void docFor(GONE_ROUTES_FILE).save(Object.fromEntries(goneRoutes));
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -700,18 +715,20 @@ export function strictOriginKey(raw) {
 }
 
 export function loadRemovedOrigins() {
-  try {
-    const arr = JSON.parse(readFileSync(removedFile(), "utf8"));
+  const d = docFor(removedFile());
+  const apply = (arr) => {
     for (const r of Array.isArray(arr) ? arr : []) {
       if (removedOrigins.size >= REMOVED_ORIGINS_MAX) break;
       const k = strictOriginKey(r?.origin);
       if (!k) continue;
       removedOrigins.set(k, { origin: k, removedAt: Number(r.removedAt) || 0, note: typeof r.note === "string" ? r.note.slice(0, 500) : "" });
     }
-  } catch { /* absent file / no volume - in-memory only */ }
-  // A removal loaded after the stores were filled (a hand edit, a test) must
-  // still take effect: purge whatever is already held.
-  for (const k of removedOrigins.keys()) purgeOrigin(k);
+    // A removal loaded after the stores were filled (a hand edit, a test) must
+    // still take effect: purge whatever is already held.
+    for (const k of removedOrigins.keys()) purgeOrigin(k);
+  };
+  if (d.backend === "pg") { trackStoreReady(d.load(null).then(apply)); return removedOrigins.size; }
+  try { apply(d.loadSync(null)); } catch { /* absent file / no volume - in-memory only */ }
   return removedOrigins.size;
 }
 
@@ -719,10 +736,7 @@ function persistRemovedOrigins() {
   // tmp+rename: a truncated file here reads as "nothing removed", which would
   // quietly bring every removed origin back on the next boot.
   try {
-    const f = removedFile();
-    const tmp = `${f}.tmp`;
-    writeFileSync(tmp, JSON.stringify([...removedOrigins.values()], null, 2));
-    renameSync(tmp, f);
+    void docFor(removedFile()).save([...removedOrigins.values()]);
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -1649,7 +1663,8 @@ async function discoverOneSource(source, selfOrigin) {
 }
 
 let selfOriginCache = null;
-async function runDiscovery(selfOrigin) {
+const runDiscovery = leased("x402-index-discovery", { ttlMs: 20 * 60_000 }, runDiscoveryUnleased);
+async function runDiscoveryUnleased(selfOrigin) {
   selfOriginCache = selfOrigin || selfOriginCache;
   await Promise.allSettled(DISCOVERY_SOURCES.map((s) => discoverOneSource(s, selfOriginCache)));
 }
@@ -5472,7 +5487,8 @@ export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_
 
 /** True while a crawl cycle is running (every entry is being replaced). */
 export function crawlInProgress() { return !!crawlInFlight; }
-async function runCrawl() {
+const runCrawl = leased("x402-index-crawl", { ttlMs: 60 * 60_000 }, runCrawlUnleased);
+async function runCrawlUnleased() {
   if (crawlInFlight) return; // overlapping runs would just rate-limit each other
   crawlInFlight = true;
   try {

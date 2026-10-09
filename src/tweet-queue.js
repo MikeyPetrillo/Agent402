@@ -58,6 +58,7 @@
 //  - Logs and the operator read carry ids, hours, counts and status codes.
 //    Never tweet text, never a credential.
 import { randomBytes } from "node:crypto";
+import { leased } from "./state-db.js";
 import {
   closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync,
   renameSync, statSync, unlinkSync, writeFileSync, writeSync,
@@ -596,7 +597,10 @@ export function createTweetQueue({
     log(`[tweet-queue] ${item.id} is IN DOUBT (${safeCls(out.cls || `http_${out.status}`)}): one retry in ${IN_DOUBT_RETRY_MS / 60_000} min or later (refused as a duplicate if the first attempt landed), then never re-sent`);
   }
 
-  async function tick() {
+  // Under a lease: two containers (a deploy's overlap, a second replica)
+  // never run this tick at once; without a database it is the plain tick.
+  const tick = leased("tweet-queue-tick", { ttlMs: 300000, log: log }, tickUnleased);
+  async function tickUnleased() {
     const m = mode();
     if (m !== "posting" && m !== "store_unreadable") return { skipped: m };
     if (ticking) return { skipped: "busy" };

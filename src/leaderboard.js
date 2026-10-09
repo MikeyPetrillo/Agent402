@@ -24,8 +24,8 @@
 // eth_getLogs calls (~30s-2min). We cache the snapshot in memory and refresh
 // hourly; the endpoint reads from cache so each request is sub-millisecond.
 
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
-import { readFile, writeFile, rename as renameFile } from "node:fs/promises";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady, leased } from "./state-db.js";
 import { timedSync } from "./boot-timing.js";
 import { fetchAllBazaarItems as walkBazaar } from "./bazaar-pager.js";
 import { EVM, OUR_EVM_WALLETS } from "./revenue-live.js";
@@ -1378,12 +1378,16 @@ const HISTORY_MAX_SELLERS = 300; // per point — bounds file size on /data
 export const LEADERBOARD_SNAPSHOT_FILE =
   process.env.LEADERBOARD_SNAPSHOT_FILE || "/data/leaderboard-snapshot.json";
 
+// Each file is one JSON document: on the volume, or in the state database
+// when one is configured (imported from the file once). Documents are made per
+// file name so tests that pass their own paths keep their own stores.
+const docs = new Map();
+const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
 /** Best-effort persist of the full snapshot. No-op on a missing /data volume. */
 function persistLeaderboardSnapshot(snapshot, file = LEADERBOARD_SNAPSHOT_FILE) {
   try {
     if (!snapshot || snapshot.scanSkipped || !Array.isArray(snapshot.leaderboard) || !snapshot.leaderboard.length) return false;
-    writeFileSync(file, JSON.stringify(snapshot));
-    return true;
+    return docFor(file).saveSync(snapshot);
   } catch { return false; }
 }
 
@@ -1392,18 +1396,32 @@ function persistLeaderboardSnapshot(snapshot, file = LEADERBOARD_SNAPSHOT_FILE) 
 export function loadPersistedLeaderboardSnapshot(file = LEADERBOARD_SNAPSHOT_FILE) {
   return timedSync("x402 leaderboard warm-start", file, () => _loadPersistedLeaderboardSnapshot(file));
 }
+const wellFormedSnapshot = (snap) => (snap && Array.isArray(snap.leaderboard) && snap.leaderboard.length ? snap : null);
 function _loadPersistedLeaderboardSnapshot(file = LEADERBOARD_SNAPSHOT_FILE) {
-  try {
-    const snap = JSON.parse(readFileSync(file, "utf8"));
-    if (snap && Array.isArray(snap.leaderboard) && snap.leaderboard.length) return snap;
-    return null;
-  } catch { return null; }
+  try { return wellFormedSnapshot(docFor(file).loadSync(null)); } catch { return null; }
+}
+/** The database copy of the snapshot (null without a database or a row). */
+async function loadPersistedLeaderboardSnapshotAsync(file = LEADERBOARD_SNAPSHOT_FILE) {
+  const d = docFor(file);
+  if (d.backend !== "pg") return null;
+  try { return wellFormedSnapshot(await d.load(null)); } catch { return null; }
 }
 
+// In database mode the history is held in memory (loaded once, updated on
+// every persist) because the trending tool reads it synchronously per call.
+const historyMemo = new Map(); // file -> array
+function historyWarm(file) {
+  const d = docFor(file);
+  if (d.backend !== "pg" || historyMemo.has(file)) return;
+  historyMemo.set(file, []);
+  trackStoreReady(d.load(null).then((arr) => { if (Array.isArray(arr)) historyMemo.set(file, arr); }));
+}
 /** Read the persisted history: array of daily points, oldest first. [] on any error. */
 export function readLeaderboardHistory(file = LEADERBOARD_HISTORY_FILE) {
   try {
-    const arr = JSON.parse(readFileSync(file, "utf8"));
+    const d = docFor(file);
+    if (d.backend === "pg") { historyWarm(file); return historyMemo.get(file) || []; }
+    const arr = d.loadSync(null);
     return Array.isArray(arr) ? arr : [];
   } catch {
     return [];
@@ -1431,8 +1449,9 @@ export function persistLeaderboardHistoryPoint(snapshot, file = LEADERBOARD_HIST
     const history = readLeaderboardHistory(file).filter((p) => p && p.day !== day);
     history.push({ day, asOf, windowLabel: snapshot.windowLabel, sellers });
     history.sort((a, b) => String(a.day).localeCompare(String(b.day)));
-    writeFileSync(file, JSON.stringify(history.slice(-HISTORY_MAX_DAYS)));
-    return true;
+    const kept = history.slice(-HISTORY_MAX_DAYS);
+    if (docFor(file).backend === "pg") historyMemo.set(file, kept);
+    return docFor(file).saveSync(kept);
   } catch {
     return false; // no /data volume or disk error — skip silently
   }
@@ -1448,17 +1467,14 @@ export const LEADERBOARD_FUNDING_FILE =
 let fundingStateCache = null;
 async function loadSellerFundingState(file = LEADERBOARD_FUNDING_FILE) {
   if (fundingStateCache) return fundingStateCache;
-  let text = null;
-  try { text = await readFile(file, "utf8"); } catch { /* no file yet: a fresh state */ }
-  fundingStateCache = text ? parseFundingState(text, USDC) : createFundingState(USDC);
+  let body = null;
+  try { body = await docFor(file).load(null); } catch { /* no state yet: a fresh state */ }
+  fundingStateCache = body ? parseFundingState(JSON.stringify(body), USDC) : createFundingState(USDC);
   return fundingStateCache;
 }
 async function persistSellerFundingState(state, file = LEADERBOARD_FUNDING_FILE) {
   try {
-    const tmp = `${file}.${process.pid}.tmp`;
-    await writeFile(tmp, serializeFundingState(state));
-    await renameFile(tmp, file);
-    return true;
+    return await docFor(file).save(JSON.parse(serializeFundingState(state)));
   } catch { return false; } // no /data volume (local dev, CI): the next scan reads every payer's history again
 }
 
@@ -1479,8 +1495,13 @@ let fundingSwitchVersion = 0;
 function operatorFundingSwitch() {
   if (fundingSwitch === null) {
     fundingSwitch = false;
+    const d = docFor(LEADERBOARD_FUNDING_SWITCH_FILE);
+    const apply = (j) => {
+      if (typeof j?.enabled === "boolean") { fundingSwitch = { enabled: j.enabled, at: typeof j.at === "string" ? j.at : null, note: typeof j.note === "string" ? j.note.slice(0, 200) : "", persisted: true }; fundingSwitchVersion++; }
+    };
+    if (d.backend === "pg") trackStoreReady(d.load(null).then((j) => { if (fundingSwitch === false) apply(j); }));
     try {
-      const j = JSON.parse(readFileSync(LEADERBOARD_FUNDING_SWITCH_FILE, "utf8"));
+      const j = d.loadSync(null);
       if (typeof j?.enabled === "boolean") fundingSwitch = { enabled: j.enabled, at: typeof j.at === "string" ? j.at : null, note: typeof j.note === "string" ? j.note.slice(0, 200) : "", persisted: true };
     } catch { /* no operator choice on the volume */ }
   }
@@ -1504,12 +1525,8 @@ export function setSellerFundingEnabled(enabled, { note = "", now = Date.now() }
   if (typeof enabled !== "boolean") throw Object.assign(new Error("enabled must be true or false"), { statusCode: 400 });
   const before = sellerFundingEnabled();
   const next = { enabled, at: new Date(now).toISOString(), note: String(note || "").slice(0, 200), persisted: false };
-  try {
-    const tmp = `${LEADERBOARD_FUNDING_SWITCH_FILE}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ enabled: next.enabled, at: next.at, note: next.note }));
-    renameSync(tmp, LEADERBOARD_FUNDING_SWITCH_FILE);
-    next.persisted = true;
-  } catch { /* no volume: in memory until the next restart */ }
+  const d = docFor(LEADERBOARD_FUNDING_SWITCH_FILE);
+  if (d.backend !== "memory") { void d.save({ enabled: next.enabled, at: next.at, note: next.note }); next.persisted = true; }
   fundingSwitch = next;
   fundingSwitchVersion++;
   evidenceMemo = { ev: null, ver: null, out: null };
@@ -1549,7 +1566,10 @@ let refreshTimer = null;
 
 const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
-async function refreshOnce(opts) {
+// Under a lease (see src/state-db.js): the old and the new container of a
+// deploy never scan at once, so the seller-funding cursors advance once.
+const refreshOnce = leased("leaderboard-refresh", { ttlMs: 30 * 60_000 }, refreshOnceUnleased);
+async function refreshOnceUnleased(opts) {
   if (cached.warming) return; // overlapping refreshes would just rate-limit each other
   cached.warming = true;
   cached.lastTriedAt = new Date().toISOString();
@@ -1601,6 +1621,7 @@ export function startLeaderboardRefresh(opts = {}) {
   if (!cached.snapshot) {
     const disk = loadPersistedLeaderboardSnapshot();
     if (disk) cached.snapshot = { ...disk, staleFromDisk: true };
+    else trackStoreReady(loadPersistedLeaderboardSnapshotAsync().then((row) => { if (row && !cached.snapshot) cached.snapshot = { ...row, staleFromDisk: true }; }));
   }
   // Skip the immediate boot scan when X402_SYNC_ON_START=false — the same flag
   // the facilitator handshake honors ("no upstream network sync at boot"). The

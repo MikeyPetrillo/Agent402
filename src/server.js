@@ -532,6 +532,7 @@ import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot } from 
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
+import { stateStoresReady, stateDbStatus } from "./state-db.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
@@ -3181,6 +3182,8 @@ app.get("/api/gateway-status", async (req, res) => {
     // status Worker can page on halted / no_credentials / refused / in_doubt;
     // the operator also gets the mode and counts. Never an id or text.
     tweetQueue: (() => { try { return _tweetQueue.alarmStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // The state database (the stores that left the volume): one word.
+    stateDb: { status: stateDbStatus() },
     // One word, never a value: whether the private upstream-cost table loaded.
     upstreamCosts: { status: upstreamCostsStatus() },
     // The ElevenLabs breaker on /api/tts and /api/tts-hd (src/tools/tts-kit.js):
@@ -5210,14 +5213,14 @@ app.get(["/__operator/shared-paytos", "/__operator/shared-paytos.json"], (req, r
   }
   res.set("Cache-Control", "no-store").json({ ...store.counts(), wallets: store.list(), note: `GET ?wallet=0x... for who that wallet's history is credited to; POST {"action":"add"|"remove","wallet":"0x...","note":"..."} to change it` });
 });
-app.post("/__operator/shared-paytos", express.json(), (req, res) => {
+app.post("/__operator/shared-paytos", express.json(), async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   const { action, wallet, note } = req.body || {};
   const store = sharedPayToStore();
   let r;
   try {
-    if (action === "add") r = store.add(wallet, { note: typeof note === "string" ? note : "" });
-    else if (action === "remove") r = store.remove(wallet);
+    if (action === "add") r = await store.add(wallet, { note: typeof note === "string" ? note : "" });
+    else if (action === "remove") r = await store.remove(wallet);
     else return res.status(400).json({ error: 'pass {"action":"add"|"remove","wallet":"0x...","note":"optional"}' });
   } catch (e) {
     return res.status(e?.statusCode || 400).json({ error: String(e?.message || e).slice(0, 200) });
@@ -5255,7 +5258,7 @@ app.get(["/__operator/seller-funding", "/__operator/seller-funding.json"], (req,
   }
   res.set("Cache-Control", "no-store").json({ ...sellerFundingStatus(), cleared: store.list(), note: 'GET ?wallet=0x... for one wallet; POST {"action":"clear"|"restore","wallet":"0x...","note":"..."} to change it; POST {"action":"disable"|"enable","note":"..."} turns the whole reader off or on' });
 });
-app.post("/__operator/seller-funding", express.json(), (req, res) => {
+app.post("/__operator/seller-funding", express.json(), async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   const { action, wallet, note } = req.body || {};
   if (action === "disable" || action === "enable") {
@@ -5266,8 +5269,8 @@ app.post("/__operator/seller-funding", express.json(), (req, res) => {
   const store = selfFundingClearedStore();
   let r;
   try {
-    if (action === "clear") r = store.add(wallet, { note: typeof note === "string" ? note : "" });
-    else if (action === "restore") r = store.remove(wallet);
+    if (action === "clear") r = await store.add(wallet, { note: typeof note === "string" ? note : "" });
+    else if (action === "restore") r = await store.remove(wallet);
     else return res.status(400).json({ error: 'pass {"action":"clear"|"restore","wallet":"0x...","note":"optional"} or {"action":"disable"|"enable"}' });
   } catch (e) {
     return res.status(e?.statusCode || 400).json({ error: String(e?.message || e).slice(0, 200) });
@@ -9932,6 +9935,14 @@ app.use((err, req, res, _next) => {
 
 // One word, never a value: whether the private upstream-cost table loaded.
 console.log(`[upstream-costs] ${upstreamCostsLoaded() ? `loaded (${upstreamCostsSummary().models} model rows, fingerprint ${upstreamCostsSummary().fingerprint})${upstreamCostsGaps().length ? ` PARTIAL - missing: ${upstreamCostsGaps().join(", ")}` : ""}` : "MISSING - metered tier refuses, flat tiers price at their bound"}`);
+// Every store that lives in the state database has registered its first
+// load; wait for them (bounded) so no request sees a store still empty
+// because its row has not arrived. Without a database this resolves at once.
+{
+  const t0 = Date.now();
+  const r = await stateStoresReady({ timeoutMs: 15_000 });
+  if (r !== "ready") console.warn(`[state-db] stores not ready after ${Date.now() - t0}ms (${r}); serving with what has loaded`);
+}
 const httpServer = app.listen(PORT, () =>
   console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`)
 );

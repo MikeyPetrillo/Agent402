@@ -15,10 +15,15 @@ import {
 import { join } from "node:path";
 import { createHmac } from "node:crypto";
 import { logSafe } from "./log-safe.js";
+import { logLines, imports, stateDbEnabled, trackStoreReady } from "./state-db.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DATA_DIR = HAS_DATA_DIR ? "/data" : "/tmp";
 let WISH_FILE = join(DATA_DIR, "wishes.jsonl");
+// In the state database the log is the "wishes" stream of log_lines (one row
+// per line, imported from the file once); the file stays the record without one.
+export const WISH_STREAM = "wishes";
+let importedFromFile = false;
 
 const NEED_MAX = 500;
 const CONTEXT_MAX = 300;
@@ -255,6 +260,12 @@ function upsertCluster(key, source, ts, caller) {
 
 function appendLine(obj) {
   if (capReached) return;
+  if (stateDbEnabled()) {
+    lineCount++;
+    logLines.append(WISH_STREAM, obj).catch(() => { /* best-effort write-through; never throw from the write path */ });
+    if (lineCount >= MAX_LINES) { capReached = true; console.warn(`[wish] line cap (${MAX_LINES}) reached - further wishes are still counted/clustered but no longer stored.`); }
+    return;
+  }
   try {
     appendFileSync(WISH_FILE, JSON.stringify(obj) + "\n");
     lineCount++;
@@ -291,15 +302,49 @@ function rebuildFromFile() {
   clusters = new Map();
   lineCount = 0;
   capReached = false;
+  if (stateDbEnabled()) { trackStoreReady(rebuildFromStateDb()); return; }
   if (!existsSync(WISH_FILE)) return;
   try {
     const { text, truncated, size } = readTail(WISH_FILE, MAX_READ_BYTES);
     let lines = text.split("\n").filter(Boolean);
     // A truncated read may start mid-line; drop the (possibly partial) first line.
     if (truncated && lines.length) lines.shift();
-    for (const line of lines) {
-      let rec;
-      try { rec = JSON.parse(line); } catch { continue; }
+    applyLines(lines.map((line) => { try { return JSON.parse(line); } catch { return null; } }));
+    lineCount = truncated && lines.length ? Math.round(size / (text.length / lines.length)) : lines.length;
+  } catch {
+    clusters = new Map();
+    lineCount = 0;
+  }
+  if (lineCount >= MAX_LINES) capReached = true;
+}
+/** The database copy: import the file once (every line, up to the cap), then rebuild from the newest rows. */
+async function rebuildFromStateDb() {
+  try {
+    if (!importedFromFile && !(await imports.done(WISH_STREAM)) && existsSync(WISH_FILE)) {
+      importedFromFile = true;
+      const { text } = readTail(WISH_FILE, 64 * 1024 * 1024);
+      let n = 0;
+      for (const line of text.split("\n").filter(Boolean)) {
+        let rec; try { rec = JSON.parse(line); } catch { continue; }
+        if (rec && typeof rec === "object") { await logLines.append(WISH_STREAM, rec); if (++n >= MAX_LINES) break; }
+      }
+      await imports.mark(WISH_STREAM, { source: WISH_FILE, bytes: Buffer.byteLength(text) });
+      console.log(`[wish] imported ${n} line(s) from ${WISH_FILE} into the state database`);
+    }
+    const rows = await logLines.tail(WISH_STREAM, 50_000);
+    rows.reverse();
+    clusters = new Map();
+    applyLines(rows.map((r) => r.body));
+    lineCount = await logLines.count(WISH_STREAM);
+    if (lineCount >= MAX_LINES) capReached = true;
+  } catch (e) {
+    console.warn(`[wish] could not rebuild from the state database: ${String(e?.message || e).slice(0, 120)}`);
+  }
+}
+function applyLines(recs) {
+  {
+    for (const rec of recs) {
+      if (!rec) continue;
       if (rec && rec.type === "threshold" && typeof rec.key === "string") {
         const c = clusters.get(rec.key);
         if (c) c.issueOpened = true;
@@ -310,15 +355,6 @@ function rebuildFromFile() {
         if (key) upsertCluster(key, ["api", "mcp", "find-miss"].includes(rec.source) ? rec.source : "api", rec.ts || Date.now(), typeof rec.caller === "string" ? rec.caller : null);
       }
     }
-    if (!truncated) {
-      lineCount = lines.length;
-    } else {
-      const avgLineLen = text.length / Math.max(lines.length, 1);
-      lineCount = Math.round(size / Math.max(avgLineLen, 1));
-      if (lineCount >= MAX_LINES) capReached = true;
-    }
-  } catch {
-    /* best-effort rebuild; start clean on any surprise */
   }
 }
 rebuildFromFile();

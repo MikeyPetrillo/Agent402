@@ -13,8 +13,10 @@
 // - The webhook is only VERIFIED when STRIPE_WEBHOOK_SECRET is set; until then
 //   it refuses unverified events (never trusts an unsigned body).
 // Rollout switch = STRIPE_SECRET_KEY (same key as the one-shot checkout).
-import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady } from "./state-db.js";
 
 // The monitoring products. Each subscribes to a `target` (a domain, a fund,
 // etc.) and re-runs a report kind on a cadence (src/monitor-scheduler.js).
@@ -70,22 +72,18 @@ const webhookSecret = () => (process.env.STRIPE_WEBHOOK_SECRET || "").trim();
 const STORE_PATH = () => join(existsSync("/data") ? "/data" : "/tmp", "stripe-subscriptions.json");
 const MAX_STORE = 20000;
 
-function loadStore(path) {
-  try { return new Map(Object.entries(JSON.parse(readFileSync(path, "utf8")))); } catch { return new Map(); }
-}
-// Merge-on-save + atomic rename: re-read the file, apply OUR changed keys on
-// top, write tmp + rename - so a second process's records are never dropped by
-// a whole-map overwrite, and a crash mid-write never leaves a torn file.
-function saveKeys(path, map, keys) {
-  try {
-    const disk = loadStore(path);
-    for (const k of keys) if (map.has(k)) disk.set(k, map.get(k));
-    const entries = [...disk.entries()];
-    const keep = entries.length > MAX_STORE ? entries.slice(-MAX_STORE) : entries;
-    const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(Object.fromEntries(keep)));
-    renameSync(tmp, path);
-  } catch { /* best-effort */ }
+const toMap = (j) => (j && typeof j === "object" && !Array.isArray(j) ? new Map(Object.entries(j)) : new Map());
+// Merge-on-save: only OUR changed keys are written into the stored object, so
+// a second process's records are never dropped by a whole-map overwrite. On
+// the file this is tmp + rename; in the state database it is a key merge.
+async function saveKeys(doc, map, keys) {
+  const patch = {};
+  for (const k of keys) if (map.has(k)) patch[k] = map.get(k);
+  const merged = await doc.mergeKeys(patch);
+  if (merged && Object.keys(merged).length > MAX_STORE) {
+    const drop = Object.keys(merged).slice(0, Object.keys(merged).length - MAX_STORE);
+    await doc.mergeKeys({}, drop);
+  }
 }
 
 // Webhook receipt tally. The handler is otherwise silent on success, so
@@ -95,12 +93,7 @@ function saveKeys(path, map, keys) {
 // reset it to a reassuring-looking zero. Counts only, never event bodies.
 const TALLY_SUFFIX = ".webhooks.json";
 const emptyTally = () => ({ received: 0, verified: 0, rejected: 0, unconfigured: 0, byType: {}, lastAt: null, lastType: null, lastRejectAt: null, lastRejectReason: null, since: new Date().toISOString() });
-function loadTally(path) {
-  try { const t = JSON.parse(readFileSync(path, "utf8")); return { ...emptyTally(), ...t, byType: t.byType || {} }; } catch { return emptyTally(); }
-}
-function saveTally(path, t) {
-  try { const tmp = `${path}.${process.pid}.tmp`; writeFileSync(tmp, JSON.stringify(t)); renameSync(tmp, path); } catch { /* best-effort */ }
-}
+const shapeTally = (t) => (t && typeof t === "object" ? { ...emptyTally(), ...t, byType: t.byType || {} } : emptyTally());
 
 /**
  * @param {object} deps
@@ -110,9 +103,26 @@ function saveTally(path, t) {
  */
 export function createStripeSubscriptions({ stripe, baseUrl, storePath, validateTarget = {}, onInvoicePaid, onPaymentSession, onChargeReversed }) {
   const path = storePath || STORE_PATH();
-  const store = loadStore(path);          // subId -> record
-  const tallyPath = path + TALLY_SUFFIX;
-  const tally = loadTally(tallyPath);
+  const doc = createJsonDocument({ file: path, log: () => {} });
+  const tallyDoc = createJsonDocument({ file: path + TALLY_SUFFIX, log: () => {} });
+  const store = toMap(doc.loadSync(null));          // subId -> record
+  const tally = shapeTally(tallyDoc.loadSync(null));
+  // In the state database the first load is asynchronous: the maps fill when
+  // the rows arrive (the file is imported once); the server awaits every
+  // store before it listens.
+  const ready = trackStoreReady(doc.backend === "pg"
+    ? Promise.all([doc.load(null), tallyDoc.load(null)]).then(([j, t]) => {
+      for (const [k, v] of toMap(j)) if (!store.has(k)) store.set(k, v);
+      // Counts bumped before the row arrived are deltas on top of it.
+      const row = shapeTally(t);
+      for (const [k, v] of Object.entries(row)) {
+        if (k === "byType") { for (const [ty, n] of Object.entries(v || {})) tally.byType[ty] = (tally.byType[ty] || 0) + (Number(n) || 0); }
+        else if (typeof v === "number") tally[k] = (Number(tally[k]) || 0) + v;
+        else if (tally[k] == null && v != null) tally[k] = v;
+      }
+    })
+    : Promise.resolve());
+  const saveTally = () => { void tallyDoc.save(tally); };
   const MAX_TYPES = 64;
   // Verified events persist at once; the unauthenticated counters (received,
   // rejected, unconfigured) persist on a 5 s debounce so an unsigned flood costs
@@ -121,15 +131,15 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
   function bump(kind, extra) {
     tally[kind] += 1;
     Object.assign(tally, extra);
-    if (kind === "verified") { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; } saveTally(tallyPath, tally); return; }
-    if (!saveTimer) { saveTimer = setTimeout(() => { saveTimer = null; saveTally(tallyPath, tally); }, 5000); saveTimer.unref?.(); }
+    if (kind === "verified") { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; } saveTally(); return; }
+    if (!saveTimer) { saveTimer = setTimeout(() => { saveTimer = null; saveTally(); }, 5000); saveTimer.unref?.(); }
   }
 
   function upsert(subId, patch) {
     if (!subId) return;
     const prev = store.get(subId) || {};
     store.set(subId, { ...prev, ...patch, updatedAt: new Date().toISOString() });
-    saveKeys(path, store, [subId]);
+    void saveKeys(doc, store, [subId]);
   }
 
   // Create a subscription Checkout Session for a monitor product + target.

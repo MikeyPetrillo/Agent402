@@ -19,8 +19,10 @@
 //   - The store keeps the address (it has to send), the target and timestamps.
 //     Operator surfaces report counts only.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady, leased } from "./state-db.js";
 
 export const ALERT_KINDS = Object.freeze({
   insider: { product: "insider-monitor", family: "insider", noun: "insider filings", cta: (t) => `Email me when ${t} insiders file a Form 4`, subject: (t, n) => `${n} new Form 4 filing${n === 1 ? "" : "s"} for ${t}`, what: (t) => `Form 4 insider filings against ${t}` },
@@ -59,20 +61,17 @@ export function defaultStorePath() {
  * @param {string} deps.secret HMAC key for confirm/unsubscribe links; without it signup is disabled
  */
 export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, validators = {}, sendEmail, secret = "", baseUrl = "https://agent402.tools", now = () => Date.now(), log = console.log, onEvent = null } = {}) {
-  let store = load();
+  // The store is one JSON document: on the volume as a file, in the state
+  // database when one is configured (first load imports the file once).
+  const doc = createJsonDocument({ file: storePath, log });
+  const shape = (j) => (j && typeof j === "object" && j.alerts ? j : { alerts: {} });
+  let store = shape(doc.loadSync(null));
+  const ready = trackStoreReady(doc.backend === "pg" ? doc.load(null).then((j) => { store = shape(j); }) : Promise.resolve());
+  function persist() {
+    void doc.save(store).then((stored) => { if (!stored) log(`[free-alerts] persist failed: ${String(doc.lastError || "").slice(0, 120)}`); });
+  }
   let ticking = false;
 
-  function load() {
-    try { const j = JSON.parse(readFileSync(storePath, "utf8")); return j && typeof j === "object" && j.alerts ? j : { alerts: {} }; } catch { return { alerts: {} }; }
-  }
-  function persist() {
-    try {
-      mkdirSync(dirname(storePath), { recursive: true });
-      const tmp = `${storePath}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify(store));
-      renameSync(tmp, storePath);
-    } catch (e) { log(`[free-alerts] persist failed: ${String(e?.message || e).slice(0, 120)}`); }
-  }
   const emit = (step, extra = {}) => { try { onEvent?.({ step, ...extra }); } catch { /* telemetry never breaks a signup */ } };
 
   const sign = (id, purpose) => createHmac("sha256", secret).update(`${purpose}:${id}`).digest("base64url").slice(0, 32);
@@ -94,6 +93,7 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
   /** Public signup. Always answers the same shape for an existing address
    *  (no enumeration); sends the confirmation email for a new or pending one. */
   async function signup({ email, kind, target, source = "" } = {}) {
+    await ready;
     if (!enabled()) throw bad("Email alerts are not available on this server.", 503);
     const em = normEmail(email);
     if (!em || em.length > MAX_EMAIL || !EMAIL_RE.test(em)) throw bad("Enter a valid email address.");
@@ -177,7 +177,11 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
   }
 
   /** One pass: probe every active alert that is due, email on NEW ids only. */
-  async function tick({ limit = TICK_PROBE_CAP, force = false } = {}) {
+  // Under a lease: two containers (a deploy's overlap, a second replica)
+  // never run this tick at once; without a database it is the plain tick.
+  const tick = leased("free-alerts-tick", { ttlMs: 900000, log: log }, tickUnleased);
+  async function tickUnleased({ limit = TICK_PROBE_CAP, force = false } = {}) {
+    await ready;
     if (ticking) return { skipped: "ticking" };
     ticking = true;
     const out = { checked: 0, baselined: 0, notified: 0, unchanged: 0, failed: 0, skipped: 0 };
@@ -257,7 +261,7 @@ ${inner}
   }
   function stop() { if (timer) clearInterval(timer); timer = null; }
 
-  return { signup, confirm, unsubscribe, tick, stats, start, stop, enabled, sign, _store: () => store };
+  return { signup, confirm, unsubscribe, tick, stats, start, stop, enabled, sign, ready: () => ready, flush: () => doc.flush(), _store: () => store };
 }
 
 /** The signup form for a page. CSP: behavior lives in /js/alert-signup.js. */

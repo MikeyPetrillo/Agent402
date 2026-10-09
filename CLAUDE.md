@@ -33,6 +33,12 @@ LLC: credit the entity, never a personal name.
   (`src/x402-buyer.js`, `src/solana-buyer.js`, `src/tempo-buyer.js`, `src/algorand-sellers.js`).
 - `src/refund-ledger.js` + `scripts/refund-run.js`: charged-but-failed is recorded as a debt and
   repaid only after on-chain proof (`src/payment-verify.js`).
+- `src/state-db.js`: the state database (Postgres, `STATE_DATABASE_URL` falling back to
+  `DATABASE_URL`, schema `state`): documents, records, log lines, leases, imports. `src/json-document.js`
+  is the one API a whole-file JSON store uses (file on the volume without a database, the row with
+  one; the file is imported once). Every scheduled loop runs under `leased(name, ...)`, so two
+  containers never run the same tick; a store registers its first load with `trackStoreReady` and
+  the server awaits `stateStoresReady` before it listens. `/api/gateway-status` reports `stateDb`.
 - `src/status.js`, `src/status-store.js`: `/status`, measured from outside production.
 - `src/stats.js`, `src/sales-ledger.js`, `src/seo.js`, `src/pages.js`, `src/guides.js`,
   `src/privacy.js`, `src/terms.js`, `src/security-page.js`, `src/company.js`.

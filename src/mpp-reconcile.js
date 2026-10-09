@@ -50,7 +50,8 @@
 //     answer; nothing accumulates.
 //   * Leaf module: every source is injected (server.js wires the real ones),
 //     so the whole thing runs offline in scripts/test-mpp-reconcile.js.
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady, leased } from "./state-db.js";
 
 export const CATEGORIES = Object.freeze([
   "served_unpaid", "paid_unrecorded", "charged_failed", "amount_mismatch", "wrong_currency",
@@ -362,16 +363,14 @@ export function createMppReconciler({
   maxEvmChecks = 50, maxStripeChecks = 50, keepDays = 14, now = () => Date.now(), log = console.log,
 } = {}) {
   let state = { days: {}, window: null, lastRunAt: null, lastError: null, runs: 0 };
-  try {
-    const s = JSON.parse(readFileSync(file, "utf8"));
-    if (s && typeof s === "object" && s.days && typeof s.days === "object") state = { ...state, ...s };
-  } catch { /* cold */ }
+  const doc = createJsonDocument({ file, log: () => {} });
+  const absorb = (s) => { if (s && typeof s === "object" && s.days && typeof s.days === "object") state = { ...state, ...s }; };
+  absorb(doc.loadSync(null));
+  const ready = trackStoreReady(doc.backend === "pg" ? doc.load(null).then(absorb) : Promise.resolve());
   let running = null;
   let timer = null, firstTimer = null;
 
-  const persist = () => {
-    try { const tmp = `${file}.tmp`; writeFileSync(tmp, JSON.stringify(state)); renameSync(tmp, file); return true; } catch { return false; }
-  };
+  const persist = () => { void doc.save(state); return true; };
 
   async function evmChecksFor(rows) {
     const out = new Map();
@@ -410,7 +409,10 @@ export function createMppReconciler({
 
   /** Reconcile the previous UTC day (or `day`) and the rolling 7 days ending
    *  at that day's end. Concurrent calls share one run. */
-  async function runOnce({ day = null } = {}) {
+  // Under a lease: two containers (a deploy's overlap, a second replica)
+  // never run this tick at once; without a database it is the plain tick.
+  const runOnce = leased("mpp-reconcile-run", { ttlMs: 1200000, log: log }, runOnceUnleased);
+  async function runOnceUnleased({ day = null } = {}) {
     if (running) return running;
     running = (async () => {
       const t = now();
