@@ -2,7 +2,7 @@
 
 Live at **[agent402.tools](https://agent402.tools)**.
 
-**The paid door for AI agents: 500+ tools, metered models and finished reports, paid per call in USDC over x402 and MPP, or by card. Open source, self-hostable, MCP-native.**
+**The paid door for AI agents: 500+ tools, metered models and finished reports, paid per call in USDC over x402 and MPP, or by card. The applied layer of Agentic Finance. Open source, self-hostable, MCP-native.**
 
 Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent402.tools) · [Why pay here](https://agent402.tools/why) · [Receipts](https://agent402.tools/proof) · [Status](https://agent402.tools/status) · [Security](https://agent402.tools/security) · [Company](https://agent402.tools/company)
 
@@ -13,6 +13,9 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 [![Live](https://img.shields.io/website?url=https%3A%2F%2Fagent402.tools%2Fhealth&label=agent402.tools&up_message=live)](https://agent402.tools)
 [![Wellknown](https://wellknown.network/agents/agent402-mcp/badge.svg)](https://wellknown.network/agents/agent402-mcp)
 [![MCP Queen operational grade](https://mcpqueen.com/badge/io.github.MikeyPetrillo/agent402.svg)](https://mcpqueen.com/s/io.github.MikeyPetrillo/agent402)
+[![agent402-mcp on Glama](https://glama.ai/mcp/servers/MikeyPetrillo/Agent402/badges/score.svg)](https://glama.ai/mcp/servers/MikeyPetrillo/Agent402)
+[![MCP Registry](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.modelcontextprotocol.io%2Fv0%2Fservers%2Fio.github.MikeyPetrillo%252Fagent402%2Fversions%2Flatest&query=%24.server.version&label=MCP%20Registry)](https://registry.modelcontextprotocol.io/v0/servers/io.github.MikeyPetrillo%2Fagent402/versions/latest)
+[![HOL Registry](https://img.shields.io/endpoint?url=https%3A%2F%2Fhol.org%2Fapi%2Fregistry%2Fbadges%2Fplugin%3Fslug%3Dhavok-holdings-llc%252Fagent402%26metric%3Dstatus%26style%3Dflat)](https://hol.org/registry/plugins/havok-holdings-llc%2Fagent402)
 [![CodeQL](https://github.com/MikeyPetrillo/Agent402/actions/workflows/codeql.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/codeql.yml)
 [![Secret scan](https://github.com/MikeyPetrillo/Agent402/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/secret-scan.yml)
 [![npm](https://img.shields.io/npm/v/agent402-mcp?label=agent402-mcp)](https://www.npmjs.com/package/agent402-mcp)
@@ -20,7 +23,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 [![npm](https://img.shields.io/npm/v/agent402-tollbooth?label=agent402-tollbooth)](https://www.npmjs.com/package/agent402-tollbooth)
 [![CI](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
-[Listed on Smithery](https://smithery.ai/servers/mike-kq9d/agent402)
+[![Smithery](https://img.shields.io/badge/Smithery-listed-blue)](https://smithery.ai/servers/mike-kq9d/agent402)
 
 ## What Agent402 is
 
@@ -104,8 +107,6 @@ quoted ceiling, or flat tiers) and the finished report products (`/v1/research`,
 > setting (`FREE_MODE=true`); a paid instance needs a payout wallet.
 
 🟢 **Hosted demo: [agent402.tools](https://agent402.tools)** · 📖 **[Wiki](https://github.com/MikeyPetrillo/Agent402/wiki)** · 📦 **[npm](https://www.npmjs.com/package/agent402-mcp)** · 🔌 **[MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)** · 🧩 **[Smithery](https://smithery.ai/servers/mike-kq9d/agent402)**
-
-[![HOL Registry](https://img.shields.io/endpoint?url=https%3A%2F%2Fhol.org%2Fapi%2Fregistry%2Fbadges%2Fplugin%3Fslug%3Dhavok-holdings-llc%252Fagent402%26metric%3Dstatus%26style%3Dflat)](https://hol.org/registry/plugins/havok-holdings-llc%2Fagent402)
 
 ## Run it yourself in 30 seconds
 

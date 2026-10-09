@@ -974,6 +974,36 @@
       }
     },
     {
+      "slug": "jwt-decode",
+      "name": "a JWE answers the header and names the payload as encrypted",
+      "input": {
+        "token": "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.a2V5.aXY.Y2lwaGVydGV4dA.dGFn"
+      },
+      "expect": {
+        "equals": {
+          "encrypted": true,
+          "segments": 5,
+          "header.enc": "A256GCM",
+          "payload": null
+        }
+      }
+    },
+    {
+      "slug": "jwt-decode",
+      "name": "a JWS with a non-JSON payload answers the bytes, not a 400",
+      "input": {
+        "token": "eyJhbGciOiJIUzI1NiJ9.aGVsbG8gd29ybGQ.c2ln"
+      },
+      "expect": {
+        "equals": {
+          "payload": null,
+          "payloadRaw": "hello world",
+          "header.alg": "HS256",
+          "signaturePresent": true
+        }
+      }
+    },
+    {
       "slug": "jwt-verify",
       "name": "wrong secret is valid:false",
       "input": {

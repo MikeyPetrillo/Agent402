@@ -172,7 +172,22 @@ export function capturePostHogToolError({ slug, status, message, shape, syntheti
 const ROLLED_UP_SLUG_RE = /^_/;
 let discoveryCallCounts = new Map(); // "slug|synthetic|cached|errored|status" -> { ..., count, latencySum }
 
-export function capturePostHogToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe, payer, refusalReason, rail }) {
+// Keyed hash of a tool's declared repeat key (tool.telemetryKey(input)):
+// stable across restarts when POW_SECRET is set, so a week of events groups by
+// the same symbol; 12 hex chars is plenty for grouping and nothing to reverse.
+import { createHmac, randomBytes } from "node:crypto";
+const TELEMETRY_SALT = process.env.POW_SECRET || randomBytes(32).toString("hex");
+export function telemetryKeyOf(tool, input) {
+  try {
+    const fn = tool?.telemetryKey;
+    if (typeof fn !== "function") return null;
+    const v = fn(input);
+    if (v == null || v === "") return null;
+    return createHmac("sha256", TELEMETRY_SALT).update(String(v)).digest("hex").slice(0, 12);
+  } catch { return null; }
+}
+
+export function capturePostHogToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe, payer, refusalReason, rail, inputKey }) {
   if (!active()) return;
   if (ROLLED_UP_SLUG_RE.test(String(slug || ""))) {
     try {
@@ -200,6 +215,10 @@ export function capturePostHogToolCall({ slug, latencyMs, cached, errored, statu
     // is groupable; the caller's message and values never leave the process.
     ...(refusalReason ? { refusalReason } : {}),
     ...(payer ? { payer } : {}),
+    // A keyed hash of the ONE input field a tool declares as its repeat key
+    // (telemetryKey on the tool def, e.g. the equity symbol), so repeat share
+    // is measurable without the value itself ever leaving the process.
+    ...(inputKey ? { inputKey } : {}),
     // The payment rail the request presented (src/payment-rail.js), so error
     // rate and latency split by x402 / MPP / credits / proof-of-work.
     ...(rail ? { rail } : {}),

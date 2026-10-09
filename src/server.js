@@ -265,7 +265,7 @@ import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { baseNotificationsEnabled } from "./base-notifications.js";
 import { railOf } from "./payment-rail.js";
-import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
+import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage, operatorLoginPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
@@ -842,7 +842,7 @@ const CATALOG = {
     category: "memory",
     price: "$0.001",
     description:
-      "Persistent key-value memory for agents, scoped to the paying wallet. Your x402 payment IS your authentication: the wallet that pays owns the namespace. No signup, no API keys. Exact-key storage for structured state - when you want retrieval by MEANING rather than key, use memory-remember + memory-recall instead. Body: {\"key\":\"…\",\"value\":any JSON,\"ttlSeconds\":3600?} to write (optional TTL), or {\"key\":\"…\",\"delete\":true} to remove. Add \"owner\":\"0x…\" to write into another wallet's namespace you've been granted. Values up to 64KB.",
+      "Persistent key-value memory for agents, scoped to the paying wallet. Your x402 payment IS your authentication: the wallet that pays owns the namespace. No signup, no API keys. Exact-key storage for structured state. For retrieval by MEANING rather than key, use the catalog slugs memory-remember and memory-recall (on MCP, through catalog.call with that slug). Body: {\"key\":\"…\",\"value\":any JSON,\"ttlSeconds\":3600?} to write (optional TTL), or {\"key\":\"…\",\"delete\":true} to remove. Add \"owner\":\"0x…\" to write into another wallet's namespace you've been granted. Values up to 64KB.",
     // Agents phrase this as "store data between sessions" / "remember this
     // across runs". None of those words appeared anywhere in the tool, so
     // the query matched `gov-data` on the word "data" instead. Memory is our
@@ -871,7 +871,7 @@ const CATALOG = {
     category: "memory",
     price: "$0.001",
     description:
-      "Read from a wallet-scoped namespace. ?key=… returns the stored value; omit key to list keys. The read half of memory-write's exact-key store - for similarity retrieval over remembered text use memory-recall. Reads your own namespace by default; add ?owner=0x… to read a namespace you've been granted access to.",
+      "Read from a wallet-scoped namespace. ?key=… returns the stored value; omit key to list keys. The read half of memory-write's exact-key store. For similarity retrieval over remembered text, call the catalog slug memory-recall (on MCP, through catalog.call). Reads your own namespace by default; add ?owner=0x… to read a namespace you've been granted access to.",
     tags: ["memory", "storage", "state", "key-value"],
     discovery: {
       // List mode ({} = no key), not a hardcoded key read: memory is
@@ -5315,6 +5315,49 @@ app.post("/__operator/sellers/remove", express.json(), (req, res) => {
   if (r.error) return res.status(400).json({ error: r.error });
   res.set("Cache-Control", "no-store").json({ removed: true, origin: r.origin, removedAt: r.removedAt });
 });
+// Operator bulk seed: origins read from another registry are
+// submitted through the SAME registerOrigin path a seller's own /sell call
+// takes - same probe, same submission caps, same provenance row - a few at a
+// time, so a seed never bypasses the rules a seller faces. Dry by default:
+// the rows say what would be submitted; `commit: true` registers them. The
+// per-call bound keeps one request inside a proxy's patience (every commit
+// is a live crawl of the origin). scripts/x402scan-seed.js is the caller.
+const SEED_MAX_PER_CALL = 25;
+app.post("/__operator/index/seed", express.json({ limit: "64kb" }), async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (operatorHeavyLimited(req, res)) return;
+  const raw = req.body?.origins;
+  if (!Array.isArray(raw) || raw.length === 0) return res.status(400).json({ error: "origins must be a non-empty array of https origins" });
+  if (raw.length > SEED_MAX_PER_CALL) return res.status(400).json({ error: `at most ${SEED_MAX_PER_CALL} origins per call` });
+  const commit = req.body?.commit === true;
+  const rows = [];
+  const queue = [];
+  for (const r of raw) {
+    const v = validateOriginInput(r, { selfOrigin: BASE_URL });
+    if (v.error) { rows.push({ origin: String(r).slice(0, 200), listed: false, error: v.error }); continue; }
+    if (isRemovedOrigin(v.origin)) { rows.push({ origin: v.origin, listed: false, error: REMOVED_ORIGIN_ERROR }); continue; }
+    queue.push(v.origin);
+  }
+  const unique = [...new Set(queue)];
+  res.set("Cache-Control", "no-store");
+  if (!commit) {
+    for (const o of unique) rows.push({ origin: o, listed: null, dryRun: true });
+    return res.json({ dryRun: true, total: raw.length, valid: unique.length, rows });
+  }
+  let i = 0;
+  const worker = async () => {
+    for (let o = unique[i++]; o; o = unique[i++]) {
+      try {
+        const r = await registerOrigin(o);
+        rows.push({ origin: o, listed: !!r?.listed, ...(r?.error ? { error: String(r.error).slice(0, 200) } : {}) });
+      } catch (e) {
+        rows.push({ origin: o, listed: false, error: String(e?.message || e).slice(0, 200) });
+      }
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  res.json({ dryRun: false, total: raw.length, valid: unique.length, listed: rows.filter((r) => r.listed).length, rows });
+});
 app.get("/__operator/sellers/removed.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   const rows = listRemovedOrigins();
@@ -9468,6 +9511,7 @@ for (const tool of ALL_KIT) {
     let probe = false;
     let status = 200;
     let refusalClass = null;
+    let inputKey = null;
     // (req.__a402Dispatched and the hang-up forgiveness ticket are set by the
     // post-paywall middleware above, for every paid catalog route.)
     // Set on a composite: aborted the moment the buyer's connection closes
@@ -9480,6 +9524,7 @@ for (const tool of ALL_KIT) {
       // so every tool accepts the flat AND the wrapped shape and a metered
       // price can never be computed from a different body than is served.
       const input = { ...handlerInputOf(req, tool) };
+      inputKey = telemetryKeyOf(tool, input);
       // A request shape we recognise and refuse rather than half-serve (several
       // URLs to a one-URL tool): a self-explaining 400, never charged.
       const shapeRefused = shapeRefusal(input, tool);
@@ -9781,7 +9826,7 @@ for (const tool of ALL_KIT) {
       const latencyMs = Date.now() - startedAt;
       // Fire-and-forget. Analytics outages must NEVER affect agents.
       recordToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic, probe }).catch(() => {});
-      capturePostHogToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic, probe, payer, refusalReason: refusalClass, rail: railOf(req) });
+      capturePostHogToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic, probe, payer, refusalReason: refusalClass, rail: railOf(req), inputKey });
     }
   });
 }

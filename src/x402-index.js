@@ -6253,8 +6253,57 @@ export function aggregateEcosystemSupply(entries, { limit = 12, capPerSeller = M
  * Powers the x402-market-pulse tool's supply side (demand comes from the
  * on-chain leaderboard).
  */
+// The aggregate walks every crawled origin and classifies every one of its
+// tools with regexes, synchronously on the event loop, and the walk grows
+// with the index. It is a market picture, not a per-call read, so it is
+// memoized: the first caller computes it once, later
+// callers get the memo, and past MARKET_MEMO_TTL_MS one caller starts a
+// chunked recompute in the background (a slice of origins per tick, so the
+// loop is never held) while everyone keeps reading the last picture.
+const MARKET_MEMO_TTL_MS = 15 * 60_000;
+const MARKET_CHUNK = 50;
+let marketMemo = { at: 0, limit: null, value: null, version: -1 };
+let marketRefresh = null;
+let marketTtlMs = MARKET_MEMO_TTL_MS;
+/** Test hook: shorten (or reset) the memo TTL; clears the memo. */
+export function __setMarketMemoTtl(ms) { marketTtlMs = Number.isFinite(ms) && ms >= 0 ? ms : MARKET_MEMO_TTL_MS; marketMemo = { at: 0, limit: null, value: null, version: -1 }; marketRefresh = null; }
+async function refreshEcosystemMarket(limit) {
+  const entries = [...cache.values()];
+  const version = cacheVersion;
+  const parts = [];
+  for (let i = 0; i < entries.length; i += MARKET_CHUNK) {
+    parts.push(aggregateEcosystemSupply(entries.slice(i, i + MARKET_CHUNK), { limit: Infinity }));
+    await new Promise((r) => setImmediate(r));
+  }
+  // Merge the per-slice aggregates: sellers and tools add, categories add per
+  // name, and the limit is applied once at the end, the same as one pass.
+  const catSellers = new Map(), catTools = new Map();
+  let sellers = 0, tools = 0;
+  for (const p of parts) {
+    sellers += p.sellers; tools += p.tools;
+    for (const c of p.categories) {
+      catSellers.set(c.category, (catSellers.get(c.category) || 0) + c.sellersOffering);
+      catTools.set(c.category, (catTools.get(c.category) || 0) + c.tools);
+    }
+  }
+  const categories = [...catSellers.keys()]
+    .map((category) => ({ category, sellersOffering: catSellers.get(category), tools: catTools.get(category) || 0 }))
+    .sort((a, b) => b.sellersOffering - a.sellersOffering || b.tools - a.tools)
+    .slice(0, limit);
+  marketMemo = { at: Date.now(), limit, version, value: { sellers, tools, categories, toolsCapPerSeller: MAX_TOOLS_PER_SELLER_PER_CATEGORY } };
+}
 export function ecosystemMarket({ limit = 12 } = {}) {
-  return aggregateEcosystemSupply([...cache.values()], { limit });
+  const fresh = marketMemo.value && marketMemo.limit === limit && Date.now() - marketMemo.at < marketTtlMs;
+  if (fresh) return marketMemo.value;
+  if (marketMemo.value && marketMemo.limit === limit) {
+    // Stale: hand back the last picture now, refresh once in the background.
+    if (!marketRefresh) marketRefresh = refreshEcosystemMarket(limit).catch(() => {}).finally(() => { marketRefresh = null; });
+    return marketMemo.value;
+  }
+  // Nothing memoized for this limit yet: one synchronous pass, then memoized.
+  const value = aggregateEcosystemSupply([...cache.values()], { limit });
+  marketMemo = { at: Date.now(), limit, version: cacheVersion, value };
+  return value;
 }
 
 /**

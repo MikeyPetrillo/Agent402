@@ -224,7 +224,11 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
 }
 // Priority-tier tags read two ways on the live catalog: "openai/fast" /
 // "anthropic/fast" and "google-vertex/global/priority" / "xai/zdr/priority".
-const PRIORITY_TAG = /\/(fast|priority)$/;
+// "openai/ultrafast" (2026-10-08, gpt-6.1-sol family) is the same kind of
+// endpoint: a service tier a request must ask for, and the gateway refuses
+// every service_tier value except priority/fast/default/auto, so no call can
+// reach it. Grading it as a routable endpoint would push the row to its price.
+const PRIORITY_TAG = /\/(fast|ultrafast|priority)$/;
 async function endpointPrices(id) {
   try {
     const r = await fetch(`https://openrouter.ai/api/v1/models/${id}/endpoints`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
