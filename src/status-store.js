@@ -16,17 +16,30 @@
 //
 // The table is idempotent by (source, component, ts) so the one-time GitHub
 // Actions backfill can be re-run safely.
+//
+// TWO BACKENDS, ONE API. Without STATE_DATABASE_URL the rows live in the
+// SQLite file below (the volume), exactly as before. With it they live in the
+// state database (see "Postgres mode" at the end of this file): the readers
+// keep their synchronous signatures by answering from an in-memory mirror of
+// the rows the page reads, the writers queue their inserts in order, and the
+// SQLite file is imported once at the first boot with the database on.
 import Database from "better-sqlite3";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
+import { basename } from "node:path";
+import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, trackStoreReady } from "./state-db.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 // STATUS_DB_PATH lets the offline tests point at a scratch file. Production
 // uses the persistent volume; without it we fall back to /tmp, which loses
 // history on restart but never blocks a boot.
 const DB_PATH = process.env.STATUS_DB_PATH || `${HAS_DATA_DIR ? "/data" : "/tmp"}/status.db`;
+// Decided once at load, like every store on this branch: the switch is a
+// variable the operator sets, never a merge.
+const PG = stateDbEnabled();
 
 let db = null;
 function open() {
+  if (PG) return null; // Postgres mode never opens the SQLite file for serving (the import opens it read-only)
   if (db) return db;
   try {
     const dir = DB_PATH.replace(/\/[^/]+$/, "");
@@ -73,11 +86,16 @@ function open() {
 
 /** True when history is being persisted somewhere that survives a restart. */
 export function statusPersistent() {
+  if (PG) return true;
   return Boolean(open()) && (DB_PATH.startsWith("/data") || Boolean(process.env.STATUS_DB_PATH));
 }
 
-/** Insert one observation. Ignores duplicates so a backfill can be re-run. */
+/** Insert one observation. Ignores duplicates so a backfill can be re-run.
+ *  Synchronous in both modes: with the database on, the row is added to the
+ *  mirror at once (the next render shows it) and the insert is queued in
+ *  order; `statusStoreFlush()` resolves once queued writes have landed. */
 export function recordProbe({ ts, source, component, ok, detail = null, url = null }) {
+  if (PG) { if (!normRow({ ts, source, component })) return false; pgRecord([{ ts, source, component, ok, detail, url }]); return true; }
   const d = open();
   if (!d) return false;
   try {
@@ -91,8 +109,11 @@ export function recordProbe({ ts, source, component, ok, detail = null, url = nu
   }
 }
 
-/** Insert many observations in one transaction (the backfill path). */
+/** Insert many observations in one transaction (the backfill path). With the
+ *  database on, the count returned is the rows the mirror did not already
+ *  hold (the queued insert ignores the rest, as the SQLite path does). */
 export function recordProbes(rows) {
+  if (PG) return pgRecord(rows || []);
   const d = open();
   if (!d) return 0;
   const stmt = d.prepare(
@@ -114,6 +135,7 @@ export function recordProbes(rows) {
 
 /** Raw observations for a component, oldest first. */
 export function probeRows(component, sinceMs) {
+  if (PG) return pgProbeRows(component, sinceMs);
   const d = open();
   if (!d) return [];
   return d
@@ -125,6 +147,7 @@ export function probeRows(component, sinceMs) {
  *  in SQLite on the (component, ts) index without materialising rows: the
  *  window figures longer than the strip need a count, not the rows. */
 export function probeCounts(component, sinceMs) {
+  if (PG) return pgProbeCounts(component, sinceMs);
   const d = open();
   if (!d) return { observed: 0, up: 0 };
   const r = d
@@ -177,6 +200,7 @@ function* distinctValues(first, next) {
  *  the current state of a component. The id only breaks a tie between rows
  *  with the same ts. */
 export function latestByComponent() {
+  if (PG) return pgLatestByComponent();
   const d = open();
   if (!d) return [];
   const s = readStatements(d);
@@ -194,6 +218,7 @@ export function latestByComponent() {
  *  paths (see stateFromSources), where one source's newest row says nothing
  *  about the path another source walks. */
 export function latestBySource(component) {
+  if (PG) return pgLatestBySource(component);
   const d = open();
   if (!d) return [];
   const s = readStatements(d);
@@ -206,6 +231,7 @@ export function latestBySource(component) {
 }
 
 export function earliestObservation() {
+  if (PG) return mirror.earliest;
   const d = open();
   if (!d) return null;
   const r = readStatements(d).earliest.get();
@@ -215,6 +241,7 @@ export function earliestObservation() {
 /** Every observation ever recorded. Read from the trigger-kept count (see
  *  open()); a store without that row counts the table instead. */
 export function totalObservations() {
+  if (PG) return mirror.count;
   const d = open();
   if (!d) return 0;
   const s = readStatements(d);
@@ -348,4 +375,265 @@ export function _resetForTest() {
   if (db) { try { db.close(); } catch { /* ignore */ } }
   db = null;
   reads = null;
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
 }
+
+// ── Postgres mode ────────────────────────────────────────────────────────────
+// With STATE_DATABASE_URL set the rows live in `<schema>.status_probes`, so
+// two containers (a deploy's overlap) write and read the same history.
+//
+// The readers above are synchronous (src/status.js builds the page from them
+// in one pass), so they answer from a MIRROR held in memory:
+//   - every row inside MIRROR_WINDOW_MS (longer than the longest window the
+//     page reads, the 90-day count), kept per component and sorted by ts;
+//   - the all-time aggregates the page prints: the newest row per component,
+//     the newest row per (source, component), the earliest ts and the exact
+//     row count.
+// The first load (registered with trackStoreReady, so the server listens
+// only after it) imports the SQLite file once, then fills the mirror from the
+// table inside one REPEATABLE READ snapshot. Each recordProbe adds its rows
+// to the mirror at once and queues the insert in order; the count is only
+// moved by what the database reports inserted (ON CONFLICT DO NOTHING
+// RETURNING), so an ignored duplicate never counts, as the SQLite triggers
+// guaranteed. A refresh every STATUS_STORE_REFRESH_MS pulls rows the OTHER
+// container wrote (by inserted_at, with a margin, deduplicated by id and by
+// key), so the new container of a deploy does not miss the probes the old one
+// recorded in its last minute, and prunes the mirror to its window.
+const T = (t) => `${stateDbSchema()}.${t}`;
+/** The span the mirror holds; the page's longest window (90 days) must fit, with slack. */
+export const MIRROR_WINDOW_MS = 92 * 86400000;
+const REFRESH_MS = Math.min(Math.max(Number(process.env.STATUS_STORE_REFRESH_MS) || 60_000, 1000), 3600_000);
+// A row's inserted_at is its statement's start; the refresh re-reads this far
+// behind its last position so a statement that committed after a refresh saw
+// past it is still picked up (seen ids make the re-read harmless).
+const REFRESH_MARGIN_MS = 10_000;
+const IMPORT_BATCH = 2000;
+const say = (m) => console.error(`[status-store] ${m}`);
+
+const mirror = {
+  byComponent: new Map(), // component -> { rows: [], dirty: boolean }
+  keys: new Set(),        // `${source}\u0001${component}\u0001${ts}` of every row in byComponent
+  latestComponent: new Map(), // component -> row
+  latestSource: new Map(),    // component -> Map(source -> row)
+  count: 0,
+  earliest: null,
+  seen: new Map(),       // database id -> inserted_at (ms, database clock) for rows already counted
+  lastDbAt: 0,           // database clock at the last successful load or refresh (ms)
+  seq: 2 ** 50,          // local order for rows whose database id is not known yet
+};
+let queue = Promise.resolve();
+let ready = Promise.resolve();
+let refreshTimer = null;
+let refreshing = false;
+let lastQueueError = "";
+
+const keyOf = (r) => `${r.source}\u0001${r.component}\u0001${r.ts}`;
+const normRow = (r) => {
+  const ts = Math.floor(Number(r?.ts));
+  if (!Number.isFinite(ts) || !r?.source || !r?.component) return null;
+  return {
+    ts, source: String(r.source), component: String(r.component), ok: r.ok ? 1 : 0,
+    detail: r.detail ? String(r.detail).slice(0, 500) : null, url: r.url ? String(r.url).slice(0, 300) : null,
+  };
+};
+const newer = (a, b) => a.ts > b.ts || (a.ts === b.ts && a.seq > b.seq);
+
+/** Add one row to the mirror. Returns true when the window part did not hold it. */
+function addToMirror(r, seq) {
+  const row = { ...r, seq };
+  // Aggregates are all-time: a row outside the window still moves them.
+  const lc = mirror.latestComponent.get(row.component);
+  if (!lc || newer(row, lc)) mirror.latestComponent.set(row.component, row);
+  let bySrc = mirror.latestSource.get(row.component);
+  if (!bySrc) { bySrc = new Map(); mirror.latestSource.set(row.component, bySrc); }
+  const ls = bySrc.get(row.source);
+  if (!ls || newer(row, ls)) bySrc.set(row.source, row);
+  if (mirror.earliest === null || row.ts < mirror.earliest) mirror.earliest = row.ts;
+  if (row.ts < Date.now() - MIRROR_WINDOW_MS) return false;
+  const k = keyOf(row);
+  if (mirror.keys.has(k)) return false;
+  mirror.keys.add(k);
+  let c = mirror.byComponent.get(row.component);
+  if (!c) { c = { rows: [], dirty: false }; mirror.byComponent.set(row.component, c); }
+  const last = c.rows[c.rows.length - 1];
+  if (last && (last.ts > row.ts || (last.ts === row.ts && last.seq > row.seq))) c.dirty = true;
+  c.rows.push(row);
+  return true;
+}
+function sortedRows(component) {
+  const c = mirror.byComponent.get(component);
+  if (!c) return [];
+  if (c.dirty) { c.rows.sort((a, b) => a.ts - b.ts || a.seq - b.seq); c.dirty = false; }
+  return c.rows;
+}
+function pruneMirror(nowMs = Date.now()) {
+  const cutoff = nowMs - MIRROR_WINDOW_MS;
+  for (const [component, c] of mirror.byComponent) {
+    const rows = sortedRows(component);
+    if (!rows.length || rows[0].ts >= cutoff) continue;
+    let i = 0;
+    while (i < rows.length && rows[i].ts < cutoff) { mirror.keys.delete(keyOf(rows[i])); i++; }
+    c.rows = rows.slice(i);
+  }
+}
+function pgProbeRows(component, sinceMs) {
+  const since = Math.floor(sinceMs);
+  const out = [];
+  for (const r of sortedRows(String(component))) if (r.ts >= since) out.push({ ts: r.ts, ok: r.ok, detail: r.detail, url: r.url, source: r.source });
+  return out;
+}
+function pgProbeCounts(component, sinceMs) {
+  const since = Math.floor(sinceMs);
+  let observed = 0, up = 0;
+  for (const r of sortedRows(String(component))) if (r.ts >= since) { observed++; up += r.ok; }
+  return { observed, up };
+}
+function pgLatestByComponent() {
+  return [...mirror.latestComponent.keys()].sort().map((component) => {
+    const r = mirror.latestComponent.get(component);
+    return { component, ts: r.ts, ok: r.ok, detail: r.detail, url: r.url };
+  });
+}
+function pgLatestBySource(component) {
+  const bySrc = mirror.latestSource.get(String(component));
+  if (!bySrc) return [];
+  return [...bySrc.keys()].sort().map((source) => {
+    const r = bySrc.get(source);
+    return { source, ts: r.ts, ok: r.ok, detail: r.detail, url: r.url };
+  });
+}
+
+const COLS = "ts, source, component, ok, detail, url";
+/** One multi-row insert per batch; resolves the rows the database reports inserted. */
+async function pgInsert(rows, run = stateQuery) {
+  let written = 0;
+  for (let i = 0; i < rows.length; i += IMPORT_BATCH) {
+    const chunk = rows.slice(i, i + IMPORT_BATCH);
+    const params = [];
+    const values = chunk.map((r, j) => { params.push(r.ts, r.source, r.component, r.ok, r.detail, r.url); const b = j * 6; return `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6})`; });
+    const r = await run(`INSERT INTO ${T("status_probes")} (${COLS}) VALUES ${values.join(", ")} ON CONFLICT (source, component, ts) DO NOTHING RETURNING id, inserted_at`, params);
+    for (const x of r.rows) { const id = Number(x.id); if (!mirror.seen.has(id)) { mirror.seen.set(id, new Date(x.inserted_at).getTime()); mirror.count++; } }
+    written += r.rowCount;
+  }
+  return written;
+}
+/** The synchronous entry for both record functions in Postgres mode. */
+function pgRecord(list) {
+  const rows = [];
+  let fresh = 0;
+  for (const raw of list) {
+    const r = normRow(raw);
+    if (!r) continue;
+    rows.push(r);
+    if (addToMirror(r, mirror.seq++)) fresh++;
+  }
+  if (rows.length) {
+    queue = queue.then(() => pgInsert(rows)).then((n) => { lastQueueError = ""; return n; }, (e) => {
+      const why = String(e?.message || e).slice(0, 120);
+      if (why !== lastQueueError) say(`recordProbe failed: ${why}`);
+      lastQueueError = why;
+    });
+  }
+  return fresh;
+}
+
+async function ensureTable() {
+  const s = stateDbSchema();
+  await stateQuery(`
+    CREATE TABLE IF NOT EXISTS ${s}.status_probes (
+      id          BIGSERIAL PRIMARY KEY,
+      ts          BIGINT NOT NULL,
+      source      TEXT NOT NULL,
+      component   TEXT NOT NULL,
+      ok          SMALLINT NOT NULL,
+      detail      TEXT,
+      url         TEXT,
+      inserted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS status_probes_unique ON ${s}.status_probes (source, component, ts DESC);
+    CREATE INDEX IF NOT EXISTS status_probes_component_ts ON ${s}.status_probes (component, ts DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS status_probes_ts ON ${s}.status_probes (ts);
+    CREATE INDEX IF NOT EXISTS status_probes_inserted_at ON ${s}.status_probes (inserted_at);
+  `);
+}
+/** The SQLite file's rows into the table, insert-if-absent (safe to run twice). */
+async function importSqlite() {
+  if (!existsSync(DB_PATH)) return { bytes: 0, rows: 0 };
+  let src = null;
+  try {
+    src = new Database(DB_PATH, { readonly: true, fileMustExist: true });
+    const has = src.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'status_probes'").get();
+    if (!has) return { bytes: statSync(DB_PATH).size, rows: 0 };
+    let rows = 0, batch = [];
+    for (const r of src.prepare(`SELECT ${COLS} FROM status_probes ORDER BY id`).iterate()) {
+      const n = normRow(r);
+      if (!n) continue;
+      batch.push(n);
+      if (batch.length >= IMPORT_BATCH) { await pgInsert(batch); rows += batch.length; batch = []; }
+    }
+    if (batch.length) { await pgInsert(batch); rows += batch.length; }
+    say(`imported ${rows} row(s) from ${DB_PATH}`);
+    return { bytes: statSync(DB_PATH).size, rows };
+  } finally { try { src?.close(); } catch { /* read-only handle */ } }
+}
+async function loadMirror() {
+  const cutoff = Date.now() - MIRROR_WINDOW_MS;
+  await withStateTx(async (c) => {
+    await c.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
+    const agg = await c.query(`SELECT count(*)::bigint AS n, min(ts)::bigint AS min_ts, now() AS at FROM ${T("status_probes")}`);
+    const win = await c.query(`SELECT id, ${COLS} FROM ${T("status_probes")} WHERE ts >= $1 ORDER BY ts, id`, [cutoff]);
+    const latestC = await c.query(`SELECT DISTINCT ON (component) id, ${COLS} FROM ${T("status_probes")} ORDER BY component, ts DESC, id DESC`);
+    const latestS = await c.query(`SELECT DISTINCT ON (source, component) id, ${COLS} FROM ${T("status_probes")} ORDER BY source, component, ts DESC`);
+    // Rows the snapshot counted that the first refresh will read again.
+    const recent = await c.query(`SELECT id, inserted_at FROM ${T("status_probes")} WHERE inserted_at > now() - ($1::bigint * interval '1 millisecond')`, [REFRESH_MARGIN_MS]);
+    mirror.byComponent.clear(); mirror.keys.clear(); mirror.latestComponent.clear(); mirror.latestSource.clear(); mirror.seen.clear();
+    mirror.count = Number(agg.rows[0].n);
+    mirror.earliest = agg.rows[0].min_ts === null ? null : Number(agg.rows[0].min_ts);
+    mirror.lastDbAt = new Date(agg.rows[0].at).getTime();
+    for (const x of [...win.rows, ...latestC.rows, ...latestS.rows]) addToMirror(normRow(x), Number(x.id));
+    for (const x of recent.rows) mirror.seen.set(Number(x.id), new Date(x.inserted_at).getTime());
+  });
+}
+/** Pull rows other containers wrote since the last position; prune the mirror. */
+async function refreshMirror() {
+  if (refreshing) return 0;
+  refreshing = true;
+  try {
+    const now = await stateQuery("SELECT now() AS at");
+    const dbNow = new Date(now.rows[0].at).getTime();
+    const r = await stateQuery(`SELECT id, inserted_at, ${COLS} FROM ${T("status_probes")} WHERE inserted_at > $1 ORDER BY id`, [new Date(mirror.lastDbAt - REFRESH_MARGIN_MS)]);
+    let added = 0;
+    for (const x of r.rows) {
+      const id = Number(x.id);
+      if (mirror.seen.has(id)) continue;
+      mirror.seen.set(id, new Date(x.inserted_at).getTime());
+      mirror.count++;
+      addToMirror(normRow(x), id);
+      added++;
+    }
+    mirror.lastDbAt = dbNow;
+    const floor = dbNow - REFRESH_MARGIN_MS;
+    for (const [id, at] of mirror.seen) if (at < floor) mirror.seen.delete(id);
+    pruneMirror();
+    return added;
+  } finally { refreshing = false; }
+}
+
+if (PG) {
+  ready = (async () => {
+    await ensureTable();
+    await importOnce(basename(DB_PATH), { source: DB_PATH, run: importSqlite });
+    await loadMirror();
+    refreshTimer = setInterval(() => { refreshMirror().catch((e) => say(`refresh failed: ${String(e?.message || e).slice(0, 120)}`)); }, REFRESH_MS);
+    refreshTimer.unref?.();
+  })().catch((e) => { say(`first load failed: ${String(e?.message || e).slice(0, 160)}`); throw e; });
+  trackStoreReady(ready);
+  queue = ready.catch(() => {});
+}
+
+/** Resolves when the first load has finished (at once without the database). */
+export function statusStoreReady() { return ready.then(() => true, () => false); }
+/** Resolves once every queued write has been tried (at once without the database). */
+export async function statusStoreFlush() { await queue; }
+/** Postgres mode only: pull other containers' rows now; resolves how many arrived. */
+export async function statusStoreRefresh() { return PG ? refreshMirror() : 0; }

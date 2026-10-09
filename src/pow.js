@@ -19,7 +19,8 @@ import { FREE_TIER_SLUGS } from "./free-tier.js";
 import Database from "better-sqlite3";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
+import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
 
 // Replay-protection lives in /data (persistent volume) so used PoW tokens
 // stay used across restarts. Falling back to /tmp on prod is unsafe: a
@@ -27,24 +28,131 @@ import { join } from "node:path";
 // be replayed against the fresh instance. We require /data when NODE_ENV
 // looks production-ish and FREE_MODE/POW_ALLOW_EPHEMERAL haven't explicitly
 // opted into the ephemeral path (local tests, edge functions, etc.).
+//
+// With STATE_DATABASE_URL set (src/state-db.js) the used challenges ALSO live
+// in the state database, shared by every container (see "Postgres mode"
+// below); the local table then only needs to outlive a request, so the
+// volume is not required.
 const HAS_DATA_DIR = existsSync("/data");
+const PG = stateDbEnabled();
 const ALLOW_EPHEMERAL =
   process.env.POW_ALLOW_EPHEMERAL === "true" ||
   process.env.FREE_MODE === "true" ||
   process.env.NODE_ENV !== "production";
-if (!HAS_DATA_DIR && !ALLOW_EPHEMERAL) {
+if (!HAS_DATA_DIR && !ALLOW_EPHEMERAL && !PG) {
   console.error(
     "PoW replay store has no persistent volume (/data missing) and NODE_ENV=production. Mount /data, or set POW_ALLOW_EPHEMERAL=true to accept replay risk on restart."
   );
   process.exit(1);
 }
 const DATA_DIR = HAS_DATA_DIR ? "/data" : "/tmp";
-const db = new Database(join(DATA_DIR, "agent402-pow.db"));
+// POW_DB_PATH names the local file (tests give each simulated container its own).
+const POW_DB_PATH = process.env.POW_DB_PATH || join(DATA_DIR, "agent402-pow.db");
+const db = new Database(POW_DB_PATH);
 db.pragma("journal_mode = WAL");
 db.exec("CREATE TABLE IF NOT EXISTS pow_used (challenge TEXT PRIMARY KEY, exp INTEGER NOT NULL)");
 db.exec("CREATE INDEX IF NOT EXISTS pow_used_exp ON pow_used (exp)");
 const markStmt = db.prepare("INSERT INTO pow_used (challenge, exp) VALUES (?, ?)");
+const absorbStmt = db.prepare("INSERT OR IGNORE INTO pow_used (challenge, exp) VALUES (?, ?)");
 const pruneStmt = db.prepare("DELETE FROM pow_used WHERE exp < ?");
+
+// ── Postgres mode ────────────────────────────────────────────────────────────
+// The single-use check must stay synchronous (the gate in src/server.js calls
+// verifySolution inline), so the local table above stays the check, and the
+// database is the way two containers share it:
+//   - a challenge this container accepts is written to `<schema>.pow_used`
+//     afterwards, through one ordered queue (ON CONFLICT DO NOTHING);
+//   - every POW_PG_REFRESH_MS a refresh (under no lease; a plain SELECT on
+//     the used_at index) pulls the challenges written since its last position
+//     into the local table, so a challenge the OTHER container accepted is
+//     refused here from then on. The first load imports the local file once
+//     and pulls every unexpired row before the server listens.
+// THE WINDOW THIS LEAVES: a solution accepted by one container can be
+// accepted again by the other if it arrives there before that container's
+// next refresh (up to POW_PG_REFRESH_MS, 3 s by default, plus the queue's
+// write latency). It is the same class of window the cross-replica replay
+// guard accepts (src/replay-guard.js): a second serving of a pure-CPU tool,
+// never a second charge. A conflict on the write counts it (powReplayStatus)
+// so the size of the window is visible rather than assumed.
+// The refresh reads by used_at (the statement's start time) with a margin
+// behind its last position rather than by id: an id assigned earlier can
+// commit later than a higher one, and a position taken from the higher id
+// would skip it for good. The local INSERT OR IGNORE makes a re-read free.
+const T = () => `${stateDbSchema()}.pow_used`;
+const PG_REFRESH_MS = clampInt(process.env.POW_PG_REFRESH_MS, 3000, 500, 60_000);
+const PG_REFRESH_MARGIN_MS = 10_000;
+const PG_PRUNE_EVERY_MS = 60_000;
+let pgQueue = Promise.resolve();
+let pgReady = Promise.resolve();
+let pgLastDbAt = 0;
+let pgLastPruneAt = 0;
+let pgPulling = false;
+let pgLastError = "";
+let pgWindowHits = 0;
+let pgTimer = null;
+const pgSay = (m) => console.error(`[pow] ${m}`);
+const nowSec = () => Math.floor(Date.now() / 1000);
+
+/** Queue the used challenge for the shared table; never rejects. */
+function pgRecordUsed(challenge, exp) {
+  pgQueue = pgQueue
+    .then(() => stateQuery(`INSERT INTO ${T()} (challenge, exp) VALUES ($1, $2) ON CONFLICT (challenge) DO NOTHING`, [challenge, exp]))
+    .then((r) => { pgLastError = ""; if (r.rowCount === 0) pgWindowHits++; }, (e) => {
+      const why = String(e?.message || e).slice(0, 120);
+      if (why !== pgLastError) pgSay(`shared replay write failed: ${why}`);
+      pgLastError = why;
+    });
+  return pgQueue;
+}
+/** Rows written since the last position into the local table; resolves how many were new here. */
+async function pgPull() {
+  if (pgPulling) return 0;
+  pgPulling = true;
+  try {
+    const now = await stateQuery("SELECT now() AS at");
+    const dbNow = new Date(now.rows[0].at).getTime();
+    const r = await stateQuery(`SELECT challenge, exp FROM ${T()} WHERE used_at > $1 AND exp >= $2`, [new Date(pgLastDbAt - PG_REFRESH_MARGIN_MS), nowSec()]);
+    let added = 0;
+    db.transaction((rows) => { for (const x of rows) added += absorbStmt.run(x.challenge, Number(x.exp)).changes; })(r.rows);
+    pgLastDbAt = dbNow;
+    if (dbNow - pgLastPruneAt > PG_PRUNE_EVERY_MS) { pgLastPruneAt = dbNow; await stateQuery(`DELETE FROM ${T()} WHERE exp < $1`, [nowSec()]); }
+    return added;
+  } finally { pgPulling = false; }
+}
+async function pgImportLocal() {
+  const rows = db.prepare("SELECT challenge, exp FROM pow_used WHERE exp >= ?").all(nowSec());
+  for (let i = 0; i < rows.length; i += 1000) {
+    const chunk = rows.slice(i, i + 1000);
+    const params = [];
+    const values = chunk.map((x, j) => { params.push(x.challenge, x.exp); return `($${j * 2 + 1}, $${j * 2 + 2})`; });
+    await stateQuery(`INSERT INTO ${T()} (challenge, exp) VALUES ${values.join(", ")} ON CONFLICT (challenge) DO NOTHING`, params);
+  }
+  return { rows: rows.length };
+}
+if (PG) {
+  pgReady = (async () => {
+    const s = stateDbSchema();
+    await stateQuery(`
+      CREATE TABLE IF NOT EXISTS ${s}.pow_used (challenge TEXT PRIMARY KEY, exp BIGINT NOT NULL, used_at TIMESTAMPTZ NOT NULL DEFAULT now());
+      CREATE INDEX IF NOT EXISTS pow_used_used_at_idx ON ${s}.pow_used (used_at);
+      CREATE INDEX IF NOT EXISTS pow_used_exp_idx ON ${s}.pow_used (exp);
+    `);
+    await importOnce(basename(POW_DB_PATH), { source: POW_DB_PATH, run: pgImportLocal });
+    await pgPull();
+    pgTimer = setInterval(() => { pgPull().catch((e) => { const why = String(e?.message || e).slice(0, 120); if (why !== pgLastError) pgSay(`shared replay pull failed: ${why}`); pgLastError = why; }); }, PG_REFRESH_MS);
+    pgTimer.unref?.();
+  })().catch((e) => { pgSay(`shared replay store: first load failed: ${String(e?.message || e).slice(0, 120)}`); throw e; });
+  trackStoreReady(pgReady);
+  pgQueue = pgReady.catch(() => {});
+}
+/** Resolves when the shared replay store's first load has finished (at once without the database). */
+export function powReplayReady() { return pgReady.then(() => true, () => false); }
+/** Resolves once every queued shared write has been tried (at once without the database). */
+export async function powReplayFlush() { await pgQueue; }
+/** Postgres mode only: pull the other containers' used challenges now; resolves how many were new here. */
+export async function powReplaySync() { return PG ? pgPull() : 0; }
+/** One word plus the count of accepted solutions the shared table already held (the window above). */
+export function powReplayStatus() { return { mode: PG ? "shared" : "local", windowHits: pgWindowHits }; }
 
 // Tools that cost real money or reach the network are NOT compute-payable —
 // they stay wallet-only so PoW can't be used to farm Chromium/egress/storage.
@@ -580,6 +688,8 @@ export function verifySolution(headerValue, slug) {
   } catch {
     return { ok: false, reason: "challenge already used" };
   }
+  // Shared with the other containers after the fact (see Postgres mode above).
+  if (PG) pgRecordUsed(challenge, exp);
   // Prune here too, so a solve-heavy/issue-light workload can't grow the table.
   pruneStmt.run(Math.floor(Date.now() / 1000));
   return { ok: true, probe: isProbe };
