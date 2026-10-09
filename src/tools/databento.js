@@ -103,13 +103,39 @@ async function assertAffordable(params, maxUsd = DEFAULT_MAX_QUERY_USD) {
   }
 }
 
+// Daily bars are end-of-day data: for a given symbol and range they cannot
+// change until the dataset's available end advances, and every caller bounds
+// `end` by availableEnd(), so the range is part of the key and a new session
+// is a new key. Measured on the request log 2026-09-09..10-08: a quote took
+// 0.8-1.9 s before the feed move (2026-09-20) and 4.6-28 s after it, two
+// upstream POSTs per call (cost check, then data) with p95 at 20 s and 4 of
+// 92 calls ending in a 5xx timeout. A repeat of a symbol inside the session
+// now answers from memory with no upstream read at all. Errors are never
+// cached; a bounded map drops the oldest entry past BARS_CACHE_MAX.
+const BARS_CACHE_MAX = 2_000;
+const barsCache = new Map(); // key -> bars (frozen rows)
+let barsCacheMax = BARS_CACHE_MAX;
+/** Test hook: shrink (or reset) the bars cache bound; clears the cache. */
+export function __setBarsCacheMax(n) { barsCacheMax = Number.isInteger(n) && n > 0 ? n : BARS_CACHE_MAX; barsCache.clear(); }
+export function barsCacheSize() { return barsCache.size; }
+
 export async function dailyBars({ symbol, start, end, maxUsd }) {
   const params = { dataset: DATASET, symbols: String(symbol).toUpperCase(), schema: "ohlcv-1d", start, end };
+  const key = `${params.dataset}|${params.symbols}|${params.schema}|${start}|${end}`;
+  const hit = barsCache.get(key);
+  if (hit) {
+    // Refresh recency so a symbol polled daily is never the oldest entry.
+    barsCache.delete(key); barsCache.set(key, hit);
+    return hit.map((b) => ({ ...b }));
+  }
   await assertAffordable(params, maxUsd);
   const text = await post("timeseries.get_range", { ...params, encoding: "json" });
   const rows = text.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
   if (!rows.length) throw bad("No market data for that symbol in that range. US equities only.");
-  return consolidate(rows);
+  const bars = consolidate(rows);
+  barsCache.set(key, bars.map((b) => Object.freeze({ ...b })));
+  while (barsCache.size > barsCacheMax) barsCache.delete(barsCache.keys().next().value);
+  return bars;
 }
 
 /** DBEQ.BASIC returns ONE BAR PER VENUE. A quote consolidates them: the day's
