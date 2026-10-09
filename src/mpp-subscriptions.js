@@ -76,6 +76,8 @@
 // tempo/charge, and no subscription call ever touches the relay.
 import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { assertSigningAllowed } from "./signing-halt.js";
+import { createJsonDocument } from "./json-document.js";
+import { stateDbEnabled, trackStoreReady, withLease } from "./state-db.js";
 import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { Challenge, Credential, Method, Receipt } from "mppx";
@@ -274,6 +276,10 @@ export async function expectedRenewalMemo({ lookupKey, subscriptionId, periodInd
 // (the disk-fill guard, same posture as the memory namespace byte budget).
 export const OFFER_SWEEP_AFTER_MS = 2 * CHALLENGE_TTL_MS;
 export const MAX_OPEN_OFFERS = 500;
+/** How long one container's pull of a subscription's due period holds the
+ *  cross-container lease (renewed while it runs): longer than a sync send
+ *  can take, short enough that a crashed holder frees it. */
+export const RENEWAL_LEASE_TTL_MS = 10 * 60_000;
 
 const SUB_PREFIX = "mpp_";                       // our subscription ids
 const REC_KEY = (subId) => `a402:sub:${subId}`;      // our records inside the shared kv
@@ -436,11 +442,14 @@ export function periodMs(periodCount = PERIOD_COUNT, periodUnit = PERIOD_UNIT) {
 }
 
 // ---------------------------------------------------------------------------
-// Store. ONE JSON file holds both mppx's own key-value entries (access keys,
-// subscription records, activation locks - all under mppx's own prefixes) and
-// our house subscriber records under `a402:sub:`. Same atomic tmp+rename and
-// merge-on-save discipline as stripe-subscriptions.js. Prod runs one replica,
-// so this is single-writer in practice; it is written to survive two anyway.
+// Store. ONE JSON document holds both mppx's own key-value entries (access
+// keys, subscription records, activation locks - all under mppx's own
+// prefixes) and our house subscriber records under `a402:sub:`. Without a
+// state database it is a file (same atomic tmp+rename and merge-on-save
+// discipline as stripe-subscriptions.js); with one (STATE_DATABASE_URL) the
+// same document lives in the database, imported from the file once at the
+// first load, and the file is kept current by write-through. Prod runs one
+// replica, so this is single-writer in practice; it is written to survive two.
 // ---------------------------------------------------------------------------
 const STORE_PATH = () => join(existsSync("/data") ? "/data" : "/tmp", "mpp-subscriptions.json");
 
@@ -481,7 +490,95 @@ export function createFileStore(path) {
     // paid-up subscriber is invisible.
     _keys: () => Object.keys(mem),
     _snapshot: () => JSON.parse(JSON.stringify(mem)),
+    /** Same surface as the database store: the file was read at construction. */
+    _ready: Promise.resolve(),
+    backend: "file",
+    async flush() {},
   };
+}
+
+/**
+ * The same AtomicStore over the state database: the whole document is one
+ * row (src/json-document.js, named after the file, imported from it once),
+ * and this process keeps an in-memory map of it. Reads answer from the map,
+ * which the first load fills (`_ready`, registered with trackStoreReady so
+ * the server awaits it before listening) and every put/delete/update keeps
+ * current. Writes merge the touched keys into the row (merge-on-save, so two
+ * containers writing different keys never overwrite each other), one queue
+ * per store so they land in call order; put and delete resolve once their
+ * key is in the row and THROW when it is not, because a house record that
+ * carries `unconfirmedCharge` must be durable before the next pull can rely
+ * on it. A failed write leaves its keys dirty and the next write re-sends
+ * them. `update` applies to the map synchronously (mppx's contract: its
+ * callback is synchronous and side-effect free; the map is the only state it
+ * sees) and queues the write. Cross-container atomicity of a single update
+ * is NOT provided, exactly as the file never provided it: mppx's activation
+ * locks guard one HTTP request, which one container serves.
+ */
+export function createDbStore(path, { log = console.warn } = {}) {
+  const doc = createJsonDocument({ file: path, log });
+  let mem = {};
+  // key -> sequence of its newest unflushed write (a delete marks the key
+  // absent from `mem`); the sequence tells a waiter whether ITS write landed
+  // or only a later one re-dirtied the key.
+  const dirty = new Map();
+  let seq = 0;
+  let chain = Promise.resolve();
+  const say = (m) => { try { log(`[mpp-subs] store: ${m}`); } catch { /* logging never throws */ } };
+  const clone = (v) => (v === undefined ? null : JSON.parse(JSON.stringify(v)));
+  const _ready = trackStoreReady(doc.load(null).then((body) => {
+    const loaded = body && typeof body === "object" && !Array.isArray(body) ? body : {};
+    // A write made before the row arrived outranks the row for its key.
+    for (const [k, v] of Object.entries(loaded)) if (!dirty.has(k)) mem[k] = v;
+  }).catch((e) => { say(`first load failed: ${String(e?.message || e).slice(0, 120)}`); }));
+
+  // One flush per queued step; a step after one that already sent every
+  // dirty key finds nothing to do. Never rejects: a waiter reads `dirty`.
+  function flushDirty() {
+    chain = chain.then(async () => {
+      if (!dirty.size) return;
+      const sent = new Map(dirty);
+      const patch = {}; const drop = [];
+      for (const [k] of sent) { if (k in mem) patch[k] = mem[k]; else drop.push(k); }
+      const body = await doc.mergeKeys(patch, drop);
+      if (body === null) { say(`write of ${sent.size} key(s) failed: ${String(doc.lastError || "").slice(0, 120)}; kept dirty for the next write`); return; }
+      for (const [k, n] of sent) if (dirty.get(k) === n) dirty.delete(k);
+    }).catch((e) => { say(`write failed: ${String(e?.message || e).slice(0, 120)}`); });
+    return chain;
+  }
+  async function write(key, apply) {
+    apply();
+    const mine = ++seq;
+    dirty.set(key, mine);
+    await flushDirty();
+    const left = dirty.get(key);
+    if (left !== undefined && left <= mine) throw new Error(`subscription store write did not land: ${String(doc.lastError || "database write failed").slice(0, 120)}`);
+  }
+  return {
+    async get(key) { return key in mem ? clone(mem[key]) : null; },
+    put(key, value) { return write(key, () => { mem[key] = clone(value); }); },
+    delete(key) { return write(key, () => { delete mem[key]; }); },
+    // Synchronous over the map up to the queued write (no await before it),
+    // which the next awaited put or delete also waits for.
+    async update(key, fn) {
+      const change = fn(key in mem ? clone(mem[key]) : null);
+      if (change.op === "set") { mem[key] = clone(change.value); dirty.set(key, ++seq); void flushDirty(); }
+      else if (change.op === "delete") { delete mem[key]; dirty.set(key, ++seq); void flushDirty(); }
+      return change.result;
+    },
+    _keys: () => Object.keys(mem),
+    _snapshot: () => JSON.parse(JSON.stringify(mem)),
+    _ready,
+    backend: "pg",
+    /** Resolves once every queued write has been attempted (tests, shutdown). */
+    async flush() { await chain; },
+    get lastError() { return doc.lastError; },
+  };
+}
+
+/** The store for this process: the database when STATE_DATABASE_URL is set, the file otherwise. */
+export function createSubscriptionStore(path, { log = console.warn } = {}) {
+  return stateDbEnabled() ? createDbStore(path, { log }) : createFileStore(path);
 }
 
 // ---------------------------------------------------------------------------
@@ -638,7 +735,7 @@ export function createMppSubscriptions({
   const recipient = envRecipient();
   const currency = envCurrency();
   const decimals = envDecimals();
-  const kv = createFileStore(storePath || STORE_PATH());
+  const kv = createSubscriptionStore(storePath || STORE_PATH(), { log });
   const subStore = Tempo.Subscription.fromStore(kv);
   const PERIOD_MS = periodMs();
 
@@ -827,6 +924,7 @@ export function createMppSubscriptions({
    *  authorization against a target we cannot watch is a subscription we would
    *  bill and never serve. Returns the WWW-Authenticate value. */
   async function mintOffer({ product, target, email, canary = false }) {
+    await ready;
     // The canary product is mintable ONLY when the caller proved the heartbeat
     // token; server.js is what establishes that, and it must pass it here.
     // Without the flag this resolver behaves exactly as it did: real products
@@ -916,6 +1014,7 @@ export function createMppSubscriptions({
    * key, and only then does anything settle.
    */
   async function activateFromCredential(authorizationHeader) {
+    await ready;
     const b = checkSubscriptionBinding(authorizationHeader, { secretKey, realm, now: now() });
     if (!b.ok) { const e = new Error(b.reason); e.statusCode = 402; e.binding = true; throw e; }
 
@@ -1082,6 +1181,7 @@ export function createMppSubscriptions({
    * Returns "active" | "past_due" | "canceled" | "expired", or null for unknown.
    */
   async function refreshStatus(subId) {
+    await ready;
     let rec = await readRec(subId);
     if (!rec) return null;
     const at = now();
@@ -1105,6 +1205,17 @@ export function createMppSubscriptions({
     if (rec.nextChargeAttemptAt && at < Date.parse(rec.nextChargeAttemptAt)) return rec.status === "active" ? "past_due" : rec.status;
     if (inFlight.has(subId)) return rec.status === "active" ? "past_due" : rec.status;
 
+    // The same guard across containers: with a state database the pull for
+    // this subscription runs under a lease, so two containers overlapping in
+    // a deploy never sign the same renewal. When another holder has it (or
+    // the database could not say) this call answers as it does for a pull
+    // already in flight here, and signs nothing. Without a database the
+    // lease is held trivially.
+    const held = await withLease(`mpp-sub-renewal:${subId}`, { ttlMs: RENEWAL_LEASE_TTL_MS, log }, () => pull(rec, subId, due, at));
+    if (!held.ran) return rec.status === "active" ? "past_due" : rec.status;
+    return held.result;
+  }
+  async function pull(rec, subId, due, at) {
     inFlight.add(subId);
     try {
       // CHAIN TRUTH FIRST. A previous pull for this period died in the send
@@ -1201,6 +1312,7 @@ export function createMppSubscriptions({
    *  active until that period ends. Requires the manage token minted at
    *  activation, which only the subscriber (and their email) ever saw. */
   async function cancel(subId, token) {
+    await ready;
     const rec = await readRec(subId);
     if (!rec) { const e = new Error("Unknown subscription"); e.statusCode = 404; throw e; }
     if (!manageTokenOk(subId, token)) { const e = new Error("Not authorized to manage this subscription"); e.statusCode = 403; throw e; }
@@ -1236,6 +1348,7 @@ export function createMppSubscriptions({
    *  only: no money moves and nothing is signed. Returns what it closed, with
    *  each record's access key address so the burner can revoke it on-chain. */
   async function sweepStaleCanaries({ olderThanMs = CANARY_SWEEP_AFTER_MS } = {}) {
+    await ready;
     const at = now();
     const swept = [];
     let skippedYoung = 0;
@@ -1295,6 +1408,11 @@ export function createMppSubscriptions({
     return cache;
   }
   warmSync();   // no boot window with an invisible subscriber
+  // With a state database the row arrives after construction: the server
+  // awaits every store's first load before it listens (trackStoreReady), and
+  // every async entry point here awaits it too, so no pull or activation
+  // runs against an empty map.
+  const ready = kv._ready.then(() => { warmSync(); });
   function listActive(kind) {
     const out = [];
     for (const rec of cache.values()) {
@@ -1336,6 +1454,7 @@ export function createMppSubscriptions({
   return {
     offerInfo, mintOffer, activateFromCredential, refreshStatus, cancel, isCanarySub, sweepStaleCanaries,
     listActive, get, isMine, status, warm, warmSync, manageToken, manageTokenOk, publicView,
+    ready: () => ready, flush: () => kv.flush(),
     _store: kv, _subStore: subStore, _method: method,
     _feePayer: feePayer, _feePayerPolicy: feePayer ? subscriptionFeePayerPolicy() : null,
     _client: tempoClient, _renewalClient: tempoRenewalClient, _renewalValidForS: renewalValidForS,
