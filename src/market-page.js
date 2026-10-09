@@ -992,7 +992,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
 
   <section>
     <h2 style="font-size:21px;font-weight:800;margin:40px 0 10px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Buy tools with ${esc(C.asset)} on ${esc(C.chainName)}</h2>
-    <p style="font-size:14.5px;color:var(--muted);margin:0 0 10px;max-width:70ch;">${payableSentence(payable, C)}, from ${usd(low)} to ${usd(high)} a call${groups.length ? `, across ${groups.map((g) => esc(g.label.toLowerCase())).slice(0, 6).join(", ")} and more` : ""}. The catalog page carries the category browser; this page is the chain's ledger.</p>
+    <p style="font-size:14.5px;color:var(--muted);margin:0 0 10px;">${payableSentence(payable, C)}, from ${usd(low)} to ${usd(high)} a call${groups.length ? `, across ${groups.map((g) => esc(g.label.toLowerCase())).slice(0, 6).join(", ")} and more` : ""}. The catalog page carries the category browser; this page is the chain's ledger.</p>
     <p style="font-family:var(--font-mono);font-size:13px;background:var(--card-zebra);padding:10px 14px;margin:0;">agents: GET ${esc(baseUrl)}/api/route?q=&lt;task&gt;&amp;network=${esc(C.networkParam)}</p>
   </section>
 

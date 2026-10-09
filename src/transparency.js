@@ -86,7 +86,7 @@ export function transparencyPage(baseUrl, traffic = null) {
 <section>
 <div class="tp-eyebrow">$ GET /transparency</div>
 <h1 class="tp-h1">Disclosures</h1>
-<p style="font-size:15px;color:var(--muted);max-width:70ch;">What the company publishes about itself, in one place: uptime from two outside observers at <a href="/status">/status</a>, every settled transaction by rail at <a href="/revenue">/revenue</a>, metered receipts against their quotes at <a href="/proof">/proof</a>, and how the service is secured at <a href="/security">/security</a>. The material disclosures below are kept verbatim, with on-chain receipts.</p>
+<p style="font-size:15px;color:var(--muted);">What the company publishes about itself, in one place: uptime from two outside observers at <a href="/status">/status</a>, every settled transaction by rail at <a href="/revenue">/revenue</a>, metered receipts against their quotes at <a href="/proof">/proof</a>, and how the service is secured at <a href="/security">/security</a>. The material disclosures below are kept verbatim, with on-chain receipts.</p>
 <p class="tp-updated">Agent402 (agent402.tools) · last updated 2026-07-29.</p>
 </section>
 
