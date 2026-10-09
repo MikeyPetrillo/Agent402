@@ -48,7 +48,7 @@ export function apiExplorerPage(baseUrl) {
 <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:14px;">$ GET /docs/api/explorer</div>
 <h1 style="font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;">API Explorer.</h1>
 <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 30px;">Browse every endpoint, inspect input schemas, and try tools live. Data from <a href="/openapi.json" style="color:var(--accent);text-decoration:none;">/openapi.json</a>.</p>
-<input class="ae-search" id="aeSearch" type="text" placeholder="Search endpoints..." autocomplete="off"><span class="ae-count" id="aeCount"></span>
+<input class="ae-search" id="aeSearch" type="text" placeholder="Search endpoints..." autocomplete="off" aria-label="Search endpoints..."><span class="ae-count" id="aeCount"></span>
 <div class="ae-cats" id="aeCats"></div>
 <div id="aeList" style="font-family:var(--font-mono);font-size:13px;color:var(--faint);">Loading...</div>
 </div>

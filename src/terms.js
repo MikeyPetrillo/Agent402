@@ -31,7 +31,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-10-08.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-10-09.</p>
 </section>
 
 <section>
@@ -57,6 +57,7 @@ If you do not agree to these terms, do not use the service.</p>
 
 <h2>Acceptable use</h2>
 <ul>
+  <li>You must be <b>18 or older</b> (or the age of majority where you live, if higher) to use the service or buy anything on it. The service is not directed at children, and we do not knowingly collect anything from anyone under 13.</li>
   <li>Don't use the service to break the law, infringe others' rights, or attack the service or third parties (e.g. using the URL-fetching tools against targets you don't control).</li>
   <li>Don't attempt to bypass rate limits, payment, or the proof-of-work gate, or to disrupt availability for others.</li>
   <li><b>Generative paths:</b> don't use the AI gateway or any generative tool to create or attempt to create: child sexual abuse material (zero tolerance - we will block the wallet and report as required by law); non-consensual intimate imagery or sexual content depicting real people; content that impersonates a real person to deceive; material that infringes others' intellectual-property rights; or content whose creation or distribution is otherwise illegal in your jurisdiction or ours.</li>

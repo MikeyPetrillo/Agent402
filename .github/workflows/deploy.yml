@@ -3969,6 +3969,9 @@ jobs:
       - name: Hamburger menu aria-label toggles with aria-expanded (real browser click, not a static string check)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-burger-aria-label.js
 
+      - name: Input labels (every text input has an accessible name; session replay stays off)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-input-labels.js
+
       - name: gov-data Catalog API v4 (retired CKAN v3 proxy 404s on catalog-old)
         run: node scripts/test-gov-data.js
 

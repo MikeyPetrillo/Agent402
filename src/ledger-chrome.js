@@ -930,17 +930,10 @@ function posthogSnippet(baseUrl) {
     capture_pageview: true,
     capture_pageleave: true,
     capture_performance: { web_vitals: true, network_timing: false },
-    // Session replay ON (2026-09-19). Eight card checkouts started in 60 days
-    // and none completed, and no query can say why - replay is the only thing
-    // that can. Paid report pages are excluded SERVER-SIDE by the project's
-    // URL blocklist (/r/, /m/, /reports/public/, /alerts/, /credits/thanks,
-    // /monitors/manage): those render bought content and the URL itself is the
-    // bearer token. maskAllInputs is the belt on top of that, so an email or a
-    // pasted key is never in a recording even on a page we do record.
-    // The project's URL blocklist and the loader's own path check are the
-    // other two layers; the server decides first from the real request path.
-    disable_session_recording: onBearer,
-    session_recording: { maskAllInputs: true, maskTextSelector: "[data-ph-mask]" },
+    // Session replay is off everywhere: the counter records page views and
+    // web vitals only, never what was clicked, typed or shown. The loader's
+    // bearer-path check stays as a second layer should this ever change.
+    disable_session_recording: true,
     disable_surveys: true,
   };
   // The vendor loader itself is 100% static (assets/js/posthog-loader.js);
