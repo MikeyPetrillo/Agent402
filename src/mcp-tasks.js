@@ -63,7 +63,7 @@
 // synchronous and count this process's own live runs.
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, unlinkSync, readdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { stateDbEnabled, stateDbSchema, stateQuery, records, leases, importOnce, trackStoreReady } from "./state-db.js";
 
 export const TASKS_EXTENSION = "io.modelcontextprotocol/tasks";
@@ -332,8 +332,10 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
       // `rec` exists, so read() already matched TASK_ID_RE - recPath cannot throw
       // here, and the catch covers the file being gone either way.
       if (expired(rec)) {
-        // The id is re-checked at the use so the shape guard is visible here too.
-        if (TASK_ID_RE.test(id)) { try { unlinkSync(recPath(id)); } catch { /* gone */ } }
+        // The record's own id (48 hex characters, matched by read()) names the
+        // file, and the resolved path must still sit under the store root.
+        const p = resolve(recPath(rec.taskId));
+        if (p.startsWith(resolve(root) + sep)) { try { unlinkSync(p); } catch { /* gone */ } }
         return "expired";
       }
       return rec;
