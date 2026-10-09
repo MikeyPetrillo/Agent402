@@ -38,6 +38,7 @@ const body = (extra = {}) => ({ messages: [{ role: "user", content: "list files"
   ok(err?.statusCode === 502 && err?.upstreamRejected === true, `a provider 4xx on a chat call is a tagged 502 inside the kit (got ${err?.statusCode}, tagged ${err?.upstreamRejected})`);
   ok(/No endpoints found that support tool use/.test(err?.message || "") && !/https?:\/\//.test(err?.message || "") && !/learn more/i.test(err?.message || ""),
     `the text keeps the actionable part and drops the provider's link (got: ${err?.message})`);
+  ok(/refused this request for [a-z0-9][\w./:-]+: /i.test(err?.message || ""), `the refusal names the model that said no (got: ${err?.message})`);
 }
 
 // 2. With fallback on, the refusal on the first model walks to the next.
