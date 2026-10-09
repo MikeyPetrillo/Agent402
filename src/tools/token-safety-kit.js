@@ -92,34 +92,45 @@ export const TOKEN_SAFETY_TOOLS = [
         required: ["address"],
       },
       output: {
-        // The REAL response for the documented input, captured from a live run
-        // AFTER the null-tax fix - an example captured from a stale build is the
-        // same defect as a fabricated one, and I nearly shipped exactly that.
+        // The real answer for the documented input, captured from a live run.
+        // The upstream answers every check for this token now, so `unknown`
+        // is empty; the shape sweep fails an example whose arrays show data
+        // the live answer does not carry.
         example: {
-            "chain": "base",
-            "address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
-            "verdict": "caution",
-            "because": "supply is mintable",
-            "blocking": [],
-            "warnings": [
-                      "supply is mintable"
-            ],
-            "unknown": [
-                      "buy tax",
-                      "sell tax"
-            ],
-            "facts": {
-                      "honeypot": false,
-                      "openSource": true,
-                      "mintable": true,
-                      "ownerRenounced": null,
-                      "buyTaxPct": null,
-                      "sellTaxPct": null,
-                      "holderCount": 752285,
-                      "lpLockedPct": 0
-            },
-            "source": "GoPlus token_security"
-  },
+          "chain": "base",
+          "address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
+          "verdict": "caution",
+          "because": "supply is mintable",
+          "blocking": [],
+          "warnings": [
+            "supply is mintable"
+          ],
+          "unknown": [],
+          "facts": {
+            "honeypot": false,
+            "cannotSellAll": false,
+            "cannotBuy": false,
+            "openSource": true,
+            "proxy": false,
+            "mintable": true,
+            "ownerAddress": null,
+            "ownerRenounced": null,
+            "hiddenOwner": false,
+            "canTakeBackOwnership": false,
+            "transferPausable": false,
+            "blacklist": false,
+            "slippageModifiable": false,
+            "buyTaxPct": 0,
+            "sellTaxPct": 0,
+            "holderCount": 754627,
+            "lpHolderCount": 175,
+            "lpLockedPct": 0,
+            "creatorPct": 0,
+            "ownerPct": 0,
+            "fakeToken": null
+          },
+          "source": "GoPlus token_security"
+        },
       },
     },
     async handler(input = {}) {
