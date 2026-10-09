@@ -38,8 +38,9 @@ try {
   const mark = await sdb.imports.done("x402-index-cache.ndjson");
   ok(mark && mark.source === ndFile, `the import is marked under the file's basename (${JSON.stringify(mark?.source)})`);
   const sellers1 = m1.indexSnapshot(snapArgs).sellers.map((s) => s.origin);
-  ok(sellers1.includes(A) && sellers1.includes(B), "the warm-started origins are served");
-  ok(m1.seedList().includes(A) && m1.seedList().includes(B), "warm-started origins re-enter the crawl seeds (no orphans)");
+  const has = (list, origin) => list.some((o) => o === origin); // exact origin match, never a substring
+  ok(has(sellers1, A) && has(sellers1, B), "the warm-started origins are served");
+  ok(has(m1.seedList(), A) && has(m1.seedList(), B), "warm-started origins re-enter the crawl seeds (no orphans)");
 
   // ---- boot 2: the rows are read, the file is NOT re-imported ------------------
   // A row changed in the database and a row deleted from it: a second boot
@@ -69,7 +70,8 @@ try {
   ok((await sdb.records.get(COLLECTION, C))?.tools?.[0]?.route === "/c", "the new origin's entry is the slim entry");
   const again = await m1.persistIndexCacheAsync(process.env.INDEX_CACHE_FILE);
   ok(again === true && (await sdb.records.count(COLLECTION)) === 2, "persisting again keeps one row per origin (upsert, never a duplicate)");
-  ok(existsSync(ndFile) && readFileSync(ndFile, "utf8").includes(C), "the NDJSON twin is written through while its directory exists (a rollback warm-starts from it)");
+  const ndOrigins = existsSync(ndFile) ? readFileSync(ndFile, "utf8").split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).map((r) => (Array.isArray(r) ? r[0] : r?.origin)) : [];
+  ok(has(ndOrigins, C), "the NDJSON twin is written through while its directory exists (a rollback warm-starts from it)");
 
   // ---- boot 3: a fresh instance warm-starts from the rows, in pages ------------
   process.env.INDEX_WARM_START_BATCH = "1"; // one row per page, so the in-progress flag is observable across turns
@@ -82,7 +84,7 @@ try {
   ok(sawTrue === true, "indexWarmStartInProgress() is true while the pages load");
   ok(m3.indexWarmStartInProgress() === false, "indexWarmStartInProgress() is false after the last page");
   const s3 = m3.indexSnapshot(snapArgs).sellers.map((s) => s.origin);
-  ok(s3.includes(A) && s3.includes(C) && !s3.includes(B), "the fresh instance serves A and C and not the deleted B");
+  ok(has(s3, A) && has(s3, C) && !has(s3, B), "the fresh instance serves A and C and not the deleted B");
   ok((await sdb.stateStoresReady()) === "ready", "no store is left pending");
 } finally {
   await sdb.__dropStateSchema();

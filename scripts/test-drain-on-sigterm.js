@@ -94,7 +94,8 @@ ok(grace <= 300_000,
 const shutdownSrc = srvSrc.slice(srvSrc.indexOf("function shutdown(signal,"), srvSrc.indexOf('process.on("SIGTERM"'));
 ok(!/setInterval\([^)]*\)\s*;?\s*\n?[\s\S]*quiet/i.test(shutdownSrc) && !/lameDuck|LAME_DUCK|lastRequestAt/.test(srvSrc),
   "no lame-duck window or quiet-detection path remains in shutdown()");
-ok(/httpServer\.close\(\(\) => process\.exit\(code\)\)/.test(shutdownSrc), "shutdown() closes the listener synchronously on the signal");
+ok(/httpServer\.close\(\(\) => \{ flushStateQueues\(\)\.finally\(\(\) => process\.exit\(code\)\); \}\)/.test(shutdownSrc), "shutdown() closes the listener synchronously on the signal (the queued state writes flush inside the close callback, bounded)");
+ok(/function flushStateQueues\(\{ timeoutMs = 10_000 \}/.test(srvSrc), "the flush is bounded so a slow database cannot hold the drain past its deadline");
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
