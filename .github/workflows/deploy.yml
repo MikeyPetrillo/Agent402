@@ -3136,6 +3136,9 @@ jobs:
       - name: Heading order (one h1 per page, no skipped levels, no empty headings - a screen reader announces level as structure)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-heading-order.js
 
+      - name: Input labels (every text input has an accessible name; session replay stays off)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-input-labels.js
+
       - name: Wrong-method 405 with Allow header (a known catalog path hit with the wrong verb no longer looks like a dead route)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-wrong-method-405.js
 

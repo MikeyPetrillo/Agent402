@@ -60,17 +60,11 @@ export function emailEnabled() {
 }
 
 /** Send one email via whichever provider is configured. 2xx -> true; never throws. */
-// CAN-SPAM 15 U.S.C. 7704(a)(5): every commercial message must carry the
-// sender's valid physical postal address. Unsubscribe handling was already
-// here; the address was not, and the statute requires BOTH. It is appended in
-// sendEmail rather than in each template because there are four senders
-// (alerts, follow-ups, monitors, digest) and a per-caller footer is one a
-// future sender forgets.
-//
-// Set COMPANY_POSTAL_ADDRESS to the registered address of the entity that
-// sends the mail. Unset, mail still goes out - a missing env var must not
-// black out a paying subscriber's monitor report - but every send warns,
-// because sending without it is the violation the FTC actually brings.
+// Every outbound message ends with the sender's postal address, appended in
+// sendEmail rather than in each template so a new sender cannot leave it out.
+// COMPANY_POSTAL_ADDRESS holds the address of the entity that sends the mail.
+// Unset, mail still goes out (a missing variable must not black out a paying
+// subscriber's monitor report) and each send logs a warning.
 let postalWarnAt = 0;
 export function postalAddress() {
   const a = (process.env.COMPANY_POSTAL_ADDRESS || "").trim();
@@ -78,7 +72,7 @@ export function postalAddress() {
   const now = Date.now();
   if (now - postalWarnAt > 600_000) {
     postalWarnAt = now;
-    console.warn("[email] COMPANY_POSTAL_ADDRESS is unset - outbound mail is missing the physical address CAN-SPAM requires. Set it on the host.");
+    console.warn("[email] COMPANY_POSTAL_ADDRESS is unset - outbound mail carries no postal address. Set it on the host.");
   }
   return null;
 }

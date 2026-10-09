@@ -235,7 +235,7 @@ export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = nu
         <div style="font-weight:800;font-size:15px;margin-bottom:8px;color:var(--ink);">Register in one call</div>
         <label for="reg-origin" style="display:block;font-family:var(--font-mono);font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Your API's origin</label>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <input id="reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:2 1 220px;font-family:var(--font-mono);font-size:13px;padding:9px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);">
+          <input id="reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:2 1 220px;font-family:var(--font-mono);font-size:13px;padding:9px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);" aria-label="https://api.yourdomain.com">
           <input id="reg-path" type="text" placeholder="/v1/priced-endpoint (optional)" aria-label="Priced path to probe (optional)" style="flex:1 1 160px;font-family:var(--font-mono);font-size:13px;padding:9px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);">
           <button id="reg-go" data-endpoint="/api/mpp-index/register" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:13px;border:none;padding:9px 16px;cursor:pointer;">SUBMIT</button>
         </div>

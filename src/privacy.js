@@ -33,17 +33,15 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-08.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-09.</p>
 </section>
 
 <section>
 <div class="pv-body">
 <p>Agent402 has no accounts and no ad trackers on its pages. Pages run a first-party page counter
 (PostHog, served from our own domain: page path, referrer and screen size, a random per-visit id held in
-session storage, never a cookie, never your IP forwarded to the analytics provider). The same tool keeps a
-session replay of some visits (what was clicked, scrolled and shown, and the browser console messages)
-so we can see where a page or a checkout goes wrong; every form field is masked, and no replay is kept
-on a private link (a paid report, a receipt, a signed alert or manage link, a checkout return page). Pages also run
+session storage, never a cookie, never your IP forwarded to the analytics provider). It keeps no session
+replay: nothing you click, type or see on a page is recorded. Pages also run
 <b>Google Analytics</b> to count visits and see how people find the site. It sets a measurement cookie
 (<code>_ga</code>) and Google receives your IP address and browser details under
 <a href="https://policies.google.com/privacy" rel="noopener">Google's privacy policy</a>. Advertising

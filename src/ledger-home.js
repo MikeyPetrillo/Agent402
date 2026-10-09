@@ -362,7 +362,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
   <div class="hm-2col" style="gap:0;border-radius:18px;overflow:hidden;border:1px solid var(--hairline);">
     <div style="padding:26px;background:var(--card);border-right:1px solid var(--hairline);">
       <label for="hm-demo-in" style="display:block;font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:10px;">Text to hash</label>
-      <input id="hm-demo-in" type="text" value="hello" placeholder="anything at all" style="width:100%;background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:14px;padding:13px 14px;margin-bottom:14px;box-sizing:border-box;" />
+      <input id="hm-demo-in" type="text" value="hello" placeholder="anything at all" style="width:100%;background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:14px;padding:13px 14px;margin-bottom:14px;box-sizing:border-box;" / aria-label="anything at all">
       <button type="button" id="hm-demo-run" class="hm-btn hm-btn-dark" style="width:100%;justify-content:center;font-size:14px;">Run it free →</button>
       <ol style="margin:20px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">
         <li style="display:grid;grid-template-columns:22px 1fr;gap:12px;padding:13px 0;border-bottom:1px solid var(--hairline);"><span id="hm-step1-mark" style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">·</span><span><span style="font-size:14px;color:var(--ink);font-weight:500;">Request a challenge</span><br><span id="hm-step1" style="font-family:var(--font-mono);font-size:11.5px;color:var(--faint);">signed, single-use, scoped to one tool</span></span></li>
@@ -408,7 +408,7 @@ curl -X POST /api/hash \\
   -H 'content-type: application/json' \\
   -d '{"origin":"https://seller.example"}'</pre>
       <div class="hm-reg-row" style="display:flex;gap:10px;margin-top:auto;">
-        <input id="hm-reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;min-width:0;font-family:var(--font-mono);font-size:13px;padding:11px 14px;border:1px solid var(--dash);border-radius:999px;background:var(--paper);color:var(--ink);">
+        <input id="hm-reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;min-width:0;font-family:var(--font-mono);font-size:13px;padding:11px 14px;border:1px solid var(--dash);border-radius:999px;background:var(--paper);color:var(--ink);" aria-label="https://api.yourdomain.com">
         <button id="hm-reg-go" class="hm-btn hm-btn-dark" style="font-size:13.5px;padding:11px 18px;">List it →</button>
       </div>
       <div id="hm-reg-out" style="font-family:var(--font-mono);font-size:11.5px;color:var(--faint);margin-top:8px;">Free, no account - we probe your origin's x402 surface and list you if it answers.</div>
