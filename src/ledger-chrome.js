@@ -283,6 +283,11 @@ body { transition: background-color .18s ease, color .18s ease; }
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body { background: var(--paper); font-family: var(--font-body); color: var(--ink); -webkit-font-smoothing: antialiased; }
+/* Balanced line breaks for running text (no one-word last lines, no ragged
+   right edge where the browser can avoid it). Headings get the same so a
+   two-line title splits evenly. Browsers without the property wrap as before. */
+p, li, dd, blockquote, figcaption, td, .lead, .tp-lead, .ml-lead { text-wrap: pretty; }
+h1, h2, h3 { text-wrap: balance; }
 ::selection { background: #34A87744; }
 a { color: inherit; }
 
