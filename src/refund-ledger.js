@@ -40,12 +40,14 @@
 // REFRESH_MS. The file is imported once (agent402-refunds.db in the imports
 // table) at the first boot with the database on, and while its directory is
 // there every landed write is also written into it (write-through), so a
-// rollback to the file-only build reads a current ledger.
+// rollback to the file-only build reads a current ledger; a file written
+// after that build ran alone is rolled forward into the table at the next
+// boot (rollForwardIfFileNewer, the file winning per row).
 import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
-import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce } from "./ledger-mirror.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
+import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, NEWER_FILE_GRACE_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce } from "./ledger-mirror.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DATA_DIR = process.env.REFUND_DB_DIR || (HAS_DATA_DIR ? "/data" : "/tmp");
@@ -223,6 +225,38 @@ async function importFile() {
   console.log(`[refund-ledger] imported ${n} of ${rows.length} row(s) from ${DB_FILE}`);
   return { bytes, rows: n };
 }
+/**
+ * Roll-forward after a rollback: the file-only build writes the file alone,
+ * so when the file was written more than NEWER_FILE_GRACE_MS after the table's
+ * newest row (write-through lands within milliseconds) it carries debts and
+ * transitions the table lacks. Every file row is applied with the FILE
+ * WINNING (upsert by id: status, outbound tx, note and timestamps from the
+ * file). Same shape as json-document's reimportIfFileNewer. Returns the counts
+ * or null when nothing was newer.
+ */
+async function rollForwardIfFileNewer() {
+  const mtime = ledgerFileMtime(DB_FILE);
+  if (!Number.isFinite(mtime)) return null;
+  const newest = Number((await stateQuery(`SELECT MAX(updated_at) AS m FROM ${T("refunds")}`)).rows[0]?.m) || 0;
+  const markedAt = newest ? 0 : (await imports.done(IMPORT_NAME))?.importedAt?.getTime?.() || 0;
+  if (!fileNewerThan(mtime, newest || markedAt)) return null;
+  const { rows } = sqliteFileRows(DB_FILE, "refunds");
+  let applied = 0, skipped = 0;
+  for (const r of rows) {
+    const v = fileToPg(r);
+    try {
+      await stateQuery(
+        `INSERT INTO ${T("refunds")} (${PG_COLS.join(", ")}) VALUES (${PG_COLS.map((_, i) => `$${i + 1}`).join(", ")})
+         ON CONFLICT (id) DO UPDATE SET ${PG_COLS.filter((c) => c !== "id").map((c) => `${c} = EXCLUDED.${c}`).join(", ")}, updated_at = ${PG_NOW_MS}`,
+        PG_COLS.map((c) => v[c] ?? null),
+      );
+      applied++;
+    } catch { skipped++; } // a file row whose evidence sits under another id in the table: left for the operator
+  }
+  await syncIdSequence(stateQuery, T("refunds"));
+  console.log(`[refund-ledger] rolled forward ${applied} row(s) from ${DB_FILE}${skipped ? ` (${skipped} skipped)` : ""}: the file was written ${Math.round((mtime - (newest || markedAt)) / 1000)} s after the table's newest row (a rollback window)`);
+  return { applied, skipped };
+}
 async function pullAll() {
   const r = await stateQuery(`SELECT * FROM ${T("refunds")} ORDER BY id`);
   db.transaction((rows) => { db.exec("DELETE FROM refunds"); for (const x of rows) applyPgRow(x); })(r.rows);
@@ -244,6 +278,7 @@ async function refreshWhere(where, params) {
 async function firstLoad() {
   await stateQuery(PG_DDL());
   await importOnce(IMPORT_NAME, { source: DB_FILE, run: importFile });
+  await rollForwardIfFileNewer();
   await pullAll();
   everyMs(refresh, REFRESH_MS);
 }

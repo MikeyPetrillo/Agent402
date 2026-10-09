@@ -6,7 +6,7 @@
 // containers try at once.
 //
 //   STATE_DATABASE_URL=postgres://... node scripts/test-refund-ledger-pg.js
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -113,6 +113,30 @@ try {
   ok(ev.includes("0xnew1") && out.rows.find((r) => r[1] === "0xnew1")[2] === "paid", "the second boot reads the table's current state, not the file");
   ok(out.rows.find((r) => r[1] === "0xpush1")[3].endsWith("then disconnected"), "the second boot sees the note rewrite");
   ok(out.alarm === "ok" || out.alarm === "aging", `the second boot's alarm reads from a loaded mirror (${out.alarm})`);
+
+  // ---- roll-forward after a rollback -----------------------------------------
+  const boot = () => JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", childSrc], { env: { ...process.env }, cwd: ROOT, encoding: "utf8" }).trim().split("\n").pop());
+  // (a) an ordinary write-through: the file sits within the grace of the table's newest row, so a file edit is not applied.
+  ok((await rl.recordRefundOwed({ slug: "r", network: "eip155:8453", payer: "0xAbCd000000000000000000000000000000000004", priceUsd: 0.005, tx: "0xroll1", httpStatus: 500 })) === true, "a debt booked by the database build (written through to the file)");
+  { const f = new Database(FILE); f.prepare("UPDATE refunds SET note = 'file edit within grace' WHERE evidence = '0xroll1'").run(); f.close(); }
+  boot();
+  ok((await pgRows("evidence = $1", ["0xroll1"]))[0].note === null, "a file written within the grace is not rolled forward (write-through, not a rollback)");
+  // (b) the file-only build ran alone: it marked a row paid, booked a new debt, and the file is past the grace.
+  {
+    const f = new Database(FILE);
+    f.prepare("UPDATE refunds SET status = 'paid', paidTx = '0xrolledtx', note = 'paid while rolled back', resolvedAt = ? WHERE evidence = '0xroll1'").run(Date.now());
+    f.prepare("INSERT INTO refunds (evidence, slug, network, payer, priceUsd, httpStatus, synthetic, status, createdAt) VALUES ('0xfileonly', 'h', 'eip155:8453', '0xAbCd000000000000000000000000000000000005', 0.006, 500, 0, 'owed', ?)").run(Date.now());
+    f.close();
+    const future = new Date(Date.now() + 10 * 60_000);
+    utimesSync(FILE, future, future);
+  }
+  const rolled = boot();
+  const paidRow = (await pgRows("evidence = $1", ["0xroll1"]))[0];
+  ok(paidRow?.status === "paid" && paidRow?.paid_tx === "0xrolledtx" && paidRow?.note === "paid while rolled back", "a refund marked paid in the file is paid in the database after the next boot");
+  ok((await pgRows("evidence = $1", ["0xfileonly"]))[0]?.status === "owed", "a debt booked in the file alone is in the database");
+  ok(rolled.rows.some((r) => r[1] === "0xfileonly") && rolled.rows.find((r) => r[1] === "0xroll1")[2] === "paid", "the booting instance reads the rolled-forward rows");
+  ok(rolled.rows.some((r) => r[1] === "ALGO-file3"), "the file wins per row: a row the file still holds is back in the table");
+  ok((await rl.recordRefundOwed({ slug: "h", network: "eip155:8453", payer: "0xAbCd000000000000000000000000000000000006", priceUsd: 0.001, tx: "0xafterroll", httpStatus: 500 })) === true && Number(rl.refundByEvidence("0xafterroll").id) > Number((await pgRows("evidence = $1", ["0xfileonly"]))[0].id), "the id sequence continues past the rolled-forward rows");
 
   // ---- the test seam empties both -------------------------------------------
   await rl.__resetRefunds();

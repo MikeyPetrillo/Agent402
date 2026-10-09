@@ -6,7 +6,7 @@
 // wallets in the table, and a fresh process reads the table, not the file.
 //
 //   STATE_DATABASE_URL=postgres://... node scripts/test-sales-ledger-pg.js
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -120,6 +120,30 @@ try {
   ok(out.new1?.attestUid === "0xuid1" && out.fb?.verdict === "bad" && out.else_?.slug === "elsewhere", "the second boot reads the table's current state");
   ok(out.totals.external.sales === 5 && out.totals.internal.sales === 3, `the second boot's totals: one external row deleted, one burner row swept internal (${JSON.stringify(out.totals)})`);
   ok(!existsSync(join(DIR, "absent", "agent402-sales.db")), "a boot with no file does not create one");
+
+  // ---- roll-forward after a rollback -----------------------------------------
+  const bootWithFile = () => JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", childSrc.replace(JSON.stringify(join(DIR, "absent", "agent402-sales.db")), JSON.stringify(FILE))], { env: { ...process.env }, cwd: ROOT, encoding: "utf8" }).trim().split("\n").pop());
+  // (a) an ordinary write-through: the file sits within the grace of the tables' newest row, so a file edit is not applied.
+  ok((await sl.recordSale({ slug: "roll", priceUsd: 0.01, rail: "usdc", network: "base", payer: BUYER, tx: "0xroll1", synthetic: false })) === true, "a sale recorded by the database build (written through to the file)");
+  { const f = new Database(FILE); f.prepare("UPDATE sale_feedback SET verdict = 'good' WHERE tx = '0xnew1'").run(); f.close(); }
+  bootWithFile();
+  ok((await q(`SELECT verdict FROM ${S}.sale_feedback WHERE tx = '0xnew1'`))[0].verdict === "bad", "a file written within the grace is not rolled forward (write-through, not a rollback)");
+  // (b) the file-only build ran alone: a sale and a changed verdict in the file, past the grace.
+  {
+    const f = new Database(FILE);
+    f.prepare("INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire) VALUES (?, 'file-only', 0.07, 'usdc', 'base', ?, '0xfileonly', 0, 'x402')").run(Date.now(), BUYER2);
+    f.prepare("UPDATE sale_feedback SET verdict = 'good', reason = 'rolled forward' WHERE tx = '0xnew1'").run();
+    f.close();
+    const future = new Date(Date.now() + 10 * 60_000);
+    utimesSync(FILE, future, future);
+  }
+  const rolled = bootWithFile();
+  ok((await q(`SELECT slug FROM ${S}.sales WHERE tx = '0xfileonly'`))[0]?.slug === "file-only", "a sale added to the file alone is in the database after the next boot");
+  ok((await q(`SELECT verdict, reason FROM ${S}.sale_feedback WHERE tx = '0xnew1'`))[0]?.reason === "rolled forward", "a verdict changed in the file wins in the database");
+  ok(rolled.fb?.verdict === "good" && rolled.file1?.tx === "0xfile1", "the booting instance reads the rolled-forward verdict, and a row the file still holds is back (insert-if-absent)");
+  await sl.salesLedgerRefresh();
+  ok(sl.saleByTx("0xfileonly")?.slug === "file-only", "a refresh brings the rolled-forward row into this instance's mirror");
+  ok((await sl.recordSale({ slug: "after", priceUsd: 0.01, rail: "usdc", network: "base", payer: BUYER, tx: "0xafterroll", synthetic: false })) === true && sl.saleByTx("0xafterroll").id > sl.saleByTx("0xfileonly").id, "the id sequence continues past the rolled-forward rows");
 } finally {
   await sdb.__dropStateSchema();
   await sdb.closeStateDb();

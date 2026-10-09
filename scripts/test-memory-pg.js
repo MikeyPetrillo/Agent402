@@ -6,7 +6,7 @@
 // without it; locally it skips).
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -222,11 +222,47 @@ try {
   ok(fromSecond.value.boot === 2, "the first process reads the second process's write");
   log = await m.getLog(A, A, 1000);
   ok(log.entries.length === second.entries && log.entries[log.entries.length - 1].hash === second.last && chainOk(log.entries), "both processes see one chain, and it verifies");
+  ok(second.late === 404, "a file write within the 60 s grace (the mirror's own writes land in milliseconds) does not roll forward");
+
+  // ---- 9) roll-forward after a rollback -------------------------------------
+  // The file-only build (a rollback) appends to the file; its mtime then runs
+  // ahead of the database's newest chain row. The next database boot re-reads
+  // the file, the file winning per row, and the chain continues from it.
+  const before = await m.getLog(A, A, 1000);
+  const rolled = child(`
+    const m = await import(${JSON.stringify(MOD_URL)});
+    const A = ${JSON.stringify(A)};
+    const w = m.memoryPut(A, "rolled-back-row", { from: "file-only build" });
+    m.grant(A, ${JSON.stringify(C)}, "readwrite");
+    const log = m.getLog(A, A, 1000);
+    console.log(JSON.stringify({ backend: m.BACKEND, entries: log.entries.length, tail: log.entries.slice(-2) }));
+  `, {});
+  ok(rolled.backend === "sqlite" && rolled.entries === before.entries.length + 2 && rolled.tail[0].prevHash === before.entries[before.entries.length - 1].hash, "the file-only build appended two chain rows continuing the mirrored chain");
+  const future = new Date(Date.now() + 120_000);
+  for (const f of [DB_FILE, `${DB_FILE}-wal`]) if (existsSync(f)) utimesSync(f, future, future);
+  const third = child(`
+    const m = await import(${JSON.stringify(MOD_URL)});
+    await m.memoryReady();
+    const A = ${JSON.stringify(A)};
+    const row = (await m.memoryGet(A, "rolled-back-row")).value.from;
+    const log = await m.getLog(A, A, 1000);
+    console.log(JSON.stringify({ row, entries: log.entries.length, last: log.entries[log.entries.length - 1] }));
+  `, { STATE_DATABASE_URL: PG_URL, STATE_DB_SCHEMA: SCHEMA });
+  ok(third.row === "file-only build", "a database boot after the rollback rolls the file's row forward");
+  ok(third.entries === rolled.entries && third.last.hash === rolled.tail[1].hash && third.last.prevHash === rolled.tail[1].prevHash, "the file's chain rows are in the database with the same seq, prev_hash and hash");
+  ok((await m.memoryGet(A, "late-file-row")).value === "x", "the row written to the file after the first import is rolled forward too (the file wins per row)");
+  ok((await m.listGrants(A)).grants.some((g) => g.grantee === C && g.mode === "readwrite"), "a grant made by the file-only build is rolled forward");
+  const mark3 = await sdb.imports.done("agent402.db");
+  ok(String(mark1.importedAt) === String(mark3.importedAt), "the roll-forward is not a re-import: the mark is unchanged");
+  const after = await m.memoryPut(A, "after-roll-forward", 1);
+  ok(after.persistent === true, "a write after the roll-forward lands");
+  log = await m.getLog(A, A, 1000);
+  ok(log.entries.length === rolled.entries + 1 && log.entries[rolled.entries].prevHash === rolled.tail[1].hash && chainOk(log.entries), "the database chain continues from the file's last hash and verifies end to end");
   // After everything (both processes, grants, docs, deletes) the file mirrors the database.
   {
     const f = new Database(DB_FILE, { readonly: true });
     const fileLog = f.prepare("SELECT seq, hash FROM memlog WHERE ns = ? ORDER BY seq").all(A).map((r) => `${r.seq}:${r.hash}`).join(",");
-    const fileKeys = f.prepare("SELECT k FROM kv WHERE ns = ? AND k <> 'late-file-row' ORDER BY k").all(A).map((r) => r.k).join(",");
+    const fileKeys = f.prepare("SELECT k FROM kv WHERE ns = ? ORDER BY k").all(A).map((r) => r.k).join(",");
     const fileDocs = f.prepare("SELECT COUNT(*) AS n FROM docs WHERE ns = ?").get(A).n;
     const fileGrants = f.prepare("SELECT grantee, mode FROM grants WHERE owner = ? ORDER BY grantee").all(A).map((r) => `${r.grantee}:${r.mode}`).join(",");
     f.close();

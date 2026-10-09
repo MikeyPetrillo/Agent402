@@ -19,6 +19,28 @@ export const PG_NOW_MS = "((extract(epoch from clock_timestamp()) * 1000)::bigin
 export const REFRESH_MS = Number(process.env.LEDGER_MIRROR_REFRESH_MS) || 15_000;
 /** Rows stamped this much before the newest stamp seen are pulled again (idempotent upserts). */
 export const REFRESH_MARGIN_MS = 60_000;
+/**
+ * A file written this much later than the table's newest row was written by
+ * a build that used the file alone (a rollback); write-through lands within
+ * milliseconds. Same grace as json-document.js.
+ */
+export const NEWER_FILE_GRACE_MS = 60_000;
+/**
+ * When the ledger file was last written: the newer of the file and its -wal
+ * (a WAL-mode build that was killed before its checkpoint left its last
+ * writes in the -wal, and the main file's mtime behind). NaN when absent.
+ */
+export function ledgerFileMtime(file) {
+  let m = NaN;
+  for (const f of [file, `${file}-wal`]) {
+    try { const t = statSync(f).mtimeMs; if (!(t <= m)) m = t; } catch { /* absent */ }
+  }
+  return m;
+}
+/** True when a file mtime (ms) is past the table's reference stamp (ms) by more than the grace; a missing stamp is never "older". */
+export function fileNewerThan(mtimeMs, stampMs, grace = NEWER_FILE_GRACE_MS) {
+  return Boolean(stampMs) && Number.isFinite(mtimeMs) && mtimeMs > stampMs + grace;
+}
 
 const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
 const ident = (s) => { if (!IDENT_RE.test(String(s))) throw new Error(`bad identifier ${JSON.stringify(s)}`); return s; };

@@ -7,7 +7,7 @@
 // owed on the row, and a published report is served by the synchronous
 // public readers from the mirror. Requires STATE_DATABASE_URL (CI fails
 // without it).
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
@@ -123,6 +123,22 @@ try {
   await refreshPublicMirror();
   ok(readPublicReport(pubOn.publicId)?.publicId === pubOn.publicId && file("cs_paid")?.public === true, "a re-publish from the other instance reaches this mirror on refresh, and the file");
   ok(existsSync(join(DIR, "cs_paid.json")), "the record file exists for the write-through");
+
+  // ---- (6) roll-forward: files written in a rollback window win per id -----
+  writeFileSync(join(DIR, "cs_paid.json"), JSON.stringify({ ...file("cs_paid"), title: "ROLLED" }));
+  const C = mk();
+  await C.ready();
+  ok((await row("cs_paid")).title === "T:AAPL", "a record file written within the write-through grace is not re-read (the row stays)");
+  const future = (Date.now() + 120_000) / 1000;
+  utimesSync(join(DIR, "cs_paid.json"), future, future);
+  const ROLLED = "rp_rolledrolledrol";
+  writeFileSync(join(DIR, "cs_rolled.json"), JSON.stringify({ status: "done", kind: "dossier", slug: "dossier", input: "ROLL", title: "T:ROLL", report: "# rolled", sources: [], tables: [], at: new Date(clock).toISOString(), public: true, publicId: ROLLED, publishedAt: new Date(clock).toISOString() }));
+  writeFileSync(join(DIR, "_public.json"), JSON.stringify({ ...file("_public"), [ROLLED]: "cs_rolled" }));
+  utimesSync(join(DIR, "_public.json"), future, future);
+  const D = mk();
+  await D.ready();
+  ok((await row("cs_paid")).title === "ROLLED" && (await row("cs_rolled"))?.status === "done", "roll-forward: records dated past the grace win over the rows, and a record born in the window exists");
+  ok((await row("_public"))?.[ROLLED] === "cs_rolled" && readPublicReport(ROLLED)?.input === "ROLL", "roll-forward: the public index written in the window is the index, and the mirror serves the report");
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();

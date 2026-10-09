@@ -41,7 +41,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { sendEmail } from "./email.js";
 import { creditsTopupFields } from "./credits-sales.js";
 import { chargeCancelledForClientGone } from "./hangup-settlement.js";
-import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, trackStoreReady } from "./state-db.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady } from "./state-db.js";
 
 // A hold whose buyer left before the first byte is decided when the response
 // ends; one that nothing ends within this long is released (call-time read,
@@ -56,6 +56,9 @@ export const CREDIT_PACKS = {
 export const KEY_RE = /^a402_[A-Za-z0-9_-]{32,64}$/;
 const SESSION_RE = /^cs_[A-Za-z0-9_]+$/;
 const MICRO = 1_000_000;
+// A file written this much later than the newest row was written by a build
+// that used the files alone (a rollback); write-through lands within milliseconds.
+export const ROLL_FORWARD_GRACE_MS = 60_000;
 
 const DATA_ROOT = () => (existsSync("/data") ? "/data" : "/tmp");
 const DEFAULT_DIR = () => join(DATA_ROOT(), "credits");
@@ -121,7 +124,32 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     log(`[credits] imported ${n} key record(s) from ${dir} into the state database`);
     return { bytes, records: n };
   }
-  const ready = usePg ? trackStoreReady(importOnce(basename(dir), { source: dir, run: importDir })) : Promise.resolve();
+  // Roll-forward (the shape of json-document's reimportIfFileNewer): a key
+  // file or the index written after the newest row, beyond the write-through
+  // grace, was written by the previous build running on the files alone (a
+  // rollback window): every key record and the index are re-read with the
+  // FILE WINNING per id, and the replacement is logged.
+  async function rollForwardIfFilesNewer() {
+    const files = (() => { try { return readdirSync(dir).filter((f) => (f.startsWith("k_") && f.endsWith(".json")) || f === "_sessions.json"); } catch { return []; } })();
+    let mtime = 0;
+    for (const f of files) { try { mtime = Math.max(mtime, statSync(join(dir, f)).mtimeMs); } catch { /* gone */ } }
+    if (!mtime) return 0;
+    const newest = await stateQuery(`SELECT max(updated_at) AS at FROM ${RT()} WHERE collection = $1`, [COLL]);
+    let rowAt = newest.rows[0]?.at ? new Date(newest.rows[0].at).getTime() : 0;
+    if (!rowAt) { const mark = await imports.done(basename(dir)); rowAt = mark?.importedAt ? new Date(mark.importedAt).getTime() : 0; }
+    if (!rowAt || mtime <= rowAt + ROLL_FORWARD_GRACE_MS) return 0;
+    let keys = 0, index = 0;
+    for (const f of files) {
+      const body = readJson(join(dir, f));
+      if (!body) continue;
+      const id = f === "_sessions.json" ? "_sessions" : f.slice(0, -5);
+      await stateQuery(`INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()`, [COLL, id, JSON.stringify(body)]);
+      if (id === "_sessions") index++; else keys++;
+    }
+    log(`[credits] rolled forward ${keys} key record(s) and ${index} index from ${dir}: the files were written ${Math.round((mtime - rowAt) / 1000)} s after the newest row (a rollback window), the files win`);
+    return keys + index;
+  }
+  const ready = usePg ? trackStoreReady(importOnce(basename(dir), { source: dir, run: importDir }).then(rollForwardIfFilesNewer)) : Promise.resolve();
   ready.catch((e) => log(`[credits] import into the state database failed: ${String(e?.message || e).slice(0, 160)}`));
   // One key's record, moved under its row lock: `fn(rec)` answers
   // { rec?, result, after? }; `rec` is written back, `after` runs once it is.

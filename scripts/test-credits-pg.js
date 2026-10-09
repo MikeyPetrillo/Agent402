@@ -5,7 +5,7 @@
 // concurrent holds on a balance that covers one leave exactly one holder, a
 // hold becomes spend only on a final 200 and comes back on anything else.
 // Requires STATE_DATABASE_URL (CI fails without it).
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { EventEmitter } from "node:events";
@@ -102,6 +102,22 @@ try {
   ok((await A.setDisabled(minted.keyId, true)) === true && (await B.authorize(KEY, 0.001)).reason === "disabled", "setDisabled lands on the row: the other instance refuses the key");
   ok((await A.setDisabled(minted.keyId, false)) === true && (await A.disableByPaymentIntent("pi_new", "refunded")) === minted.keyId && (await B.balance(KEY)).disabled === true, "a refunded pack payment disables its key");
   ok((await B.balanceById(minted.keyId)) === 19.995 && (await B.balanceById("nope")) === null, "balanceById reads the row by key id");
+
+  // ---- (6) roll-forward: files written in a rollback window win per id -----
+  const keyFile = join(DIR, `k_${HASH}.json`);
+  const rolledRec = { ...fileRec(HASH), balanceMicro: 500_000, spentMicro: 19_500_000, disabled: false };
+  writeFileSync(keyFile, JSON.stringify(rolledRec));
+  const C = mk();
+  await C.ready();
+  ok((await C.balance(KEY)).balanceUsd === 19.995 && (await C.balance(KEY)).disabled === true, "a key file written within the write-through grace is not re-read (the row stays)");
+  const future = (Date.now() + 120_000) / 1000;
+  utimesSync(keyFile, future, future);
+  writeFileSync(join(DIR, "_sessions.json"), JSON.stringify({ ...JSON.parse(readFileSync(join(DIR, "_sessions.json"), "utf8")), cs_rolled: HASH }));
+  utimesSync(join(DIR, "_sessions.json"), future, future);
+  const D = mk();
+  await D.ready();
+  ok((await D.balance(KEY)).balanceUsd === 0.5 && (await D.balance(KEY)).disabled === false && (await rowRec(HASH)).spentMicro === 19_500_000, "roll-forward: the key file dated past the grace wins over the row");
+  ok((await D.claim("cs_rolled")).status === "claimed" && (await rowRec(HASH)) !== null, "roll-forward: the sessions index written in the window is the index");
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();

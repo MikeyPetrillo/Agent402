@@ -35,15 +35,17 @@
 // refresh interval behind another container's. The file is imported once
 // (agent402-sales.db in the imports table) at the first boot with the
 // database on, and while its directory is there every landed write is also
-// written into it (write-through), so a rollback reads a current ledger.
+// written into it (write-through), so a rollback reads a current ledger; a
+// file written after that build ran alone is rolled forward into the tables
+// at the next boot (rollForwardIfFileNewer, the file winning per row).
 import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { normalizePayerAddress } from "./payer.js";
 import { PAYING_RAILS_SQL, isPaidRail } from "./paid-rails.js";
-import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
-import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce } from "./ledger-mirror.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
+import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce } from "./ledger-mirror.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DB_PATH = process.env.SALES_LEDGER_DB || join(HAS_DATA_DIR ? "/data" : "/tmp", "agent402-sales.db");
@@ -241,6 +243,35 @@ async function importFile() {
   if (sales.rows.length || fb.rows.length) console.log(`[sales-ledger] imported ${n} of ${sales.rows.length} sale(s) and ${m} of ${fb.rows.length} feedback row(s) from ${DB_PATH}`);
   return { bytes: sales.bytes, rows: n + m };
 }
+const FEEDBACK_UPSERT = `ON CONFLICT (tx) DO UPDATE SET ${FEEDBACK_COLS.filter((c) => c !== "tx").map((c) => `${c} = EXCLUDED.${c}`).join(", ")}, updated_at = ${PG_NOW_MS}`;
+/**
+ * Roll-forward after a rollback: the file-only build writes the file alone,
+ * so when the file was written more than NEWER_FILE_GRACE_MS after the
+ * tables' newest row (write-through lands within milliseconds) it carries
+ * sales and verdicts the tables lack. The file wins per row: sales are
+ * inserted where absent (by id), feedback is upserted by tx. Same shape as
+ * json-document's reimportIfFileNewer. Returns the counts or null.
+ */
+async function rollForwardIfFileNewer() {
+  const mtime = ledgerFileMtime(DB_PATH);
+  if (!Number.isFinite(mtime)) return null;
+  const newest = Math.max(
+    Number((await stateQuery(`SELECT MAX(updated_at) AS m FROM ${T("sales")}`)).rows[0]?.m) || 0,
+    Number((await stateQuery(`SELECT MAX(updated_at) AS m FROM ${T("sale_feedback")}`)).rows[0]?.m) || 0,
+  );
+  const markedAt = newest ? 0 : (await imports.done(IMPORT_NAME))?.importedAt?.getTime?.() || 0;
+  if (!fileNewerThan(mtime, newest || markedAt)) return null;
+  const sales = sqliteFileRows(DB_PATH, "sales");
+  const fb = sqliteFileRows(DB_PATH, "sale_feedback");
+  let n = 0, m = 0;
+  if (sales.rows.length) {
+    n = await insertRows(stateQuery, T("sales"), SALE_COLS, sales.rows.map(saleRowOf), { conflict: "ON CONFLICT DO NOTHING" });
+    await syncIdSequence(stateQuery, T("sales"));
+  }
+  if (fb.rows.length) m = await insertRows(stateQuery, T("sale_feedback"), FEEDBACK_COLS, fb.rows.map(feedbackRowOf), { conflict: FEEDBACK_UPSERT });
+  console.log(`[sales-ledger] rolled forward ${n} sale(s) and ${m} feedback row(s) from ${DB_PATH}: the file was written ${Math.round((mtime - (newest || markedAt)) / 1000)} s after the tables' newest row (a rollback window)`);
+  return { sales: n, feedback: m };
+}
 async function pullAll() {
   const s = await stateQuery(`SELECT * FROM ${T("sales")} ORDER BY id`);
   const f = await stateQuery(`SELECT * FROM ${T("sale_feedback")} ORDER BY ts`);
@@ -260,6 +291,7 @@ async function refresh() {
 async function firstLoad() {
   await stateQuery(PG_DDL());
   await importOnce(IMPORT_NAME, { source: DB_PATH, run: importFile });
+  await rollForwardIfFileNewer();
   await sweepPg();
   await pullAll();
   everyMs(refresh, REFRESH_MS);

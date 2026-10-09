@@ -33,11 +33,14 @@ import Database from "better-sqlite3";
 import { existsSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, trackStoreReady } from "../state-db.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady } from "../state-db.js";
 
 const micro = (usd) => Math.round(Number(usd) * 1e6);
 const RUN_MAX_MS = 15 * 60_000;
 const RETENTION_MS = 30 * 86_400_000;
+// A file written this much later than the newest row was written by a build
+// that used the file alone (a rollback); write-through lands within milliseconds.
+export const ROLL_FORWARD_GRACE_MS = 60_000;
 const usd = (m) => Math.round(Number(m)) / 1e6;
 export const hashToken = (t) => createHash("sha256").update(String(t)).digest("hex");
 
@@ -300,19 +303,22 @@ const PG_DDL = (T) => `
   CREATE TABLE IF NOT EXISTS ${T("decisions")} (
     id TEXT PRIMARY KEY, created_at BIGINT NOT NULL, depth TEXT NOT NULL,
     price_micro BIGINT NOT NULL, payer TEXT, plan_json TEXT NOT NULL,
-    cost_via_micro BIGINT NOT NULL, settled INTEGER NOT NULL DEFAULT 0, feedback_hash TEXT
+    cost_via_micro BIGINT NOT NULL, settled INTEGER NOT NULL DEFAULT 0, feedback_hash TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
   );
   CREATE TABLE IF NOT EXISTS ${T("credits")} (
     token_hash TEXT PRIMARY KEY, decision_id TEXT NOT NULL, payer TEXT,
     amount_micro BIGINT NOT NULL, expires_at BIGINT NOT NULL,
-    state TEXT NOT NULL, run_id TEXT, created_at BIGINT NOT NULL
+    state TEXT NOT NULL, run_id TEXT, created_at BIGINT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
   );
   CREATE INDEX IF NOT EXISTS decide_ledger_credits_decision ON ${T("credits")} (decision_id);
   CREATE TABLE IF NOT EXISTS ${T("runs")} (
     id TEXT PRIMARY KEY, decision_id TEXT NOT NULL, payer TEXT, status TEXT NOT NULL,
     budget_micro BIGINT NOT NULL, spent_micro BIGINT NOT NULL DEFAULT 0,
     credit_micro BIGINT NOT NULL DEFAULT 0, steps_json TEXT NOT NULL DEFAULT '[]',
-    created_at BIGINT NOT NULL, finished_at BIGINT, run_key TEXT
+    created_at BIGINT NOT NULL, finished_at BIGINT, run_key TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
   );
   CREATE INDEX IF NOT EXISTS decide_ledger_runs_payer ON ${T("runs")} (payer, created_at);
   CREATE INDEX IF NOT EXISTS decide_ledger_runs_created ON ${T("runs")} (created_at);
@@ -321,10 +327,12 @@ const PG_DDL = (T) => `
   CREATE TABLE IF NOT EXISTS ${T("feedback")} (
     decision_id TEXT NOT NULL, step INTEGER NOT NULL, tool_id TEXT,
     outcome TEXT NOT NULL, quality INTEGER, latency_ms INTEGER, created_at BIGINT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (decision_id, step)
   );
   CREATE TABLE IF NOT EXISTS ${T("seller_spend")} (
-    id BIGSERIAL PRIMARY KEY, run_id TEXT NOT NULL, seller TEXT NOT NULL, micro BIGINT NOT NULL, created_at BIGINT NOT NULL
+    id BIGSERIAL PRIMARY KEY, run_id TEXT NOT NULL, seller TEXT NOT NULL, micro BIGINT NOT NULL, created_at BIGINT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
   );
   CREATE INDEX IF NOT EXISTS decide_ledger_seller_spend_seller ON ${T("seller_spend")} (seller, created_at);
   CREATE INDEX IF NOT EXISTS decide_ledger_seller_spend_created ON ${T("seller_spend")} (created_at);
@@ -381,42 +389,81 @@ function openDatabaseLedger(path) {
     Promise.resolve().then(run).catch(() => {}).finally(() => refreshing.delete(key));
   }
 
+  // Open the SQLite file for reading only (the write-through handle is separate).
+  function openSource() {
+    try { return new Database(path, { readonly: true, fileMustExist: true }); }
+    catch { return new Database(path, { fileMustExist: true }); }
+  }
+  // Every row of the file into the tables. `win` = "file": the file's row
+  // replaces the table's (roll-forward); otherwise a row already there is
+  // kept (the first import, idempotent across two containers booting).
+  async function applyFile(win) {
+    const src = openSource();
+    const upsert = (conflict, set) => (win === "file" ? `ON CONFLICT ${conflict} DO UPDATE SET ${set}, updated_at = now()` : `ON CONFLICT ${conflict} DO NOTHING`);
+    let rows = 0;
+    try {
+      const tables = new Set(src.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name));
+      if (tables.has("decisions")) for (const r of src.prepare("SELECT * FROM decisions").all()) {
+        await q(`INSERT INTO ${T("decisions")} (id, created_at, depth, price_micro, payer, plan_json, cost_via_micro, settled, feedback_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          ${upsert("(id)", "created_at = EXCLUDED.created_at, depth = EXCLUDED.depth, price_micro = EXCLUDED.price_micro, payer = EXCLUDED.payer, plan_json = EXCLUDED.plan_json, cost_via_micro = EXCLUDED.cost_via_micro, settled = EXCLUDED.settled, feedback_hash = EXCLUDED.feedback_hash")}`,
+          [r.id, r.created_at, r.depth, r.price_micro, r.payer ?? null, r.plan_json, r.cost_via_micro, r.settled ? 1 : 0, r.feedback_hash ?? null]); rows++;
+      }
+      if (tables.has("credits")) for (const r of src.prepare("SELECT * FROM credits").all()) {
+        await q(`INSERT INTO ${T("credits")} (token_hash, decision_id, payer, amount_micro, expires_at, state, run_id, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+          ${upsert("(token_hash)", "decision_id = EXCLUDED.decision_id, payer = EXCLUDED.payer, amount_micro = EXCLUDED.amount_micro, expires_at = EXCLUDED.expires_at, state = EXCLUDED.state, run_id = EXCLUDED.run_id, created_at = EXCLUDED.created_at")}`,
+          [r.token_hash, r.decision_id, r.payer ?? null, r.amount_micro, r.expires_at, r.state, r.run_id ?? null, r.created_at]); rows++;
+      }
+      if (tables.has("runs")) for (const r of src.prepare("SELECT * FROM runs").all()) {
+        // A run key the table already holds on another run keeps that run's key.
+        if (win === "file" && r.run_key != null) await q(`UPDATE ${T("runs")} SET run_key = NULL, updated_at = now() WHERE decision_id = $1 AND run_key = $2 AND id <> $3`, [r.decision_id, r.run_key, r.id]);
+        await q(`INSERT INTO ${T("runs")} (id, decision_id, payer, status, budget_micro, spent_micro, credit_micro, steps_json, created_at, finished_at, run_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+          ${upsert("(id)", "decision_id = EXCLUDED.decision_id, payer = EXCLUDED.payer, status = EXCLUDED.status, budget_micro = EXCLUDED.budget_micro, spent_micro = EXCLUDED.spent_micro, credit_micro = EXCLUDED.credit_micro, steps_json = EXCLUDED.steps_json, created_at = EXCLUDED.created_at, finished_at = EXCLUDED.finished_at, run_key = EXCLUDED.run_key")}`,
+          [r.id, r.decision_id, r.payer ?? null, r.status, r.budget_micro, r.spent_micro ?? 0, r.credit_micro ?? 0, r.steps_json ?? "[]", r.created_at, r.finished_at ?? null, r.run_key ?? null]); rows++;
+      }
+      if (tables.has("feedback")) for (const r of src.prepare("SELECT * FROM feedback").all()) {
+        await q(`INSERT INTO ${T("feedback")} (decision_id, step, tool_id, outcome, quality, latency_ms, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)
+          ${upsert("(decision_id, step)", "tool_id = EXCLUDED.tool_id, outcome = EXCLUDED.outcome, quality = EXCLUDED.quality, latency_ms = EXCLUDED.latency_ms, created_at = EXCLUDED.created_at")}`,
+          [r.decision_id, r.step, r.tool_id ?? null, r.outcome, r.quality ?? null, r.latency_ms ?? null, r.created_at]); rows++;
+      }
+      // Seller spend has no key of its own: a line is added when no identical
+      // line (run, seller, amount, time) is there yet.
+      if (tables.has("seller_spend")) for (const r of src.prepare("SELECT * FROM seller_spend").all()) {
+        await q(`INSERT INTO ${T("seller_spend")} (run_id, seller, micro, created_at) SELECT $1, $2, $3::bigint, $4::bigint
+          WHERE NOT EXISTS (SELECT 1 FROM ${T("seller_spend")} WHERE run_id = $1 AND seller = $2 AND micro = $3::bigint AND created_at = $4::bigint)`, [r.run_id, r.seller, r.micro, r.created_at]); rows++;
+      }
+    } finally { src.close(); }
+    return rows;
+  }
   async function importFile() {
     const name = basename(path);
     return importOnce(name, {
       source: path,
       run: async () => {
         if (!existsSync(path)) return { bytes: 0, rows: 0 };
-        let src;
-        try { src = new Database(path, { readonly: true, fileMustExist: true }); }
-        catch { src = new Database(path, { fileMustExist: true }); }
-        let rows = 0;
-        try {
-          const tables = new Set(src.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name));
-          if (tables.has("decisions")) for (const r of src.prepare("SELECT * FROM decisions").all()) {
-            await q(`INSERT INTO ${T("decisions")} (id, created_at, depth, price_micro, payer, plan_json, cost_via_micro, settled, feedback_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`,
-              [r.id, r.created_at, r.depth, r.price_micro, r.payer ?? null, r.plan_json, r.cost_via_micro, r.settled ? 1 : 0, r.feedback_hash ?? null]); rows++;
-          }
-          if (tables.has("credits")) for (const r of src.prepare("SELECT * FROM credits").all()) {
-            await q(`INSERT INTO ${T("credits")} (token_hash, decision_id, payer, amount_micro, expires_at, state, run_id, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (token_hash) DO NOTHING`,
-              [r.token_hash, r.decision_id, r.payer ?? null, r.amount_micro, r.expires_at, r.state, r.run_id ?? null, r.created_at]); rows++;
-          }
-          if (tables.has("runs")) for (const r of src.prepare("SELECT * FROM runs").all()) {
-            await q(`INSERT INTO ${T("runs")} (id, decision_id, payer, status, budget_micro, spent_micro, credit_micro, steps_json, created_at, finished_at, run_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING`,
-              [r.id, r.decision_id, r.payer ?? null, r.status, r.budget_micro, r.spent_micro ?? 0, r.credit_micro ?? 0, r.steps_json ?? "[]", r.created_at, r.finished_at ?? null, r.run_key ?? null]); rows++;
-          }
-          if (tables.has("feedback")) for (const r of src.prepare("SELECT * FROM feedback").all()) {
-            await q(`INSERT INTO ${T("feedback")} (decision_id, step, tool_id, outcome, quality, latency_ms, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (decision_id, step) DO NOTHING`,
-              [r.decision_id, r.step, r.tool_id ?? null, r.outcome, r.quality ?? null, r.latency_ms ?? null, r.created_at]); rows++;
-          }
-          if (tables.has("seller_spend")) for (const r of src.prepare("SELECT * FROM seller_spend").all()) {
-            await q(`INSERT INTO ${T("seller_spend")} (run_id, seller, micro, created_at) VALUES ($1,$2,$3,$4)`, [r.run_id, r.seller, r.micro, r.created_at]); rows++;
-          }
-        } finally { src.close(); }
+        const rows = await applyFile("table");
         log(`imported ${rows} row(s) from ${name}`);
         return { bytes: statSync(path).size, rows };
       },
     });
+  }
+  // Roll-forward (the shape of json-document's reimportIfFileNewer): a file
+  // written after the newest row, beyond the write-through grace, carries
+  // rows and transitions made while the previous build ran on the file alone
+  // (a rollback window). They are applied with the file winning per row,
+  // and the replacement is logged. The WAL counts as the file.
+  async function rollForwardIfFileNewer() {
+    if (!existsSync(path)) return 0;
+    let mtime = 0;
+    for (const f of [path, `${path}-wal`]) { try { mtime = Math.max(mtime, statSync(f).mtimeMs); } catch { /* no such file */ } }
+    const newest = await q(`SELECT max(u) AS at FROM (
+      SELECT max(updated_at) AS u FROM ${T("decisions")} UNION ALL SELECT max(updated_at) FROM ${T("credits")} UNION ALL SELECT max(updated_at) FROM ${T("runs")}
+      UNION ALL SELECT max(updated_at) FROM ${T("feedback")} UNION ALL SELECT max(updated_at) FROM ${T("seller_spend")}) x`);
+    let rowAt = newest.rows[0]?.at ? new Date(newest.rows[0].at).getTime() : 0;
+    if (!rowAt) { const mark = await importsDone(); rowAt = mark?.importedAt ? new Date(mark.importedAt).getTime() : 0; }
+    if (!rowAt || mtime <= rowAt + ROLL_FORWARD_GRACE_MS) return 0;
+    const rows = await applyFile("file");
+    log(`rolled forward ${rows} row(s) from ${basename(path)}: the file was written ${Math.round((mtime - rowAt) / 1000)} s after the newest row (a rollback window), the file's rows win`);
+    return rows;
   }
   async function boot() {
     const now = Date.now();
@@ -424,7 +471,7 @@ function openDatabaseLedger(path) {
     // restart; a container that is gone). Only those: a younger one may be
     // running in the other container of a deploy's overlap. Its whole budget
     // is booked as spent, so an unknown spend counts against the ceilings.
-    await q(`UPDATE ${T("runs")} SET status = 'abandoned', spent_micro = budget_micro, finished_at = $1 WHERE status = 'running' AND created_at < $2`, [now, now - RUN_MAX_MS]);
+    await q(`UPDATE ${T("runs")} SET status = 'abandoned', spent_micro = budget_micro, finished_at = $1, updated_at = now() WHERE status = 'running' AND created_at < $2`, [now, now - RUN_MAX_MS]);
     const cut = now - RETENTION_MS;
     await q(`DELETE FROM ${T("decisions")} WHERE created_at < $1`, [cut]);
     await q(`DELETE FROM ${T("seller_spend")} WHERE created_at < $1`, [cut]);
@@ -437,7 +484,8 @@ function openDatabaseLedger(path) {
     for (const r of (await q(`SELECT * FROM ${T("decisions")} WHERE created_at >= $1`, [now - RETENTION_MS])).rows) remember(rowDecision(r));
     for (const r of (await q(`SELECT * FROM ${T("credits")} WHERE expires_at > $1`, [now])).rows) rememberCredit(rowCredit(r));
   }
-  const ready = (async () => { await q(PG_DDL(T)); await importFile(); await boot(); await loadMirror(); })();
+  const importsDone = () => imports.done(basename(path));
+  const ready = (async () => { await q(PG_DDL(T)); await importFile(); await rollForwardIfFileNewer(); await boot(); await loadMirror(); })();
   ready.catch((e) => console.error("[decide] ledger: database setup failed:", String(e?.message || e).slice(0, 200)));
   trackStoreReady(ready);
 
@@ -466,7 +514,7 @@ function openDatabaseLedger(path) {
       await ready;
       const planJson = JSON.stringify(plan);
       const r = await q(`INSERT INTO ${T("decisions")} (id, created_at, depth, price_micro, payer, plan_json, cost_via_micro, settled, feedback_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8)
-        ON CONFLICT (id) DO UPDATE SET created_at = EXCLUDED.created_at, depth = EXCLUDED.depth, price_micro = EXCLUDED.price_micro, payer = EXCLUDED.payer, plan_json = EXCLUDED.plan_json, cost_via_micro = EXCLUDED.cost_via_micro, settled = 0, feedback_hash = EXCLUDED.feedback_hash
+        ON CONFLICT (id) DO UPDATE SET created_at = EXCLUDED.created_at, depth = EXCLUDED.depth, price_micro = EXCLUDED.price_micro, payer = EXCLUDED.payer, plan_json = EXCLUDED.plan_json, cost_via_micro = EXCLUDED.cost_via_micro, settled = 0, feedback_hash = EXCLUDED.feedback_hash, updated_at = now()
         RETURNING *`, [decisionId, now, depth, micro(priceUsd), payer || null, planJson, micro(costViaUsd), feedbackHash]);
       remember(rowDecision(r.rows[0]));
       pruneMirror(now);
@@ -482,7 +530,7 @@ function openDatabaseLedger(path) {
       await ready;
       // xmax <> 0 on the returned row: the insert found a row and updated it.
       const r = await q(`INSERT INTO ${T("feedback")} (decision_id, step, tool_id, outcome, quality, latency_ms, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)
-        ON CONFLICT (decision_id, step) DO UPDATE SET tool_id = EXCLUDED.tool_id, outcome = EXCLUDED.outcome, quality = EXCLUDED.quality, latency_ms = EXCLUDED.latency_ms, created_at = EXCLUDED.created_at
+        ON CONFLICT (decision_id, step) DO UPDATE SET tool_id = EXCLUDED.tool_id, outcome = EXCLUDED.outcome, quality = EXCLUDED.quality, latency_ms = EXCLUDED.latency_ms, created_at = EXCLUDED.created_at, updated_at = now()
         RETURNING (xmax <> 0) AS had`, [decisionId, step, toolId || null, outcome, quality, latencyMs, now]);
       through((w) => w.feedback.run(decisionId, step, toolId || null, outcome, quality, latencyMs, now));
       return r.rows[0]?.had === true;
@@ -490,7 +538,7 @@ function openDatabaseLedger(path) {
     async getDecision(id) { await ready; const d = await getDecisionRow(id); return d ? publicDecision(d) : null; },
     async markDecisionSettled(id) {
       await ready;
-      await q(`UPDATE ${T("decisions")} SET settled = 1 WHERE id = $1`, [id]);
+      await q(`UPDATE ${T("decisions")} SET settled = 1, updated_at = now() WHERE id = $1`, [id]);
       const d = decisions.get(id); if (d) d.settled = true;
       through((w) => w.settleDecision.run(id));
     },
@@ -507,7 +555,7 @@ function openDatabaseLedger(path) {
     },
     async activateCredit(hash) {
       await ready;
-      const r = await q(`UPDATE ${T("credits")} SET state = 'active' WHERE token_hash = $1 AND state = 'pending' RETURNING *`, [hash]);
+      const r = await q(`UPDATE ${T("credits")} SET state = 'active', updated_at = now() WHERE token_hash = $1 AND state = 'pending' RETURNING *`, [hash]);
       if (r.rowCount === 1) { rememberCredit(rowCredit(r.rows[0])); through((w) => w.activate.run(hash)); }
       return r.rowCount === 1;
     },
@@ -527,7 +575,7 @@ function openDatabaseLedger(path) {
       await ready;
       if (typeof token !== "string" || !token) return 0;
       const h = hashToken(token);
-      const r = await q(`UPDATE ${T("credits")} SET state = 'redeemed', run_id = $1 WHERE token_hash = $2 AND decision_id = $3 AND state = 'active' AND expires_at > $4 RETURNING *`, [runId, h, decisionId, now]);
+      const r = await q(`UPDATE ${T("credits")} SET state = 'redeemed', run_id = $1, updated_at = now() WHERE token_hash = $2 AND decision_id = $3 AND state = 'active' AND expires_at > $4 RETURNING *`, [runId, h, decisionId, now]);
       if (r.rowCount !== 1) return 0;
       const c = rememberCredit(rowCredit(r.rows[0]));
       through((w) => w.redeem.run(runId, h, decisionId, now));
@@ -537,7 +585,7 @@ function openDatabaseLedger(path) {
       await ready;
       if (typeof token !== "string" || !token) return;
       const h = hashToken(token);
-      const r = await q(`UPDATE ${T("credits")} SET state = 'active', run_id = NULL WHERE token_hash = $1 AND state = 'redeemed' AND run_id = $2 RETURNING *`, [h, runId]);
+      const r = await q(`UPDATE ${T("credits")} SET state = 'active', run_id = NULL, updated_at = now() WHERE token_hash = $1 AND state = 'redeemed' AND run_id = $2 RETURNING *`, [h, runId]);
       if (r.rowCount === 1) { rememberCredit(rowCredit(r.rows[0])); through((w) => w.restore.run(h, runId)); }
     },
     async createRun({ runId, decisionId, payer, budgetUsd, creditUsd, runKey = null, now = Date.now() }) {
@@ -553,7 +601,7 @@ function openDatabaseLedger(path) {
         await run(`SELECT pg_advisory_xact_lock(hashtext('decide-ledger'), hashtext('book-run'))`);
         // A run cut off longer ago than any run can last is booked as spent
         // here, so the ceilings never forget an unknown spend.
-        await run(`UPDATE ${T("runs")} SET status = 'abandoned', spent_micro = budget_micro, finished_at = $1 WHERE status = 'running' AND created_at < $2`, [now, now - RUN_MAX_MS]);
+        await run(`UPDATE ${T("runs")} SET status = 'abandoned', spent_micro = budget_micro, finished_at = $1, updated_at = now() WHERE status = 'running' AND created_at < $2`, [now, now - RUN_MAX_MS]);
         const p = payer || null;
         if (caps) {
           const reason = capRefusal(caps, budgetUsd, p, {
@@ -578,9 +626,9 @@ function openDatabaseLedger(path) {
     async finishRun({ runId, status, spentUsd, steps, now = Date.now() }) {
       await ready;
       const stepsJson = JSON.stringify(steps || []);
-      await q(`UPDATE ${T("runs")} SET status = $1, spent_micro = $2, steps_json = $3, finished_at = $4 WHERE id = $5`, [status, micro(spentUsd), stepsJson, now, runId]);
+      await q(`UPDATE ${T("runs")} SET status = $1, spent_micro = $2, steps_json = $3, finished_at = $4, updated_at = now() WHERE id = $5`, [status, micro(spentUsd), stepsJson, now, runId]);
       const release = status === "failed" && !(micro(spentUsd) > 0);
-      if (release) await q(`UPDATE ${T("runs")} SET run_key = NULL WHERE id = $1`, [runId]);
+      if (release) await q(`UPDATE ${T("runs")} SET run_key = NULL, updated_at = now() WHERE id = $1`, [runId]);
       through((w) => { w.finishRun.run(status, micro(spentUsd), stepsJson, now, runId); if (release) w.releaseRunKey.run(runId); });
     },
     async getRun(id) {
@@ -616,7 +664,7 @@ function openDatabaseLedger(path) {
     async settleSellerHold(holdId, amountUsd) {
       await ready;
       if (holdId == null || holdId === false) return;
-      if (amountUsd > 0) await q(`UPDATE ${T("seller_spend")} SET micro = $1 WHERE id = $2`, [micro(amountUsd), holdId]);
+      if (amountUsd > 0) await q(`UPDATE ${T("seller_spend")} SET micro = $1, updated_at = now() WHERE id = $2`, [micro(amountUsd), holdId]);
       else await q(`DELETE FROM ${T("seller_spend")} WHERE id = $1`, [holdId]);
       const rowid = sellerHoldRowid.get(holdId);
       if (rowid != null) { sellerHoldRowid.delete(holdId); through((w) => { if (amountUsd > 0) w.sellerHoldSet.run(micro(amountUsd), rowid); else w.sellerHoldDrop.run(rowid); }); }

@@ -574,6 +574,7 @@ function sqliteBackend() {
 const IMPORT_NAME = "agent402.db";
 const LOCK_SPACE = 4020; // advisory lock namespace for memory (int4, paired with hashtext(owner))
 const IMPORT_CHUNK = 500;
+const ROLL_FORWARD_GRACE_MS = 60_000; // the mirror writes the file within milliseconds of a commit
 
 function pgBackend() {
   const T = (t) => `${stateDbSchema()}.${t}`;
@@ -605,9 +606,11 @@ function pgBackend() {
     );
   `;
 
-  // Insert rows in chunks, ON CONFLICT DO NOTHING: idempotent, so two
-  // containers importing at once (or a boot that crashed mid-import) are safe.
-  async function insertRows(table, cols, rows) {
+  // Insert rows in chunks. `conflict` is the ON CONFLICT clause: DO NOTHING
+  // for the first import (idempotent, so two containers importing at once,
+  // or a boot that crashed mid-import, are safe); a conditional DO UPDATE for
+  // the roll-forward, where the file wins per row and only a changed row counts.
+  async function insertRows(table, cols, rows, conflict = "ON CONFLICT DO NOTHING") {
     let n = 0;
     for (let i = 0; i < rows.length; i += IMPORT_CHUNK) {
       const chunk = rows.slice(i, i + IMPORT_CHUNK);
@@ -616,36 +619,80 @@ function pgBackend() {
         const ph = cols.map((c) => { params.push(row[c] ?? null); return `$${params.length}`; });
         return `(${ph.join(",")})`;
       });
-      const r = await stateQuery(`INSERT INTO ${T(table)} (${cols.join(",")}) VALUES ${tuples.join(",")} ON CONFLICT DO NOTHING`, params);
+      const r = await stateQuery(`INSERT INTO ${T(table)} (${cols.join(",")}) VALUES ${tuples.join(",")} ${conflict}`, params);
       n += r.rowCount;
     }
     return n;
   }
 
+  const KV_COLS = ["ns", "k", "v", "updated", "exp"];
+  const GRANT_COLS = ["owner", "grantee", "mode", "created", "exp"];
+  const LOG_COLS = ["ns", "seq", "ts", "actor", "action", "key", "data", "prev_hash", "hash"];
+  const DOC_COLS = ["ns", "id", "text", "meta", "vec", "model", "updated"];
+  // The file wins per row; a row already equal is not counted.
+  const FILE_WINS = {
+    memory_kv: `ON CONFLICT (ns, k) DO UPDATE SET v = EXCLUDED.v, updated = EXCLUDED.updated, exp = EXCLUDED.exp
+      WHERE ${T("memory_kv")}.v IS DISTINCT FROM EXCLUDED.v OR ${T("memory_kv")}.updated IS DISTINCT FROM EXCLUDED.updated OR ${T("memory_kv")}.exp IS DISTINCT FROM EXCLUDED.exp`,
+    memory_grants: `ON CONFLICT (owner, grantee) DO UPDATE SET mode = EXCLUDED.mode, created = EXCLUDED.created, exp = EXCLUDED.exp
+      WHERE ${T("memory_grants")}.mode IS DISTINCT FROM EXCLUDED.mode OR ${T("memory_grants")}.created IS DISTINCT FROM EXCLUDED.created OR ${T("memory_grants")}.exp IS DISTINCT FROM EXCLUDED.exp`,
+    memory_docs: `ON CONFLICT (ns, id) DO UPDATE SET text = EXCLUDED.text, meta = EXCLUDED.meta, vec = EXCLUDED.vec, model = EXCLUDED.model, updated = EXCLUDED.updated
+      WHERE ${T("memory_docs")}.updated IS DISTINCT FROM EXCLUDED.updated OR ${T("memory_docs")}.text IS DISTINCT FROM EXCLUDED.text`,
+    memory_memlog: "ON CONFLICT (ns, seq) DO NOTHING", // a chain row never changes; the file's extra rows continue it
+  };
+
   // Read every table of the SQLite file (read-only; an older file may lack
-  // the exp / model columns, which read as null) and insert what is absent.
-  async function importSqlite() {
-    if (!existsSync(DB_FILE)) return { bytes: 0, rows: 0, skipped: "no file" };
+  // the exp / model columns, which read as null).
+  function readSqlite() {
     const src = new Database(DB_FILE, { readonly: true, fileMustExist: true });
     try {
       const cols = (t) => src.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
       const has = (t) => src.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
       const sel = (t, want) => (has(t) ? src.prepare(`SELECT ${want.map((c) => (cols(t).includes(c) ? c : `NULL AS ${c}`)).join(", ")} FROM ${t}`).all() : []);
-      const kv = sel("kv", ["ns", "k", "v", "updated", "exp"]);
-      const grants = sel("grants", ["owner", "grantee", "mode", "created", "exp"]);
-      const memlog = sel("memlog", ["ns", "seq", "ts", "actor", "action", "key", "data", "prev_hash", "hash"]);
-      const docs = sel("docs", ["ns", "id", "text", "meta", "vec", "model", "updated"]);
-      let rows = 0;
-      rows += await insertRows("memory_kv", ["ns", "k", "v", "updated", "exp"], kv);
-      rows += await insertRows("memory_grants", ["owner", "grantee", "mode", "created", "exp"], grants);
-      rows += await insertRows("memory_memlog", ["ns", "seq", "ts", "actor", "action", "key", "data", "prev_hash", "hash"], memlog);
-      rows += await insertRows("memory_docs", ["ns", "id", "text", "meta", "vec", "model", "updated"], docs);
-      const bytes = statSync(DB_FILE).size;
-      console.log(`[memory] imported ${rows} row(s) (${kv.length} kv, ${grants.length} grants, ${memlog.length} log, ${docs.length} docs read) from ${DB_FILE} into the state database`);
-      return { bytes, rows };
+      return { kv: sel("kv", KV_COLS), grants: sel("grants", GRANT_COLS), memlog: sel("memlog", LOG_COLS), docs: sel("docs", DOC_COLS) };
     } finally {
       src.close();
     }
+  }
+
+  async function applySqlite(fileWins) {
+    const { kv, grants, memlog, docs } = readSqlite();
+    const c = (t) => (fileWins ? FILE_WINS[t] : undefined);
+    const n = {
+      kv: await insertRows("memory_kv", KV_COLS, kv, c("memory_kv")),
+      grants: await insertRows("memory_grants", GRANT_COLS, grants, c("memory_grants")),
+      log: await insertRows("memory_memlog", LOG_COLS, memlog, c("memory_memlog")),
+      docs: await insertRows("memory_docs", DOC_COLS, docs, c("memory_docs")),
+    };
+    return { rows: n.kv + n.grants + n.log + n.docs, n, read: { kv: kv.length, grants: grants.length, log: memlog.length, docs: docs.length } };
+  }
+
+  // The first boot with the database on: insert what is absent.
+  async function importSqlite() {
+    if (!existsSync(DB_FILE)) return { bytes: 0, rows: 0, skipped: "no file" };
+    const { rows, read } = await applySqlite(false);
+    const bytes = statSync(DB_FILE).size;
+    console.log(`[memory] imported ${rows} row(s) (${read.kv} kv, ${read.grants} grants, ${read.log} log, ${read.docs} docs read) from ${DB_FILE} into the state database`);
+    return { bytes, rows };
+  }
+
+  // Roll-forward after a rollback: while the file-only build served, it wrote
+  // memory rows the database lacks, and the import mark keeps the first-boot
+  // import from reading them. When the file (or its WAL) was modified later
+  // than the database's newest chain row by more than the grace (the mirror
+  // lands within milliseconds), the file is re-read and wins per row: kv,
+  // grants and docs upsert; chain rows insert where absent, so the chain
+  // continues from the file's last hash. Idempotent, so two containers may
+  // both run it.
+  const fileMtimeMs = () => Math.max(...[DB_FILE, `${DB_FILE}-wal`].map((f) => { try { return statSync(f).mtimeMs; } catch { return 0; } }));
+  async function rollForwardIfFileNewer() {
+    if (!existsSync(DB_FILE)) return null;
+    const mtime = fileMtimeMs();
+    const r = await stateQuery(`SELECT MAX(ts) AS ts FROM ${T("memory_memlog")}`);
+    const newest = r.rows[0]?.ts == null ? 0 : Number(r.rows[0].ts);
+    if (mtime - newest <= ROLL_FORWARD_GRACE_MS) return null;
+    const { rows, n, read } = await applySqlite(true);
+    console.log(`[memory] rolled forward ${rows} row(s) from ${DB_FILE} (${n.kv} kv, ${n.grants} grants, ${n.log} log, ${n.docs} docs changed of ${read.kv}/${read.grants}/${read.log}/${read.docs} read): the file was written ${Math.round((mtime - newest) / 1000)} s after the database's newest chain row`);
+    return rows;
   }
 
   let readyP = null;
@@ -653,7 +700,8 @@ function pgBackend() {
     if (!readyP) {
       readyP = (async () => {
         await stateQuery(DDL());
-        await importOnce(IMPORT_NAME, { source: DB_FILE, run: importSqlite });
+        const { imported } = await importOnce(IMPORT_NAME, { source: DB_FILE, run: importSqlite });
+        if (!imported) await rollForwardIfFileNewer(); // a first import already read the whole file
       })().catch((e) => {
         readyP = null; // the next call tries again (a database that was down at boot)
         console.error(`[memory] state database setup failed: ${String(e?.message || e).slice(0, 160)}`);

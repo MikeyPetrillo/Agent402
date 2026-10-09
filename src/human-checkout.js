@@ -49,7 +49,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, unlinkS
 import { createHash } from "node:crypto";
 import { join, basename } from "node:path";
 import { sendReportReadyEmail } from "./email.js";
-import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
 
 // The products the human door sells by card. The CARD price is not the agent
 // price: the card processor takes a percentage plus a fixed fee per charge, and
@@ -222,6 +222,10 @@ const USE_PG = stateDbEnabled();
 const COLL = "human-checkout";
 const RT = () => `${stateDbSchema()}.records`;
 const indexId = (path) => basename(path, ".json"); // _inflight.json -> _inflight
+const INDEX_IDS = ["_inflight", "_issues", "_public", "_failures"];
+// A file written this much later than the newest row was written by a build
+// that used the files alone (a rollback); write-through lands within milliseconds.
+export const ROLL_FORWARD_GRACE_MS = 60_000;
 const pgGet = async (id) => (await stateQuery(`SELECT body FROM ${RT()} WHERE collection = $1 AND id = $2`, [COLL, id])).rows[0]?.body ?? null;
 const pgPut = async (id, body) => { await stateQuery(`INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()`, [COLL, id, JSON.stringify(body)]); };
 const pgPutIfAbsent = async (id, body) => (await stateQuery(`INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO NOTHING`, [COLL, id, JSON.stringify(body)])).rowCount === 1;
@@ -330,7 +334,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     for (const f of files) {
       if (!f.endsWith(".json")) continue;
       const id = f.slice(0, -5);
-      if (!(SESSION_RE.test(id) || ["_inflight", "_issues", "_public", "_failures"].includes(id))) continue;
+      if (!(SESSION_RE.test(id) || INDEX_IDS.includes(id))) continue;
       const body = readJson(join(dir, f));
       if (!body) continue;
       await pgPutIfAbsent(id, body);
@@ -341,7 +345,33 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     await refreshPublicMirror();
     return { bytes, records: n };
   }
-  const ready = USE_PG ? trackStoreReady(importOnce(basename(dir), { source: dir, run: importDir })) : Promise.resolve();
+  // Roll-forward (the shape of json-document's reimportIfFileNewer): a record
+  // or index file written after the newest row, beyond the write-through
+  // grace, was written by the previous build running on the files alone (a
+  // rollback window): every record and index is re-read with the FILE
+  // WINNING per id, and the replacement is logged.
+  async function rollForwardIfFilesNewer() {
+    const files = (() => { try { return readdirSync(dir).filter((f) => f.endsWith(".json") && (SESSION_RE.test(f.slice(0, -5)) || INDEX_IDS.includes(f.slice(0, -5)))); } catch { return []; } })();
+    let mtime = 0;
+    for (const f of files) { try { mtime = Math.max(mtime, statSync(join(dir, f)).mtimeMs); } catch { /* gone */ } }
+    if (!mtime) return 0;
+    const newest = await stateQuery(`SELECT max(updated_at) AS at FROM ${RT()} WHERE collection = $1`, [COLL]);
+    let rowAt = newest.rows[0]?.at ? new Date(newest.rows[0].at).getTime() : 0;
+    if (!rowAt) { const mark = await imports.done(basename(dir)); rowAt = mark?.importedAt ? new Date(mark.importedAt).getTime() : 0; }
+    if (!rowAt || mtime <= rowAt + ROLL_FORWARD_GRACE_MS) return 0;
+    let records = 0, indexes = 0;
+    for (const f of files) {
+      const body = readJson(join(dir, f));
+      if (!body) continue;
+      const id = f.slice(0, -5);
+      await pgPut(id, body);
+      if (SESSION_RE.test(id)) records++; else indexes++;
+    }
+    log(`[human-checkout] rolled forward ${records} record(s) and ${indexes} index(es) from ${dir}: the files were written ${Math.round((mtime - rowAt) / 1000)} s after the newest row (a rollback window), the files win`);
+    await refreshPublicMirror();
+    return records + indexes;
+  }
+  const ready = USE_PG ? trackStoreReady(importOnce(basename(dir), { source: dir, run: importDir }).then(rollForwardIfFilesNewer)) : Promise.resolve();
   ready.catch((e) => log(`[human-checkout] import into the state database failed: ${String(e?.message || e).slice(0, 160)}`));
 
   const readRec = USE_PG ? async (id) => { await ready; return pgGet(id); } : (id) => readJson(recPath(id));

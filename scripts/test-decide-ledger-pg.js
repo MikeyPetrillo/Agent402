@@ -6,7 +6,7 @@
 // two concurrent runs, returned when that run fails before spending, and a
 // run is booked once per key and never past a ceiling. Requires
 // STATE_DATABASE_URL (CI fails without it).
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -126,6 +126,29 @@ try {
     const sp = db.prepare("SELECT micro FROM seller_spend WHERE run_id = ?").get("run_d");
     db.close();
     ok(cr?.state === "active" && dr?.settled === 1 && rr?.status === "running" && sp?.micro === 100000, "every write in database mode is also applied to the SQLite file (a rollback reads current state)");
+  }
+
+  // ---- roll-forward: a file written in a rollback window wins per row ------
+  {
+    // A transition and a row made by the file-only build: within the
+    // write-through grace they are left alone (an ordinary write-through).
+    const db = new Database(FILE);
+    db.prepare("UPDATE credits SET state = 'redeemed', run_id = 'run_file' WHERE token_hash = ?").run(c.hash);
+    db.prepare("INSERT INTO runs (id, decision_id, payer, status, budget_micro, spent_micro, created_at, finished_at) VALUES (?,?,?,?,?,?,?,?)").run("run_file", "d1", "0xb", "complete", 50000, 50000, now, now);
+    db.close();
+    const L3 = openDecideLedger(FILE);
+    await L3.ready;
+    ok((await L3.creditState(c.token)).state === "active" && (await L3.getRun("run_file")) === null, "a file written within the write-through grace is not re-read (the rows stay)");
+    // The same file dated past the grace: a rollback window. The file wins.
+    const future = (Date.now() + 120_000) / 1000;
+    utimesSync(FILE, future, future);
+    const L4 = openDecideLedger(FILE);
+    await L4.ready;
+    const rolled = await L4.creditState(c.token);
+    const run = await L4.getRun("run_file");
+    ok(rolled.state === "redeemed" && (await sdb.stateQuery(`SELECT run_id FROM ${T("credits")} WHERE token_hash = $1`, [c.hash])).rows[0].run_id === "run_file", "roll-forward: a credit redeemed in the file is redeemed in the table");
+    ok(run?.status === "complete" && run.spentUsd === 0.05 && (await L4.getDecision("d_late"))?.id === "d_late", "roll-forward: a run booked in the file exists in the table (and the file's other rows came along)");
+    ok((await L4.redeemCredit(c.token, "d1", "r9", now)) === 0, "...so the rolled-forward credit cannot be redeemed again");
   }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
