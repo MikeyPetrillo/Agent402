@@ -2334,6 +2334,8 @@ jobs:
           # Finance-kit tests (Yahoo chart quote+history, Nasdaq earnings calendar — keyless live APIs)
           t node scripts/test-finance-kit.js
           t node scripts/test-databento-timeouts.js
+          # "Operator bulk seed route: token-only, bounded, same validation as /sell, dry by default"
+          t node scripts/test-operator-seed.js
           # "MPP self-registration probe hint (optional path/method: validated, probed, kept only on success, persisted with the seed - offline)"
           t node scripts/test-mpp-index-hint.js
 

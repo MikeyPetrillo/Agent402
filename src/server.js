@@ -5315,6 +5315,49 @@ app.post("/__operator/sellers/remove", express.json(), (req, res) => {
   if (r.error) return res.status(400).json({ error: r.error });
   res.set("Cache-Control", "no-store").json({ removed: true, origin: r.origin, removedAt: r.removedAt });
 });
+// Operator bulk seed (2026-10-09): origins read from another registry are
+// submitted through the SAME registerOrigin path a seller's own /sell call
+// takes - same probe, same submission caps, same provenance row - a few at a
+// time, so a seed never bypasses the rules a seller faces. Dry by default:
+// the rows say what would be submitted; `commit: true` registers them. The
+// per-call bound keeps one request inside a proxy's patience (every commit
+// is a live crawl of the origin). scripts/x402scan-seed.js is the caller.
+const SEED_MAX_PER_CALL = 25;
+app.post("/__operator/index/seed", express.json({ limit: "64kb" }), async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (operatorHeavyLimited(req, res)) return;
+  const raw = req.body?.origins;
+  if (!Array.isArray(raw) || raw.length === 0) return res.status(400).json({ error: "origins must be a non-empty array of https origins" });
+  if (raw.length > SEED_MAX_PER_CALL) return res.status(400).json({ error: `at most ${SEED_MAX_PER_CALL} origins per call` });
+  const commit = req.body?.commit === true;
+  const rows = [];
+  const queue = [];
+  for (const r of raw) {
+    const v = validateOriginInput(r, { selfOrigin: BASE_URL });
+    if (v.error) { rows.push({ origin: String(r).slice(0, 200), listed: false, error: v.error }); continue; }
+    if (isRemovedOrigin(v.origin)) { rows.push({ origin: v.origin, listed: false, error: REMOVED_ORIGIN_ERROR }); continue; }
+    queue.push(v.origin);
+  }
+  const unique = [...new Set(queue)];
+  res.set("Cache-Control", "no-store");
+  if (!commit) {
+    for (const o of unique) rows.push({ origin: o, listed: null, dryRun: true });
+    return res.json({ dryRun: true, total: raw.length, valid: unique.length, rows });
+  }
+  let i = 0;
+  const worker = async () => {
+    for (let o = unique[i++]; o; o = unique[i++]) {
+      try {
+        const r = await registerOrigin(o);
+        rows.push({ origin: o, listed: !!r?.listed, ...(r?.error ? { error: String(r.error).slice(0, 200) } : {}) });
+      } catch (e) {
+        rows.push({ origin: o, listed: false, error: String(e?.message || e).slice(0, 200) });
+      }
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  res.json({ dryRun: false, total: raw.length, valid: unique.length, listed: rows.filter((r) => r.listed).length, rows });
+});
 app.get("/__operator/sellers/removed.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   const rows = listRemovedOrigins();
