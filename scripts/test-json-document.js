@@ -13,9 +13,12 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const DIR = mkdtempSync(join(tmpdir(), "json-doc-"));
 
 // ---- file and memory backends: no database in the environment ---------------
-delete process.env.STATE_DATABASE_URL; delete process.env.DATABASE_URL;
+delete process.env.STATE_DATABASE_URL;
+process.env.DATABASE_URL = "postgres://ignored.example/analytics"; // DATABASE_URL alone never switches the stores
 {
   const { createJsonDocument, documentNameOf } = await import("../src/json-document.js?file");
+  const { stateDbEnabled } = await import("../src/state-db.js");
+  ok(stateDbEnabled() === false, "DATABASE_URL alone leaves the state database off: the switch is STATE_DATABASE_URL");
   ok(documentNameOf("/data/free-alerts.json") === "free-alerts.json", "the document name is the file's basename");
   const file = join(DIR, "a.json");
   const doc = createJsonDocument({ file, log: () => {} });

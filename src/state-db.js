@@ -11,11 +11,13 @@
 //   leases      a named lease one process holds at a time (the scheduled loops,
 //               which must not run twice while two containers overlap)
 //
-// STATE_DATABASE_URL names the database, falling back to DATABASE_URL (the
-// Railway Postgres already wired for leads and analytics). Tables live in the
-// `state` schema (STATE_DB_SCHEMA; tests use one schema per run and drop it).
-// Without a URL every call reports `enabled: false` and the callers keep their
-// file or in-memory behaviour, so a local boot needs no database.
+// STATE_DATABASE_URL names the database and is the switch: unset, every call
+// reports `enabled: false` and the callers keep their file or in-memory
+// behaviour, so a deploy of this code changes nothing until the operator sets
+// it (to the same Postgres DATABASE_URL already points at, by design). There
+// is deliberately no fallback to DATABASE_URL: the cutover is a variable the
+// operator sets, never a merge. Tables live in the `state` schema
+// (STATE_DB_SCHEMA; tests use one schema per run and drop it).
 //
 // TLS follows src/db-ssl.js: relaxed on Railway's private mesh, verified and
 // fail-closed on any public host.
@@ -27,7 +29,7 @@ const SCHEMA_RE = /^[a-z_][a-z0-9_]{0,40}$/;
 const NAME_MAX = 200;
 
 export function stateDbUrl(env = process.env) {
-  return String(env.STATE_DATABASE_URL || env.DATABASE_URL || "").trim();
+  return String(env.STATE_DATABASE_URL || "").trim();
 }
 export function stateDbSchema(env = process.env) {
   const s = String(env.STATE_DB_SCHEMA || "state").trim();
