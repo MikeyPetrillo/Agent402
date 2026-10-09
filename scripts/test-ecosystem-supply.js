@@ -57,6 +57,8 @@ const m1 = ecosystemMarket({ limit: 12 });
 const m2 = ecosystemMarket({ limit: 12 });
 assert.strictEqual(m1, m2, "a fresh memo is returned as the same object (no second walk)");
 assert.strictEqual(m1.tools, 10016, "the memo carries the true uncapped total");
+await new Promise((r) => setTimeout(r, 50));
+assert.strictEqual(ecosystemMarket({ limit: 12 }), m1, "a fresh memo starts no background refresh (the object is unchanged after a tick)");
 __setMarketMemoTtl(0);
 const first = ecosystemMarket({ limit: 12 });          // nothing memoized after the reset: one synchronous pass
 const stale = ecosystemMarket({ limit: 12 });          // TTL 0: stale, served now, refresh starts in the background
