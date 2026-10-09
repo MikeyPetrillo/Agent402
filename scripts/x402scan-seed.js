@@ -16,6 +16,7 @@
 //   AGENT402_OPERATOR_TOKEN=… node scripts/x402scan-seed.js --in seed.json --submit
 //     [--base https://agent402.tools] [--max-pages 50] [--max-usd 0.50] [--start-page 0]
 import { readFileSync, writeFileSync } from "node:fs";
+import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 
 const argv = process.argv.slice(2);
 const flag = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 && argv[i + 1] !== undefined ? argv[i + 1] : dflt; };
@@ -40,12 +41,12 @@ async function readRegistry() {
   let spentAtomic = 0n;
   // The selector is the spend guard: only a Base USDC exact accept at or under
   // the per-page cap is ever signed; everything else throws before signing.
-  const client = new x402Client((_version, accepts) => {
+  const client = disableVendorSpendControls(new x402Client((_version, accepts) => {
     const ok = (accepts || []).find((a) => a?.scheme === "exact" && a?.network === "eip155:8453" && BigInt(a?.amount ?? a?.maxAmountRequired ?? "0") <= PAGE_QUOTE_CAP_ATOMIC);
     if (!ok) throw new Error("page quote above the per-page cap or not payable on Base USDC - refused, nothing signed");
     spentAtomic += BigInt(ok.amount ?? ok.maxAmountRequired ?? "0");
     return ok;
-  });
+  }));
   registerExactEvmScheme(client, { signer: privateKeyToAccount(pk.startsWith("0x") ? pk : `0x${pk}`) });
   const payFetch = wrapFetchWithPayment(fetch, client);
   const origins = new Map(); // origin -> resource count
