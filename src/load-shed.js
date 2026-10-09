@@ -24,7 +24,12 @@ import { recentLagMs, lateTicksRecent } from "./loop-lag.js";
 
 const BUDGET_WINDOW_MS = 1000;
 
-export function createComputeBudget({ budgetMs = Number(process.env.DISCOVERY_CPU_BUDGET_MS) || 300, windowMs = BUDGET_WINDOW_MS } = {}) {
+// 800 ms of search per rolling second across all callers: one router query
+// costs about 200 ms, so a caller that asks route and then find inside a
+// second is served, while a burst past four queries a second is still shed.
+// The per-client share and the in-flight cap in server.js keep one caller
+// from spending the whole budget.
+export function createComputeBudget({ budgetMs = Number(process.env.DISCOVERY_CPU_BUDGET_MS) || 800, windowMs = BUDGET_WINDOW_MS } = {}) {
   const samples = []; // [at, ms]
   let sum = 0;
   const prune = (now) => { while (samples.length && now - samples[0][0] > windowMs) sum -= samples.shift()[1]; };
