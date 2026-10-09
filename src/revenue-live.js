@@ -1644,7 +1644,7 @@ export function decideSection(d) {
     return `<tr>
       <td><strong>${esc(label)}</strong> <span style="color:var(--muted);"><code>${esc(route)}</code></span></td>
       <td class="num">${Number(a.count || 0).toLocaleString()}</td>
-      <td class="num">${Number(a.external || 0).toLocaleString()}</td>
+      <td class="num">${Number(a.external || 0).toLocaleString()}${a.sweeps?.count ? ` <span style="color:var(--muted);font-size:12px;">+${Number(a.sweeps.count).toLocaleString()} sweep${a.sweeps.count === 1 ? "" : "s"}</span>` : ""}</td>
       <td class="num">${money(a.externalUsd)}</td>
       <td class="num">${Number(w.external || 0).toLocaleString()}</td>
       <td class="num">${Number(w.externalBuyers || 0).toLocaleString()}</td>
