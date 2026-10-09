@@ -2,7 +2,7 @@
 
 Live at **[agent402.tools](https://agent402.tools)**.
 
-**The paid door for AI agents: 500+ tools, metered models and finished reports, paid per call in USDC over x402 and MPP, or by card. Open source, self-hostable, MCP-native.**
+**The paid door for AI agents: 500+ tools, metered models and finished reports, paid per call in USDC over x402 and MPP, or by card. The applied layer of Agentic Finance. Open source, self-hostable, MCP-native.**
 
 Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent402.tools) · [Why pay here](https://agent402.tools/why) · [Receipts](https://agent402.tools/proof) · [Status](https://agent402.tools/status) · [Security](https://agent402.tools/security) · [Company](https://agent402.tools/company)
 
