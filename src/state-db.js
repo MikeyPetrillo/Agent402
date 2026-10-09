@@ -309,12 +309,29 @@ export const leases = {
  * the run (`reason: "db"`) rather than running twice. The lease is renewed on
  * a timer while `fn` runs, so a long tick keeps it; it is released after.
  */
-export async function withLease(name, { ttlMs = 120_000, owner = leaseOwnerDefault, log = console.warn } = {}, fn) {
+// When the database cannot answer a lease, a container that has been up for
+// longer than a deploy's overlap is the only container (one replica; the
+// overlap is seconds), so it runs its tick as it did before the database
+// existed. A young container defers: it may be the new half of a deploy whose
+// old half is still running. STATE_DB_LEASE_FAILOPEN_MS sets the age.
+export function leaseFailOpenMs(env = process.env) {
+  const n = Number(env.STATE_DB_LEASE_FAILOPEN_MS);
+  return Number.isFinite(n) && n >= 0 ? n : 10 * 60_000;
+}
+export async function withLease(name, { ttlMs = 120_000, owner = leaseOwnerDefault, log = console.warn, uptimeMs = process.uptime() * 1000 } = {}, fn) {
   if (typeof fn !== "function") throw new Error("withLease needs a function");
   if (!stateDbEnabled()) return { ran: true, result: await fn() };
   let held = false;
   try { held = await leases.acquire(name, { owner, ttlMs }); }
-  catch (e) { log(`[state-db] lease ${name}: acquire failed (${String(e?.message || e).slice(0, 120)}); this tick is skipped`); return { ran: false, reason: "db" }; }
+  catch (e) {
+    const why = String(e?.message || e).slice(0, 120);
+    if (uptimeMs >= leaseFailOpenMs()) {
+      log(`[state-db] lease ${name}: acquire failed (${why}); running without it as the only container (up ${Math.round(uptimeMs / 60_000)} min)`);
+      return { ran: true, result: await fn(), reason: "db-failopen" };
+    }
+    log(`[state-db] lease ${name}: acquire failed (${why}); this tick is skipped (container up ${Math.round(uptimeMs / 1000)} s, under the fail-open age)`);
+    return { ran: false, reason: "db" };
+  }
   if (!held) return { ran: false, reason: "held" };
   const beat = setInterval(() => { leases.renew(name, { owner, ttlMs }).catch(() => {}); }, Math.max(1000, Math.floor(ttlMs / 3)));
   beat.unref?.();

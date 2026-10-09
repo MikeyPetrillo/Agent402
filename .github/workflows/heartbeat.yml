@@ -454,6 +454,30 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
           fi
 
+      # The state database (src/state-db.js): the stores that left the /data
+      # volume and the leases every scheduled loop runs under. "degraded" is
+      # the pool reporting an error; "off" (variable unset), "idle" and "on"
+      # never page. A long-lived container keeps its loops running without the
+      # lease (fail-open after ten minutes up), but the moved stores cannot be
+      # written while it lasts, so it pages at once.
+      - name: State database check (alarm on a degraded Postgres)
+        if: always()
+        continue-on-error: true
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.stateDb.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "state database: $STATUS"
+          TITLE="State database DEGRADED (Postgres)"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ "$STATUS" = "degraded" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status.stateDb reports **degraded**: the Postgres pool behind STATE_DATABASE_URL has reported an error. The moved stores (subscriptions, alerts, monitor runs, listings, leaderboards, logs) cannot be written while it lasts; loops on a container up for more than ten minutes keep running without their lease. Check the Postgres service on Railway and the boot log. Auto-closes when the status reads on."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ)."
+            fi
+          elif [ "$STATUS" = "on" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the state database reads on at $(date -u +%FT%TZ)."
+          fi
+
       # The Stellar facilitator's own fee-paying account. It pays the
       # transaction fee on EVERY Stellar settlement, and until 2026-08-31 it
       # was the one spending wallet we run with no alarm on it. This is a slow

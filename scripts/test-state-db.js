@@ -88,6 +88,20 @@ try {
   const r3 = await withLease("W", { owner: "A", ttlMs: 1000, log: () => {} }, async () => { await sleep(1500); return "long"; }).catch(() => { bad = true; });
   ok(!bad && r3.ran && r3.result === "long", "a tick longer than the ttl keeps the lease through renewal");
   ok(!(await leases.acquire("W", { owner: "B", ttlMs: 1000 })) === false, "after a long tick the lease is free again");
+  // A database that cannot answer: a young container skips, an old one runs as the only container.
+  const brokenUrl = process.env.STATE_DATABASE_URL;
+  const { leaseFailOpenMs } = sdb;
+  ok(leaseFailOpenMs({}) === 600_000 && leaseFailOpenMs({ STATE_DB_LEASE_FAILOPEN_MS: "5000" }) === 5000, "the fail-open age defaults to ten minutes and reads the variable");
+  await closeStateDb();
+  process.env.STATE_DATABASE_URL = "postgres://postgres@127.0.0.1:1/none?sslmode=disable&connect_timeout=1";
+  let ran = 0;
+  const young = await withLease("F", { ttlMs: 1000, uptimeMs: 1000, log: () => {} }, async () => { ran++; });
+  ok(young.ran === false && young.reason === "db" && ran === 0, "lease unavailable: a container younger than the fail-open age skips its tick");
+  const old = await withLease("F", { ttlMs: 1000, uptimeMs: 11 * 60_000, log: () => {} }, async () => { ran++; return "ok"; });
+  ok(old.ran === true && old.reason === "db-failopen" && ran === 1, "lease unavailable: a container older than the fail-open age runs as the only container");
+  await closeStateDb();
+  process.env.STATE_DATABASE_URL = brokenUrl;
+  ok(await stateDb(), "the real database is reachable again afterwards");
 } finally {
   await __dropStateSchema();
   await closeStateDb();
