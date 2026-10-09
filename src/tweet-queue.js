@@ -57,8 +57,20 @@
 //    neither.
 //  - Logs and the operator read carry ids, hours, counts and status codes.
 //    Never tweet text, never a credential.
+//  - STORE: the state file on the volume, or, when the state database is
+//    configured (STATE_DATABASE_URL), one JSON document there with the same
+//    body (name tweet-queue-state.json; the file is imported once at the
+//    first load and kept current by write-through while the volume exists).
+//    With the database the critical section is held under a short database
+//    lease (tweet-queue-state) instead of the lock file, so two containers
+//    overlapping on a deploy serialize the same way two processes on the
+//    volume did. status() and alarmStatus() stay synchronous: they answer from
+//    an in-memory mirror of the document, refreshed by every read and write
+//    this process makes and by a background refresh each call starts.
+//    Without a database nothing here changes.
 import { randomBytes } from "node:crypto";
-import { leased } from "./state-db.js";
+import { createJsonDocument } from "./json-document.js";
+import { leased, leases, stateDbEnabled, trackStoreReady } from "./state-db.js";
 import {
   closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync,
   renameSync, statSync, unlinkSync, writeFileSync, writeSync,
@@ -72,6 +84,9 @@ export const DEFAULT_TICK_MS = 3 * 60_000;
 export const DEFAULT_FIRST_TICK_MS = 90_000;
 export const POST_TIMEOUT_MS = 20_000;
 export const LOCK_LEASE_MS = 30_000;
+export const STATE_DOC_NAME = "tweet-queue-state.json";
+export const STATE_LEASE_NAME = "tweet-queue-state";
+const MIRROR_REFRESH_MS = 2_000;
 export const IN_DOUBT_RETRY_MS = 10 * 60_000;
 const SENDING_STALE_MS = 5 * 60_000; // a SENDING record older than this is a crash, not a post in flight
 const LOCK_RETRY_MS = 25;
@@ -194,15 +209,22 @@ class StoreError extends Error {
   constructor(cls) { super(`tweet-queue state ${cls}`); this.cls = cls; }
 }
 
+const freshState = () => ({ records: new Map(), slots: new Map(), fresh: true });
+
 function readState(path) {
   let raw;
   try { raw = readFileSync(path, "utf8"); }
   catch (e) {
-    if (e?.code === "ENOENT") return { records: new Map(), slots: new Map(), fresh: true };
+    if (e?.code === "ENOENT") return freshState();
     throw new StoreError("unreadable");
   }
   let j;
   try { j = JSON.parse(raw); } catch { throw new StoreError("corrupt"); }
+  return parseStateBody(j);
+}
+
+/** The stored body (the file's JSON, or the document's) as maps; corrupt when it is not the v1 shape. */
+function parseStateBody(j) {
   if (!j || typeof j !== "object" || j.v !== 1 || !Array.isArray(j.records) || !Array.isArray(j.slots)) throw new StoreError("corrupt");
   const records = new Map();
   const slots = new Map();
@@ -217,12 +239,14 @@ function readState(path) {
   return { records, slots };
 }
 
+const stateBody = (st) => ({
+  v: 1,
+  records: [...st.records.values()],
+  slots: [...st.slots].map(([hour, id]) => ({ hour, id })),
+});
+
 function writeState(path, st) {
-  const body = JSON.stringify({
-    v: 1,
-    records: [...st.records.values()],
-    slots: [...st.slots].map(([hour, id]) => ({ hour, id })),
-  });
+  const body = JSON.stringify(stateBody(st));
   const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   try {
     mkdirSync(dirname(path), { recursive: true });
@@ -401,6 +425,88 @@ export function createTweetQueue({
 } = {}) {
   const lockPath = `${storePath}.lock`;
   const windowMs = catchupHours * HOUR_MS;
+  // The backend, decided once: the state database when configured, else the file.
+  const usePg = stateDbEnabled();
+  // Only a process that may post imports the file: a read-only boot (FREE_MODE,
+  // not production) that copies the variables must never seed the database
+  // with ITS record of what was posted, which would be empty.
+  const doc = usePg ? createJsonDocument({ name: STATE_DOC_NAME, file: storePath || null, log, importFromFile: !freeMode && !notProduction }) : null;
+  const MISSING = Object.freeze({});
+  // The database backend's mirror for the synchronous reads (status, alarm):
+  // the last body this process read or wrote, or the read's error class.
+  let mirror = { st: null, error: null, at: 0 };
+  let refreshing = null;
+  const cloneState = (st) => ({ records: new Map([...st.records].map(([k, v]) => [k, { ...v }])), slots: new Map(st.slots), ...(st.fresh ? { fresh: true } : {}) });
+  const store = usePg ? {
+    async read() {
+      let st;
+      try {
+        const j = await doc.load(MISSING);
+        if (j === MISSING) {
+          if (doc.lastError) throw new StoreError("unreadable");
+          st = freshState();
+        } else st = parseStateBody(j);
+      } catch (e) {
+        const err = e instanceof StoreError ? e : new StoreError("unreadable");
+        mirror = { st: null, error: err.cls, at: Date.now() };
+        throw err;
+      }
+      mirror = { st: cloneState(st), error: null, at: Date.now() };
+      return st;
+    },
+    async write(st) {
+      if (!(await doc.save(stateBody(st)))) throw new StoreError("unwritable");
+      mirror = { st: cloneState({ ...st, fresh: false }), error: null, at: Date.now() };
+    },
+    // The critical section under a database lease: the token is the owner,
+    // so only this call's release can free it, and a holder that dies lets
+    // it expire on its own.
+    async lock(fn, tries) {
+      const token = randomBytes(8).toString("hex");
+      for (let i = 0; i < tries; i++) {
+        let held = false;
+        try { held = await leases.acquire(STATE_LEASE_NAME, { owner: token, ttlMs: leaseMs }); }
+        catch { throw new StoreError("lock_unwritable"); }
+        if (held) {
+          try { return { ok: true, value: await fn() }; }
+          finally { await leases.release(STATE_LEASE_NAME, { owner: token }).catch(() => { /* it expires on its own */ }); }
+        }
+        await new Promise((r) => setTimeout(r, LOCK_RETRY_MS));
+      }
+      return { ok: false };
+    },
+  } : {
+    async read() { return readState(storePath); },
+    async write(st) { writeState(storePath, st); },
+    async lock(fn, tries) {
+      const token = randomBytes(8).toString("hex");
+      for (let i = 0; i < tries; i++) {
+        if (tryLock(lockPath, token, leaseMs)) {
+          try { return { ok: true, value: await fn() }; } finally { unlock(lockPath, token); }
+        }
+        await new Promise((r) => setTimeout(r, LOCK_RETRY_MS));
+      }
+      return { ok: false };
+    },
+  };
+  /** Database backend: refresh the mirror in the background, at most every few seconds. */
+  function refreshMirror(force = false) {
+    if (!usePg) return Promise.resolve();
+    if (refreshing) return refreshing;
+    if (!force && Date.now() - mirror.at < MIRROR_REFRESH_MS) return Promise.resolve();
+    refreshing = store.read().catch(() => { /* the mirror carries the error class */ }).finally(() => { refreshing = null; });
+    return refreshing;
+  }
+  // The first load, awaited by the server before it listens.
+  const ready = usePg ? trackStoreReady(refreshMirror(true)) : Promise.resolve();
+  /** The state for a synchronous read: the file now, or the database mirror. */
+  function readStateSync() {
+    if (!usePg) return readState(storePath);
+    void refreshMirror();
+    if (mirror.error) throw new StoreError(mirror.error);
+    if (!mirror.st) throw new StoreError("unreadable"); // the first load has not landed
+    return mirror.st;
+  }
   const parsed = parseTweetQueue(queueJson, { maxWeighted });
   const queueIds = new Set(parsed.items.map((it) => it.id));
   const itemById = new Map(parsed.items.map((it) => [it.id, it]));
@@ -427,7 +533,7 @@ export function createTweetQueue({
     if (switchedOff) return "switched_off";
     if (freeMode) return "free_mode";
     if (notProduction) return "not_production";
-    if (!storePath) return "no_store";
+    if (!storePath && !usePg) return "no_store";
     if (missing.length) return "no_credentials";
     if (storeError) return "store_unreadable";
     return "posting";
@@ -435,7 +541,7 @@ export function createTweetQueue({
 
   const noteError = (cls, extra = {}) => { lastError = { class: safeCls(cls), at: new Date(now()).toISOString(), ...extra }; };
 
-  function persist(st) {
+  async function persist(st) {
     const t = now();
     for (const [id, r] of st.records) {
       if (!queueIds.has(id) && t - r.at > RETAIN_MS) st.records.delete(id);
@@ -443,24 +549,15 @@ export function createTweetQueue({
     for (const hour of st.slots.keys()) {
       if (t - Date.parse(`${hour}:00:00Z`) > SLOT_RETAIN_MS) st.slots.delete(hour);
     }
-    writeState(storePath, st);
+    await store.write(st);
   }
 
-  async function withLock(fn, tries) {
-    const token = randomBytes(8).toString("hex");
-    for (let i = 0; i < tries; i++) {
-      if (tryLock(lockPath, token, leaseMs)) {
-        try { return { ok: true, value: fn() }; } finally { unlock(lockPath, token); }
-      }
-      await new Promise((r) => setTimeout(r, LOCK_RETRY_MS));
-    }
-    return { ok: false };
-  }
+  const withLock = (fn, tries) => store.lock(fn, tries);
 
   // Under the lock: drop what aged out, then claim the oldest due item for
   // this clock hour by writing its SENDING record before anything is sent.
-  function claimNext() {
-    const st = readState(storePath);
+  async function claimNext() {
+    const st = await store.read();
     storeError = null;
     if (testHoldMs > 0) { const until = Date.now() + testHoldMs; while (Date.now() < until) { /* widen the race window */ } }
     const t = now();
@@ -482,7 +579,7 @@ export function createTweetQueue({
       // Written even when nothing was skipped: without the file every later
       // tick would read as a first run and skip what it came to post.
       st.fresh = false;
-      persist(st);
+      await persist(st);
     }
     for (const it of parsed.items) {
       if (st.records.has(it.id) || t - it.when <= windowMs) continue;
@@ -505,13 +602,13 @@ export function createTweetQueue({
       }) || null;
     }
     if (!pick) {
-      if (dropped) persist(st);
+      if (dropped) await persist(st);
       return { dropped, item: null, why: holder ? "hour_used" : "nothing_due" };
     }
     const prior = st.records.has(pick.id) ? { ...st.records.get(pick.id) } : null; // set only for a retry
     st.records.set(pick.id, { id: pick.id, state: "sending", at: t, hour, ...(prior ? { retry: true, firstHour: prior.hour ?? null } : {}) });
     st.slots.set(hour, pick.id);
-    persist(st);
+    await persist(st);
     return { dropped, item: pick, hour, prior };
   }
 
@@ -519,8 +616,8 @@ export function createTweetQueue({
   // re-read, and if it no longer holds our record (restored from a backup, or
   // replaced by hand mid-post) the outcome is written anyway: anything that
   // may have posted must stay recorded, or the next tick would send it again.
-  function recordOutcome(item, hour, out, prior = null) {
-    const st = readState(storePath);
+  async function recordOutcome(item, hour, out, prior = null) {
+    const st = await store.read();
     const id = item.id;
     const ours = st.records.get(id)?.state === "sending";
     const t = now();
@@ -540,7 +637,7 @@ export function createTweetQueue({
         if (ours || !st.records.has(id)) st.records.set(id, prior);
         releaseRetrySlot();
       } else { stillInDoubt(out.cls || `http_${out.status}`); holdSlot(); }
-      persist(st);
+      await persist(st);
       return true;
     }
     if (out.kind === "posted") { st.records.set(id, { id, state: "posted", at: t, hour, ...(out.tweetId ? { tweetId: out.tweetId } : {}) }); holdSlot(); }
@@ -548,7 +645,7 @@ export function createTweetQueue({
     else if (out.kind === "rejected") { st.records.set(id, { id, state: "rejected", at: t, status: out.status }); releaseSlot(); }
     else if (out.kind === "account" || out.kind === "not_sent") { if (ours) st.records.delete(id); releaseSlot(); }
     else { st.records.set(id, { id, state: "in_doubt", at: t, hour, cls: safeCls(out.cls || `http_${out.status}`), retryAt: t + IN_DOUBT_RETRY_MS }); holdSlot(); }
-    persist(st);
+    await persist(st);
     return true;
   }
 
@@ -658,8 +755,8 @@ export function createTweetQueue({
     const t = now();
     let st = null;
     let readError = null;
-    if (storePath) {
-      try { st = readState(storePath); } catch (e) { readError = e instanceof StoreError ? e.cls : "unreadable"; }
+    if (storePath || usePg) {
+      try { st = readStateSync(); } catch (e) { readError = e instanceof StoreError ? e.cls : "unreadable"; }
     }
     const records = st ? st.records : new Map();
     const counts = { posted: 0, duplicate: 0, rejected: 0, dropped: 0, inDoubt: 0, retryPending: 0, sending: 0, due: 0, upcoming: 0, pastWindow: 0 };
@@ -735,7 +832,7 @@ export function createTweetQueue({
     else if (m !== "posting" && m !== "store_unreadable") status = "halted";
     else {
       let st = null;
-      try { st = readState(storePath); } catch { st = null; }
+      try { st = readStateSync(); } catch { st = null; }
       if (!st || storeError) status = "halted";
       else {
         for (const it of parsed.items) {
@@ -769,5 +866,5 @@ export function createTweetQueue({
 
   function stopTimer() { if (timer) clearInterval(timer); timer = null; }
 
-  return { tick, status, alarmStatus, start, stopTimer, mode };
+  return { tick, status, alarmStatus, start, stopTimer, mode, ready: () => ready, backend: usePg ? "pg" : "file", flush: () => (doc ? doc.flush() : Promise.resolve()) };
 }

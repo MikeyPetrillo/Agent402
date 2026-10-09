@@ -62,9 +62,18 @@
 // and exposes no `stripe.crypto.depositAddresses` resource, so these preview
 // fields would be fought rather than helped. A plain fetch with the version
 // header also gives us an explicit timeout and zero uncontrolled SDK retries.
+//
+// STORE: a SQLite file on the volume (agent402-stripe-shadow.db), or, when the
+// state database is configured (STATE_DATABASE_URL), the stripe_shadow table
+// there, with the same columns. The first boot with the database on imports
+// the file's rows once (insert-if-absent, so two containers booting at once
+// are safe) and records the import. With the database the drain CLAIMS its
+// batch in one UPDATE ... RETURNING, so two containers that overlap on a
+// deploy never send the same row, and a row left in `sending` is reclaimed
+// only once it is older than any post could be in flight.
 import Database from "better-sqlite3";
-import { leased } from "./state-db.js";
-import { existsSync, mkdirSync } from "node:fs";
+import { importOnce, leased, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady, withStateTx } from "./state-db.js";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { logSafe } from "./log-safe.js";
 
@@ -142,6 +151,83 @@ export function shadowLedgerEnabled(env = process.env) {
 }
 
 const DEFAULT_DIR = () => (existsSync("/data") ? "/data" : "/tmp");
+export const SHADOW_DB_FILE = "agent402-stripe-shadow.db";
+// With the database, a `sending` row older than this is a crash, not a post
+// in flight (a post is bounded by timeoutMs, ten seconds by default).
+const SENDING_STALE_MS = () => Math.max(60_000, Number(process.env.STRIPE_SHADOW_SENDING_STALE_MS) || 10 * 60_000);
+const T = () => `${stateDbSchema()}.stripe_shadow`;
+const PG_COLS = "tx, stripe_net, chain, slug, cents, price_usd, status, reason, pi_id, attempts, created_at, updated_at, next_at";
+const PG_DDL = () => `
+  CREATE TABLE IF NOT EXISTS ${T()} (
+    tx           TEXT PRIMARY KEY,
+    stripe_net   TEXT,
+    chain        TEXT,
+    slug         TEXT,
+    cents        INTEGER NOT NULL DEFAULT 0,
+    price_usd    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    status       TEXT NOT NULL,
+    reason       TEXT,
+    pi_id        TEXT,
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    created_at   BIGINT NOT NULL,
+    updated_at   BIGINT NOT NULL,
+    next_at      BIGINT NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS stripe_shadow_status ON ${T()} (status, next_at);
+`;
+const num = (v) => (v == null ? v : Number(v));
+/** A Postgres row in the shape the SQLite rows have (bigints and sums arrive as strings). */
+const rowOf = (r) => ({ ...r, cents: num(r.cents), price_usd: num(r.price_usd), attempts: num(r.attempts), created_at: num(r.created_at), updated_at: num(r.updated_at), next_at: num(r.next_at) });
+
+/** Copy every row of the SQLite file into the table, insert-if-absent. */
+async function importSqliteFile(file) {
+  if (!file || !existsSync(file)) return { bytes: 0, rows: 0 };
+  const src = new Database(file, { readonly: true, fileMustExist: true });
+  let rows = [];
+  try { rows = src.prepare("SELECT * FROM shadow").all(); } finally { src.close(); }
+  await withStateTx(async (client) => {
+    for (const r of rows) {
+      await client.query(
+        `INSERT INTO ${T()} (${PG_COLS}) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (tx) DO NOTHING`,
+        [r.tx, r.stripe_net ?? null, r.chain ?? null, r.slug ?? null, Number(r.cents) || 0, Number(r.price_usd) || 0, String(r.status || "pending"), r.reason ?? null, r.pi_id ?? null, Number(r.attempts) || 0, Number(r.created_at) || 0, Number(r.updated_at) || 0, Number(r.next_at) || 0],
+      );
+    }
+  });
+  return { bytes: statSync(file).size, rows: rows.length };
+}
+
+/** The reconciliation numbers from the three aggregate reads (either backend). */
+function buildReport(base, byStatus, byReason, recent) {
+  const counts = {};
+  const usd = {};
+  let seen = 0;
+  let ourUsd = 0;
+  for (const r of byStatus) {
+    counts[r.status] = r.n;
+    usd[r.status] = Math.round((r.usd || 0) * 1e6) / 1e6;
+    seen += r.n;
+    ourUsd += r.usd || 0;
+  }
+  const recordedCents = byStatus.filter((r) => r.status === "recorded").reduce((a, r) => a + (r.cents || 0), 0);
+  return {
+    ...base,
+    ourSide: {
+      settlementsSeen: seen,
+      usdTotal: Math.round(ourUsd * 1e6) / 1e6,
+      source: "sales ledger settlements handed to record(), priced at catalog list price",
+    },
+    stripeSide: {
+      paymentIntents: counts.recorded || 0,
+      usdTotal: Math.round(recordedCents) / 100,
+      source: "PaymentIntents Stripe returned 2xx for",
+    },
+    counts,
+    usd,
+    reasons: byReason.map((r) => ({ status: r.status, reason: r.reason, n: r.n, usd: Math.round((r.usd || 0) * 1e6) / 1e6 })),
+    recent,
+    compare: "For a week: stripeSide.paymentIntents/usdTotal against the Stripe Dashboard, and ourSide.usdTotal minus usd.skipped against /api/revenue/daily external USDC totals for the same window. counts.skipped with reason below-minimum/sub-cent-amount is expected to dominate: Stripe's stablecoin floor is $0.01 and most catalog tools are $0.001.",
+  };
+}
 
 /**
  * @param {object} [deps]
@@ -169,18 +255,24 @@ export function createShadowLedger(deps = {}) {
   } = deps;
 
   const enabled = shadowLedgerEnabled(env);
+  // The backend: the state database when it is configured, else the SQLite
+  // file. Decided once, at construction, like every other store.
+  const usePg = enabled && stateDbEnabled();
+  const dbFile = deps.dbFile || join(DEFAULT_DIR(), SHADOW_DB_FILE);
   let db = null;
   let initError = null;
   let timer = null;
   let draining = false;
+  let pgReady = null;   // resolves true once the table exists and the file is imported, false when that failed
+  let pgDead = false;
 
   // Disabled = inert. No file is opened, no timer armed. Any failure to open
   // the store degrades to the SAME inert object: a shadow ledger that cannot
   // persist must do nothing at all rather than post without a dedupe layer.
-  if (enabled) {
+  if (enabled && !usePg) {
     try {
       if (!deps.dbFile) { try { mkdirSync(DEFAULT_DIR(), { recursive: true }); } catch { /* exists */ } }
-      db = new Database(deps.dbFile || join(DEFAULT_DIR(), "agent402-stripe-shadow.db"));
+      db = new Database(dbFile);
       db.pragma("journal_mode = WAL");
       db.exec(`
         CREATE TABLE IF NOT EXISTS shadow (
@@ -212,10 +304,30 @@ export function createShadowLedger(deps = {}) {
       console.warn(`[stripe-shadow] store unavailable, ledger inert: ${logSafe(initError)}`);
     }
   }
+  if (usePg) {
+    // The table, the one-time import of the SQLite file, and the reclaim of
+    // rows another container (or this one, before a restart) left in
+    // `sending` longer than a post can be in flight. A row claimed seconds
+    // ago may be mid-send on the other half of a deploy: it is left alone.
+    pgReady = (async () => {
+      await stateQuery(PG_DDL());
+      const imp = await importOnce(SHADOW_DB_FILE, { source: dbFile, run: () => importSqliteFile(dbFile) });
+      if (imp.imported && imp.rows) log(`[stripe-shadow] imported ${imp.rows} row(s) from ${dbFile}`);
+      const reclaimed = await reclaimStale();
+      if (reclaimed > 0) log(`[stripe-shadow] reclaimed ${reclaimed} row(s) stranded mid-send by a restart`);
+      return true;
+    })().catch((e) => {
+      initError = String(e?.message || e).slice(0, 200);
+      pgDead = true;
+      console.warn(`[stripe-shadow] store unavailable, ledger inert: ${logSafe(initError)}`);
+      return false;
+    });
+    trackStoreReady(pgReady);
+  }
 
-  const live = () => enabled && db !== null;
+  const live = () => enabled && (db !== null || (usePg && !pgDead));
 
-  const stmts = live() ? {
+  const stmts = db ? {
     ins: db.prepare(`INSERT OR IGNORE INTO shadow
       (tx, stripe_net, chain, slug, cents, price_usd, status, reason, attempts, created_at, updated_at, next_at)
       VALUES (@tx, @stripe_net, @chain, @slug, @cents, @price_usd, @status, @reason, 0, @ts, @ts, @ts)`),
@@ -227,6 +339,54 @@ export function createShadowLedger(deps = {}) {
     recent: db.prepare("SELECT tx, slug, chain, stripe_net, cents, price_usd, status, reason, pi_id, attempts, created_at, updated_at FROM shadow ORDER BY created_at DESC LIMIT ?"),
     count: db.prepare("SELECT COUNT(*) n FROM shadow"),
   } : null;
+
+  // ---- the database path ------------------------------------------------------
+  // Writes from the serving path are queued in order (one in flight) and never
+  // awaited by the caller: record() stays a synchronous void. flush() resolves
+  // once the queue is empty (tests and shutdown).
+  let chain = Promise.resolve();
+  function enqueueOp(fn) {
+    const next = chain.then(async () => { if (!(await pgReady)) return; await fn(); })
+      .catch((e) => { try { console.warn(`[stripe-shadow] enqueue failed: ${logSafe(e?.message || e)}`); } catch { /* nothing left to do */ } });
+    chain = next;
+    return next;
+  }
+  async function reclaimStale() {
+    const t = now();
+    const r = await stateQuery(`UPDATE ${T()} SET status='pending', updated_at=$1 WHERE status='sending' AND updated_at < $2`, [t, t - SENDING_STALE_MS()]);
+    return r.rowCount;
+  }
+  async function pgInsert(row) {
+    await stateQuery(
+      `INSERT INTO ${T()} (${PG_COLS}) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULL,0,$9,$9,$9) ON CONFLICT (tx) DO NOTHING`,
+      [row.tx, row.stripe_net, row.chain, row.slug, row.cents, row.price_usd, row.status, row.reason, row.ts],
+    );
+  }
+  /** Claim up to `batchSize` due rows in ONE statement: the rows another container claimed are skipped. */
+  async function pgClaimDue() {
+    const t = now();
+    const r = await stateQuery(
+      `UPDATE ${T()} s SET status='sending', attempts=s.attempts+1, updated_at=$1
+       WHERE s.tx IN (SELECT tx FROM ${T()} WHERE status='pending' AND next_at <= $1 ORDER BY created_at ASC LIMIT $2 FOR UPDATE SKIP LOCKED)
+       RETURNING ${PG_COLS}`,
+      [t, batchSize],
+    );
+    return r.rows.map(rowOf);
+  }
+  async function pgFinish(f) {
+    await stateQuery(
+      `UPDATE ${T()} SET status=$2, reason=$3, pi_id=$4, updated_at=$5, next_at=$6 WHERE tx=$1 AND status='sending'`,
+      [f.tx, f.status, f.reason, f.pi_id, f.ts, f.next_at],
+    );
+  }
+  async function pgAggregates(limit) {
+    const byStatus = (await stateQuery(`SELECT status, COUNT(*)::int AS n, SUM(price_usd)::float8 AS usd, SUM(cents)::bigint AS cents FROM ${T()} GROUP BY status`)).rows
+      .map((r) => ({ status: r.status, n: Number(r.n), usd: Number(r.usd) || 0, cents: Number(r.cents) || 0 }));
+    const byReason = (await stateQuery(`SELECT status, reason, COUNT(*)::int AS n, SUM(price_usd)::float8 AS usd FROM ${T()} WHERE reason IS NOT NULL GROUP BY status, reason ORDER BY n DESC`)).rows
+      .map((r) => ({ status: r.status, reason: r.reason, n: Number(r.n), usd: Number(r.usd) || 0 }));
+    const recent = (await stateQuery(`SELECT tx, slug, chain, stripe_net, cents, price_usd, status, reason, pi_id, attempts, created_at, updated_at FROM ${T()} ORDER BY created_at DESC LIMIT $1`, [limit])).rows.map(rowOf);
+    return { byStatus, byReason, recent };
+  }
 
   /**
    * Enqueue one settled on-chain payment. SYNCHRONOUS, returns undefined,
@@ -244,7 +404,7 @@ export function createShadowLedger(deps = {}) {
       const key = verdict.skip === "no-tx"
         ? `notx:${String(slug || "?")}:${Math.floor(ts / 60_000)}`
         : String(tx);
-      stmts.ins.run({
+      const row = {
         tx: key,
         stripe_net: verdict.ok ? verdict.stripeNetwork : null,
         chain: network ? String(network) : null,
@@ -254,7 +414,9 @@ export function createShadowLedger(deps = {}) {
         status: verdict.ok ? "pending" : "skipped",
         reason: verdict.ok ? null : verdict.skip,
         ts,
-      });
+      };
+      if (usePg) enqueueOp(() => pgInsert(row)); // queued, in order, never awaited here
+      else stmts.ins.run(row);
       if (verdict.ok) ensureTimer();
     } catch (e) {
       // Accounting must never break serving, and the shadow ledger must never
@@ -316,33 +478,45 @@ export function createShadowLedger(deps = {}) {
   const drain = leased("stripe-shadow-drain", { ttlMs: 300000, log: console.warn }, drainUnleased);
   async function drainUnleased() {
     if (!live() || draining) return { attempted: 0 };
+    if (usePg && !(await pgReady)) return { attempted: 0 };
     draining = true;
     let attempted = 0;
     try {
-      const rows = stmts.due.all(now(), batchSize);
+      let rows;
+      if (usePg) {
+        // Rows another container left mid-send past the stale window come
+        // back to pending first; then this tick's batch is claimed in one
+        // statement, so no row is ever claimed twice.
+        await reclaimStale();
+        rows = await pgClaimDue();
+      } else {
+        rows = stmts.due.all(now(), batchSize);
+      }
       for (const row of rows) {
         // Claim before the network call. If the process dies mid-flight the row
         // sits in `sending` and is reclaimed at next boot, never re-driven by a
-        // concurrent tick.
-        if (stmts.claim.run({ tx: row.tx, ts: now() }).changes !== 1) continue;
+        // concurrent tick. (With the database the claim was the UPDATE above.)
+        if (!usePg && stmts.claim.run({ tx: row.tx, ts: now() }).changes !== 1) continue;
         attempted++;
-        const v = await postOne({ ...row, attempts: row.attempts + 1 });
-        const attempts = row.attempts + 1;
+        const attempts = usePg ? row.attempts : row.attempts + 1;
+        const v = await postOne({ ...row, attempts });
         const exhausted = v.status === "retry" && attempts >= maxAttempts;
         const status = v.status === "retry" ? (exhausted ? "abandoned" : "pending") : v.status;
         const storedReason = exhausted ? `${v.reason}:max-attempts` : v.reason;
-        stmts.finish.run({
+        const fin = {
           tx: row.tx,
           status,
           reason: storedReason,
           pi_id: v.piId,
           ts: now(),
           next_at: status === "pending" ? now() + backoffMs * attempts : 0,
-        });
+        };
+        if (usePg) await pgFinish(fin); else stmts.finish.run(fin);
         if (status === "rejected" || status === "abandoned") {
           log(`[stripe-shadow] ${status} ${logSafe(row.slug)} ${row.cents}c on ${logSafe(row.stripe_net)}: ${logSafe(storedReason)}`);
         }
       }
+      if (usePg && attempted) await refreshSnapshot();
     } catch (e) {
       try { console.warn(`[stripe-shadow] drain failed: ${logSafe(e?.message || e)}`); } catch { /* nothing left to do */ }
     } finally {
@@ -366,54 +540,71 @@ export function createShadowLedger(deps = {}) {
   }
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
-  /** The reconciliation surface. Read-only; safe to call when disabled. */
-  function report({ limit = 50 } = {}) {
-    const base = {
-      enabled,
-      live: live(),
-      apiVersion: SHADOW_API_VERSION,
-      mode: "transaction_verification",
-      authoritative: false,
-      note: "SHADOW ONLY. Our sales ledger and the chain are authoritative; /revenue never reads this. Stripe's x402 guide expects payments to land on a Stripe-created deposit address, and our payTo is our own wallet, so rejections here are an expected result, not an outage.",
-    };
+  /** The reconciliation surface. Read-only; safe to call when disabled.
+   *  On the SQLite file it reads live. On the database it returns the last
+   *  SNAPSHOT (taken after every drain, and refreshed by each call for the
+   *  next one, at most every few seconds) so the caller stays synchronous;
+   *  reportAsync() reads the database fresh. */
+  const baseReport = () => ({
+    enabled,
+    live: live(),
+    apiVersion: SHADOW_API_VERSION,
+    mode: "transaction_verification",
+    authoritative: false,
+    backend: usePg ? "pg" : "sqlite",
+    note: "SHADOW ONLY. Our sales ledger and the chain are authoritative; /revenue never reads this. Stripe's x402 guide expects payments to land on a Stripe-created deposit address, and our payTo is our own wallet, so rejections here are an expected result, not an outage.",
+  });
+  function disabledReport() {
+    const base = baseReport();
     if (!enabled) return { ...base, reason: env.STRIPE_SECRET_KEY ? "STRIPE_SHADOW_LEDGER not set to 'on'" : "STRIPE_SHADOW_LEDGER/STRIPE_SECRET_KEY not set" };
     if (!live()) return { ...base, reason: "store unavailable", initError };
+    return null;
+  }
+  let snapshot = null;
+  let snapshotAt = 0;
+  let snapshotLimit = 50;
+  let refreshing = null;
+  const SNAPSHOT_MIN_MS = 2_000;
+  function refreshSnapshot(limit = snapshotLimit) {
+    if (refreshing) return refreshing;
+    refreshing = (async () => {
+      if (!(await pgReady)) return;
+      const { byStatus, byReason, recent } = await pgAggregates(limit);
+      snapshot = buildReport(baseReport(), byStatus, byReason, recent);
+      snapshotAt = now();
+      snapshotLimit = limit;
+    })().catch((e) => { try { console.warn(`[stripe-shadow] report failed: ${logSafe(e?.message || e)}`); } catch { /* nothing left to do */ } })
+      .finally(() => { refreshing = null; });
+    return refreshing;
+  }
+  function report({ limit = 50 } = {}) {
+    const off = disabledReport();
+    if (off) return off;
+    const lim = Math.max(1, Math.min(500, Number(limit) || 50));
+    if (usePg) {
+      if (!snapshot || now() - snapshotAt >= SNAPSHOT_MIN_MS || lim !== snapshotLimit) void refreshSnapshot(lim);
+      if (!snapshot) return { ...baseReport(), reason: "snapshot pending: the first read of the database is in flight, read again" };
+      return { ...snapshot, snapshotAt: new Date(snapshotAt).toISOString() };
+    }
     try {
-      const counts = {};
-      const usd = {};
-      let seen = 0;
-      let ourUsd = 0;
-      for (const r of stmts.byStatus.all()) {
-        counts[r.status] = r.n;
-        usd[r.status] = Math.round((r.usd || 0) * 1e6) / 1e6;
-        seen += r.n;
-        ourUsd += r.usd || 0;
-      }
-      const recordedCents = stmts.byStatus.all().filter((r) => r.status === "recorded").reduce((a, r) => a + (r.cents || 0), 0);
-      return {
-        ...base,
-        ourSide: {
-          settlementsSeen: seen,
-          usdTotal: Math.round(ourUsd * 1e6) / 1e6,
-          source: "sales ledger settlements handed to record(), priced at catalog list price",
-        },
-        stripeSide: {
-          paymentIntents: counts.recorded || 0,
-          usdTotal: Math.round(recordedCents) / 100,
-          source: "PaymentIntents Stripe returned 2xx for",
-        },
-        counts,
-        usd,
-        reasons: stmts.byReason.all().map((r) => ({ status: r.status, reason: r.reason, n: r.n, usd: Math.round((r.usd || 0) * 1e6) / 1e6 })),
-        recent: stmts.recent.all(Math.max(1, Math.min(500, Number(limit) || 50))),
-        compare: "For a week: stripeSide.paymentIntents/usdTotal against the Stripe Dashboard, and ourSide.usdTotal minus usd.skipped against /api/revenue/daily external USDC totals for the same window. counts.skipped with reason below-minimum/sub-cent-amount is expected to dominate: Stripe's stablecoin floor is $0.01 and most catalog tools are $0.001.",
-      };
+      return buildReport(baseReport(), stmts.byStatus.all(), stmts.byReason.all(), stmts.recent.all(lim));
     } catch (e) {
-      return { ...base, reason: "report failed", error: logSafe(e?.message || e, 200) };
+      return { ...baseReport(), reason: "report failed", error: logSafe(e?.message || e, 200) };
     }
   }
+  /** The same surface, read fresh (awaits the database; the file is read at once). */
+  async function reportAsync(opts = {}) {
+    if (!usePg) return report(opts);
+    const off = disabledReport();
+    if (off) return off;
+    await flush();
+    await refreshSnapshot(Math.max(1, Math.min(500, Number(opts.limit) || 50)));
+    return report(opts);
+  }
+  /** Resolves once every queued write has landed (tests and shutdown). */
+  async function flush() { let last = null; while (chain !== last) { last = chain; await last; } }
 
-  return { record, drain, start, stop, report, enabled, live: live(), _db: db };
+  return { record, drain, start, stop, report, reportAsync, flush, ready: () => (pgReady || Promise.resolve(db !== null)), enabled, backend: usePg ? "pg" : "sqlite", live: live(), _db: db };
 }
 
 // ---------------------------------------------------------------------------
@@ -438,4 +629,8 @@ export function startShadowLedger() {
 }
 export function shadowLedgerReport(opts) {
   try { return instance().report(opts); } catch { return { enabled: false, reason: "report failed" }; }
+}
+/** The report read fresh from the store (a promise; on the SQLite file it is the same read). */
+export async function shadowLedgerReportAsync(opts) {
+  try { return await instance().reportAsync(opts); } catch { return { enabled: false, reason: "report failed" }; }
 }

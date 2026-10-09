@@ -10,10 +10,23 @@
 // and the crawler list), persisted under DATA_DIR/traffic and served to the
 // operator at /__operator/traffic.json. O(1) per request, every map capped,
 // never a raw ip or a payer address in the store.
+//
+// STORE: one JSON file per UTC day plus payers.json under the directory, or,
+// when the state database is configured (STATE_DATABASE_URL), the `records`
+// table there (collection "traffic", id = the day or "payers"), on the same
+// 60 s persist cadence and the same retention. The first load with the
+// database on imports the directory's files once (insert-if-absent) and
+// records the import under the directory's basename. Without a database
+// nothing here changes: the files are read and written as before.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { railOf } from "./payment-rail.js";
+import { importOnce, records, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady } from "./state-db.js";
+
+const COLLECTION = "traffic";
+const PAYERS_ID = "payers";
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export const CLASSES = Object.freeze(["ours", "repeat-buyer", "paid", "pow", "payment-refused", "known-indexer", "crawler", "challenge-only", "human", "other"]);
 // Our own probes and sweeps, by the names they send (the signed heartbeat
@@ -111,10 +124,23 @@ export function createTrafficStore(opts = {}) {
   const dayOf = (t = Date.now()) => new Date(t).toISOString().slice(0, 10);
   const rollup = (day) => { if (!days.has(day)) days.set(day, emptyDay(day)); return days.get(day); };
   const expired = (day, now) => day < dayOf(now - o.retentionDays * 864e5);
+  // The database backend, decided once at construction.
+  const usePg = o.backend === "file" ? false : stateDbEnabled();
+  const log = typeof o.log === "function" ? o.log : console.warn;
+  const say = (m) => { try { log(`[traffic] ${m}`); } catch { /* logging never throws */ } };
+  let ready = Promise.resolve();
+  let pgFailedOnce = false;
+  const RT = () => `${stateDbSchema()}.records`;
   // Drop rollups past retention, in memory and on disk.
   function prune(now = Date.now()) {
     for (const d of [...days.keys()]) if (expired(d, now)) days.delete(d);
     for (const d of [...dayIps.keys()]) if (expired(d, now)) dayIps.delete(d);
+    if (usePg) {
+      // The day rows past retention. Never the payers row: 'payers' sorts
+      // after every date, and the guard says so outright.
+      const cutoff = dayOf(now - o.retentionDays * 864e5);
+      void stateQuery(`DELETE FROM ${RT()} WHERE collection = $1 AND id <> $2 AND id < $3`, [COLLECTION, PAYERS_ID, cutoff]).catch((e) => { if (!pgFailedOnce) { pgFailedOnce = true; say(`retention delete failed: ${String(e?.message || e).slice(0, 120)}`); } });
+    }
     try {
       if (!existsSync(o.dir)) return;
       for (const f of readdirSync(o.dir)) {
@@ -124,8 +150,8 @@ export function createTrafficStore(opts = {}) {
     } catch { /* unreadable dir */ }
   }
 
-  function load(now = Date.now()) {
-    prune(now);
+  /** Read the directory's files into memory (the file backend's load). */
+  function loadFiles(now) {
     try {
       if (!existsSync(o.dir)) return;
       for (const f of readdirSync(o.dir)) {
@@ -134,22 +160,100 @@ export function createTrafficStore(opts = {}) {
       }
     } catch { /* unreadable dir: start cold */ }
   }
+  /** Copy the directory's files into the table, insert-if-absent (two containers booting at once are safe). */
+  async function importDir(now) {
+    let rows = 0, bytes = 0;
+    if (!existsSync(o.dir)) return { rows, bytes };
+    const put = async (id, body, file) => {
+      await stateQuery(`INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO NOTHING`, [COLLECTION, id, JSON.stringify(body)]);
+      rows++; try { bytes += statSync(file).size; } catch { /* counted as zero */ }
+    };
+    for (const f of readdirSync(o.dir)) {
+      const file = join(o.dir, f);
+      if (/^\d{4}-\d{2}-\d{2}\.json$/.test(f)) {
+        let d; try { d = JSON.parse(readFileSync(file, "utf8")); } catch { continue; }
+        if (d?.day && DAY_RE.test(d.day) && !expired(d.day, now)) await put(d.day, d, file);
+      } else if (f === "payers.json") {
+        let j; try { j = JSON.parse(readFileSync(file, "utf8")); } catch { continue; }
+        if (j && typeof j === "object") await put(PAYERS_ID, j, file);
+      }
+    }
+    return { rows, bytes };
+  }
+  async function loadPg(now) {
+    const imp = await importOnce(basename(o.dir), { source: o.dir, run: () => importDir(now) });
+    if (imp.imported && imp.rows) say(`imported ${imp.rows} file(s) from ${o.dir}`);
+    const rows = await records.list(COLLECTION, { limit: 100_000 });
+    for (const { id, body } of rows) {
+      if (id === PAYERS_ID) { if (body && typeof body === "object") for (const [k, v] of Object.entries(body)) if (!payers.has(k)) payers.set(k, Number(v) || 0); continue; }
+      if (!DAY_RE.test(id) || expired(id, now) || !body?.day) continue;
+      if (!days.has(id)) days.set(id, body); // a rollup already counting in memory is newer than the row
+    }
+  }
+  /**
+   * Read the store. Synchronous on the files; with the database it returns a
+   * promise (registered with the server's boot ordering) and fills memory
+   * when it resolves. Both prune first.
+   */
+  function load(now = Date.now()) {
+    prune(now);
+    if (!usePg) { loadFiles(now); return; }
+    ready = trackStoreReady(loadPg(now).catch((e) => { say(`load failed: ${String(e?.message || e).slice(0, 120)}; starting cold`); }));
+    return ready;
+  }
+  // The file writes (the file backend's persist, and the database backend's
+  // write-through while the volume is there so a rollback reads current files).
+  function writeFiles(bodies) {
+    mkdirSync(o.dir, { recursive: true });
+    for (const r of bodies.days) {
+      const tmp = join(o.dir, `${r.day}.json.tmp`); writeFileSync(tmp, JSON.stringify(r)); renameSync(tmp, join(o.dir, `${r.day}.json`));
+    }
+    const tmp = join(o.dir, "payers.json.tmp"); writeFileSync(tmp, JSON.stringify(bodies.payers)); renameSync(tmp, join(o.dir, "payers.json"));
+  }
+  const bodiesNow = (now) => {
+    const today = dayOf(now);
+    return { days: [today, dayOf(now - 864e5)].map((d) => days.get(d)).filter(Boolean), payers: Object.fromEntries(payers) };
+  };
+  // Database saves coalesce: one write in flight, the newest bodies waiting,
+  // so persists issued back to back land in order and a burst costs one write.
+  let inFlight = null;
+  let pendingBodies = null;
+  function savePg(bodies) {
+    pendingBodies = bodies;
+    if (!inFlight) {
+      inFlight = (async () => {
+        while (pendingBodies) {
+          const b = pendingBodies; pendingBodies = null;
+          try {
+            await ready;
+            for (const r of b.days) await records.put(COLLECTION, r.day, r);
+            await records.put(COLLECTION, PAYERS_ID, b.payers);
+            pgFailedOnce = false;
+            try { if (existsSync(o.dir)) writeFiles(b); } catch { /* best effort */ }
+          } catch (e) {
+            dirty = true; // the next persist retries with the newer rollup
+            if (!pgFailedOnce) { pgFailedOnce = true; say(`persist failed: ${String(e?.message || e).slice(0, 120)}`); }
+          }
+        }
+        inFlight = null;
+      })();
+    }
+    return inFlight;
+  }
   // `now` is injectable like record()'s: the test fixture records a fixed day,
   // and a wall-clock-only persist made it fail from the second day after.
+  /** Write what changed. True when written (files) or queued (database). */
   function persist(now = Date.now()) {
     prune(now);
     if (!dirty) return false;
+    if (usePg) { dirty = false; void savePg(bodiesNow(now)); return true; }
     try {
-      mkdirSync(o.dir, { recursive: true });
-      const today = dayOf(now);
-      for (const d of [today, dayOf(now - 864e5)]) {
-        const r = days.get(d); if (!r) continue;
-        const tmp = join(o.dir, `${d}.json.tmp`); writeFileSync(tmp, JSON.stringify(r)); renameSync(tmp, join(o.dir, `${d}.json`));
-      }
-      const tmp = join(o.dir, "payers.json.tmp"); writeFileSync(tmp, JSON.stringify(Object.fromEntries(payers))); renameSync(tmp, join(o.dir, "payers.json"));
+      writeFiles(bodiesNow(now));
       dirty = false; return true;
     } catch { return false; }
   }
+  /** Resolves once no database write is in flight (tests and shutdown). */
+  async function flush() { while (inFlight) await inFlight; }
 
   function record({ ip, ua, path, method, status, accept, hadPayment, hadPow, paidReceipt, payer, rail = null, powAccepted = false, now = Date.now() }) {
     const day = dayOf(now);
@@ -229,7 +333,7 @@ export function createTrafficStore(opts = {}) {
     };
   }
   const summaryLine = (day = dayOf(Date.now() - 864e5)) => { const r = days.get(day); if (!r) return null; const rails = railSummary(r.rails); return `[traffic] ${day} total=${r.total} ` + CLASSES.map((c) => `${c}=${r.classes[c]}`).join(" ") + ` distinctIps=${r.distinctIps} crawlers=${Object.keys(r.crawlers).length}` + Object.entries(rails).map(([k, v]) => ` rail.${k}=${v.paid}/${v.attempts}paid,${v.distinctPayers}payers`).join(""); };
-  return { record, report, persist, load, summaryLine, _days: days, _payers: payers };
+  return { record, report, persist, load, summaryLine, flush, ready: () => ready, backend: usePg ? "pg" : "file", _days: days, _payers: payers };
 }
 
 /** Counts only: attempts, paid, refused, errored, distinct payers and paid
