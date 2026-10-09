@@ -68,6 +68,21 @@ await dailyBars(q);
 ok(dataReads === 5, `the oldest entry was dropped past the bound, so the first symbol reads again (${dataReads})`);
 __setBarsCacheMax();
 
+// The price check and the data read run side by side: two reads that each
+// take one upstream latency finish in about one, not two.
+{
+  globalThis.fetch = async (url) => {
+    await new Promise((r) => setTimeout(r, 200));
+    if (String(url).includes("get_cost")) return new Response("0.00001", { status: 200 });
+    const bar = { hd: { ts_event: String(Date.UTC(2026, 8, 3) * 1e6) }, open: "1e9", high: "2e9", low: "5e8", close: "1.5e9", volume: "100" };
+    return new Response(JSON.stringify(bar) + "\n", { status: 200 });
+  };
+  const t0 = Date.now();
+  const bars = await dailyBars({ symbol: "MSFT", start: "2026-09-01", end: "2026-09-05" });
+  const took = Date.now() - t0;
+  ok(bars.length === 1 && took < 340, `a first read with two 200 ms upstream reads finishes in about one latency (${took} ms)`);
+}
+
 const worst = DATABENTO_TIMEOUTS_MS.range + DATABENTO_TIMEOUTS_MS.cost + DATABENTO_TIMEOUTS_MS.data;
 ok(worst <= 25_000, `the three reads together are bounded at ${worst} ms, under a buyer's patience`);
 
