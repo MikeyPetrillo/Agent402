@@ -53,6 +53,8 @@ export const FINANCE_TOOLS = [
     route: "GET /api/stock-quote",
     name: "Stock quote",
     slug: "stock-quote",
+    // Repeat share is measured on the symbol (hashed in telemetry, never the value).
+    telemetryKey: (i) => String(i?.symbol || "").trim().toUpperCase() || null,
     category: "data",
     price: "$0.001",
     description:
@@ -118,6 +120,8 @@ export const FINANCE_TOOLS = [
     route: "GET /api/stock-history",
     name: "Stock historical bars",
     slug: "stock-history",
+    // Repeat share is measured on the symbol (hashed in telemetry, never the value).
+    telemetryKey: (i) => String(i?.symbol || "").trim().toUpperCase() || null,
     category: "data",
     price: "$0.005",
     description:

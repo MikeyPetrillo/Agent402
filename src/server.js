@@ -265,7 +265,7 @@ import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { baseNotificationsEnabled } from "./base-notifications.js";
 import { railOf } from "./payment-rail.js";
-import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
+import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage, operatorLoginPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
@@ -9468,6 +9468,7 @@ for (const tool of ALL_KIT) {
     let probe = false;
     let status = 200;
     let refusalClass = null;
+    let inputKey = null;
     // (req.__a402Dispatched and the hang-up forgiveness ticket are set by the
     // post-paywall middleware above, for every paid catalog route.)
     // Set on a composite: aborted the moment the buyer's connection closes
@@ -9480,6 +9481,7 @@ for (const tool of ALL_KIT) {
       // so every tool accepts the flat AND the wrapped shape and a metered
       // price can never be computed from a different body than is served.
       const input = { ...handlerInputOf(req, tool) };
+      inputKey = telemetryKeyOf(tool, input);
       // A request shape we recognise and refuse rather than half-serve (several
       // URLs to a one-URL tool): a self-explaining 400, never charged.
       const shapeRefused = shapeRefusal(input, tool);
@@ -9781,7 +9783,7 @@ for (const tool of ALL_KIT) {
       const latencyMs = Date.now() - startedAt;
       // Fire-and-forget. Analytics outages must NEVER affect agents.
       recordToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic, probe }).catch(() => {});
-      capturePostHogToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic, probe, payer, refusalReason: refusalClass, rail: railOf(req) });
+      capturePostHogToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic, probe, payer, refusalReason: refusalClass, rail: railOf(req), inputKey });
     }
   });
 }

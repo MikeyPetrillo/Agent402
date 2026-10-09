@@ -33,6 +33,42 @@ globalThis.fetch = async (url) => {
 const bars = await dailyBars({ symbol: "AAPL", start: "2026-09-01", end: "2026-09-05" });
 ok(calls === 2 && Array.isArray(bars) && bars.length === 1, `a timed-out cost read still serves the data (${calls} calls, ${bars.length} bar)`);
 
+// Bars are end-of-day data keyed by symbol and range: a repeat inside the
+// session answers from memory with no upstream read. Errors are never cached,
+// the bound drops the oldest entry, and the cached rows cannot be mutated by
+// a caller (each read gets its own copies).
+const { __setBarsCacheMax, barsCacheSize } = await import("../src/tools/databento.js");
+__setBarsCacheMax(2);
+const barOf = (ts, close) => ({ hd: { ts_event: String(ts * 1e6) }, open: "1e9", high: "2e9", low: "5e8", close, volume: "100" });
+let dataReads = 0, costReads = 0, failData = false;
+globalThis.fetch = async (url) => {
+  const u = String(url);
+  if (u.includes("get_cost")) { costReads++; return new Response("0.00001", { status: 200 }); }
+  if (u.includes("get_range")) {
+    dataReads++;
+    if (failData) throw timeoutErr();
+    return new Response(JSON.stringify(barOf(Date.UTC(2026, 8, 2), "1.5e9")) + "\n", { status: 200 });
+  }
+  return new Response(JSON.stringify({ end: "2026-09-05" }), { status: 200 });
+};
+const q = { symbol: "aapl", start: "2026-09-01", end: "2026-09-05" };
+const first = await dailyBars(q);
+ok(dataReads === 1 && costReads === 1, `first read of a symbol and range costs one cost check and one data read (${costReads}/${dataReads})`);
+first[0].close = 0; // a caller mutating its copy must not poison the cache
+const second = await dailyBars({ ...q, symbol: "AAPL" });
+ok(dataReads === 1 && costReads === 1 && second[0].close === 1.5, `a repeat of the same symbol and range (any case) reads nothing upstream and returns the original bar (${dataReads} data reads, close ${second[0].close})`);
+await dailyBars({ ...q, end: "2026-09-08" });
+ok(dataReads === 2, `a new available end is a new key and reads upstream again (${dataReads})`);
+failData = true;
+try { await dailyBars({ ...q, symbol: "MSFT" }); ok(false, "failed read"); } catch (e) { ok(e.statusCode === 504, `a failed data read is still the 504 (${e.statusCode})`); }
+failData = false;
+await dailyBars({ ...q, symbol: "MSFT" });
+ok(dataReads === 4, `a failed read is never cached: the retry reads upstream (${dataReads})`);
+ok(barsCacheSize() === 2, `the cache holds at most its bound (${barsCacheSize()} of 2)`);
+await dailyBars(q);
+ok(dataReads === 5, `the oldest entry was dropped past the bound, so the first symbol reads again (${dataReads})`);
+__setBarsCacheMax();
+
 const worst = DATABENTO_TIMEOUTS_MS.range + DATABENTO_TIMEOUTS_MS.cost + DATABENTO_TIMEOUTS_MS.data;
 ok(worst <= 25_000, `the three reads together are bounded at ${worst} ms, under a buyer's patience`);
 
