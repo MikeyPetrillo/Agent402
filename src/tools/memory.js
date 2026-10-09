@@ -9,10 +9,24 @@
 // Everything is namespaced by a wallet address. Access to a namespace you do
 // not own requires an explicit grant from the owner — so cross-agent sharing is
 // opt-in and authenticated by x402 payment identity.
+//
+// Two backends behind one API:
+//   - SQLite (better-sqlite3) in the agent402.db file on the volume: every
+//     export is synchronous, exactly as before.
+//   - The state database (src/state-db.js) when STATE_DATABASE_URL is set:
+//     the same four tables live in Postgres, the SQLite file is imported once
+//     at the first boot, and EVERY export returns a promise (buyers pay per
+//     write, so a write resolves only after the database has it; nothing is
+//     queued or fire-and-forget). The route handlers in src/server.js await
+//     each call, so they serve both shapes unchanged. After each committed
+//     write the same statements are replayed into the SQLite file (when its
+//     directory exists; best effort, never the verdict), so a rollback to the
+//     file-only build serves current memory. Reads stay on Postgres.
 import Database from "better-sqlite3";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, trackStoreReady } from "../state-db.js";
 
 // Memory is the WORST case for a silent /data → /tmp fallback: agents pay
 // USDC per write, and the value of that storage is precisely its durability
@@ -20,54 +34,26 @@ import { join } from "node:path";
 // refuse to boot in production without /data unless an explicit opt-out is
 // set (local tests, FREE_MODE sweeps, edge runners). Without this gate a
 // misconfigured deploy would charge buyers for memory that vanishes on the
-// next container restart.
+// next container restart. With the state database on, durability is the
+// database's, so the volume is not required.
+const USE_PG = stateDbEnabled();
 const HAS_DATA_DIR = existsSync("/data");
 const ALLOW_EPHEMERAL =
   process.env.MEMORY_ALLOW_EPHEMERAL === "true" ||
   process.env.FREE_MODE === "true" ||
   process.env.NODE_ENV !== "production";
-if (!HAS_DATA_DIR && !ALLOW_EPHEMERAL) {
+if (!USE_PG && !HAS_DATA_DIR && !ALLOW_EPHEMERAL) {
   console.error(
     "Memory DB has no persistent volume (/data missing) and NODE_ENV=production. Mount /data, or set MEMORY_ALLOW_EPHEMERAL=true to accept losing paid agent memory on restart."
   );
   process.exit(1);
 }
 const DATA_DIR = HAS_DATA_DIR ? "/data" : "/tmp";
-export const PERSISTENT = HAS_DATA_DIR;
-
-const db = new Database(join(DATA_DIR, "agent402.db"));
-db.pragma("journal_mode = WAL");
-db.exec(`
-  CREATE TABLE IF NOT EXISTS kv (
-    ns TEXT NOT NULL, k TEXT NOT NULL, v TEXT NOT NULL,
-    updated INTEGER NOT NULL, exp INTEGER,
-    PRIMARY KEY (ns, k)
-  );
-  CREATE TABLE IF NOT EXISTS grants (
-    owner TEXT NOT NULL, grantee TEXT NOT NULL, mode TEXT NOT NULL,
-    created INTEGER NOT NULL, exp INTEGER,
-    PRIMARY KEY (owner, grantee)
-  );
-  CREATE TABLE IF NOT EXISTS memlog (
-    ns TEXT NOT NULL, seq INTEGER NOT NULL, ts INTEGER NOT NULL,
-    actor TEXT NOT NULL, action TEXT NOT NULL, key TEXT,
-    data TEXT, prev_hash TEXT NOT NULL, hash TEXT NOT NULL,
-    PRIMARY KEY (ns, seq)
-  );
-  CREATE TABLE IF NOT EXISTS docs (
-    ns TEXT NOT NULL, id TEXT NOT NULL, text TEXT NOT NULL,
-    meta TEXT, vec TEXT NOT NULL, model TEXT, updated INTEGER NOT NULL,
-    PRIMARY KEY (ns, id)
-  );
-`);
-
-// Migrate older tables in place if needed.
-const kvCols = db.prepare("PRAGMA table_info(kv)").all().map((c) => c.name);
-if (!kvCols.includes("exp")) db.exec("ALTER TABLE kv ADD COLUMN exp INTEGER");
-const docCols = db.prepare("PRAGMA table_info(docs)").all().map((c) => c.name);
-if (!docCols.includes("model")) db.exec("ALTER TABLE docs ADD COLUMN model TEXT");
-// After migrations so the column is guaranteed to exist on older databases.
-db.exec("CREATE INDEX IF NOT EXISTS kv_exp ON kv (exp) WHERE exp IS NOT NULL");
+// The SQLite file: the store without a database, the one-time import source with one.
+const DB_FILE = String(process.env.MEMORY_DB_FILE || "").trim() || join(DATA_DIR, "agent402.db");
+export const PERSISTENT = USE_PG || HAS_DATA_DIR;
+/** "pg" when the state database holds memory, "sqlite" otherwise. */
+export const BACKEND = USE_PG ? "pg" : "sqlite";
 
 const MAX_KEY = 256;
 const MAX_VALUE = 64 * 1024;
@@ -97,123 +83,52 @@ function bad(message, code = 400) {
 // key-count path. 413 = the request is fine, the store is full.
 const MAX_NS_BYTES = () => Number(process.env.MEMORY_MAX_NS_BYTES) || 32 * 1024 * 1024;
 
-function assertByteBudget(owner, key, incomingBytes) {
-  const existing = kvGet.get(owner, key);
-  const delta = incomingBytes - (existing ? existing.v.length : 0);
-  if (delta <= 0) return; // shrinking or same-size overwrite always allowed
-  if (kvBytes.get(owner).b + delta > MAX_NS_BYTES()) {
-    kvPruneExpired.run(owner, nowSec());
-    if (kvBytes.get(owner).b + delta > MAX_NS_BYTES()) {
-      throw bad(`Namespace byte budget exceeded (${MAX_NS_BYTES()} bytes of stored values) - delete keys, shrink values, or let TTLs expire`, 413);
-    }
-  }
+// --- shared pure helpers (both backends) ----------------------------------
+
+const VERIFY_RULE =
+  "hash[i] = sha256(prevHash + '|' + seq + '|' + ts + '|' + actor + '|' + action + '|' + (key||'') + '|' + (JSON.stringify(data)||''))";
+
+function chainHash(prev, seq, ts, actor, action, key, data) {
+  return createHash("sha256")
+    .update(`${prev}|${seq}|${ts}|${actor}|${action}|${key ?? ""}|${data ?? ""}`)
+    .digest("hex");
 }
 
-// --- statements -----------------------------------------------------------
-const kvPut = db.prepare(
-  "INSERT INTO kv (ns, k, v, updated, exp) VALUES (@ns, @k, @v, @updated, @exp) " +
-    "ON CONFLICT(ns, k) DO UPDATE SET v = excluded.v, updated = excluded.updated, exp = excluded.exp"
-);
-const kvGet = db.prepare("SELECT v, updated, exp FROM kv WHERE ns = ? AND k = ?");
-const kvDel = db.prepare("DELETE FROM kv WHERE ns = ? AND k = ?");
-const kvList = db.prepare("SELECT k, updated, exp FROM kv WHERE ns = ? ORDER BY updated DESC LIMIT 1000");
-const kvCount = db.prepare("SELECT COUNT(*) AS n FROM kv WHERE ns = ?");
-const kvBytes = db.prepare("SELECT COALESCE(SUM(LENGTH(v)), 0) AS b FROM kv WHERE ns = ?");
-const kvPruneExpired = db.prepare("DELETE FROM kv WHERE ns = ? AND exp IS NOT NULL AND exp < ?");
-const kvPruneAll = db.prepare("DELETE FROM kv WHERE exp IS NOT NULL AND exp < ?");
+function accessError(owner, actor, need) {
+  return bad(
+    owner === actor
+      ? "No payer identity on this request"
+      : `Wallet ${actor} has no ${need} grant on namespace ${owner}`,
+    403
+  );
+}
 
-// Expired rows in namespaces nobody reads anymore would otherwise live forever
-// on the persistent volume — sweep globally on a timer (cheap: exp is indexed).
-setInterval(() => {
-  try {
-    kvPruneAll.run(nowSec());
-  } catch {
-    /* best-effort */
-  }
-}, 10 * 60 * 1000).unref();
-
-const grantPut = db.prepare(
-  "INSERT INTO grants (owner, grantee, mode, created, exp) VALUES (@owner, @grantee, @mode, @created, @exp) " +
-    "ON CONFLICT(owner, grantee) DO UPDATE SET mode = excluded.mode, created = excluded.created, exp = excluded.exp"
-);
-const grantGet = db.prepare("SELECT mode, exp FROM grants WHERE owner = ? AND grantee = ?");
-const grantDel = db.prepare("DELETE FROM grants WHERE owner = ? AND grantee = ?");
-const grantList = db.prepare("SELECT grantee, mode, created, exp FROM grants WHERE owner = ?");
-
-const logLast = db.prepare("SELECT seq, hash FROM memlog WHERE ns = ? ORDER BY seq DESC LIMIT 1");
-const logIns = db.prepare(
-  "INSERT INTO memlog (ns, seq, ts, actor, action, key, data, prev_hash, hash) " +
-    "VALUES (@ns, @seq, @ts, @actor, @action, @key, @data, @prev_hash, @hash)"
-);
-const logRead = db.prepare("SELECT seq, ts, actor, action, key, data, prev_hash, hash FROM memlog WHERE ns = ? ORDER BY seq ASC LIMIT ?");
-
-const docPut = db.prepare(
-  "INSERT INTO docs (ns, id, text, meta, vec, model, updated) VALUES (@ns, @id, @text, @meta, @vec, @model, @updated) " +
-    "ON CONFLICT(ns, id) DO UPDATE SET text = excluded.text, meta = excluded.meta, vec = excluded.vec, model = excluded.model, updated = excluded.updated"
-);
-const docCount = db.prepare("SELECT COUNT(*) AS n FROM docs WHERE ns = ?");
-const docAll = db.prepare("SELECT id, text, meta, vec, model, updated FROM docs WHERE ns = ?");
-const docDel = db.prepare("DELETE FROM docs WHERE ns = ? AND id = ?");
-
-// --- access control -------------------------------------------------------
-
-/** True if `actor` may act on `owner`'s namespace at the required level. */
-export function authorize(owner, actor, need /* "read" | "write" */) {
-  if (owner === actor) return true;
-  const g = grantGet.get(owner, actor);
+function grantAllows(g, need) {
   if (!g) return false;
   if (g.exp && g.exp < nowSec()) return false;
   return need === "write" ? g.mode === "readwrite" : true;
 }
 
-function requireAccess(owner, actor, need) {
-  if (!authorize(owner, actor, need)) {
-    throw bad(
-      owner === actor
-        ? "No payer identity on this request"
-        : `Wallet ${actor} has no ${need} grant on namespace ${owner}`,
-      403
-    );
-  }
+function checkKey(key, message = `"key" must be a non-empty string of at most ${MAX_KEY} chars`) {
+  if (typeof key !== "string" || !key || key.length > MAX_KEY) throw bad(message);
 }
 
-// --- tamper-evident audit chain ------------------------------------------
-
-function appendLog(ns, actor, action, key, dataObj) {
-  const last = logLast.get(ns);
-  const seq = (last?.seq ?? 0) + 1;
-  const prev = last?.hash ?? "";
-  const ts = now();
-  const data = dataObj === undefined ? null : JSON.stringify(dataObj);
-  const hash = createHash("sha256")
-    .update(`${prev}|${seq}|${ts}|${actor}|${action}|${key ?? ""}|${data ?? ""}`)
-    .digest("hex");
-  logIns.run({ ns, seq, ts, actor, action, key: key ?? null, data, prev_hash: prev, hash });
-  return { seq, hash };
+function serializeValue(value, message = `"value" is required and must serialize to at most ${MAX_VALUE} bytes`) {
+  const serialized = typeof value === "string" ? value : JSON.stringify(value);
+  if (serialized === undefined || serialized.length > MAX_VALUE) throw bad(message);
+  return serialized;
 }
 
-export function getLog(owner, actor, limit = 100) {
-  requireAccess(owner, actor, "read");
-  const rows = logRead.all(owner, Math.min(Math.max(limit, 1), 1000));
-  return {
-    ns: owner,
-    entries: rows.map((r) => ({
-      seq: r.seq,
-      ts: r.ts,
-      actor: r.actor,
-      action: r.action,
-      key: r.key,
-      data: r.data ? JSON.parse(r.data) : null,
-      prevHash: r.prev_hash,
-      hash: r.hash,
-    })),
-    verify:
-      "hash[i] = sha256(prevHash + '|' + seq + '|' + ts + '|' + actor + '|' + action + '|' + (key||'') + '|' + (JSON.stringify(data)||''))",
-    persistent: PERSISTENT,
-  };
+function expiryOf(ttlSeconds) {
+  if (ttlSeconds === undefined || ttlSeconds === null) return null;
+  const t = parseInt(ttlSeconds, 10);
+  if (!Number.isFinite(t) || t <= 0) throw bad('"ttlSeconds" must be a positive integer');
+  return nowSec() + t;
 }
 
-// --- key/value with TTL ---------------------------------------------------
+function parseStored(v) {
+  try { return JSON.parse(v); } catch { return v; }
+}
 
 function freshKv(row) {
   if (!row) return null;
@@ -221,162 +136,34 @@ function freshKv(row) {
   return row;
 }
 
-export function memoryPut(owner, key, value, { actor = owner, ttlSeconds } = {}) {
-  requireAccess(owner, actor, "write");
-  if (typeof key !== "string" || !key || key.length > MAX_KEY)
-    throw bad(`"key" must be a non-empty string of at most ${MAX_KEY} chars`);
-  const serialized = typeof value === "string" ? value : JSON.stringify(value);
-  if (serialized === undefined || serialized.length > MAX_VALUE)
-    throw bad(`"value" is required and must serialize to at most ${MAX_VALUE} bytes`);
-  if (kvCount.get(owner).n >= MAX_KEYS_PER_NS() && !kvGet.get(owner, key)) {
-    // Expired rows must not consume quota — reclaim before rejecting.
-    kvPruneExpired.run(owner, nowSec());
-    if (kvCount.get(owner).n >= MAX_KEYS_PER_NS()) throw bad(`Namespace is full (${MAX_KEYS_PER_NS()} keys)`, 413);
-  }
-  assertByteBudget(owner, key, serialized.length);
-  let exp = null;
-  if (ttlSeconds !== undefined && ttlSeconds !== null) {
-    const t = parseInt(ttlSeconds, 10);
-    if (!Number.isFinite(t) || t <= 0) throw bad('"ttlSeconds" must be a positive integer');
-    exp = nowSec() + t;
-  }
-  const updated = now();
-  kvPut.run({ ns: owner, k: key, v: serialized, updated, exp });
-  appendLog(owner, actor, "put", key, { bytes: serialized.length, exp });
-  return { key, bytes: serialized.length, updated, expiresAt: exp, owner, persistent: PERSISTENT };
+function logEntry(r) {
+  return {
+    seq: r.seq,
+    ts: r.ts,
+    actor: r.actor,
+    action: r.action,
+    key: r.key,
+    data: r.data ? JSON.parse(r.data) : null,
+    prevHash: r.prev_hash,
+    hash: r.hash,
+  };
 }
 
-export function memoryGet(owner, key, { actor = owner } = {}) {
-  requireAccess(owner, actor, "read");
-  if (!key) {
-    kvPruneExpired.run(owner, nowSec());
-    return { keys: kvList.all(owner).filter((r) => !(r.exp && r.exp < nowSec())), owner, persistent: PERSISTENT };
-  }
-  const row = freshKv(kvGet.get(owner, key));
-  if (!row) throw bad("Key not found", 404);
-  let value;
-  try {
-    value = JSON.parse(row.v);
-  } catch {
-    value = row.v;
-  }
-  return { key, value, updated: row.updated, expiresAt: row.exp, owner, persistent: PERSISTENT };
+function grantEntry(r) {
+  return { grantee: r.grantee, mode: r.mode, created: r.created, expiresAt: r.exp, active: !r.exp || r.exp >= nowSec() };
 }
-
-export function memoryDelete(owner, key, { actor = owner } = {}) {
-  requireAccess(owner, actor, "write");
-  if (!key) throw bad('"key" is required');
-  const deleted = kvDel.run(owner, key).changes > 0;
-  if (deleted) appendLog(owner, actor, "delete", key);
-  return { key, deleted, owner };
-}
-
-/** Atomic numeric counter — a coordination primitive only a shared store can offer. */
-export const memoryIncr = db.transaction((owner, key, by, actor) => {
-  requireAccess(owner, actor, "write");
-  if (typeof key !== "string" || !key || key.length > MAX_KEY) throw bad(`Invalid "key"`);
-  const amount = by === undefined ? 1 : Number(by);
-  if (!Number.isFinite(amount)) throw bad('"by" must be a number');
-  const row = freshKv(kvGet.get(owner, key));
-  let current = 0;
-  if (row) {
-    const n = Number(row.v);
-    if (!Number.isFinite(n)) throw bad(`Key "${key}" holds a non-numeric value; cannot increment`);
-    current = n;
-  } else if (kvCount.get(owner).n >= MAX_KEYS_PER_NS()) {
-    kvPruneExpired.run(owner, nowSec());
-    if (kvCount.get(owner).n >= MAX_KEYS_PER_NS()) throw bad(`Namespace is full (${MAX_KEYS_PER_NS()} keys)`, 413);
-  }
-  const next = current + amount;
-  kvPut.run({ ns: owner, k: key, v: String(next), updated: now(), exp: row?.exp ?? null });
-  appendLog(owner, actor, "incr", key, { by: amount, value: next });
-  return { key, value: next, owner };
-});
-
-/**
- * Atomic compare-and-set — the general coordination primitive. Writes (or, when
- * no value is supplied, deletes) a key only if its current value equals
- * `expected`. This is what distributed locks and optimistic concurrency are
- * built from:
- *   - acquire a lock:  expected = null (key absent/expired), value = <token>, ttlSeconds = <lease>
- *   - release a lock:  expected = <token>, no value  → deletes on match
- *   - safe update:     expected = <old value>, value = <new value>
- * `hasValue` distinguishes "set to a value" (even null) from "no value = delete".
- * Values are compared as JSON values (same canonicalization on both sides).
- */
-export const memoryCas = db.transaction((owner, key, expected, value, { actor = owner, ttlSeconds, hasValue = false } = {}) => {
-  requireAccess(owner, actor, "write");
-  if (typeof key !== "string" || !key || key.length > MAX_KEY) throw bad(`"key" must be a non-empty string of at most ${MAX_KEY} chars`);
-  const row = freshKv(kvGet.get(owner, key));
-  let current = null;
-  if (row) { try { current = JSON.parse(row.v); } catch { current = row.v; } }
-  const want = expected === undefined ? null : expected;
-  if (JSON.stringify(current) !== JSON.stringify(want)) {
-    return { key, swapped: false, value: current, owner };
-  }
-  // Matched → release (no value supplied) or write the new value.
-  if (!hasValue || value === undefined) {
-    const deleted = kvDel.run(owner, key).changes > 0;
-    if (deleted) appendLog(owner, actor, "cas-del", key, { expected: want });
-    return { key, swapped: true, value: null, owner };
-  }
-  const serialized = typeof value === "string" ? value : JSON.stringify(value);
-  if (serialized === undefined || serialized.length > MAX_VALUE) throw bad(`"value" must serialize to at most ${MAX_VALUE} bytes`);
-  if (!row && kvCount.get(owner).n >= MAX_KEYS_PER_NS()) {
-    kvPruneExpired.run(owner, nowSec());
-    if (kvCount.get(owner).n >= MAX_KEYS_PER_NS()) throw bad(`Namespace is full (${MAX_KEYS_PER_NS()} keys)`, 413);
-  }
-  assertByteBudget(owner, key, serialized.length);
-  let exp = null;
-  if (ttlSeconds !== undefined && ttlSeconds !== null) {
-    const t = parseInt(ttlSeconds, 10);
-    if (!Number.isFinite(t) || t <= 0) throw bad('"ttlSeconds" must be a positive integer');
-    exp = nowSec() + t;
-  }
-  kvPut.run({ ns: owner, k: key, v: serialized, updated: now(), exp });
-  appendLog(owner, actor, "cas-set", key, { expected: want, bytes: serialized.length, exp });
-  return { key, swapped: true, value, owner, expiresAt: exp };
-});
-
-// --- grants (cross-agent sharing) ----------------------------------------
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
-
-export function grant(owner, grantee, mode, ttlSeconds) {
+function checkGrant(owner, grantee, mode, ttlSeconds) {
   if (typeof grantee !== "string" || !ADDR.test(grantee)) throw bad('"grantee" must be a 0x wallet address');
   const g = grantee.toLowerCase();
   if (g === owner) throw bad("You already own this namespace");
   if (mode !== "read" && mode !== "readwrite") throw bad('"mode" must be "read" or "readwrite"');
-  let exp = null;
-  if (ttlSeconds !== undefined && ttlSeconds !== null) {
-    const t = parseInt(ttlSeconds, 10);
-    if (!Number.isFinite(t) || t <= 0) throw bad('"ttlSeconds" must be a positive integer');
-    exp = nowSec() + t;
-  }
-  grantPut.run({ owner, grantee: g, mode, created: now(), exp });
-  appendLog(owner, owner, "grant", g, { mode, exp });
-  return { owner, grantee: g, mode, expiresAt: exp };
+  return { g, exp: expiryOf(ttlSeconds) };
 }
-
-export function revoke(owner, grantee) {
+function checkGrantee(grantee) {
   if (typeof grantee !== "string" || !ADDR.test(grantee)) throw bad('"grantee" must be a 0x wallet address');
-  const g = grantee.toLowerCase();
-  const removed = grantDel.run(owner, g).changes > 0;
-  if (removed) appendLog(owner, owner, "revoke", g);
-  return { owner, grantee: g, revoked: removed };
-}
-
-export function listGrants(owner) {
-  return {
-    owner,
-    grants: grantList.all(owner).map((r) => ({
-      grantee: r.grantee,
-      mode: r.mode,
-      created: r.created,
-      expiresAt: r.exp,
-      active: !r.exp || r.exp >= nowSec(),
-    })),
-  };
+  return grantee.toLowerCase();
 }
 
 // --- similarity recall (local embeddings; pluggable provider) -------------
@@ -466,27 +253,13 @@ function newDocId() {
   return `${nowSec().toString(36)}${(docSeq++ & 0xffff).toString(36)}${randomBytes(6).toString("hex")}`;
 }
 
-export async function remember(owner, text, meta, { actor = owner } = {}) {
-  requireAccess(owner, actor, "write");
+function checkDocText(text) {
   if (typeof text !== "string" || !text.trim()) throw bad('"text" is required');
   if (text.length > MAX_DOC_TEXT) throw bad(`"text" exceeds ${MAX_DOC_TEXT} chars`);
-  if (docCount.get(owner).n >= MAX_DOCS_PER_NS) throw bad(`Recall store is full (${MAX_DOCS_PER_NS} docs)`);
-  const { vec, model } = await embedText(text);
-  const id = newDocId();
-  const metaStr = meta === undefined ? null : JSON.stringify(meta);
-  docPut.run({ ns: owner, id, text, meta: metaStr, vec: JSON.stringify(vec), model, updated: now() });
-  appendLog(owner, actor, "remember", id, { chars: text.length });
-  return { id, owner, stored: true, embedder: model };
 }
 
-export async function recall(owner, query, k, { actor = owner } = {}) {
-  requireAccess(owner, actor, "read");
-  if (typeof query !== "string" || !query.trim()) throw bad('"query" is required');
-  const topK = Math.min(Math.max(parseInt(k, 10) || 5, 1), 50);
-  const { vec: qv, model } = await embedText(query);
-  // Only compare against docs embedded by the SAME embedder (a provider switch
-  // would otherwise compare incompatible vector spaces).
-  const docs = docAll.all(owner);
+/** Rank stored docs against a query vector; only docs from the same embedder compare. */
+function rankDocs(docs, qv, model, topK, owner, query) {
   const comparable = docs.filter((d) => (d.model ?? "local-v1") === model);
   const scored = comparable.map((d) => ({
     id: d.id,
@@ -502,10 +275,757 @@ export async function recall(owner, query, k, { actor = owner } = {}) {
   return out;
 }
 
-export function forget(owner, id, { actor = owner } = {}) {
-  requireAccess(owner, actor, "write");
-  if (!id) throw bad('"id" is required');
-  const deleted = docDel.run(owner, id).changes > 0;
-  if (deleted) appendLog(owner, actor, "forget", id);
-  return { id, deleted, owner };
+const topKOf = (k) => Math.min(Math.max(parseInt(k, 10) || 5, 1), 50);
+const logLimitOf = (limit) => Math.min(Math.max(limit, 1), 1000);
+
+// SQLite table DDL. The file backend creates it; the Postgres import reads
+// the same tables from the file.
+const SQLITE_DDL = `
+  CREATE TABLE IF NOT EXISTS kv (
+    ns TEXT NOT NULL, k TEXT NOT NULL, v TEXT NOT NULL,
+    updated INTEGER NOT NULL, exp INTEGER,
+    PRIMARY KEY (ns, k)
+  );
+  CREATE TABLE IF NOT EXISTS grants (
+    owner TEXT NOT NULL, grantee TEXT NOT NULL, mode TEXT NOT NULL,
+    created INTEGER NOT NULL, exp INTEGER,
+    PRIMARY KEY (owner, grantee)
+  );
+  CREATE TABLE IF NOT EXISTS memlog (
+    ns TEXT NOT NULL, seq INTEGER NOT NULL, ts INTEGER NOT NULL,
+    actor TEXT NOT NULL, action TEXT NOT NULL, key TEXT,
+    data TEXT, prev_hash TEXT NOT NULL, hash TEXT NOT NULL,
+    PRIMARY KEY (ns, seq)
+  );
+  CREATE TABLE IF NOT EXISTS docs (
+    ns TEXT NOT NULL, id TEXT NOT NULL, text TEXT NOT NULL,
+    meta TEXT, vec TEXT NOT NULL, model TEXT, updated INTEGER NOT NULL,
+    PRIMARY KEY (ns, id)
+  );
+`;
+
+// =========================================================================
+// SQLite backend: the file on the volume, synchronous, as it always was.
+// =========================================================================
+/** Open the SQLite file read-write with the tables in place (older files migrated). */
+function openSqlite() {
+  const db = new Database(DB_FILE);
+  db.pragma("journal_mode = WAL");
+  db.exec(SQLITE_DDL);
+
+  // Migrate older tables in place if needed.
+  const kvCols = db.prepare("PRAGMA table_info(kv)").all().map((c) => c.name);
+  if (!kvCols.includes("exp")) db.exec("ALTER TABLE kv ADD COLUMN exp INTEGER");
+  const docCols = db.prepare("PRAGMA table_info(docs)").all().map((c) => c.name);
+  if (!docCols.includes("model")) db.exec("ALTER TABLE docs ADD COLUMN model TEXT");
+  // After migrations so the column is guaranteed to exist on older databases.
+  db.exec("CREATE INDEX IF NOT EXISTS kv_exp ON kv (exp) WHERE exp IS NOT NULL");
+  return db;
 }
+
+// The SQLite statements, by name: the file backend runs them directly; the
+// Postgres backend replays them into the file after each commit.
+function sqliteStatements(db) {
+  return {
+    kvPut: db.prepare(
+      "INSERT INTO kv (ns, k, v, updated, exp) VALUES (@ns, @k, @v, @updated, @exp) " +
+        "ON CONFLICT(ns, k) DO UPDATE SET v = excluded.v, updated = excluded.updated, exp = excluded.exp"
+    ),
+    kvDel: db.prepare("DELETE FROM kv WHERE ns = ? AND k = ?"),
+    kvPruneExpired: db.prepare("DELETE FROM kv WHERE ns = ? AND exp IS NOT NULL AND exp < ?"),
+    kvPruneAll: db.prepare("DELETE FROM kv WHERE exp IS NOT NULL AND exp < ?"),
+    grantPut: db.prepare(
+      "INSERT INTO grants (owner, grantee, mode, created, exp) VALUES (@owner, @grantee, @mode, @created, @exp) " +
+        "ON CONFLICT(owner, grantee) DO UPDATE SET mode = excluded.mode, created = excluded.created, exp = excluded.exp"
+    ),
+    grantDel: db.prepare("DELETE FROM grants WHERE owner = ? AND grantee = ?"),
+    logIns: db.prepare(
+      "INSERT INTO memlog (ns, seq, ts, actor, action, key, data, prev_hash, hash) " +
+        "VALUES (@ns, @seq, @ts, @actor, @action, @key, @data, @prev_hash, @hash)"
+    ),
+    docPut: db.prepare(
+      "INSERT INTO docs (ns, id, text, meta, vec, model, updated) VALUES (@ns, @id, @text, @meta, @vec, @model, @updated) " +
+        "ON CONFLICT(ns, id) DO UPDATE SET text = excluded.text, meta = excluded.meta, vec = excluded.vec, model = excluded.model, updated = excluded.updated"
+    ),
+    docDel: db.prepare("DELETE FROM docs WHERE ns = ? AND id = ?"),
+  };
+}
+
+function sqliteBackend() {
+  const db = openSqlite();
+
+  function assertByteBudget(owner, key, incomingBytes) {
+    const existing = kvGet.get(owner, key);
+    const delta = incomingBytes - (existing ? existing.v.length : 0);
+    if (delta <= 0) return; // shrinking or same-size overwrite always allowed
+    if (kvBytes.get(owner).b + delta > MAX_NS_BYTES()) {
+      kvPruneExpired.run(owner, nowSec());
+      if (kvBytes.get(owner).b + delta > MAX_NS_BYTES()) {
+        throw bad(`Namespace byte budget exceeded (${MAX_NS_BYTES()} bytes of stored values) - delete keys, shrink values, or let TTLs expire`, 413);
+      }
+    }
+  }
+
+  // --- statements -----------------------------------------------------------
+  const { kvPut, kvDel, kvPruneExpired, kvPruneAll, grantPut, grantDel, logIns, docPut, docDel } = sqliteStatements(db);
+  const kvGet = db.prepare("SELECT v, updated, exp FROM kv WHERE ns = ? AND k = ?");
+  const kvList = db.prepare("SELECT k, updated, exp FROM kv WHERE ns = ? ORDER BY updated DESC LIMIT 1000");
+  const kvCount = db.prepare("SELECT COUNT(*) AS n FROM kv WHERE ns = ?");
+  const kvBytes = db.prepare("SELECT COALESCE(SUM(LENGTH(v)), 0) AS b FROM kv WHERE ns = ?");
+
+  // Expired rows in namespaces nobody reads anymore would otherwise live forever
+  // on the persistent volume — sweep globally on a timer (cheap: exp is indexed).
+  setInterval(() => {
+    try {
+      kvPruneAll.run(nowSec());
+    } catch {
+      /* best-effort */
+    }
+  }, 10 * 60 * 1000).unref();
+
+  const grantGet = db.prepare("SELECT mode, exp FROM grants WHERE owner = ? AND grantee = ?");
+  const grantList = db.prepare("SELECT grantee, mode, created, exp FROM grants WHERE owner = ?");
+
+  const logLast = db.prepare("SELECT seq, hash FROM memlog WHERE ns = ? ORDER BY seq DESC LIMIT 1");
+  const logRead = db.prepare("SELECT seq, ts, actor, action, key, data, prev_hash, hash FROM memlog WHERE ns = ? ORDER BY seq ASC LIMIT ?");
+
+  const docCount = db.prepare("SELECT COUNT(*) AS n FROM docs WHERE ns = ?");
+  const docAll = db.prepare("SELECT id, text, meta, vec, model, updated FROM docs WHERE ns = ?");
+
+  // --- access control -------------------------------------------------------
+
+  function authorize(owner, actor, need /* "read" | "write" */) {
+    if (owner === actor) return true;
+    return grantAllows(grantGet.get(owner, actor), need);
+  }
+
+  function requireAccess(owner, actor, need) {
+    if (!authorize(owner, actor, need)) throw accessError(owner, actor, need);
+  }
+
+  // --- tamper-evident audit chain ------------------------------------------
+
+  function appendLog(ns, actor, action, key, dataObj) {
+    const last = logLast.get(ns);
+    const seq = (last?.seq ?? 0) + 1;
+    const prev = last?.hash ?? "";
+    const ts = now();
+    const data = dataObj === undefined ? null : JSON.stringify(dataObj);
+    const hash = chainHash(prev, seq, ts, actor, action, key, data);
+    logIns.run({ ns, seq, ts, actor, action, key: key ?? null, data, prev_hash: prev, hash });
+    return { seq, hash };
+  }
+
+  function getLog(owner, actor, limit = 100) {
+    requireAccess(owner, actor, "read");
+    const rows = logRead.all(owner, logLimitOf(limit));
+    return { ns: owner, entries: rows.map(logEntry), verify: VERIFY_RULE, persistent: PERSISTENT };
+  }
+
+  // --- key/value with TTL ---------------------------------------------------
+
+  function memoryPut(owner, key, value, { actor = owner, ttlSeconds } = {}) {
+    requireAccess(owner, actor, "write");
+    checkKey(key);
+    const serialized = serializeValue(value);
+    if (kvCount.get(owner).n >= MAX_KEYS_PER_NS() && !kvGet.get(owner, key)) {
+      // Expired rows must not consume quota — reclaim before rejecting.
+      kvPruneExpired.run(owner, nowSec());
+      if (kvCount.get(owner).n >= MAX_KEYS_PER_NS()) throw bad(`Namespace is full (${MAX_KEYS_PER_NS()} keys)`, 413);
+    }
+    assertByteBudget(owner, key, serialized.length);
+    const exp = expiryOf(ttlSeconds);
+    const updated = now();
+    kvPut.run({ ns: owner, k: key, v: serialized, updated, exp });
+    appendLog(owner, actor, "put", key, { bytes: serialized.length, exp });
+    return { key, bytes: serialized.length, updated, expiresAt: exp, owner, persistent: PERSISTENT };
+  }
+
+  function memoryGet(owner, key, { actor = owner } = {}) {
+    requireAccess(owner, actor, "read");
+    if (!key) {
+      kvPruneExpired.run(owner, nowSec());
+      return { keys: kvList.all(owner).filter((r) => !(r.exp && r.exp < nowSec())), owner, persistent: PERSISTENT };
+    }
+    const row = freshKv(kvGet.get(owner, key));
+    if (!row) throw bad("Key not found", 404);
+    return { key, value: parseStored(row.v), updated: row.updated, expiresAt: row.exp, owner, persistent: PERSISTENT };
+  }
+
+  function memoryDelete(owner, key, { actor = owner } = {}) {
+    requireAccess(owner, actor, "write");
+    if (!key) throw bad('"key" is required');
+    const deleted = kvDel.run(owner, key).changes > 0;
+    if (deleted) appendLog(owner, actor, "delete", key);
+    return { key, deleted, owner };
+  }
+
+  /** Atomic numeric counter — a coordination primitive only a shared store can offer. */
+  const memoryIncr = db.transaction((owner, key, by, actor) => {
+    requireAccess(owner, actor, "write");
+    checkKey(key, `Invalid "key"`);
+    const amount = by === undefined ? 1 : Number(by);
+    if (!Number.isFinite(amount)) throw bad('"by" must be a number');
+    const row = freshKv(kvGet.get(owner, key));
+    let current = 0;
+    if (row) {
+      const n = Number(row.v);
+      if (!Number.isFinite(n)) throw bad(`Key "${key}" holds a non-numeric value; cannot increment`);
+      current = n;
+    } else if (kvCount.get(owner).n >= MAX_KEYS_PER_NS()) {
+      kvPruneExpired.run(owner, nowSec());
+      if (kvCount.get(owner).n >= MAX_KEYS_PER_NS()) throw bad(`Namespace is full (${MAX_KEYS_PER_NS()} keys)`, 413);
+    }
+    const next = current + amount;
+    kvPut.run({ ns: owner, k: key, v: String(next), updated: now(), exp: row?.exp ?? null });
+    appendLog(owner, actor, "incr", key, { by: amount, value: next });
+    return { key, value: next, owner };
+  });
+
+  /** Atomic compare-and-set (see the export's doc comment). */
+  const memoryCas = db.transaction((owner, key, expected, value, { actor = owner, ttlSeconds, hasValue = false } = {}) => {
+    requireAccess(owner, actor, "write");
+    checkKey(key);
+    const row = freshKv(kvGet.get(owner, key));
+    const current = row ? parseStored(row.v) : null;
+    const want = expected === undefined ? null : expected;
+    if (JSON.stringify(current) !== JSON.stringify(want)) {
+      return { key, swapped: false, value: current, owner };
+    }
+    // Matched → release (no value supplied) or write the new value.
+    if (!hasValue || value === undefined) {
+      const deleted = kvDel.run(owner, key).changes > 0;
+      if (deleted) appendLog(owner, actor, "cas-del", key, { expected: want });
+      return { key, swapped: true, value: null, owner };
+    }
+    const serialized = serializeValue(value, `"value" must serialize to at most ${MAX_VALUE} bytes`);
+    if (!row && kvCount.get(owner).n >= MAX_KEYS_PER_NS()) {
+      kvPruneExpired.run(owner, nowSec());
+      if (kvCount.get(owner).n >= MAX_KEYS_PER_NS()) throw bad(`Namespace is full (${MAX_KEYS_PER_NS()} keys)`, 413);
+    }
+    assertByteBudget(owner, key, serialized.length);
+    const exp = expiryOf(ttlSeconds);
+    kvPut.run({ ns: owner, k: key, v: serialized, updated: now(), exp });
+    appendLog(owner, actor, "cas-set", key, { expected: want, bytes: serialized.length, exp });
+    return { key, swapped: true, value, owner, expiresAt: exp };
+  });
+
+  // --- grants (cross-agent sharing) ----------------------------------------
+
+  function grant(owner, grantee, mode, ttlSeconds) {
+    const { g, exp } = checkGrant(owner, grantee, mode, ttlSeconds);
+    grantPut.run({ owner, grantee: g, mode, created: now(), exp });
+    appendLog(owner, owner, "grant", g, { mode, exp });
+    return { owner, grantee: g, mode, expiresAt: exp };
+  }
+
+  function revoke(owner, grantee) {
+    const g = checkGrantee(grantee);
+    const removed = grantDel.run(owner, g).changes > 0;
+    if (removed) appendLog(owner, owner, "revoke", g);
+    return { owner, grantee: g, revoked: removed };
+  }
+
+  function listGrants(owner) {
+    return { owner, grants: grantList.all(owner).map(grantEntry) };
+  }
+
+  // --- similarity recall -----------------------------------------------------
+
+  async function remember(owner, text, meta, { actor = owner } = {}) {
+    requireAccess(owner, actor, "write");
+    checkDocText(text);
+    if (docCount.get(owner).n >= MAX_DOCS_PER_NS) throw bad(`Recall store is full (${MAX_DOCS_PER_NS} docs)`);
+    const { vec, model } = await embedText(text);
+    const id = newDocId();
+    const metaStr = meta === undefined ? null : JSON.stringify(meta);
+    docPut.run({ ns: owner, id, text, meta: metaStr, vec: JSON.stringify(vec), model, updated: now() });
+    appendLog(owner, actor, "remember", id, { chars: text.length });
+    return { id, owner, stored: true, embedder: model };
+  }
+
+  async function recall(owner, query, k, { actor = owner } = {}) {
+    requireAccess(owner, actor, "read");
+    if (typeof query !== "string" || !query.trim()) throw bad('"query" is required');
+    const topK = topKOf(k);
+    const { vec: qv, model } = await embedText(query);
+    // Only compare against docs embedded by the SAME embedder (a provider switch
+    // would otherwise compare incompatible vector spaces).
+    return rankDocs(docAll.all(owner), qv, model, topK, owner, query);
+  }
+
+  function forget(owner, id, { actor = owner } = {}) {
+    requireAccess(owner, actor, "write");
+    if (!id) throw bad('"id" is required');
+    const deleted = docDel.run(owner, id).changes > 0;
+    if (deleted) appendLog(owner, actor, "forget", id);
+    return { id, deleted, owner };
+  }
+
+  return { ready: () => Promise.resolve(), mirrorStatus: () => "n/a", authorize, getLog, memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas, grant, revoke, listGrants, remember, recall, forget };
+}
+
+// =========================================================================
+// Postgres backend: the same tables in the state database. Every write runs
+// in one transaction under a per-namespace advisory lock, so the audit chain
+// (seq, prev_hash) stays contiguous across concurrent requests and across two
+// containers, and incr / cas are atomic read-modify-write steps.
+// =========================================================================
+const IMPORT_NAME = "agent402.db";
+const LOCK_SPACE = 4020; // advisory lock namespace for memory (int4, paired with hashtext(owner))
+const IMPORT_CHUNK = 500;
+
+function pgBackend() {
+  const T = (t) => `${stateDbSchema()}.${t}`;
+  const num = (x) => (x === null || x === undefined ? null : Number(x));
+  const kvRow = (r) => (r ? { v: r.v, updated: num(r.updated), exp: num(r.exp) } : null);
+
+  const DDL = () => `
+    CREATE TABLE IF NOT EXISTS ${T("memory_kv")} (
+      ns TEXT NOT NULL, k TEXT NOT NULL, v TEXT NOT NULL,
+      updated BIGINT NOT NULL, exp BIGINT,
+      PRIMARY KEY (ns, k)
+    );
+    CREATE INDEX IF NOT EXISTS memory_kv_exp ON ${T("memory_kv")} (exp) WHERE exp IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS ${T("memory_grants")} (
+      owner TEXT NOT NULL, grantee TEXT NOT NULL, mode TEXT NOT NULL,
+      created BIGINT NOT NULL, exp BIGINT,
+      PRIMARY KEY (owner, grantee)
+    );
+    CREATE TABLE IF NOT EXISTS ${T("memory_memlog")} (
+      ns TEXT NOT NULL, seq BIGINT NOT NULL, ts BIGINT NOT NULL,
+      actor TEXT NOT NULL, action TEXT NOT NULL, key TEXT,
+      data TEXT, prev_hash TEXT NOT NULL, hash TEXT NOT NULL,
+      PRIMARY KEY (ns, seq)
+    );
+    CREATE TABLE IF NOT EXISTS ${T("memory_docs")} (
+      ns TEXT NOT NULL, id TEXT NOT NULL, text TEXT NOT NULL,
+      meta TEXT, vec TEXT NOT NULL, model TEXT, updated BIGINT NOT NULL,
+      PRIMARY KEY (ns, id)
+    );
+  `;
+
+  // Insert rows in chunks, ON CONFLICT DO NOTHING: idempotent, so two
+  // containers importing at once (or a boot that crashed mid-import) are safe.
+  async function insertRows(table, cols, rows) {
+    let n = 0;
+    for (let i = 0; i < rows.length; i += IMPORT_CHUNK) {
+      const chunk = rows.slice(i, i + IMPORT_CHUNK);
+      const params = [];
+      const tuples = chunk.map((row) => {
+        const ph = cols.map((c) => { params.push(row[c] ?? null); return `$${params.length}`; });
+        return `(${ph.join(",")})`;
+      });
+      const r = await stateQuery(`INSERT INTO ${T(table)} (${cols.join(",")}) VALUES ${tuples.join(",")} ON CONFLICT DO NOTHING`, params);
+      n += r.rowCount;
+    }
+    return n;
+  }
+
+  // Read every table of the SQLite file (read-only; an older file may lack
+  // the exp / model columns, which read as null) and insert what is absent.
+  async function importSqlite() {
+    if (!existsSync(DB_FILE)) return { bytes: 0, rows: 0, skipped: "no file" };
+    const src = new Database(DB_FILE, { readonly: true, fileMustExist: true });
+    try {
+      const cols = (t) => src.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
+      const has = (t) => src.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+      const sel = (t, want) => (has(t) ? src.prepare(`SELECT ${want.map((c) => (cols(t).includes(c) ? c : `NULL AS ${c}`)).join(", ")} FROM ${t}`).all() : []);
+      const kv = sel("kv", ["ns", "k", "v", "updated", "exp"]);
+      const grants = sel("grants", ["owner", "grantee", "mode", "created", "exp"]);
+      const memlog = sel("memlog", ["ns", "seq", "ts", "actor", "action", "key", "data", "prev_hash", "hash"]);
+      const docs = sel("docs", ["ns", "id", "text", "meta", "vec", "model", "updated"]);
+      let rows = 0;
+      rows += await insertRows("memory_kv", ["ns", "k", "v", "updated", "exp"], kv);
+      rows += await insertRows("memory_grants", ["owner", "grantee", "mode", "created", "exp"], grants);
+      rows += await insertRows("memory_memlog", ["ns", "seq", "ts", "actor", "action", "key", "data", "prev_hash", "hash"], memlog);
+      rows += await insertRows("memory_docs", ["ns", "id", "text", "meta", "vec", "model", "updated"], docs);
+      const bytes = statSync(DB_FILE).size;
+      console.log(`[memory] imported ${rows} row(s) (${kv.length} kv, ${grants.length} grants, ${memlog.length} log, ${docs.length} docs read) from ${DB_FILE} into the state database`);
+      return { bytes, rows };
+    } finally {
+      src.close();
+    }
+  }
+
+  let readyP = null;
+  function ready() {
+    if (!readyP) {
+      readyP = (async () => {
+        await stateQuery(DDL());
+        await importOnce(IMPORT_NAME, { source: DB_FILE, run: importSqlite });
+      })().catch((e) => {
+        readyP = null; // the next call tries again (a database that was down at boot)
+        console.error(`[memory] state database setup failed: ${String(e?.message || e).slice(0, 160)}`);
+        throw e;
+      });
+    }
+    return readyP;
+  }
+  trackStoreReady(ready().catch(() => {}));
+
+  // --- the SQLite mirror ------------------------------------------------------
+  // When the file's directory exists (the volume is still mounted), every
+  // committed write is replayed into the file with the same statements the
+  // file backend runs, memlog rows with the same seq and hashes included, so a
+  // rollback to the file-only build serves current memory. Best effort: a
+  // failure is logged once and never changes the answer. Reads never touch it.
+  let mirror = null;
+  let mirrorFailed = false;
+  function mirrorDb() {
+    if (mirror || mirrorFailed || !existsSync(dirname(DB_FILE))) return mirror;
+    try {
+      const db = openSqlite();
+      const st = sqliteStatements(db);
+      mirror = { db, st, apply: db.transaction((ops) => { for (const [name, ...args] of ops) st[name].run(...args); }) };
+    } catch (e) {
+      mirrorFailed = true;
+      console.error(`[memory] SQLite mirror could not open ${DB_FILE}: ${String(e?.message || e).slice(0, 160)}; the file will not follow the database`);
+    }
+    return mirror;
+  }
+  function mirrorApply(ops) {
+    if (!ops.length) return;
+    const mdb = mirrorDb();
+    if (!mdb) return;
+    try { mdb.apply(ops); }
+    catch (e) {
+      if (!mirrorFailed) console.error(`[memory] SQLite mirror write failed: ${String(e?.message || e).slice(0, 160)}; later failures are not logged`);
+      mirrorFailed = true;
+    }
+  }
+  /** Tests only: the mirror state. */
+  const mirrorStatus = () => (mirrorFailed ? "failed" : mirror ? "on" : existsSync(dirname(DB_FILE)) ? "idle" : "off");
+
+  // Expired rows in namespaces nobody reads anymore: sweep on a timer, as the file backend does.
+  setInterval(() => {
+    const t = nowSec();
+    ready().then(() => stateQuery(`DELETE FROM ${T("memory_kv")} WHERE exp IS NOT NULL AND exp < $1`, [t])).then(() => mirrorApply([["kvPruneAll", t]])).catch(() => {});
+  }, 10 * 60 * 1000).unref();
+
+  // Postgres TEXT cannot hold a NUL character; SQLite could. Refuse it (400) rather than fail the statement (500).
+  function noNul(s, what) {
+    if (typeof s === "string" && s.includes("\u0000")) throw bad(`${what} must not contain NUL characters`);
+    return s;
+  }
+
+  // Every write: one transaction, the owner's advisory lock first. `q` is the
+  // transaction client's query (or stateQuery for a plain read); `q.mirror`
+  // collects the SQLite statements to replay once the transaction commits.
+  const lock = (c, owner) => c.query("SELECT pg_advisory_xact_lock($1, hashtext($2))", [LOCK_SPACE, owner]);
+  async function locked(owner, fn) {
+    await ready();
+    const ops = [];
+    const out = await withStateTx(async (c) => {
+      await lock(c, owner);
+      const q = (text, params) => c.query(text, params);
+      q.mirror = ops;
+      return fn(q);
+    });
+    mirrorApply(ops);
+    return out;
+  }
+  async function read(fn) {
+    await ready();
+    return fn(stateQuery);
+  }
+
+  // --- statement helpers over an executor ---------------------------------
+  const kvGet = async (q, ns, k) => kvRow((await q(`SELECT v, updated, exp FROM ${T("memory_kv")} WHERE ns = $1 AND k = $2`, [ns, k])).rows[0]);
+  const kvPut = (q, row) => {
+    q.mirror?.push(["kvPut", row]);
+    return q(
+      `INSERT INTO ${T("memory_kv")} (ns, k, v, updated, exp) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (ns, k) DO UPDATE SET v = EXCLUDED.v, updated = EXCLUDED.updated, exp = EXCLUDED.exp`,
+      [row.ns, row.k, row.v, row.updated, row.exp],
+    );
+  };
+  const kvDel = async (q, ns, k) => { q.mirror?.push(["kvDel", ns, k]); return (await q(`DELETE FROM ${T("memory_kv")} WHERE ns = $1 AND k = $2`, [ns, k])).rowCount > 0; };
+  const kvCount = async (q, ns) => Number((await q(`SELECT COUNT(*)::bigint AS n FROM ${T("memory_kv")} WHERE ns = $1`, [ns])).rows[0].n);
+  const kvBytes = async (q, ns) => Number((await q(`SELECT COALESCE(SUM(LENGTH(v)), 0)::bigint AS b FROM ${T("memory_kv")} WHERE ns = $1`, [ns])).rows[0].b);
+  const kvPruneExpired = (q, ns) => { const t = nowSec(); q.mirror?.push(["kvPruneExpired", ns, t]); return q(`DELETE FROM ${T("memory_kv")} WHERE ns = $1 AND exp IS NOT NULL AND exp < $2`, [ns, t]); };
+  const grantGet = async (q, owner, grantee) => {
+    const r = (await q(`SELECT mode, exp FROM ${T("memory_grants")} WHERE owner = $1 AND grantee = $2`, [owner, grantee])).rows[0];
+    return r ? { mode: r.mode, exp: num(r.exp) } : null;
+  };
+  const docCount = async (q, ns) => Number((await q(`SELECT COUNT(*)::bigint AS n FROM ${T("memory_docs")} WHERE ns = $1`, [ns])).rows[0].n);
+
+  async function assertKeyQuota(q, owner, key, rowKnownAbsent = false) {
+    if ((await kvCount(q, owner)) < MAX_KEYS_PER_NS()) return;
+    if (!rowKnownAbsent && (await kvGet(q, owner, key))) return; // overwriting never counts against the cap
+    // Expired rows must not consume quota: reclaim before rejecting.
+    await kvPruneExpired(q, owner);
+    if ((await kvCount(q, owner)) >= MAX_KEYS_PER_NS()) throw bad(`Namespace is full (${MAX_KEYS_PER_NS()} keys)`, 413);
+  }
+
+  async function assertByteBudget(q, owner, key, incomingBytes) {
+    const existing = await kvGet(q, owner, key);
+    const delta = incomingBytes - (existing ? existing.v.length : 0);
+    if (delta <= 0) return; // shrinking or same-size overwrite always allowed
+    if ((await kvBytes(q, owner)) + delta > MAX_NS_BYTES()) {
+      await kvPruneExpired(q, owner);
+      if ((await kvBytes(q, owner)) + delta > MAX_NS_BYTES()) {
+        throw bad(`Namespace byte budget exceeded (${MAX_NS_BYTES()} bytes of stored values) - delete keys, shrink values, or let TTLs expire`, 413);
+      }
+    }
+  }
+
+  // --- access control -------------------------------------------------------
+
+  async function authorizeWith(q, owner, actor, need) {
+    if (owner === actor) return true;
+    return grantAllows(await grantGet(q, owner, actor), need);
+  }
+  async function requireAccess(q, owner, actor, need) {
+    if (!(await authorizeWith(q, owner, actor, need))) throw accessError(owner, actor, need);
+  }
+  const authorize = (owner, actor, need) => read((q) => authorizeWith(q, owner, actor, need));
+
+  // --- tamper-evident audit chain (inside the caller's locked transaction) ---
+
+  async function appendLog(q, ns, actor, action, key, dataObj) {
+    const last = (await q(`SELECT seq, hash FROM ${T("memory_memlog")} WHERE ns = $1 ORDER BY seq DESC LIMIT 1`, [ns])).rows[0];
+    const seq = (last ? Number(last.seq) : 0) + 1;
+    const prev = last?.hash ?? "";
+    const ts = now();
+    const data = dataObj === undefined ? null : JSON.stringify(dataObj);
+    const hash = chainHash(prev, seq, ts, actor, action, key, data);
+    q.mirror?.push(["logIns", { ns, seq, ts, actor, action, key: key ?? null, data, prev_hash: prev, hash }]);
+    await q(
+      `INSERT INTO ${T("memory_memlog")} (ns, seq, ts, actor, action, key, data, prev_hash, hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [ns, seq, ts, actor, action, key ?? null, data, prev, hash],
+    );
+    return { seq, hash };
+  }
+
+  function getLog(owner, actor, limit = 100) {
+    return read(async (q) => {
+      await requireAccess(q, owner, actor, "read");
+      const r = await q(`SELECT seq, ts, actor, action, key, data, prev_hash, hash FROM ${T("memory_memlog")} WHERE ns = $1 ORDER BY seq ASC LIMIT $2`, [owner, logLimitOf(limit)]);
+      return { ns: owner, entries: r.rows.map((x) => logEntry({ ...x, seq: num(x.seq), ts: num(x.ts) })), verify: VERIFY_RULE, persistent: PERSISTENT };
+    });
+  }
+
+  // --- key/value with TTL ---------------------------------------------------
+
+  function memoryPut(owner, key, value, { actor = owner, ttlSeconds } = {}) {
+    return locked(owner, async (q) => {
+      await requireAccess(q, owner, actor, "write");
+      checkKey(key);
+      noNul(key, '"key"');
+      const serialized = noNul(serializeValue(value), '"value"');
+      await assertKeyQuota(q, owner, key);
+      await assertByteBudget(q, owner, key, serialized.length);
+      const exp = expiryOf(ttlSeconds);
+      const updated = now();
+      await kvPut(q, { ns: owner, k: key, v: serialized, updated, exp });
+      await appendLog(q, owner, actor, "put", key, { bytes: serialized.length, exp });
+      return { key, bytes: serialized.length, updated, expiresAt: exp, owner, persistent: PERSISTENT };
+    });
+  }
+
+  function memoryGet(owner, key, { actor = owner } = {}) {
+    return read(async (q) => {
+      await requireAccess(q, owner, actor, "read");
+      if (!key) {
+        await kvPruneExpired(q, owner);
+        const r = await q(`SELECT k, updated, exp FROM ${T("memory_kv")} WHERE ns = $1 ORDER BY updated DESC LIMIT 1000`, [owner]);
+        const keys = r.rows.map((x) => ({ k: x.k, updated: num(x.updated), exp: num(x.exp) })).filter((x) => !(x.exp && x.exp < nowSec()));
+        return { keys, owner, persistent: PERSISTENT };
+      }
+      const row = freshKv(await kvGet(q, owner, key));
+      if (!row) throw bad("Key not found", 404);
+      return { key, value: parseStored(row.v), updated: row.updated, expiresAt: row.exp, owner, persistent: PERSISTENT };
+    });
+  }
+
+  function memoryDelete(owner, key, { actor = owner } = {}) {
+    return locked(owner, async (q) => {
+      await requireAccess(q, owner, actor, "write");
+      if (!key) throw bad('"key" is required');
+      const deleted = await kvDel(q, owner, key);
+      if (deleted) await appendLog(q, owner, actor, "delete", key);
+      return { key, deleted, owner };
+    });
+  }
+
+  function memoryIncr(owner, key, by, actor) {
+    return locked(owner, async (q) => {
+      await requireAccess(q, owner, actor, "write");
+      checkKey(key, `Invalid "key"`);
+      const amount = by === undefined ? 1 : Number(by);
+      if (!Number.isFinite(amount)) throw bad('"by" must be a number');
+      const row = freshKv(await kvGet(q, owner, key));
+      let current = 0;
+      if (row) {
+        const n = Number(row.v);
+        if (!Number.isFinite(n)) throw bad(`Key "${key}" holds a non-numeric value; cannot increment`);
+        current = n;
+      } else {
+        await assertKeyQuota(q, owner, key, true);
+      }
+      const next = current + amount;
+      await kvPut(q, { ns: owner, k: key, v: String(next), updated: now(), exp: row?.exp ?? null });
+      await appendLog(q, owner, actor, "incr", key, { by: amount, value: next });
+      return { key, value: next, owner };
+    });
+  }
+
+  function memoryCas(owner, key, expected, value, { actor = owner, ttlSeconds, hasValue = false } = {}) {
+    return locked(owner, async (q) => {
+      await requireAccess(q, owner, actor, "write");
+      checkKey(key);
+      const row = freshKv(await kvGet(q, owner, key));
+      const current = row ? parseStored(row.v) : null;
+      const want = expected === undefined ? null : expected;
+      if (JSON.stringify(current) !== JSON.stringify(want)) {
+        return { key, swapped: false, value: current, owner };
+      }
+      if (!hasValue || value === undefined) {
+        const deleted = await kvDel(q, owner, key);
+        if (deleted) await appendLog(q, owner, actor, "cas-del", key, { expected: want });
+        return { key, swapped: true, value: null, owner };
+      }
+      const serialized = noNul(serializeValue(value, `"value" must serialize to at most ${MAX_VALUE} bytes`), '"value"');
+      if (!row) await assertKeyQuota(q, owner, key, true);
+      await assertByteBudget(q, owner, key, serialized.length);
+      const exp = expiryOf(ttlSeconds);
+      await kvPut(q, { ns: owner, k: key, v: serialized, updated: now(), exp });
+      await appendLog(q, owner, actor, "cas-set", key, { expected: want, bytes: serialized.length, exp });
+      return { key, swapped: true, value, owner, expiresAt: exp };
+    });
+  }
+
+  // --- grants (cross-agent sharing) ----------------------------------------
+
+  function grant(owner, grantee, mode, ttlSeconds) {
+    const { g, exp } = checkGrant(owner, grantee, mode, ttlSeconds);
+    return locked(owner, async (q) => {
+      const created = now();
+      q.mirror.push(["grantPut", { owner, grantee: g, mode, created, exp }]);
+      await q(
+        `INSERT INTO ${T("memory_grants")} (owner, grantee, mode, created, exp) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (owner, grantee) DO UPDATE SET mode = EXCLUDED.mode, created = EXCLUDED.created, exp = EXCLUDED.exp`,
+        [owner, g, mode, created, exp],
+      );
+      await appendLog(q, owner, owner, "grant", g, { mode, exp });
+      return { owner, grantee: g, mode, expiresAt: exp };
+    });
+  }
+
+  function revoke(owner, grantee) {
+    const g = checkGrantee(grantee);
+    return locked(owner, async (q) => {
+      q.mirror.push(["grantDel", owner, g]);
+      const removed = (await q(`DELETE FROM ${T("memory_grants")} WHERE owner = $1 AND grantee = $2`, [owner, g])).rowCount > 0;
+      if (removed) await appendLog(q, owner, owner, "revoke", g);
+      return { owner, grantee: g, revoked: removed };
+    });
+  }
+
+  function listGrants(owner) {
+    return read(async (q) => {
+      const r = await q(`SELECT grantee, mode, created, exp FROM ${T("memory_grants")} WHERE owner = $1`, [owner]);
+      return { owner, grants: r.rows.map((x) => grantEntry({ ...x, created: num(x.created), exp: num(x.exp) })) };
+    });
+  }
+
+  // --- similarity recall (vectors stay JSON text; cosine runs in JS) ---------
+
+  async function remember(owner, text, meta, { actor = owner } = {}) {
+    await read((q) => requireAccess(q, owner, actor, "write"));
+    checkDocText(text);
+    noNul(text, '"text"');
+    const metaStr = meta === undefined ? null : noNul(JSON.stringify(meta), '"meta"');
+    const { vec, model } = await embedText(text); // the provider call stays outside the transaction
+    return locked(owner, async (q) => {
+      await requireAccess(q, owner, actor, "write");
+      if ((await docCount(q, owner)) >= MAX_DOCS_PER_NS) throw bad(`Recall store is full (${MAX_DOCS_PER_NS} docs)`);
+      const id = newDocId();
+      const doc = { ns: owner, id, text, meta: metaStr, vec: JSON.stringify(vec), model, updated: now() };
+      q.mirror.push(["docPut", doc]);
+      await q(
+        `INSERT INTO ${T("memory_docs")} (ns, id, text, meta, vec, model, updated) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (ns, id) DO UPDATE SET text = EXCLUDED.text, meta = EXCLUDED.meta, vec = EXCLUDED.vec, model = EXCLUDED.model, updated = EXCLUDED.updated`,
+        [doc.ns, doc.id, doc.text, doc.meta, doc.vec, doc.model, doc.updated],
+      );
+      await appendLog(q, owner, actor, "remember", id, { chars: text.length });
+      return { id, owner, stored: true, embedder: model };
+    });
+  }
+
+  async function recall(owner, query, k, { actor = owner } = {}) {
+    await read((q) => requireAccess(q, owner, actor, "read"));
+    if (typeof query !== "string" || !query.trim()) throw bad('"query" is required');
+    const topK = topKOf(k);
+    const { vec: qv, model } = await embedText(query);
+    const docs = (await stateQuery(`SELECT id, text, meta, vec, model, updated FROM ${T("memory_docs")} WHERE ns = $1`, [owner])).rows
+      .map((d) => ({ ...d, updated: num(d.updated) }));
+    return rankDocs(docs, qv, model, topK, owner, query);
+  }
+
+  function forget(owner, id, { actor = owner } = {}) {
+    return locked(owner, async (q) => {
+      await requireAccess(q, owner, actor, "write");
+      if (!id) throw bad('"id" is required');
+      q.mirror.push(["docDel", owner, id]);
+      const deleted = (await q(`DELETE FROM ${T("memory_docs")} WHERE ns = $1 AND id = $2`, [owner, id])).rowCount > 0;
+      if (deleted) await appendLog(q, owner, actor, "forget", id);
+      return { id, deleted, owner };
+    });
+  }
+
+  return { ready, mirrorStatus, authorize, getLog, memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas, grant, revoke, listGrants, remember, recall, forget };
+}
+
+const impl = USE_PG ? pgBackend() : sqliteBackend();
+
+// --- exports --------------------------------------------------------------
+// SQLite backend: synchronous, except remember/recall (embedding). Postgres
+// backend: every one of these returns a promise, resolved only after the
+// database has the write (paid memory is never fire-and-forget).
+
+/** Resolves when the backend is ready (tables created, the SQLite file imported); immediate on SQLite. */
+export function memoryReady() { return impl.ready(); }
+
+/** Tests only: "on" | "idle" | "failed" | "off" for the Postgres backend's SQLite mirror, "n/a" on SQLite. */
+export function __memoryMirrorStatus() { return impl.mirrorStatus(); }
+
+/** True if `actor` may act on `owner`'s namespace at the required level ("read" | "write"). */
+export function authorize(owner, actor, need) { return impl.authorize(owner, actor, need); }
+
+export function getLog(owner, actor, limit = 100) { return impl.getLog(owner, actor, limit); }
+
+export function memoryPut(owner, key, value, opts) { return impl.memoryPut(owner, key, value, opts); }
+
+export function memoryGet(owner, key, opts) { return impl.memoryGet(owner, key, opts); }
+
+export function memoryDelete(owner, key, opts) { return impl.memoryDelete(owner, key, opts); }
+
+/** Atomic numeric counter — a coordination primitive only a shared store can offer. */
+export function memoryIncr(owner, key, by, actor) { return impl.memoryIncr(owner, key, by, actor); }
+
+/**
+ * Atomic compare-and-set — the general coordination primitive. Writes (or, when
+ * no value is supplied, deletes) a key only if its current value equals
+ * `expected`. This is what distributed locks and optimistic concurrency are
+ * built from:
+ *   - acquire a lock:  expected = null (key absent/expired), value = <token>, ttlSeconds = <lease>
+ *   - release a lock:  expected = <token>, no value  → deletes on match
+ *   - safe update:     expected = <old value>, value = <new value>
+ * `hasValue` distinguishes "set to a value" (even null) from "no value = delete".
+ * Values are compared as JSON values (same canonicalization on both sides).
+ */
+export function memoryCas(owner, key, expected, value, opts) { return impl.memoryCas(owner, key, expected, value, opts); }
+
+export function grant(owner, grantee, mode, ttlSeconds) { return impl.grant(owner, grantee, mode, ttlSeconds); }
+
+export function revoke(owner, grantee) { return impl.revoke(owner, grantee); }
+
+export function listGrants(owner) { return impl.listGrants(owner); }
+
+export function remember(owner, text, meta, opts) { return impl.remember(owner, text, meta, opts); }
+
+export function recall(owner, query, k, opts) { return impl.recall(owner, query, k, opts); }
+
+export function forget(owner, id, opts) { return impl.forget(owner, id, opts); }
