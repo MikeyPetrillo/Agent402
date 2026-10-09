@@ -44,7 +44,7 @@ import { pipeline } from "node:stream/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createJsonDocument } from "./json-document.js";
-import { trackStoreReady, leased } from "./state-db.js";
+import { trackStoreReady, leased, stateDbEnabled, stateDbSchema, stateQuery } from "./state-db.js";
 
 const cfg = () => ({
   endpoint: (process.env.BACKUP_S3_ENDPOINT || "").trim().replace(/\/+$/, ""),
@@ -364,6 +364,42 @@ export async function runBackup({ log = console.log } = {}) {
       rmSync(up, { force: true });
     }
 
+    // The state database (src/state-db.js): every table in its schema goes
+    // up as one gzip'd NDJSON object under state/, so the stores that left
+    // the volume have the same offsite copy the files had. Same budget, same
+    // encryption, same retention. Restore: scripts/backup-restore.js.
+    if (stateDbEnabled()) {
+      let tables = [];
+      try { tables = await stateTables(); } catch (e) { held.push({ name: "state/*", reason: `table list failed: ${String(e?.message || e).slice(0, 120)}` }); }
+      for (const table of tables) {
+        if (table === "leases") continue; // live locks, never restored
+        const objName = `state/${table}.ndjson`;
+        const gz = join(tmp, `state-${table}.ndjson.gz`);
+        let rows = 0;
+        try { rows = await stageStateTable(table, gz); }
+        catch (e) { held.push({ name: objName, reason: `stage failed: ${String(e?.message || e).slice(0, 120)}` }); continue; }
+        let up = gz, suffix = ".gz";
+        if (c.encKey) {
+          const enc = gz + ".enc";
+          writeFileSync(enc, encryptBackupBuffer(readFileSync(gz), c.encKey));
+          rmSync(gz, { force: true });
+          up = enc; suffix = ".gz.enc";
+        }
+        const bytes = statSync(up).size;
+        if (bytes > budget) {
+          held.push({ name: objName, reason: `over budget (${(bytes / 1e6).toFixed(1)}MB compressed, ${(budget / 1e6).toFixed(1)}MB left)` });
+          rmSync(up, { force: true });
+          continue;
+        }
+        const key = `backups/${day}/${objName}${suffix}`;
+        const res = await s3("PUT", key, { body: createReadStream(up), contentLength: bytes });
+        if (!res.ok) throw new Error(`upload ${key} failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+        budget -= bytes;
+        uploaded.push({ name: objName, gzBytes: bytes, encrypted: Boolean(c.encKey), rows });
+        rmSync(up, { force: true });
+      }
+    }
+
     // Retention: delete whole date prefixes older than keepDays. Dates sort
     // lexicographically, so the cutoff is a string compare — no clock math
     // on object timestamps.
@@ -395,6 +431,33 @@ export async function runBackup({ log = console.log } = {}) {
     rmSync(tmp, { recursive: true, force: true });
     running = false;
   }
+}
+
+/** The tables in the state schema (names only, from the catalog). */
+export async function stateTables() {
+  const r = await stateQuery("SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name", [stateDbSchema()]);
+  return r.rows.map((x) => String(x.table_name)).filter((t) => /^[a-z_][a-z0-9_]*$/.test(t));
+}
+/** Stage one state table as gzip'd NDJSON: one JSON object per row, read in
+ *  pages so a large table never sits in memory at once. */
+export async function stageStateTable(table, gzPath, { pageRows = 5000 } = {}) {
+  if (!/^[a-z_][a-z0-9_]*$/.test(table)) throw new Error("bad table name");
+  const out = createGzip({ level: 6 });
+  const done = pipeline(out, createWriteStream(gzPath));
+  const q = `SELECT row_to_json(t) AS r FROM ${stateDbSchema()}.${table} t ORDER BY ctid LIMIT $1 OFFSET $2`;
+  let n = 0, offset = 0;
+  for (;;) {
+    const page = await stateQuery(q, [pageRows, offset]);
+    for (const row of page.rows) {
+      if (!out.write(JSON.stringify(row.r) + "\n")) await new Promise((r) => out.once("drain", r));
+      n++;
+    }
+    if (page.rows.length < pageRows) break;
+    offset += pageRows;
+  }
+  out.end();
+  await done;
+  return n;
 }
 
 /** Stage a directory store as one gzip'd NDJSON bundle: {"path","body"} per
