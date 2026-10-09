@@ -10,6 +10,7 @@
 // remediation plan. The probes are free (only the synthesis touches OpenRouter).
 // Settlement-safe (throws >=400 on failure), WALLET_ONLY, not cached. Gated on
 // OPENROUTER_API_KEY for the synthesis (503 without it).
+import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { KIT } from "./kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -45,6 +46,22 @@ async function chat(body, timeoutMs, user) {
   return res.json();
 }
 const costOf = (d) => Number(d?.usage?.cost) || 0;
+// The DMARC facts separate what the record SAYS from what applies by default,
+// so the report never presents a default (sp, aspf, adkim, fo, ri) as a
+// setting the domain chose, and never invents a value for an absent tag.
+const DMARC_DEFAULTS = { sp: "inherits p", aspf: "r", adkim: "r", fo: "0", ri: "86400", pct: "100" };
+export function dmarcFacts(d) {
+  const raw = String(d?.raw || "");
+  const tags = {};
+  for (const part of raw.split(";").map((s) => s.trim()).filter(Boolean)) {
+    const [k, ...rest] = part.split("=");
+    if (k && rest.length && k.trim().toLowerCase() !== "v") tags[k.trim().toLowerCase()] = rest.join("=").trim();
+  }
+  const present = Object.entries(tags).map(([k, v]) => `${k}=${v}`).join(" ");
+  const defaults = Object.entries(DMARC_DEFAULTS).filter(([k]) => !(k in tags)).map(([k, v]) => `${k} (${k === "sp" ? `not set: subdomains inherit p=${d.policy}` : `default ${v}`})`).join(", ");
+  const ruf = tags.ruf ? "" : "; no ruf tag, so no failure reports are requested";
+  return `p=${d.policy} at ${d.percent}% (valid=${d.valid}); record: "${raw.replace(/"/g, "'")}"; tags present: ${present || "none beyond v"}; not in the record (defaults apply): ${defaults || "none"}${ruf}`;
+}
 const textOf = (d) => (d?.choices?.[0]?.message?.content || "").trim();
 
 async function settle(p, timeoutMs) {
@@ -282,7 +299,7 @@ function makeDomainAuditHandlerInner(tierSlug) {
 
     // 2) GROUNDING BLOCKS (the probe results are the only source of truth).
     const emailBlock = email
-      ? `Score ${emailScore}/100 (${email.summary}). SPF: ${email.spf?.hasRecord ? `present (${email.spf.all || "?"}all, ${email.spf.lookupCountRecursive ?? email.spf.lookupCount} DNS lookups counted recursively through include/redirect (RFC 7208 limit 10; top-level ${email.spf.lookupCount}), valid=${email.spf.valid})` : email.spf?.hasRecord === null ? `NOT MEASURED (DNS lookup failed: ${email.spf.lookupError})` : "MISSING"}. DMARC: ${email.dmarc?.hasRecord ? `p=${email.dmarc.policy} at ${email.dmarc.percent}% (valid=${email.dmarc.valid}${email.dmarc.subdomainPolicy ? `; sp=${email.dmarc.subdomainPolicy}` : ""}${email.dmarc.alignment ? `; aspf=${email.dmarc.alignment.spf}, adkim=${email.dmarc.alignment.dkim}` : ""}${email.dmarc.reportingUris ? `; rua=${email.dmarc.reportingUris.aggregate?.length ? email.dmarc.reportingUris.aggregate.join(",") : "NONE"}; ruf=${email.dmarc.reportingUris.failure?.length ? email.dmarc.reportingUris.failure.join(",") : "none"}` : ""}${email.dmarc.failureOptions ? `; fo=${email.dmarc.failureOptions}` : ""})` : email.dmarc?.hasRecord === null ? `NOT MEASURED (DNS lookup failed: ${email.dmarc.lookupError})` : "MISSING"}. DKIM: ${email.dkim?.found?.length ? email.dkim.found.map((d) => `${d.selector} (${d.bits}-bit, valid=${d.valid})`).join(", ") : `none found (probed ${email.dkim?.probed?.length || 0} selectors: ${(email.dkim?.probed || []).join(", ")} - a selector outside that list would not be seen)`}. MX: ${email.mx?.lookupError ? `NOT MEASURED (DNS lookup failed: ${email.mx.lookupError})` : `${email.mx?.count || 0} records`}${email.mx?.records?.length ? ` (${email.mx.records.slice(0, 8).join(", ")})` : ""}. Checks: ${(email.checks || []).map((c) => `${c.check}=${c.status}`).join(", ")}.`
+      ? `Score ${emailScore}/100 (${email.summary}). SPF: ${email.spf?.hasRecord ? `present (${email.spf.all || "?"}all, ${email.spf.lookupCountRecursive ?? email.spf.lookupCount} DNS lookups counted recursively through include/redirect (RFC 7208 limit 10; top-level ${email.spf.lookupCount}), valid=${email.spf.valid})` : email.spf?.hasRecord === null ? `NOT MEASURED (DNS lookup failed: ${email.spf.lookupError})` : "MISSING"}. DMARC: ${email.dmarc?.hasRecord ? dmarcFacts(email.dmarc) : email.dmarc?.hasRecord === null ? `NOT MEASURED (DNS lookup failed: ${email.dmarc.lookupError})` : "MISSING"}. DKIM: ${email.dkim?.found?.length ? email.dkim.found.map((d) => `${d.selector} (${d.bits}-bit, valid=${d.valid})`).join(", ") : `none found (probed ${email.dkim?.probed?.length || 0} selectors: ${(email.dkim?.probed || []).join(", ")} - a selector outside that list would not be seen)`}. MX: ${email.mx?.lookupError ? `NOT MEASURED (DNS lookup failed: ${email.mx.lookupError})` : `${email.mx?.count || 0} records`}${email.mx?.records?.length ? ` (${email.mx.records.slice(0, 8).join(", ")})` : ""}. Checks: ${(email.checks || []).map((c) => `${c.check}=${c.status}`).join(", ")}.`
       : `email-deliverability probe FAILED: ${emailR.error}`;
     const hdrBlock = hdr
       ? `Security-header score ${headerScore}/100. Findings: ${(hdr.security?.findings || []).map((f) => `${f.header}=${f.present ? `present${f.value ? ` [${String(f.value).replace(/\s+/g, " ").slice(0, 300)}]` : ""}` : "MISSING"}`).join(", ")}. Warnings: ${(hdr.security?.warnings || []).join("; ") || "none"}. HTTP status ${hdr.status}.`
@@ -332,6 +349,7 @@ Rules for the fixes, each learned from a real report:
 6. The Server header is informational (the platform is visible from DNS anyway and an edge-injected header cannot be removed by the app); X-Powered-By is a real, removable disclosure.
 7. Escalate safely: DMARC p=none with reporting first then quarantine/reject; HSTS with a short max-age first; CSP report-only first.
 8. Check both hosts: use the www/apex twin result - a twin that does not redirect, or lacks HSTS while the other has it, is a finding.
+9. DMARC and SPF tags: name a tag as configured only when it appears under "tags present". A default that applies because the tag is absent is described as a default (for example "sp is not set, so subdomains inherit the domain policy"), never as a choice the domain made, and never written as a tag value that does not exist (there is no "ruf=none"; an absent ruf means no failure reports are requested).
 
 Do NOT write a sources section. Ground every claim in the probe data; where a probe failed, say the check could not be completed rather than guessing.
 
@@ -345,9 +363,9 @@ Do NOT write a sources section. Ground every claim in the probe data; where a pr
 NOTE: a gap in this material is never a finding about the domain - a probe marked FAILED or unknown was not checked here; say so instead of "not configured".${t.pro ? `\n=== ATTACK SURFACE / STACK / REGISTRATION ===\n${proBlock}` : ""}`;
 
     let spent = 0;
-    const sd = await chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user);
-    spent += costOf(sd);
-    const prose = textOf(sd);
+    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
+    spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
+    const prose = proseOf(sd, cutShort);
     if (!prose) throw bad("Domain audit synthesis produced nothing - not charged", 502);
     const header = `# Domain Security Audit: ${domain}\n\n**Overall grade: ${grade}** (${composite}/100)${gradeCaveat}\n`;
     const report = `${header}\n${prose}`;
