@@ -21,6 +21,7 @@ import { dispatchable } from "./route-execute.js";
 import { EXPENSIVE_COMPOSITE_SLUGS } from "../composite-spend-guard.js";
 import { evmCredentialBudgetMs } from "../evm-validity.js";
 import { resolveStepRefs } from "../decide/step-refs.js";
+import { sketchPlan, sketchListPriceUsd, SKETCH_MIN_STEPS, SKETCH_MAX_STEPS } from "../decide/sketch-plan.js";
 
 export const NEUTRALITY_NOTE = "Every candidate is scored by one formula with the same weights: fit to the step, observed reliability, price, schema quality and a freshness pass mark. It has no term for who sells the tool, and every tool carries firstParty. Fit is judged from the same bounded description for every tool; reliability counts one observation per payer per day. Outside tools are eligible when a live 402 was seen within the configured window and their input schema is known.";
 
@@ -145,10 +146,18 @@ export function makeDecideHandler({ ledger, now = () => Date.now() }) {
 
 /** What an execute call is priced at: its budget less a valid credit, never
  *  under the settlement floor. Sync: reads the local ledger only. */
-export function executeQuoteUsd(body, { ledger, now = Date.now() }) {
+export function executeQuoteUsd(body, { ledger, now = Date.now(), getCatalog = null }) {
   const floor = 0.001;
   const d = body?.decisionId ? ledger.getDecision(String(body.decisionId)) : null;
-  if (!d) return floor;
+  if (!d) {
+    // A sketch run (steps, no decision) is quoted at its steps' list prices;
+    // the handler refuses a step it cannot run before anything is charged.
+    if (!body?.decisionId && Array.isArray(body?.steps) && typeof getCatalog === "function") {
+      const sum = sketchListPriceUsd(body.steps, getCatalog());
+      if (sum > 0) return Math.max(floor, executeBudgetUsd(body, { costViaUsd: sum }));
+    }
+    return floor;
+  }
   const credit = ledger.creditAvailableUsd(body?.creditToken, d.id, now);
   const budget = executeBudgetUsd(body, d, undefined, credit);
   return Math.max(floor, roundUsd(budget - credit));
@@ -189,14 +198,35 @@ function priceOfDef(def) {
 export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(), isComposite = (slug) => EXPENSIVE_COMPOSITE_SLUGS.has(slug), runBudgetMs = (req) => evmCredentialBudgetMs(req), spendingWalletStatus = async () => (await import("../upstream-buyer-status.js")).upstreamBuyerStatus() }) {
   return async function executeHandler(input, req) {
     const cfg = decideConfig();
-    const decisionId = String(input?.decisionId || "");
-    if (!decisionId) throw bad('"decisionId" is required (from POST /api/decide)');
-    const d = ledger.getDecision(decisionId);
-    if (!d) throw bad("Unknown decisionId - decisions are kept for this server's own answers only", 404);
-    if (!d.settled) throw bad("That decision's payment has not settled, so it cannot be executed", 409);
     if (input.params != null && (typeof input.params !== "object" || Array.isArray(input.params))) throw bad('"params" must be an object keyed by step number');
     const payer = payerOf(req);
     const t = now();
+    let decisionId = String(input?.decisionId || "");
+    let d = null;
+    if (decisionId) {
+      d = ledger.getDecision(decisionId);
+      if (!d) throw bad("Unknown decisionId - decisions are kept for this server's own answers only", 404);
+      if (!d.settled) throw bad("That decision's payment has not settled, so it cannot be executed", 409);
+    } else if (Array.isArray(input?.steps)) {
+      // The steps of a free plan sketch become a decision of their own: kept
+      // like a paid one (so the run can be repeated and given feedback),
+      // priced at zero and settled at once, since the sketch cost nothing.
+      const refuse = (def) => {
+        const dis = dispatchable(def);
+        if (!dis.ok) return dis.why;
+        if (typeof def.tierQuote === "function") return "is priced per request; call it directly";
+        if (isComposite(def.slug)) return "is a report product; call it directly";
+        return null;
+      };
+      const sk = sketchPlan(input.steps, { catalog: getCatalog(), refuse });
+      if (!sk.ok) throw bad(sk.error, 400);
+      decisionId = `skt_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      ledger.saveDecision({ decisionId, depth: "sketch", priceUsd: 0, payer, plan: sk.plan, costViaUsd: sk.costUsd, now: t });
+      ledger.markDecisionSettled(decisionId);
+      d = ledger.getDecision(decisionId);
+    } else {
+      throw bad(`"decisionId" (from POST /api/decide) or "steps" (the tool slugs of a free plan sketch from /api/find or /api/route, ${SKETCH_MIN_STEPS} to ${SKETCH_MAX_STEPS}, in order) is required`);
+    }
     const startedAt = Date.now();
     const budget = executeBudgetUsd(input, d, cfg, ledger.creditAvailableUsd(input.creditToken, d.id, t));
     if (budget <= 0) throw bad("Nothing to execute: the plan has no priced steps; pass maxBudgetUsd", 400);
@@ -204,7 +234,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     // WHAT WAS PAID is the quote the payment gate settled against (stashed on
     // the request by every gate), never a recomputation: a credit raced away
     // since the quote would otherwise make an unpaid budget spendable.
-    const quoted = Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0 ? req.__meteredQuoteUsd : executeQuoteUsd(input, { ledger, now: t });
+    const quoted = Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0 ? req.__meteredQuoteUsd : executeQuoteUsd(input, { ledger, now: t, getCatalog });
     const creditAssumed = roundUsd(Math.max(0, budget - quoted));
 
     // One run per (decision, runKey): a client that timed out and paid again
@@ -528,23 +558,24 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
       // Base payment funds: other EVM chains are not offered (credits and card
       // still work).
       onlyNetworks: ["eip155:8453"],
-      quote: (body) => executeQuoteUsd(body, { ledger, now: now() }),
+      quote: (body) => executeQuoteUsd(body, { ledger, now: now(), getCatalog }),
       // The budget is capped per call (executeBudgetUsd), so that is the ceiling.
       quoteMaxUsd: decideConfig().execute.perCallMaxUsd,
       description:
-        "Run a decision's plan through Agent402: first-party steps run directly, third-party steps are bought from the seller and resold to you (you pay on Base, or by credits or card) at the seller's price plus a disclosed markup. Priced at the plan's budget (or your maxBudgetUsd, whichever you set) less a valid execution credit; spend stops at that budget, fallbacks are tried in order, and any unspent amount comes back as a credit. A run where no step succeeds is not charged.",
+        "Run a decision's plan through Agent402: first-party steps run directly, third-party steps are bought from the seller and resold to you (you pay on Base, or by credits or card) at the seller's price plus a disclosed markup. Priced at the plan's budget (or your maxBudgetUsd, whichever you set) less a valid execution credit; spend stops at that budget, fallbacks are tried in order, and any unspent amount comes back as a credit. A run where no step succeeds is not charged. Also runs a free plan sketch: pass the sketch's tool slugs as steps (no decisionId) with params for step 1, and each later step takes its one required input from the step before, at list price.",
       tags: ["agents", "execute", "planning", "router", "x402"],
       discovery: {
         bodyType: "json",
         input: { decisionId: "dec_2b1c9e0f4a7d4c3e9b8a1f00", creditToken: "dc_...", maxBudgetUsd: 0.05 },
         inputSchema: {
           properties: {
-            decisionId: { type: "string", description: "From POST /api/decide" },
+            decisionId: { type: "string", description: "From POST /api/decide (or pass steps instead)" },
+            steps: { type: "array", items: { type: "string" }, description: "Instead of decisionId: the tool slugs of a free plan sketch (from /api/find or /api/route), 2 to 5, in order. Pass params for step 1; a later step takes its one required input from the step before." },
             creditToken: { type: "string", description: "executionCredit.token from that decision (optional)" },
             maxBudgetUsd: { type: "number", description: "Spend ceiling for the run (default: the plan's estimate via Agent402)" },
             params: { type: "object", description: "Per-step params overriding the plan's exampleParams, keyed by step number" },
           },
-          required: ["decisionId"],
+          required: [],
         },
         output: { example: { runId: "run_…", decisionId: "dec_…", status: "complete", steps: [{ step: 1, status: "ok", tool: { slug: "search", seller: "agent402", firstParty: true }, costUsd: 0.02, result: {} }], budgetUsd: 0.02, spentUsd: 0.02, paidUsd: 0.001, creditAppliedUsd: 0.02, routingFeePct: 5, leftoverCredit: null } },
       },

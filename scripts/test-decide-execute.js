@@ -607,5 +607,35 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   const attempts = JSON.stringify(out?.steps || out?.error?.message || out);
   ok(/declares no inputs: pass params/.test(attempts), "the step says why and how to run it (pass params)");
 }
+// ---- a free plan sketch runs through execute by its slugs ----
+{
+  calls.length = 0;
+  catalog.s1 = { slug: "s1", route: "POST /api/s1", price: "$0.004", discovery: { bodyType: "json", inputSchema: { properties: { text: { type: "string" } }, required: ["text"] } }, handler: async (p) => { calls.push(["s1", p]); return { q: `${p.text}-s1` }; } };
+  catalog.s2 = { slug: "s2", route: "POST /api/s2", price: "$0.006", discovery: { bodyType: "json", inputSchema: { properties: { q: { type: "string" } }, required: ["q"] } }, handler: async (p) => { calls.push(["s2", p]); return { s2: p.q }; } };
+  const getCatalog = () => catalog;
+  ok(executeQuoteUsd({ steps: ["s1", "s2"] }, { ledger, now: clock, getCatalog }) === 0.01, "a sketch run is quoted at its steps' list prices");
+  ok(executeQuoteUsd({ steps: ["s1", "s2"], maxBudgetUsd: 0.005 }, { ledger, now: clock, getCatalog }) === 0.005, "a caller's budget caps the sketch quote");
+  ok(executeQuoteUsd({ steps: ["nope", "none"] }, { ledger, now: clock, getCatalog }) === 0.001, "unknown slugs quote the floor (the handler then refuses, uncharged)");
+  await throwsWith(() => exec({}, mkReq("0xs")), 400, "steps", "with neither decisionId nor steps the refusal names both");
+  await throwsWith(() => exec({ steps: ["s1"] }, mkReq("0xs")), 400, "2 to 5", "one step is not a plan");
+  await throwsWith(() => exec({ steps: ["s1", "nope"] }, mkReq("0xs")), 400, 'no tool "nope"', "an unknown slug is refused before anything runs");
+  await throwsWith(() => exec({ steps: ["s1", "route-execute-pro"] }, mkReq("0xs")), 400, "route-execute", "a tool execute may not dispatch is refused by name");
+  ok(!calls.length, "no refused sketch ran a step");
+  await throwsWith(() => exec({ steps: ["s1", "s2"] }, mkReq("0xs2")), 400, "needs text", "without step-1 params nothing runs and the refusal names the field");
+  ok(!calls.length, "the placeholder is never sent to a tool");
+  const req = mkReq("0xs");
+  const out = await exec({ steps: ["s1", "s2"], params: { 1: { text: "hi" } } }, req);
+  ok(out.status === "complete" && out.decisionId.startsWith("skt_") && out.steps.length === 2, `a sketch runs end to end (${out.status}, ${out.decisionId})`);
+  ok(out.steps[1].result?.s2 === "hi-s1", "step 2 takes its one required input from step 1's output");
+  ok(out.paidUsd === 0.01 && out.spentUsd === 0.01 && out.creditAppliedUsd === 0 && out.charges.firstPartyUsd === 0.01, `priced at list, nothing else (${out.paidUsd}/${out.spentUsd})`);
+  const d2 = ledger.getDecision(out.decisionId);
+  ok(d2 && d2.depth === "sketch" && d2.priceUsd === 0 && d2.settled && d2.plan[1].tool.exampleParams.q === "{{step 1}}", "the sketch is kept as a free, settled decision whose later step references the one before");
+  const again = await exec({ decisionId: out.decisionId, params: { 1: { text: "yo" } } }, mkReq("0xs"));
+  ok(again.steps[1].result?.s2 === "yo-s1", "the kept sketch decision runs again by id");
+  const both = await exec({ decisionId: out.decisionId, steps: ["s2", "s1"], params: { 1: { text: "id" } } }, mkReq("0xs"));
+  ok(both.decisionId === out.decisionId && both.steps[0].tool.slug === "s1", "a decisionId wins over steps");
+  ok(!("sweeps" in out), "no sweep bookkeeping leaks into a run answer");
+}
+
 console.log(`\ntest-decide-execute: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

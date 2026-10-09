@@ -52,6 +52,15 @@ ok(p.estimatedCostUsd === 0 && p.estimatedCostIsFloor === false, "free (proof-of
 ok(p.upgrade === upgrade, "the paid decide upgrade is passed through unchanged");
 ok(/no model/.test(p.builtBy), "the sketch says how it was built");
 ok(p.steps.every((s) => Array.isArray(s.fallbacks) && s.fallbacks.length <= 2), "at most two fallbacks per step");
+ok(p.execute === undefined && !/execute/.test(p.howToRun), "without execute on this host the sketch carries no execute body");
+
+// ---- the execute body, when POST /api/decide/execute is served here
+const px = buildPlanSketch("hash the text with sha256, then base64 encode it, then make a qr code", { rank, upgrade, executable: true });
+ok(px.execute && px.execute.route === "POST /api/decide/execute" && px.execute.body.steps.join(",") === "hash,base64,qr", `a runnable sketch carries its slugs in order for execute (${JSON.stringify(px.execute?.body?.steps)})`);
+ok(px.execute.body.params && typeof px.execute.body.params[1] === "object" && Object.values(px.execute.body.params[1]).every((v) => /^<.+>$/.test(v)), "step 1's required fields are named as placeholders to fill in");
+ok(Number.isFinite(px.execute.priceUsd) && px.execute.priceUsd > 0 && /list price/.test(px.execute.note) && /execute\.body/.test(px.howToRun), "the execute price is the steps' list prices (free tier applies to direct calls only) and howToRun points at it");
+const pw = buildPlanSketch("hash the text then order me a pizza", { rank, executable: true });
+ok(pw.steps[1].tool && pw.execute === undefined, "a sketch with a weak step carries no execute body, even though the step names a tool");
 
 const paidRank = (task) => { const r = rank(task); r.results = r.results.map((t) => ({ ...t, computePayable: false, priceUsd: 0.002 })); return r; };
 const priced = buildPlanSketch("hash the text, then base64 encode it", { rank: paidRank });

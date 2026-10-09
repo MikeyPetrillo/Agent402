@@ -535,7 +535,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decideSales, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly } from "./sales-ledger.js";
+import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -3578,7 +3578,7 @@ app.get("/api/revenue/decide", (_req, res) => {
     res.set("Cache-Control", "public, max-age=60").json(memoSurface("revenue:decide", 60_000, () => ({
       asOf: new Date().toISOString(),
       ...decideSales({ days: 30 }),
-      note: "Paid settlements of POST /api/decide and POST /api/decide/execute. internal = our own canaries and tests; external = everyone else. externalUsd is what outside buyers paid us for these two routes; an execute run's pass-through payments to outside sellers are not included.",
+      note: "Paid settlements of POST /api/decide and POST /api/decide/execute. internal = our own canaries and tests; external = outside buyers, less catalog sweeps (a wallet that bought " + SWEEP_DISTINCT_TOOLS_PER_DAY + " or more distinct tools in one UTC day, counted under sweeps). externalUsd is what outside buyers paid us for these two routes; an execute run's pass-through payments to outside sellers are not included.",
     })));
   } catch (e) {
     res.status(500).json({ error: "decide revenue failed", detail: String(e?.message || e).slice(0, 120) });
@@ -5778,6 +5778,7 @@ const planSketchFor = (q) => {
       rank: (task) => findTools(CATALOG, task, { k: 3, baseUrl: BASE_URL, powSlugs: POW_SLUGS }),
       weakScore: FIND_WEAK_SCORE,
       upgrade: decideUpgrade(),
+      executable: Boolean(CATALOG["POST /api/decide/execute"]),
     });
   } catch { return null; } // a sketch is an extra; find and route answer regardless
 };
