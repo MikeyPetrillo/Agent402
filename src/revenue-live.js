@@ -8,6 +8,7 @@
 // instant and public RPCs see at most one scan a minute; a flaky chain shows
 // "unavailable" for that rail instead of breaking the page. Balances and
 // transfers are public on-chain data — this page just saves the tab-cycling.
+import { tempoSelfRecipient } from "./mpp-tempo.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { standingBand } from "./standing.js";
 import { join } from "node:path";
@@ -1519,34 +1520,6 @@ async function refreshSnapshot({ walletAddress, solanaWallet }) {
 
 const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-// Explorer links for a settlement's tx hash, keyed by rail. Used by the
-// MPP-wire section below.
-const SALE_TX_URL = {
-  base: (h) => `https://basescan.org/tx/${h}`,
-  celo: (h) => `https://celoscan.io/tx/${h}`,
-  polygon: (h) => `https://polygonscan.com/tx/${h}`,
-  arbitrum: (h) => `https://arbiscan.io/tx/${h}`,
-  avalanche: (h) => `https://snowtrace.io/tx/${h}`,
-  "robinhood (USDG)": (h) => `https://robinhoodchain.blockscout.com/tx/${h}`,
-  solana: (h) => `https://solscan.io/tx/${h}`,
-  stellar: (h) => `https://stellar.expert/explorer/public/tx/${h}`,
-  algorand: (h) => `https://allo.info/tx/${h}`,
-  tempo: (h) => `https://explore.tempo.xyz/tx/${h}`,
-};
-// Some ledger rows store the network as a CAIP-2 id (a chain missing from the
-// name map when it settled) rather than the short name — resolve both forms so
-// every rail's tx links render regardless of when the row was recorded.
-const NET_ALIAS = {
-  "eip155:8453": "base", "eip155:42220": "celo", "eip155:137": "polygon",
-  "eip155:42161": "arbitrum", "eip155:43114": "avalanche", "eip155:143": "monad",
-  "eip155:4663": "robinhood (USDG)", "eip155:4217": "tempo",
-  "stellar:pubnet": "stellar", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=": "algorand",
-};
-function txHref(network, tx) {
-  if (!tx) return null;
-  const key = SALE_TX_URL[network] ? network : (NET_ALIAS[network] || network);
-  return SALE_TX_URL[key] ? SALE_TX_URL[key](tx) : null;
-}
 // Friendly network label for display: rows recorded before a chain was in the
 // name map store the raw CAIP-2 id (e.g. eip155:42220) — show "celo" instead.
 const netName = (n) => NET_ALIAS[n] || n;
@@ -1598,7 +1571,14 @@ function mppExternalUsdCell(n, r) {
   return `$${Number(r.externalUsd).toFixed(Number(r.externalUsd) >= 1 ? 2 : 3)}`;
 }
 
-function mppRailsSection(mpp) {
+// The wallet each MPP rail pays into: Base and Celo settle to the x402
+// treasury (the same address the x402 table links), Tempo to its own
+// recipient. Card has no public ledger.
+function mppWallets(rails) {
+  const byLabel = (label) => (Array.isArray(rails) ? rails.find((r) => r && r.rail === label && r.wallet)?.wallet : null) || null;
+  return { base: byLabel("Base"), celo: byLabel("Celo"), tempo: tempoSelfRecipient() };
+}
+function mppRailsSection(mpp, { wallets = {} } = {}) {
   const count = Number(mpp?.count || 0);
   const rails = { ...(mpp?.rails || {}) };
   if (!Object.keys(rails).length && mpp?.byNetwork) {
@@ -1608,10 +1588,13 @@ function mppRailsSection(mpp) {
   const entries = Object.entries(rails).sort((a, b) => (b[1].count - a[1].count) || a[0].localeCompare(b[0]));
   const rows = entries.map(([n, r]) => {
     const meta = MPP_RAIL_META[n] || { label: mppRailLabel(n), asset: "USDC", how: "" };
-    // One proof link, labelled by its hash: checkable at a glance, matches an explorer.
-    const tx = (r.txs || [])[0];
-    const href = tx ? txHref(n, tx) : null;
-    const proof = tx ? (href ? `<a href="${esc(href)}" rel="noopener" title="${esc(String(tx))}">${esc(String(tx).slice(0, 10))}…</a>` : `${esc(String(tx).slice(0, 10))}…`) : `<span style="color:var(--muted);">none yet</span>`;
+    // The proof is the receiving wallet's explorer page, the same rule the
+    // x402 table uses: every settlement on the rail is there, and a single
+    // transaction would name its payer. Card payments have no public ledger.
+    const addr = wallets[n] || null;
+    const proof = meta.explorer && addr
+      ? `<a href="${esc(meta.explorer + addr)}" rel="noopener" title="${esc(addr)}">${esc(addr.slice(0, 6))}…${esc(addr.slice(-4))}</a>`
+      : n === "stripe" ? `<span style="color:var(--muted);">card, no public ledger</span>` : `<span style="color:var(--muted);">-</span>`;
     return `<tr>
       <td><strong>${esc(meta.label)}</strong> <span style="color:var(--muted);">${esc(meta.asset)}</span></td>
       <td class="num">${Number(r.count).toLocaleString()}</td>
@@ -1856,7 +1839,7 @@ export function revenuePage(baseUrl, snap) {
     ${partialNotes ? `<p style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:8px 0 0;">${partialNotes} rail${partialNotes === 1 ? "" : "s"} read partially from public RPCs this refresh (balances are live; detail in <a href="/api/revenue">/api/revenue</a>).</p>` : ""}
     </section>
     <section>
-    ${mppRailsSection(snap.mpp)}
+    ${mppRailsSection(snap.mpp, { wallets: mppWallets(snap.rails) })}
     </section>
     <section>
     ${decideSection(snap.decide)}
