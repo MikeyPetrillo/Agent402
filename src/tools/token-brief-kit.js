@@ -31,6 +31,7 @@
 // state, LP-locked bucket, top-holder bucket, banded risk level, rugged flag.
 // A changed fingerprint is what triggers a paid re-run + alert, exactly like
 // probeDomain / probeRecalls.
+import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase } from "./solana-intel-kit.js";
 import { markUntrusted } from "./provenance.js";
@@ -346,9 +347,9 @@ ${holderBlock}
 ${riskBlock}`;
 
     let spent = 0;
-    const sd = await chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user);
-    spent += costOf(sd);
-    const prose = textOf(sd);
+    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
+    spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
+    const prose = proseOf(sd, cutShort);
     if (!prose) throw bad("Token brief synthesis produced nothing - not charged", 502);
 
     const header = `# Solana Token Due-Diligence Brief: ${name || mint}${symbol ? ` (${symbol})` : ""}\n\n**Mint** \`${mint}\` · **Mint authority** ${buckets.mint} · **Freeze authority** ${buckets.freeze} · **LP locked** ${buckets.lpLocked} · **Top-10 holders** ${buckets.topHolders} · **RugCheck band** ${buckets.riskLevel}\n`;

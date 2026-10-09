@@ -49,6 +49,9 @@ if (LOCAL_BOOT) {
   const { spawn } = await import("node:child_process");
   const { createServer } = await import("node:http");
   const { getFreePorts } = await import("./lib/free-port.js");
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
   const [PORT, FAC_PORT] = await getFreePorts(2);
   localFac = createServer((req, res) => {
     res.writeHead(req.url === "/supported" ? 200 : 404, { "Content-Type": "application/json" });
@@ -60,6 +63,9 @@ if (LOCAL_BOOT) {
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+    // Mount the Decide routes too (their challenge is among the largest), with
+    // a placeholder service that is never called: only the 402 is read.
+    DECIDE_SERVICE_URL: "http://127.0.0.1:9", DECIDE_INTERNAL_TOKEN: "challenge-size-local-placeholder-token-0000", DECIDE_LEDGER_DB: join(mkdtempSync(join(tmpdir(), "challenge-size-")), "decide.db"),
   }, stdio: ["ignore", "ignore", "pipe"] });
   localProc.stderr.on("data", () => {});
   localBase = `http://127.0.0.1:${PORT}`;
@@ -91,6 +97,55 @@ function projectBytes(prodHeader, localHeader) {
 // authorization (~700 bytes measured), so budget below the common 8 KB limit.
 const MAX_HEADER_BYTES = Number(process.env.MAX_CHALLENGE_HEADER_BYTES) || 12_000;
 const WARN_HEADER_BYTES = Number(process.env.WARN_CHALLENGE_HEADER_BYTES) || 9_000;
+// The whole 402, every header: a Node fetch client reads at most 16 KB of
+// response headers, and past that the buyer sees a header overflow, not a
+// paywall. The challenge shares that budget with the MPP challenge, CORS and
+// the security headers, so the bound is on the total, with room for more rails.
+const MAX_TOTAL_HEADER_BYTES = Number(process.env.MAX_TOTAL_HEADER_BYTES) || 13_800;
+const WARN_TOTAL_HEADER_BYTES = Number(process.env.WARN_TOTAL_HEADER_BYTES) || 12_500;
+// The body that provokes the largest challenge on the gateway: a priced
+// model widens the MPP challenge (its quote rides in every method's request).
+const GATEWAY_BODY = JSON.stringify({ model: "openai/gpt-5", max_tokens: 300, messages: [{ role: "user", content: "Reply with the single word: settled" }] });
+
+// Read a 402 with a raised header limit: a plain fetch refuses response
+// headers over 16 KB, and an oversized challenge is exactly what this test
+// must measure. Answers like a fetch Response for the fields used here.
+import { request as httpsRequest } from "node:https";
+import { request as httpRequest } from "node:http";
+function read402(url, { method = "GET", headers = {}, body, timeoutMs = 20000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = (u.protocol === "https:" ? httpsRequest : httpRequest)(u, { method, headers, maxHeaderSize: 262144, timeout: timeoutMs }, (res) => {
+      res.resume();
+      const map = new Map();
+      for (let i = 0; i < res.rawHeaders.length; i += 2) { const k = res.rawHeaders[i].toLowerCase(); map.set(k, map.has(k) ? `${map.get(k)}, ${res.rawHeaders[i + 1]}` : res.rawHeaders[i + 1]); }
+      res.on("end", () => resolve({ status: res.statusCode, headers: { get: (k) => map.get(String(k).toLowerCase()) ?? null, forEach: (fn) => map.forEach((v, k) => fn(v, k)) } }));
+    });
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", reject);
+    if (body !== undefined) req.write(body);
+    req.end();
+  });
+}
+const bodyFor = (t) => (t.method !== "POST" ? undefined : /^\/v1\//.test(t.path) ? GATEWAY_BODY : "{}");
+const headerBytes = (res) => { let n = 20; res.headers.forEach((v, k) => { n += k.length + v.length + 4; }); return n; };
+const headerMap = (res) => { const m = new Map(); res.headers.forEach((v, k) => m.set(k, v.length)); return m; };
+// The projected total: this tree's headers where the local boot answered
+// them, prod's for what only prod carries (the MPP challenge, the edge's own
+// headers), and the projected challenge in place of either payment-required.
+function projectTotal(prodRes, localRes, projectedPR) {
+  const prod = headerMap(prodRes), local = headerMap(localRes);
+  let n = 20;
+  for (const k of new Set([...prod.keys(), ...local.keys()])) {
+    if (k === "payment-required") { n += k.length + projectedPR + 4; continue; }
+    if (local.has(k)) { n += k.length + local.get(k) + 4; continue; }
+    if (prod.has(k) && !LOCAL_DECIDES.has(k)) n += k.length + prod.get(k) + 4;
+  }
+  return n;
+}
+// Headers this tree decides on its own (present or absent by code, not by
+// deployment), so prod's copy is not carried over when the local boot omits it.
+const LOCAL_DECIDES = new Set(["content-security-policy", "x-frame-options", "permissions-policy", "x-permitted-cross-domain-policies", "referrer-policy", "x-content-type-options"]);
 const CONCURRENCY = Number(process.env.CHALLENGE_CONCURRENCY) || 8;
 
 let pass = 0, fail = 0;
@@ -143,25 +198,27 @@ async function worker() {
     const t = queue.shift();
     let res;
     try {
-      res = await fetch(`${TARGET}${t.path}`, {
+      res = await read402(`${TARGET}${t.path}`, {
         method: t.method,
         headers: { "content-type": "application/json", "user-agent": SWEEP_UA, ...heartbeatHeaders() },
-        body: t.method === "POST" ? "{}" : undefined,
-        signal: AbortSignal.timeout(20000),
+        body: bodyFor(t),
       });
     } catch (e) { skipped.push(`${t.slug}: ${String(e.message).slice(0, 40)}`); continue; }
     if (res.status !== 402) continue; // free tier, or FREE_MODE: nothing to bound
     const h = res.headers.get("payment-required") || "";
     if (!h) { rows.push({ slug: t.slug, bytes: -1 }); continue; }
-    let projected = null;
+    const total = headerBytes(res);
+    let projected = null, projectedTotalLocal = null;
     if (localBase) {
       try {
-        const lr = await fetch(`${localBase}${t.path}`, { method: t.method, headers: { "content-type": "application/json" }, body: t.method === "POST" ? "{}" : undefined, signal: AbortSignal.timeout(20000) });
+        const lr = await read402(`${localBase}${t.path}`, { method: t.method, headers: { "content-type": "application/json" }, body: bodyFor(t), timeoutMs: 20000 });
         const lh = lr.status === 402 ? (lr.headers.get("payment-required") || "") : "";
-        if (lh) projected = projectBytes(h, lh);
+        if (lh) { projected = projectBytes(h, lh); if (projected != null) projectedTotalLocal = projectTotal(res, lr, projected); }
       } catch { /* a route this tree does not serve (retired) keeps the measured figure */ }
     }
-    rows.push({ slug: t.slug, bytes: h.length, projected });
+    // The total is projected the same way: prod's other headers stay, the
+    // challenge is this tree's.
+    rows.push({ slug: t.slug, bytes: h.length, projected, total, projectedTotal: projectedTotalLocal });
   }
 }
 await Promise.all(Array.from({ length: CONCURRENCY }, worker));
@@ -191,6 +248,15 @@ ok(over.length === 0, `no challenge over the ${MAX_HEADER_BYTES}-byte ceiling${l
 const overOnProd = sized.filter((r) => r.bytes > MAX_HEADER_BYTES && judged(r) <= MAX_HEADER_BYTES);
 if (overOnProd.length) console.log(`WARNING: production currently serves ${overOnProd.length} challenge(s) over the ceiling (${overOnProd.slice(0, 3).map((r) => `${r.slug} ${r.bytes} -> ${r.projected} with this tree`).join(", ")}) - this tree brings them under; deploy it`);
 
+const judgedTotal = (r) => (r.projectedTotal != null ? r.projectedTotal : r.total);
+const overTotal = sized.filter((r) => judgedTotal(r) > MAX_TOTAL_HEADER_BYTES);
+ok(overTotal.length === 0, `no 402 over ${MAX_TOTAL_HEADER_BYTES} total header bytes${localBase ? " (projected with this tree's challenge)" : ""}${overTotal.length ? `: ${overTotal.slice(0, 5).map((r) => `${r.slug} ${judgedTotal(r)}`).join(", ")}` : ""}`);
+const overTotalOnProd = sized.filter((r) => r.total > MAX_TOTAL_HEADER_BYTES && judgedTotal(r) <= MAX_TOTAL_HEADER_BYTES);
+if (overTotalOnProd.length) console.log(`WARNING: production currently serves ${overTotalOnProd.length} 402(s) over ${MAX_TOTAL_HEADER_BYTES} total header bytes (${overTotalOnProd.slice(0, 3).map((r) => `${r.slug} ${r.total} -> ${r.projectedTotal}`).join(", ")}) - this tree brings them under`);
+const warnTotal = sized.filter((r) => judgedTotal(r) > WARN_TOTAL_HEADER_BYTES && judgedTotal(r) <= MAX_TOTAL_HEADER_BYTES);
+const byTotal = [...sized].sort((a, b) => judgedTotal(b) - judgedTotal(a));
+console.log(`largest 402 in total header bytes: ${byTotal[0].slug} at ${judgedTotal(byTotal[0])}${byTotal[0].projectedTotal != null ? ` projected (measured on prod ${byTotal[0].total})` : ""}`);
+if (warnTotal.length) console.log(`WARNING: ${warnTotal.length} route(s) past the ${WARN_TOTAL_HEADER_BYTES}-byte total watch line`);
 const warn = sized.filter((r) => judged(r) > WARN_HEADER_BYTES && judged(r) <= MAX_HEADER_BYTES);
 const byJudged = [...sized].sort((a, b) => judged(b) - judged(a));
 console.log(`\nlargest challenge: ${byJudged[0].slug} at ${judged(byJudged[0])} bytes${byJudged[0].projected != null ? ` projected (measured on prod ${byJudged[0].bytes})` : ""} (smallest ${judged(byJudged[byJudged.length - 1])})`);

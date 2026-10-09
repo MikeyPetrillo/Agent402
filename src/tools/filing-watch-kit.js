@@ -23,6 +23,7 @@
 //     one's form type.
 //   describeFilingChanges(prev, next) human-readable lines for the filings in
 //     `next` that were not in `prev` - the body of the alert email.
+import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { resolveCompany } from "./edgar-kit.js";
 // The submissions read itself is the helper ticker-pack already ships (one
@@ -692,9 +693,9 @@ ${docBlocks || "(no primary document was read for this window)"}`;
 
     // 5) SYNTHESIZE.
     let spent = 0;
-    const sd = await chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user);
-    spent += costOf(sd);
-    const prose = textOf(sd);
+    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
+    spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
+    const prose = proseOf(sd, cutShort);
     if (!prose) throw bad("Filing report synthesis produced nothing - not charged", 502);
 
     const header = `# SEC Filing Report: ${name}${symbol ? ` (${symbol})` : ""}\n\n**Last ${days} days** · ${pr.filings.length} filing${pr.filings.length === 1 ? "" : "s"}${counts ? ` (${counts})` : ""} · ${read.length} primary document${read.length === 1 ? "" : "s"} read in full${routineParsed.length ? ` · ${routineParsed.length} ownership form${routineParsed.length === 1 ? "" : "s"} parsed` : ""}\n`;

@@ -11,6 +11,7 @@
 // `probeRecalls()` is exported for the monitor scheduler: the same probes,
 // no LLM, with a fingerprint of the recall numbers seen - a NEW recall number
 // for the subscriber's query is what triggers a paid re-run + alert.
+import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { GOV_TOOLS } from "./gov-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -150,9 +151,9 @@ Write a clear, well-structured report of up to ${t.words} words with these secti
 === FDA RECORDS (newest first per feed; ${pr.items.length} of ${pr.totalAll}) ===\n${lines || "(no records matched)"}`;
 
     let spent = 0;
-    const sd = await chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user);
-    spent += costOf(sd);
-    const prose = textOf(sd);
+    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
+    spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
+    const prose = proseOf(sd, cutShort);
     if (!prose) throw bad("Recall report synthesis produced nothing - not charged", 502);
     const header = `# FDA Recall Report: ${query}\n\n**${pr.items.length} most recent of ${pr.totalAll} record${pr.totalAll === 1 ? "" : "s"}** (${pr.events} recall event${pr.events === 1 ? "" : "s"} among those shown) across ${Object.keys(pr.status).length} FDA enforcement feed${Object.keys(pr.status).length === 1 ? "" : "s"} · ${ongoing} of the shown records ongoing\n`;
     const sourceList = numbered.map((s) => `[${s.n}] ${s.title} - ${s.url}`).join("\n");

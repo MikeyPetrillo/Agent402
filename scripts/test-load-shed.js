@@ -9,6 +9,11 @@ const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
 
 // --- unit
 const { createComputeBudget, shouldShedFree } = await import("../src/load-shed.js");
+{
+  const saved = process.env.DISCOVERY_CPU_BUDGET_MS; delete process.env.DISCOVERY_CPU_BUDGET_MS;
+  ok(createComputeBudget().budgetMs === 800, "the shared discovery budget defaults to 800 ms of search per rolling second");
+  if (saved !== undefined) process.env.DISCOVERY_CPU_BUDGET_MS = saved;
+}
 const b = createComputeBudget({ budgetMs: 100, windowMs: 1000 });
 b.record(60, 1000); ok(!b.over(1000), "under budget: not over");
 b.record(50, 1100); ok(b.over(1100), "110 ms of compute inside the window is over a 100 ms budget");

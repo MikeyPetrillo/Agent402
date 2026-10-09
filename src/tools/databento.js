@@ -106,9 +106,9 @@ async function assertAffordable(params, maxUsd = DEFAULT_MAX_QUERY_USD) {
 // Daily bars are end-of-day data: for a given symbol and range they cannot
 // change until the dataset's available end advances, and every caller bounds
 // `end` by availableEnd(), so the range is part of the key and a new session
-// is a new key. A first read costs two upstream POSTs (cost check, then
-// data); a repeat of a symbol inside the session answers from memory with no
-// upstream read at all. Errors are never cached; a bounded map drops the
+// is a new key. A first read costs two upstream POSTs (the cost check and the
+// data, side by side); a repeat of a symbol inside the session answers from
+// memory with no upstream read at all. Errors are never cached; a bounded map drops the
 // oldest entry past BARS_CACHE_MAX.
 const BARS_CACHE_MAX = 2_000;
 const barsCache = new Map(); // key -> bars (frozen rows)
@@ -126,8 +126,17 @@ export async function dailyBars({ symbol, start, end, maxUsd }) {
     barsCache.delete(key); barsCache.set(key, hit);
     return hit.map((b) => ({ ...b }));
   }
-  await assertAffordable(params, maxUsd);
-  const text = await post("timeseries.get_range", { ...params, encoding: "json" });
+  // The price check and the data read run together: every caller bounds the
+  // range to one symbol and at most 250 daily bars, so the read's cost is
+  // bounded by construction, and the check still refuses an unexpectedly
+  // wide query before anything is answered. Serially, the two reads took
+  // twice the upstream's latency on every first read of a symbol.
+  // Both settle before either outcome is acted on, so no read is left in
+  // flight behind an early refusal; the price check's own refusal wins.
+  const [priced, read] = await Promise.allSettled([assertAffordable(params, maxUsd), post("timeseries.get_range", { ...params, encoding: "json" })]);
+  if (priced.status === "rejected") throw priced.reason;
+  if (read.status === "rejected") throw read.reason;
+  const text = read.value;
   const rows = text.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
   if (!rows.length) throw bad("No market data for that symbol in that range. US equities only.");
   const bars = consolidate(rows);

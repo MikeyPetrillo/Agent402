@@ -1259,6 +1259,8 @@ jobs:
           t node scripts/test-mcp-call-tool-contract.js
           # Exposure hardening (A402-11/12/13 no X-Powered-By; security.txt; health gates flags; credential-free MCP CORS — spawns child)
           t node scripts/test-security-headers.js
+          # Document headers: pages always, JSON API paths never, an HTML answer under /api again (offline, in-process)
+          t node scripts/test-security-headers-unit.js
           t node scripts/test-algorand-page-deadline.js
           # crawl kit (offline)
           t node scripts/test-crawl-kit.js
@@ -1550,6 +1552,12 @@ jobs:
           # Tool resolver (/api/find ranking, guards)
           t node scripts/test-find.js
           t node scripts/test-plan-sketch.js
+          # Report synthesis: a length stop is retried once, then trimmed to a complete block and marked (offline)
+          t node scripts/test-report-synthesis.js
+          # boundedSchema: a 402's discovery input schema trimmed to a byte budget, descriptions first (offline)
+          t node scripts/test-bounded-schema.js
+          # MTA-STS policy text is well-formed for any configuration (offline)
+          t node scripts/test-mta-sts.js
           # Unicode-aware query tokenization shared by /api/route, /api/find and the index search: CJK bigrams, short-Latin whole-token rule kept (offline)
           t node scripts/test-query-terms.js
           # Revenue ledger unit tests (all-time external accounting, idempotent rescans, CI self-gate)
@@ -2717,6 +2725,8 @@ jobs:
           t node scripts/test-proof.js
           # Tempo relay verdicts are visible (non-2xx relay status + body reach the rejection log, per-request — offline)
           t node scripts/test-mpp-tempo-relay-errors.js
+          # A keyed broadcast the relay refuses for its validBefore is re-sent once without the key (offline)
+          t node scripts/test-mpp-tempo-idempotency-policy.js
           # workflow_run references name a workflow that exists (GitHub matches on name:, a mismatch never fires - offline)
           t node scripts/test-workflow-run-refs.js
           # Every workflow job names a versioned runner image, never a moving -latest label (offline)

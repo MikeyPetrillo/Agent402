@@ -887,6 +887,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               rank: (task) => findTools(catalog, task, { k: 3, baseUrl, powSlugs: freeSlugs }),
               weakScore: FIND_WEAK_SCORE,
               upgrade: d ? { tool: "decide", route: "POST /api/decide", mcp: "decide.plan", price: d.price, note: "a judged plan with your inputs filled in and fallbacks checked; the fee is credited toward running it with decide.execute" } : null,
+              executable: Boolean(catalog["POST /api/decide/execute"]),
             });
           } catch { plan = null; }
           if (plan) {

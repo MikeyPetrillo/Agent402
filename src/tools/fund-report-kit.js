@@ -12,6 +12,7 @@
 // the buyer is not charged), cost read internally and never returned,
 // WALLET_ONLY, not cached. Pure SEC data for the core (no extra upstream wallet);
 // gated on OPENROUTER_API_KEY for the synthesis (503 without it).
+import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { get13fHoldings, resolveManager } from "./edgar-kit.js";
@@ -222,9 +223,9 @@ Write a thorough, well-structured report of up to ${t.words} words with these se
 === WEB RESEARCH ===\n${webBlock}
 === WEB SOURCES (numbered, with snippet content) ===\n${webSourceLines}`;
 
-    const sd = await chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user);
-    spent += costOf(sd);
-    const prose = textOf(sd);
+    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
+    spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
+    const prose = proseOf(sd, cutShort);
     if (!prose) throw bad("Fund report synthesis produced nothing - not charged", 502);
 
     const sourceList = numbered.map((s) => `[${s.n}] ${s.title} - ${s.url}`).join("\n");

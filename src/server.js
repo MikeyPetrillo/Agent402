@@ -1,4 +1,6 @@
 import "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
+import { mtaStsPolicy } from "./mta-sts.js";
+import { securityHeaders } from "./security-headers.js";
 import { carriesPaymentAttempt } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
@@ -535,7 +537,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decideSales, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly } from "./sales-ledger.js";
+import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -2966,45 +2968,7 @@ app.use((req, res, next) => {
   return res.status(503).json({ error: "This server is redeploying; premium report generation restarts on the new build in about a minute. Not charged - please retry." });
 });
 
-app.use((_req, res, next) => {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "SAMEORIGIN");
-  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
-  // Disable browser features we never use — defense-in-depth against any future
-  // XSS or third-party script accidentally probing for them.
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()");
-  res.setHeader("X-Permitted-Cross-Domain-Policies", "none");
-  res.setHeader(
-    "Content-Security-Policy",
-    // script-src drops 'unsafe-inline' (2026-08-16): every page-behavior
-    // script site-wide now lives in a real file under /js/:file (strict
-    // filename allowlist, no path traversal - see server.js's /js/:file
-    // route) or a dedicated route with its own scoped CSP (the SDK
-    // playground's eval sandbox at /sdk-playground/sandbox). This is
-    // defense-in-depth, not a fix for a live exploit — the site already
-    // manually-escapes all third-party/user content (crawled seller names,
-    // wish-board text, etc.) rather than relying on a templating engine's
-    // automatic escaping, across hundreds of call sites; removing
-    // 'unsafe-inline' means a future missed esc() call can no longer be
-    // turned into a working <script> injection, only inert markup. One
-    // narrow exception remains: unpkg.com, for the homepage's pinned,
-    // SRI-verified d3 + topojson-client tags (the dot-map, Aug 2026 revamp -
-    // the site's first-ever third-party script, an explicit, knowing
-    // tradeoff against the "everything self-hosted" posture used everywhere
-    // else, incl. fonts). A specific host, never a wildcard or 'unsafe-eval'
-    // — SRI on the tags themselves is a second, independent layer (a
-    // compromised unpkg response with a mismatched hash is refused by the
-    // browser before it ever executes). connect-src's existing 'https:'
-    // already covers the map's runtime fetch of the world-atlas geometry
-    // from jsdelivr, so no change needed there. www.googletagmanager.com
-    // (2026-10-01) serves the Google Analytics tag loaded by
-    // assets/js/ga-loader.js when GA_MEASUREMENT_ID is set; its collection
-    // requests ride the existing connect-src/img-src https:.
-    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self' https://www.googletagmanager.com; connect-src 'self' https:; frame-src 'self' https://live.agent402.tools; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
-  );
-  next();
-});
+app.use(securityHeaders());
 
 // Free, unauthenticated routes
 // Sets browser/CDN cache headers for static-ish HTML pages so clicking around
@@ -3107,6 +3071,13 @@ app.get("/health", (req, res) => {
 // computed ~180 days out on each request so the file is never stale (RFC 9116
 // recommends under a year). Contact
 // override via SECURITY_CONTACT_EMAIL; defaults to the maintainer address.
+// MTA-STS policy (RFC 8461), read by sending mail servers from the mta-sts
+// host; the DNS record that points at it is published separately.
+app.get("/.well-known/mta-sts.txt", (_req, res) => {
+  const policy = mtaStsPolicy();
+  if (!policy) return res.status(404).type("text/plain").send("no MTA-STS policy is configured on this host\n");
+  res.set("Cache-Control", "public, max-age=3600").type("text/plain").send(policy);
+});
 app.get("/.well-known/security.txt", (_req, res) => {
   const contact = (process.env.SECURITY_CONTACT_EMAIL || "").trim() || "mike@agent402.tools";
   const expires = new Date(Date.now() + 180 * 24 * 3600 * 1000).toISOString();
@@ -3578,7 +3549,7 @@ app.get("/api/revenue/decide", (_req, res) => {
     res.set("Cache-Control", "public, max-age=60").json(memoSurface("revenue:decide", 60_000, () => ({
       asOf: new Date().toISOString(),
       ...decideSales({ days: 30 }),
-      note: "Paid settlements of POST /api/decide and POST /api/decide/execute. internal = our own canaries and tests; external = everyone else. externalUsd is what outside buyers paid us for these two routes; an execute run's pass-through payments to outside sellers are not included.",
+      note: "Paid settlements of POST /api/decide and POST /api/decide/execute. internal = our own canaries and tests; external = outside buyers, less catalog sweeps (a wallet that bought " + SWEEP_DISTINCT_TOOLS_PER_DAY + " or more distinct tools in one UTC day, counted under sweeps). externalUsd is what outside buyers paid us for these two routes; an execute run's pass-through payments to outside sellers are not included.",
     })));
   } catch (e) {
     res.status(500).json({ error: "decide revenue failed", detail: String(e?.message || e).slice(0, 120) });
@@ -5778,6 +5749,7 @@ const planSketchFor = (q) => {
       rank: (task) => findTools(CATALOG, task, { k: 3, baseUrl: BASE_URL, powSlugs: POW_SLUGS }),
       weakScore: FIND_WEAK_SCORE,
       upgrade: decideUpgrade(),
+      executable: Boolean(CATALOG["POST /api/decide/execute"]),
     });
   } catch { return null; } // a sketch is an extra; find and route answer regardless
 };

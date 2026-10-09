@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { PROVIDER_DKIM_SELECTORS, providerForMx } from "../src/tools/network-kit.js";
 import { analyzeSecurity, cspQuality } from "../src/tools/network-kit2.js";
-import { DNS_HOSTS, dnsHostFor, probeWwwPair, reportMailboxesFrom} from "../src/tools/domain-audit-kit.js";
+import { DNS_HOSTS, dnsHostFor, probeWwwPair, reportMailboxesFrom, dmarcFacts } from "../src/tools/domain-audit-kit.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL: ${m}`); } };
 
@@ -90,6 +90,17 @@ ok(/app\.get\("\/reports\/public\/:publicId", \(req, res, next\) => \{\s*if \(wa
   ok(/hasRecord: dmarcRaw \? true : \(dmarcTxt\.error \? null : false\)/.test(net), "dmarc.hasRecord is null when the lookup failed");
   ok(/const summary = unmeasured\.length \? "partial"/.test(net), "the summary word refuses to grade a partial reading");
   ok((kit.match(/NOT MEASURED \(DNS lookup failed/g) || []).length === 3, "the report prompt says NOT MEASURED for each unmeasured leg rather than MISSING");
+}
+
+// ---- DMARC facts: what the record says, apart from what applies by default
+{
+  const f = dmarcFacts({ raw: "v=DMARC1; p=quarantine; rua=mailto:r@x.test; pct=100", policy: "quarantine", percent: 100, valid: true });
+  ok(/tags present: p=quarantine rua=mailto:r@x.test pct=100/.test(f), "the tags the record carries are listed as present");
+  ok(/not in the record \(defaults apply\): sp \(not set: subdomains inherit p=quarantine\), aspf \(default r\), adkim \(default r\), fo \(default 0\), ri \(default 86400\)/.test(f), "absent tags are listed as defaults, sp as inheriting p");
+  ok(/no ruf tag, so no failure reports are requested/.test(f) && !/ruf=none/.test(f), "an absent ruf is described, never written as ruf=none");
+  const g = dmarcFacts({ raw: "v=DMARC1; p=reject; sp=none; aspf=s; ruf=mailto:f@x.test; fo=1", policy: "reject", percent: 100, valid: true });
+  ok(/tags present: p=reject sp=none aspf=s ruf=mailto:f@x.test fo=1/.test(g) && /defaults apply\): adkim \(default r\), ri \(default 86400\), pct \(default 100\)$/.test(g), "a record with explicit tags lists only the rest as defaults");
+  ok(/record: "v=DMARC1; p=reject; sp=none; aspf=s; ruf=mailto:f@x.test; fo=1"/.test(g), "the raw record rides along verbatim");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

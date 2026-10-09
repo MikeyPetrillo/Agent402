@@ -352,5 +352,26 @@ rmSync(dir, { recursive: true, force: true });
   ok(decideSection(null) === "", "no data renders nothing, never a zero table");
 }
 
+// --- decideSales: a catalog sweep is not demand -----------------------------------
+{
+  const { decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY } = await import("../src/sales-ledger.js");
+  const { decideSection } = await import("../src/revenue-live.js");
+  const before = decideSales({ days: 30 });
+  const S = "0x6666666666666666666666666666666666666666";
+  for (let i = 0; i < SWEEP_DISTINCT_TOOLS_PER_DAY - 1; i++) recordSale({ slug: `sweep-tool-${i}`, priceUsd: 0.001, rail: "usdc", network: "eip155:8453", payer: S, tx: `0xS${i}`, synthetic: false });
+  recordSale({ slug: "decide", priceUsd: 0.005, rail: "usdc", network: "eip155:8453", payer: S, tx: "0xSD", synthetic: false });
+  const d = decideSales({ days: 30 });
+  ok(d.allTime.decide.external === before.allTime.decide.external && d.allTime.decide.externalBuyers === before.allTime.decide.externalBuyers && d.allTime.decide.externalUsd === before.allTime.decide.externalUsd, "a wallet whose day reaches 30 distinct tools, the plan included, is not an outside plan buyer");
+  ok(d.allTime.decide.sweeps.count - before.allTime.decide.sweeps.count === 1 && d.allTime.decide.sweeps.buyers - before.allTime.decide.sweeps.buyers === 1 && Math.abs(d.allTime.decide.sweeps.usd - before.allTime.decide.sweeps.usd - 0.005) < 1e-9, "its plan is counted under sweeps instead");
+  ok(d.allTime.decide.count - before.allTime.decide.count === 1, "the settlement still counts in the total");
+  ok(/distinct tools/.test(d.sweepRule) && new RegExp(String(SWEEP_DISTINCT_TOOLS_PER_DAY)).test(d.sweepRule), "the rule is stated on the surface");
+  ok(/sweep/.test(decideSection(d)), "the /revenue section shows the sweep count beside the outside count");
+  const S2 = "0x7777777777777777777777777777777777777777";
+  for (let i = 0; i < SWEEP_DISTINCT_TOOLS_PER_DAY - 2; i++) recordSale({ slug: `few-tool-${i}`, priceUsd: 0.001, rail: "usdc", network: "eip155:8453", payer: S2, tx: `0xF${i}`, synthetic: false });
+  recordSale({ slug: "decide", priceUsd: 0.005, rail: "usdc", network: "eip155:8453", payer: S2, tx: "0xFD", synthetic: false });
+  const d3 = decideSales({ days: 30 });
+  ok(d3.allTime.decide.external - d.allTime.decide.external === 1 && d3.allTime.decide.sweeps.count === d.allTime.decide.sweeps.count, "one tool under the line (the plan itself counts as a distinct tool) is still an outside buyer");
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

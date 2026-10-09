@@ -53,8 +53,10 @@ const toolRow = (t) => ({
  * @param {{ rank: (task: string) => object, weakScore?: number, upgrade?: object|null }} opts
  *   rank: the free lexical ranker (findTools bound to the catalog, k >= 3).
  *   upgrade: the paid decide pointer, or null when decide is not served here.
+ *   executable: true when POST /api/decide/execute is served here, so the
+ *     sketch carries a ready execute body.
  */
-export function buildPlanSketch(query, { rank, weakScore = 3, upgrade = null } = {}) {
+export function buildPlanSketch(query, { rank, weakScore = 3, upgrade = null, executable = false } = {}) {
   const all = splitSteps(query);
   if (!all.length) return null;
   const steps = all.slice(0, PLAN_MAX_STEPS);
@@ -74,6 +76,16 @@ export function buildPlanSketch(query, { rank, weakScore = 3, upgrade = null } =
     out.push(row);
   }
   const unmatched = out.filter((s) => s.match !== "strong").map((s) => s.step);
+  // A sketch every step of which matched strongly can be run through execute:
+  // the slugs in order, and step 1's required fields as placeholders to fill
+  // in. A weak step is a guess, and execute pays for each step it runs.
+  const runnable = executable && out.length > 0 && out.every((s) => s.match === "strong");
+  const execute = runnable ? {
+    route: "POST /api/decide/execute",
+    body: { steps: out.map((s) => s.tool.slug), params: { 1: Object.fromEntries((out[0].tool.required || []).map((k) => [k, `<${k}>`])) } },
+    priceUsd: priced ? Math.round(out.reduce((a, s) => a + (s.tool.priceUsd || 0), 0) * 1e6) / 1e6 : null,
+    note: "Agent402 runs the steps in order at each tool's list price (the proof-of-work free tier applies to direct calls only); a later step takes its one required input from the step before, or pass params for it. A run where no step succeeds is not charged.",
+  } : null;
   return {
     kind: "sketch",
     builtBy: "keyword match per step; no model, not judged",
@@ -86,7 +98,10 @@ export function buildPlanSketch(query, { rank, weakScore = 3, upgrade = null } =
     estimatedCostUsd: Math.round(costUsd * 1e6) / 1e6,
     estimatedCostIsFloor: !priced || unmatched.length > 0,
     ...(unmatched.length ? { weakSteps: unmatched } : {}),
-    howToRun: "Call each step's tool in order with your own inputs (callExample shows the shape); a later step's input usually comes from the step before it.",
+    howToRun: execute
+      ? "Call each step's tool in order with your own inputs (callExample shows the shape), or send execute.body to POST /api/decide/execute and Agent402 runs them in order."
+      : "Call each step's tool in order with your own inputs (callExample shows the shape); a later step's input usually comes from the step before it.",
+    ...(execute ? { execute } : {}),
     ...(upgrade ? { upgrade } : {}),
   };
 }

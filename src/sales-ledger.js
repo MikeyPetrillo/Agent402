@@ -787,29 +787,53 @@ const qCardSubs = db.prepare(`
 // or trial row never reads as a sale. Uncapped aggregates by design (feeds
 // distinct counts; see test-capped-counts).
 const DECIDE_SLUGS = ["decide", "decide-execute"];
+// A wallet that buys this many distinct tools inside one UTC day is walking the
+// catalog, not choosing a planner: its decide settlements are real sales but
+// not demand, so the surface counts them apart.
+export const SWEEP_DISTINCT_TOOLS_PER_DAY = 30;
+const qSweepPayers = db.prepare(`
+  SELECT DISTINCT payer FROM (
+    SELECT payer, (ts / 86400000) AS day, COUNT(DISTINCT slug) AS n
+    FROM sales WHERE internal = 0 AND payer IS NOT NULL AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+    GROUP BY payer, day)
+  WHERE n >= ${SWEEP_DISTINCT_TOOLS_PER_DAY}`);
 const qDecideSales = db.prepare(`
-  SELECT slug, internal, COUNT(*) AS n, SUM(price_usd) AS usd, COUNT(DISTINCT payer) AS payers, MAX(ts) AS last_ts
+  SELECT slug, internal, payer, COUNT(*) AS n, SUM(price_usd) AS usd, MAX(ts) AS last_ts
   FROM sales WHERE slug IN ('decide', 'decide-execute') AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
-  GROUP BY slug, internal`);
+  GROUP BY slug, internal, payer`);
 function decideWindow(since) {
   const out = {};
-  for (const slug of DECIDE_SLUGS) out[slug] = { count: 0, internal: 0, external: 0, externalUsd: 0, externalBuyers: 0, lastExternalAt: null };
+  for (const slug of DECIDE_SLUGS) out[slug] = { count: 0, internal: 0, external: 0, externalUsd: 0, externalBuyers: 0, lastExternalAt: null, sweeps: { count: 0, usd: 0, buyers: 0 } };
+  const sweeps = new Set(qSweepPayers.all(since).map((r) => r.payer));
+  let lastTs = {};
   for (const r of qDecideSales.all(since)) {
     const e = out[r.slug];
     if (!e) continue;
     e.count += r.n;
     if (r.internal) { e.internal += r.n; continue; }
+    if (r.payer && sweeps.has(r.payer)) {
+      e.sweeps.count += r.n;
+      e.sweeps.usd = +(e.sweeps.usd + Number(r.usd || 0)).toFixed(6);
+      e.sweeps.buyers += 1;
+      continue;
+    }
     e.external += r.n;
     e.externalUsd = +(e.externalUsd + Number(r.usd || 0)).toFixed(6);
-    e.externalBuyers += Number(r.payers || 0);
-    // Truncated to the hour, like every other external timestamp we publish.
-    if (r.last_ts) e.lastExternalAt = new Date(Math.floor(r.last_ts / 3_600_000) * 3_600_000).toISOString();
+    if (r.payer) e.externalBuyers += 1;
+    if (r.last_ts && r.last_ts > (lastTs[r.slug] || 0)) lastTs[r.slug] = r.last_ts;
   }
+  // Truncated to the hour, like every other external timestamp we publish.
+  for (const slug of DECIDE_SLUGS) if (lastTs[slug]) out[slug].lastExternalAt = new Date(Math.floor(lastTs[slug] / 3_600_000) * 3_600_000).toISOString();
   return out;
 }
-/** { days, window: {decide, decide-execute}, allTime: {...} } - see decideWindow. */
+/** { days, sweepRule, window: {decide, decide-execute}, allTime: {...} } - see decideWindow. */
 export function decideSales({ days = 30 } = {}) {
-  return { days, window: decideWindow(Date.now() - days * 86_400_000), allTime: decideWindow(0) };
+  return {
+    days,
+    sweepRule: `a wallet that bought ${SWEEP_DISTINCT_TOOLS_PER_DAY} or more distinct tools in one UTC day is a catalog sweep: its plans and runs are counted under sweeps, not external`,
+    window: decideWindow(Date.now() - days * 86_400_000),
+    allTime: decideWindow(0),
+  };
 }
 
 export function cardSales({ days = 30 } = {}) {

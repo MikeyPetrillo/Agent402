@@ -13,6 +13,7 @@
 // `probeInsiderFilings()` is exported for the monitor scheduler: the cheap
 // daily probe (one EDGAR full-text query, no XML fetch) whose fingerprint is
 // the set of Form 4 accession numbers - a new one = paid re-run + email.
+import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { resolveCompany, eftsSearch, fetchXmlText } from "./edgar-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -235,9 +236,9 @@ Write a well-structured report of up to ${t.words} words with these sections whe
 NOTE: a gap in this material is never a finding about the company or an insider - if a filing was not fetched or a table is empty, say the material does not cover it.`;
 
     let spent = 0;
-    const sd = await chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user);
-    spent += costOf(sd);
-    const prose = textOf(sd);
+    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
+    spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
+    const prose = proseOf(sd, cutShort);
     if (!prose) throw bad("Insider report synthesis produced nothing - not charged", 502);
     const header = `# Insider Flow Report: ${name} (${symbol})\n\n**${pf.total > pf.filings.length ? `${readOldest} to ${pf.endDate} (the newest ${good.length} of ${pf.total} filings in the ${days}-day window)` : `${pf.startDate} to ${pf.endDate}`}** · ${good.length} Form 4 filing${good.length === 1 ? "" : "s"} read · ${buys.length} open-market buy${buys.length === 1 ? "" : "s"} (${fmtUsd(sum(buys, "valueUsd"))}) · ${sells.length} open-market sale${sells.length === 1 ? "" : "s"} (${fmtUsd(sum(sells, "valueUsd"))})\n`;
     const sourceList = numbered.map((s) => `[${s.n}] ${s.title} - ${s.url}`).join("\n");

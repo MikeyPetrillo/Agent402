@@ -164,6 +164,27 @@ function pathOf(input) {
   try { return new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url).pathname; } catch { return ""; }
 }
 
+const IDEMPOTENCY_POLICY_RE = /validBefore.*within one hour/i;
+function headerEntries(headers) {
+  if (!headers) return [];
+  if (typeof headers.entries === "function") return [...headers.entries()];
+  return Object.entries(headers);
+}
+function hasIdempotencyKey(headers) {
+  return headerEntries(headers).some(([k]) => String(k).toLowerCase() === "idempotency-key");
+}
+function withoutIdempotencyKey(headers) {
+  return Object.fromEntries(headerEntries(headers).filter(([k]) => String(k).toLowerCase() !== "idempotency-key"));
+}
+/** True when a 2xx broadcast answer is the relay refusing the idempotency key
+ *  itself (policy_denied: validBefore more than one hour out). */
+export async function isIdempotencyPolicyRefusal(res) {
+  try {
+    const j = JSON.parse(await res.clone().text());
+    return j?.success === false && j?.error?.code === "policy_denied" && IDEMPOTENCY_POLICY_RE.test(String(j.error.message || ""));
+  } catch { return false; }
+}
+
 async function relayFetch(input, init = {}) {
   const store = relayTrace.getStore();
   const path = pathOf(input);
@@ -200,6 +221,19 @@ async function relayFetch(input, init = {}) {
       }
       throw e;
     }
+  }
+  // The relay refuses an idempotent broadcast whose transaction is valid for
+  // longer than an hour (policy_denied, measured live 2026-10-09 on four outside
+  // payments: the buyer's SDK signed a long validBefore, mppx always sends an
+  // idempotency-key, the relay refused AFTER the handler ran). The refusal is
+  // the key's, not the payment's: the same transaction is re-sent once without
+  // the key. A retry is re-broadcasting bytes the chain dedupes by hash, so a
+  // broadcast that in fact went through on the first call cannot be paid twice.
+  if (isBroadcast && res.ok && hasIdempotencyKey(init.headers) && await isIdempotencyPolicyRefusal(res)) {
+    const retried = await globalThis.fetch(input, { ...init, headers: withoutIdempotencyKey(init.headers) });
+    if (store) store.policyRetried = true;
+    console.log(`[mpp-tempo] broadcast refused for the idempotency key (validBefore over one hour); re-sent without it: HTTP ${retried.status}`);
+    res = retried;
   }
   if (!store) return res;
   if (res.status >= 500 || res.status === 429 || res.status === 401 || res.status === 403) store.relayUnavailable = res.status;

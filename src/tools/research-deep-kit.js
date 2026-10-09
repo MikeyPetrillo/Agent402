@@ -10,6 +10,7 @@
 // deterministic (LLM + live web) → WALLET_ONLY, lenient
 // NETWORK test set, never cached (the web moves). Gated on OPENROUTER_API_KEY
 // (503 without it), independent of Stripe keys.
+import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { fetchOpenRouter, throwUpstreamError, RERANK_MODEL, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { extractArticle } from "./extract.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -271,9 +272,9 @@ ${t.synthFrame ? `${t.synthFrame}\n\n` : ""}Write a thorough, well-structured, w
     // default, and reasoning tokens would eat the max_tokens budget before the
     // report is written (smoke test 2026-08-20: a 76-char "I'll write the
     // report now…" stub that still 200'd). We want every token on the report.
-    const sd = await chat({ model: synthModel, messages: [{ role: "user", content: synthPrompt }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user);
-    spent += costOf(sd);
-    const prose0 = textOf(sd);
+    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: synthModel, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
+    spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
+    const prose0 = proseOf(sd, cutShort);
     if (!prose0) throw bad("Synthesis produced no report - not charged", 502);
     const audit = auditCitations(prose0, sources, good.map((r) => r.answer).join(" "));
     const prose = audit.prose;
