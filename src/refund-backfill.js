@@ -28,7 +28,7 @@ export const NON_DELIVERING_SLUGS = [
 export const DEFECT_FROM = Date.parse("2026-07-08T00:00:00Z");
 export const DEFECT_UNTIL = Date.parse("2026-09-01T00:00:00Z");
 
-export function backfillBrokenPackRefunds({
+export async function backfillBrokenPackRefunds({
   slugs = NON_DELIVERING_SLUGS,
   from = DEFECT_FROM,
   until = DEFECT_UNTIL,
@@ -50,7 +50,7 @@ export function backfillBrokenPackRefunds({
     // loud rather than minted as something unverifiable.
     if (!r.tx) { noTx++; continue; }
     if (!write) continue;
-    if (recordRefundOwed({
+    if (await recordRefundOwed({
       slug: r.slug, network: r.network, payer: r.payer,
       priceUsd: usd, tx: r.tx, httpStatus: 200, synthetic: false,
     })) minted++; else already++;

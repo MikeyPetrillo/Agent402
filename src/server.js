@@ -146,6 +146,14 @@ function tempoPushHashOf(req) {
   const h = Object.hasOwn(req, "mppTempoPushHash") ? req.mppTempoPushHash : null;
   return typeof h === "string" && h ? h : null;
 }
+// A ledger write answers a boolean on the volume and a promise of one with
+// the state database on (src/refund-ledger.js): run `then` with the verdict
+// either way, and read the write as booked meanwhile.
+function whenVerdict(r, then) {
+  if (r && typeof r.then === "function") { r.then((v) => { try { then(v); } catch { /* bookkeeping only */ } }).catch(() => {}); return true; }
+  then(r);
+  return Boolean(r);
+}
 function recordHangupDebt(req, res) {
   const def = CATALOG[`${req.method} ${req.path}`];
   if (!def) return null;
@@ -198,11 +206,12 @@ function recordHangupDebt(req, res) {
   // hang-up) for review instead of repaying it as an ordinary debt.
   const denied = hangupTicketDenial(req);
   const hangupReason = denied || (hangupForgiven(req) ? "settled in flight" : "no ticket");
-  let created = recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason });
   // The same push transfer was refused on input earlier and booked as owed
   // under its hash; INSERT OR IGNORE kept that 400 row. It is a disconnect
   // now: promote it, or the hang-up holds never see it.
-  if (!created && req.tempoSettled && tempoPushHashOf(req) === row.tx) created = tempoPushDebts?.hungUp(row.tx, hangupReason) === true;
+  const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason }), (made) => {
+    if (!made && req.tempoSettled && tempoPushHashOf(req) === row.tx) void tempoPushDebts?.hungUp(row.tx, hangupReason);
+  });
   console.warn(`[hangup] CHARGED-BUT-NOT-SERVED: client disconnected before the settled response was delivered (${req.method} ${req.path} rail=${row.wire} tx=${row.tx || "?"}) - ${created ? "recorded as owed in the refund ledger" : "already on the books"}${denied ? `; not forgiven: ${denied}` : ""}`);
   return row;
 }
@@ -254,7 +263,7 @@ import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
 import { admitCoveredRun } from "./inflight-cover.js";
 import { paymentReplayKey, createReplayGuard } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
-import { recordProbes } from "./status-store.js";
+import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
 import { tollboothCloudPage } from "./tollbooth-cloud.js";
 import { tollboothWaitlistPage } from "./tollbooth-waitlist.js";
@@ -528,7 +537,7 @@ import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
 import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerBuyerRepeat7, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
 import { upstreamCostsLoaded, upstreamCostsSummary, upstreamCostsGaps, upstreamCostsStatus } from "./upstream-costs.js";
-import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot } from "./x402-economy.js";
+import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, economyHistoryFlush } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
@@ -538,7 +547,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly } from "./sales-ledger.js";
+import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -626,7 +635,7 @@ import { payX402, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sel
 import { readTextCapped } from "./capped-body.js";
 import { svmBuyerConfigured, svmBuyerStatus, SOLANA_NETWORK_LABELS } from "./solana-buyer.js";
 import { payTempo, tempoBuyerConfigured, tempoBuyerStatus, tempoRpc } from "./tempo-buyer.js";
-import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken, PROBE_POW_SLUG } from "./pow.js";
+import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken, PROBE_POW_SLUG, powReplayFlush } from "./pow.js";
 import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL, limiterKey } from "./rate-limit.js";
 import { classifyWishes, wishClassifyEnabled } from "./wish-classify.js";
 import { rerankMisses, rerankEnabled } from "./discovery-rerank.js";
@@ -686,8 +695,8 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundsForPayer } from "./refund-ledger.js";
-import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince } from "./stats.js";
+import { recordRefundOwed, refundByEvidence, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundsForPayer, refundLedgerFlush } from "./refund-ledger.js";
+import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
 const PORT = process.env.PORT || 3000;
@@ -5064,11 +5073,11 @@ app.get("/__operator/backup.json", (req, res) => {
 // remains the sole payer (dry-run by default, capped, and it re-derives the
 // inbound payment from the chain before every send). Dry by default here too:
 // ?write=1 is what actually mints.
-app.post("/__operator/refunds/backfill", (req, res) => {
+app.post("/__operator/refunds/backfill", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorHeavyLimited(req, res)) return;
   try {
-    res.json(backfillBrokenPackRefunds({ write: String(req.query.write || "") === "1" }));
+    res.json(await backfillBrokenPackRefunds({ write: String(req.query.write || "") === "1" }));
   } catch (e) {
     res.status(500).json({ error: String(e.message) });
   }
@@ -5381,22 +5390,22 @@ app.get("/__operator/seller-registrations.json", (req, res) => {
     registrations: rows,
   });
 });
-app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), (req, res) => {
+app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorLedgerLimited(req, res)) return;   // see refunds.json above
   const { id, action, tx, note } = req.body || {};
   const rowId = Number(id);
   if (!Number.isInteger(rowId) || rowId <= 0) return res.status(400).json({ error: "id required" });
   let ok = false;
-  if (action === "paid") ok = markRefundPaid(rowId, tx, note || null);
-  else if (action === "void") ok = markRefundVoid(rowId, note);
+  if (action === "paid") ok = await markRefundPaid(rowId, tx, note || null);
+  else if (action === "void") ok = await markRefundVoid(rowId, note);
   // `claim` moves owed -> sending before any broadcast, so a crash between
   // sending and marking paid cannot be re-sent by the next run. Only one
   // caller can win a given row.
-  else if (action === "claim") ok = claimRefundForSend(rowId, note || null);
+  else if (action === "claim") ok = await claimRefundForSend(rowId, note || null);
   // `release` puts a row stuck in `sending` back to owed, after a human has
   // checked the chain and found nothing was sent. It needs that note.
-  else if (action === "release") ok = releaseStuckSend(rowId, note);
+  else if (action === "release") ok = await releaseStuckSend(rowId, note);
   else return res.status(400).json({ error: 'action must be "claim", "release" (requires note), "paid" (requires tx) or "void" (requires note)' });
   if (!ok) return res.status(409).json({ error: "not updated - row missing, already resolved, not sending (release), or evidence missing (paid needs tx, void and release need a note)" });
   res.json({ ok: true, id: rowId, action, totals: refundTotals() });
@@ -9186,7 +9195,9 @@ app.use((req, res, next) => {
         const tx = req.tempoSettled ? (tempoPushHashOf(req) || tempoTxFromReceiptHeader(res.getHeader("Payment-Receipt"))) : stripeTxFromReceiptHeader(res.getHeader("Payment-Receipt"));
         recordChargedFailure(def.slug, res.statusCode);
         whenTempoLedgerPayerKnown(req, "refund-ledger", () => {
-          const created = recordRefundOwed({
+          // A corrected push retry: its hash already carries the owed
+          // input-refused row, which the insert below leaves alone.
+          whenVerdict(recordRefundOwed({
             slug: def.slug,
             network: req.tempoSettled ? "tempo" : "stripe",
             payer: req.tempoSettled ? tempoLedgerPayer(req) : null,
@@ -9195,10 +9206,9 @@ app.use((req, res, next) => {
             httpStatus: res.statusCode,
             synthetic: isSyntheticRequest(req),
             wire: req.tempoSettled ? "mpp-tempo" : "mpp-stripe",
+          }), (created) => {
+            if (!created && req.tempoSettled && tempoPushDebts && typeof tx === "string") void tempoPushDebts.handlerFailed(tx, res.statusCode);
           });
-          // A corrected push retry: its hash already carries the owed
-          // input-refused row, which the insert above left alone.
-          if (!created && req.tempoSettled && tempoPushDebts && typeof tx === "string") tempoPushDebts.handlerFailed(tx, res.statusCode);
         });
       }
     });
@@ -10210,6 +10220,13 @@ let shuttingDown = false;
 // `code`/`deadlineMs` default to the graceful-redeploy values. The fatal path
 // below reuses this with a non-zero code and a short deadline - same drain
 // machinery, different exit semantics.
+function flushStateQueues({ timeoutMs = 10_000 } = {}) {
+  const flushes = [salesLedgerFlush, refundLedgerFlush, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush]
+    .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
+  let timer;
+  const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });
+  return Promise.race([Promise.allSettled(flushes), deadline]).finally(() => clearTimeout(timer));
+}
 function shutdown(signal, { code = 0, deadlineMs = DRAIN_DEADLINE_MS } = {}) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -10228,7 +10245,10 @@ function shutdown(signal, { code = 0, deadlineMs = DRAIN_DEADLINE_MS } = {}) {
   // deadline with the money spent and nobody to receive the answer.
   const cut = abortInFlightComposites(signal);
   if (cut) console.log(`[drain] aborted ${cut} in-flight composite run(s) - upstream calls cut, nobody charged`);
-  httpServer.close(() => process.exit(code));
+  // The queued state-database writes (ledgers, tallies, replay rows) land
+  // before the process exits, bounded so a slow database cannot hold the
+  // drain past its deadline. Without a database every flush resolves at once.
+  httpServer.close(() => { flushStateQueues().finally(() => process.exit(code)); });
   // server.close() waits for ALL connections, including idle keep-alive
   // sockets agents hold open between calls. Sweep those now and every few
   // seconds (a socket goes idle the moment its in-flight response finishes),

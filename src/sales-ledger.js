@@ -22,16 +22,35 @@
 //
 // Zero config: persists wherever /data exists (prod); elsewhere it lands in
 // /tmp (ephemeral, still functional) — SALES_LEDGER_DB overrides for tests.
+//
+// Where it lives. Without a state database (STATE_DATABASE_URL unset) the
+// tables are the SQLite file and every export is synchronous, as it always
+// was. With one, the tables are in Postgres and the SQLite handle below is an
+// in-memory MIRROR of them: every reader keeps its SQL and stays synchronous,
+// reading the mirror; every WRITE (recordSale, setAttestation,
+// recordSaleFeedback) is one Postgres statement with RETURNING, lands in call
+// order, is written into the mirror when it lands, and returns a Promise. The
+// mirror pulls other containers' writes every REFRESH_MS, so in database mode
+// a reader is exact for this process's own landed writes and at most one
+// refresh interval behind another container's. The file is imported once
+// (agent402-sales.db in the imports table) at the first boot with the
+// database on, and while its directory is there every landed write is also
+// written into it (write-through), so a rollback reads a current ledger.
 import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { normalizePayerAddress } from "./payer.js";
 import { PAYING_RAILS_SQL, isPaidRail } from "./paid-rails.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
+import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce } from "./ledger-mirror.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DB_PATH = process.env.SALES_LEDGER_DB || join(HAS_DATA_DIR ? "/data" : "/tmp", "agent402-sales.db");
-export const salesPersistent = HAS_DATA_DIR || Boolean(process.env.SALES_LEDGER_DB);
+const USE_PG = stateDbEnabled();
+/** "pg" when the ledger lives in the state database, "file" when it is the SQLite file. */
+export const salesLedgerBackend = USE_PG ? "pg" : "file";
+export const salesPersistent = HAS_DATA_DIR || Boolean(process.env.SALES_LEDGER_DB) || USE_PG;
 
 // EVM burners lowercase; Solana/Stellar/Algorand burners case-exact (base58
 // and Stellar/Algorand base32 addresses are case-sensitive — lowercasing
@@ -43,9 +62,11 @@ const BURNERS = new Set([
   ...OUR_ALGORAND_WALLETS,
 ]);
 
-const db = new Database(DB_PATH);
-db.pragma("journal_mode = WAL");
-db.exec(`
+const db = new Database(USE_PG ? ":memory:" : DB_PATH);
+if (!USE_PG) db.pragma("journal_mode = WAL");
+// Write-through handle (database mode, while the file's directory exists).
+const fileDb = USE_PG && existsSync(dirname(DB_PATH)) ? (() => { try { const f = new Database(DB_PATH); f.pragma("journal_mode = WAL"); return f; } catch { return null; } })() : null;
+for (const h of [db, fileDb]) if (h) h.exec(`
 CREATE TABLE IF NOT EXISTS sales (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   ts        INTEGER NOT NULL,   -- unix ms, server clock at response finish
@@ -87,25 +108,25 @@ CREATE INDEX IF NOT EXISTS idx_feedback_slug ON sale_feedback (slug, ts);
 // src/mpp-shim.js). Same settlement either way; recorded so MPP adoption is
 // answerable from the ledger history the day it starts, and /revenue can
 // surface the split once external MPP sales exist. NULL = pre-column rows.
-try { db.exec("ALTER TABLE sales ADD COLUMN wire TEXT"); } catch { /* exists */ }
+for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN wire TEXT"); } catch { /* exists */ } }
 // Additive column (2026-08-27): the QUOTED ceiling of a metered call, next to
 // the settled amount in price_usd, so "settled under the quote" is a fact the
 // ledger can prove per row (see proofFeed / GET /api/proof). NULL on flat
 // routes and pre-column rows.
-try { db.exec("ALTER TABLE sales ADD COLUMN quote_usd REAL"); } catch { /* exists */ }
+for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN quote_usd REAL"); } catch { /* exists */ } }
 // Additive columns (2026-09-03, the attest tool): sha256 of the JSON body the
 // buyer received (hex, recorded by the dispatcher for JSON responses only;
 // NULL for streamed/binary bodies and pre-column rows), and the EAS
 // attestation written for this sale on Base, once one exists.
-try { db.exec("ALTER TABLE sales ADD COLUMN response_sha256 TEXT"); } catch { /* exists */ }
-try { db.exec("ALTER TABLE sales ADD COLUMN attest_uid TEXT"); } catch { /* exists */ }
-try { db.exec("ALTER TABLE sales ADD COLUMN attest_tx TEXT"); } catch { /* exists */ }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_sales_tx ON sales (tx)"); } catch { /* exists */ }
+for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN response_sha256 TEXT"); } catch { /* exists */ } }
+for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN attest_uid TEXT"); } catch { /* exists */ } }
+for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN attest_tx TEXT"); } catch { /* exists */ } }
+for (const h of [db, fileDb]) if (h) { try { h.exec("CREATE INDEX IF NOT EXISTS idx_sales_tx ON sales (tx)"); } catch { /* exists */ } }
 // wire and ts carried no index of their own, so the MPP/Tempo aggregates
 // (WHERE wire IN ...) and the window totals (WHERE ts >= ?, MIN(ts)) scanned
 // the whole table on every /revenue and /api/stats build (2026-09-25 audit).
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_sales_wire_ts ON sales (wire, ts)"); } catch { /* exists */ }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_sales_ts ON sales (ts)"); } catch { /* exists */ }
+for (const h of [db, fileDb]) if (h) { try { h.exec("CREATE INDEX IF NOT EXISTS idx_sales_wire_ts ON sales (wire, ts)"); } catch { /* exists */ } }
+for (const h of [db, fileDb]) if (h) { try { h.exec("CREATE INDEX IF NOT EXISTS idx_sales_ts ON sales (ts)"); } catch { /* exists */ } }
 
 // Boot-time reclassification (2026-08-20): `internal` is decided at record
 // time, so a wallet that JOINS the burner/test set later leaves stale
@@ -120,13 +141,154 @@ const INTERNAL_TX_ALLOWLIST = [
   "0xa3c18eeacc2f0dff61a7144f93d8d33c60148adc31a07832c390769da2bd85a0",
   "0x913e5fa8322cc54a499d73214af76449781831d732ab0344139edce37f35dcba",
 ];
-try {
-  const bList = [...BURNERS].map(() => "?").join(",");
-  const swept = db.prepare(`UPDATE sales SET internal = 1 WHERE internal = 0 AND payer IN (${bList})`).run(...BURNERS).changes;
-  const tList = INTERNAL_TX_ALLOWLIST.map(() => "?").join(",");
-  const oneOff = db.prepare(`UPDATE sales SET internal = 1 WHERE internal = 0 AND tx IN (${tList})`).run(...INTERNAL_TX_ALLOWLIST).changes;
-  if (swept + oneOff > 0) console.log(`[sales-ledger] reclassified ${swept + oneOff} row(s) internal (burner-set membership${oneOff ? ` + ${oneOff} pre-fix AgentCore test buy(s)` : ""})`);
-} catch (e) { console.warn(`[sales-ledger] internal reclassification sweep failed: ${String(e?.message || e).slice(0, 200)}`); }
+const sweepLog = (swept, oneOff) => { if (swept + oneOff > 0) console.log(`[sales-ledger] reclassified ${swept + oneOff} row(s) internal (burner-set membership${oneOff ? ` + ${oneOff} pre-fix AgentCore test buy(s)` : ""})`); };
+if (!USE_PG) {
+  try {
+    const bList = [...BURNERS].map(() => "?").join(",");
+    const swept = db.prepare(`UPDATE sales SET internal = 1 WHERE internal = 0 AND payer IN (${bList})`).run(...BURNERS).changes;
+    const tList = INTERNAL_TX_ALLOWLIST.map(() => "?").join(",");
+    const oneOff = db.prepare(`UPDATE sales SET internal = 1 WHERE internal = 0 AND tx IN (${tList})`).run(...INTERNAL_TX_ALLOWLIST).changes;
+    sweepLog(swept, oneOff);
+  } catch (e) { console.warn(`[sales-ledger] internal reclassification sweep failed: ${String(e?.message || e).slice(0, 200)}`); }
+}
+// The same sweep in database mode runs against Postgres in firstLoad(), before the first pull.
+async function sweepPg() {
+  try {
+    const swept = (await stateQuery(`UPDATE ${T("sales")} SET internal = 1, updated_at = ${PG_NOW_MS} WHERE internal = 0 AND payer = ANY($1::text[])`, [[...BURNERS]])).rowCount || 0;
+    const oneOff = (await stateQuery(`UPDATE ${T("sales")} SET internal = 1, updated_at = ${PG_NOW_MS} WHERE internal = 0 AND tx = ANY($1::text[])`, [INTERNAL_TX_ALLOWLIST])).rowCount || 0;
+    sweepLog(swept, oneOff);
+  } catch (e) { console.warn(`[sales-ledger] internal reclassification sweep failed: ${String(e?.message || e).slice(0, 200)}`); }
+}
+
+// ---- the state database -------------------------------------------------------
+const T = (t) => `${stateDbSchema()}.${t}`;
+const IMPORT_NAME = basename(DB_PATH);
+const SALE_COLS = ["id", "ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256", "attest_uid", "attest_tx"];
+const FEEDBACK_COLS = ["tx", "sale_id", "slug", "payer", "verdict", "reason", "ts"];
+const PG_DDL = () => `
+  CREATE TABLE IF NOT EXISTS ${T("sales")} (
+    id              BIGSERIAL PRIMARY KEY,
+    ts              BIGINT NOT NULL,
+    slug            TEXT NOT NULL,
+    price_usd       DOUBLE PRECISION NOT NULL,
+    rail            TEXT NOT NULL,
+    network         TEXT,
+    payer           TEXT,
+    tx              TEXT,
+    internal        INTEGER NOT NULL,
+    wire            TEXT,
+    quote_usd       DOUBLE PRECISION,
+    response_sha256 TEXT,
+    attest_uid      TEXT,
+    attest_tx       TEXT,
+    updated_at      BIGINT NOT NULL DEFAULT ${PG_NOW_MS}
+  );
+  CREATE INDEX IF NOT EXISTS sales_tx ON ${T("sales")} (tx);
+  CREATE INDEX IF NOT EXISTS sales_updated_at ON ${T("sales")} (updated_at);
+  CREATE TABLE IF NOT EXISTS ${T("sale_feedback")} (
+    tx          TEXT PRIMARY KEY,
+    sale_id     BIGINT NOT NULL,
+    slug        TEXT NOT NULL,
+    payer       TEXT NOT NULL,
+    verdict     TEXT NOT NULL,
+    reason      TEXT,
+    ts          BIGINT NOT NULL,
+    updated_at  BIGINT NOT NULL DEFAULT ${PG_NOW_MS}
+  );
+  CREATE INDEX IF NOT EXISTS sale_feedback_updated_at ON ${T("sale_feedback")} (updated_at);
+`;
+const MIRROR_SALE_SQL = `INSERT OR REPLACE INTO sales (${SALE_COLS.join(", ")}) VALUES (${SALE_COLS.map((c) => "@" + c).join(", ")})`;
+const MIRROR_FEEDBACK_SQL = `INSERT OR REPLACE INTO sale_feedback (${FEEDBACK_COLS.join(", ")}) VALUES (${FEEDBACK_COLS.map((c) => "@" + c).join(", ")})`;
+const mirrorSale = db.prepare(MIRROR_SALE_SQL);
+const mirrorFeedback = db.prepare(MIRROR_FEEDBACK_SQL);
+const fileSale = fileDb ? fileDb.prepare(MIRROR_SALE_SQL) : null;
+const fileFeedback = fileDb ? fileDb.prepare(MIRROR_FEEDBACK_SQL) : null;
+const num = (v) => (v == null ? null : Number(v));
+const saleRowOf = (r) => ({
+  id: Number(r.id), ts: Number(r.ts), slug: r.slug, price_usd: Number(r.price_usd) || 0, rail: r.rail, network: r.network ?? null,
+  payer: r.payer ?? null, tx: r.tx ?? null, internal: Number(r.internal) ? 1 : 0, wire: r.wire ?? null, quote_usd: num(r.quote_usd),
+  response_sha256: r.response_sha256 ?? null, attest_uid: r.attest_uid ?? null, attest_tx: r.attest_tx ?? null,
+});
+const feedbackRowOf = (r) => ({ tx: r.tx, sale_id: Number(r.sale_id), slug: r.slug, payer: r.payer, verdict: r.verdict, reason: r.reason ?? null, ts: Number(r.ts) });
+let lastSaleUpdated = 0, lastFeedbackUpdated = 0;
+let ready = null;
+let refreshing = false;
+const warnOnce = makeWarnOnce("sales-ledger");
+const enqueue = serialQueue();
+const stamp = (r, which) => { const u = Number(r.updated_at) || 0; if (which === "sale") { if (u > lastSaleUpdated) lastSaleUpdated = u; } else if (u > lastFeedbackUpdated) lastFeedbackUpdated = u; };
+function applySale(r) { mirrorSale.run(saleRowOf(r)); stamp(r, "sale"); }
+function applyFeedback(r) { mirrorFeedback.run(feedbackRowOf(r)); stamp(r, "feedback"); }
+const applySales = db.transaction((rows) => { for (const r of rows) applySale(r); });
+const applyFeedbacks = db.transaction((rows) => { for (const r of rows) applyFeedback(r); });
+let writeThroughWarned = false;
+/** The landed row into the file (same id), so a rolled-back build reads it. Best effort, never the verdict. */
+function writeThrough(stmt, row) {
+  if (!stmt) return;
+  try { stmt.run(row); }
+  catch (e) { if (!writeThroughWarned) { writeThroughWarned = true; console.warn(`[sales-ledger] write-through to ${DB_PATH} failed: ${String(e?.message || e).slice(0, 120)}`); } }
+}
+
+/** Both tables of the file into Postgres, once: insert-if-absent with the file's ids, so a second container importing at the same time is harmless. */
+async function importFile() {
+  const sales = sqliteFileRows(DB_PATH, "sales");
+  const fb = sqliteFileRows(DB_PATH, "sale_feedback");
+  let n = 0, m = 0;
+  if (sales.rows.length) {
+    n = await insertRows(stateQuery, T("sales"), SALE_COLS, sales.rows.map(saleRowOf), { conflict: "ON CONFLICT DO NOTHING" });
+    await syncIdSequence(stateQuery, T("sales"));
+  }
+  if (fb.rows.length) m = await insertRows(stateQuery, T("sale_feedback"), FEEDBACK_COLS, fb.rows.map(feedbackRowOf), { conflict: "ON CONFLICT DO NOTHING" });
+  if (sales.rows.length || fb.rows.length) console.log(`[sales-ledger] imported ${n} of ${sales.rows.length} sale(s) and ${m} of ${fb.rows.length} feedback row(s) from ${DB_PATH}`);
+  return { bytes: sales.bytes, rows: n + m };
+}
+async function pullAll() {
+  const s = await stateQuery(`SELECT * FROM ${T("sales")} ORDER BY id`);
+  const f = await stateQuery(`SELECT * FROM ${T("sale_feedback")} ORDER BY ts`);
+  db.transaction(() => { db.exec("DELETE FROM sales; DELETE FROM sale_feedback"); for (const r of s.rows) applySale(r); for (const r of f.rows) applyFeedback(r); })();
+}
+/** Rows another container wrote since the last pull (with a margin; upserts are idempotent). */
+async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
+  try {
+    const s = await stateQuery(`SELECT * FROM ${T("sales")} WHERE updated_at > $1 ORDER BY updated_at, id`, [Math.max(0, lastSaleUpdated - REFRESH_MARGIN_MS)]);
+    if (s.rows.length) applySales(s.rows);
+    const f = await stateQuery(`SELECT * FROM ${T("sale_feedback")} WHERE updated_at > $1 ORDER BY updated_at`, [Math.max(0, lastFeedbackUpdated - REFRESH_MARGIN_MS)]);
+    if (f.rows.length) applyFeedbacks(f.rows);
+  } finally { refreshing = false; }
+}
+async function firstLoad() {
+  await stateQuery(PG_DDL());
+  await importOnce(IMPORT_NAME, { source: DB_PATH, run: importFile });
+  await sweepPg();
+  await pullAll();
+  everyMs(refresh, REFRESH_MS);
+}
+function readyP() {
+  if (!USE_PG) return Promise.resolve();
+  if (!ready) {
+    ready = firstLoad().catch((e) => {
+      ready = null; // the next write or refresh tries the load again
+      warnOnce("first load", e);
+      throw e;
+    });
+  }
+  return ready;
+}
+if (USE_PG) trackStoreReady(readyP());
+/** One queued Postgres write: lands after every earlier write; never rejects (a failed write resolves `onError`, logged once a minute). */
+function pgWrite(label, fn, onError = false) {
+  return enqueue(async () => {
+    try { await readyP(); return await fn(); }
+    catch (e) { warnOnce(label, e); return onError; }
+  });
+}
+/** Resolves once the first load (DDL, the one-time file import, the sweep, the full pull) is done; immediately in file mode. */
+export function salesLedgerReady() { return readyP().catch(() => {}); }
+/** Resolves once every queued write has landed (tests and shutdown). */
+export function salesLedgerFlush() { return enqueue(async () => {}); }
+/** Pull other containers' writes now (the timer does this every REFRESH_MS). */
+export async function salesLedgerRefresh() { if (!USE_PG) return; await readyP(); await refresh(); }
 
 const insertSale = db.prepare(
   "INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -146,13 +308,16 @@ export function txFromPaymentResponse(headerValue) {
 /**
  * Record one served catalog call. Fire-and-forget from the serving path:
  * never throws, and a broken disk only costs the row, not the response.
+ * Database mode: returns a Promise (true once the row is in Postgres, false
+ * when the write failed), queued behind earlier writes so rows land in call
+ * order; the serving path does not wait on it.
  */
 export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic, wire, quoteUsd, responseSha256 }) {
   try {
     const p = normalizePayerAddress(payer); // lowercases EVM only — base58/Stellar stay case-exact
     const internal = Boolean(synthetic) || rail === "heartbeat" || (p !== null && BURNERS.has(p));
     const q = Number(quoteUsd);
-    insertSale.run(
+    const vals = [
       Date.now(),
       String(slug || "unknown"),
       Number(priceUsd) || 0,
@@ -163,9 +328,21 @@ export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic
       internal ? 1 : 0,
       wire ? String(wire) : null,
       Number.isFinite(q) && q > 0 ? q : null,
-      /^[0-9a-f]{64}$/i.test(String(responseSha256 || "")) ? String(responseSha256).toLowerCase() : null
-    );
+      /^[0-9a-f]{64}$/i.test(String(responseSha256 || "")) ? String(responseSha256).toLowerCase() : null,
+    ];
+    if (USE_PG) {
+      return pgWrite("record-sale", async () => {
+        const r = await stateQuery(
+          `INSERT INTO ${T("sales")} (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`, vals);
+        applySale(r.rows[0]);
+        writeThrough(fileSale, saleRowOf(r.rows[0]));
+        return true;
+      });
+    }
+    insertSale.run(...vals);
   } catch { /* never break serving for accounting */ }
+  return USE_PG ? Promise.resolve(false) : undefined;
 }
 
 const selectByTx = db.prepare(
@@ -201,6 +378,7 @@ const selectFeedbackTally = db.prepare(`
   FROM sale_feedback WHERE ts >= ? GROUP BY slug ORDER BY (good + bad) DESC
 `);
 
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function saleByTx(tx) {
   const t = String(tx || "").trim();
   if (!t) return null;
@@ -215,8 +393,25 @@ export function saleByTx(tx) {
 
 /** Record the attestation written for a sale. Write-once: a second call for
  *  the same row is a no-op (returns false), so a racing double attest can
- *  never overwrite the first UID. */
+ *  never overwrite the first UID. Database mode: a Promise of the verdict,
+ *  decided by `UPDATE ... WHERE attest_uid IS NULL RETURNING` in Postgres. */
 export function setAttestation(id, { uid, attestTx }) {
+  if (USE_PG) {
+    return pgWrite("set-attestation", async () => {
+      const r = await stateQuery(
+        `UPDATE ${T("sales")} SET attest_uid = $1, attest_tx = $2, updated_at = ${PG_NOW_MS} WHERE id = $3 AND attest_uid IS NULL RETURNING *`,
+        [String(uid), attestTx ? String(attestTx) : null, Number(id)]);
+      if (!r.rows[0]) {
+        // Another container won: show its row.
+        const cur = await stateQuery(`SELECT * FROM ${T("sales")} WHERE id = $1`, [Number(id)]).catch(() => null);
+        if (cur?.rows[0]) applySale(cur.rows[0]);
+        return false;
+      }
+      applySale(r.rows[0]);
+      writeThrough(fileSale, saleRowOf(r.rows[0]));
+      return true;
+    });
+  }
   try { return updateAttestation.run(String(uid), attestTx ? String(attestTx) : null, Number(id)).changes === 1; }
   catch { return false; }
 }
@@ -303,6 +498,7 @@ const qClaimedSettlements = db.prepare(`
   WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ? AND ts < ?
   ORDER BY ts`);
 /** External paid settlements in [since, until) as recorded at serve time. */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function claimedSettlements(since, until = Date.now()) {
   return qClaimedSettlements.all(since, until);
 }
@@ -403,6 +599,7 @@ const qExternalByNetwork = db.prepare(`
 const qExternalByNetworkPayers = db.prepare(`
   SELECT DISTINCT network, payer
   FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?`);
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function externalByNetwork({ days = 30 } = {}) {
   const since = Date.now() - days * 86_400_000;
   const out = {};
@@ -435,6 +632,7 @@ const qPayerRecent = db.prepare(`
  *  an empty envelope, so this is the only record of who was charged. Internal
  *  rows (our own canaries and burners) are excluded by the ledger's own
  *  classification - refunding ourselves would just burn gas. */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function externalSalesForSlugs(slugs, sinceMs, untilMs) {
   const list = (Array.isArray(slugs) ? slugs : []).filter((s) => typeof s === "string" && s);
   if (!list.length) return [];
@@ -485,10 +683,13 @@ export function externalSalesForSlugs(slugs, sinceMs, untilMs) {
  * number that looks like a measurement and is not one. "It delivered" or "it
  * did not" is what a buyer actually knows, and it is the only thing we would
  * be willing to publish about someone else.
+ *
+ * Database mode: returns a Promise of the row (null when the write failed),
+ * one row per tx in Postgres (INSERT ... ON CONFLICT (tx) DO UPDATE).
  */
 export function recordSaleFeedback({ tx, saleId, slug, payer, verdict, reason }) {
   const v = verdict === "good" || verdict === "bad" ? verdict : null;
-  if (!tx || !saleId || !slug || !payer || !v) return null;
+  if (!tx || !saleId || !slug || !payer || !v) return USE_PG ? Promise.resolve(null) : null;
   const row = {
     tx: String(tx), saleId: Number(saleId), slug: String(slug),
     payer: String(payer).toLowerCase(), verdict: v,
@@ -497,11 +698,24 @@ export function recordSaleFeedback({ tx, saleId, slug, payer, verdict, reason })
     reason: reason == null ? null : String(reason).slice(0, 1000),
     ts: Date.now(),
   };
+  if (USE_PG) {
+    return pgWrite("record-feedback", async () => {
+      const r = await stateQuery(
+        `INSERT INTO ${T("sale_feedback")} (tx, sale_id, slug, payer, verdict, reason, ts) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (tx) DO UPDATE SET verdict = EXCLUDED.verdict, reason = EXCLUDED.reason, ts = EXCLUDED.ts, updated_at = ${PG_NOW_MS}
+         RETURNING *`,
+        [row.tx, row.saleId, row.slug, row.payer, row.verdict, row.reason, row.ts]);
+      applyFeedback(r.rows[0]);
+      writeThrough(fileFeedback, feedbackRowOf(r.rows[0]));
+      return row;
+    }, null);
+  }
   upsertFeedback.run(row.tx, row.saleId, row.slug, row.payer, row.verdict, row.reason, row.ts);
   return row;
 }
 
 /** This buyer's own verdict on one tx, or null. */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function feedbackForTx(tx) {
   const r = selectFeedbackByTx.get(String(tx || ""));
   return r ? { tx: r.tx, slug: r.slug, verdict: r.verdict, reason: r.reason, at: new Date(r.ts).toISOString() } : null;
@@ -514,6 +728,7 @@ export function feedbackForTx(tx) {
  * attached, and the same rule that keeps buyer addresses off every other
  * surface applies here.
  */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function feedbackByTool({ days = 90 } = {}) {
   const since = Date.now() - Math.max(1, days) * 86_400_000;
   return selectFeedbackTally.all(since).map((r) => ({
@@ -531,6 +746,7 @@ export function feedbackByTool({ days = 90 } = {}) {
  * unread for eleven days on the wish board), so the log line at write time and
  * this list are the two places a person actually finds them.
  */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function badFeedback({ days = 30, limit = 50 } = {}) {
   const since = Date.now() - Math.max(1, days) * 86_400_000;
   return selectBadFeedback.all(since, Math.max(1, Math.min(500, Number(limit) || 50))).map((r) => ({
@@ -539,6 +755,7 @@ export function badFeedback({ days = 30, limit = 50 } = {}) {
   }));
 }
 
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function payerReceipts(payer, { from = null, to = null, limit = 500 } = {}) {
   const lo = from ? Date.parse(from) : Date.now() - 90 * 86_400_000;
   const hi = to ? Date.parse(to) : Date.now();
@@ -579,6 +796,7 @@ export function payerReceipts(payer, { from = null, to = null, limit = 500 } = {
   };
 }
 
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function payerUsage(payer, { days = 30, limit = 50 } = {}) {
   const since = Date.now() - days * 86_400_000;
   const t = qPayerTotals.get(payer, since);
@@ -610,6 +828,7 @@ export function payerUsage(payer, { days = 30, limit = 50 } = {}) {
  * buyers over `days`. Breadth of demand, not revenue: the tools the most
  * independent wallets reach for. Canary/burner traffic excluded (internal=0).
  */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function topByBuyers({ days = 30, limit = 8 } = {}) {
   const since = Date.now() - days * 86_400_000;
   return qExtBuyersBySlug.all(since, limit).map((r) => ({
@@ -626,11 +845,13 @@ export function topByBuyers({ days = 30, limit = 8 } = {}) {
  * distinct attributable buyers, first/last sale ts. Ranking, lenses, and
  * trend math live in the tool's pure compute (x402-kit computeBestsellers).
  */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function externalSlugWindow(sinceMs, untilMs) {
   return qExtSlugWindow.all(sinceMs, untilMs);
 }
 
 /** When the ledger recorded its first row (unix ms), or null when empty. */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function firstRecordedTs() {
   return qFirstTs.get()?.ts ?? null;
 }
@@ -651,6 +872,7 @@ export function firstRecordedTs() {
 // are hex (case-insensitive, normalized to lowercase); Solana/Stellar
 // signatures are base58/base32 and case-SENSITIVE, so those are kept verbatim
 // and both forms are carried.
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function mppTxHashes() {
   const out = new Set();
   for (const r of qMppTx.all()) {
@@ -670,6 +892,7 @@ const qMppWindow = db.prepare(`
   SELECT id, ts, slug, price_usd, quote_usd, rail, network, payer, tx, internal, wire
   FROM sales WHERE wire IN ('mpp', 'mpp-tempo', 'mpp-stripe', 'mpp-tempo-subscription') AND ts >= ? AND ts < ?
   ORDER BY id ASC LIMIT ?`);
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function mppLedgerRows(sinceMs, untilMs = Date.now(), { limit = 50_000 } = {}) {
   try {
     return qMppWindow.all(Number(sinceMs) || 0, Number(untilMs) || Date.now(), limit).map((r) => ({
@@ -681,6 +904,7 @@ export function mppLedgerRows(sinceMs, untilMs = Date.now(), { limit = 50_000 } 
 }
 
 /** Recent MPP-wire settlements (Authorization: Payment) with on-chain tx + payer. */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function mppSales({ limit = 30, detailed = false } = {}) {
   const rows = qMppRecent.all(Math.min(Math.max(1, limit | 0), 100));
   // Dropping the payer was not enough. Each row still pairs a TOOL NAME with a
@@ -830,6 +1054,7 @@ function decideWindow(since) {
   return out;
 }
 /** { days, sweepRule, window: {decide, decide-execute}, allTime: {...} } - see decideWindow. */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function decideSales({ days = 30 } = {}) {
   return {
     days,
@@ -839,6 +1064,7 @@ export function decideSales({ days = 30 } = {}) {
   };
 }
 
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function cardSales({ days = 30 } = {}) {
   const since = Date.now() - days * 86_400_000;
   const w = qCard.get(since), all = qCard.get(0), subs = qCardSubs.get(0);
@@ -851,6 +1077,7 @@ export function cardSales({ days = 30 } = {}) {
  * view's revenue side - external rows on money rails only, same isPaidRail
  * rule as salesSummary (a pow row's price is what it WOULD have cost).
  */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function externalDailyRevenue({ days = 60 } = {}) {
   const since = Date.now() - days * 86_400_000;
   const rows = db.prepare(
@@ -862,6 +1089,7 @@ export function externalDailyRevenue({ days = 60 } = {}) {
   return rows.map((r) => ({ day: r.day, revenueUsd: +Number(r.usd || 0).toFixed(6), sales: r.n }));
 }
 
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function salesSummary({ days = 30, detailed = false } = {}) {
   const since = Date.now() - days * 86_400_000;
   const totals = { external: { sales: 0, revenueUsd: 0 }, internal: { sales: 0, revenueUsd: 0 }, byRail: {} };
@@ -931,6 +1159,7 @@ const qTempoDaily = db.prepare(`
   GROUP BY day ORDER BY day`);
 
 /** [{day, extUsd, extTx, intUsd, intTx}], oldest first. */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function tempoDailyRevenue() {
   return qTempoDaily.all().map((r) => ({
     day: r.day,
@@ -942,6 +1171,7 @@ export function tempoDailyRevenue() {
 }
 
 /** First day any Tempo settlement was recorded, or null before the first one. */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function tempoDailyRecordingSince() {
   const rows = qTempoDaily.all();
   return rows.length ? rows[0].day : null;
@@ -960,6 +1190,7 @@ const qTempoExternalPayments = db.prepare(`
   ORDER BY ts`);
 
 /** [{ts, payer, tx, usd}] for every external Tempo settlement, oldest first. */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function externalTempoPayments() {
   try {
     return qTempoExternalPayments.all().map((r) => ({ ts: r.ts, payer: r.payer || null, tx: r.tx || null, usd: Number(r.price_usd) || 0 }));
@@ -987,11 +1218,13 @@ const qMeteredExtWindow = db.prepare(`
 /** External metered settlements in a window: counts only, never a roster. The
  *  weekly number the distribution work is measured by (PostHog mirror:
  *  "External metered buyers per week"). */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function meteredExternal({ days = 7, slug = "v1-chat-metered" } = {}) {
   const r = qMeteredExtWindow.get(slug, Date.now() - days * 86_400_000) || {};
   return { days, slug, settlements: Number(r.n) || 0, buyers: Number(r.buyers) || 0, settledUsd: +Number(r.settled || 0).toFixed(6), lastAt: r.last_ts ? new Date(r.last_ts).toISOString() : null };
 }
 
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function proofFeed({ slug = "v1-chat-metered" } = {}) {
   const side = (internal) => {
     const a = qProofAgg.get(slug, internal ? 1 : 0) || {};
@@ -1062,6 +1295,7 @@ export function weekStartOf(ts) {
   return Math.floor((ts - WEEK_EPOCH_MS) / WEEK_MS) * WEEK_MS + WEEK_EPOCH_MS;
 }
 
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function mppAgentsWeekly({ weeks = 12, now = Date.now() } = {}) {
   const n = Math.max(1, Math.min(104, Math.floor(Number(weeks)) || 12));
   const currentWk = Math.floor((now - WEEK_EPOCH_MS) / WEEK_MS);

@@ -38,18 +38,18 @@ export function createTempoPushDebts({ recordOwed, voidOnClaim, renoteOwed, refu
   });
   return {
     /** Input refused before finalize. True when a debt stands for the hash. */
-    inputRefused(req, info) {
+    async inputRefused(req, info) {
       if (!info?.hash) return false;
-      recordOwed({ ...base(req, info), httpStatus: Number(info.status) || 400, note: PUSH_INPUT_REFUSED_NOTE });
+      await recordOwed({ ...base(req, info), httpStatus: Number(info.status) || 400, note: PUSH_INPUT_REFUSED_NOTE });
       return refundByEvidence(info.hash)?.status === "owed";
     },
     /** Finalize refused. True when a debt stands for the hash. */
-    notClaimed(req, info) {
+    async notClaimed(req, info) {
       if (!info?.hash) return false;
       const b = base(req, info);
-      const created = recordOwed({ ...b, httpStatus: 402, note: PUSH_FINALIZE_REFUSED_NOTE });
+      const created = await recordOwed({ ...b, httpStatus: 402, note: PUSH_FINALIZE_REFUSED_NOTE });
       // An input-refused row for the same hash becomes this row, once.
-      const promoted = !created && renoteOwed(info.hash, PUSH_INPUT_REFUSED_NOTE, PUSH_FINALIZE_REFUSED_NOTE);
+      const promoted = !created && (await renoteOwed(info.hash, PUSH_INPUT_REFUSED_NOTE, PUSH_FINALIZE_REFUSED_NOTE));
       if ((created || promoted) && !b.synthetic) recordChargedFailure(b.slug, PUSH_FINALIZE_FAILURE_STATUS);
       return refundByEvidence(info.hash)?.status === "owed";
     },
@@ -59,24 +59,24 @@ export function createTempoPushDebts({ recordOwed, voidOnClaim, renoteOwed, refu
      *  disconnect it now is, so the refund planner's hang-up holds (lasting
      *  effect, repeat hang-up) read it. A row being sent, paid or void is
      *  never touched. True when the row changed. */
-    hungUp(hash, hangupReason) {
+    async hungUp(hash, hangupReason) {
       if (typeof hash !== "string" || !hash) return false;
-      return promoteToHangup(hash, { from: PUSH_INPUT_REFUSED_NOTE, hangupReason, append: PUSH_HANGUP_AFTER_CLAIM_NOTE }) === true;
+      return (await promoteToHangup(hash, { from: PUSH_INPUT_REFUSED_NOTE, hangupReason, append: PUSH_HANGUP_AFTER_CLAIM_NOTE })) === true;
     },
     /** A claimed push whose handler then answered >= 400 (not a disconnect)
      *  on a hash that already carries an OWED input-refused row: the row takes
      *  the handler's status and says the retry was claimed and then failed, so
      *  a reviewer reads what happened. Sending, paid or void rows are never
      *  touched. True when the row changed. */
-    handlerFailed(hash, httpStatus) {
+    async handlerFailed(hash, httpStatus) {
       if (typeof hash !== "string" || !hash) return false;
-      return restateHandlerFailure(hash, { from: PUSH_INPUT_REFUSED_NOTE, httpStatus, append: PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE }) === true;
+      return (await restateHandlerFailure(hash, { from: PUSH_INPUT_REFUSED_NOTE, httpStatus, append: PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE })) === true;
     },
     /** At finish: a push credential that was claimed AND served voids its debt. */
-    served(req, res) {
+    async served(req, res) {
       const hash = Object.hasOwn(req, "mppTempoPushHash") ? req.mppTempoPushHash : null;
       if (!req.tempoSettled || res.statusCode !== 200 || typeof hash !== "string" || !hash) return false;
-      const voided = voidOnClaim(hash, PUSH_CLAIMED_NOTE);
+      const voided = await voidOnClaim(hash, PUSH_CLAIMED_NOTE);
       if (!voided) {
         const row = refundByEvidence(hash);
         if (row && (row.status === "sending" || row.status === "paid")) console.error(`[mpp-tempo] REFUNDED-AND-SERVED: push transfer ${hash} was claimed and served while its debt was already ${row.status}; review refund #${row.id}`);
