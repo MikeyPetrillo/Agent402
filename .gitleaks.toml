@@ -75,6 +75,11 @@ regexes = [
   '''0xe15fc38f6d8c56af07bbcbe3baf5708a2bf423''',
   # The leak-guard test's own canary tokens (e.g. fredv2-LEAKCANARY0000).
   '''LEAKCANARY''',
+  # Two jwt-decode corpus fixtures (scripts/corpus/cpu-text.json): a JWE whose
+  # five segments encode the words key/iv/ciphertext/tag, and a JWS whose
+  # payload is "hello world". Hand-built shapes pinned exactly; not credentials.
+  '''^eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ\.a2V5\.aXY\.Y2lwaGVydGV4dA\.dGFn$''',
+  '''^eyJhbGciOiJIUzI1NiJ9\.aGVsbG8gd29ybGQ\.c2ln$''',
   # keccak256("AuthorizationUsed(address,bytes32)"): USDC's public EIP-3009
   # event topic (services/live reads it from the chain). An event signature
   # hash, not a credential; the generic rule fires on the AUTH in its name.

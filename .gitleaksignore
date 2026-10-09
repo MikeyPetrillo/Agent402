@@ -2,8 +2,3 @@
 # secret and catalog prose, neither a credential.
 2618171f254b05561488e97d54bf38f8fc42687b:scripts/test-payment-required-body.js:generic-api-key:168
 a9e421ab1fb4a8012fe7d648e7224ce18b3eb3b0:src/payments.js:generic-api-key:542
-# Reviewed false positives (2026-10-09): two jwt-decode corpus fixtures, a JWE
-# whose five segments encode the words key/iv/ciphertext/tag and a JWS whose
-# payload is "hello world"; hand-built shapes, not credentials.
-ad8d1daa2320e6b3ef403dd462483b8ee0454f9e:scripts/corpus/cpu-text.json:generic-api-key:980
-ad8d1daa2320e6b3ef403dd462483b8ee0454f9e:scripts/corpus/cpu-text.json:generic-api-key:995
