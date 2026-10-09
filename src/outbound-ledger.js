@@ -17,12 +17,15 @@
 // it, and how it ended.
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { logLines, stateDbEnabled } from "./state-db.js";
+import { logLines, stateDbEnabled, trackStoreReady, reconcileLogFile } from "./state-db.js";
 
 export const OUTBOUND_STREAM = "outbound-spend";
 
 const FILE = (process.env.OUTBOUND_LEDGER_FILE || "/data/outbound-spend.ndjson").trim();
 const DISABLED = /^(0|false|off|no)$/i.test((process.env.OUTBOUND_LEDGER ?? "").trim());
+// Boot: lines the file holds past the stream (written while rolled back to a
+// build that used the file alone) are appended to the stream.
+if (stateDbEnabled() && !DISABLED) trackStoreReady(reconcileLogFile(OUTBOUND_STREAM, FILE).catch(() => 0));
 
 let warnedAt = 0;
 function warnOnce(msg) {

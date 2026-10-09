@@ -21,6 +21,9 @@ import { dirname } from "node:path";
 import { documents, imports, stateDbEnabled } from "./state-db.js";
 
 const NAME_RE = /^[a-z0-9][a-z0-9._:-]{0,120}$/;
+// A file written this much later than its row was written by a build that
+// used the file alone (a rollback); write-through lands within milliseconds.
+export const NEWER_FILE_GRACE_MS = 60_000;
 
 /** The volume's own name for a document: the file's basename. */
 export function documentNameOf(file) {
@@ -65,6 +68,28 @@ export function createJsonDocument({ name = null, file = null, log = console.war
     catch (e) { if (!writeThroughWarned) { writeThroughWarned = true; say(`write-through to ${file} failed: ${String(e?.message || e).slice(0, 120)}`); } }
   }
 
+  /**
+   * Roll-forward: a file written after the row (beyond the write-through
+   * grace) carries writes made while the old build ran on the file alone;
+   * it replaces the row and the replacement is logged. Returns the body or null.
+   */
+  async function reimportIfFileNewer(row) {
+    if (!file || !importFromFile) return null;
+    let mtime;
+    try { mtime = statSync(file).mtimeMs; } catch { return null; }
+    const rowAt = row.updatedAt instanceof Date ? row.updatedAt.getTime() : 0;
+    if (!rowAt || mtime <= rowAt + NEWER_FILE_GRACE_MS) return null;
+    try {
+      const { body, bytes } = readJsonFile(file);
+      await documents.put(docName, body);
+      say(`re-imported ${bytes} bytes from ${file}: the file was written ${Math.round((mtime - rowAt) / 1000)} s after the row (a rollback window)`);
+      return body;
+    } catch (e) {
+      say(`re-import from ${file} failed: ${String(e?.message || e).slice(0, 120)}`);
+      return null;
+    }
+  }
+
   async function importOnce() {
     if (!importFromFile || !file || !existsSync(file)) return null;
     try {
@@ -90,7 +115,11 @@ export function createJsonDocument({ name = null, file = null, log = console.war
       try {
         if (usePg) {
           const row = await documents.get(docName);
-          if (row) { lastError = null; return row.body; }
+          if (row) {
+            lastError = null;
+            const fresher = await reimportIfFileNewer(row);
+            return fresher === null ? row.body : fresher;
+          }
           const imported = await importOnce();
           lastError = null;
           return imported === null ? fallback : imported;

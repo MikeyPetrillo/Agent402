@@ -125,8 +125,8 @@ const T = (table) => `${schema()}.${table}`;
 
 export const documents = {
   async get(name) {
-    const r = await stateQuery(`SELECT body, version FROM ${T("documents")} WHERE name = $1`, [checkName(name)]);
-    return r.rows[0] ? { body: r.rows[0].body, version: Number(r.rows[0].version) } : null;
+    const r = await stateQuery(`SELECT body, version, updated_at FROM ${T("documents")} WHERE name = $1`, [checkName(name)]);
+    return r.rows[0] ? { body: r.rows[0].body, version: Number(r.rows[0].version), updatedAt: new Date(r.rows[0].updated_at) } : null;
   },
   /** Upsert the whole body. */
   async put(name, body) {
@@ -222,6 +222,36 @@ export const logLines = {
     return Number(r.rows[0].n);
   },
 };
+
+/**
+ * Roll-forward for an append log: the file on the volume is written through
+ * on every line, so after a rollback (the old build appends to the file only)
+ * it holds lines the stream lacks. Any line past the stream's count is
+ * appended, in order. Returns how many were added.
+ */
+export async function reconcileLogFile(stream, file, { maxBytes = 64 * 1024 * 1024, log = console.log } = {}) {
+  if (!file) return 0;
+  let text;
+  try {
+    const { readFileSync, statSync } = await import("node:fs");
+    const size = statSync(file).size;
+    if (size > maxBytes) return 0; // a file that large is not a rollback window; left for the operator
+    text = readFileSync(file, "utf8");
+  } catch { return 0; }
+  // Count the file's VALID lines against the stream: an unparseable line was
+  // never a row, so it must not shift the comparison.
+  const recs = [];
+  for (const line of text.split("\n").filter(Boolean)) {
+    let rec; try { rec = JSON.parse(line); } catch { continue; }
+    if (rec && typeof rec === "object") recs.push(rec);
+  }
+  const have = await logLines.count(stream);
+  if (recs.length <= have) return 0;
+  let n = 0;
+  for (const rec of recs.slice(have)) { await logLines.append(stream, rec); n++; }
+  if (n) log(`[state-db] ${stream}: appended ${n} line(s) the file held past the stream (written while rolled back)`);
+  return n;
+}
 
 export const imports = {
   async done(name) {

@@ -76,6 +76,19 @@ if (String(process.env.STATE_DATABASE_URL || "").trim()) {
     ok((await fresh.load("fb")) === "fb" && (await sdb.imports.done("fresh-doc")) === null, "no file, no row: fallback and no import record");
     const noimp = createJsonDocument({ file, name: "noimport", importFromFile: false, log: () => {} });
     ok((await noimp.load("fb")) === "fb", "importFromFile:false never reads the file");
+    // Roll-forward: a file written well after the row (the old build ran on the file alone) replaces the row.
+    const { utimesSync } = await import("node:fs");
+    const rb = createJsonDocument({ file: join(DIR, "rb.json"), log: () => {} });
+    await rb.save({ gen: "row" });
+    writeFileSync(join(DIR, "rb.json"), JSON.stringify({ gen: "rollback" }));
+    const later = new Date(Date.now() + 5 * 60_000);
+    utimesSync(join(DIR, "rb.json"), later, later);
+    const rb2 = createJsonDocument({ file: join(DIR, "rb.json"), log: () => {} });
+    ok((await rb2.load()).gen === "rollback" && (await sdb.documents.get("rb.json")).body.gen === "rollback", "a file newer than its row by more than the grace re-imports and replaces the row");
+    const sameAge = createJsonDocument({ file: join(DIR, "sa.json"), log: () => {} });
+    await sameAge.save({ gen: "row" });
+    writeFileSync(join(DIR, "sa.json"), JSON.stringify({ gen: "stale-write-through" }));
+    ok((await createJsonDocument({ file: join(DIR, "sa.json"), log: () => {} }).load()).gen === "row", "a file written within the grace (write-through) does not replace the row");
     const mergedFirst = createJsonDocument({ file: join(DIR, "mf.json"), log: () => {} });
     writeFileSync(join(DIR, "mf.json"), JSON.stringify({ old: 1 }));
     const mm = await mergedFirst.mergeKeys({ new: 2 });

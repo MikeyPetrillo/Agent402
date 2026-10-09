@@ -147,6 +147,7 @@ try {
   {
     process.env.OUTBOUND_LEDGER_FILE = join(D1, "outbound-spend.ndjson");
     const { recordOutbound, OUTBOUND_STREAM } = await import("../src/outbound-ledger.js");
+    await sdb.stateStoresReady(); // the boot reconcile runs before any request, as the server does
     recordOutbound({ chain: "base", payTo: "0x" + "a".repeat(40), amountAtomic: "1000", asset: "USDC", usd: 0.001, slug: "s", origin: "https://seller.test/x", result: "delivered", tx: "0xtx" });
     await new Promise((r) => setTimeout(r, 300));
     const lines = await sdb.logLines.read(OUTBOUND_STREAM);
@@ -162,6 +163,12 @@ try {
       await sdb.stateStoresReady();
       const im = await sdb.imports.done(wish.WISH_STREAM);
       ok(im && (await sdb.logLines.count(wish.WISH_STREAM)) === 2, "wishes: the file's valid lines are imported once");
+      // Roll-forward: a line the old build appended to the file alone is picked up at the next boot.
+      const { appendFileSync } = await import("node:fs");
+      appendFileSync(wishFile, JSON.stringify({ need: "written while rolled back", source: "api", ts: 3 }) + "\n");
+      const added = await sdb.reconcileLogFile(wish.WISH_STREAM, wishFile, { log: () => {} });
+      ok(added === 1 && (await sdb.logLines.count(wish.WISH_STREAM)) === 3, "wishes: a line past the stream's count is appended on reconcile");
+      ok((await sdb.reconcileLogFile(wish.WISH_STREAM, wishFile, { log: () => {} })) === 0, "wishes: a second reconcile adds nothing");
     } else {
       console.log("skip - wish.js exposes no file setter for tests");
     }

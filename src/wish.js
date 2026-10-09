@@ -15,7 +15,7 @@ import {
 import { join } from "node:path";
 import { createHmac } from "node:crypto";
 import { logSafe } from "./log-safe.js";
-import { logLines, imports, stateDbEnabled, trackStoreReady } from "./state-db.js";
+import { logLines, imports, stateDbEnabled, trackStoreReady, reconcileLogFile } from "./state-db.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DATA_DIR = HAS_DATA_DIR ? "/data" : "/tmp";
@@ -332,6 +332,7 @@ async function rebuildFromStateDb() {
       await imports.mark(WISH_STREAM, { source: WISH_FILE, bytes: Buffer.byteLength(text) });
       console.log(`[wish] imported ${n} line(s) from ${WISH_FILE} into the state database`);
     }
+    await reconcileLogFile(WISH_STREAM, WISH_FILE);
     const rows = await logLines.tail(WISH_STREAM, 50_000);
     rows.reverse();
     clusters = new Map();
