@@ -818,20 +818,6 @@ jobs:
     # lifecycle scripts execute — SHADOWS them to empty (below), so a malicious
     # package cannot read them. That is the real F07 exposure; our own test
     # steps are trusted code from this repo.
-      # A REAL Postgres for the state-database suites (src/state-db.js): the
-      # stores that left the /data volume. Each suite makes and drops its own
-      # schema. Under CI a missing database FAILS those suites (scripts/lib/test-pg.js).
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
       UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
       # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
@@ -1194,6 +1180,20 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
+      # A REAL Postgres for the state-database suites (src/state-db.js): the
+      # stores that left the /data volume. Each suite makes and drops its own
+      # schema. Under CI a missing database FAILS those suites (scripts/lib/test-pg.js).
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
       # A fork PR cannot read the secret; its cost-table suites skip instead of failing.

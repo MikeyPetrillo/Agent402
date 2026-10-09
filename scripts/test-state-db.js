@@ -102,9 +102,12 @@ try {
   ok(young.ran === false && young.reason === "db" && ran === 0, "lease unavailable: a container younger than the fail-open age skips its tick");
   const old = await withLease("F", { ttlMs: 1000, uptimeMs: 11 * 60_000, log: () => {} }, async () => { ran++; return "ok"; });
   ok(old.ran === true && old.reason === "db-failopen" && ran === 1, "lease unavailable: a container older than the fail-open age runs as the only container");
+  ok(stateDbStatus() === "degraded", "a failed query flips the status word to degraded");
   await closeStateDb();
   process.env.STATE_DATABASE_URL = brokenUrl;
   ok(await stateDb(), "the real database is reachable again afterwards");
+  await documents.put("after", { ok: true });
+  ok(stateDbStatus() === "on", "a good query restores the status word to on");
 } finally {
   await __dropStateSchema();
   await closeStateDb();

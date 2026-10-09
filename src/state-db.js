@@ -113,7 +113,14 @@ export async function stateDb() {
 export async function stateQuery(text, params = []) {
   const p = await stateDb();
   if (!p) throw new Error("state database not configured");
-  return p.query(text, params);
+  try {
+    const r = await p.query(text, params);
+    lastError = null; // the status word reads "on" again after a good query
+    return r;
+  } catch (e) {
+    lastError = String(e?.message || e).slice(0, 160); // and "degraded" after a failed one
+    throw e;
+  }
 }
 
 const checkName = (name, what = "name") => {
@@ -379,8 +386,9 @@ export function leased(name, { ttlMs = 120_000, log = console.warn } = {}, fn) {
 /** For /api/gateway-status: one word, never a number. */
 export function stateDbStatus() {
   if (!stateDbEnabled()) return "off";
+  if (lastError) return "degraded"; // a failed connect, setup or query, until the next good one
   if (!ready) return "idle";
-  return lastError ? "degraded" : "on";
+  return "on";
 }
 
 /** Tests only: drop the configured schema and close the pool. */

@@ -29,7 +29,7 @@
 // MONITOR_SCHEDULER=off disables the timer (manual runs still work).
 import { existsSync } from "node:fs";
 import { createJsonDocument } from "./json-document.js";
-import { leases, trackStoreReady } from "./state-db.js";
+import { leases, trackStoreReady, leaseFailOpenMs } from "./state-db.js";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
@@ -120,7 +120,7 @@ export function describeDomainChanges(prev, next) {
  * @param {(s:string)=>void} [deps.log]
  * @param {(ms:number)=>Promise<void>} [deps.sleep]
  */
-export function createMonitorScheduler({ subs, generate, probeDomain, normDomain, latestFiling, resolveManager, notify, baseUrl, storePath, now = () => Date.now(), ownerId, log = console.log, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), manageUrlFor = () => `${baseUrl}/monitors`, refreshStatus = null, probeRecalls = null, probeIpos = null, probeInsiderFilings = null, probeTokenBrief = null, describeTokenChanges = null, probeCompanyFilings = null, describeFilingChanges = null }) {
+export function createMonitorScheduler({ subs, generate, probeDomain, normDomain, latestFiling, resolveManager, notify, baseUrl, storePath, now = () => Date.now(), ownerId, log = console.log, uptimeMs = () => process.uptime() * 1000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), manageUrlFor = () => `${baseUrl}/monitors`, refreshStatus = null, probeRecalls = null, probeIpos = null, probeInsiderFilings = null, probeTokenBrief = null, describeTokenChanges = null, probeCompanyFilings = null, describeFilingChanges = null }) {
   const path = storePath || STORE_PATH();
   const doc = createJsonDocument({ file: path, log });
   const usePg = doc.backend === "pg";
@@ -135,7 +135,16 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     await ready;
     if (usePg) {
       let held = false;
-      try { held = await leases.acquire(LEASE_NAME, { owner: me, ttlMs: LOCK_STALE_MS }); } catch (e) { log(`[monitors] lease: ${errMsg(e)}`); return false; }
+      try { held = await leases.acquire(LEASE_NAME, { owner: me, ttlMs: LOCK_STALE_MS }); }
+      catch (e) {
+        // The same rule as src/state-db.js withLease: a container up longer
+        // than a deploy's overlap is the only container, so paid reports keep
+        // going out while the database is down; a young one defers.
+        if (uptimeMs() < leaseFailOpenMs()) { log(`[monitors] lease: ${errMsg(e)}; tick skipped (container up ${Math.round(uptimeMs() / 1000)} s)`); return false; }
+        log(`[monitors] lease: ${errMsg(e)}; running without it as the only container (up ${Math.round(uptimeMs() / 60_000)} min)`);
+        store = { ...store, lock: { owner: me, at: now() } };
+        return true;
+      }
       if (!held) return false;
       // The row is the freshest view: only a lease holder writes state, so
       // another container's results win over our stale memory.

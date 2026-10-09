@@ -1663,8 +1663,10 @@ async function discoverOneSource(source, selfOrigin) {
 }
 
 let selfOriginCache = null;
-const runDiscovery = leased("x402-index-discovery", { ttlMs: 20 * 60_000 }, runDiscoveryUnleased);
-async function runDiscoveryUnleased(selfOrigin) {
+// The timers call the leased form; the plain function keeps its name for the
+// tests that read it. See src/state-db.js leased().
+const runDiscoveryLeased = leased("x402-index-discovery", { ttlMs: 20 * 60_000 }, (selfOrigin) => runDiscovery(selfOrigin));
+async function runDiscovery(selfOrigin) {
   selfOriginCache = selfOrigin || selfOriginCache;
   await Promise.allSettled(DISCOVERY_SOURCES.map((s) => discoverOneSource(s, selfOriginCache)));
 }
@@ -5487,8 +5489,8 @@ export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_
 
 /** True while a crawl cycle is running (every entry is being replaced). */
 export function crawlInProgress() { return !!crawlInFlight; }
-const runCrawl = leased("x402-index-crawl", { ttlMs: 60 * 60_000 }, runCrawlUnleased);
-async function runCrawlUnleased() {
+const runCrawlLeased = leased("x402-index-crawl", { ttlMs: 60 * 60_000 }, () => runCrawl());
+async function runCrawl() {
   if (crawlInFlight) return; // overlapping runs would just rate-limit each other
   crawlInFlight = true;
   try {
@@ -6072,14 +6074,14 @@ export function startCrawler(opts = {}) {
   const firstDelayMs = Number.isFinite(opts.firstDelayMs) ? opts.firstDelayMs : Number(process.env.INDEX_FIRST_CRAWL_DELAY_MS ?? 30_000);
   firstCrawlTimer = setTimeout(() => {
     firstCrawlTimer = null;
-    runDiscovery(selfOrigin).then(() => runCrawl()).then(() => persistIndexCacheAsync()).catch(() => {});
+    runDiscoveryLeased(selfOrigin).then(() => runCrawlLeased()).then(() => persistIndexCacheAsync()).catch(() => {});
   }, Math.max(0, firstDelayMs));
   if (typeof firstCrawlTimer.unref === "function") firstCrawlTimer.unref();
   crawlerTimer = setInterval(() => {
     // Re-check a few recorded successions each cycle. A retirement is a claim
     // about NOW, and the marker that justified it can be taken down; without
     // this the hiding outlives the proof and the seller has no undo.
-    runCrawl()
+    runCrawlLeased()
       .then(() => reverifySuccessions().catch(() => {}))
       // ...and look for a few nobody registered. A seller who migrated before
       // `replaces` recorded anything is invisible to reverify, which only ever
@@ -6088,7 +6090,7 @@ export function startCrawler(opts = {}) {
       .then(() => persistIndexCacheAsync())
       .catch(() => {});
   }, CRAWL_INTERVAL_MS);
-  discoveryTimer = setInterval(() => runDiscovery(selfOrigin), DISCOVERY_INTERVAL_MS);
+  discoveryTimer = setInterval(() => runDiscoveryLeased(selfOrigin), DISCOVERY_INTERVAL_MS);
   // Don't keep the event loop alive on shutdown.
   if (typeof crawlerTimer.unref === "function") crawlerTimer.unref();
   if (typeof discoveryTimer.unref === "function") discoveryTimer.unref();
