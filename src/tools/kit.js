@@ -310,24 +310,41 @@ const encodingTools = [
       const token = capText(need(input, "token"), 16_384, "token");
       const parts = token.split(".");
       if (parts.length < 2) throw bad("Not a JWT (expected at least 2 dot-separated segments)");
-      const decode = (seg) => {
-        try {
-          return JSON.parse(Buffer.from(seg.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
-        } catch {
-          throw bad("JWT segment is not valid base64url JSON");
-        }
-      };
-      const header = decode(parts[0]);
-      const payload = decode(parts[1]);
+      const b64 = (seg) => Buffer.from(seg.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+      const asJson = (seg) => { try { return JSON.parse(b64(seg).toString("utf8")); } catch { return undefined; } };
+      // The header is JSON in every JOSE object; a token whose first segment
+      // is not is not a JWT at all.
+      const header = asJson(parts[0]);
+      if (!header || typeof header !== "object") throw bad("JWT header segment is not valid base64url JSON");
+      // A JWE (five segments, or an "enc" header) carries ciphertext where a
+      // JWS carries claims: there is nothing to decode without the key, so the
+      // header is answered and the payload is named as encrypted. 2026-09-18:
+      // 26 such tokens were refused with "not valid base64url JSON".
+      const encrypted = parts.length === 5 || typeof header.enc === "string";
+      if (encrypted) {
+        return { header, payload: null, encrypted: true, segments: parts.length, verified: false, expired: null, expiresInSeconds: null,
+          note: "JWE: the payload is encrypted and cannot be read without the key; only the header is decoded." };
+      }
+      let payload = asJson(parts[1]);
+      let payloadRaw;
+      if (payload === undefined || payload === null || typeof payload !== "object") {
+        // A JWS whose payload is not a JSON claims set (detached, binary or
+        // plain text): hand back the bytes rather than refuse the token.
+        const buf = b64(parts[1]);
+        const text = buf.toString("utf8");
+        payloadRaw = /^[\x09\x0a\x0d\x20-\x7e]*$/.test(text) ? text : buf.toString("base64url");
+        payload = null;
+      }
       const now = Math.floor(Date.now() / 1000);
-      const expired = typeof payload.exp === "number" ? payload.exp < now : null;
+      const exp = payload && typeof payload.exp === "number" ? payload.exp : null;
       return {
         header,
         payload,
+        ...(payloadRaw !== undefined ? { payloadRaw, note: "The payload is not a JSON claims set; payloadRaw carries it as text or base64url." } : {}),
         signaturePresent: parts.length === 3 && parts[2].length > 0,
         verified: false,
-        expired,
-        expiresInSeconds: typeof payload.exp === "number" ? payload.exp - now : null,
+        expired: exp !== null ? exp < now : null,
+        expiresInSeconds: exp !== null ? exp - now : null,
       };
     },
   },

@@ -277,6 +277,8 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     ok(e1?.statusCode === 503 && /rate-limited/.test(e1.message), "200 + {error: rate-limited} + no choices -> 503 (walkable)");
     let e2 = null; try { assertUpstreamBody({ error: { code: 500, message: "provider exploded" } }); } catch (e) { e2 = e; }
     ok(e2?.statusCode === 502, "200 + a non-rate-limit error + no output -> 502");
+    let e3 = null; try { assertUpstreamBody({ error: { message: "No endpoints found that support tool use. Try disabling \"exec\". To learn more about provider routing, visit: https://openrouter.ai/docs" } }, { model: "vendor/model-x" }); } catch (e) { e3 = e; }
+    ok(e3?.statusCode === 502 && e3?.upstreamRejected === true && /refused this request for vendor\/model-x: No endpoints found that support tool use/.test(e3?.message) && !/https?:/.test(e3?.message), `a provider refusal inside a 200 body is a 502 the chain walks, marked upstreamRejected, naming the model and carrying no link (${e3?.message})`);
     ok(assertUpstreamBody({ error: { message: "partial" }, choices: [{ message: { content: "x" } }] })?.choices?.length === 1, "an error beside real output is returned as-is (partial answers are the buyer's)");
     ok(assertUpstreamBody({ choices: [] })?.choices?.length === 0 && assertUpstreamBody(null) === null, "no error field -> untouched (the empty-refusal / empty-length walks judge those)");
     const walked = [];
