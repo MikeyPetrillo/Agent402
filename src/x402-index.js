@@ -24,9 +24,11 @@
 //   • The router uses the same lexical scoring shape as /api/find so rankings
 //     are consistent whether a buyer searches local-only or cross-seller.
 import { resolveLocalRefs } from "./openapi-deref.js";
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { dirname } from "node:path";
+import { createHash } from "node:crypto";
 import { createJsonDocument } from "./json-document.js";
-import { trackStoreReady, leased } from "./state-db.js";
+import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce } from "./state-db.js";
 // Each store is one JSON document: on the volume, or in the state database
 // when one is configured (imported from the file once).
 const docs = new Map();
@@ -5926,15 +5928,182 @@ export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
     // never leave a half file for the next boot to read.
     const ndFile = file === INDEX_CACHE_FILE ? INDEX_CACHE_NDJSON_FILE : file.replace(/\.json$/, "") + ".ndjson";
     const header = JSON.stringify({ savedAt, format: "ndjson-v1", origins: entries.length });
-    await writeFile(`${ndFile}.tmp`, header + "\n" + lines.join("\n") + "\n");
-    await rename(`${ndFile}.tmp`, ndFile);
-    // The legacy single-JSON file stays current too, for the sync loader and
-    // for anything that copies it (backups exclude cache files anyway). Built
-    // from the same lines: byte-identical to JSON.stringify({ savedAt, entries }).
-    await writeFile(file, `{"savedAt":${savedAt},"entries":[${lines.join(",")}]}`);
+    const writeFiles = async () => {
+      await writeFile(`${ndFile}.tmp`, header + "\n" + lines.join("\n") + "\n");
+      await rename(`${ndFile}.tmp`, ndFile);
+      // The legacy single-JSON file stays current too, for the sync loader and
+      // for anything that copies it (backups exclude cache files anyway). Built
+      // from the same lines: byte-identical to JSON.stringify({ savedAt, entries }).
+      await writeFile(file, `{"savedAt":${savedAt},"entries":[${lines.join(",")}]}`);
+    };
+    if (stateDbEnabled()) {
+      // The state database holds the cache (one row per origin); the files are
+      // written through while their directory exists, so a rollback to the
+      // build that reads files alone warm-starts from a current one. A file
+      // error is logged, never the verdict.
+      const stored = await persistIndexCacheToStateDb(entries, lines);
+      if (existsSync(dirname(ndFile))) await writeFiles().catch((e) => console.warn(`[x402-index] cache write-through failed: ${String(e?.message || e).slice(0, 120)}`));
+      return stored;
+    }
+    await writeFiles();
     return true;
   } catch { return false; }
   finally { persistInFlight = false; }
+}
+
+// ---------------------------------------------------------------------------
+// The crawl cache in the state database (STATE_DATABASE_URL set)
+// ---------------------------------------------------------------------------
+// One row per seller origin in the generic `records` table (collection
+// "x402-index", id = origin, body = the slim entry the files hold), so a boot
+// pages the warm start a few hundred rows per event-loop turn exactly as the
+// NDJSON reader does, and a crawl cycle writes the rows whose entry changed
+// and deletes the rows of origins the cache no longer holds. The file is
+// imported once (the NDJSON twin, or the legacy JSON when only that exists);
+// after that the rows are what a boot reads.
+const INDEX_RECORDS = "x402-index";
+const INDEX_IMPORT_NAME = INDEX_CACHE_NDJSON_FILE.split("/").pop();
+// Rows per statement and bytes per statement: an origin's entry can run to
+// hundreds of KB (tool arrays), so batches are cut by size as well as count.
+const PG_ROWS_PER_BATCH = 40;
+const PG_BYTES_PER_BATCH = 4 * 1_048_576;
+// origin -> hash of the line last written (null: held, hash unknown). The hash
+// lets an unchanged origin skip its write; the key set is what a persist
+// deletes against.
+const pgOriginHashes = new Map();
+const lineHash = (line) => createHash("sha1").update(line).digest("base64");
+const recordsTable = () => `${stateDbSchema()}.records`;
+
+/** The lines as (id, body) batches: `lines[i]` is JSON.stringify([origin, entry]). */
+function* recordBatches(entries, bodyOf) {
+  let ids = [], bodies = [], bytes = 0;
+  for (let i = 0; i < entries.length; i++) {
+    const body = bodyOf(i);
+    if (body === null) continue;
+    ids.push(entries[i][0]); bodies.push(body); bytes += body.length;
+    if (ids.length >= PG_ROWS_PER_BATCH || bytes >= PG_BYTES_PER_BATCH) { yield [ids, bodies]; ids = []; bodies = []; bytes = 0; }
+  }
+  if (ids.length) yield [ids, bodies];
+}
+
+/** Upsert changed origins and delete the rows of origins no longer held. */
+async function persistIndexCacheToStateDb(entries, lines) {
+  const t0 = performance.now();
+  let written = 0, deleted = 0;
+  try {
+    const held = new Set();
+    const changed = new Map(); // origin -> hash, applied once its batch is stored
+    for (let i = 0; i < entries.length; i++) {
+      const origin = entries[i][0];
+      held.add(origin);
+      const h = lineHash(lines[i]);
+      if (pgOriginHashes.get(origin) !== h) changed.set(origin, h);
+      if ((i + 1) % PERSIST_BATCH === 0) await new Promise((r) => setImmediate(r));
+    }
+    // The body is the entry alone: the line is `[origin, entry]`, and the
+    // entry starts after the origin string and its comma.
+    const bodyOf = (i) => (changed.has(entries[i][0]) ? lines[i].slice(JSON.stringify(entries[i][0]).length + 2, -1) : null);
+    for (const [ids, bodies] of recordBatches(entries, bodyOf)) {
+      await stateQuery(
+        `INSERT INTO ${recordsTable()} (collection, id, body)
+         SELECT $1, u.id, u.body::jsonb FROM unnest($2::text[], $3::text[]) AS u(id, body)
+         ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()`,
+        [INDEX_RECORDS, ids, bodies],
+      );
+      for (const id of ids) pgOriginHashes.set(id, changed.get(id));
+      written += ids.length;
+      await new Promise((r) => setImmediate(r));
+    }
+    const gone = [...pgOriginHashes.keys()].filter((o) => !held.has(o));
+    for (let i = 0; i < gone.length; i += 500) {
+      const ids = gone.slice(i, i + 500);
+      await stateQuery(`DELETE FROM ${recordsTable()} WHERE collection = $1 AND id = ANY($2::text[])`, [INDEX_RECORDS, ids]);
+      for (const id of ids) pgOriginHashes.delete(id);
+      deleted += ids.length;
+    }
+    console.log(`[x402-index] state database: ${written} origin row(s) written, ${deleted} deleted, ${entries.length - written} unchanged, in ${Math.round(performance.now() - t0)}ms`);
+    return true;
+  } catch (e) {
+    console.warn(`[x402-index] state database persist failed after ${written} row(s): ${String(e?.message || e).slice(0, 120)}`);
+    return false;
+  }
+}
+
+/** Import the cache file once: the NDJSON twin, else the legacy JSON. Every
+ *  row is insert-if-absent, so two containers importing at once are safe. */
+async function importIndexCacheFile() {
+  let source = null, entries = [];
+  if (existsSync(INDEX_CACHE_NDJSON_FILE)) {
+    source = INDEX_CACHE_NDJSON_FILE;
+    const text = readFileSync(source, "utf8");
+    const nl = text.indexOf("\n");
+    if (nl > 0) {
+      try { JSON.parse(text.slice(0, nl)); } catch { source = null; } // header must parse: not our file
+      if (source) {
+        for (const line of text.slice(nl + 1).split("\n")) {
+          if (!line) continue;
+          try { const e = JSON.parse(line); if (Array.isArray(e) && typeof e[0] === "string" && e[0] && e[1] && typeof e[1] === "object") entries.push(e); } catch { /* an unreadable line is skipped, as the file loader skips it */ }
+        }
+      }
+    } else source = null;
+  }
+  if (!source && existsSync(INDEX_CACHE_FILE)) {
+    try {
+      const parsed = JSON.parse(readFileSync(INDEX_CACHE_FILE, "utf8"));
+      entries = (Array.isArray(parsed?.entries) ? parsed.entries : []).filter((e) => Array.isArray(e) && typeof e[0] === "string" && e[0] && e[1] && typeof e[1] === "object");
+      source = INDEX_CACHE_FILE;
+    } catch { entries = []; }
+  }
+  let rows = 0, bytes = 0;
+  const bodyOf = (i) => { const b = JSON.stringify(entries[i][1]); bytes += b.length; return b; };
+  for (const [ids, bodies] of recordBatches(entries, bodyOf)) {
+    await stateQuery(
+      `INSERT INTO ${recordsTable()} (collection, id, body)
+       SELECT $1, u.id, u.body::jsonb FROM unnest($2::text[], $3::text[]) AS u(id, body)
+       ON CONFLICT (collection, id) DO NOTHING`,
+      [INDEX_RECORDS, ids, bodies],
+    );
+    rows += ids.length;
+    await new Promise((r) => setImmediate(r));
+  }
+  if (source) console.log(`[x402-index] imported ${rows} origin(s) from ${source} into the state database`);
+  return { source: source || "none", bytes, rows };
+}
+
+/** Warm start from the state database: the file is imported once, then the
+ *  rows are paged WARM_START_BATCH at a time with an event-loop turn between
+ *  pages; indexWarmStartInProgress() is true until the last page is folded.
+ *  Resolves to the number of sellers loaded; a database error ends the warm
+ *  start with what was loaded (the crawl re-decides the rest). */
+export async function warmStartIndexFromStateDb() {
+  warmStartInProgress = true;
+  const t0 = performance.now();
+  let n = 0, pages = 0, maxTurnMs = 0;
+  try {
+    const imp = await importOnce(INDEX_IMPORT_NAME, { source: INDEX_CACHE_NDJSON_FILE, run: importIndexCacheFile });
+    if (imp.imported && imp.source && imp.source !== "none") console.log(`[x402-index] cache file imported once (${imp.rows} origin(s), ${imp.source})`);
+    let after = "";
+    for (;;) {
+      const page = await records.list(INDEX_RECORDS, { limit: WARM_START_BATCH, after });
+      if (!page.length) break;
+      const turn0 = performance.now();
+      for (const { id, body } of page) {
+        pgOriginHashes.set(id, null);
+        if (foldWarmEntry(id, body)) n++;
+      }
+      maxTurnMs = Math.max(maxTurnMs, performance.now() - turn0);
+      pages++;
+      after = page[page.length - 1].id;
+      if (page.length < WARM_START_BATCH) break;
+      await new Promise((r) => setImmediate(r));
+    }
+  } catch (e) {
+    console.warn(`[x402-index] state database warm-start stopped after ${n} seller(s): ${String(e?.message || e).slice(0, 120)}`);
+  } finally {
+    warmStartInProgress = false;
+  }
+  console.log(`[x402-index] warm-started ${n} sellers from the state database in ${Math.round(performance.now() - t0)}ms (${pages} page(s), longest turn ${Math.round(maxTurnMs)}ms)`);
+  return n;
 }
 
 export function persistIndexCache(file = INDEX_CACHE_FILE) {
@@ -6056,6 +6225,11 @@ export function startCrawler(opts = {}) {
     const warmed = loadPersistedIndexCache();
     if (warmed) console.log(`[x402-index] warm-started ${warmed} sellers from ${INDEX_CACHE_FILE}`);
     scheduleRouteIndexWarm();
+  } else if (stateDbEnabled()) {
+    // The rows are the cache; the files are only the one-time import source
+    // (and the write-through a rollback reads), so the file loaders do not
+    // run after this: an origin only a file still holds is not in the index.
+    trackStoreReady(warmStartIndexFromStateDb()).catch(() => {}).finally(scheduleRouteIndexWarm);
   } else {
     loadPersistedIndexCacheAsync().then((n) => {
       if (n) return;
