@@ -27,11 +27,29 @@
 // few bytes, not every report. A legacy single-file store is imported once.
 // Rollout switch = STRIPE_SECRET_KEY (same key as the MPP gate). The key needs
 // Checkout Sessions + Refunds write; it settles to your Stripe balance only.
+//
+// STATE DATABASE. With STATE_DATABASE_URL set (src/state-db.js) every record
+// is a row of the `records` table (collection "human-checkout", id = the
+// session id, or the index's underscore name: _inflight, _issues, _public,
+// _failures), and the methods that read or write them RETURN PROMISES:
+// fulfill and recoverAbandoned always did; listIssues, setPublic and peek do
+// so only on the database (synchronous on the files, as before). The claim
+// is one conditional statement (a session is claimed only when no record
+// exists, or the stale "generating" claim the caller saw is still the one on
+// the row), so two containers never generate the same paid session twice.
+// The public readers stay synchronous: on the database they serve an
+// in-memory mirror of the public index and its reports, filled at the first
+// load, updated by this process's toggles and refreshed in the background.
+// Reads come from the rows (no memory cache); the first boot with the
+// database on imports the directory once. While the directory exists, every
+// row write is also written to its file (best effort, never the verdict), so
+// a rollback to the previous build reads current claims and reports.
 import Stripe from "stripe";
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, unlinkSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, unlinkSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { sendReportReadyEmail } from "./email.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
 
 // The products the human door sells by card. The CARD price is not the agent
 // price: the card processor takes a percentage plus a fixed fee per charge, and
@@ -83,23 +101,32 @@ export function reportHeadline(r, label) {
   const t = String(r?.title || r?.input || "").trim();
   return t ? `${lab}: ${t}` : lab;
 }
-export function readPublicReport(publicId, dir = DEFAULT_DIR()) {
-  if (typeof publicId !== "string" || !PUBLIC_ID_RE.test(publicId)) return null;
-  const idx = readJson(PUBLIC_INDEX(dir)) || {};
-  const sessionId = Object.hasOwn(idx, publicId) ? idx[publicId] : null;
-  if (!sessionId || !SESSION_RE.test(String(sessionId))) return null;
-  const rec = readJson(join(dir, `${sessionId}.json`));
+// The view of a delivered, public report, or null for anything else.
+function publicView(rec, publicId) {
   if (!rec || rec.status !== "done" || rec.public !== true || rec.publicId !== publicId) return null;
   const productKey = Object.keys(HUMAN_PRODUCTS).find((k) => HUMAN_PRODUCTS[k].slug === rec.slug) || null;
   // Everything on a done record is the report itself; nothing buyer-identifying is stored on it.
   return { status: "done", publicView: true, publicId, product: productKey, kind: rec.kind, slug: rec.slug, input: rec.input, title: rec.title, report: rec.report, sources: rec.sources || [], tables: rec.tables || [], ...(rec.images ? { images: rec.images } : {}), at: rec.at, publishedAt: rec.publishedAt || null, priceUsd: productKey ? HUMAN_PRODUCTS[productKey].price / 100 : null };
 }
-export function listPublicReports(dir = DEFAULT_DIR()) {
+export function readPublicReport(publicId, dir = DEFAULT_DIR()) {
+  if (typeof publicId !== "string" || !PUBLIC_ID_RE.test(publicId)) return null;
+  if (USE_PG) {
+    const sessionId = Object.hasOwn(pub.idx, publicId) ? pub.idx[publicId] : null;
+    const rec = sessionId ? pub.recs.get(sessionId) : null;
+    if (!rec) nudgePublicMirror(); // published by another container, perhaps: the next read sees it
+    return publicView(rec, publicId);
+  }
   const idx = readJson(PUBLIC_INDEX(dir)) || {};
+  const sessionId = Object.hasOwn(idx, publicId) ? idx[publicId] : null;
+  if (!sessionId || !SESSION_RE.test(String(sessionId))) return null;
+  return publicView(readJson(join(dir, `${sessionId}.json`)), publicId);
+}
+export function listPublicReports(dir = DEFAULT_DIR()) {
+  const idx = USE_PG ? pub.idx : readJson(PUBLIC_INDEX(dir)) || {};
   const out = [];
   for (const [publicId, sessionId] of Object.entries(idx)) {
     if (!PUBLIC_ID_RE.test(publicId) || !SESSION_RE.test(String(sessionId))) continue;
-    const rec = readJson(join(dir, `${sessionId}.json`));
+    const rec = USE_PG ? pub.recs.get(sessionId) : readJson(join(dir, `${sessionId}.json`));
     if (rec && rec.status === "done" && rec.public === true && rec.publicId === publicId) out.push({ publicId, title: rec.title, kind: rec.kind, at: rec.publishedAt || rec.at });
   }
   return out;
@@ -190,6 +217,68 @@ function writeJsonAtomic(path, obj) {
   } catch { return false; }
 }
 
+// ---- state database: the records of this collection ----------------------
+const USE_PG = stateDbEnabled();
+const COLL = "human-checkout";
+const RT = () => `${stateDbSchema()}.records`;
+const indexId = (path) => basename(path, ".json"); // _inflight.json -> _inflight
+const pgGet = async (id) => (await stateQuery(`SELECT body FROM ${RT()} WHERE collection = $1 AND id = $2`, [COLL, id])).rows[0]?.body ?? null;
+const pgPut = async (id, body) => { await stateQuery(`INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()`, [COLL, id, JSON.stringify(body)]); };
+const pgPutIfAbsent = async (id, body) => (await stateQuery(`INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO NOTHING`, [COLL, id, JSON.stringify(body)])).rowCount === 1;
+const pgIds = async () => (await stateQuery(`SELECT id FROM ${RT()} WHERE collection = $1`, [COLL])).rows.map((r) => r.id);
+const pgClear = async () => { await stateQuery(`DELETE FROM ${RT()} WHERE collection = $1`, [COLL]); };
+// One key of an index row set or dropped in one statement (the row is created
+// when absent); resolves the index body.
+const pgPatchIndex = async (id, key, value) => (await stateQuery(
+  `INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb)
+   ON CONFLICT (collection, id) DO UPDATE SET body = (${RT()}.body || $3::jsonb) - $4::text[], updated_at = now()
+   RETURNING body`,
+  [COLL, id, JSON.stringify(value === null ? {} : { [key]: value }), value === null ? [key] : []],
+)).rows[0].body;
+// A failure timestamp appended to the buyer's list in one statement.
+const pgAppendFailure = async (key, at) => (await stateQuery(
+  `INSERT INTO ${RT()} (collection, id, body) VALUES ($1, '_failures', jsonb_build_object($2::text, jsonb_build_array($3::bigint)))
+   ON CONFLICT (collection, id) DO UPDATE SET body = jsonb_set(${RT()}.body, ARRAY[$2::text], COALESCE(${RT()}.body -> $2::text, '[]'::jsonb) || jsonb_build_array($3::bigint)), updated_at = now()
+   RETURNING body`,
+  [COLL, key, at],
+)).rows[0].body;
+// THE CLAIM. The record becomes this "generating" claim only when no record
+// exists, or the record is the stale "generating" claim the caller saw
+// (its claimedAt matches): a record another container finished, or claimed
+// since, is never overwritten. Resolves true when this call holds the claim.
+const pgClaim = async (id, claim, seenClaimedAt) => (await stateQuery(
+  `INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb)
+   ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
+   WHERE ${RT()}.body ->> 'status' = 'generating' AND $4::numeric IS NOT NULL AND COALESCE((${RT()}.body ->> 'claimedAt')::numeric, 0) = $4::numeric
+   RETURNING id`,
+  [COLL, id, JSON.stringify(claim), seenClaimedAt == null ? null : Number(seenClaimedAt)],
+)).rowCount === 1;
+
+// The public index and its reports, mirrored for the synchronous readers
+// (served on every page load, with or without a Stripe engine).
+const pub = { idx: {}, recs: new Map(), refreshing: null, lastAt: 0 };
+export async function refreshPublicMirror() {
+  if (!USE_PG) return;
+  if (pub.refreshing) return pub.refreshing;
+  pub.refreshing = (async () => {
+    const idx = (await pgGet("_public")) || {};
+    const recs = new Map();
+    for (const [publicId, sid] of Object.entries(idx)) {
+      if (!PUBLIC_ID_RE.test(publicId) || !SESSION_RE.test(String(sid))) continue;
+      const rec = await pgGet(sid);
+      if (rec) recs.set(sid, rec);
+    }
+    pub.idx = idx; pub.recs = recs; pub.lastAt = Date.now();
+  })().catch(() => {}).finally(() => { pub.refreshing = null; });
+  return pub.refreshing;
+}
+const nudgePublicMirror = () => { if (USE_PG && Date.now() - pub.lastAt > 2000) refreshPublicMirror(); };
+if (USE_PG) {
+  trackStoreReady(refreshPublicMirror());
+  const t = setInterval(() => { refreshPublicMirror(); }, 60_000);
+  t.unref?.();
+}
+
 /**
  * @param {object} deps
  * @param {Stripe} deps.stripe            Stripe client (injectable for tests)
@@ -205,9 +294,10 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort; writes will fail loudly below */ }
   const INFLIGHT = join(dir, "_inflight.json");   // sessionId -> claimedAt (ms)
   const ISSUES = join(dir, "_issues.json");       // sessionId -> { kind, at, ... } (owed refunds etc.)
+  const FAILURES = join(dir, "_failures.json");   // sha256(buyer email) prefix -> [failure ms] inside FAIL_WINDOW_MS
   const recPath = (id) => join(dir, `${id}.json`); // id already validated by SESSION_RE
 
-  const mem = new Map();            // sessionId -> terminal record (bounded cache)
+  const mem = new Map();            // sessionId -> terminal record (bounded cache; file backend only)
   const inFlight = new Map();       // sessionId -> Promise (generate-once within a process)
   const negative = new Map();       // sessionId -> { status, until }
   const NEG_TTL = { not_found: 60_000, unpaid: 10_000 };
@@ -226,20 +316,57 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     log(`[human-checkout] migrated ${n} legacy report record(s) into ${dir}`);
   })();
 
-  const readRec = (id) => readJson(recPath(id));
-  function writeRec(id, rec) {
-    writeJsonAtomic(recPath(id), rec);
-    if (rec.status === "done" || rec.status === "error") {
-      if (mem.size >= MEM_CACHE_MAX) mem.delete(mem.keys().next().value);
-      mem.set(id, rec);
+  // ---- the store: files, or rows with the files written through ------------
+  // Every primitive answers at once on the files and in a promise on the
+  // database; the callers await either.
+  let throughWarned = false;
+  const through = (path, body) => {
+    if (!USE_PG || !existsSync(dir)) return;
+    if (!writeJsonAtomic(path, body) && !throughWarned) { throughWarned = true; log(`[human-checkout] write-through to ${dir} failed (the database row is the record)`); }
+  };
+  async function importDir() {
+    const files = (() => { try { return readdirSync(dir); } catch { return []; } })();
+    let bytes = 0, n = 0;
+    for (const f of files) {
+      if (!f.endsWith(".json")) continue;
+      const id = f.slice(0, -5);
+      if (!(SESSION_RE.test(id) || ["_inflight", "_issues", "_public", "_failures"].includes(id))) continue;
+      const body = readJson(join(dir, f));
+      if (!body) continue;
+      await pgPutIfAbsent(id, body);
+      try { bytes += statSync(join(dir, f)).size; } catch { /* counted as 0 */ }
+      if (SESSION_RE.test(id)) n++;
     }
+    log(`[human-checkout] imported ${n} report record(s) from ${dir} into the state database`);
+    await refreshPublicMirror();
+    return { bytes, records: n };
   }
-  const readIndex = (p) => readJson(p) || {};
-  function patchIndex(p, id, value) {
-    const idx = readIndex(p);
-    if (value === null) delete idx[id]; else idx[id] = value;
-    writeJsonAtomic(p, idx);
-  }
+  const ready = USE_PG ? trackStoreReady(importOnce(basename(dir), { source: dir, run: importDir })) : Promise.resolve();
+  ready.catch((e) => log(`[human-checkout] import into the state database failed: ${String(e?.message || e).slice(0, 160)}`));
+
+  const readRec = USE_PG ? async (id) => { await ready; return pgGet(id); } : (id) => readJson(recPath(id));
+  const writeRec = USE_PG
+    ? async (id, rec) => { await ready; await pgPut(id, rec); through(recPath(id), rec); }
+    : (id, rec) => {
+      writeJsonAtomic(recPath(id), rec);
+      if (rec.status === "done" || rec.status === "error") {
+        if (mem.size >= MEM_CACHE_MAX) mem.delete(mem.keys().next().value);
+        mem.set(id, rec);
+      }
+    };
+  // The claim (see pgClaim). On the files the write is the claim: one process.
+  const claimRec = USE_PG
+    ? async (id, claim, seenClaimedAt) => { await ready; const held = await pgClaim(id, claim, seenClaimedAt); if (held) through(recPath(id), claim); return held; }
+    : (id, claim) => { writeRec(id, claim); return true; };
+  const readIndex = USE_PG ? async (p) => { await ready; return (await pgGet(indexId(p))) || {}; } : (p) => readJson(p) || {};
+  const patchIndex = USE_PG
+    ? async (p, id, value) => { await ready; const body = await pgPatchIndex(indexId(p), id, value); through(p, body); return body; }
+    : (p, id, value) => {
+      const idx = readIndex(p);
+      if (value === null) delete idx[id]; else idx[id] = value;
+      writeJsonAtomic(p, idx);
+      return idx;
+    };
   const negGet = (id) => { const n = negative.get(id); if (n && n.until > now()) return { status: n.status }; if (n) negative.delete(id); return null; };
   const negSet = (id, status) => { if (negative.size > 5000) negative.clear(); negative.set(id, { status, until: now() + (NEG_TTL[status] || 10_000) }); return { status }; };
 
@@ -285,8 +412,8 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     return null;
   }
   // Persist an error outcome; an unrefunded one is OWED (indexed, retried).
-  function recordError(id, session, refundId, message) {
-    const prev = readRec(id) || {};
+  async function recordError(id, session, refundId, message) {
+    const prev = (await readRec(id)) || {};
     import("./posthog.js").then(({ capturePostHogHumanFunnel }) => capturePostHogHumanFunnel({ step: "failed", product: prev.slug || null, reason: refundId ? "refunded" : "refund-owed" })).catch(() => {});
     const rec = {
       status: "error", refundId,
@@ -295,9 +422,9 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       paymentIntent: typeof session?.payment_intent === "string" ? session.payment_intent : session?.payment_intent?.id || null,
       at: new Date(now()).toISOString(),
     };
-    writeRec(id, rec);
-    patchIndex(INFLIGHT, id, null);
-    patchIndex(ISSUES, id, refundId ? null : { kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts });
+    await writeRec(id, rec);
+    await patchIndex(INFLIGHT, id, null);
+    await patchIndex(ISSUES, id, refundId ? null : { kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts });
     return rec;
   }
   // An owed refund is retried on later polls (bounded, paced).
@@ -309,61 +436,74 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     return recordError(id, { payment_intent: rec.paymentIntent }, refundId, rec.error.replace(/ Your refund is being processed\.$/, ""));
   }
 
-  const FAILURES = join(dir, "_failures.json");   // sha256(buyer email) prefix -> [failure ms] inside FAIL_WINDOW_MS
   const failKeyOf = (session) => {
     const e = String(session?.customer_details?.email || session?.customer_email || "").trim().toLowerCase();
     return e ? createHash("sha256").update(e).digest("hex").slice(0, 24) : null;
   };
-  const recentFailures = (k) => (k && (readIndex(FAILURES)[k] || []).filter((t) => now() - Number(t) < FAIL_WINDOW_MS)) || [];
-  const noteFailure = (k) => { if (!k) return; patchIndex(FAILURES, k, [...recentFailures(k), now()]); };
+  const inWindow = (list) => (list || []).filter((t) => now() - Number(t) < FAIL_WINDOW_MS);
+  const recentFailures = USE_PG
+    ? async (k) => (k ? inWindow((await readIndex(FAILURES))[k]) : [])
+    : (k) => (k && inWindow(readIndex(FAILURES)[k])) || [];
+  const noteFailure = USE_PG
+    ? async (k) => { if (!k) return; await ready; through(FAILURES, await pgAppendFailure(k, now())); }
+    : (k) => { if (!k) return; patchIndex(FAILURES, k, [...recentFailures(k), now()]); };
 
-  function startJob(sessionId, session, p, input, { takeover = 0 } = {}) {
+  // `seenClaimedAt` is the claimedAt of the stale claim this call is taking
+  // over (null when it saw no record): the claim lands only if that is still
+  // what the store holds, so a session is generated by exactly one job.
+  function startJob(sessionId, session, p, input, { takeover = 0, seenClaimedAt = null } = {}) {
     const claim = { status: "generating", kind: p.kind, slug: p.slug, at: new Date(now()).toISOString(), claimedAt: now(), takeovers: takeover, pid: process.pid };
-    writeRec(sessionId, claim);
-    patchIndex(INFLIGHT, sessionId, now());
     const job = (async () => {
-      const failKey = failKeyOf(session);
       try {
-        if (recentFailures(failKey).length >= FAIL_MAX) {
-          log(`[human-checkout] ${sessionId} (${p.slug}): buyer address has ${FAIL_MAX}+ failed reports in the window - refunded without a generation attempt`);
+        // On the files these three steps stay synchronous (no await), so the
+        // generation starts in the same turn as the claim, as it always did.
+        const held = USE_PG ? await claimRec(sessionId, claim, seenClaimedAt) : claimRec(sessionId, claim, seenClaimedAt);
+        if (!held) return { status: "generating", claimedElsewhere: true };
+        if (USE_PG) await patchIndex(INFLIGHT, sessionId, now()); else patchIndex(INFLIGHT, sessionId, now());
+        const failKey = failKeyOf(session);
+        const failures = USE_PG ? await recentFailures(failKey) : recentFailures(failKey);
+        try {
+          if (failures.length >= FAIL_MAX) {
+            log(`[human-checkout] ${sessionId} (${p.slug}): buyer address has ${FAIL_MAX}+ failed reports in the window - refunded without a generation attempt`);
+            const refundId = await refundSession(session);
+            return await recordError(sessionId, session, refundId, "Recent reports for this email address could not be completed, so this purchase was refunded without a new attempt. Please try again tomorrow, or email us with the input you used.");
+          }
+          // generate() may return a plain report string (legacy / tests) or a
+          // bundle { report, title, sources, tables }. Normalize either way.
+          const g = await generate(p.kind, p.slug, input, { buyerKey: `human:${sessionId}`, rail: "card", priceUsd: Number(p.price) / 100 });
+          const bundle = (g && typeof g === "object") ? g : { report: String(g ?? "") };
+          if (!bundle.report) throw new Error("empty report");
+          const rec = {
+            status: "done", kind: p.kind, slug: p.slug, input,
+            report: bundle.report,
+            title: bundle.title || input,
+            sources: Array.isArray(bundle.sources) ? bundle.sources : [],
+            tables: Array.isArray(bundle.tables) ? bundle.tables : [],
+            ...(Array.isArray(bundle.images) && bundle.images.length ? { images: bundle.images } : {}),
+            at: new Date(now()).toISOString(),
+          };
+          await writeRec(sessionId, rec);
+          await patchIndex(INFLIGHT, sessionId, null);
+          const email = session.customer_details?.email || session.customer_email;
+          // `kind` + baseUrl let the email carry the matching MONITOR offer with
+          // this target prefilled (the retention loop); a kind with no monitor
+          // simply gets no offer. See src/report-upgrade.js.
+          if (email) sendReportReadyEmail({ to: email, reportUrl: `${baseUrl}/r/${sessionId}`, productLabel: p.label, subjectOf: input, kind: p.kind, baseUrl }).catch(() => {});
+          // Post-purchase sequence (src/followups.js): the only moment the buyer's
+          // address is in hand next to what they bought. Never stored on the record.
+          if (email) { try { onDelivered?.({ sessionId, email, product: p.slug, kind: p.kind, label: p.label, input }); } catch { /* follow-ups never break delivery */ } }
+          // Book what Stripe actually collected (a promotion code lowers it), never the list price.
+          const paidUsd = Number.isFinite(Number(session.amount_total)) ? Number(session.amount_total) / 100 : p.price / 100;
+          try { onSale?.({ sessionId, product: p.slug, priceUsd: paidUsd, listPriceUsd: p.price / 100, paymentIntent: typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id || null }); } catch { /* accounting never breaks delivery */ }
+          return rec;
+        } catch (err) {
+          log(`[human-checkout] report failed for ${sessionId} (${p.slug}): ${String(err?.message || err).slice(0, 160)}`);
+          await noteFailure(failKey);
           const refundId = await refundSession(session);
-          return recordError(sessionId, session, refundId, "Recent reports for this email address could not be completed, so this purchase was refunded without a new attempt. Please try again tomorrow, or email us with the input you used.");
+          const failEmail = session.customer_details?.email || session.customer_email;
+          if (failEmail) { try { onFailed?.({ email: failEmail, product: p.slug, label: p.label, refunded: Boolean(refundId) }); } catch { /* never breaks the refund path */ } }
+          return await recordError(sessionId, session, refundId, "We couldn't complete this report.");
         }
-        // generate() may return a plain report string (legacy / tests) or a
-        // bundle { report, title, sources, tables }. Normalize either way.
-        const g = await generate(p.kind, p.slug, input, { buyerKey: `human:${sessionId}`, rail: "card", priceUsd: Number(p.price) / 100 });
-        const bundle = (g && typeof g === "object") ? g : { report: String(g ?? "") };
-        if (!bundle.report) throw new Error("empty report");
-        const rec = {
-          status: "done", kind: p.kind, slug: p.slug, input,
-          report: bundle.report,
-          title: bundle.title || input,
-          sources: Array.isArray(bundle.sources) ? bundle.sources : [],
-          tables: Array.isArray(bundle.tables) ? bundle.tables : [],
-          ...(Array.isArray(bundle.images) && bundle.images.length ? { images: bundle.images } : {}),
-          at: new Date(now()).toISOString(),
-        };
-        writeRec(sessionId, rec);
-        patchIndex(INFLIGHT, sessionId, null);
-        const email = session.customer_details?.email || session.customer_email;
-        // `kind` + baseUrl let the email carry the matching MONITOR offer with
-        // this target prefilled (the retention loop); a kind with no monitor
-        // simply gets no offer. See src/report-upgrade.js.
-        if (email) sendReportReadyEmail({ to: email, reportUrl: `${baseUrl}/r/${sessionId}`, productLabel: p.label, subjectOf: input, kind: p.kind, baseUrl }).catch(() => {});
-        // Post-purchase sequence (src/followups.js): the only moment the buyer's
-        // address is in hand next to what they bought. Never stored on the record.
-        if (email) { try { onDelivered?.({ sessionId, email, product: p.slug, kind: p.kind, label: p.label, input }); } catch { /* follow-ups never break delivery */ } }
-        // Book what Stripe actually collected (a promotion code lowers it), never the list price.
-        const paidUsd = Number.isFinite(Number(session.amount_total)) ? Number(session.amount_total) / 100 : p.price / 100;
-        try { onSale?.({ sessionId, product: p.slug, priceUsd: paidUsd, listPriceUsd: p.price / 100, paymentIntent: typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id || null }); } catch { /* accounting never breaks delivery */ }
-        return rec;
-      } catch (err) {
-        log(`[human-checkout] report failed for ${sessionId} (${p.slug}): ${String(err?.message || err).slice(0, 160)}`);
-        noteFailure(failKey);
-        const refundId = await refundSession(session);
-        const failEmail = session.customer_details?.email || session.customer_email;
-        if (failEmail) { try { onFailed?.({ email: failEmail, product: p.slug, label: p.label, refunded: Boolean(refundId) }); } catch { /* never breaks the refund path */ } }
-        return recordError(sessionId, session, refundId, "We couldn't complete this report.");
       } finally { inFlight.delete(sessionId); }
     })();
     inFlight.set(sessionId, job);
@@ -373,21 +513,22 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // page polls. NEVER generates without a verified-paid Stripe session.
   async function fulfill(sessionId) {
     if (typeof sessionId !== "string" || !SESSION_RE.test(sessionId)) return { status: "invalid" };
-    const cached = mem.get(sessionId);
+    const cached = USE_PG ? null : mem.get(sessionId);
     if (cached) return cached.status === "error" ? retryOwedRefund(sessionId, cached) : cached;
     if (inFlight.has(sessionId)) return { status: "generating" };
-    const disk = readRec(sessionId);
+    const disk = await readRec(sessionId);
     if (disk && (disk.status === "done" || disk.status === "error")) {
-      writeRec(sessionId, disk); // warms the memory cache
+      if (!USE_PG) writeRec(sessionId, disk); // warms the memory cache
       return disk.status === "error" ? retryOwedRefund(sessionId, disk) : disk;
     }
-    let takeover = 0;
+    let takeover = 0, seenClaimedAt = null;
     if (disk && disk.status === "generating") {
       const age = now() - (disk.claimedAt || Date.parse(disk.at) || 0);
       if (age < STALE_CLAIM_MS) return { status: "generating" };
       // Abandoned claim (restart mid-generation). One takeover regenerates;
       // a second abandonment means something is wrong with this job: refund.
       takeover = (disk.takeovers || 0) + 1;
+      seenClaimedAt = disk.claimedAt || 0;
       log(`[human-checkout] abandoned claim ${sessionId} (${Math.round(age / 1000)}s old, takeover #${takeover})`);
     }
 
@@ -413,7 +554,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       return recordError(sessionId, session, refundId, "We couldn't complete this report after a retry.");
     }
     if (inFlight.has(sessionId)) return { status: "generating" };
-    startJob(sessionId, session, p, input, { takeover });
+    startJob(sessionId, session, p, input, { takeover, seenClaimedAt });
     return { status: "generating" };
   }
 
@@ -422,12 +563,12 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // fulfill() so it regenerates (or refunds) without waiting for a poll - the
   // buyer may have closed the tab. Bounded and sequential.
   async function recoverAbandoned({ limit = 10 } = {}) {
-    const idx = readIndex(INFLIGHT);
+    const idx = await readIndex(INFLIGHT);
     const ids = Object.keys(idx).filter((id) => SESSION_RE.test(id) && !inFlight.has(id)).slice(0, limit);
     const out = [];
     for (const id of ids) {
-      const rec = readRec(id);
-      if (!rec || rec.status !== "generating") { patchIndex(INFLIGHT, id, null); continue; }
+      const rec = await readRec(id);
+      if (!rec || rec.status !== "generating") { await patchIndex(INFLIGHT, id, null); continue; }
       // Only claims older than the stale window are taken over; a fresh one may
       // belong to a process that is still running (another replica).
       if (now() - (rec.claimedAt || 0) < STALE_CLAIM_MS) continue;
@@ -438,16 +579,20 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   }
 
   // Operator view: what needs a human - owed refunds, stuck claims.
+  const issuesOf = (inflight, issues) => ({
+    inflight: Object.entries(inflight).map(([id, at]) => ({ id, claimedAt: new Date(at).toISOString(), ageMs: now() - at, stale: now() - at >= STALE_CLAIM_MS })),
+    refundOwed: Object.entries(issues).map(([id, v]) => ({ id, ...v })),
+    storeDir: dir,
+  });
   function listIssues() {
-    const inflight = readIndex(INFLIGHT);
-    const issues = readIndex(ISSUES);
-    const stuck = Object.entries(inflight).map(([id, at]) => ({ id, claimedAt: new Date(at).toISOString(), ageMs: now() - at, stale: now() - at >= STALE_CLAIM_MS }));
-    const owed = Object.entries(issues).map(([id, v]) => ({ id, ...v }));
-    return { inflight: stuck, refundOwed: owed, storeDir: dir };
+    if (USE_PG) return (async () => issuesOf(await readIndex(INFLIGHT), await readIndex(ISSUES)))();
+    return issuesOf(readIndex(INFLIGHT), readIndex(ISSUES));
   }
 
   function peek(sessionId) {
-    const rec = mem.get(sessionId) || (SESSION_RE.test(String(sessionId)) ? readRec(sessionId) : null);
+    const valid = SESSION_RE.test(String(sessionId));
+    if (USE_PG) return (async () => { const rec = valid ? await readRec(sessionId) : null; if (rec) return rec; if (inFlight.has(sessionId)) return { status: "generating" }; return null; })();
+    const rec = mem.get(sessionId) || (valid ? readRec(sessionId) : null);
     if (rec) return rec;
     if (inFlight.has(sessionId)) return { status: "generating" };
     return null;
@@ -457,21 +602,45 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // private again (the id stays reserved and dead: a revoked link never
   // resolves, and a re-publish reuses it so old links work again).
   function setPublic(sessionId, flag) {
-    if (typeof sessionId !== "string" || !SESSION_RE.test(sessionId)) return { status: "invalid" };
+    if (typeof sessionId !== "string" || !SESSION_RE.test(sessionId)) return USE_PG ? Promise.resolve({ status: "invalid" }) : { status: "invalid" };
+    const want = flag === true;
+    const toggle = (rec) => {
+      if (want && !rec.publicId) rec.publicId = `rp_${randomBytes(12).toString("base64url")}`;
+      rec.public = want;
+      if (want) rec.publishedAt = new Date(now()).toISOString();
+      return { status: "done", public: want, publicId: want ? rec.publicId : null };
+    };
+    if (USE_PG) {
+      return (async () => {
+        const rec = await readRec(sessionId);
+        if (!rec || rec.status !== "done") return { status: rec?.status || "not_found" };
+        const out = toggle(rec);
+        await writeRec(sessionId, rec);
+        if (rec.publicId) {
+          pub.idx = await patchIndex(PUBLIC_INDEX(dir), rec.publicId, want ? sessionId : null);
+          if (want) pub.recs.set(sessionId, rec); else pub.recs.delete(sessionId);
+        }
+        return out;
+      })();
+    }
     const rec = mem.get(sessionId) || readRec(sessionId);
     if (!rec || rec.status !== "done") return { status: rec?.status || "not_found" };
-    const want = flag === true;
-    if (want && !rec.publicId) rec.publicId = `rp_${randomBytes(12).toString("base64url")}`;
-    rec.public = want;
-    if (want) rec.publishedAt = new Date(now()).toISOString();
+    const out = toggle(rec);
     writeRec(sessionId, rec);
     if (rec.publicId) patchIndex(PUBLIC_INDEX(dir), rec.publicId, want ? sessionId : null);
-    return { status: "done", public: want, publicId: want ? rec.publicId : null };
+    return out;
   }
 
-  // Test/ops: number of records on disk (excluding indexes).
-  function _count() { try { return readdirSync(dir).filter((f) => f.startsWith("cs_") && f.endsWith(".json")).length; } catch { return 0; } }
-  function _reset() { try { for (const f of readdirSync(dir)) unlinkSync(join(dir, f)); } catch { /* ignore */ } mem.clear(); negative.clear(); }
+  // Test/ops: number of records (excluding indexes).
+  function _count() {
+    if (USE_PG) return (async () => { await ready; return (await pgIds()).filter((id) => SESSION_RE.test(id)).length; })();
+    try { return readdirSync(dir).filter((f) => f.startsWith("cs_") && f.endsWith(".json")).length; } catch { return 0; }
+  }
+  function _reset() {
+    try { for (const f of readdirSync(dir)) unlinkSync(join(dir, f)); } catch { /* ignore */ }
+    mem.clear(); negative.clear();
+    if (USE_PG) return (async () => { await ready; await pgClear(); pub.idx = {}; pub.recs = new Map(); })();
+  }
 
-  return { createSession, fulfill, peek, recoverAbandoned, listIssues, setPublic, _count, _reset };
+  return { createSession, fulfill, peek, recoverAbandoned, listIssues, setPublic, _count, _reset, ready: () => ready, backend: USE_PG ? "pg" : "file" };
 }

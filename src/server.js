@@ -3772,21 +3772,21 @@ if (_credits) {
     try { res.json(await _credits.claim(String(req.query.session || ""))); }
     catch (e) { console.warn("[credits] claim failed:", String(e?.message || e).slice(0, 200)); res.status(500).json({ status: "error", error: "Could not claim the key right now." }); }
   });
-  app.get("/api/credits/balance", (req, res) => {
+  app.get("/api/credits/balance", async (req, res) => {
     res.set("Cache-Control", "no-store");
     const auth = String(req.headers.authorization || "");
-    const b = /^Bearer a402_/.test(auth) ? _credits.balance(auth.slice(7).trim()) : null;
+    const b = /^Bearer a402_/.test(auth) ? await _credits.balance(auth.slice(7).trim()) : null;
     if (!b) return res.status(401).json({ error: "Send your credits key as Authorization: Bearer a402_…", ...creditsTopupFields(BASE_URL) });
     res.json(b);
   });
-  app.get("/__operator/credits.json", (req, res) => {
+  app.get("/__operator/credits.json", async (req, res) => {
     if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-    res.set("Cache-Control", "no-store").json(_credits.status());
+    res.set("Cache-Control", "no-store").json(await _credits.status());
   });
-  app.post("/__operator/credits/disable", express.json(), (req, res) => {
+  app.post("/__operator/credits/disable", express.json(), async (req, res) => {
     if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
     const { keyId, disabled = true } = req.body || {};
-    res.json({ ok: _credits.setDisabled(String(keyId || ""), !!disabled) });
+    res.json({ ok: await _credits.setDisabled(String(keyId || ""), !!disabled) });
   });
 } else {
   app.post("/api/credits/checkout", (_req, res) => res.status(503).json({
@@ -3822,9 +3822,9 @@ if (humanCheckoutEnabled()) {
     // re-driven shortly after boot - the buyer may have closed the tab.
     const _sweep = setTimeout(() => { _humanCheckout.recoverAbandoned().catch(() => {}); }, 45_000);
     _sweep.unref?.();
-    app.get("/__operator/human-checkout.json", (req, res) => {
+    app.get("/__operator/human-checkout.json", async (req, res) => {
       if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-      res.set("Cache-Control", "no-store").json({ ...(_humanCheckout.listIssues()), compositeUsage: compositeUsageSnapshot(), compositeGuard: _compositeGuardState(), stripeWebhooks: _subs?.webhookStats?.() || null });
+      res.set("Cache-Control", "no-store").json({ ...(await _humanCheckout.listIssues()), compositeUsage: compositeUsageSnapshot(), compositeGuard: _compositeGuardState(), stripeWebhooks: _subs?.webhookStats?.() || null });
     });
     app.post("/api/buy", async (req, res) => {
       if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
@@ -3852,9 +3852,9 @@ if (humanCheckoutEnabled()) {
       res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(reportDeliveryPage(String(req.params.sessionId || ""), { baseUrl: BASE_URL, robots: "noindex, nofollow" }));
     });
     // The session id is the bearer: only its holder can publish or unpublish.
-    app.post("/api/r/:sessionId/public", express.json({ limit: "2kb" }), (req, res) => {
+    app.post("/api/r/:sessionId/public", express.json({ limit: "2kb" }), async (req, res) => {
       if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
-      const r = _humanCheckout.setPublic(String(req.params.sessionId || ""), req.body?.public === true);
+      const r = await _humanCheckout.setPublic(String(req.params.sessionId || ""), req.body?.public === true);
       if (r.status !== "done") return res.status(r.status === "invalid" ? 400 : 404).json(r);
       try { capturePostHogHumanFunnel({ step: r.public ? "report_published" : "report_unpublished" }); } catch { /* telemetry never breaks the request */ }
       res.set("Cache-Control", "no-store").json({ ...r, url: r.public ? `${BASE_URL}/reports/public/${r.publicId}` : null });

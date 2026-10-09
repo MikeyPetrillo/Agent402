@@ -82,6 +82,10 @@ const payerOf = (req) => (req ? payerFromRequest(req) || (req.mppTempoSender ? `
 // including a client that hung up after the handler answered (the server
 // resolves __onSettled through hangup-settlement's onSettleOutcome).
 const onSettled = (req, fn) => { if (req && typeof req === "object") (req.__onSettled ||= []).push(fn); };
+// A ledger write made after the answer (the settlement hooks) is awaited by
+// nobody: on the state database it is a promise, and a failure is logged,
+// never thrown into a response that is already gone.
+const fire = (p) => { if (p && typeof p.then === "function") p.catch((e) => console.warn("[decide] ledger write failed:", String(e?.message || e).slice(0, 120))); };
 const roundUsd = (x) => Math.round(x * 1e6) / 1e6;
 
 /** Fire-and-forget: reliability observations to the decide service. Never
@@ -120,15 +124,15 @@ export function makeDecideHandler({ ledger, now = () => Date.now() }) {
     // The decision is kept here (money side) so execute can price from it;
     // its credit counts only once THIS payment settles.
     const feedbackToken = `fb_${randomBytes(18).toString("base64url")}`;
-    ledger.saveDecision({ decisionId: out.decisionId, depth, priceUsd, payer, plan: out.plan, costViaUsd: out.estimatedCostViaAgent402Usd || 0, feedbackHash: hashToken(feedbackToken), now: now() });
+    await ledger.saveDecision({ decisionId: out.decisionId, depth, priceUsd, payer, plan: out.plan, costViaUsd: out.estimatedCostViaAgent402Usd || 0, feedbackHash: hashToken(feedbackToken), now: now() });
     const amount = roundUsd(priceUsd * cfg.credit.percentOfFee / 100);
     let executionCredit = null;
     if (amount > 0 && out.plan?.length) {
-      const c = ledger.mintCredit({ decisionId: out.decisionId, amountUsd: amount, ttlMs: cfg.credit.ttlHours * 3_600_000, payer, now: now() });
-      onSettled(req, (settledOk) => { if (settledOk) { ledger.activateCredit(c.hash); ledger.markDecisionSettled(out.decisionId); } });
+      const c = await ledger.mintCredit({ decisionId: out.decisionId, amountUsd: amount, ttlMs: cfg.credit.ttlHours * 3_600_000, payer, now: now() });
+      onSettled(req, (settledOk) => { if (settledOk) { fire(ledger.activateCredit(c.hash)); fire(ledger.markDecisionSettled(out.decisionId)); } });
       executionCredit = { amountUsd: c.amountUsd, expiresAt: new Date(c.expiresAt).toISOString(), token: c.token, redeemWith: "POST /api/decide/execute { decisionId, creditToken }", activeAfterPaymentSettles: true };
     } else {
-      onSettled(req, (settledOk) => { if (settledOk) ledger.markDecisionSettled(out.decisionId); });
+      onSettled(req, (settledOk) => { if (settledOk) fire(ledger.markDecisionSettled(out.decisionId)); });
     }
     return {
       ...out,
@@ -145,10 +149,12 @@ export function makeDecideHandler({ ledger, now = () => Date.now() }) {
 // ---------------------------------------------------------------- execute
 
 /** What an execute call is priced at: its budget less a valid credit, never
- *  under the settlement floor. Sync: reads the local ledger only. */
+ *  under the settlement floor. Sync: reads the ledger's synchronous view
+ *  (the file, or the mirror on the state database, which the handler then
+ *  re-validates against the database before anything is charged). */
 export function executeQuoteUsd(body, { ledger, now = Date.now(), getCatalog = null }) {
   const floor = 0.001;
-  const d = body?.decisionId ? ledger.getDecision(String(body.decisionId)) : null;
+  const d = body?.decisionId ? (ledger.getDecisionSync ? ledger.getDecisionSync(String(body.decisionId)) : ledger.getDecision(String(body.decisionId))) : null;
   if (!d) {
     // A sketch run (steps, no decision) is quoted at its steps' list prices;
     // the handler refuses a step it cannot run before anything is charged.
@@ -158,7 +164,7 @@ export function executeQuoteUsd(body, { ledger, now = Date.now(), getCatalog = n
     }
     return floor;
   }
-  const credit = ledger.creditAvailableUsd(body?.creditToken, d.id, now);
+  const credit = ledger.creditAvailableUsdSync ? ledger.creditAvailableUsdSync(body?.creditToken, d.id, now) : ledger.creditAvailableUsd(body?.creditToken, d.id, now);
   const budget = executeBudgetUsd(body, d, undefined, credit);
   return Math.max(floor, roundUsd(budget - credit));
 }
@@ -209,7 +215,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     let d = null;
     let persistSketch = null, sketchFeedbackToken = null;
     if (decisionId) {
-      d = ledger.getDecision(decisionId);
+      d = await ledger.getDecision(decisionId);
       if (!d) throw bad("Unknown decisionId - decisions are kept for this server's own answers only", 404);
       if (!d.settled) throw bad("That decision's payment has not settled, so it cannot be executed", 409);
     } else if (Array.isArray(input?.steps)) {
@@ -231,7 +237,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       decisionId = runKey
         ? `skt_${createHash("sha256").update(`${payer || ""}|${runKey}|${sk.plan.map((p) => p.tool.slug).join(",")}`).digest("hex").slice(0, 24)}`
         : `skt_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-      const prior = runKey ? ledger.getDecision(decisionId) : null;
+      const prior = runKey ? await ledger.getDecision(decisionId) : null;
       if (prior) d = prior;
       else {
         // Kept like a paid decision (feedback token included), priced at zero
@@ -240,16 +246,16 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         const feedbackToken = `fb_${randomBytes(18).toString("base64url")}`;
         sketchFeedbackToken = feedbackToken;
         d = { id: decisionId, createdAt: t, depth: "sketch", priceUsd: 0, payer, plan: sk.plan, costViaUsd: sk.costUsd, settled: true };
-        persistSketch = () => {
-          ledger.saveDecision({ decisionId, depth: "sketch", priceUsd: 0, payer, plan: sk.plan, costViaUsd: sk.costUsd, feedbackHash: hashToken(feedbackToken), now: t });
-          ledger.markDecisionSettled(decisionId);
+        persistSketch = async () => {
+          await ledger.saveDecision({ decisionId, depth: "sketch", priceUsd: 0, payer, plan: sk.plan, costViaUsd: sk.costUsd, feedbackHash: hashToken(feedbackToken), now: t });
+          await ledger.markDecisionSettled(decisionId);
         };
       }
     } else {
       throw bad(`"decisionId" (from POST /api/decide) or "steps" (the tool slugs of a free plan sketch from /api/find or /api/route, ${SKETCH_MIN_STEPS} to ${SKETCH_MAX_STEPS}, in order) is required`);
     }
     const startedAt = Date.now();
-    const budget = executeBudgetUsd(input, d, cfg, ledger.creditAvailableUsd(input.creditToken, d.id, t));
+    const budget = executeBudgetUsd(input, d, cfg, await ledger.creditAvailableUsd(input.creditToken, d.id, t));
     if (budget <= 0) throw bad("Nothing to execute: the plan has no priced steps; pass maxBudgetUsd", 400);
 
     // WHAT WAS PAID is the quote the payment gate settled against (stashed on
@@ -258,7 +264,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     const quoted = Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0 ? req.__meteredQuoteUsd : executeQuoteUsd(input, { ledger, now: t, getCatalog });
     const creditAssumed = roundUsd(Math.max(0, budget - quoted));
 
-    const prior = ledger.runByKey(d.id, runKey);
+    const prior = await ledger.runByKey(d.id, runKey);
     if (prior) {
       // The payer that ran it gets that run's outcome back with the refusal
       // (still a 409, so nothing is charged again); anyone else gets the id only.
@@ -279,33 +285,40 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     }
 
     // Caps, checked before anything is spent (a >= 400 is never charged).
-    // From here to createRun there is no await: the checks and the booking of
-    // this run happen in one turn, so concurrent requests cannot all pass on
-    // the same reading.
-    if (payer && ledger.payerExposureUsd(payer, t - 3_600_000) + budget > cfg.execute.perWalletHourUsd) throw bad(`This wallet has reached its hourly execution ceiling ($${cfg.execute.perWalletHourUsd}); nothing was charged`, 429);
+    // These reads refuse early with the right message; the booking below
+    // (bookRun) checks the same ceilings again in the same atomic step as the
+    // insert, so concurrent requests, in this process or in another
+    // container, cannot all pass on the same reading.
+    const payerDayCap = cfg.execute.globalDayUsd * cfg.execute.perPayerDayShare;
+    const capRefused = (reason) => reason === "payerHour" ? bad(`This wallet has reached its hourly execution ceiling ($${cfg.execute.perWalletHourUsd}); nothing was charged`, 429)
+      : reason === "global" ? bad("Outside steps are paused for everyone for up to 24 hours; nothing was charged", 429)
+      : bad(`This wallet has reached its daily execution ceiling ($${roundUsd(payerDayCap)}); nothing was charged`, 429);
+    if (payer && await ledger.payerExposureUsd(payer, t - 3_600_000) + budget > cfg.execute.perWalletHourUsd) throw capRefused("payerHour");
     // Only a plan that can pay outside sellers is held to the wallet's
     // global daily ceiling; our own tools do not draw on that wallet.
-    if (hasOutside && ledger.globalExposureUsd(t - 86_400_000) + budget > cfg.execute.globalDayUsd) throw bad("Outside steps are paused for everyone for up to 24 hours; nothing was charged", 429);
-    const payerDayCap = cfg.execute.globalDayUsd * cfg.execute.perPayerDayShare;
-    if (payer && ledger.payerExposureUsd(payer, t - 86_400_000) + budget > payerDayCap) throw bad(`This wallet has reached its daily execution ceiling ($${roundUsd(payerDayCap)}); nothing was charged`, 429);
+    if (hasOutside && await ledger.globalExposureUsd(t - 86_400_000) + budget > cfg.execute.globalDayUsd) throw capRefused("global");
+    if (payer && await ledger.payerExposureUsd(payer, t - 86_400_000) + budget > payerDayCap) throw capRefused("payerDay");
 
     const runId = `run_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
     let redeemed = 0;
     if (creditAssumed > 0) {
-      redeemed = ledger.redeemCredit(input.creditToken, d.id, runId, t);
+      redeemed = await ledger.redeemCredit(input.creditToken, d.id, runId, t);
       // The price assumed this credit; if it is gone (used by another run,
       // expired), refuse before spending anything. Not charged.
       if (redeemed + 1e-9 < creditAssumed) {
-        if (redeemed) ledger.restoreCredit(input.creditToken, runId);
+        if (redeemed) await ledger.restoreCredit(input.creditToken, runId);
         throw bad("The execution credit this price assumed is no longer available (already used or expired); nothing was charged - request a fresh quote", 409);
       }
     }
     const spendable = roundUsd(Math.min(budget, quoted + redeemed));
-    if (persistSketch) { persistSketch(); persistSketch = null; }
-    if (!ledger.createRun({ runId, decisionId: d.id, payer, budgetUsd: spendable, creditUsd: redeemed, runKey, now: t })) {
-      // Lost a race with a concurrent request carrying the same key.
-      if (redeemed) ledger.restoreCredit(input.creditToken, runId);
-      throw bad("This decision already has a run with that key; nothing was charged", 409);
+    if (persistSketch) { await persistSketch(); persistSketch = null; }
+    const booked = await ledger.bookRun({ runId, decisionId: d.id, payer, budgetUsd: spendable, creditUsd: redeemed, runKey, now: t,
+      caps: { payerHourUsd: cfg.execute.perWalletHourUsd, globalDayUsd: hasOutside ? cfg.execute.globalDayUsd : null, payerDayUsd: payerDayCap, hourSinceMs: t - 3_600_000, daySinceMs: t - 86_400_000 } });
+    if (!booked.ok) {
+      // Lost a race: a concurrent request carrying the same key, or one that
+      // took the last of a ceiling's headroom. Nothing was booked.
+      if (redeemed) await ledger.restoreCredit(input.creditToken, runId);
+      throw booked.reason === "key" ? bad("This decision already has a run with that key; nothing was charged", 409) : capRefused(booked.reason);
     }
 
     // One deadline for the whole run, inside what the buyer's payment can
@@ -393,15 +406,15 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         const maxUsd = Math.min(roundUsd((spendable - spent) / (1 + cfg.routingFeePct / 100)), roundUsd(listPrice * 1.5), cfg.execute.perCallMaxUsd);
         // Checked and held in one turn, before the payment: concurrent runs
         // see this leg's worst case against the seller's daily ceiling.
-        if (ledger.sellerSpendUsd(tool.seller, t - 86_400_000) + maxUsd > cfg.execute.perSellerDayUsd) { attempts.push({ id: tool.id, skipped: "this seller's daily execution ceiling is reached" }); continue; }
-        const hold = ledger.holdSellerSpend({ runId, seller: tool.seller, amountUsd: maxUsd, now: now() });
+        const hold = await ledger.holdSellerSpend({ runId, seller: tool.seller, amountUsd: maxUsd, now: now(), capUsd: cfg.execute.perSellerDayUsd, sinceMs: t - 86_400_000 });
+        if (hold === false) { attempts.push({ id: tool.id, skipped: "this seller's daily execution ceiling is reached" }); continue; }
         try {
           const r = await withTimeout(router.handler({ task: `${step.purpose} (${tool.name})`, include: "external", target: tool.endpoint, params: toolParams, maxUsd }, req), Math.min(left(), cfg.execute.externalStepTimeoutMs), tool.seller);
           const underlying = Number(r?.receipt?.underlyingPriceUsd);
           const paidOut = Number.isFinite(underlying) && underlying > 0 ? underlying : maxUsd; // unknown: book the worst case
           const fee = roundUsd(paidOut * cfg.routingFeePct / 100);
           spent = roundUsd(spent + paidOut + fee);
-          ledger.settleSellerHold(hold, paidOut);
+          await ledger.settleSellerHold(hold, paidOut);
           // The router's receipt prices the router's own call (paidUsd is its
           // tier price, routingFeeUsd the tier price minus the seller's). This
           // run charges the seller's price plus decide's fee, so those two
@@ -425,11 +438,11 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
             const signed = Number(e?.signedUsd);
             const exposure = Number.isFinite(signed) && signed >= 0 && !timedOut ? Math.min(signed, maxUsd) : maxUsd;
             spent = roundUsd(spent + exposure * (1 + cfg.routingFeePct / 100));
-            ledger.settleSellerHold(hold, exposure);
+            await ledger.settleSellerHold(hold, exposure);
             attempts[attempts.length - 1].bookedUsd = roundUsd(exposure); // the worst case booked for this leg (read by the reconciliation)
             break;
           }
-          ledger.settleSellerHold(hold, 0); // refused before any payment: nothing left
+          await ledger.settleSellerHold(hold, 0); // refused before any payment: nothing left
         }
       }
       if (done) { outputs[String(step.step)] = done.result; results.push({ step: step.step, status: "ok", ...done, ...(attempts.length ? { attempts } : {}) }); }
@@ -448,16 +461,16 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     const okSteps = results.filter((r) => r.status === "ok").length;
     const nothingSpent = spent === 0 && !mayHaveSpentOutside;
     if (!okSteps) {
-      ledger.finishRun({ runId, status: "failed", spentUsd: spent, steps: results, now: now() });
+      await ledger.finishRun({ runId, status: "failed", spentUsd: spent, steps: results, now: now() });
       // A credit comes back only when nothing left our wallet.
-      if (redeemed && nothingSpent) ledger.restoreCredit(input.creditToken, runId);
+      if (redeemed && nothingSpent) await ledger.restoreCredit(input.creditToken, runId);
       // Caused by the caller's own inputs (skipped steps, params that do not
       // fit, 4xx answers) with nothing spent: a 400, which the spend-then-fail
       // breaker does not count. A tool-side failure or any spend: a 502.
       const callerCaused = nothingSpent && results.every((r) => r.status === "skipped" || (r.attempts || []).every((a) => a.skipped || (a.status >= 400 && a.status < 500)));
       throw Object.assign(bad(`No step of the plan could be run (${results.map((r) => `step ${r.step}: ${r.reason || (r.attempts || []).map((a) => a.error || a.skipped).join(" / ")}`).join("; ").slice(0, 600)}). Nothing was charged.`, callerCaused ? 400 : 502), { steps: results });
     }
-    ledger.finishRun({ runId, status: okSteps === results.length ? "complete" : "partial", spentUsd: spent, steps: results.map(({ result, ...r }) => r), now: now() });
+    await ledger.finishRun({ runId, status: okSteps === results.length ? "complete" : "partial", spentUsd: spent, steps: results.map(({ result, ...r }) => r), now: now() });
     // Unspent funds (what was paid plus the credit, less what was spent)
     // return as a credit on the same decision, live once this payment settles
     // and expiring WITH the decision, so a credit is never rolled forward.
@@ -465,13 +478,13 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     const decisionExpiry = d.createdAt + cfg.credit.ttlHours * 3_600_000;
     let leftoverCredit = null;
     if (leftover >= 0.001 && decisionExpiry > now() + 60_000) {
-      const c = ledger.mintCredit({ decisionId: d.id, amountUsd: leftover, expiresAt: decisionExpiry, payer, now: now() });
-      onSettled(req, (settledOk) => { if (settledOk) ledger.activateCredit(c.hash); });
+      const c = await ledger.mintCredit({ decisionId: d.id, amountUsd: leftover, expiresAt: decisionExpiry, payer, now: now() });
+      onSettled(req, (settledOk) => { if (settledOk) fire(ledger.activateCredit(c.hash)); });
       leftoverCredit = { amountUsd: c.amountUsd, expiresAt: new Date(c.expiresAt).toISOString(), token: c.token, activeAfterPaymentSettles: true };
     }
     // A settlement that fails after this run spent money forfeits the credit:
     // restoring it would let the same credit fund run after run.
-    if (redeemed && nothingSpent) onSettled(req, (settledOk) => { if (!settledOk) ledger.restoreCredit(input.creditToken, runId); });
+    if (redeemed && nothingSpent) onSettled(req, (settledOk) => { if (!settledOk) fire(ledger.restoreCredit(input.creditToken, runId)); });
     // What the spend was, on separate lines: our own tools, what was passed
     // through to outside sellers, and the routing fee on it.
     const okResults = results.filter((r) => r.status === "ok");
@@ -494,13 +507,31 @@ const OUTCOMES = new Set(["success", "failure"]);
 
 /** Free: a buyer's verdict on one step of a decision they bought. */
 export function makeFeedbackHandler({ ledger, send = callService, now = () => Date.now() }) {
+  const refusal = () => bad("decisionId and feedbackToken do not match a decision", 403);
+  // One answer for "unknown decision" and "wrong token": a stranger learns
+  // nothing about which decisions exist. The ledger on the state database
+  // answers in promises, so the handler is async there and sync on the file.
+  if (ledger.async) {
+    return async function feedback(body) {
+      const b = body && typeof body === "object" ? body : {};
+      const decisionId = String(b.decisionId || "");
+      if (!(await ledger.feedbackTokenOk(decisionId, b.feedbackToken))) throw refusal();
+      const d = await ledger.getDecision(decisionId);
+      const v = validate(b, d);
+      const replaced = await ledger.saveFeedback({ decisionId, ...v, now: now() });
+      return finish(decisionId, d, v, replaced);
+    };
+  }
   return function feedback(body) {
     const b = body && typeof body === "object" ? body : {};
     const decisionId = String(b.decisionId || "");
-    // One answer for "unknown decision" and "wrong token": a stranger learns
-    // nothing about which decisions exist.
-    if (!ledger.feedbackTokenOk(decisionId, b.feedbackToken)) throw bad("decisionId and feedbackToken do not match a decision", 403);
+    if (!ledger.feedbackTokenOk(decisionId, b.feedbackToken)) throw refusal();
     const d = ledger.getDecision(decisionId);
+    const v = validate(b, d);
+    const replaced = ledger.saveFeedback({ decisionId, ...v, now: now() });
+    return finish(decisionId, d, v, replaced);
+  };
+  function validate(b, d) {
     const step = Number(b.step);
     const planned = d.plan.find((p) => p.step === step);
     if (!Number.isInteger(step) || !planned) throw bad(`"step" must be one of ${d.plan.map((p) => p.step).join(", ") || "(none)"}`);
@@ -514,11 +545,13 @@ export function makeFeedbackHandler({ ledger, send = callService, now = () => Da
     const ids = [planned.tool.id, ...(planned.fallbacks || []).map((f) => f.id)];
     const toolId = b.toolId === undefined ? planned.tool.id : String(b.toolId);
     if (!ids.includes(toolId)) throw bad('"toolId" must be the step\'s tool or one of its fallbacks');
-    const replaced = ledger.saveFeedback({ decisionId, step, toolId, outcome, quality, latencyMs, now: now() });
+    return { step, toolId, outcome, quality, latencyMs };
+  }
+  function finish(decisionId, d, { step, toolId, outcome }, replaced) {
     // A replaced verdict is not counted twice.
     if (!replaced) sendObservations([{ toolId, ok: outcome === "success", source: "feedback", by: observerId(d.payer) }], { send });
     return { ok: true, decisionId, step, toolId, outcome, replaced };
-  };
+  }
 }
 
 

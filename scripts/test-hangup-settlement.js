@@ -388,7 +388,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
     ok(check > 0 && calls.every((c) => src.indexOf(c) > check && src.indexOf(c) - check < 2500), `${name}: the cancelled-charge check precedes the ${name === "mpp-tempo" ? "broadcast" : "capture"}`);
   }
   ok(/\} else if \(req\.creditsSettled && Number\(req\.creditsChargedOnClose\) > 0\) \{/.test(server), "the debt recorder books a credits hold settled on an abandoned run");
-  ok(/const denied = hangupTicketDenial\(req\);[\s\S]{0,800}\$\{denied \? `; not forgiven: \$\{denied\}` : ""\}/.test(server), "the owed line names why the run was not forgiven");
+  ok(/const denied = hangupTicketDenial\(req\);[\s\S]{0,1400}\$\{denied \? `; not forgiven: \$\{denied\}` : ""\}/.test(server), "the owed line names why the run was not forgiven");
   ok(/priceFor: \(method, path, req\) => \{[\s\S]{0,700}longRunning: isLongRunningSlug\(def\.slug\) \} : null;\s*\n\s*\},\s*\n\s*\/\/ Input check before the relay round trip/.test(server), "the Tempo GATE's priceFor carries longRunning (not only the challenge appender)");
   // The composite's client-gone signal aborts only when the charge is cancelled.
   ok(/\? await runInAbortableScope\(\(\) => tool\.handler\(input, req\), \{ signal: clientGoneCtl\.signal \}\)/.test(server), "the dispatcher runs a composite with the client-gone signal ({ signal })");

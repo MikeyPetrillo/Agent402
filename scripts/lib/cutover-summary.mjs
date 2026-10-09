@@ -48,10 +48,36 @@ if (mode === "pg") {
 }
 
 if (withDecide) {
+  // Decide: open the ledger (the database half imports the file on open),
+  // then read exact counts and sums from the store each mode uses.
   const { openDecideLedger } = await import("../../src/decide/ledger.js");
   const ledger = openDecideLedger(process.env.DECIDE_LEDGER_DB);
-  if (typeof ledger.ready === "function") await ledger.ready();
-  out.decide = typeof ledger.summaryForCutover === "function" ? await ledger.summaryForCutover() : { note: "the decide ledger exposes no cutover summary yet" };
+  if (ledger.ready) await ledger.ready;
+  const tables = ["decisions", "credits", "runs", "feedback", "seller_spend"];
+  if (mode === "pg") {
+    const sdb = await import("../../src/state-db.js");
+    const S = sdb.stateDbSchema();
+    const q = async (sql) => (await sdb.stateQuery(sql)).rows;
+    const counts = {}; for (const t of tables) counts[t] = Number((await q(`SELECT count(*)::bigint AS n FROM ${S}.decide_ledger_${t}`))[0].n);
+    const by = async (t, col) => Object.fromEntries((await q(`SELECT ${col} AS k, count(*)::bigint AS n FROM ${S}.decide_ledger_${t} GROUP BY ${col} ORDER BY ${col}`)).map((r) => [String(r.k), Number(r.n)]));
+    const creditCols = (await q(`SELECT column_name FROM information_schema.columns WHERE table_schema = '${S}' AND table_name = 'decide_ledger_credits'`)).map((r) => r.column_name);
+    const stateCol = creditCols.includes("state") ? "state" : "status";
+    const amountCol = creditCols.find((c) => /usd|amount|micro/.test(c)) || null;
+    out.decide = { counts, creditsByState: await by("credits", stateCol), runsByState: await by("runs", (await q(`SELECT column_name FROM information_schema.columns WHERE table_schema = '${S}' AND table_name = 'decide_ledger_runs'`)).some((r) => r.column_name === "state") ? "state" : "status"),
+      creditsSum: amountCol ? Number((await q(`SELECT coalesce(sum(${amountCol}),0) AS s FROM ${S}.decide_ledger_credits`))[0].s) : null, amountCol };
+  } else {
+    const { default: Database } = await import("better-sqlite3");
+    const db = new Database(process.env.DECIDE_LEDGER_DB, { readonly: true });
+    const counts = {}; for (const t of tables) counts[t] = db.prepare(`select count(*) c from ${t}`).get().c;
+    const cols = (t) => db.prepare(`pragma table_info(${t})`).all().map((c) => c.name);
+    const cc = cols("credits"), rc = cols("runs");
+    const stateCol = cc.includes("state") ? "state" : "status";
+    const amountCol = cc.find((c) => /usd|amount|micro/.test(c)) || null;
+    const by = (t, col) => Object.fromEntries(db.prepare(`select ${col} k, count(*) n from ${t} group by ${col} order by ${col}`).all().map((r) => [String(r.k), r.n]));
+    out.decide = { counts, creditsByState: by("credits", stateCol), runsByState: by("runs", rc.includes("state") ? "state" : "status"),
+      creditsSum: amountCol ? Number(db.prepare(`select coalesce(sum(${amountCol}),0) s from credits`).get().s) : null, amountCol };
+    db.close();
+  }
 }
 
 if (mode === "pg") {

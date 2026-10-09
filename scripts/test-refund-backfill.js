@@ -37,7 +37,7 @@ const { listRefunds } = await import("../src/refund-ledger.js");
 let passed = 0;
 const ok = (cond, msg) => { assert.ok(cond, msg); passed++; console.log("ok -", msg); };
 
-const dry = backfillBrokenPackRefunds({ write: false });
+const dry = await backfillBrokenPackRefunds({ write: false });
 ok(dry.settlements === 3, `only in-window external sales of non-delivering packs are selected (got ${dry.settlements})`);
 ok(!Object.keys(dry.byPayer).includes("0xourburner"), "our own burner is never owed a refund from ourselves");
 ok(!Object.values(dry.byPayer).some((v) => v.usd === 0.12), "a partial-delivery pack is not treated as non-delivery");
@@ -45,13 +45,13 @@ ok(dry.owedUsd === 0.31, `owed is the sum of the selected rows only (got ${dry.o
 ok(dry.skippedNoTx === 1, "a sale with no settle tx is counted and skipped, not minted unverifiable");
 ok(listRefunds({ status: "owed" }).length === 0, "a dry run records nothing");
 
-const wrote = backfillBrokenPackRefunds({ write: true });
+const wrote = await backfillBrokenPackRefunds({ write: true });
 ok(wrote.minted === 2, `only rows carrying a settle tx are minted (got ${wrote.minted})`);
 const owed = listRefunds({ status: "owed", limit: 50 });
 ok(owed.length === 2, `the ledger holds one debt per minted settlement (got ${owed.length})`);
 ok(owed.some((r) => r.network === "solana"), "a Solana debt IS recorded even though no sender exists - refund-run holds it before claiming, so it cannot strand");
 
-const again = backfillBrokenPackRefunds({ write: true });
+const again = await backfillBrokenPackRefunds({ write: true });
 ok(again.minted === 0 && again.alreadyRecorded === 2, "a second run mints nothing (idempotent on the settle tx)");
 ok(listRefunds({ status: "owed", limit: 50 }).length === 2, "and does not duplicate the ledger rows");
 

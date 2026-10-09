@@ -121,7 +121,7 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
     if (!EMAIL_RE.test(mail)) throw bad("Enter a valid email address.");
     if (typeof creditsKey === "string" && creditsKey.trim()) {
       if (typeof creditsKeyId !== "function") throw bad("Credits keys cannot subscribe here.", 503);
-      const keyId = creditsKeyId(creditsKey.trim());
+      const keyId = await creditsKeyId(creditsKey.trim()); // a value on the volume, a promise with the database
       if (!keyId) throw bad("That credits key is not recognised.", 403);
       return enrol({ kind: "credits", payer: `credits:${keyId}`, email: mail, source });
     }
