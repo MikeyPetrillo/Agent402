@@ -331,7 +331,11 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
       if (!rec) return null;
       // `rec` exists, so read() already matched TASK_ID_RE - recPath cannot throw
       // here, and the catch covers the file being gone either way.
-      if (expired(rec)) { try { unlinkSync(recPath(id)); } catch { /* gone */ } return "expired"; }
+      if (expired(rec)) {
+        // The id is re-checked at the use so the shape guard is visible here too.
+        if (TASK_ID_RE.test(id)) { try { unlinkSync(recPath(id)); } catch { /* gone */ } }
+        return "expired";
+      }
       return rec;
     }
 
