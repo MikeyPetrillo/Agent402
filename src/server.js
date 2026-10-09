@@ -2966,11 +2966,17 @@ app.use((req, res, next) => {
   return res.status(503).json({ error: "This server is redeploying; premium report generation restarts on the new build in about a minute. Not charged - please retry." });
 });
 
-app.use((_req, res, next) => {
+// The JSON API paths serve no document: a CSP, frame or permissions policy
+// means nothing to the agent reading them and costs about half a kilobyte on
+// every answer, including the 402 challenge, whose total header size a
+// buyer's HTTP client bounds. Pages keep the full set.
+const DOCUMENT_HEADERS_SKIP = /^\/(api|v1|mcp)(\/|$)/;
+app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+  if (DOCUMENT_HEADERS_SKIP.test(req.path)) return next();
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
   // Disable browser features we never use — defense-in-depth against any future
   // XSS or third-party script accidentally probing for them.
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()");

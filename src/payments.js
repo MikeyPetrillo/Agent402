@@ -1,5 +1,5 @@
 import { handlerInputOf } from "./handler-input.js";
-import { boundedResponseSchemaFor } from "./openapi-schema.js";
+import { boundedResponseSchemaFor, boundedSchema } from "./openapi-schema.js";
 import { paymentMiddlewareFromHTTPServer, x402HTTPResourceServer } from "@x402/express";
 import { createGuardedInit, withGuardedInit } from "./x402-boot-init.js";
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
@@ -497,6 +497,16 @@ export const BAZAAR_DESCRIPTION_MAX = 500;
 // of a 12 KB ceiling before this, so the schema must be small enough that no
 // route crosses it. test-challenge-size.js is the enforcement.
 export const BAZAAR_SCHEMA_MAX_BYTES = Number(process.env.BAZAAR_SCHEMA_MAX_BYTES) || 500;
+// The input schema in the discovery extension is bounded the same way: a
+// buyer's HTTP client has a fixed header budget (Node's fetch reads at most
+// 16 KB of response headers), and the challenge shares it with thirteen
+// chain offers, the MPP challenge and the security headers. The full input
+// schema with its descriptions is in /openapi.json.
+export const BAZAAR_INPUT_SCHEMA_MAX_BYTES = Number(process.env.BAZAAR_INPUT_SCHEMA_MAX_BYTES) || 900;
+// The discovery block as a whole (input example, output example, both
+// schemas) has a budget too; past it the output example gives way to the
+// truncation note first, then the output schema. A small example stays.
+export const BAZAAR_DISCOVERY_MAX_BYTES = Number(process.env.BAZAAR_DISCOVERY_MAX_BYTES) || 2_000;
 
 export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
   if (!s) return s;
@@ -1284,6 +1294,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const slimDiscovery = (d, path) => {
     if (!d) return d;
     const slim = { ...d };
+    if (slim.inputSchema) {
+      const bounded = boundedSchema(slim.inputSchema, BAZAAR_INPUT_SCHEMA_MAX_BYTES);
+      if (bounded) slim.inputSchema = bounded; else delete slim.inputSchema;
+    }
     if (slim.output) {
       // Keep the output EXAMPLE in the bazaar declaration: discovery crawlers
       // (MPPScan's @agentcash/discovery, which x402scan also consumes) treat a
@@ -1315,6 +1329,17 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           : {}),
         ...(schema ? { schema } : {}),
       };
+    }
+    // Whole-block budget. The output schema goes first (it is derived from
+    // the example, which stays readable), then the example gives way to the
+    // truncation note; a schema never outlives the example it was read from.
+    const bytes = () => JSON.stringify(slim).length;
+    if (bytes() > BAZAAR_DISCOVERY_MAX_BYTES && slim.output?.schema) {
+      const { schema: _dropped, ...rest } = slim.output;
+      slim.output = rest;
+    }
+    if (bytes() > BAZAAR_DISCOVERY_MAX_BYTES && slim.output?.example !== undefined && !slim.output.example?.truncated) {
+      slim.output = { ...slim.output, example: { truncated: true, note: "full example in /openapi.json" } };
     }
     return slim;
   };

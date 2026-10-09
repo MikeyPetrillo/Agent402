@@ -184,3 +184,33 @@ function schemaAtDepth(value, limit, depth = 0) {
   schema.properties = properties;
   return schema;
 }
+
+/** A JSON schema trimmed to fit a byte budget, for a 402 challenge the buyer
+ *  echoes back: descriptions go first (the full schema with its prose is in
+ *  /openapi.json), then nested property detail one level at a time, down to
+ *  the top-level property names and types. Null when even that is too large. */
+export function boundedSchema(schema, maxBytes = 900) {
+  if (!schema || typeof schema !== "object") return null;
+  const size = (s) => JSON.stringify(s).length;
+  if (size(schema) <= maxBytes) return schema;
+  const strip = (node, depth, limit, keepDesc) => {
+    if (!node || typeof node !== "object" || Array.isArray(node)) return node;
+    const out = {};
+    for (const [k, v] of Object.entries(node)) {
+      if (k === "description" && !keepDesc) continue;
+      if (k === "examples" || k === "example" || k === "default") continue;
+      if ((k === "properties" || k === "items" || k === "additionalProperties") && depth >= limit) continue;
+      if (k === "properties" && v && typeof v === "object") { out[k] = Object.fromEntries(Object.entries(v).map(([pk, pv]) => [pk, strip(pv, depth + 1, limit, keepDesc)])); continue; }
+      if ((k === "items" || k === "additionalProperties") && v && typeof v === "object") { out[k] = strip(v, depth + 1, limit, keepDesc); continue; }
+      if (k === "enum" && Array.isArray(v) && v.length > 12) { out[k] = v.slice(0, 12); continue; }
+      out[k] = v;
+    }
+    return out;
+  };
+  for (const [limit, keepDesc] of [[8, false], [2, false], [1, false]]) {
+    const t = strip(schema, 0, limit, keepDesc);
+    if (size(t) <= maxBytes) return t;
+  }
+  const bare = { type: "object", ...(Array.isArray(schema.required) ? { required: schema.required.slice(0, 12) } : {}) };
+  return size(bare) <= maxBytes ? bare : null;
+}
