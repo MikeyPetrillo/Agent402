@@ -2211,7 +2211,14 @@ export function upstreamRefusalText(msg) {
  *  chain walks on 502/503/504), 502 otherwise. A body with output beside an
  *  error (a partial answer) is returned as-is. Applied at every place a wire
  *  parses an upstream 200. */
-export function assertUpstreamBody(data) {
+// The provider refusing THIS request rather than failing: no endpoint for the
+// model takes tools or the context, the request shape is unsupported. The
+// failover chain still walks a 502 to the next model; once none took it the
+// route binder answers 400 (upstreamRejected), the buyer's input being the
+// cause. 2026-10-06: one buyer saw 147 bare 502s in two minutes for a tool-use
+// request on a model with no tool-capable endpoint, none naming the model.
+const PROVIDER_REFUSAL_RE = /no endpoints? found|not support|unsupported|context length|maximum context|too (?:long|many)/i;
+export function assertUpstreamBody(data, { model } = {}) {
   if (!data || typeof data !== "object" || !data.error) return data;
   const has = (k) => Array.isArray(data[k]) && data[k].length > 0;
   if (has("choices") || has("output") || has("content") || has("data")) return data;
@@ -2219,6 +2226,10 @@ export function assertUpstreamBody(data) {
   const msg = redactSecrets(String(err.message || err.code || "upstream error")).slice(0, 200);
   const code = Number(err.code);
   const rateLimited = code === 429 || /rate.?limit/i.test(msg);
+  if (!rateLimited && PROVIDER_REFUSAL_RE.test(msg)) {
+    const named = model ? ` for ${String(model).slice(0, 80)}` : "";
+    throw Object.assign(bad(`The model provider refused this request${named}: ${upstreamRefusalText(msg)}`, 502), { upstreamRejected: true });
+  }
   throw bad(`Upstream error: ${msg}`, rateLimited ? 503 : 502);
 }
 
@@ -2228,7 +2239,7 @@ async function callOpenRouter(body, { timeoutMs } = {}) {
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
-  assertUpstreamBody(data);
+  assertUpstreamBody(data, { model: body?.model });
   if (!hasChatMessage(data)) throw bad("Upstream returned no answer (no message) - not charged", 502);
   // Full OpenAI wire shape passes through untouched (id, object, created,
   // model, choices incl. tool_calls, usage) — drop-in fidelity is the product.
