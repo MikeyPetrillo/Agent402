@@ -28,6 +28,9 @@ try {
   ok(m2.body.x === 1 && m2.version === 1, "mergeKeys creates a missing document");
   ok((await documents.list("d")).map((x) => x.name).join(",") === "d-new,d1", "list by prefix, sorted");
   ok((await documents.list("d_")).length === 0, "list escapes LIKE wildcards");
+  await documents.put("a\\b", { s: 1 }); await documents.put("axb", { s: 2 });
+  ok((await documents.list("a\\")).map((x) => x.name).join(",") === "a\\b", "list treats a backslash in the prefix literally");
+  ok((await documents.list("a%")).length === 0, "list treats a percent in the prefix literally");
   ok((await documents.del("d-new")) === true && (await documents.del("d-new")) === false, "del reports whether a row went");
   ok((await documents.putIfAbsent("pia", { a: 1 })) === true && (await documents.putIfAbsent("pia", { a: 2 })) === false && (await documents.get("pia")).body.a === 1, "putIfAbsent creates once and never overwrites");
   let threw = false; try { await documents.put("", {}); } catch { threw = true; }

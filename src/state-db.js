@@ -161,7 +161,8 @@ export const documents = {
     return r.rowCount > 0;
   },
   async list(prefix = "") {
-    const r = await stateQuery(`SELECT name, version, updated_at FROM ${T("documents")} WHERE name LIKE $1 ORDER BY name`, [`${String(prefix).replace(/[%_]/g, "\\$&")}%`]);
+    // The prefix is literal: backslash, percent and underscore are escaped, with the escape character named.
+    const r = await stateQuery(`SELECT name, version, updated_at FROM ${T("documents")} WHERE name LIKE $1 ESCAPE '\\' ORDER BY name`, [`${String(prefix).replace(/[\\%_]/g, "\\$&")}%`]);
     return r.rows.map((x) => ({ name: x.name, version: Number(x.version), updatedAt: x.updated_at }));
   },
 };
