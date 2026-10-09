@@ -5315,7 +5315,7 @@ app.post("/__operator/sellers/remove", express.json(), (req, res) => {
   if (r.error) return res.status(400).json({ error: r.error });
   res.set("Cache-Control", "no-store").json({ removed: true, origin: r.origin, removedAt: r.removedAt });
 });
-// Operator bulk seed (2026-10-09): origins read from another registry are
+// Operator bulk seed: origins read from another registry are
 // submitted through the SAME registerOrigin path a seller's own /sell call
 // takes - same probe, same submission caps, same provenance row - a few at a
 // time, so a seed never bypasses the rules a seller faces. Dry by default:

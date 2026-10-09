@@ -106,12 +106,10 @@ async function assertAffordable(params, maxUsd = DEFAULT_MAX_QUERY_USD) {
 // Daily bars are end-of-day data: for a given symbol and range they cannot
 // change until the dataset's available end advances, and every caller bounds
 // `end` by availableEnd(), so the range is part of the key and a new session
-// is a new key. Measured on the request log 2026-09-09..10-08: a quote took
-// 0.8-1.9 s before the feed move (2026-09-20) and 4.6-28 s after it, two
-// upstream POSTs per call (cost check, then data) with p95 at 20 s and 4 of
-// 92 calls ending in a 5xx timeout. A repeat of a symbol inside the session
-// now answers from memory with no upstream read at all. Errors are never
-// cached; a bounded map drops the oldest entry past BARS_CACHE_MAX.
+// is a new key. A first read costs two upstream POSTs (cost check, then
+// data); a repeat of a symbol inside the session answers from memory with no
+// upstream read at all. Errors are never cached; a bounded map drops the
+// oldest entry past BARS_CACHE_MAX.
 const BARS_CACHE_MAX = 2_000;
 const barsCache = new Map(); // key -> bars (frozen rows)
 let barsCacheMax = BARS_CACHE_MAX;

@@ -318,8 +318,7 @@ const encodingTools = [
       if (!header || typeof header !== "object") throw bad("JWT header segment is not valid base64url JSON");
       // A JWE (five segments, or an "enc" header) carries ciphertext where a
       // JWS carries claims: there is nothing to decode without the key, so the
-      // header is answered and the payload is named as encrypted. 2026-09-18:
-      // 26 such tokens were refused with "not valid base64url JSON".
+      // header is answered and the payload is named as encrypted.
       const encrypted = parts.length === 5 || typeof header.enc === "string";
       if (encrypted) {
         return { header, payload: null, encrypted: true, segments: parts.length, verified: false, expired: null, expiresInSeconds: null,

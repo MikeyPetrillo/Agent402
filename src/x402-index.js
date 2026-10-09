@@ -6254,10 +6254,9 @@ export function aggregateEcosystemSupply(entries, { limit = 12, capPerSeller = M
  * on-chain leaderboard).
  */
 // The aggregate walks every crawled origin and classifies every one of its
-// tools with regexes, synchronously: measured 2026-10-09 at a 20 s median per
-// call over 4,785 origins (9 s in August, rising with the index), on the event
-// loop, for a tool bought a few times a week. It is a market picture, not a
-// per-call read, so it is memoized: the first caller computes it once, later
+// tools with regexes, synchronously on the event loop, and the walk grows
+// with the index. It is a market picture, not a per-call read, so it is
+// memoized: the first caller computes it once, later
 // callers get the memo, and past MARKET_MEMO_TTL_MS one caller starts a
 // chunked recompute in the background (a slice of origins per tick, so the
 // loop is never held) while everyone keeps reading the last picture.

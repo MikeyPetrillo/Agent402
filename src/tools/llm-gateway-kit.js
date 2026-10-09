@@ -2187,8 +2187,7 @@ export async function throwUpstreamError(res, { refusal = false, model } = {}) {
   // the route binder answers the buyer 400 if no model took it (upstreamRejected).
   // The provider's own links are dropped: the buyer acts through our API.
   // The model is named so a burst of refusals is diagnosable from the log and
-  // the buyer knows which link of the chain said no (2026-10-06: 147 in two
-  // minutes, none naming it).
+  // the buyer knows which link of the chain said no.
   const named = model ? ` for ${String(model).slice(0, 80)}` : "";
   if (refusal) throw Object.assign(bad(`The model provider refused this request${named}: ${upstreamRefusalText(msg)}`, 502), { upstreamRejected: true });
   throw bad(`Upstream error: ${upstreamRefusalText(msg)}`, 502);
@@ -2219,8 +2218,7 @@ export function upstreamRefusalText(msg) {
 // model takes tools or the context, the request shape is unsupported. The
 // failover chain still walks a 502 to the next model; once none took it the
 // route binder answers 400 (upstreamRejected), the buyer's input being the
-// cause. 2026-10-06: one buyer saw 147 bare 502s in two minutes for a tool-use
-// request on a model with no tool-capable endpoint, none naming the model.
+// cause, and the refusal names the model.
 const PROVIDER_REFUSAL_RE = /no endpoints? found|not support|unsupported|context length|maximum context|too (?:long|many)/i;
 export function assertUpstreamBody(data, { model } = {}) {
   if (!data || typeof data !== "object" || !data.error) return data;

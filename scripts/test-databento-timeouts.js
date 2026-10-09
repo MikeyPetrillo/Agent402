@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // A slow or unreachable market-data upstream is a 504/502 naming the
-// upstream, never a bare 500 (2026-09-30: stock-quote and stock-history
-// answered 500 after 15-35 s when the upstream was slow, because a fetch
-// timeout carried no status). Offline: global fetch is stubbed.
+// upstream, never a bare 500 (a fetch timeout carries no status of its own).
+// Offline: global fetch is stubbed.
 process.env.DATABENTO_API_KEY = "db-test-key-not-real";
 const { dailyBars, availableEnd, DATABENTO_TIMEOUTS_MS } = await import("../src/tools/databento.js");
 
