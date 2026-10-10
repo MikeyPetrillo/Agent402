@@ -132,6 +132,34 @@ try {
     ok(rowAtRefund?.status === "error" && rowAtRefund.refundOwed === true, `the owed record is on the row when the refund is issued (${rowAtRefund?.status})`);
     ok(fin?.status === "error" && fin.refundId === "re_1" && (await row(id))?.refundId === "re_1", `...then the refund id is recorded (${fin?.refundId})`);
   }
+  // A report lands on the row (another container, or this one's replay)
+  // between a stale-claim read and the refund's pre-refund record: the
+  // record is refused by the row, so no refund is issued for the delivered
+  // report and the poll answers with the report.
+  for (const tag of ["held", "heldrefund"]) {
+    const id = sid(tag);
+    gens = 0; refunds.length = 0;
+    const done = tag === "held"
+      ? { status: "done", kind: "dossier", slug: "dossier", input: "MSFT", report: "# landed elsewhere", title: "t", sources: [], tables: [], at: new Date().toISOString() }
+      : { status: "error", refundId: "re_elsewhere", refundOwed: false, error: "refunded", at: new Date().toISOString() };
+    await sdb.stateQuery(`INSERT INTO ${sdb.stateDbSchema()}.records (collection, id, body) VALUES ('human-checkout', $1, $2::jsonb)`, [id, JSON.stringify({ status: "generating", claimedAt: Date.now() - 11 * 60_000, takeovers: 1, at: new Date().toISOString() })]);
+    const origQ = pool.query;
+    let flipped = false;
+    pool.query = async (text, values, cb) => {
+      if (!flipped && /->> 'status' = 'generating'/.test(String(text?.text ?? text)) && (values || []).includes(id)) {
+        flipped = true;
+        await origQuery(`UPDATE ${sdb.stateDbSchema()}.records SET body = $2::jsonb WHERE collection = 'human-checkout' AND id = $1`, [id, JSON.stringify(done)]);
+      }
+      return origQ(text, values, cb);
+    };
+    let ans;
+    try { ans = await hc.fulfill(id); } finally { pool.query = origQ; }
+    await wait(300);
+    const r = await row(id);
+    const issues = (await row("_issues")) || {};
+    ok(flipped && refunds.length === 0 && r?.status === done.status && r?.refundId === done.refundId && !(id in issues), `${tag}: a pre-refund record the row refuses issues no refund (refunds ${refunds.length}, row ${r?.status}/${r?.refundId ?? null}, issues entry ${id in issues})`);
+    ok(ans?.status === done.status, `${tag}: ...and the poll answers with what the row holds (${ans?.status})`);
+  }
 } finally {
   relay.heal();
   try { await sdb.stateQuery(`DROP SCHEMA IF EXISTS ${sdb.stateDbSchema()} CASCADE`); } catch (e) { console.error("drop failed", e.message); }
