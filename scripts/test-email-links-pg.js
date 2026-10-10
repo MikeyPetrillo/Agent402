@@ -19,9 +19,14 @@ const { createFollowups } = await import("../src/followups.js");
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// The route answers once the change is applied in memory; its row write lands just after.
+const eventually = async (f, ms = 5000) => { for (const end = Date.now() + ms; ; await sleep(50)) { try { if (await f()) return true; } catch { /* not yet */ } if (Date.now() > end) return false; } };
 const SECRET = "email-links-test-secret";
 const DIR = mkdtempSync(join(tmpdir(), "email-links-"));
 const quiet = () => {};
+// The server's own email stores keep their default files (outside DIR), and a
+// database boot imports such a file once: every record here is new per run.
+const RUN = Math.random().toString(36).slice(2, 10);
 const PORT = await getFreePort();
 const B = `http://127.0.0.1:${PORT}`;
 let log = "";
@@ -47,33 +52,34 @@ try {
   // The other container makes one record of each kind, after this server read the rows.
   const fa = createFreeAlerts({ storePath: join(DIR, "other", "free-alerts.json"), probes: { insider: async () => ({ ids: [] }) }, validators: { insider: (t) => String(t).toUpperCase() }, sendEmail: async () => true, secret: SECRET, log: quiet });
   await fa.ready();
-  await fa.signup({ email: "links@example.com", kind: "insider", target: "TSTX", source: "test" });
+  await fa.signup({ email: `links-${RUN}@example.com`, kind: "insider", target: "TSTX", source: "test" });
   await fa.flush();
-  const aid = Object.values((await sdb.documents.get("free-alerts.json")).body.alerts).find((a) => a.email === "links@example.com")?.id;
+  const aid = Object.values((await sdb.documents.get("free-alerts.json")).body.alerts).find((a) => a.email === `links-${RUN}@example.com`)?.id;
   const conf = await fetch(`${B}/alerts/confirm?id=${aid}&k=${fa.sign(aid, "confirm")}`);
   ok(conf.status === 200 && /Alert confirmed/.test(await conf.text()), `an alert made on the other container is confirmed by its link here (${conf.status})`);
-  ok((await sdb.documents.get("free-alerts.json")).body.alerts[aid]?.status === "active", "...and is active in the row");
+  ok(await eventually(async () => (await sdb.documents.get("free-alerts.json")).body.alerts[aid]?.status === "active"), "...and is active in the row");
   const unsub = await fetch(`${B}/alerts/unsubscribe?id=${aid}&k=${fa.sign(aid, "unsubscribe")}`, { method: "POST" });
   ok(unsub.status === 200, `its one-click unsubscribe answers 200 (${unsub.status})`);
 
   const wd = createWalletDigest({ storePath: join(DIR, "other", "wallet-digest.json"), sendEmail: async () => true, secret: SECRET, usage: () => ({}), verifySignature: async () => true, log: quiet });
   await wd.ready();
-  const link = new URL(wd.preEnrolCredits({ keyId: "k_links", email: "digest@example.com" }));
+  const link = new URL(wd.preEnrolCredits({ keyId: `k_links_${RUN}`, email: `digest-${RUN}@example.com` }));
   await wd.flush();
   const did = link.searchParams.get("id");
   const dc = await fetch(`${B}/digest/confirm?id=${did}&k=${link.searchParams.get("k")}`);
   ok(dc.status === 200, `a digest made on the other container is confirmed by its link here (${dc.status})`);
-  ok((await sdb.documents.get("wallet-digest.json")).body.subs[did]?.status === "active", "...and is active in the row");
+  ok(await eventually(async () => (await sdb.documents.get("wallet-digest.json")).body.subs[did]?.status === "active"), "...and is active in the row");
 
   const fu = createFollowups({ storePath: join(DIR, "other", "followups.json"), sendEmail: async () => true, secret: SECRET, monitorFor: () => null, log: quiet });
   await fu.ready();
-  fu.enqueue({ sessionId: "cs_links", email: "fu@example.com", product: "p", kind: "k", label: "l", input: "i" });
+  const sid = `cs_links_${RUN}`;
+  fu.enqueue({ sessionId: sid, email: `fu-${RUN}@example.com`, product: "p", kind: "k", label: "l", input: "i" });
   await fu.flush();
   const { createHmac } = await import("node:crypto");
-  const stopK = createHmac("sha256", SECRET).update("stop:cs_links").digest("base64url").slice(0, 32);
-  const st = await fetch(`${B}/followups/stop?id=cs_links&k=${stopK}`);
+  const stopK = createHmac("sha256", SECRET).update(`stop:${sid}`).digest("base64url").slice(0, 32);
+  const st = await fetch(`${B}/followups/stop?id=${sid}&k=${stopK}`);
   ok(st.status === 200, `a follow-up made on the other container is stopped by its link here (${st.status})`);
-  ok((await sdb.documents.get("followups.json")).body.seqs.cs_links?.stopped, "...and is stopped in the row");
+  ok(await eventually(async () => Boolean((await sdb.documents.get("followups.json")).body.seqs[sid]?.stopped)), "...and is stopped in the row");
 } finally {
   child.kill("SIGKILL");
   await sdb.__dropStateSchema().catch(() => {});
