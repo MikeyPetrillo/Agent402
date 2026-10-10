@@ -819,7 +819,26 @@ function pgBackend() {
   // transaction client's query (or stateQuery for a plain read); `q.mirror`
   // collects the SQLite statements to replay once the transaction commits.
   const lock = (c, owner) => c.query("SELECT pg_advisory_xact_lock($1, hashtext($2))", [LOCK_SPACE, owner]);
+  // One write per owner at a time in this process: later writes wait here, not
+  // on a pooled connection parked on the database lock, so a burst to one
+  // namespace holds at most one connection. The database lock still orders
+  // writes between processes.
+  const ownerTails = new Map();
   async function locked(owner, fn) {
+    const prev = ownerTails.get(owner) || Promise.resolve();
+    let done;
+    const mine = new Promise((r) => { done = r; });
+    const tail = prev.then(() => mine);
+    ownerTails.set(owner, tail);
+    try {
+      await prev;
+      return await lockedNow(owner, fn);
+    } finally {
+      done();
+      if (ownerTails.get(owner) === tail) ownerTails.delete(owner);
+    }
+  }
+  async function lockedNow(owner, fn) {
     await ready();
     const ops = [];
     const out = await withStateTx(async (c) => {

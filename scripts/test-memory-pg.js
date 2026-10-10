@@ -126,6 +126,40 @@ try {
   ok(new Set(incrs.map((r) => r.value)).size === N, "every concurrent incr saw a distinct intermediate value");
   log = await m.getLog(A, A, 1000);
   ok(log.entries.filter((e) => e.action === "incr").length === N + 1 && chainOk(log.entries), `the chain stays contiguous and valid through ${N} concurrent writers (${log.entries.length} entries)`);
+  // ---- one namespace cannot occupy the shared pool -----------------------------
+  // Writes to one owner wait their turn in this process, not on a pooled
+  // connection parked on the database lock: while a burst of writes to one
+  // namespace runs, no connection of ours waits on an advisory lock and an
+  // unrelated query is served alongside it.
+  {
+    const pg = (await import("pg")).default;
+    const watcher = new pg.Client({ connectionString: PG_URL });
+    await watcher.connect();
+    let maxWaiting = 0, sampling = true;
+    const sampler = (async () => {
+      while (sampling) {
+        const r = await watcher.query("SELECT COUNT(*)::int AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND wait_event = 'advisory' AND pid <> pg_backend_pid()");
+        maxWaiting = Math.max(maxWaiting, r.rows[0].n);
+      }
+    })();
+    const W = "0x" + "d4".repeat(20);
+    const BURST = 120;
+    const writes = Array.from({ length: BURST }, (_, i) => m.memoryPut(W, "k" + (i % 5), "v" + i));
+    let otherDone = false;
+    const other = sdb.stateQuery("SELECT 1").then(() => { otherDone = true; });
+    let writesDone = 0;
+    for (const w of writes) w.then(() => { writesDone++; }, () => {});
+    await other;
+    const writesAtOther = writesDone;
+    const results = await Promise.allSettled(writes);
+    sampling = false; await sampler; await watcher.end();
+    ok(results.every((r) => r.status === "fulfilled"), `${BURST} concurrent writes to one namespace all succeed`);
+    ok(maxWaiting === 0, `no pooled connection waited on a namespace lock during the burst (max waiting ${maxWaiting})`);
+    ok(otherDone && writesAtOther < BURST, `an unrelated query was served before the burst finished (${writesAtOther}/${BURST} writes done)`);
+    const lg = await m.getLog(W, W, 1000);
+    ok(lg.entries.length === BURST && chainOk(lg.entries), `the namespace chain is contiguous through the burst (${lg.entries.length} entries)`);
+  }
+
   // ---- M9: a retried paid write with a client request id applies once ---------
   {
     const first = await m.memoryIncr(A, "rid-ctr", 1, A, { requestId: "job-7:step-1" });
