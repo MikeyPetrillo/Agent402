@@ -1370,6 +1370,16 @@ const SELF_FLAG = /USDC this seller's wallet had sent its payers|USDC that walle
   let threw = false;
   try { LB.setSellerFundingEnabled("no"); } catch (err) { threw = err.statusCode === 400; }
   ok(threw, "a switch value that is not a boolean is refused");
+  {
+    // A write that fails is reported as not persisted (the path is a directory, so the rename fails).
+    const { rmSync: rm, mkdirSync: mk, writeFileSync: wf } = await import("node:fs");
+    const sw = process.env.LEADERBOARD_FUNDING_SWITCH_FILE;
+    rm(sw, { force: true }); mk(sw, { recursive: true }); wf(join(sw, "keep"), "x");
+    const f = LB.setSellerFundingEnabled(false, { now: NOW });
+    ok(f.operator?.persisted === false, `a switch whose write failed reports persisted:false (${f.operator?.persisted})`);
+    rm(sw, { recursive: true, force: true });
+    LB.setSellerFundingEnabled(true, { now: NOW });
+  }
   LB.stopLeaderboardRefresh();
   LB._resetLeaderboardCacheForTests();
 }
