@@ -184,6 +184,13 @@ const mirrorUpsert = db.prepare(`
   VALUES (@id, @evidence, @slug, @network, @payer, @priceUsd, @httpStatus, @synthetic, @status, @paidTx, @note, @createdAt, @resolvedAt, @wire, @hangupReason, @claimedAt)
 `);
 const fileUpsert = fileDb ? fileDb.prepare(mirrorUpsert.source) : null;
+// Beside each written-through row, the table's updated_at it was written at
+// (its own table in the file, so the refunds table keeps the file-only build's
+// shape). At the next boot's reconcile, a file row whose stamp still equals
+// the table row's updated_at was changed in the file alone since (a rollback);
+// any other difference means the table moved on, and the table wins.
+if (fileDb) { try { fileDb.exec("CREATE TABLE IF NOT EXISTS pg_sync (evidence TEXT PRIMARY KEY, updated_at INTEGER NOT NULL)"); } catch { /* best effort */ } }
+const fileSync = fileDb ? (() => { try { return fileDb.prepare("INSERT OR REPLACE INTO pg_sync (evidence, updated_at) VALUES (?, ?)"); } catch { return null; } })() : null;
 const num = (v) => (v == null ? null : Number(v));
 let watermark = 0;     // refresh pulls rows stamped after this (database clock, ms)
 let loaded = false;    // the first pull finished: the readers answer from a full mirror
@@ -204,7 +211,7 @@ let writeThroughWarned = false;
 /** The landed row into the file (same id, same evidence), so a rolled-back build reads it. */
 function writeThroughRow(r) {
   if (!fileUpsert) return;
-  try { fileUpsert.run(pgToMirror(r)); }
+  try { fileUpsert.run(pgToMirror(r)); if (fileSync && r.updated_at != null) fileSync.run(r.evidence, Number(r.updated_at)); }
   catch (e) { if (!writeThroughWarned) { writeThroughWarned = true; console.warn(`[refund-ledger] write-through to ${DB_FILE} failed: ${String(e?.message || e).slice(0, 120)}`); } }
 }
 const applyPgRows = db.transaction((rows) => { for (const r of rows) applyPgRow(r); });
@@ -288,13 +295,19 @@ const same = (a, b) => (a == null && b == null) || (a != null && b != null && St
  *  - A debt the table lacks (by evidence) is inserted, with the file's id when
  *    that id is free and a fresh one otherwise. This lands what a file-only
  *    build wrote during the cutover window or a rollback.
- *  - A debt the table holds moves FORWARD only: the file row is applied when
- *    its status is further along (owed < sending < paid/void) and the table
- *    row has not been written since the file was; at the same, unresolved
- *    status only when the file was written past the grace after the table
- *    row. A table row that is further along, resolved, or newer is never
+ *  - A debt the table holds moves FORWARD only, judged per row, never by
+ *    the file's mtime alone (a container clock ahead of the database's, or a
+ *    copied file, stamps a stale file in the future). The file row is applied
+ *    when its status is further along (owed < sending < paid/void), the file
+ *    was written after the table row, and the table row has not been written
+ *    since the file row's own step: its write-through stamp (pg_sync) still
+ *    equals the table's updated_at, or the step's own time (claimedAt for
+ *    sending, resolvedAt for paid/void) is at or after it. At the same,
+ *    unresolved status only when the stamp still equals the table's
+ *    updated_at and the file was written past the grace after it. A table
+ *    row that is further along, resolved, or written since is never
  *    overwritten, so a stale or foreign file can never turn paid back into
- *    owed.
+ *    owed, send a released row again, or drop a held hang-up's reason.
  */
 async function reconcileFile() {
   const mtime = ledgerFileMtime(DB_FILE);
@@ -302,6 +315,7 @@ async function reconcileFile() {
   const { rows } = sqliteFileRows(DB_FILE, "refunds");
   if (!rows.length) return null;
   const file = rows.map(fileToPg).filter((v) => v.evidence);
+  const synced = new Map(sqliteFileRows(DB_FILE, "pg_sync").rows.map((x) => [x.evidence, Number(x.updated_at)]));
   const cur = new Map();
   for (let i = 0; i < file.length; i += 1000) {
     const r = await stateQuery(`SELECT * FROM ${T("refunds")} WHERE evidence = ANY($1::text[])`, [file.slice(i, i + 1000).map((v) => v.evidence)]);
@@ -325,15 +339,19 @@ async function reconcileFile() {
     }
     if (COMPARE_COLS.every((c) => same(v[c], d[c]))) continue;
     const rf = rankOf(v.status), rd = rankOf(d.status), du = Number(d.updated_at) || 0;
-    const forward = rf > rd && du <= mtime;
-    const sameStage = rf === rd && rd < 2 && du + NEWER_FILE_GRACE_MS < mtime;
+    // The table row as the file last saw it: nothing has written it since.
+    const untouched = synced.has(v.evidence) && synced.get(v.evidence) === du;
+    // When the file row took the step it is ahead by (container clock, ms).
+    const stepAt = Number(rf === 1 ? v.claimed_at : v.resolved_at) || 0;
+    const forward = rf > rd && du <= mtime && (untouched || stepAt >= du);
+    const sameStage = rf === rd && rd < 2 && du + NEWER_FILE_GRACE_MS < mtime && untouched;
     if (!forward && !sameStage) continue;
     // Guarded on the row as compared: a write that landed since is never overwritten.
     const r = await stateQuery(
       `UPDATE ${T("refunds")} SET ${COMPARE_COLS.map((c, i) => `${c} = $${i + 3}`).join(", ")}, updated_at = ${PG_NOW_MS}
-       WHERE evidence = $1 AND updated_at = $2 RETURNING id`,
+       WHERE evidence = $1 AND updated_at = $2 RETURNING *`,
       [v.evidence, d.updated_at, ...COMPARE_COLS.map((c) => v[c] ?? null)]);
-    if (r.rows[0]) advanced++;
+    if (r.rows[0]) { writeThroughRow(r.rows[0]); advanced++; }
   }
   if (inserted) await syncIdSequence(stateQuery, T("refunds"));
   if (inserted || advanced) console.log(`[refund-ledger] reconciled ${DB_FILE}: ${inserted} debt(s) the table lacked inserted, ${advanced} row(s) moved forward`);

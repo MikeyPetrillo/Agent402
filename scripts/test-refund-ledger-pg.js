@@ -182,6 +182,41 @@ try {
     ok((await pgRows("evidence = $1", ["0xcutover"])).length === 1, "M5: a second boot inserts it no second time");
   }
 
+  // ---- a stale file stamped in the future never undoes a newer table row ------
+  // Judged per row: the file's mtime can run ahead of the database clock (a
+  // container clock, a copied file), so it alone never lets a stale row win.
+  {
+    const PAY = "0xAbCd00000000000000000000000000000000000b";
+    // (a) a held hang-up the table wrote since the file last saw the row
+    ok((await rl.recordRefundOwed({ slug: "hold", network: "eip155:8453", payer: PAY, priceUsd: 0.01, tx: "0xr6hold", httpStatus: 400, note: "push unclaimed: input refused" })) === true, "r6: a debt (written through)");
+    { const f = new Database(FILE); f.prepare("UPDATE refunds SET httpStatus = 502, note = 'stale copy' WHERE evidence = '0xr6hold'").run(); f.close(); }
+    await sdb.stateQuery(`UPDATE ${T} SET http_status = 499, hangup_reason = 'payer budget', updated_at = updated_at + 5 WHERE evidence = '0xr6hold'`); // another container, not written through here
+    // (b) a released row: the file still says sending (a copy from before the release)
+    ok((await rl.recordRefundOwed({ slug: "rel", network: "eip155:8453", payer: PAY, priceUsd: 0.01, tx: "0xr6rel", httpStatus: 500 })) === true, "r6: a second debt");
+    const relId = Number(rl.refundByEvidence("0xr6rel").id);
+    const claimedAt = Date.now();
+    { const f = new Database(FILE); f.prepare("UPDATE refunds SET status = 'sending', claimedAt = ? WHERE evidence = '0xr6rel'").run(claimedAt - 60_000); f.close(); }
+    await sdb.stateQuery(`UPDATE ${T} SET note = 'released by a human', updated_at = updated_at + 5 WHERE id = $1`, [relId]); // released elsewhere since that claim
+    // (c) a same-stage change the file-only build made to a row nothing else touched: applied
+    ok((await rl.recordRefundOwed({ slug: "promo", network: "tempo", payer: PAY, priceUsd: 0.01, tx: "0xr6promo", httpStatus: 400, note: "push unclaimed: input refused" })) === true, "r6: a third debt");
+    { const f = new Database(FILE); f.prepare("UPDATE refunds SET httpStatus = 499, hangupReason = 'ip budget', note = 'push unclaimed: input refused; claimed on retry, then disconnected' WHERE evidence = '0xr6promo'").run(); f.close(); }
+    // (d) a claim the file-only build made after the table's last write: applied
+    ok((await rl.recordRefundOwed({ slug: "claim", network: "eip155:8453", payer: PAY, priceUsd: 0.01, tx: "0xr6claim", httpStatus: 500 })) === true, "r6: a fourth debt");
+    await sdb.stateQuery(`UPDATE ${T} SET note = 'touched elsewhere', updated_at = updated_at + 5 WHERE evidence = '0xr6claim'`);
+    { const f = new Database(FILE); f.prepare("UPDATE refunds SET status = 'sending', note = 'touched elsewhere', claimedAt = ? WHERE evidence = '0xr6claim'").run(Date.now() + 1000); f.close(); }
+    const future = new Date(Date.now() + 3600_000); // an hour ahead of the database
+    for (const f of [FILE, `${FILE}-wal`]) { try { utimesSync(f, future, future); } catch { /* no wal */ } }
+    boot();
+    const hold = (await pgRows("evidence = $1", ["0xr6hold"]))[0];
+    ok(Number(hold.http_status) === 499 && hold.hangup_reason === "payer budget" && hold.note === "push unclaimed: input refused", `r6 same stage: a stale file leaves the table's held hang-up alone (${hold.http_status}, ${hold.hangup_reason})`);
+    const rel = (await pgRows("evidence = $1", ["0xr6rel"]))[0];
+    ok(rel.status === "owed", `r6 forward: a stale 'sending' claimed before the table's last write never sends a released row again (${rel.status})`);
+    const promo = (await pgRows("evidence = $1", ["0xr6promo"]))[0];
+    ok(Number(promo.http_status) === 499 && promo.hangup_reason === "ip budget", `r6: a change made in the file alone, to a row the table has not written since, still rolls forward (${promo.http_status}, ${promo.hangup_reason})`);
+    const cl = (await pgRows("evidence = $1", ["0xr6claim"]))[0];
+    ok(cl.status === "sending", `r6: a claim the file made after the table's last write rolls forward (${cl.status})`);
+  }
+
   // ---- WS-H H3: the id sequence never moves backwards --------------------------
   {
     const seq = (await sdb.stateQuery("SELECT pg_get_serial_sequence($1, 'id') AS s", [T])).rows[0].s;
