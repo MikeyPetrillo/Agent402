@@ -4,7 +4,7 @@
 // the row first so the OTHER container's spend counts, and a write merges
 // rather than overwrites the other container's rows. The other container is a
 // real second process. Requires STATE_DATABASE_URL (CI fails without it).
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -89,6 +89,74 @@ try {
   ok(restarted.booked && near(restarted.spent, 0), "another chain starts at zero");
   const row4 = await documents.get(DOC);
   ok(near((row4.body.chains.base || []).reduce((s, r) => s + r.usd, 0), 1.34), "a boot elsewhere leaves the base rows intact");
+
+  // ---- 5. check-and-book is one step ------------------------------------------
+  {
+    // Two calls in one container at once: one $1 ceiling, two $0.60 reservations.
+    const both = await Promise.all([G.reserveSpend(P, 0.6, { chain: "solana", walletDailyMaxUsd: 1, maxUnsettledUsd: 10 }), G.reserveSpend(P, 0.6, { chain: "solana", walletDailyMaxUsd: 1, maxUnsettledUsd: 10 })]);
+    ok(both.filter((d) => d.ok).length === 1 && both.find((d) => d.ok)?.handle?.chain === "solana", `two concurrent reservations against room for one: one is booked (${both.map((d) => d.ok).join(",")})`);
+    // Two containers (two module instances, each its own process tag and memory)
+    // at once: the ledger row is locked from the read to the write.
+    const GA = await import("../src/external-spend-guard.js?container-a");
+    const GB = await import("../src/external-spend-guard.js?container-b");
+    await GA.__ready(); await GB.__ready();
+    const pause = () => new Promise((r) => setTimeout(r, 150));
+    GA.__onReserveRead(pause); GB.__onReserveRead(pause);
+    const two = await Promise.all([GA.reserveSpend(null, 0.6, { chain: "algorand", walletDailyMaxUsd: 1 }), GB.reserveSpend(null, 0.6, { chain: "algorand", walletDailyMaxUsd: 1 })]);
+    GA.__onReserveRead(null); GB.__onReserveRead(null);
+    const rowAlg = (await documents.get(DOC)).body.chains.algorand || [];
+    ok(two.filter((d) => d.ok).length === 1 && rowAlg.length === 1, `two containers reserving at once against room for one: one booked, one refused, one row (${two.map((d) => d.ok).join(",")}; ${rowAlg.length} row)`);
+    ok(two.find((d) => !d.ok)?.code === "wallet_daily_ceiling", "the refused one names the wallet ceiling");
+    // Bookings (noteSpend) from both containers at once: the merge runs under
+    // the row lock, so neither write drops the other's rows.
+    await Promise.all(Array.from({ length: 6 }, (_, i) => (i % 2 ? GA : GB).noteSpend(null, 0.01, { chain: "tempo" })));
+    await GA.__flush(); await GB.__flush();
+    const rowTempo = (await documents.get(DOC)).body.chains.tempo || [];
+    ok(rowTempo.length === 6, `six bookings from two containers at once all reach the row (${rowTempo.length})`);
+  }
+
+  // ---- 6. a boot during an outage refuses chain spends until the ledger is read ----
+  {
+    const { startPgRelay } = await import("./lib/pg-relay.js");
+    const relay = await startPgRelay(process.env.STATE_DATABASE_URL);
+    relay.cut();
+    const childFile = join(TMP, "child", "wallet-daily-spend.json"); // same document name, a file that does not exist
+    const code = `
+      const G = await import(${JSON.stringify(new URL("../src/external-spend-guard.js", import.meta.url).href)});
+      await G.__ready();
+      const out = { first: await G.reserveSpend(null, 0.1, { chain: "base" }), may: await G.maySpend(null, 0.1, { chain: "base" }), payerOnly: (await G.reserveSpend("0x9999999999999999999999999999999999999999", 0.1, {})).ok };
+      const t0 = Date.now();
+      let later = null;
+      while (Date.now() - t0 < 20000) { later = await G.reserveSpend(null, 0.1, { chain: "base", walletDailyMaxUsd: 1.4 }); if (later.code !== "spend_ledger_unreadable") break; await new Promise((r) => setTimeout(r, 250)); }
+      out.later = { ok: later.ok, code: later.code || null, spent: G.walletDailySpentUsd("base") };
+      const { closeStateDb } = await import(${JSON.stringify(new URL("../src/state-db.js", import.meta.url).href)});
+      await closeStateDb();
+      console.log(JSON.stringify(out));
+    `;
+    const child = spawn(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, STATE_DATABASE_URL: relay.url, WALLET_DAILY_LEDGER_FILE: childFile }, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (d) => { stdout += d; }); child.stderr.on("data", (d) => { stderr += d; });
+    setTimeout(() => relay.heal(), 7000);
+    const status = await new Promise((r) => child.on("exit", r));
+    await relay.close();
+    let out = null; try { out = JSON.parse(stdout.trim().split("\n").pop()); } catch { /* reported below */ }
+    ok(status === 0 && out, `the outage boot ran (${status}; ${stderr.slice(-200)})`);
+    ok(out?.first?.ok === false && out.first.code === "spend_ledger_unreadable" && out.may?.code === "spend_ledger_unreadable", "a container whose first ledger read failed (no file either) refuses chain spends instead of starting at zero");
+    ok(out?.payerOnly === true, "a spend with no chain wallet is not held by the chain ledger");
+    ok(out?.later?.code === "wallet_daily_ceiling" && near(out.later.spent, 1.34), `once the database answers, the stored day counts (${JSON.stringify(out?.later)})`);
+    // With the written-through file present, an outage boot reads the day from it.
+    (await import("node:fs")).mkdirSync(join(TMP, "child"), { recursive: true });
+    writeFileSync(childFile, JSON.stringify({ chains: { base: [{ id: 9, usd: 0.9, at: Date.now() - 1000, o: "x" }] }, at: Date.now() }));
+    const r2 = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      const G = await import(${JSON.stringify(new URL("../src/external-spend-guard.js", import.meta.url).href)});
+      await G.__ready();
+      const d = await G.reserveSpend(null, 0.2, { chain: "base", walletDailyMaxUsd: 1 });
+      console.log(JSON.stringify({ ok: d.ok, code: d.code || null, spent: G.walletDailySpentUsd("base") }));
+      process.exit(0);
+    `], { env: { ...process.env, STATE_DATABASE_URL: "postgres://postgres@127.0.0.1:1/none?sslmode=disable", WALLET_DAILY_LEDGER_FILE: childFile }, encoding: "utf8", timeout: 60_000 });
+    let o2 = null; try { o2 = JSON.parse(r2.stdout.trim().split("\n").pop()); } catch { /* reported below */ }
+    ok(o2?.code === "wallet_daily_ceiling" && near(o2.spent, 0.9), `an outage boot with the ledger file present decides on the file's day (${JSON.stringify(o2)})`);
+  }
 
   await __reset();
   ok((await documents.get(DOC)) === null, "__reset drops the row");

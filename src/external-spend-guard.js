@@ -129,6 +129,11 @@ const PROC = `${process.pid}-${randomBytes(3).toString("hex")}`;
 const DOC_NAME = documentNameOf(CHAIN_LEDGER_FILE);
 const chainDoc = PG ? createJsonDocument({ file: CHAIN_LEDGER_FILE, log: console.warn, writeThroughFiles: false }) : null;
 let pgReady = Promise.resolve();
+// Database mode: whether this process has read the chain ledger (the row, or
+// the written-through file when the row could not be read). Until it has, a
+// chain spend is refused: a container that booted during an outage must not
+// start the day at zero spent while the other container's spend is stored.
+let chainLedgerLoaded = !PG;
 let pgWriting = null;
 let pgWriteAgain = false;
 let pgLastReadWarn = 0;
@@ -173,14 +178,24 @@ function adoptStoredBody(body, now = Date.now()) {
 }
 
 async function loadChainLedgerPg() {
-  const body = await chainDoc.load(null);
-  if (body === null) {
-    if (chainDoc.lastError) {
-      console.warn(`[spend-guard] could not read the ${DOC_NAME} document (${chainDoc.lastError}); `
-        + "THE DAY STARTS AT ZERO SPENT - the 24h ceiling is not enforced against earlier spend in this window");
+  const r = await chainDoc.read({ retry: true });
+  if (!r.ok) {
+    // The written-through file is the next best record of the day; without
+    // one, chain spends are refused until a read of the row succeeds.
+    try {
+      const raw = JSON.parse(readFileSync(CHAIN_LEDGER_FILE, "utf8"));
+      adoptStoredBody(raw);
+      chainLedgerLoaded = true;
+      console.warn(`[spend-guard] could not read the ${DOC_NAME} document (${chainDoc.lastError}); the day's spend is read from ${CHAIN_LEDGER_FILE} until the database answers`);
+    } catch {
+      console.warn(`[spend-guard] could not read the ${DOC_NAME} document (${chainDoc.lastError}) and no ledger file is readable; `
+        + "external spends that book against a chain wallet are refused until the ledger is read");
     }
     return;
   }
+  chainLedgerLoaded = true;
+  if (!r.exists) return;
+  const body = r.body;
   adoptStoredBody(body);
   let restored = 0;
   for (const rows of chainLedger.values()) restored += rows.length;
@@ -192,9 +207,10 @@ async function loadChainLedgerPg() {
 async function refreshFromPg() {
   await pgReady;
   try {
-    const body = await chainDoc.load(null);
-    if (body !== null) adoptStoredBody(body);
-    else if (chainDoc.lastError) throw new Error(chainDoc.lastError);
+    const r = await chainDoc.read();
+    if (!r.ok) throw new Error(r.error || chainDoc.lastError || "unreadable");
+    if (r.exists) adoptStoredBody(r.body);
+    chainLedgerLoaded = true;
     return true;
   } catch (e) {
     const t = Date.now();
@@ -213,6 +229,18 @@ function writeFileThrough(body) {
     writeFileSync(tmp, JSON.stringify(body));
     renameSync(tmp, CHAIN_LEDGER_FILE);
   } catch { /* best effort; the row is what a load reads */ }
+}
+
+/** The stored chains with this process's rows merged in (other processes' rows kept). */
+function mergedChainBody(stored, now) {
+  const chains = {};
+  for (const chain of new Set([...Object.keys(stored || {}), ...chainLedger.keys()])) {
+    const foreign = freshRows(stored?.[chain], now).filter((r) => r.o !== PROC);
+    const own = (chainLedger.get(chain) || []).filter((r) => r.o === PROC && now - r.at < WALLET_DAY_MS);
+    const rows = [...foreign, ...own];
+    if (rows.length) chains[chain] = rows;
+  }
+  return { chains, at: now };
 }
 
 /** Merge this process's rows into the stored document under a row lock, so
@@ -349,8 +377,98 @@ export function maySpend(payer, usd, opts = {}) {
   if (!PG) return decideSpend(payer, usd, opts);
   // With the state database: the stored body (both containers' bookings) is
   // read before the ceiling is applied. One small read per spend decision.
-  return refreshFromPg().then(() => decideSpend(payer, usd, opts));
+  return refreshFromPg().then(() => unreadableRefusal(opts) || decideSpend(payer, usd, opts));
 }
+
+/** Database mode: a chain spend while the day's ledger has never been read is refused. */
+function unreadableRefusal(opts = {}) {
+  const ck = chainKeyOf(opts.chain);
+  if (!PG || chainLedgerLoaded || !ck) return null;
+  return {
+    ok: false, code: "spend_ledger_unreadable", chain: ck,
+    reason: `the ${ck} spending wallet's daily ledger could not be read, so its ceiling cannot be checked;` +
+      ` external routing on ${ck} is paused for every buyer until it can.`,
+  };
+}
+
+/**
+ * Check the ceilings and book the spend in ONE step: the decision and the
+ * booking cannot be split by another call's decision, so two calls in flight
+ * cannot both pass a ceiling that has room for one. Returns the decision
+ * with `handle` (as noteSpend returns it) when it is ok. Synchronous without
+ * the state database; with it, a promise, and the chain ledger row is locked
+ * (SELECT ... FOR UPDATE) from the read to the write, so two containers'
+ * reservations queue on it.
+ */
+export function reserveSpend(payer, usd, opts = {}) {
+  if (!PG) {
+    const d = decideSpend(payer, usd, opts);
+    return d.ok ? { ...d, handle: noteSpend(payer, usd, opts) } : d;
+  }
+  return reserveSpendPg(payer, usd, opts);
+}
+let reserveReadHook = null;
+async function reserveSpendPg(payer, usd, opts) {
+  await pgReady;
+  const ck = chainKeyOf(opts.chain);
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const amount = Number(usd) || 0;
+  if (!ck) {
+    const d = decideSpend(payer, usd, { ...opts, now });
+    return d.ok ? { ...d, handle: await noteSpend(payer, usd, { now }) } : d;
+  }
+  let booked = null;
+  try {
+    const out = await withStateTx(async (client) => {
+      const T = (t) => `${stateDbSchema()}.${t}`;
+      const cur = await client.query(`SELECT body FROM ${T("documents")} WHERE name = $1 FOR UPDATE`, [DOC_NAME]);
+      if (reserveReadHook) await reserveReadHook();
+      const storedBody = cur.rows[0]?.body && typeof cur.rows[0].body === "object" ? cur.rows[0].body : { chains: {} };
+      adoptStoredBody(storedBody, now);
+      chainLedgerLoaded = true;
+      // No await from here to the booking: the decision and the rows it adds are one step.
+      const d = decideSpend(payer, usd, { ...opts, now });
+      if (!d.ok) return d;
+      booked = bookLocal(keyOf(payer), ck, amount, now);
+      const body = mergedChainBody(storedBody.chains || {}, now);
+      await client.query(
+        `INSERT INTO ${T("documents")} (name, body) VALUES ($1, $2::jsonb)
+         ON CONFLICT (name) DO UPDATE SET body = EXCLUDED.body, version = ${T("documents")}.version + 1, updated_at = now()`,
+        [DOC_NAME, JSON.stringify(body)],
+      );
+      writeFileThrough(body);
+      return { ...d, handle: booked };
+    });
+    return out;
+  } catch (e) {
+    // The booking already counts here when the failure came after it; the
+    // next write carries it to the row.
+    if (booked) { void writeChainLedgerPg(); return { ok: true, handle: booked }; }
+    const t = Date.now();
+    if (t - pgLastReadWarn > 60_000) { pgLastReadWarn = t; console.warn(`[spend-guard] reservation against the state database failed (${String(e?.message || e).slice(0, 80)}); deciding on this container's own records`); }
+    const refused = unreadableRefusal(opts);
+    if (refused) return refused;
+    const d = decideSpend(payer, usd, { ...opts, now });
+    if (!d.ok) return d;
+    const handle = bookLocal(keyOf(payer), ck, amount, now);
+    void writeChainLedgerPg();
+    return { ...d, handle };
+  }
+}
+/**
+ * reserveSpend's shape from a separate check and book, for callers that
+ * inject their own maySpend/noteSpend (tests, stubs). The real guard's
+ * reserveSpend is the one that is a single step.
+ */
+export function composeReserve(may, note) {
+  return async (payer, usd, opts) => {
+    const d = await may(payer, usd, opts);
+    if (!d?.ok) return d;
+    return { ...d, handle: await note(payer, usd, opts) };
+  };
+}
+/** Test-only: awaited between the locked read and the decision of a reservation. */
+export function __onReserveRead(fn) { reserveReadHook = typeof fn === "function" ? fn : null; }
 function decideSpend(payer, usd, { maxUnsettledUsd = DEFAULT_MAX_UNSETTLED_USD, now = Date.now(), chain = null, walletDailyMaxUsd } = {}) {
   // The chain-wallet ceiling is checked FIRST and for every caller, attributable
   // payer or not: it bounds the wallet, not the buyer. `code` is the field a
@@ -403,8 +521,17 @@ export function noteSpend(payer, usd, opts = undefined) {
   const k = keyOf(payer);
   const ck = chainKeyOf(o.chain);
   if (!k && !ck) return PG ? Promise.resolve(null) : null;
+  const handle = bookLocal(k, ck, Number(usd) || 0, now);
+  if (!PG) return handle;
+  // The booking reaches the database BEFORE the buy, so the other container's
+  // next ceiling check counts it. A failed write is logged by the writer and
+  // retried with the next one; the spend still counts here meanwhile.
+  return (ck ? writeChainLedgerPg() : Promise.resolve(true)).then(() => handle);
+}
+
+/** Add the rows for one spend to the in-memory ledgers (synchronous). */
+function bookLocal(k, ck, amount, now) {
   const id = ++seq;
-  const amount = Number(usd) || 0;
   if (k) {
     const rows = prune(ledger.get(k) || [], now);
     rows.push({ id, usd: amount, at: now, settled: false });
@@ -416,12 +543,7 @@ export function noteSpend(payer, usd, opts = undefined) {
     chainLedger.set(ck, rows);
     if (!PG) persistChainLedgerSoon();
   }
-  const handle = { payer: k, id, chain: ck };
-  if (!PG) return handle;
-  // The booking reaches the database BEFORE the buy, so the other container's
-  // next ceiling check counts it. A failed write is logged by the writer and
-  // retried with the next one; the spend still counts here meanwhile.
-  return (ck ? writeChainLedgerPg() : Promise.resolve(true)).then(() => handle);
+  return { payer: k, id, chain: ck };
 }
 
 /**
