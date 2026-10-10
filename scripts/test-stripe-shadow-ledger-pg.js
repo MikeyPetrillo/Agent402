@@ -131,7 +131,37 @@ try {
   ok(fr.status === "abandoned" && String(fr.reason).endsWith(":max-attempts") && Number(fr.attempts) === 2, `exhausted after maxAttempts (${fr.status}, ${fr.reason})`);
   const rep = await f.reportAsync({ limit: 3 });
   ok(rep.recent.length === 3 && rep.counts.abandoned === 1 && typeof rep.recent[0].created_at === "number", "the report's recent list honours its limit and carries numbers, not strings");
-  for (const l of [a, b, c, d1, d2, e, f]) l.stop();
+
+  // ---- 5. a finish lands only on the row this drain still holds -------------
+  // While this drain's post is in flight, the row is reclaimed and recorded by
+  // another container (a post that outlived the stale window). This drain's
+  // answer (a transient failure) must not put the recorded row back to pending.
+  let g = null;
+  const raced = { impl: async () => {
+    await sdb.stateQuery(`UPDATE ${T} SET status = 'recorded', pi_id = 'pi_other', updated_at = $2 WHERE tx = $1`, [TX("f"), Date.now()]);
+    return { status: 503, json: async () => ({ error: { type: "api_error" } }) };
+  } };
+  g = createShadowLedger({ env: ENV_ON, dbFile, fetchImpl: raced.impl, intervalMs: 0, log: quiet, backoffMs: 0 });
+  await g.ready();
+  g.record({ ...SALE, tx: TX("f"), slug: "raced" });
+  await g.flush();
+  await g.drain();
+  const gr = (await rowsOf("tx = $1", [TX("f")]))[0];
+  ok(gr.status === "recorded" && gr.pi_id === "pi_other", `a finish does not overwrite a row another container recorded meanwhile (${gr.status}, ${gr.pi_id})`);
+
+  // ---- 6. a store whose first load failed is not inert for good -------------
+  // (the boot-blip suite covers the database refusing at boot; here the
+  // import bookkeeping is unreachable for one load, then back.)
+  const S = process.env.STATE_DB_SCHEMA;
+  await sdb.stateQuery(`ALTER TABLE ${S}.imports RENAME TO imports_away`);
+  const h = createShadowLedger({ env: ENV_ON, dbFile, fetchImpl: stubStripe().impl, intervalMs: 0, log: quiet });
+  const firstLoad = await h.ready();
+  h.record({ ...SALE, tx: TX("9"), slug: "while-away" });
+  await sdb.stateQuery(`ALTER TABLE ${S}.imports_away RENAME TO imports`);
+  ok(firstLoad === false && (await h.ready()) === true, `the first load fails while the table is away, and the next call retries it (${firstLoad})`);
+  await h.flush();
+  ok(h.report().live === true && (await rowsOf("tx = $1", [TX("9")])).length === 1, "and the record made meanwhile lands; the ledger is live");
+  for (const l of [a, b, c, d1, d2, e, f, g, h]) l.stop();
 } finally {
   await sdb.__dropStateSchema();
   await sdb.closeStateDb();
