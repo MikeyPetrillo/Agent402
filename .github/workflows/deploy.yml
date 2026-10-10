@@ -1335,6 +1335,7 @@ jobs:
           t node scripts/test-revenue-ledger-pg.js
           t node scripts/test-refund-ledger-pg.js
           t node scripts/test-sales-ledger-pg.js
+          t node scripts/test-ledger-dead-letter-pg.js
           t node scripts/test-mcp-tasks-pg.js
           t node scripts/test-hangup-forgiveness-pg.js
           t node scripts/test-external-spend-guard-pg.js

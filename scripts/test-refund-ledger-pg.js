@@ -21,6 +21,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIR = mkdtempSync(join(tmpdir(), "refunds-pg-"));
 const FILE = join(DIR, "agent402-refunds.db");
 process.env.REFUND_DB_DIR = DIR;
+process.env.LEDGER_MIRROR_MARGIN_MS = "400";
 
 // The file a volume would hold: three debts written by the file-only build.
 {
@@ -109,7 +110,7 @@ try {
   `;
   const out = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", childSrc], { env: { ...process.env }, cwd: ROOT, encoding: "utf8" }).trim().split("\n").pop());
   const ev = out.rows.map((r) => r[1]);
-  ok(!ev.includes("ALGO-file3"), "a second boot does not import the file again (a row deleted from the table stays gone)");
+  ok(ev.filter((e) => e === "ALGO-file3").length === 1 && (await pgRows("evidence = $1", ["ALGO-file3"])).length === 1, "a debt missing from the table is restored from the file at the next boot (insert-if-absent by evidence), once");
   ok(ev.includes("0xnew1") && out.rows.find((r) => r[1] === "0xnew1")[2] === "paid", "the second boot reads the table's current state, not the file");
   ok(out.rows.find((r) => r[1] === "0xpush1")[3].endsWith("then disconnected"), "the second boot sees the note rewrite");
   ok(out.alarm === "ok" || out.alarm === "aging", `the second boot's alarm reads from a loaded mirror (${out.alarm})`);
@@ -137,6 +138,98 @@ try {
   ok(rolled.rows.some((r) => r[1] === "0xfileonly") && rolled.rows.find((r) => r[1] === "0xroll1")[2] === "paid", "the booting instance reads the rolled-forward rows");
   ok(rolled.rows.some((r) => r[1] === "ALGO-file3"), "the file wins per row: a row the file still holds is back in the table");
   ok((await rl.recordRefundOwed({ slug: "h", network: "eip155:8453", payer: "0xAbCd000000000000000000000000000000000006", priceUsd: 0.001, tx: "0xafterroll", httpStatus: 500 })) === true && Number(rl.refundByEvidence("0xafterroll").id) > Number((await pgRows("evidence = $1", ["0xfileonly"]))[0].id), "the id sequence continues past the rolled-forward rows");
+
+  // ---- M10: a stale or foreign file never moves a row backwards -----------------
+  {
+    ok((await rl.recordRefundOwed({ slug: "m10", network: "eip155:8453", payer: "0xAbCd000000000000000000000000000000000007", priceUsd: 0.002, tx: "0xm10", httpStatus: 500 })) === true, "M10: a debt is booked");
+    const mid = Number(rl.refundByEvidence("0xm10").id);
+    ok((await rl.claimRefundForSend(mid, "run")) === true && (await rl.markRefundPaid(mid, "0xm10paid", "sent")) === true, "M10: and paid");
+    // The file still says owed (a foreign writer, or a copy from before the payment) and is stamped far in the future.
+    { const f = new Database(FILE); f.prepare("UPDATE refunds SET status = 'owed', paidTx = NULL, note = 'stale', resolvedAt = NULL WHERE evidence = '0xm10'").run(); f.close(); }
+    const future = new Date(Date.now() + 30 * 60_000);
+    utimesSync(FILE, future, future);
+    boot();
+    const r = (await pgRows("evidence = $1", ["0xm10"]))[0];
+    ok(r.status === "paid" && r.paid_tx === "0xm10paid", `M10: a file row behind the table never reverts paid to owed (${r.status}, ${r.paid_tx})`);
+    // An owed row written in the table after the file: the file's note is not applied.
+    ok((await rl.recordRefundOwed({ slug: "m10b", network: "eip155:8453", payer: "0xAbCd000000000000000000000000000000000007", priceUsd: 0.002, tx: "0xm10b", httpStatus: 500 })) === true, "M10: a second debt");
+    { const f = new Database(FILE); f.prepare("UPDATE refunds SET note = 'old file note' WHERE evidence = '0xm10b'").run(); f.close(); }
+    const past = new Date(Date.now() - 30 * 60_000);
+    utimesSync(FILE, past, past);
+    boot();
+    ok((await pgRows("evidence = $1", ["0xm10b"]))[0].note === null, "M10: a table row written after the file is never overwritten by it");
+  }
+
+  // ---- M5: a cutover-window row from the file-only build, its id already taken ----
+  {
+    const maxId = Number((await sdb.stateQuery(`SELECT MAX(id) AS m FROM ${T}`)).rows[0].m);
+    { const f = new Database(FILE); f.prepare("INSERT INTO refunds (id, evidence, slug, network, payer, priceUsd, httpStatus, synthetic, status, createdAt) VALUES (?, '0xcutover', 'c', 'eip155:8453', '0xAbCd000000000000000000000000000000000008', 0.003, 500, 0, 'owed', ?)").run(maxId + 1000, Date.now());
+      f.prepare("UPDATE refunds SET id = ? WHERE evidence = '0xcutover'").run(Number(rl.refundByEvidence("0xm10").id) + 5000); f.close(); }
+    // The file row's id collides with nothing now; make it collide with a live table row instead.
+    { const f = new Database(FILE); const live = Number(rl.refundByEvidence("0xm10b").id); f.prepare("DELETE FROM refunds WHERE id = ?").run(live); f.prepare("UPDATE refunds SET id = ? WHERE evidence = '0xcutover'").run(live); f.close(); }
+    const past = new Date(Date.now() - 30 * 60_000);
+    utimesSync(FILE, past, past); // older than the table's newest row: the mtime gate alone would skip it
+    boot();
+    const rows = await pgRows("evidence = $1", ["0xcutover"]);
+    ok(rows.length === 1 && rows[0].status === "owed", "M5: a debt written to the file by the old build is in the table after the next boot, even under a colliding id and an old mtime");
+    boot();
+    ok((await pgRows("evidence = $1", ["0xcutover"])).length === 1, "M5: a second boot inserts it no second time");
+  }
+
+  // ---- WS-H H3: the id sequence never moves backwards --------------------------
+  {
+    const seq = (await sdb.stateQuery("SELECT pg_get_serial_sequence($1, 'id') AS s", [T])).rows[0].s;
+    const before = Number((await sdb.stateQuery("SELECT nextval($1::regclass) AS v", [seq])).rows[0].v); // an insert that took an id and has not committed
+    const { syncIdSequence } = await import("../src/ledger-mirror.js");
+    await sdb.stateQuery(`DELETE FROM ${T} WHERE id = (SELECT MAX(id) FROM ${T})`);
+    await syncIdSequence(sdb.stateQuery, T);
+    const next = Number((await sdb.stateQuery("SELECT nextval($1::regclass) AS v", [seq])).rows[0].v);
+    ok(next > before, `syncIdSequence never moves the sequence back under an id already taken (${before} then ${next})`);
+  }
+
+  // ---- a5 / a18: renote and restate change an OWED row whose note matches only ----
+  {
+    ok((await rl.recordRefundOwed({ slug: "rn", network: "tempo", payer: "0xAbCd00000000000000000000000000000000000a", priceUsd: 0.01, tx: "0xrn", httpStatus: 400, wire: "mpp-tempo", note: "push unclaimed: input refused" })) === true, "a5: a push debt");
+    ok((await rl.renoteOwedRefund("0xrn", "some other note", "x")) === false && (await pgRows("evidence = $1", ["0xrn"]))[0].note === "push unclaimed: input refused", "a5: renote with a non-matching note changes nothing");
+    ok((await rl.restateOwedAsHandlerFailure("0xrn", { from: "some other note", httpStatus: 502, append: "y" })) === false && Number((await pgRows("evidence = $1", ["0xrn"]))[0].http_status) === 400, "a18: restate with a non-matching note changes nothing");
+    const rid = Number(rl.refundByEvidence("0xrn").id);
+    ok((await rl.claimRefundForSend(rid, "push unclaimed: input refused")) === true, "a5: the row is claimed (sending), note unchanged");
+    ok((await rl.renoteOwedRefund("0xrn", "push unclaimed: input refused", "x")) === false && (await pgRows("evidence = $1", ["0xrn"]))[0].note === "push unclaimed: input refused", "a5: renote never touches a sending row");
+    ok((await rl.restateOwedAsHandlerFailure("0xrn", { from: "push unclaimed: input refused", httpStatus: 502, append: "y" })) === false && (await pgRows("evidence = $1", ["0xrn"]))[0].status === "sending", "a18: restate never touches a sending row");
+    ok((await rl.recordRefundOwed({ slug: "rn2", network: "tempo", payer: "0xAbCd00000000000000000000000000000000000a", priceUsd: 0.01, tx: "0xrn2", httpStatus: 400, note: "push unclaimed: input refused" })) === true
+      && (await rl.renoteOwedRefund("0xrn2", "push unclaimed: input refused", "renoted")) === true && (await pgRows("evidence = $1", ["0xrn2"]))[0].note === "renoted", "a5: control: a matching owed row is renoted");
+    ok((await rl.restateOwedAsHandlerFailure("0xrn2", { from: "renoted", httpStatus: 502, append: "y" })) === true && Number((await pgRows("evidence = $1", ["0xrn2"]))[0].http_status) === 502, "a18: control: a matching owed row is restated");
+  }
+
+  // ---- e4: refundLedgerFlush resolves only once a queued write is in Postgres ----
+  {
+    rl.recordRefundOwed({ slug: "fl", network: "eip155:8453", payer: "0xAbCd00000000000000000000000000000000000b", priceUsd: 0.001, tx: "0xflush", httpStatus: 500 }); // not awaited
+    await rl.refundLedgerFlush();
+    ok((await pgRows("evidence = $1", ["0xflush"])).length === 1, "e4: a queued debt is in Postgres when the flush resolves");
+  }
+
+  // ---- H13: a NUL in a note never stops the ledger ------------------------------
+  {
+    ok((await rl.recordRefundOwed({ slug: "nul", network: "eip155:8453", payer: "0xAbCd00000000000000000000000000000000000c", priceUsd: 0.001, tx: "0xnul", httpStatus: 500, note: "bad\u0000note" })) === true, "H13: a debt whose note carries a NUL is recorded");
+    ok((await pgRows("evidence = $1", ["0xnul"]))[0]?.note === "badnote", "H13: stored with the NUL stripped");
+    { const f = new Database(FILE); f.prepare("INSERT INTO refunds (evidence, slug, network, payer, priceUsd, httpStatus, synthetic, status, note, createdAt) VALUES ('0xnulfile', 'n', 'eip155:8453', '0xAbCd00000000000000000000000000000000000c', 0.001, 500, 0, 'owed', ?, ?)").run("file\u0000note", Date.now()); f.close(); }
+    const out2 = boot();
+    ok(out2.rows.some((r) => r[1] === "0xnulfile") && (await pgRows("evidence = $1", ["0xnulfile"]))[0]?.note === "filenote", "H13: a file row with a NUL is imported and the ledger still loads");
+  }
+
+  // ---- M2: an import burst is not pulled again on every refresh -----------------
+  {
+    const vals = [];
+    for (let i = 0; i < 2000; i++) vals.push(`('0xbulk${i}', 'b', 'eip155:8453', 0, ${Date.now()})`);
+    await sdb.stateQuery(`INSERT INTO ${T} (evidence, slug, network, price_usd, created_at) VALUES ${vals.join(",")}`);
+    // Refreshes spaced as the timer spaces them (REFRESH_MS > the margin).
+    const gap = () => new Promise((r) => setTimeout(r, Number(process.env.LEDGER_MIRROR_MARGIN_MS) + 300));
+    await gap();
+    const first = await rl.refundLedgerRefresh();
+    await gap();
+    const second = await rl.refundLedgerRefresh();
+    ok(first >= 2000 && second === 0, `M2: the burst is pulled once, and the next refresh pulls nothing (${first}, ${second})`);
+  }
 
   // ---- the test seam empties both -------------------------------------------
   await rl.__resetRefunds();

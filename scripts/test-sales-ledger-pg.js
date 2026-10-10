@@ -21,6 +21,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIR = mkdtempSync(join(tmpdir(), "sales-pg-"));
 const FILE = join(DIR, "agent402-sales.db");
 process.env.SALES_LEDGER_DB = FILE;
+process.env.LEDGER_MIRROR_MARGIN_MS = "400";
 const BUYER = "0x1111111111111111111111111111111111111111";
 const BUYER2 = "0x2222222222222222222222222222222222222222";
 
@@ -132,7 +133,7 @@ try {
   {
     const f = new Database(FILE);
     f.prepare("INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire) VALUES (?, 'file-only', 0.07, 'usdc', 'base', ?, '0xfileonly', 0, 'x402')").run(Date.now(), BUYER2);
-    f.prepare("UPDATE sale_feedback SET verdict = 'good', reason = 'rolled forward' WHERE tx = '0xnew1'").run();
+    f.prepare("UPDATE sale_feedback SET verdict = 'good', reason = 'rolled forward', ts = ? WHERE tx = '0xnew1'").run(Date.now());
     f.close();
     const future = new Date(Date.now() + 10 * 60_000);
     utimesSync(FILE, future, future);
@@ -144,6 +145,67 @@ try {
   await sl.salesLedgerRefresh();
   ok(sl.saleByTx("0xfileonly")?.slug === "file-only", "a refresh brings the rolled-forward row into this instance's mirror");
   ok((await sl.recordSale({ slug: "after", priceUsd: 0.01, rail: "usdc", network: "base", payer: BUYER, tx: "0xafterroll", synthetic: false })) === true && sl.saleByTx("0xafterroll").id > sl.saleByTx("0xfileonly").id, "the id sequence continues past the rolled-forward rows");
+  // A verdict in the file older than the table's is not applied, even past the grace.
+  {
+    const f = new Database(FILE);
+    f.prepare("UPDATE sale_feedback SET verdict = 'bad', reason = 'stale', ts = 1 WHERE tx = '0xnew1'").run();
+    f.close();
+    const future = new Date(Date.now() + 20 * 60_000);
+    utimesSync(FILE, future, future);
+    bootWithFile();
+    ok((await q(`SELECT reason FROM ${S}.sale_feedback WHERE tx = '0xnew1'`))[0]?.reason === "rolled forward", "an older verdict in the file never replaces the table's newer one");
+  }
+
+  // ---- M5: a cutover-window sale by the file-only build, its id taken, old mtime ----
+  {
+    const taken = sl.saleByTx("0xafterroll").id;
+    const f = new Database(FILE);
+    f.prepare("DELETE FROM sales WHERE id = ?").run(taken);
+    f.prepare("INSERT INTO sales (id, ts, slug, price_usd, rail, network, payer, tx, internal, wire) VALUES (?, ?, 'cutover', 0.02, 'usdc', 'base', ?, '0xcutover', 0, 'x402')").run(taken, Date.now(), BUYER2);
+    f.prepare("INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal) VALUES (?, 'pow-cutover', 0, 'pow', NULL, NULL, NULL, 0)").run(Date.now());
+    f.close();
+    const past = new Date(Date.now() - 30 * 60_000);
+    utimesSync(FILE, past, past);
+    bootWithFile();
+    ok((await q(`SELECT count(*)::int AS n FROM ${S}.sales WHERE tx = '0xcutover'`))[0].n === 1 && (await q(`SELECT count(*)::int AS n FROM ${S}.sales WHERE slug = 'pow-cutover'`))[0].n === 1, "M5: sales the old build wrote to the file land at the next boot, under a taken id and an old mtime, with or without a tx");
+    bootWithFile();
+    ok((await q(`SELECT count(*)::int AS n FROM ${S}.sales WHERE tx = '0xcutover'`))[0].n === 1 && (await q(`SELECT count(*)::int AS n FROM ${S}.sales WHERE slug = 'pow-cutover'`))[0].n === 1, "M5: and a second boot inserts them no second time");
+    ok((await q(`SELECT slug FROM ${S}.sales WHERE id = $1`, [taken]))[0]?.slug === "after", "M5: the table's own row under that id is untouched");
+  }
+
+  // ---- H13: a NUL in a buyer's words never stops the ledger -------------------
+  {
+    const sale = sl.saleByTx("0xnew2");
+    const fbn = await sl.recordSaleFeedback({ tx: "0xnew2", saleId: sale.id, slug: sale.slug, payer: BUYER2, verdict: "bad", reason: "broken\u0000output" });
+    ok(fbn?.verdict === "bad" && (await q(`SELECT reason FROM ${S}.sale_feedback WHERE tx = '0xnew2'`))[0]?.reason === "brokenoutput", "H13: a verdict whose reason carries a NUL is stored, NUL stripped");
+    const f = new Database(FILE);
+    f.prepare("INSERT INTO sale_feedback (tx, sale_id, slug, payer, verdict, reason, ts) VALUES ('0xnulfb', 1, 'hash', ?, 'bad', ?, ?)").run(BUYER, "x\u0000y", Date.now());
+    f.prepare("INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal) VALUES (?, ?, 0.01, 'usdc', 'base', ?, '0xnulsale', 0)").run(Date.now(), "nul\u0000slug", BUYER);
+    f.close();
+    const out3 = bootWithFile();
+    ok(out3.totals && (await q(`SELECT reason FROM ${S}.sale_feedback WHERE tx = '0xnulfb'`))[0]?.reason === "xy" && (await q(`SELECT slug FROM ${S}.sales WHERE tx = '0xnulsale'`))[0]?.slug === "nulslug", "H13: file rows with a NUL are imported and the ledger still loads");
+    ok((await sl.recordSale({ slug: "after-nul", priceUsd: 0.01, rail: "usdc", network: "base", payer: BUYER, tx: "0xafternul", synthetic: false })) === true, "H13: a later sale still lands");
+  }
+
+  // ---- e5: salesLedgerFlush resolves only once a queued write is in Postgres ----
+  {
+    sl.recordSale({ slug: "flush", priceUsd: 0.01, rail: "usdc", network: "base", payer: BUYER, tx: "0xflush", synthetic: false }); // not awaited
+    await sl.salesLedgerFlush();
+    ok((await q(`SELECT count(*)::int AS n FROM ${S}.sales WHERE tx = '0xflush'`))[0].n === 1, "e5: a queued sale is in Postgres when the flush resolves");
+  }
+
+  // ---- M2: an import burst is not pulled again on every refresh ---------------
+  {
+    const vals = [];
+    for (let i = 0; i < 10000; i++) vals.push(`(${Date.now()}, 'bulk', 0.001, 'usdc', 'base', '0xbulk${i}', 0)`);
+    await sdb.stateQuery(`INSERT INTO ${S}.sales (ts, slug, price_usd, rail, network, tx, internal) VALUES ${vals.join(",")}`);
+    const gap = () => new Promise((r) => setTimeout(r, Number(process.env.LEDGER_MIRROR_MARGIN_MS) + 300));
+    await gap();
+    const first = await sl.salesLedgerRefresh();
+    await gap();
+    const second = await sl.salesLedgerRefresh();
+    ok(first >= 10000 && second === 0, `M2: a 10k-row burst is pulled once, and the next refresh pulls nothing (${first}, ${second})`);
+  }
 } finally {
   await sdb.__dropStateSchema();
   await sdb.closeStateDb();
