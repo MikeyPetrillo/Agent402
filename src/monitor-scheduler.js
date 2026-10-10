@@ -28,7 +28,7 @@
 // this is fulfilment only. Rollout: mounts only when subscriptions are enabled;
 // MONITOR_SCHEDULER=off disables the timer (manual runs still work).
 import { existsSync } from "node:fs";
-import { createJsonDocument } from "./json-document.js";
+import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, withLease } from "./state-db.js";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -54,6 +54,10 @@ export const MAX_FULL_PER_SUB_30D = 4;   // welcome + scheduled + up to 4 change
 // Bounds a monthly subscription against its own MEASURED upstream per report,
 // net of card fees. The tier's own `maxUpstreamUsd` is a circuit breaker that downgrades the synthesis model, not
 // the normal cost; a run that hit it every time would still be capped here at 4.
+// Database mode: how long a paid run's claim on its subscription holds. A run
+// that outlives it (or a container that died mid-run) lets the next holder run
+// the subscription again; a claim never blocks longer than this.
+export const RUN_CLAIM_TTL_MS = 2 * HOUR;
 export const PERMANENT_FAIL_NOTICE_AT = 5; // consecutive failures before the subscriber is told (once)
 const REPORTS_PER_SUB = 12;
 const MAX_RUNS_KEPT = 24;
@@ -142,8 +146,89 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   let store = shapeStore(doc.loadSync(null));
   const ready = trackStoreReady(usePg ? doc.load(null).then((j) => { store = shapeStore(j); }) : Promise.resolve());
   const me = ownerId || `${process.env.RAILWAY_REPLICA_ID || "local"}:${process.pid}:${randomBytes(3).toString("hex")}`;
-  const persist = () => { void doc.save(store); };
-  const stateOf = (subId) => (store.subs[subId] ||= { failures: 0, runs: [] });
+  // Database mode: two containers can hold this store at once (a deploy's
+  // overlap, a lease that lapsed mid-run). Saves never put the whole body:
+  // they merge into the row the subscriptions this container touched (the
+  // copy that ran last wins, the row's run claim is kept) and the reports it
+  // added or pruned. On the volume the whole file is saved, as before.
+  const touched = new Set(), addedReports = new Set(), prunedReports = new Set();
+  let saving = null, saveAgain = false;
+  function mergeIntoRow(b) {
+    const body = shapeStore(b);
+    for (const id of touched) {
+      const mine = Object.hasOwn(store.subs, id) ? store.subs[id] : null;
+      if (!mine) continue;
+      const theirs = Object.hasOwn(body.subs, id) ? body.subs[id] : null;
+      // The other container delivered a report this copy has not seen, or ran it later: its record stands.
+      if (theirs && (Number(theirs.lastFullAt || 0) > Number(mine.lastFullAt || 0) || lastActivity(theirs) > lastActivity(mine))) continue;
+      const { runClaim: _local, ...m } = mine;
+      body.subs[id] = theirs?.runClaim ? { ...m, runClaim: theirs.runClaim } : m;
+    }
+    for (const id of addedReports) if (Object.hasOwn(store.reports, id)) body.reports[id] = store.reports[id];
+    for (const id of prunedReports) delete body.reports[id];
+    body.lock = store.lock; body.lastTickAt = store.lastTickAt; body.lastTick = store.lastTick;
+    return body;
+  }
+  function savePg() {
+    if (saving) { saveAgain = true; return saving; }
+    saving = (async () => {
+      do {
+        saveAgain = false;
+        const added = [...addedReports], pruned = [...prunedReports];
+        const r = await doc.update(mergeIntoRow, { fallback: shapeStore(null) });
+        if (r.ok) { for (const id of added) addedReports.delete(id); for (const id of pruned) prunedReports.delete(id); }
+        else log(`[monitors] save failed: ${errMsg(r.error || doc.lastError || "")}`);
+      } while (saveAgain);
+    })().finally(() => { saving = null; });
+    return saving;
+  }
+  const persist = () => { if (usePg) void savePg(); else void doc.save(store); };
+  const stateOf = (subId) => { if (usePg) touched.add(subId); return (store.subs[subId] ||= { failures: 0, runs: [] }); };
+
+  // Database mode: a paid run is claimed on its subscription's record in the
+  // row first, a conditional write that succeeds only while no other live
+  // claim exists and the row shows no report newer than the copy this run
+  // decided from. Only the claimer generates. The claim is cleared when the
+  // run's record is written (or the run fails).
+  const claimLost = () => { const e = new Error("the subscription's run is claimed elsewhere or already ran"); e.leaseLost = true; return e; };
+  async function claimRun(subId, st) {
+    const token = randomBytes(8).toString("hex");
+    let rowSt = null;
+    const r = await doc.update((b) => {
+      const body = shapeStore(b);
+      const cur = Object.hasOwn(body.subs, subId) ? body.subs[subId] : null;
+      rowSt = cur;
+      if (cur?.runClaim && Number(cur.runClaim.until) > now()) return SKIP_UPDATE;
+      if (cur && ((cur.lastReportId || null) !== (st.lastReportId || null) || Number(cur.lastFullAt || 0) > Number(st.lastFullAt || 0))) return SKIP_UPDATE;
+      body.subs[subId] = { ...(cur || { failures: 0, runs: [] }), runClaim: { by: me, token, until: now() + RUN_CLAIM_TTL_MS } };
+      return body;
+    }, { fallback: shapeStore(null) });
+    if (!r.ok) throw new Error(`could not claim the run: ${errMsg(r.error || doc.lastError || "")}`);
+    if (r.changed) return token;
+    // Not ours: take the row's copy, so no save of ours writes a stale one over it.
+    if (rowSt) { const { runClaim: _c, ...copy } = rowSt; store.subs[subId] = copy; }
+    return null;
+  }
+  async function endRun(subId, token, reportId = null) {
+    const r = await doc.update((b) => {
+      const body = shapeStore(b);
+      const cur = Object.hasOwn(body.subs, subId) ? body.subs[subId] : null;
+      const mine = Object.hasOwn(store.subs, subId) ? store.subs[subId] : null;
+      const claim = cur?.runClaim && cur.runClaim.token !== token ? cur.runClaim : null;
+      if (reportId && mine) {
+        const { runClaim: _c, ...m } = mine;
+        body.subs[subId] = claim ? { ...m, runClaim: claim } : m;
+        if (Object.hasOwn(store.reports, reportId)) body.reports[reportId] = store.reports[reportId];
+        for (const id of prunedReports) delete body.reports[id];
+      } else if (cur?.runClaim?.token === token) {
+        const { runClaim: _c, ...rest } = cur;
+        body.subs[subId] = rest;
+      } else return SKIP_UPDATE;
+      return body;
+    }, { fallback: shapeStore(null) });
+    if (!r.ok) log(`[monitors] ${subId}: the run record could not be written yet (${errMsg(r.error || doc.lastError || "")}); the next save carries it`);
+    else if (reportId) addedReports.delete(reportId);
+  }
 
   // --- shared-store lock -----------------------------------------------------
   // With the state database the tick runs under withLease (see tick() below):
@@ -171,7 +256,8 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     if (!usePg) { persist(); return; }
     // The tick's state lands before the lease goes: the next holder's read
     // must see this tick's runs.
-    try { await doc.save(store); await doc.flush(); } catch { /* logged by the document */ }
+    try { await savePg(); if (saveAgain || saving) await savePg(); await doc.flush(); } catch { /* logged */ }
+    touched.clear();
   }
   // The fencing check for the tick in progress: false once its lease is
   // lost, checked before each subscription and before each paid run.
@@ -181,7 +267,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   // --- delivery ---------------------------------------------------------------
   function pruneReports(subId) {
     const mine = Object.entries(store.reports).filter(([, r]) => r.subId === subId).sort((a, b) => String(a[1].at).localeCompare(String(b[1].at)));
-    while (mine.length > REPORTS_PER_SUB) { const [id] = mine.shift(); delete store.reports[id]; }
+    while (mine.length > REPORTS_PER_SUB) { const [id] = mine.shift(); delete store.reports[id]; if (usePg) prunedReports.add(id); }
   }
 
   // Paid runs in the trailing 30 days (from the run log) - the per-sub cost cap.
@@ -204,10 +290,18 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     const p = MONITOR_PRODUCTS[rec.product];
     if (!(await stillActive(rec))) { const e = new Error("subscription no longer active"); e.inactive = true; throw e; }
     if (!fence()) throw leaseLost();
+    const token = usePg ? await claimRun(rec.subId, st) : null;
+    if (usePg && !token) throw claimLost();
     const input = inputFor(p.kind, rec.target, st);
-    const g = await generate(p.kind, p.slug, input, { buyerKey: `sub:${rec.subId}`, rail: "monitor", priceUsd: Number(p.price) / 100 });
+    let g;
+    try {
+      g = await generate(p.kind, p.slug, input, { buyerKey: `sub:${rec.subId}`, rail: "monitor", priceUsd: Number(p.price) / 100 });
+      if (!((g && typeof g === "object") ? g.report : String(g ?? ""))) throw new Error("empty report");
+    } catch (e) {
+      if (token) await endRun(rec.subId, token).catch(() => {});
+      throw e;
+    }
     const bundle = (g && typeof g === "object") ? g : { report: String(g ?? "") };
-    if (!bundle.report) throw new Error("empty report");
     const id = newReportId();
     const at = new Date(now()).toISOString();
     store.reports[id] = {
@@ -219,7 +313,8 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     st.lastFullAt = now(); st.lastReportId = id; st.failures = 0; st.nextAttemptAt = null; st.lastError = null;
     st.runs = [...(st.runs || []), { at, reason, reportId: id }].slice(-MAX_RUNS_KEPT);
     pruneReports(rec.subId);
-    persist();
+    if (usePg) { addedReports.add(id); await endRun(rec.subId, token, id); }
+    else persist();
     if (rec.email) {
       // The manage link (a keyed bearer to the Stripe portal) rides ONLY in the
       // subscriber's email; the report JSON/page carry no bearer to the portal.
@@ -541,6 +636,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
           // again). A row that cannot be read skips the tick.
           const rd = await doc.read();
           if (!rd.ok) { log(`[monitors] could not read the run history (${errMsg(doc.lastError || "")}); tick skipped`); return { skipped: "locked" }; }
+          if (typeof subs.reload === "function") await subs.reload();
           const row = shapeStore(rd.exists ? rd.body : null);
           store = { ...store, lock: { owner: me, at: now() }, subs: mergeSubsByNewest(store.subs, row.subs), reports: { ...store.reports, ...row.reports } };
           fence = () => lease.stillHeld();

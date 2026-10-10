@@ -1329,6 +1329,8 @@ jobs:
           t node scripts/test-leased-loops.js
           # A tick whose lease was lost stops before its next send, pull or paid run.
           t node scripts/test-lease-fencing-pg.js
+          # A paid monitor run is claimed on its record; saves merge, never erase.
+          t node scripts/test-monitor-scheduler-pg.js
           t node scripts/test-idempotency-store.js
           # Every store that left the volume: file imported once, rows win, invariant on Postgres.
           t node scripts/test-stats-pg.js
