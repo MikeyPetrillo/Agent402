@@ -303,7 +303,9 @@ async function insertAbsentFileSales(sinceTs) {
   const file = rows.map(saleRowOf);
   // A sale's identity is ts/slug/rail/payer/tx, never the tx alone (see INSERT_SALE_IF_ABSENT).
   const keyOf = (r) => `${Number(r.ts)}|${r.slug}|${r.rail}|${r.payer ?? ""}|${r.tx ?? ""}`;
-  const minTs = Math.min(...file.map((r) => Number(r.ts)));
+  // A loop, never Math.min(...spread): a spread of every file row overflows the stack past ~110k rows.
+  let minTs = Infinity;
+  for (const x of file) if (Number(x.ts) < minTs) minTs = Number(x.ts);
   const have = new Set();
   const r = await stateQuery(`SELECT ts, slug, rail, payer, tx FROM ${T("sales")} WHERE ts >= $1`, [minTs]);
   for (const x of r.rows) have.add(keyOf(x));
