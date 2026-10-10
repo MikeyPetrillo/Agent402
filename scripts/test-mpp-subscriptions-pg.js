@@ -195,18 +195,97 @@ try {
 
   // ---- (6) roll-forward after a rollback window ------------------------------------
   {
-    const rec2 = { ...oldRec, subId: "mpp_newer" };
     const file2 = join(D1, "mpp-subscriptions.json");
+    // The last write before the rollback goes through this file's own
+    // write-through (the volume's container), so its sidecar names the row's
+    // current version; then the old build, on the file alone, adds a record.
+    const A2 = makeEngine(file2);
+    await A2.engine.ready();
+    await A2.engine._writeRec({ ...(await A2.engine._readRec(sub.subId)), note: "before-rollback" });
+    await A2.engine.flush();
+    const rec2 = { ...oldRec, subId: "mpp_newer" };
     const body = JSON.parse(readFileSync(file2, "utf8"));
     body["a402:sub:mpp_newer"] = rec2;
     writeFileSync(file2, JSON.stringify(body));
-    // A file written long after the row was last written is a rollback
-    // window's writes: the next first load replaces the row with it.
-    const future = (Date.now() + 10 * 60_000) / 1000;
-    utimesSync(file2, future, future);
     const A3 = makeEngine(file2);
     await A3.engine.ready();
-    ok(A3.engine.get("mpp_newer")?.subId === "mpp_newer", "a file written past the write-through grace (a rollback window) is rolled forward into the row");
+    ok(A3.engine.get("mpp_newer")?.subId === "mpp_newer", "a file the old build changed after this store's write-through of the current row is rolled forward into the row");
+    // A file whose sidecar names an older row version (the row moved on since) never replaces the row, whatever its mtime.
+    await sdb.documents.mergeKeys("mpp-subscriptions.json", { "a402:sub:mpp_other": { ...oldRec, subId: "mpp_other" } });
+    const body2 = JSON.parse(readFileSync(file2, "utf8"));
+    body2["a402:sub:mpp_stale"] = { ...oldRec, subId: "mpp_stale" };
+    writeFileSync(file2, JSON.stringify(body2));
+    const future = (Date.now() + 10 * 60_000) / 1000;
+    utimesSync(file2, future, future);
+    const A4 = makeEngine(file2);
+    await A4.engine.ready();
+    ok(!A4.engine.get("mpp_stale") && A4.engine.get("mpp_other")?.subId === "mpp_other", "a newer mtime alone does not roll a file over a row that moved on");
+  }
+  // ---- (7) two containers: a renewal decision reads the row, never a boot copy ----------
+  {
+    // The store itself: a key one container writes is what the other reads next.
+    const SA = createDbStore(join(D1, "g-subs.json"), { log: quiet }); await SA._ready;
+    const SB = createDbStore(join(D2, "g-subs.json"), { log: quiet }); await SB._ready;
+    await SA.put("sub_1", { subscriptionId: "1", lastChargedPeriod: 0 });
+    await SA.put("a402:sub:mpp_1", { subId: "mpp_1", lastChargedPeriod: 0 });
+    const SB2 = createDbStore(join(D2, "g-subs.json"), { log: quiet }); await SB2._ready; // boots now: reads period 0
+    await SA.put("sub_1", { subscriptionId: "1", lastChargedPeriod: 1 });
+    await SA.put("a402:sub:mpp_1", { subId: "mpp_1", lastChargedPeriod: 1 });
+    const bMppx = await SB2.get("sub_1"), bRec = await SB2.get("a402:sub:mpp_1");
+    ok(bMppx?.lastChargedPeriod === 1 && bRec?.lastChargedPeriod === 1, `a container booted before the other's charge reads the charged period (row: 1 1 | B sees: ${bMppx?.lastChargedPeriod} ${bRec?.lastChargedPeriod})`);
+    void SB;
+
+    const P = makeEngine(join(D1, "ov", "mpp-subscriptions.json"));
+    await P.engine.ready();
+    const offerP = await P.engine.mintOffer({ product: "fund-monitor", target: "Overlap Manager LP" });
+    const subP = await P.engine.activateFromCredential(await signCredential(Challenge.deserialize(offerP.header)));
+    await P.engine.flush();
+    const Q = makeEngine(join(D2, "ov", "mpp-subscriptions.json")); // the new container boots during the overlap
+    await Q.engine.ready();
+    ok(Q.engine.get(subP.subId)?.lastChargedPeriod === 0, "the second container booted with period 0 unpaid in its copy");
+    advance(PERIOD);
+    P.setCharge(() => ({ reference: "0xp-period1" }));
+    ok(await P.engine.refreshStatus(subP.subId) === "active" && P.calls.charge === 1, "the old container charges the due period");
+    Q.setCharge(() => ({ reference: "0xq-MUST-NOT" }));
+    const qStatus = await Q.engine.refreshStatus(subP.subId);
+    ok(qStatus === "active" && Q.calls.charge === 0, `the second container sees the period charged and signs nothing (status ${qStatus}, charges ${Q.calls.charge})`);
+    ok((await rowBody())?.[`a402:sub:${subP.subId}`]?.lastChargeTx === "0xp-period1" && !(await rowBody())?.[`a402:sub:${subP.subId}`]?.chargeClaim, "the row keeps the old container's charge, and no claim is left behind");
+
+    // Both of the second container's reads are stale (a reply that crossed the
+    // other container's charge): the claim on the row still refuses the period.
+    advance(PERIOD);
+    P.setCharge(() => ({ reference: "0xp-period2" }));
+    const staleRec = await Q.engine._readRec(subP.subId);
+    ok(await P.engine.refreshStatus(subP.subId) === "active" && P.calls.charge === 2, "the old container charges period 2");
+    const kvQ = Q.engine._store, realGet = kvQ.get, realFresh = kvQ.getFresh;
+    const key = `a402:sub:${subP.subId}`;
+    kvQ.get = async (k) => (k === key ? JSON.parse(JSON.stringify(staleRec)) : realGet.call(kvQ, k));
+    kvQ.getFresh = async (k) => (k === key ? JSON.parse(JSON.stringify(staleRec)) : realFresh.call(kvQ, k));
+    const qStale = await Q.engine.refreshStatus(subP.subId);
+    kvQ.get = realGet; kvQ.getFresh = realFresh;
+    ok(qStale === "active" && Q.calls.charge === 0, `with stale reads the period claim on the row still refuses a second pull (status ${qStale}, charges ${Q.calls.charge})`);
+    // A cancel on one container is what the other decides from.
+    const token = P.engine.manageToken(subP.subId);
+    await P.engine.cancel(subP.subId, token);
+    await P.engine.flush();
+    advance(PERIOD);
+    const qCancel = await Q.engine.refreshStatus(subP.subId);
+    ok(qCancel === "canceled" && Q.calls.charge === 0, `a cancel made on the other container is seen before any pull (status ${qCancel})`);
+
+    // A live claim (the other container mid-pull) stops a second signature even with the lease free.
+    const offerR = await P.engine.mintOffer({ product: "fund-monitor", target: "Claim Manager LP" });
+    const subR = await P.engine.activateFromCredential(await signCredential(Challenge.deserialize(offerR.header)));
+    await P.engine.flush();
+    await Q.engine.refreshMirror(true);
+    ok(Q.engine.listActive().some((r) => r.subId === subR.subId), "listActive on the other container picks up a new subscriber from the row");
+    advance(PERIOD);
+    const recR = await P.engine._readRec(subR.subId);
+    await P.engine._store.put(`a402:sub:${subR.subId}`, { ...recR, chargeClaim: { period: 1, token: "other", by: "other-container", until: new Date(clock + 60_000).toISOString() } });
+    const qr = await Q.engine.refreshStatus(subR.subId);
+    ok(qr === "past_due" && Q.calls.charge === 0, `a period another container has claimed is not pulled here (status ${qr})`);
+    await P.engine._store.put(`a402:sub:${subR.subId}`, { ...recR, chargeClaim: { period: 1, token: "other", by: "other-container", until: new Date(clock - 1).toISOString() } });
+    Q.setCharge(() => ({ reference: "0xq-after-expiry" }));
+    ok(await Q.engine.refreshStatus(subR.subId) === "active" && Q.calls.charge === 1, "a claim left by a container that died expires, and the period is pulled once");
   }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
