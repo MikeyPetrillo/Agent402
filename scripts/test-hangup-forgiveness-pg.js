@@ -71,6 +71,28 @@ try {
   const row3 = await documents.get(HANGUP_DOCUMENT_NAME);
   ok(row3?.body?.global?.length === 3, "the row carries it too");
 
+  // ---- 4. two containers persist at once: neither drops the other's records ----
+  {
+    const HA = await import("../src/hangup-forgiveness.js?container-a");
+    const HB = await import("../src/hangup-forgiveness.js?container-b");
+    _resetHangupForgiveness(); // the first instance's pending persist must not add its records here
+    process.env.HANGUP_FORGIVE_FILE = "off"; // no file to import: the row is the only store here
+    HA._resetHangupForgiveness(); HB._resetHangupForgiveness();
+    await documents.del(HANGUP_DOCUMENT_NAME);
+    const spendOn = (M, keys, price, t) => { const req = {}; M.reserveHangupForgiveness(req, { keys, priceUsd: price, now: t }); M.settleHangupTicket(req, { abandoned: true, now: t }); };
+    spendOn(HA, ["0xaaaa", "ip:198.51.100.1"], 0.02, now - 3_000);
+    spendOn(HB, ["0xbbbb", "ip:198.51.100.2"], 0.03, now - 2_000);
+    await Promise.all([HA.persistNow(), HB.persistNow()]);
+    const both = (await documents.get(HANGUP_DOCUMENT_NAME))?.body;
+    const has = (body, raw) => (body?.keys || []).some((r) => r[0] === HA.hangupKeyDigest(raw));
+    ok(both?.global?.length === 2 && has(both, "0xaaaa") && has(both, "0xbbbb") && both.keys.length === 4, `both containers' records are in the row (${both?.global?.length} service-wide, ${both?.keys?.length} keys)`);
+    spendOn(HA, ["0xaaaa", "ip:198.51.100.1"], 0.01, now - 1_000);
+    await HA.persistNow();
+    const after = (await documents.get(HANGUP_DOCUMENT_NAME))?.body;
+    ok(after.global.length === 3 && after.keys.find((r) => r[0] === HA.hangupKeyDigest("0xbbbb"))?.[1]?.length === 1, "a later persist from one container keeps the other's records");
+    process.env.HANGUP_FORGIVE_FILE = file;
+  }
+
   // A load from an unreadable row body is strict, like the file.
   await documents.put(HANGUP_DOCUMENT_NAME, { v: 99, global: [[now - 1, 5_000]] });
   _resetHangupForgiveness();
