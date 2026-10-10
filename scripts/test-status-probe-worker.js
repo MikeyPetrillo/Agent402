@@ -632,6 +632,21 @@ for (const [name, over, detail] of failCases) {
     assert.equal(judge({ gateway: {} })[T], "quiet");
   });
 
+  await acheck("ledger dead-letter: the worker's and heartbeat.yml's issue bodies name all five journals and their log lines", async () => {
+    const { ALARMS } = await import("../workers/status-probe/src/index.js");
+    const T = "Ledger rows waiting on local disk (dead-letter stuck)";
+    const worker = ALARMS.find((x) => x.title === T).body({ gateway: { ledgerDeadLetter: { status: "stuck" } } });
+    const yml = await readFile(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
+    const step = yml.slice(yml.indexOf(`TITLE="${T}"`), yml.indexOf("gh issue close", yml.indexOf(`TITLE="${T}"`)));
+    assert.ok(step.length > 0, "heartbeat.yml has the dead-letter step");
+    for (const [name, text] of [["worker", worker], ["heartbeat.yml", step]]) {
+      assert.ok(text.includes("a sale, a refund debt, a card report's final record, a subscription record or a decide write"), `${name} names the five journals`);
+      assert.ok(text.includes("Each journal's replay retries on a timer"), `${name} says each replay retries on a timer`);
+      for (const tag of ["[sales-ledger]", "[refund-ledger]", "[human-checkout]", "[subscriptions]", "[decide]"]) assert.ok(text.includes(tag), `${name} lists the ${tag} log lines`);
+      assert.ok(text.includes("counts per journal"), `${name} says the operator view has the counts per journal`);
+    }
+  });
+
   await acheck("offsite backup: held, failed and stale page, ok clears, off and unknown do neither; body echoes only known words", async () => {
     const { judge, ALARMS } = await import("../workers/status-probe/src/index.js");
     const T = "Offsite backup is not current";

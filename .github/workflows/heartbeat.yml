@@ -664,7 +664,8 @@ jobs:
               ;;
           esac
 
-      # Sales and refund debts kept on the container's local disk because the
+      # Money writes (sales, refund debts, card report records, subscription
+      # records, decide writes) kept on the container's local disk because the
       # state database has not taken them (src/ledger-mirror.js): one word on
       # /api/gateway-status. "stuck" means an entry has waited past
       # LEDGER_DEAD_LETTER_STUCK_MINUTES; without the /data volume that disk
@@ -672,7 +673,7 @@ jobs:
       # readings 30 s apart, like the state database check. "pending" (the
       # replay is working through them), "none", "off" and "unknown" never page;
       # none and off close.
-      - name: Ledger dead-letter check (alarm when sales or debts wait on local disk)
+      - name: Ledger dead-letter check (alarm when money writes wait on local disk)
         if: always()
         continue-on-error: true
         run: |
@@ -685,7 +686,7 @@ jobs:
           case "$WORD" in
             stuck)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports ledgerDeadLetter.status=stuck on two readings 30 s apart: a sale or a refund debt has waited on the container's local disk for the state database longer than LEDGER_DEAD_LETTER_STUCK_MINUTES (default 20). The replay retries every 15 s; while it cannot land them they exist only on that container, so do not redeploy or restart it until they land. Check stateDb on the same endpoint, the Postgres service on Railway, and the [sales-ledger] / [refund-ledger] log lines (a row the database refuses is named there). The operator read of /api/gateway-status has the counts. Auto-closes when the word is none." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports ledgerDeadLetter.status=stuck on two readings 30 s apart: a money write (a sale, a refund debt, a card report's final record, a subscription record or a decide write) has waited on the container's local disk for the state database longer than LEDGER_DEAD_LETTER_STUCK_MINUTES (default 20). Each journal's replay retries on a timer; while it cannot land them they exist only on that container, so do not redeploy or restart it until they land. Check stateDb on the same endpoint, the Postgres service on Railway, and the [sales-ledger] / [refund-ledger] / [human-checkout] / [subscriptions] / [decide] log lines (a row the database refuses is named there). The operator read of /api/gateway-status has the counts per journal. Auto-closes when the word is none." >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still stuck at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
               fi
