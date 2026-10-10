@@ -133,9 +133,14 @@ const CAIP2_BY_SHORT_NAME = {
   stellar: "stellar:pubnet",
   algorand: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
 };
+// The ledger can also carry the display label (src/stats.js CAIP2_NAMES), which
+// names the token for a non-USDC rail: "robinhood (USDG)". The suffix is not
+// part of the chain's name, so it is dropped before the lookup; without this
+// every Robinhood debt was held "unsupported network robinhood (USDG)".
 export function normalizeNetwork(network) {
   const n = String(network || "").trim();
-  return CAIP2_BY_SHORT_NAME[n.toLowerCase()] || n;
+  const short = n.replace(/\s*\([^)]*\)\s*$/, "").toLowerCase();
+  return CAIP2_BY_SHORT_NAME[short] || CAIP2_BY_SHORT_NAME[n.toLowerCase()] || n;
 }
 
 export function familyOf(network) {
