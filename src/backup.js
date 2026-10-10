@@ -1,4 +1,5 @@
-// Nightly offsite backup of /data to an S3-compatible bucket (Railway
+// Nightly offsite backup of /data and of the state database (every table,
+// one consistent snapshot, uploaded first) to an S3-compatible bucket (Railway
 // Buckets). The volume holds the money-adjacent state — refund ledger,
 // stats, status history, leads, buyer memory — with nothing but platform
 // snapshots behind it; this module puts a bounded, priced copy elsewhere.
@@ -359,7 +360,8 @@ export async function runBackup({ log = console.log } = {}) {
     // Each table goes up as gzip'd NDJSON under state/, beside a schema
     // object (state/_schema.json) that lets scripts/state-restore.js create
     // the tables in an empty database. Restore: scripts/state-restore.js
-    // --dir, or scripts/backup-restore.js on a state/ object.
+    // --dir <day>/state, or scripts/backup-restore.js --state-dir (or on one
+    // state/ object).
     const heldState = [];
     if (stateDbEnabled()) {
       let staged = null;
