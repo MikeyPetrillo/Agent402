@@ -13,7 +13,7 @@
 //
 // Each object is decrypted (BACKUP_ENCRYPTION_KEY) and gunzipped like
 // scripts/backup-restore.js; every line is one row_to_json object and goes in
-// with INSERT ... SELECT FROM json_populate_recordset ... ON CONFLICT DO
+// with INSERT ... SELECT FROM json_populate_record ... ON CONFLICT DO
 // NOTHING, so Postgres itself parses every value: a bigint above 2^53, a
 // numeric or a jsonb body comes back exactly. A restore over an existing
 // table adds only the rows it lacks; --replace truncates the table first.
@@ -102,7 +102,13 @@ export async function restoreStateTable(tableName, text, { replace = false, sche
   if (!TABLE_RE.test(tableName)) throw new Error(`bad table name "${tableName}"`);
   const S = schemaOf(schema);
   const T = `${S}.${tableName}`;
-  const cols = new Set((await stateQuery("SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2", [S, tableName])).rows.map((c) => c.column_name));
+  const colRows = (await stateQuery("SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2", [S, tableName])).rows;
+  const cols = new Set(colRows.map((c) => c.column_name));
+  // row_to_json writes SQL NULL and a JSON null body alike as null. A NOT NULL
+  // json column can only have held JSON null, so it is read as the JSON value
+  // itself (json_populate_recordset would turn it into SQL NULL); a nullable
+  // one takes SQL NULL.
+  const jsonNotNull = new Map(colRows.filter((c) => /^jsonb?$/.test(c.data_type) && c.is_nullable === "NO").map((c) => [c.column_name, c.data_type]));
   if (!cols.size) throw new Error(`table ${T} does not exist; restore the day's _schema object first (--dir does), or boot the app once`);
   if (replace) await stateQuery(`TRUNCATE ${T}`);
   let restored = 0, skipped = 0;
@@ -112,8 +118,10 @@ export async function restoreStateTable(tableName, text, { replace = false, sche
   let batch = [], sig = null, keys = null;
   const flush = async () => {
     if (!batch.length) return;
-    const list = keys.map((k) => `"${k.replace(/"/g, '""')}"`).join(", ");
-    const r = await stateQuery(`INSERT INTO ${T} (${list}) OVERRIDING SYSTEM VALUE SELECT ${list} FROM json_populate_recordset(NULL::${T}, $1::json) ON CONFLICT DO NOTHING`, [`[${batch.join(",")}]`]);
+    const qi = (k) => `"${k.replace(/"/g, '""')}"`;
+    const list = keys.map(qi).join(", ");
+    const sel = keys.map((k) => (jsonNotNull.has(k) ? `(e.j -> '${k.replace(/'/g, "''")}')::${jsonNotNull.get(k)}` : `r.${qi(k)}`)).join(", ");
+    const r = await stateQuery(`INSERT INTO ${T} (${list}) OVERRIDING SYSTEM VALUE SELECT ${sel} FROM json_array_elements($1::json) AS e(j), LATERAL json_populate_record(NULL::${T}, e.j) AS r ON CONFLICT DO NOTHING`, [`[${batch.join(",")}]`]);
     restored += r.rowCount; skipped += batch.length - r.rowCount;
     batch = [];
   };
