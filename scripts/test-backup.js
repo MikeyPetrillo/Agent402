@@ -222,6 +222,19 @@ ok(stateAfterRun1.every((k) => run2Puts.includes(k)) && new Set(run2Puts).size =
   ok(![...objects.keys()].some((k) => k.includes("backup-status.json")), "neither the status file nor its write-through mark was uploaded");
 }
 
+// The alarm leg: the gateway status publishes the word, the heartbeat pages
+// on held / failed / stale after a second reading and closes on ok.
+{
+  const { readFileSync } = await import("node:fs");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/\n\s+backup: \{ status: \(\(\) => \{ try \{ return backupAlarmStatus\(\); \}/.test(server), "/api/gateway-status publishes backup.status from backupAlarmStatus()");
+  const hb = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
+  const leg = hb.slice(hb.indexOf("Offsite backup check"), hb.indexOf("Offsite backup check") + 3000);
+  ok(/\.backup\.status/.test(leg), "the heartbeat reads backup.status");
+  ok(/held\|failed\|stale\) sleep 30; WORD=\$\(read_bk\)/.test(leg), "...re-reads once before paging");
+  ok(/held\|failed\|stale\)\n\s+if \[ -z "\$OPEN" \]; then\n\s+gh issue create/.test(leg) && /ok\)\n\s+if \[ -n "\$OPEN" \]; then\n\s+gh issue close/.test(leg), "...opens an issue on held/failed/stale and closes it on ok");
+}
+
 db.close();
 stub.close();
 if (DB_MODE) {
