@@ -186,11 +186,11 @@ const mirrorUpsert = db.prepare(`
 const fileUpsert = fileDb ? fileDb.prepare(mirrorUpsert.source) : null;
 // Beside each written-through row, the table's updated_at it was written at
 // (its own table in the file, so the refunds table keeps the file-only build's
-// shape). At the next boot's reconcile, a file row whose stamp still equals
+// shape; named *_meta so the migration check reads it as bookkeeping). At the next boot's reconcile, a file row whose stamp still equals
 // the table row's updated_at was changed in the file alone since (a rollback);
 // any other difference means the table moved on, and the table wins.
-if (fileDb) { try { fileDb.exec("CREATE TABLE IF NOT EXISTS pg_sync (evidence TEXT PRIMARY KEY, updated_at INTEGER NOT NULL)"); } catch { /* best effort */ } }
-const fileSync = fileDb ? (() => { try { return fileDb.prepare("INSERT OR REPLACE INTO pg_sync (evidence, updated_at) VALUES (?, ?)"); } catch { return null; } })() : null;
+if (fileDb) { try { fileDb.exec("CREATE TABLE IF NOT EXISTS pg_sync_meta (evidence TEXT PRIMARY KEY, updated_at INTEGER NOT NULL)"); } catch { /* best effort */ } }
+const fileSync = fileDb ? (() => { try { return fileDb.prepare("INSERT OR REPLACE INTO pg_sync_meta (evidence, updated_at) VALUES (?, ?)"); } catch { return null; } })() : null;
 const num = (v) => (v == null ? null : Number(v));
 let watermark = 0;     // refresh pulls rows stamped after this (database clock, ms)
 let loaded = false;    // the first pull finished: the readers answer from a full mirror
@@ -300,7 +300,7 @@ const same = (a, b) => (a == null && b == null) || (a != null && b != null && St
  *    copied file, stamps a stale file in the future). The file row is applied
  *    when its status is further along (owed < sending < paid/void), the file
  *    was written after the table row, and the table row has not been written
- *    since the file row's own step: its write-through stamp (pg_sync) still
+ *    since the file row's own step: its write-through stamp (pg_sync_meta) still
  *    equals the table's updated_at, or the step's own time (claimedAt for
  *    sending, resolvedAt for paid/void) is at or after it. At the same,
  *    unresolved status only when the stamp still equals the table's
@@ -315,7 +315,7 @@ async function reconcileFile() {
   const { rows } = sqliteFileRows(DB_FILE, "refunds");
   if (!rows.length) return null;
   const file = rows.map(fileToPg).filter((v) => v.evidence);
-  const synced = new Map(sqliteFileRows(DB_FILE, "pg_sync").rows.map((x) => [x.evidence, Number(x.updated_at)]));
+  const synced = new Map(sqliteFileRows(DB_FILE, "pg_sync_meta").rows.map((x) => [x.evidence, Number(x.updated_at)]));
   const cur = new Map();
   for (let i = 0; i < file.length; i += 1000) {
     const r = await stateQuery(`SELECT * FROM ${T("refunds")} WHERE evidence = ANY($1::text[])`, [file.slice(i, i + 1000).map((v) => v.evidence)]);
