@@ -59,14 +59,14 @@ await sdb.documents.put("loading-doc", { kept: true });
 // ---- a save while the first load is still retrying is held -------------------
 {
   relay.cut();
-  const doc = createJsonDocument({ name: "loading-doc", log: () => {}, failLog: () => {}, loadRetryDelaysMs: [400] });
+  const doc = createJsonDocument({ name: "loading-doc", log: () => {}, failLog: () => {}, loadRetryDelaysMs: [1500] });
   const p = doc.load(null);
-  await wait(50);
+  await wait(100);
   ok(doc.loadState === "loading", `a document whose first load is retrying reads loading (${doc.loadState})`);
   ok(sdb.unloadedStateStores().includes("document loading-doc"), "a loading document is named among the unloaded stores");
+  relay.heal(); // the database answers again before the load's next try
   const saved = await doc.save({ kept: false });
   ok(saved === false, "a save while the first load is retrying is held");
-  relay.heal();
   const body = await p;
   ok(body?.kept === true && (await sdb.documents.get("loading-doc")).body.kept === true, `the stored body is unchanged by the held save (${JSON.stringify(body)})`);
 }
@@ -82,6 +82,8 @@ await sdb.documents.put("loading-doc", { kept: true });
   xi.removeOrigin("https://bad-four.example");
   const restored = xi.restoreOrigin("https://bad-four.example");
   ok(restored.restored === true, "a restore during the load lifts the in-memory removal");
+  xi.removeOrigin("https://bad-two.example"); // stored before the boot, removed again and restored in the window
+  ok(xi.restoreOrigin("https://bad-two.example").restored === true, "a stored removal repeated and restored in the window answers restored");
   await wait(5000);                 // past the in-load retries: the load has given up
   ok(sdb.stateDbStatus() === "degraded", `the status word is degraded while the removal list is unread (${sdb.stateDbStatus()})`);
   relay.heal();
@@ -89,12 +91,13 @@ await sdb.documents.put("loading-doc", { kept: true });
   const stored = await until(async () => {
     const row = await sdb.documents.get("removed-origins.json");
     const o = (row?.body || []).map((x) => x.origin);
-    return o.includes("https://bad-one.example") && o.includes("https://bad-two.example") && o.includes("https://bad-three.example");
+    return o.includes("https://bad-one.example") && o.includes("https://bad-three.example");
   });
   const row = await sdb.documents.get("removed-origins.json");
   const origins = (row?.body || []).map((x) => x.origin).sort();
   ok(stored, `the merged list is saved: stored removals kept, the boot-window removal added (${JSON.stringify(origins)})`);
   ok(!origins.includes("https://bad-four.example") && !xi.isRemovedOrigin("https://bad-four.example"), "an origin restored during the window stays restored");
+  ok(!origins.includes("https://bad-two.example") && !xi.isRemovedOrigin("https://bad-two.example"), "a stored removal restored during the window is not brought back by the merge");
   xi.removeOrigin("https://bad-five.example");
   ok(await until(async () => JSON.stringify((await sdb.documents.get("removed-origins.json")).body).includes("bad-five")), "a removal after the recovery is saved");
   ok(await until(() => sdb.stateDbStatus() === "on"), `the status word reads on again (${sdb.stateDbStatus()}, unloaded ${JSON.stringify(sdb.unloadedStateStores())})`);
