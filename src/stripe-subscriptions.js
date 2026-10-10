@@ -186,8 +186,11 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
   const PG = doc.backend === "pg";
   const pending = PG ? createDeadLetter({ file: `${path}.pending.ndjson` }) : null;
   const unsaved = new Set(); // subIds whose latest record has not landed
+  // Resolves false only in database mode when the record did not reach the
+  // database (it waits in the local journal); the webhook then answers 503
+  // so Stripe delivers the event again.
   async function upsert(subId, patch) {
-    if (!subId) return;
+    if (!subId) return true;
     if (PG && !store.has(subId)) {
       // A subscription another container recorded since this one loaded:
       // its stored record is the base, so a partial patch (a webhook's
@@ -196,12 +199,13 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     }
     const prev = store.get(subId) || {};
     store.set(subId, { ...prev, ...patch, updatedAt: new Date().toISOString() });
-    if (!PG) { void saveKeys(doc, store, [subId]); return; }
+    if (!PG) { void saveKeys(doc, store, [subId]); return true; }
     let landed = false;
     try { landed = await saveKeys(doc, store, [subId]); } catch { landed = false; }
-    if (landed) { unsaved.delete(subId); return; }
+    if (landed) { unsaved.delete(subId); return true; }
     unsaved.add(subId);
     if (!pending.add("sub", { subId, rec: store.get(subId) })) console.error(`[subscriptions] the record of ${subId} could not be kept on local disk`);
+    return false;
   }
   let replaying = false;
   async function replayPending() {
@@ -352,6 +356,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       seenEvents.set(event.id, Date.now());
       if (seenEvents.size > 5000) for (const [k, t] of seenEvents) { if (Date.now() - t > 86_400_000 || seenEvents.size > 5000) seenEvents.delete(k); else break; }
     }
+    let stored = true; // every record this event writes reached the database
     switch (event.type) {
       case "checkout.session.completed": {
         const s = event.data.object;
@@ -364,7 +369,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
           // Stripe retries and reorders events: a completed-checkout event must
           // never overwrite a status the subscription lifecycle already set.
           const prev = store.get(id);
-          await upsert(id, {
+          stored = stored && await upsert(id, {
             customer: s.customer, status: prev?.status || "active",
             product: s.metadata?.product || prev?.product || null, target: s.metadata?.target || prev?.target || null,
             email: s.customer_details?.email || s.customer_email || prev?.email || null,
@@ -375,7 +380,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       case "customer.subscription.created":
       case "customer.subscription.updated": {
         const sub = event.data.object;
-        await upsert(sub.id, {
+        stored = stored && await upsert(sub.id, {
           customer: sub.customer, status: sub.status,
           product: sub.metadata?.product || store.get(sub.id)?.product || null,
           target: sub.metadata?.target || store.get(sub.id)?.target || null,
@@ -386,7 +391,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       }
       case "customer.subscription.deleted": {
         const sub = event.data.object;
-        await upsert(sub.id, { status: "canceled" });
+        stored = stored && await upsert(sub.id, { status: "canceled" });
         break;
       }
       case "invoice.paid": {
@@ -396,10 +401,13 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
         const inv = event.data.object;
         const subId = typeof inv.subscription === "string" ? inv.subscription : inv.subscription?.id || inv.parent?.subscription_details?.subscription || null;
         const rec = subId ? store.get(subId) : null;
-        if (typeof onInvoicePaid === "function" && inv.amount_paid > 0) {
+        // The record first: an event answered 503 (its record not stored) is
+        // delivered again, so the sale is booked on the delivery that stores
+        // it, never once per delivery.
+        if (subId && rec) stored = stored && await upsert(subId, { lastInvoiceId: inv.id, lastPaidAt: new Date().toISOString() });
+        if (stored && typeof onInvoicePaid === "function" && inv.amount_paid > 0) {
           try { onInvoicePaid({ invoiceId: inv.id, subId, product: rec?.product || null, amountUsd: inv.amount_paid / 100, customer: inv.customer }); } catch { /* accounting never breaks the webhook */ }
         }
-        if (subId && rec) await upsert(subId, { lastInvoiceId: inv.id, lastPaidAt: new Date().toISOString() });
         break;
       }
       case "charge.refunded":
@@ -411,6 +419,15 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
         break;
       }
       default: break; // ignore unrelated events
+    }
+    if (!stored) {
+      // Database mode: a record waits in the local journal (a backstop). The
+      // event is not acknowledged until the record is in the database, so
+      // Stripe delivers it again; its id is forgotten so that retry is applied.
+      if (event.id) seenEvents.delete(event.id);
+      const e = new Error("Webhook received; its record is not stored yet, retry later");
+      e.statusCode = 503;
+      throw e;
     }
     return { received: true, type: event.type };
   }
