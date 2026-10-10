@@ -320,7 +320,7 @@ export async function warmTick() {
   warm.primed = true;
   if (!spendBackground()) return { skipped: "ceiling" };
   let end;
-  try { end = await readRange(); } catch { return { skipped: "range-failed" }; }
+  try { end = await readRange(); } catch (e) { return { skipped: "range-failed", error: String(e?.message || e).slice(0, 120) }; }
   // The quote shape is priced once per session, including the boot read, so
   // no quote goes unpriced past the first tick after a deploy.
   await auditQuotePrice(end);
@@ -338,13 +338,21 @@ export async function warmTick() {
   return { end, prefetched: read };
 }
 
+// The last tick's outcome ({ end, prefetched } or { skipped: reason }), kept
+// for the operator surface so a warmer that never reads says why.
+async function recordedTick() {
+  try { warm.lastResult = await warmTick(); }
+  catch (e) { warm.lastResult = { skipped: "error", error: String(e?.message || e).slice(0, 120) }; }
+  return warm.lastResult;
+}
+
 /** Start the warmer (boot only; idempotent). Returns whether it is running. */
 export function startQuoteWarmer() {
   if (warm.started) return true;
   if (!databentoEnabled() || String(process.env.DATABENTO_WARM || "").toLowerCase() === "off") return false;
   warm.started = true;
-  warmTick().catch(() => {});
-  warm.timer = setInterval(() => { warmTick().catch(() => {}); }, RANGE_REFRESH_MS);
+  recordedTick();
+  warm.timer = setInterval(() => { recordedTick(); }, RANGE_REFRESH_MS);
   warm.timer.unref?.();
   return true;
 }
@@ -361,6 +369,7 @@ export function quoteWarmerStatus() {
     trackedSymbols: popularity.size, topN: warmTopN(), prefetched: warm.prefetched,
     quotePriceCheck: quotePriceInline ? "inline" : "per-session",
     quotePriceAuditOk: quotePriceAudit.ok,
+    lastTick: warm.lastResult ? { skipped: warm.lastResult.skipped || null, error: warm.lastResult.error || null, prefetched: warm.lastResult.prefetched ?? null } : null,
   };
 }
 

@@ -108,7 +108,10 @@ try {
   ok(up, "paid server booted with the market-data stub preload");
   // The first tick runs at boot; on a busy CI runner (the boot revenue snapshot
   // reaches public RPCs) it can land well after /health answers.
-  ok(await waitFor(() => db.range >= 1, 30_000), `the boot-started quote warmer read the session boundary from the stub (${db.range})`);
+  const warmed = await waitFor(() => db.range >= 1, 30_000);
+  let warmerState = "";
+  if (!warmed) { try { warmerState = JSON.stringify((await (await perf()).json())?.stockQuoteWarmer?.lastTick ?? null); } catch (e) { warmerState = `perf read failed: ${e?.message}`; } }
+  ok(warmed, `the boot-started quote warmer read the session boundary from the stub (${db.range})${warmerState ? `; last tick: ${warmerState}` : ""}`);
 
   const unpaid = await fetch(`${B}/api/stock-quote?symbol=MSFT`);
   ok(unpaid.status === 402, `unpaid stock-quote -> 402 (got ${unpaid.status})`);
