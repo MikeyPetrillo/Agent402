@@ -5,6 +5,7 @@
 // against a Postgres (required under CI); the records are made by a second
 // engine instance on the same schema, standing in for the other container.
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,7 +27,7 @@ const DIR = mkdtempSync(join(tmpdir(), "email-links-"));
 const quiet = () => {};
 // The server's own email stores keep their default files (outside DIR), and a
 // database boot imports such a file once: every record here is new per run.
-const RUN = Math.random().toString(36).slice(2, 10);
+const RUN = randomBytes(4).toString("hex");
 const PORT = await getFreePort();
 const B = `http://127.0.0.1:${PORT}`;
 let log = "";
