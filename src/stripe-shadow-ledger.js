@@ -72,7 +72,8 @@
 // deploy never send the same row, and a row left in `sending` is reclaimed
 // only once it is older than any post could be in flight.
 import Database from "better-sqlite3";
-import { importOnce, leased, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady, withStateTx } from "./state-db.js";
+import { importOnce, leased, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady, withStateTx, withSchemaLock } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { logSafe } from "./log-safe.js";
@@ -263,8 +264,7 @@ export function createShadowLedger(deps = {}) {
   let initError = null;
   let timer = null;
   let draining = false;
-  let pgReady = null;   // resolves true once the table exists and the file is imported, false when that failed
-  let pgDead = false;
+  let pgLoader = null;  // the first load (table, import, reclaim), retried until it lands
 
   // Disabled = inert. No file is opened, no timer armed. Any failure to open
   // the store degrades to the SAME inert object: a shadow ledger that cannot
@@ -309,23 +309,24 @@ export function createShadowLedger(deps = {}) {
     // rows another container (or this one, before a restart) left in
     // `sending` longer than a post can be in flight. A row claimed seconds
     // ago may be mid-send on the other half of a deploy: it is left alone.
-    pgReady = (async () => {
-      await stateQuery(PG_DDL());
+    // A failed load is retried (by the next call and a background timer),
+    // never left dead: records made meanwhile wait in `pendingInserts`.
+    pgLoader = retryingLoad("[stripe-shadow] store:", async () => {
+      await withSchemaLock((c) => c.query(PG_DDL()));
       const imp = await importOnce(SHADOW_DB_FILE, { source: dbFile, run: () => importSqliteFile(dbFile) });
       if (imp.imported && imp.rows) log(`[stripe-shadow] imported ${imp.rows} row(s) from ${dbFile}`);
       const reclaimed = await reclaimStale();
       if (reclaimed > 0) log(`[stripe-shadow] reclaimed ${reclaimed} row(s) stranded mid-send by a restart`);
+      initError = null;
       return true;
-    })().catch((e) => {
-      initError = String(e?.message || e).slice(0, 200);
-      pgDead = true;
-      console.warn(`[stripe-shadow] store unavailable, ledger inert: ${logSafe(initError)}`);
-      return false;
-    });
-    trackStoreReady(pgReady);
+    }, { log: (m) => { try { console.warn(logSafe(m, 300)); } catch { /* nothing left to do */ } }, onLoaded: () => { if (pendingInserts.length) void drainInserts(); } });
+    trackStoreReady(pgLoader.eventually);
+    pgLoader.ready().catch((e) => { initError = String(e?.message || e).slice(0, 200); });
   }
+  /** True once the first load has landed; a failed attempt answers false and is retried. */
+  const pgReady = () => pgLoader.ready().then(() => true, (e) => { initError = String(e?.message || e).slice(0, 200); return false; });
 
-  const live = () => enabled && (db !== null || (usePg && !pgDead));
+  const live = () => enabled && (db !== null || usePg);
 
   const stmts = db ? {
     ins: db.prepare(`INSERT OR IGNORE INTO shadow
@@ -341,15 +342,46 @@ export function createShadowLedger(deps = {}) {
   } : null;
 
   // ---- the database path ------------------------------------------------------
-  // Writes from the serving path are queued in order (one in flight) and never
-  // awaited by the caller: record() stays a synchronous void. flush() resolves
-  // once the queue is empty (tests and shutdown).
-  let chain = Promise.resolve();
-  function enqueueOp(fn) {
-    const next = chain.then(async () => { if (!(await pgReady)) return; await fn(); })
-      .catch((e) => { try { console.warn(`[stripe-shadow] enqueue failed: ${logSafe(e?.message || e)}`); } catch { /* nothing left to do */ } });
-    chain = next;
-    return next;
+  // Inserts from the serving path wait in `pendingInserts` and are written in
+  // order, never awaited by the caller: record() stays a synchronous void. A
+  // failed insert keeps its row (and every later one) and is retried by the
+  // next record, flush or retry timer; past PENDING_INSERTS_MAX the oldest is
+  // dropped, logged. flush() resolves once a drain has tried them all.
+  const PENDING_INSERTS_MAX = 50_000;
+  const pendingInserts = [];
+  let insertDraining = null;
+  let insertRetry = null;
+  let lastInsertError = "";
+  function drainInserts() {
+    if (insertDraining) return insertDraining;
+    insertDraining = (async () => {
+      try {
+        if (!(await pgReady())) { scheduleInsertRetry(); return false; }
+        while (pendingInserts.length) {
+          try { await pgInsert(pendingInserts[0]); }
+          catch (e) {
+            const why = logSafe(e?.message || e);
+            if (why !== lastInsertError) { try { console.warn(`[stripe-shadow] enqueue failed, kept for retry: ${why}`); } catch { /* nothing left to do */ } }
+            lastInsertError = why;
+            scheduleInsertRetry();
+            return false;
+          }
+          pendingInserts.shift(); lastInsertError = "";
+        }
+        return true;
+      } finally { insertDraining = null; }
+    })();
+    return insertDraining;
+  }
+  function scheduleInsertRetry() {
+    if (insertRetry) return;
+    insertRetry = setTimeout(() => { insertRetry = null; void drainInserts(); }, 5_000);
+    insertRetry.unref?.();
+  }
+  function enqueueInsert(row) {
+    pendingInserts.push(row);
+    if (pendingInserts.length > PENDING_INSERTS_MAX) { pendingInserts.shift(); try { console.warn(`[stripe-shadow] more than ${PENDING_INSERTS_MAX} rows waiting for the database; the oldest was dropped`); } catch { /* nothing left to do */ } }
+    void drainInserts();
   }
   async function reclaimStale() {
     const t = now();
@@ -415,7 +447,7 @@ export function createShadowLedger(deps = {}) {
         reason: verdict.ok ? null : verdict.skip,
         ts,
       };
-      if (usePg) enqueueOp(() => pgInsert(row)); // queued, in order, never awaited here
+      if (usePg) enqueueInsert(row); // queued, in order, never awaited here
       else stmts.ins.run(row);
       if (verdict.ok) ensureTimer();
     } catch (e) {
@@ -478,7 +510,7 @@ export function createShadowLedger(deps = {}) {
   const drain = leased("stripe-shadow-drain", { ttlMs: 300000, log: console.warn }, drainUnleased);
   async function drainUnleased() {
     if (!live() || draining) return { attempted: 0 };
-    if (usePg && !(await pgReady)) return { attempted: 0 };
+    if (usePg && !(await pgReady())) return { attempted: 0 };
     draining = true;
     let attempted = 0;
     try {
@@ -568,7 +600,7 @@ export function createShadowLedger(deps = {}) {
   function refreshSnapshot(limit = snapshotLimit) {
     if (refreshing) return refreshing;
     refreshing = (async () => {
-      if (!(await pgReady)) return;
+      if (!(await pgReady())) return;
       const { byStatus, byReason, recent } = await pgAggregates(limit);
       snapshot = buildReport(baseReport(), byStatus, byReason, recent);
       snapshotAt = now();
@@ -602,9 +634,9 @@ export function createShadowLedger(deps = {}) {
     return report(opts);
   }
   /** Resolves once every queued write has landed (tests and shutdown). */
-  async function flush() { let last = null; while (chain !== last) { last = chain; await last; } }
+  async function flush() { if (usePg) await drainInserts(); }
 
-  return { record, drain, start, stop, report, reportAsync, flush, ready: () => (pgReady || Promise.resolve(db !== null)), enabled, backend: usePg ? "pg" : "sqlite", live: live(), _db: db };
+  return { record, drain, start, stop, report, reportAsync, flush, ready: () => (usePg ? pgReady() : Promise.resolve(db !== null)), enabled, backend: usePg ? "pg" : "sqlite", live: live(), _db: db };
 }
 
 // ---------------------------------------------------------------------------

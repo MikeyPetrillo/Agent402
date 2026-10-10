@@ -20,7 +20,8 @@ import Database from "better-sqlite3";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join, basename } from "node:path";
-import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady, withSchemaLock } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
 
 // Replay-protection lives in /data (persistent volume) so used PoW tokens
 // stay used across restarts. Falling back to /tmp on prod is unsafe: a
@@ -82,8 +83,15 @@ const T = () => `${stateDbSchema()}.pow_used`;
 const PG_REFRESH_MS = clampInt(process.env.POW_PG_REFRESH_MS, 3000, 500, 60_000);
 const PG_REFRESH_MARGIN_MS = 10_000;
 const PG_PRUNE_EVERY_MS = 60_000;
-let pgQueue = Promise.resolve();
-let pgReady = Promise.resolve();
+let pgLoader = null; // the first load, retried until it lands
+// Accepted challenges not yet in the shared table. A failed write keeps them
+// here; the next accept, flush or retry timer writes them. Expired ones are
+// dropped (the table would refuse nothing with them), and the set is bounded.
+const pgPending = new Map(); // challenge -> exp
+const PG_PENDING_MAX = 100_000;
+const PG_DRAIN_RETRY_MS = 5_000;
+let pgDraining = null;
+let pgDrainTimer = null;
 let pgLastDbAt = 0;
 let pgLastPruneAt = 0;
 let pgPulling = false;
@@ -95,14 +103,41 @@ const nowSec = () => Math.floor(Date.now() / 1000);
 
 /** Queue the used challenge for the shared table; never rejects. */
 function pgRecordUsed(challenge, exp) {
-  pgQueue = pgQueue
-    .then(() => stateQuery(`INSERT INTO ${T()} (challenge, exp) VALUES ($1, $2) ON CONFLICT (challenge) DO NOTHING`, [challenge, exp]))
-    .then((r) => { pgLastError = ""; if (r.rowCount === 0) pgWindowHits++; }, (e) => {
-      const why = String(e?.message || e).slice(0, 120);
-      if (why !== pgLastError) pgSay(`shared replay write failed: ${why}`);
-      pgLastError = why;
-    });
-  return pgQueue;
+  pgPending.set(challenge, exp);
+  if (pgPending.size > PG_PENDING_MAX) { const first = pgPending.keys().next().value; pgPending.delete(first); }
+  return pgDrain();
+}
+/** Write the pending challenges in order; a failure keeps them and schedules a retry. */
+function pgDrain() {
+  if (pgDraining) return pgDraining;
+  pgDraining = (async () => {
+    try {
+      try { await pgLoader.ready(); } catch { pgScheduleDrain(); return false; } // the table may not exist yet
+      while (pgPending.size) {
+        const [challenge, exp] = pgPending.entries().next().value;
+        if (exp < nowSec()) { pgPending.delete(challenge); continue; }
+        let r;
+        try { r = await stateQuery(`INSERT INTO ${T()} (challenge, exp) VALUES ($1, $2) ON CONFLICT (challenge) DO NOTHING`, [challenge, exp]); }
+        catch (e) {
+          const why = String(e?.message || e).slice(0, 120);
+          if (why !== pgLastError) pgSay(`shared replay write failed, kept for retry: ${why}`);
+          pgLastError = why;
+          pgScheduleDrain();
+          return false;
+        }
+        pgPending.delete(challenge);
+        pgLastError = "";
+        if (r.rowCount === 0) pgWindowHits++;
+      }
+      return true;
+    } finally { pgDraining = null; }
+  })();
+  return pgDraining;
+}
+function pgScheduleDrain() {
+  if (pgDrainTimer) return;
+  pgDrainTimer = setTimeout(() => { pgDrainTimer = null; void pgDrain(); }, PG_DRAIN_RETRY_MS);
+  pgDrainTimer.unref?.();
 }
 /** Rows written since the last position into the local table; resolves how many were new here. */
 async function pgPull() {
@@ -130,25 +165,30 @@ async function pgImportLocal() {
   return { rows: rows.length };
 }
 if (PG) {
-  pgReady = (async () => {
+  // Retried until it lands (a failed attempt is forgotten and tried again by
+  // the next call and a background timer); the pull timer starts when it
+  // does, however late, so the replay window never stays open.
+  pgLoader = retryingLoad("shared replay store", async () => {
     const s = stateDbSchema();
-    await stateQuery(`
+    await withSchemaLock((c) => c.query(`
       CREATE TABLE IF NOT EXISTS ${s}.pow_used (challenge TEXT PRIMARY KEY, exp BIGINT NOT NULL, used_at TIMESTAMPTZ NOT NULL DEFAULT now());
       CREATE INDEX IF NOT EXISTS pow_used_used_at_idx ON ${s}.pow_used (used_at);
       CREATE INDEX IF NOT EXISTS pow_used_exp_idx ON ${s}.pow_used (exp);
-    `);
+    `));
     await importOnce(basename(POW_DB_PATH), { source: POW_DB_PATH, run: pgImportLocal });
     await pgPull();
-    pgTimer = setInterval(() => { pgPull().catch((e) => { const why = String(e?.message || e).slice(0, 120); if (why !== pgLastError) pgSay(`shared replay pull failed: ${why}`); pgLastError = why; }); }, PG_REFRESH_MS);
-    pgTimer.unref?.();
-  })().catch((e) => { pgSay(`shared replay store: first load failed: ${String(e?.message || e).slice(0, 120)}`); throw e; });
-  trackStoreReady(pgReady);
-  pgQueue = pgReady.catch(() => {});
+    if (!pgTimer) {
+      pgTimer = setInterval(() => { pgPull().catch((e) => { const why = String(e?.message || e).slice(0, 120); if (why !== pgLastError) pgSay(`shared replay pull failed: ${why}`); pgLastError = why; }); }, PG_REFRESH_MS);
+      pgTimer.unref?.();
+    }
+  }, { log: pgSay, onLoaded: () => { if (pgPending.size) void pgDrain(); } });
+  trackStoreReady(pgLoader.eventually);
+  pgLoader.ready().catch(() => {});
 }
-/** Resolves when the shared replay store's first load has finished (at once without the database). */
-export function powReplayReady() { return pgReady.then(() => true, () => false); }
-/** Resolves once every queued shared write has been tried (at once without the database). */
-export async function powReplayFlush() { await pgQueue; }
+/** Resolves true once the shared replay store's first load has landed (at once without the database); false while it has not. */
+export function powReplayReady() { return PG ? pgLoader.ready().then(() => true, () => false) : Promise.resolve(true); }
+/** Resolves once every pending shared write has been tried (at once without the database). */
+export async function powReplayFlush() { if (PG) await pgDrain(); }
 /** Postgres mode only: pull the other containers' used challenges now; resolves how many were new here. */
 export async function powReplaySync() { return PG ? pgPull() : 0; }
 /** One word plus the count of accepted solutions the shared table already held (the window above). */

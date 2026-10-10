@@ -118,6 +118,46 @@ try {
   await D.ready();
   ok((await D.balance(KEY)).balanceUsd === 0.5 && (await D.balance(KEY)).disabled === false && (await rowRec(HASH)).spentMicro === 19_500_000, "roll-forward: the key file dated past the grace wins over the row");
   ok((await D.claim("cs_rolled")).status === "claimed" && (await rowRec(HASH)) !== null, "roll-forward: the sessions index written in the window is the index");
+
+  // ---- (7) a hold nothing ever settled or released is returned by the sweep --
+  const past = (Date.now() - 3600_000) / 1000; // the files of (6) are no longer newer than the rows
+  for (const f of [keyFile, join(DIR, "_sessions.json")]) utimesSync(f, past, past);
+  const logs = [];
+  const E = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: (m) => logs.push(m) });
+  await E.ready();
+  const RT = `${sdb.stateDbSchema()}.records`;
+  const age = (holdId) => sdb.stateQuery(`UPDATE ${RT} SET body = jsonb_set(body, ARRAY['holds', $2::text, 'at'], to_jsonb($3::bigint)) WHERE collection = 'credits' AND id = $1`, [`k_${HASH}`, holdId, Date.now() - 20 * 60_000]);
+  const bal = async () => { const b = await E.balance(KEY); return [b.balanceUsd, b.heldUsd]; };
+  const young = await E.authorize(KEY, 0.1);
+  const stuck = await E.authorize(KEY, 0.2);
+  ok(young.holdId && stuck.holdId && (await rowRec(HASH)).holds[stuck.holdId]?.m === 200_000, "each hold on the database is an entry on the row");
+  await age(stuck.holdId);
+  const sw = await E.sweepAbandonedHolds();
+  ok(sw.released === 1 && JSON.stringify(await bal()) === JSON.stringify([0.4, 0.1]), `the sweep returns the hold older than CREDITS_ABANDONED_HOLD_MS and keeps the young one (${JSON.stringify(sw)}, ${JSON.stringify(await bal())})`);
+  ok(logs.some((l) => /released 1 abandoned hold\(s\) on key/.test(l)), "the return is logged");
+  const late = await E.settle(stuck.hash, stuck.heldMicro, "whois", null, stuck.holdId);
+  ok(late.chargedUsd === 0 && JSON.stringify(await bal()) === JSON.stringify([0.4, 0.1]), "a settle that arrives for a swept hold moves no money");
+  const s2 = await E.settle(young.hash, young.heldMicro, "whois", null, young.holdId);
+  ok(s2.chargedUsd === 0.1 && JSON.stringify(await bal()) === JSON.stringify([0.4, 0]), "the young hold settles as usual");
+  // A hold a request in flight here still holds is never swept, whatever its age.
+  const gateE = E.gate((m, p) => (p === "/api/whois" ? { priceUsd: 0.05, slug: "whois" } : null));
+  const resE = fakeRes();
+  ok(Object.keys((await rowRec(HASH)).holds).length === 0, "a settle or release that names no hold ends its entry too (no entry is left to sweep twice)");
+  await gateE({ method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${KEY}` } }, resE, () => {});
+  const liveId = Object.keys((await rowRec(HASH)).holds)[0];
+  await age(liveId);
+  { const sw2 = await E.sweepAbandonedHolds(); ok(sw2.released === 0 && JSON.stringify(await bal()) === JSON.stringify([0.35, 0.05]), `a hold of a request still in flight here is not swept (${JSON.stringify(sw2)} ${JSON.stringify(await bal())})`); }
+  resE.statusCode = 200; resE.emit("finish");
+  ok(await until(async () => JSON.stringify(await bal()) === JSON.stringify([0.35, 0])), "and settles when its response finishes");
+  // The first load of a new instance sweeps too.
+  const h4 = await E.authorize(KEY, 0.05);
+  await age(h4.holdId);
+  const F = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: (m) => logs.push(m) });
+  await F.ready();
+  ok(JSON.stringify(await bal()) === JSON.stringify([0.35, 0]), `a boot sweeps: the old hold is back on the balance after the first load (${JSON.stringify(await bal())} ${logs.slice(-2).join(" | ")})`);
+  // Held money with no entry (a build without entries placed it) comes back once the row is quiet.
+  await sdb.stateQuery(`UPDATE ${RT} SET body = jsonb_set(body, '{heldMicro}', to_jsonb(30000)), updated_at = now() - interval '1 hour' WHERE collection = 'credits' AND id = $1`, [`k_${HASH}`]);
+  ok((await E.sweepAbandonedHolds()).released === 1 && JSON.stringify(await bal()) === JSON.stringify([0.38, 0]), "held money no entry accounts for is returned once the row has been quiet for the window");
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();

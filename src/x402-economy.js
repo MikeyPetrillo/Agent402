@@ -23,7 +23,8 @@ import Database from "better-sqlite3";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
-import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady, withSchemaLock } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
 
 // Persistent daily history — the live query only reaches back 30 days, so
 // every snapshot upserts its daily rows into SQLite (same /data-volume
@@ -73,8 +74,13 @@ if (hdb) {
 // from the same upstream, so the last upsert wins and nothing is lost.
 const T = () => `${stateDbSchema()}.economy_daily`;
 const history = new Map(); // day -> { settlements, payers }
-let queue = Promise.resolve();
-let ready = Promise.resolve();
+let loader = null; // the first load, retried until it lands
+// Days recorded but not yet written (the newest values per day). A failed
+// upsert keeps them here; the next record, flush or retry timer writes them.
+const pendingDays = new Map(); // day -> { row, updatedTs }
+let draining = null;
+let drainTimer = null;
+const DRAIN_RETRY_MS = 5_000;
 let lastQueueError = "";
 const say = (m) => console.warn(`x402-economy: ${m}`);
 const dayRows = (daily) => {
@@ -107,21 +113,58 @@ async function importSqlite() {
     return { bytes: statSync(HISTORY_DB).size, rows: rows.length };
   } finally { try { src?.close(); } catch { /* read-only handle */ } }
 }
+/** Write the pending days; resolves true when none is left, false (retry scheduled) when a write failed. */
+function drain() {
+  if (draining) return draining;
+  draining = (async () => {
+    try {
+      try { await loader.ready(); } catch { scheduleDrain(); return false; } // the table may not exist yet
+      while (pendingDays.size) {
+        const batch = [...pendingDays.values()];
+        try {
+          // One statement per updated_ts keeps each row's own stamp.
+          for (const ts of new Set(batch.map((b) => b.updatedTs))) await pgUpsert(batch.filter((b) => b.updatedTs === ts).map((b) => b.row), ts);
+        } catch (e) {
+          const why = String(e?.message || e).slice(0, 120);
+          if (why !== lastQueueError) say(`history write failed, kept for retry (${why})`);
+          lastQueueError = why;
+          scheduleDrain();
+          return false;
+        }
+        // A day recorded again while the write was in flight stays pending.
+        for (const b of batch) if (pendingDays.get(b.row.day) === b) pendingDays.delete(b.row.day);
+        lastQueueError = "";
+      }
+      return true;
+    } finally { draining = null; }
+  })();
+  return draining;
+}
+function scheduleDrain() {
+  if (drainTimer) return;
+  drainTimer = setTimeout(() => { drainTimer = null; void drain(); }, DRAIN_RETRY_MS);
+  drainTimer.unref?.();
+}
 if (PG) {
-  ready = (async () => {
-    await stateQuery(`CREATE TABLE IF NOT EXISTS ${T()} (day TEXT PRIMARY KEY, settlements BIGINT NOT NULL, payers BIGINT NOT NULL, updated_ts BIGINT)`);
+  // Retried until it lands (a failed attempt is forgotten and tried again by
+  // the next call and a background timer), so a blip at boot never leaves the
+  // history dead until the next deploy.
+  loader = retryingLoad("economy history", async () => {
+    await withSchemaLock((c) => c.query(`CREATE TABLE IF NOT EXISTS ${T()} (day TEXT PRIMARY KEY, settlements BIGINT NOT NULL, payers BIGINT NOT NULL, updated_ts BIGINT)`));
     await importOnce(basename(HISTORY_DB), { source: HISTORY_DB, run: importSqlite });
     const r = await stateQuery(`SELECT day, settlements, payers FROM ${T()}`);
     history.clear();
     for (const x of r.rows) history.set(x.day, { settlements: Number(x.settlements), payers: Number(x.payers) });
-  })().catch((e) => { say(`history load failed (${String(e?.message || e).slice(0, 120)})`); throw e; });
-  trackStoreReady(ready);
-  queue = ready.catch(() => {});
+    // Days recorded here that are not written yet keep their newer values.
+    for (const { row } of pendingDays.values()) history.set(row.day, { settlements: row.settlements, payers: row.payers });
+  }, { log: say, onLoaded: () => { if (pendingDays.size) void drain(); } });
+  trackStoreReady(loader.eventually);
+  loader.ready().catch(() => {});
 }
-/** Resolves when the first load has finished (at once without the database). */
-export function economyHistoryReady() { return ready.then(() => true, () => false); }
-/** Resolves once every queued write has been tried (at once without the database). */
-export async function economyHistoryFlush() { await queue; }
+/** Resolves true once the first load has landed (at once without the database); false while it has not. */
+export function economyHistoryReady() { return PG ? loader.ready().then(() => true, () => false) : Promise.resolve(true); }
+/** Resolves once every pending write has been tried (at once without the database). */
+export async function economyHistoryFlush() { if (PG) await drain(); }
 
 /** Upsert a snapshot's daily rows into the persistent history. Exported for tests.
  *  Returns nothing in SQLite mode (written before it returns). With the
@@ -133,13 +176,8 @@ export function recordDailyHistory(daily) {
     const rows = dayRows(daily);
     for (const r of rows) history.set(r.day, { settlements: r.settlements, payers: r.payers });
     const now = Math.floor(Date.now() / 1000);
-    queue = queue.then(() => pgUpsert(rows, now)).then(() => { lastQueueError = ""; return true; }, (e) => {
-      const why = String(e?.message || e).slice(0, 120);
-      if (why !== lastQueueError) say(`history write failed (${why})`);
-      lastQueueError = why;
-      return false;
-    });
-    return queue;
+    for (const r of rows) pendingDays.set(r.day, { row: r, updatedTs: now });
+    return drain();
   }
   if (!hdb) return; // history disabled - nothing to record
   const now = Math.floor(Date.now() / 1000);

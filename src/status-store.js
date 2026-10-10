@@ -26,7 +26,8 @@
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { basename } from "node:path";
-import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, trackStoreReady } from "./state-db.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, trackStoreReady, withSchemaLock } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 // STATUS_DB_PATH lets the offline tests point at a scratch file. Production
@@ -421,9 +422,17 @@ const mirror = {
   lastDbAt: 0,           // database clock at the last successful load or refresh (ms)
   seq: 2 ** 50,          // local order for rows whose database id is not known yet
 };
-let queue = Promise.resolve();
-let ready = Promise.resolve();
+let loader = null;     // the first load, retried until it lands (Postgres mode)
 let refreshTimer = null;
+// Rows recorded but not yet written, oldest batch first. A failed insert
+// keeps its batch here and is retried (every DRAIN_RETRY_MS, and on the next
+// record); the oldest batches are dropped, logged, past PENDING_MAX_ROWS.
+const pending = [];
+let pendingRows = 0;
+let draining = null;
+let drainTimer = null;
+const DRAIN_RETRY_MS = 5_000;
+const PENDING_MAX_ROWS = 50_000;
 let refreshing = false;
 let lastQueueError = "";
 
@@ -528,18 +537,46 @@ function pgRecord(list) {
     if (addToMirror(r, mirror.seq++)) fresh++;
   }
   if (rows.length) {
-    queue = queue.then(() => pgInsert(rows)).then((n) => { lastQueueError = ""; return n; }, (e) => {
-      const why = String(e?.message || e).slice(0, 120);
-      if (why !== lastQueueError) say(`recordProbe failed: ${why}`);
-      lastQueueError = why;
-    });
+    pending.push(rows); pendingRows += rows.length;
+    let dropped = 0;
+    while (pendingRows > PENDING_MAX_ROWS && pending.length > 1) { const old = pending.shift(); pendingRows -= old.length; dropped += old.length; }
+    if (dropped) say(`${dropped} unwritten row(s) dropped: more than ${PENDING_MAX_ROWS} were waiting for the database`);
+    void drain();
   }
   return fresh;
+}
+/** Write the pending batches in order; a failure keeps the batch and schedules a retry. Resolves true when nothing is left. */
+function drain() {
+  if (draining) return draining;
+  draining = (async () => {
+    try {
+      try { await loader.ready(); } catch { scheduleDrain(); return false; } // the tables may not exist yet
+      while (pending.length) {
+        const rows = pending[0];
+        try { await pgInsert(rows); }
+        catch (e) {
+          const why = String(e?.message || e).slice(0, 120);
+          if (why !== lastQueueError) say(`recordProbe failed, kept for retry: ${why}`);
+          lastQueueError = why;
+          scheduleDrain();
+          return false;
+        }
+        pending.shift(); pendingRows -= rows.length; lastQueueError = "";
+      }
+      return true;
+    } finally { draining = null; }
+  })();
+  return draining;
+}
+function scheduleDrain() {
+  if (drainTimer) return;
+  drainTimer = setTimeout(() => { drainTimer = null; void drain(); }, DRAIN_RETRY_MS);
+  drainTimer.unref?.();
 }
 
 async function ensureTable() {
   const s = stateDbSchema();
-  await stateQuery(`
+  await withSchemaLock((c) => c.query(`
     CREATE TABLE IF NOT EXISTS ${s}.status_probes (
       id          BIGSERIAL PRIMARY KEY,
       ts          BIGINT NOT NULL,
@@ -554,7 +591,7 @@ async function ensureTable() {
     CREATE INDEX IF NOT EXISTS status_probes_component_ts ON ${s}.status_probes (component, ts DESC, id DESC);
     CREATE INDEX IF NOT EXISTS status_probes_ts ON ${s}.status_probes (ts);
     CREATE INDEX IF NOT EXISTS status_probes_inserted_at ON ${s}.status_probes (inserted_at);
-  `);
+  `));
 }
 /** The SQLite file's rows into the table, insert-if-absent (safe to run twice). */
 async function importSqlite() {
@@ -592,6 +629,8 @@ async function loadMirror() {
     mirror.lastDbAt = new Date(agg.rows[0].at).getTime();
     for (const x of [...win.rows, ...latestC.rows, ...latestS.rows]) addToMirror(normRow(x), Number(x.id));
     for (const x of recent.rows) mirror.seen.set(Number(x.id), new Date(x.inserted_at).getTime());
+    // Rows recorded here that are not written yet stay visible.
+    for (const batch of pending) for (const row of batch) addToMirror(row, mirror.seq++);
   });
 }
 /** Pull rows other containers wrote since the last position; prune the mirror. */
@@ -620,20 +659,25 @@ async function refreshMirror() {
 }
 
 if (PG) {
-  ready = (async () => {
+  // Retried until it lands: a failed attempt is forgotten and tried again
+  // (on the next call, and by a background timer), so a blip at boot never
+  // leaves the history dead until the next deploy.
+  loader = retryingLoad("status history", async () => {
     await ensureTable();
     await importOnce(basename(DB_PATH), { source: DB_PATH, run: importSqlite });
     await loadMirror();
-    refreshTimer = setInterval(() => { refreshMirror().catch((e) => say(`refresh failed: ${String(e?.message || e).slice(0, 120)}`)); }, REFRESH_MS);
-    refreshTimer.unref?.();
-  })().catch((e) => { say(`first load failed: ${String(e?.message || e).slice(0, 160)}`); throw e; });
-  trackStoreReady(ready);
-  queue = ready.catch(() => {});
+    if (!refreshTimer) {
+      refreshTimer = setInterval(() => { refreshMirror().catch((e) => say(`refresh failed: ${String(e?.message || e).slice(0, 120)}`)); }, REFRESH_MS);
+      refreshTimer.unref?.();
+    }
+  }, { log: say, onLoaded: () => { if (pending.length) void drain(); } });
+  trackStoreReady(loader.eventually);
+  loader.ready().catch(() => {});
 }
 
-/** Resolves when the first load has finished (at once without the database). */
-export function statusStoreReady() { return ready.then(() => true, () => false); }
-/** Resolves once every queued write has been tried (at once without the database). */
-export async function statusStoreFlush() { await queue; }
+/** Resolves true once the first load has landed (at once without the database); false while it has not. */
+export function statusStoreReady() { return PG ? loader.ready().then(() => true, () => false) : Promise.resolve(true); }
+/** Resolves once every pending write has been tried (at once without the database). */
+export async function statusStoreFlush() { if (PG) await drain(); }
 /** Postgres mode only: pull other containers' rows now; resolves how many arrived. */
 export async function statusStoreRefresh() { return PG ? refreshMirror() : 0; }

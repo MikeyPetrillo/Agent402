@@ -22,7 +22,8 @@
 // database and the SQLite file is a local read mirror of them (see "The
 // ledger in the state database" below); without it nothing here changes.
 import Database from "better-sqlite3";
-import { leased, stateDbEnabled, stateQuery, stateDbSchema, withStateTx, importOnce, trackStoreReady } from "./state-db.js";
+import { leased, stateDbEnabled, stateQuery, stateDbSchema, withStateTx, importOnce, trackStoreReady, withSchemaLock } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -179,7 +180,8 @@ const PG_DDL = () => `
   );
 `;
 let pgTablesReady = null;
-const pgTables = () => (pgTablesReady ||= stateQuery(PG_DDL()).catch((e) => { pgTablesReady = null; throw e; }));
+// Under the schema lock: two containers creating these at once would otherwise race on the catalog.
+const pgTables = () => (pgTablesReady ||= withSchemaLock((c) => c.query(PG_DDL())).catch((e) => { pgTablesReady = null; throw e; }));
 const intOrNull = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Math.trunc(Number(v)));
 // A row as the tables and the mirror both store it: the SQLite shape with the
 // integer columns made integers (a chain timestamp is whole seconds).
@@ -317,21 +319,21 @@ async function refreshMirror() {
   mirror(() => { for (const x of curs) putCursor.run(x); });
 }
 
-let storeReady = Promise.resolve({ imported: false });
-if (USE_PG) {
-  storeReady = trackStoreReady((async () => {
-    await pgTables();
-    const imp = await importOnce(IMPORT_NAME, { source: DB_PATH, run: importSqliteFile });
-    await refreshMirror();
-    return imp;
-  })().catch((e) => {
-    console.warn(`revenue-ledger: state database first load failed (readers serve the file until a tick refreshes): ${String(e?.message || e).slice(0, 120)}`);
-    return { imported: false, error: true };
-  }));
-}
+// The first load is retried until it lands, within the boot: a failed
+// attempt is forgotten and tried again by a background timer (and by the next
+// tick), so a blip at boot never leaves the import or the mirror undone.
+const storeLoader = USE_PG ? retryingLoad("revenue-ledger: state database", async () => {
+  await pgTables();
+  const imp = await importOnce(IMPORT_NAME, { source: DB_PATH, run: importSqliteFile });
+  await refreshMirror();
+  return imp;
+}) : null;
+if (storeLoader) { trackStoreReady(storeLoader.eventually); storeLoader.ready().catch(() => {}); }
+const storeReadyP = () => (storeLoader ? storeLoader.ready().catch(() => ({ imported: false, error: true })) : Promise.resolve({ imported: false }));
 /** Resolves once the first load has finished (the file imported once, the
- *  mirror filled); already resolved without a database. */
-export function ledgerStoreReady() { return storeReady; }
+ *  mirror filled), `{ error: true }` while it has not landed yet (it is
+ *  retried); already resolved without a database. */
+export function ledgerStoreReady() { return storeReadyP(); }
 /** Tests and operators: pull the tables into the mirror now. No-op without a database. */
 export async function refreshLedgerMirror() { if (USE_PG) await refreshMirror(); }
 
@@ -1609,7 +1611,7 @@ export function startRevenueLedger({ walletAddress, solanaWallet, stellarWallet,
   // holder, a database error) tries again rather than ending the loop.
   const syncOnce = leased("revenue-ledger-tick", { ttlMs: 10 * 60_000, failOpen: true }, async () => {
     let allCaughtUp = true;
-    if (USE_PG) { await storeReady; staged.clear(); }
+    if (USE_PG) { await storeReadyP(); staged.clear(); }
     if (walletAddress) {
       for (const chain of Object.keys(EVM)) {
         try {

@@ -21,7 +21,9 @@
 import Database from "better-sqlite3";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { importOnce, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady, withStateTx } from "./state-db.js";
+import { randomBytes } from "node:crypto";
+import { importOnce, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady, withStateTx, withSchemaLock } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
 
 // Counters + recent-calls + meta live in /data (persistent volume) so they
 // survive redeploys — recentCalls is the live activity feed on the landing
@@ -305,6 +307,11 @@ const SELLER_OPS_PENDING_MAX = 10_000;
 const FLUSH_COALESCE_MS = 25;
 const FLUSH_RETRY_MS = 5_000;
 const IMPORT_CHUNK = 2_000;
+// Each flush is one batch with an id, recorded in the same transaction as its
+// deltas; a batch whose id is already there is skipped. Ids are kept this long
+// (far past any retry), pruned at most once per FLUSH_IDS_PRUNE_MS.
+const FLUSH_IDS_KEEP_MS = 7 * 86_400_000;
+const FLUSH_IDS_PRUNE_MS = 3_600_000;
 const numOrNull = (v) => (v == null ? null : Number(v));
 const key2 = (a, b) => `${a}\u0000${b}`;
 const key3 = (a, b, c) => `${a}\u0000${b}\u0000${c}`;
@@ -388,7 +395,9 @@ function openPg(file) {
   let tablesReady = null;
   const ensureTables = () => {
     if (!tablesReady) {
-      tablesReady = stateQuery(`
+      // Under the schema lock: two containers creating these at once would
+      // otherwise race on the catalog.
+      tablesReady = withSchemaLock((c) => c.query(`
         CREATE TABLE IF NOT EXISTS ${T("counters")} (k TEXT PRIMARY KEY, n BIGINT NOT NULL);
         CREATE TABLE IF NOT EXISTS ${T("tool_counts")} (slug TEXT PRIMARY KEY, n BIGINT NOT NULL);
         CREATE TABLE IF NOT EXISTS ${T("paid_tool_counts")} (slug TEXT PRIMARY KEY, n BIGINT NOT NULL);
@@ -400,7 +409,9 @@ function openPg(file) {
         CREATE TABLE IF NOT EXISTS ${T("daily_upstream_calls")} (day TEXT NOT NULL, upstream TEXT NOT NULL, caller TEXT NOT NULL, n BIGINT NOT NULL, PRIMARY KEY (day, upstream, caller));
         CREATE TABLE IF NOT EXISTS ${T("daily_upstream_spend")} (day TEXT NOT NULL, source TEXT NOT NULL, usd_micro BIGINT NOT NULL, n BIGINT NOT NULL, PRIMARY KEY (day, source));
         CREATE TABLE IF NOT EXISTS ${T("seller_registrations")} (origin TEXT PRIMARY KEY, first_seen BIGINT NOT NULL, last_routable_seen BIGINT, last_settled_seen BIGINT);
-      `).catch((e) => { tablesReady = null; throw e; });
+        CREATE TABLE IF NOT EXISTS ${T("flushes")} (id TEXT PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now());
+        CREATE INDEX IF NOT EXISTS stats_flushes_at ON ${T("flushes")} (at);
+      `)).catch((e) => { tablesReady = null; throw e; });
     }
     return tablesReady;
   };
@@ -480,6 +491,9 @@ function openPg(file) {
       spend: (await q("daily_upstream_spend", "SELECT day, source, usd_micro, n FROM %T")).map((r) => ({ day: r.day, source: r.source, usd_micro: Number(r.usd_micro), n: Number(r.n) })),
       sellers: (await q("seller_registrations", "SELECT origin, first_seen, last_routable_seen, last_settled_seen FROM %T")).map((r) => ({ origin: r.origin, first_seen: Number(r.first_seen), last_routable_seen: numOrNull(r.last_routable_seen), last_settled_seen: numOrNull(r.last_settled_seen) })),
     };
+    // A batch whose commit was in doubt is in the rows when its id is.
+    const held = pendingBatch;
+    const heldLanded = held ? (await stateQuery(`SELECT 1 FROM ${T("flushes")} WHERE id = $1`, [held.id])).rowCount === 1 : false;
     // Replace the mirror with the rows, then re-apply whatever was written
     // before the load finished (it is still pending in the delta), so an
     // early write is neither lost from the mirror nor counted twice.
@@ -497,7 +511,8 @@ function openPg(file) {
     const pendingRecent = recent.splice(0); const pendingFailures = failures.splice(0);
     for (const r of fresh.recent) pushRing(recent, r);
     for (const r of fresh.failures) pushRing(failures, r);
-    const d = delta;
+    for (const d of [held && !heldLanded ? held.d : null, delta]) {
+    if (!d) continue;
     for (const [k, n] of d.counters) addTo(counters, k, n);
     for (const [k, n] of d.tools) addTo(toolCounts, k, n);
     for (const [k, n] of d.paid) addTo(paidCounts, k, n);
@@ -509,10 +524,14 @@ function openPg(file) {
     for (const r of pendingRecent) pushRing(recent, r);
     for (const r of pendingFailures) pushRing(failures, r);
     for (const op of d.sellerOps) mirrorSellerOp(op);
+    }
     loaded = true;
   }
 
-  const ready = trackStoreReady((async () => {
+  // The first load is retried until it lands (a failed attempt is
+  // forgotten; a background timer tries again), so a blip at boot never
+  // leaves the tally, or /health, dead until the next deploy.
+  const loader = retryingLoad("stats tally", async () => {
     try {
       await ensureTables();
       await importOnce(STATS_IMPORT_NAME, { source: file, run: importSqlite });
@@ -521,42 +540,31 @@ function openPg(file) {
       lastError = null;
     } catch (e) {
       lastError = String(e?.message || e).slice(0, 160);
-      say(`first load failed: ${lastError}`);
       throw e;
     }
-  })());
-  ready.catch(() => {}); // reported above; the server's readiness wait is bounded
+  }, { log: say, onLoaded: () => { if (delta.dirty || pendingBatch) flushSoon(); } });
+  const readyP = () => loader.ready();
+  trackStoreReady(loader.eventually);
+  readyP().catch(() => {});
 
   // ---- the ordered write queue ----
   // Deltas are additive, so one transaction per flush carries every write
-  // made since the last one; a failed flush merges its delta back in front
-  // of the newer writes and retries, so no row is dropped while the database
-  // is away and nothing is counted twice when it returns.
+  // made since the last one. A failed flush keeps its batch and retries it
+  // first, under the same batch id, so no row is dropped while the database
+  // is away and nothing is counted twice when it returns, even when the
+  // failure was a lost reply to a COMMIT that landed.
   let flushing = null;
   let flushTimer = null;
   let retryTimer = null;
+  // The batch whose transaction failed, retried AS IS under the same id: if
+  // its COMMIT landed and only the reply was lost, the id is already there
+  // and the retry adds nothing.
+  let pendingBatch = null;
+  let lastIdsPrune = 0;
+  const scheduleRetry = () => { if (!retryTimer) { retryTimer = setTimeout(() => { retryTimer = null; void flush(); }, FLUSH_RETRY_MS); retryTimer.unref?.(); } };
   function flushSoon() {
     if (flushTimer || flushing) return;
     flushTimer = setTimeout(() => { flushTimer = null; void flush(); }, FLUSH_COALESCE_MS);
-  }
-  function mergeBack(d) {
-    const cur = delta;
-    const merged = newDelta();
-    merged.dirty = true;
-    for (const src of [d, cur]) {
-      for (const [k, n] of src.counters) addTo(merged.counters, k, n);
-      for (const [k, n] of src.tools) addTo(merged.tools, k, n);
-      for (const [k, n] of src.paid) addTo(merged.paid, k, n);
-      for (const [k, n] of src.heartbeat) addTo(merged.heartbeat, k, n);
-      for (const [k, v] of src.meta) if (!merged.meta.has(k)) merged.meta.set(k, v);
-      for (const [k, n] of src.daily) addTo(merged.daily, k, n);
-      for (const [k, n] of src.upstream) addTo(merged.upstream, k, n);
-      for (const [k, v] of src.spend) { const m = merged.spend.get(k) || merged.spend.set(k, { usd_micro: 0, n: 0 }).get(k); m.usd_micro += v.usd_micro; m.n += v.n; }
-    }
-    merged.recent = [...d.recent, ...cur.recent].slice(-RECENT_KEEP);
-    merged.failures = [...d.failures, ...cur.failures].slice(-FAILURES_PENDING_MAX);
-    merged.sellerOps = [...d.sellerOps, ...cur.sellerOps].slice(-SELLER_OPS_PENDING_MAX);
-    delta = merged;
   }
   async function applyDelta(c, d) {
     const upsertN = async (table, col, map) => {
@@ -606,26 +614,43 @@ function openPg(file) {
       }
     }
   }
+  async function applyBatch(c, b) {
+    const fresh = await c.query(`INSERT INTO ${T("flushes")} (id) VALUES ($1) ON CONFLICT (id) DO NOTHING RETURNING id`, [b.id]);
+    if (fresh.rowCount === 0) { say(`batch ${b.id} was already applied (its commit landed before the reply was lost); not applied again`); return; }
+    await applyDelta(c, b.d);
+    if (Date.now() - lastIdsPrune > FLUSH_IDS_PRUNE_MS) {
+      lastIdsPrune = Date.now();
+      await c.query(`DELETE FROM ${T("flushes")} WHERE at < now() - ($1::bigint * interval '1 millisecond')`, [FLUSH_IDS_KEEP_MS]);
+    }
+  }
   function flush() {
     if (flushing) return flushing;
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     flushing = (async () => {
-      try { await ready; } catch { /* the first load failed; the tables exist or the write fails below */ }
-      let okAll = true;
-      while (delta.dirty) {
-        const d = delta; delta = newDelta();
-        try { await withStateTx((c) => applyDelta(c, d)); lastError = null; }
-        catch (e) {
-          okAll = false;
-          lastError = String(e?.message || e).slice(0, 160);
-          say(`write failed, kept for retry: ${lastError}`);
-          mergeBack(d);
-          if (!retryTimer) { retryTimer = setTimeout(() => { retryTimer = null; void flush(); }, FLUSH_RETRY_MS); retryTimer.unref?.(); }
-          break;
+      try {
+        // Nothing is written before the first load has landed (the tables
+        // may not exist yet); the writes wait in the delta meanwhile.
+        try { await readyP(); } catch { scheduleRetry(); return false; }
+        for (;;) {
+          if (!pendingBatch) {
+            if (!delta.dirty) break;
+            pendingBatch = { id: `${Date.now().toString(36)}-${randomBytes(8).toString("hex")}`, d: delta };
+            delta = newDelta();
+          }
+          try { await withStateTx((c) => applyBatch(c, pendingBatch)); pendingBatch = null; lastError = null; }
+          catch (e) {
+            const why = String(e?.message || e).slice(0, 160);
+            // A data or constraint error answers the same every time: that
+            // batch is dropped (loudly) instead of blocking every later write.
+            if (/^(22|23)/.test(String(e?.code || ""))) { say(`write refused by the database (${e.code}), batch ${pendingBatch.id} dropped: ${why}`); pendingBatch = null; continue; }
+            lastError = why;
+            say(`write failed, kept for retry: ${lastError}`);
+            scheduleRetry();
+            return false;
+          }
         }
-      }
-      flushing = null;
-      return okAll;
+        return true;
+      } finally { flushing = null; }
     })();
     return flushing;
   }
@@ -636,7 +661,7 @@ function openPg(file) {
 
   return {
     backend: "pg",
-    ready,
+    get ready() { return readyP(); },
     flush,
     recordCall,
     recordFailure,
