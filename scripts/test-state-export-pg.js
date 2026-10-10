@@ -65,6 +65,12 @@ try {
   ok(boot.status === 0, `every store boots in file mode on the exported directory${boot.status ? ` (${boot.stderr.slice(-300)})` : ""}`);
   const after = run(["scripts/state-ledger-checksum.js", "--data", out]);
   ok(after.status === 0, "after the file-mode boot every ledger still equals the database");
+  // A table with no file shape is never dropped silently.
+  await c.query(`CREATE TABLE ${S}.unknown_store (k TEXT PRIMARY KEY)`);
+  await c.query(`INSERT INTO ${S}.unknown_store VALUES ('a')`);
+  await c.query(`INSERT INTO ${S}.log_lines (stream, body) VALUES ('unknown-stream', '{}'::jsonb)`);
+  const un = run(["scripts/state-export.js", "--out", join(DIR, "out2")]);
+  ok(un.status === 1 && /UNMAPPED: table unknown_store/.test(un.stdout) && /UNMAPPED: log stream unknown-stream/.test(un.stdout), "an unmapped table or stream is named and fails the export");
 } finally {
   await c.query(`DROP SCHEMA IF EXISTS ${S} CASCADE`).catch(() => {});
   await c.end().catch(() => {});
