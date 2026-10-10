@@ -12,7 +12,10 @@
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
 
-const { validateJudgeRequest, judge, judgeEnabled, LIMITS, JUDGE_TOOLS } = await import("../src/tools/judge-kit.js");
+// Hermetic: a developer shell's OpenRouter key would offer Decision-1 here;
+// scripts/test-decision-one.js covers it.
+delete process.env.OPENROUTER_API_KEY;
+const { validateJudgeRequest, judge, judgeEnabled, LIMITS, JUDGE_TOOLS, DECISION_ONE } = await import("../src/tools/judge-kit.js");
 const MAX_TOKENS_PER_CALL = 16_600;   // the per-call token budget the price allows
 
 // --- the caps ARE the margin guard -------------------------------------------
@@ -39,6 +42,8 @@ const rejects = (input, why) => {
   return msg;
 };
 ok(validateJudgeRequest(base).questions.a.type === "noul", "control: a valid noul passes");
+ok(validateJudgeRequest({ ...base, model: DECISION_ONE }).model === "microsoft-decision-1", "control: microsoft-decision-1 is a model a buyer can name");
+ok(rejects({ ...base, model: "microsoft/microsoft-decision-1" }, "Decision-1's upstream id instead of the route's name").includes("microsoft-decision-1"), "the refusal lists the names the route accepts");
 rejects({ ...base, state: "" }, "empty state");
 rejects({ ...base, state: "x".repeat(LIMITS.stateChars + 1) }, "state past the cap");
 rejects({ ...base, state: "\u5b57".repeat(6_000) }, "a state under the character cap but over the byte bound");
