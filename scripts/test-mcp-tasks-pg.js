@@ -120,6 +120,45 @@ try {
     ok(threw === null && got2 === null, `get(${JSON.stringify(bad.slice(0, 22))}) is a clean null`);
   }
 
+  // ---- M11: a live run marked closed elsewhere, then completed with a charge ----
+  {
+    const dir = join(TMP, "m11_tasks");
+    const charged = [];
+    const A = createTaskStore({ dir, bootId: "m11A", log: quiet, onChargedFailure: (x) => charged.push(x) });
+    await A.ready();
+    const rec = await A.create({ slug: "some-paid-tool" });
+    // (a) A's boot lease row is gone (a missed renew, a database blip at boot): the next renew takes it back.
+    await leases.release("m11_tasks:boot:m11A", { owner: "m11A" });
+    await A._renewLease();
+    ok((await leases.holder("m11_tasks:boot:m11A"))?.owner === "m11A", "M11a: a renew that finds no lease row re-acquires the boot lease");
+    // (b) the lease is gone again and B's sweep resolves the live run as an orphan.
+    await leases.release("m11_tasks:boot:m11A", { owner: "m11A" });
+    const B = createTaskStore({ dir, bootId: "m11B", log: quiet });
+    await B.ready();
+    ok((await B.get(rec.taskId))?.status === "failed", "M11b: another container resolved the run as failed");
+    // A's run now returns its settled, paid 200.
+    await A.complete(rec.taskId, { content: [{ type: "text", text: "paid result" }] }, { receipt: { success: true, transaction: "0xm11" }, priceUsd: 0.05 });
+    const after = await A.get(rec.taskId);
+    ok(after.status === "failed" && charged.length === 1 && charged[0].receipt?.transaction === "0xm11", `M11b: a charged result on a row closed elsewhere records the debt (status ${after.status}, onChargedFailure calls: ${charged.length})`);
+    // A failure arriving on a closed row records nothing.
+    const rec2 = await A.create({ slug: "some-paid-tool" });
+    await B.cancel(rec2.taskId);
+    await A.fail(rec2.taskId, { code: -32603, message: "x" });
+    ok(charged.length === 1 && (await A.get(rec2.taskId)).status === "cancelled", "M11b: a failure on a row cancelled elsewhere records no debt and keeps the cancel");
+    // a16: the conditional write. The row closes elsewhere between A's read and A's write.
+    const rec3 = await A.create({ slug: "some-paid-tool" });
+    const origGet = records.get;
+    records.get = async (c, id) => {
+      const body = await origGet.call(records, c, id);
+      if (id === rec3.taskId && body?.status === "working") await records.put(c, id, { ...body, status: "cancelled", statusMessage: "closed elsewhere" });
+      return body;
+    };
+    try { await A.complete(rec3.taskId, { content: [{ type: "text", text: "late" }] }, { receipt: { success: true, transaction: "0xm11c" }, priceUsd: 0.05 }); }
+    finally { records.get = origGet; }
+    ok((await A.get(rec3.taskId)).status === "cancelled" && charged.length === 2, `a16: a row closed between read and write keeps its terminal state, and the charged result is recorded (${(await A.get(rec3.taskId)).status}, ${charged.length})`);
+    await A.close(); await B.close();
+  }
+
   await s2._reset();
   ok((await records.count(COLLECTION)) === 0, "_reset clears the collection");
   await s2.close();
