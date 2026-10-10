@@ -94,9 +94,49 @@ setImmediate(() => { throw new Error("boom"); });
   if (code === "timeout") child.kill("SIGKILL");
 }
 
+// ---- 3. Real server, file mode: the fatal drain keeps its full deadline ----
+// Without a state database there is no lease to release and no pool to close,
+// so nothing may cut the drain short: a request still in flight holds the
+// exit until the fatal deadline (10 s), exactly as before the database work.
+// A preload throws from a SIGUSR2 handler, a real uncaught exception inside
+// the server process, while a POST is held open mid-body.
+async function testFatalFileModeDeadline() {
+  const dir = mkdtempSync(join(tmpdir(), "a402-fatal-srv-"));
+  const preload = join(dir, "throw-on-usr2.mjs");
+  writeFileSync(preload, `process.on("SIGUSR2", () => { throw new Error("boom from the test"); });\n`);
+  const port = 3900 + (process.pid % 500);
+  const env = { ...process.env, FREE_MODE: "true", PORT: String(port), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" };
+  delete env.STATE_DATABASE_URL;
+  const child = spawn(process.execPath, ["--import", preload, "src/server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  let out = "";
+  child.stdout.on("data", (d) => { out += d; });
+  child.stderr.on("data", (d) => { out += d; });
+  const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+  let up = false;
+  for (let i = 0; i < 120; i++) {
+    try { const r = await fetch(`http://127.0.0.1:${port}/health`); if (r.ok) { up = true; break; } } catch { /* not up yet */ }
+    await wait(250);
+  }
+  ok(up, "server booted in FREE_MODE with the throwing preload");
+  const http = await import("node:http");
+  const held = http.request({ host: "127.0.0.1", port, method: "POST", path: "/api/hash", headers: { "content-type": "application/json", "content-length": 64 } });
+  held.on("error", () => {});
+  held.write("{\"text\":");
+  await wait(300);
+  const t0 = Date.now();
+  child.kill("SIGUSR2");
+  const code = await Promise.race([exited, wait(15_000).then(() => "timeout")]);
+  const elapsed = Date.now() - t0;
+  ok(code === 1, `uncaught exception in the server exits 1 (got ${code})`);
+  ok(elapsed >= 9_000 && elapsed < 12_000, `file mode: a held request keeps the fatal drain to its 10 s deadline, no early finish (${elapsed}ms)`);
+  held.destroy();
+  if (code === "timeout") child.kill("SIGKILL");
+}
+
 (async () => {
   await testSigterm();
   await testFatal();
+  await testFatalFileModeDeadline();
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

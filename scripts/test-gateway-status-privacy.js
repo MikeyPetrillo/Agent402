@@ -39,6 +39,10 @@ const pubBody = await pub.json();
 const opRes = await fetch(`${base}/api/gateway-status`, { headers: { Authorization: `Bearer ${TOKEN}` } });
 const opBody = await opRes.json();
 
+// --- the ledgers' local dead-letter: one word publicly, counts for the operator ---
+ok(pubBody?.ledgerDeadLetter?.status === "off" && Object.keys(pubBody.ledgerDeadLetter).join(",") === "status", `ledgerDeadLetter publishes its word only (${JSON.stringify(pubBody?.ledgerDeadLetter)}; off without a state database)`);
+ok(opBody?.ledgerDeadLetter?.status === "off" && typeof opBody?.ledgerDeadLetter?.sales?.onDisk === "number", "the operator view of ledgerDeadLetter carries the counts");
+
 // --- the money fields, by name ---------------------------------------------
 const MONEY = /"(capUsd|spentUsd|budget|callsToday|fundedUsd|remainingUsd|spentSinceRestartUsd|refusedToday|lowBelowFraction)":\s*-?[0-9]/;
 ok(!MONEY.test(JSON.stringify(pubBody)),

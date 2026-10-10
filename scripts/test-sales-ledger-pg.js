@@ -210,6 +210,40 @@ try {
     const second = await sl.salesLedgerRefresh();
     ok(first >= 10000 && second === 0, `M2: a 10k-row burst is pulled once, and the next refresh pulls nothing (${first}, ${second})`);
   }
+
+  // ---- a file with 130k sales in the reconcile window still loads ------------
+  // The per-boot reconcile reads every file sale since the import mark; its
+  // lowest ts was once taken with Math.min(...spread), which throws a
+  // RangeError past ~110k arguments, so the first load never landed.
+  {
+    const bigDir = join(DIR, "big");
+    const bigFile = join(bigDir, "agent402-sales.db");
+    execFileSync("mkdir", ["-p", bigDir]);
+    const f = new Database(bigFile);
+    f.exec(`CREATE TABLE sales (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, slug TEXT NOT NULL, price_usd REAL NOT NULL, rail TEXT NOT NULL, network TEXT, payer TEXT, tx TEXT, internal INTEGER NOT NULL, wire TEXT, quote_usd REAL, response_sha256 TEXT, attest_uid TEXT, attest_tx TEXT);
+      CREATE TABLE sale_feedback (tx TEXT PRIMARY KEY, sale_id INTEGER NOT NULL, slug TEXT NOT NULL, payer TEXT NOT NULL, verdict TEXT NOT NULL, reason TEXT, ts INTEGER NOT NULL)`);
+    const ins = f.prepare("INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire) VALUES (?, ?, 0.001, 'usdc', 'base', NULL, ?, 0, 'x402')");
+    const t0 = Date.now();
+    f.transaction(() => { for (let i = 0; i < 130_000; i++) ins.run(t0 + i, `tool-${i % 17}`, `0xbig${i}`); })();
+    f.close();
+    const bigSchema = `${S}_big`;
+    const src = `
+      const sl = await import(${JSON.stringify(join(ROOT, "src/sales-ledger.js"))});
+      const sdb = await import(${JSON.stringify(join(ROOT, "src/state-db.js"))});
+      const { unloadedStores } = await import(${JSON.stringify(join(ROOT, "src/store-retry.js"))});
+      const loaded = await Promise.race([sl.salesLedgerReady().then(() => true), new Promise((r) => setTimeout(() => r(false), 60000))]);
+      const landed = await sl.recordSale({ slug: "after-big", priceUsd: 0.01, rail: "usdc", network: "base", payer: null, tx: "0xafterbig" });
+      const n = Number((await sdb.stateQuery("SELECT count(*) AS n FROM " + sdb.stateDbSchema() + ".sales")).rows[0].n);
+      console.log(JSON.stringify({ loaded, unloaded: unloadedStores(), landed, n }));
+      await sdb.__dropStateSchema(); await sdb.closeStateDb(); process.exit(0);
+    `;
+    const big = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", src], {
+      env: { ...process.env, SALES_LEDGER_DB: bigFile, STATE_DB_SCHEMA: bigSchema, STATE_STORE_RETRY_MS: "500", LEDGER_MIRROR_REFRESH_MS: "1000000000" },
+      cwd: ROOT, encoding: "utf8", maxBuffer: 64 << 20,
+    }).trim().split("\n").pop());
+    ok(big.loaded && !big.unloaded.includes("sales ledger") && big.landed === true && big.n === 130_001,
+      `130k file sales in the reconcile window: the ledger loads and a sale lands (${JSON.stringify(big)})`);
+  }
 } finally {
   await sdb.__dropStateSchema();
   await sdb.closeStateDb();

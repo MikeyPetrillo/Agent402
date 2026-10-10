@@ -547,6 +547,9 @@ import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFro
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores } from "./state-db.js";
+import { salesDeadLetterState } from "./sales-ledger.js";
+import { refundDeadLetterState } from "./refund-ledger.js";
+import { deadLetterWord, DEAD_LETTER_STUCK_MINUTES } from "./ledger-mirror.js";
 import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
@@ -3211,6 +3214,21 @@ app.get("/api/gateway-status", async (req, res) => {
     tweetQueue: (() => { try { return _tweetQueue.alarmStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // The state database (the stores that left the volume): one word.
     stateDb: { status: stateDbStatus() },
+    // Sales and refund debts waiting on this container's local disk for the
+    // database (src/ledger-mirror.js): none / pending / stuck (an entry older
+    // than LEDGER_DEAD_LETTER_STUCK_MINUTES, which dies with the container),
+    // off without a state database. One word publicly; counts for the operator.
+    ledgerDeadLetter: (() => {
+      try {
+        const sales = salesDeadLetterState(), refunds = refundDeadLetterState();
+        const status = deadLetterWord([sales, refunds], { enabled: stateDbEnabled() });
+        if (!full) return { status };
+        const age = (s) => (s.oldestAt == null ? null : Math.floor((Date.now() - s.oldestAt) / 60_000));
+        return { status, stuckMinutes: DEAD_LETTER_STUCK_MINUTES,
+          sales: { waiting: sales.waiting, onDisk: sales.total, oldestMinutes: age(sales) },
+          refunds: { waiting: refunds.waiting, onDisk: refunds.total, oldestMinutes: age(refunds) } };
+      } catch { return { status: "unknown" }; }
+    })(),
     // One word, never a value: whether the private upstream-cost table loaded.
     upstreamCosts: { status: upstreamCostsStatus() },
     // The ElevenLabs breaker on /api/tts and /api/tts-hd (src/tools/tts-kit.js):
@@ -10303,10 +10321,12 @@ function shutdown(signal, { code = 0, deadlineMs = DRAIN_DEADLINE_MS } = {}) {
   // before the process exits, bounded so a slow database cannot hold the
   // drain past its deadline: one flush round, at most 10 s, each statement
   // under the pool's own time limits. Without a database every flush
-  // resolves at once. During a database outage that round fails and what is
-  // still queued is lost with the process; while the /data volume exists
-  // the stores that write through to it keep their copy, after the volume
-  // is removed nothing does.
+  // resolves at once. During a database outage that round fails; sales and
+  // refund debts were written to the ledgers' local dead-letter when they
+  // were queued, so they wait on this container's disk for the next boot's
+  // replay (ledgerDeadLetter on /api/gateway-status pages while they wait).
+  // Other stores' queued writes are lost with the process; while the /data
+  // volume exists the stores that write through to it keep their copy.
   httpServer.close(() => { flushStateQueues().finally(finish); });
   // server.close() waits for ALL connections, including idle keep-alive
   // sockets agents hold open between calls. Sweep those now and every few
@@ -10314,9 +10334,11 @@ function shutdown(signal, { code = 0, deadlineMs = DRAIN_DEADLINE_MS } = {}) {
   // so an idle connection can't pin the drain to the hard deadline.
   httpServer.closeIdleConnections();
   setInterval(() => httpServer.closeIdleConnections(), 5_000).unref();
-  // Hard deadline so a stuck request can't block the redeploy; the lease
-  // release and pool close start early enough to finish inside it.
-  setTimeout(finish, Math.max(0, deadlineMs - 6_000)).unref();
+  // Hard deadline so a stuck request can't block the redeploy. With a state
+  // database the lease release and pool close start early enough to finish
+  // inside it; without one there is nothing to release, so in-flight requests
+  // keep the whole deadline (file mode drains exactly as it always did).
+  if (stateDbEnabled()) setTimeout(finish, Math.max(0, deadlineMs - 6_000)).unref();
   setTimeout(() => process.exit(code), deadlineMs).unref();
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
