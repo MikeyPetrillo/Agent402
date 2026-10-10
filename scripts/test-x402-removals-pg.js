@@ -39,8 +39,8 @@ try {
   const r = xi.removeOrigin(NEW, { note: "crawler off" }); // nothing loaded the list before this call
   ok(r.removed === true, "a removal with the crawler off answers removed");
   ok(await until(async () => {
-    const o = ((await sdb.documents.get(DOC))?.body || []).map((x) => x.origin);
-    return o.includes(STORED) && o.includes(NEW);
+    const o = new Set(((await sdb.documents.get(DOC))?.body || []).map((x) => x.origin));
+    return o.has(STORED) && o.has(NEW);
   }), `the stored removal is kept and the new one added in the row (${JSON.stringify(((await sdb.documents.get(DOC))?.body || []).map((x) => x.origin))})`);
   ok(xi.listRemovedOrigins().some((x) => x.origin === STORED), "the listing shows the stored removal");
 
