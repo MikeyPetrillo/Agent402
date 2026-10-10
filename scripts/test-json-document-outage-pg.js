@@ -152,12 +152,20 @@ await sdb.documents.put("loading-doc", { kept: true });
   ok((await doc.save({ v: 1 })) === false, "a save during a steady outage reports it did not land");
   ok(lines.some((l) => /save failed/.test(l)), `the failed save reaches failLog (${JSON.stringify(lines[0] || "")})`);
   ok(unsavedDocuments().includes("document steady-doc (save pending)") && sdb.unsavedStateStores().includes("document steady-doc (save pending)"), "the document is named among the unsaved stores");
-  ok(sdb.stateDbStatus() === "degraded", `the status word reads degraded (${sdb.stateDbStatus()})`);
-  void doc.save({ v: 2 }); // a newer body while the first waits
   relay.heal();
-  ok(await until(async () => (await sdb.documents.get("steady-doc")).body.v === 2), "the newest body lands once the database is back");
+  ok(await until(async () => (await sdb.documents.get("steady-doc")).body.v === 1), "with no further save, the kept body lands once the database is back");
+  relay.cut();
+  await doc.save({ v: 2 });
+  ok(sdb.unsavedStateStores().includes("document steady-doc (save pending)"), "a second failed save is listed again");
+  relay.heal();
+  await sdb.stateQuery("SELECT 1"); // the connection fault clears; the save has not landed yet
+  ok(sdb.stateDbStatus() === "degraded", `the status word reads degraded while a save waits, with the database answering (${sdb.stateDbStatus()})`);
+  relay.cut();
+  void doc.save({ v: 3 }); // a newer body while the second waits
+  relay.heal();
+  ok(await until(async () => (await sdb.documents.get("steady-doc")).body.v === 3), "the newest body lands once the database is back");
   await wait(1500); // past the retry backoff: nothing older follows it
-  ok((await sdb.documents.get("steady-doc")).body.v === 2, "no older body is sent after the newer one landed");
+  ok((await sdb.documents.get("steady-doc")).body.v === 3, "no older body is sent after the newer one landed");
   ok(!sdb.unsavedStateStores().includes("document steady-doc (save pending)"), "the document leaves the unsaved list once the body lands");
   ok(lines.some((l) => /held save landed/.test(l)), "the landing is logged");
 }
