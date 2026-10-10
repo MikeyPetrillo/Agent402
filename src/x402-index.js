@@ -33,6 +33,45 @@ import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, rec
 // when one is configured (imported from the file once).
 const docs = new Map();
 const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
+// With a database, a save made while a document's load is still running (or
+// failed and re-reading) is refused: it would replace a body nobody read.
+// Changes made in that window are kept here instead: the refused save marks
+// the document dirty, a key deleted meanwhile is remembered, and when the
+// stored body arrives it is merged under memory (deleted keys left out) and
+// the merged body is saved.
+const unsaved = new Map(); // file -> { dirty, deleted: Set }
+const pendingLoad = (d) => d.backend === "pg" && (d.loadState === "loading" || d.loadState === "failed");
+function unsavedOf(file) { let u = unsaved.get(file); if (!u) { u = { dirty: false, deleted: new Set() }; unsaved.set(file, u); } return u; }
+/** Save a whole body, or mark it dirty for the merge when the load has not read the row. */
+function saveOrHold(file, body) {
+  const d = docFor(file);
+  if (pendingLoad(d)) { unsavedOf(file).dirty = true; return; }
+  void d.save(body);
+}
+/** Remember a key deleted while the load is pending, so the merge does not bring it back. */
+function noteDeleted(file, key) {
+  if (pendingLoad(docFor(file))) unsavedOf(file).deleted.add(key);
+}
+/**
+ * Load a document with the database, applying its body once it is read (now or
+ * after a background re-read) and saving the merge when memory changed in the
+ * meantime. `keyOf(entry)` names a body entry for the deleted-key filter.
+ */
+function loadMerging(file, { apply, persist, keyOf }) {
+  const d = docFor(file);
+  const onLoad = (body) => {
+    const u = unsaved.get(file);
+    unsaved.delete(file);
+    let b = body;
+    if (u?.deleted.size) {
+      if (Array.isArray(b)) b = b.filter((e) => !u.deleted.has(keyOf(e)));
+      else if (b && typeof b === "object") b = Object.fromEntries(Object.entries(b).filter(([k, v]) => !u.deleted.has(keyOf([k, v]))));
+    }
+    apply(b);
+    if (u && (u.dirty || u.deleted.size)) persist();
+  };
+  return trackStoreReady(d.load(null, { onLoad }));
+}
 import { timedSync } from "./boot-timing.js";
 import { esc } from "./ledger-chrome.js";
 // F23: seller-manifest homepages are external, attacker-controlled URLs. esc()
@@ -417,14 +456,14 @@ export function loadSubmittedSeeds() {
       if (typeof o === "string") { submittedSeeds.add(o); discoveredSeeds.add(o); }
     }
   };
-  if (d.backend === "pg") return trackStoreReady(d.load(null).then(apply));
+  if (d.backend === "pg") return loadMerging(SUBMITTED_SEEDS_FILE, { apply, persist: persistSubmittedSeeds, keyOf: (o) => o });
   try { apply(d.loadSync(null)); } catch { /* absent file / no volume — in-memory only */ }
   return Promise.resolve();
 }
 
 function persistSubmittedSeeds() {
   try {
-    void docFor(SUBMITTED_SEEDS_FILE).save([...submittedSeeds]);
+    saveOrHold(SUBMITTED_SEEDS_FILE, [...submittedSeeds]);
   } catch { /* best-effort — no volume in local/dev */ }
 }
 
@@ -452,7 +491,7 @@ const successions = new Map(); // old origin -> { to: new origin, at: recordedAt
 
 export function loadSuccessions() {
   const d = docFor(SUCCESSIONS_FILE);
-  if (d.backend === "pg") return trackStoreReady(d.load(null).then(applySuccessions));
+  if (d.backend === "pg") return loadMerging(SUCCESSIONS_FILE, { apply: applySuccessions, persist: persistSuccessions, keyOf: ([k]) => k });
   applySuccessions(d.loadSync(null));
   return Promise.resolve();
 }
@@ -477,7 +516,7 @@ function persistSuccessions() {
   // truncated file here reads as "no successions", silently restoring every
   // duplicate this exists to hide.
   try {
-    void docFor(SUCCESSIONS_FILE).save(Object.fromEntries(successions));
+    saveOrHold(SUCCESSIONS_FILE, Object.fromEntries(successions));
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -510,7 +549,7 @@ const goneKey = (origin, method, route) => `${origin} ${String(method || "GET").
 
 export function loadGoneRoutes() {
   const d = docFor(GONE_ROUTES_FILE);
-  if (d.backend === "pg") return trackStoreReady(d.load(null).then(applyGoneRoutes));
+  if (d.backend === "pg") return loadMerging(GONE_ROUTES_FILE, { apply: applyGoneRoutes, persist: persistGoneRoutes, keyOf: ([k]) => k });
   applyGoneRoutes(d.loadSync(null));
   return Promise.resolve();
 }
@@ -525,7 +564,7 @@ function applyGoneRoutes(obj) {
 
 function persistGoneRoutes() {
   try {
-    void docFor(GONE_ROUTES_FILE).save(Object.fromEntries(goneRoutes));
+    saveOrHold(GONE_ROUTES_FILE, Object.fromEntries(goneRoutes));
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -538,14 +577,15 @@ export function markRouteGone(origin, method, route, { at = Date.now(), kind = "
 }
 
 function clearGoneMark(origin, method, route) {
-  if (goneRoutes.delete(goneKey(origin, method, route))) persistGoneRoutes();
+  const k = goneKey(origin, method, route);
+  if (goneRoutes.delete(k)) { noteDeleted(GONE_ROUTES_FILE, k); persistGoneRoutes(); }
 }
 
 /** Clear every mark on an origin (a re-registration). Returns how many. */
 export function clearGoneMarks(origin) {
   const prefix = `${origin} `;
   let n = 0;
-  for (const k of [...goneRoutes.keys()]) if (k.startsWith(prefix)) { goneRoutes.delete(k); n++; }
+  for (const k of [...goneRoutes.keys()]) if (k.startsWith(prefix)) { goneRoutes.delete(k); noteDeleted(GONE_ROUTES_FILE, k); n++; }
   if (n) persistGoneRoutes();
   return n;
 }
@@ -673,6 +713,7 @@ export function succeededBy(origin) {
 export function revokeSuccession(oldOrigin) {
   const key = String(oldOrigin || "");
   if (!successions.delete(key)) return false;
+  noteDeleted(SUCCESSIONS_FILE, key);
   persistSuccessions();
   return true;
 }
@@ -729,7 +770,7 @@ export function loadRemovedOrigins() {
     // still take effect: purge whatever is already held.
     for (const k of removedOrigins.keys()) purgeOrigin(k);
   };
-  if (d.backend === "pg") { trackStoreReady(d.load(null).then(apply)); return removedOrigins.size; }
+  if (d.backend === "pg") { loadMerging(removedFile(), { apply, persist: persistRemovedOrigins, keyOf: (r) => strictOriginKey(r?.origin) }); return removedOrigins.size; }
   try { apply(d.loadSync(null)); } catch { /* absent file / no volume - in-memory only */ }
   return removedOrigins.size;
 }
@@ -738,7 +779,7 @@ function persistRemovedOrigins() {
   // tmp+rename: a truncated file here reads as "nothing removed", which would
   // quietly bring every removed origin back on the next boot.
   try {
-    void docFor(removedFile()).save([...removedOrigins.values()]);
+    saveOrHold(removedFile(), [...removedOrigins.values()]);
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -783,6 +824,7 @@ export function restoreOrigin(raw) {
   const key = strictOriginKey(raw);
   if (!key) return { error: "pass an exact origin" };
   if (!removedOrigins.delete(key)) return { restored: false, origin: key };
+  noteDeleted(removedFile(), key);
   persistRemovedOrigins();
   return { restored: true, origin: key };
 }
@@ -819,6 +861,7 @@ export async function reverifySuccessions({ now = Date.now(), maxAgeMs = 24 * 36
       // A definite NO from a readable pair of origins: the claim no longer
       // holds, so stop hiding the predecessor.
       successions.delete(from);
+      noteDeleted(SUCCESSIONS_FILE, from);
       dropped++;
     } else if (res?.ok) {
       successions.set(from, { to: r.to, at: now });
@@ -5698,6 +5741,7 @@ function releaseDeadSubmissions(okFraction) {
   if (!releasable.length) return { released: 0, reason: "nothing past its idle window" };
   for (const origin of releasable) {
     submittedSeeds.delete(origin);
+    noteDeleted(SUBMITTED_SEEDS_FILE, origin);
     // Stop crawling it too, otherwise the slot is free but the fetches are not.
     // Discovery may legitimately re-add it within the hour if a registry still
     // lists it - that is correct: it is then a discovered seller, not a
@@ -6006,7 +6050,7 @@ async function persistIndexCacheToStateDb(entries, lines) {
     for (const [ids, bodies] of recordBatches(entries, bodyOf)) {
       await stateQuery(
         `INSERT INTO ${recordsTable()} (collection, id, body)
-         SELECT $1, u.id, u.body::jsonb FROM unnest($2::text[], $3::text[]) AS u(id, body)
+         SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
          ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()`,
         [INDEX_RECORDS, ids, bodies],
       );
@@ -6059,7 +6103,7 @@ async function importIndexCacheFile() {
   for (const [ids, bodies] of recordBatches(entries, bodyOf)) {
     await stateQuery(
       `INSERT INTO ${recordsTable()} (collection, id, body)
-       SELECT $1, u.id, u.body::jsonb FROM unnest($2::text[], $3::text[]) AS u(id, body)
+       SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
        ON CONFLICT (collection, id) DO NOTHING`,
       [INDEX_RECORDS, ids, bodies],
     );

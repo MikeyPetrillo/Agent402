@@ -145,6 +145,21 @@ try {
       return (await c.query({ text: `SELECT id, body FROM ${sdb.stateDbSchema()}.records WHERE collection = $1 AND id = $2`, values: ["nul-c", "r\u00002"] })).rows[0];
     });
     ok(tx && tx.id === "r2" && tx.body.w === "z", "a transaction's parameters (positional and config form) are cleaned too");
+    // JSON escapes are cleaned only in a parameter cast to json/jsonb: a TEXT
+    // value that happens to look like JSON is stored exactly as typed.
+    const S = sdb.stateDbSchema();
+    await stateQuery(`CREATE TABLE IF NOT EXISTS ${S}.text_probe (k INT PRIMARY KEY, v TEXT)`);
+    const typed = ['{"note":"\\u0000"}', '"\\u0000"', '["\\ud800"]', '{"a":1,"a\\u0000":2}'];
+    for (let i = 0; i < typed.length; i++) await stateQuery(`INSERT INTO ${S}.text_probe (k, v) VALUES ($1, $2)`, [i, typed[i]]);
+    const back = (await stateQuery(`SELECT k, v FROM ${S}.text_probe ORDER BY k`)).rows.map((r) => r.v);
+    ok(JSON.stringify(back) === JSON.stringify(typed), `a TEXT value shaped like JSON with escapes is stored unchanged (${JSON.stringify(back)})`);
+    await withStateTx(async (c) => { await c.query(`UPDATE ${S}.text_probe SET v = $2 WHERE k = $1`, [0, typed[3]]); await c.query({ text: `UPDATE ${S}.text_probe SET v = $2 WHERE k = $1`, values: [1, typed[0]] }); });
+    const back2 = (await stateQuery(`SELECT v FROM ${S}.text_probe WHERE k IN (0, 1) ORDER BY k`)).rows.map((r) => r.v);
+    ok(back2[0] === typed[3] && back2[1] === typed[0], "a transaction's TEXT parameters are stored unchanged too");
+    const asJson = (await stateQuery("SELECT $1::jsonb AS j, $2::jsonb[] AS a", ['{"n":"x\\u0000y"}', ['{"m":"\\ud800"}']])).rows[0];
+    ok(asJson.j.n === "xy" && asJson.a[0].m === "\ufffd", `a parameter cast to jsonb or jsonb[] still has its escapes cleaned (${JSON.stringify(asJson)})`);
+    const raw = (await stateQuery("SELECT $1::text AS t", ['{"z":"a\u0000b"}'])).rows[0].t;
+    ok(raw === '{"z":"ab"}', "a raw NUL is still dropped from a TEXT parameter");
   }
 
   // ---- H11: re-entry in one process never releases the running holder -------
@@ -167,6 +182,35 @@ try {
     releaseGate();
     await first;
     ok(second.skipped === "leased" && second.reason === "busy" && midHolder?.owner === sdb.leaseOwnerId() && wrappedRuns === 1, "leased(): an overlapping call in-process skips and leaves the lease held");
+  }
+
+  // ---- an acquire that lands after its call gave up never frees a later tick's row
+  {
+    const pg = (await import("pg")).default;
+    const S = sdb.stateDbSchema();
+    await stateQuery(`INSERT INTO ${S}.leases (name, owner, expires_at) VALUES ('LATE', 'gone', now() - interval '1 minute') ON CONFLICT (name) DO UPDATE SET owner = 'gone', expires_at = now() - interval '1 minute'`);
+    const locker = new pg.Client({ connectionString: process.env.STATE_DATABASE_URL });
+    await locker.connect();
+    await locker.query("BEGIN");
+    await locker.query(`SELECT 1 FROM ${S}.leases WHERE name = 'LATE' FOR UPDATE`); // every acquire waits behind this
+    const first = await withLease("LATE", { ttlMs: 60_000, acquireTimeoutMs: 300, log: () => {} }, async () => "first ran");
+    ok(first.ran === false && first.reason === "db", `an acquire that outlasts its limit skips the tick (${JSON.stringify(first)})`);
+    let holderDuring = "unset";
+    let releaseGate;
+    const gate = new Promise((r) => { releaseGate = r; });
+    const second = withLease("LATE", { ttlMs: 60_000, acquireTimeoutMs: 10_000, log: () => {} }, async () => {
+      await gate;
+      holderDuring = (await leases.holder("LATE"))?.owner || null;
+      return "second ran";
+    });
+    await sleep(100);
+    await locker.query("ROLLBACK"); // the first acquire lands now, after its call gave up; the second one too
+    await sleep(500);
+    releaseGate();
+    const r2 = await second;
+    await locker.end();
+    ok(r2.ran === true && holderDuring === sdb.leaseOwnerId(), `the later tick still holds its row after the earlier late acquire landed (holder ${holderDuring})`);
+    ok((await leases.holder("LATE")) === null, "and the later tick releases it when done");
   }
 
   // ---- M13: the owner id differs per boot even with the same replica and pid -
@@ -370,6 +414,46 @@ try {
     const puts = await Promise.allSettled(Array.from({ length: 4 }, (_, i) => records.put("retry-c", `r${i}`, { i })));
     ok(puts.every((r) => r.status === "fulfilled") && (await records.count("retry-c")) === 4, "an idempotent write right after idle connections died succeeds");
     ok(stateDbStatus() === "on", `and the word reads on (${stateDbStatus()})`);
+  }
+
+  // ---- idle connections whose sockets went silent (no close seen) -------------
+  {
+    // A relay that can sever silently: the upstream side is dropped and the
+    // client's socket stays open until its next write, which is reset. Every
+    // idle pooled client is then dead without the pool knowing, so a retry on
+    // "another pooled client" would land on another dead one.
+    const net = await import("node:net");
+    const target = new URL(process.env.STATE_DATABASE_URL);
+    const pairs = new Set();
+    const relay = net.createServer((c) => {
+      const u = net.connect(Number(target.port || 5432), target.hostname);
+      const pr = { c, u, cut: false };
+      pairs.add(pr);
+      c.on("error", () => {}); u.on("error", () => {});
+      c.on("close", () => { u.destroy(); pairs.delete(pr); });
+      u.on("close", () => { if (!pr.cut) c.destroy(); });
+      c.on("data", (d) => { if (pr.cut) c.resetAndDestroy(); else u.write(d); });
+      u.on("data", (d) => { if (!pr.cut) c.write(d); });
+    });
+    await new Promise((r) => relay.listen(0, "127.0.0.1", r));
+    const liveUrl = process.env.STATE_DATABASE_URL;
+    const relayed = new URL(liveUrl); relayed.hostname = "127.0.0.1"; relayed.port = String(relay.address().port);
+    process.env.STATE_DATABASE_URL = relayed.toString();
+    const fresh = await import("../src/state-db.js?silent-sever");
+    try {
+      await Promise.all(Array.from({ length: 4 }, () => fresh.stateQuery("SELECT pg_sleep(0.05)")));
+      for (const pr of pairs) { pr.cut = true; pr.u.destroy(); }
+      const one = await fresh.stateQuery("SELECT 1 AS one").then((r) => r.rows[0].one, (e) => `ERR ${e.code || ""} ${e.message}`);
+      ok(one === 1, `a read after every idle connection went silently dead is retried on a new connection (${one})`);
+      const put = await fresh.records.put("sever-c", "r1", { a: 1 }).then(() => "ok", (e) => `ERR ${e.message}`);
+      ok(put === "ok", `and the next idempotent write finds no dead idle connection left (${put})`);
+      ok(fresh.stateDbStatus() === "on", `the word reads on (${fresh.stateDbStatus()})`);
+    } finally {
+      await fresh.closeStateDb();
+      process.env.STATE_DATABASE_URL = liveUrl;
+      for (const pr of pairs) { pr.u.destroy(); pr.c.destroy(); }
+      await new Promise((r) => relay.close(r));
+    }
   }
 
   // ---- the schema setup takes the shared advisory lock ------------------------

@@ -2187,6 +2187,13 @@ const surfaceMemo = new Map();
 // the store lands instead of a minute later.
 const PARTIAL_MEMO_MS = 2_000;
 const memoFresh = (hit, now, ttlMs) => now - hit.at < (hit.partial ? Math.min(ttlMs, PARTIAL_MEMO_MS) : ttlMs);
+// A JSON body built that way also says so in fields a machine reads (the
+// rule in src/partial-answer.js): partial, and why.
+const PARTIAL_STATE_NOTE = "Built while a stored dataset was still loading: figures may be incomplete. The full answer replaces this one within seconds of the load.";
+function markPartialState(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return value;
+  return { ...value, partial: true, partialReason: "state-loading", partialNote: PARTIAL_STATE_NOTE };
+}
 function memoSurface(key, ttlMs, build) {
   const hit = surfaceMemo.get(key);
   const now = Date.now();
@@ -2197,7 +2204,8 @@ function memoSurface(key, ttlMs, build) {
       setImmediate(() => {
         try {
           const partial = !stateStoresLoaded();
-          const value = build();
+          const built = build();
+          const value = partial ? markPartialState(built) : built;
           if (surfaceMemo.get(key) === hit) surfaceMemo.set(key, { at: Date.now(), value, partial });
         } catch (e) {
           console.warn(`[surface-memo] ${key} rebuild failed: ${String(e?.message || e).slice(0, 120)}`);
@@ -2207,7 +2215,8 @@ function memoSurface(key, ttlMs, build) {
     return hit.value;
   }
   const partial = !stateStoresLoaded();
-  const value = build();
+  const built = build();
+  const value = partial ? markPartialState(built) : built;
   surfaceMemo.set(key, { at: now, value, partial });
   return value;
 }
@@ -2223,7 +2232,8 @@ async function memoSurfaceAsync(key, ttlMs, buildAsync) {
     pending = (async () => {
       try {
         const partial = !stateStoresLoaded();
-        const value = await buildAsync();
+        const built = await buildAsync();
+        const value = partial ? markPartialState(built) : built;
         surfaceMemo.set(key, { at: Date.now(), value, partial });
         return value;
       } finally { surfaceBuilds.delete(key); }

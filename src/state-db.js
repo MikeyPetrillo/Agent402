@@ -106,27 +106,28 @@ function cleanJsonEscapes(s) {
     return m;
   });
 }
-/** A string as Postgres will take it (see above). Exported for stores that build SQL text themselves. */
-export function cleanPgText(s) {
+/** A string as Postgres will take it (see above). Exported for stores that build SQL text themselves.
+ *  `json: false` leaves JSON escapes alone: a TEXT column stores the six characters \u0000 as typed. */
+export function cleanPgText(s, { json = true } = {}) {
   if (typeof s !== "string") return s;
   let out = s;
   if (out.indexOf("\u0000") !== -1) out = out.replaceAll("\u0000", "");
   if (typeof out.isWellFormed === "function" ? !out.isWellFormed() : LONE_SURROGATE.test(out)) {
     out = typeof out.toWellFormed === "function" ? out.toWellFormed() : out.replace(LONE_SURROGATE, "\ufffd");
   }
-  if (out.indexOf("\\u") !== -1 && JSON_BAD_ESC.test(out)) {
+  if (json && out.indexOf("\\u") !== -1 && JSON_BAD_ESC.test(out)) {
     const c = out.trimStart()[0];
     if (c === "{" || c === "[" || c === "\"") out = cleanJsonEscapes(out);
   }
   return out;
 }
 /** One query parameter cleaned; arrays element-wise, plain objects as the JSON text pg would send. */
-export function cleanPgParam(v) {
-  if (typeof v === "string") return cleanPgText(v);
+export function cleanPgParam(v, { json = true } = {}) {
+  if (typeof v === "string") return cleanPgText(v, { json });
   if (Array.isArray(v)) {
     let changed = null;
     for (let i = 0; i < v.length; i++) {
-      const c = cleanPgParam(v[i]);
+      const c = cleanPgParam(v[i], { json });
       if (c !== v[i]) { if (!changed) changed = v.slice(); changed[i] = c; }
     }
     return changed || v;
@@ -136,7 +137,26 @@ export function cleanPgParam(v) {
   }
   return v;
 }
-const cleanParams = (params) => (Array.isArray(params) ? cleanPgParam(params) : params);
+// JSON escapes are cleaned only in a parameter the statement casts to json/jsonb
+// ($n::jsonb, $n::jsonb[], $n::json): any other string may be a TEXT value.
+const JSON_CAST = /\$(\d+)\s*::\s*jsonb?\b/gi;
+function jsonParamIndexes(text) {
+  const out = new Set();
+  if (typeof text !== "string") return out;
+  for (const m of text.matchAll(JSON_CAST)) out.add(Number(m[1]) - 1);
+  return out;
+}
+const cleanParams = (params, text) => {
+  if (!Array.isArray(params)) return params;
+  const js = jsonParamIndexes(text);
+  let changed = null;
+  for (let i = 0; i < params.length; i++) {
+    const v = params[i];
+    const c = v && typeof v === "object" && !Array.isArray(v) ? cleanPgParam(v) : cleanPgParam(v, { json: js.has(i) });
+    if (c !== v) { if (!changed) changed = params.slice(); changed[i] = c; }
+  }
+  return changed || params;
+};
 
 function schema() {
   if (!schemaName) schemaName = stateDbSchema();
@@ -242,6 +262,10 @@ async function setupSchema(p) {
 // connection, but only where running the statement twice is harmless: a
 // SELECT, or a caller-marked idempotent statement. Never inside withStateTx,
 // and never after a timeout (the statement may still be running).
+// The pool does not know which of its idle clients died the same way (a
+// socket that went silent is found only by writing to it), so before the
+// retry every client idle at that moment is taken and discarded: the retry,
+// and the statements after it, run on new connections.
 const DEAD_CONN_CODES = new Set(["ECONNRESET", "EPIPE", "ECONNABORTED", "57P01", "57P02", "57P03"]);
 const DEAD_CONN_MSG = /Connection terminated|terminating connection|not queryable|Connection ended|encountered a connection error/i;
 function isDeadConnection(e) {
@@ -251,6 +275,16 @@ function isDeadConnection(e) {
   return DEAD_CONN_CODES.has(code) || /^08/.test(code) || DEAD_CONN_MSG.test(String(e.message || e));
 }
 const READ_ONLY = /^\s*SELECT\b/i;
+async function discardIdleClients(p) {
+  // connect() hands out idle clients first; each one taken is closed instead
+  // of returned. Bounded by the idle count read once, so it never waits on a
+  // busy pool or opens connections only to close them.
+  for (let n = p.idleCount; n > 0 && p.idleCount > 0; n--) {
+    let c;
+    try { c = await p.connect(); } catch { return; }
+    try { c.release(true); } catch { /* already gone */ }
+  }
+}
 
 /**
  * Run one statement against the state database. Throws when no database is
@@ -260,12 +294,13 @@ const READ_ONLY = /^\s*SELECT\b/i;
 export async function stateQuery(text, params = [], { idempotent = false } = {}) {
   const p = await stateDb();
   if (!p) throw new Error("state database not configured");
-  const values = cleanParams(params);
+  const values = cleanParams(params, text);
   try {
     const r = await p.query(text, values);
     noteSuccess(); // the status word reads "on" again after a good query
     return r;
   } catch (e) {
+    if (isDeadConnection(e)) await discardIdleClients(p);
     if (isDeadConnection(e) && (idempotent || (typeof text === "string" && READ_ONLY.test(text)))) {
       try {
         const r = await p.query(text, values);
@@ -573,8 +608,19 @@ async function acquireWithin(name, owner, ttlMs, limitMs) {
     timer.unref?.();
   });
   // An acquire that lands after we gave up is handed back at once, so the
-  // row does not sit unused until its ttl.
-  attempt.then((won) => { if (timedOut && won) leases.release(name, { owner }).catch(() => {}); }, () => {});
+  // row does not sit unused until its ttl. The owner id is the process's, so
+  // a later call for the same lease running here may own that same row: it
+  // is left to that call, which releases it when it ends. While the hand-back
+  // is in flight the name is reserved, so a call starting meanwhile answers
+  // busy instead of acquiring a row the release is about to delete.
+  attempt.then((won) => {
+    if (!timedOut || !won) return;
+    const key = leaseKey(owner, String(name));
+    if (heldLeases.has(key)) return;
+    const releasing = { name: String(name), owner, ttlMs, controller: new AbortController(), acquired: false, confirmedAt: 0, lost: false, released: true, failOpen: false, log: () => {} };
+    heldLeases.set(key, releasing);
+    leases.release(name, { owner }).catch(() => {}).finally(() => { if (heldLeases.get(key) === releasing) heldLeases.delete(key); });
+  }, () => {});
   try { return await Promise.race([attempt, deadline]); }
   catch (e) { if (timedOut) noteFailure(e); throw e; }
   finally { clearTimeout(timer); }
@@ -697,15 +743,21 @@ export function trackStoreReady(p, name) {
 }
 export function markStoreLoaded(name) { storeStates.set(String(name), "loaded"); }
 export function markStoreFailed(name) { storeStates.set(String(name), "failed"); }
-// Another registry of unloaded stores can be consulted too (a function
-// returning a list of labels); stateDbStatus and stateStoresLoaded read both.
-let unloadedProbe = null;
-export function setUnloadedStoresProbe(fn) { unloadedProbe = typeof fn === "function" ? fn : null; }
-/** Labels of the stores whose first load has not succeeded (this registry plus the probe). */
+// Other registries of unloaded stores are consulted too (each a function
+// returning a list of labels, under its own key: the retrying loads, every
+// json-document whose body has not been read); stateDbStatus and
+// stateStoresLoaded read them all. A null fn removes that key's probe.
+const unloadedProbes = new Map();
+export function setUnloadedStoresProbe(fn, key = "default") {
+  if (typeof fn === "function") unloadedProbes.set(String(key), fn); else unloadedProbes.delete(String(key));
+}
+/** Labels of the stores whose first load has not succeeded (this registry plus the probes). */
 export function unloadedStateStores() {
   const out = [];
   for (const [n, s] of storeStates) if (s !== "loaded") out.push(n);
-  if (unloadedProbe) { try { for (const n of unloadedProbe() || []) out.push(String(n)); } catch { /* a probe never breaks the status */ } }
+  for (const probe of unloadedProbes.values()) {
+    try { for (const n of probe() || []) out.push(String(n)); } catch { /* a probe never breaks the status */ }
+  }
   return [...new Set(out)];
 }
 /** Whether every registered store has loaded. Always true without a database. */
@@ -756,14 +808,14 @@ export async function withStateTx(fn, { timeoutMs = 0 } = {}) {
   client.query = function cleanedQuery(config, values, cb) {
     if (typeof config === "string") {
       return queryTimeout
-        ? ownQuery.call(this, { text: config, values: typeof values === "function" ? undefined : cleanParams(values), query_timeout: queryTimeout }, typeof values === "function" ? values : cb)
-        : ownQuery.call(this, config, typeof values === "function" ? values : cleanParams(values), typeof values === "function" ? undefined : cb);
+        ? ownQuery.call(this, { text: config, values: typeof values === "function" ? undefined : cleanParams(values, config), query_timeout: queryTimeout }, typeof values === "function" ? values : cb)
+        : ownQuery.call(this, config, typeof values === "function" ? values : cleanParams(values, config), typeof values === "function" ? undefined : cb);
     }
     if (config && typeof config === "object" && typeof config.submit !== "function") {
       const c = { ...config };
-      if (Array.isArray(c.values)) c.values = cleanParams(c.values);
+      if (Array.isArray(c.values)) c.values = cleanParams(c.values, c.text);
       if (queryTimeout && !c.query_timeout) c.query_timeout = queryTimeout;
-      return ownQuery.call(this, c, typeof values === "function" ? values : cleanParams(values), cb);
+      return ownQuery.call(this, c, typeof values === "function" ? values : cleanParams(values, c.text), cb);
     }
     return ownQuery.call(this, config, values, cb);
   };

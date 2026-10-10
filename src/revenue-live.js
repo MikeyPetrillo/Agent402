@@ -1346,7 +1346,8 @@ let refreshing = null;
 const LASTGOOD_PATH = join(existsSync("/data") ? "/data" : "/tmp", "revenue-lastgood.json");
 const lastGoodDoc = createJsonDocument({ file: LASTGOOD_PATH, log: () => {} });
 let diskLastGood = lastGoodDoc.loadSync(null); // first boot or unreadable: in-memory behavior
-if (lastGoodDoc.backend === "pg") trackStoreReady(lastGoodDoc.load(null).then((j) => { if (j && !diskLastGood) diskLastGood = j; }));
+// onLoad also runs when a failed load's background re-read lands.
+if (lastGoodDoc.backend === "pg") trackStoreReady(lastGoodDoc.load(null, { onLoad: (j) => { if (j && !diskLastGood) diskLastGood = j; } }));
 function persistLastGood(rails) {
   try {
     const keep = rails

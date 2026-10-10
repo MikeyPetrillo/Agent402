@@ -1401,10 +1401,13 @@ function _loadPersistedLeaderboardSnapshot(file = LEADERBOARD_SNAPSHOT_FILE) {
   try { return wellFormedSnapshot(docFor(file).loadSync(null)); } catch { return null; }
 }
 /** The database copy of the snapshot (null without a database or a row). */
-async function loadPersistedLeaderboardSnapshotAsync(file = LEADERBOARD_SNAPSHOT_FILE) {
+async function loadPersistedLeaderboardSnapshotAsync(file = LEADERBOARD_SNAPSHOT_FILE, { onLoad = null } = {}) {
   const d = docFor(file);
   if (d.backend !== "pg") return null;
-  try { return wellFormedSnapshot(await d.load(null)); } catch { return null; }
+  // onLoad gets the snapshot whenever the row is read: now, or when a failed
+  // load's background re-read lands.
+  const opts = onLoad ? { onLoad: (j) => { const s = wellFormedSnapshot(j); if (s) onLoad(s); } } : {};
+  try { return wellFormedSnapshot(await d.load(null, opts)); } catch { return null; }
 }
 
 // In database mode the history is held in memory (loaded once, updated on
@@ -1414,7 +1417,17 @@ function historyWarm(file) {
   const d = docFor(file);
   if (d.backend !== "pg" || historyMemo.has(file)) return;
   historyMemo.set(file, []);
-  trackStoreReady(d.load(null).then((arr) => { if (Array.isArray(arr)) historyMemo.set(file, arr); }));
+  // A point recorded while the row was unread is merged over the stored
+  // history (same day: the newer point wins), so a late read never drops it
+  // and the next save does not replace the stored history with a short one.
+  trackStoreReady(d.load(null, { onLoad: (arr) => {
+    if (!Array.isArray(arr)) return;
+    const mine = historyMemo.get(file) || [];
+    const days = new Set(mine.map((p) => p && p.day));
+    const merged = [...arr.filter((p) => p && !days.has(p.day)), ...mine].sort((a, b) => String(a.day).localeCompare(String(b.day))).slice(-HISTORY_MAX_DAYS);
+    historyMemo.set(file, merged);
+    if (mine.length) d.saveSync(merged);
+  } }));
 }
 /** Read the persisted history: array of daily points, oldest first. [] on any error. */
 export function readLeaderboardHistory(file = LEADERBOARD_HISTORY_FILE) {
@@ -1468,8 +1481,14 @@ let fundingStateCache = null;
 async function loadSellerFundingState(file = LEADERBOARD_FUNDING_FILE) {
   if (fundingStateCache) return fundingStateCache;
   let body = null;
-  try { body = await docFor(file).load(null); } catch { /* no state yet: a fresh state */ }
-  fundingStateCache = body ? parseFundingState(JSON.stringify(body), USDC) : createFundingState(USDC);
+  const d = docFor(file);
+  try { body = await d.load(null); } catch { /* no state yet: a fresh state */ }
+  const state = body ? parseFundingState(JSON.stringify(body), USDC) : createFundingState(USDC);
+  // A fresh state that stands in for an unread row is not kept: the next
+  // scan loads again, so the stored progress is resumed once it can be read
+  // (the stand-in's saves are held meanwhile).
+  if (d.backend === "pg" && d.loadState !== "ok") return state;
+  fundingStateCache = state;
   return fundingStateCache;
 }
 async function persistSellerFundingState(state, file = LEADERBOARD_FUNDING_FILE) {
@@ -1499,7 +1518,12 @@ function operatorFundingSwitch() {
     const apply = (j) => {
       if (typeof j?.enabled === "boolean") { fundingSwitch = { enabled: j.enabled, at: typeof j.at === "string" ? j.at : null, note: typeof j.note === "string" ? j.note.slice(0, 200) : "", persisted: true }; fundingSwitchVersion++; }
     };
-    if (d.backend === "pg") trackStoreReady(d.load(null).then((j) => { if (fundingSwitch === false) apply(j); }));
+    // onLoad also runs when a failed load's background re-read lands. An
+    // operator choice made meanwhile wins and is saved now that it can be.
+    if (d.backend === "pg") trackStoreReady(d.load(null, { onLoad: (j) => {
+      if (fundingSwitch === false) apply(j);
+      else if (fundingSwitch && fundingSwitch.persisted !== true) { const f = fundingSwitch; void d.save({ enabled: f.enabled, at: f.at, note: f.note }).then((stored) => { f.persisted = stored === true; }); }
+    } }));
     try {
       const j = d.loadSync(null);
       if (typeof j?.enabled === "boolean") fundingSwitch = { enabled: j.enabled, at: typeof j.at === "string" ? j.at : null, note: typeof j.note === "string" ? j.note.slice(0, 200) : "", persisted: true };
@@ -1625,7 +1649,7 @@ export function startLeaderboardRefresh(opts = {}) {
   if (!cached.snapshot) {
     const disk = loadPersistedLeaderboardSnapshot();
     if (disk) cached.snapshot = { ...disk, staleFromDisk: true };
-    else trackStoreReady(loadPersistedLeaderboardSnapshotAsync().then((row) => { if (row && !cached.snapshot) cached.snapshot = { ...row, staleFromDisk: true }; }));
+    else trackStoreReady(loadPersistedLeaderboardSnapshotAsync(LEADERBOARD_SNAPSHOT_FILE, { onLoad: (row) => { if (!cached.snapshot) cached.snapshot = { ...row, staleFromDisk: true }; } }));
   }
   // Skip the immediate boot scan when X402_SYNC_ON_START=false — the same flag
   // the facilitator handshake honors ("no upstream network sync at boot"). The

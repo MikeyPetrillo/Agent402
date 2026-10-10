@@ -118,7 +118,13 @@ export function __testSetSubmittedCap(n) {
 
 export function loadSubmittedSeeds() {
   const d = docFor(MPP_SUBMITTED_SEEDS_FILE);
-  if (d.backend === "pg") return trackStoreReady(d.load(null).then(applySubmittedSeeds));
+  if (d.backend === "pg") {
+    // A submission made while the load is still reading the row is refused
+    // by the document (it would replace a body nobody read); it is kept in
+    // memory and saved merged with the stored list once the row is read,
+    // now or by the document's background re-read.
+    return trackStoreReady(d.load(null, { onLoad: (arr) => { applySubmittedSeeds(arr); if (submittedUnsaved) { submittedUnsaved = false; persistSubmittedSeeds(); } } }));
+  }
   applySubmittedSeeds(d.loadSync(null));
   return Promise.resolve();
 }
@@ -138,10 +144,13 @@ function applySubmittedSeeds(arr) {
   } catch { /* absent file / no volume - in-memory only */ }
 }
 
+let submittedUnsaved = false;
 function persistSubmittedSeeds() {
   try {
     const rows = [...submittedSeeds].map((origin) => (submittedHints.has(origin) ? { origin, ...submittedHints.get(origin) } : origin));
-    void docFor(MPP_SUBMITTED_SEEDS_FILE).save(rows);
+    const d = docFor(MPP_SUBMITTED_SEEDS_FILE);
+    if (d.backend === "pg" && (d.loadState === "loading" || d.loadState === "failed")) { submittedUnsaved = true; return; }
+    void d.save(rows);
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -621,7 +630,8 @@ function _loadPersistedMppIndexCache(file = MPP_INDEX_CACHE_FILE) {
   const d = docFor(file);
   if (d.backend === "pg") {
     // The row arrives after boot: warm the cache when it does.
-    trackStoreReady(d.load(null).then((parsed) => { const n = applyMppIndexCache(parsed); if (n) console.log(`[mpp-index] warm-started ${n} sellers from the state database`); }));
+    // onLoad also runs when a failed load's background re-read lands.
+    trackStoreReady(d.load(null, { onLoad: (parsed) => { const n = applyMppIndexCache(parsed); if (n) console.log(`[mpp-index] warm-started ${n} sellers from the state database`); } }));
     return 0;
   }
   return applyMppIndexCache(d.loadSync(null));
