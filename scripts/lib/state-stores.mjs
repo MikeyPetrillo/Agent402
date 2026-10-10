@@ -9,6 +9,13 @@
 //   LOG_FILES       the append-only logs (log_lines stream)
 //   INDEX_CACHE     the crawl cache (records collection, NDJSON file)
 //
+// A store's `transient` tables expire on their own (retry ids kept for a
+// day): exported, never imported, so the verifier does not compare counts.
+// Its `queues` are file-only tables of rows still waiting to reach the
+// database (the ledger mirror's dead letter): verified empty, never mapped.
+// DB_ONLY tables exist only in the database (bookkeeping a file build never
+// kept): neither exported nor verified.
+//
 // bootStores() imports every store module with the paths pointed into one
 // directory and waits for each to be ready. With STATE_DATABASE_URL unset
 // that creates every SQLite file with the module's OWN schema (and its
@@ -21,17 +28,18 @@ import { join, resolve } from "node:path";
 import { mkdirSync } from "node:fs";
 
 export const SQLITE_STORES = [
-  { file: "agent402-sales.db", env: (d) => ({ SALES_LEDGER_DB: join(d, "agent402-sales.db") }), tables: { sales: "sales", sale_feedback: "sale_feedback" } },
-  { file: "agent402-refunds.db", env: (d) => ({ REFUND_DB_DIR: d }), tables: { refunds: "refunds" } },
+  { file: "agent402-sales.db", env: (d) => ({ SALES_LEDGER_DB: join(d, "agent402-sales.db") }), tables: { sales: "sales", sale_feedback: "sale_feedback" }, queues: ["pg_dead_letter"] },
+  { file: "agent402-refunds.db", env: (d) => ({ REFUND_DB_DIR: d }), tables: { refunds: "refunds" }, queues: ["pg_dead_letter"] },
   { file: "agent402-decide.db", env: (d) => ({ DECIDE_LEDGER_DB: join(d, "agent402-decide.db") }), tables: { decisions: "decide_ledger_decisions", credits: "decide_ledger_credits", runs: "decide_ledger_runs", feedback: "decide_ledger_feedback", seller_spend: "decide_ledger_seller_spend" } },
   { file: "agent402-stats.db", env: (d) => ({ STATS_DB_DIR: d, STATS_ALLOW_EPHEMERAL: "true" }), tables: { counters: "stats_counters", tool_counts: "stats_tool_counts", meta: "stats_meta", recent_calls: "stats_recent_calls", paid_tool_counts: "stats_paid_tool_counts", heartbeat_tool_counts: "stats_heartbeat_tool_counts", charged_failures: "stats_charged_failures", daily_calls: "stats_daily_calls", daily_upstream_calls: "stats_daily_upstream_calls", daily_upstream_spend: "stats_daily_upstream_spend", seller_registrations: "stats_seller_registrations" } },
-  { file: "agent402.db", env: (d) => ({ MEMORY_DB_FILE: join(d, "agent402.db"), MEMORY_ALLOW_EPHEMERAL: "true" }), tables: { kv: "memory_kv", grants: "memory_grants", memlog: "memory_memlog", docs: "memory_docs" } },
+  { file: "agent402.db", env: (d) => ({ MEMORY_DB_FILE: join(d, "agent402.db"), MEMORY_ALLOW_EPHEMERAL: "true" }), tables: { kv: "memory_kv", grants: "memory_grants", memlog: "memory_memlog", docs: "memory_docs", requests: "memory_requests" }, transient: ["requests"] },
   { file: "status.db", env: (d) => ({ STATUS_DB_PATH: join(d, "status.db") }), tables: { status_probes: "status_probes" } },
   { file: "agent402-economy.db", env: (d) => ({ X402_ECONOMY_DB: join(d, "agent402-economy.db") }), tables: { daily: "economy_daily" } },
   { file: "agent402-revenue.db", env: (d) => ({ REVENUE_LEDGER_DB: join(d, "agent402-revenue.db") }), tables: { transfers: "revenue_transfers", cursors: "revenue_cursors" } },
   { file: "agent402-stripe-shadow.db", env: () => ({}), tables: { shadow: "stripe_shadow" } },
   { file: "agent402-pow.db", env: (d) => ({ POW_DB_PATH: join(d, "agent402-pow.db") }), tables: { pow_used: "pow_used" } },
 ];
+export const DB_ONLY = ["stats_flushes"];
 // collection -> directory on the volume, and how a file name maps to a record id.
 export const RECORD_DIRS = [
   { dir: "credits", collection: "credits", idOf: (f) => (f.startsWith("k_") && f.endsWith(".json") ? f.slice(0, -5) : f === "_sessions.json" ? "_sessions" : null), fileOf: (id) => `${id}.json` },

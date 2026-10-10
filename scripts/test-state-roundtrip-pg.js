@@ -26,6 +26,8 @@ try {
   ok(boot.status === 0, `the stores create their tables${boot.status ? ` (${String(boot.stderr).slice(-300)})` : ""}`);
   const tables = (await q("SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY 1", [SRC])).rows.map((r) => r.table_name).filter((t) => t !== "leases");
   ok(tables.length >= 30, `every store table exists (${tables.length})`);
+  // Tables and columns added after the first cut: the retry ids, the applied stats batches, the log line key.
+  ok(["memory_requests", "stats_flushes", "log_lines"].every((t) => tables.includes(t)), `the newer tables are in the catalog the backup walks (${["memory_requests", "stats_flushes"].filter((t) => !tables.includes(t)).join(", ") || "all present"})`);
   const serialCols = (await q("SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = $1 AND column_default LIKE 'nextval(%'", [SRC])).rows;
   ok(serialCols.length >= 8, `the serial columns are there to test (${serialCols.map((r) => `${r.table_name}.${r.column_name}`).join(", ")})`);
 
@@ -78,6 +80,9 @@ try {
     } catch (e) { n = -1; console.error(`  ${t}: ${e.message}`); }
     if (n) { differ++; console.error(`  ${t}: ${n} row(s) differ`); }
   }
+  const lk = (await q("SELECT count(*)::int AS n FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'log_lines' AND column_name = 'line_key'", [DST])).rows[0].n;
+  const lkIdx = (await q("SELECT indexdef FROM pg_indexes WHERE schemaname = $1 AND indexname = 'log_lines_stream_key'", [DST])).rows[0]?.indexdef || "";
+  ok(lk === 1 && /UNIQUE/.test(lkIdx) && /line_key IS NOT NULL/.test(lkIdx), `the restored log_lines keeps line_key and its partial unique index (${lkIdx || "no index"})`);
   ok(differ === 0, `every table restored row for row (${tables.length} tables, ${differ} differ)`);
 
   const collide = [];

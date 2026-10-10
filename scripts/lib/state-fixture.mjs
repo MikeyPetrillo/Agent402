@@ -40,6 +40,7 @@ export async function seedFixture(dir, { salesN = 600, refundsN = 260 } = {}) {
     const db = new Database(join(dir, s.file));
     try {
       for (const table of Object.keys(s.tables)) {
+        if ((s.transient || []).includes(table)) continue; // expires on its own, never imported
         const cols = db.prepare(`PRAGMA table_info("${table}")`).all();
         if (!cols.length) continue;
         const use = cols.filter((c) => !(c.pk === 1 && /INT/i.test(c.type) && cols.filter((x) => x.pk).length === 1));

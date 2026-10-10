@@ -20,8 +20,8 @@
 //     [origin, entry] per line)
 //   - every log stream as its NDJSON file (outbound-spend.ndjson, wishes.jsonl)
 // Every table is read inside ONE repeatable-read transaction: the export is
-// one consistent snapshot. The bookkeeping tables (imports, leases) are not
-// exported. A state table, collection or stream with no file shape is listed
+// one consistent snapshot. The bookkeeping tables (imports, leases, and the
+// DB_ONLY tables in scripts/lib/state-stores.mjs) are not exported. A state table, collection or stream with no file shape is listed
 // and makes the exit code 1, so nothing is dropped silently.
 //
 // To roll back: stop the app, run this into an empty directory, check it
@@ -35,10 +35,10 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import pg from "pg";
-import { SQLITE_STORES, RECORD_DIRS, LOG_FILES, INDEX_CACHE } from "./lib/state-stores.mjs";
+import { SQLITE_STORES, RECORD_DIRS, LOG_FILES, INDEX_CACHE, DB_ONLY } from "./lib/state-stores.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const BOOKKEEPING = new Set(["imports", "leases"]);
+const BOOKKEEPING = new Set(["imports", "leases", ...DB_ONLY]);
 const GENERIC = new Set(["documents", "records", "log_lines"]);
 const snake = (c) => c.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
 const PAGE = 2000;

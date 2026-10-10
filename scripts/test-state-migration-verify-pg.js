@@ -37,6 +37,20 @@ try {
   ok(missing.status === 1, "a store missing from --data fails the verification");
   ok(/agent402-decide\.db.*NO.*file missing/.test(missing.stdout), `...and is named (${line(missing.stdout, "agent402-decide.db").trim()})`);
 
+  // A ledger whose mirror dead letter still holds rows: the database is behind the file.
+  const queued = join(DIR, "queued");
+  cpSync(data, queued, { recursive: true });
+  { const { default: Database } = await import("better-sqlite3"); const db = new Database(join(queued, "agent402-sales.db"));
+    db.exec("CREATE TABLE IF NOT EXISTS pg_dead_letter (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, payload TEXT NOT NULL, at INTEGER NOT NULL)");
+    db.prepare("INSERT INTO pg_dead_letter (kind, payload, at) VALUES (?, ?, ?)").run("sale", "{}", Date.now()); db.close(); }
+  const q1 = verify(queued);
+  ok(q1.status === 1 && /agent402-sales\.db\s+pg_dead_letter.*NO\s+rows still queued/.test(q1.stdout), `a non-empty dead letter fails the verification (${q1.stdout.split("\n").find((l) => /pg_dead_letter/.test(l))?.trim() || "no line"})`);
+  // Retry ids expire and are never imported: present in the file, not compared.
+  { const { default: Database } = await import("better-sqlite3"); const db = new Database(join(queued, "agent402.db"));
+    db.prepare("INSERT INTO requests (ns, rid, fp, result, ts) VALUES (?, ?, ?, ?, ?)").run("0xabc", "r1", "fp", "{}", Date.now()); db.close(); }
+  const q2 = verify(queued);
+  ok(/agent402\.db\s+requests\s+1\s+\S*\s*ok\s+transient/.test(q2.stdout), `memory retry ids are listed as transient (${q2.stdout.split("\n").find((l) => /agent402\.db\s+requests/.test(l))?.trim() || "no line"})`);
+
   // A lazy document with no row: reported, not passed silently.
   writeFileSync(join(data, "leaderboard-funding.json"), JSON.stringify({ wallets: { a: 1 } }));
   const lazy = verify(data);

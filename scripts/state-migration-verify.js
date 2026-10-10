@@ -47,13 +47,19 @@ async function reportMissing(store, part, rowsInTable) {
 }
 for (const [file, map] of Object.entries(sqliteMap)) {
   if (!has(file)) {
-    let n = 0; for (const t of Object.values(map)) n += (await tableRows(t)) || 0;
+    const transient = new Set(((SQLITE_STORES.find((x) => x.file === file) || {}).transient || []).map((t) => map[t]));
+    let n = 0; for (const t of Object.values(map)) if (!transient.has(t)) n += (await tableRows(t)) || 0;
     await reportMissing(file, "(file)", n);
     continue;
   }
   const tables = sqliteTables(f(file));
+  const spec = SQLITE_STORES.find((x) => x.file === file) || {};
   for (const t of tables) {
     const pg = map[t];
+    // Retry ids expire on their own and are never imported: not compared.
+    if ((spec.transient || []).includes(t)) { rows.push({ store: file, file: t, fileCount: sqliteCount(f(file), t), tableCount: pg ? await tableRows(pg) : null, ok: true, note: "transient (expires), not imported" }); continue; }
+    // Rows still queued for the database: the import is complete only when none are.
+    if ((spec.queues || []).includes(t)) { const n = sqliteCount(f(file), t); rows.push({ store: file, file: t, fileCount: n, tableCount: null, ok: n === 0, note: n ? "rows still queued for the database" : "queue empty" }); continue; }
     if (!pg && /_meta$|^meta$/.test(t)) continue; // a settings row, not data
     if (!pg) { rows.push({ store: file, file: t, fileCount: sqliteCount(f(file), t), tableCount: null, ok: false, note: "no table mapping" }); continue; }
     let where = "";
