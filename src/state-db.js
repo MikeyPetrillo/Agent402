@@ -262,6 +262,10 @@ async function setupSchema(p) {
 // connection, but only where running the statement twice is harmless: a
 // SELECT, or a caller-marked idempotent statement. Never inside withStateTx,
 // and never after a timeout (the statement may still be running).
+// The pool does not know which of its idle clients died the same way (a
+// socket that went silent is found only by writing to it), so before the
+// retry every client idle at that moment is taken and discarded: the retry,
+// and the statements after it, run on new connections.
 const DEAD_CONN_CODES = new Set(["ECONNRESET", "EPIPE", "ECONNABORTED", "57P01", "57P02", "57P03"]);
 const DEAD_CONN_MSG = /Connection terminated|terminating connection|not queryable|Connection ended|encountered a connection error/i;
 function isDeadConnection(e) {
@@ -271,6 +275,16 @@ function isDeadConnection(e) {
   return DEAD_CONN_CODES.has(code) || /^08/.test(code) || DEAD_CONN_MSG.test(String(e.message || e));
 }
 const READ_ONLY = /^\s*SELECT\b/i;
+async function discardIdleClients(p) {
+  // connect() hands out idle clients first; each one taken is closed instead
+  // of returned. Bounded by the idle count read once, so it never waits on a
+  // busy pool or opens connections only to close them.
+  for (let n = p.idleCount; n > 0 && p.idleCount > 0; n--) {
+    let c;
+    try { c = await p.connect(); } catch { return; }
+    try { c.release(true); } catch { /* already gone */ }
+  }
+}
 
 /**
  * Run one statement against the state database. Throws when no database is
@@ -286,6 +300,7 @@ export async function stateQuery(text, params = [], { idempotent = false } = {})
     noteSuccess(); // the status word reads "on" again after a good query
     return r;
   } catch (e) {
+    if (isDeadConnection(e)) await discardIdleClients(p);
     if (isDeadConnection(e) && (idempotent || (typeof text === "string" && READ_ONLY.test(text)))) {
       try {
         const r = await p.query(text, values);

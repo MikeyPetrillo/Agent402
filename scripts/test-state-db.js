@@ -387,6 +387,46 @@ try {
     ok(stateDbStatus() === "on", `and the word reads on (${stateDbStatus()})`);
   }
 
+  // ---- idle connections whose sockets went silent (no close seen) -------------
+  {
+    // A relay that can sever silently: the upstream side is dropped and the
+    // client's socket stays open until its next write, which is reset. Every
+    // idle pooled client is then dead without the pool knowing, so a retry on
+    // "another pooled client" would land on another dead one.
+    const net = await import("node:net");
+    const target = new URL(process.env.STATE_DATABASE_URL);
+    const pairs = new Set();
+    const relay = net.createServer((c) => {
+      const u = net.connect(Number(target.port || 5432), target.hostname);
+      const pr = { c, u, cut: false };
+      pairs.add(pr);
+      c.on("error", () => {}); u.on("error", () => {});
+      c.on("close", () => { u.destroy(); pairs.delete(pr); });
+      u.on("close", () => { if (!pr.cut) c.destroy(); });
+      c.on("data", (d) => { if (pr.cut) c.resetAndDestroy(); else u.write(d); });
+      u.on("data", (d) => { if (!pr.cut) c.write(d); });
+    });
+    await new Promise((r) => relay.listen(0, "127.0.0.1", r));
+    const liveUrl = process.env.STATE_DATABASE_URL;
+    const relayed = new URL(liveUrl); relayed.hostname = "127.0.0.1"; relayed.port = String(relay.address().port);
+    process.env.STATE_DATABASE_URL = relayed.toString();
+    const fresh = await import("../src/state-db.js?silent-sever");
+    try {
+      await Promise.all(Array.from({ length: 4 }, () => fresh.stateQuery("SELECT pg_sleep(0.05)")));
+      for (const pr of pairs) { pr.cut = true; pr.u.destroy(); }
+      const one = await fresh.stateQuery("SELECT 1 AS one").then((r) => r.rows[0].one, (e) => `ERR ${e.code || ""} ${e.message}`);
+      ok(one === 1, `a read after every idle connection went silently dead is retried on a new connection (${one})`);
+      const put = await fresh.records.put("sever-c", "r1", { a: 1 }).then(() => "ok", (e) => `ERR ${e.message}`);
+      ok(put === "ok", `and the next idempotent write finds no dead idle connection left (${put})`);
+      ok(fresh.stateDbStatus() === "on", `the word reads on (${fresh.stateDbStatus()})`);
+    } finally {
+      await fresh.closeStateDb();
+      process.env.STATE_DATABASE_URL = liveUrl;
+      for (const pr of pairs) { pr.u.destroy(); pr.c.destroy(); }
+      await new Promise((r) => relay.close(r));
+    }
+  }
+
   // ---- the schema setup takes the shared advisory lock ------------------------
   {
     const lockClient = new (await import("pg")).default.Client({ connectionString: process.env.STATE_DATABASE_URL });
