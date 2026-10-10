@@ -608,8 +608,19 @@ async function acquireWithin(name, owner, ttlMs, limitMs) {
     timer.unref?.();
   });
   // An acquire that lands after we gave up is handed back at once, so the
-  // row does not sit unused until its ttl.
-  attempt.then((won) => { if (timedOut && won) leases.release(name, { owner }).catch(() => {}); }, () => {});
+  // row does not sit unused until its ttl. The owner id is the process's, so
+  // a later call for the same lease running here may own that same row: it
+  // is left to that call, which releases it when it ends. While the hand-back
+  // is in flight the name is reserved, so a call starting meanwhile answers
+  // busy instead of acquiring a row the release is about to delete.
+  attempt.then((won) => {
+    if (!timedOut || !won) return;
+    const key = leaseKey(owner, String(name));
+    if (heldLeases.has(key)) return;
+    const releasing = { name: String(name), owner, ttlMs, controller: new AbortController(), acquired: false, confirmedAt: 0, lost: false, released: true, failOpen: false, log: () => {} };
+    heldLeases.set(key, releasing);
+    leases.release(name, { owner }).catch(() => {}).finally(() => { if (heldLeases.get(key) === releasing) heldLeases.delete(key); });
+  }, () => {});
   try { return await Promise.race([attempt, deadline]); }
   catch (e) { if (timedOut) noteFailure(e); throw e; }
   finally { clearTimeout(timer); }

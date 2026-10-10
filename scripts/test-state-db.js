@@ -184,6 +184,35 @@ try {
     ok(second.skipped === "leased" && second.reason === "busy" && midHolder?.owner === sdb.leaseOwnerId() && wrappedRuns === 1, "leased(): an overlapping call in-process skips and leaves the lease held");
   }
 
+  // ---- an acquire that lands after its call gave up never frees a later tick's row
+  {
+    const pg = (await import("pg")).default;
+    const S = sdb.stateDbSchema();
+    await stateQuery(`INSERT INTO ${S}.leases (name, owner, expires_at) VALUES ('LATE', 'gone', now() - interval '1 minute') ON CONFLICT (name) DO UPDATE SET owner = 'gone', expires_at = now() - interval '1 minute'`);
+    const locker = new pg.Client({ connectionString: process.env.STATE_DATABASE_URL });
+    await locker.connect();
+    await locker.query("BEGIN");
+    await locker.query(`SELECT 1 FROM ${S}.leases WHERE name = 'LATE' FOR UPDATE`); // every acquire waits behind this
+    const first = await withLease("LATE", { ttlMs: 60_000, acquireTimeoutMs: 300, log: () => {} }, async () => "first ran");
+    ok(first.ran === false && first.reason === "db", `an acquire that outlasts its limit skips the tick (${JSON.stringify(first)})`);
+    let holderDuring = "unset";
+    let releaseGate;
+    const gate = new Promise((r) => { releaseGate = r; });
+    const second = withLease("LATE", { ttlMs: 60_000, acquireTimeoutMs: 10_000, log: () => {} }, async () => {
+      await gate;
+      holderDuring = (await leases.holder("LATE"))?.owner || null;
+      return "second ran";
+    });
+    await sleep(100);
+    await locker.query("ROLLBACK"); // the first acquire lands now, after its call gave up; the second one too
+    await sleep(500);
+    releaseGate();
+    const r2 = await second;
+    await locker.end();
+    ok(r2.ran === true && holderDuring === sdb.leaseOwnerId(), `the later tick still holds its row after the earlier late acquire landed (holder ${holderDuring})`);
+    ok((await leases.holder("LATE")) === null, "and the later tick releases it when done");
+  }
+
   // ---- M13: the owner id differs per boot even with the same replica and pid -
   {
     const other = await import("../src/state-db.js?second-boot");
