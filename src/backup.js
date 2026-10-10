@@ -45,7 +45,7 @@ import { pipeline } from "node:stream/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createJsonDocument } from "./json-document.js";
-import { trackStoreReady, leased, stateDb, stateDbEnabled, stateDbSchema, stateQuery } from "./state-db.js";
+import { trackStoreReady, leased, stateDbEnabled, stateDbSchema, stateQuery, withStateTx } from "./state-db.js";
 
 const cfg = () => ({
   endpoint: (process.env.BACKUP_S3_ENDPOINT || "").trim().replace(/\/+$/, ""),
@@ -460,20 +460,15 @@ function orderStateTables(tables) {
 }
 
 /** Run fn(client) inside one REPEATABLE READ READ ONLY transaction on a
- *  dedicated connection: every read in it sees the same snapshot. */
+ *  dedicated connection: every read in it sees the same snapshot. It runs
+ *  in withStateTx, so a connection that drops mid-snapshot is an error the
+ *  caller sees (never an uncaught one) and the client is discarded. */
 async function withSnapshot(fn) {
-  const pool = await stateDb();
-  if (!pool) throw new Error("state database not configured");
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-    const out = await fn(client);
-    await client.query("COMMIT");
-    return out;
-  } catch (e) {
-    try { await client.query("ROLLBACK"); } catch { /* the connection is gone */ }
-    throw e;
-  } finally { client.release(); }
+  if (!stateDbEnabled()) throw new Error("state database not configured");
+  return withStateTx(async (client) => {
+    await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+    return fn(client);
+  });
 }
 
 /** Stream one table through a server-side cursor into gzip'd NDJSON (one
