@@ -289,6 +289,7 @@ const statusFile = () => join(cfg().dataDir, "backup-status.json");
 let statusDoc = null;
 const statusStore = () => (statusDoc ||= createJsonDocument({ file: statusFile(), log: () => {} }));
 let statusLoaded = false;
+let statusDirty = false; // a status save refused while the row was unread
 let statusReady = Promise.resolve();
 const absorbStatus = (saved) => {
   if (!saved || typeof saved !== "object") return;
@@ -304,13 +305,21 @@ function loadStatus() {
   // arrives here, so a boot that calls this early has it before any reader.
   // A read that outlasts its retries lands later through onLoad (the
   // document's background re-read), so the word never stays stale on it.
-  if (d.backend === "pg") statusReady = trackStoreReady(d.load(null, { onLoad: absorbStatus }).then(() => {}, () => {}));
+  // A status saved while the row is unread is refused; it is saved again
+  // (merged over the stored one) once the row arrives.
+  if (d.backend === "pg") statusReady = trackStoreReady(d.load(null, { onLoad: (saved) => { absorbStatus(saved); if (statusDirty) { statusDirty = false; saveStatus(); } } }).then(() => {}, () => {}));
+}
+/** True while the database copy of the status has not been read (the word is unknown, not stale). */
+function statusUnread() {
+  const d = statusStore();
+  return d.backend === "pg" && !d.loaded;
 }
 /** Settles once the persisted status has been read (immediately in file
  *  mode). Does not start the read: startBackupScheduler does, at boot. */
 export const backupStatusLoaded = () => statusReady;
 function saveStatus() {
-  void statusStore().save(status); // best-effort
+  if (statusUnread()) { statusDirty = true; return; } // saved once the stored status is read
+  void statusStore().save(status); // best-effort; a failed save is re-sent by the document
 }
 export const backupStatus = () => { loadStatus(); return { ...status, configured: backupConfigured() }; };
 
@@ -322,9 +331,12 @@ export const backupStatus = () => { loadStatus(); return { ...status, configured
 //   stale   no successful run within BACKUP_STALE_HOURS (26: one nightly
 //           window plus slack), including none at all since configured
 //   ok      the last run succeeded and is recent
+//   unknown the stored status has not been read yet (database unreachable)
+//           and this process has not run a backup: no page either way
 export function backupAlarmStatus(now = Date.now()) {
   if (!backupConfigured()) return "off";
   loadStatus();
+  if (statusUnread() && !status.lastAttempt) return "unknown";
   const result = status.lastResult || (status.lastAttempt ? (status.lastError ? "failed" : "ok") : null);
   if (result === "failed" || result === "held") return result;
   const staleMs = clampInt(process.env.BACKUP_STALE_HOURS, 26, 2, 24 * 30) * 3600_000;

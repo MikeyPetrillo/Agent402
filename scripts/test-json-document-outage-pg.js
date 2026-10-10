@@ -130,12 +130,30 @@ await sdb.documents.put("loading-doc", { kept: true });
   const recent = new Date(Date.now() - 3600_000).toISOString();
   await sdb.documents.put("backup-status.json", { lastAttempt: recent, lastSuccess: recent, lastResult: "ok", lastError: null });
   relay.cut();
-  const { backupAlarmStatus, backupStatusLoaded } = await import("../src/backup.js");
+  const { backupAlarmStatus, backupStatusLoaded, runBackup } = await import("../src/backup.js");
   const first = backupAlarmStatus();
   await backupStatusLoaded();
-  ok(first === "stale" && backupAlarmStatus() === "stale", `while the boot read cannot land, the word is stale (${first}, ${backupAlarmStatus()})`);
+  ok(first === "unknown" && backupAlarmStatus() === "unknown", `while the boot read cannot land, the word is unknown, not stale (${first}, ${backupAlarmStatus()})`);
   relay.heal();
   ok(await until(() => backupAlarmStatus() === "ok", 10_000), `once the database is back the stored status reaches the store and the word is ok (${backupAlarmStatus()})`);
+}
+
+// ---- a backup status saved before the row was read is not lost -------------
+// A fresh module (a later boot): the run finishes while the status row is
+// unread, so its save is refused; it is saved, merged over the stored status,
+// once the row arrives.
+{
+  const recent = new Date(Date.now() - 3600_000).toISOString();
+  process.env.BACKUP_DATA_DIR = join(DIR, "bk2");
+  await sdb.documents.put("backup-status.json", { lastAttempt: recent, lastSuccess: recent, lastResult: "ok", lastError: null });
+  relay.cut();
+  const bk = await import(`../src/backup.js?second=${Date.now()}`);
+  const run = await bk.runBackup({ log: () => {} }); // the bucket is unreachable: a failed run
+  ok(run.ok === false && bk.backupAlarmStatus() === "failed", `a run this process made is reported whatever the row (${bk.backupAlarmStatus()})`);
+  relay.heal();
+  ok(await until(async () => (await sdb.documents.get("backup-status.json"))?.body?.lastResult === "failed", 10_000), "the run's status lands in the row once the row is read");
+  const row = (await sdb.documents.get("backup-status.json")).body;
+  ok(row.lastSuccess === recent, `the stored last success is kept in the merged status (${row.lastSuccess})`);
 }
 
 // ---- a save that fails after the document loaded is kept and re-sent ----------
