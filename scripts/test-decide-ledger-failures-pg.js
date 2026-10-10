@@ -180,9 +180,15 @@ if (CHILD) {
       const decisionId = `dx_${randomBytes(4).toString("hex")}`;
       globalThis.fetch = async () => { relay.cut(); return new Response(JSON.stringify({ decisionId, plan: [{ step: 1, purpose: "p", tool: fp("a"), fallbacks: [] }], gaps: [], estimatedCostViaAgent402Usd: 0.01 }), { status: 200 }); };
       const req = mkReq(0.05);
-      const r = await run(() => makeDecideHandler({ ledger: L })({ task: "do it", depth: "plan" }, req));
+      const warned = [];
+      const realWarn = console.warn;
+      console.warn = (...a) => { warned.push(a.join(" ")); realWarn(...a); };
+      let r;
+      try { r = await run(() => makeDecideHandler({ ledger: L })({ task: "do it", depth: "plan" }, req)); } finally { console.warn = realWarn; }
       globalThis.fetch = realFetch;
       const atAnswer = L.pendingCount();
+      const failLines = warned.filter((l) => /ledger write failed/.test(l));
+      ok(failLines.length >= 2 && failLines.every((l) => /and journaled/.test(l)), `...each failed write's log line says it was journaled (${failLines.length} lines: ${failLines.map((l) => /and journaled/.test(l)).join(",")})`);
       for (const fn of req.__onSettled || []) fn(true);
       ok(!r.err && r.out.executionCredit?.token && r.out.executionCredit.recordPending === true, `decide with the ledger down after the model call: 200 with a credit (${r.err ? `${r.status} ${r.err.message}` : "200"})`);
       ok(atAnswer === 2, `...the decision and the credit are journaled before the answer (${atAnswer})`);

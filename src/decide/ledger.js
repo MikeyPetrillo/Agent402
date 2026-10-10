@@ -734,7 +734,7 @@ function openDatabaseLedger(path) {
     journal(kind, payload) {
       const p = { ...(payload || {}) };
       if (typeof p.token === "string") { p.hash = hashToken(p.token); delete p.token; }
-      const onDisk = pending.add(String(kind), p);
+      const onDisk = pending.add(String(kind), p) != null; // the entry's id, or null when it is not on disk
       if (!onDisk) console.error(`[decide] ledger: a ${kind} write could not be journaled to local disk`);
       return onDisk;
     },
