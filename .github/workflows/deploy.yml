@@ -1352,6 +1352,8 @@ jobs:
           t node scripts/test-decide-ledger-failures-pg.js
           t node scripts/test-credits-pg.js
           t node scripts/test-human-checkout-pg.js
+          # A report made is never refunded or regenerated over a database failure; a refund is recorded first.
+          t node scripts/test-human-checkout-failures-pg.js
           t node scripts/test-wish-pg.js
           # A first load that failed is retried until it lands; DDL from two boots never races;
           # a failed write is kept and retried; a stats batch whose COMMIT reply was lost counts once.
