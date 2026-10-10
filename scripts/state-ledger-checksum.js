@@ -5,7 +5,7 @@
 // is truncated, re-typed, rounded or swapped between rows; this cannot.
 //
 //   STATE_DATABASE_URL=... STATE_DB_SCHEMA=<schema> node scripts/state-ledger-checksum.js --data <dir>
-//   ... [--sales f] [--refunds f] [--decide f] [--revenue f] [--shadow f] [--credits dir] [--checkout dir] [--outbound f] [--wishes f] [--json]
+//   ... [--sales f] [--refunds f] [--decide f] [--revenue f] [--shadow f] [--credits dir] [--checkout dir] [--outbound f] [--wishes f] [--documents dir] [--json]
 //
 // --data picks every ledger it finds in a volume-shaped directory; a flag
 // names one file and wins over --data. Exit 1 when any ledger differs.
@@ -17,6 +17,12 @@
 // sorted at every level. A SQLite column is compared with the state column
 // of the same name, or its snake_case form (createdAt -> created_at); a
 // SQLite column with no state column is itself a difference (it would be lost).
+//
+// JSON documents (every top-level *.json file of --data, or --documents <dir>:
+// the subscription engines' state among them) are compared whole: the file's
+// canonical JSON against its documents row's, one hash each. A file with no
+// row yet is SKIP (it is imported when its feature first runs, and
+// state-migration-verify.js reports it); a file that is not JSON differs.
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -28,6 +34,9 @@ import { SQLITE_STORES, RECORD_DIRS, LOG_FILES } from "./lib/state-stores.mjs";
 export const MONEY_SQLITE = { sales: "agent402-sales.db", refunds: "agent402-refunds.db", decide: "agent402-decide.db", revenue: "agent402-revenue.db", shadow: "agent402-stripe-shadow.db" };
 export const MONEY_DIRS = { credits: "credits", checkout: "human-checkout" };
 export const MONEY_LOGS = { outbound: "outbound-spend.ndjson", wishes: "wishes.jsonl" };
+// Every top-level JSON document of a volume-shaped directory.
+export const DOCUMENTS_KEY = "documents";
+const docFilesIn = (dir) => readdirSync(dir).filter((x) => x.endsWith(".json") && statSync(join(dir, x)).isFile()).sort();
 
 const snake = (c) => c.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
 const sortKeys = (v) => (Array.isArray(v) ? v.map(sortKeys) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k])])) : v);
@@ -123,6 +132,17 @@ export async function ledgerChecksums({ files, url = process.env.STATE_DATABASE_
       const at = (x, i) => `${String(i).padStart(9, "0")} ${x}`; // the position is part of the row
       results.push(compare(`${fileName} log`, a.map(at), b.map(at)));
     }
+    if (files[DOCUMENTS_KEY]) {
+      const dir = files[DOCUMENTS_KEY];
+      for (const name of docFilesIn(dir)) {
+        let body, parsed = true;
+        try { body = JSON.parse(readFileSync(join(dir, name), "utf8")); } catch { parsed = false; }
+        const r = await pool.query(`SELECT body FROM ${S}.documents WHERE name = $1`, [name]);
+        const label = `${name} document`;
+        if (!r.rows.length) { results.push({ name: label, equal: true, rowsFile: 1, rowsTable: 0, note: "no row yet (imported when its feature first runs)", skipped: true }); continue; }
+        results.push(compare(label, [parsed ? jsonCanon(body) : "unparseable file"], [jsonCanon(r.rows[0].body)], parsed ? "" : "file is not JSON"));
+      }
+    }
   } finally { await pool.end(); }
   return results;
 }
@@ -133,6 +153,7 @@ export function ledgerFilesIn(dir) {
   if (!dir) return out;
   for (const [k, f] of Object.entries({ ...MONEY_SQLITE, ...MONEY_LOGS })) if (existsSync(join(dir, f))) out[k] = join(dir, f);
   for (const [k, d] of Object.entries(MONEY_DIRS)) if (existsSync(join(dir, d)) && statSync(join(dir, d)).isDirectory()) out[k] = join(dir, d);
+  if (existsSync(dir) && docFilesIn(dir).length) out[DOCUMENTS_KEY] = dir;
   return out;
 }
 
@@ -151,7 +172,7 @@ if (isMain) {
   const opt = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : null; };
   if (!String(process.env.STATE_DATABASE_URL || "").trim()) { console.error("STATE_DATABASE_URL is required"); process.exit(2); }
   const files = ledgerFilesIn(opt("--data"));
-  for (const k of [...Object.keys(MONEY_SQLITE), ...Object.keys(MONEY_DIRS), ...Object.keys(MONEY_LOGS)]) if (opt(`--${k}`)) files[k] = opt(`--${k}`);
+  for (const k of [...Object.keys(MONEY_SQLITE), ...Object.keys(MONEY_DIRS), ...Object.keys(MONEY_LOGS), DOCUMENTS_KEY]) if (opt(`--${k}`)) files[k] = opt(`--${k}`);
   for (const [k, f] of Object.entries(files)) if (!existsSync(f)) { console.error(`${k}: ${f} does not exist`); process.exit(2); }
   if (!Object.keys(files).length) { console.error("no ledger named: --data <dir> or --sales/--refunds/..."); process.exit(2); }
   const results = await ledgerChecksums({ files });
