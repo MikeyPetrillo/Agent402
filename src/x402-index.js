@@ -6050,7 +6050,7 @@ async function persistIndexCacheToStateDb(entries, lines) {
     for (const [ids, bodies] of recordBatches(entries, bodyOf)) {
       await stateQuery(
         `INSERT INTO ${recordsTable()} (collection, id, body)
-         SELECT $1, u.id, u.body::jsonb FROM unnest($2::text[], $3::text[]) AS u(id, body)
+         SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
          ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()`,
         [INDEX_RECORDS, ids, bodies],
       );
@@ -6103,7 +6103,7 @@ async function importIndexCacheFile() {
   for (const [ids, bodies] of recordBatches(entries, bodyOf)) {
     await stateQuery(
       `INSERT INTO ${recordsTable()} (collection, id, body)
-       SELECT $1, u.id, u.body::jsonb FROM unnest($2::text[], $3::text[]) AS u(id, body)
+       SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
        ON CONFLICT (collection, id) DO NOTHING`,
       [INDEX_RECORDS, ids, bodies],
     );

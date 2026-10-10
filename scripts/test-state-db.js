@@ -145,6 +145,21 @@ try {
       return (await c.query({ text: `SELECT id, body FROM ${sdb.stateDbSchema()}.records WHERE collection = $1 AND id = $2`, values: ["nul-c", "r\u00002"] })).rows[0];
     });
     ok(tx && tx.id === "r2" && tx.body.w === "z", "a transaction's parameters (positional and config form) are cleaned too");
+    // JSON escapes are cleaned only in a parameter cast to json/jsonb: a TEXT
+    // value that happens to look like JSON is stored exactly as typed.
+    const S = sdb.stateDbSchema();
+    await stateQuery(`CREATE TABLE IF NOT EXISTS ${S}.text_probe (k INT PRIMARY KEY, v TEXT)`);
+    const typed = ['{"note":"\\u0000"}', '"\\u0000"', '["\\ud800"]', '{"a":1,"a\\u0000":2}'];
+    for (let i = 0; i < typed.length; i++) await stateQuery(`INSERT INTO ${S}.text_probe (k, v) VALUES ($1, $2)`, [i, typed[i]]);
+    const back = (await stateQuery(`SELECT k, v FROM ${S}.text_probe ORDER BY k`)).rows.map((r) => r.v);
+    ok(JSON.stringify(back) === JSON.stringify(typed), `a TEXT value shaped like JSON with escapes is stored unchanged (${JSON.stringify(back)})`);
+    await withStateTx(async (c) => { await c.query(`UPDATE ${S}.text_probe SET v = $2 WHERE k = $1`, [0, typed[3]]); await c.query({ text: `UPDATE ${S}.text_probe SET v = $2 WHERE k = $1`, values: [1, typed[0]] }); });
+    const back2 = (await stateQuery(`SELECT v FROM ${S}.text_probe WHERE k IN (0, 1) ORDER BY k`)).rows.map((r) => r.v);
+    ok(back2[0] === typed[3] && back2[1] === typed[0], "a transaction's TEXT parameters are stored unchanged too");
+    const asJson = (await stateQuery("SELECT $1::jsonb AS j, $2::jsonb[] AS a", ['{"n":"x\\u0000y"}', ['{"m":"\\ud800"}']])).rows[0];
+    ok(asJson.j.n === "xy" && asJson.a[0].m === "\ufffd", `a parameter cast to jsonb or jsonb[] still has its escapes cleaned (${JSON.stringify(asJson)})`);
+    const raw = (await stateQuery("SELECT $1::text AS t", ['{"z":"a\u0000b"}'])).rows[0].t;
+    ok(raw === '{"z":"ab"}', "a raw NUL is still dropped from a TEXT parameter");
   }
 
   // ---- H11: re-entry in one process never releases the running holder -------

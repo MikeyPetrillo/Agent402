@@ -106,27 +106,28 @@ function cleanJsonEscapes(s) {
     return m;
   });
 }
-/** A string as Postgres will take it (see above). Exported for stores that build SQL text themselves. */
-export function cleanPgText(s) {
+/** A string as Postgres will take it (see above). Exported for stores that build SQL text themselves.
+ *  `json: false` leaves JSON escapes alone: a TEXT column stores the six characters \u0000 as typed. */
+export function cleanPgText(s, { json = true } = {}) {
   if (typeof s !== "string") return s;
   let out = s;
   if (out.indexOf("\u0000") !== -1) out = out.replaceAll("\u0000", "");
   if (typeof out.isWellFormed === "function" ? !out.isWellFormed() : LONE_SURROGATE.test(out)) {
     out = typeof out.toWellFormed === "function" ? out.toWellFormed() : out.replace(LONE_SURROGATE, "\ufffd");
   }
-  if (out.indexOf("\\u") !== -1 && JSON_BAD_ESC.test(out)) {
+  if (json && out.indexOf("\\u") !== -1 && JSON_BAD_ESC.test(out)) {
     const c = out.trimStart()[0];
     if (c === "{" || c === "[" || c === "\"") out = cleanJsonEscapes(out);
   }
   return out;
 }
 /** One query parameter cleaned; arrays element-wise, plain objects as the JSON text pg would send. */
-export function cleanPgParam(v) {
-  if (typeof v === "string") return cleanPgText(v);
+export function cleanPgParam(v, { json = true } = {}) {
+  if (typeof v === "string") return cleanPgText(v, { json });
   if (Array.isArray(v)) {
     let changed = null;
     for (let i = 0; i < v.length; i++) {
-      const c = cleanPgParam(v[i]);
+      const c = cleanPgParam(v[i], { json });
       if (c !== v[i]) { if (!changed) changed = v.slice(); changed[i] = c; }
     }
     return changed || v;
@@ -136,7 +137,26 @@ export function cleanPgParam(v) {
   }
   return v;
 }
-const cleanParams = (params) => (Array.isArray(params) ? cleanPgParam(params) : params);
+// JSON escapes are cleaned only in a parameter the statement casts to json/jsonb
+// ($n::jsonb, $n::jsonb[], $n::json): any other string may be a TEXT value.
+const JSON_CAST = /\$(\d+)\s*::\s*jsonb?\b/gi;
+function jsonParamIndexes(text) {
+  const out = new Set();
+  if (typeof text !== "string") return out;
+  for (const m of text.matchAll(JSON_CAST)) out.add(Number(m[1]) - 1);
+  return out;
+}
+const cleanParams = (params, text) => {
+  if (!Array.isArray(params)) return params;
+  const js = jsonParamIndexes(text);
+  let changed = null;
+  for (let i = 0; i < params.length; i++) {
+    const v = params[i];
+    const c = v && typeof v === "object" && !Array.isArray(v) ? cleanPgParam(v) : cleanPgParam(v, { json: js.has(i) });
+    if (c !== v) { if (!changed) changed = params.slice(); changed[i] = c; }
+  }
+  return changed || params;
+};
 
 function schema() {
   if (!schemaName) schemaName = stateDbSchema();
@@ -260,7 +280,7 @@ const READ_ONLY = /^\s*SELECT\b/i;
 export async function stateQuery(text, params = [], { idempotent = false } = {}) {
   const p = await stateDb();
   if (!p) throw new Error("state database not configured");
-  const values = cleanParams(params);
+  const values = cleanParams(params, text);
   try {
     const r = await p.query(text, values);
     noteSuccess(); // the status word reads "on" again after a good query
@@ -762,14 +782,14 @@ export async function withStateTx(fn, { timeoutMs = 0 } = {}) {
   client.query = function cleanedQuery(config, values, cb) {
     if (typeof config === "string") {
       return queryTimeout
-        ? ownQuery.call(this, { text: config, values: typeof values === "function" ? undefined : cleanParams(values), query_timeout: queryTimeout }, typeof values === "function" ? values : cb)
-        : ownQuery.call(this, config, typeof values === "function" ? values : cleanParams(values), typeof values === "function" ? undefined : cb);
+        ? ownQuery.call(this, { text: config, values: typeof values === "function" ? undefined : cleanParams(values, config), query_timeout: queryTimeout }, typeof values === "function" ? values : cb)
+        : ownQuery.call(this, config, typeof values === "function" ? values : cleanParams(values, config), typeof values === "function" ? undefined : cb);
     }
     if (config && typeof config === "object" && typeof config.submit !== "function") {
       const c = { ...config };
-      if (Array.isArray(c.values)) c.values = cleanParams(c.values);
+      if (Array.isArray(c.values)) c.values = cleanParams(c.values, c.text);
       if (queryTimeout && !c.query_timeout) c.query_timeout = queryTimeout;
-      return ownQuery.call(this, c, typeof values === "function" ? values : cleanParams(values), cb);
+      return ownQuery.call(this, c, typeof values === "function" ? values : cleanParams(values, c.text), cb);
     }
     return ownQuery.call(this, config, values, cb);
   };
