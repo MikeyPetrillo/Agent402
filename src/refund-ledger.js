@@ -48,7 +48,7 @@ import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
-import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, NEWER_FILE_GRACE_MS, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError } from "./ledger-mirror.js";
+import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, NEWER_FILE_GRACE_MS, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError, createLedgerWriter } from "./ledger-mirror.js";
 import { retryingLoad } from "./store-retry.js";
 
 const HAS_DATA_DIR = existsSync("/data");
@@ -214,31 +214,58 @@ const fileToPg = (r) => cleanRow({
   status: r.status || "owed", paid_tx: r.paidTx ?? null, note: r.note ?? null, created_at: Number(r.createdAt) || 0,
   resolved_at: r.resolvedAt ?? null, wire: r.wire ?? null, hangup_reason: r.hangupReason ?? null, claimed_at: r.claimedAt ?? null,
 });
-// A debt Postgres refused or never answered waits here (the ledger file while
-// it is open, else an NDJSON beside it) and is replayed insert-if-absent by
-// evidence; see createDeadLetter.
+// A debt, and every change to an owed debt's status or note, is written here
+// (the ledger file while it is open, else an NDJSON beside it) when it is
+// queued and removed once Postgres holds it; an entry left behind (refused,
+// timed out, killed) is replayed in the order it was written: a debt insert-
+// if-absent by evidence, a change as the same guarded UPDATE. See
+// createDeadLetter.
 const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: join(DATA_DIR, "agent402-refunds.dead-letter.ndjson") }) : null;
 const INSERT_OWED_SQL = () => `INSERT INTO ${T("refunds")} (evidence, slug, network, payer, price_usd, http_status, synthetic, created_at, wire, hangup_reason, note)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (evidence) DO NOTHING RETURNING *`;
 const owedParams = (row) => [row.evidence, row.slug, row.network, row.payer, row.priceUsd, row.httpStatus, row.synthetic, row.createdAt, row.wire, row.hangupReason, row.note];
+const NOTE_CASE = (p) => `CASE WHEN note IS NULL OR note = '' THEN ${p}::text ELSE note || '; ' || ${p}::text END`;
+/**
+ * The changes to an OWED debt that the Tempo push flow makes (src/tempo-push-
+ * debts.js), by name, each one guarded UPDATE keyed on evidence ($1). Every
+ * guard reads the state the change moves FROM (status owed, and the note it
+ * rewrites), so running one twice, or after the row moved on, changes
+ * nothing: safe to replay.
+ */
+const OWED_CHANGES = {
+  void: () => `UPDATE ${T("refunds")} SET status = 'void', note = ${NOTE_CASE("$2")}, resolved_at = $3, updated_at = ${PG_NOW_MS}
+         WHERE evidence = $1 AND status = 'owed' RETURNING *`,
+  renote: () => `UPDATE ${T("refunds")} SET note = $3, updated_at = ${PG_NOW_MS} WHERE evidence = $1 AND status = 'owed' AND note = $2 RETURNING *`,
+  promote: () => `UPDATE ${T("refunds")} SET http_status = 499, hangup_reason = $3, note = ${NOTE_CASE("$4")}, updated_at = ${PG_NOW_MS}
+         WHERE evidence = $1 AND status = 'owed' AND note = $2 RETURNING *`,
+  restate: () => `UPDATE ${T("refunds")} SET http_status = $3, note = ${NOTE_CASE("$4")}, updated_at = ${PG_NOW_MS}
+         WHERE evidence = $1 AND status = 'owed' AND note = $2 RETURNING *`,
+};
 let replaying = false;
-/** Land every dead-lettered debt that is not in the table yet. Stops at the first connection failure (the next tick retries). */
+/**
+ * Land every dead-lettered debt and change, oldest first (a change after the
+ * debt it changes), skipping entries whose write this process still has
+ * queued. Stops at the first connection failure (the next tick retries).
+ */
 async function replayDeadLetters() {
   if (!deadLetter || replaying) return 0;
   replaying = true;
   let landed = 0;
   try {
     for (const e of deadLetter.list()) {
-      if (e.kind !== "refund" || !e.payload?.evidence) { deadLetter.remove(e.id); continue; }
+      const v = e.payload;
+      const isDebt = e.kind === "refund" && v?.evidence;
+      const isChange = e.kind === "refund-change" && OWED_CHANGES[v?.op] && Array.isArray(v.params) && v.params[0];
+      if (!isDebt && !isChange) { deadLetter.remove(e.id); continue; }
       let r;
-      try { r = await stateQuery(INSERT_OWED_SQL(), owedParams(e.payload)); }
-      catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); continue; } throw err; }
+      try { r = await stateQuery(isDebt ? INSERT_OWED_SQL() : OWED_CHANGES[v.op](), isDebt ? owedParams(v) : v.params); writer.answered(); }
+      catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); continue; } writer.failed(err); throw err; }
       if (r.rows[0]) { applyPgRow(r.rows[0]); writeThroughRow(r.rows[0]); landed++; }
-      else await refreshWhere("evidence = $1", [e.payload.evidence]).catch(() => {});
+      else await refreshWhere("evidence = $1", [isDebt ? v.evidence : v.params[0]]).catch(() => {});
       deadLetter.remove(e.id);
     }
   } finally { replaying = false; }
-  if (landed) console.log(`[refund-ledger] landed ${landed} debt(s) that had waited in the local dead-letter`);
+  if (landed) console.log(`[refund-ledger] landed ${landed} debt(s) or change(s) that had waited in the local dead-letter`);
   return landed;
 }
 
@@ -331,6 +358,7 @@ async function refresh() {
   try {
     const now = await pgNowMs(stateQuery);
     const r = await stateQuery(`SELECT * FROM ${T("refunds")} WHERE updated_at > $1 ORDER BY updated_at, id`, [Math.max(0, watermark)]);
+    writer.answered();
     if (r.rows.length) applyPgRows(r.rows);
     watermark = Math.max(watermark, now - REFRESH_MARGIN_MS);
     return r.rows.length;
@@ -362,12 +390,24 @@ if (USE_PG) {
   everyMs(() => (deadLetter.size() ? enqueue(async () => { await readyP(); await replayDeadLetters(); }) : null), REFRESH_MS);
 }
 
-/** One queued Postgres write: lands after every earlier write, never rejects (a failed write resolves false, logged once a minute; `onFail` runs first). */
-function pgWrite(label, fn, onFail = null) {
-  return enqueue(async () => {
-    try { await readyP(); return await fn(); }
-    catch (e) { warnOnce(label, e); try { onFail?.(e); } catch { /* best effort */ } return false; }
-  });
+// The queued write path: write-ahead to the dead-letter for debts and their
+// changes, fail fast on a hung database, and before every write the
+// dead-lettered entries older than it land first, so a void or a claim never
+// runs ahead of the debt it acts on. See createLedgerWriter.
+const writer = createLedgerWriter({
+  enqueue, ready: () => readyP(), deadLetter, warnOnce, label: "refund-ledger",
+  before: async () => { if (deadLetter.list().length) await replayDeadLetters(); },
+});
+/** One queued Postgres write: lands after every earlier write, never rejects (a failed write resolves false, logged once a minute). */
+function pgWrite(label, fn) {
+  return writer.write(label, fn);
+}
+/** One change to an owed debt (OWED_CHANGES), dead-lettered while it is queued; resolves true when it changed the row. */
+function owedChange(label, op, params) {
+  return writer.write(label, async () => {
+    const r = await stateQuery(OWED_CHANGES[op](), params);
+    return applyOrRefresh(r, "evidence = $1", [params[0]]);
+  }, { kind: "refund-change", payload: { op, params } });
 }
 /** A refusal before any write: the same `false`, in the mode's shape. */
 const refuse = () => (USE_PG ? Promise.resolve(false) : false);
@@ -377,7 +417,6 @@ async function applyOrRefresh(r, where, params) {
   await refreshWhere(where, params).catch(() => {});
   return false;
 }
-const NOTE_CASE = (p) => `CASE WHEN note IS NULL OR note = '' THEN ${p}::text ELSE note || '; ' || ${p}::text END`;
 
 /** Resolves once the first load (DDL, the one-time file import, the full pull) is done; immediately in file mode. */
 export function refundLedgerReady() { return readyP().catch(() => {}); }
@@ -435,14 +474,13 @@ export function recordRefundOwed({ slug, network, payer, priceUsd, tx, httpStatu
       note: typeof note === "string" && note.trim() ? note.trim().slice(0, 200) : null,
     });
     if (USE_PG) {
-      return pgWrite("record", async () => {
+      // On local disk BEFORE it is queued, removed once it lands: a debt that
+      // is refused, times out, or whose process is killed first is replayed
+      // insert-if-absent by evidence, so it is never dropped.
+      return writer.write("record", async () => {
         const r = await stateQuery(INSERT_OWED_SQL(), owedParams(row));
         return applyOrRefresh(r, "evidence = $1", [row.evidence]);
-      }, () => {
-        // Not landed (or landed with the reply lost): kept on local disk and
-        // replayed insert-if-absent by evidence, so the debt is never dropped.
-        if (!deadLetter.add("refund", row)) console.error(`[refund-ledger] a debt could not be written to Postgres or the local dead-letter: evidence ${row.evidence}`);
-      });
+      }, { kind: "refund", payload: row });
     }
     const info = insertOwed.run(row);
     return info.changes > 0;
@@ -566,15 +604,7 @@ export function refundByEvidence(evidence) {
 export function voidOwedOnClaim(evidence, note) {
   if (typeof evidence !== "string" || !evidence.trim() || !note || typeof note !== "string" || !note.trim()) return refuse();
   if (USE_PG) {
-    const ev = evidence.trim();
-    return pgWrite("void-on-claim", async () => {
-      const r = await stateQuery(
-        `UPDATE ${T("refunds")} SET status = 'void', note = ${NOTE_CASE("$2")}, resolved_at = $3, updated_at = ${PG_NOW_MS}
-         WHERE evidence = $1 AND status = 'owed' RETURNING *`,
-        [ev, note.trim(), Date.now()],
-      );
-      return applyOrRefresh(r, "evidence = $1", [ev]);
-    });
+    return owedChange("void-on-claim", "void", [evidence.trim(), noNul(note.trim()), Date.now()]);
   }
   try { return voidOwedByEvidence.run({ evidence: evidence.trim(), note: note.trim(), resolvedAt: Date.now() }).changes > 0; } catch { return false; }
 }
@@ -585,15 +615,9 @@ export function voidOwedOnClaim(evidence, note) {
  *  Promise of it. */
 export function renoteOwedRefund(evidence, from, to) {
   if (USE_PG) {
-    to = noNul(to);
     const ev = String(evidence || "").trim();
-    return pgWrite("renote", async () => {
-      const r = await stateQuery(
-        `UPDATE ${T("refunds")} SET note = $3, updated_at = ${PG_NOW_MS} WHERE evidence = $1 AND status = 'owed' AND note = $2 RETURNING *`,
-        [ev, from, to],
-      );
-      return applyOrRefresh(r, "evidence = $1", [ev]);
-    });
+    if (!ev) return refuse();
+    return owedChange("renote", "renote", [ev, from, noNul(to)]);
   }
   try { return renoteOwed.run({ evidence: String(evidence || "").trim(), from, to }).changes > 0; } catch { return false; }
 }
@@ -608,14 +632,7 @@ export function promoteOwedToHangup(evidence, { from, hangupReason, append } = {
   const reason = hangupReason ? String(hangupReason).slice(0, 40) : null;
   const add = String(append).slice(0, 120);
   if (USE_PG) {
-    return pgWrite("promote-hangup", async () => {
-      const r = await stateQuery(
-        `UPDATE ${T("refunds")} SET http_status = 499, hangup_reason = $3, note = ${NOTE_CASE("$4")}, updated_at = ${PG_NOW_MS}
-         WHERE evidence = $1 AND status = 'owed' AND note = $2 RETURNING *`,
-        [ev, from, reason, add],
-      );
-      return applyOrRefresh(r, "evidence = $1", [ev]);
-    });
+    return owedChange("promote-hangup", "promote", [ev, from, noNul(reason), noNul(add)]);
   }
   try {
     return promoteHangup.run({ evidence: ev, from, append: add, hangupReason: reason }).changes > 0;
@@ -632,14 +649,7 @@ export function restateOwedAsHandlerFailure(evidence, { from, httpStatus, append
   const ev = evidence.trim();
   const add = String(append).slice(0, 120);
   if (USE_PG) {
-    return pgWrite("restate-failure", async () => {
-      const r = await stateQuery(
-        `UPDATE ${T("refunds")} SET http_status = $3, note = ${NOTE_CASE("$4")}, updated_at = ${PG_NOW_MS}
-         WHERE evidence = $1 AND status = 'owed' AND note = $2 RETURNING *`,
-        [ev, from, st, add],
-      );
-      return applyOrRefresh(r, "evidence = $1", [ev]);
-    });
+    return owedChange("restate-failure", "restate", [ev, from, st, noNul(add)]);
   }
   try {
     return restateHandlerFailure.run({ evidence: ev, from, append: add, httpStatus: st }).changes > 0;

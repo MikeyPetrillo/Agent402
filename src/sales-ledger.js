@@ -41,11 +41,12 @@
 import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { normalizePayerAddress } from "./payer.js";
 import { PAYING_RAILS_SQL, isPaidRail } from "./paid-rails.js";
 import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
-import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError } from "./ledger-mirror.js";
+import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError, createLedgerWriter } from "./ledger-mirror.js";
 import { retryingLoad } from "./store-retry.js";
 
 const HAS_DATA_DIR = existsSync("/data");
@@ -166,7 +167,15 @@ async function sweepPg() {
 // ---- the state database -------------------------------------------------------
 const T = (t) => `${stateDbSchema()}.${t}`;
 const IMPORT_NAME = basename(DB_PATH);
-const SALE_COLS = ["id", "ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256", "attest_uid", "attest_tx"];
+// sale_uid (database mode): an id each sale gets when it is recorded, so the
+// live write, the dead-letter replay and the file reconcile all name the SAME
+// sale, and two distinct sales in one millisecond never collapse into one.
+// NULL on rows recorded before it existed and on rows a file-only build wrote;
+// those are matched by the whole row (ts, slug, rail, payer, tx). Added to the
+// in-memory mirror and the write-through file only in database mode, so file
+// mode's file is untouched.
+if (USE_PG) for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN sale_uid TEXT"); } catch { /* exists */ } }
+const SALE_COLS = ["id", "ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256", "attest_uid", "attest_tx", ...(USE_PG ? ["sale_uid"] : [])];
 const FEEDBACK_COLS = ["tx", "sale_id", "slug", "payer", "verdict", "reason", "ts"];
 const PG_DDL = () => `
   CREATE TABLE IF NOT EXISTS ${T("sales")} (
@@ -188,6 +197,8 @@ const PG_DDL = () => `
   );
   CREATE INDEX IF NOT EXISTS sales_tx ON ${T("sales")} (tx);
   CREATE INDEX IF NOT EXISTS sales_updated_at ON ${T("sales")} (updated_at);
+  ALTER TABLE ${T("sales")} ADD COLUMN IF NOT EXISTS sale_uid TEXT;
+  CREATE UNIQUE INDEX IF NOT EXISTS sales_sale_uid ON ${T("sales")} (sale_uid);
   CREATE TABLE IF NOT EXISTS ${T("sale_feedback")} (
     tx          TEXT PRIMARY KEY,
     sale_id     BIGINT NOT NULL,
@@ -211,6 +222,7 @@ const saleRowOf = (r) => cleanRow({
   id: Number(r.id), ts: Number(r.ts), slug: r.slug, price_usd: Number(r.price_usd) || 0, rail: r.rail, network: r.network ?? null,
   payer: r.payer ?? null, tx: r.tx ?? null, internal: Number(r.internal) ? 1 : 0, wire: r.wire ?? null, quote_usd: num(r.quote_usd),
   response_sha256: r.response_sha256 ?? null, attest_uid: r.attest_uid ?? null, attest_tx: r.attest_tx ?? null,
+  ...(USE_PG ? { sale_uid: r.sale_uid ?? null } : {}),
 });
 const feedbackRowOf = (r) => cleanRow({ tx: r.tx, sale_id: Number(r.sale_id), slug: r.slug, payer: r.payer, verdict: r.verdict, reason: r.reason ?? null, ts: Number(r.ts) });
 let watermark = 0; // refresh pulls rows stamped after this (database clock, ms)
@@ -234,17 +246,32 @@ function writeThrough(stmt, row) {
 // insert-if-absent (a sale by ts/slug/rail/payer/tx, never by tx alone; a
 // verdict by tx, never over a newer one); see createDeadLetter.
 const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: `${DB_PATH}.dead-letter.ndjson` }) : null;
+// The queued write path (write-ahead to the dead-letter, fail fast on a hung
+// database); see createLedgerWriter. readyP is hoisted (a function).
+const writer = createLedgerWriter({ enqueue, ready: () => readyP(), deadLetter, warnOnce, label: "sales-ledger" });
 const SALE_INS_COLS = ["ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256"];
 const SALE_INS_TYPES = ["bigint", "text", "double precision", "text", "text", "text", "text", "integer", "text", "double precision", "text"];
-/** INSERT a sale unless the same sale (ts, slug, rail, payer and tx) is already
- *  there. A tx alone is not a sale's identity: the live write keeps every row,
- *  and two sales can name one payment (a subscription invoice, a webhook sent
- *  twice), so a replay must not drop the second. */
-const INSERT_SALE_IF_ABSENT = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")})
+/** A sale's values carry its sale_uid as a twelfth value (an entry queued
+ *  before sale_uid existed has eleven). */
+const uidOf = (vals) => (Array.isArray(vals) && typeof vals[11] === "string" && vals[11] ? vals[11] : null);
+/** INSERT a sale unless the same sale is already there. With a sale_uid that
+ *  is the identity (the live write and the replay of one sale share it, two
+ *  sales in one millisecond never do). Without one (an entry queued before it
+ *  existed), the whole row: ts, slug, rail, payer and tx. A tx alone is never
+ *  a sale's identity: two sales can name one payment (a subscription invoice,
+ *  a webhook sent twice), so a replay must not drop the second. */
+const INSERT_SALE_BY_UID = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")}, sale_uid)
+  VALUES (${SALE_INS_COLS.map((_, i) => `$${i + 1}`).join(", ")}, $12) ON CONFLICT (sale_uid) DO NOTHING RETURNING *`;
+const INSERT_SALE_IF_ABSENT_ROW = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")})
   SELECT ${SALE_INS_COLS.map((_, i) => `$${i + 1}::${SALE_INS_TYPES[i]}`).join(", ")}
   WHERE NOT EXISTS (SELECT 1 FROM ${T("sales")} WHERE tx IS NOT DISTINCT FROM $7::text
     AND ts = $1::bigint AND slug = $2::text AND rail = $4::text AND payer IS NOT DISTINCT FROM $6::text)
   RETURNING *`;
+/** Insert-if-absent for one queued sale; resolves the row when this call inserted it. */
+async function insertSaleIfAbsent(vals) {
+  if (uidOf(vals)) return (await stateQuery(INSERT_SALE_BY_UID(), vals.slice(0, 12))).rows[0] || null;
+  return (await stateQuery(INSERT_SALE_IF_ABSENT_ROW(), vals.slice(0, 11))).rows[0] || null;
+}
 const FEEDBACK_IF_NEWER = () => `INSERT INTO ${T("sale_feedback")} (tx, sale_id, slug, payer, verdict, reason, ts) VALUES ($1, $2, $3, $4, $5, $6, $7)
   ON CONFLICT (tx) DO UPDATE SET verdict = EXCLUDED.verdict, reason = EXCLUDED.reason, ts = EXCLUDED.ts, updated_at = ${PG_NOW_MS}
   WHERE ${T("sale_feedback")}.ts < EXCLUDED.ts RETURNING *`;
@@ -260,13 +287,15 @@ async function replayDeadLetters() {
       let r;
       try {
         if (e.kind === "sale" && Array.isArray(v)) {
-          r = await stateQuery(INSERT_SALE_IF_ABSENT(), v);
-          if (r.rows[0]) { applySale(r.rows[0]); writeThrough(fileSale, saleRowOf(r.rows[0])); landed++; }
+          const row = await insertSaleIfAbsent(v);
+          writer.answered();
+          if (row) { applySale(row); writeThrough(fileSale, saleRowOf(row)); landed++; }
         } else if (e.kind === "feedback" && v?.tx) {
           r = await stateQuery(FEEDBACK_IF_NEWER(), [v.tx, v.saleId, v.slug, v.payer, v.verdict, v.reason, v.ts]);
+          writer.answered();
           if (r.rows[0]) { applyFeedback(r.rows[0]); writeThrough(fileFeedback, feedbackRowOf(r.rows[0])); landed++; }
         }
-      } catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); continue; } throw err; }
+      } catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); continue; } writer.failed(err); throw err; }
       deadLetter.remove(e.id);
     }
   } finally { replaying = false; }
@@ -301,14 +330,17 @@ async function insertAbsentFileSales(sinceTs) {
   const { rows } = sqliteFileRows(DB_PATH, "sales", { where: "ts >= ?", params: [Math.max(0, Math.floor(sinceTs))] });
   if (!rows.length) return 0;
   const file = rows.map(saleRowOf);
-  // A sale's identity is ts/slug/rail/payer/tx, never the tx alone (see INSERT_SALE_IF_ABSENT).
-  const keyOf = (r) => `${Number(r.ts)}|${r.slug}|${r.rail}|${r.payer ?? ""}|${r.tx ?? ""}`;
+  // A sale's identity is its sale_uid when it has one, else ts/slug/rail/payer/tx, never the tx alone (see insertSaleIfAbsent).
+  const rowKeyOf = (r) => `${Number(r.ts)}|${r.slug}|${r.rail}|${r.payer ?? ""}|${r.tx ?? ""}`;
+  const keyOf = (r) => (r.sale_uid ? `uid|${r.sale_uid}` : rowKeyOf(r));
   // A loop, never Math.min(...spread): a spread of every file row overflows the stack past ~110k rows.
   let minTs = Infinity;
   for (const x of file) if (Number(x.ts) < minTs) minTs = Number(x.ts);
   const have = new Set();
-  const r = await stateQuery(`SELECT ts, slug, rail, payer, tx FROM ${T("sales")} WHERE ts >= $1`, [minTs]);
-  for (const x of r.rows) have.add(keyOf(x));
+  const r = await stateQuery(`SELECT ts, slug, rail, payer, tx, sale_uid FROM ${T("sales")} WHERE ts >= $1`, [minTs]);
+  // A table row is known by its uid AND by its whole row, so a file row without
+  // a uid (a file-only build's) is matched as it always was.
+  for (const x of r.rows) { have.add(rowKeyOf(x)); if (x.sale_uid) have.add(`uid|${x.sale_uid}`); }
   const seen = new Set();
   const missing = file.filter((x) => {
     const k = keyOf(x);
@@ -318,7 +350,8 @@ async function insertAbsentFileSales(sinceTs) {
   });
   if (!missing.length) return 0;
   const cols = SALE_COLS.filter((c) => c !== "id");
-  return insertRows(stateQuery, T("sales"), cols, missing, {});
+  // ON CONFLICT: a sale_uid another container's reconcile inserted a moment ago.
+  return insertRows(stateQuery, T("sales"), cols, missing, { conflict: "ON CONFLICT DO NOTHING" });
 }
 /**
  * Every boot while the ledger file exists: sales written to the file since
@@ -383,6 +416,7 @@ async function refresh() {
     if (s.rows.length) applySales(s.rows);
     const f = await stateQuery(`SELECT * FROM ${T("sale_feedback")} WHERE updated_at > $1 ORDER BY updated_at`, [Math.max(0, watermark)]);
     if (f.rows.length) applyFeedbacks(f.rows);
+    writer.answered();
     watermark = Math.max(watermark, now - REFRESH_MARGIN_MS);
     return s.rows.length + f.rows.length;
   } finally { refreshing = false; }
@@ -412,10 +446,7 @@ if (USE_PG) {
 }
 /** One queued Postgres write: lands after every earlier write; never rejects (a failed write resolves `onError`, logged once a minute; `onFail` runs first). */
 function pgWrite(label, fn, onError = false, onFail = null) {
-  return enqueue(async () => {
-    try { await readyP(); return await fn(); }
-    catch (e) { warnOnce(label, e); try { onFail?.(e); } catch { /* best effort */ } return onError; }
-  });
+  return writer.write(label, fn, { onError, onFail });
 }
 /** Resolves once the first load (DDL, the one-time file import, the sweep, the full pull) is done; immediately in file mode. */
 export function salesLedgerReady() { return readyP().catch(() => {}); }
@@ -474,18 +505,17 @@ export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic
       /^[0-9a-f]{64}$/i.test(String(responseSha256 || "")) ? String(responseSha256).toLowerCase() : null,
     ].map(noNul);
     if (USE_PG) {
-      return pgWrite("record-sale", async () => {
-        const r = await stateQuery(
-          `INSERT INTO ${T("sales")} (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`, vals);
-        applySale(r.rows[0]);
-        writeThrough(fileSale, saleRowOf(r.rows[0]));
+      // The sale's own id, and the sale on local disk BEFORE it is queued: a
+      // crash, a kill or a database that hangs through the shutdown flush
+      // leaves it there, and the replay lands it once (by this id).
+      const pgVals = [...vals, randomUUID()];
+      return writer.write("record-sale", async () => {
+        let row = await insertSaleIfAbsent(pgVals);
+        // No row: this sale is already there (an earlier attempt whose reply was lost).
+        if (!row) row = (await stateQuery(`SELECT * FROM ${T("sales")} WHERE sale_uid = $1`, [pgVals[11]])).rows[0];
+        if (row) { applySale(row); writeThrough(fileSale, saleRowOf(row)); }
         return true;
-      }, false, () => {
-        // Not landed (or landed with the reply lost): kept on local disk and
-        // replayed insert-if-absent, so the sale is never dropped.
-        if (!deadLetter.add("sale", vals)) console.error("[sales-ledger] a sale could not be written to Postgres or the local dead-letter");
-      });
+      }, { kind: "sale", payload: pgVals, onError: false });
     }
     insertSale.run(...vals);
   } catch { /* never break serving for accounting */ }
