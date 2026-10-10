@@ -208,20 +208,71 @@ export async function stateDb() {
   const p = getPool();
   if (!p) return null;
   if (!ready) {
-    ready = p.query(DDL(schema())).then(() => p).catch((e) => { ready = null; noteFailure(e); connFault = true; throw e; });
+    ready = setupSchema(p).then(() => p).catch((e) => { ready = null; noteFailure(e); connFault = true; throw e; });
   }
   return ready;
 }
+// The base DDL runs in one transaction under a transaction-scoped advisory
+// lock keyed on the schema, so two containers booting at once never race on
+// the same catalog rows (CREATE ... IF NOT EXISTS is not safe concurrently).
+// The key pair (4020402, hashtext(schema)) is the one every schema change in
+// this database takes.
+export const SCHEMA_LOCK_KEY = 4020402;
+async function setupSchema(p) {
+  const client = await p.connect();
+  let broken = null;
+  const onError = (err) => { broken = broken || err; };
+  client.on("error", onError);
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock($1, hashtext($2))", [SCHEMA_LOCK_KEY, schema()]);
+    await client.query(DDL(schema()));
+    await client.query("COMMIT");
+  } catch (e) {
+    if (!broken) { try { await client.query("ROLLBACK"); } catch (re) { broken = re; } }
+    throw e;
+  } finally {
+    if (broken) client.release(broken); else { client.removeListener("error", onError); client.release(); }
+  }
+}
 
-/** Run one statement against the state database. Throws when no database is configured. */
-export async function stateQuery(text, params = []) {
+// A pooled connection whose socket died while idle (a Postgres restart, a
+// network reset) fails the first statement sent on it, before the server
+// ever sees that statement. Such a failure is retried once on a fresh
+// connection, but only where running the statement twice is harmless: a
+// SELECT, or a caller-marked idempotent statement. Never inside withStateTx,
+// and never after a timeout (the statement may still be running).
+const DEAD_CONN_CODES = new Set(["ECONNRESET", "EPIPE", "ECONNABORTED", "57P01", "57P02", "57P03"]);
+const DEAD_CONN_MSG = /Connection terminated|terminating connection|not queryable|Connection ended|encountered a connection error/i;
+function isDeadConnection(e) {
+  if (!e) return false;
+  const code = String(e.code || "");
+  if (code === "57014" || /timeout/i.test(String(e.message || ""))) return false;
+  return DEAD_CONN_CODES.has(code) || /^08/.test(code) || DEAD_CONN_MSG.test(String(e.message || e));
+}
+const READ_ONLY = /^\s*SELECT\b/i;
+
+/**
+ * Run one statement against the state database. Throws when no database is
+ * configured. `{ idempotent: true }` marks a write that is safe to send twice
+ * (see the retry note above); a SELECT is retried without it.
+ */
+export async function stateQuery(text, params = [], { idempotent = false } = {}) {
   const p = await stateDb();
   if (!p) throw new Error("state database not configured");
+  const values = cleanParams(params);
   try {
-    const r = await p.query(text, cleanParams(params));
+    const r = await p.query(text, values);
     noteSuccess(); // the status word reads "on" again after a good query
     return r;
   } catch (e) {
+    if (isDeadConnection(e) && (idempotent || (typeof text === "string" && READ_ONLY.test(text)))) {
+      try {
+        const r = await p.query(text, values);
+        noteSuccess();
+        return r;
+      } catch (e2) { noteFailure(e2); throw e2; }
+    }
     noteFailure(e); // and "degraded" after a connection-class failure
     throw e;
   }
@@ -288,6 +339,7 @@ export const records = {
       `INSERT INTO ${T("records")} (collection, id, body) VALUES ($1, $2, $3::jsonb)
        ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()`,
       [checkName(collection, "collection"), checkName(id, "id"), JSON.stringify(body ?? null)],
+      { idempotent: true },
     );
     return true;
   },
@@ -407,6 +459,7 @@ export const imports = {
     await stateQuery(
       `INSERT INTO ${T("imports")} (name, source, bytes) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING`,
       [checkName(name), String(source || "file"), Math.max(0, Number(bytes) || 0)],
+      { idempotent: true },
     );
     return true;
   },
@@ -439,11 +492,12 @@ export const leases = {
     const r = await stateQuery(
       `UPDATE ${T("leases")} SET expires_at = now() + ($3::bigint * interval '1 millisecond') WHERE name = $1 AND owner = $2`,
       [checkName(name), String(owner), Math.max(1000, Number(ttlMs) || 60_000)],
+      { idempotent: true },
     );
     return r.rowCount > 0;
   },
   async release(name, { owner = leaseOwnerDefault } = {}) {
-    const r = await stateQuery(`DELETE FROM ${T("leases")} WHERE name = $1 AND owner = $2`, [checkName(name), String(owner)]);
+    const r = await stateQuery(`DELETE FROM ${T("leases")} WHERE name = $1 AND owner = $2`, [checkName(name), String(owner)], { idempotent: true });
     return r.rowCount > 0;
   },
   async holder(name) {
@@ -643,11 +697,21 @@ export function trackStoreReady(p, name) {
 }
 export function markStoreLoaded(name) { storeStates.set(String(name), "loaded"); }
 export function markStoreFailed(name) { storeStates.set(String(name), "failed"); }
+// Another registry of unloaded stores can be consulted too (a function
+// returning a list of labels); stateDbStatus and stateStoresLoaded read both.
+let unloadedProbe = null;
+export function setUnloadedStoresProbe(fn) { unloadedProbe = typeof fn === "function" ? fn : null; }
+/** Labels of the stores whose first load has not succeeded (this registry plus the probe). */
+export function unloadedStateStores() {
+  const out = [];
+  for (const [n, s] of storeStates) if (s !== "loaded") out.push(n);
+  if (unloadedProbe) { try { for (const n of unloadedProbe() || []) out.push(String(n)); } catch { /* a probe never breaks the status */ } }
+  return out;
+}
 /** Whether every registered store has loaded. Always true without a database. */
 export function stateStoresLoaded() {
   if (!stateDbEnabled()) return true;
-  for (const s of storeStates.values()) if (s !== "loaded") return false;
-  return true;
+  return unloadedStateStores().length === 0;
 }
 /**
  * Resolves when every registered store has settled its first load (bounded

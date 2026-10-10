@@ -142,7 +142,7 @@ try {
     ok(t === "tu", "a plain text parameter with NUL is cleaned");
     const tx = await withStateTx(async (c) => {
       await c.query(`INSERT INTO ${sdb.stateDbSchema()}.records (collection, id, body) VALUES ($1, $2, $3::jsonb)`, ["nul-c", "r\u00002", JSON.stringify({ w: "z\u0000" })]);
-      return (await c.query({ text: `SELECT id, body FROM ${sdb.stateDbSchema()}.records WHERE collection = $1 AND id = $2`, values: ["nul-c", "r2"] })).rows[0];
+      return (await c.query({ text: `SELECT id, body FROM ${sdb.stateDbSchema()}.records WHERE collection = $1 AND id = $2`, values: ["nul-c", "r\u00002"] })).rows[0];
     });
     ok(tx && tx.id === "r2" && tx.body.w === "z", "a transaction's parameters (positional and config form) are cleaned too");
   }
@@ -193,6 +193,12 @@ try {
     ok((await leases.holder("FN"))?.owner === "thief", "a lost run does not release the new holder's lease");
     await leases.release("FN", { owner: "thief" });
     ok(sdb.leaseStillHeld("never-taken") === false, "a lease this process does not hold reads not held");
+    // No renew has landed for a full ttl (here the loop is blocked): not held, before any renew reports.
+    const stalled = await withLease("FN2", { ttlMs: 1000, log: () => {} }, async (ctx) => {
+      const until = Date.now() + 1100; while (Date.now() < until) { /* a stall: no timer runs */ }
+      return { still: ctx.stillHeld(), named: sdb.leaseStillHeld("FN2") };
+    });
+    ok(stalled.result.still === false && stalled.result.named === false && stalled.lost === true, `a run that stalled past its ttl reads not held and is flagged lost (${JSON.stringify(stalled)})`);
   }
 
   // ---- M18: log reconcile restores a lost middle line, never duplicates -----
@@ -217,10 +223,23 @@ try {
       writeFileSync(f3, `{"a":1}\n{"b":2}\n{"c":3}\n`);
       const both = await Promise.all([reconcileLogFile("rec3", f3, { log: () => {} }), reconcileLogFile("rec3", f3, { log: () => {} })]);
       ok(both[0] + both[1] === 2 && (await logLines.count("rec3")) === 3, `two reconciles at once add each missing line once (added ${both.join("+")}, stream ${await logLines.count("rec3")})`);
+      // A line another container restored between this one's read and its
+      // insert (same stable key) is skipped, not an error.
+      {
+        const { createHash } = await import("node:crypto");
+        const keyOf = (b) => createHash("sha256").update(JSON.stringify(b)).digest("hex").slice(0, 32);
+        await logLines.append("rec5", { a: 1 });
+        await stateQuery(`INSERT INTO ${sdb.stateDbSchema()}.log_lines (stream, body, line_key) VALUES ('rec5', '{"other":"row"}'::jsonb, $1)`, [`${keyOf({ b: 2 })}:1`]);
+        const f5 = join(dir, "rec5.ndjson");
+        writeFileSync(f5, `{"a":1}\n{"b":2}\n{"c":3}\n`);
+        let threw = null, added5 = null;
+        try { added5 = await reconcileLogFile("rec5", f5, { log: () => {} }); } catch (e) { threw = e; }
+        ok(!threw && added5 === 1 && (await logLines.count("rec5")) === 3, `a line whose key another container already wrote is skipped (added ${added5}${threw ? `, threw ${threw.message}` : ""})`);
+      }
       // Key order and a NUL in the file line do not make a stored line look missing.
-      await logLines.append("rec4", { y: 2, x: "n\u0000ul" });
+      await logLines.append("rec4", { bb: 2, a: "n\u0000ul" }); // jsonb hands keys back shortest first: a, bb
       const f4 = join(dir, "rec4.ndjson");
-      writeFileSync(f4, `{"x":"n\\u0000ul","y":2}\n{"z":1}\n`);
+      writeFileSync(f4, `{"bb":2,"a":"n\\u0000ul"}\n{"z":1}\n`);
       ok((await reconcileLogFile("rec4", f4, { log: () => {} })) === 1 && (await logLines.count("rec4")) === 2, "a stored line matches its file line regardless of key order or a cleaned NUL");
       // Two identical lines in the file and one in the stream: one is added.
       await logLines.append("rec2", { same: 1 });
@@ -241,6 +260,11 @@ try {
     try { await sdb.withStateTx(async (c) => c.query(`INSERT INTO ${sdb.stateDbSchema()}.uniq_t (k) VALUES ('a')`)); } catch (e) { txDup = e; }
     ok(txDup?.code === "23505" && stateDbStatus() === "on", "the same in a transaction leaves the word on");
     ok(sdb.lastStateDbError() && /duplicate key/.test(sdb.lastStateDbError()), "the last error is still recorded for the operator");
+    let slow = null;
+    try { await sdb.withStateTx(async (c) => c.query("SELECT pg_sleep(2)"), { timeoutMs: 300 }); } catch (e) { slow = e; }
+    ok(slow?.code === "57014" && stateDbStatus() === "degraded", `a transaction past its statement limit fails and reads degraded (${slow?.code}, ${stateDbStatus()})`);
+    await stateQuery("SELECT 1");
+    ok(stateDbStatus() === "on", "the next good statement reads on");
   }
 
   // ---- H4 + e2: a database that hangs is detected and leases do not hang ----
@@ -264,7 +288,7 @@ try {
     process.env.STATE_DATABASE_URL = realUrl.replace(`${target.hostname}:${target.port}`, `127.0.0.1:${relay.address().port}`);
     process.env.STATE_DB_QUERY_TIMEOUT_MS = "1500";
     process.env.STATE_DB_CONNECT_TIMEOUT_MS = "1500";
-    process.env.STATE_DB_LEASE_ACQUIRE_MS = "2000";
+    process.env.STATE_DB_LEASE_ACQUIRE_MS = "600";
     try {
       await documents.put("hang-pre", { a: 1 });
       ok(stateDbStatus() === "on", "through the relay the word reads on");
@@ -278,7 +302,7 @@ try {
       const t1 = Date.now();
       let ran = 0;
       const lr = await withLease("HANG", { ttlMs: 60_000, log: () => {} }, async () => { ran++; });
-      ok(lr.ran === false && lr.reason === "db" && ran === 0 && Date.now() - t1 < 6000, `a lease acquire against a hung database gives up in bounded time (${Date.now() - t1} ms, ${JSON.stringify(lr)})`);
+      ok(lr.ran === false && lr.reason === "db" && ran === 0 && Date.now() - t1 < 1300, `a lease acquire against a hung database gives up in bounded time (${Date.now() - t1} ms, ${JSON.stringify(lr)})`);
       const t2 = Date.now();
       let txErr = null;
       try { await sdb.withStateTx(async (c) => c.query("SELECT 1")); } catch (e) { txErr = e; }
@@ -307,8 +331,10 @@ try {
     const n = await other.releaseHeldLeases({ timeoutMs: 3000 });
     ok(n === 1 && (await leases.holder("SD")) === null, `releaseHeldLeases frees the held lease at once (${n})`);
     ok(sig?.aborted === true && other.leaseStillHeld("SD") === false, "the running tick sees its lease is gone");
+    await leases.acquire("SD2", { owner: "someone-else", ttlMs: 60_000 });
     const late = await other.withLease("SD2", { ttlMs: 1000, log: () => {} }, async () => "ran");
-    ok(late.ran === false && late.reason === "shutdown", "after shutdown no new leased tick starts");
+    ok(late.ran === false && late.reason === "shutdown", `after shutdown no new leased tick starts, nor tries the row (${late.reason})`);
+    await leases.release("SD2", { owner: "someone-else" });
     gateOpen();
     await running;
     await other.closeStateDb();
@@ -329,6 +355,52 @@ try {
     ok(fresh.stateDbStatus() === "on" && fresh.stateStoresLoaded() === true, "once the store reports its retried load, the word reads on");
     fresh.markStoreFailed("good-store");
     ok(fresh.stateDbStatus() === "degraded", "a store can report a load that failed after resolving");
+    await fresh.closeStateDb();
+  }
+
+  // ---- a pooled connection that died while idle ------------------------------
+  {
+    // Warm several pooled clients, then kill their backends while they sit idle.
+    await Promise.all(Array.from({ length: 4 }, () => stateQuery("SELECT pg_sleep(0.05)")));
+    await stateQuery(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND state = 'idle' AND application_name = ''`);
+    const reads = await Promise.allSettled(Array.from({ length: 4 }, () => stateQuery("SELECT 1 AS one")));
+    ok(reads.every((r) => r.status === "fulfilled"), `reads right after idle connections died succeed on a fresh connection (${reads.map((r) => r.status === "fulfilled" ? "ok" : r.reason?.message).join("; ")})`);
+    await Promise.all(Array.from({ length: 4 }, () => stateQuery("SELECT pg_sleep(0.05)")));
+    await stateQuery(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND state = 'idle' AND application_name = ''`);
+    const puts = await Promise.allSettled(Array.from({ length: 4 }, (_, i) => records.put("retry-c", `r${i}`, { i })));
+    ok(puts.every((r) => r.status === "fulfilled") && (await records.count("retry-c")) === 4, "an idempotent write right after idle connections died succeeds");
+    ok(stateDbStatus() === "on", `and the word reads on (${stateDbStatus()})`);
+  }
+
+  // ---- the schema setup takes the shared advisory lock ------------------------
+  {
+    const lockClient = new (await import("pg")).default.Client({ connectionString: process.env.STATE_DATABASE_URL });
+    await lockClient.connect();
+    await lockClient.query("BEGIN");
+    await lockClient.query("SELECT pg_advisory_xact_lock(4020402, hashtext($1))", [sdb.stateDbSchema()]);
+    const fresh = await import("../src/state-db.js?lock-boot");
+    let done = false;
+    const setup = fresh.stateDb().then(() => { done = true; });
+    await sleep(500);
+    ok(done === false, "schema setup waits while another holder has the schema lock");
+    await lockClient.query("COMMIT");
+    await setup;
+    ok(done === true, "and completes once the lock is released");
+    await lockClient.end();
+    await fresh.closeStateDb();
+  }
+
+  // ---- an outside registry of unloaded stores feeds the status word ------------
+  {
+    const fresh = await import("../src/state-db.js?probe-boot");
+    await fresh.stateQuery("SELECT 1");
+    await fresh.stateStoresReady({ timeoutMs: 100 });
+    ok(fresh.stateDbStatus() === "on", "no unloaded store: on");
+    let pending = ["sales-ledger"];
+    fresh.setUnloadedStoresProbe(() => pending);
+    ok(fresh.stateDbStatus() === "degraded" && fresh.unloadedStateStores().join() === "sales-ledger", "a store the probe names reads degraded");
+    pending = [];
+    ok(fresh.stateDbStatus() === "on", "and on once it loads");
     await fresh.closeStateDb();
   }
 
