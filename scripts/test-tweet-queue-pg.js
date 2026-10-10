@@ -147,6 +147,26 @@ try {
     await A.q.tick();
     ok(A.sent.length === 0, "and A never sends it");
   }
+  // ---- lease fencing: a tick whose lease was lost posts nothing more -------------
+  {
+    const sp = join(DIR, "fence", "state.json");
+    const its = [{ id: "lf1", when: when(T0), text: text("lf1") }, { id: "lf2", when: when(T0), text: text("lf2") }];
+    await sdb.documents.put(STATE_DOC_NAME, { v: 1, records: [], slots: [] });
+    const realNow = Date.now;
+    let armed = true;
+    const F = mk(its, { storePath: sp, clock: T0 + MIN, post: async (tx) => {
+      F.sent.push(tx);
+      if (armed) { Date.now = () => realNow() + 2 * H; return { kind: "rejected", status: 403 }; } // the tick goes on to the next item
+      return { kind: "posted", tweetId: "1" };
+    } });
+    await F.q.ready();
+    try { await F.q.tick(); } finally { Date.now = realNow; }
+    ok(F.sent.length === 1, `after the tick lease is lost no further post is sent (${F.sent.length})`);
+    ok((await recOf("lf2")) === null, "the claim taken for the next item is handed back (no SENDING record is left)");
+    armed = false;
+    await F.q.tick();
+    ok(F.sent.length === 2 && (await recOf("lf2"))?.state === "posted", "the next tick under a held lease posts it");
+  }
 } finally {
   await sdb.__dropStateSchema();
   await sdb.closeStateDb();
