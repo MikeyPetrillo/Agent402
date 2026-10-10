@@ -63,8 +63,12 @@ try {
   const debt = await rl.recordRefundOwed({ slug: "hash", network: "eip155:8453", payer: PAYER, priceUsd: 0.002, tx: "0xdl-debt", httpStatus: 502, wire: "x402" });
   const sale = await sl.recordSale({ slug: "hash", priceUsd: 0.002, rail: "usdc", network: "base", payer: PAYER, tx: "0xdl-sale", wire: "x402" });
   const powSale = await sl.recordSale({ slug: "uuid", priceUsd: 0, rail: "pow" }); // no tx: matched by ts/slug/rail/payer
-  ok(debt === false && sale === false && powSale === false, "the writes report not landed while the database is unreachable");
-  ok(rl.refundDeadLetterCount() === 1 && sl.salesDeadLetterCount() === 2, `the debt and the sales wait in the local dead-letter (${rl.refundDeadLetterCount()}, ${sl.salesDeadLetterCount()})`);
+  // Two sales naming one payment (a subscription invoice and its report): a tx
+  // is not a sale's identity, so the replay must land both.
+  const shared1 = await sl.recordSale({ slug: "monitor", priceUsd: 5, rail: "card", network: "stripe", payer: null, tx: "in_dl-shared", wire: "stripe-subscription" });
+  const shared2 = await sl.recordSale({ slug: "monitor-report", priceUsd: 0, rail: "card", network: "stripe", payer: null, tx: "in_dl-shared", wire: "stripe-subscription" });
+  ok(debt === false && sale === false && powSale === false && shared1 === false && shared2 === false, "the writes report not landed while the database is unreachable");
+  ok(rl.refundDeadLetterCount() === 1 && sl.salesDeadLetterCount() === 4, `the debt and the sales wait in the local dead-letter (${rl.refundDeadLetterCount()}, ${sl.salesDeadLetterCount()})`);
 
   // ---- (2) the database is back: a refresh lands each exactly once ----------------
   healRelay();
@@ -72,6 +76,7 @@ try {
   await sl.salesLedgerRefresh();
   ok(await count(`SELECT count(*) AS n FROM ${S}.refunds WHERE evidence = '0xdl-debt'`) === 1, "the debt is in Postgres after the outage");
   ok(await count(`SELECT count(*) AS n FROM ${S}.sales WHERE tx = '0xdl-sale'`) === 1 && await count(`SELECT count(*) AS n FROM ${S}.sales WHERE rail = 'pow' AND slug = 'uuid'`) === 1, "both sales are in Postgres after the outage");
+  ok(await count(`SELECT count(*) AS n FROM ${S}.sales WHERE tx = 'in_dl-shared'`) === 2, "two sales sharing one tx both land: a tx alone is not a sale's identity");
   ok(rl.refundDeadLetterCount() === 0 && sl.salesDeadLetterCount() === 0, "the dead-letter is empty once they landed");
   ok(rl.refundByEvidence("0xdl-debt")?.status === "owed" && sl.saleByTx("0xdl-sale")?.slug === "hash", "the mirror reads the landed rows");
   await rl.refundLedgerRefresh();
@@ -85,7 +90,10 @@ try {
   healRelay();
   // Another writer lands the same rows first (as if the original commit had gone through).
   await sdb.stateQuery(`INSERT INTO ${S}.refunds (evidence, slug, price_usd, created_at) VALUES ('0xdl-debt2', 'hash', 0.002, $1)`, [Date.now()]);
-  await sdb.stateQuery(`INSERT INTO ${S}.sales (ts, slug, price_usd, rail, tx, internal) VALUES ($1, 'hash', 0.002, 'usdc', '0xdl-sale2', 0)`, [Date.now()]);
+  // The landed sale is the queued one, value for value (a lost reply leaves exactly that row).
+  const queued = sl._salesDeadLetterEntries().find((e) => e.kind === "sale" && e.payload[6] === "0xdl-sale2")?.payload;
+  await sdb.stateQuery(`INSERT INTO ${S}.sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, queued);
   // ---- (4) and a fresh boot reading the same file is the one that replays --------
   const childSrc = `
     const rl = await import(${JSON.stringify(join(ROOT, "src/refund-ledger.js"))});

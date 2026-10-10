@@ -231,16 +231,19 @@ function writeThrough(stmt, row) {
 
 // A sale or verdict Postgres refused or never answered waits here (the ledger
 // file while it is open, else an NDJSON beside it) and is replayed
-// insert-if-absent (a sale by its tx, or by ts/slug/rail/payer without one; a
+// insert-if-absent (a sale by ts/slug/rail/payer/tx, never by tx alone; a
 // verdict by tx, never over a newer one); see createDeadLetter.
 const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: `${DB_PATH}.dead-letter.ndjson` }) : null;
 const SALE_INS_COLS = ["ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256"];
 const SALE_INS_TYPES = ["bigint", "text", "double precision", "text", "text", "text", "text", "integer", "text", "double precision", "text"];
-/** INSERT a sale unless one with the same tx (or, without a tx, the same ts/slug/rail/payer) is already there. */
+/** INSERT a sale unless the same sale (ts, slug, rail, payer and tx) is already
+ *  there. A tx alone is not a sale's identity: the live write keeps every row,
+ *  and two sales can name one payment (a subscription invoice, a webhook sent
+ *  twice), so a replay must not drop the second. */
 const INSERT_SALE_IF_ABSENT = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")})
   SELECT ${SALE_INS_COLS.map((_, i) => `$${i + 1}::${SALE_INS_TYPES[i]}`).join(", ")}
-  WHERE NOT EXISTS (SELECT 1 FROM ${T("sales")} WHERE CASE WHEN $7::text IS NOT NULL THEN tx = $7::text
-    ELSE tx IS NULL AND ts = $1::bigint AND slug = $2::text AND rail = $4::text AND payer IS NOT DISTINCT FROM $6::text END)
+  WHERE NOT EXISTS (SELECT 1 FROM ${T("sales")} WHERE tx IS NOT DISTINCT FROM $7::text
+    AND ts = $1::bigint AND slug = $2::text AND rail = $4::text AND payer IS NOT DISTINCT FROM $6::text)
   RETURNING *`;
 const FEEDBACK_IF_NEWER = () => `INSERT INTO ${T("sale_feedback")} (tx, sale_id, slug, payer, verdict, reason, ts) VALUES ($1, $2, $3, $4, $5, $6, $7)
   ON CONFLICT (tx) DO UPDATE SET verdict = EXCLUDED.verdict, reason = EXCLUDED.reason, ts = EXCLUDED.ts, updated_at = ${PG_NOW_MS}
@@ -290,7 +293,7 @@ const FEEDBACK_UPSERT = () => `ON CONFLICT (tx) DO UPDATE SET ${FEEDBACK_COLS.fi
 const RECONCILE_LOOKBACK_MS = 10 * 60_000;
 /**
  * The file's sales (from `sinceTs`) the table lacks, inserted with fresh ids:
- * matched by tx, or by ts/slug/rail/payer for a sale without one, so a row
+ * matched by ts/slug/rail/payer/tx, so a row
  * whose file id is taken in the table is still inserted and a row already
  * there never twice. Returns how many were inserted.
  */
@@ -298,26 +301,18 @@ async function insertAbsentFileSales(sinceTs) {
   const { rows } = sqliteFileRows(DB_PATH, "sales", { where: "ts >= ?", params: [Math.max(0, Math.floor(sinceTs))] });
   if (!rows.length) return 0;
   const file = rows.map(saleRowOf);
-  const withTx = file.filter((r) => r.tx);
-  const haveTx = new Set();
-  for (let i = 0; i < withTx.length; i += 5000) {
-    const r = await stateQuery(`SELECT tx FROM ${T("sales")} WHERE tx = ANY($1::text[])`, [withTx.slice(i, i + 5000).map((x) => x.tx)]);
-    for (const x of r.rows) haveTx.add(x.tx);
-  }
-  const keyOf = (r) => `${Number(r.ts)}|${r.slug}|${r.rail}|${r.payer ?? ""}`;
-  const noTx = file.filter((r) => !r.tx);
-  const haveKey = new Set();
-  if (noTx.length) {
-    const minTs = Math.min(...noTx.map((r) => Number(r.ts)));
-    const r = await stateQuery(`SELECT ts, slug, rail, payer FROM ${T("sales")} WHERE tx IS NULL AND ts >= $1`, [minTs]);
-    for (const x of r.rows) haveKey.add(keyOf(x));
-  }
+  // A sale's identity is ts/slug/rail/payer/tx, never the tx alone (see INSERT_SALE_IF_ABSENT).
+  const keyOf = (r) => `${Number(r.ts)}|${r.slug}|${r.rail}|${r.payer ?? ""}|${r.tx ?? ""}`;
+  const minTs = Math.min(...file.map((r) => Number(r.ts)));
+  const have = new Set();
+  const r = await stateQuery(`SELECT ts, slug, rail, payer, tx FROM ${T("sales")} WHERE ts >= $1`, [minTs]);
+  for (const x of r.rows) have.add(keyOf(x));
   const seen = new Set();
-  const missing = file.filter((r) => {
-    const k = r.tx ? `tx:${r.tx}` : `k:${keyOf(r)}`;
+  const missing = file.filter((x) => {
+    const k = keyOf(x);
     if (seen.has(k)) return false; // the file's own duplicates are inserted once per key, like the replay
     seen.add(k);
-    return r.tx ? !haveTx.has(r.tx) : !haveKey.has(keyOf(r));
+    return !have.has(k);
   });
   if (!missing.length) return 0;
   const cols = SALE_COLS.filter((c) => c !== "id");
@@ -343,8 +338,8 @@ async function reconcileFile() {
  * Roll-forward after a rollback: the file-only build writes the file alone,
  * so when the file was written more than NEWER_FILE_GRACE_MS after the
  * tables' newest row (write-through lands within milliseconds) it carries
- * sales and verdicts the tables lack. Sales are inserted where absent (by tx,
- * or by ts/slug/rail/payer without one, with fresh ids); a verdict replaces
+ * sales and verdicts the tables lack. Sales are inserted where absent (by
+ * ts/slug/rail/payer/tx, with fresh ids); a verdict replaces
  * the table's only when it is newer (its own ts). Returns the counts or null.
  */
 async function rollForwardIfFileNewer() {
@@ -357,7 +352,7 @@ async function rollForwardIfFileNewer() {
   const markedAt = newest ? 0 : (await imports.done(IMPORT_NAME))?.importedAt?.getTime?.() || 0;
   if (!fileNewerThan(mtime, newest || markedAt)) return null;
   const fb = sqliteFileRows(DB_PATH, "sale_feedback");
-  // Every sale the file holds that the table lacks (by tx or key; fresh ids).
+  // Every sale the file holds that the table lacks (by its full key; fresh ids).
   const n = await insertAbsentFileSales(0);
   let m = 0;
   if (fb.rows.length) m = await insertRows(stateQuery, T("sale_feedback"), FEEDBACK_COLS, fb.rows.map(feedbackRowOf), { conflict: FEEDBACK_UPSERT() });
@@ -433,6 +428,8 @@ export async function salesLedgerRefresh() {
 }
 /** Rows waiting in the local dead-letter (database mode; 0 in file mode). */
 export function salesDeadLetterCount() { return deadLetter ? deadLetter.size() : 0; }
+/** Test hook: the queued entries, oldest first. */
+export function _salesDeadLetterEntries() { return deadLetter ? deadLetter.list() : []; }
 
 const insertSale = db.prepare(
   "INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"

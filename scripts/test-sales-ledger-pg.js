@@ -163,6 +163,9 @@ try {
     f.prepare("DELETE FROM sales WHERE id = ?").run(taken);
     f.prepare("INSERT INTO sales (id, ts, slug, price_usd, rail, network, payer, tx, internal, wire) VALUES (?, ?, 'cutover', 0.02, 'usdc', 'base', ?, '0xcutover', 0, 'x402')").run(taken, Date.now(), BUYER2);
     f.prepare("INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal) VALUES (?, 'pow-cutover', 0, 'pow', NULL, NULL, NULL, 0)").run(Date.now());
+    // Two sales naming one payment: both must land (a tx is not a sale's identity).
+    f.prepare("INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire) VALUES (?, 'monitor', 5, 'card', 'stripe', NULL, 'in_cutover-shared', 0, 'stripe-subscription')").run(Date.now());
+    f.prepare("INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire) VALUES (?, 'monitor-report', 0, 'card', 'stripe', NULL, 'in_cutover-shared', 0, 'stripe-subscription')").run(Date.now());
     f.close();
     const past = new Date(Date.now() - 30 * 60_000);
     utimesSync(FILE, past, past);
@@ -170,6 +173,7 @@ try {
     ok((await q(`SELECT count(*)::int AS n FROM ${S}.sales WHERE tx = '0xcutover'`))[0].n === 1 && (await q(`SELECT count(*)::int AS n FROM ${S}.sales WHERE slug = 'pow-cutover'`))[0].n === 1, "M5: sales the old build wrote to the file land at the next boot, under a taken id and an old mtime, with or without a tx");
     bootWithFile();
     ok((await q(`SELECT count(*)::int AS n FROM ${S}.sales WHERE tx = '0xcutover'`))[0].n === 1 && (await q(`SELECT count(*)::int AS n FROM ${S}.sales WHERE slug = 'pow-cutover'`))[0].n === 1, "M5: and a second boot inserts them no second time");
+    ok((await q(`SELECT count(*)::int AS n FROM ${S}.sales WHERE tx = 'in_cutover-shared'`))[0].n === 2, "M5: two file sales sharing one tx both land, once each");
     ok((await q(`SELECT slug FROM ${S}.sales WHERE id = $1`, [taken]))[0]?.slug === "after", "M5: the table's own row under that id is untouched");
   }
 
