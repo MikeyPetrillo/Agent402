@@ -317,10 +317,12 @@ export async function warmTick() {
   // The boot read (no value yet) runs once without demand; after that, no
   // demand means no call.
   if (idle && (rangeState.end || warm.primed)) return { skipped: "idle" };
-  warm.primed = true;
   if (!spendBackground()) return { skipped: "ceiling" };
   let end;
   try { end = await readRange(); } catch (e) { return { skipped: "range-failed", error: String(e?.message || e).slice(0, 120) }; }
+  // Primed only once the boot read landed, so a failed boot read is retried
+  // (recordedTick) even with no demand yet.
+  warm.primed = true;
   // The quote shape is priced once per session, including the boot read, so
   // no quote goes unpriced past the first tick after a deploy.
   await auditQuotePrice(end);
@@ -340,9 +342,21 @@ export async function warmTick() {
 
 // The last tick's outcome ({ end, prefetched } or { skipped: reason }), kept
 // for the operator surface so a warmer that never reads says why.
+// A tick whose range read failed is retried soon, backing off to the normal
+// interval: a boot whose event loop is busy for a few seconds (the revenue
+// snapshot) can time out the first read, and waiting a full interval left the
+// boundary on the request path for 15 minutes.
+const WARM_RETRY_MS = envMs("DATABENTO_WARM_RETRY_MS", 30_000);
 async function recordedTick() {
   try { warm.lastResult = await warmTick(); }
   catch (e) { warm.lastResult = { skipped: "error", error: String(e?.message || e).slice(0, 120) }; }
+  const failed = warm.lastResult?.skipped === "range-failed" || warm.lastResult?.skipped === "error";
+  if (warm.retryTimer) { clearTimeout(warm.retryTimer); warm.retryTimer = null; }
+  if (failed && warm.started) {
+    warm.retryDelay = Math.min(RANGE_REFRESH_MS, warm.retryDelay ? warm.retryDelay * 2 : WARM_RETRY_MS);
+    warm.retryTimer = setTimeout(() => { warm.retryTimer = null; recordedTick(); }, warm.retryDelay);
+    warm.retryTimer.unref?.();
+  } else warm.retryDelay = 0;
   return warm.lastResult;
 }
 
@@ -356,7 +370,7 @@ export function startQuoteWarmer() {
   warm.timer.unref?.();
   return true;
 }
-export function stopQuoteWarmer() { if (warm.timer) clearInterval(warm.timer); warm.timer = null; warm.started = false; }
+export function stopQuoteWarmer() { if (warm.timer) clearInterval(warm.timer); if (warm.retryTimer) clearTimeout(warm.retryTimer); warm.timer = null; warm.retryTimer = null; warm.retryDelay = 0; warm.started = false; }
 
 /** Counts only (no symbols: they are buyer inputs), for the operator surface. */
 export function quoteWarmerStatus() {

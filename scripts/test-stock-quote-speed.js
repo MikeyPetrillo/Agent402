@@ -29,6 +29,7 @@ import { syncBuiltinESMExports } from "node:module";
 
 process.env.DATABENTO_API_KEY = "db-test-key-not-real";
 process.env.DATABENTO_WARM_TOP_N = "2";
+process.env.DATABENTO_WARM_RETRY_MS = "200";
 delete process.env.DATABENTO_BACKGROUND_DAILY_MAX_CALLS;
 delete process.env.DATABENTO_RANGE_MAX_AGE_MS;
 delete process.env.DATABENTO_WARM_IDLE_MS;
@@ -45,7 +46,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 
 // ---- stub upstream: every call takes LATENCY ms
 const LATENCY = 150;
-const up = { range: 0, cost: 0, data: 0, end: "2026-10-09", price: "0.00001", costFail: null, inflight: 0, maxInflight: 0, order: [] };
+const up = { rangeFail: 0, range: 0, cost: 0, data: 0, end: "2026-10-09", price: "0.00001", costFail: null, inflight: 0, maxInflight: 0, order: [] };
 const realFetch = globalThis.fetch;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const bar = (day, close) => JSON.stringify({ hd: { ts_event: String(Date.parse(day) * 1e6) }, open: "1e11", high: "2e11", low: "5e10", close, volume: "100" });
@@ -55,7 +56,7 @@ globalThis.fetch = async (url) => {
   up.inflight++; up.maxInflight = Math.max(up.maxInflight, up.inflight);
   try {
     await sleep(LATENCY);
-    if (u.includes("get_dataset_range")) { up.range++; return new Response(JSON.stringify({ end: up.end }), { status: 200 }); }
+    if (u.includes("get_dataset_range")) { up.range++; if (up.rangeFail > 0) { up.rangeFail--; return new Response("upstream busy", { status: 503 }); } return new Response(JSON.stringify({ end: up.end }), { status: 200 }); }
     if (u.includes("get_cost")) { up.cost++; up.order.push("cost"); if (up.costFail === "throw") return new Response("upstream down", { status: 500 }); if (up.costFail === "nan") return new Response("not a number", { status: 200 }); return new Response(up.price, { status: 200 }); }
     if (u.includes("get_range")) { up.data++; up.order.push("data"); return new Response(bar("2026-10-08", "1.4e11") + "\n" + bar(up.end, "1.5e11") + "\n", { status: 200 }); }
     throw new Error(`unstubbed path ${u}`);
@@ -90,6 +91,18 @@ try {
   try { await quote({ symbol: "IBM" }); } catch (e) { early = e; }
   ok(early?.statusCode === 400 && diff(e0, snap()).data === 0 && up.order[0] === "cost", `before any audit an over-bound quote is refused by the price check, with no data read (${JSON.stringify(diff(e0, snap()))})`);
   up.price = "0.00001";
+
+  // A boot read that fails (a busy boot can time it out) is retried soon,
+  // not a full refresh interval later, even with no demand yet.
+  db.__resetDatabentoState();
+  up.rangeFail = 1;
+  const r0 = up.range;
+  ok(db.startQuoteWarmer() === true, "the warmer starts");
+  let retried = false;
+  for (let i = 0; i < 100 && !retried; i++) { await sleep(50); const st = db.quoteWarmerStatus(); retried = up.range - r0 >= 2 && st.range != null && st.lastTick && st.lastTick.skipped === null; }
+  ok(retried, `a failed boot read is retried within the retry delay and lands (range reads ${up.range - r0}, last tick ${JSON.stringify(db.quoteWarmerStatus().lastTick)})`);
+  db.stopQuoteWarmer();
+  up.rangeFail = 0;
 
   // The warmer off (DATABENTO_WARM=off): no audit ever runs, so every cold quote is priced inline.
   db.__resetDatabentoState();
