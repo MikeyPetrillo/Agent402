@@ -106,7 +106,9 @@ try {
   let up = false;
   for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) { up = true; break; } } catch { /* booting */ } await sleep(500); }
   ok(up, "paid server booted with the market-data stub preload");
-  ok(await waitFor(() => db.range >= 1), `the boot-started quote warmer read the session boundary from the stub (${db.range})`);
+  // The first tick runs at boot; on a busy CI runner (the boot revenue snapshot
+  // reaches public RPCs) it can land well after /health answers.
+  ok(await waitFor(() => db.range >= 1, 30_000), `the boot-started quote warmer read the session boundary from the stub (${db.range})`);
 
   const unpaid = await fetch(`${B}/api/stock-quote?symbol=MSFT`);
   ok(unpaid.status === 402, `unpaid stock-quote -> 402 (got ${unpaid.status})`);
