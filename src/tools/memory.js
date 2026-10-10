@@ -302,7 +302,34 @@ const SQLITE_DDL = `
     meta TEXT, vec TEXT NOT NULL, model TEXT, updated INTEGER NOT NULL,
     PRIMARY KEY (ns, id)
   );
+  CREATE TABLE IF NOT EXISTS requests (
+    ns TEXT NOT NULL, rid TEXT NOT NULL, fp TEXT NOT NULL, result TEXT NOT NULL, ts INTEGER NOT NULL,
+    PRIMARY KEY (ns, rid)
+  );
 `;
+
+// ---- client request ids (retry-safe writes) ----------------------------------
+// A paid write whose answer was lost (the commit landed, the reply did not) is
+// retried by the client; without an id the retry applies again (an incr counts
+// twice). With an optional client request id (body "requestId" or header
+// X-Memory-Request-Id) the first write stores its answer under (namespace,
+// actor + id) in the same transaction as the write, and a repeat returns that
+// answer marked `replayed`, applying nothing. The same id for a different
+// write is refused (409). Ids are kept REQUEST_ID_TTL_MS.
+const REQUEST_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+export const REQUEST_ID_TTL_MS = 24 * 3600 * 1000;
+function requestIdOf(v) {
+  if (v === undefined || v === null || v === "") return null;
+  const s = String(v);
+  if (!REQUEST_ID_RE.test(s)) throw bad('"requestId" must be 1-128 characters: letters, digits, ".", "_", ":" or "-"');
+  return s;
+}
+const requestKey = (actor, rid) => `${actor}\n${rid}`;
+const requestFp = (op, key, args) => createHash("sha256").update(JSON.stringify([op, key ?? null, args ?? null])).digest("hex");
+function replayStored(row, fp) {
+  if (row.fp !== fp) throw bad('"requestId" was already used for a different write; use a new id for each new write', 409);
+  return { ...JSON.parse(row.result), replayed: true };
+}
 
 // =========================================================================
 // SQLite backend: the file on the volume, synchronous, as it always was.
@@ -372,6 +399,23 @@ function sqliteBackend() {
   const kvList = db.prepare("SELECT k, updated, exp FROM kv WHERE ns = ? ORDER BY updated DESC LIMIT 1000");
   const kvCount = db.prepare("SELECT COUNT(*) AS n FROM kv WHERE ns = ?");
   const kvBytes = db.prepare("SELECT COALESCE(SUM(LENGTH(v)), 0) AS b FROM kv WHERE ns = ?");
+  const reqGet = db.prepare("SELECT fp, result FROM requests WHERE ns = ? AND rid = ?");
+  const reqPut = db.prepare("INSERT INTO requests (ns, rid, fp, result, ts) VALUES (?, ?, ?, ?, ?)");
+  const reqPrune = db.prepare("DELETE FROM requests WHERE ns = ? AND ts < ?");
+  /** Run a write once per client request id (see requestIdOf); without an id, just run it. */
+  const once = (op, owner, actor, key, args, requestId, fn) => {
+    const rid = requestIdOf(requestId);
+    if (!rid) return fn();
+    return db.transaction(() => {
+      const k = requestKey(actor, rid), fp = requestFp(op, key, args);
+      const hit = reqGet.get(owner, k);
+      if (hit) return replayStored(hit, fp);
+      const out = fn();
+      reqPrune.run(owner, now() - REQUEST_ID_TTL_MS);
+      reqPut.run(owner, k, fp, JSON.stringify(out), now());
+      return out;
+    })();
+  };
 
   // Expired rows in namespaces nobody reads anymore would otherwise live forever
   // on the persistent volume — sweep globally on a timer (cheap: exp is indexed).
@@ -424,7 +468,10 @@ function sqliteBackend() {
 
   // --- key/value with TTL ---------------------------------------------------
 
-  function memoryPut(owner, key, value, { actor = owner, ttlSeconds } = {}) {
+  function memoryPut(owner, key, value, { actor = owner, ttlSeconds, requestId } = {}) {
+    return once("put", owner, actor, key, [value === undefined ? null : value, ttlSeconds ?? null], requestId, () => memoryPutNow(owner, key, value, { actor, ttlSeconds }));
+  }
+  function memoryPutNow(owner, key, value, { actor = owner, ttlSeconds } = {}) {
     requireAccess(owner, actor, "write");
     checkKey(key);
     const serialized = serializeValue(value);
@@ -452,7 +499,10 @@ function sqliteBackend() {
     return { key, value: parseStored(row.v), updated: row.updated, expiresAt: row.exp, owner, persistent: PERSISTENT };
   }
 
-  function memoryDelete(owner, key, { actor = owner } = {}) {
+  function memoryDelete(owner, key, { actor = owner, requestId } = {}) {
+    return once("delete", owner, actor, key, null, requestId, () => memoryDeleteNow(owner, key, { actor }));
+  }
+  function memoryDeleteNow(owner, key, { actor = owner } = {}) {
     requireAccess(owner, actor, "write");
     if (!key) throw bad('"key" is required');
     const deleted = kvDel.run(owner, key).changes > 0;
@@ -461,7 +511,8 @@ function sqliteBackend() {
   }
 
   /** Atomic numeric counter — a coordination primitive only a shared store can offer. */
-  const memoryIncr = db.transaction((owner, key, by, actor) => {
+  const memoryIncr = (owner, key, by, actor, { requestId } = {}) => once("incr", owner, actor, key, [by === undefined ? 1 : by], requestId, () => memoryIncrNow(owner, key, by, actor));
+  const memoryIncrNow = db.transaction((owner, key, by, actor) => {
     requireAccess(owner, actor, "write");
     checkKey(key, `Invalid "key"`);
     const amount = by === undefined ? 1 : Number(by);
@@ -483,7 +534,9 @@ function sqliteBackend() {
   });
 
   /** Atomic compare-and-set (see the export's doc comment). */
-  const memoryCas = db.transaction((owner, key, expected, value, { actor = owner, ttlSeconds, hasValue = false } = {}) => {
+  const memoryCas = (owner, key, expected, value, { actor = owner, ttlSeconds, hasValue = false, requestId } = {}) =>
+    once("cas", owner, actor, key, [expected ?? null, hasValue ? value ?? null : "\u0000absent", ttlSeconds ?? null], requestId, () => memoryCasNow(owner, key, expected, value, { actor, ttlSeconds, hasValue }));
+  const memoryCasNow = db.transaction((owner, key, expected, value, { actor = owner, ttlSeconds, hasValue = false } = {}) => {
     requireAccess(owner, actor, "write");
     checkKey(key);
     const row = freshKv(kvGet.get(owner, key));
@@ -603,6 +656,10 @@ function pgBackend() {
       ns TEXT NOT NULL, id TEXT NOT NULL, text TEXT NOT NULL,
       meta TEXT, vec TEXT NOT NULL, model TEXT, updated BIGINT NOT NULL,
       PRIMARY KEY (ns, id)
+    );
+    CREATE TABLE IF NOT EXISTS ${T("memory_requests")} (
+      ns TEXT NOT NULL, rid TEXT NOT NULL, fp TEXT NOT NULL, result TEXT NOT NULL, ts BIGINT NOT NULL,
+      PRIMARY KEY (ns, rid)
     );
   `;
 
@@ -777,6 +834,24 @@ function pgBackend() {
     await ready();
     return fn(stateQuery);
   }
+  /**
+   * A locked write, once per client request id: the stored answer and the
+   * write commit in one transaction, so a retry after a lost commit reply
+   * finds the answer and applies nothing (see requestIdOf).
+   */
+  function lockedOnce(op, owner, actor, key, args, requestId, fn) {
+    const rid = requestIdOf(requestId);
+    if (!rid) return locked(owner, fn);
+    return locked(owner, async (q) => {
+      const k = requestKey(actor, rid), fp = requestFp(op, key, args);
+      const hit = (await q(`SELECT fp, result FROM ${T("memory_requests")} WHERE ns = $1 AND rid = $2`, [owner, k])).rows[0];
+      if (hit) return replayStored(hit, fp);
+      const out = await fn(q);
+      await q(`DELETE FROM ${T("memory_requests")} WHERE ns = $1 AND ts < $2`, [owner, now() - REQUEST_ID_TTL_MS]);
+      await q(`INSERT INTO ${T("memory_requests")} (ns, rid, fp, result, ts) VALUES ($1, $2, $3, $4, $5)`, [owner, k, fp, JSON.stringify(out), now()]);
+      return out;
+    });
+  }
 
   // --- statement helpers over an executor ---------------------------------
   const kvGet = async (q, ns, k) => kvRow((await q(`SELECT v, updated, exp FROM ${T("memory_kv")} WHERE ns = $1 AND k = $2`, [ns, k])).rows[0]);
@@ -856,8 +931,8 @@ function pgBackend() {
 
   // --- key/value with TTL ---------------------------------------------------
 
-  function memoryPut(owner, key, value, { actor = owner, ttlSeconds } = {}) {
-    return locked(owner, async (q) => {
+  function memoryPut(owner, key, value, { actor = owner, ttlSeconds, requestId } = {}) {
+    return lockedOnce("put", owner, actor, key, [value === undefined ? null : value, ttlSeconds ?? null], requestId, async (q) => {
       await requireAccess(q, owner, actor, "write");
       checkKey(key);
       noNul(key, '"key"');
@@ -887,8 +962,8 @@ function pgBackend() {
     });
   }
 
-  function memoryDelete(owner, key, { actor = owner } = {}) {
-    return locked(owner, async (q) => {
+  function memoryDelete(owner, key, { actor = owner, requestId } = {}) {
+    return lockedOnce("delete", owner, actor, key, null, requestId, async (q) => {
       await requireAccess(q, owner, actor, "write");
       if (!key) throw bad('"key" is required');
       const deleted = await kvDel(q, owner, key);
@@ -897,8 +972,8 @@ function pgBackend() {
     });
   }
 
-  function memoryIncr(owner, key, by, actor) {
-    return locked(owner, async (q) => {
+  function memoryIncr(owner, key, by, actor, { requestId } = {}) {
+    return lockedOnce("incr", owner, actor, key, [by === undefined ? 1 : by], requestId, async (q) => {
       await requireAccess(q, owner, actor, "write");
       checkKey(key, `Invalid "key"`);
       const amount = by === undefined ? 1 : Number(by);
@@ -919,8 +994,8 @@ function pgBackend() {
     });
   }
 
-  function memoryCas(owner, key, expected, value, { actor = owner, ttlSeconds, hasValue = false } = {}) {
-    return locked(owner, async (q) => {
+  function memoryCas(owner, key, expected, value, { actor = owner, ttlSeconds, hasValue = false, requestId } = {}) {
+    return lockedOnce("cas", owner, actor, key, [expected ?? null, hasValue ? value ?? null : "\u0000absent", ttlSeconds ?? null], requestId, async (q) => {
       await requireAccess(q, owner, actor, "write");
       checkKey(key);
       const row = freshKv(await kvGet(q, owner, key));
@@ -1050,8 +1125,9 @@ export function memoryGet(owner, key, opts) { return impl.memoryGet(owner, key, 
 
 export function memoryDelete(owner, key, opts) { return impl.memoryDelete(owner, key, opts); }
 
-/** Atomic numeric counter — a coordination primitive only a shared store can offer. */
-export function memoryIncr(owner, key, by, actor) { return impl.memoryIncr(owner, key, by, actor); }
+/** Atomic numeric counter — a coordination primitive only a shared store can offer.
+ *  `opts.requestId`: a client request id makes a retry return the first answer instead of counting again. */
+export function memoryIncr(owner, key, by, actor, opts) { return impl.memoryIncr(owner, key, by, actor, opts); }
 
 /**
  * Atomic compare-and-set — the general coordination primitive. Writes (or, when

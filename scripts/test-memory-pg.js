@@ -126,6 +126,24 @@ try {
   ok(new Set(incrs.map((r) => r.value)).size === N, "every concurrent incr saw a distinct intermediate value");
   log = await m.getLog(A, A, 1000);
   ok(log.entries.filter((e) => e.action === "incr").length === N + 1 && chainOk(log.entries), `the chain stays contiguous and valid through ${N} concurrent writers (${log.entries.length} entries)`);
+  // ---- M9: a retried paid write with a client request id applies once ---------
+  {
+    const first = await m.memoryIncr(A, "rid-ctr", 1, A, { requestId: "job-7:step-1" });
+    // The commit landed and the answer was lost: the client retries with the same id.
+    const again = await m.memoryIncr(A, "rid-ctr", 1, A, { requestId: "job-7:step-1" });
+    ok(first.value === 1 && again.value === 1 && again.replayed === true && (await m.memoryGet(A, "rid-ctr")).value === 1, `M9: a retried incr with the same requestId counts once and replays the first answer (${first.value}, ${again.value})`);
+    const racing = await Promise.all(Array.from({ length: 8 }, () => m.memoryIncr(A, "rid-ctr2", 1, A, { requestId: "same-id" })));
+    ok((await m.memoryGet(A, "rid-ctr2")).value === 1 && racing.filter((r) => !r.replayed).length === 1, "M9: concurrent copies of one requestId apply once");
+    ok((await m.memoryIncr(A, "rid-ctr", 1, A)).value === 2, "M9: without a requestId every call counts");
+    await rejects("M9: the same requestId for a different write is refused", () => m.memoryIncr(A, "rid-ctr", 5, A, { requestId: "job-7:step-1" }), 409);
+    await rejects("M9: a malformed requestId is refused", () => m.memoryIncr(A, "rid-ctr", 1, A, { requestId: "has space" }), 400);
+    const p1 = await m.memoryPut(A, "rid-put", { n: 1 }, { requestId: "put-1" });
+    const p2 = await m.memoryPut(A, "rid-put", { n: 1 }, { requestId: "put-1" });
+    ok(p2.replayed === true && p2.updated === p1.updated, "M9: a retried put replays its first answer");
+    const logIncr = (await m.getLog(A, A, 1000)).entries.filter((e) => e.key === "rid-ctr2");
+    ok(logIncr.length === 1, `M9: one memlog row for the applied write (${logIncr.length})`);
+    ok((await m.memoryIncr(B, "rid-ctr", 1, B, { requestId: "job-7:step-1" })).value === 1, "M9: another namespace's id is its own");
+  }
   const cas = await Promise.all(Array.from({ length: 10 }, (_, i) => m.memoryCas(A, "locks/job", null, `agent-${i}`, { ttlSeconds: 30, hasValue: true })));
   const winners = cas.filter((r) => r.swapped);
   ok(winners.length === 1, `exactly one of 10 concurrent cas acquires wins the lock (${winners.length})`);
