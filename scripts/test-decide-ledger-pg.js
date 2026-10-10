@@ -75,6 +75,16 @@ try {
 
   // ---- (3) the credit lifecycle, with two concurrent redeems ----------------
   const c = await L.mintCredit({ decisionId: "d1", amountUsd: 0.02, ttlMs: 3_600_000, payer: "0xb", now });
+  {
+    // A mint retried with its token (the first attempt landed, its reply was lost) is one credit, on either instance.
+    const { newCreditToken } = await import("../src/decide/ledger.js");
+    const tk = newCreditToken();
+    const args = { decisionId: "d1", amountUsd: 0.01, expiresAt: now + 3_600_000, payer: "0xb", now, token: tk };
+    const [m1, m2] = await Promise.all([L.mintCredit(args), L2.mintCredit(args)]);
+    ok(m1.hash === m2.hash && (await L.creditState(tk))?.amountUsd === 0.01, "a mint retried with its token names one credit (two instances at once)");
+    let threw = false; try { await L2.mintCredit({ ...args, amountUsd: 0.05 }); } catch { threw = true; }
+    ok(threw && (await L.creditState(tk))?.amountUsd === 0.01, "the same token for a different credit is refused, the first kept");
+  }
   ok((await L.creditState(c.token))?.state === "pending" && (await L.redeemCredit(c.token, "d1", "r0", now)) === 0, "a credit is minted pending and cannot be redeemed");
   ok(L.creditAvailableUsdSync(c.token, "d1", now) === 0, "...nor quoted");
   ok((await L.activateCredit(c.hash)) === true && (await L.activateCredit(c.hash)) === false, "activation (after settlement) happens once");

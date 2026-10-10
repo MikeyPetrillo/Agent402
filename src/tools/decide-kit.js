@@ -14,7 +14,7 @@ import { runInAbortableScope } from "../drain-abort.js";
 import { decideConfig, priceForDepth, DEPTHS } from "../decide/config.js";
 import { recordWish } from "../wish.js";
 import { payerFromRequest } from "../payer.js";
-import { openDecideLedger, hashToken } from "../decide/ledger.js";
+import { openDecideLedger, hashToken, newCreditToken } from "../decide/ledger.js";
 import { validateParams, fitParamsToSchema } from "../decide/params.js";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { dispatchable } from "./route-execute.js";
@@ -503,22 +503,39 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     // and expiring WITH the decision, so a credit is never rolled forward.
     const leftover = roundUsd(quoted + redeemed - spent);
     const decisionExpiry = d.createdAt + cfg.credit.ttlHours * 3_600_000;
-    let leftoverCredit = null, leftoverCreditUnrecorded = null;
+    let leftoverCredit = null;
     if (leftover >= 0.001 && decisionExpiry > now() + 60_000) {
-      // A mint draws a fresh token each call, so it cannot be retried after
-      // the answer: tried twice here, and on failure the run still answers,
-      // saying the leftover could not be recorded.
+      // The token is drawn first, so every attempt mints the same credit: a
+      // mint that fails here is queued for retry like the other writes after
+      // a spend, and the buyer gets the token now. The credit is activated
+      // once the payment settles and the mint has landed (the activation
+      // retries until the row exists); a settlement that fails leaves it
+      // pending, never spendable.
+      const token = newCreditToken();
+      const hash = hashToken(token);
+      const mintArgs = { decisionId: d.id, amountUsd: leftover, expiresAt: decisionExpiry, payer, now: now(), token };
       let c = null;
       for (let i = 0; i < 2 && !c; i++) {
-        try { c = await ledger.mintCredit({ decisionId: d.id, amountUsd: leftover, expiresAt: decisionExpiry, payer, now: now() }); }
+        try { c = await ledger.mintCredit(mintArgs); }
         catch (e) { console.warn(`[decide] mint leftover credit ${runId}: ledger write failed (${String(e?.message || e).slice(0, 120)})`); }
       }
-      if (c) {
-        onSettled(req, (settledOk) => { if (settledOk) fireRetry(`activate credit ${runId}`, () => ledger.activateCredit(c.hash), ledgerRetryMs); });
-        leftoverCredit = { amountUsd: c.amountUsd, expiresAt: new Date(c.expiresAt).toISOString(), token: c.token, activeAfterPaymentSettles: true };
-      } else {
-        leftoverCreditUnrecorded = { amountUsd: leftover, note: "The unspent budget could not be recorded as a credit just now. The run itself completed and its results are above." };
-      }
+      const minted = Boolean(c);
+      let mintedLate = false, settled = false;
+      const activate = async () => {
+        if (await ledger.activateCredit(hash)) return;
+        if (!(await ledger.creditState(token))) throw new Error("the leftover credit is not recorded yet");
+      };
+      // A late mint activates the credit itself when the payment has already
+      // settled; the settlement hook activates it when the mint is in. Both
+      // steps are idempotent, so either order (or both) is safe.
+      if (!minted) fireRetry(`mint leftover credit ${runId}`, async () => { await ledger.mintCredit(mintArgs); mintedLate = true; if (settled) await activate(); }, ledgerRetryMs);
+      onSettled(req, (settledOk) => {
+        if (!settledOk) return;
+        settled = true;
+        if (minted || mintedLate) fireRetry(`activate credit ${runId}`, activate, ledgerRetryMs);
+      });
+      const expiresAt = c ? c.expiresAt : decisionExpiry;
+      leftoverCredit = { amountUsd: c ? c.amountUsd : roundUsd(leftover), expiresAt: new Date(expiresAt).toISOString(), token, activeAfterPaymentSettles: true, ...(minted ? {} : { recordPending: true }) };
     }
     // A settlement that fails after this run spent money forfeits the credit:
     // restoring it would let the same credit fund run after run.
@@ -535,7 +552,6 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       steps: results, budgetUsd: spendable, spentUsd: spent, paidUsd: quoted, creditAppliedUsd: redeemed,
       charges: { firstPartyUsd, passThroughUsd, routingFeesUsd, uncertainUsd: roundUsd(Math.max(0, spent - firstPartyUsd - passThroughUsd - routingFeesUsd)) },
       routingFeePct: cfg.routingFeePct, leftoverCredit,
-      ...(leftoverCreditUnrecorded ? { leftoverCreditUnrecorded } : {}),
     };
   };
 }

@@ -44,6 +44,15 @@ const RETENTION_MS = 30 * 86_400_000;
 export const ROLL_FORWARD_GRACE_MS = 60_000;
 const usd = (m) => Math.round(Number(m)) / 1e6;
 export const hashToken = (t) => createHash("sha256").update(String(t)).digest("hex");
+/** A fresh credit token. A caller that may retry a mint draws it first and
+ *  passes it as `token`, so every attempt names the same credit. */
+export const newCreditToken = () => `dc_${randomBytes(24).toString("base64url")}`;
+const TOKEN_RE = /^dc_[A-Za-z0-9_-]{32}$/;
+// The same credit minted twice (a retried mint whose first attempt landed):
+// the row must be the one this call describes, else the token is refused.
+function sameMint(row, { decisionId, amountMicro, expiresAt }) {
+  return row && row.decisionId === decisionId && row.amountMicro === amountMicro && row.expiresAt === expiresAt;
+}
 
 /** The SQLite ledger is one file on one volume: it is correct only while one
  *  process writes it. With more than one replica, two ledgers would each
@@ -222,11 +231,22 @@ function openFileLedger(path) {
 
     /** `expiresAt` wins over `ttlMs`: a leftover credit inherits its decision's
      *  expiry, so no credit ever outlives the decision it came from. */
-    mintCredit({ decisionId, amountUsd, ttlMs, expiresAt: fixedExpiry = null, payer, now = Date.now() }) {
-      const token = `dc_${randomBytes(24).toString("base64url")}`;
+    /** `token` (optional, from newCreditToken) makes the mint retryable: a
+     *  second call with the same token and the same credit is a no-op. */
+    mintCredit({ decisionId, amountUsd, ttlMs, expiresAt: fixedExpiry = null, payer, now = Date.now(), token: given = null }) {
+      if (given !== null && !TOKEN_RE.test(String(given))) throw new Error("mintCredit: malformed token");
+      const token = given || newCreditToken();
       const expiresAt = Number.isFinite(fixedExpiry) ? fixedExpiry : now + ttlMs;
-      st.mint.run(hashToken(token), decisionId, payer || null, micro(amountUsd), expiresAt, now);
-      return { token, hash: hashToken(token), amountUsd: usd(micro(amountUsd)), expiresAt };
+      const h = hashToken(token);
+      if (given) {
+        const r = st.credit.get(h);
+        if (r) {
+          if (!sameMint({ decisionId: r.decision_id, amountMicro: Number(r.amount_micro), expiresAt: Number(r.expires_at) }, { decisionId, amountMicro: micro(amountUsd), expiresAt })) throw new Error("mintCredit: token already names another credit");
+          return { token, hash: h, amountUsd: usd(micro(amountUsd)), expiresAt };
+        }
+      }
+      st.mint.run(h, decisionId, payer || null, micro(amountUsd), expiresAt, now);
+      return { token, hash: h, amountUsd: usd(micro(amountUsd)), expiresAt };
     },
     activateCredit(hash) { return st.activate.run(hash).changes === 1; },
     /** Spendable amount of a credit for this decision right now, or 0. Read-only. */
@@ -550,15 +570,23 @@ function openDatabaseLedger(path) {
       const d = decisions.get(id); if (d) d.settled = true;
       through((w) => w.settleDecision.run(id));
     },
-    async mintCredit({ decisionId, amountUsd, ttlMs, expiresAt: fixedExpiry = null, payer, now = Date.now() }) {
+    async mintCredit({ decisionId, amountUsd, ttlMs, expiresAt: fixedExpiry = null, payer, now = Date.now(), token: given = null }) {
+      if (given !== null && !TOKEN_RE.test(String(given))) throw new Error("mintCredit: malformed token");
       await readyP();
-      const token = `dc_${randomBytes(24).toString("base64url")}`;
+      const token = given || newCreditToken();
       const hash = hashToken(token);
       const expiresAt = Number.isFinite(fixedExpiry) ? fixedExpiry : now + ttlMs;
-      const r = await q(`INSERT INTO ${T("credits")} (token_hash, decision_id, payer, amount_micro, expires_at, state, created_at) VALUES ($1,$2,$3,$4,$5,'pending',$6) RETURNING *`,
+      // With a caller's token the insert is idempotent: a retry whose first
+      // attempt landed (the reply was lost) finds the same row.
+      const r = await q(`INSERT INTO ${T("credits")} (token_hash, decision_id, payer, amount_micro, expires_at, state, created_at) VALUES ($1,$2,$3,$4,$5,'pending',$6) ON CONFLICT (token_hash) DO NOTHING RETURNING *`,
         [hash, decisionId, payer || null, micro(amountUsd), expiresAt, now]);
-      rememberCredit(rowCredit(r.rows[0]));
-      through((w) => w.mint.run(hash, decisionId, payer || null, micro(amountUsd), expiresAt, now));
+      let row = rowCredit(r.rows[0]);
+      if (!row) {
+        row = rowCredit((await q(`SELECT * FROM ${T("credits")} WHERE token_hash = $1`, [hash])).rows[0]);
+        if (!given || !sameMint(row, { decisionId, amountMicro: micro(amountUsd), expiresAt })) throw new Error("mintCredit: token already names another credit");
+      }
+      rememberCredit(row);
+      if (r.rows[0]) through((w) => w.mint.run(hash, decisionId, payer || null, micro(amountUsd), expiresAt, now));
       return { token, hash, amountUsd: usd(micro(amountUsd)), expiresAt };
     },
     async activateCredit(hash) {
