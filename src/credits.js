@@ -171,6 +171,30 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
   // without entries) are returned the same way once the row has been quiet
   // for that long. A settle that arrives for a swept hold takes nothing.
   const liveHolds = new Set(); // hold ids of requests in flight here
+  // A request in flight refreshes its hold's `at` every third of the window,
+  // so a sweep on another container (which cannot see this process's
+  // liveHolds) never returns a hold a running request still holds.
+  const holdRefreshers = new Map(); // hold id -> interval
+  function keepHoldFresh(hash, holdId) {
+    if (!usePg || !holdId || holdRefreshers.has(holdId)) return;
+    const started = Date.now();
+    const t = setInterval(() => {
+      // No request runs this long: a hold whose response never ended is left to the sweep.
+      if (Date.now() - started > 60 * 60_000) { stopHoldFresh(holdId); return; }
+      mutatePgNow(hash, (rec) => {
+        const h = rec?.holds?.[holdId];
+        if (!h) return { result: false };
+        rec.holds = { ...rec.holds, [holdId]: { ...h, at: now() } };
+        return { rec, result: true };
+      }).then((still) => { if (still === false) stopHoldFresh(holdId); }).catch(() => { /* the next tick tries again */ });
+    }, Math.max(250, Math.floor(abandonedHoldMs() / 3)));
+    t.unref?.();
+    holdRefreshers.set(holdId, t);
+  }
+  function stopHoldFresh(holdId) {
+    const t = holdId ? holdRefreshers.get(holdId) : null;
+    if (t) { clearInterval(t); holdRefreshers.delete(holdId); }
+  }
   const holdTotal = (holds) => Object.values(holds || {}).reduce((a, h) => a + (Number(h?.m) || 0), 0);
   async function sweepAbandonedHolds() {
     if (!usePg) return { released: 0, micro: 0 };
@@ -355,13 +379,30 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
   }
   function settleOn(rec, heldMicro, slug, chargeUsd, holdId = null) {
     if (!rec) return { result: null };
+    // A retried settle whose first attempt landed (its reply was lost): the
+    // row already says what that settle took. Nothing moves again, and the
+    // sale is booked at that amount (the first attempt never booked it).
+    const prior = holdId && !Object.hasOwn(rec.holds || {}, holdId) ? rec.settledHolds?.[holdId] : null;
+    if (prior) {
+      const taken = Number(prior.m) || 0;
+      return { result: { balanceUsd: microToUsd(rec.balanceMicro), chargedUsd: microToUsd(taken), heldUsd: microToUsd(Number(prior.h) || taken), returnedUsd: microToUsd(Math.max(0, (Number(prior.h) || taken) - taken)) }, after: () => onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: rec.keyId }) };
+    }
     heldMicro = takeHold(rec, heldMicro, holdId);
     const held = Math.min(heldMicro, rec.heldMicro || 0);
     const want = Number.isFinite(Number(chargeUsd)) && Number(chargeUsd) > 0 ? usdToMicro(Number(chargeUsd)) : held;
     const taken = Math.min(held, want);
     const returned = held - taken;
     rec.heldMicro = (rec.heldMicro || 0) - held; rec.balanceMicro += returned; rec.spentMicro += taken; rec.calls += 1; rec.lastUsedAt = new Date(now()).toISOString();
+    if (holdId) rec.settledHolds = recentSettled({ ...(rec.settledHolds || {}), [holdId]: { m: taken, h: held, at: now() } });
     return { rec, result: { balanceUsd: microToUsd(rec.balanceMicro), chargedUsd: microToUsd(taken), heldUsd: microToUsd(held), returnedUsd: microToUsd(returned) }, after: () => onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: rec.keyId }) };
+  }
+  // What each recent settle took, by hold id (database only): kept long
+  // enough for a retry of a settle whose reply was lost, then dropped.
+  const SETTLED_KEEP_MS = 15 * 60_000, SETTLED_KEEP_MAX = 200;
+  function recentSettled(map) {
+    const cut = now() - SETTLED_KEEP_MS;
+    const live = Object.entries(map).filter(([, v]) => Number(v?.at) >= cut).sort((a, b) => b[1].at - a[1].at).slice(0, SETTLED_KEEP_MAX);
+    return Object.fromEntries(live);
   }
   function releaseOn(rec, heldMicro, holdId = null) {
     if (!rec) return { result: null };
@@ -459,7 +500,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
           try { const c = await fn(); onDone?.(c); return; }
           catch (e) { if (i === 2) log(`[credits] ${label} failed after retries (the sweep returns the hold after ${Math.round(abandonedHoldMs() / 1000)} s): ${String(e?.message || e).slice(0, 120)}`); else await sleep(500 * (i + 1)); }
         }
-      } finally { if (holdId) liveHolds.delete(holdId); }
+      } finally { if (holdId) { liveHolds.delete(holdId); stopHoldFresh(holdId); } }
     })();
   }
 
@@ -500,7 +541,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
       // as the Tempo and Stripe gates do on acceptance.
       for (const h of ["payment-signature", "x-payment", "payment-identifier", "x-pow-solution"]) { if (req.headers && h in req.headers) delete req.headers[h]; }
       req.creditsSettling = true; req.creditsSettled = true; req.creditsKeyId = a.keyId; req.creditsPriceUsd = item.priceUsd;
-      if (a.holdId) liveHolds.add(a.holdId);
+      if (a.holdId) { liveHolds.add(a.holdId); keepHoldFresh(a.hash, a.holdId); }
       res.setHeader("X-Credits-Balance", String(a.balanceUsd));
       const slug = item.slug || req.path;
       // The two outcomes of the hold. On the files they answer at once; on the
