@@ -184,7 +184,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
   // again loses none; the replay writes it only over an older copy of the
   // same subscription (by updatedAt), never over a newer one.
   const PG = doc.backend === "pg";
-  const pending = PG ? createDeadLetter({ file: `${path}.pending.ndjson` }) : null;
+  const pending = PG ? createDeadLetter({ file: `${path}.pending.ndjson`, name: "subscriptions" }) : null;
   const unsaved = new Set(); // subIds whose latest record has not landed
   // Resolves false only in database mode when the record did not reach the
   // database (it waits in the local journal); the webhook then answers 503

@@ -426,7 +426,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // timer until Postgres holds it. Never a refund for a report that was made.
   const pendingFinals = new Map(); // sessionId -> record not yet in the database
   const heldAnswers = new WeakSet(); // recordError answers whose record the row refused
-  const finalsDeadLetter = USE_PG ? createDeadLetter({ file: join(dir, "_pending-finals.ndjson") }) : null;
+  const finalsDeadLetter = USE_PG ? createDeadLetter({ file: join(dir, "_pending-finals.ndjson"), name: "checkoutFinals" }) : null;
   const FINALS_REPLAY_MS = Number(process.env.HUMAN_CHECKOUT_REPLAY_MS) || 5_000;
   async function afterFinal(id, rec) {
     try { await patchIndex(INFLIGHT, id, null); } catch { /* the boot sweep clears a finished claim */ }

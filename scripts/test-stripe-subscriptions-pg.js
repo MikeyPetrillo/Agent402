@@ -20,6 +20,7 @@ process.env.STATE_DB_CONNECT_TIMEOUT_MS = "1500";
 process.env.SUBSCRIPTIONS_REPLAY_MS = "200";
 const sdb = await import("../src/state-db.js");
 const { createStripeSubscriptions } = await import("../src/stripe-subscriptions.js");
+const { ledgerDeadLetterStatus } = await import("../src/ledger-mirror.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -88,6 +89,8 @@ try {
       relay.cut();
       const first = await send(ev);
       const kept = existsSync(`${STORE}.pending.ndjson`) && readFileSync(`${STORE}.pending.ndjson`, "utf8").includes("sub_cs_three");
+      const dl = ledgerDeadLetterStatus({ full: true });
+      ok(dl.status === "pending" && dl.subscriptions?.onDisk >= 1 && ledgerDeadLetterStatus({ now: Date.now() + 60 * 60_000 }).status === "stuck", `${ev.type}: the dead-letter word counts the journaled record (${dl.status}, ${dl.subscriptions?.onDisk} on disk)`);
       ok(first.code === 503 && kept && booked.length === 0, `${ev.type} with the database away: answers ${first.code} (5xx so Stripe retries), journal kept (${kept}), sales booked ${booked.length}`);
       relay.heal();
       const again = await send(ev);

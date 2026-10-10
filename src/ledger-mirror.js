@@ -151,7 +151,28 @@ const ident2 = (t) => String(t).split(".").map(ident).join(".");
  * guarded UPDATE) on the next successful load, refresh and on a timer, and
  * removes an entry only once Postgres holds it.
  */
-export function createDeadLetter({ db = null, file = "" } = {}) {
+// Every local money journal by name (sales, refunds, checkout finals,
+// subscriptions, decide), so the dead-letter word on /api/gateway-status
+// covers each of them. A name may have several journals (one per store
+// directory); their states are summed, and two instances over the same file
+// count it once (the newest instance is kept).
+const journals = new Map(); // name -> Map(file -> dead letter)
+/** The state of every named journal: { name: { waiting, total, oldestAt } }. */
+export function journalStates() {
+  const out = {};
+  for (const [name, set] of journals) {
+    const acc = { waiting: 0, total: 0, oldestAt: null };
+    for (const dl of set.values()) {
+      const st = dl.state();
+      acc.waiting += st.waiting; acc.total += st.total;
+      if (st.oldestAt != null && (acc.oldestAt == null || st.oldestAt < acc.oldestAt)) acc.oldestAt = st.oldestAt;
+    }
+    out[name] = acc;
+  }
+  return out;
+}
+/** `name`: the journal's name on the dead-letter word (see journalStates). */
+export function createDeadLetter({ db = null, file = "", name = "" } = {}) {
   let sqlite = null;
   if (db) {
     try {
@@ -193,7 +214,7 @@ export function createDeadLetter({ db = null, file = "" } = {}) {
     if (sqlite) { try { return sqlite.list.all().map((r) => ({ id: r.id, kind: r.kind, payload: JSON.parse(r.payload), at: r.at })); } catch { return []; } }
     return file ? readNd() : [];
   };
-  return {
+  const dl = {
     kind: sqlite ? "sqlite" : file ? "ndjson" : "none",
     /** The entry's id once it is on local disk, else null. `pending`: this process's write for it is still queued. */
     add(kind, payload, { pending: isPending = false } = {}) {
@@ -235,7 +256,23 @@ export function createDeadLetter({ db = null, file = "" } = {}) {
       for (const e of readNd()) if (m === null || e.at < m) m = e.at;
       return m;
     },
+    /** Entries waiting for the replay, every entry on disk, and when the oldest was written (null when none), from one read. */
+    state() {
+      if (sqlite) {
+        try {
+          const total = sqlite.count.get().n;
+          // A queued id is on disk until its write lands (remove drops it from both).
+          return { waiting: Math.max(0, total - pending.size), total, oldestAt: sqlite.oldest.get().at ?? null };
+        } catch { return { waiting: 0, total: 0, oldestAt: null }; }
+      }
+      const entries = file ? readNd() : [];
+      let oldestAt = null;
+      for (const e of entries) if (oldestAt === null || e.at < oldestAt) oldestAt = e.at;
+      return { waiting: entries.filter((e) => !pending.has(key(e.id))).length, total: entries.length, oldestAt };
+    },
   };
+  if (name) { if (!journals.has(name)) journals.set(name, new Map()); journals.get(name).set(String(db?.name || "") + "\u0000" + String(file || ""), dl); }
+  return dl;
 }
 /**
  * A failure that took the full time limit (a statement or connect timeout, a
@@ -316,6 +353,23 @@ export function deadLetterWord(states, { enabled = true, now = Date.now(), stuck
   }
   if (oldest != null && now - oldest > stuckMinutes * 60_000) return "stuck";
   return waiting > 0 ? "pending" : "none";
+}
+/** The journals the dead-letter word always names (zeros when one is not open). */
+export const MONEY_JOURNALS = ["sales", "refunds", "checkoutFinals", "subscriptions", "decide"];
+/**
+ * ledgerDeadLetter on /api/gateway-status: one word over every local money
+ * journal (see deadLetterWord); `full` (the operator) adds the counts per
+ * journal. Never an id, an amount or a payload.
+ */
+export function ledgerDeadLetterStatus({ full = false, enabled = true, now = Date.now(), stuckMinutes = DEAD_LETTER_STUCK_MINUTES } = {}) {
+  const states = journalStates();
+  for (const n of MONEY_JOURNALS) if (!states[n]) states[n] = { waiting: 0, total: 0, oldestAt: null };
+  const status = deadLetterWord(Object.values(states), { enabled, now, stuckMinutes });
+  if (!full) return { status };
+  const age = (s) => (s.oldestAt == null ? null : Math.floor((now - s.oldestAt) / 60_000));
+  const out = { status, stuckMinutes };
+  for (const [n, s] of Object.entries(states)) out[n] = { waiting: s.waiting, onDisk: s.total, oldestMinutes: age(s) };
+  return out;
 }
 /** A Postgres error about the row itself (bad data, a constraint), not the connection: retrying the same row cannot help. */
 export function isRowError(e) {

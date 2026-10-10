@@ -465,7 +465,8 @@ Auto-closes when the word is ok.`;
     },
   },
   {
-    // Sales and refund debts kept on the container's local disk because the
+    // Money writes (sales, refund debts, checkout finals, subscription and
+    // decide records) kept on the container's local disk because the
     // state database has not taken them (ledgerDeadLetter on
     // /api/gateway-status, src/ledger-mirror.js). stuck pages; none and off
     // clear; pending (the replay is working) and unknown do neither. Title
@@ -477,7 +478,7 @@ Auto-closes when the word is ok.`;
       return w === "none" || w === "off" ? "good" : "quiet";
     },
     body: () =>
-      `/api/gateway-status reports ledgerDeadLetter.status=stuck: a sale or a refund debt has waited on the container's local disk for the state database longer than LEDGER_DEAD_LETTER_STUCK_MINUTES (default 20). The replay retries every 15 s; while it cannot land them they exist only on that container, so do not redeploy or restart it until they land. Check stateDb on the same endpoint, the Postgres service on Railway, and the [sales-ledger] / [refund-ledger] log lines (a row the database refuses is named there). The operator read of /api/gateway-status has the counts. Auto-closes when the word is none.`,
+      `/api/gateway-status reports ledgerDeadLetter.status=stuck: a money write (a sale, a refund debt, a card report's final record, a subscription record or a decide write) has waited on the container's local disk for the state database longer than LEDGER_DEAD_LETTER_STUCK_MINUTES (default 20). Each journal's replay retries on a timer; while it cannot land them they exist only on that container, so do not redeploy or restart it until they land. Check stateDb on the same endpoint, the Postgres service on Railway, and the [sales-ledger] / [refund-ledger] / [human-checkout] / [subscriptions] / [decide] log lines (a row the database refuses is named there). The operator read of /api/gateway-status has the counts per journal. Auto-closes when the word is none.`,
   },
   {
     // The nightly offsite backup (backup on /api/gateway-status,

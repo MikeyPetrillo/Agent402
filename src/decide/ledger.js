@@ -392,7 +392,7 @@ function openDatabaseLedger(path) {
   }
   // An NDJSON file beside the ledger file (on the volume while it exists),
   // never a table in the SQLite file the migration verifier compares.
-  const pending = createDeadLetter({ file: `${path}.pending.ndjson` });
+  const pending = createDeadLetter({ file: `${path}.pending.ndjson`, name: "decide" });
   const through = (fn) => {
     if (!wt) return;
     try { fn(wt); }

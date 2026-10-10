@@ -227,7 +227,7 @@ const fileToPg = (r) => cleanRow({
 // timed out, killed) is replayed in the order it was written: a debt insert-
 // if-absent by evidence, a change as the same guarded UPDATE. See
 // createDeadLetter.
-const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: join(DATA_DIR, "agent402-refunds.dead-letter.ndjson") }) : null;
+const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: join(DATA_DIR, "agent402-refunds.dead-letter.ndjson"), name: "refunds" }) : null;
 const INSERT_OWED_SQL = () => `INSERT INTO ${T("refunds")} (evidence, slug, network, payer, price_usd, http_status, synthetic, created_at, wire, hangup_reason, note)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (evidence) DO NOTHING RETURNING *`;
 const owedParams = (row) => [row.evidence, row.slug, row.network, row.payer, row.priceUsd, row.httpStatus, row.synthetic, row.createdAt, row.wire, row.hangupReason, row.note];

@@ -245,7 +245,7 @@ function writeThrough(stmt, row) {
 // file while it is open, else an NDJSON beside it) and is replayed
 // insert-if-absent (a sale by ts/slug/rail/payer/tx, never by tx alone; a
 // verdict by tx, never over a newer one); see createDeadLetter.
-const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: `${DB_PATH}.dead-letter.ndjson` }) : null;
+const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: `${DB_PATH}.dead-letter.ndjson`, name: "sales" }) : null;
 // The queued write path (write-ahead to the dead-letter, fail fast on a hung
 // database); see createLedgerWriter. readyP is hoisted (a function).
 const writer = createLedgerWriter({ enqueue, ready: () => readyP(), deadLetter, warnOnce, label: "sales-ledger" });

@@ -34,6 +34,7 @@ const DIR = CHILD ? process.env.DECIDE_FAIL_DIR : mkdtempSync(join(tmpdir(), "de
 const sdb = await import("../src/state-db.js");
 const { openDecideLedger } = await import("../src/decide/ledger.js");
 const { makeExecuteHandler, makeDecideHandler } = await import("../src/tools/decide-kit.js");
+const { ledgerDeadLetterStatus } = await import("../src/ledger-mirror.js");
 
 const ext = (id, seller) => ({ id, slug: id, name: id, seller, firstParty: false, endpoint: `https://${seller}/x`, method: "POST", priceUsd: 0.02, inputSchema: { type: "object", properties: { q: { type: "string" } }, required: ["q"] }, exampleParams: { q: "x" } });
 const fp = (id) => ({ ...ext(id, "agent402"), firstParty: true });
@@ -192,6 +193,8 @@ if (CHILD) {
       for (const fn of req.__onSettled || []) fn(true);
       ok(!r.err && r.out.executionCredit?.token && r.out.executionCredit.recordPending === true, `decide with the ledger down after the model call: 200 with a credit (${r.err ? `${r.status} ${r.err.message}` : "200"})`);
       ok(atAnswer === 2, `...the decision and the credit are journaled before the answer (${atAnswer})`);
+      const dl = ledgerDeadLetterStatus({ full: true });
+      ok(dl.status === "pending" && dl.decide?.onDisk >= 2 && ledgerDeadLetterStatus({ now: Date.now() + 60 * 60_000 }).status === "stuck", `...the dead-letter word counts the decide journal (${dl.status}, ${dl.decide?.onDisk} on disk)`);
       await wait(200);
       ok(L.pendingCount() === 4, `...the activation and the settled mark once the payment settles (${L.pendingCount()})`);
       relay.heal();
