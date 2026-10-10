@@ -137,13 +137,15 @@ if (String(process.env.STATE_DATABASE_URL || "").trim()) {
     // ---- a failed save is reported, never dropped silently (e1) --------------
     const bad = createJsonDocument({ name: "e1.json", log: () => {} });
     await bad.save({ ok: 1 });
-    const badSave = await bad.save({ s: "nul\u0000inside" });
-    ok(badSave === false && /unsupported|0x00|null character/i.test(String(bad.lastError || "")), `a save the database rejects resolves false and records the error (${String(bad.lastError || "").slice(0, 60)})`);
-    ok((await sdb.documents.get("e1.json")).body.ok === 1, "...and the row is the last good body");
+    // A NUL character, which Postgres text cannot hold, is cleaned by the
+    // state database's parameter cleaning: the save lands rather than failing.
+    const nulSave = await bad.save({ ok: 1, s: "nul\u0000inside" });
+    ok(nulSave === true && (await sdb.documents.get("e1.json")).body.s === "nulinside", "a body with a NUL character is saved with the character removed");
     relay.cut();
     const cutSave = await bad.save({ ok: 2 });
     await heal();
     ok(cutSave === false && bad.lastError, "a save during an outage resolves false and records the error");
+    ok((await sdb.documents.get("e1.json")).body.ok === 1, "...and the row is the last good body");
 
     // ---- update(): two writers never drop each other (H8) --------------------
     const u1 = createJsonDocument({ name: "upd.json", log: () => {} });
