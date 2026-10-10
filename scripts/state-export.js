@@ -93,7 +93,8 @@ export async function exportState(outDir, { url = process.env.STATE_DATABASE_URL
           if (!sCols.length) throw new Error(`${store.file} has no ${sTable} table after its module created it`);
           const pTypes = Object.fromEntries((await client.query("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2", [schema, pTable])).rows.map((r) => [r.column_name, r.data_type]));
           const pairs = sCols.map((c) => [c, c in pTypes ? c : snake(c) in pTypes ? snake(c) : null]).filter(([, p]) => p);
-          const dropped = Object.keys(pTypes).filter((p) => !pairs.some(([, x]) => x === p));
+          const dbCols = new Set((store.dbColumns || {})[sTable] || []);
+          const dropped = Object.keys(pTypes).filter((p) => !dbCols.has(p) && !pairs.some(([, x]) => x === p));
           if (dropped.length) report.droppedColumns[pTable] = dropped;
           const conv = pairs.map(([, p]) => {
             const t = pTypes[p];

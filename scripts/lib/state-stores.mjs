@@ -13,6 +13,11 @@
 // day): exported, never imported, so the verifier does not compare counts.
 // Its `queues` are file-only tables of rows still waiting to reach the
 // database (the ledger mirror's dead letter): verified empty, never mapped.
+// Its `bookkeeping` tables are file-only stamps the write-through keeps
+// beside the mirror (the refund ledger's pg_sync_meta): never mapped,
+// reported by the verifier as bookkeeping. Its `dbColumns` are columns a
+// state table has and the file shape never held (a sale's sale_uid, the
+// database's own dedupe id): the export leaves them out without a note.
 // DB_ONLY tables exist only in the database (bookkeeping a file build never
 // kept): neither exported nor verified.
 //
@@ -28,8 +33,8 @@ import { join, resolve } from "node:path";
 import { mkdirSync } from "node:fs";
 
 export const SQLITE_STORES = [
-  { file: "agent402-sales.db", env: (d) => ({ SALES_LEDGER_DB: join(d, "agent402-sales.db") }), tables: { sales: "sales", sale_feedback: "sale_feedback" }, queues: ["pg_dead_letter"] },
-  { file: "agent402-refunds.db", env: (d) => ({ REFUND_DB_DIR: d }), tables: { refunds: "refunds" }, queues: ["pg_dead_letter"] },
+  { file: "agent402-sales.db", env: (d) => ({ SALES_LEDGER_DB: join(d, "agent402-sales.db") }), tables: { sales: "sales", sale_feedback: "sale_feedback" }, queues: ["pg_dead_letter"], dbColumns: { sales: ["sale_uid"] } },
+  { file: "agent402-refunds.db", env: (d) => ({ REFUND_DB_DIR: d }), tables: { refunds: "refunds" }, queues: ["pg_dead_letter"], bookkeeping: ["pg_sync_meta"] },
   { file: "agent402-decide.db", env: (d) => ({ DECIDE_LEDGER_DB: join(d, "agent402-decide.db") }), tables: { decisions: "decide_ledger_decisions", credits: "decide_ledger_credits", runs: "decide_ledger_runs", feedback: "decide_ledger_feedback", seller_spend: "decide_ledger_seller_spend" } },
   { file: "agent402-stats.db", env: (d) => ({ STATS_DB_DIR: d, STATS_ALLOW_EPHEMERAL: "true" }), tables: { counters: "stats_counters", tool_counts: "stats_tool_counts", meta: "stats_meta", recent_calls: "stats_recent_calls", paid_tool_counts: "stats_paid_tool_counts", heartbeat_tool_counts: "stats_heartbeat_tool_counts", charged_failures: "stats_charged_failures", daily_calls: "stats_daily_calls", daily_upstream_calls: "stats_daily_upstream_calls", daily_upstream_spend: "stats_daily_upstream_spend", seller_registrations: "stats_seller_registrations" } },
   { file: "agent402.db", env: (d) => ({ MEMORY_DB_FILE: join(d, "agent402.db"), MEMORY_ALLOW_EPHEMERAL: "true" }), tables: { kv: "memory_kv", grants: "memory_grants", memlog: "memory_memlog", docs: "memory_docs", requests: "memory_requests" }, transient: ["requests"] },

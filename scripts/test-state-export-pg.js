@@ -35,6 +35,9 @@ try {
 
   const ex = run(["scripts/state-export.js", "--out", out]);
   ok(ex.status === 0 && !/UNMAPPED/.test(ex.stdout), `the export runs with every table mapped${ex.status ? ` (${(ex.stderr || ex.stdout).slice(-400)})` : ""}`);
+  // A sale's sale_uid is the database's own dedupe id (the file shape never
+  // held it): listed in the store registry, so the export leaves it out quietly.
+  ok(!/note: sales columns[^\n]*sale_uid/.test(ex.stdout), `the export does not report sale_uid as a dropped column (${(ex.stdout.match(/note: sales[^\n]*/) || ["no note"])[0]})`);
   const again = run(["scripts/state-export.js", "--out", out]);
   ok(again.status === 1 && /not empty/.test(again.stderr), "a non-empty --out is refused without --force");
 

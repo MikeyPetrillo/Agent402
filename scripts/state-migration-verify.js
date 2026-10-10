@@ -60,6 +60,8 @@ for (const [file, map] of Object.entries(sqliteMap)) {
     if ((spec.transient || []).includes(t)) { rows.push({ store: file, file: t, fileCount: sqliteCount(f(file), t), tableCount: pg ? await tableRows(pg) : null, ok: true, note: "transient (expires), not imported" }); continue; }
     // Rows still queued for the database: the import is complete only when none are.
     if ((spec.queues || []).includes(t)) { const n = sqliteCount(f(file), t); rows.push({ store: file, file: t, fileCount: n, tableCount: null, ok: n === 0, note: n ? "rows still queued for the database" : "queue empty" }); continue; }
+    // File-only stamps the write-through keeps (never data, never mapped).
+    if ((spec.bookkeeping || []).includes(t)) { rows.push({ store: file, file: t, fileCount: sqliteCount(f(file), t), tableCount: null, ok: true, note: "bookkeeping (file only), not imported" }); continue; }
     if (!pg && /_meta$|^meta$/.test(t)) continue; // a settings row, not data
     if (!pg) { rows.push({ store: file, file: t, fileCount: sqliteCount(f(file), t), tableCount: null, ok: false, note: "no table mapping" }); continue; }
     let where = "";

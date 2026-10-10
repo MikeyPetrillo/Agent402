@@ -29,6 +29,10 @@ try {
   ok(clean.status === 0, `a clean import verifies${clean.status ? `:\n${clean.stdout.split("\n").filter((l) => / NO /.test(l)).join("\n")}` : ""}`);
   ok(/x402-index-cache\s+origins\s+5\s+5\s+ok/.test(line(clean.stdout, "x402-index-cache")), `the crawl cache counts origins, not its header line (${line(clean.stdout, "x402-index-cache").trim()})`);
 
+  // The refund write-through's stamps are named bookkeeping by the store
+  // registry, not passed over by a name pattern.
+  ok(/agent402-refunds\.db\s+pg_sync_meta.*bookkeeping/.test(clean.stdout), `the refund ledger's pg_sync_meta is reported as bookkeeping (${clean.stdout.split("\n").find((l) => /pg_sync_meta/.test(l))?.trim() || "no line"})`);
+
   // A store whose file is not in --data, while its table holds rows.
   const partial = join(DIR, "partial");
   cpSync(data, partial, { recursive: true });
