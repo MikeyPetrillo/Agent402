@@ -1478,24 +1478,43 @@ export function persistLeaderboardHistoryPoint(snapshot, file = LEADERBOARD_HIST
 export const LEADERBOARD_FUNDING_FILE =
   process.env.LEADERBOARD_FUNDING_FILE || "/data/leaderboard-funding.json";
 let fundingStateCache = null;
+// With a database: the row version the cached state was read at (or last
+// saved as). A save is conditional on it, so a state that stands in for an
+// unread row, or one the row moved past, never replaces stored progress.
+let fundingStateVersion = null;
 async function loadSellerFundingState(file = LEADERBOARD_FUNDING_FILE) {
   if (fundingStateCache) return fundingStateCache;
-  let body = null;
   const d = docFor(file);
-  try { body = await d.load(null); } catch { /* no state yet: a fresh state */ }
+  let r = { ok: false };
+  try { r = await d.read({ retry: true }); } catch { /* no state yet: a fresh state */ }
+  const body = r.ok && r.exists ? r.body : null;
   const state = body ? parseFundingState(JSON.stringify(body), USDC) : createFundingState(USDC);
-  // A fresh state that stands in for an unread row is not kept: the next
-  // scan loads again, so the stored progress is resumed once it can be read
-  // (the stand-in's saves are held meanwhile).
-  if (d.backend === "pg" && d.loadState !== "ok") return state;
+  // A fresh state that stands in for an unread row is not kept, and never
+  // saved: the next scan loads again, so the stored progress is resumed once
+  // it can be read.
+  if (d.backend === "pg" && !r.ok) return state;
   fundingStateCache = state;
+  fundingStateVersion = d.backend === "pg" ? Number(r.version) || 0 : null;
   return fundingStateCache;
 }
 async function persistSellerFundingState(state, file = LEADERBOARD_FUNDING_FILE) {
   try {
-    return await docFor(file).save(JSON.parse(serializeFundingState(state)));
+    const d = docFor(file);
+    const body = JSON.parse(serializeFundingState(state));
+    if (d.backend !== "pg") return await d.save(body);
+    // Only the state read from the row is saved, and only over the version it was read at.
+    if (state !== fundingStateCache || fundingStateVersion === null) return false;
+    const r = await d.saveIfVersion(body, fundingStateVersion);
+    if (r.ok) { fundingStateVersion = r.version; return true; }
+    // The row moved on (another container saved): drop this copy, the next
+    // scan resumes from the row. A database error keeps it for the next try.
+    if (r.conflict) { fundingStateCache = null; fundingStateVersion = null; }
+    return false;
   } catch { return false; } // no /data volume (local dev, CI): the next scan reads every payer's history again
 }
+/** Tests only: forget the cached funding state. */
+export function __resetSellerFundingStateForTest() { fundingStateCache = null; fundingStateVersion = null; }
+export { loadSellerFundingState as __loadSellerFundingStateForTest, persistSellerFundingState as __persistSellerFundingStateForTest };
 
 // THE SWITCH (2026-09-28): the seller-funding reader and everything it feeds
 // the router, on by default. Off when LEADERBOARD_FUNDING_SCAN=off (read at

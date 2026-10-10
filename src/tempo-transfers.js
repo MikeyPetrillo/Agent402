@@ -196,13 +196,39 @@ export function feedHistoryDays(state) {
 /** Async variant for the scheduler: the stringify is still on-thread, but the
  *  write is not, and a failure never throws into the rebuild. */
 export async function persistFeedStateAsync(state, file = TEMPO_TRANSFERS_CACHE_FILE) {
-  try { return await docFor(file).save(state); } catch { return false; }
+  try {
+    const d = docFor(file);
+    if (d.backend !== "pg") return await d.save(state);
+    // With a database the save is conditional on the row version this file's
+    // state was last read at (or saved as). A state built while the row was
+    // unread has none and is not saved: it would replace stored progress.
+    // When the row moved on, the stored state is taken into this object (the
+    // caller's reference) and this round's additions are left for the next
+    // sync to fetch again.
+    if (!feedVersions.has(file)) return false;
+    const r = await d.saveIfVersion(state, feedVersions.get(file));
+    if (r.ok) { feedVersions.set(file, r.version); return true; }
+    if (r.conflict) {
+      const row = await d.read();
+      const stored = row.ok && row.exists ? shapeFeedState(row.body) : null;
+      if (row.ok) feedVersions.set(file, Number(row.version) || 0);
+      if (stored && state && typeof state === "object") { for (const k of Object.keys(state)) delete state[k]; Object.assign(state, stored); }
+    }
+    return false;
+  } catch { return false; }
 }
+// file -> the row version the feed state was last read at or saved as (database only).
+const feedVersions = new Map();
 /** The database copy of the feed state; null without a database or a row. */
 export async function loadFeedStateAsync(file = TEMPO_TRANSFERS_CACHE_FILE) {
   const d = docFor(file);
   if (d.backend !== "pg") return null;
-  try { return shapeFeedState(await d.load(null)); } catch { return null; }
+  try {
+    const r = await d.read({ retry: true });
+    if (!r.ok) return null;
+    feedVersions.set(file, Number(r.version) || 0);
+    return r.exists ? shapeFeedState(r.body) : null;
+  } catch { return null; }
 }
 /** True while the database copy has not been read (its load failed and is re-reading): a state built meanwhile is a stand-in. */
 export function feedStateUnread(file = TEMPO_TRANSFERS_CACHE_FILE) {
