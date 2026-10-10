@@ -135,7 +135,7 @@ try {
     const its = [{ id: "cas1", when: when(T0), text: text("cas1") }];
     const A = mk(its, { storePath: sp, clock: T0 + MIN }); const B = mk(its, { storePath: sp, clock: T0 + MIN });
     await A.q.ready(); await B.q.ready();
-    await sdb.documents.del(STATE_DOC_NAME);
+    await sdb.documents.put(STATE_DOC_NAME, { v: 1, records: [], slots: [] }); // a row exists: the claim's write is an update at a version
     const stale = await A.q._stateStore.read();      // A reads (its lease then lapses)
     await B.q.tick();                                 // B claims and posts meanwhile
     ok(B.sent.length === 1, "B posts the item");
