@@ -95,14 +95,50 @@ try {
   await a.flush();
   ok((await rowsOf("tx = $1", [SALE.tx])).length === 1, "a replayed settlement is one row: the tx hash is the primary key");
   // Two drains overlapping (two containers, or two ticks) claim disjoint rows.
+  // Below the lease: the claim itself (one UPDATE ... RETURNING per batch)
+  // hands two drains running at once different rows.
   const slow = stubStripe({ delayMs: 150 });
   const d1 = createShadowLedger({ env: ENV_ON, dbFile, fetchImpl: slow.impl, intervalMs: 0, log: quiet, batchSize: 1 });
   const d2 = createShadowLedger({ env: ENV_ON, dbFile, fetchImpl: slow.impl, intervalMs: 0, log: quiet, batchSize: 1 });
   await Promise.all([d1.ready(), d2.ready()]);
-  const [r1, r2] = await Promise.all([d1.drain(), d2.drain()]);
+  const [r1, r2] = await Promise.all([d1._drainUnleased(), d2._drainUnleased()]);
   ok(r1.attempted === 1 && r2.attempted === 1 && slow.calls.length === 2 && new Set(slow.calls.map((x) => x.key)).size === 2, `two overlapping drains claim DIFFERENT rows (${slow.calls.map((x) => x.key.slice(0, 6)).join(",")})`);
   await Promise.all([d1.drain(), d2.drain()]);
   ok(slow.calls.length === 2 && slow.created() === 2, "nothing is sent twice: both pending rows are recorded after one send each");
+  // Two containers: the drain in another process and this one, at once,
+  // through the lease. Between them every due row is sent exactly once.
+  {
+    const { spawn } = await import("node:child_process");
+    for (const n of ["e", "f", "0"]) await sdb.stateQuery(`INSERT INTO ${T} (tx, stripe_net, chain, slug, cents, price_usd, status, attempts, created_at, updated_at, next_at) VALUES ($1,'base','base','two-proc',500,5,'pending',0,$2,$2,0)`, [TX(n), Date.now()]);
+    const code = `
+      const { createShadowLedger } = await import(${JSON.stringify(new URL("../src/stripe-shadow-ledger.js", import.meta.url).href)});
+      const keys = [];
+      const impl = async (url, init) => { keys.push(init.headers["Idempotency-Key"]); await new Promise((r) => setTimeout(r, 150)); return { status: 200, json: async () => ({ id: "pi_child_" + keys.length }) }; };
+      const l = createShadowLedger({ env: { STRIPE_SHADOW_LEDGER: "on", STRIPE_SECRET_KEY: "sk_test_shadow" }, dbFile: process.env.SHADOW_FILE, fetchImpl: impl, intervalMs: 0, log: () => {}, batchSize: 3 });
+      await l.ready();
+      console.log("READY");
+      await new Promise((r) => process.stdin.once("data", r));
+      const r = await l.drain();
+      console.log("RESULT " + JSON.stringify({ r, keys }));
+      process.exit(0);
+    `;
+    const child = spawn(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, SHADOW_FILE: join(DIR, "child", SHADOW_DB_FILE) }, stdio: ["pipe", "pipe", "inherit"] });
+    let out = "";
+    const readyP = new Promise((res) => child.stdout.on("data", (x) => { out += x; if (out.includes("READY")) res(); }));
+    const doneP = new Promise((res) => child.on("exit", res));
+    await readyP;
+    const mine = stubStripe({ delayMs: 150 });
+    const p = createShadowLedger({ env: ENV_ON, dbFile, fetchImpl: mine.impl, intervalMs: 0, log: quiet, batchSize: 3 });
+    await p.ready();
+    child.stdin.write("go\n");
+    const rp = await p.drain();
+    await doneP;
+    const cr = JSON.parse((out.match(/RESULT (.*)/) || [])[1] || "{}");
+    const all = [...mine.calls.map((x) => x.key), ...(cr.keys || [])];
+    ok(all.length === 3 && new Set(all).size === 3 && ["e", "f", "0"].every((n) => all.includes(TX(n))), `two processes draining at once send each due row once (this ${mine.calls.length}, other ${(cr.keys || []).length}; ${JSON.stringify(rp)} / ${JSON.stringify(cr.r)})`);
+    ok((await rowsOf("slug = 'two-proc'")).every((r) => r.status === "recorded"), "...and every one of them is recorded");
+    await sdb.stateQuery(`DELETE FROM ${T} WHERE slug = 'two-proc'`); // the rest of the test counts its own rows
+  }
   const recorded = await rowsOf("status = 'recorded'");
   ok(recorded.length === 3 && recorded.every((r) => r.pi_id), "every posted row holds its PaymentIntent id");
   // A row mid-send on another container (sending, young) is left alone by a

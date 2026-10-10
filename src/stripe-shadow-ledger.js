@@ -636,7 +636,7 @@ export function createShadowLedger(deps = {}) {
   /** Resolves once every queued write has landed (tests and shutdown). */
   async function flush() { if (usePg) await drainInserts(); }
 
-  return { record, drain, start, stop, report, reportAsync, flush, ready: () => (usePg ? pgReady() : Promise.resolve(db !== null)), enabled, backend: usePg ? "pg" : "sqlite", live: live(), _db: db };
+  return { record, drain, start, stop, report, reportAsync, flush, ready: () => (usePg ? pgReady() : Promise.resolve(db !== null)), enabled, backend: usePg ? "pg" : "sqlite", live: live(), _db: db, _drainUnleased: drainUnleased };
 }
 
 // ---------------------------------------------------------------------------
