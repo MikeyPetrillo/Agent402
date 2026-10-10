@@ -778,14 +778,19 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   const { header } = await signCredential(Challenge.deserialize(offer.header));
   const sub = await E.activateFromCredential(header);
   advance(PERIOD);
-  let cancelP = null;
-  setCharge(() => { cancelP = E.cancel(sub.subId, E.manageToken(sub.subId)); return { reference: "0xrace" }; });
-  const kv = E._store, realPut = kv.put;
-  kv.put = async (k, v) => { if (k === `a402:sub:${sub.subId}` && cancelP) { const c = cancelP; cancelP = null; await c; } return realPut.call(kv, k, v); };
-  try { await E.refreshStatus(sub.subId); } finally { kv.put = realPut; }
-  if (cancelP) await cancelP;
+  // After the charge, the renewal's next write of the record (a put or a
+  // conditional write) first lets a whole cancel run.
+  let charged = false;
+  setCharge(() => { charged = true; return { reference: "0xrace" }; });
+  const kv = E._store, realPut = kv.put, realCas = kv.compareAndSet;
+  const cancelFirst = async (k) => { if (k === `a402:sub:${sub.subId}` && charged) { charged = false; await E.cancel(sub.subId, sub.manageToken); } };
+  kv.put = async (k, v) => { await cancelFirst(k); return realPut.call(kv, k, v); };
+  kv.compareAndSet = async (k, d) => { await cancelFirst(k); return realCas.call(kv, k, d); };
+  let st0;
+  try { st0 = await E.refreshStatus(sub.subId); } finally { kv.put = realPut; kv.compareAndSet = realCas; }
   const rec = await E._readRec(sub.subId);
   ok(rec.cancelAtPeriodEnd === true && rec.lastChargedPeriod === 1, `file store: a cancel during the renewal survives its write and the charge stands (cancel=${rec.cancelAtPeriodEnd}, period=${rec.lastChargedPeriod})`);
+  ok(rec.status === "active" && st0 === "active", `file store: the period the renewal paid is honoured until it ends (record ${rec.status}, answer ${st0})`);
   advance(PERIOD);
   const before = calls.charge;
   const st = await E.refreshStatus(sub.subId);

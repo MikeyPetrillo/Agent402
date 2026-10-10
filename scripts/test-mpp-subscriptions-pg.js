@@ -329,14 +329,18 @@ try {
     advance(PERIOD);
     let cancelA = null;
     Q.setCharge(() => { cancelA = P.engine.cancel(subA.subId, P.engine.manageToken(subA.subId)).then(() => P.engine.flush()); return { reference: "0xq-race-a" }; });
-    const kvQ = Q.engine._store, realPut = kvQ.put;
-    kvQ.put = async (k, v) => { if (k === key(subA.subId) && cancelA) { const c = cancelA; cancelA = null; await c; } return realPut.call(kvQ, k, v); };
+    // The renewal's next write of the record (a put or a conditional write) waits for the cancel.
+    const kvQ = Q.engine._store, realPut = kvQ.put, realCas = kvQ.compareAndSet;
+    const waitCancel = async (k) => { if (k === key(subA.subId) && cancelA) { const c = cancelA; cancelA = null; await c; } };
+    kvQ.put = async (k, v) => { await waitCancel(k); return realPut.call(kvQ, k, v); };
+    kvQ.compareAndSet = async (k, d) => { await waitCancel(k); return realCas.call(kvQ, k, d); };
     let stA;
-    try { stA = await Q.engine.refreshStatus(subA.subId); } finally { kvQ.put = realPut; }
+    try { stA = await Q.engine.refreshStatus(subA.subId); } finally { kvQ.put = realPut; kvQ.compareAndSet = realCas; }
     if (cancelA) await cancelA;
     await Q.engine.flush();
-    let rowA = (await rowBody())?.[key(subA.subId)];
+    const rowA = (await rowBody())?.[key(subA.subId)];
     ok(rowA?.cancelAtPeriodEnd === true && rowA?.lastChargedPeriod === 1 && rowA?.lastChargeTx === "0xq-race-a", `a cancel made during the other container's renewal survives its write, and the charge stands (status ${stA}; row cancel=${rowA?.cancelAtPeriodEnd} period=${rowA?.lastChargedPeriod})`);
+    ok(rowA?.status === "active" && stA === "active", `...and the period it paid is honoured: active until it ends (row ${rowA?.status}, answer ${stA})`);
     advance(PERIOD);
     const beforeA = Q.calls.charge;
     const stA2 = await Q.engine.refreshStatus(subA.subId);
