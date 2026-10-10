@@ -5,18 +5,25 @@
 // migration is proven complete store by store, not by one happy log line.
 //
 //   STATE_DATABASE_URL=... STATE_DB_SCHEMA=<the schema the boot imported into> \
-//     node scripts/state-migration-verify.js --data <dir the files live in>
+//     node scripts/state-migration-verify.js --data <dir the files live in> [--allow-lazy]
 //
 // Exit 1 on any store whose counts differ (an unexpired-only table, such as
-// the proof-of-work replay set, compares against the file's unexpired rows).
+// the proof-of-work replay set, compares against the file's unexpired rows),
+// on a known store whose file is missing from --data while its table holds
+// rows, and on a document that is read lazily and has no row yet ("NOT
+// IMPORTED": the boot never ran the feature that imports it; --allow-lazy
+// accepts those and still prints them). Counts only: the money ledgers are
+// compared row for row by scripts/state-ledger-checksum.js.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { stateDb, stateDbSchema, stateQuery, documents, records, logLines, imports, closeStateDb } from "../src/state-db.js";
+import { SQLITE_STORES, RECORD_DIRS, LOG_FILES, INDEX_CACHE } from "./lib/state-stores.mjs";
 
 const args = process.argv.slice(2);
 const opt = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : null; };
 const dataDir = opt("--data");
+const allowLazy = args.includes("--allow-lazy");
 if (!dataDir || !existsSync(dataDir)) { console.error("usage: --data <dir>"); process.exit(2); }
 if (!(await stateDb())) { console.error("STATE_DATABASE_URL is required"); process.exit(2); }
 const S = stateDbSchema();
@@ -30,19 +37,20 @@ const f = (name) => join(dataDir, name);
 const has = (name) => existsSync(f(name));
 
 // ---- SQLite ledgers: every table ----------------------------------------------
-const sqliteMap = {
-  "agent402-sales.db": { sales: "sales", sale_feedback: "sale_feedback" },
-  "agent402-refunds.db": { refunds: "refunds" },
-  "agent402-decide.db": { decisions: "decide_ledger_decisions", credits: "decide_ledger_credits", runs: "decide_ledger_runs", feedback: "decide_ledger_feedback", seller_spend: "decide_ledger_seller_spend" },
-  "agent402-stats.db": { counters: "stats_counters", tool_counts: "stats_tool_counts", meta: "stats_meta", recent_calls: "stats_recent_calls", paid_tool_counts: "stats_paid_tool_counts", heartbeat_tool_counts: "stats_heartbeat_tool_counts", charged_failures: "stats_charged_failures", daily_calls: "stats_daily_calls", daily_upstream_calls: "stats_daily_upstream_calls", daily_upstream_spend: "stats_daily_upstream_spend", seller_registrations: "stats_seller_registrations" },
-  "agent402.db": { kv: "memory_kv", grants: "memory_grants", memlog: "memory_memlog", docs: "memory_docs" },
-  "status.db": { status_probes: "status_probes" },
-  "agent402-economy.db": { daily: "economy_daily" },
-  "agent402-revenue.db": { transfers: "revenue_transfers", cursors: "revenue_cursors" },
-  "agent402-stripe-shadow.db": { shadow: "stripe_shadow" },
-};
+// The replay set (agent402-pow.db) is compared on its unexpired rows below.
+const sqliteMap = Object.fromEntries(SQLITE_STORES.filter((x) => x.file !== "agent402-pow.db").map((x) => [x.file, x.tables]));
+// A known store with no file in --data: reported, never skipped. A table
+// holding rows with no file to have come from is a difference.
+const tableRows = async (t) => { try { return await count(t); } catch { return null; } };
+async function reportMissing(store, part, rowsInTable) {
+  rows.push({ store, file: part, fileCount: null, tableCount: rowsInTable, ok: !rowsInTable, note: rowsInTable ? "file missing from --data, table has rows" : "file missing from --data, table empty" });
+}
 for (const [file, map] of Object.entries(sqliteMap)) {
-  if (!has(file)) continue;
+  if (!has(file)) {
+    let n = 0; for (const t of Object.values(map)) n += (await tableRows(t)) || 0;
+    await reportMissing(file, "(file)", n);
+    continue;
+  }
   const tables = sqliteTables(f(file));
   for (const t of tables) {
     const pg = map[t];
@@ -54,7 +62,8 @@ for (const [file, map] of Object.entries(sqliteMap)) {
   }
 }
 // The replay set: the file keeps expired rows the import skips.
-if (has("agent402-pow.db")) {
+if (!has("agent402-pow.db")) await reportMissing("agent402-pow.db", "(file)", (await tableRows("pow_used")) || 0);
+else {
   const now = Date.now();
   const live = sqliteCount(f("agent402-pow.db"), "pow_used", `where exp > ${now}`);
   const all = sqliteCount(f("agent402-pow.db"), "pow_used");
@@ -62,8 +71,8 @@ if (has("agent402-pow.db")) {
 }
 // ---- record directories ----------------------------------------------------
 const TASK_TTL_MS = 60 * 60_000; // task handles expire after an hour; expired files are not imported
-for (const [dir, collection] of [["credits", "credits"], ["human-checkout", "human-checkout"], ["mcp-tasks", "mcp-tasks"], ["async-jobs", "async-jobs"], ["traffic", "traffic"]]) {
-  if (!has(dir) || !statSync(f(dir)).isDirectory()) continue;
+for (const { dir, collection } of RECORD_DIRS) {
+  if (!has(dir) || !statSync(f(dir)).isDirectory()) { await reportMissing(dir + "/", "(directory)", await records.count(collection)); continue; }
   let files = readdirSync(f(dir)).filter((x) => x.endsWith(".json") && !x.endsWith(".tmp"));
   let note = collection;
   if (collection === "mcp-tasks" || collection === "async-jobs") { const live = files.filter((x) => Date.now() - statSync(join(f(dir), x)).mtimeMs < TASK_TTL_MS); note = `${files.length - live.length} expired handle(s) not imported`; files = live; }
@@ -86,21 +95,27 @@ for (const x of docFiles) {
   if (fileBody === undefined) { rows.push({ store: x, file: "unparseable", fileCount: null, tableCount: row ? 1 : 0, ok: false, note: "file is not JSON" }); continue; }
   const mark = await imports.done(x);
   const lazy = !row && LAZY[x];
-  rows.push({ store: x, file: `top-level size ${sizeOf(fileBody)}`, fileCount: sizeOf(fileBody), tableCount: row ? sizeOf(row.body) : null, ok: (!!row && sizeOf(row.body) === sizeOf(fileBody)) || !!lazy, note: row ? (mark ? "imported" : "row, no mark") : lazy ? `lazy: ${lazy}` : "NO ROW" });
+  rows.push({ store: x, file: `top-level size ${sizeOf(fileBody)}`, fileCount: sizeOf(fileBody), tableCount: row ? sizeOf(row.body) : null, ok: (!!row && sizeOf(row.body) === sizeOf(fileBody)) || (!!lazy && allowLazy), lazy: !!lazy, note: row ? (mark ? "imported" : "row, no mark") : lazy ? `NOT IMPORTED (lazy: ${lazy})` : "NO ROW" });
 }
 // ---- append logs --------------------------------------------------------------
-for (const [file, stream] of [["outbound-spend.ndjson", "outbound-spend"], ["wishes.jsonl", "wishes"]]) {
-  if (!has(file)) continue;
+for (const { file, stream } of LOG_FILES) {
+  if (!has(file)) { await reportMissing(file, "(file)", await logLines.count(stream)); continue; }
   const valid = readFileSync(f(file), "utf8").split("\n").filter(Boolean).filter((l) => { try { const r = JSON.parse(l); return r && typeof r === "object"; } catch { return false; } }).length;
   check(file, "valid lines", valid, await logLines.count(stream));
 }
 // ---- the crawl cache: one row per origin ----------------------------------------
-if (has("x402-index-cache.ndjson") || has("x402-index-cache.json")) {
+// The NDJSON file's first line is a header ({savedAt, format, origins}), not
+// an origin; every following line is one [origin, entry] pair, counted the way
+// the importer accepts it.
+const isEntry = (e) => Array.isArray(e) && typeof e[0] === "string" && e[0] && e[1] && typeof e[1] === "object";
+if (has(INDEX_CACHE.file) || has("x402-index-cache.json")) {
   let n = 0;
-  if (has("x402-index-cache.ndjson")) n = readFileSync(f("x402-index-cache.ndjson"), "utf8").split("\n").filter(Boolean).length;
-  else { try { const j = JSON.parse(readFileSync(f("x402-index-cache.json"), "utf8")); n = Array.isArray(j?.entries) ? j.entries.length : 0; } catch { n = null; } }
-  check("x402-index-cache", "origins", n, await records.count("x402-index"));
-}
+  if (has(INDEX_CACHE.file)) {
+    const lines = readFileSync(f(INDEX_CACHE.file), "utf8").split("\n").filter(Boolean);
+    n = lines.slice(1).filter((l) => { try { return isEntry(JSON.parse(l)); } catch { return false; } }).length;
+  } else { try { const j = JSON.parse(readFileSync(f("x402-index-cache.json"), "utf8")); n = Array.isArray(j?.entries) ? j.entries.filter(isEntry).length : 0; } catch { n = null; } }
+  check("x402-index-cache", "origins", n, await records.count(INDEX_CACHE.collection));
+} else await reportMissing("x402-index-cache", "(file)", await records.count(INDEX_CACHE.collection));
 
 const bad = rows.filter((r) => !r.ok);
 const pad = (s, n) => String(s ?? "").padEnd(n);

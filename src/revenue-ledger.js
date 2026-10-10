@@ -1602,8 +1602,14 @@ export function ledgerBuyerRepeat7(wallets, { events, now = Date.now(), weeks = 
   };
 }
 
+// The loop runs wherever its rows persist: the volume, REVENUE_LEDGER=true,
+// or the state database (the only place they persist once the volume is gone).
+export function revenueLedgerLoopEnabled(env = process.env, { hasDataDir = HAS_DATA_DIR } = {}) {
+  return hasDataDir || env.REVENUE_LEDGER === "true" || stateDbEnabled(env);
+}
+
 export function startRevenueLedger({ walletAddress, solanaWallet, stellarWallet, algorandWallet, baseExtraWallets = [], algorandExtraWallets = [] }) {
-  const enabled = HAS_DATA_DIR || process.env.REVENUE_LEDGER === "true";
+  const enabled = revenueLedgerLoopEnabled();
   if (loopStarted || !enabled || (!walletAddress && !solanaWallet && !stellarWallet && !algorandWallet)) return false;
   loopStarted = true;
   // The sync work runs under a lease (two containers never advance the
