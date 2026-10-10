@@ -284,6 +284,30 @@ try {
     ok(JSON.stringify(await status(h3)) === before3, "a change is guarded on the state it moves from: a second run is a no-op");
   }
 
+  // ---- (10) the gateway-status word over both dead-letters -------------------------
+  {
+    const { deadLetterWord } = await import("../src/ledger-mirror.js");
+    await settle();
+    const word = (o = {}) => deadLetterWord([sl.salesDeadLetterState(), rl.refundDeadLetterState()], o);
+    ok(word() === "none" && sl.salesDeadLetterState().oldestAt === null, "nothing on disk: none");
+    cutRelay();
+    await sl.recordSale({ slug: "word", priceUsd: 0.01, rail: "usdc", network: "base", payer: PAYER, tx: "0xword-sale" });
+    await rl.recordRefundOwed({ slug: "word", network: "eip155:8453", payer: PAYER, priceUsd: 0.01, tx: "0xword-debt", httpStatus: 502 });
+    ok(word() === "pending" && sl.salesDeadLetterState().waiting === 1 && rl.refundDeadLetterState().waiting === 1, "a sale and a debt waiting for the database: pending");
+    ok(word({ now: Date.now() + 21 * 60_000 }) === "stuck" && word({ now: Date.now() + 21 * 60_000, stuckMinutes: 30 }) === "pending", "an entry older than the limit (20 minutes by default): stuck");
+    const queued = sl.recordSale({ slug: "word", priceUsd: 0.01, rail: "usdc", network: "base", payer: PAYER, tx: "0xword-sale2" });
+    ok(sl.salesDeadLetterState().total === 2 && sl.salesDeadLetterState().waiting === 1, "a write still queued is on disk but not counted as waiting");
+    await queued;
+    healRelay();
+    await settle();
+    ok(word() === "none", "once they land: none");
+    ok(word({ enabled: false }) === "off", "without a state database: off");
+    const hb = (await import("node:fs")).readFileSync(join(ROOT, ".github/workflows/heartbeat.yml"), "utf8");
+    const step = hb.slice(hb.indexOf("- name: Ledger dead-letter check"), hb.indexOf("- name:", hb.indexOf("- name: Ledger dead-letter check") + 10));
+    ok(/\.ledgerDeadLetter\.status/.test(step) && /if \[ "\$WORD" = "stuck" \]; then sleep 30; WORD=\$\(read_dl\); fi/.test(step) && /stuck\)\s+if \[ -z "\$OPEN" \]; then\s+gh issue create/.test(step),
+      "the heartbeat reads ledgerDeadLetter.status, confirms stuck on a second reading and opens an issue");
+  }
+
   // ---- (5) the NDJSON fallback ---------------------------------------------------
   {
     const file = join(DIR, "nd", "dl.ndjson");

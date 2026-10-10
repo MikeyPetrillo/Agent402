@@ -461,6 +461,10 @@ export async function salesLedgerRefresh() {
 }
 /** Rows waiting in the local dead-letter (database mode; 0 in file mode). */
 export function salesDeadLetterCount() { return deadLetter ? deadLetter.size() : 0; }
+/** The dead-letter for the gateway-status word: entries waiting for the replay, all entries on disk, and when the oldest was written (null when none). */
+export function salesDeadLetterState() {
+  return deadLetter ? { waiting: deadLetter.list().length, total: deadLetter.size(), oldestAt: deadLetter.oldestAt() } : { waiting: 0, total: 0, oldestAt: null };
+}
 /** Test hook: the queued entries, oldest first. */
 export function _salesDeadLetterEntries() { return deadLetter ? deadLetter.list() : []; }
 

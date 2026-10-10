@@ -633,6 +633,39 @@ jobs:
               ;;
           esac
 
+      # Sales and refund debts kept on the container's local disk because the
+      # state database has not taken them (src/ledger-mirror.js): one word on
+      # /api/gateway-status. "stuck" means an entry has waited past
+      # LEDGER_DEAD_LETTER_STUCK_MINUTES; without the /data volume that disk
+      # dies with the container, so a redeploy would lose those rows. Two
+      # readings 30 s apart, like the state database check. "pending" (the
+      # replay is working through them), "none", "off" and "unknown" never page;
+      # none and off close.
+      - name: Ledger dead-letter check (alarm when sales or debts wait on local disk)
+        if: always()
+        continue-on-error: true
+        run: |
+          read_dl() { curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.ledgerDeadLetter.status // "unknown"' 2>/dev/null || echo unknown; }
+          WORD=$(read_dl)
+          if [ "$WORD" = "stuck" ]; then sleep 30; WORD=$(read_dl); fi
+          echo "ledger dead-letter: $WORD"
+          TITLE="Ledger rows waiting on local disk (dead-letter stuck)"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            stuck)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports ledgerDeadLetter.status=stuck on two readings 30 s apart: a sale or a refund debt has waited on the container's local disk for the state database longer than LEDGER_DEAD_LETTER_STUCK_MINUTES (default 20). The replay retries every 15 s; while it cannot land them they exist only on that container, so do not redeploy or restart it until they land. Check stateDb on the same endpoint, the Postgres service on Railway, and the [sales-ledger] / [refund-ledger] log lines (a row the database refuses is named there). The operator read of /api/gateway-status has the counts. Auto-closes when the word is none." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still stuck at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            none|off)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the ledger dead-letter reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Transactional email (src/email.js): one word on /api/gateway-status,
       # recorded from real sends and kept on the volume. exhausted / failing
       # page; ok closes; unknown and unconfigured do neither. Built 2026-10-01

@@ -296,6 +296,27 @@ export function createLedgerWriter({ enqueue, ready, deadLetter, warnOnce, befor
   };
   return writer;
 }
+/** After this long on local disk an entry reads "stuck" (LEDGER_DEAD_LETTER_STUCK_MINUTES). */
+export const DEAD_LETTER_STUCK_MINUTES = Number(process.env.LEDGER_DEAD_LETTER_STUCK_MINUTES) || 20;
+/**
+ * One word for the ledgers' dead-letters together (each state from a ledger's
+ * deadLetterState()): "stuck" when any entry has been on local disk longer
+ * than `stuckMinutes` (a write that has not reached Postgres in that time,
+ * kept only on this container's disk), "pending" when an entry waits for the
+ * replay, "none" otherwise; "off" without a state database. An entry whose
+ * write is still queued is not "pending" (every write passes through the
+ * dead-letter), but it is "stuck" once it is old.
+ */
+export function deadLetterWord(states, { enabled = true, now = Date.now(), stuckMinutes = DEAD_LETTER_STUCK_MINUTES } = {}) {
+  if (!enabled) return "off";
+  let waiting = 0, oldest = null;
+  for (const s of states) {
+    waiting += Number(s?.waiting) || 0;
+    if (s?.oldestAt != null && (oldest == null || s.oldestAt < oldest)) oldest = s.oldestAt;
+  }
+  if (oldest != null && now - oldest > stuckMinutes * 60_000) return "stuck";
+  return waiting > 0 ? "pending" : "none";
+}
 /** A Postgres error about the row itself (bad data, a constraint), not the connection: retrying the same row cannot help. */
 export function isRowError(e) {
   const c = String(e?.code || "");

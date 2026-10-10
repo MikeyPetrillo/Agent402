@@ -449,6 +449,10 @@ export async function refundLedgerRefresh() {
 }
 /** Debts waiting in the local dead-letter (database mode; 0 in file mode). */
 export function refundDeadLetterCount() { return deadLetter ? deadLetter.size() : 0; }
+/** The dead-letter for the gateway-status word: entries waiting for the replay, all entries on disk, and when the oldest was written (null when none). */
+export function refundDeadLetterState() {
+  return deadLetter ? { waiting: deadLetter.list().length, total: deadLetter.size(), oldestAt: deadLetter.oldestAt() } : { waiting: 0, total: 0, oldestAt: null };
+}
 
 /**
  * Does this settle receipt PROVE the buyer was charged?
