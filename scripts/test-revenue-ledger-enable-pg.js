@@ -10,6 +10,7 @@ import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-revenue-ledger-enable-pg" });
 const DIR = mkdtempSync(join(tmpdir(), "rev-enable-"));
 process.env.REVENUE_LEDGER_DB = join(DIR, "agent402-revenue.db");
+process.env.SALES_LEDGER_DB = join(DIR, "agent402-sales.db");
 delete process.env.REVENUE_LEDGER;
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
