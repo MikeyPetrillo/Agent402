@@ -706,7 +706,7 @@ export function unloadedStateStores() {
   const out = [];
   for (const [n, s] of storeStates) if (s !== "loaded") out.push(n);
   if (unloadedProbe) { try { for (const n of unloadedProbe() || []) out.push(String(n)); } catch { /* a probe never breaks the status */ } }
-  return out;
+  return [...new Set(out)];
 }
 /** Whether every registered store has loaded. Always true without a database. */
 export function stateStoresLoaded() {

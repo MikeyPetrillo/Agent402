@@ -49,6 +49,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
 import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, NEWER_FILE_GRACE_MS, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError } from "./ledger-mirror.js";
+import { retryingLoad } from "./store-retry.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DATA_DIR = process.env.REFUND_DB_DIR || (HAS_DATA_DIR ? "/data" : "/tmp");
@@ -186,7 +187,6 @@ const fileUpsert = fileDb ? fileDb.prepare(mirrorUpsert.source) : null;
 const num = (v) => (v == null ? null : Number(v));
 let watermark = 0;     // refresh pulls rows stamped after this (database clock, ms)
 let loaded = false;    // the first pull finished: the readers answer from a full mirror
-let ready = null;
 let refreshing = false;
 const warnOnce = makeWarnOnce("refund-ledger");
 const enqueue = serialQueue();
@@ -348,19 +348,15 @@ async function firstLoad() {
   await pullAll();
   everyMs(() => enqueue(replayDeadLetters).then(refresh), REFRESH_MS);
 }
-function readyP() {
-  if (!USE_PG) return Promise.resolve();
-  if (!ready) {
-    ready = firstLoad().catch((e) => {
-      ready = null; // the next write or refresh tries the load again
-      warnOnce("first load", e);
-      throw e;
-    });
-  }
-  return ready;
-}
+// The first load is retried until it lands (src/store-retry.js): a failed
+// attempt is forgotten so the next write or refresh tries again, and a
+// backoff timer retries it when nothing calls, so a database blip at boot
+// never leaves the mirror empty until the next deploy.
+const loader = USE_PG ? retryingLoad("refund ledger", firstLoad, { log: (m) => console.warn(m) }) : null;
+function readyP() { return loader ? loader.ready() : Promise.resolve(); }
 if (USE_PG) {
-  trackStoreReady(readyP());
+  trackStoreReady(loader.eventually);
+  readyP().catch(() => {});
   // A dead-lettered debt is retried even while the first load keeps failing
   // (the refresh timer starts only after it succeeds).
   everyMs(() => (deadLetter.size() ? enqueue(async () => { await readyP(); await replayDeadLetters(); }) : null), REFRESH_MS);

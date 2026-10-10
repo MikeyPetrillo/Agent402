@@ -544,7 +544,8 @@ import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, econom
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
-import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb } from "./state-db.js";
+import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores } from "./state-db.js";
+import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
@@ -9966,10 +9967,13 @@ console.log(`[upstream-costs] ${upstreamCostsLoaded() ? `loaded (${upstreamCosts
 // Every store that lives in the state database has registered its first
 // load; wait for them (bounded) so no request sees a store still empty
 // because its row has not arrived. Without a database this resolves at once.
+// The stores that retry their own first load (src/store-retry.js) report
+// by label through the probe, so the status and this line name them.
+setUnloadedStoresProbe(unloadedStores);
 {
   const t0 = Date.now();
   const r = await stateStoresReady({ timeoutMs: 15_000 });
-  if (r !== "ready") console.warn(`[state-db] stores not ready after ${Date.now() - t0}ms (${r}); serving with what has loaded`);
+  if (r !== "ready") console.warn(`[state-db] stores not ready after ${Date.now() - t0}ms (${r}); serving with what has loaded (still loading: ${unloadedStateStores().slice(0, 12).join(", ") || "none named"})`);
   else if (stateDbEnabled()) console.log(`[state-db] stores loaded in ${Date.now() - t0}ms; listening`);
 }
 const httpServer = app.listen(PORT, () =>

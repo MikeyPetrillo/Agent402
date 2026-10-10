@@ -52,6 +52,8 @@ const code = `
   const sh = await import("./src/stripe-shadow-ledger.js");
   const wi = await import("./src/wish.js");
   const rv = await import("./src/revenue-ledger.js");
+  const sl = await import("./src/sales-ledger.js");
+  const rl = await import("./src/refund-ledger.js");
   const { createCredits } = await import("./src/credits.js");
   const { openDecideLedger } = await import("./src/decide/ledger.js");
   const { createHumanCheckout } = await import("./src/human-checkout.js");
@@ -66,6 +68,10 @@ const code = `
   const hc = createHumanCheckout({ stripe, generate: async () => ({ report: "# R\\n\\nText. [1]", title: "T", sources: [], tables: [] }), baseUrl: "https://agent402.tools", storeDir: H + "/checkout", onSale: () => {}, log: () => {} });
   const shadow = sh.createShadowLedger({ env: { ...process.env, STRIPE_SHADOW_LEDGER: "on", STRIPE_SECRET_KEY: "sk_test_x", STRIPE_SHADOW_INTERVAL_MS: "0" }, dbFile: H + "/shadow.db", log: () => {} });
   shadow.record({ slug: "early", priceUsd: 0.01, rail: "usdc", network: "base", tx: "0x" + "2".repeat(64) }); // during the outage
+  // The server's boot wiring: the retrying stores' labels feed the status.
+  db.setUnloadedStoresProbe((await import("./src/store-retry.js")).unloadedStores);
+  const bootWait = await db.stateStoresReady({ timeoutMs: 500 });
+  res.statusDuring = { wait: bootWait, word: db.stateDbStatus(), unloaded: db.unloadedStateStores() };
   await wait(6000); // the database has been back for about 4 s; nothing has called most stores since the boot
 
   await t("credits", async () => { const m = await credits.claim("cs_credit"); const a = await credits.authorize(m.key, 0.01); return m.status === "minted" && a.ok === true; });
@@ -95,6 +101,7 @@ const code = `
   await t("shadow", async () => { shadow.record({ slug: "late", priceUsd: 0.01, rail: "usdc", network: "base", tx: "0x" + "1".repeat(64) }); await shadow.flush(); const n = Number((await db.stateQuery("SELECT count(*) n FROM " + db.stateDbSchema() + ".stripe_shadow")).rows[0].n); return n === 2 && shadow.report().live !== false; });
   await t("wish", async () => { wi.recordWish({ need: "a wish after the blip", source: "api" }); await wait(300); const n = Number((await db.stateQuery("SELECT count(*) n FROM " + db.stateDbSchema() + ".log_lines WHERE stream = 'wishes'")).rows[0].n); return n === 2 && wi.getWishesAggregate().totalWishes === 2; });
   await t("revenue", async () => !(await rv.ledgerStoreReady()).error);
+  res.statusAfter = { word: db.stateDbStatus(), unloaded: db.unloadedStateStores() };
   console.log("RESULT " + JSON.stringify(res));
   process.exit(0);
 `;
@@ -102,7 +109,7 @@ const env = {
   ...process.env, STATE_DATABASE_URL: proxyUrl, STATE_DB_SCHEMA: schema, NODE_ENV: "test", FREE_MODE: "true", H_DIR: d,
   STATE_STORE_RETRY_MS: "300", STATE_STORE_RETRY_MAX_MS: "1000", POW_PG_REFRESH_MS: "500", POW_SECRET: "blip-secret", POW_DIFFICULTY: "8", POW_ALLOW_EPHEMERAL: "true",
   STATS_DB_DIR: d, POW_DB_PATH: join(d, "pow.db"), STATUS_DB_PATH: join(d, "status.db"), X402_ECONOMY_DB: join(d, "econ.db"), WISH_FILE: join(d, "wishes.jsonl"),
-  REVENUE_LEDGER_DB: join(d, "rev.db"), STATE_DB_POOL_MAX: "6",
+  REVENUE_LEDGER_DB: join(d, "rev.db"), SALES_LEDGER_DB: join(d, "sales.db"), REFUND_DB_DIR: d, STATE_DB_POOL_MAX: "6",
 };
 const out = await new Promise((res) => {
   const c = spawn(process.execPath, ["--input-type=module", "-e", code], { cwd: ROOT, env });
@@ -116,6 +123,19 @@ if (!m) console.error(out.e.slice(-2000));
 const r = m ? JSON.parse(m[1]) : {};
 for (const k of ["credits", "decide", "checkout", "stats", "status", "economy", "pow", "shadow", "wish", "revenue"]) {
   ok(r[k] === true, `${k}: works once the database answers after a failed first load (${JSON.stringify(r[k])})`);
+}
+// While a first load is still failing the status says so and names the store;
+// once every store has landed it reads on and names none.
+const during = r.statusDuring || {};
+ok(during.wait === "timeout" && during.word === "degraded" && ["stats tally", "status history", "economy history", "sales ledger", "refund ledger"].every((l) => (during.unloaded || []).includes(l)), `status during the outage: degraded, the retrying stores named (${JSON.stringify(during).slice(0, 300)})`);
+ok(new Set(during.unloaded || []).size === (during.unloaded || []).length, "a store is named once");
+ok(r.statusAfter?.word === "on" && (r.statusAfter?.unloaded || []).length === 0, `status after recovery: on, nothing unloaded (${JSON.stringify(r.statusAfter)})`);
+// The server sets the same probe before its boot wait.
+{
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(join(ROOT, "src/server.js"), "utf8");
+  const at = src.indexOf("setUnloadedStoresProbe(unloadedStores)"), wait = src.indexOf("await stateStoresReady(");
+  ok(at > 0 && wait > at, "src/server.js sets the retrying stores' probe before its boot wait");
 }
 proxy.close(); for (const s of socks) s.destroy();
 await sdb.__dropStateSchema().catch(() => {});
