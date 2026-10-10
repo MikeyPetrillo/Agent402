@@ -202,6 +202,15 @@ await sdb.documents.put("loading-doc", { kept: true });
   relay.heal();
   await sdb.stateQuery("SELECT 1"); // any good statement after the failure
   ok(await until(async () => (await sdb.documents.get("wake-doc")).body.v === 1, 3000), "a statement that succeeds after the outage wakes the held save (no 60 s backoff)");
+  // A failed load's re-read waiting on the same long backoff is woken too.
+  await sdb.documents.put("wake-load-doc", { w: 1 });
+  relay.cut();
+  const ldoc = createJsonDocument({ name: "wake-load-doc", log: () => {}, failLog: () => {}, loadRetryDelaysMs: [] });
+  await ldoc.load(null);
+  ok(ldoc.loadState === "failed", "precondition: the load failed");
+  relay.heal();
+  await sdb.stateQuery("SELECT 1");
+  ok(await until(() => ldoc.loadState === "ok", 3000), "a statement that succeeds after the outage wakes the background re-read (no 60 s backoff)");
   // A save whose retry waits (no statement has succeeded since) is sent by the shutdown flush.
   relay.cut();
   await fdoc.save({ v: 7 });
