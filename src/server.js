@@ -2471,13 +2471,13 @@ const _followups = createFollowups({
   onEvent: ({ step, kind }) => { try { capturePostHogHumanFunnel({ step, kind }); } catch { /* telemetry never breaks the engine */ } },
 });
 if (process.env.FOLLOWUPS !== "off") _followups.start();
-app.get("/followups/stop", (req, res) => {
-  const r = _followups.stop(String(req.query.id || ""), String(req.query.k || ""));
+app.get("/followups/stop", async (req, res) => {
+  const r = await _followups.stopAsync(String(req.query.id || ""), String(req.query.k || ""));
   res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
   if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The link is invalid. <a href="/company#contact">Contact us</a> and we will stop the emails by hand.</p>`));
   res.send(alertPage("Done", `<p>No more follow-up emails about that purchase. Your report link keeps working.</p><p><a href="/reports">Back to reports</a></p>`));
 });
-app.post("/followups/stop", (req, res) => { const r = _followups.stop(String(req.query.id || ""), String(req.query.k || "")); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
+app.post("/followups/stop", async (req, res) => { const r = await _followups.stopAsync(String(req.query.id || ""), String(req.query.k || "")); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
 app.get("/__operator/followups.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json(_followups.stats());
@@ -2514,20 +2514,20 @@ app.post("/api/alerts", express.json({ limit: "4kb" }), async (req, res) => {
     res.status(500).json({ error: "Could not sign you up. Please try again." });
   }
 });
-app.get("/alerts/confirm", (req, res) => {
-  const r = _freeAlerts.confirm(String(req.query.id || ""), String(req.query.k || ""));
+app.get("/alerts/confirm", async (req, res) => {
+  const r = await _freeAlerts.confirmAsync(String(req.query.id || ""), String(req.query.k || ""));
   res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
   if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The confirmation link is invalid or the alert was unsubscribed. <a href="/reports">Back to reports</a>.</p>`));
   res.send(alertPage("Alert confirmed", `<p>You will get an email when there are new ${escHtml(ALERT_KIND_LABEL(r.kind, r.target))}. One a day at most, only when something changes.</p><p><a href="/monitors?product=${encodeURIComponent(r.product)}&target=${encodeURIComponent(r.target)}">Want the full report re-run and emailed automatically?</a></p><p><a href="/reports">Back to reports</a></p>`));
 });
-app.get("/alerts/unsubscribe", (req, res) => {
-  const r = _freeAlerts.unsubscribe(String(req.query.id || ""), String(req.query.k || ""));
+app.get("/alerts/unsubscribe", async (req, res) => {
+  const r = await _freeAlerts.unsubscribeAsync(String(req.query.id || ""), String(req.query.k || ""));
   res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
   if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The unsubscribe link is invalid. <a href="/company#contact">Contact us</a> and we will remove you by hand.</p>`));
   res.send(alertPage("Unsubscribed", `<p>No more emails about ${escHtml(r.target)}. <a href="/reports">Back to reports</a></p>`));
 });
 // One-click unsubscribe (RFC 8058): mail clients POST the List-Unsubscribe URL.
-app.post("/alerts/unsubscribe", (req, res) => { const r = _freeAlerts.unsubscribe(String(req.query.id || ""), String(req.query.k || "")); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
+app.post("/alerts/unsubscribe", async (req, res) => { const r = await _freeAlerts.unsubscribeAsync(String(req.query.id || ""), String(req.query.k || "")); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
 // ---- weekly digest routes (src/wallet-digest.js) ----
 app.get("/digest", (_req, res) => htmlCache(res, 300, 900).send(digestPage(BASE_URL)));
 app.post("/api/digest", express.json({ limit: "8kb" }), async (req, res) => {
@@ -2543,19 +2543,19 @@ app.post("/api/digest", express.json({ limit: "8kb" }), async (req, res) => {
     res.status(500).json({ error: "Could not subscribe. Please try again." });
   }
 });
-app.get("/digest/confirm", (req, res) => {
-  const r = _walletDigest.confirm(String(req.query.id || ""), String(req.query.k || ""));
+app.get("/digest/confirm", async (req, res) => {
+  const r = await _walletDigest.confirmAsync(String(req.query.id || ""), String(req.query.k || ""));
   res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
   if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The confirmation link is invalid or the digest was unsubscribed. <a href="/digest">Subscribe again</a>.</p>`));
   res.send(alertPage("Digest confirmed", `<p>Your first digest arrives within the hour, then one a week. Nothing is sent for a quiet week. <a href="/tools/my-usage">See the full history now</a>.</p>`));
 });
-app.get("/digest/unsubscribe", (req, res) => {
-  const r = _walletDigest.unsubscribe(String(req.query.id || ""), String(req.query.k || ""));
+app.get("/digest/unsubscribe", async (req, res) => {
+  const r = await _walletDigest.unsubscribeAsync(String(req.query.id || ""), String(req.query.k || ""));
   res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
   if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The unsubscribe link is invalid. <a href="/company#contact">Contact us</a> and we will remove you by hand.</p>`));
   res.send(alertPage("Unsubscribed", `<p>No more digests. Your address has been removed. <a href="/digest">Subscribe again</a> any time.</p>`));
 });
-app.post("/digest/unsubscribe", (req, res) => { const r = _walletDigest.unsubscribe(String(req.query.id || ""), String(req.query.k || "")); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
+app.post("/digest/unsubscribe", async (req, res) => { const r = await _walletDigest.unsubscribeAsync(String(req.query.id || ""), String(req.query.k || "")); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
 app.get("/__operator/digest.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json(_walletDigest.stats());
