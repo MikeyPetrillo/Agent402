@@ -50,6 +50,7 @@ import { createHash } from "node:crypto";
 import { join, basename } from "node:path";
 import { sendReportReadyEmail } from "./email.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
 
 // The products the human door sells by card. The CARD price is not the agent
 // price: the card processor takes a percentage plus a fixed fee per charge, and
@@ -371,12 +372,19 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     await refreshPublicMirror();
     return records + indexes;
   }
-  const ready = USE_PG ? trackStoreReady(importOnce(basename(dir), { source: dir, run: importDir }).then(rollForwardIfFilesNewer)) : Promise.resolve();
-  ready.catch((e) => log(`[human-checkout] import into the state database failed: ${String(e?.message || e).slice(0, 160)}`));
+  // The first load is retried until it lands: a failed attempt is
+  // forgotten, so the next call tries again, and a background timer retries
+  // for a store nobody calls.
+  const loader = USE_PG ? retryingLoad("[human-checkout]", async () => {
+    await importOnce(basename(dir), { source: dir, run: importDir });
+    await rollForwardIfFilesNewer();
+  }, { log }) : null;
+  const readyP = () => (loader ? loader.ready() : Promise.resolve());
+  if (loader) { trackStoreReady(loader.eventually); readyP().catch(() => {}); }
 
-  const readRec = USE_PG ? async (id) => { await ready; return pgGet(id); } : (id) => readJson(recPath(id));
+  const readRec = USE_PG ? async (id) => { await readyP(); return pgGet(id); } : (id) => readJson(recPath(id));
   const writeRec = USE_PG
-    ? async (id, rec) => { await ready; await pgPut(id, rec); through(recPath(id), rec); }
+    ? async (id, rec) => { await readyP(); await pgPut(id, rec); through(recPath(id), rec); }
     : (id, rec) => {
       writeJsonAtomic(recPath(id), rec);
       if (rec.status === "done" || rec.status === "error") {
@@ -386,11 +394,11 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     };
   // The claim (see pgClaim). On the files the write is the claim: one process.
   const claimRec = USE_PG
-    ? async (id, claim, seenClaimedAt) => { await ready; const held = await pgClaim(id, claim, seenClaimedAt); if (held) through(recPath(id), claim); return held; }
+    ? async (id, claim, seenClaimedAt) => { await readyP(); const held = await pgClaim(id, claim, seenClaimedAt); if (held) through(recPath(id), claim); return held; }
     : (id, claim) => { writeRec(id, claim); return true; };
-  const readIndex = USE_PG ? async (p) => { await ready; return (await pgGet(indexId(p))) || {}; } : (p) => readJson(p) || {};
+  const readIndex = USE_PG ? async (p) => { await readyP(); return (await pgGet(indexId(p))) || {}; } : (p) => readJson(p) || {};
   const patchIndex = USE_PG
-    ? async (p, id, value) => { await ready; const body = await pgPatchIndex(indexId(p), id, value); through(p, body); return body; }
+    ? async (p, id, value) => { await readyP(); const body = await pgPatchIndex(indexId(p), id, value); through(p, body); return body; }
     : (p, id, value) => {
       const idx = readIndex(p);
       if (value === null) delete idx[id]; else idx[id] = value;
@@ -475,7 +483,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     ? async (k) => (k ? inWindow((await readIndex(FAILURES))[k]) : [])
     : (k) => (k && inWindow(readIndex(FAILURES)[k])) || [];
   const noteFailure = USE_PG
-    ? async (k) => { if (!k) return; await ready; through(FAILURES, await pgAppendFailure(k, now())); }
+    ? async (k) => { if (!k) return; await readyP(); through(FAILURES, await pgAppendFailure(k, now())); }
     : (k) => { if (!k) return; patchIndex(FAILURES, k, [...recentFailures(k), now()]); };
 
   // `seenClaimedAt` is the claimedAt of the stale claim this call is taking
@@ -663,14 +671,14 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
 
   // Test/ops: number of records (excluding indexes).
   function _count() {
-    if (USE_PG) return (async () => { await ready; return (await pgIds()).filter((id) => SESSION_RE.test(id)).length; })();
+    if (USE_PG) return (async () => { await readyP(); return (await pgIds()).filter((id) => SESSION_RE.test(id)).length; })();
     try { return readdirSync(dir).filter((f) => f.startsWith("cs_") && f.endsWith(".json")).length; } catch { return 0; }
   }
   function _reset() {
     try { for (const f of readdirSync(dir)) unlinkSync(join(dir, f)); } catch { /* ignore */ }
     mem.clear(); negative.clear();
-    if (USE_PG) return (async () => { await ready; await pgClear(); pub.idx = {}; pub.recs = new Map(); })();
+    if (USE_PG) return (async () => { await readyP(); await pgClear(); pub.idx = {}; pub.recs = new Map(); })();
   }
 
-  return { createSession, fulfill, peek, recoverAbandoned, listIssues, setPublic, _count, _reset, ready: () => ready, backend: USE_PG ? "pg" : "file" };
+  return { createSession, fulfill, peek, recoverAbandoned, listIssues, setPublic, _count, _reset, ready: () => readyP(), backend: USE_PG ? "pg" : "file" };
 }

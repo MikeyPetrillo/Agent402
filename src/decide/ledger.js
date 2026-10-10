@@ -33,7 +33,8 @@ import Database from "better-sqlite3";
 import { existsSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady } from "../state-db.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady, withSchemaLock } from "../state-db.js";
+import { retryingLoad } from "../store-retry.js";
 
 const micro = (usd) => Math.round(Number(usd) * 1e6);
 const RUN_MAX_MS = 15 * 60_000;
@@ -485,9 +486,16 @@ function openDatabaseLedger(path) {
     for (const r of (await q(`SELECT * FROM ${T("credits")} WHERE expires_at > $1`, [now])).rows) rememberCredit(rowCredit(r));
   }
   const importsDone = () => imports.done(basename(path));
-  const ready = (async () => { await q(PG_DDL(T)); await importFile(); await rollForwardIfFileNewer(); await boot(); await loadMirror(); })();
-  ready.catch((e) => console.error("[decide] ledger: database setup failed:", String(e?.message || e).slice(0, 200)));
-  trackStoreReady(ready);
+  // The first load (tables under the schema lock, the one-time import, the
+  // roll-forward, the boot sweep, the mirror) is retried until it lands; a
+  // failed attempt is forgotten, so the next call tries again.
+  const loader = retryingLoad("[decide] ledger:", async () => {
+    await withSchemaLock((c) => c.query(PG_DDL(T)));
+    await importFile(); await rollForwardIfFileNewer(); await boot(); await loadMirror();
+  }, { log: (m) => console.error(m) });
+  const readyP = () => loader.ready();
+  trackStoreReady(loader.eventually);
+  readyP().catch(() => {});
 
   const getDecisionRow = async (id) => remember(rowDecision((await q(`SELECT * FROM ${T("decisions")} WHERE id = $1`, [String(id || "")])).rows[0]));
   const getCreditRow = async (hash) => rememberCredit(rowCredit((await q(`SELECT * FROM ${T("credits")} WHERE token_hash = $1`, [hash])).rows[0]));
@@ -509,9 +517,9 @@ function openDatabaseLedger(path) {
   const api = {
     db: null,
     async: true,
-    ready,
+    get ready() { return readyP(); },
     async saveDecision({ decisionId, depth, priceUsd, payer, plan, costViaUsd, feedbackHash = null, now = Date.now() }) {
-      await ready;
+      await readyP();
       const planJson = JSON.stringify(plan);
       const r = await q(`INSERT INTO ${T("decisions")} (id, created_at, depth, price_micro, payer, plan_json, cost_via_micro, settled, feedback_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8)
         ON CONFLICT (id) DO UPDATE SET created_at = EXCLUDED.created_at, depth = EXCLUDED.depth, price_micro = EXCLUDED.price_micro, payer = EXCLUDED.payer, plan_json = EXCLUDED.plan_json, cost_via_micro = EXCLUDED.cost_via_micro, settled = 0, feedback_hash = EXCLUDED.feedback_hash, updated_at = now()
@@ -521,13 +529,13 @@ function openDatabaseLedger(path) {
       through((w) => w.saveDecision.run(decisionId, now, depth, micro(priceUsd), payer || null, planJson, micro(costViaUsd), feedbackHash));
     },
     async feedbackTokenOk(decisionId, token, { now = Date.now(), maxAgeMs = 7 * 86_400_000 } = {}) {
-      await ready;
+      await readyP();
       if (typeof token !== "string" || !token) return false;
       const d = await getDecisionRow(decisionId);
       return !!d && !!d.feedbackHash && d.feedbackHash === hashToken(token) && d.settled === true && now - d.createdAt <= maxAgeMs;
     },
     async saveFeedback({ decisionId, step, toolId, outcome, quality = null, latencyMs = null, now = Date.now() }) {
-      await ready;
+      await readyP();
       // xmax <> 0 on the returned row: the insert found a row and updated it.
       const r = await q(`INSERT INTO ${T("feedback")} (decision_id, step, tool_id, outcome, quality, latency_ms, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)
         ON CONFLICT (decision_id, step) DO UPDATE SET tool_id = EXCLUDED.tool_id, outcome = EXCLUDED.outcome, quality = EXCLUDED.quality, latency_ms = EXCLUDED.latency_ms, created_at = EXCLUDED.created_at, updated_at = now()
@@ -535,15 +543,15 @@ function openDatabaseLedger(path) {
       through((w) => w.feedback.run(decisionId, step, toolId || null, outcome, quality, latencyMs, now));
       return r.rows[0]?.had === true;
     },
-    async getDecision(id) { await ready; const d = await getDecisionRow(id); return d ? publicDecision(d) : null; },
+    async getDecision(id) { await readyP(); const d = await getDecisionRow(id); return d ? publicDecision(d) : null; },
     async markDecisionSettled(id) {
-      await ready;
+      await readyP();
       await q(`UPDATE ${T("decisions")} SET settled = 1, updated_at = now() WHERE id = $1`, [id]);
       const d = decisions.get(id); if (d) d.settled = true;
       through((w) => w.settleDecision.run(id));
     },
     async mintCredit({ decisionId, amountUsd, ttlMs, expiresAt: fixedExpiry = null, payer, now = Date.now() }) {
-      await ready;
+      await readyP();
       const token = `dc_${randomBytes(24).toString("base64url")}`;
       const hash = hashToken(token);
       const expiresAt = Number.isFinite(fixedExpiry) ? fixedExpiry : now + ttlMs;
@@ -554,25 +562,25 @@ function openDatabaseLedger(path) {
       return { token, hash, amountUsd: usd(micro(amountUsd)), expiresAt };
     },
     async activateCredit(hash) {
-      await ready;
+      await readyP();
       const r = await q(`UPDATE ${T("credits")} SET state = 'active', updated_at = now() WHERE token_hash = $1 AND state = 'pending' RETURNING *`, [hash]);
       if (r.rowCount === 1) { rememberCredit(rowCredit(r.rows[0])); through((w) => w.activate.run(hash)); }
       return r.rowCount === 1;
     },
     async creditAvailableUsd(token, decisionId, now = Date.now()) {
-      await ready;
+      await readyP();
       if (typeof token !== "string" || !token) return 0;
       const c = await getCreditRow(hashToken(token));
       if (!c || c.decisionId !== decisionId || c.state !== "active" || c.expiresAt <= now) return 0;
       return usd(c.amountMicro);
     },
     async creditState(token) {
-      await ready;
+      await readyP();
       const c = typeof token === "string" ? await getCreditRow(hashToken(token)) : null;
       return c ? { state: c.state, expiresAt: c.expiresAt, amountUsd: usd(c.amountMicro), decisionId: c.decisionId } : null;
     },
     async redeemCredit(token, decisionId, runId, now = Date.now()) {
-      await ready;
+      await readyP();
       if (typeof token !== "string" || !token) return 0;
       const h = hashToken(token);
       const r = await q(`UPDATE ${T("credits")} SET state = 'redeemed', run_id = $1, updated_at = now() WHERE token_hash = $2 AND decision_id = $3 AND state = 'active' AND expires_at > $4 RETURNING *`, [runId, h, decisionId, now]);
@@ -582,18 +590,18 @@ function openDatabaseLedger(path) {
       return usd(c.amountMicro);
     },
     async restoreCredit(token, runId) {
-      await ready;
+      await readyP();
       if (typeof token !== "string" || !token) return;
       const h = hashToken(token);
       const r = await q(`UPDATE ${T("credits")} SET state = 'active', run_id = NULL, updated_at = now() WHERE token_hash = $1 AND state = 'redeemed' AND run_id = $2 RETURNING *`, [h, runId]);
       if (r.rowCount === 1) { rememberCredit(rowCredit(r.rows[0])); through((w) => w.restore.run(h, runId)); }
     },
     async createRun({ runId, decisionId, payer, budgetUsd, creditUsd, runKey = null, now = Date.now() }) {
-      await ready;
+      await readyP();
       return insertRunWith(q, { runId, decisionId, payer, budgetUsd, creditUsd, runKey, now });
     },
     async bookRun({ runId, decisionId, payer, budgetUsd, creditUsd, runKey = null, now = Date.now(), caps = null }) {
-      await ready;
+      await readyP();
       return withStateTx(async (c) => {
         const run = (text, params) => c.query(text, params);
         // One booking at a time across every container: the exposures below
@@ -616,7 +624,7 @@ function openDatabaseLedger(path) {
       });
     },
     async runByKey(decisionId, runKey) {
-      await ready;
+      await readyP();
       const r = runKey ? (await q(`SELECT id, status, payer, spent_micro, steps_json FROM ${T("runs")} WHERE decision_id = $1 AND run_key = $2`, [decisionId, runKey])).rows[0] : null;
       if (!r) return null;
       let steps = [];
@@ -624,7 +632,7 @@ function openDatabaseLedger(path) {
       return { id: r.id, status: r.status, payer: r.payer, spentUsd: usd(r.spent_micro), steps };
     },
     async finishRun({ runId, status, spentUsd, steps, now = Date.now() }) {
-      await ready;
+      await readyP();
       const stepsJson = JSON.stringify(steps || []);
       await q(`UPDATE ${T("runs")} SET status = $1, spent_micro = $2, steps_json = $3, finished_at = $4, updated_at = now() WHERE id = $5`, [status, micro(spentUsd), stepsJson, now, runId]);
       const release = status === "failed" && !(micro(spentUsd) > 0);
@@ -632,21 +640,21 @@ function openDatabaseLedger(path) {
       through((w) => { w.finishRun.run(status, micro(spentUsd), stepsJson, now, runId); if (release) w.releaseRunKey.run(runId); });
     },
     async getRun(id) {
-      await ready;
+      await readyP();
       const r = (await q(`SELECT * FROM ${T("runs")} WHERE id = $1`, [id])).rows[0];
       if (!r) return null;
       const row = { ...r, budget_micro: num(r.budget_micro), spent_micro: num(r.spent_micro), credit_micro: num(r.credit_micro), created_at: num(r.created_at), finished_at: num(r.finished_at) };
       return { ...row, budgetUsd: usd(row.budget_micro), spentUsd: usd(row.spent_micro), creditUsd: usd(row.credit_micro), steps: JSON.parse(r.steps_json) };
     },
-    async payerExposureUsd(payer, sinceMs, now = Date.now()) { await ready; return payerExposureWith(q, payer, sinceMs, now); },
+    async payerExposureUsd(payer, sinceMs, now = Date.now()) { await readyP(); return payerExposureWith(q, payer, sinceMs, now); },
     async noteSellerSpend({ runId, seller, amountUsd, now = Date.now() }) {
-      await ready;
+      await readyP();
       if (!(seller && amountUsd > 0)) return;
       await q(`INSERT INTO ${T("seller_spend")} (run_id, seller, micro, created_at) VALUES ($1,$2,$3,$4)`, [runId, String(seller), micro(amountUsd), now]);
       through((w) => w.sellerSpend.run(runId, String(seller), micro(amountUsd), now));
     },
     async holdSellerSpend({ runId, seller, amountUsd, now = Date.now(), capUsd = null, sinceMs = 0 }) {
-      await ready;
+      await readyP();
       if (!seller || !(amountUsd > 0)) return null;
       const id = await withStateTx(async (c) => {
         const run = (text, params) => c.query(text, params);
@@ -662,7 +670,7 @@ function openDatabaseLedger(path) {
       return id;
     },
     async settleSellerHold(holdId, amountUsd) {
-      await ready;
+      await readyP();
       if (holdId == null || holdId === false) return;
       if (amountUsd > 0) await q(`UPDATE ${T("seller_spend")} SET micro = $1, updated_at = now() WHERE id = $2`, [micro(amountUsd), holdId]);
       else await q(`DELETE FROM ${T("seller_spend")} WHERE id = $1`, [holdId]);
@@ -670,10 +678,10 @@ function openDatabaseLedger(path) {
       if (rowid != null) { sellerHoldRowid.delete(holdId); through((w) => { if (amountUsd > 0) w.sellerHoldSet.run(micro(amountUsd), rowid); else w.sellerHoldDrop.run(rowid); }); }
     },
     async sellerSpendUsd(seller, sinceMs) {
-      await ready;
+      await readyP();
       return usd(sum(await q(`SELECT COALESCE(SUM(micro),0)::bigint AS s FROM ${T("seller_spend")} WHERE seller = $1 AND created_at >= $2`, [String(seller || ""), sinceMs])));
     },
-    async globalExposureUsd(sinceMs, now = Date.now()) { await ready; return globalExposureWith(q, sinceMs, now); },
+    async globalExposureUsd(sinceMs, now = Date.now()) { await readyP(); return globalExposureWith(q, sinceMs, now); },
 
     // ---- synchronous mirror reads (the 402 quote) -------------------------
     getDecisionSync(id) {
