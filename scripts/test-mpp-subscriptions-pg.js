@@ -307,6 +307,59 @@ try {
     Q.setCharge(() => ({ reference: "0xq-next-holder" }));
     ok(await Q.engine.refreshStatus(subR.subId) === "active" && Q.calls.charge === chargesBefore + 1, "the next renewal under a held lease charges the period once");
   }
+  // ---- (9) a cancel during the other container's in-flight renewal -------------------
+  // The renewal's charge is signed and sent (seconds); a cancel lands on the
+  // other container meanwhile. Neither write may undo the other: the cancel
+  // stands, the charged period stands, and the next period is not pulled.
+  {
+    const P = makeEngine(join(D1, "cx", "mpp-subscriptions.json"));
+    await P.engine.ready();
+    const Q = makeEngine(join(D2, "cx", "mpp-subscriptions.json"));
+    await Q.engine.ready();
+    const activate = async (target) => {
+      const offer = await P.engine.mintOffer({ product: "fund-monitor", target });
+      const sub = await P.engine.activateFromCredential(await signCredential(Challenge.deserialize(offer.header)));
+      await P.engine.flush();
+      return sub;
+    };
+    const key = (id) => `a402:sub:${id}`;
+
+    // Order A: the cancel lands before the renewal writes its record.
+    const subA = await activate("Cancel Race A LP");
+    advance(PERIOD);
+    let cancelA = null;
+    Q.setCharge(() => { cancelA = P.engine.cancel(subA.subId, P.engine.manageToken(subA.subId)).then(() => P.engine.flush()); return { reference: "0xq-race-a" }; });
+    const kvQ = Q.engine._store, realPut = kvQ.put;
+    kvQ.put = async (k, v) => { if (k === key(subA.subId) && cancelA) { const c = cancelA; cancelA = null; await c; } return realPut.call(kvQ, k, v); };
+    let stA;
+    try { stA = await Q.engine.refreshStatus(subA.subId); } finally { kvQ.put = realPut; }
+    if (cancelA) await cancelA;
+    await Q.engine.flush();
+    let rowA = (await rowBody())?.[key(subA.subId)];
+    ok(rowA?.cancelAtPeriodEnd === true && rowA?.lastChargedPeriod === 1 && rowA?.lastChargeTx === "0xq-race-a", `a cancel made during the other container's renewal survives its write, and the charge stands (status ${stA}; row cancel=${rowA?.cancelAtPeriodEnd} period=${rowA?.lastChargedPeriod})`);
+    advance(PERIOD);
+    const beforeA = Q.calls.charge;
+    const stA2 = await Q.engine.refreshStatus(subA.subId);
+    ok(stA2 === "canceled" && Q.calls.charge === beforeA, `the next period is not charged after that cancel (status ${stA2}, charges ${Q.calls.charge - beforeA})`);
+
+    // Order B: the cancel reads the record before the renewal writes it, and writes after.
+    const subB = await activate("Cancel Race B LP");
+    advance(PERIOD);
+    let renewalDone = null, cancelB = null;
+    const kvP = P.engine._store, realPutP = kvP.put;
+    kvP.put = async (k, v) => { if (k === key(subB.subId) && renewalDone) await renewalDone; return realPutP.call(kvP, k, v); };
+    Q.setCharge(() => { cancelB = P.engine.cancel(subB.subId, P.engine.manageToken(subB.subId)); return { reference: "0xq-race-b" }; });
+    let viewB;
+    try {
+      renewalDone = Q.engine.refreshStatus(subB.subId).then(() => Q.engine.flush());
+      await renewalDone;
+      viewB = await cancelB;
+      await P.engine.flush();
+    } finally { kvP.put = realPutP; }
+    const rowB = (await rowBody())?.[key(subB.subId)];
+    ok(rowB?.lastChargedPeriod === 1 && rowB?.lastChargeTx === "0xq-race-b" && rowB?.cancelAtPeriodEnd === true, `a cancel decided on a copy read before the renewal's write keeps the charged period (row period=${rowB?.lastChargedPeriod} tx=${rowB?.lastChargeTx} cancel=${rowB?.cancelAtPeriodEnd})`);
+    ok(rowB?.status === "active" && viewB?.status === "active", `...and, the new period being paid, stays active until it ends (row ${rowB?.status}, answer ${viewB?.status})`);
+  }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();
