@@ -24,6 +24,7 @@ process.env.HUMAN_CHECKOUT_REPLAY_MS = "200";
 delete process.env.ZEPTOMAIL_TOKEN; delete process.env.RESEND_API_KEY; delete process.env.EMAIL_FROM;
 const sdb = await import("../src/state-db.js");
 const { createHumanCheckout } = await import("../src/human-checkout.js");
+const { ledgerDeadLetterStatus } = await import("../src/ledger-mirror.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -79,12 +80,15 @@ try {
     genHook = null;
     const onDisk = existsSync(join(DIR, "_pending-finals.ndjson")) && readFileSync(join(DIR, "_pending-finals.ndjson"), "utf8").includes(id);
     ok(first?.status === "done" && onDisk && refunds.length === 0, `${tag}: the database away after generation: this container serves ${first?.status}, the record is on local disk (${onDisk}), refunds ${refunds.length}`);
+    const dl = ledgerDeadLetterStatus({ full: true }), dlLater = ledgerDeadLetterStatus({ now: Date.now() + 60 * 60_000 });
+    ok(dl.status === "pending" && dl.checkoutFinals?.onDisk >= 1 && dlLater.status === "stuck" && Object.keys(dlLater).join(",") === "status", `${tag}: the dead-letter word counts the kept final (${dl.status}, ${dl.checkoutFinals?.onDisk} on disk; an hour on ${dlLater.status})`);
     const polled = await hc.fulfill(id).catch(() => ({ status: "threw" }));
     ok(polled?.status === "done", `${tag}: ...and a poll on it answers ${polled?.status} while the database is away`);
     relay.heal();
     for (let i = 0; i < 40 && (await row(id))?.status !== "done"; i++) await wait(100);
     const r = await row(id);
     ok(r?.status === "done" && r.report, `${tag}: the record lands once the database is back (${r?.status})`);
+    ok(ledgerDeadLetterStatus({ full: true }).checkoutFinals?.onDisk === 0, `${tag}: ...and leaves the dead-letter count once it lands`);
     const inflight = (await row("_inflight")) || {};
     ok(!(id in inflight), `${tag}: ...and its claim leaves the in-flight index`);
     // Ten minutes on, a poll on another container finds the report, not a stale claim.
@@ -131,6 +135,34 @@ try {
     stripe.refunds.create = create; failGen = false;
     ok(rowAtRefund?.status === "error" && rowAtRefund.refundOwed === true, `the owed record is on the row when the refund is issued (${rowAtRefund?.status})`);
     ok(fin?.status === "error" && fin.refundId === "re_1" && (await row(id))?.refundId === "re_1", `...then the refund id is recorded (${fin?.refundId})`);
+  }
+  // A report lands on the row (another container, or this one's replay)
+  // between a stale-claim read and the refund's pre-refund record: the
+  // record is refused by the row, so no refund is issued for the delivered
+  // report and the poll answers with the report.
+  for (const tag of ["held", "heldrefund"]) {
+    const id = sid(tag);
+    gens = 0; refunds.length = 0;
+    const done = tag === "held"
+      ? { status: "done", kind: "dossier", slug: "dossier", input: "MSFT", report: "# landed elsewhere", title: "t", sources: [], tables: [], at: new Date().toISOString() }
+      : { status: "error", refundId: "re_elsewhere", refundOwed: false, error: "refunded", at: new Date().toISOString() };
+    await sdb.stateQuery(`INSERT INTO ${sdb.stateDbSchema()}.records (collection, id, body) VALUES ('human-checkout', $1, $2::jsonb)`, [id, JSON.stringify({ status: "generating", claimedAt: Date.now() - 11 * 60_000, takeovers: 1, at: new Date().toISOString() })]);
+    const origQ = pool.query;
+    let flipped = false;
+    pool.query = async (text, values, cb) => {
+      if (!flipped && /->> 'status' = 'generating'/.test(String(text?.text ?? text)) && (values || []).includes(id)) {
+        flipped = true;
+        await origQuery(`UPDATE ${sdb.stateDbSchema()}.records SET body = $2::jsonb WHERE collection = 'human-checkout' AND id = $1`, [id, JSON.stringify(done)]);
+      }
+      return origQ(text, values, cb);
+    };
+    let ans;
+    try { ans = await hc.fulfill(id); } finally { pool.query = origQ; }
+    await wait(300);
+    const r = await row(id);
+    const issues = (await row("_issues")) || {};
+    ok(flipped && refunds.length === 0 && r?.status === done.status && r?.refundId === done.refundId && !(id in issues), `${tag}: a pre-refund record the row refuses issues no refund (refunds ${refunds.length}, row ${r?.status}/${r?.refundId ?? null}, issues entry ${id in issues})`);
+    ok(ans?.status === done.status, `${tag}: ...and the poll answers with what the row holds (${ans?.status})`);
   }
 } finally {
   relay.heal();

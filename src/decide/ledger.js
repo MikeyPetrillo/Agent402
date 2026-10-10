@@ -392,7 +392,7 @@ function openDatabaseLedger(path) {
   }
   // An NDJSON file beside the ledger file (on the volume while it exists),
   // never a table in the SQLite file the migration verifier compares.
-  const pending = createDeadLetter({ file: `${path}.pending.ndjson` });
+  const pending = createDeadLetter({ file: `${path}.pending.ndjson`, name: "decide" });
   const through = (fn) => {
     if (!wt) return;
     try { fn(wt); }
@@ -734,7 +734,7 @@ function openDatabaseLedger(path) {
     journal(kind, payload) {
       const p = { ...(payload || {}) };
       if (typeof p.token === "string") { p.hash = hashToken(p.token); delete p.token; }
-      const onDisk = pending.add(String(kind), p);
+      const onDisk = pending.add(String(kind), p) != null; // the entry's id, or null when it is not on disk
       if (!onDisk) console.error(`[decide] ledger: a ${kind} write could not be journaled to local disk`);
       return onDisk;
     },

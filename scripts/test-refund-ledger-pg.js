@@ -54,6 +54,22 @@ try {
   ok(rl.refundTotals().owed.n === 2 && rl.refundTotals().paid.n === 1, "totals read from the mirror");
   ok(rl.refundAlarmStatus({ owedHours: 48 }).status === "aging", "the alarm sees the three-day-old debt");
 
+  // ---- M2: the first refresh after an import does not pull the import again --
+  {
+    const src = `
+      const rl = await import(${JSON.stringify(join(ROOT, "src/refund-ledger.js"))});
+      const sdb = await import(${JSON.stringify(join(ROOT, "src/state-db.js"))});
+      await rl.refundLedgerReady();
+      const n = await rl.refundLedgerRefresh();
+      console.log(JSON.stringify({ n, imported: rl.listRefunds({ status: "all" }).length }));
+      await sdb.__dropStateSchema(); await sdb.closeStateDb(); process.exit(0);
+    `;
+    const out = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", src], {
+      env: { ...process.env, STATE_DB_SCHEMA: `${sdb.stateDbSchema()}_imp`, LEDGER_MIRROR_MARGIN_MS: "60000", LEDGER_MIRROR_REFRESH_MS: "1000000000" }, cwd: ROOT, encoding: "utf8",
+    }).trim().split("\n").pop());
+    ok(out.imported === 3 && out.n === 0, `M2: the first refresh after an import pulls none of the imported rows (${out.n}; mirror holds ${out.imported})`);
+  }
+
   // ---- (2) writes land in Postgres before the promise resolves ---------------
   const row = { slug: "hash", network: "eip155:8453", payer: "0xAbCd000000000000000000000000000000000009", priceUsd: 0.004, tx: "0xnew1", httpStatus: 502, wire: "x402" };
   const p = rl.recordRefundOwed(row);

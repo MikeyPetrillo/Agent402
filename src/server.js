@@ -547,9 +547,7 @@ import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFro
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores } from "./state-db.js";
-import { salesDeadLetterState } from "./sales-ledger.js";
-import { refundDeadLetterState } from "./refund-ledger.js";
-import { deadLetterWord, DEAD_LETTER_STUCK_MINUTES } from "./ledger-mirror.js";
+import { ledgerDeadLetterStatus } from "./ledger-mirror.js";
 import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
@@ -3235,20 +3233,15 @@ app.get("/api/gateway-status", async (req, res) => {
     tweetQueue: (() => { try { return _tweetQueue.alarmStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // The state database (the stores that left the volume): one word.
     stateDb: { status: stateDbStatus() },
-    // Sales and refund debts waiting on this container's local disk for the
-    // database (src/ledger-mirror.js): none / pending / stuck (an entry older
-    // than LEDGER_DEAD_LETTER_STUCK_MINUTES, which dies with the container),
-    // off without a state database. One word publicly; counts for the operator.
+    // Money writes waiting on this container's local disk for the database
+    // (src/ledger-mirror.js journals: sales, refund debts, card checkout
+    // finals, subscription records, decide writes): none / pending / stuck
+    // (an entry older than LEDGER_DEAD_LETTER_STUCK_MINUTES, which dies with
+    // the container), off without a state database. One word publicly;
+    // counts per journal for the operator.
     ledgerDeadLetter: (() => {
-      try {
-        const sales = salesDeadLetterState(), refunds = refundDeadLetterState();
-        const status = deadLetterWord([sales, refunds], { enabled: stateDbEnabled() });
-        if (!full) return { status };
-        const age = (s) => (s.oldestAt == null ? null : Math.floor((Date.now() - s.oldestAt) / 60_000));
-        return { status, stuckMinutes: DEAD_LETTER_STUCK_MINUTES,
-          sales: { waiting: sales.waiting, onDisk: sales.total, oldestMinutes: age(sales) },
-          refunds: { waiting: refunds.waiting, onDisk: refunds.total, oldestMinutes: age(refunds) } };
-      } catch { return { status: "unknown" }; }
+      try { return ledgerDeadLetterStatus({ full, enabled: stateDbEnabled() }); }
+      catch { return { status: "unknown" }; }
     })(),
     // The nightly offsite backup (src/backup.js): off / ok / held / failed / stale. One word.
     backup: { status: (() => { try { return backupAlarmStatus(); } catch { return "unknown"; } })() },

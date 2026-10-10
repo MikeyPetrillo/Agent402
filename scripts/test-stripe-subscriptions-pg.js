@@ -20,6 +20,7 @@ process.env.STATE_DB_CONNECT_TIMEOUT_MS = "1500";
 process.env.SUBSCRIPTIONS_REPLAY_MS = "200";
 const sdb = await import("../src/state-db.js");
 const { createStripeSubscriptions } = await import("../src/stripe-subscriptions.js");
+const { ledgerDeadLetterStatus } = await import("../src/ledger-mirror.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -70,6 +71,33 @@ try {
     await cw.handleWebhook(Buffer.from(payload), Stripe.webhooks.generateTestHeaderString({ payload, secret: "whsec_test" }));
     const r3 = (await sdb.stateQuery(`SELECT body -> 'sub_cs_three' AS r FROM ${sdb.stateDbSchema()}.documents WHERE name = $1`, [docName])).rows[0]?.r;
     ok(before === null && r3?.status === "canceled" && r3?.product === "domain-monitor" && r3?.target === "example.com", `a cancellation on a container that never loaded the record keeps product and target (${JSON.stringify(r3 && { status: r3.status, product: r3.product })})`);
+
+    // A webhook whose record cannot reach the database answers 503 (Stripe
+    // delivers it again), keeps the record in the journal, books no sale;
+    // the same event delivered once the database is back answers 200 and
+    // books the invoice once.
+    const booked = [];
+    const cw2 = createStripeSubscriptions({ stripe: { ...stripe, webhooks: Stripe.webhooks }, baseUrl: "https://example.test", storePath: STORE, onInvoicePaid: (i) => booked.push(i.invoiceId) });
+    await wait(300);
+    await cw2.reload();
+    const send = async (ev) => { const p = JSON.stringify(ev); try { return { code: 200, body: await cw2.handleWebhook(Buffer.from(p), Stripe.webhooks.generateTestHeaderString({ payload: p, secret: "whsec_test" })) }; } catch (e) { return { code: e.statusCode || 0 }; } };
+    for (const ev of [
+      { id: "evt_down_upd", type: "customer.subscription.updated", data: { object: { id: "sub_cs_three", customer: "cus_1", status: "past_due", metadata: {} } } },
+      { id: "evt_down_inv", type: "invoice.paid", data: { object: { id: "in_down", subscription: "sub_cs_three", amount_paid: 900, customer: "cus_1" } } },
+    ]) {
+      booked.length = 0;
+      relay.cut();
+      const first = await send(ev);
+      const kept = existsSync(`${STORE}.pending.ndjson`) && readFileSync(`${STORE}.pending.ndjson`, "utf8").includes("sub_cs_three");
+      const dl = ledgerDeadLetterStatus({ full: true });
+      ok(dl.status === "pending" && dl.subscriptions?.onDisk >= 1 && ledgerDeadLetterStatus({ now: Date.now() + 60 * 60_000 }).status === "stuck", `${ev.type}: the dead-letter word counts the journaled record (${dl.status}, ${dl.subscriptions?.onDisk} on disk)`);
+      ok(first.code === 503 && kept && booked.length === 0, `${ev.type} with the database away: answers ${first.code} (5xx so Stripe retries), journal kept (${kept}), sales booked ${booked.length}`);
+      relay.heal();
+      const again = await send(ev);
+      const rx = (await sdb.stateQuery(`SELECT body -> 'sub_cs_three' AS r FROM ${sdb.stateDbSchema()}.documents WHERE name = $1`, [docName])).rows[0]?.r;
+      const landed = ev.type === "invoice.paid" ? rx?.lastInvoiceId === "in_down" : rx?.status === "past_due";
+      ok(again.code === 200 && !again.body?.duplicate && landed && booked.length === (ev.type === "invoice.paid" ? 1 : 0), `...Stripe's retry once it is back answers ${again.code} (duplicate ${Boolean(again.body?.duplicate)}), the record is in the database (${landed}), sales booked ${booked.length}`);
+    }
   }
 
   // A replayed record never overwrites a newer copy.

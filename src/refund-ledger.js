@@ -193,6 +193,7 @@ if (fileDb) { try { fileDb.exec("CREATE TABLE IF NOT EXISTS pg_sync_meta (eviden
 const fileSync = fileDb ? (() => { try { return fileDb.prepare("INSERT OR REPLACE INTO pg_sync_meta (evidence, updated_at) VALUES (?, ?)"); } catch { return null; } })() : null;
 const num = (v) => (v == null ? null : Number(v));
 let watermark = 0;     // refresh pulls rows stamped after this (database clock, ms)
+let importedThrough = 0; // the newest updated_at an import in this process wrote (database clock, ms)
 let loaded = false;    // the first pull finished: the readers answer from a full mirror
 let refreshing = false;
 const warnOnce = makeWarnOnce("refund-ledger");
@@ -227,7 +228,7 @@ const fileToPg = (r) => cleanRow({
 // timed out, killed) is replayed in the order it was written: a debt insert-
 // if-absent by evidence, a change as the same guarded UPDATE. See
 // createDeadLetter.
-const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: join(DATA_DIR, "agent402-refunds.dead-letter.ndjson") }) : null;
+const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: join(DATA_DIR, "agent402-refunds.dead-letter.ndjson"), name: "refunds" }) : null;
 const INSERT_OWED_SQL = () => `INSERT INTO ${T("refunds")} (evidence, slug, network, payer, price_usd, http_status, synthetic, created_at, wire, hangup_reason, note)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (evidence) DO NOTHING RETURNING *`;
 const owedParams = (row) => [row.evidence, row.slug, row.network, row.payer, row.priceUsd, row.httpStatus, row.synthetic, row.createdAt, row.wire, row.hangupReason, row.note];
@@ -282,6 +283,9 @@ async function importFile() {
   if (!rows.length) return { bytes, rows: 0 };
   const n = await insertRows(stateQuery, T("refunds"), PG_COLS, rows.map(fileToPg), { conflict: "ON CONFLICT DO NOTHING" });
   await syncIdSequence(stateQuery, T("refunds"));
+  // The newest stamp the import wrote: the boot pull holds those rows, so
+  // the refreshes start after it (see pullAll).
+  if (n) importedThrough = Number((await stateQuery(`SELECT MAX(updated_at) AS m FROM ${T("refunds")}`)).rows[0]?.m) || 0;
   console.log(`[refund-ledger] imported ${n} of ${rows.length} row(s) from ${DB_FILE}`);
   return { bytes, rows: n };
 }
@@ -361,7 +365,10 @@ async function pullAll() {
   const now = await pgNowMs(stateQuery);
   const r = await stateQuery(`SELECT * FROM ${T("refunds")} ORDER BY id`);
   db.transaction((rows) => { db.exec("DELETE FROM refunds"); for (const x of rows) applyPgRow(x); })(r.rows);
-  watermark = now - REFRESH_MARGIN_MS;
+  // An import this process just ran stamped every row it inserted within
+  // the margin: the full pull holds them, so the refreshes start after the
+  // newest imported stamp instead of pulling them again.
+  watermark = Math.max(now - REFRESH_MARGIN_MS, importedThrough);
   loaded = true;
 }
 /**

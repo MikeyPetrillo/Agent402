@@ -425,7 +425,8 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // memory, served from memory to this container's polls, and replayed on a
   // timer until Postgres holds it. Never a refund for a report that was made.
   const pendingFinals = new Map(); // sessionId -> record not yet in the database
-  const finalsDeadLetter = USE_PG ? createDeadLetter({ file: join(dir, "_pending-finals.ndjson") }) : null;
+  const heldAnswers = new WeakSet(); // recordError answers whose record the row refused
+  const finalsDeadLetter = USE_PG ? createDeadLetter({ file: join(dir, "_pending-finals.ndjson"), name: "checkoutFinals" }) : null;
   const FINALS_REPLAY_MS = Number(process.env.HUMAN_CHECKOUT_REPLAY_MS) || 5_000;
   async function afterFinal(id, rec) {
     try { await patchIndex(INFLIGHT, id, null); } catch { /* the boot sweep clears a finished claim */ }
@@ -434,13 +435,20 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       catch (e) { log(`[human-checkout] issues index for ${id} not updated: ${String(e?.message || e).slice(0, 120)}`); }
     }
   }
-  /** Write a final record; true when Postgres holds it now (or already held a final one). */
+  /**
+   * Write a final record. Resolves true when Postgres holds THIS record now,
+   * "held" when the row already held a final record this one may not replace
+   * (a delivered report, or a recorded refund): nothing was written, and the
+   * caller must not act as if it had been (no refund, no issues entry), and
+   * false when it was kept on local disk for replay.
+   */
   async function landFinal(id, rec) {
     try {
       await readyP();
       const wrote = await pgPutFinal(id, rec);
-      if (wrote) through(recPath(id), rec);
       pendingFinals.delete(id);
+      if (!wrote) return "held";
+      through(recPath(id), rec);
       await afterFinal(id, rec);
       return true;
     } catch (e) {
@@ -463,10 +471,13 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
         // A newer final for the same session (a refund recorded after its intent) replaces an older one.
         const newest = pendingFinals.get(id);
         const body = newest && Date.parse(newest.at || 0) > Date.parse(rec.at || 0) ? newest : rec;
-        if (await pgPutFinal(id, body)) through(recPath(id), body);
+        const wrote = await pgPutFinal(id, body);
+        if (wrote) through(recPath(id), body);
         const held = pendingFinals.get(id);
         if (held && !(Date.parse(held.at || 0) > Date.parse(body.at || 0))) pendingFinals.delete(id);
-        await afterFinal(id, body);
+        // A record the row refused (it holds a delivered report or a recorded
+        // refund) is dropped without touching the issues index.
+        if (wrote) await afterFinal(id, body);
         finalsDeadLetter.remove(e.id);
         landed++;
       }
@@ -545,7 +556,16 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       paymentIntent: typeof session?.payment_intent === "string" ? session.payment_intent : session?.payment_intent?.id || null,
       at: new Date(now()).toISOString(),
     };
-    if (USE_PG) { await landFinal(id, rec); return rec; }
+    if (USE_PG) {
+      if ((await landFinal(id, rec)) !== "held") return rec;
+      // The row holds a final record this one may not replace: answer with
+      // that row, marked so a caller never refunds on the strength of it.
+      let row = null;
+      try { row = await readRec(id); } catch { /* answered below */ }
+      const answer = row && row.status !== "generating" ? row : { status: "generating" };
+      heldAnswers.add(answer);
+      return answer;
+    }
     await writeRec(id, rec);
     await patchIndex(INFLIGHT, id, null);
     await patchIndex(ISSUES, id, refundId ? null : { kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts });
@@ -559,6 +579,9 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     if (!USE_PG) { const refundId = await refundSession(session); return recordError(id, session, refundId, message); }
     const owed = await recordError(id, session, null, message, { intent: true });
     if (pendingFinals.has(id)) return owed;
+    // The pre-refund record did not land on the row (it already holds a
+    // delivered report or a recorded refund): no refund is issued.
+    if (heldAnswers.has(owed)) return owed;
     const refundId = await refundSession(session);
     return recordError(id, session, refundId, message);
   }

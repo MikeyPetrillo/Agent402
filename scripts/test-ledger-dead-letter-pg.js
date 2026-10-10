@@ -350,6 +350,24 @@ try {
     for (const e of dl.list()) dl.remove(e.id);
     ok(dl.size() === 0 && dl.oldestAt() === null, "removed entries are gone");
   }
+  // In a fail-fast window a write whose dead-letter append failed still tries
+  // Postgres (it is kept nowhere else); one that is on disk skips it.
+  {
+    const { createLedgerWriter } = await import("../src/ledger-mirror.js");
+    let diskOk = false, ran = 0;
+    const dl = { add: () => (diskOk ? "id-1" : null), release: () => {}, remove: () => {} };
+    const w = createLedgerWriter({ enqueue: (f) => f(), ready: async () => {}, deadLetter: dl, warnOnce: () => {}, label: "t" });
+    w.failed(Object.assign(new Error("Query read timeout"), { code: "57014" }));
+    ok(w.failFastActive(), "a timed-out write opens the fail-fast window");
+    const origErr = console.error; console.error = () => {};
+    let v;
+    try { v = await w.write("w", async () => { ran++; return "landed"; }, { kind: "sale", payload: { a: 1 }, onError: false }); } finally { console.error = origErr; }
+    ok(ran === 1 && v === "landed", `a write the dead-letter could not keep tries Postgres in the window (ran ${ran}, answered ${v})`);
+    diskOk = true; ran = 0;
+    w.failed(Object.assign(new Error("Query read timeout"), { code: "57014" }));
+    v = await w.write("w", async () => { ran++; return "landed"; }, { kind: "sale", payload: { a: 2 }, onError: false });
+    ok(ran === 0 && v === false, `a write on local disk skips Postgres in the window (ran ${ran})`);
+  }
 } finally {
   healRelay();
   await sdb.__dropStateSchema().catch(() => {});

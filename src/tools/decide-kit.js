@@ -106,7 +106,7 @@ async function ledgerWriteAfterSpend(label, thunk, delays = LEDGER_RETRY_MS, jou
   try { await thunk(); return true; }
   catch (e) {
     let kept = false;
-    try { kept = journal ? journal() === true : false; } catch { kept = false; }
+    try { kept = journal ? Boolean(journal()) : false; } catch { kept = false; } // the journal answers its entry id (or true) when on disk
     console.warn(`[decide] ${label}: ledger write failed (${String(e?.message || e).slice(0, 120)}); queued for retry${kept ? " and journaled" : ""}`);
     retryLedgerWrite(label, thunk, delays);
     return false;
