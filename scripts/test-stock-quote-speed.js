@@ -81,7 +81,7 @@ try {
   db.__resetDatabentoState();
   const p0 = snap();
   const prime = await db.warmTick();
-  ok(prime.end === up.end && total(diff(p0, snap())) === 1, `the warmer's boot read fetches the boundary once (${JSON.stringify(diff(p0, snap()))})`);
+  ok(prime.end === up.end && diff(p0, snap()).range === 1 && diff(p0, snap()).cost === 1 && diff(p0, snap()).data === 0, `the warmer's boot read fetches the boundary once and prices the quote shape once (${JSON.stringify(diff(p0, snap()))})`);
 
   // b. a cold symbol: one upstream call on the request path.
   const cold = await timed("MSFT");
@@ -107,7 +107,7 @@ try {
   const t1 = snap();
   await db.warmTick();
   const tick1 = diff(t1, snap());
-  ok(tick1.range === 1 && tick1.cost === 1 && tick1.data === 0, `c. the warmer re-reads the boundary and prices the quote shape once; MSFT is already cached so no data read (${JSON.stringify(tick1)})`);
+  ok(tick1.range === 1 && tick1.cost === 0 && tick1.data === 0, `c. the warmer re-reads the boundary off the request path; the session is already priced and MSFT already cached (${JSON.stringify(tick1)})`);
   const t2 = snap();
   await db.warmTick();
   ok(diff(t2, snap()).cost === 0 && diff(t2, snap()).range === 1, "the price check runs once per session, not once per tick");
@@ -139,19 +139,19 @@ try {
   const idle = await db.warmTick();
   ok(idle.skipped === "idle" && total(diff(i0, snap())) === 0, `an idle warmer makes no upstream call (${JSON.stringify(idle)})`);
 
-  // d. the ceiling: three background calls a day, then nothing.
+  // d. the ceiling: four background calls a day, then nothing.
   db.__resetDatabentoState();
-  process.env.DATABENTO_BACKGROUND_DAILY_MAX_CALLS = "3";
+  process.env.DATABENTO_BACKGROUND_DAILY_MAX_CALLS = "4";
   up.end = "2026-10-13";
-  await db.warmTick(); // boot read: 1 call
+  await db.warmTick(); // boot read + price: 2 calls
   for (const s of ["AAA", "BBB", "CCC"]) await quote({ symbol: s }); // demand + popularity (request-path reads)
   up.end = "2026-10-14";
   const d0 = snap();
-  const capped = await db.warmTick(); // range (2) + price (3) + no room for a pre-read
+  const capped = await db.warmTick(); // range (3) + price (4) + no room for a pre-read
   const dd = diff(d0, snap());
   const st = db.quoteWarmerStatus();
   ok(dd.range === 1 && dd.cost === 1 && dd.data === 0 && capped.prefetched === 0, `d. the warmer stops pre-reading at its ceiling (${JSON.stringify(dd)})`);
-  ok(st.background.calls === 3 && st.background.dailyMax === 3 && st.background.ceilingHit === true, `d. the status reports the ceiling reached (${JSON.stringify(st.background)})`);
+  ok(st.background.calls === 4 && st.background.dailyMax === 4 && st.background.ceilingHit === true, `d. the status reports the ceiling reached (${JSON.stringify(st.background)})`);
   const d1 = snap();
   const after = await db.warmTick();
   ok(after.skipped === "ceiling" && total(diff(d1, snap())) === 0, `d. past the ceiling a tick makes no call at all (${JSON.stringify(after)})`);
@@ -165,9 +165,10 @@ try {
   // The price check's guarantee: a quote shape that prices over the bound puts
   // the check back inline on every quote read.
   db.__resetDatabentoState();
-  up.price = "5"; // over any bound
-  await db.warmTick();
+  await db.warmTick();                      // boot: priced within bound
+  ok(db.quoteWarmerStatus().quotePriceCheck === "per-session" && db.quoteWarmerStatus().quotePriceAuditOk === true, "the boot read prices the quote shape and finds it within bound");
   await quote({ symbol: "EEE" });           // demand
+  up.price = "5"; // over any bound
   up.end = "2026-10-15";
   await db.warmTick();                      // the audit fails -> latch
   ok(db.quoteWarmerStatus().quotePriceCheck === "inline" && db.quoteWarmerStatus().quotePriceAuditOk === false, "a quote shape priced over the bound latches the price check back inline");

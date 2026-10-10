@@ -235,7 +235,7 @@ async function readBars(params, key, maxUsd) {
 // DATABENTO_WARM_TOP_N symbols by recent paid requests for the new session.
 // It starts at boot (never from inside a request), only with a key configured
 // and DATABENTO_WARM not "off"; with no demand it makes no call at all beyond
-// the one boot read of the range.
+// the boot read of the range and the session's one price check.
 //
 // THE BOUND. Every background call counts against
 // DATABENTO_BACKGROUND_DAILY_MAX_CALLS per UTC day (default 150: 96 range
@@ -313,9 +313,11 @@ export async function warmTick() {
   if (!spendBackground()) return { skipped: "ceiling" };
   let end;
   try { end = await readRange(); } catch { return { skipped: "range-failed" }; }
+  // The quote shape is priced once per session, including the boot read, so
+  // no quote goes unpriced past the first tick after a deploy.
+  await auditQuotePrice(end);
   if (idle || end === warm.lastWarmedEnd) return { end };
   warm.lastWarmedEnd = end;
-  await auditQuotePrice(end);
   let read = 0;
   for (const symbol of warmSymbols()) {
     const { start } = quoteWindow(end);
