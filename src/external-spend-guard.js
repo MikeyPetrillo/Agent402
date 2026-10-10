@@ -257,6 +257,9 @@ function writeChainLedgerPg() {
       try {
         const T = (t) => `${stateDbSchema()}.${t}`;
         const merged = await withStateTx(async (client) => {
+          // A row that does not exist yet cannot be locked: create it empty
+          // first (a second writer's insert waits on this one), then lock it.
+          await client.query(`INSERT INTO ${T("documents")} (name, body) VALUES ($1, '{"chains":{}}'::jsonb) ON CONFLICT (name) DO NOTHING`, [DOC_NAME]);
           const cur = await client.query(`SELECT body FROM ${T("documents")} WHERE name = $1 FOR UPDATE`, [DOC_NAME]);
           const now = Date.now();
           const stored = cur.rows[0]?.body && typeof cur.rows[0].body === "object" ? cur.rows[0].body.chains || {} : {};
@@ -421,7 +424,10 @@ async function reserveSpendPg(payer, usd, opts) {
   try {
     const out = await withStateTx(async (client) => {
       const T = (t) => `${stateDbSchema()}.${t}`;
-      const cur = await client.query(`SELECT body FROM ${T("documents")} WHERE name = $1 FOR UPDATE`, [DOC_NAME]);
+      // A row that does not exist yet cannot be locked: create it empty
+          // first (a second writer's insert waits on this one), then lock it.
+          await client.query(`INSERT INTO ${T("documents")} (name, body) VALUES ($1, '{"chains":{}}'::jsonb) ON CONFLICT (name) DO NOTHING`, [DOC_NAME]);
+          const cur = await client.query(`SELECT body FROM ${T("documents")} WHERE name = $1 FOR UPDATE`, [DOC_NAME]);
       if (reserveReadHook) await reserveReadHook();
       const storedBody = cur.rows[0]?.body && typeof cur.rows[0].body === "object" ? cur.rows[0].body : { chains: {} };
       adoptStoredBody(storedBody, now);

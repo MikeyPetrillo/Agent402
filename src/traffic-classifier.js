@@ -257,6 +257,9 @@ export function createTrafficStore(opts = {}) {
   const savedBase = new Map(); // id -> the body this process last read or wrote for it
   async function mergeOne(id, snap) {
     return withStateTx(async (client) => {
+      // A row that does not exist yet cannot be locked: create it empty first
+      // (a second writer's insert waits on this one), then lock it.
+      await client.query(`INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, 'null'::jsonb) ON CONFLICT (collection, id) DO NOTHING`, [COLLECTION, id]);
       const cur = await client.query(`SELECT body FROM ${RT()} WHERE collection = $1 AND id = $2 FOR UPDATE`, [COLLECTION, id]);
       const merged = mergeCountsDelta(cur.rows[0]?.body ?? null, savedBase.get(id), snap);
       await client.query(

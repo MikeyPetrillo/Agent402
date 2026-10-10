@@ -270,6 +270,11 @@ try {
     ok(day?.total === 10, `traffic: both containers' counts for the day add up in the row (${day?.total})`);
     ok(Object.values(pay || {}).reduce((a, b) => a + b, 0) === 2, "traffic: both containers' payer counts add up");
     ok(TA._days.get("2026-10-09")?.total === 10, "traffic: the container that saved last counts on from the merged day");
+    // Both save at the same moment: the row lock queues them, neither delta is lost.
+    for (let i = 0; i < 5; i++) { rec(TA, "192.0.2.9", { now: t0 + 864e5 }); rec(TB, "192.0.2.8", { now: t0 + 864e5 }); }
+    TA.persist(t0 + 864e5); TB.persist(t0 + 864e5);
+    await Promise.all([TA.flush(), TB.flush()]);
+    ok((await sdb.records.get("traffic", "2026-10-10"))?.total === 10, `traffic: two saves at the same moment both land (${(await sdb.records.get("traffic", "2026-10-10"))?.total})`);
   }
 } finally {
   relay.heal();

@@ -107,6 +107,14 @@ try {
     const rowAlg = (await documents.get(DOC)).body.chains.algorand || [];
     ok(two.filter((d) => d.ok).length === 1 && rowAlg.length === 1, `two containers reserving at once against room for one: one booked, one refused, one row (${two.map((d) => d.ok).join(",")}; ${rowAlg.length} row)`);
     ok(two.find((d) => !d.ok)?.code === "wallet_daily_ceiling", "the refused one names the wallet ceiling");
+    // The same with no row yet (the first bookings ever): the row is created before it is locked.
+    const saved = (await documents.get(DOC)).body;
+    await documents.del(DOC);
+    GA.__onReserveRead(pause); GB.__onReserveRead(pause);
+    const first = await Promise.all([GA.reserveSpend(null, 0.6, { chain: "algorand", walletDailyMaxUsd: 1, now: Date.now() + 2 * 864e5 }), GB.reserveSpend(null, 0.6, { chain: "algorand", walletDailyMaxUsd: 1, now: Date.now() + 2 * 864e5 })]);
+    GA.__onReserveRead(null); GB.__onReserveRead(null);
+    ok(first.filter((d) => d.ok).length === 1, `two first-ever reservations at once against room for one: one booked (${first.map((d) => d.ok).join(",")})`);
+    await documents.put(DOC, saved);
     // Bookings (noteSpend) from both containers at once: the merge runs under
     // the row lock, so neither write drops the other's rows.
     await Promise.all(Array.from({ length: 6 }, (_, i) => (i % 2 ? GA : GB).noteSpend(null, 0.01, { chain: "tempo" })));
