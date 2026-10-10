@@ -1342,6 +1342,7 @@ jobs:
           t node scripts/test-traffic-classifier-pg.js
           t node scripts/test-tweet-queue-pg.js
           t node scripts/test-x402-index-pg.js
+          t node scripts/test-x402-removals-pg.js
           t node scripts/test-revenue-ledger-pg.js
           t node scripts/test-revenue-ledger-enable-pg.js
           t node scripts/test-refund-ledger-pg.js

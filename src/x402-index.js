@@ -757,7 +757,27 @@ export function strictOriginKey(raw) {
   return `${u.protocol}//${u.host.toLowerCase()}`;
 }
 
+// Whether the removal list's load has been started in this process (by the
+// crawler's start, the boot with the crawler off, or the first operator or
+// registration call), so a removal made with the crawler off is never saved
+// over a stored list nobody read.
+let removalsLoadStarted = false;
+function ensureRemovalsLoaded() { if (!removalsLoadStarted) loadRemovedOrigins(); }
+/**
+ * Whether the removal list is known: always on the volume; with a database,
+ * once its row has been read. Until then registration is refused and the
+ * router offers no outside seller (fail closed), since any of them could be
+ * one the operator removed.
+ */
+export function removalsKnown() {
+  ensureRemovalsLoaded();
+  const d = docFor(removedFile());
+  return d.backend !== "pg" || d.loadState === "ok";
+}
+export const REMOVALS_NOT_LOADED_ERROR = "the removed-origins list has not loaded yet (state database unreachable); try again shortly";
+
 export function loadRemovedOrigins() {
+  removalsLoadStarted = true;
   const d = docFor(removedFile());
   const apply = (arr) => {
     for (const r of Array.isArray(arr) ? arr : []) {
@@ -806,6 +826,7 @@ function purgeOrigin(key) {
  * Returns { removed, origin, removedAt, held } or { error }.
  */
 export function removeOrigin(raw, { note = "" } = {}) {
+  ensureRemovalsLoaded();
   const key = strictOriginKey(raw);
   if (!key) return { error: "pass an exact origin such as https://seller.example (scheme and host, optional port and path prefix, no query, no wildcard)" };
   if (!removedOrigins.has(key) && removedOrigins.size >= REMOVED_ORIGINS_MAX) return { error: `removed list is full (${REMOVED_ORIGINS_MAX})` };
@@ -823,6 +844,9 @@ export function removeOrigin(raw, { note = "" } = {}) {
 export function restoreOrigin(raw) {
   const key = strictOriginKey(raw);
   if (!key) return { error: "pass an exact origin" };
+  // A stored removal cannot be lifted before the list is read: say so,
+  // rather than "that origin was not removed".
+  if (!removedOrigins.has(key) && !removalsKnown()) return { error: REMOVALS_NOT_LOADED_ERROR, notLoaded: true, origin: key };
   if (!removedOrigins.delete(key)) return { restored: false, origin: key };
   noteDeleted(removedFile(), key);
   persistRemovedOrigins();
@@ -831,6 +855,7 @@ export function restoreOrigin(raw) {
 
 /** Every removed origin, newest first, for the operator surface. */
 export function listRemovedOrigins() {
+  ensureRemovalsLoaded();
   return [...removedOrigins.values()].sort((a, b) => (b.removedAt || 0) - (a.removedAt || 0));
 }
 
@@ -1170,6 +1195,7 @@ export async function succeedsOrigin(claimant, predecessor, { fetchImpl } = {}) 
 
 export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
   if (isRemovedOrigin(origin) || (replaces && isRemovedOrigin(replaces))) return { listed: false, origin, removed: true, error: REMOVED_ORIGIN_ERROR };
+  if (!removalsKnown()) return { listed: false, origin, notLoaded: true, error: REMOVALS_NOT_LOADED_ERROR };
   // Evaluated lazily: the claimant has to be in the cache before its payTo can
   // be compared, so this is re-read at each record site rather than up front.
   const checkSuccession = async () => {
@@ -6645,6 +6671,7 @@ export function allSolanaPayToOrigins() {
 const ROUTABLE_SUMMARY_TTL_MS = Number(process.env.ROUTABLE_SUMMARY_TTL_MS) || 30_000;
 let routableSummaryMemo = null; // { at, size, out }
 export function routableSellerSummaries() {
+  if (!removalsKnown()) return Object.freeze([]); // fail closed until the removal list is read (not memoized)
   const now = Date.now();
   if (routableSummaryMemo && routableSummaryMemo.size === cache.size && now - routableSummaryMemo.at < ROUTABLE_SUMMARY_TTL_MS) return routableSummaryMemo.out;
   const out = buildRoutableSellerSummaries();
@@ -7751,7 +7778,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   const selecting = Array.from({ length: nTerms }, (_, k) => !ROUTE_NONSELECTING_TERMS.has(terms[k]));
   if (!selecting.some(Boolean)) selecting.fill(true);
   if (!memoHit) for (const t of localPool) scoreRow(t);
-  if (!memoHit && inc !== "local") {
+  if (!memoHit && inc !== "local" && removalsKnown()) {
     routeIndexSync();
     // Which entries are in the pool this query: the routable / alias / self
     // filters, decided once per ENTRY (a seller's 500 candidate rows used to
@@ -8199,6 +8226,7 @@ export function crawlToolsByOrigin() {
  *  not removed at the owner's request). A generator, so the decision index
  *  export can yield between entries instead of holding the loop. */
 export function* routableRemoteEntries({ baseUrl = "" } = {}) {
+  if (!removalsKnown()) return; // fail closed until the removal list is read
   const aliases = computeAliasOrigins(cache);
   const selfBase = String(baseUrl || "").replace(/\/+$/, "").toLowerCase();
   const isSelf = (origin) => {
