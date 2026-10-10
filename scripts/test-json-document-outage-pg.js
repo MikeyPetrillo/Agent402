@@ -191,6 +191,10 @@ await sdb.documents.put("loading-doc", { kept: true });
   const left = await flushJsonDocuments({ timeoutMs: 5000 });
   ok((await sdb.documents.get("flush-doc")).body.v === 7 && !left.includes("document flush-doc (save pending)"), `the shutdown flush sends the waiting save (${JSON.stringify(left)})`);
   process.env.STATE_STORE_RETRY_MS = prevMs; process.env.STATE_STORE_RETRY_MAX_MS = prevMax;
+  const { readFileSync } = await import("node:fs");
+  const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const fq = srv.slice(srv.indexOf("function flushStateQueues"), srv.indexOf("function shutdown("));
+  ok(/flushJsonDocuments\(/.test(fq), "the server's bounded shutdown flush sends the waiting document saves");
 }
 
 // ---- the load is done only once the store has the body (roll-forward) -------

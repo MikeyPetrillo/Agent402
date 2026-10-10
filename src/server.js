@@ -547,6 +547,7 @@ import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFro
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores } from "./state-db.js";
+import { flushJsonDocuments } from "./json-document.js";
 import { salesDeadLetterState } from "./sales-ledger.js";
 import { refundDeadLetterState } from "./refund-ledger.js";
 import { deadLetterWord, DEAD_LETTER_STUCK_MINUTES } from "./ledger-mirror.js";
@@ -10299,7 +10300,7 @@ let shuttingDown = false;
 // below reuses this with a non-zero code and a short deadline - same drain
 // machinery, different exit semantics.
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => flushJsonDocuments({ timeoutMs })]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });
