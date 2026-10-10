@@ -11,7 +11,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
 import { requireTestPg } from "./lib/test-pg.js";
+import { startPgRelay } from "./lib/pg-relay.js";
 const { schema } = requireTestPg({ label: "test-email-links-pg" });
+// The server reaches the database through a relay the test can cut (an outage).
+const relay = await startPgRelay(process.env.STATE_DATABASE_URL);
 const sdb = await import("../src/state-db.js");
 const { createFreeAlerts } = await import("../src/free-alerts.js");
 const { createWalletDigest } = await import("../src/wallet-digest.js");
@@ -33,7 +36,7 @@ const B = `http://127.0.0.1:${PORT}`;
 let log = "";
 const child = spawn(process.execPath, ["src/server.js"], {
   env: {
-    ...process.env, STATE_DB_SCHEMA: schema, FREE_MODE: "true", PORT: String(PORT), POW_SECRET: SECRET, FREE_ALERTS_SECRET: "", MPP_SECRET_KEY: "",
+    ...process.env, STATE_DATABASE_URL: relay.url, STATE_DB_CONNECT_TIMEOUT_MS: "1500", STATE_DB_SCHEMA: schema, FREE_MODE: "true", PORT: String(PORT), POW_SECRET: SECRET, FREE_ALERTS_SECRET: "", MPP_SECRET_KEY: "",
     FREE_ALERTS: "off", WALLET_DIGEST: "off", FOLLOWUPS: "off", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
     STATS_DB_DIR: DIR, MEMORY_DB_FILE: join(DIR, "agent402.db"), POW_DB_PATH: join(DIR, "pow.db"), STATUS_DB_PATH: join(DIR, "status.db"),
     X402_ECONOMY_DB: join(DIR, "economy.db"), SALES_LEDGER_DB: join(DIR, "sales.db"), REFUND_DB_DIR: DIR, DECIDE_LEDGER_DB: join(DIR, "decide.db"),
@@ -81,8 +84,21 @@ try {
   const st = await fetch(`${B}/followups/stop?id=${sid}&k=${stopK}`);
   ok(st.status === 200, `a follow-up made on the other container is stopped by its link here (${st.status})`);
   ok(await eventually(async () => Boolean((await sdb.documents.get("followups.json")).body.seqs[sid]?.stopped)), "...and is stopped in the row");
+
+  // During an outage a link whose row write cannot land answers 503, never ok.
+  relay.cut();
+  const gone = `al_out${RUN}`, goneD = `dg_out${RUN}`, goneF = `cs_out_${RUN}`;
+  const fstopK = createHmac("sha256", SECRET).update(`stop:${goneF}`).digest("base64url").slice(0, 32);
+  const u1 = await fetch(`${B}/alerts/unsubscribe?id=${gone}&k=${fa.sign(gone, "unsubscribe")}`, { method: "POST" });
+  ok(u1.status === 503 && u1.headers.get("retry-after"), `a one-click alert unsubscribe during an outage answers 503 with Retry-After (${u1.status})`);
+  const u2 = await fetch(`${B}/digest/unsubscribe?id=${goneD}&k=${wd.sign(goneD, "unsubscribe")}`);
+  ok(u2.status === 503 && /try again/i.test(await u2.text()), `a digest unsubscribe page during an outage answers 503 and asks to try again (${u2.status})`);
+  const u3 = await fetch(`${B}/followups/stop?id=${goneF}&k=${fstopK}`, { method: "POST" });
+  ok(u3.status === 503, `a one-click follow-up stop during an outage answers 503 (${u3.status})`);
+  relay.heal();
 } finally {
   child.kill("SIGKILL");
+  relay.heal(); await relay.close();
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();
   rmSync(DIR, { recursive: true, force: true });

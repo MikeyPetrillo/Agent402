@@ -1324,6 +1324,8 @@ jobs:
           t node scripts/test-overlap-stores-pg.js
           # A signed email link for a record the other container made works here.
           t node scripts/test-email-links-pg.js
+          # A link whose row write cannot land answers unavailable (503), never ok.
+          t node scripts/test-email-links-outage-pg.js
           t node scripts/test-leased-loops.js
           # A tick whose lease was lost stops before its next send, pull or paid run.
           t node scripts/test-lease-fencing-pg.js

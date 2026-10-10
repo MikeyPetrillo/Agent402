@@ -105,22 +105,27 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
     return n;
   }
 
-  function stop(id, k) {
+  // Returns the answer and the row write it started (null when none): stop()
+  // leaves the write in the background, stopAsync() (the route) waits for it
+  // and answers "unavailable" when it cannot land.
+  function stopStep(id, k) {
     const at = now();
     const stopRow = (seqs) => { const x = Object.hasOwn(seqs, id) ? seqs[id] : null; if (!x || x.stopped) return SKIP_UPDATE; x.stopped = true; x.stoppedReason = "link"; x.stoppedAt = at; x.email = null; };
     const r = recOf(id);
     // Database mode: a signed stop link for a sequence this container has not
     // read yet (made on the other one) still stops it, on the row.
-    if (!r && PG && ID_RE.test(String(id)) && verify(id, k)) { void write(stopRow); return { ok: true }; }
-    if (!r || !verify(id, k)) return { ok: false };
+    if (!r && PG && ID_RE.test(String(id)) && verify(id, k)) return { out: { ok: true }, p: write(stopRow) };
+    if (!r || !verify(id, k)) return { out: { ok: false }, p: null };
+    let p = null;
     if (!r.stopped) {
       r.stopped = true; r.stoppedReason = "link"; r.stoppedAt = at; r.email = null;
-      if (PG) void write(stopRow);
+      if (PG) p = write(stopRow);
       else persist();
       emit("followup_stopped");
-    }
-    return { ok: true };
+    } else if (PG) p = write(stopRow); // the row may not have it yet
+    return { out: { ok: true }, p };
   }
+  function stop(id, k) { return stopStep(id, k).out; }
 
   /** Immediate: the buyer's report failed and the refund is on its way. */
   async function sendFailed({ email, label, refunded }) {
@@ -263,7 +268,12 @@ ${footer(r)}`);
 
   // The link routes' async form: with the database a record the other
   // container made since this one last read the row is read first.
-  async function stopAsync(id, k) { if (PG && typeof id === "string" && !recOf(id)) await refresh().catch(() => false); return stop(id, k); }
+  async function stopAsync(id, k) {
+    if (PG && typeof id === "string" && !recOf(id)) await refresh().catch(() => false);
+    const { out, p } = stopStep(id, k);
+    if (!PG || !out.ok || !p) return out;
+    return (await p).ok ? out : { ok: false, reason: "unavailable" };
+  }
 
   let timer = null;
   function start({ intervalMs = 60 * 60_000, firstMs = 3 * 60_000 } = {}) {

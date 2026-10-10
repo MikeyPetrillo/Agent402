@@ -205,33 +205,41 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
     return sendEmail({ to: rec.email, subject, html, text });
   }
 
-  function confirm(id, k) {
+  // Each link step returns its answer and the row write it started (null when
+  // none). The sync methods leave the write in the background; the async ones
+  // (the routes) wait for it, so a write that cannot land is answered as
+  // "unavailable" instead of ok.
+  function confirmStep(id, k) {
     kick();
     const rec = recOf(id);
     if (!rec && PG && ID_RE.test(String(id)) && verify(id, "confirm", k)) kick(true); // made on the other container: read the row again
-    if (!rec || !verify(id, "confirm", k)) return { ok: false, reason: "invalid" };
-    if (rec.status === "unsubscribed") return { ok: false, reason: "unsubscribed" };
+    if (!rec || !verify(id, "confirm", k)) return { out: { ok: false, reason: "invalid" }, p: null };
+    if (rec.status === "unsubscribed") return { out: { ok: false, reason: "unsubscribed" }, p: null };
+    let p = null;
     if (rec.status !== "active") {
       const at = now();
-      void apply((subs) => { const x = own(subs, id); if (!x || x.status === "active" || x.status === "unsubscribed") return SKIP_UPDATE; x.status = "active"; x.confirmedAt = at; });
+      p = apply((subs) => { const x = own(subs, id); if (!x || x.status === "active" || x.status === "unsubscribed") return SKIP_UPDATE; x.status = "active"; x.confirmedAt = at; });
       emit("digest_confirmed", { kind: rec.kind });
     }
-    return { ok: true, kind: rec.kind };
+    return { out: { ok: true, kind: rec.kind }, p };
   }
+  function confirm(id, k) { return confirmStep(id, k).out; }
 
-  function unsubscribe(id, k) {
+  function unsubscribeStep(id, k) {
     kick();
     const at = now();
     const drop = (subs) => { const x = own(subs, id); if (!x || x.status === "unsubscribed") return SKIP_UPDATE; x.status = "unsubscribed"; x.unsubscribedAt = at; x.email = null; };
     const rec = recOf(id);
     // Database mode: a signed link for a record this container has not read
     // yet (made on the other one) still unsubscribes, on the row.
-    if (!rec && PG && ID_RE.test(String(id)) && verify(id, "unsubscribe", k)) { void write(drop); return { ok: true, kind: null }; }
-    if (!rec || !verify(id, "unsubscribe", k)) return { ok: false, reason: "invalid" };
-    if (rec.status !== "unsubscribed") { void apply(drop); emit("digest_unsubscribed", { kind: rec.kind }); }
-    else if (PG) void write(drop);
-    return { ok: true, kind: rec.kind };
+    if (!rec && PG && ID_RE.test(String(id)) && verify(id, "unsubscribe", k)) return { out: { ok: true, kind: null }, p: write(drop) };
+    if (!rec || !verify(id, "unsubscribe", k)) return { out: { ok: false, reason: "invalid" }, p: null };
+    let p = null;
+    if (rec.status !== "unsubscribed") { p = apply(drop); emit("digest_unsubscribed", { kind: rec.kind }); }
+    else if (PG) p = write(drop);
+    return { out: { ok: true, kind: rec.kind }, p };
   }
+  function unsubscribe(id, k) { return unsubscribeStep(id, k).out; }
 
   function sweep() {
     const t = now();
@@ -357,8 +365,26 @@ ${inner}
 
   // The link routes' async form: with the database a record the other
   // container made since this one last read the row is read first.
-  async function confirmAsync(id, k) { if (PG && typeof id === "string" && !recOf(id)) await refresh().catch(() => false); return confirm(id, k); }
-  async function unsubscribeAsync(id, k) { if (PG && typeof id === "string" && !recOf(id)) await refresh().catch(() => false); return unsubscribe(id, k); }
+  // The routes: database mode reads the row on a miss, waits for the row
+  // write, and answers from the row (a confirm for a record the other
+  // container unsubscribed answers "unsubscribed").
+  async function confirmAsync(id, k) {
+    if (PG && typeof id === "string" && !recOf(id)) await refresh().catch(() => false);
+    const { out, p } = confirmStep(id, k);
+    if (!PG || !out.ok) return out;
+    const r = await (p || write(() => SKIP_UPDATE));
+    if (!r.ok) return { ok: false, reason: "unavailable" };
+    const x = own(shape(r.body).subs, id);
+    if (!x) return { ok: false, reason: "invalid" };
+    if (x.status === "unsubscribed") return { ok: false, reason: "unsubscribed" };
+    return out;
+  }
+  async function unsubscribeAsync(id, k) {
+    if (PG && typeof id === "string" && !recOf(id)) await refresh().catch(() => false);
+    const { out, p } = unsubscribeStep(id, k);
+    if (!PG || !out.ok || !p) return out;
+    return (await p).ok ? out : { ok: false, reason: "unavailable" };
+  }
 
   let timer = null;
   function start({ intervalMs = 60 * 60_000, firstMs = 10 * 60_000 } = {}) {
