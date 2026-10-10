@@ -70,7 +70,7 @@
 //    Without a database nothing here changes.
 import { randomBytes } from "node:crypto";
 import { createJsonDocument } from "./json-document.js";
-import { leased, leases, stateDbEnabled, trackStoreReady } from "./state-db.js";
+import { leased, leases, leaseStillHeld, stateDbEnabled, trackStoreReady } from "./state-db.js";
 import {
   closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync,
   renameSync, statSync, unlinkSync, writeFileSync, writeSync,
@@ -86,6 +86,8 @@ export const POST_TIMEOUT_MS = 20_000;
 export const LOCK_LEASE_MS = 30_000;
 export const STATE_DOC_NAME = "tweet-queue-state.json";
 export const STATE_LEASE_NAME = "tweet-queue-state";
+/** The lease the tick runs under (two containers never tick at once). */
+export const TICK_LEASE_NAME = "tweet-queue-tick";
 const MIRROR_REFRESH_MS = 2_000;
 export const IN_DOUBT_RETRY_MS = 10 * 60_000;
 const SENDING_STALE_MS = 5 * 60_000; // a SENDING record older than this is a crash, not a post in flight
@@ -724,7 +726,7 @@ export function createTweetQueue({
 
   // Under a lease: two containers (a deploy's overlap, a second replica)
   // never run this tick at once; without a database it is the plain tick.
-  const tick = leased("tweet-queue-tick", { ttlMs: 300000, log: log }, tickUnleased);
+  const tick = leased(TICK_LEASE_NAME, { ttlMs: 300000, log: log }, tickUnleased);
   async function tickUnleased() {
     const m = mode();
     if (m !== "posting" && m !== "store_unreadable") return { skipped: m };
@@ -742,6 +744,16 @@ export function createTweetQueue({
         const c = claim.value;
         result.dropped += c.dropped;
         if (!c.item) { result.idle = c.why; break; }
+        // Fencing: a tick whose lease was lost stops before the post and hands
+        // the claim back (recorded as not sent: the item stays queued). The
+        // conditional claim already keeps two containers off one item.
+        if (!leaseStillHeld(TICK_LEASE_NAME)) {
+          try { await withLock(() => recordWithRetry(c.item, c.hour, { kind: "not_sent", cls: "lease_lost" }, c.prior), 120); }
+          catch { /* the SENDING record stands: never re-sent, the safe direction */ }
+          log("[tweet-queue] the tick lease was lost before the post: stopped, the claim handed back");
+          result.lost = true;
+          break;
+        }
         const out = await safePost(c.item.text);
         let recorded;
         try { recorded = await withLock(() => recordWithRetry(c.item, c.hour, out, c.prior), 120); }

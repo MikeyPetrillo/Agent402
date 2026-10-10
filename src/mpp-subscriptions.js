@@ -897,6 +897,29 @@ export function createMppSubscriptions({
     cache.set(next.subId, next);   // listActive/get are synchronous for the scheduler
     return next;
   }
+  /**
+   * A write from a copy read before a slow step (a renewal's chain check,
+   * signature and send take seconds) keeps a cancel stored meanwhile, by this
+   * request or the other container, instead of overwriting the whole record.
+   * A requested cancel that meets a period just paid stays "active until the
+   * period ends", as cancel() itself decides; anything else stays canceled.
+   */
+  async function writeRecKeepingCancel(rec) {
+    const r = await kv.compareAndSet(REC_KEY(rec.subId), (cur) => {
+      const out = { ...rec, updatedAt: new Date(now()).toISOString() };
+      if (cur && cur.cancelAtPeriodEnd && !out.cancelAtPeriodEnd) {
+        out.cancelAtPeriodEnd = true; out.canceledAt = cur.canceledAt; out.canceledReason = cur.canceledReason;
+      }
+      if (cur && cur.status === "canceled" && out.status !== "canceled" && out.status !== "expired") {
+        const paidOn = cur.canceledReason === "requested" && !isCanaryProduct(out.product) && out.status === "active" && now() < paidThroughAt(out);
+        if (!paidOn) { out.status = "canceled"; out.canceledAt = cur.canceledAt; out.canceledReason = cur.canceledReason; }
+      }
+      return out;
+    });
+    const next = r.value || { ...rec };
+    cache.set(rec.subId, next);   // listActive/get are synchronous for the scheduler
+    return next;
+  }
   async function allRecs() {
     // The other container's records (and its cancels) are in the row, not in this map.
     await kv.refreshAll().catch(() => false);
@@ -1321,15 +1344,15 @@ export function createMppSubscriptions({
     // The standing authorization has a hard end. Past it no pull can succeed,
     // so stop pretending otherwise.
     const term = Date.parse(rec.subscriptionExpires);
-    if (Number.isFinite(term) && at >= term) { await writeRec({ ...rec, status: "expired" }); return { status: "expired" }; }
+    if (Number.isFinite(term) && at >= term) { await writeRecKeepingCancel({ ...rec, status: "expired" }); return { status: "expired" }; }
     const due = currentPeriodIndex(rec, at);
     if (due <= (rec.lastChargedPeriod ?? 0)) {
-      if (rec.status !== "active") await writeRec({ ...rec, status: "active" });
+      if (rec.status !== "active") await writeRecKeepingCancel({ ...rec, status: "active" });
       return { status: "active" };
     }
     // A new period is due.
     if (rec.cancelAtPeriodEnd) {
-      await writeRec({ ...rec, status: "canceled", canceledAt: rec.canceledAt || new Date(at).toISOString(), canceledReason: rec.canceledReason || "requested" });
+      await writeRecKeepingCancel({ ...rec, status: "canceled", canceledAt: rec.canceledAt || new Date(at).toISOString(), canceledReason: rec.canceledReason || "requested" });
       return { status: "canceled" };
     }
     if (rec.nextChargeAttemptAt && at < Date.parse(rec.nextChargeAttemptAt)) return { status: rec.status === "active" ? "past_due" : rec.status };
@@ -1347,7 +1370,7 @@ export function createMppSubscriptions({
         const verdict = await find({ rec, mppxRec, periodIndex: due, sinceMs: Date.parse(rec.unconfirmedCharge.at) - UNCONFIRMED_LOOKBACK_MS });
         if (verdict === null) {
           const next = { ...rec, status: rec.status === "active" ? "past_due" : rec.status, nextChargeAttemptAt: new Date(at + TRANSIENT_CHARGE_BACKOFF_MS).toISOString() };
-          await writeRec(next);
+          await writeRecKeepingCancel(next);
           log(`[mpp-subs] ${subId}: unconfirmed period ${due} and the chain is unreadable - waiting, not re-charging`);
           return next.status;
         }
@@ -1359,7 +1382,7 @@ export function createMppSubscriptions({
             ...rec, status: "active", lastChargedPeriod: due, lastChargeTx: verdict.tx, lastChargeAt: new Date(at).toISOString(),
             chargeFailures: 0, firstFailedAt: null, nextChargeAttemptAt: null, lastChargeError: null, unconfirmedCharge: null,
           };
-          await writeRec(next);
+          await writeRecKeepingCancel(next);
           bookCharge(next, due, verdict.tx);
           log(`[mpp-subs] reconciled ${subId} period ${due} from the chain: the send that timed out had landed, tx=${verdict.tx} - not charged twice`);
           return "active";
@@ -1370,12 +1393,12 @@ export function createMppSubscriptions({
           (Date.parse(rec.unconfirmedCharge.at) + renewalValidForS * 1000 + SETTLEABLE_SLACK_MS);
         if (at < settleableUntil) {
           const next = { ...rec, status: rec.status === "active" ? "past_due" : rec.status, nextChargeAttemptAt: new Date(settleableUntil).toISOString() };
-          await writeRec(next);
+          await writeRecKeepingCancel(next);
           log(`[mpp-subs] ${subId}: unconfirmed period ${due} not on chain yet and still settleable - waiting, not re-charging`);
           return next.status;
         }
         rec = { ...rec, unconfirmedCharge: null };
-        await writeRec(rec);
+        await writeRecKeepingCancel(rec);
         log(`[mpp-subs] ${subId}: the send that timed out for period ${due} never landed - charging now`);
       }
       if (!stillHeld()) {
@@ -1396,7 +1419,7 @@ export function createMppSubscriptions({
         lastChargeAt: new Date(at).toISOString(),
         chargeFailures: 0, firstFailedAt: null, nextChargeAttemptAt: null, lastChargeError: null, unconfirmedCharge: null,
       };
-      await writeRec(next);
+      await writeRecKeepingCancel(next);
       bookCharge(next, charged, next.lastChargeTx);
       log(`[mpp-subs] charged ${subId} period ${charged} tx=${next.lastChargeTx || "?"}`);
       return "active";
@@ -1424,7 +1447,7 @@ export function createMppSubscriptions({
         status: givenUp ? "canceled" : "past_due",
         ...(givenUp ? { canceledAt: new Date(at).toISOString(), canceledReason: "unpaid" } : {}),
       };
-      await writeRec(next);
+      await writeRecKeepingCancel(next);
       log(`[mpp-subs] period charge failed for ${subId} (attempt ${failures}${givenUp ? ", giving up: past the grace window" : `, retry in ${Math.round(backoff / 60000)}m${transient ? " (transient)" : ""}${ambiguous ? ", chain checked before any retry" : ""}`}): ${diagnoseError(err)}`);
       return next.status;
     } finally { inFlight.delete(subId); }
@@ -1449,17 +1472,27 @@ export function createMppSubscriptions({
     // its product, and only the canary's own ?refresh=1 pulls it), so "cancel
     // at period end" left canary records reading `active` indefinitely.
     const canaryRec = isCanaryProduct(rec.product);
-    const stillPaid = !canaryRec && at < endsAt && rec.status === "active";
-    const next = {
-      ...rec, cancelAtPeriodEnd: true,
-      canceledAt: new Date(at).toISOString(), canceledReason: "requested",
-      status: stillPaid ? "active" : "canceled",
-    };
-    await writeRec(next);
+    let stillPaid = !canaryRec && at < endsAt && rec.status === "active";
+    let endsAtNow = endsAt;
+    // Decided on the record as it is when written (a renewal on either
+    // container may have just paid a period), never on the copy read above.
+    const r = await kv.compareAndSet(REC_KEY(subId), (cur) => {
+      if (!cur || cur.status === "canceled") return null;
+      endsAtNow = paidThroughAt(cur);
+      stillPaid = !canaryRec && at < endsAtNow && cur.status === "active";
+      return {
+        ...cur, cancelAtPeriodEnd: true,
+        canceledAt: new Date(at).toISOString(), canceledReason: "requested",
+        status: stillPaid ? "active" : "canceled",
+        updatedAt: new Date(at).toISOString(),
+      };
+    });
+    const next = r.value || rec;
+    cache.set(subId, next);   // listActive/get are synchronous for the scheduler
     // A closed canary record's access key is never needed again; drop our
     // private half so the burner's standing authorization is inert.
     if (canaryRec) await destroyAccessKey(rec.accessKeyAddress);
-    log(`[mpp-subs] canceled ${subId} (${stillPaid ? `active until ${new Date(endsAt).toISOString()}` : "immediately"})`);
+    if (r.won) log(`[mpp-subs] canceled ${subId} (${stillPaid ? `active until ${new Date(endsAtNow).toISOString()}` : "immediately"})`);
     return publicView(next);
   }
 
@@ -1481,7 +1514,11 @@ export function createMppSubscriptions({
       if (rec.status === "canceled" || rec.status === "expired") continue;
       const born = Date.parse(rec.createdAt || rec.billingAnchor || "");
       if (Number.isFinite(born) && at - born < olderThanMs) { skippedYoung++; continue; }
-      await writeRec({ ...rec, status: "canceled", cancelAtPeriodEnd: true, canceledAt: rec.canceledAt || new Date(at).toISOString(), canceledReason: rec.canceledReason || "canary-sweep" });
+      const r = await kv.compareAndSet(REC_KEY(rec.subId), (cur) => (cur && cur.status !== "canceled" && cur.status !== "expired" && isCanaryProduct(cur.product)
+        ? { ...cur, status: "canceled", cancelAtPeriodEnd: true, canceledAt: cur.canceledAt || new Date(at).toISOString(), canceledReason: cur.canceledReason || "canary-sweep", updatedAt: new Date(at).toISOString() }
+        : null));
+      if (r.value) cache.set(rec.subId, r.value);
+      if (!r.won) continue;
       const keysDestroyed = await destroyAccessKey(rec.accessKeyAddress);
       swept.push({ subId: rec.subId, accessKeyAddress: rec.accessKeyAddress || null, keysDestroyed });
     }
