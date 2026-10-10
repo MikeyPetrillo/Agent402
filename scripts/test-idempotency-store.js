@@ -100,6 +100,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     ok(await s.claim("g") === false, "a same-process duplicate is refused even when Redis lost the claim");
     await s.release("g"); s.stop();
   }
+  // A claim taken locally while Redis was down never deletes the Redis claim
+  // another container took for the same key meanwhile.
+  {
+    kv.clear(); up = false;
+    const A = createIdempotencyStore({ redis: async () => fake, releaseRetryMs: 20 });
+    const B = createIdempotencyStore({ redis: async () => fake, releaseRetryMs: 20 });
+    ok(await A.claim("h") === true, "A claims h locally while Redis is down");
+    up = true;
+    ok(await B.claim("h") === true, "B claims h in Redis");
+    await A.release("h"); await sleep(60);
+    ok(kv.has("idem:f:h"), "A's release leaves B's Redis claim in place");
+    await B.release("h"); A.stop(); B.stop();
+  }
 }
 // ---- shared, real Redis -----------------------------------------------------
 const url = String(process.env.REDIS_URL || "").trim();
