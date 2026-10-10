@@ -247,18 +247,29 @@ try {
   ok((await m.memoryPut(C, "q4", "y".repeat(200))).bytes === 200, "shrinking a value frees budget");
   delete process.env.MEMORY_MAX_NS_BYTES;
   await rejects("a value with a NUL character is refused (400, not a failed statement)", () => m.memoryPut(C, "nul", "a\u0000b"), 400);
-  // Postgres keeps no U+0000 and no unpaired surrogate: a value holding one is
-  // refused (400, never charged) rather than stored changed.
+  // Postgres keeps no U+0000 and no unpaired surrogate in TEXT: the state
+  // database cleans both out of a TEXT parameter (JSON escapes are cleaned
+  // only in a parameter cast to json/jsonb, and memory casts none). Text the
+  // cleaner would change is refused (400, never charged); everything else is
+  // stored and reads back exactly as written.
   await m.memoryPut(C, "nul", { keep: 1 });
-  await rejects("an object value holding U+0000 is refused (400)", () => m.memoryPut(C, "nul", { note: "line1\u0000line2" }), 400);
-  await rejects("a string value that is JSON text with an escaped NUL is refused (400)", () => m.memoryPut(C, "nul", '{"a":"\\u0000"}'), 400);
-  await rejects("a value holding an unpaired surrogate is refused (400)", () => m.memoryPut(C, "nul", { s: "\ud800" }), 400);
-  await rejects("cas to a value holding U+0000 is refused (400)", () => m.memoryCas(C, "nul", { keep: 1 }, ["\u0000"], { hasValue: true }), 400);
+  await rejects("a key holding U+0000 is refused (400)", () => m.memoryPut(C, "k\u0000", 1), 400);
+  await rejects("a string value holding an unpaired surrogate is refused (400)", () => m.memoryPut(C, "nul", "a\ud800b"), 400);
   await rejects("incr on a key holding U+0000 is refused (400)", () => m.memoryIncr(C, "c\u0000tr", 1, C), 400);
-  await rejects("remember with meta holding U+0000 is refused (400)", () => m.remember(C, "a note", { t: "\u0000" }), 400);
+  await rejects("remember text holding U+0000 is refused (400)", () => m.remember(C, "a\u0000note"), 400);
   ok(JSON.stringify((await m.memoryGet(C, "nul")).value) === JSON.stringify({ keep: 1 }), "a refused write leaves the stored value as it was");
-  await m.memoryPut(C, "esc", { t: "a\\u0000b" });
-  ok((await m.memoryGet(C, "esc")).value.t === "a\\u0000b", "an escaped backslash before u0000 is plain text and round-trips");
+  // A value whose JSON text carries U+0000 or a lone surrogate as an escape
+  // is TEXT the cleaner leaves alone: stored, and read back unchanged.
+  for (const [label, v] of [["an object holding U+0000", { note: "line1\u0000line2" }], ["JSON text with an escaped NUL", '{"a":"\\u0000"}'],
+    ["an object holding an unpaired surrogate", { s: "\ud800" }], ["an escaped backslash before u0000", { t: "a\\u0000b" }], ["a cas target array with U+0000", ["\u0000"]]]) {
+    await m.memoryPut(C, "rt", v);
+    // (A string value that is JSON text reads back parsed, as it always has.)
+    const want = typeof v === "string" ? JSON.parse(v) : v;
+    ok(JSON.stringify((await m.memoryGet(C, "rt")).value) === JSON.stringify(want), `${label} is stored and reads back exactly as written`);
+  }
+  const casNul = await m.memoryCas(C, "rt", ["\u0000"], { n: "\u0000" }, { hasValue: true });
+  ok(casNul.swapped !== false && JSON.stringify((await m.memoryGet(C, "rt")).value) === JSON.stringify({ n: "\u0000" }), "cas to a value holding U+0000 stores it exactly");
+  await m.remember(C, "a note", { t: "\u0000" }).then(() => ok(true, "remember with meta holding U+0000 is accepted"), (e) => ok(false, `remember with meta holding U+0000 is accepted (${e.statusCode} ${e.message})`));
 
   // ---- 8) a second boot: no re-import, and both processes see each other -------
   // Add a row to the SQLite file AFTER the import; a second boot must not pick it up.

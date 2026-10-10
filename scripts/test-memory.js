@@ -220,18 +220,20 @@ ok("EVM normalized to lowercase", normalizePayerAddress("0x" + "AB".repeat(20)) 
   delete process.env.MEMORY_MAX_NS_KEYS;
 }
 
-// --- text the state database cannot hold is refused in both backends ---
+// --- text the state database would change is refused in both backends ---
+// (U+0000 or an unpaired surrogate in the TEXT itself; a JSON escape of one
+// is plain text the database keeps, so it round-trips here too.)
 {
   const N = rnd();
   memoryPut(N, "nul", { keep: 1 });
-  throws("object value holding U+0000 -> 400", () => memoryPut(N, "nul", { note: "a\u0000b" }), 400);
   throws("string value holding U+0000 -> 400", () => memoryPut(N, "nul", "a\u0000b"), 400);
-  throws("value holding an unpaired surrogate -> 400", () => memoryPut(N, "nul", { s: "\udc00" }), 400);
-  throws("cas to a value holding U+0000 -> 400", () => memoryCas(N, "nul", { keep: 1 }, ["\u0000"], { hasValue: true }), 400);
+  throws("string value holding an unpaired surrogate -> 400", () => memoryPut(N, "nul", "a\udc00"), 400);
   throws("incr on a key holding U+0000 -> 400", () => memoryIncr(N, "n\u0000", 1, N), 400);
   ok("a refused write leaves the value as it was", JSON.stringify(memoryGet(N, "nul").value) === JSON.stringify({ keep: 1 }));
-  memoryPut(N, "esc", { t: "a\\u0000b" });
-  ok("an escaped backslash before u0000 round-trips", memoryGet(N, "esc").value.t === "a\\u0000b");
+  for (const [label, v] of [["object holding U+0000", { note: "a\u0000b" }], ["object holding an unpaired surrogate", { s: "\udc00" }], ["escaped backslash before u0000", { t: "a\\u0000b" }]]) {
+    memoryPut(N, "rt", v);
+    ok(`${label} round-trips`, JSON.stringify(memoryGet(N, "rt").value) === JSON.stringify(v));
+  }
 }
 
 const failed = checks.filter(([, c]) => !c);

@@ -110,12 +110,15 @@ function grantAllows(g, need) {
   return need === "write" ? g.mode === "readwrite" : true;
 }
 
-// The state database stores no U+0000 and no unpaired surrogate (state-db.js
-// cleans both out of every parameter). Written text that cleaning would change
-// is refused (400) in both backends, so a stored value always reads back as
-// written and a namespace moves between backends unchanged.
+// The state database stores no U+0000 and no unpaired surrogate in TEXT
+// (state-db.js cleans both out of every parameter; JSON escapes are cleaned
+// only in a parameter cast to json/jsonb, and memory's columns are all TEXT
+// with no such cast). Written text that cleaning would change is refused
+// (400) in both backends, exactly that and nothing more, so a stored value
+// always reads back as written and a namespace moves between backends
+// unchanged.
 function storable(s, what) {
-  if (typeof s === "string" && cleanPgText(s) !== s) throw bad(`${what} must not contain NUL (U+0000) characters or unpaired surrogates`);
+  if (typeof s === "string" && cleanPgText(s, { json: false }) !== s) throw bad(`${what} must not contain NUL (U+0000) characters or unpaired surrogates`);
   return s;
 }
 
