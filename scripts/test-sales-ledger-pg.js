@@ -59,6 +59,24 @@ try {
   ok((await q(`SELECT count(*)::int AS n FROM ${S}.sales`))[0].n === 3 && (await q(`SELECT count(*)::int AS n FROM ${S}.sale_feedback`))[0].n === 1, "Postgres holds both tables");
   ok(sl.proofFeed().external.count === 1 && sl.proofFeed().external.latest.underQuote === true, "the metered proof reads from the mirror");
 
+  // ---- M2: the first refresh after an import does not pull the import again --
+  // (a child on its own schema, with a margin far wider than the boot, so
+  // every imported row is inside it)
+  {
+    const src = `
+      const sl = await import(${JSON.stringify(join(ROOT, "src/sales-ledger.js"))});
+      const sdb = await import(${JSON.stringify(join(ROOT, "src/state-db.js"))});
+      await sl.salesLedgerReady();
+      const n = await sl.salesLedgerRefresh();
+      console.log(JSON.stringify({ n, imported: sl.salesSummary({ detailed: true }).totals.external.sales }));
+      await sdb.__dropStateSchema(); await sdb.closeStateDb(); process.exit(0);
+    `;
+    const out = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", src], {
+      env: { ...process.env, STATE_DB_SCHEMA: `${S}_imp`, LEDGER_MIRROR_MARGIN_MS: "60000", LEDGER_MIRROR_REFRESH_MS: "1000000000" }, cwd: ROOT, encoding: "utf8",
+    }).trim().split("\n").pop());
+    ok(out.imported === 2 && out.n === 0, `M2: the first refresh after an import pulls none of the imported rows (${out.n}; mirror holds ${out.imported} external sales)`);
+  }
+
   // ---- (2) writes land in call order, in Postgres and in the file -------------
   const p1 = sl.recordSale({ slug: "a-first", priceUsd: 0.01, rail: "usdc", network: "base", payer: BUYER, tx: "0xnew1", synthetic: false, wire: "x402" });
   const p2 = sl.recordSale({ slug: "b-second", priceUsd: 0.02, rail: "usdc", network: "base", payer: BUYER2, tx: "0xnew2", synthetic: false, wire: "mpp" });

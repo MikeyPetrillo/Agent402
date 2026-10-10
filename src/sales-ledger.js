@@ -226,6 +226,7 @@ const saleRowOf = (r) => cleanRow({
 });
 const feedbackRowOf = (r) => cleanRow({ tx: r.tx, sale_id: Number(r.sale_id), slug: r.slug, payer: r.payer, verdict: r.verdict, reason: r.reason ?? null, ts: Number(r.ts) });
 let watermark = 0; // refresh pulls rows stamped after this (database clock, ms)
+let importedThrough = 0; // the newest updated_at an import in this process wrote (database clock, ms)
 let refreshing = false;
 const warnOnce = makeWarnOnce("sales-ledger");
 const enqueue = serialQueue();
@@ -303,6 +304,15 @@ async function replayDeadLetters() {
   return landed;
 }
 
+/** The newest updated_at in either table (database clock, ms). Every other
+ *  container's writer waits for its own first load (this import included),
+ *  so right after an import the rows at or below it are the import's. */
+async function newestStamp() {
+  return Math.max(
+    Number((await stateQuery(`SELECT MAX(updated_at) AS m FROM ${T("sales")}`)).rows[0]?.m) || 0,
+    Number((await stateQuery(`SELECT MAX(updated_at) AS m FROM ${T("sale_feedback")}`)).rows[0]?.m) || 0,
+  );
+}
 /** Both tables of the file into Postgres, once: insert-if-absent with the file's ids, so a second container importing at the same time is harmless. */
 async function importFile() {
   const sales = sqliteFileRows(DB_PATH, "sales");
@@ -313,6 +323,7 @@ async function importFile() {
     await syncIdSequence(stateQuery, T("sales"));
   }
   if (fb.rows.length) m = await insertRows(stateQuery, T("sale_feedback"), FEEDBACK_COLS, fb.rows.map(feedbackRowOf), { conflict: "ON CONFLICT DO NOTHING" });
+  if (n || m) importedThrough = await newestStamp();
   if (sales.rows.length || fb.rows.length) console.log(`[sales-ledger] imported ${n} of ${sales.rows.length} sale(s) and ${m} of ${fb.rows.length} feedback row(s) from ${DB_PATH}`);
   return { bytes: sales.bytes, rows: n + m };
 }
@@ -399,7 +410,10 @@ async function pullAll() {
   const s = await stateQuery(`SELECT * FROM ${T("sales")} ORDER BY id`);
   const f = await stateQuery(`SELECT * FROM ${T("sale_feedback")} ORDER BY ts`);
   db.transaction(() => { db.exec("DELETE FROM sales; DELETE FROM sale_feedback"); for (const r of s.rows) applySale(r); for (const r of f.rows) applyFeedback(r); })();
-  watermark = now - REFRESH_MARGIN_MS;
+  // An import this process just ran stamped every row it inserted within
+  // the margin: the full pull holds them, so the refreshes start after the
+  // newest imported stamp instead of pulling them again.
+  watermark = Math.max(now - REFRESH_MARGIN_MS, importedThrough);
 }
 /**
  * Rows another container wrote since the last pull. The watermark advances to
