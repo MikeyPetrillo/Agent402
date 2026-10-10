@@ -257,6 +257,7 @@ import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
 import { datasetStatus, datasetRecorded, runDatasetSnapshot, startDatasetScheduler } from "./dataset-snapshot.js";
 import { startQuoteWarmer, quoteWarmerStatus } from "./tools/databento.js";
+import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary } from "./paid-phase-timing.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
 import { createAsyncJobs } from "./async-jobs.js";
@@ -4919,7 +4920,7 @@ app.get("/__operator/perf.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // ?reset=1 clears the stall high-water mark first (the load test reads a fresh one per scenario).
   if (req.query.reset === "1") resetLoopLag();
-  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), inFlight: inFlightCount(), shed: shedStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
+  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), inFlight: inFlightCount(), shed: shedStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), paidPhases: paidPhaseSummary(), stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
 });
 // One short CPU-profile window on demand (stall attribution without the
 // per-minute cost of continuous profiling). Answers the longest busy run:
@@ -8298,6 +8299,9 @@ if (!FREE_MODE) {
   // socket. A charge that was taken anyway (no ticket, a Tempo push
   // credential, or a close during the settle call itself) is booked as owed
   // in the refund ledger.
+  // Arrival stamp for the per-phase timing of paid calls
+  // (src/paid-phase-timing.js); before every gate, so gate time is measured.
+  app.use(phaseArrivalMiddleware());
   app.use(createHangupSettlementHook({ onUndelivered: recordHangupOutcome }));
 
   // Tempo support for MPP (src/mpp-tempo.js) — a SECOND, independent
@@ -9276,6 +9280,10 @@ if (!FREE_MODE) {
     // (a Tempo push credential) is not forgivable: an undelivered answer on it
     // is owed, so it takes no ticket and spends none of the budget.
     req.__a402HandlerStarted = Date.now();
+    // Handler start and end for the per-phase timing (every rail); its res.end
+    // wrapper is outside every gate's buffering one, so it marks the handler's
+    // own end.
+    markPaidHandlerStart(req, res, def.slug);
     if (req.tempoSettled) return next();
     reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: quotedPriceUsd(def, req), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true });
     res.once("close", () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) }));
