@@ -10314,9 +10314,11 @@ function shutdown(signal, { code = 0, deadlineMs = DRAIN_DEADLINE_MS } = {}) {
   // so an idle connection can't pin the drain to the hard deadline.
   httpServer.closeIdleConnections();
   setInterval(() => httpServer.closeIdleConnections(), 5_000).unref();
-  // Hard deadline so a stuck request can't block the redeploy; the lease
-  // release and pool close start early enough to finish inside it.
-  setTimeout(finish, Math.max(0, deadlineMs - 6_000)).unref();
+  // Hard deadline so a stuck request can't block the redeploy. With a state
+  // database the lease release and pool close start early enough to finish
+  // inside it; without one there is nothing to release, so in-flight requests
+  // keep the whole deadline (file mode drains exactly as it always did).
+  if (stateDbEnabled()) setTimeout(finish, Math.max(0, deadlineMs - 6_000)).unref();
   setTimeout(() => process.exit(code), deadlineMs).unref();
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
