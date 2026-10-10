@@ -49,7 +49,7 @@ export const INDEX_CACHE = { file: "x402-index-cache.ndjson", collection: "x402-
 /** The environment that points every store module into `dir`. */
 export function storeEnv(dir) {
   const d = resolve(dir);
-  const env = {};
+  const env = { OUTBOUND_LEDGER_FILE: join(d, "outbound-spend.ndjson"), WISH_FILE: join(d, "wishes.jsonl"), INDEX_CACHE_FILE: join(d, "x402-index-cache.json") };
   for (const s of SQLITE_STORES) Object.assign(env, s.env(d));
   return env;
 }
@@ -74,6 +74,15 @@ export async function bootStores(dir, { log = () => {} } = {}) {
   // The shadow ledger only opens its store when it is switched on; it is
   // constructed here and never started (no timer, no network).
   const shadow = createShadowLedger({ env: { STRIPE_SHADOW_LEDGER: "on", STRIPE_SECRET_KEY: "unused-never-started" }, dbFile: join(resolve(dir), "agent402-stripe-shadow.db"), fetchImpl: async () => { throw new Error("never started"); }, log });
+  // The record directories and the append logs.
+  const { createCredits } = await import(src("credits.js"));
+  const credits = createCredits({ stripe: null, baseUrl: "http://127.0.0.1", storeDir: join(resolve(dir), "credits"), onDebit: () => {}, onLoad: () => {}, log });
+  const { createHumanCheckout } = await import(src("human-checkout.js"));
+  const checkout = createHumanCheckout({ stripe: null, generate: async () => { throw new Error("never called"); }, baseUrl: "http://127.0.0.1", storeDir: join(resolve(dir), "human-checkout"), onSale: () => {}, log });
+  const outbound = await import(src("outbound-ledger.js"));
+  const wish = await import(src("wish.js"));
+  await credits.ready();
+  await checkout.ready();
   await sales.salesLedgerReady?.();
   await refunds.refundLedgerReady?.();
   await Promise.resolve(revenue.ledgerStoreReady?.()).catch(() => {});
@@ -85,11 +94,14 @@ export async function bootStores(dir, { log = () => {} } = {}) {
   await memory.memoryReady?.();
   await decide.ready;
   if (pg) {
+    // The crawl cache is imported by the index's warm start.
+    const index = await import(src("x402-index.js"));
+    await index.warmStartIndexFromStateDb();
     const sdb = await import(src("state-db.js"));
     await sdb.stateDb();
     await sdb.stateStoresReady({ timeoutMs: 120_000 });
   }
-  return { pg, modules: { sales, refunds, revenue, stats, status, economy, pow, memory, decide, shadow } };
+  return { pg, modules: { sales, refunds, revenue, stats, status, economy, pow, memory, decide, shadow, credits, checkout, outbound, wish } };
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === new URL(import.meta.url).pathname;
