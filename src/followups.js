@@ -14,7 +14,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { createJsonDocument } from "./json-document.js";
+import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
 
 const DAY = 24 * 60 * 60_000;
@@ -38,10 +38,33 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
   // database when one is configured (first load imports the file once).
   const doc = createJsonDocument({ file: storePath, log });
   const shape = (j) => (j && typeof j === "object" && j.seqs ? j : { seqs: {} });
+  // With the database two containers can hold this store at once (a deploy's
+  // overlap). Each one re-reads the row at the start of every tick, and every
+  // write is a versioned read-modify-write of the record it changes, applied
+  // to the fresh row (never a whole-body put of a copy that may be stale):
+  // a stop on one container is never undone by the other's save, and a step
+  // is claimed in the row before its email goes, so it is sent once.
+  const PG = doc.backend === "pg";
   let store = shape(doc.loadSync(null));
-  const ready = trackStoreReady(doc.backend === "pg" ? doc.load(null).then((j) => { store = shape(j); }) : Promise.resolve());
+  const ready = trackStoreReady(PG ? doc.load(null).then((j) => { store = shape(j); }) : Promise.resolve());
   function persist() {
     void doc.save(store).then((stored) => { if (!stored) log(`[followups] persist failed: ${String(doc.lastError || "").slice(0, 120)}`); });
+  }
+  const pending = new Set();
+  /** Apply `change(seqs)` to the stored row (database mode) and adopt the fresh row. Resolves the update result. */
+  function write(change) {
+    const p = doc.update((b) => { const body = shape(b); return change(body.seqs) === SKIP_UPDATE ? SKIP_UPDATE : body; }, { fallback: { seqs: {} } })
+      .then((r) => { if (r.ok) store = shape(r.body); else log(`[followups] write failed: ${String(r.error || "").slice(0, 120)}`); return r; });
+    pending.add(p); p.finally(() => pending.delete(p));
+    return p;
+  }
+  /** Re-read the row (database mode). False when it could not be read. */
+  async function refresh() {
+    if (!PG) return true;
+    const r = await doc.read();
+    if (!r.ok) return false;
+    store = shape(r.exists ? r.body : null);
+    return true;
   }
   let ticking = false;
   const emit = (step, extra = {}) => { try { onEvent?.({ step, ...extra }); } catch { /* telemetry never breaks delivery */ } };
@@ -64,22 +87,38 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
     if (recOf(sid)) return recOf(sid);
     if (Object.keys(store.seqs).length >= MAX_STORE) prune();
     const rec = { id: sid, email: em, product: String(product || ""), kind: String(kind || ""), label: String(label || "report"), input: hdr(input, 200), createdAt: now(), sent: {}, stopped: false };
-    store.seqs[rec.id] = rec; persist();
+    store.seqs[rec.id] = rec;
+    if (PG) void write((seqs) => { if (Object.hasOwn(seqs, sid)) return SKIP_UPDATE; seqs[sid] = { ...rec, sent: {} }; });
+    else persist();
     return rec;
   }
 
   /** A buyer who came back is not re-sold: stop every open sequence for the address. */
   function markRepeat(email) {
     const em = normEmail(email); let n = 0;
-    for (const r of Object.values(store.seqs)) if (r.email === em && !r.stopped) { r.stopped = true; r.stoppedReason = "repeat-buyer"; r.email = null; n++; }
-    if (n) persist();
+    const stopAll = (seqs) => { let k = 0; for (const r of Object.values(seqs)) if (r.email === em && !r.stopped) { r.stopped = true; r.stoppedReason = "repeat-buyer"; r.email = null; k++; } return k; };
+    n = stopAll(store.seqs);
+    // Database mode: the row may hold sequences for this address this
+    // container has not seen yet, so the stop runs on the row whatever n is.
+    if (PG) { if (em) void write((seqs) => (stopAll(seqs) ? undefined : SKIP_UPDATE)); }
+    else if (n) persist();
     return n;
   }
 
   function stop(id, k) {
+    const at = now();
+    const stopRow = (seqs) => { const x = Object.hasOwn(seqs, id) ? seqs[id] : null; if (!x || x.stopped) return SKIP_UPDATE; x.stopped = true; x.stoppedReason = "link"; x.stoppedAt = at; x.email = null; };
     const r = recOf(id);
+    // Database mode: a signed stop link for a sequence this container has not
+    // read yet (made on the other one) still stops it, on the row.
+    if (!r && PG && ID_RE.test(String(id)) && verify(id, k)) { void write(stopRow); return { ok: true }; }
     if (!r || !verify(id, k)) return { ok: false };
-    if (!r.stopped) { r.stopped = true; r.stoppedReason = "link"; r.stoppedAt = now(); r.email = null; persist(); emit("followup_stopped"); }
+    if (!r.stopped) {
+      r.stopped = true; r.stoppedReason = "link"; r.stoppedAt = at; r.email = null;
+      if (PG) void write(stopRow);
+      else persist();
+      emit("followup_stopped");
+    }
     return { ok: true };
   }
 
@@ -106,6 +145,9 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
     ticking = true;
     const out = { monitor: 0, another: 0, skipped: 0, failed: 0 };
     try {
+      // Database mode: start from the row as it is now (the other container
+      // may have stopped, added or sent since this one last read it).
+      if (!(await refresh())) return { skipped: "store-unreadable" };
       let n = 0;
       for (const r of Object.values(store.seqs)) {
         if (r.stopped || n >= limit) continue;
@@ -113,22 +155,58 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
         if (!r.sent.monitor && age >= STEP_DELAYS_MS.monitor) {
           n++;
           const mon = monitorFor(r.kind);
-          if (!mon) { r.sent.monitor = "no-monitor"; out.skipped++; }
+          if (!mon) { if (await settle(r, "monitor", "no-monitor")) out.skipped++; }
           else {
-            const sent = await sendMonitorOffer(r, mon);
-            if (sent) { r.sent.monitor = now(); out.monitor++; emit("followup_monitor_sent", { kind: r.kind }); } else { out.failed++; }
+            const mine = await claim(r, "monitor");
+            if (!mine) { out.skipped++; continue; }
+            const sent = await sendMonitorOffer(mine, mon);
+            if (sent) { await finish(r, "monitor", mine, now()); out.monitor++; emit("followup_monitor_sent", { kind: r.kind }); } else { await release(r, "monitor", mine); out.failed++; }
           }
           continue; // one email per sequence per tick
         }
         if (!r.sent.another && age >= STEP_DELAYS_MS.another) {
           n++;
-          const sent = await sendAnother(r);
-          if (sent) { r.sent.another = now(); out.another++; emit("followup_another_sent", { kind: r.kind }); } else { out.failed++; }
+          const mine = await claim(r, "another");
+          if (!mine) { out.skipped++; continue; }
+          const sent = await sendAnother(mine);
+          if (sent) { await finish(r, "another", mine, now()); out.another++; emit("followup_another_sent", { kind: r.kind }); } else { await release(r, "another", mine); out.failed++; }
         }
       }
-      persist();
+      if (!PG) persist();
     } finally { ticking = false; }
     return out;
+  }
+
+  // A step's send is claimed in the row first: the claim is a versioned
+  // write that only succeeds while the sequence is open and the step unsent,
+  // so of two containers ticking at once exactly one sends. A claim whose
+  // send never confirms (a crash between the two) stays claimed: the step is
+  // skipped rather than risk a second email. File mode has one writer and
+  // marks the step in memory as before.
+  async function claim(r, step) {
+    if (!PG) return r;
+    const mark = `sending:${now()}:${Math.random().toString(36).slice(2, 10)}`;
+    const res = await write((seqs) => { const x = Object.hasOwn(seqs, r.id) ? seqs[r.id] : null; if (!x || x.stopped || x.sent?.[step]) return SKIP_UPDATE; x.sent = { ...(x.sent || {}), [step]: mark }; });
+    if (!res.ok || !res.changed) return null;
+    const fresh = res.body.seqs[r.id];
+    if (!fresh || fresh.sent?.[step] !== mark || !fresh.email) return null;
+    const sent = { ...fresh.sent }; delete sent[step]; // the email reads the steps already sent, not this claim
+    return { ...fresh, sent, _claim: mark };
+  }
+  async function finish(r, step, mine, value) {
+    if (!PG) { r.sent[step] = value; return true; }
+    const res = await write((seqs) => { const x = Object.hasOwn(seqs, r.id) ? seqs[r.id] : null; if (!x || x.sent?.[step] !== mine._claim) return SKIP_UPDATE; x.sent[step] = value; });
+    return res.ok;
+  }
+  async function release(r, step, mine) {
+    if (!PG) return true;
+    const res = await write((seqs) => { const x = Object.hasOwn(seqs, r.id) ? seqs[r.id] : null; if (!x || x.sent?.[step] !== mine._claim) return SKIP_UPDATE; delete x.sent[step]; });
+    return res.ok;
+  }
+  async function settle(r, step, value) {
+    if (!PG) { r.sent[step] = value; return true; }
+    const res = await write((seqs) => { const x = Object.hasOwn(seqs, r.id) ? seqs[r.id] : null; if (!x || x.sent?.[step]) return SKIP_UPDATE; x.sent = { ...(x.sent || {}), [step]: value }; });
+    return res.ok && res.changed;
   }
 
   async function sendMonitorOffer(r, mon) {
@@ -161,18 +239,27 @@ ${footer(r)}`);
 
   /** Drop finished sequences older than 30 days so the store stays bounded. */
   function prune() {
-    let changed = false;
-    for (const [id, r] of Object.entries(store.seqs)) {
-      const done = r.stopped || (r.sent.monitor && r.sent.another);
-      if (done && now() - r.createdAt > 30 * DAY) { delete store.seqs[id]; changed = true; }
-    }
-    if (changed) persist();
+    const drop = (seqs) => {
+      let changed = false;
+      for (const [id, r] of Object.entries(seqs)) {
+        const done = r.stopped || (r.sent.monitor && r.sent.another);
+        if (done && now() - r.createdAt > 30 * DAY) { delete seqs[id]; changed = true; }
+      }
+      return changed;
+    };
+    const changed = drop(store.seqs);
+    if (PG) { if (changed) void write((seqs) => (drop(seqs) ? undefined : SKIP_UPDATE)); }
+    else if (changed) persist();
   }
 
   function stats() {
     const rs = Object.values(store.seqs);
     return { total: rs.length, open: rs.filter((r) => !r.stopped && !(r.sent.monitor && r.sent.another)).length, stopped: rs.filter((r) => r.stopped).length, monitorSent: rs.filter((r) => typeof r.sent.monitor === "number").length, anotherSent: rs.filter((r) => typeof r.sent.another === "number").length, enabled: enabled(), storePath };
   }
+
+  // The link routes' async form: with the database a record the other
+  // container made since this one last read the row is read first.
+  async function stopAsync(id, k) { if (PG && typeof id === "string" && !recOf(id)) await refresh().catch(() => false); return stop(id, k); }
 
   let timer = null;
   function start({ intervalMs = 60 * 60_000, firstMs = 3 * 60_000 } = {}) {
@@ -183,5 +270,5 @@ ${footer(r)}`);
   }
   function stopTimer() { if (timer) clearInterval(timer); timer = null; }
 
-  return { enqueue, markRepeat, stop, sendFailed, tick, prune, stats, start, stopTimer, enabled, ready: () => ready, flush: () => doc.flush(), _store: () => store };
+  return { stopAsync, enqueue, markRepeat, stop, sendFailed, tick, prune, stats, start, stopTimer, enabled, ready: () => ready, flush: async () => { while (pending.size) await Promise.allSettled([...pending]); await doc.flush(); }, refresh, _store: () => store };
 }

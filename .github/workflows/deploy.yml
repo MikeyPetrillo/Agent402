@@ -1320,6 +1320,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           t node scripts/test-state-db.js
           t node scripts/test-stores-pg.js
+          # Two containers on one schema: the email stores never undo or repeat each other.
+          t node scripts/test-overlap-stores-pg.js
           t node scripts/test-leased-loops.js
           t node scripts/test-idempotency-store.js
           # Every store that left the volume: file imported once, rows win, invariant on Postgres.

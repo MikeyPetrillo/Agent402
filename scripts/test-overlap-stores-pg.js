@@ -1,0 +1,153 @@
+// Two containers on one database (a deploy's overlap): two instances of each
+// email store share one schema, each with its own in-memory copy. A write
+// on one must never be undone by the other's save, a record made on one is
+// seen by the other, an email is sent once when both tick at the same time,
+// and a load that fails during an outage never leads to an overwrite.
+// Requires STATE_DATABASE_URL (CI fails without it).
+import { createHmac } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { requireTestPg } from "./lib/test-pg.js";
+import { startPgRelay } from "./lib/pg-relay.js";
+requireTestPg({ label: "test-overlap-stores-pg" });
+const relay = await startPgRelay(process.env.STATE_DATABASE_URL);
+process.env.STATE_DATABASE_URL = relay.url;
+const sdb = await import("../src/state-db.js");
+const { createFollowups } = await import("../src/followups.js");
+const { createFreeAlerts } = await import("../src/free-alerts.js");
+const { createWalletDigest } = await import("../src/wallet-digest.js");
+
+let pass = 0, fail = 0;
+const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
+const DIR = mkdtempSync(join(tmpdir(), "overlap-stores-"));
+const quiet = () => {};
+const secret = "overlap-secret";
+const heal = async () => { relay.heal(); for (let i = 0; i < 6; i++) { try { await sdb.stateQuery("SELECT 1"); return; } catch { /* a dead pooled connection */ } } };
+const DAY = 86_400_000;
+
+try {
+  // ---- follow-ups --------------------------------------------------------------
+  {
+    let clock = 1_000_000_000_000;
+    const sent = [];
+    const mk = (tag) => createFollowups({ storePath: join(DIR, tag, "followups.json"), secret, now: () => clock, monitorFor: () => ({ product: "m", label: "Monitor", priceUsd: "$1" }), sendEmail: async (m) => { sent.push(`${tag}:${m.to}`); return true; }, log: quiet });
+    const stopKey = (id) => createHmac("sha256", secret).update(`stop:${id}`).digest("base64url").slice(0, 32);
+    const A = mk("a"); await A.ready();
+    A.enqueue({ sessionId: "cs_buyer_one", email: "one@example.com", product: "p", kind: "k", label: "L", input: "X" }); await A.flush();
+    const B = mk("b"); await B.ready(); // the second container boots and reads the row
+    ok(A.stop("cs_buyer_one", stopKey("cs_buyer_one")).ok, "followups: the stop link works on A");
+    await A.flush();
+    B.enqueue({ sessionId: "cs_buyer_two", email: "two@example.com", product: "p", kind: "k", label: "L", input: "Y" }); await B.flush();
+    const row = (await sdb.documents.get("followups.json")).body.seqs;
+    ok(row.cs_buyer_one?.stopped === true && row.cs_buyer_one?.email === null && Boolean(row.cs_buyer_two), "followups: an unsubscribe on A is not undone by B's next write, and B's record lands");
+    A.enqueue({ sessionId: "cs_from_a", email: "a@example.com", product: "p", kind: "k", label: "L", input: "Z" }); await A.flush();
+    B.enqueue({ sessionId: "cs_from_b", email: "b@example.com", product: "p", kind: "k", label: "L", input: "W" }); await B.flush();
+    const C = mk("c"); await C.ready();
+    ok(["cs_from_a", "cs_from_b"].every((id) => Object.hasOwn(C._store().seqs, id)), "followups: writes from both containers survive each other");
+    // B never saw cs_from_a at boot; it buys again on B: every open sequence for that address stops, on the row.
+    B.markRepeat("a@example.com"); await B.flush();
+    ok((await sdb.documents.get("followups.json")).body.seqs.cs_from_a?.stopped === true, "followups: a repeat buyer seen on B stops a sequence only A had in memory");
+    // A step is emailed once: both containers tick at once, then again in turn.
+    clock += 3 * DAY;
+    sent.length = 0;
+    await Promise.all([A.tick(), B.tick()]);
+    const twoSent = sent.filter((x) => x.endsWith("two@example.com")).length;
+    ok(twoSent === 1, `followups: two containers ticking at once send the day-2 step once (sent ${twoSent}: ${JSON.stringify(sent)})`);
+    await A.tick(); await B.tick();
+    ok(sent.filter((x) => x.endsWith("two@example.com")).length === 1, "followups: a later tick on either container does not send it again");
+    const r2 = (await sdb.documents.get("followups.json")).body.seqs.cs_buyer_two;
+    ok(typeof r2.sent.monitor === "number", "followups: the step is recorded as sent with its time");
+    ok(!sent.some((x) => x.endsWith("one@example.com")), "followups: the stopped sequence is never emailed");
+  }
+
+  // ---- free alerts -------------------------------------------------------------
+  {
+    let clock = 1_000_000_000_000;
+    const sent = [];
+    let ids = ["a"];
+    const probes = { domain: Object.assign(async () => ({ ids })) };
+    const mk = (tag) => createFreeAlerts({ storePath: join(DIR, tag, "free-alerts.json"), probes, validators: { domain: (t) => t }, now: () => clock, secret, sendEmail: async (m) => { sent.push(`${tag}:${m.to}:${m.subject}`); return true; }, log: quiet });
+    const key = (id, p) => createHmac("sha256", secret).update(`${p}:${id}`).digest("base64url").slice(0, 32);
+    const A = mk("a"); await A.ready();
+    const B = mk("b"); await B.ready();
+    await A.signup({ email: "x@example.com", kind: "domain", target: "x.example" }); await A.flush();
+    await B.signup({ email: "y@example.com", kind: "domain", target: "y.example" }); await B.flush();
+    let row = (await sdb.documents.get("free-alerts.json")).body.alerts;
+    const byEmail = (e) => Object.values(row).find((a) => a.email === e);
+    ok(byEmail("x@example.com") && byEmail("y@example.com"), "free-alerts: a signup on A is not lost by B's signup");
+    const xid = byEmail("x@example.com").id, yid = byEmail("y@example.com").id;
+    // Confirm on B a record A made (B read it at its signup), unsubscribe on A.
+    ok(B.confirm(xid, key(xid, "confirm")).ok && (await A.confirmAsync(yid, key(yid, "confirm"))).ok, "free-alerts: each container confirms a record the other made (the async link route reads the row on a miss)");
+    await A.flush(); await B.flush();
+    ok(A.unsubscribe(xid, key(xid, "unsubscribe")).ok, "free-alerts: unsubscribe on A");
+    await A.flush();
+    await B.signup({ email: "z@example.com", kind: "domain", target: "z.example" }); await B.flush();
+    row = (await sdb.documents.get("free-alerts.json")).body.alerts;
+    ok(row[xid].status === "unsubscribed" && row[xid].email === null && row[yid].status === "active", "free-alerts: the unsubscribe on A survives B's next write, and the confirms both landed");
+    // An unsubscribe link for a record this container never read still works (on the row).
+    const D = mk("d"); await D.ready();
+    await A.signup({ email: "w@example.com", kind: "domain", target: "w.example" }); await A.flush();
+    const wid = Object.values((await sdb.documents.get("free-alerts.json")).body.alerts).find((a) => a.email === "w@example.com").id;
+    ok(D.unsubscribe(wid, key(wid, "unsubscribe")).ok, "free-alerts: a signed unsubscribe for a record made elsewhere answers ok");
+    await D.flush();
+    ok((await sdb.documents.get("free-alerts.json")).body.alerts[wid].status === "unsubscribed", "...and unsubscribes it on the row");
+    // Baseline then a change: both tick at once, one email.
+    await Promise.all([A.tick({ force: true }), B.tick({ force: true })]);
+    ids = ["a", "b"]; clock += 2 * DAY; sent.length = 0;
+    await Promise.all([A.tick({ force: true }), B.tick({ force: true })]);
+    const ySends = sent.filter((x) => x.includes(":y@example.com:")).length;
+    ok(ySends === 1, `free-alerts: two containers ticking at once send one change email (sent ${ySends})`);
+    ok(!sent.some((x) => x.includes(":x@example.com:")), "free-alerts: the unsubscribed address is never emailed");
+    // A failed first load: the instance starts empty and its signup must not erase the row.
+    const before = Object.keys((await sdb.documents.get("free-alerts.json")).body.alerts).length;
+    relay.cut();
+    const F = mk("f");
+    await F.ready();
+    await heal();
+    let threw = null;
+    try { await F.signup({ email: "new@example.com", kind: "domain", target: "n.example" }); } catch (e) { threw = e; }
+    await F.flush();
+    const after = (await sdb.documents.get("free-alerts.json")).body.alerts;
+    ok(Object.keys(after).length === before + (threw ? 0 : 1) && after[yid] && after[xid], `free-alerts: a signup after a failed first load keeps every stored alert (${before} before, ${Object.keys(after).length} after)`);
+  }
+
+  // ---- wallet digest -----------------------------------------------------------
+  {
+    let clock = 1_000_000_000_000;
+    const sent = [];
+    const usage = () => ({ totals: { calls: 3, paidUsd: 0.03 }, bySlug: [{ slug: "hash", calls: 3, usd: 0.03 }], byNetwork: {} });
+    const mk = (tag) => createWalletDigest({ storePath: join(DIR, tag, "wallet-digest.json"), secret, now: () => clock, usage, verifySignature: async () => true, sendEmail: async (m) => { sent.push(`${tag}:${m.to}:${m.subject}`); return true; }, log: quiet });
+    const key = (id, p) => createHmac("sha256", secret).update(`digest:${p}:${id}`).digest("base64url").slice(0, 32);
+    const A = mk("a"); await A.ready();
+    const B = mk("b"); await B.ready();
+    const la = A.preEnrolCredits({ keyId: "k1", email: "p@example.com" }); await A.flush();
+    const lb = B.preEnrolCredits({ keyId: "k2", email: "q@example.com" }); await B.flush();
+    let row = (await sdb.documents.get("wallet-digest.json")).body.subs;
+    ok(Object.keys(row).length === 2, "wallet-digest: pre-enrolments on both containers both land");
+    const idOf = (l) => new URL(l).searchParams.get("id");
+    const pid = idOf(la), qid = idOf(lb);
+    await A.refresh();
+    ok(A.confirm(pid, key(pid, "confirm")).ok && A.confirm(qid, key(qid, "confirm")).ok, "wallet-digest: confirms on A");
+    await A.flush();
+    await B.refresh();
+    ok(B.unsubscribe(pid, key(pid, "unsubscribe")).ok, "wallet-digest: unsubscribe on B");
+    await B.flush();
+    A.preEnrolCredits({ keyId: "k3", email: "r@example.com" }); await A.flush();
+    row = (await sdb.documents.get("wallet-digest.json")).body.subs;
+    ok(row[pid].status === "unsubscribed" && row[pid].email === null && row[qid].status === "active", "wallet-digest: B's unsubscribe survives A's next write");
+    sent.length = 0;
+    await Promise.all([A.tick(), B.tick()]);
+    ok(sent.filter((x) => x.includes(":q@example.com:")).length === 1 && !sent.some((x) => x.includes(":p@example.com:")), `wallet-digest: two containers ticking at once send one digest, none to the unsubscribed address (${sent.length})`);
+    await A.tick(); await B.tick();
+    ok(sent.filter((x) => x.includes(":q@example.com:")).length === 1, "wallet-digest: the week is not sent again");
+  }
+} finally {
+  relay.heal();
+  for (let i = 0; i < 3; i++) { try { await sdb.__dropStateSchema(); break; } catch { /* a connection the cut killed */ } }
+  await sdb.closeStateDb();
+  await relay.close();
+  rmSync(DIR, { recursive: true, force: true });
+}
+console.log(`${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

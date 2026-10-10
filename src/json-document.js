@@ -33,7 +33,7 @@ import { documents, imports, stateDbEnabled, stateDbSchema, stateQuery } from ".
 export const SKIP_UPDATE = Symbol("json-document.skip-update");
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");
-const sleep = (ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); // bounded backoff; not unref'd, so an awaited retry keeps a short-lived process alive
 /** The sidecar that records which row version a write-through file carries. */
 export const rowMarkOf = (file) => `${file}.rowmark`;
 /** True for a body that holds no data: null, {}, [], or objects of only empty values. */
