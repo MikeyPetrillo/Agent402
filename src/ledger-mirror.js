@@ -313,7 +313,9 @@ export function createLedgerWriter({ enqueue, ready, deadLetter, warnOnce, befor
         else if (deadLetter.add(kind, payload) == null) console.error(`[${label}] a ${kind} could not be written to Postgres or the local dead-letter`);
       };
       return enqueue(async () => {
-        if (ahead && writer.failFastActive()) { keep(); return onError; }
+        // The fail-fast shortcut only for a write already on local disk: one
+        // whose append failed is kept nowhere else, so it tries Postgres.
+        if (ahead && id != null && writer.failFastActive()) { keep(); return onError; }
         try {
           await ready();
           if (before) await before();
