@@ -1350,6 +1350,7 @@ jobs:
           t node scripts/test-state-roundtrip-pg.js
           t node scripts/test-state-migration-verify-pg.js
           t node scripts/test-state-ledger-checksum-pg.js
+          t node scripts/test-state-cutover-check-pg.js
           # The server through a Postgres outage and back, a burst, a clean drain; two processes on one schema.
           t node scripts/test-state-db-resilience.js
           t node scripts/test-state-db-overlap.js

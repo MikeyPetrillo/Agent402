@@ -1,7 +1,8 @@
 // Child of scripts/state-cutover-check.js: import the money ledgers in the
 // mode the environment selects, wait for their first load, and print one
-// JSON line of exact figures. Never writes the files (read-only import,
-// STATE_WRITE_THROUGH=off).
+// JSON line of exact figures. The parent hands each mode its own copy of the
+// files, so nothing a boot writes reaches the originals. CUTOVER_KEEP_SCHEMA=1
+// leaves the database half's schema for the parent's row-level checksum.
 const mode = process.env.CUTOVER_MODE || "file";
 const withDecide = process.argv[2] === "with-decide";
 const out = { mode };
@@ -25,13 +26,20 @@ out.sales = {
   decide: sales.decideSales({ days: 30 }),
   firstRecordedTs: sales.firstRecordedTs(),
 };
-// Refunds: totals and the status breakdown.
-const rows = refunds.listRefunds({ limit: 100000 });
+// Refunds: EVERY row in every status (listRefunds defaults to the first 200
+// owed rows), with the count and the sum per status.
+const rows = refunds.listRefunds({ status: "all", limit: Number.MAX_SAFE_INTEGER });
 const list = Array.isArray(rows) ? rows : rows?.rows || [];
-const byStatus = {};
-let owedUsd = 0, n = 0;
-for (const r of list) { n++; byStatus[r.status] = (byStatus[r.status] || 0) + 1; if (r.status === "owed") owedUsd += Number(r.priceUsd ?? r.price_usd ?? 0); }
-out.refunds = { count: n, byStatus, owedUsd: +owedUsd.toFixed(6), totals: refunds.refundTotals(), alarm: refunds.refundAlarmStatus() };
+const byStatus = {}, usdByStatus = {};
+let n = 0;
+for (const r of list) {
+  n++;
+  byStatus[r.status] = (byStatus[r.status] || 0) + 1;
+  usdByStatus[r.status] = (usdByStatus[r.status] || 0) + Number(r.priceUsd ?? r.price_usd ?? 0);
+}
+const sorted = (o) => Object.fromEntries(Object.entries(o).sort(([a], [b]) => (a < b ? -1 : 1)));
+for (const k of Object.keys(usdByStatus)) usdByStatus[k] = +usdByStatus[k].toFixed(9);
+out.refunds = { count: n, byStatus: sorted(byStatus), usdByStatus: sorted(usdByStatus), owedUsd: usdByStatus.owed || 0, totals: refunds.refundTotals(), alarm: refunds.refundAlarmStatus() };
 
 // Exact row counts straight from the store each mode reads: the SQLite files
 // in file mode, the state tables in database mode. The two must be equal, or
@@ -82,7 +90,7 @@ if (withDecide) {
 
 if (mode === "pg") {
   const sdb = await import("../../src/state-db.js");
-  await sdb.__dropStateSchema();
+  if (process.env.CUTOVER_KEEP_SCHEMA !== "1") await sdb.__dropStateSchema();
   await sdb.closeStateDb();
 }
 console.log(JSON.stringify(out));
