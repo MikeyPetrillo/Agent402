@@ -213,6 +213,18 @@ try {
   ok((await m.memoryPut(C, "q4", "y".repeat(200))).bytes === 200, "shrinking a value frees budget");
   delete process.env.MEMORY_MAX_NS_BYTES;
   await rejects("a value with a NUL character is refused (400, not a failed statement)", () => m.memoryPut(C, "nul", "a\u0000b"), 400);
+  // Postgres keeps no U+0000 and no unpaired surrogate: a value holding one is
+  // refused (400, never charged) rather than stored changed.
+  await m.memoryPut(C, "nul", { keep: 1 });
+  await rejects("an object value holding U+0000 is refused (400)", () => m.memoryPut(C, "nul", { note: "line1\u0000line2" }), 400);
+  await rejects("a string value that is JSON text with an escaped NUL is refused (400)", () => m.memoryPut(C, "nul", '{"a":"\\u0000"}'), 400);
+  await rejects("a value holding an unpaired surrogate is refused (400)", () => m.memoryPut(C, "nul", { s: "\ud800" }), 400);
+  await rejects("cas to a value holding U+0000 is refused (400)", () => m.memoryCas(C, "nul", { keep: 1 }, ["\u0000"], { hasValue: true }), 400);
+  await rejects("incr on a key holding U+0000 is refused (400)", () => m.memoryIncr(C, "c\u0000tr", 1, C), 400);
+  await rejects("remember with meta holding U+0000 is refused (400)", () => m.remember(C, "a note", { t: "\u0000" }), 400);
+  ok(JSON.stringify((await m.memoryGet(C, "nul")).value) === JSON.stringify({ keep: 1 }), "a refused write leaves the stored value as it was");
+  await m.memoryPut(C, "esc", { t: "a\\u0000b" });
+  ok((await m.memoryGet(C, "esc")).value.t === "a\\u0000b", "an escaped backslash before u0000 is plain text and round-trips");
 
   // ---- 8) a second boot: no re-import, and both processes see each other -------
   // Add a row to the SQLite file AFTER the import; a second boot must not pick it up.

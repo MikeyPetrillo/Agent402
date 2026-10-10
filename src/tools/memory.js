@@ -26,7 +26,7 @@ import Database from "better-sqlite3";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, trackStoreReady, withSchemaLock } from "../state-db.js";
+import { cleanPgText, stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, trackStoreReady, withSchemaLock } from "../state-db.js";
 import { retryingLoad } from "../store-retry.js";
 
 // Memory is the WORST case for a silent /data → /tmp fallback: agents pay
@@ -110,14 +110,24 @@ function grantAllows(g, need) {
   return need === "write" ? g.mode === "readwrite" : true;
 }
 
+// The state database stores no U+0000 and no unpaired surrogate (state-db.js
+// cleans both out of every parameter). Written text that cleaning would change
+// is refused (400) in both backends, so a stored value always reads back as
+// written and a namespace moves between backends unchanged.
+function storable(s, what) {
+  if (typeof s === "string" && cleanPgText(s) !== s) throw bad(`${what} must not contain NUL (U+0000) characters or unpaired surrogates`);
+  return s;
+}
+
 function checkKey(key, message = `"key" must be a non-empty string of at most ${MAX_KEY} chars`) {
   if (typeof key !== "string" || !key || key.length > MAX_KEY) throw bad(message);
+  storable(key, '"key"');
 }
 
 function serializeValue(value, message = `"value" is required and must serialize to at most ${MAX_VALUE} bytes`) {
   const serialized = typeof value === "string" ? value : JSON.stringify(value);
   if (serialized === undefined || serialized.length > MAX_VALUE) throw bad(message);
-  return serialized;
+  return storable(serialized, '"value"');
 }
 
 function expiryOf(ttlSeconds) {
@@ -257,6 +267,7 @@ function newDocId() {
 function checkDocText(text) {
   if (typeof text !== "string" || !text.trim()) throw bad('"text" is required');
   if (text.length > MAX_DOC_TEXT) throw bad(`"text" exceeds ${MAX_DOC_TEXT} chars`);
+  storable(text, '"text"');
 }
 
 /** Rank stored docs against a query vector; only docs from the same embedder compare. */
@@ -592,7 +603,7 @@ function sqliteBackend() {
     if (docCount.get(owner).n >= MAX_DOCS_PER_NS) throw bad(`Recall store is full (${MAX_DOCS_PER_NS} docs)`);
     const { vec, model } = await embedText(text);
     const id = newDocId();
-    const metaStr = meta === undefined ? null : JSON.stringify(meta);
+    const metaStr = meta === undefined ? null : storable(JSON.stringify(meta), '"meta"');
     docPut.run({ ns: owner, id, text, meta: metaStr, vec: JSON.stringify(vec), model, updated: now() });
     appendLog(owner, actor, "remember", id, { chars: text.length });
     return { id, owner, stored: true, embedder: model };
@@ -804,12 +815,6 @@ function pgBackend() {
     ready().then(() => stateQuery(`DELETE FROM ${T("memory_kv")} WHERE exp IS NOT NULL AND exp < $1`, [t])).then(() => mirrorApply([["kvPruneAll", t]])).catch(() => {});
   }, 10 * 60 * 1000).unref();
 
-  // Postgres TEXT cannot hold a NUL character; SQLite could. Refuse it (400) rather than fail the statement (500).
-  function noNul(s, what) {
-    if (typeof s === "string" && s.includes("\u0000")) throw bad(`${what} must not contain NUL characters`);
-    return s;
-  }
-
   // Every write: one transaction, the owner's advisory lock first. `q` is the
   // transaction client's query (or stateQuery for a plain read); `q.mirror`
   // collects the SQLite statements to replay once the transaction commits.
@@ -931,8 +936,7 @@ function pgBackend() {
     return lockedOnce("put", owner, actor, key, [value === undefined ? null : value, ttlSeconds ?? null], requestId, async (q) => {
       await requireAccess(q, owner, actor, "write");
       checkKey(key);
-      noNul(key, '"key"');
-      const serialized = noNul(serializeValue(value), '"value"');
+      const serialized = serializeValue(value);
       await assertKeyQuota(q, owner, key);
       await assertByteBudget(q, owner, key, serialized.length);
       const exp = expiryOf(ttlSeconds);
@@ -1005,7 +1009,7 @@ function pgBackend() {
         if (deleted) await appendLog(q, owner, actor, "cas-del", key, { expected: want });
         return { key, swapped: true, value: null, owner };
       }
-      const serialized = noNul(serializeValue(value, `"value" must serialize to at most ${MAX_VALUE} bytes`), '"value"');
+      const serialized = serializeValue(value, `"value" must serialize to at most ${MAX_VALUE} bytes`);
       if (!row) await assertKeyQuota(q, owner, key, true);
       await assertByteBudget(q, owner, key, serialized.length);
       const exp = expiryOf(ttlSeconds);
@@ -1054,8 +1058,7 @@ function pgBackend() {
   async function remember(owner, text, meta, { actor = owner } = {}) {
     await read((q) => requireAccess(q, owner, actor, "write"));
     checkDocText(text);
-    noNul(text, '"text"');
-    const metaStr = meta === undefined ? null : noNul(JSON.stringify(meta), '"meta"');
+    const metaStr = meta === undefined ? null : storable(JSON.stringify(meta), '"meta"');
     const { vec, model } = await embedText(text); // the provider call stays outside the transaction
     return locked(owner, async (q) => {
       await requireAccess(q, owner, actor, "write");
