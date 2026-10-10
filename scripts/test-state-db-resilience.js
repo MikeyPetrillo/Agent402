@@ -24,12 +24,20 @@ const until = async (fn, ms, step = 250) => { const t0 = Date.now(); for (;;) { 
 const target = new URL(url);
 const relayPort = await getFreePort();
 let cut = false;
+let bootLag = 150;
 const live = new Set();
 const relay = createServer((client) => {
   if (cut) { client.destroy(); return; }
   const up = connect({ host: target.hostname, port: Number(target.port || 5432) });
   live.add(client); live.add(up);
-  client.pipe(up); up.pipe(client);
+  client.pipe(up);
+  // While booting, every answer from Postgres arrives late, so the stores'
+  // first loads take a measurable time the boot must wait out.
+  let chain = Promise.resolve();
+  up.on("data", (d) => {
+    if (!bootLag) { chain = chain.then(() => { if (!client.destroyed) client.write(d); }); return; }
+    chain = chain.then(() => new Promise((r) => setTimeout(r, bootLag))).then(() => { if (!client.destroyed) client.write(d); });
+  });
   const drop = () => { client.destroy(); up.destroy(); live.delete(client); live.delete(up); };
   client.on("error", drop); up.on("error", drop); client.on("close", drop); up.on("close", drop);
 });
@@ -68,9 +76,11 @@ const hashCount = async () => Number((await sdb.stateQuery(`SELECT coalesce(max(
 try {
   ok(await until(async () => (await get("/health", 2000)).status === 200, 120_000, 500), "the server boots in database mode behind the relay");
   // The boot waits for every store's first load before it listens.
+  bootLag = 0;
   const storesAt = log.indexOf("[state-db] stores loaded in");
   const listenAt = log.indexOf("Agent402 listening on");
-  ok(storesAt !== -1 && listenAt !== -1 && storesAt < listenAt, `the server listened only after its stores loaded (stores line at ${storesAt}, listen line at ${listenAt})`);
+  const waited = Number((log.match(/\[state-db\] stores loaded in (\d+)ms/) || [])[1]);
+  ok(storesAt !== -1 && listenAt !== -1 && storesAt < listenAt && waited >= 150, `the server listened only after its stores loaded, which took a lagged round trip or more (waited ${waited} ms; stores line at ${storesAt}, listen line at ${listenAt})`);
   ok(await until(async () => (await stateWord()) === "on", 20_000), "the status word reads on while the database answers");
   const callsBefore = await hashCount();
   ok(await callTool() === 200, "a deterministic tool answers 200");
