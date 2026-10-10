@@ -24,12 +24,20 @@ const until = async (fn, ms, step = 250) => { const t0 = Date.now(); for (;;) { 
 const target = new URL(url);
 const relayPort = await getFreePort();
 let cut = false;
+let bootLag = 150;
 const live = new Set();
 const relay = createServer((client) => {
   if (cut) { client.destroy(); return; }
   const up = connect({ host: target.hostname, port: Number(target.port || 5432) });
   live.add(client); live.add(up);
-  client.pipe(up); up.pipe(client);
+  client.pipe(up);
+  // While booting, every answer from Postgres arrives late, so the stores'
+  // first loads take a measurable time the boot must wait out.
+  let chain = Promise.resolve();
+  up.on("data", (d) => {
+    if (!bootLag) { chain = chain.then(() => { if (!client.destroyed) client.write(d); }); return; }
+    chain = chain.then(() => new Promise((r) => setTimeout(r, bootLag))).then(() => { if (!client.destroyed) client.write(d); });
+  });
   const drop = () => { client.destroy(); up.destroy(); live.delete(client); live.delete(up); };
   client.on("error", drop); up.on("error", drop); client.on("close", drop); up.on("close", drop);
 });
@@ -67,6 +75,12 @@ const hashCount = async () => Number((await sdb.stateQuery(`SELECT coalesce(max(
 
 try {
   ok(await until(async () => (await get("/health", 2000)).status === 200, 120_000, 500), "the server boots in database mode behind the relay");
+  // The boot waits for every store's first load before it listens.
+  bootLag = 0;
+  const storesAt = log.indexOf("[state-db] stores loaded in");
+  const listenAt = log.indexOf("Agent402 listening on");
+  const waited = Number((log.match(/\[state-db\] stores loaded in (\d+)ms/) || [])[1]);
+  ok(storesAt !== -1 && listenAt !== -1 && storesAt < listenAt && waited >= 150, `the server listened only after its stores loaded, which took a lagged round trip or more (waited ${waited} ms; stores line at ${storesAt}, listen line at ${listenAt})`);
   ok(await until(async () => (await stateWord()) === "on", 20_000), "the status word reads on while the database answers");
   const callsBefore = await hashCount();
   ok(await callTool() === 200, "a deterministic tool answers 200");
@@ -102,13 +116,35 @@ try {
   ok(await callTool() === 200, "a call after recovery answers 200");
   ok(await until(async () => (await hashCount()) === landedBeforeCut + 6, 60_000), "the five outage calls and the recovery call all land, exactly (queued, retried)");
 
+  // ---- cuts during transactions ---------------------------------------------
+  // Under traffic the stats flush holds a transaction open most of the time,
+  // so cutting the relay now drops connections that are checked out between
+  // statements (pg emits "error" on them), not only idle ones.
+  let flapping = true;
+  const flapCalls = [];
+  const traffic = Promise.all(Array.from({ length: 12 }, async () => { while (flapping) flapCalls.push(await callTool(10_000)); }));
+  for (let i = 0; i < 10; i++) { await sleep(150); cutRelay(); await sleep(200); healRelay(); }
+  flapping = false;
+  await traffic;
+  ok(exited === null, `ten relay cuts under traffic leave the process alive (${flapCalls.length} calls during the cuts)`);
+  ok(!/\[uncaughtException\]/.test(log), "no uncaught exception from a connection dropped mid-transaction");
+  ok(flapCalls.length > 0 && flapCalls.every((s) => s === 200), `every call during the cuts answers 200 (${[...new Set(flapCalls)].join(",")})`);
+  ok(await until(async () => (await stateWord()) === "on", 60_000, 500), "the status word reads on again after the cuts");
+  ok(await callTool() === 200, "a call after the cuts answers 200");
+
   // ---- drain ------------------------------------------------------------------
+  // Loop leases only: a per-boot liveness row (name ":boot:") is not a loop
+  // lease and expires on its own, which is how other containers learn it died.
+  const liveLeases = async () => (await sdb.stateQuery(`SELECT name FROM ${T("leases")} WHERE expires_at > now() AND name NOT LIKE '%:boot:%'`)).rows.map((r) => r.name);
+  const heldBefore = await liveLeases();
   const tKill = Date.now();
   child.kill("SIGTERM");
   ok(await until(async () => exited !== null, 30_000), `SIGTERM drains and exits (${exited ? Date.now() - tKill : "?"} ms)`);
   ok(exited && exited.code === 0, `exit code 0 (got ${exited?.code} ${exited?.signal || ""})`);
+  const heldAfter = await liveLeases();
+  if (!heldBefore.length) console.log("note - no loop lease was held at SIGTERM; the release is covered by test-state-db.js");
+  ok(heldAfter.length === 0, `the drain releases every lease the process held (before: ${heldBefore.join(",") || "none"}; after: ${heldAfter.join(",") || "none"})`);
   ok(!/\[unhandledRejection\]|\[uncaughtException\]/.test(log), "no unhandled rejection or uncaught exception in the log");
-  ok(/\[state-db\]|degraded|imported|stateDb/.test(log) || true, "log captured");
 } finally {
   if (exited === null) { try { child.kill("SIGKILL"); } catch { /* gone */ } }
   relay.close();

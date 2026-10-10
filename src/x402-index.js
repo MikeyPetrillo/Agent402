@@ -1667,7 +1667,7 @@ async function discoverOneSource(source, selfOrigin) {
 let selfOriginCache = null;
 // The timers call the leased form; the plain function keeps its name for the
 // tests that read it. See src/state-db.js leased().
-const runDiscoveryLeased = leased("x402-index-discovery", { ttlMs: 20 * 60_000 }, (selfOrigin) => runDiscovery(selfOrigin));
+const runDiscoveryLeased = leased("x402-index-discovery", { ttlMs: 20 * 60_000, failOpen: true }, (selfOrigin) => runDiscovery(selfOrigin));
 async function runDiscovery(selfOrigin) {
   selfOriginCache = selfOrigin || selfOriginCache;
   await Promise.allSettled(DISCOVERY_SOURCES.map((s) => discoverOneSource(s, selfOriginCache)));
@@ -5491,7 +5491,7 @@ export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_
 
 /** True while a crawl cycle is running (every entry is being replaced). */
 export function crawlInProgress() { return !!crawlInFlight; }
-const runCrawlLeased = leased("x402-index-crawl", { ttlMs: 60 * 60_000 }, () => runCrawl());
+const runCrawlLeased = leased("x402-index-crawl", { ttlMs: 60 * 60_000, failOpen: true }, () => runCrawl());
 async function runCrawl() {
   if (crawlInFlight) return; // overlapping runs would just rate-limit each other
   crawlInFlight = true;

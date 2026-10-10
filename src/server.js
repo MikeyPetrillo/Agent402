@@ -544,7 +544,7 @@ import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, econom
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
-import { stateStoresReady, stateDbStatus, stateDbEnabled } from "./state-db.js";
+import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb } from "./state-db.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
@@ -2172,17 +2172,24 @@ const surfaceMemo = new Map();
 // request waits on a slow synchronous build (the /revenue ledger series took
 // up to 1.2 s). A failed rebuild keeps the previous value. Only the first
 // build of a key is paid by a request.
+// A value built while a state-database store has not loaded yet (the boot
+// wait timed out, or a first load failed and is retrying) is partial: it is
+// kept for PARTIAL_MEMO_MS at most, so the full answer replaces it as soon as
+// the store lands instead of a minute later.
+const PARTIAL_MEMO_MS = 2_000;
+const memoFresh = (hit, now, ttlMs) => now - hit.at < (hit.partial ? Math.min(ttlMs, PARTIAL_MEMO_MS) : ttlMs);
 function memoSurface(key, ttlMs, build) {
   const hit = surfaceMemo.get(key);
   const now = Date.now();
-  if (hit && now - hit.at < ttlMs) return hit.value;
+  if (hit && memoFresh(hit, now, ttlMs)) return hit.value;
   if (hit) {
     if (!hit.rebuilding) {
       hit.rebuilding = true;
       setImmediate(() => {
         try {
+          const partial = !stateStoresLoaded();
           const value = build();
-          if (surfaceMemo.get(key) === hit) surfaceMemo.set(key, { at: Date.now(), value });
+          if (surfaceMemo.get(key) === hit) surfaceMemo.set(key, { at: Date.now(), value, partial });
         } catch (e) {
           console.warn(`[surface-memo] ${key} rebuild failed: ${String(e?.message || e).slice(0, 120)}`);
         } finally { hit.rebuilding = false; }
@@ -2190,8 +2197,9 @@ function memoSurface(key, ttlMs, build) {
     }
     return hit.value;
   }
+  const partial = !stateStoresLoaded();
   const value = build();
-  surfaceMemo.set(key, { at: now, value });
+  surfaceMemo.set(key, { at: now, value, partial });
   return value;
 }
 // memoSurface for a builder that yields between steps: the first build is
@@ -2200,13 +2208,14 @@ const surfaceBuilds = new Map();
 async function memoSurfaceAsync(key, ttlMs, buildAsync) {
   const hit = surfaceMemo.get(key);
   const now = Date.now();
-  if (hit && now - hit.at < ttlMs) return hit.value;
+  if (hit && memoFresh(hit, now, ttlMs)) return hit.value;
   let pending = surfaceBuilds.get(key);
   if (!pending) {
     pending = (async () => {
       try {
+        const partial = !stateStoresLoaded();
         const value = await buildAsync();
-        surfaceMemo.set(key, { at: Date.now(), value });
+        surfaceMemo.set(key, { at: Date.now(), value, partial });
         return value;
       } finally { surfaceBuilds.delete(key); }
     })();
@@ -9955,6 +9964,7 @@ console.log(`[upstream-costs] ${upstreamCostsLoaded() ? `loaded (${upstreamCosts
   const t0 = Date.now();
   const r = await stateStoresReady({ timeoutMs: 15_000 });
   if (r !== "ready") console.warn(`[state-db] stores not ready after ${Date.now() - t0}ms (${r}); serving with what has loaded`);
+  else if (stateDbEnabled()) console.log(`[state-db] stores loaded in ${Date.now() - t0}ms; listening`);
 }
 const httpServer = app.listen(PORT, () =>
   console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`)
@@ -10248,17 +10258,41 @@ function shutdown(signal, { code = 0, deadlineMs = DRAIN_DEADLINE_MS } = {}) {
   // deadline with the money spent and nobody to receive the answer.
   const cut = abortInFlightComposites(signal);
   if (cut) console.log(`[drain] aborted ${cut} in-flight composite run(s) - upstream calls cut, nobody charged`);
+  // Scheduled loops: every one runs under a lease (src/state-db.js), so no
+  // new tick starts from here on, and a tick still running is told (its lease
+  // signal aborts, leaseStillHeld reads false) so it stops before its next
+  // external effect. The rows are released just before exit (below), so the
+  // other container picks the loops up at once instead of at the ttl.
+  try { stopLeases(); } catch { /* never blocks the drain */ }
+  // The last step, once: release every lease this process holds, then close
+  // the pool. Each step is bounded; the exit never waits on the database.
+  let exiting = false;
+  const finish = () => {
+    if (exiting) return;
+    exiting = true;
+    const bounded = (p, ms) => Promise.race([Promise.resolve(p).catch(() => {}), new Promise((r) => setTimeout(r, ms).unref())]);
+    bounded(releaseHeldLeases({ timeoutMs: 3_000 }), 3_500)
+      .then(() => bounded(closeStateDb(), 2_000))
+      .finally(() => process.exit(code));
+  };
   // The queued state-database writes (ledgers, tallies, replay rows) land
   // before the process exits, bounded so a slow database cannot hold the
-  // drain past its deadline. Without a database every flush resolves at once.
-  httpServer.close(() => { flushStateQueues().finally(() => process.exit(code)); });
+  // drain past its deadline: one flush round, at most 10 s, each statement
+  // under the pool's own time limits. Without a database every flush
+  // resolves at once. During a database outage that round fails and what is
+  // still queued is lost with the process; while the /data volume exists
+  // the stores that write through to it keep their copy, after the volume
+  // is removed nothing does.
+  httpServer.close(() => { flushStateQueues().finally(finish); });
   // server.close() waits for ALL connections, including idle keep-alive
   // sockets agents hold open between calls. Sweep those now and every few
   // seconds (a socket goes idle the moment its in-flight response finishes),
   // so an idle connection can't pin the drain to the hard deadline.
   httpServer.closeIdleConnections();
   setInterval(() => httpServer.closeIdleConnections(), 5_000).unref();
-  // Hard deadline so a stuck request can't block the redeploy.
+  // Hard deadline so a stuck request can't block the redeploy; the lease
+  // release and pool close start early enough to finish inside it.
+  setTimeout(finish, Math.max(0, deadlineMs - 6_000)).unref();
   setTimeout(() => process.exit(code), deadlineMs).unref();
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));

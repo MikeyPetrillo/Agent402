@@ -506,7 +506,7 @@ export function startBackupScheduler({ log = console.log } = {}) {
   }
   // The run itself is awaited under the lease, so two containers inside the
   // same hour do not both upload; the day is taken only once the lease is held.
-  const nightly = leased("backup-nightly", { ttlMs: 60 * 60_000, log }, async () => {
+  const nightly = leased("backup-nightly", { ttlMs: 60 * 60_000, log, failOpen: true }, async () => {
     const now = new Date();
     const day = now.toISOString().slice(0, 10);
     if (now.getUTCHours() !== cfg().utcHour || lastDay === day) return;
