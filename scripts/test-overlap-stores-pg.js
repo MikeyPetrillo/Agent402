@@ -180,6 +180,22 @@ try {
     clock += 60_000;
     await M.tick();
     ok(generated === 1, `a run this container made but the row lost is not run (and paid for) again (${generated} reports)`);
+    // The save holds the lease: with the row locked elsewhere (the save waits),
+    // the lease is still this container's until the save lands.
+    const pg = (await import("pg")).default;
+    const locker = new pg.Client({ connectionString: process.env.STATE_DATABASE_URL });
+    await locker.connect();
+    await locker.query(`SET search_path TO ${sdb.stateDbSchema()}`);
+    await locker.query("BEGIN");
+    await locker.query("SELECT 1 FROM documents WHERE name = 'monitor-runs.json' FOR UPDATE");
+    clock += 60_000;
+    const pendingTick = M.tick();
+    await new Promise((r) => setTimeout(r, 600));
+    const holderMid = await sdb.leases.holder("monitor-scheduler");
+    await locker.query("ROLLBACK"); await locker.end();
+    await pendingTick;
+    ok(holderMid?.owner === "M", `while the tick's save waits, the lease is still held (${holderMid?.owner ?? "released"})`);
+    ok((await sdb.leases.holder("monitor-scheduler")) === null, "and it is released once the save has landed");
   }
 } finally {
   relay.heal();
