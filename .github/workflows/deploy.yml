@@ -1348,6 +1348,8 @@ jobs:
           t node scripts/test-external-spend-guard-pg.js
           t node scripts/test-mpp-subscriptions-pg.js
           t node scripts/test-decide-ledger-pg.js
+          # A paid step is never turned into a 500 by a later ledger failure; writes after a spend survive an exit.
+          t node scripts/test-decide-ledger-failures-pg.js
           t node scripts/test-credits-pg.js
           t node scripts/test-human-checkout-pg.js
           t node scripts/test-wish-pg.js
