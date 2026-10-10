@@ -26,7 +26,8 @@ import Database from "better-sqlite3";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, trackStoreReady } from "../state-db.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, trackStoreReady, withSchemaLock } from "../state-db.js";
+import { retryingLoad } from "../store-retry.js";
 
 // Memory is the WORST case for a silent /data → /tmp fallback: agents pay
 // USDC per write, and the value of that storage is precisely its durability
@@ -752,22 +753,17 @@ function pgBackend() {
     return rows;
   }
 
-  let readyP = null;
-  function ready() {
-    if (!readyP) {
-      readyP = (async () => {
-        await stateQuery(DDL());
-        const { imported } = await importOnce(IMPORT_NAME, { source: DB_FILE, run: importSqlite });
-        if (!imported) await rollForwardIfFileNewer(); // a first import already read the whole file
-      })().catch((e) => {
-        readyP = null; // the next call tries again (a database that was down at boot)
-        console.error(`[memory] state database setup failed: ${String(e?.message || e).slice(0, 160)}`);
-        throw e;
-      });
-    }
-    return readyP;
-  }
-  trackStoreReady(ready().catch(() => {}));
+  // The first load is retried until it lands (src/store-retry.js): the next
+  // call tries again after a failure, and a backoff timer retries when
+  // nothing calls, so the status reads the store as loading until it lands.
+  const loader = retryingLoad("memory", async () => {
+    await withSchemaLock((c) => c.query(DDL()));
+    const { imported } = await importOnce(IMPORT_NAME, { source: DB_FILE, run: importSqlite });
+    if (!imported) await rollForwardIfFileNewer(); // a first import already read the whole file
+  }, { log: (m) => console.error(`[memory] ${m}`) });
+  const ready = () => loader.ready();
+  trackStoreReady(loader.eventually);
+  ready().catch(() => {});
 
   // --- the SQLite mirror ------------------------------------------------------
   // When the file's directory exists (the volume is still mounted), every

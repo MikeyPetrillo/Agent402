@@ -47,7 +47,7 @@
 import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
+import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
 import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, NEWER_FILE_GRACE_MS, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError } from "./ledger-mirror.js";
 import { retryingLoad } from "./store-retry.js";
 
@@ -341,7 +341,7 @@ async function refreshWhere(where, params) {
   if (r.rows.length) applyPgRows(r.rows);
 }
 async function firstLoad() {
-  await stateQuery(PG_DDL());
+  await withSchemaLock((c) => c.query(PG_DDL())); // two boots at once never race on the catalog
   await importOnce(IMPORT_NAME, { source: DB_FILE, run: importFile });
   await reconcileFile();
   await replayDeadLetters();

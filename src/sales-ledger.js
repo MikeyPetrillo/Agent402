@@ -44,7 +44,7 @@ import { basename, dirname, join } from "node:path";
 import { OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { normalizePayerAddress } from "./payer.js";
 import { PAYING_RAILS_SQL, isPaidRail } from "./paid-rails.js";
-import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
+import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
 import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError } from "./ledger-mirror.js";
 import { retryingLoad } from "./store-retry.js";
 
@@ -391,7 +391,7 @@ async function refresh() {
   } finally { refreshing = false; }
 }
 async function firstLoad() {
-  await stateQuery(PG_DDL());
+  await withSchemaLock((c) => c.query(PG_DDL())); // two boots at once never race on the catalog
   await importOnce(IMPORT_NAME, { source: DB_PATH, run: importFile });
   await rollForwardIfFileNewer();
   await reconcileFile();

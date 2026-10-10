@@ -32,6 +32,9 @@ const boot = `
   const sh = await import("./src/stripe-shadow-ledger.js");
   const wi = await import("./src/wish.js");
   const rv = await import("./src/revenue-ledger.js");
+  const sl = await import("./src/sales-ledger.js");
+  const rl = await import("./src/refund-ledger.js");
+  const mem = await import("./src/tools/memory.js");
   const { createCredits } = await import("./src/credits.js");
   const { openDecideLedger } = await import("./src/decide/ledger.js");
   const { createHumanCheckout } = await import("./src/human-checkout.js");
@@ -54,8 +57,8 @@ function child(env) {
   });
 }
 const FAILED = /first load failed|load failed|setup failed|store unavailable|import into the state database failed|could not rebuild|duplicate key value|already exists/;
-// The stores this test covers (other modules' lines are theirs to test).
-const MINE = /^(\[(stats|status-store|pow|stripe-shadow|wish|credits|decide|human-checkout)\]|x402-economy:|revenue-ledger:)/;
+// The stores this test covers: every store whose first load runs its own DDL.
+const MINE = /^(\[(stats|status-store|pow|stripe-shadow|wish|credits|decide|human-checkout|sales-ledger|refund-ledger|memory)\]|x402-economy:|revenue-ledger:|sales ledger |refund ledger |memory )/;
 const pg = (await import("pg")).default;
 for (let i = 0; i < ROUNDS; i++) {
   const schema = `t_race_${randomBytes(4).toString("hex")}`;
@@ -68,7 +71,8 @@ for (let i = 0; i < ROUNDS; i++) {
   const envs = dirs.map((d) => ({
     ...process.env, STATE_DATABASE_URL: url, STATE_DB_SCHEMA: schema, NODE_ENV: "test", FREE_MODE: "true", H_DIR: d, START_AT,
     STATE_STORE_RETRY_MS: "600000", STATS_DB_DIR: d, POW_DB_PATH: join(d, "pow.db"), POW_ALLOW_EPHEMERAL: "true", STATUS_DB_PATH: join(d, "status.db"),
-    X402_ECONOMY_DB: join(d, "econ.db"), WISH_FILE: join(d, "wishes.jsonl"), REVENUE_LEDGER_DB: join(d, "rev.db"),
+    X402_ECONOMY_DB: join(d, "econ.db"), WISH_FILE: join(d, "wishes.jsonl"), REVENUE_LEDGER_DB: join(d, "rev.db"), SALES_LEDGER_DB: join(d, "sales.db"), REFUND_DB_DIR: d,
+    MEMORY_DB_FILE: join(d, "agent402.db"), MEMORY_ALLOW_EPHEMERAL: "true",
   }));
   const outs = await Promise.all(envs.map(child));
   for (const [j, o] of outs.entries()) {
