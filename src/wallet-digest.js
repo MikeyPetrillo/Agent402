@@ -22,7 +22,7 @@ import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
-import { trackStoreReady, leased } from "./state-db.js";
+import { trackStoreReady, leased, leaseStillHeld } from "./state-db.js";
 
 const DAY = 86_400_000;
 export const DIGEST_PERIOD_MS = 7 * DAY;
@@ -318,6 +318,13 @@ ${d.balanceUsd == null ? "" : `<p style="margin:16px 0 0;">Credits balance: <b>$
           const c = await write((subs) => { const x = own(subs, rec.id); prev = null; mine = null; if (!isDue(x)) return SKIP_UPDATE; prev = { lastSentAt: x.lastSentAt ?? null, sends: x.sends || 0 }; x.lastSentAt = t; if (d) x.sends = (x.sends || 0) + 1; mine = { ...x, sends: prev.sends }; });
           if (!c.ok || !c.changed) { if (!c.ok) out.failed++; continue; }
           if (!d) { out.quiet++; continue; } // a quiet week still advances the clock
+          // Fencing: a tick whose lease was lost puts the clock back and
+          // stops before the send (another container may be running it now).
+          if (!leaseStillHeld("wallet-digest-tick")) {
+            await write((subs) => { const x = own(subs, rec.id); if (!x || x.lastSentAt !== t) return SKIP_UPDATE; x.lastSentAt = prev.lastSentAt; x.sends = prev.sends; });
+            out.lost = true;
+            break;
+          }
           if (await sendDigest(mine, d)) { out.sent++; emit("digest_sent", { kind: rec.kind }); }
           else { await write((subs) => { const x = own(subs, rec.id); if (!x || x.lastSentAt !== t) return SKIP_UPDATE; x.lastSentAt = prev.lastSentAt; x.sends = prev.sends; }); out.failed++; }
           continue;

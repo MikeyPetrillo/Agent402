@@ -127,7 +127,7 @@ try {
     const young = createMonitorScheduler({ ...deps, storePath: join(D2, "monitor-runs.json"), ownerId: "Y", uptimeMs: () => 1000 });
     ok((await young.tick()).skipped === "locked", "monitors: with the database down a young container skips its tick");
     const t2 = await old.tick();
-    ok(t2.skipped === undefined && typeof t2.active === "number", "monitors: with the database down an old container that read its history runs its tick as the only container");
+    ok(t2.skipped === "locked", "monitors: with the database down an old container skips its tick too (a run pays for a report: no fail-open)");
     const neverRead = createMonitorScheduler({ ...deps, storePath: join(D2, "monitor-runs.json"), ownerId: "N", uptimeMs: () => 11 * 60_000 });
     await neverRead.ready();
     ok((await neverRead.tick()).skipped === "locked", "monitors: an old container whose history was never read skips (it would pay again for delivered reports)");

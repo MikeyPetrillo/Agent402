@@ -286,6 +286,26 @@ try {
     await P.engine._store.put(`a402:sub:${subR.subId}`, { ...recR, chargeClaim: { period: 1, token: "other", by: "other-container", until: new Date(clock - 1).toISOString() } });
     Q.setCharge(() => ({ reference: "0xq-after-expiry" }));
     ok(await Q.engine.refreshStatus(subR.subId) === "active" && Q.calls.charge === 1, "a claim left by a container that died expires, and the period is pulled once");
+
+    // ---- (8) fencing: a renewal lease lost before the signature signs nothing --------
+    // The chain check before the signature (a send for this period that timed
+    // out earlier) takes long enough that the lease's ttl passes with no
+    // renew: the pull stops before signing, and the claim is cleared.
+    advance(PERIOD);
+    const recF = await Q.engine._readRec(subR.subId);
+    const dueF = (recF.lastChargedPeriod ?? 0) + 1;
+    await Q.engine._writeRec({ ...recF, unconfirmedCharge: { periodIndex: dueF, at: new Date(clock - 2 * 86400_000).toISOString(), settleableUntil: new Date(clock - 86400_000).toISOString() } });
+    const realNow = Date.now;
+    Q.setFind(() => { Date.now = () => realNow() + 2 * RENEWAL_LEASE_TTL_MS; return { found: false }; });
+    Q.setCharge(() => ({ reference: "0xq-MUST-NOT-lost-lease" }));
+    const chargesBefore = Q.calls.charge;
+    let fenced;
+    try { fenced = await Q.engine.refreshStatus(subR.subId); } finally { Date.now = realNow; }
+    ok(fenced === "past_due" && Q.calls.charge === chargesBefore, `a renewal whose lease was lost before the signature signs nothing (status ${fenced}, charges ${Q.calls.charge - chargesBefore})`);
+    ok(!(await Q.engine._readRec(subR.subId)).chargeClaim, "...and its claim on the record is cleared");
+    Q.setFind({ found: false });
+    Q.setCharge(() => ({ reference: "0xq-next-holder" }));
+    ok(await Q.engine.refreshStatus(subR.subId) === "active" && Q.calls.charge === chargesBefore + 1, "the next renewal under a held lease charges the period once");
   }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});

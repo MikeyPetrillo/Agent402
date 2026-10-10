@@ -1323,6 +1323,8 @@ jobs:
           # Two containers on one schema: the email stores never undo or repeat each other.
           t node scripts/test-overlap-stores-pg.js
           t node scripts/test-leased-loops.js
+          # A tick whose lease was lost stops before its next send, pull or paid run.
+          t node scripts/test-lease-fencing-pg.js
           t node scripts/test-idempotency-store.js
           # Every store that left the volume: file imported once, rows win, invariant on Postgres.
           t node scripts/test-stats-pg.js

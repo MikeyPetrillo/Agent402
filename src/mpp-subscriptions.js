@@ -1263,7 +1263,7 @@ export function createMppSubscriptions({
     // and the attempt is claimed on the record itself: a versioned write that
     // only succeeds while the period is still unpaid and no claim for this
     // period and attempt exists. Only the claimer signs.
-    const held = await withLease(`mpp-sub-renewal:${subId}`, { ttlMs: RENEWAL_LEASE_TTL_MS, log }, async () => {
+    const held = await withLease(`mpp-sub-renewal:${subId}`, { ttlMs: RENEWAL_LEASE_TTL_MS, log }, async (lease) => {
       let fresh;
       try { fresh = await kv.getFresh(REC_KEY(subId)); }
       catch (e) { log(`[mpp-subs] ${subId}: could not re-read the record before a renewal (${String(e?.message || e).slice(0, 120)}); nothing signed`); return rec.status === "active" ? "past_due" : rec.status; }
@@ -1297,10 +1297,11 @@ export function createMppSubscriptions({
         log(`[mpp-subs] ${subId}: a pull for period ${due} is already claimed; nothing signed here`);
         return seen.status === "active" ? "past_due" : seen.status;
       }
-      // Once the lease API reports a lost lease (an AbortSignal or
-      // leaseStillHeld), check it here before signing; the claim above
-      // already keeps a second container from pulling the same period.
-      try { return await pull(claim.value, subId, due, at); }
+      // Fencing: pull() checks the lease right before it signs, so a renewal
+      // whose lease was lost (another container may hold it now) signs
+      // nothing; the claim above already keeps a second container from
+      // pulling the same period.
+      try { return await pull(claim.value, subId, due, at, () => lease.stillHeld()); }
       finally {
         await kv.compareAndSet(REC_KEY(subId), (cur) => (cur?.chargeClaim?.token === token ? { ...cur, chargeClaim: null } : null))
           .then((r) => { if (r.value) cache.set(subId, r.value); })
@@ -1334,7 +1335,7 @@ export function createMppSubscriptions({
     if (rec.nextChargeAttemptAt && at < Date.parse(rec.nextChargeAttemptAt)) return { status: rec.status === "active" ? "past_due" : rec.status };
     return { due };
   }
-  async function pull(rec, subId, due, at) {
+  async function pull(rec, subId, due, at, stillHeld = () => true) {
     inFlight.add(subId);
     try {
       // CHAIN TRUTH FIRST. A previous pull for this period died in the send
@@ -1376,6 +1377,10 @@ export function createMppSubscriptions({
         rec = { ...rec, unconfirmedCharge: null };
         await writeRec(rec);
         log(`[mpp-subs] ${subId}: the send that timed out for period ${due} never landed - charging now`);
+      }
+      if (!stillHeld()) {
+        log(`[mpp-subs] ${subId}: the renewal lease was lost before period ${due} was signed; nothing signed`);
+        return rec.status === "active" ? "past_due" : rec.status;
       }
       const charge = injectedChargePeriod || defaultChargePeriod;
       const result = await charge(rec, { periodIndex: due });

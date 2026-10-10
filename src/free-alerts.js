@@ -22,7 +22,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
-import { trackStoreReady, leased } from "./state-db.js";
+import { trackStoreReady, leased, leaseStillHeld } from "./state-db.js";
 
 export const ALERT_KINDS = Object.freeze({
   insider: { product: "insider-monitor", family: "insider", noun: "insider filings", cta: (t) => `Email me when ${t} insiders file a Form 4`, subject: (t, n) => `${n} new Form 4 filing${n === 1 ? "" : "s"} for ${t}`, what: (t) => `Form 4 insider filings against ${t}` },
@@ -258,7 +258,7 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
         }
         const ids = Array.isArray(r?.ids) ? r.ids.map(String) : [];
         const version = String(probe.version || "");
-        if (PG) { await tickRow(a, ids, version, r, out); continue; }
+        if (PG) { if ((await tickRow(a, ids, version, r, out)) === "lost") break; continue; }
         a.lastCheckAt = now(); a.failures = 0; a.lastError = null;
         // A missing baseline, or one taken by a probe whose id space has since
         // changed, is (re)set silently: comparing across versions would mail
@@ -307,6 +307,13 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
     if (verdict === "baselined") { out.baselined++; return false; }
     if (verdict === "unchanged") { out.unchanged++; return false; }
     if (verdict === "gap") { out.skipped++; return false; }
+    // Fencing: a tick whose lease was lost puts the claim back and stops
+    // before the send (another container may be running the tick now).
+    if (!leaseStillHeld("free-alerts-tick")) {
+      await write((al) => { const x = own(al, a.id); if (!x || x.lastNotifiedAt !== at) return SKIP_UPDATE; Object.assign(x, prev); });
+      out.lost = true;
+      return "lost";
+    }
     const sent = await sendChange(mine, fresh, r);
     if (sent) { out.notified++; emit("alert_sent", { kind: mine.kind }); return true; }
     await write((al) => { const x = own(al, a.id); if (!x || x.lastNotifiedAt !== at) return SKIP_UPDATE; Object.assign(x, prev); });

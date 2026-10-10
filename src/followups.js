@@ -15,7 +15,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
-import { trackStoreReady, leased } from "./state-db.js";
+import { trackStoreReady, leased, leaseStillHeld } from "./state-db.js";
 
 const DAY = 24 * 60 * 60_000;
 export const STEP_DELAYS_MS = Object.freeze({ monitor: 2 * DAY, another: 7 * DAY });
@@ -159,6 +159,9 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
           else {
             const mine = await claim(r, "monitor");
             if (!mine) { out.skipped++; continue; }
+            // Fencing: a tick whose lease was lost (another container may be
+            // running it now) hands the claim back and stops before the send.
+            if (!leaseStillHeld("followups-tick")) { await release(r, "monitor", mine); out.lost = true; break; }
             const sent = await sendMonitorOffer(mine, mon);
             if (sent) { await finish(r, "monitor", mine, now()); out.monitor++; emit("followup_monitor_sent", { kind: r.kind }); } else { await release(r, "monitor", mine); out.failed++; }
           }
@@ -168,6 +171,7 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
           n++;
           const mine = await claim(r, "another");
           if (!mine) { out.skipped++; continue; }
+          if (!leaseStillHeld("followups-tick")) { await release(r, "another", mine); out.lost = true; break; }
           const sent = await sendAnother(mine);
           if (sent) { await finish(r, "another", mine, now()); out.another++; emit("followup_another_sent", { kind: r.kind }); } else { await release(r, "another", mine); out.failed++; }
         }
