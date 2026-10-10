@@ -355,7 +355,9 @@ export function loadPersistedSolanaLeaderboard(file = SOLANA_LB_CACHE_FILE) {
   const d = docFor(file);
   const apply = (j) => { if (j && Array.isArray(j.rows)) { current = { ...emptyBoard(), ...j, state: j.state || {}, warm: true }; return true; } return false; };
   if (d.backend === "pg") {
-    trackStoreReady(d.load(null).then((j) => { if (!current.warm && apply(j)) console.log(`[solana-leaderboard] warm-started ${current.rows.length} payTos from the state database`); }));
+    // onLoad also runs when a failed load's background re-read lands; a scan
+    // that finished meanwhile (current.at set) is newer and is kept.
+    trackStoreReady(d.load(null, { onLoad: (j) => { if (!current.warm && !current.at && apply(j)) console.log(`[solana-leaderboard] warm-started ${current.rows.length} payTos from the state database`); } }));
     return false;
   }
   try { return apply(d.loadSync(null)); } catch { /* cold start */ }

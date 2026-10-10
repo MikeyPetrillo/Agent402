@@ -189,7 +189,10 @@ try {
       console.log("skip - wish.js exposes no file setter for tests");
     }
   }
-  ok((await sdb.stateStoresReady()) === "ready", "every registered store reports ready");
+  // A document left unread while the database was pointed away (the monitor
+  // cases above) re-reads in the background and lands once it answers again.
+  for (let end = Date.now() + 15_000; Date.now() < end && sdb.unloadedStateStores().length;) await new Promise((r) => setTimeout(r, 100));
+  ok((await sdb.stateStoresReady()) === "ready", `every registered store reports ready (unloaded: ${JSON.stringify(sdb.unloadedStateStores())})`);
 } finally {
   await sdb.__dropStateSchema();
   await sdb.closeStateDb();

@@ -697,15 +697,21 @@ export function trackStoreReady(p, name) {
 }
 export function markStoreLoaded(name) { storeStates.set(String(name), "loaded"); }
 export function markStoreFailed(name) { storeStates.set(String(name), "failed"); }
-// Another registry of unloaded stores can be consulted too (a function
-// returning a list of labels); stateDbStatus and stateStoresLoaded read both.
-let unloadedProbe = null;
-export function setUnloadedStoresProbe(fn) { unloadedProbe = typeof fn === "function" ? fn : null; }
-/** Labels of the stores whose first load has not succeeded (this registry plus the probe). */
+// Other registries of unloaded stores are consulted too (each a function
+// returning a list of labels, under its own key: the retrying loads, every
+// json-document whose body has not been read); stateDbStatus and
+// stateStoresLoaded read them all. A null fn removes that key's probe.
+const unloadedProbes = new Map();
+export function setUnloadedStoresProbe(fn, key = "default") {
+  if (typeof fn === "function") unloadedProbes.set(String(key), fn); else unloadedProbes.delete(String(key));
+}
+/** Labels of the stores whose first load has not succeeded (this registry plus the probes). */
 export function unloadedStateStores() {
   const out = [];
   for (const [n, s] of storeStates) if (s !== "loaded") out.push(n);
-  if (unloadedProbe) { try { for (const n of unloadedProbe() || []) out.push(String(n)); } catch { /* a probe never breaks the status */ } }
+  for (const probe of unloadedProbes.values()) {
+    try { for (const n of probe() || []) out.push(String(n)); } catch { /* a probe never breaks the status */ }
+  }
   return [...new Set(out)];
 }
 /** Whether every registered store has loaded. Always true without a database. */

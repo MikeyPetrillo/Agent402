@@ -204,6 +204,11 @@ export async function loadFeedStateAsync(file = TEMPO_TRANSFERS_CACHE_FILE) {
   if (d.backend !== "pg") return null;
   try { return shapeFeedState(await d.load(null)); } catch { return null; }
 }
+/** True while the database copy has not been read (its load failed and is re-reading): a state built meanwhile is a stand-in. */
+export function feedStateUnread(file = TEMPO_TRANSFERS_CACHE_FILE) {
+  const d = docFor(file);
+  return d.backend === "pg" && d.loadState !== "ok";
+}
 export function loadFeedState(file = TEMPO_TRANSFERS_CACHE_FILE) {
   return timedSync("Tempo transfer feed warm-start", file, () => _loadFeedState(file));
 }
