@@ -439,23 +439,29 @@ export function createTweetQueue({
   const cloneState = (st) => ({ records: new Map([...st.records].map(([k, v]) => [k, { ...v }])), slots: new Map(st.slots), ...(st.fresh ? { fresh: true } : {}) });
   const store = usePg ? {
     async read() {
-      let st;
+      let st, version = 0;
       try {
-        const j = await doc.load(MISSING);
-        if (j === MISSING) {
-          if (doc.lastError) throw new StoreError("unreadable");
-          st = freshState();
-        } else st = parseStateBody(j);
+        const r = await doc.read({ retry: false });
+        if (!r.ok) throw new StoreError("unreadable");
+        if (!r.exists) st = freshState();
+        else { st = parseStateBody(r.body); version = r.version || 0; }
       } catch (e) {
         const err = e instanceof StoreError ? e : new StoreError("unreadable");
         mirror = { st: null, error: err.cls, at: Date.now() };
         throw err;
       }
       mirror = { st: cloneState(st), error: null, at: Date.now() };
+      // The version the claim's write is conditional on (not part of the body).
+      Object.defineProperty(st, "version", { value: version, writable: true, enumerable: false });
       return st;
     },
+    // A conditional write: it lands only if the row is still the one this
+    // state was read from, so a claim ("recorded before it is sent") can never
+    // be a last-writer-wins overwrite of another claim, whatever the lease did.
     async write(st) {
-      if (!(await doc.save(stateBody(st)))) throw new StoreError("unwritable");
+      const r = await doc.saveIfVersion(stateBody(st), st.version || 0);
+      if (!r.ok) throw new StoreError(r.conflict ? "conflict" : "unwritable");
+      st.version = r.version;
       mirror = { st: cloneState({ ...st, fresh: false }), error: null, at: Date.now() };
     },
     // The critical section under a database lease: the token is the owner,
@@ -468,8 +474,12 @@ export function createTweetQueue({
         try { held = await leases.acquire(STATE_LEASE_NAME, { owner: token, ttlMs: leaseMs }); }
         catch { throw new StoreError("lock_unwritable"); }
         if (held) {
+          // Renewed while the section runs, so a slow read or write cannot
+          // outlive it (the conditional write is the backstop if it does).
+          const beat = setInterval(() => { leases.renew(STATE_LEASE_NAME, { owner: token, ttlMs: leaseMs }).catch(() => { /* the write is conditional */ }); }, Math.max(1000, Math.floor(leaseMs / 3)));
+          beat.unref?.();
           try { return { ok: true, value: await fn() }; }
-          finally { await leases.release(STATE_LEASE_NAME, { owner: token }).catch(() => { /* it expires on its own */ }); }
+          finally { clearInterval(beat); await leases.release(STATE_LEASE_NAME, { owner: token }).catch(() => { /* it expires on its own */ }); }
         }
         await new Promise((r) => setTimeout(r, LOCK_RETRY_MS));
       }
@@ -649,6 +659,24 @@ export function createTweetQueue({
     return true;
   }
 
+  // A claim whose conditional write lost to another writer claims nothing:
+  // that writer's record stands and this tick sends nothing.
+  async function claimOrYield() {
+    try { return await claimNext(); }
+    catch (e) {
+      if (e instanceof StoreError && e.cls === "conflict") { log("[tweet-queue] the state changed under this claim (another writer): nothing claimed this tick"); return { dropped: 0, item: null, why: "conflict" }; }
+      throw e;
+    }
+  }
+  // An outcome must be recorded: a write that lost to another writer reads
+  // the state again and records the outcome on it.
+  async function recordWithRetry(item, hour, out, prior) {
+    for (let i = 0; ; i++) {
+      try { return await recordOutcome(item, hour, out, prior); }
+      catch (e) { if (!(e instanceof StoreError && e.cls === "conflict") || i >= 4) throw e; }
+    }
+  }
+
   async function safePost(text) {
     try {
       const out = await poster(text);
@@ -709,14 +737,14 @@ export function createTweetQueue({
     const result = { posted: 0, dropped: 0, duplicate: 0, rejected: 0, inDoubt: 0, retried: 0 };
     try {
       for (let n = 0; n < MAX_POSTS_TRIED_PER_TICK; n++) {
-        const claim = await withLock(claimNext, 40);
+        const claim = await withLock(claimOrYield, 40);
         if (!claim.ok) { result.skipped = "locked"; break; }
         const c = claim.value;
         result.dropped += c.dropped;
         if (!c.item) { result.idle = c.why; break; }
         const out = await safePost(c.item.text);
         let recorded;
-        try { recorded = await withLock(() => recordOutcome(c.item, c.hour, out, c.prior), 120); }
+        try { recorded = await withLock(() => recordWithRetry(c.item, c.hour, out, c.prior), 120); }
         catch (e) { recorded = { ok: false, error: e }; }
         if (!recorded.ok || !recorded.value) {
           // The outcome could not be written: the SENDING record stands, so the
@@ -866,5 +894,5 @@ export function createTweetQueue({
 
   function stopTimer() { if (timer) clearInterval(timer); timer = null; }
 
-  return { tick, status, alarmStatus, start, stopTimer, mode, ready: () => ready, backend: usePg ? "pg" : "file", flush: () => (doc ? doc.flush() : Promise.resolve()) };
+  return { tick, status, alarmStatus, start, stopTimer, mode, ready: () => ready, backend: usePg ? "pg" : "file", flush: () => (doc ? doc.flush() : Promise.resolve()), _stateStore: store };
 }

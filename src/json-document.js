@@ -326,6 +326,29 @@ export function createJsonDocument({ name = null, file = null, log = console.war
       }
     },
     /**
+     * Compare-and-set of the whole body: written only when the row is still at
+     * `version` (as read()), or created when `version` is 0/null and there is
+     * no row. Resolves { ok:true, version } or { ok:false, conflict } (and
+     * { ok:false, error } on a database error). Without a database: a plain save.
+     */
+    async saveIfVersion(body, version) {
+      if (!usePg) { const okSave = await api.save(body); return okSave ? { ok: true, version: null } : { ok: false, error: lastError }; }
+      try {
+        const r = Number(version) > 0
+          ? await stateQuery(`UPDATE ${table()} SET body = $2::jsonb, version = version + 1, updated_at = now() WHERE name = $1 AND version = $3 RETURNING version`, [docName, JSON.stringify(body ?? null), Number(version)])
+          : await stateQuery(`INSERT INTO ${table()} (name, body) VALUES ($1, $2::jsonb) ON CONFLICT (name) DO NOTHING RETURNING version`, [docName, JSON.stringify(body ?? null)]);
+        if (!r.rowCount) return { ok: false, conflict: true };
+        const v = Number(r.rows[0].version);
+        lastError = null; loadState = "ok";
+        writeThrough(body, v);
+        return { ok: true, version: v };
+      } catch (e) {
+        lastError = String(e?.message || e).slice(0, 160);
+        say(`conditional save failed: ${lastError}`);
+        return { ok: false, error: lastError };
+      }
+    },
+    /**
      * Read-modify-write that never drops another writer's change. `mutate`
      * gets a copy of the stored body (or of `fallback` when there is none),
      * changes it in place or returns a new body, or returns SKIP_UPDATE to

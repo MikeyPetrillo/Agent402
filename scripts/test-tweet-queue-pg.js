@@ -129,6 +129,24 @@ try {
   await s6.q.ready();
   const r8 = await s6.q.tick();
   ok(r8.error === "store_corrupt" && s6.sent.length === 0 && s6.q.alarmStatus().status === "halted" && s6.q.status().mode === "store_unreadable", "a corrupt document halts posting and pages");
+  // ---- conditional claim: a write from a stale read is refused ------------------
+  {
+    const sp = join(DIR, "cas", "state.json");
+    const its = [{ id: "cas1", when: when(T0), text: text("cas1") }];
+    const A = mk(its, { storePath: sp, clock: T0 + MIN }); const B = mk(its, { storePath: sp, clock: T0 + MIN });
+    await A.q.ready(); await B.q.ready();
+    await sdb.documents.del(STATE_DOC_NAME);
+    const stale = await A.q._stateStore.read();      // A reads (its lease then lapses)
+    await B.q.tick();                                 // B claims and posts meanwhile
+    ok(B.sent.length === 1, "B posts the item");
+    stale.records.set("cas1", { id: "cas1", state: "sending", at: T0 + MIN, hour: hourOf(T0 + MIN) });
+    let cls = null;
+    try { await A.q._stateStore.write(stale); } catch (e) { cls = e.cls; }
+    ok(cls === "conflict", `a claim written from a read the other container has moved past is refused (${cls})`);
+    ok((await recOf("cas1"))?.state === "posted", "the other container's record stands");
+    await A.q.tick();
+    ok(A.sent.length === 0, "and A never sends it");
+  }
 } finally {
   await sdb.__dropStateSchema();
   await sdb.closeStateDb();
