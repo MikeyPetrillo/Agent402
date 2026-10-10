@@ -204,6 +204,8 @@ try {
     const A = createSharedPayToStore({ file: join(DIR, "sa", "sor-shared-paytos.json"), log: quiet }); await A.ready();
     const B = createSharedPayToStore({ file: join(DIR, "sb", "sor-shared-paytos.json"), log: quiet }); await B.ready();
     await A.add(W(1)); await B.add(W(2));
+    const mid = Object.keys((await sdb.documents.get("sor-shared-paytos.json")).body.wallets).sort();
+    ok(mid.join() === [W(1), W(2)].join(), `shared-paytos: an add on B (booted before A's add) keeps A's wallet (${mid.length} listed)`);
     await A.remove(W(1)); await B.add(W(3));
     const wallets = Object.keys((await sdb.documents.get("sor-shared-paytos.json")).body.wallets).sort();
     ok(wallets.join() === [W(2), W(3)].join(), `shared-paytos: each container's add and remove survive the other's (${wallets.length} listed)`);
