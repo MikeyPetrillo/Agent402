@@ -370,7 +370,25 @@ export function createMppReconciler({
   let running = null;
   let timer = null, firstTimer = null;
 
-  const persist = () => { void doc.save(state); return true; };
+  // With the database the other container may have run (and stored) a day
+  // this one has not: a run starts from the row, and its save writes only
+  // the day it computed and the run fields onto the row as it is then.
+  const PG = doc.backend === "pg";
+  const persist = (d = null) => {
+    if (!PG) { void doc.save(state); return true; }
+    const mine = { ...state };
+    return doc.update((b) => {
+      const row = b && typeof b === "object" && b.days && typeof b.days === "object" ? b : { days: {}, window: null, lastRunAt: null, lastError: null, runs: 0 };
+      const days = { ...row.days, ...(d && mine.days[d] ? { [d]: mine.days[d] } : {}) };
+      for (const k of Object.keys(days).sort().slice(0, -keepDays)) delete days[k];
+      const newer = !row.lastRunAt || (mine.lastRunAt && mine.lastRunAt >= row.lastRunAt);
+      return {
+        ...row, days,
+        ...(newer ? { window: d ? mine.window : row.window, lastRunAt: mine.lastRunAt, lastError: mine.lastError, ...(d ? { lastDay: d } : {}) } : {}),
+        runs: Math.max(Number(row.runs) || 0, Number(mine.runs) || 0),
+      };
+    }, { fallback: null }).then((r) => { if (r.ok) absorb(r.body); return r.ok; });
+  };
 
   async function evmChecksFor(rows) {
     const out = new Map();
@@ -415,6 +433,7 @@ export function createMppReconciler({
   async function runOnceUnleased({ day = null } = {}) {
     if (running) return running;
     running = (async () => {
+      if (PG) { const r = await doc.read(); if (r.ok && r.exists) absorb(r.body); }
       const t = now();
       const d = day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : utcDay(t - DAY_MS);
       const start = dayStartMs(d), end = start + DAY_MS;
@@ -436,13 +455,13 @@ export function createMppReconciler({
         state.lastDay = d;
         state.lastError = null;
         state.runs = (state.runs || 0) + 1;
-        persist();
+        await persist(d);
         log(`[mpp-reconcile] ${d}: ${daySum.mismatchTotal} mismatch(es), chain ${daySum.sources.chain.source || "-"}${daySum.sources.chain.complete ? "" : " (incomplete)"}; 7d ${winSum.mismatchTotal}`);
         return { ok: true, day: d, summary: state.days[d], window: state.window };
       } catch (e) {
         state.lastError = String(e?.message || e).slice(0, 200);
         state.lastRunAt = new Date(t).toISOString();
-        persist();
+        await persist();
         log(`[mpp-reconcile] run failed: ${state.lastError}`);
         return { ok: false, error: state.lastError };
       } finally { running = null; }

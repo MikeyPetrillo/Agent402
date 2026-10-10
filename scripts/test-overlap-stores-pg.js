@@ -197,6 +197,78 @@ try {
     ok(holderMid?.owner === "M", `while the tick's save waits, the lease is still held (${holderMid?.owner ?? "released"})`);
     ok((await sdb.leases.holder("monitor-scheduler")) === null, "and it is released once the save has landed");
   }
+  // ---- shared payTo listing ---------------------------------------------------
+  {
+    const { createSharedPayToStore } = await import("../src/shared-paytos.js");
+    const W = (n) => "0x" + String(n).repeat(40);
+    const A = createSharedPayToStore({ file: join(DIR, "sa", "sor-shared-paytos.json"), log: quiet }); await A.ready();
+    const B = createSharedPayToStore({ file: join(DIR, "sb", "sor-shared-paytos.json"), log: quiet }); await B.ready();
+    await A.add(W(1)); await B.add(W(2));
+    await A.remove(W(1)); await B.add(W(3));
+    const wallets = Object.keys((await sdb.documents.get("sor-shared-paytos.json")).body.wallets).sort();
+    ok(wallets.join() === [W(2), W(3)].join(), `shared-paytos: each container's add and remove survive the other's (${wallets.length} listed)`);
+    ok(B.has(W(2)) && B.has(W(3)) && !B.has(W(1)), "shared-paytos: the container that wrote last lists the row as it is");
+  }
+
+  // ---- email send outcome ------------------------------------------------------
+  {
+    process.env.EMAIL_STATUS_FILE = join(DIR, "em", "email-status.json");
+    const EA = await import("../src/email.js?container-a");
+    const EB = await import("../src/email.js?container-b");
+    await sdb.documents.del("email-status.json");
+    EA.noteEmailOutcome(true, { provider: "p" }); EB.noteEmailOutcome(true, { provider: "p" }); EA.noteEmailOutcome(false, { status: 429, code: "LE_102", provider: "p" }); EB.noteEmailOutcome(true, { provider: "p" });
+    let body = null;
+    for (let i = 0; i < 40; i++) { body = (await sdb.documents.get("email-status.json"))?.body; if ((body?.sentTotal || 0) + (body?.failedTotal || 0) >= 4) break; await new Promise((r) => setTimeout(r, 50)); }
+    ok(body?.sentTotal === 3 && body?.failedTotal === 1, `email: both containers' send counts add up in the row (${body?.sentTotal} sent, ${body?.failedTotal} failed)`);
+  }
+
+  // ---- Stripe webhook tally --------------------------------------------------
+  {
+    process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
+    const { createStripeSubscriptions } = await import("../src/stripe-subscriptions.js");
+    let n = 0;
+    const stripe = { webhooks: { constructEvent: () => ({ id: `evt_${++n}`, type: "ping.test", data: { object: {} } }) } };
+    const SA = createStripeSubscriptions({ stripe, baseUrl: "https://t.example", storePath: join(DIR, "ta", "stripe-subscriptions.json"), onInvoicePaid: () => {} });
+    const SB = createStripeSubscriptions({ stripe, baseUrl: "https://t.example", storePath: join(DIR, "tb", "stripe-subscriptions.json"), onInvoicePaid: () => {} });
+    await new Promise((r) => setTimeout(r, 300));
+    for (let i = 0; i < 3; i++) { await SA.handleWebhook("{}", "sig").catch(() => {}); await SB.handleWebhook("{}", "sig").catch(() => {}); }
+    let t = null;
+    for (let i = 0; i < 40; i++) { t = (await sdb.documents.get("stripe-subscriptions.json.webhooks.json"))?.body; if ((t?.verified || 0) >= 6) break; await new Promise((r) => setTimeout(r, 50)); }
+    ok(t?.verified === 6 && t?.byType?.["ping.test"] === 6, `stripe tally: both containers' verified webhooks add up in the row (${t?.verified})`);
+    delete process.env.STRIPE_WEBHOOK_SECRET;
+  }
+
+  // ---- MPP reconciliation days ------------------------------------------------
+  {
+    const { createMppReconciler } = await import("../src/mpp-reconcile.js");
+    const RA = createMppReconciler({ file: join(DIR, "ra", "mpp-reconcile.json"), log: quiet });
+    const RB = createMppReconciler({ file: join(DIR, "rb", "mpp-reconcile.json"), log: quiet });
+    await new Promise((r) => setTimeout(r, 300));
+    await RA.runOnce({ day: "2026-10-01" });
+    await RB.runOnce({ day: "2026-10-02" });
+    const days = Object.keys((await sdb.documents.get("mpp-reconcile.json"))?.body?.days || {}).sort();
+    ok(days.includes("2026-10-01") && days.includes("2026-10-02"), `mpp-reconcile: a day one container reconciled survives the other's run (${days.join(",")})`);
+  }
+
+  // ---- traffic rollups -----------------------------------------------------------
+  {
+    const { createTrafficStore } = await import("../src/traffic-classifier.js");
+    const t0 = Date.parse("2026-10-09T10:00:00Z");
+    const TA = createTrafficStore({ dir: join(DIR, "tra", "traffic"), salt: "s", log: quiet });
+    const TB = createTrafficStore({ dir: join(DIR, "trb", "traffic"), salt: "s", log: quiet });
+    await TA.load(t0); await TB.load(t0);
+    const rec = (st, ip, extra = {}) => st.record({ ip, ua: "curl/8", path: "/api/hash", method: "POST", status: 200, accept: "*/*", now: t0, ...extra });
+    for (let i = 0; i < 4; i++) rec(TA, "192.0.2.1");
+    for (let i = 0; i < 3; i++) rec(TB, "192.0.2.2");
+    rec(TA, "192.0.2.3", { paidReceipt: true, payer: "0xpayer" }); rec(TB, "192.0.2.4", { paidReceipt: true, payer: "0xpayer" });
+    TA.persist(t0); await TA.flush(); TB.persist(t0); await TB.flush();
+    rec(TA, "192.0.2.1"); TA.persist(t0); await TA.flush();
+    const day = await sdb.records.get("traffic", "2026-10-09");
+    const pay = await sdb.records.get("traffic", "payers");
+    ok(day?.total === 10, `traffic: both containers' counts for the day add up in the row (${day?.total})`);
+    ok(Object.values(pay || {}).reduce((a, b) => a + b, 0) === 2, "traffic: both containers' payer counts add up");
+    ok(TA._days.get("2026-10-09")?.total === 10, "traffic: the container that saved last counts on from the merged day");
+  }
 } finally {
   relay.heal();
   for (let i = 0; i < 3; i++) { try { await sdb.__dropStateSchema(); break; } catch { /* a connection the cut killed */ } }

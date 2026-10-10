@@ -22,8 +22,30 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { railOf } from "./payment-rail.js";
-import { importOnce, records, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady } from "./state-db.js";
+import { importOnce, records, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady, withStateTx } from "./state-db.js";
 
+// Counts in a rollup that are a size or a high-water mark, not a sum: two
+// containers' values merge by the larger one. Every other number adds.
+const MAX_FIELDS = new Set(["distinctIps", "distinctPaths", "discovery"]);
+const cloneJson = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+/**
+ * The stored body plus what this process counted since `base` (the body it
+ * last read or wrote): numbers add their difference (a high-water field takes
+ * the larger value), objects merge key by key, anything else takes `cur`'s.
+ * Exported for tests.
+ */
+export function mergeCountsDelta(row, base, cur, key = "") {
+  if (typeof cur === "number") {
+    if (MAX_FIELDS.has(key)) return Math.max(Number(row) || 0, cur);
+    return (Number(row) || 0) + (cur - (Number(base) || 0));
+  }
+  if (cur && typeof cur === "object" && !Array.isArray(cur)) {
+    const out = row && typeof row === "object" && !Array.isArray(row) ? { ...row } : {};
+    for (const [k, v] of Object.entries(cur)) out[k] = mergeCountsDelta(out[k], base && typeof base === "object" ? base[k] : undefined, v, k);
+    return out;
+  }
+  return cur === undefined ? row : cur;
+}
 const COLLECTION = "traffic";
 const PAYERS_ID = "payers";
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -185,9 +207,17 @@ export function createTrafficStore(opts = {}) {
     if (imp.imported && imp.rows) say(`imported ${imp.rows} file(s) from ${o.dir}`);
     const rows = await records.list(COLLECTION, { limit: 100_000 });
     for (const { id, body } of rows) {
-      if (id === PAYERS_ID) { if (body && typeof body === "object") for (const [k, v] of Object.entries(body)) if (!payers.has(k)) payers.set(k, Number(v) || 0); continue; }
+      if (id === PAYERS_ID) {
+        if (body && typeof body === "object") {
+          // Counted here before the row arrived: a delta on top of it.
+          for (const [k, v] of Object.entries(body)) payers.set(k, (Number(v) || 0) + (payers.get(k) || 0));
+          savedBase.set(PAYERS_ID, cloneJson(body));
+        }
+        continue;
+      }
       if (!DAY_RE.test(id) || expired(id, now) || !body?.day) continue;
-      if (!days.has(id)) days.set(id, body); // a rollup already counting in memory is newer than the row
+      if (!days.has(id)) { days.set(id, body); savedBase.set(id, cloneJson(body)); }
+      else { days.set(id, mergeCountsDelta(body, undefined, days.get(id))); savedBase.set(id, cloneJson(body)); }
     }
   }
   /**
@@ -216,8 +246,27 @@ export function createTrafficStore(opts = {}) {
   };
   // Database saves coalesce: one write in flight, the newest bodies waiting,
   // so persists issued back to back land in order and a burst costs one write.
+  //
+  // Two containers count the same day at once during a deploy, so a save is
+  // never a put of this process's rollup over the row: under the row's lock
+  // it adds what was counted here since the last save (the delta against
+  // `savedBase`) onto the stored rollup, and this process then counts on
+  // from the merged result.
   let inFlight = null;
   let pendingBodies = null;
+  const savedBase = new Map(); // id -> the body this process last read or wrote for it
+  async function mergeOne(id, snap) {
+    return withStateTx(async (client) => {
+      const cur = await client.query(`SELECT body FROM ${RT()} WHERE collection = $1 AND id = $2 FOR UPDATE`, [COLLECTION, id]);
+      const merged = mergeCountsDelta(cur.rows[0]?.body ?? null, savedBase.get(id), snap);
+      await client.query(
+        `INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb)
+         ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()`,
+        [COLLECTION, id, JSON.stringify(merged)],
+      );
+      return merged;
+    });
+  }
   function savePg(bodies) {
     pendingBodies = bodies;
     if (!inFlight) {
@@ -226,10 +275,25 @@ export function createTrafficStore(opts = {}) {
           const b = pendingBodies; pendingBodies = null;
           try {
             await ready;
-            for (const r of b.days) await records.put(COLLECTION, r.day, r);
-            await records.put(COLLECTION, PAYERS_ID, b.payers);
+            const written = { days: [], payers: null };
+            for (const r of b.days) {
+              const snap = cloneJson(r);
+              const merged = await mergeOne(r.day, snap);
+              // Counted here while the write ran: carried on top of the merged rollup.
+              const live = days.get(r.day);
+              if (live) days.set(r.day, mergeCountsDelta(merged, snap, live));
+              savedBase.set(r.day, cloneJson(merged));
+              written.days.push(merged);
+            }
+            const psnap = cloneJson(b.payers);
+            const pm = await mergeOne(PAYERS_ID, psnap);
+            const livePayers = Object.fromEntries(payers);
+            payers.clear();
+            for (const [k, v] of Object.entries(mergeCountsDelta(pm, psnap, livePayers))) payers.set(k, Number(v) || 0);
+            savedBase.set(PAYERS_ID, cloneJson(pm));
+            written.payers = pm;
             pgFailedOnce = false;
-            try { if (existsSync(o.dir)) writeFiles(b); } catch { /* best effort */ }
+            try { if (existsSync(o.dir)) writeFiles(written); } catch { /* best effort */ }
           } catch (e) {
             dirty = true; // the next persist retries with the newer rollup
             if (!pgFailedOnce) { pgFailedOnce = true; say(`persist failed: ${String(e?.message || e).slice(0, 120)}`); }
