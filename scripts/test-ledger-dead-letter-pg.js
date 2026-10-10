@@ -308,6 +308,31 @@ try {
       "the heartbeat reads ledgerDeadLetter.status, confirms stuck on a second reading and opens an issue");
   }
 
+  // ---- (7) text Postgres cannot keep, through the dead-letter ---------------------
+  // A sale's feedback reason and a debt's note queued during an outage carry
+  // U+0000, an unpaired surrogate and JSON-escape text. The replay lands them
+  // (the database's cleaning takes out what TEXT cannot hold and leaves the
+  // escape text as typed, since neither column is cast to json/jsonb) and
+  // the dead-letter empties: an entry is never stuck on its own text.
+  {
+    await settle();
+    cutRelay();
+    const reason = '{"x":"\\u0000"} a\u0000b \ud800';
+    const note = '{"why":"\\u0000"}\u0000 n\udc00';
+    ok((await sl.recordSale({ slug: "hash", priceUsd: 0.002, rail: "usdc", network: "base", payer: PAYER, tx: "0xnul-sale", wire: "x402" })) === false, "a sale waits");
+    await sl.recordSaleFeedback({ tx: "0xnul-sale", saleId: 1, slug: "hash", payer: PAYER, verdict: "bad", reason });
+    ok((await rl.recordRefundOwed({ slug: "hash", network: "eip155:8453", payer: PAYER, priceUsd: 0.002, tx: "0xnul-debt", httpStatus: 502, note })) === false, "a debt with a note waits");
+    ok(sl.salesDeadLetterCount() === 2 && rl.refundDeadLetterCount() === 1, `the sale, its feedback and the debt are on local disk (${sl.salesDeadLetterCount()}, ${rl.refundDeadLetterCount()})`);
+    healRelay();
+    await settle();
+    ok(sl.salesDeadLetterCount() === 0 && rl.refundDeadLetterCount() === 0, `the dead-letter empties (${sl.salesDeadLetterCount()}, ${rl.refundDeadLetterCount()})`);
+    const fb = (await sdb.stateQuery(`SELECT reason FROM ${S}.sale_feedback WHERE tx = '0xnul-sale'`)).rows[0]?.reason;
+    ok(fb === '{"x":"\\u0000"} ab \ufffd', `the reason landed with U+0000 removed, the surrogate replaced and the escape text as typed (${JSON.stringify(fb)})`);
+    const nt = (await sdb.stateQuery(`SELECT note FROM ${S}.refunds WHERE evidence = '0xnul-debt'`)).rows[0]?.note;
+    ok(typeof nt === "string" && nt.startsWith('{"why":"\\u0000"}') && !nt.includes("\u0000") && !/[\ud800-\udfff]/.test(nt), `the note landed, escape text kept, U+0000 and the surrogate gone (${JSON.stringify(nt)})`);
+    ok(sl.feedbackForTx("0xnul-sale")?.reason === fb, "the mirror reads the reason the database holds");
+  }
+
   // ---- (5) the NDJSON fallback ---------------------------------------------------
   {
     const file = join(DIR, "nd", "dl.ndjson");
