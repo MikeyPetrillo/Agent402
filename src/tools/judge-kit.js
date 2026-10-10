@@ -270,7 +270,9 @@ export async function judge(input, { fetchImpl = fetch } = {}) {
   const order = backends(body, Buffer.byteLength(JSON.stringify(request)));
   const { backend, out } = await firstAnswer(order, async (b) => {
     if (b === "jev") { const j = await callJev(body, fetchImpl); return { j, answers: checkJev(j.answers, body), model: j.model || "jev-latest" }; }
-    if (b === "decision-one") { const j = await callDecisionOne(body, fetchImpl); return { j, answers: checkJev(j.answers, body), model: j.model || DECISION_ONE_MODEL }; }
+    // Decision-1 is named by the buyer's own enum value, not the dated
+    // upstream id the router answers with.
+    if (b === "decision-one") { const j = await callDecisionOne(body, fetchImpl); return { j, answers: checkJev(j.answers, body), model: DECISION_ONE }; }
     const j = await callLuna(request, fetchImpl);
     return { j, answers: fromDecisions(j, body, ids), model: j.model || LUNA };
   });
@@ -394,7 +396,7 @@ export async function decisions(input, { fetchImpl = fetch } = {}) {
   const { backend, out } = await firstAnswer(order, async (b) => {
     if (b === "luna") { const j = await callLuna(request, fetchImpl); return { j, answers: checkLuna(j.answers, request), model: j.model || LUNA }; }
     const j = b === "jev" ? await callJev(body, fetchImpl) : await callDecisionOne(body, fetchImpl);
-    return { j, answers: toDecisionsAnswers(checkJev(j.answers, body), request, levels), model: j.model || (b === "jev" ? "jev-latest" : DECISION_ONE_MODEL) };
+    return { j, answers: toDecisionsAnswers(checkJev(j.answers, body), request, levels), model: b === "jev" ? j.model || "jev-latest" : DECISION_ONE };
   });
   return {
     model: out.model,
