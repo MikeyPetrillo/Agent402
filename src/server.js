@@ -5404,6 +5404,9 @@ app.post("/__operator/sellers/restore", express.json(), (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorHeavyLimited(req, res)) return;
   const r = restoreOrigin(req.body?.origin);
+  // The removal list has not been read yet (the state database is down): a
+  // retry is the remedy, so say 503 with when to try, not a bad request.
+  if (r.notLoaded) return res.status(503).set("Retry-After", "30").set("Cache-Control", "no-store").json({ error: r.error, origin: r.origin, notLoaded: true });
   if (r.error) return res.status(400).json({ error: r.error });
   res.set("Cache-Control", "no-store").json({ ...r, note: r.restored ? "the owner can register the origin again" : "that origin was not removed" });
 });
@@ -7089,6 +7092,16 @@ app.post("/api/index/register", async (req, res) => {
     replaces = rv.origin;
   }
   const result = await registerOrigin(v.origin, { replaces });
+  if (result?.notLoaded) {
+    // The removal list has not been read yet (the state database is down):
+    // nothing was fetched or listed, so the call gives back both of its
+    // slots and answers 503 with when to try again.
+    const gi = regGlobal.lastIndexOf(now);
+    if (gi >= 0) regGlobal.splice(gi, 1);
+    const mi = mine.lastIndexOf(now);
+    if (mi >= 0) mine.splice(mi, 1);
+    return res.status(503).set("Retry-After", "30").json(result);
+  }
   // A re-registration that landed inside both of the origin's windows fetched
   // nothing, so it gives back its slot in the GLOBAL budget: repeated calls
   // about one known origin must not use up the hour for new sellers. (The
