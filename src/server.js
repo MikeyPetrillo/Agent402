@@ -10321,10 +10321,12 @@ function shutdown(signal, { code = 0, deadlineMs = DRAIN_DEADLINE_MS } = {}) {
   // before the process exits, bounded so a slow database cannot hold the
   // drain past its deadline: one flush round, at most 10 s, each statement
   // under the pool's own time limits. Without a database every flush
-  // resolves at once. During a database outage that round fails and what is
-  // still queued is lost with the process; while the /data volume exists
-  // the stores that write through to it keep their copy, after the volume
-  // is removed nothing does.
+  // resolves at once. During a database outage that round fails; sales and
+  // refund debts were written to the ledgers' local dead-letter when they
+  // were queued, so they wait on this container's disk for the next boot's
+  // replay (ledgerDeadLetter on /api/gateway-status pages while they wait).
+  // Other stores' queued writes are lost with the process; while the /data
+  // volume exists the stores that write through to it keep their copy.
   httpServer.close(() => { flushStateQueues().finally(finish); });
   // server.close() waits for ALL connections, including idle keep-alive
   // sockets agents hold open between calls. Sweep those now and every few
