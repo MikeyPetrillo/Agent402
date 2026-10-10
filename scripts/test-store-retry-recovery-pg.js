@@ -66,7 +66,10 @@ await sdb.stateQuery("SELECT 1"); // schema in place before the outage
   const before = sdb.__recoveryProbeRuns?.() ?? 0;
   await wait(1200);
   const after = sdb.__recoveryProbeRuns?.() ?? 0;
-  ok(after === before, `no recovery check runs while the database is healthy (${before} -> ${after})`);
+  // A pooled socket the cut broke can still fail one late statement, which
+  // starts one more check that stops at its first good answer; a check left
+  // running would send one every 300 ms here.
+  ok(after - before <= 1, `recovery checks stop once the database answers (${before} -> ${after} over 1.2 s)`);
 }
 
 await sdb.__dropStateSchema().catch(() => {});
