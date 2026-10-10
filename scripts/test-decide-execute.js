@@ -659,5 +659,47 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ok(rows() === before + 1, "a sketch that was booked and then could not run keeps its row, like a paid decision");
 }
 
+// ---- H5: a ledger write that fails after outside sellers were paid never turns the run into a 500 ----
+{
+  const lf = openDecideLedger(join(mkdtempSync(join(tmpdir(), "decide-lf-")), "l.db"));
+  let broken = true;
+  const failing = new Set(["finishRun", "settleSellerHold", "activateCredit", "mintCredit"]);
+  const flaky = new Proxy(lf, { get(t, k) {
+    const v = t[k];
+    if (typeof v !== "function") return v;
+    return (...a) => { if (broken && failing.has(k)) throw new Error(`ledger down (${String(k)})`); return v.apply(t, a); };
+  } });
+  lf.saveDecision({ decisionId: "dh5", depth: "plan", priceUsd: 0.02, payer: "0xh5", plan, costViaUsd: 0.031, now: clock });
+  lf.markDecisionSettled("dh5");
+  const exh = makeExecuteHandler({ ledger: flaky, getCatalog: () => catalog, now, runBudgetMs: () => null, spendingWalletStatus: async () => ({ status: "ok" }), ledgerRetryMs: [20, 20, 20, 20] });
+  calls.length = 0;
+  routerMode = "ok";
+  const req = mkReq("0xh5");
+  let out = null, err = null;
+  try { out = await exh({ decisionId: "dh5", params: { 2: { q: "z" } }, maxBudgetUsd: 0.05 }, req); } catch (e) { err = e; }
+  ok(!err && out?.status === "complete" && calls.some((c) => c[0] === "router"), `H5: the outside seller was paid and the run still answers its result (${err ? `${err.statusCode} ${err.message}` : out?.status})`);
+  ok(out && out.leftoverCredit === null && out.leftoverCreditUnrecorded?.amountUsd > 0, "H5: a leftover credit that could not be minted is reported, not thrown");
+  const run = lf.getRun(out?.runId);
+  ok(run && run.status === "running", "H5: while the ledger is down the run row is not finished yet");
+  broken = false;
+  await new Promise((r) => setTimeout(r, 200));
+  const run2 = lf.getRun(out?.runId);
+  ok(run2 && run2.status === "complete" && run2.spentUsd === out.spentUsd, `H5: the queued finish lands once the ledger answers again (${run2?.status}, ${run2?.spentUsd})`);
+  const held = lf.db.prepare("SELECT micro FROM seller_spend WHERE run_id = ?").all(out.runId).map((r) => Number(r.micro));
+  ok(held.length === 1 && held[0] === 18000, `H5: the seller hold is settled to what was paid (${held.join()})`);
+  // The leftover credit minted, but its activation after settlement fails: it is retried.
+  failing.delete("mintCredit");
+  broken = true;
+  const r2 = mkReq("0xh5b");
+  const out2 = await exh({ decisionId: "dh5", params: { 2: { q: "y" } }, maxBudgetUsd: 0.05 }, r2);
+  ok(out2?.leftoverCredit?.token && lf.creditState(out2.leftoverCredit.token).state === "pending", "H5: a leftover credit is minted, pending");
+  let hookThrew = false;
+  try { settle(r2, 200); } catch { hookThrew = true; }
+  ok(!hookThrew, "H5: a failing activation never throws into the settlement hook");
+  broken = false;
+  await new Promise((r) => setTimeout(r, 200));
+  ok(lf.creditState(out2.leftoverCredit.token).state === "active", "H5: the activation lands on retry");
+}
+
 console.log(`\ntest-decide-execute: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

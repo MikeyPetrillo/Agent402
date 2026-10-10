@@ -45,7 +45,7 @@ import { OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_
 import { normalizePayerAddress } from "./payer.js";
 import { PAYING_RAILS_SQL, isPaidRail } from "./paid-rails.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
-import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce } from "./ledger-mirror.js";
+import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError } from "./ledger-mirror.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DB_PATH = process.env.SALES_LEDGER_DB || join(HAS_DATA_DIR ? "/data" : "/tmp", "agent402-sales.db");
@@ -206,20 +206,19 @@ const mirrorFeedback = db.prepare(MIRROR_FEEDBACK_SQL);
 const fileSale = fileDb ? fileDb.prepare(MIRROR_SALE_SQL) : null;
 const fileFeedback = fileDb ? fileDb.prepare(MIRROR_FEEDBACK_SQL) : null;
 const num = (v) => (v == null ? null : Number(v));
-const saleRowOf = (r) => ({
+const saleRowOf = (r) => cleanRow({
   id: Number(r.id), ts: Number(r.ts), slug: r.slug, price_usd: Number(r.price_usd) || 0, rail: r.rail, network: r.network ?? null,
   payer: r.payer ?? null, tx: r.tx ?? null, internal: Number(r.internal) ? 1 : 0, wire: r.wire ?? null, quote_usd: num(r.quote_usd),
   response_sha256: r.response_sha256 ?? null, attest_uid: r.attest_uid ?? null, attest_tx: r.attest_tx ?? null,
 });
-const feedbackRowOf = (r) => ({ tx: r.tx, sale_id: Number(r.sale_id), slug: r.slug, payer: r.payer, verdict: r.verdict, reason: r.reason ?? null, ts: Number(r.ts) });
-let lastSaleUpdated = 0, lastFeedbackUpdated = 0;
+const feedbackRowOf = (r) => cleanRow({ tx: r.tx, sale_id: Number(r.sale_id), slug: r.slug, payer: r.payer, verdict: r.verdict, reason: r.reason ?? null, ts: Number(r.ts) });
+let watermark = 0; // refresh pulls rows stamped after this (database clock, ms)
 let ready = null;
 let refreshing = false;
 const warnOnce = makeWarnOnce("sales-ledger");
 const enqueue = serialQueue();
-const stamp = (r, which) => { const u = Number(r.updated_at) || 0; if (which === "sale") { if (u > lastSaleUpdated) lastSaleUpdated = u; } else if (u > lastFeedbackUpdated) lastFeedbackUpdated = u; };
-function applySale(r) { mirrorSale.run(saleRowOf(r)); stamp(r, "sale"); }
-function applyFeedback(r) { mirrorFeedback.run(feedbackRowOf(r)); stamp(r, "feedback"); }
+function applySale(r) { mirrorSale.run(saleRowOf(r)); }
+function applyFeedback(r) { mirrorFeedback.run(feedbackRowOf(r)); }
 const applySales = db.transaction((rows) => { for (const r of rows) applySale(r); });
 const applyFeedbacks = db.transaction((rows) => { for (const r of rows) applyFeedback(r); });
 let writeThroughWarned = false;
@@ -228,6 +227,48 @@ function writeThrough(stmt, row) {
   if (!stmt) return;
   try { stmt.run(row); }
   catch (e) { if (!writeThroughWarned) { writeThroughWarned = true; console.warn(`[sales-ledger] write-through to ${DB_PATH} failed: ${String(e?.message || e).slice(0, 120)}`); } }
+}
+
+// A sale or verdict Postgres refused or never answered waits here (the ledger
+// file while it is open, else an NDJSON beside it) and is replayed
+// insert-if-absent (a sale by its tx, or by ts/slug/rail/payer without one; a
+// verdict by tx, never over a newer one); see createDeadLetter.
+const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: `${DB_PATH}.dead-letter.ndjson` }) : null;
+const SALE_INS_COLS = ["ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256"];
+const SALE_INS_TYPES = ["bigint", "text", "double precision", "text", "text", "text", "text", "integer", "text", "double precision", "text"];
+/** INSERT a sale unless one with the same tx (or, without a tx, the same ts/slug/rail/payer) is already there. */
+const INSERT_SALE_IF_ABSENT = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")})
+  SELECT ${SALE_INS_COLS.map((_, i) => `$${i + 1}::${SALE_INS_TYPES[i]}`).join(", ")}
+  WHERE NOT EXISTS (SELECT 1 FROM ${T("sales")} WHERE CASE WHEN $7::text IS NOT NULL THEN tx = $7::text
+    ELSE tx IS NULL AND ts = $1::bigint AND slug = $2::text AND rail = $4::text AND payer IS NOT DISTINCT FROM $6::text END)
+  RETURNING *`;
+const FEEDBACK_IF_NEWER = () => `INSERT INTO ${T("sale_feedback")} (tx, sale_id, slug, payer, verdict, reason, ts) VALUES ($1, $2, $3, $4, $5, $6, $7)
+  ON CONFLICT (tx) DO UPDATE SET verdict = EXCLUDED.verdict, reason = EXCLUDED.reason, ts = EXCLUDED.ts, updated_at = ${PG_NOW_MS}
+  WHERE ${T("sale_feedback")}.ts < EXCLUDED.ts RETURNING *`;
+let replaying = false;
+/** Land every dead-lettered sale and verdict not in the tables yet. Stops at the first connection failure (the next tick retries). */
+async function replayDeadLetters() {
+  if (!deadLetter || replaying) return 0;
+  replaying = true;
+  let landed = 0;
+  try {
+    for (const e of deadLetter.list()) {
+      const v = e.payload;
+      let r;
+      try {
+        if (e.kind === "sale" && Array.isArray(v)) {
+          r = await stateQuery(INSERT_SALE_IF_ABSENT(), v);
+          if (r.rows[0]) { applySale(r.rows[0]); writeThrough(fileSale, saleRowOf(r.rows[0])); landed++; }
+        } else if (e.kind === "feedback" && v?.tx) {
+          r = await stateQuery(FEEDBACK_IF_NEWER(), [v.tx, v.saleId, v.slug, v.payer, v.verdict, v.reason, v.ts]);
+          if (r.rows[0]) { applyFeedback(r.rows[0]); writeThrough(fileFeedback, feedbackRowOf(r.rows[0])); landed++; }
+        }
+      } catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); continue; } throw err; }
+      deadLetter.remove(e.id);
+    }
+  } finally { replaying = false; }
+  if (landed) console.log(`[sales-ledger] landed ${landed} row(s) that had waited in the local dead-letter`);
+  return landed;
 }
 
 /** Both tables of the file into Postgres, once: insert-if-absent with the file's ids, so a second container importing at the same time is harmless. */
@@ -243,14 +284,68 @@ async function importFile() {
   if (sales.rows.length || fb.rows.length) console.log(`[sales-ledger] imported ${n} of ${sales.rows.length} sale(s) and ${m} of ${fb.rows.length} feedback row(s) from ${DB_PATH}`);
   return { bytes: sales.bytes, rows: n + m };
 }
-const FEEDBACK_UPSERT = `ON CONFLICT (tx) DO UPDATE SET ${FEEDBACK_COLS.filter((c) => c !== "tx").map((c) => `${c} = EXCLUDED.${c}`).join(", ")}, updated_at = ${PG_NOW_MS}`;
+// A verdict from the file replaces the table's only when it is the newer one (its own ts).
+const FEEDBACK_UPSERT = () => `ON CONFLICT (tx) DO UPDATE SET ${FEEDBACK_COLS.filter((c) => c !== "tx").map((c) => `${c} = EXCLUDED.${c}`).join(", ")}, updated_at = ${PG_NOW_MS} WHERE ${T("sale_feedback")}.ts < EXCLUDED.ts`;
+/** Rows a file-only build may have written are at most this much older than the import mark. */
+const RECONCILE_LOOKBACK_MS = 10 * 60_000;
+/**
+ * The file's sales (from `sinceTs`) the table lacks, inserted with fresh ids:
+ * matched by tx, or by ts/slug/rail/payer for a sale without one, so a row
+ * whose file id is taken in the table is still inserted and a row already
+ * there never twice. Returns how many were inserted.
+ */
+async function insertAbsentFileSales(sinceTs) {
+  const { rows } = sqliteFileRows(DB_PATH, "sales", { where: "ts >= ?", params: [Math.max(0, Math.floor(sinceTs))] });
+  if (!rows.length) return 0;
+  const file = rows.map(saleRowOf);
+  const withTx = file.filter((r) => r.tx);
+  const haveTx = new Set();
+  for (let i = 0; i < withTx.length; i += 5000) {
+    const r = await stateQuery(`SELECT tx FROM ${T("sales")} WHERE tx = ANY($1::text[])`, [withTx.slice(i, i + 5000).map((x) => x.tx)]);
+    for (const x of r.rows) haveTx.add(x.tx);
+  }
+  const keyOf = (r) => `${Number(r.ts)}|${r.slug}|${r.rail}|${r.payer ?? ""}`;
+  const noTx = file.filter((r) => !r.tx);
+  const haveKey = new Set();
+  if (noTx.length) {
+    const minTs = Math.min(...noTx.map((r) => Number(r.ts)));
+    const r = await stateQuery(`SELECT ts, slug, rail, payer FROM ${T("sales")} WHERE tx IS NULL AND ts >= $1`, [minTs]);
+    for (const x of r.rows) haveKey.add(keyOf(x));
+  }
+  const seen = new Set();
+  const missing = file.filter((r) => {
+    const k = r.tx ? `tx:${r.tx}` : `k:${keyOf(r)}`;
+    if (seen.has(k)) return false; // the file's own duplicates are inserted once per key, like the replay
+    seen.add(k);
+    return r.tx ? !haveTx.has(r.tx) : !haveKey.has(keyOf(r));
+  });
+  if (!missing.length) return 0;
+  const cols = SALE_COLS.filter((c) => c !== "id");
+  return insertRows(stateQuery, T("sales"), cols, missing, {});
+}
+/**
+ * Every boot while the ledger file exists: sales written to the file since
+ * the import mark (with a lookback) that the table lacks are inserted, and
+ * verdicts the table lacks are inserted. This lands what the file-only build
+ * wrote during the cutover window or a rollback, whatever the file's mtime.
+ */
+async function reconcileFile() {
+  if (!existsSync(DB_PATH)) return null;
+  const mark = await imports.done(IMPORT_NAME);
+  const since = (mark?.importedAt?.getTime?.() || 0) - RECONCILE_LOOKBACK_MS;
+  const n = await insertAbsentFileSales(since);
+  const fb = sqliteFileRows(DB_PATH, "sale_feedback");
+  const m = fb.rows.length ? await insertRows(stateQuery, T("sale_feedback"), FEEDBACK_COLS, fb.rows.map(feedbackRowOf), { conflict: "ON CONFLICT (tx) DO NOTHING" }) : 0;
+  if (n || m) console.log(`[sales-ledger] reconciled ${DB_PATH}: ${n} sale(s) and ${m} verdict(s) the tables lacked inserted`);
+  return { sales: n, feedback: m };
+}
 /**
  * Roll-forward after a rollback: the file-only build writes the file alone,
  * so when the file was written more than NEWER_FILE_GRACE_MS after the
  * tables' newest row (write-through lands within milliseconds) it carries
- * sales and verdicts the tables lack. The file wins per row: sales are
- * inserted where absent (by id), feedback is upserted by tx. Same shape as
- * json-document's reimportIfFileNewer. Returns the counts or null.
+ * sales and verdicts the tables lack. Sales are inserted where absent (by tx,
+ * or by ts/slug/rail/payer without one, with fresh ids); a verdict replaces
+ * the table's only when it is newer (its own ts). Returns the counts or null.
  */
 async function rollForwardIfFileNewer() {
   const mtime = ledgerFileMtime(DB_PATH);
@@ -261,40 +356,49 @@ async function rollForwardIfFileNewer() {
   );
   const markedAt = newest ? 0 : (await imports.done(IMPORT_NAME))?.importedAt?.getTime?.() || 0;
   if (!fileNewerThan(mtime, newest || markedAt)) return null;
-  const sales = sqliteFileRows(DB_PATH, "sales");
   const fb = sqliteFileRows(DB_PATH, "sale_feedback");
-  let n = 0, m = 0;
-  if (sales.rows.length) {
-    n = await insertRows(stateQuery, T("sales"), SALE_COLS, sales.rows.map(saleRowOf), { conflict: "ON CONFLICT DO NOTHING" });
-    await syncIdSequence(stateQuery, T("sales"));
-  }
-  if (fb.rows.length) m = await insertRows(stateQuery, T("sale_feedback"), FEEDBACK_COLS, fb.rows.map(feedbackRowOf), { conflict: FEEDBACK_UPSERT });
+  // Every sale the file holds that the table lacks (by tx or key; fresh ids).
+  const n = await insertAbsentFileSales(0);
+  let m = 0;
+  if (fb.rows.length) m = await insertRows(stateQuery, T("sale_feedback"), FEEDBACK_COLS, fb.rows.map(feedbackRowOf), { conflict: FEEDBACK_UPSERT() });
   console.log(`[sales-ledger] rolled forward ${n} sale(s) and ${m} feedback row(s) from ${DB_PATH}: the file was written ${Math.round((mtime - (newest || markedAt)) / 1000)} s after the tables' newest row (a rollback window)`);
   return { sales: n, feedback: m };
 }
 async function pullAll() {
+  const now = await pgNowMs(stateQuery);
   const s = await stateQuery(`SELECT * FROM ${T("sales")} ORDER BY id`);
   const f = await stateQuery(`SELECT * FROM ${T("sale_feedback")} ORDER BY ts`);
   db.transaction(() => { db.exec("DELETE FROM sales; DELETE FROM sale_feedback"); for (const r of s.rows) applySale(r); for (const r of f.rows) applyFeedback(r); })();
+  watermark = now - REFRESH_MARGIN_MS;
 }
-/** Rows another container wrote since the last pull (with a margin; upserts are idempotent). */
+/**
+ * Rows another container wrote since the last pull. The watermark advances to
+ * the database clock (minus REFRESH_MARGIN_MS) read before the query, not to
+ * the newest stamp seen, so rows sharing one stamp range (an import of 55k
+ * sales) are not pulled again on every refresh. Returns the rows pulled.
+ */
 async function refresh() {
-  if (refreshing) return;
+  if (refreshing) return 0;
   refreshing = true;
   try {
-    const s = await stateQuery(`SELECT * FROM ${T("sales")} WHERE updated_at > $1 ORDER BY updated_at, id`, [Math.max(0, lastSaleUpdated - REFRESH_MARGIN_MS)]);
+    const now = await pgNowMs(stateQuery);
+    const s = await stateQuery(`SELECT * FROM ${T("sales")} WHERE updated_at > $1 ORDER BY updated_at, id`, [Math.max(0, watermark)]);
     if (s.rows.length) applySales(s.rows);
-    const f = await stateQuery(`SELECT * FROM ${T("sale_feedback")} WHERE updated_at > $1 ORDER BY updated_at`, [Math.max(0, lastFeedbackUpdated - REFRESH_MARGIN_MS)]);
+    const f = await stateQuery(`SELECT * FROM ${T("sale_feedback")} WHERE updated_at > $1 ORDER BY updated_at`, [Math.max(0, watermark)]);
     if (f.rows.length) applyFeedbacks(f.rows);
+    watermark = Math.max(watermark, now - REFRESH_MARGIN_MS);
+    return s.rows.length + f.rows.length;
   } finally { refreshing = false; }
 }
 async function firstLoad() {
   await stateQuery(PG_DDL());
   await importOnce(IMPORT_NAME, { source: DB_PATH, run: importFile });
   await rollForwardIfFileNewer();
+  await reconcileFile();
+  await replayDeadLetters();
   await sweepPg();
   await pullAll();
-  everyMs(refresh, REFRESH_MS);
+  everyMs(() => enqueue(replayDeadLetters).then(refresh), REFRESH_MS);
 }
 function readyP() {
   if (!USE_PG) return Promise.resolve();
@@ -307,20 +411,32 @@ function readyP() {
   }
   return ready;
 }
-if (USE_PG) trackStoreReady(readyP());
-/** One queued Postgres write: lands after every earlier write; never rejects (a failed write resolves `onError`, logged once a minute). */
-function pgWrite(label, fn, onError = false) {
+if (USE_PG) {
+  trackStoreReady(readyP());
+  // A dead-lettered row is retried even while the first load keeps failing
+  // (the refresh timer starts only after it succeeds).
+  everyMs(() => (deadLetter.size() ? enqueue(async () => { await readyP(); await replayDeadLetters(); }) : null), REFRESH_MS);
+}
+/** One queued Postgres write: lands after every earlier write; never rejects (a failed write resolves `onError`, logged once a minute; `onFail` runs first). */
+function pgWrite(label, fn, onError = false, onFail = null) {
   return enqueue(async () => {
     try { await readyP(); return await fn(); }
-    catch (e) { warnOnce(label, e); return onError; }
+    catch (e) { warnOnce(label, e); try { onFail?.(e); } catch { /* best effort */ } return onError; }
   });
 }
 /** Resolves once the first load (DDL, the one-time file import, the sweep, the full pull) is done; immediately in file mode. */
 export function salesLedgerReady() { return readyP().catch(() => {}); }
 /** Resolves once every queued write has landed (tests and shutdown). */
 export function salesLedgerFlush() { return enqueue(async () => {}); }
-/** Pull other containers' writes now (the timer does this every REFRESH_MS). */
-export async function salesLedgerRefresh() { if (!USE_PG) return; await readyP(); await refresh(); }
+/** Land any dead-lettered rows, then pull other containers' writes now (the timer does this every REFRESH_MS). Resolves the rows pulled. */
+export async function salesLedgerRefresh() {
+  if (!USE_PG) return 0;
+  await readyP();
+  await enqueue(replayDeadLetters);
+  return refresh();
+}
+/** Rows waiting in the local dead-letter (database mode; 0 in file mode). */
+export function salesDeadLetterCount() { return deadLetter ? deadLetter.size() : 0; }
 
 const insertSale = db.prepare(
   "INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -361,7 +477,7 @@ export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic
       wire ? String(wire) : null,
       Number.isFinite(q) && q > 0 ? q : null,
       /^[0-9a-f]{64}$/i.test(String(responseSha256 || "")) ? String(responseSha256).toLowerCase() : null,
-    ];
+    ].map(noNul);
     if (USE_PG) {
       return pgWrite("record-sale", async () => {
         const r = await stateQuery(
@@ -370,6 +486,10 @@ export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic
         applySale(r.rows[0]);
         writeThrough(fileSale, saleRowOf(r.rows[0]));
         return true;
+      }, false, () => {
+        // Not landed (or landed with the reply lost): kept on local disk and
+        // replayed insert-if-absent, so the sale is never dropped.
+        if (!deadLetter.add("sale", vals)) console.error("[sales-ledger] a sale could not be written to Postgres or the local dead-letter");
       });
     }
     insertSale.run(...vals);
@@ -727,9 +847,11 @@ export function recordSaleFeedback({ tx, saleId, slug, payer, verdict, reason })
     payer: String(payer).toLowerCase(), verdict: v,
     // Bounded: a buyer's words, stored and later shown, so they can never be
     // an unbounded span in anything that renders them.
-    reason: reason == null ? null : String(reason).slice(0, 1000),
+    // U+0000 is stripped: Postgres refuses it in text.
+    reason: reason == null ? null : noNul(String(reason)).slice(0, 1000),
     ts: Date.now(),
   };
+  for (const k of ["tx", "slug", "payer"]) row[k] = noNul(row[k]);
   if (USE_PG) {
     return pgWrite("record-feedback", async () => {
       const r = await stateQuery(
@@ -740,7 +862,7 @@ export function recordSaleFeedback({ tx, saleId, slug, payer, verdict, reason })
       applyFeedback(r.rows[0]);
       writeThrough(fileFeedback, feedbackRowOf(r.rows[0]));
       return row;
-    }, null);
+    }, null, () => { deadLetter.add("feedback", row); });
   }
   upsertFeedback.run(row.tx, row.saleId, row.slug, row.payer, row.verdict, row.reason, row.ts);
   return row;

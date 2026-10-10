@@ -238,12 +238,13 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
     rec.statusMessage = "The report was produced but could not be stored for delivery.";
     rec.error = { code: TASK_INTERNAL_ERROR, message: "Result could not be retained." };
   }
-  function reportCharged(rec, bytes, receipt, priceUsd) {
-    // We hold a delivered 200 we cannot retain. This is the ONLY path here
-    // that can leave a buyer charged for nothing, so it is the only one that
-    // records a debt - and only on the ledger's positive proof of charge.
+  function reportCharged(rec, bytes, receipt, priceUsd, why = null) {
+    // We hold a delivered 200 we cannot hand over (it cannot be retained, or
+    // the task was closed elsewhere). These are the ONLY paths here that can
+    // leave a buyer charged for nothing, so they are the only ones that record
+    // a debt - and only on the ledger's positive proof of charge.
     try { onChargedFailure?.({ slug: rec.slug, receipt, priceUsd }); } catch { /* never break the path */ }
-    log(`[${label}] result for ${rec.slug} could not be retained (${bytes} bytes); recorded for refund review`);
+    log(`[${label}] result for ${rec.slug} could not be ${why ? `delivered (${why})` : `retained (${bytes} bytes)`}; recorded for refund review`);
   }
 
   if (stateDbEnabled()) return createPgTaskStore();
@@ -489,12 +490,35 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
       return { orphaned, pruned };
     }
 
+    /**
+     * Keep this boot's lease: renew it, and when the renew updated no row (the
+     * boot acquire failed, or the row lapsed after missed renews) take it again,
+     * so another container's sweep never reads a live run as an orphan for long.
+     */
+    async function renewLease() {
+      if (closed) return false;
+      let renewed = false;
+      try { renewed = await leases.renew(LEASE, { owner: bootId, ttlMs: LEASE_TTL_MS }); } catch { renewed = false; }
+      if (renewed) return true;
+      try { return await leases.acquire(LEASE, { owner: bootId, ttlMs: LEASE_TTL_MS }); } catch { return false; }
+    }
     async function boot() {
       try { await importOnce(collection, { source: root, run: importDirectory }); }
       catch (e) { log(`[${label}] import from ${root} failed: ${String(e?.message || e).slice(0, 120)}`); }
-      try { await leases.acquire(LEASE, { owner: bootId, ttlMs: LEASE_TTL_MS }); }
-      catch (e) { log(`[${label}] boot lease not held: ${String(e?.message || e).slice(0, 120)}`); }
-      const beat = setInterval(() => { if (!closed) leases.renew(LEASE, { owner: bootId, ttlMs: LEASE_TTL_MS }).catch(() => {}); }, Math.floor(LEASE_TTL_MS / 3));
+      // A failed boot acquire is retried shortly in the background (never
+      // holding up the boot), then by the renew timer.
+      let held = false;
+      try { held = await leases.acquire(LEASE, { owner: bootId, ttlMs: LEASE_TTL_MS }); }
+      catch (e) { log(`[${label}] boot lease not held yet: ${String(e?.message || e).slice(0, 120)}; retrying`); }
+      if (!held) {
+        void (async () => {
+          for (const wait of [500, 2000, 5000]) {
+            await new Promise((r) => { const t = setTimeout(r, wait); t.unref?.(); });
+            if (closed || (await renewLease())) return;
+          }
+        })();
+      }
+      const beat = setInterval(() => { void renewLease(); }, Math.floor(LEASE_TTL_MS / 3));
       beat.unref?.(); timers.push(beat);
       await sweep();
       const again = setInterval(() => { if (!closed) void sweep(); }, SWEEP_EVERY_MS);
@@ -536,7 +560,15 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
       try { rec = await rowOf(String(id || "")); } catch { rec = mine.get(id) || null; }
       if (!rec) return false;
       runs.delete(id);
-      if (isTerminal(rec.status)) { mine.delete(id); return false; }
+      if (isTerminal(rec.status)) {
+        mine.delete(id);
+        // Closed elsewhere (another container resolved it as an orphan, or a
+        // cancel), yet the run delivered a settled 200: the buyer may have
+        // paid for a result they will not get, so the debt is recorded (on
+        // the ledger's positive proof of charge, like reportCharged).
+        if (status === "completed" && rec.status !== "completed") reportCharged(rec, 0, receipt, priceUsd, `the task was already ${rec.status}`);
+        return false;
+      }
       const t = transition(rec, { status, result, error, statusMessage });
       let stored = false;
       if (status === "completed") {
@@ -581,7 +613,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
     return {
       create, get, complete, fail, cancel, settle, sweep,
       activeCount, atCapacity, isRunning: (id) => runs.has(id),
-      backend: "pg", collection, ready: () => ready, close,
+      backend: "pg", collection, ready: () => ready, close, _renewLease: renewLease,
       bootId, TTL_MS, POLL_MS, RUN_TIMEOUT_MS, MAX_ACTIVE, MAX_RESULT_BYTES, dir: root,
       async _reset() {
         runs.clear(); mine.clear();

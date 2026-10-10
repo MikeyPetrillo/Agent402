@@ -40,14 +40,15 @@
 // REFRESH_MS. The file is imported once (agent402-refunds.db in the imports
 // table) at the first boot with the database on, and while its directory is
 // there every landed write is also written into it (write-through), so a
-// rollback to the file-only build reads a current ledger; a file written
-// after that build ran alone is rolled forward into the table at the next
-// boot (rollForwardIfFileNewer, the file winning per row).
+// rollback to the file-only build reads a current ledger; at every boot while
+// the file exists its rows are reconciled into the table per row
+// (reconcileFile: insert-if-absent by evidence, forward-only status). A debt
+// Postgres refuses is kept in a local dead-letter and replayed.
 import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
-import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, NEWER_FILE_GRACE_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce } from "./ledger-mirror.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
+import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, NEWER_FILE_GRACE_MS, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError } from "./ledger-mirror.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DATA_DIR = process.env.REFUND_DB_DIR || (HAS_DATA_DIR ? "/data" : "/tmp");
@@ -183,7 +184,7 @@ const mirrorUpsert = db.prepare(`
 `);
 const fileUpsert = fileDb ? fileDb.prepare(mirrorUpsert.source) : null;
 const num = (v) => (v == null ? null : Number(v));
-let lastUpdated = 0;   // newest updated_at the mirror holds (server clock, ms)
+let watermark = 0;     // refresh pulls rows stamped after this (database clock, ms)
 let loaded = false;    // the first pull finished: the readers answer from a full mirror
 let ready = null;
 let refreshing = false;
@@ -198,8 +199,6 @@ const pgToMirror = (r) => ({
 });
 function applyPgRow(r) {
   mirrorUpsert.run(pgToMirror(r));
-  const u = Number(r.updated_at) || 0;
-  if (u > lastUpdated) lastUpdated = u;
 }
 let writeThroughWarned = false;
 /** The landed row into the file (same id, same evidence), so a rolled-back build reads it. */
@@ -209,12 +208,39 @@ function writeThroughRow(r) {
   catch (e) { if (!writeThroughWarned) { writeThroughWarned = true; console.warn(`[refund-ledger] write-through to ${DB_FILE} failed: ${String(e?.message || e).slice(0, 120)}`); } }
 }
 const applyPgRows = db.transaction((rows) => { for (const r of rows) applyPgRow(r); });
-const fileToPg = (r) => ({
+const fileToPg = (r) => cleanRow({
   id: r.id, evidence: r.evidence, slug: r.slug, network: r.network ?? null, payer: r.payer ?? null,
   price_usd: Number(r.priceUsd) || 0, http_status: r.httpStatus ?? null, synthetic: r.synthetic ? 1 : 0,
   status: r.status || "owed", paid_tx: r.paidTx ?? null, note: r.note ?? null, created_at: Number(r.createdAt) || 0,
   resolved_at: r.resolvedAt ?? null, wire: r.wire ?? null, hangup_reason: r.hangupReason ?? null, claimed_at: r.claimedAt ?? null,
 });
+// A debt Postgres refused or never answered waits here (the ledger file while
+// it is open, else an NDJSON beside it) and is replayed insert-if-absent by
+// evidence; see createDeadLetter.
+const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: join(DATA_DIR, "agent402-refunds.dead-letter.ndjson") }) : null;
+const INSERT_OWED_SQL = () => `INSERT INTO ${T("refunds")} (evidence, slug, network, payer, price_usd, http_status, synthetic, created_at, wire, hangup_reason, note)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (evidence) DO NOTHING RETURNING *`;
+const owedParams = (row) => [row.evidence, row.slug, row.network, row.payer, row.priceUsd, row.httpStatus, row.synthetic, row.createdAt, row.wire, row.hangupReason, row.note];
+let replaying = false;
+/** Land every dead-lettered debt that is not in the table yet. Stops at the first connection failure (the next tick retries). */
+async function replayDeadLetters() {
+  if (!deadLetter || replaying) return 0;
+  replaying = true;
+  let landed = 0;
+  try {
+    for (const e of deadLetter.list()) {
+      if (e.kind !== "refund" || !e.payload?.evidence) { deadLetter.remove(e.id); continue; }
+      let r;
+      try { r = await stateQuery(INSERT_OWED_SQL(), owedParams(e.payload)); }
+      catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); continue; } throw err; }
+      if (r.rows[0]) { applyPgRow(r.rows[0]); writeThroughRow(r.rows[0]); landed++; }
+      else await refreshWhere("evidence = $1", [e.payload.evidence]).catch(() => {});
+      deadLetter.remove(e.id);
+    }
+  } finally { replaying = false; }
+  if (landed) console.log(`[refund-ledger] landed ${landed} debt(s) that had waited in the local dead-letter`);
+  return landed;
+}
 
 /** The file's rows into the table, once: insert-if-absent, so a second container importing at the same time is harmless. */
 async function importFile() {
@@ -225,50 +251,89 @@ async function importFile() {
   console.log(`[refund-ledger] imported ${n} of ${rows.length} row(s) from ${DB_FILE}`);
   return { bytes, rows: n };
 }
+const RANK = { owed: 0, sending: 1, paid: 2, void: 2 };
+const rankOf = (st) => RANK[st] ?? 0;
+const COMPARE_COLS = ["status", "paid_tx", "note", "resolved_at", "http_status", "hangup_reason", "claimed_at"];
+const same = (a, b) => (a == null && b == null) || (a != null && b != null && String(a) === String(b));
 /**
- * Roll-forward after a rollback: the file-only build writes the file alone,
- * so when the file was written more than NEWER_FILE_GRACE_MS after the table's
- * newest row (write-through lands within milliseconds) it carries debts and
- * transitions the table lacks. Every file row is applied with the FILE
- * WINNING (upsert by id: status, outbound tx, note and timestamps from the
- * file). Same shape as json-document's reimportIfFileNewer. Returns the counts
- * or null when nothing was newer.
+ * Every boot while the ledger file exists: the file's rows against the table,
+ * per row, never by file mtime against the table's newest stamp.
+ *  - A debt the table lacks (by evidence) is inserted, with the file's id when
+ *    that id is free and a fresh one otherwise. This lands what a file-only
+ *    build wrote during the cutover window or a rollback.
+ *  - A debt the table holds moves FORWARD only: the file row is applied when
+ *    its status is further along (owed < sending < paid/void) and the table
+ *    row has not been written since the file was; at the same, unresolved
+ *    status only when the file was written past the grace after the table
+ *    row. A table row that is further along, resolved, or newer is never
+ *    overwritten, so a stale or foreign file can never turn paid back into
+ *    owed.
  */
-async function rollForwardIfFileNewer() {
+async function reconcileFile() {
   const mtime = ledgerFileMtime(DB_FILE);
   if (!Number.isFinite(mtime)) return null;
-  const newest = Number((await stateQuery(`SELECT MAX(updated_at) AS m FROM ${T("refunds")}`)).rows[0]?.m) || 0;
-  const markedAt = newest ? 0 : (await imports.done(IMPORT_NAME))?.importedAt?.getTime?.() || 0;
-  if (!fileNewerThan(mtime, newest || markedAt)) return null;
   const { rows } = sqliteFileRows(DB_FILE, "refunds");
-  let applied = 0, skipped = 0;
-  for (const r of rows) {
-    const v = fileToPg(r);
-    try {
-      await stateQuery(
-        `INSERT INTO ${T("refunds")} (${PG_COLS.join(", ")}) VALUES (${PG_COLS.map((_, i) => `$${i + 1}`).join(", ")})
-         ON CONFLICT (id) DO UPDATE SET ${PG_COLS.filter((c) => c !== "id").map((c) => `${c} = EXCLUDED.${c}`).join(", ")}, updated_at = ${PG_NOW_MS}`,
-        PG_COLS.map((c) => v[c] ?? null),
-      );
-      applied++;
-    } catch { skipped++; } // a file row whose evidence sits under another id in the table: left for the operator
+  if (!rows.length) return null;
+  const file = rows.map(fileToPg).filter((v) => v.evidence);
+  const cur = new Map();
+  for (let i = 0; i < file.length; i += 1000) {
+    const r = await stateQuery(`SELECT * FROM ${T("refunds")} WHERE evidence = ANY($1::text[])`, [file.slice(i, i + 1000).map((v) => v.evidence)]);
+    for (const x of r.rows) cur.set(x.evidence, x);
   }
-  await syncIdSequence(stateQuery, T("refunds"));
-  console.log(`[refund-ledger] rolled forward ${applied} row(s) from ${DB_FILE}${skipped ? ` (${skipped} skipped)` : ""}: the file was written ${Math.round((mtime - (newest || markedAt)) / 1000)} s after the table's newest row (a rollback window)`);
-  return { applied, skipped };
+  let inserted = 0, advanced = 0;
+  const cols = PG_COLS.filter((c) => c !== "id");
+  for (const v of file) {
+    const d = cur.get(v.evidence);
+    if (!d) {
+      let r = await stateQuery(
+        `INSERT INTO ${T("refunds")} (${PG_COLS.join(", ")}) VALUES (${PG_COLS.map((_, i) => `$${i + 1}`).join(", ")}) ON CONFLICT DO NOTHING RETURNING id`,
+        PG_COLS.map((c) => v[c] ?? null));
+      if (!r.rows[0]) {
+        r = await stateQuery(
+          `INSERT INTO ${T("refunds")} (${cols.join(", ")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")}) ON CONFLICT (evidence) DO NOTHING RETURNING id`,
+          cols.map((c) => v[c] ?? null));
+      }
+      if (r.rows[0]) inserted++;
+      continue;
+    }
+    if (COMPARE_COLS.every((c) => same(v[c], d[c]))) continue;
+    const rf = rankOf(v.status), rd = rankOf(d.status), du = Number(d.updated_at) || 0;
+    const forward = rf > rd && du <= mtime;
+    const sameStage = rf === rd && rd < 2 && du + NEWER_FILE_GRACE_MS < mtime;
+    if (!forward && !sameStage) continue;
+    // Guarded on the row as compared: a write that landed since is never overwritten.
+    const r = await stateQuery(
+      `UPDATE ${T("refunds")} SET ${COMPARE_COLS.map((c, i) => `${c} = $${i + 3}`).join(", ")}, updated_at = ${PG_NOW_MS}
+       WHERE evidence = $1 AND updated_at = $2 RETURNING id`,
+      [v.evidence, d.updated_at, ...COMPARE_COLS.map((c) => v[c] ?? null)]);
+    if (r.rows[0]) advanced++;
+  }
+  if (inserted) await syncIdSequence(stateQuery, T("refunds"));
+  if (inserted || advanced) console.log(`[refund-ledger] reconciled ${DB_FILE}: ${inserted} debt(s) the table lacked inserted, ${advanced} row(s) moved forward`);
+  return { inserted, advanced };
 }
 async function pullAll() {
+  const now = await pgNowMs(stateQuery);
   const r = await stateQuery(`SELECT * FROM ${T("refunds")} ORDER BY id`);
   db.transaction((rows) => { db.exec("DELETE FROM refunds"); for (const x of rows) applyPgRow(x); })(r.rows);
+  watermark = now - REFRESH_MARGIN_MS;
   loaded = true;
 }
-/** Rows another container wrote since the last pull (with a margin; upserts are idempotent). */
+/**
+ * Rows another container wrote since the last pull. The watermark advances to
+ * the database clock (minus REFRESH_MARGIN_MS) read before the query, not to
+ * the newest stamp seen, so rows sharing one stamp range (an import) are not
+ * pulled again on every refresh. Returns how many rows were pulled.
+ */
 async function refresh() {
-  if (refreshing) return;
+  if (refreshing) return 0;
   refreshing = true;
   try {
-    const r = await stateQuery(`SELECT * FROM ${T("refunds")} WHERE updated_at > $1 ORDER BY updated_at, id`, [Math.max(0, lastUpdated - REFRESH_MARGIN_MS)]);
+    const now = await pgNowMs(stateQuery);
+    const r = await stateQuery(`SELECT * FROM ${T("refunds")} WHERE updated_at > $1 ORDER BY updated_at, id`, [Math.max(0, watermark)]);
     if (r.rows.length) applyPgRows(r.rows);
+    watermark = Math.max(watermark, now - REFRESH_MARGIN_MS);
+    return r.rows.length;
   } finally { refreshing = false; }
 }
 async function refreshWhere(where, params) {
@@ -278,9 +343,10 @@ async function refreshWhere(where, params) {
 async function firstLoad() {
   await stateQuery(PG_DDL());
   await importOnce(IMPORT_NAME, { source: DB_FILE, run: importFile });
-  await rollForwardIfFileNewer();
+  await reconcileFile();
+  await replayDeadLetters();
   await pullAll();
-  everyMs(refresh, REFRESH_MS);
+  everyMs(() => enqueue(replayDeadLetters).then(refresh), REFRESH_MS);
 }
 function readyP() {
   if (!USE_PG) return Promise.resolve();
@@ -293,13 +359,18 @@ function readyP() {
   }
   return ready;
 }
-if (USE_PG) trackStoreReady(readyP());
+if (USE_PG) {
+  trackStoreReady(readyP());
+  // A dead-lettered debt is retried even while the first load keeps failing
+  // (the refresh timer starts only after it succeeds).
+  everyMs(() => (deadLetter.size() ? enqueue(async () => { await readyP(); await replayDeadLetters(); }) : null), REFRESH_MS);
+}
 
-/** One queued Postgres write: lands after every earlier write, never rejects (a failed write resolves false, logged once a minute). */
-function pgWrite(label, fn) {
+/** One queued Postgres write: lands after every earlier write, never rejects (a failed write resolves false, logged once a minute; `onFail` runs first). */
+function pgWrite(label, fn, onFail = null) {
   return enqueue(async () => {
     try { await readyP(); return await fn(); }
-    catch (e) { warnOnce(label, e); return false; }
+    catch (e) { warnOnce(label, e); try { onFail?.(e); } catch { /* best effort */ } return false; }
   });
 }
 /** A refusal before any write: the same `false`, in the mode's shape. */
@@ -316,8 +387,15 @@ const NOTE_CASE = (p) => `CASE WHEN note IS NULL OR note = '' THEN ${p}::text EL
 export function refundLedgerReady() { return readyP().catch(() => {}); }
 /** Resolves once every queued write has landed (tests and shutdown). */
 export function refundLedgerFlush() { return enqueue(async () => {}); }
-/** Pull other containers' writes now (the timer does this every REFRESH_MS). */
-export async function refundLedgerRefresh() { if (!USE_PG) return; await readyP(); await refresh(); }
+/** Land any dead-lettered debts, then pull other containers' writes now (the timer does this every REFRESH_MS). Resolves the rows pulled. */
+export async function refundLedgerRefresh() {
+  if (!USE_PG) return 0;
+  await readyP();
+  await enqueue(replayDeadLetters);
+  return refresh();
+}
+/** Debts waiting in the local dead-letter (database mode; 0 in file mode). */
+export function refundDeadLetterCount() { return deadLetter ? deadLetter.size() : 0; }
 
 /**
  * Does this settle receipt PROVE the buyer was charged?
@@ -347,7 +425,7 @@ export function recordRefundOwed({ slug, network, payer, priceUsd, tx, httpStatu
     const evidence = (typeof tx === "string" && tx.trim())
       ? tx.trim()
       : `${payer || "unknown"}|${slug || "unknown"}|${Math.floor(Date.now() / 60_000)}`;
-    const row = {
+    const row = cleanRow({
       evidence,
       slug: String(slug || "unknown"),
       network: network ? String(network) : null,
@@ -359,15 +437,15 @@ export function recordRefundOwed({ slug, network, payer, priceUsd, tx, httpStatu
       wire: wire ? String(wire).slice(0, 40) : null,
       hangupReason: hangupReason ? String(hangupReason).slice(0, 40) : null,
       note: typeof note === "string" && note.trim() ? note.trim().slice(0, 200) : null,
-    };
+    });
     if (USE_PG) {
       return pgWrite("record", async () => {
-        const r = await stateQuery(
-          `INSERT INTO ${T("refunds")} (evidence, slug, network, payer, price_usd, http_status, synthetic, created_at, wire, hangup_reason, note)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (evidence) DO NOTHING RETURNING *`,
-          [row.evidence, row.slug, row.network, row.payer, row.priceUsd, row.httpStatus, row.synthetic, row.createdAt, row.wire, row.hangupReason, row.note],
-        );
+        const r = await stateQuery(INSERT_OWED_SQL(), owedParams(row));
         return applyOrRefresh(r, "evidence = $1", [row.evidence]);
+      }, () => {
+        // Not landed (or landed with the reply lost): kept on local disk and
+        // replayed insert-if-absent by evidence, so the debt is never dropped.
+        if (!deadLetter.add("refund", row)) console.error(`[refund-ledger] a debt could not be written to Postgres or the local dead-letter: evidence ${row.evidence}`);
       });
     }
     const info = insertOwed.run(row);
@@ -511,6 +589,7 @@ export function voidOwedOnClaim(evidence, note) {
  *  Promise of it. */
 export function renoteOwedRefund(evidence, from, to) {
   if (USE_PG) {
+    to = noNul(to);
     const ev = String(evidence || "").trim();
     return pgWrite("renote", async () => {
       const r = await stateQuery(

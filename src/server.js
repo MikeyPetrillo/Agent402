@@ -874,6 +874,7 @@ const CATALOG = {
           ttlSeconds: { type: "number", description: "Optional: auto-expire the key after N seconds" },
           owner: { type: "string", description: "Optional 0x namespace to write into (requires a readwrite grant)" },
           delete: { type: "boolean", description: "Set true to delete the key instead" },
+          requestId: { type: "string", description: "Optional client id for this write; a retry with the same id returns the first answer" },
         },
         required: ["key"],
       },
@@ -909,7 +910,7 @@ const CATALOG = {
     category: "memory",
     price: "$0.001",
     description:
-      "Atomically increment (or decrement) a numeric key and return the new value - a coordination primitive for counters, locks, and rate budgets shared across agents. Creates the key at 0 if absent.",
+      "Atomically increment (or decrement) a numeric key and return the new value - a coordination primitive for counters, locks, and rate budgets shared across agents. Creates the key at 0 if absent. Retry safely with a requestId: a repeat with the same id returns the first answer and counts once; a retry without one counts again.",
     tags: ["memory", "counter", "atomic", "coordination", "lock"],
     discovery: {
       bodyType: "json",
@@ -919,6 +920,7 @@ const CATALOG = {
           key: { type: "string", description: "Counter key" },
           by: { type: "number", description: "Amount to add (default 1; negative to decrement)" },
           owner: { type: "string", description: "Optional 0x namespace (requires a readwrite grant)" },
+          requestId: { type: "string", description: "Optional client id for this write (1-128 chars); a retry with the same id returns the first answer instead of counting again" },
         },
         required: ["key"],
       },
@@ -943,6 +945,7 @@ const CATALOG = {
           value: { description: "New value to set on match; omit to DELETE on match (lock release)" },
           ttlSeconds: { type: "number", description: "Optional TTL for the written value (lease for locks)" },
           owner: { type: "string", description: "Optional 0x namespace (requires a readwrite grant)" },
+          requestId: { type: "string", description: "Optional client id for this write; a retry with the same id returns the first answer" },
         },
         required: ["key"],
       },
@@ -9461,16 +9464,19 @@ const memHandler = (fn) => async (req, res) => {
   }
 };
 
+// Optional client request id: a retried write returns the first answer instead of applying twice.
+const memRequestId = (req) => req.body?.requestId ?? req.header("x-memory-request-id") ?? undefined;
 app.post("/api/memory", memHandler((req, actor, owner) => {
   const { key, value, delete: del, ttlSeconds } = req.body ?? {};
-  return del ? memoryDelete(owner, key, { actor }) : memoryPut(owner, key, value, { actor, ttlSeconds });
+  const requestId = memRequestId(req);
+  return del ? memoryDelete(owner, key, { actor, requestId }) : memoryPut(owner, key, value, { actor, ttlSeconds, requestId });
 }));
 app.get("/api/memory", memHandler((req, actor, owner) => memoryGet(owner, req.query.key, { actor })));
 
 // Coordination + provenance + recall (all wallet-only; identity = payment).
-app.post("/api/memory/incr", memHandler((req, actor, owner) => memoryIncr(owner, req.body?.key, req.body?.by, actor)));
+app.post("/api/memory/incr", memHandler((req, actor, owner) => memoryIncr(owner, req.body?.key, req.body?.by, actor, { requestId: memRequestId(req) })));
 app.post("/api/memory/cas", memHandler((req, actor, owner) =>
-  memoryCas(owner, req.body?.key, req.body?.expected, req.body?.value, { actor, ttlSeconds: req.body?.ttlSeconds, hasValue: "value" in (req.body || {}) })
+  memoryCas(owner, req.body?.key, req.body?.expected, req.body?.value, { actor, ttlSeconds: req.body?.ttlSeconds, hasValue: "value" in (req.body || {}), requestId: memRequestId(req) })
 ));
 app.post("/api/memory/grant", memHandler((req, actor) => grant(actor, req.body?.grantee, req.body?.mode, req.body?.ttlSeconds)));
 app.post("/api/memory/revoke", memHandler((req, actor) => revoke(actor, req.body?.grantee)));

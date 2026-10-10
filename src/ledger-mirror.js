@@ -11,14 +11,38 @@
 // therefore exact for this process's own writes as soon as they land and at
 // most one refresh interval behind another container's.
 import Database from "better-sqlite3";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, statSync, readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { randomBytes } from "node:crypto";
 
 /** Server-clock milliseconds, the `updated_at` stamp every write sets. */
 export const PG_NOW_MS = "((extract(epoch from clock_timestamp()) * 1000)::bigint)";
 /** How often the mirror pulls other containers' writes. */
 export const REFRESH_MS = Number(process.env.LEDGER_MIRROR_REFRESH_MS) || 15_000;
-/** Rows stamped this much before the newest stamp seen are pulled again (idempotent upserts). */
-export const REFRESH_MARGIN_MS = 60_000;
+/**
+ * The refresh watermark trails the database clock by this much: a refresh
+ * pulls rows stamped after (the previous refresh's database now() minus the
+ * margin), so a write stamped just before a refresh and committed just after
+ * it is pulled by the next one. Every ledger write is one autocommit
+ * statement that commits within milliseconds of its stamp. Kept below
+ * REFRESH_MS so a burst (a 55k-row import shares one stamp range) is pulled
+ * at most once more, not on every refresh until the next sale lands.
+ */
+export const REFRESH_MARGIN_MS = Number(process.env.LEDGER_MIRROR_MARGIN_MS) || 10_000;
+/** The database clock in ms (the same clock as every `updated_at`). */
+export async function pgNowMs(query) {
+  return Number((await query(`SELECT ${PG_NOW_MS} AS n`)).rows[0]?.n) || 0;
+}
+/** Postgres refuses U+0000 in text; SQLite and JSON accept it. Stripped from every value a ledger writes or imports. */
+export function noNul(v) {
+  return typeof v === "string" && v.includes("\u0000") ? v.replace(/\u0000/g, "") : v;
+}
+/** noNul over every value of a row object (a new object). */
+export function cleanRow(row) {
+  const out = {};
+  for (const [k, v] of Object.entries(row)) out[k] = noNul(v);
+  return out;
+}
 /**
  * A file written this much later than the table's newest row was written by
  * a build that used the file alone (a rollback); write-through lands within
@@ -50,7 +74,7 @@ const ident = (s) => { if (!IDENT_RE.test(String(s))) throw new Error(`bad ident
  * `{ rows: [], bytes: 0 }` when the file or the table is missing. Never
  * creates the file.
  */
-export function sqliteFileRows(file, table) {
+export function sqliteFileRows(file, table, { where = "", params = [] } = {}) {
   if (!file || !existsSync(file)) return { rows: [], bytes: 0 };
   const t = ident(table);
   let db;
@@ -59,7 +83,7 @@ export function sqliteFileRows(file, table) {
   try {
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
     if (!has) return { rows: [], bytes: statSync(file).size };
-    return { rows: db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all(), bytes: statSync(file).size };
+    return { rows: db.prepare(`SELECT * FROM ${t}${where ? ` WHERE ${where}` : ""} ORDER BY rowid`).all(...params), bytes: statSync(file).size };
   } finally { db.close(); }
 }
 
@@ -96,12 +120,85 @@ export async function insertRows(query, table, columns, rows, { conflict = "", b
   return n;
 }
 
-/** After an import that carried the file's ids: the id sequence continues past them. */
+/**
+ * After an import that carried the file's ids: the id sequence continues past
+ * them. One statement, and never backwards: the sequence's own last value
+ * (which already counts an insert that has taken an id but not committed) is
+ * kept when it is ahead of MAX(id).
+ */
 export async function syncIdSequence(query, table) {
   const seq = (await query("SELECT pg_get_serial_sequence($1, 'id') AS s", [table])).rows[0]?.s;
   if (!seq) return;
-  const max = Number((await query(`SELECT COALESCE(MAX(id), 0) AS m FROM ${table}`)).rows[0].m) || 0;
-  await query("SELECT setval($1::regclass, $2::bigint, $3::boolean)", [seq, Math.max(max, 1), max > 0]);
+  await query(
+    `SELECT CASE WHEN t.v > 0 THEN setval($1::regclass, t.v, true) ELSE setval($1::regclass, 1, false) END
+       FROM (SELECT GREATEST((SELECT COALESCE(MAX(id), 0) FROM ${ident2(table)}), COALESCE(pg_sequence_last_value($1::regclass), 0)) AS v) t`,
+    [seq],
+  );
+}
+const ident2 = (t) => String(t).split(".").map(ident).join(".");
+
+/**
+ * A durable local queue for ledger writes Postgres refused or never answered
+ * (a refund owed, a sale): a row that cannot land must not vanish. Kept in
+ * the ledger's own SQLite file while it is open (table pg_dead_letter), else
+ * in an NDJSON file. The ledger replays every entry insert-if-absent (by its
+ * natural key) on the next successful load, refresh and on a timer, and
+ * removes an entry only once Postgres holds it.
+ */
+export function createDeadLetter({ db = null, file = "" } = {}) {
+  let sqlite = null;
+  if (db) {
+    try {
+      db.exec("CREATE TABLE IF NOT EXISTS pg_dead_letter (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, payload TEXT NOT NULL, at INTEGER NOT NULL)");
+      sqlite = {
+        add: db.prepare("INSERT INTO pg_dead_letter (kind, payload, at) VALUES (?, ?, ?)"),
+        list: db.prepare("SELECT id, kind, payload, at FROM pg_dead_letter ORDER BY id"),
+        remove: db.prepare("DELETE FROM pg_dead_letter WHERE id = ?"),
+        count: db.prepare("SELECT count(*) AS n FROM pg_dead_letter"),
+      };
+    } catch { sqlite = null; }
+  }
+  const readNd = () => {
+    try {
+      return readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((e) => e && e.id && e.kind);
+    } catch { return []; }
+  };
+  return {
+    kind: sqlite ? "sqlite" : file ? "ndjson" : "none",
+    /** True when the entry is on local disk. */
+    add(kind, payload) {
+      try {
+        if (sqlite) { sqlite.add.run(String(kind), JSON.stringify(payload), Date.now()); return true; }
+        if (!file) return false;
+        mkdirSync(dirname(file), { recursive: true });
+        appendFileSync(file, JSON.stringify({ id: `${Date.now()}-${randomBytes(4).toString("hex")}`, kind: String(kind), payload, at: Date.now() }) + "\n");
+        return true;
+      } catch { return false; }
+    },
+    list() {
+      if (sqlite) { try { return sqlite.list.all().map((r) => ({ id: r.id, kind: r.kind, payload: JSON.parse(r.payload), at: r.at })); } catch { return []; } }
+      return file ? readNd() : [];
+    },
+    remove(id) {
+      try {
+        if (sqlite) { sqlite.remove.run(id); return; }
+        if (!file) return;
+        const keep = readNd().filter((e) => e.id !== id);
+        const tmp = `${file}.tmp`;
+        writeFileSync(tmp, keep.map((e) => JSON.stringify(e) + "\n").join(""));
+        renameSync(tmp, file);
+      } catch { /* replayed again; the replay is insert-if-absent */ }
+    },
+    size() {
+      if (sqlite) { try { return sqlite.count.get().n; } catch { return 0; } }
+      return file ? readNd().length : 0;
+    },
+  };
+}
+/** A Postgres error about the row itself (bad data, a constraint), not the connection: retrying the same row cannot help. */
+export function isRowError(e) {
+  const c = String(e?.code || "");
+  return /^(22|23)/.test(c);
 }
 
 /** An unref'd interval whose callback's failure is swallowed (the next tick retries). */
