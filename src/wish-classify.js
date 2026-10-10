@@ -30,6 +30,7 @@
 // interface, not the truth.
 import { logSafe } from "./log-safe.js";
 import { looksLikeListingInjection } from "./x402-index.js";
+import { askDecisionOne, decisionOneEnabled } from "./decision-one.js";
 
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 const MODEL = (process.env.TYPESAFE_MODEL || "jev-latest").trim();
@@ -37,7 +38,10 @@ const keyOf = () => (process.env.TYPESAFE_API_KEY || "").trim();
 
 /** Unset key = the whole feature is absent, exactly like every other metered
  *  upstream in this tree. Nothing 503s and no row changes shape. */
-export const wishClassifyEnabled = () => !!keyOf();
+export const wishClassifyEnabled = () => !!keyOf() || decisionOneEnabled();
+// Microsoft Decision-1 answers when Jev fails, and alone when no TypeSafe key
+// is set: the board fails open per row, so a second backend only adds answers.
+// Note the CONFIDENT band below was measured on Jev, not on Decision-1.
 
 // Bounds, because this spends money per row and runs against a board that grows.
 const MAX_ROWS = Number(process.env.TYPESAFE_MAX_ROWS || 60);
@@ -72,14 +76,7 @@ function questionsFor() {
 }
 
 async function judge(text, fetchImpl = fetch) {
-  const res = await fetchImpl(ENDPOINT, {
-    method: "POST",
-    headers: { authorization: `Bearer ${keyOf()}`, "content-type": "application/json" },
-    body: JSON.stringify({ state: String(text).slice(0, 1_000), model: MODEL, questions: questionsFor() }),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
-  if (!res.ok) throw new Error(`typesafe HTTP ${res.status}`);
-  const body = await res.json();
+  const request = { state: String(text).slice(0, 1_000), model: MODEL, questions: questionsFor() };
   // The wire puts a noul probability under a key NAMED FOR THE TYPE:
   //   {"answers":{"advertises":{"type":"noul","noul":0.44}}}
   // The first cut of this guessed `probability`/`value`, which parses to null
@@ -87,12 +84,34 @@ async function judge(text, fetchImpl = fetch) {
   // all 27 stubbed assertions passed, because the fixture encoded the same
   // guess. Read from the live wire, keep the other spellings as a belt, and
   // never accept a non-number.
-  const p = (id) => {
-    const ans = body?.answers?.[id];
-    const v = ans?.noul ?? ans?.probability ?? ans?.value ?? ans;
-    return typeof v === "number" && v >= 0 && v <= 1 ? v : null;
+  const read = (body) => {
+    const p = (id) => {
+      const ans = body?.answers?.[id];
+      const v = ans?.noul ?? ans?.probability ?? ans?.value ?? ans;
+      return typeof v === "number" && v >= 0 && v <= 1 ? v : null;
+    };
+    return { advertises: p("advertises") };
   };
-  return { advertises: p("advertises") };
+  // Jev first; Decision-1 with the same body when Jev fails or its answer has
+  // no readable probability.
+  let jevError = null;
+  if (keyOf()) {
+    try {
+      const res = await fetchImpl(ENDPOINT, {
+        method: "POST",
+        headers: { authorization: `Bearer ${keyOf()}`, "content-type": "application/json" },
+        body: JSON.stringify(request),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      if (!res.ok) throw new Error(`typesafe HTTP ${res.status}`);
+      const out = read(await res.json());
+      if (out.advertises != null || !decisionOneEnabled()) return out;
+    } catch (e) {
+      jevError = e;
+    }
+  }
+  if (!decisionOneEnabled()) throw jevError || new Error("no judgment backend");
+  return read(await askDecisionOne(request, { fetchImpl, timeoutMs: TIMEOUT_MS }));
 }
 
 /** A verdict the operator board can render. Never a number the reader has to

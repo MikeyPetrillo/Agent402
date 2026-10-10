@@ -3,6 +3,9 @@
 // and may refuse before anything runs (src/tool-judge.js). Offline: the
 // judgment endpoint is a stubbed fetch; fails open when it is unusable.
 import assert from "node:assert/strict";
+// Hermetic: a developer shell's OpenRouter key would turn on the Decision-1
+// fallback (src/decision-one.js); scripts/test-decision-one.js covers it.
+delete process.env.OPENROUTER_API_KEY; delete process.env.DECIDE_OPENROUTER_API_KEY;
 process.env.TYPESAFE_API_KEY = "test-key";
 const { decide, judgeTool, criteriaFor, NONE, _jevReset, jevSpendStatus } = await import("../src/tool-judge.js");
 const { buildRouteExecuteTool } = await import("../src/tools/route-execute.js");
