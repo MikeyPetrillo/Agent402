@@ -548,6 +548,8 @@ import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores } from "./state-db.js";
 import { ledgerDeadLetterStatus } from "./ledger-mirror.js";
+import { flushJsonDocuments } from "./json-document.js";
+import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
@@ -10076,6 +10078,7 @@ else console.log(`[posthog] disabled (${posthogInit.reason || "unknown"})`);
 // outbound load on other people's hosts that no test ever looked at.
 if (String(process.env.X402_INDEX_CRAWL || "").toLowerCase() === "off") {
   console.log("[index] crawler disabled (X402_INDEX_CRAWL=off)");
+  loadRemovedOrigins(); // the operator's removals load regardless, so a removal never saves over a list nobody read
 } else {
   startCrawler({ selfOrigin: BASE_URL });
 }
@@ -10292,7 +10295,7 @@ let shuttingDown = false;
 // below reuses this with a non-zero code and a short deadline - same drain
 // machinery, different exit semantics.
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => flushJsonDocuments({ timeoutMs })]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });

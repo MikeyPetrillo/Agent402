@@ -68,7 +68,21 @@ function noteFailure(e) {
   lastError = String(e?.message || e).slice(0, 160);
   if (isConnectionError(e)) connFault = true;
 }
-function noteSuccess() { connFault = false; }
+function noteSuccess() {
+  if (!connFault) return;
+  connFault = false;
+  // The database answered again after a connection-class failure: wake the
+  // stores that wait on a backoff (a held save, a background re-read), so
+  // recovery does not wait out their longest delay.
+  for (const fn of recoveryListeners) setImmediate(() => { try { fn(); } catch { /* a listener never breaks a query */ } });
+}
+const recoveryListeners = new Set();
+/** Call `fn` (once per recovery, on the next turn) when a statement succeeds after a connection-class failure. Returns an unsubscribe. */
+export function onStateDbRecovered(fn) {
+  if (typeof fn !== "function") return () => {};
+  recoveryListeners.add(fn);
+  return () => recoveryListeners.delete(fn);
+}
 /** The last state-database failure message (any kind), or null. Never a value from a row. */
 export function lastStateDbError() { return lastError; }
 
@@ -751,6 +765,21 @@ const unloadedProbes = new Map();
 export function setUnloadedStoresProbe(fn, key = "default") {
   if (typeof fn === "function") unloadedProbes.set(String(key), fn); else unloadedProbes.delete(String(key));
 }
+// Stores holding a write that has not reached the database yet (a whole-body
+// save that failed and is being re-sent): each a function returning labels.
+// Any label turns the status word degraded, boot wait or not.
+const unsavedProbes = new Map();
+export function setUnsavedStoresProbe(fn, key = "default") {
+  if (typeof fn === "function") unsavedProbes.set(String(key), fn); else unsavedProbes.delete(String(key));
+}
+/** Labels of the stores with a write that has not landed yet. */
+export function unsavedStateStores() {
+  const out = [];
+  for (const probe of unsavedProbes.values()) {
+    try { for (const n of probe() || []) out.push(String(n)); } catch { /* a probe never breaks the status */ }
+  }
+  return [...new Set(out)];
+}
 /** Labels of the stores whose first load has not succeeded (this registry plus the probes). */
 export function unloadedStateStores() {
   const out = [];
@@ -882,6 +911,7 @@ export function stateDbStatus() {
   if (!stateDbEnabled()) return "off";
   if (connFault) return "degraded"; // a connection-class failure or a failed setup, until the next good statement
   if (bootWaitDone && !stateStoresLoaded()) return "degraded"; // a store whose first load never landed
+  if (unsavedStateStores().length) return "degraded"; // a save that failed and has not landed yet
   if (!ready) return "idle";
   return "on";
 }

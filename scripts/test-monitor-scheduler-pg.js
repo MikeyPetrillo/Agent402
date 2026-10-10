@@ -72,6 +72,28 @@ try {
   ok(!runs.some((r) => r.endsWith("three.example")), `a subscription claimed by another container is not run here (${JSON.stringify(r3)})`);
   const after3 = (await sdb.documents.get("monitor-runs.json")).body.subs.sub_three;
   ok(after3?.runClaim?.by === "Z" && !(after3.failures > 0), "its claim stands and no failure is counted");
+
+  // The end-of-tick save fails: the subscriptions it carried stay touched, and
+  // the next save merges them into the row.
+  const T = sdb.stateDbSchema();
+  const recs4 = [{ subId: "sub_four", product: "domain-monitor", target: "four.example", status: "active", email: "four@example.com" }];
+  const C = createMonitorScheduler({
+    subs: { listActive: () => recs4 },
+    storePath: join(DIR, "C", "monitor-runs.json"), ownerId: "C",
+    generate: async () => { await sdb.stateQuery(`ALTER TABLE ${T}.documents RENAME TO documents_away`); return { report: "rC four", title: "t" }; },
+    probeDomain: async () => ({ signals: { grade: "A" }, fingerprint: "fp" }), normDomain: (d) => d,
+    latestFiling: async () => null, resolveManager: async () => null, notify: async () => true,
+    baseUrl: "https://t.example", log: quiet, sleep: async () => {},
+  });
+  await C.ready();
+  await C.tick();
+  ok(C._touchedCount() > 0, `a tick whose save failed keeps the subscriptions it touched (${C._touchedCount()})`);
+  await sdb.stateQuery(`ALTER TABLE ${T}.documents_away RENAME TO documents`);
+  ok(!((await sdb.documents.get("monitor-runs.json")).body.subs.sub_four?.runs || []).length, "precondition: the run's record is not in the row yet");
+  await C.tick();
+  const four = (await sdb.documents.get("monitor-runs.json")).body.subs.sub_four;
+  ok((four?.runs || []).length === 1, `the next save carries the run's record into the row (${JSON.stringify(four?.runs || null)})`);
+  ok(C._touchedCount() === 0, "and then lets go of it");
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();

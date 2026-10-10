@@ -23,7 +23,7 @@ process.env.STATE_DB_CONNECT_TIMEOUT_MS = "1000";
 process.env.STATE_STORE_RETRY_MS = "300";
 process.env.STATE_STORE_RETRY_MAX_MS = "600";
 const sdb = await import("../src/state-db.js");
-const { createJsonDocument, unloadedDocuments } = await import("../src/json-document.js");
+const { createJsonDocument, unloadedDocuments, unsavedDocuments, flushJsonDocuments } = await import("../src/json-document.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -130,12 +130,121 @@ await sdb.documents.put("loading-doc", { kept: true });
   const recent = new Date(Date.now() - 3600_000).toISOString();
   await sdb.documents.put("backup-status.json", { lastAttempt: recent, lastSuccess: recent, lastResult: "ok", lastError: null });
   relay.cut();
-  const { backupAlarmStatus, backupStatusLoaded } = await import("../src/backup.js");
+  const { backupAlarmStatus, backupStatusLoaded, runBackup } = await import("../src/backup.js");
   const first = backupAlarmStatus();
   await backupStatusLoaded();
-  ok(first === "stale" && backupAlarmStatus() === "stale", `while the boot read cannot land, the word is stale (${first}, ${backupAlarmStatus()})`);
+  ok(first === "unknown" && backupAlarmStatus() === "unknown", `while the boot read cannot land, the word is unknown, not stale (${first}, ${backupAlarmStatus()})`);
   relay.heal();
   ok(await until(() => backupAlarmStatus() === "ok", 10_000), `once the database is back the stored status reaches the store and the word is ok (${backupAlarmStatus()})`);
+}
+
+// ---- a backup status saved before the row was read is not lost -------------
+// A fresh module (a later boot): the run finishes while the status row is
+// unread, so its save is refused; it is saved, merged over the stored status,
+// once the row arrives.
+{
+  const recent = new Date(Date.now() - 3600_000).toISOString();
+  process.env.BACKUP_DATA_DIR = join(DIR, "bk2");
+  await sdb.documents.put("backup-status.json", { lastAttempt: recent, lastSuccess: recent, lastResult: "ok", lastError: null });
+  relay.cut();
+  const bk = await import(`../src/backup.js?second=${Date.now()}`);
+  const run = await bk.runBackup({ log: () => {} }); // the bucket is unreachable: a failed run
+  ok(run.ok === false && bk.backupAlarmStatus() === "failed", `a run this process made is reported whatever the row (${bk.backupAlarmStatus()})`);
+  relay.heal();
+  ok(await until(async () => (await sdb.documents.get("backup-status.json"))?.body?.lastResult === "failed", 10_000), "the run's status lands in the row once the row is read");
+  const row = (await sdb.documents.get("backup-status.json")).body;
+  ok(row.lastSuccess === recent, `the stored last success is kept in the merged status (${row.lastSuccess})`);
+}
+
+// ---- a save that fails after the document loaded is kept and re-sent ----------
+// The document loaded fine; the database goes away; a whole-body save fails.
+// The newest body is kept, re-sent until it lands (never an older one after a
+// newer one), the document is named among the unsaved stores meanwhile, and
+// the failure reaches failLog even when the store's own log is quiet.
+{
+  await sdb.documents.put("steady-doc", { v: 0 });
+  const lines = [];
+  const doc = createJsonDocument({ name: "steady-doc", log: () => {}, failLog: (m) => lines.push(m) });
+  await doc.load(null);
+  relay.cut();
+  ok((await doc.save({ v: 1 })) === false, "a save during a steady outage reports it did not land");
+  ok(lines.some((l) => /save failed/.test(l)), `the failed save reaches failLog (${JSON.stringify(lines[0] || "")})`);
+  ok(unsavedDocuments().includes("document steady-doc (save pending)") && sdb.unsavedStateStores().includes("document steady-doc (save pending)"), "the document is named among the unsaved stores");
+  relay.heal();
+  ok(await until(async () => (await sdb.documents.get("steady-doc")).body.v === 1), "with no further save, the kept body lands once the database is back");
+  relay.cut();
+  await doc.save({ v: 2 });
+  ok(sdb.unsavedStateStores().includes("document steady-doc (save pending)"), "a second failed save is listed again");
+  relay.heal();
+  await sdb.stateQuery("SELECT 1"); // the connection fault clears; the save has not landed yet
+  ok(sdb.stateDbStatus() === "degraded", `the status word reads degraded while a save waits, with the database answering (${sdb.stateDbStatus()})`);
+  relay.cut();
+  void doc.save({ v: 3 }); // a newer body while the second waits
+  relay.heal();
+  ok(await until(async () => (await sdb.documents.get("steady-doc")).body.v === 3), "the newest body lands once the database is back");
+  await wait(1500); // past the retry backoff: nothing older follows it
+  ok((await sdb.documents.get("steady-doc")).body.v === 3, "no older body is sent after the newer one landed");
+  ok(!sdb.unsavedStateStores().includes("document steady-doc (save pending)"), "the document leaves the unsaved list once the body lands");
+  ok(lines.some((l) => /held save landed/.test(l)), "the landing is logged");
+}
+
+// ---- recovery wakes a long backoff; the shutdown flush sends what waits ----
+{
+  const prevMs = process.env.STATE_STORE_RETRY_MS, prevMax = process.env.STATE_STORE_RETRY_MAX_MS;
+  process.env.STATE_STORE_RETRY_MS = "60000"; process.env.STATE_STORE_RETRY_MAX_MS = "60000";
+  await sdb.documents.put("wake-doc", { v: 0 });
+  await sdb.documents.put("flush-doc", { v: 0 });
+  const doc = createJsonDocument({ name: "wake-doc", log: () => {}, failLog: () => {} });
+  const fdoc = createJsonDocument({ name: "flush-doc", log: () => {}, failLog: () => {} });
+  await doc.load(null); await fdoc.load(null);
+  relay.cut();
+  await doc.save({ v: 1 });
+  relay.heal();
+  await sdb.stateQuery("SELECT 1"); // any good statement after the failure
+  ok(await until(async () => (await sdb.documents.get("wake-doc")).body.v === 1, 3000), "a statement that succeeds after the outage wakes the held save (no 60 s backoff)");
+  // A failed load's re-read waiting on the same long backoff is woken too.
+  await sdb.documents.put("wake-load-doc", { w: 1 });
+  relay.cut();
+  const ldoc = createJsonDocument({ name: "wake-load-doc", log: () => {}, failLog: () => {}, loadRetryDelaysMs: [] });
+  await ldoc.load(null);
+  ok(ldoc.loadState === "failed", "precondition: the load failed");
+  relay.heal();
+  await sdb.stateQuery("SELECT 1");
+  ok(await until(() => ldoc.loadState === "ok", 3000), "a statement that succeeds after the outage wakes the background re-read (no 60 s backoff)");
+  // A save whose retry waits (no statement has succeeded since) is sent by the shutdown flush.
+  relay.cut();
+  await fdoc.save({ v: 7 });
+  relay.heal();
+  const left = await flushJsonDocuments({ timeoutMs: 5000 });
+  ok((await sdb.documents.get("flush-doc")).body.v === 7 && !left.includes("document flush-doc (save pending)"), `the shutdown flush sends the waiting save (${JSON.stringify(left)})`);
+  process.env.STATE_STORE_RETRY_MS = prevMs; process.env.STATE_STORE_RETRY_MAX_MS = prevMax;
+  const { readFileSync } = await import("node:fs");
+  const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const fq = srv.slice(srv.indexOf("function flushStateQueues"), srv.indexOf("function shutdown("));
+  ok(/flushJsonDocuments\(/.test(fq), "the server's bounded shutdown flush sends the waiting document saves");
+}
+
+// ---- the load is done only once the store has the body (roll-forward) -------
+// A rolled-back build wrote the file alone; the next load re-imports it (an
+// UPDATE and a second read). A save in that window would put empty memory
+// over the row: it is refused until the body is handed over.
+{
+  const { writeFileSync } = await import("node:fs");
+  const file = join(DIR, "rollfwd.json");
+  const d1 = createJsonDocument({ file, log: () => {}, failLog: () => {} });
+  await d1.load({});
+  await d1.save({ keep: ["a", "b", "c"] });
+  await d1.flush();
+  writeFileSync(file, JSON.stringify({ keep: ["a", "b", "c", "d"] }));
+  const d2 = createJsonDocument({ file, log: () => {}, failLog: () => {} });
+  let memory = {}, delivered = false, early = 0, stop = false;
+  const loading = d2.load({}, { onLoad: (b) => { memory = b; delivered = true; } });
+  const persister = (async () => { while (!stop) { if ((await d2.save(memory)) === true && !delivered) early++; await new Promise((r) => setImmediate(r)); } })();
+  await loading;
+  stop = true; await persister; await d2.flush();
+  const row = await sdb.documents.get("rollfwd.json");
+  ok(early === 0, `no save is accepted before the store has the body (${early})`);
+  ok(row?.body?.keep?.length === 4, `the row keeps the re-imported body (${JSON.stringify(row?.body)})`);
 }
 
 await sdb.__dropStateSchema().catch(() => {});

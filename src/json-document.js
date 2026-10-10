@@ -30,11 +30,22 @@
 // store (load's onLoad), and saves resume. Until then the document is named
 // in the state database's list of unloaded stores, so the status word reads
 // degraded, and a save issued while the first load is still running is held
-// too (a body built from empty memory would replace the stored one).
+// too (a body built from empty memory would replace the stored one). The
+// load counts as done only once the store has the body (after any roll-forward
+// re-import and its second read), so no save lands in between.
+//
+// A whole-body save that fails (the database went away after the document
+// loaded) is not dropped: the newest body is kept and re-sent with a backoff
+// until it lands, and a newer save always replaces the one waiting (an older
+// body is never sent after a newer one). Until it lands the document is named
+// in the state database's list of unsaved stores (the status word reads
+// degraded) and every failure goes to failLog. A statement that succeeds after
+// a connection failure wakes the waiting saves and re-reads at once, and
+// flushJsonDocuments() sends what is waiting (the shutdown flush).
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { documents, imports, setUnloadedStoresProbe, stateDbEnabled, stateDbSchema, stateQuery } from "./state-db.js";
+import { documents, imports, onStateDbRecovered, setUnloadedStoresProbe, setUnsavedStoresProbe, stateDbEnabled, stateDbSchema, stateQuery } from "./state-db.js";
 
 /** Returned by an update() mutator to leave the stored body unchanged. */
 export const SKIP_UPDATE = Symbol("json-document.skip-update");
@@ -63,6 +74,26 @@ const notLoaded = new Set();
 /** Names of the database documents whose stored body has not been read yet (load running or failed). */
 export function unloadedDocuments() { return [...new Set([...notLoaded].map((d) => `document ${d.name}`))]; }
 setUnloadedStoresProbe(unloadedDocuments, "json-document");
+// Database documents holding a whole-body save that has not landed yet.
+const unsavedDocs = new Set();
+/** Names of the database documents whose latest save has not reached the row yet (it is being re-sent). */
+export function unsavedDocuments() { return [...new Set([...unsavedDocs].map((d) => `document ${d.name} (save pending)`))]; }
+setUnsavedStoresProbe(unsavedDocuments, "json-document");
+// Every database document with a timer to cut short when the database answers
+// again (a held save's retry, a failed load's re-read).
+const waiting = new Set();
+onStateDbRecovered(() => { for (const d of [...waiting]) { try { d._wake(); } catch { /* never throws */ } } });
+/**
+ * Send every waiting whole-body save now and wait for the attempts, bounded
+ * by `timeoutMs` (the shutdown flush). Resolves the names still unsaved.
+ */
+export async function flushJsonDocuments({ timeoutMs = 5_000 } = {}) {
+  const docs = [...new Set([...unsavedDocs, ...waiting])];
+  let timer;
+  const deadline = new Promise((r) => { timer = setTimeout(r, timeoutMs); timer.unref?.(); });
+  await Promise.race([Promise.allSettled(docs.map((d) => d.flush())), deadline]).finally(() => clearTimeout(timer));
+  return unsavedDocuments();
+}
 const envMs = (k, d) => { const n = Number(process.env[k]); return Number.isFinite(n) && n > 0 ? n : d; };
 
 /** The volume's own name for a document: the file's basename. */
@@ -125,22 +156,78 @@ export function createJsonDocument({ name = null, file = null, log = console.war
   // quiet: the operator's clue to a store that is not persisting.
   const alert = (m) => { say(m); if (failLog && failLog !== log) { try { failLog(`[json-document] ${docName}: ${m}`); } catch { /* logging never throws */ } } };
   function scheduleLateRead() {
-    if (lateTimer || !usePg) return;
+    if (lateTimer || lateReading || !usePg) return;
     lateDelay = lateDelay ? Math.min(envMs("STATE_STORE_RETRY_MAX_MS", 60_000), lateDelay * 2) : envMs("STATE_STORE_RETRY_MS", 1000);
     lateTimer = setTimeout(lateRead, lateDelay);
     lateTimer.unref?.();
+    waiting.add(api);
   }
+  let lateReading = false;
   async function lateRead() {
-    lateTimer = null;
+    if (lateTimer) { clearTimeout(lateTimer); lateTimer = null; }
+    if (!saveTimer) waiting.delete(api);
     if (loadState === "ok" && !lateHandlers.length) { lateDelay = 0; return; }
-    lateFailures++;
-    const r = await api.read({ quiet: true });
-    if (!r.ok) { scheduleLateRead(); return; }
-    alert(`load landed after ${lateFailures} background attempt(s); saves resume`);
-    lateDelay = 0; lateFailures = 0;
-    for (const h of lateHandlers.splice(0)) {
-      try { h.onLoad(r.exists ? r.body : h.fallback); } catch (e) { say(`applying the late body failed: ${String(e?.message || e).slice(0, 120)}`); }
-    }
+    if (lateReading) return;
+    lateReading = true;
+    let r;
+    try {
+      lateFailures++;
+      // Not done until the re-import (if any) and its second read are over.
+      r = await readRow({ quiet: true });
+      if (r.ok) {
+        alert(`load landed after ${lateFailures} background attempt(s); saves resume`);
+        lateDelay = 0; lateFailures = 0;
+        setLoadState("ok"); // the handlers below take the body in this same turn
+        for (const h of lateHandlers.splice(0)) {
+          try { h.onLoad(r.exists ? r.body : h.fallback); } catch (e) { say(`applying the late body failed: ${String(e?.message || e).slice(0, 120)}`); }
+        }
+      }
+    } finally { lateReading = false; }
+    if (!r?.ok) scheduleLateRead();
+  }
+  // A whole-body save that failed waits here for its retry (see the header note).
+  let saveTimer = null;
+  let saveDelay = 0;
+  let saveFailures = 0;
+  function scheduleSaveRetry() {
+    if (saveTimer || inFlight) return;
+    saveDelay = saveDelay ? Math.min(envMs("STATE_STORE_RETRY_MAX_MS", 60_000), saveDelay * 2) : envMs("STATE_STORE_RETRY_MS", 1000);
+    saveTimer = setTimeout(() => { saveTimer = null; if (!lateTimer) waiting.delete(api); if (pendingBody !== undefined) void startSaving(); }, saveDelay);
+    saveTimer.unref?.();
+    waiting.add(api);
+  }
+  /** One put loop: the newest body each round; on a failure the newest body is kept and retried later. */
+  function startSaving() {
+    if (inFlight) return inFlight;
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; if (!lateTimer) waiting.delete(api); }
+    inFlight = (async () => {
+      let okAll = true;
+      while (pendingBody !== undefined) {
+        const next = pendingBody; pendingBody = undefined;
+        try {
+          const v = await documents.put(docName, next);
+          lastError = null; writeThrough(next, v);
+          if (pendingBody === undefined && unsavedDocs.has(api)) {
+            unsavedDocs.delete(api);
+            alert(`the held save landed after ${saveFailures} failed attempt(s)`);
+            saveFailures = 0; saveDelay = 0;
+          }
+        } catch (e) {
+          okAll = false;
+          lastError = String(e?.message || e).slice(0, 160);
+          // A newer body issued while this one was in flight replaces it.
+          if (pendingBody === undefined) pendingBody = next;
+          saveFailures++;
+          unsavedDocs.add(api);
+          alert(`save failed (attempt ${saveFailures}): ${lastError}; the latest body is kept and re-sent`);
+          break;
+        }
+      }
+      inFlight = null;
+      if (pendingBody !== undefined) scheduleSaveRetry();
+      return okAll;
+    })();
+    return inFlight;
   }
 
   let writeThroughWarned = false;
@@ -197,6 +284,53 @@ export function createJsonDocument({ name = null, file = null, log = console.war
   }
   const table = () => `${stateDbSchema()}.documents`;
 
+  /**
+   * The read behind read() and load(): { ok, exists, body, version }. It
+   * marks a failed read (the document is then held), never a good one: the
+   * caller marks the load done once the body is where it belongs.
+   */
+  async function readRow({ retry = false, quiet = false } = {}) {
+    if (!usePg) {
+      try {
+        if (file) { if (!existsSync(file)) return { ok: true, exists: false, body: null, version: null }; return { ok: true, exists: true, body: readJsonFile(file).body, version: null }; }
+        return { ok: true, exists: memory !== undefined, body: memory === undefined ? null : memory, version: null };
+      } catch (e) {
+        lastError = String(e?.message || e).slice(0, 160);
+        say(`load failed: ${lastError}`);
+        return { ok: false, exists: false, body: null, version: null, error: lastError };
+      }
+    }
+    const delays = retry ? [...loadRetryDelaysMs] : [];
+    for (;;) {
+      try {
+        const row = await documents.get(docName);
+        if (row) {
+          const fresher = await reimportIfFileNewer(row);
+          lastError = null;
+          if (fresher !== null) { const again = await documents.get(docName); return { ok: true, exists: true, body: again ? again.body : fresher, version: again ? again.version : null }; }
+          return { ok: true, exists: true, body: row.body, version: row.version };
+        }
+        const imported = await importOnce();
+        if (imported !== null) {
+          const again = await documents.get(docName);
+          lastError = null;
+          return { ok: true, exists: true, body: again ? again.body : imported, version: again ? again.version : null };
+        }
+        lastError = null;
+        return { ok: true, exists: false, body: null, version: 0 };
+      } catch (e) {
+        lastError = String(e?.message || e).slice(0, 160);
+        if (!delays.length) {
+          const first = loadState !== "failed";
+          setLoadState("failed");
+          if (!quiet || first) alert(`load failed: ${lastError}; saves are held until a load succeeds (re-reading in the background)`);
+          return { ok: false, exists: false, body: null, version: null, error: lastError };
+        }
+        await sleep(delays.shift());
+      }
+    }
+  }
+
   async function importOnce() {
     if (!importFromFile || !file || !existsSync(file)) return null;
     try {
@@ -234,9 +368,14 @@ export function createJsonDocument({ name = null, file = null, log = console.war
      */
     async load(fallback = null, { onLoad = null } = {}) {
       if (usePg && loadState !== "ok") setLoadState("loading");
-      const r = await api.read({ retry: true });
+      const r = await readRow({ retry: true });
       if (r.ok) {
         const body = r.exists ? r.body : fallback;
+        // Done only now, after any re-import and its second read: the store
+        // takes the body in this same turn (onLoad, or the caller's await),
+        // so no save can land before it has it. A save onLoad makes itself
+        // (a merge of what changed meanwhile) is allowed.
+        if (usePg) setLoadState("ok");
         if (onLoad) { try { onLoad(body); } catch (e) { say(`applying the loaded body failed: ${String(e?.message || e).slice(0, 120)}`); } }
         return body;
       }
@@ -248,45 +387,9 @@ export function createJsonDocument({ name = null, file = null, log = console.war
      * ok:false is an error (never "no row"). `retry` uses the load backoff.
      */
     async read({ retry = false, quiet = false } = {}) {
-      if (!usePg) {
-        try {
-          if (file) { if (!existsSync(file)) return { ok: true, exists: false, body: null, version: null }; return { ok: true, exists: true, body: readJsonFile(file).body, version: null }; }
-          return { ok: true, exists: memory !== undefined, body: memory === undefined ? null : memory, version: null };
-        } catch (e) {
-          lastError = String(e?.message || e).slice(0, 160);
-          say(`load failed: ${lastError}`);
-          return { ok: false, exists: false, body: null, version: null, error: lastError };
-        }
-      }
-      const delays = retry ? [...loadRetryDelaysMs] : [];
-      for (;;) {
-        try {
-          const row = await documents.get(docName);
-          if (row) {
-            lastError = null; setLoadState("ok");
-            const fresher = await reimportIfFileNewer(row);
-            if (fresher !== null) { const again = await documents.get(docName); return { ok: true, exists: true, body: again ? again.body : fresher, version: again ? again.version : null }; }
-            return { ok: true, exists: true, body: row.body, version: row.version };
-          }
-          const imported = await importOnce();
-          if (imported !== null) {
-            const again = await documents.get(docName);
-            lastError = null; setLoadState("ok");
-            return { ok: true, exists: true, body: again ? again.body : imported, version: again ? again.version : null };
-          }
-          lastError = null; setLoadState("ok");
-          return { ok: true, exists: false, body: null, version: 0 };
-        } catch (e) {
-          lastError = String(e?.message || e).slice(0, 160);
-          if (!delays.length) {
-            const first = loadState !== "failed";
-            setLoadState("failed");
-            if (!quiet || first) alert(`load failed: ${lastError}; saves are held until a load succeeds (re-reading in the background)`);
-            return { ok: false, exists: false, body: null, version: null, error: lastError };
-          }
-          await sleep(delays.shift());
-        }
-      }
+      const r = await readRow({ retry, quiet });
+      if (r.ok && usePg) setLoadState("ok");
+      return r;
     },
     /**
      * The stored body without waiting: file and memory backends only. The
@@ -328,19 +431,7 @@ export function createJsonDocument({ name = null, file = null, log = console.war
         return Promise.resolve(false);
       }
       pendingBody = body;
-      if (!inFlight) {
-        inFlight = (async () => {
-          let okAll = true;
-          while (pendingBody !== undefined) {
-            const next = pendingBody; pendingBody = undefined;
-            try { const v = await documents.put(docName, next); lastError = null; writeThrough(next, v); }
-            catch (e) { okAll = false; lastError = String(e?.message || e).slice(0, 160); say(`save failed: ${lastError}`); }
-          }
-          inFlight = null;
-          return okAll;
-        })();
-      }
-      return inFlight;
+      return startSaving();
     },
     /**
      * Synchronous save for the file and memory backends (true when written).
@@ -358,8 +449,20 @@ export function createJsonDocument({ name = null, file = null, log = console.war
         return false;
       }
     },
-    /** Resolves once no save is in flight (tests and shutdown). */
-    async flush() { while (inFlight) await inFlight; },
+    /**
+     * Resolves once no save is in flight (tests and shutdown). A save waiting
+     * for its retry is sent now. Resolves true when nothing is left unsaved.
+     */
+    async flush() {
+      if (usePg && pendingBody !== undefined && !inFlight) void startSaving();
+      while (inFlight) await inFlight;
+      return pendingBody === undefined;
+    },
+    /** Cut a backoff short (the database answered again). */
+    _wake() {
+      if (saveTimer && pendingBody !== undefined) void startSaving();
+      if (lateTimer) void lateRead();
+    },
     /**
      * Merge object keys into the stored body (and drop `dropKeys`), without
      * replacing keys another writer set: the merge-on-save stores. Resolves

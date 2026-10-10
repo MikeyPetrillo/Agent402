@@ -153,6 +153,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   // added or pruned. On the volume the whole file is saved, as before.
   const touched = new Set(), addedReports = new Set(), prunedReports = new Set();
   let saving = null, saveAgain = false;
+  let lastSaveOk = true; // whether the latest merge reached the row (touched is kept until one does)
   function mergeIntoRow(b) {
     const body = shapeStore(b);
     for (const id of touched) {
@@ -176,8 +177,9 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
         saveAgain = false;
         const added = [...addedReports], pruned = [...prunedReports];
         const r = await doc.update(mergeIntoRow, { fallback: shapeStore(null) });
+        lastSaveOk = r.ok === true;
         if (r.ok) { for (const id of added) addedReports.delete(id); for (const id of pruned) prunedReports.delete(id); }
-        else log(`[monitors] save failed: ${errMsg(r.error || doc.lastError || "")}`);
+        else log(`[monitors] save failed: ${errMsg(r.error || doc.lastError || "")}; the touched subscriptions are kept for the next save`);
       } while (saveAgain);
     })().finally(() => { saving = null; });
     return saving;
@@ -256,8 +258,10 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     if (!usePg) { persist(); return; }
     // The tick's state lands before the lease goes: the next holder's read
     // must see this tick's runs.
-    try { await savePg(); if (saveAgain || saving) await savePg(); await doc.flush(); } catch { /* logged */ }
-    touched.clear();
+    try { await savePg(); if (saveAgain || saving) await savePg(); await doc.flush(); } catch { lastSaveOk = false; /* logged */ }
+    // Only a save that landed lets go of what it carried: after a failed one
+    // the next save (the next tick's) merges these subscriptions again.
+    if (lastSaveOk) touched.clear();
   }
   // The fencing check for the tick in progress: false once its lease is
   // lost, checked before each subscription and before each paid run.
@@ -737,5 +741,5 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   }
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
-  return { tick, reportView, subIdOfReport, status, start, stop, ready: () => ready, flush: () => doc.flush(), _store: () => store };
+  return { tick, reportView, subIdOfReport, status, start, stop, ready: () => ready, flush: () => doc.flush(), _store: () => store, _touchedCount: () => touched.size };
 }
