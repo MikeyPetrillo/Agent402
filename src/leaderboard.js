@@ -1568,7 +1568,7 @@ const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
 // Under a lease (see src/state-db.js): the old and the new container of a
 // deploy never scan at once, so the seller-funding cursors advance once.
-const refreshOnce = leased("leaderboard-refresh", { ttlMs: 30 * 60_000 }, refreshOnceUnleased);
+const refreshOnce = leased("leaderboard-refresh", { ttlMs: 30 * 60_000, failOpen: true }, refreshOnceUnleased);
 async function refreshOnceUnleased(opts) {
   if (cached.warming) return; // overlapping refreshes would just rate-limit each other
   cached.warming = true;

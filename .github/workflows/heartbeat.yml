@@ -455,22 +455,27 @@ jobs:
           fi
 
       # The state database (src/state-db.js): the stores that left the /data
-      # volume and the leases every scheduled loop runs under. "degraded" is
-      # the pool reporting an error; "off" (variable unset), "idle" and "on"
-      # never page. A long-lived container keeps its loops running without the
-      # lease (fail-open after ten minutes up), but the moved stores cannot be
-      # written while it lasts, so it pages at once.
+      # volume and the leases every scheduled loop runs under. "degraded" is a
+      # connection-class failure (refused, reset, hung, timed out), a failed
+      # schema setup, or a store whose first load has not landed since boot;
+      # "off" (variable unset), "idle" and "on" never page. While it lasts the
+      # moved stores cannot be written and loops with external effects skip
+      # their ticks (only internal loops on a long-lived container run without
+      # the lease). Two readings 30 s apart, because a deploy's boot window
+      # can read degraded once.
       - name: State database check (alarm on a degraded Postgres)
         if: always()
         continue-on-error: true
         run: |
-          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.stateDb.status // "unknown"' 2>/dev/null || echo unknown)
+          read_sdb() { curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.stateDb.status // "unknown"' 2>/dev/null || echo unknown; }
+          STATUS=$(read_sdb)
+          if [ "$STATUS" = "degraded" ]; then sleep 30; STATUS=$(read_sdb); fi
           echo "state database: $STATUS"
           TITLE="State database DEGRADED (Postgres)"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "$STATUS" = "degraded" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status.stateDb reports **degraded**: the Postgres pool behind STATE_DATABASE_URL has reported an error. The moved stores (subscriptions, alerts, monitor runs, listings, leaderboards, logs) cannot be written while it lasts; loops on a container up for more than ten minutes keep running without their lease. Check the Postgres service on Railway and the boot log. Auto-closes when the status reads on."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status.stateDb reports **degraded** on two readings 30 s apart: the Postgres behind STATE_DATABASE_URL refused, dropped or hung on a statement, its schema setup failed, or a moved store has not loaded since boot. The moved stores (subscriptions, alerts, monitor runs, listings, leaderboards, logs) cannot be written while it lasts; loops with external effects skip their ticks, internal loops on a container up for more than ten minutes keep running without their lease. Check the Postgres service on Railway and the boot log ([state-db] lines). Auto-closes when the status reads on."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ)."
             fi

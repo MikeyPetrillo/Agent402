@@ -170,7 +170,7 @@ export function __testResetSubmitted() { submittedSeeds.clear(); submittedHints.
  *  (self-serve registration should keep requiring a bare origin from the
  *  submitter) - left for a follow-up if gateway-hosted MPP sellers turn out
  *  to be a meaningful share of the ecosystem going forward. */
-export const discoverMppRegistry = leased("mpp-index-discover-registry", { ttlMs: 10 * 60_000 }, discoverMppRegistryUnleased);
+export const discoverMppRegistry = leased("mpp-index-discover-registry", { ttlMs: 10 * 60_000, failOpen: true }, discoverMppRegistryUnleased);
 async function discoverMppRegistryUnleased() {
   try {
     const { html } = await safeFetch(MPP_DISCOVERY_URL, { maxBytes: MAX_REGISTRY_BYTES, headers: { Accept: "application/json" } });
@@ -279,7 +279,7 @@ function mppScanListUrl(page) {
 /** Discover seeds from MPPScan: the tRPC list (all pages), falling back to
  *  the rendered page's origin list if the API fails or changes shape. Never
  *  throws. */
-export const discoverMppScan = leased("mpp-index-discover-scan", { ttlMs: 10 * 60_000 }, discoverMppScanUnleased);
+export const discoverMppScan = leased("mpp-index-discover-scan", { ttlMs: 10 * 60_000, failOpen: true }, discoverMppScanUnleased);
 async function discoverMppScanUnleased() {
   const seen = new Set();
   let added = 0, total = 0, error = null, source = "api";
@@ -583,7 +583,7 @@ async function runPool(items, limit, worker) {
   await Promise.all(workers);
 }
 
-export const runMppCrawl = leased("mpp-index-crawl", { ttlMs: 30 * 60_000 }, runMppCrawlUnleased);
+export const runMppCrawl = leased("mpp-index-crawl", { ttlMs: 30 * 60_000, failOpen: true }, runMppCrawlUnleased);
 async function runMppCrawlUnleased() {
   if (crawlInFlight) return;
   crawlInFlight = true;

@@ -334,7 +334,7 @@ function _loadPersistedMppLeaderboard(file = MPP_LB_CACHE_FILE) {
 /** One rebuild, deduped (a burst of requests never fans out to N chain
  *  reads). On failure the previous snapshot stays, marked stale + lastError. */
 let feedState = null; // Tempo transfer-feed state (null until first load/sync)
-export const refreshMppLeaderboard = leased("mpp-leaderboard-refresh", { ttlMs: 20 * 60_000 }, refreshMppLeaderboardUnleased);
+export const refreshMppLeaderboard = leased("mpp-leaderboard-refresh", { ttlMs: 20 * 60_000, failOpen: true }, refreshMppLeaderboardUnleased);
 function refreshMppLeaderboardUnleased(opts = {}) {
   if (inFlight) return inFlight;
   inFlight = (async () => {

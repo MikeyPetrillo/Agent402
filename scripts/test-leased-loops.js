@@ -55,6 +55,26 @@ try {
     const src = readFileSync(new URL("../" + file, import.meta.url), "utf8");
     ok(src.includes(`"${name}"`), `${file} names its lease ${name}`);
   }
+  // Fail-open (running without the lease when the database cannot answer) is
+  // opt-in, and only loops whose effects stay inside our own state take it:
+  // a loop that mails, posts, charges or reports never does.
+  const failOpenOk = new Set(["x402-index-crawl", "x402-index-discovery", "mpp-index-crawl", "mpp-index-discover-registry", "mpp-index-discover-scan",
+    "leaderboard-refresh", "solana-leaderboard-refresh", "mpp-leaderboard-refresh", "mpp-reconcile-run", "backup-nightly", "revenue-ledger-tick"]);
+  const { readdirSync } = await import("node:fs");
+  const leasedCall = /\b(?:leased|withLease)\(\s*([`"][^`"]+[`"])\s*,\s*\{([^}]*)\}/g;
+  let sites = 0;
+  for (const f of readdirSync(new URL("../src/", import.meta.url)).filter((x) => x.endsWith(".js") && x !== "state-db.js")) {
+    const src = readFileSync(new URL("../src/" + f, import.meta.url), "utf8");
+    for (const m of src.matchAll(leasedCall)) {
+      sites++;
+      const name = m[1].slice(1, -1).replace(/\$\{[^}]*$/, "");
+      const opens = /failOpen:\s*true/.test(m[2]);
+      if (opens !== failOpenOk.has(name)) ok(false, `src/${f}: lease ${name} ${opens ? "fails open but is not an internal-only loop" : "is internal-only and should fail open"}`);
+    }
+  }
+  ok(sites >= 17, `every leased loop's fail-open choice matches its kind (${sites} call sites)`);
+  ok(/leased\("followups-tick", \{ ttlMs: \d+, log: log \}/.test(readFileSync(new URL("../src/followups.js", import.meta.url), "utf8")), "followups (mail) keeps the safe default");
+
   // The helper itself without a database runs the function.
   const r = await sdb.withLease("any", { ttlMs: 1000 }, async () => 1);
   ok(r.ran && r.result === 1, "withLease with a database acquires and runs");

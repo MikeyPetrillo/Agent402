@@ -1607,7 +1607,7 @@ export function startRevenueLedger({ walletAddress, solanaWallet, stellarWallet,
   // The sync work runs under a lease (two containers never advance the
   // cursors at once); the re-arm is outside it, so a skipped tick (another
   // holder, a database error) tries again rather than ending the loop.
-  const syncOnce = leased("revenue-ledger-tick", { ttlMs: 10 * 60_000 }, async () => {
+  const syncOnce = leased("revenue-ledger-tick", { ttlMs: 10 * 60_000, failOpen: true }, async () => {
     let allCaughtUp = true;
     if (USE_PG) { await storeReady; staged.clear(); }
     if (walletAddress) {

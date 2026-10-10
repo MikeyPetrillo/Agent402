@@ -366,7 +366,7 @@ export function __resetSolanaLeaderboardForTest() { current = emptyBoard(); }
 export function _stateForTest() { return current.state; }
 
 /** Rebuild: list payTos, scan incrementally against the persisted per-payTo state, prime the gate, persist. Deduped in flight. */
-export const refreshSolanaLeaderboard = leased("solana-leaderboard-refresh", { ttlMs: 30 * 60_000 }, refreshSolanaLeaderboardUnleased);
+export const refreshSolanaLeaderboard = leased("solana-leaderboard-refresh", { ttlMs: 30 * 60_000, failOpen: true }, refreshSolanaLeaderboardUnleased);
 async function refreshSolanaLeaderboardUnleased({ listPayTos, rpc, creditFromTx, readFn = null, prime, windowHours = 168 } = {}) {
   if (inFlight) return inFlight;
   inFlight = (async () => {
