@@ -221,7 +221,7 @@ if (CHILD) {
       const o = JSON.parse(buf.split("\n").find((l) => l.startsWith("{")) || "{}");
       const before = (await q(`SELECT status FROM ${T("runs")} WHERE id = $1`, [o.runId]))[0];
       ok(o.status === "complete" && o.leftover?.token && before?.status === "running", `the child answered ${o.status} with a leftover credit, then exited; the run reads ${before?.status} in the database`);
-      ok(existsSync(join(childDir, "ledger.db")), "...its journal is in the ledger file on the volume");
+      ok(existsSync(join(childDir, "ledger.db.pending.ndjson")), "...its journal is on the volume beside the ledger file");
       const L2 = openDecideLedger(join(childDir, "ledger.db"));
       await L2.ready;
       for (let i = 0; i < 30 && L2.pendingCount(); i++) await wait(100);

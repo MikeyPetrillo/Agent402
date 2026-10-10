@@ -33,7 +33,7 @@
 // moved (a run's finish, a leftover credit, an activation, a settled mark, a
 // seller hold's final amount, a restored credit) must outlive the process if
 // Postgres refuses it or never answers. Such a write is journaled to local
-// disk (the SQLite file while it exists, else an NDJSON file beside it)
+// disk (an NDJSON file beside the ledger file)
 // before the handler answers, and replayed at load and on a timer; every
 // replay is idempotent (an UPDATE to a fixed state, an insert-if-absent by
 // its key), and an entry is removed once Postgres holds its effect. A credit
@@ -385,13 +385,14 @@ function openDatabaseLedger(path) {
   // file backend runs, after the database write. Best effort, logged once.
   let wt = null;
   let wtWarned = false;
-  let fileDb = null;
   const sellerHoldRowid = new Map(); // database hold id -> file rowid
   if (existsSync(path)) {
-    try { const fdb = new Database(path); ensureSqliteSchema(fdb); wt = prepareSqlite(fdb); fileDb = fdb; }
+    try { const fdb = new Database(path); ensureSqliteSchema(fdb); wt = prepareSqlite(fdb); }
     catch (e) { warn(`write-through to ${basename(path)} is off: ${String(e?.message || e).slice(0, 120)}`); }
   }
-  const pending = createDeadLetter({ db: fileDb, file: `${path}.pending.ndjson` });
+  // An NDJSON file beside the ledger file (on the volume while it exists),
+  // never a table in the SQLite file the migration verifier compares.
+  const pending = createDeadLetter({ file: `${path}.pending.ndjson` });
   const through = (fn) => {
     if (!wt) return;
     try { fn(wt); }
