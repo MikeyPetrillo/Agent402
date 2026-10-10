@@ -71,6 +71,9 @@ try {
   for (const t of ["t_seq", "t_ident", "t_always"]) { const g = join(DIR, `${t}.ndjson.gz`); await stageStateTable(t, g); texts[t] = gunzipSync(readFileSync(g)).toString("utf8"); }
   ok(texts.t_ident.includes("9007199254740993"), "the staged object carries a bigint above 2^53 exactly");
   for (const t of ["t_seq", "t_ident", "t_always"]) await sdb.stateQuery(`TRUNCATE ${S}.${t} RESTART IDENTITY`);
+  // A sequence already ahead of the restored rows never moves back (an id
+  // handed out once is never handed out again).
+  await sdb.stateQuery(`SELECT setval(pg_get_serial_sequence('${S}.t_always', 'id'), 100)`);
   for (const t of ["t_seq", "t_ident", "t_always"]) await restoreStateTable(t, texts[t]);
   let seqErr = null;
   try {
@@ -81,6 +84,8 @@ try {
   ok(!seqErr, `a new row goes into every serial and identity table after the restore (${seqErr || "ok"})`);
   const newSeq = (await sdb.stateQuery(`SELECT seq FROM ${S}.t_seq WHERE k = 'new'`)).rows[0]?.seq;
   ok(Number(newSeq) === 41, `a serial column that is not the key moves past the restored maximum (got ${newSeq})`);
+  const alwaysNew = (await sdb.stateQuery(`SELECT id FROM ${S}.t_always WHERE v = 'new'`)).rows[0]?.id;
+  ok(Number(alwaysNew) === 101, `a sequence ahead of the restored maximum is kept (next id ${alwaysNew})`);
   const big = (await sdb.stateQuery(`SELECT big::text AS b, amount::text AS a, body->>'big' AS jb, body::text AS raw FROM ${S}.t_ident WHERE id = 1`)).rows[0];
   ok(big?.b === "9007199254740993" && big?.jb === "9007199254740993" && big?.a === "123456789012345678901234567890.000001", `bigint, numeric and a big number inside jsonb come back exactly (${JSON.stringify(big)})`);
   const bare = (await sdb.stateQuery(`SELECT body::text AS t FROM ${S}.t_ident WHERE id = 2`)).rows[0]?.t;
