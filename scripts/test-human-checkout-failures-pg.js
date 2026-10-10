@@ -79,6 +79,8 @@ try {
     genHook = null;
     const onDisk = existsSync(join(DIR, "_pending-finals.ndjson")) && readFileSync(join(DIR, "_pending-finals.ndjson"), "utf8").includes(id);
     ok(first?.status === "done" && onDisk && refunds.length === 0, `${tag}: the database away after generation: this container serves ${first?.status}, the record is on local disk (${onDisk}), refunds ${refunds.length}`);
+    const polled = await hc.fulfill(id).catch(() => ({ status: "threw" }));
+    ok(polled?.status === "done", `${tag}: ...and a poll on it answers ${polled?.status} while the database is away`);
     relay.heal();
     for (let i = 0; i < 40 && (await row(id))?.status !== "done"; i++) await wait(100);
     const r = await row(id);
