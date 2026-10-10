@@ -195,6 +195,21 @@ if (CHILD) {
       ok(d?.settled === true && st?.state === "active", `...once the database is back the decision is settled (${d?.settled}) and the credit active (${st?.state})`);
     }
 
+    // The decision's save lands and its reply is lost, then the payment settles: the retried save never unsettles it.
+    {
+      const realFetch = globalThis.fetch;
+      const decisionId = `dx_${randomBytes(4).toString("hex")}`;
+      globalThis.fetch = async () => new Response(JSON.stringify({ decisionId, plan: [{ step: 1, purpose: "p", tool: fp("a"), fallbacks: [] }], gaps: [], estimatedCostViaAgent402Usd: 0.01 }), { status: 200 });
+      armed.push({ re: /INSERT INTO .*decide_ledger_decisions/, left: 1 });
+      const req = mkReq(0.05);
+      const r = await run(() => makeDecideHandler({ ledger: L })({ task: "do it", depth: "plan" }, req));
+      globalThis.fetch = realFetch;
+      for (const fn of req.__onSettled || []) fn(true);
+      await wait(1800);
+      const d = await L.getDecision(decisionId);
+      ok(!r.err && d?.settled === true && L.pendingCount() === 0, `a save whose reply was lost, then settled: the retried save keeps it settled (${d?.settled}, journal ${L.pendingCount()})`);
+    }
+
     // A container that exits before the database answers again: a fresh ledger replays its journal.
     {
       const childDir = mkdtempSync(join(DIR, "child-"));
