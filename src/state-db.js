@@ -853,18 +853,9 @@ export async function closeStateDb() {
  * other instead of racing on the catalog. Commits on return, rolls back on
  * throw; the lock is released with the transaction.
  */
-export async function withSchemaLock(fn) {
-  const p = await stateDb();
-  if (!p) throw new Error("state database not configured");
-  const client = await p.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query("SELECT pg_advisory_xact_lock(4020402, hashtext($1))", [schema()]);
-    const out = await fn(client);
-    await client.query("COMMIT");
-    return out;
-  } catch (e) {
-    try { await client.query("ROLLBACK"); } catch { /* the connection is gone */ }
-    throw e;
-  } finally { client.release(); }
+export async function withSchemaLock(fn, { timeoutMs = 0 } = {}) {
+  return withStateTx(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock($1, hashtext($2))", [SCHEMA_LOCK_KEY, schema()]);
+    return fn(client);
+  }, { timeoutMs });
 }
