@@ -103,6 +103,22 @@ await sdb.documents.put("loading-doc", { kept: true });
   ok(await until(() => sdb.stateDbStatus() === "on"), `the status word reads on again (${sdb.stateDbStatus()}, unloaded ${JSON.stringify(sdb.unloadedStateStores())})`);
 }
 
+// ---- a boot reconcile that fails is not reported loaded ----------------------
+{
+  const { writeFileSync } = await import("node:fs");
+  process.env.OUTBOUND_LEDGER_FILE = join(DIR, "outbound-spend.ndjson");
+  writeFileSync(process.env.OUTBOUND_LEDGER_FILE, JSON.stringify({ at: "2026-10-01T00:00:00.000Z", chain: "base", result: "delivered" }) + "\n");
+  relay.cut();
+  const ob = await import("../src/outbound-ledger.js");
+  const word = await sdb.stateStoresReady({ timeoutMs: 1500 });
+  const named = sdb.unloadedStateStores().filter((n) => /outbound/.test(n));
+  ok(word !== "ready" && named.length > 0, `the outbound ledger whose boot reconcile failed is not reported loaded (${word}; ${JSON.stringify(named)})`);
+  ok(sdb.stateDbStatus() === "degraded", `and the status word reads degraded (${sdb.stateDbStatus()})`);
+  relay.heal();
+  ok(await until(() => !sdb.unloadedStateStores().some((n) => /outbound/.test(n))), `the reconcile is retried and the ledger reads loaded once the database answers (${JSON.stringify(sdb.unloadedStateStores())})`);
+  ok(await until(async () => (await sdb.logLines.count(ob.OUTBOUND_STREAM)) === 1), "the retried reconcile restores the file's line to the stream");
+}
+
 await sdb.__dropStateSchema().catch(() => {});
 await sdb.closeStateDb();
 await relay.close();

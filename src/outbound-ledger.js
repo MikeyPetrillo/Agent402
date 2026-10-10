@@ -17,7 +17,8 @@
 // it, and how it ended.
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { logLines, stateDbEnabled, trackStoreReady, reconcileLogFile } from "./state-db.js";
+import { logLines, stateDbEnabled, trackStoreReady, reconcileLogFile, markStoreFailed, markStoreLoaded } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
 
 export const OUTBOUND_STREAM = "outbound-spend";
 
@@ -25,7 +26,13 @@ const FILE = (process.env.OUTBOUND_LEDGER_FILE || "/data/outbound-spend.ndjson")
 const DISABLED = /^(0|false|off|no)$/i.test((process.env.OUTBOUND_LEDGER ?? "").trim());
 // Boot: lines the file holds past the stream (written while rolled back to a
 // build that used the file alone) are appended to the stream.
-if (stateDbEnabled() && !DISABLED) trackStoreReady(reconcileLogFile(OUTBOUND_STREAM, FILE).catch(() => 0));
+// A reconcile that fails is retried with a backoff and the store reads
+// unloaded until one lands (it is never reported loaded on a failure).
+const STORE_NAME = "outbound-ledger reconcile";
+if (stateDbEnabled() && !DISABLED) {
+  const load = retryingLoad(STORE_NAME, () => reconcileLogFile(OUTBOUND_STREAM, FILE), { onLoaded: () => markStoreLoaded(STORE_NAME) });
+  trackStoreReady(load.ready().catch(() => { markStoreFailed(STORE_NAME); }), STORE_NAME);
+}
 
 let warnedAt = 0;
 function warnOnce(msg) {
