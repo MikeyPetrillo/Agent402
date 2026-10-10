@@ -36,6 +36,20 @@ try {
   ok(cs.length >= 8 && cs.every((x) => x.equal), `the gate compares every ledger row for row (${cs.length} tables, ${cs.filter((x) => !x.equal).length} differ)`);
   ok(cs.some((x) => x.name === "refunds.refunds" && x.rowsFile === fx.refunds) && cs.some((x) => x.name === "sales.sales" && x.rowsTable === fx.sales), "the checksums cover every sale and refund row");
   ok(JSON.stringify(digest()) === JSON.stringify(before), "the files given to the gate are unchanged");
+
+  // Negative control: a column the import does not carry. Every figure still
+  // matches; only the row comparison sees the loss, and it fails the gate.
+  const { default: Database } = await import("better-sqlite3");
+  const db = new Database(join(data, "agent402-sales.db"));
+  db.exec("ALTER TABLE sales ADD COLUMN extra_note TEXT; UPDATE sales SET extra_note = 'kept only in the file' WHERE id % 50 = 0;");
+  db.close();
+  const neg = spawnSync(process.execPath, ["scripts/state-cutover-check.js", "--sales", join(data, "agent402-sales.db"), "--refunds", join(data, "agent402-refunds.db"), "--json"], { env: process.env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  let nout = null; try { nout = JSON.parse(neg.stdout); } catch { /* reported below */ }
+  const salesRow = nout?.checksums?.find((x) => x.name === "sales.sales");
+  ok(neg.status === 1 && nout?.diffs.length === 0 && salesRow && !salesRow.equal, `a row difference the figures cannot see fails the gate (exit ${neg.status}, ${salesRow?.note || "no sales row"})`);
+  const text = spawnSync(process.execPath, ["scripts/state-cutover-check.js", "--sales", join(data, "agent402-sales.db"), "--refunds", join(data, "agent402-refunds.db")], { env: process.env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  ok(text.status === 1 && /MISMATCH: 0 figure\(s\) and 1 ledger table\(s\) differ/.test(text.stdout), "the printed verdict names the differing ledger table");
+
   await c.connect();
   const left = (await c.query("SELECT count(*) AS n FROM pg_namespace WHERE nspname = $1", [out?.schema || "none"])).rows[0].n;
   ok(Number(left) === 0, "the throwaway schema is dropped");
