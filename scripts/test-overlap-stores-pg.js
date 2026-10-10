@@ -56,6 +56,15 @@ try {
     ok(twoSent === 1, `followups: two containers ticking at once send the day-2 step once (sent ${twoSent}: ${JSON.stringify(sent)})`);
     await A.tick(); await B.tick();
     ok(sent.filter((x) => x.endsWith("two@example.com")).length === 1, "followups: a later tick on either container does not send it again");
+    // The claim alone, both at once on an open step: exactly one container wins it.
+    A.enqueue({ sessionId: "cs_claim", email: "c@example.com", product: "p", kind: "k", label: "L", input: "C" }); await A.flush();
+    const claims = await Promise.all([A._claimStep("cs_claim", "another"), B._claimStep("cs_claim", "another")]);
+    ok(claims.filter(Boolean).length === 1, `followups: a step claimed by two containers at once is won by one (${claims.filter(Boolean).length})`);
+    ok((await B._claimStep("cs_claim", "another")) === null, "followups: a claimed step cannot be claimed again");
+    // A tick reads the row first: a record made on A after B's last read is in B's copy after B's tick.
+    A.enqueue({ sessionId: "cs_late", email: "late@example.com", product: "p", kind: "k", label: "L", input: "L" }); await A.flush();
+    await B.tick();
+    ok(Object.hasOwn(B._store().seqs, "cs_late"), "followups: a tick starts from the row as it is now");
     const r2 = (await sdb.documents.get("followups.json")).body.seqs.cs_buyer_two;
     ok(typeof r2.sent.monitor === "number", "followups: the step is recorded as sent with its time");
     ok(!sent.some((x) => x.endsWith("one@example.com")), "followups: the stopped sequence is never emailed");

@@ -270,5 +270,5 @@ ${footer(r)}`);
   }
   function stopTimer() { if (timer) clearInterval(timer); timer = null; }
 
-  return { stopAsync, enqueue, markRepeat, stop, sendFailed, tick, prune, stats, start, stopTimer, enabled, ready: () => ready, flush: async () => { while (pending.size) await Promise.allSettled([...pending]); await doc.flush(); }, refresh, _store: () => store };
+  return { stopAsync, enqueue, markRepeat, stop, sendFailed, tick, prune, stats, start, stopTimer, enabled, ready: () => ready, flush: async () => { while (pending.size) await Promise.allSettled([...pending]); await doc.flush(); }, refresh, _claimStep: (id, step) => claim({ id }, step), _store: () => store };
 }
