@@ -39,7 +39,7 @@ const relay = createServer((client) => {
   client.on("error", drop); up.on("error", drop); client.on("close", drop); up.on("close", drop);
 });
 await new Promise((r) => relay.listen(0, "127.0.0.1", r));
-const relayUrl = `${target.protocol}//${target.username ? `${target.username}@` : ""}127.0.0.1:${relay.address().port}${target.pathname}${target.search}`;
+const relayUrl = `${target.protocol}//${target.username ? `${target.username}${target.password ? ":" + target.password : ""}@` : ""}127.0.0.1:${relay.address().port}${target.pathname}${target.search}`;
 
 const DIR = mkdtempSync(join(tmpdir(), "stats-ackloss-"));
 process.env.STATE_DATABASE_URL = relayUrl;

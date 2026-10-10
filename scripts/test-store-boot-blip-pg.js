@@ -35,7 +35,7 @@ const proxy = net.createServer((c) => {
   u.on("error", drop); c.on("error", drop); u.on("close", drop); c.on("close", drop);
 });
 await new Promise((r) => proxy.listen(0, "127.0.0.1", r));
-const proxyUrl = `${target.protocol}//${target.username ? `${target.username}@` : ""}127.0.0.1:${proxy.address().port}${target.pathname}${target.search}`;
+const proxyUrl = `${target.protocol}//${target.username ? `${target.username}${target.password ? ":" + target.password : ""}@` : ""}127.0.0.1:${proxy.address().port}${target.pathname}${target.search}`;
 // The database answers once the child has read the status during the outage
 // (bounded, so a child that never gets there still ends).
 const upAfter = setTimeout(() => { up = true; }, 20_000);
