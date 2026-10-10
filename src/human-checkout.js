@@ -51,6 +51,7 @@ import { join, basename } from "node:path";
 import { sendReportReadyEmail } from "./email.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
+import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 
 // The products the human door sells by card. The CARD price is not the agent
 // price: the card processor takes a percentage plus a fixed fee per charge, and
@@ -230,6 +231,18 @@ export const ROLL_FORWARD_GRACE_MS = 60_000;
 const pgGet = async (id) => (await stateQuery(`SELECT body FROM ${RT()} WHERE collection = $1 AND id = $2`, [COLL, id])).rows[0]?.body ?? null;
 const pgPut = async (id, body) => { await stateQuery(`INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()`, [COLL, id, JSON.stringify(body)]); };
 const pgPutIfAbsent = async (id, body) => (await stateQuery(`INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO NOTHING`, [COLL, id, JSON.stringify(body)])).rowCount === 1;
+// A final record (done, or an error): it replaces only a "generating" claim
+// or an error whose refund is not recorded yet, so a replayed write never
+// undoes a report delivered (or made public) or a refund already recorded.
+// Resolves true when it wrote; false means the row already holds a final
+// record (a retry whose first attempt landed).
+const pgPutFinal = async (id, body) => (await stateQuery(
+  `INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb)
+   ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
+   WHERE ${RT()}.body ->> 'status' = 'generating'
+      OR (${RT()}.body ->> 'status' = 'error' AND EXCLUDED.body ->> 'status' = 'error' AND ${RT()}.body ->> 'refundId' IS NULL)`,
+  [COLL, id, JSON.stringify(body)],
+)).rowCount === 1;
 const pgIds = async () => (await stateQuery(`SELECT id FROM ${RT()} WHERE collection = $1`, [COLL])).rows.map((r) => r.id);
 const pgClear = async () => { await stateQuery(`DELETE FROM ${RT()} WHERE collection = $1`, [COLL]); };
 // One key of an index row set or dropped in one statement (the row is created
@@ -405,6 +418,68 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       writeJsonAtomic(p, idx);
       return idx;
     };
+  // ---- final records that must outlive a database failure (database mode) --
+  // A delivered report (after the upstream spend) and an error record (before
+  // its refund is issued) are written with pgPutFinal; one that does not land
+  // is kept on local disk (an NDJSON file in the store directory) and in
+  // memory, served from memory to this container's polls, and replayed on a
+  // timer until Postgres holds it. Never a refund for a report that was made.
+  const pendingFinals = new Map(); // sessionId -> record not yet in the database
+  const finalsDeadLetter = USE_PG ? createDeadLetter({ file: join(dir, "_pending-finals.ndjson") }) : null;
+  const FINALS_REPLAY_MS = Number(process.env.HUMAN_CHECKOUT_REPLAY_MS) || 5_000;
+  async function afterFinal(id, rec) {
+    try { await patchIndex(INFLIGHT, id, null); } catch { /* the boot sweep clears a finished claim */ }
+    if (rec.status === "error") {
+      try { await patchIndex(ISSUES, id, rec.refundId ? null : { kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts }); }
+      catch (e) { log(`[human-checkout] issues index for ${id} not updated: ${String(e?.message || e).slice(0, 120)}`); }
+    }
+  }
+  /** Write a final record; true when Postgres holds it now (or already held a final one). */
+  async function landFinal(id, rec) {
+    try {
+      await readyP();
+      const wrote = await pgPutFinal(id, rec);
+      if (wrote) through(recPath(id), rec);
+      pendingFinals.delete(id);
+      await afterFinal(id, rec);
+      return true;
+    } catch (e) {
+      pendingFinals.set(id, rec);
+      const kept = finalsDeadLetter.add("final", { id, rec });
+      log(`[human-checkout] the ${rec.status} record for ${id} did not land (${String(e?.message || e).slice(0, 120)}); kept ${kept ? "on local disk" : "in memory only"} for replay`);
+      return false;
+    }
+  }
+  let replayingFinals = false;
+  async function replayFinals() {
+    if (!finalsDeadLetter || replayingFinals || !finalsDeadLetter.size()) return 0;
+    replayingFinals = true;
+    let landed = 0;
+    try {
+      await readyP();
+      for (const e of finalsDeadLetter.list()) {
+        const { id, rec } = e.payload || {};
+        if (!SESSION_RE.test(String(id)) || !rec) { finalsDeadLetter.remove(e.id); continue; }
+        // A newer final for the same session (a refund recorded after its intent) replaces an older one.
+        const newest = pendingFinals.get(id);
+        const body = newest && Date.parse(newest.at || 0) > Date.parse(rec.at || 0) ? newest : rec;
+        if (await pgPutFinal(id, body)) through(recPath(id), body);
+        const held = pendingFinals.get(id);
+        if (held && !(Date.parse(held.at || 0) > Date.parse(body.at || 0))) pendingFinals.delete(id);
+        await afterFinal(id, body);
+        finalsDeadLetter.remove(e.id);
+        landed++;
+      }
+    } catch { /* the database is still away: the next tick retries */ }
+    finally { replayingFinals = false; }
+    if (landed) log(`[human-checkout] landed ${landed} record(s) kept on local disk`);
+    return landed;
+  }
+  if (USE_PG) {
+    readyP().then(() => replayFinals()).catch(() => {});
+    everyMs(() => replayFinals(), FINALS_REPLAY_MS);
+  }
+
   const negGet = (id) => { const n = negative.get(id); if (n && n.until > now()) return { status: n.status }; if (n) negative.delete(id); return null; };
   const negSet = (id, status) => { if (negative.size > 5000) negative.clear(); negative.set(id, { status, until: now() + (NEG_TTL[status] || 10_000) }); return { status }; };
 
@@ -445,31 +520,54 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   async function refundSession(session) {
     try {
       const pi = session?.payment_intent;
-      if (pi) { const r = await stripe.refunds.create({ payment_intent: typeof pi === "string" ? pi : pi.id }); return r.id; }
+      if (pi) {
+        const piId = typeof pi === "string" ? pi : pi.id;
+        // On the database the refund carries a key of its own, so a refund
+        // issued again for the same payment (a retry whose reply was lost)
+        // returns the first one instead of failing or doubling.
+        const r = USE_PG ? await stripe.refunds.create({ payment_intent: piId }, { idempotencyKey: `agent402-refund-${piId}` }) : await stripe.refunds.create({ payment_intent: piId });
+        return r.id;
+      }
     } catch (e) { log(`[human-checkout] refund failed: ${String(e?.message || e).slice(0, 160)}`); }
     return null;
   }
   // Persist an error outcome; an unrefunded one is OWED (indexed, retried).
-  async function recordError(id, session, refundId, message) {
-    const prev = (await readRec(id)) || {};
-    import("./posthog.js").then(({ capturePostHogHumanFunnel }) => capturePostHogHumanFunnel({ step: "failed", product: prev.slug || null, reason: refundId ? "refunded" : "refund-owed" })).catch(() => {});
+  // `intent`: the record written BEFORE a refund is issued (database mode):
+  // owed, no attempt counted, due at once.
+  async function recordError(id, session, refundId, message, { intent = false } = {}) {
+    let prev = {};
+    try { prev = pendingFinals.get(id) || (await readRec(id)) || {}; } catch (e) { if (!USE_PG) throw e; }
+    if (!intent) import("./posthog.js").then(({ capturePostHogHumanFunnel }) => capturePostHogHumanFunnel({ step: "failed", product: prev.slug || null, reason: refundId ? "refunded" : "refund-owed" })).catch(() => {});
     const rec = {
       status: "error", refundId,
       error: refundId ? `${message} Your payment has been refunded.` : `${message} Your refund is being processed.`,
-      refundOwed: !refundId, refundAttempts: (prev.refundAttempts || 0) + 1, lastRefundAttemptAt: now(),
+      refundOwed: !refundId, refundAttempts: (prev.refundAttempts || 0) + (intent ? 0 : 1), lastRefundAttemptAt: intent ? 0 : now(),
       paymentIntent: typeof session?.payment_intent === "string" ? session.payment_intent : session?.payment_intent?.id || null,
       at: new Date(now()).toISOString(),
     };
+    if (USE_PG) { await landFinal(id, rec); return rec; }
     await writeRec(id, rec);
     await patchIndex(INFLIGHT, id, null);
     await patchIndex(ISSUES, id, refundId ? null : { kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts });
     return rec;
+  }
+  // Refund a session and record it. On the database the owed record lands
+  // FIRST (kept on local disk if Postgres is away), so a refund is never
+  // issued that no record names; while that record has not landed the
+  // refund waits (an owed record's refund is retried on the next poll).
+  async function refundAndRecord(id, session, message) {
+    if (!USE_PG) { const refundId = await refundSession(session); return recordError(id, session, refundId, message); }
+    const owed = await recordError(id, session, null, message, { intent: true });
+    if (pendingFinals.has(id)) return owed;
+    const refundId = await refundSession(session);
+    return recordError(id, session, refundId, message);
   }
   // An owed refund is retried on later polls (bounded, paced).
   async function retryOwedRefund(id, rec) {
     if (!rec.refundOwed || rec.refundId) return rec;
     if ((rec.refundAttempts || 0) >= MAX_REFUND_ATTEMPTS) return rec;
     if (now() - (rec.lastRefundAttemptAt || 0) < REFUND_RETRY_MS) return rec;
+    if (USE_PG && pendingFinals.has(id)) return rec; // its owed record has not landed yet
     const refundId = await refundSession({ payment_intent: rec.paymentIntent });
     return recordError(id, { payment_intent: rec.paymentIntent }, refundId, rec.error.replace(/ Your refund is being processed\.$/, ""));
   }
@@ -500,17 +598,18 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
         if (USE_PG) await patchIndex(INFLIGHT, sessionId, now()); else patchIndex(INFLIGHT, sessionId, now());
         const failKey = failKeyOf(session);
         const failures = USE_PG ? await recentFailures(failKey) : recentFailures(failKey);
+        let generated = false;
         try {
           if (failures.length >= FAIL_MAX) {
             log(`[human-checkout] ${sessionId} (${p.slug}): buyer address has ${FAIL_MAX}+ failed reports in the window - refunded without a generation attempt`);
-            const refundId = await refundSession(session);
-            return await recordError(sessionId, session, refundId, "Recent reports for this email address could not be completed, so this purchase was refunded without a new attempt. Please try again tomorrow, or email us with the input you used.");
+            return await refundAndRecord(sessionId, session, "Recent reports for this email address could not be completed, so this purchase was refunded without a new attempt. Please try again tomorrow, or email us with the input you used.");
           }
           // generate() may return a plain report string (legacy / tests) or a
           // bundle { report, title, sources, tables }. Normalize either way.
           const g = await generate(p.kind, p.slug, input, { buyerKey: `human:${sessionId}`, rail: "card", priceUsd: Number(p.price) / 100 });
           const bundle = (g && typeof g === "object") ? g : { report: String(g ?? "") };
           if (!bundle.report) throw new Error("empty report");
+          generated = true;
           const rec = {
             status: "done", kind: p.kind, slug: p.slug, input,
             report: bundle.report,
@@ -520,8 +619,10 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
             ...(Array.isArray(bundle.images) && bundle.images.length ? { images: bundle.images } : {}),
             at: new Date(now()).toISOString(),
           };
-          await writeRec(sessionId, rec);
-          await patchIndex(INFLIGHT, sessionId, null);
+          // The report exists and the upstream spend is made: from here a
+          // database failure keeps the record for replay, never a refund.
+          if (USE_PG) await landFinal(sessionId, rec);
+          else { await writeRec(sessionId, rec); await patchIndex(INFLIGHT, sessionId, null); }
           const email = session.customer_details?.email || session.customer_email;
           // `kind` + baseUrl let the email carry the matching MONITOR offer with
           // this target prefilled (the retention loop); a kind with no monitor
@@ -536,6 +637,14 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
           return rec;
         } catch (err) {
           log(`[human-checkout] report failed for ${sessionId} (${p.slug}): ${String(err?.message || err).slice(0, 160)}`);
+          if (USE_PG && generated) throw err; // the record is kept (landFinal); a failure after it is not a failed report
+          if (USE_PG) {
+            try { await noteFailure(failKey); } catch (e) { log(`[human-checkout] failure count for ${sessionId} not recorded: ${String(e?.message || e).slice(0, 120)}`); }
+            const rec = await refundAndRecord(sessionId, session, "We couldn't complete this report.");
+            const failEmail = session.customer_details?.email || session.customer_email;
+            if (failEmail) { try { onFailed?.({ email: failEmail, product: p.slug, label: p.label, refunded: Boolean(rec.refundId) }); } catch { /* never breaks the refund path */ } }
+            return rec;
+          }
           await noteFailure(failKey);
           const refundId = await refundSession(session);
           const failEmail = session.customer_details?.email || session.customer_email;
@@ -544,6 +653,9 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
         }
       } finally { inFlight.delete(sessionId); }
     })();
+    // A claim or read that failed (the database away) ends the job; the next
+    // poll tries again. Never an unhandled rejection.
+    job.catch((e) => log(`[human-checkout] job for ${sessionId} stopped: ${String(e?.message || e).slice(0, 160)}`));
     inFlight.set(sessionId, job);
   }
 
@@ -554,6 +666,8 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     const cached = USE_PG ? null : mem.get(sessionId);
     if (cached) return cached.status === "error" ? retryOwedRefund(sessionId, cached) : cached;
     if (inFlight.has(sessionId)) return { status: "generating" };
+    const kept = USE_PG ? pendingFinals.get(sessionId) : null;
+    if (kept) return kept.status === "error" ? retryOwedRefund(sessionId, kept) : kept;
     const disk = await readRec(sessionId);
     if (disk && (disk.status === "done" || disk.status === "error")) {
       if (!USE_PG) writeRec(sessionId, disk); // warms the memory cache
@@ -584,12 +698,10 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     const p = Object.hasOwn(HUMAN_PRODUCTS, String(productKey)) ? HUMAN_PRODUCTS[productKey] : null;
     if (!p || !input) {
       // Paid for a report we cannot identify (our bug, not theirs): refund it.
-      const refundId = await refundSession(session);
-      return recordError(sessionId, session, refundId, "This purchase is missing its report details.");
+      return refundAndRecord(sessionId, session, "This purchase is missing its report details.");
     }
     if (takeover > MAX_TAKEOVERS) {
-      const refundId = await refundSession(session);
-      return recordError(sessionId, session, refundId, "We couldn't complete this report after a retry.");
+      return refundAndRecord(sessionId, session, "We couldn't complete this report after a retry.");
     }
     if (inFlight.has(sessionId)) return { status: "generating" };
     startJob(sessionId, session, p, input, { takeover, seenClaimedAt });
@@ -629,7 +741,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
 
   function peek(sessionId) {
     const valid = SESSION_RE.test(String(sessionId));
-    if (USE_PG) return (async () => { const rec = valid ? await readRec(sessionId) : null; if (rec) return rec; if (inFlight.has(sessionId)) return { status: "generating" }; return null; })();
+    if (USE_PG) return (async () => { if (valid && pendingFinals.has(sessionId)) return pendingFinals.get(sessionId); const rec = valid ? await readRec(sessionId) : null; if (rec) return rec; if (inFlight.has(sessionId)) return { status: "generating" }; return null; })();
     const rec = mem.get(sessionId) || (valid ? readRec(sessionId) : null);
     if (rec) return rec;
     if (inFlight.has(sessionId)) return { status: "generating" };

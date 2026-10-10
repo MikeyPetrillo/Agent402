@@ -28,6 +28,16 @@
 // While the SQLite file still exists on the volume, every database write is
 // also applied to it (best effort, never the verdict), so a rollback to the
 // previous build reads current credits and runs.
+//
+// PENDING WRITES. A write the execute and decide handlers make after money
+// moved (a run's finish, a leftover credit, an activation, a settled mark, a
+// seller hold's final amount, a restored credit) must outlive the process if
+// Postgres refuses it or never answers. Such a write is journaled to local
+// disk (an NDJSON file beside the ledger file)
+// before the handler answers, and replayed at load and on a timer; every
+// replay is idempotent (an UPDATE to a fixed state, an insert-if-absent by
+// its key), and an entry is removed once Postgres holds its effect. A credit
+// token is never journaled, only its hash.
 
 import Database from "better-sqlite3";
 import { existsSync, statSync } from "node:fs";
@@ -35,10 +45,14 @@ import { join, basename } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady, withSchemaLock } from "../state-db.js";
 import { retryingLoad } from "../store-retry.js";
+import { createDeadLetter, isRowError, everyMs } from "../ledger-mirror.js";
 
 const micro = (usd) => Math.round(Number(usd) * 1e6);
 const RUN_MAX_MS = 15 * 60_000;
 const RETENTION_MS = 30 * 86_400_000;
+// Journaled writes: how often they are replayed, and how long one is kept.
+const PENDING_REPLAY_MS = Number(process.env.DECIDE_PENDING_REPLAY_MS) || 15_000;
+const PENDING_MAX_AGE_MS = 7 * 86_400_000;
 // A file written this much later than the newest row was written by a build
 // that used the file alone (a rollback); write-through lands within milliseconds.
 export const ROLL_FORWARD_GRACE_MS = 60_000;
@@ -376,6 +390,9 @@ function openDatabaseLedger(path) {
     try { const fdb = new Database(path); ensureSqliteSchema(fdb); wt = prepareSqlite(fdb); }
     catch (e) { warn(`write-through to ${basename(path)} is off: ${String(e?.message || e).slice(0, 120)}`); }
   }
+  // An NDJSON file beside the ledger file (on the volume while it exists),
+  // never a table in the SQLite file the migration verifier compares.
+  const pending = createDeadLetter({ file: `${path}.pending.ndjson` });
   const through = (fn) => {
     if (!wt) return;
     try { fn(wt); }
@@ -566,9 +583,10 @@ function openDatabaseLedger(path) {
     async getDecision(id) { await readyP(); const d = await getDecisionRow(id); return d ? publicDecision(d) : null; },
     async markDecisionSettled(id) {
       await readyP();
-      await q(`UPDATE ${T("decisions")} SET settled = 1, updated_at = now() WHERE id = $1`, [id]);
+      const r = await q(`UPDATE ${T("decisions")} SET settled = 1, updated_at = now() WHERE id = $1`, [id]);
       const d = decisions.get(id); if (d) d.settled = true;
       through((w) => w.settleDecision.run(id));
+      return r.rowCount === 1;
     },
     async mintCredit({ decisionId, amountUsd, ttlMs, expiresAt: fixedExpiry = null, payer, now = Date.now(), token: given = null }) {
       if (given !== null && !TOKEN_RE.test(String(given))) throw new Error("mintCredit: malformed token");
@@ -711,6 +729,23 @@ function openDatabaseLedger(path) {
     },
     async globalExposureUsd(sinceMs, now = Date.now()) { await readyP(); return globalExposureWith(q, sinceMs, now); },
 
+    // ---- pending writes (see PENDING WRITES above) -------------------------
+    /** Journal a write to local disk for replay; true when it is on disk. A token becomes its hash. */
+    journal(kind, payload) {
+      const p = { ...(payload || {}) };
+      if (typeof p.token === "string") { p.hash = hashToken(p.token); delete p.token; }
+      const onDisk = pending.add(String(kind), p);
+      if (!onDisk) console.error(`[decide] ledger: a ${kind} write could not be journaled to local disk`);
+      return onDisk;
+    },
+    /** A decision row written only when absent (a retried save must never unsettle a row the settled mark already reached). */
+    async saveDecisionIfAbsent(row) { await readyP(); return applyPending("saveDecision", row); },
+    /** Drop the row a seller hold whose booking reply was lost may have left (its run, seller, amount and stamp). */
+    async dropSellerHold(p) { await readyP(); return applyPending("dropSellerHold", p); },
+    /** Replay every journaled write; resolves how many landed. */
+    replayPending: () => replayPending(),
+    pendingCount: () => pending.size(),
+
     // ---- synchronous mirror reads (the 402 quote) -------------------------
     getDecisionSync(id) {
       const key = String(id || "");
@@ -727,5 +762,69 @@ function openDatabaseLedger(path) {
       return usd(c.amountMicro);
     },
   };
+
+  // One replay at a time. Each kind is idempotent; an entry whose effect
+  // needs a row that is not there yet (an activation before its mint, a
+  // settled mark before its decision) stays until the row comes or the entry
+  // ages out. A connection failure stops the pass (the next tick retries).
+  let replaying = false;
+  async function applyPending(kind, p) {
+    switch (kind) {
+      case "saveDecision": {
+        // Never over a row already there: a replay must not unsettle it.
+        const r = await q(`INSERT INTO ${T("decisions")} (id, created_at, depth, price_micro, payer, plan_json, cost_via_micro, settled, feedback_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8) ON CONFLICT (id) DO NOTHING RETURNING *`,
+          [p.decisionId, p.now, p.depth, micro(p.priceUsd), p.payer || null, JSON.stringify(p.plan || []), micro(p.costViaUsd || 0), p.feedbackHash || null]);
+        if (r.rows[0]) { remember(rowDecision(r.rows[0])); through((w) => w.saveDecision.run(p.decisionId, p.now, p.depth, micro(p.priceUsd), p.payer || null, JSON.stringify(p.plan || []), micro(p.costViaUsd || 0), p.feedbackHash || null)); }
+        return true;
+      }
+      case "markDecisionSettled": return (await api.markDecisionSettled(p.decisionId)) === true;
+      case "mintCredit": {
+        const r = await q(`INSERT INTO ${T("credits")} (token_hash, decision_id, payer, amount_micro, expires_at, state, created_at) VALUES ($1,$2,$3,$4,$5,'pending',$6) ON CONFLICT (token_hash) DO NOTHING RETURNING *`,
+          [p.hash, p.decisionId, p.payer || null, micro(p.amountUsd), p.expiresAt, p.now]);
+        if (r.rows[0]) { rememberCredit(rowCredit(r.rows[0])); through((w) => w.mint.run(p.hash, p.decisionId, p.payer || null, micro(p.amountUsd), p.expiresAt, p.now)); }
+        return true;
+      }
+      case "activateCredit": {
+        if (await api.activateCredit(p.hash)) return true;
+        const c = await getCreditRow(p.hash);
+        return Boolean(c && c.state !== "pending");
+      }
+      case "restoreCredit": {
+        const r = await q(`UPDATE ${T("credits")} SET state = 'active', run_id = NULL, updated_at = now() WHERE token_hash = $1 AND state = 'redeemed' AND run_id = $2 RETURNING *`, [p.hash, p.runId]);
+        if (r.rowCount === 1) { rememberCredit(rowCredit(r.rows[0])); through((w) => w.restore.run(p.hash, p.runId)); }
+        return true;
+      }
+      case "finishRun": await api.finishRun(p); return true;
+      case "settleSellerHold": await api.settleSellerHold(p.holdId, p.amountUsd); return true;
+      case "dropSellerHold":
+        // A hold whose booking reply was lost: the row it may have left,
+        // identified by its run, seller, amount and stamp. That leg was not paid.
+        await q(`DELETE FROM ${T("seller_spend")} WHERE run_id = $1 AND seller = $2 AND micro = $3 AND created_at = $4`, [p.runId, String(p.seller), micro(p.amountUsd), p.now]);
+        return true;
+      default: return true; // unknown kind: nothing to apply
+    }
+  }
+  async function replayPending() {
+    if (replaying) return 0;
+    replaying = true;
+    let landed = 0;
+    try {
+      const now = Date.now();
+      for (const e of pending.list()) {
+        if (now - Number(e.at || 0) > PENDING_MAX_AGE_MS) { console.error(`[decide] ledger: a journaled ${e.kind} write aged out unapplied`); pending.remove(e.id); continue; }
+        let done;
+        try { done = await applyPending(e.kind, e.payload || {}); }
+        catch (err) {
+          if (isRowError(err)) { console.error(`[decide] ledger: a journaled ${e.kind} write was refused (${String(err?.message || err).slice(0, 120)})`); pending.remove(e.id); continue; }
+          throw err;
+        }
+        if (done) { pending.remove(e.id); landed++; }
+      }
+    } finally { replaying = false; }
+    if (landed) log(`landed ${landed} journaled write(s)`);
+    return landed;
+  }
+  readyP().then(() => (pending.size() ? replayPending() : 0)).catch(() => {});
+  everyMs(() => (pending.size() ? readyP().then(replayPending) : null), PENDING_REPLAY_MS);
   return api;
 }

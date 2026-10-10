@@ -1348,8 +1348,16 @@ jobs:
           t node scripts/test-external-spend-guard-pg.js
           t node scripts/test-mpp-subscriptions-pg.js
           t node scripts/test-decide-ledger-pg.js
+          # A paid step is never turned into a 500 by a later ledger failure; writes after a spend survive an exit.
+          t node scripts/test-decide-ledger-failures-pg.js
           t node scripts/test-credits-pg.js
+          # A retried settle books what the first one took; another container's sweep leaves a live hold.
+          t node scripts/test-credits-failures-pg.js
           t node scripts/test-human-checkout-pg.js
+          # A report made is never refunded or regenerated over a database failure; a refund is recorded first.
+          t node scripts/test-human-checkout-failures-pg.js
+          # A paid subscription recorded while the database is away survives a restart; reload shows another container's.
+          t node scripts/test-stripe-subscriptions-pg.js
           t node scripts/test-wish-pg.js
           # A first load that failed is retried until it lands; DDL from two boots never races;
           # a failed write is kept and retried; a stats batch whose COMMIT reply was lost counts once.
