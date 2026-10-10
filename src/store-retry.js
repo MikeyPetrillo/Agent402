@@ -13,10 +13,18 @@
 //   trackStoreReady(load.eventually);  // resolves on the first success
 //
 // STATE_STORE_RETRY_MS (first delay, default 1 s) doubles per failure up to
-// STATE_STORE_RETRY_MAX_MS (default 60 s).
+// STATE_STORE_RETRY_MAX_MS (default 60 s). When the state database answers
+// again after a connection-class failure, every load waiting on that backoff
+// runs at once (and starts its backoff over), so a store does not stay
+// unloaded for up to a minute after the outage ends.
+import { onStateDbRecovered } from "./state-db.js";
+
 const envMs = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? n : dflt; };
 
 const unloaded = new Set();
+// The wake-ups of the loads waiting on a backoff timer.
+const waiting = new Set();
+onStateDbRecovered(() => { for (const wake of [...waiting]) { try { wake(); } catch { /* never throws */ } } });
 /** Labels of the stores whose first load has not landed yet (for a status word). */
 export function unloadedStores() { return [...unloaded]; }
 
@@ -32,10 +40,18 @@ export function retryingLoad(label, load, { log = console.warn, onLoaded = null 
   let resolveEventually;
   const eventually = new Promise((r) => { resolveEventually = r; });
   unloaded.add(label);
+  const wake = () => {
+    if (loaded || !timer) return;
+    clearTimeout(timer); timer = null;
+    waiting.delete(wake);
+    delay = base;
+    ready().catch(() => {});
+  };
   const schedule = () => {
     if (timer || loaded) return;
-    timer = setTimeout(() => { timer = null; ready().catch(() => {}); }, delay);
+    timer = setTimeout(() => { timer = null; waiting.delete(wake); ready().catch(() => {}); }, delay);
     timer.unref?.();
+    waiting.add(wake);
     delay = Math.min(max, delay * 2);
   };
   function ready() {
@@ -44,6 +60,7 @@ export function retryingLoad(label, load, { log = console.warn, onLoaded = null 
         loaded = true;
         unloaded.delete(label);
         if (timer) { clearTimeout(timer); timer = null; }
+        waiting.delete(wake);
         if (failures) log(`${label} first load landed after ${failures} failed attempt(s)`);
         resolveEventually(true);
         try { onLoaded?.(v); } catch { /* the hook never fails the load */ }

@@ -66,11 +66,34 @@ export function isConnectionError(e) {
 }
 function noteFailure(e) {
   lastError = String(e?.message || e).slice(0, 160);
-  if (isConnectionError(e)) connFault = true;
+  if (isConnectionError(e)) markConnFault();
+}
+// While a connection-class failure stands, one cheap read every
+// STATE_DB_RECOVERY_PROBE_MS (default 2 s) finds the moment the database
+// answers again, so the recovery below does not wait for some store's own
+// timer to send the next statement. At most one check is in flight; the
+// checks stop at the first good statement and when the pool closes.
+let probeTimer = null;
+let probing = false;
+let probeRuns = 0;
+/** Tests only: how many recovery checks have been sent. */
+export function __recoveryProbeRuns() { return probeRuns; }
+function markConnFault() {
+  connFault = true;
+  if (probeTimer || !pool) return;
+  probeTimer = setInterval(() => {
+    if (!connFault || !pool) { clearInterval(probeTimer); probeTimer = null; return; }
+    if (probing) return;
+    probing = true;
+    probeRuns++;
+    stateQuery("SELECT 1").catch(() => {}).finally(() => { probing = false; });
+  }, envMs("STATE_DB_RECOVERY_PROBE_MS", 2_000));
+  probeTimer.unref?.();
 }
 function noteSuccess() {
   if (!connFault) return;
   connFault = false;
+  if (probeTimer) { clearInterval(probeTimer); probeTimer = null; }
   // The database answered again after a connection-class failure: wake the
   // stores that wait on a backoff (a held save, a background re-read), so
   // recovery does not wait out their longest delay.
@@ -242,7 +265,7 @@ export async function stateDb() {
   const p = getPool();
   if (!p) return null;
   if (!ready) {
-    ready = setupSchema(p).then(() => p).catch((e) => { ready = null; noteFailure(e); connFault = true; throw e; });
+    ready = setupSchema(p).then(() => p).catch((e) => { ready = null; noteFailure(e); markConnFault(); throw e; });
   }
   return ready;
 }
@@ -923,6 +946,7 @@ export async function __dropStateSchema() {
   await p.query(`DROP SCHEMA IF EXISTS ${schema()} CASCADE`);
 }
 export async function closeStateDb() {
+  if (probeTimer) { clearInterval(probeTimer); probeTimer = null; }
   const p = pool;
   pool = null; ready = null;
   if (p) await p.end().catch(() => {});

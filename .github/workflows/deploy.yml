@@ -1368,6 +1368,7 @@ jobs:
           # A first load that failed is retried until it lands; DDL from two boots never races;
           # a failed write is kept and retried; a stats batch whose COMMIT reply was lost counts once.
           t node scripts/test-store-boot-blip-pg.js
+          t node scripts/test-store-retry-recovery-pg.js
           t node scripts/test-json-document-outage-pg.js
           t node scripts/test-store-ddl-race-pg.js
           t node scripts/test-store-write-retry-pg.js
