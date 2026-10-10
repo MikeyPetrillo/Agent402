@@ -36,7 +36,9 @@ const proxy = net.createServer((c) => {
 });
 await new Promise((r) => proxy.listen(0, "127.0.0.1", r));
 const proxyUrl = `${target.protocol}//${target.username ? `${target.username}@` : ""}127.0.0.1:${proxy.address().port}${target.pathname}${target.search}`;
-setTimeout(() => { up = true; }, 2000);
+// The database answers once the child has read the status during the outage
+// (bounded, so a child that never gets there still ends).
+const upAfter = setTimeout(() => { up = true; }, 20_000);
 
 const d = mkdtempSync(join(tmpdir(), "store-blip-"));
 const code = `
@@ -72,7 +74,8 @@ const code = `
   db.setUnloadedStoresProbe((await import("./src/store-retry.js")).unloadedStores);
   const bootWait = await db.stateStoresReady({ timeoutMs: 500 });
   res.statusDuring = { wait: bootWait, word: db.stateDbStatus(), unloaded: db.unloadedStateStores() };
-  await wait(6000); // the database has been back for about 4 s; nothing has called most stores since the boot
+  console.log("STATUS_TAKEN"); // the parent lets the database answer from here
+  await wait(6000); // the database has been back for about 6 s; nothing has called most stores since the boot
 
   await t("credits", async () => { const m = await credits.claim("cs_credit"); const a = await credits.authorize(m.key, 0.01); return m.status === "minted" && a.ok === true; });
   await t("decide", async () => {
@@ -114,7 +117,7 @@ const env = {
 const out = await new Promise((res) => {
   const c = spawn(process.execPath, ["--input-type=module", "-e", code], { cwd: ROOT, env });
   let o = "", e = "";
-  c.stdout.on("data", (x) => (o += x)); c.stderr.on("data", (x) => (e += x));
+  c.stdout.on("data", (x) => { o += x; if (!up && o.includes("STATUS_TAKEN")) { up = true; clearTimeout(upAfter); } }); c.stderr.on("data", (x) => (e += x));
   const kill = setTimeout(() => c.kill("SIGKILL"), 60_000);
   c.on("exit", () => { clearTimeout(kill); res({ o, e }); });
 });
