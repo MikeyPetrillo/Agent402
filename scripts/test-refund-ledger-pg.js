@@ -158,6 +158,12 @@ try {
     utimesSync(FILE, past, past);
     boot();
     ok((await pgRows("evidence = $1", ["0xm10b"]))[0].note === null, "M10: a table row written after the file is never overwritten by it");
+    // Further along in the file, but the table row was written after the file: not applied.
+    ok((await rl.recordRefundOwed({ slug: "m10c", network: "eip155:8453", payer: "0xAbCd000000000000000000000000000000000007", priceUsd: 0.002, tx: "0xm10c", httpStatus: 500 })) === true, "M10: a third debt");
+    { const f = new Database(FILE); f.prepare("UPDATE refunds SET status = 'paid', paidTx = '0xforeign' WHERE evidence = '0xm10c'").run(); f.close(); }
+    for (const f of [FILE, `${FILE}-wal`]) { try { utimesSync(f, past, past); } catch { /* no wal */ } }
+    boot();
+    ok((await pgRows("evidence = $1", ["0xm10c"]))[0].status === "owed", "M10: a file older than the table row never moves it, even forward");
   }
 
   // ---- M5: a cutover-window row from the file-only build, its id already taken ----
