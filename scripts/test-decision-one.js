@@ -26,7 +26,7 @@ delete process.env.ROUTE_JUDGE;
 
 const { setUpstreamCostsForTest, upstreamCostsGaps } = await import("../src/upstream-costs.js");
 const { OPENROUTER_ATTRIBUTION } = await import("../src/openrouter-attribution.js");
-const { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL } = await import("../src/decision-one.js");
+const { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL, _decisionOneSpendReset } = await import("../src/decision-one.js");
 const toolJudge = await import("../src/tool-judge.js");
 const rerank = await import("../src/discovery-rerank.js");
 const wish = await import("../src/wish-classify.js");
@@ -332,6 +332,28 @@ const DOWN = reply(503, {});
   delete process.env.OPENROUTER_API_KEY;
   ok(!decisionOneOffered(), "without the OpenRouter key Decision-1 is not offered");
   process.env.OPENROUTER_API_KEY = "or-test-not-real";
+}
+
+// ---- the spend bound: per-call size and a daily byte ceiling -----------------
+{
+  const answer = reply(200, { answers: { q: { type: "noul", noul: 0.5 } } });
+  const small = { state: "s", questions: { q: { type: "noul", instructions: "?" } } };
+  const big = { state: "x".repeat(40_000), questions: small.questions };
+  _decisionOneSpendReset();
+  let s = stub({ [OPENROUTER]: answer });
+  let e = null; try { await askDecisionOne(big, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
+  ok(e?.statusCode === 503 && s.calls.length === 0, "a body over the per-call cap is refused before anything is sent");
+
+  const bytes = Buffer.byteLength(JSON.stringify({ ...small, model: DECISION_ONE_MODEL }));
+  process.env.DECISION_ONE_DAILY_MAX_BYTES = String(bytes * 2);
+  _decisionOneSpendReset();
+  s = stub({ [OPENROUTER]: answer });
+  await askDecisionOne(small, { fetchImpl: s.fetchImpl });
+  await askDecisionOne(small, { fetchImpl: s.fetchImpl });
+  e = null; try { await askDecisionOne(small, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
+  ok(s.calls.length === 2 && e?.statusCode === 503, `the daily ceiling admits what fits and refuses the next call unsent (sent ${s.calls.length})`);
+  delete process.env.DECISION_ONE_DAILY_MAX_BYTES;
+  _decisionOneSpendReset();
 }
 
 console.warn = quiet;

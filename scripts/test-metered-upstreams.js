@@ -51,6 +51,7 @@ const ALLOWED = {
   "leaderboard.js": { why: "leaderboard scan", bound: /CACHE|TTL|cached/i },
   "x402-index.js": { why: "registry discovery poll", bound: /DISCOVERY_INTERVAL_MS/ },
   "server.js": { why: "wallet activity scan", bound: /SQL_SCAN_DAILY_BUDGET/ },
+  "decision-one.js": { why: "typed-judgment backend for the paid judge routes and the internal judges", bound: /DECISION_ONE_DAILY_MAX_BYTES/ },
   "verify-hint.js": { why: "payer balance read after a refused payment; public nodes first, the keyed provider last", bound: /MAX_BATCHES_INFLIGHT/ },
   // A file may NAME a metered host without ever calling it - upstream-budgets
   // declares the per-vendor daily call budgets and matches egress-meter rows by

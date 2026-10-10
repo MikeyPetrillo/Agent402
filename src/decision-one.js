@@ -14,6 +14,22 @@ export const DECISION_ONE_MODEL = "microsoft/microsoft-decision-1";
 const ENDPOINT = () => (process.env.DECISION_ONE_URL || "https://openrouter.ai/api/alpha/decisions").trim();
 const keyOf = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const TIMEOUT_MS = 25_000;
+// The spend bound for every caller, paid route and internal judges alike. A
+// token can be one byte, so the bytes sent are the worst-case input tokens:
+// one call is capped at DECISION_ONE_MAX_BODY_BYTES, and a UTC day's calls at
+// DECISION_ONE_DAILY_MAX_BYTES. Past either the call is refused before it is
+// sent (a 503, so a paid caller is not charged and an internal judge skips).
+const maxBodyBytes = () => Number(process.env.DECISION_ONE_MAX_BODY_BYTES) || 32_000;
+const dailyMaxBytes = () => Number(process.env.DECISION_ONE_DAILY_MAX_BYTES) || 50_000_000;
+const spend = { day: "", bytes: 0 };
+function bookBytes(n) {
+  const day = new Date().toISOString().slice(0, 10);
+  if (spend.day !== day) { spend.day = day; spend.bytes = 0; }
+  if (spend.bytes + n > dailyMaxBytes()) return false;
+  spend.bytes += n;
+  return true;
+}
+export function _decisionOneSpendReset() { spend.day = ""; spend.bytes = 0; }
 
 export const decisionOneEnabled = (apiKey = keyOf()) =>
   !!String(apiKey || "").trim() && String(process.env.DECISION_ONE || "").trim().toLowerCase() !== "off";
@@ -32,12 +48,16 @@ const fail = (msg, statusCode, mayBeBilled = false) => {
  *  body is never relayed: it can echo the caller's own state back. */
 export async function askDecisionOne(body, { fetchImpl = fetch, timeoutMs = TIMEOUT_MS, apiKey = keyOf() } = {}) {
   if (!decisionOneEnabled(apiKey)) throw fail("Decision-1 is not configured on this server.", 503);
+  const payload = JSON.stringify({ ...body, model: DECISION_ONE_MODEL });
+  const bytes = Buffer.byteLength(payload);
+  if (bytes > maxBodyBytes()) throw fail(`Judgment request is ${bytes} bytes; Decision-1 accepts ${maxBodyBytes()}.`, 503);
+  if (!bookBytes(bytes)) throw fail("Decision-1's daily ceiling is reached on this server.", 503);
   let res;
   try {
     res = await fetchImpl(ENDPOINT(), {
       method: "POST",
       headers: { ...OPENROUTER_ATTRIBUTION, authorization: `Bearer ${String(apiKey).trim()}`, "content-type": "application/json" },
-      body: JSON.stringify({ ...body, model: DECISION_ONE_MODEL }),
+      body: payload,
       signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
     });
   } catch (err) {
