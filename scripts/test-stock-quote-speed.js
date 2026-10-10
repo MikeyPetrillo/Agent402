@@ -17,7 +17,13 @@
 //   e. every answer says whether it came from cache (cached, fetchedAt);
 // plus: the price check moves to the warmer for the quote shape only, and a
 // failed price audit puts it back inline; concurrent cold reads share one
-// upstream read; an idle warmer makes no call.
+// upstream read; an idle warmer makes no call. A quote is read unpriced ONLY
+// after an audit of its own session came back within the bound: before the
+// first audit, with the warmer off, or after an audit that threw or answered
+// no number, it is priced inline, and that audit is retried on the next tick.
+// Wherever the price check is on the request path it runs BEFORE the read, so
+// an over-bound query is refused without being read. A warmer pre-read counts
+// every upstream call it makes. The self-check's quote is not demand.
 import dnsPromises from "node:dns/promises";
 import { syncBuiltinESMExports } from "node:module";
 
@@ -39,7 +45,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 
 // ---- stub upstream: every call takes LATENCY ms
 const LATENCY = 150;
-const up = { range: 0, cost: 0, data: 0, end: "2026-10-09", price: "0.00001", inflight: 0, maxInflight: 0 };
+const up = { range: 0, cost: 0, data: 0, end: "2026-10-09", price: "0.00001", costFail: null, inflight: 0, maxInflight: 0, order: [] };
 const realFetch = globalThis.fetch;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const bar = (day, close) => JSON.stringify({ hd: { ts_event: String(Date.parse(day) * 1e6) }, open: "1e11", high: "2e11", low: "5e10", close, volume: "100" });
@@ -50,8 +56,8 @@ globalThis.fetch = async (url) => {
   try {
     await sleep(LATENCY);
     if (u.includes("get_dataset_range")) { up.range++; return new Response(JSON.stringify({ end: up.end }), { status: 200 }); }
-    if (u.includes("get_cost")) { up.cost++; return new Response(up.price, { status: 200 }); }
-    if (u.includes("get_range")) { up.data++; return new Response(bar("2026-10-08", "1.4e11") + "\n" + bar(up.end, "1.5e11") + "\n", { status: 200 }); }
+    if (u.includes("get_cost")) { up.cost++; up.order.push("cost"); if (up.costFail === "throw") return new Response("upstream down", { status: 500 }); if (up.costFail === "nan") return new Response("not a number", { status: 200 }); return new Response(up.price, { status: 200 }); }
+    if (u.includes("get_range")) { up.data++; up.order.push("data"); return new Response(bar("2026-10-08", "1.4e11") + "\n" + bar(up.end, "1.5e11") + "\n", { status: 200 }); }
     throw new Error(`unstubbed path ${u}`);
   } finally { up.inflight--; }
 };
@@ -74,8 +80,42 @@ try {
   // ---- cold boot: no session boundary yet. Read inline (the only time).
   db.__resetDatabentoState();
   const first = await timed("IBM");
-  ok(first.calls.range === 1 && first.calls.data === 1 && first.calls.cost === 0,
-    `cold boot, cold symbol: the boundary and the data are read, no price call (${JSON.stringify(first.calls)}, ${first.ms} ms)`);
+  ok(first.calls.range === 1 && first.calls.data === 1 && first.calls.cost === 1,
+    `cold boot, cold symbol: no audit has run yet, so the read is priced inline (${JSON.stringify(first.calls)}, ${first.ms} ms)`);
+
+  // An over-bound quote before any audit: refused by the price check, never read.
+  db.__resetDatabentoState();
+  up.price = "5"; up.order.length = 0;
+  let early = null; const e0 = snap();
+  try { await quote({ symbol: "IBM" }); } catch (e) { early = e; }
+  ok(early?.statusCode === 400 && diff(e0, snap()).data === 0 && up.order[0] === "cost", `before any audit an over-bound quote is refused by the price check, with no data read (${JSON.stringify(diff(e0, snap()))})`);
+  up.price = "0.00001";
+
+  // The warmer off (DATABENTO_WARM=off): no audit ever runs, so every cold quote is priced inline.
+  db.__resetDatabentoState();
+  process.env.DATABENTO_WARM = "off";
+  ok(db.startQuoteWarmer() === false, "DATABENTO_WARM=off: the warmer does not start");
+  const off1 = await timed("OFFA");
+  ok(off1.calls.cost === 1 && off1.calls.data === 1, `with the warmer off a cold quote is priced inline (${JSON.stringify(off1.calls)})`);
+  delete process.env.DATABENTO_WARM;
+
+  // A boot audit that throws, or answers no number: quotes stay priced inline
+  // and the next tick audits again; once it passes, quotes read unpriced.
+  for (const mode of ["throw", "nan"]) {
+    db.__resetDatabentoState();
+    up.costFail = mode;
+    await db.warmTick();
+    ok(db.quoteWarmerStatus().quotePriceAuditOk !== true, `a boot audit that ${mode === "throw" ? "throws" : "answers no number"} does not mark the session audited`);
+    await quote({ symbol: "AUDA" }); // demand, so the next tick is not idle
+    const a1 = await timed("AUDB");
+    ok(a1.calls.cost === 1 && a1.calls.data === 1, `after a boot audit that ${mode === "throw" ? "threw" : "answered no number"} a cold quote is still priced inline (${JSON.stringify(a1.calls)})`);
+    up.costFail = null;
+    const r0 = snap();
+    await db.warmTick();
+    ok(diff(r0, snap()).cost === 1 && db.quoteWarmerStatus().quotePriceAuditOk === true, `the next tick retries the audit (${JSON.stringify(diff(r0, snap()))})`);
+    const a2 = await timed("AUDC");
+    ok(a2.calls.cost === 0 && a2.calls.data === 1, `after the retried audit passes a cold quote reads unpriced (${JSON.stringify(a2.calls)})`);
+  }
 
   // ---- warm boundary: the warmer's boot read, off the request path.
   db.__resetDatabentoState();
@@ -176,6 +216,7 @@ try {
   let refused = null;
   try { await quote({ symbol: "FFF" }); } catch (e) { refused = e; }
   ok(diff(l0, snap()).cost === 1 && refused?.statusCode === 400, `after the latch a cold quote is priced inline and refused when over the bound (${JSON.stringify(diff(l0, snap()))}, ${refused?.statusCode})`);
+  ok(diff(l0, snap()).data === 0, `...and the refused query is never read upstream (${diff(l0, snap()).data} data reads)`);
   up.price = "0.00001";
 
   // stock-history keeps its inline price check (a wider, caller-sized range).
@@ -184,6 +225,36 @@ try {
   const h0 = snap();
   await FINANCE_TOOLS.find((t) => t.slug === "stock-history").handler({ symbol: "GGG", days: 5 });
   ok(diff(h0, snap()).cost === 1 && diff(h0, snap()).data === 1, `stock-history still prices its read inline (${JSON.stringify(diff(h0, snap()))})`);
+  up.price = "5"; up.order.length = 0;
+  const h1 = snap(); let hRefused = null;
+  try { await FINANCE_TOOLS.find((t) => t.slug === "stock-history").handler({ symbol: "GGH", days: 5 }); } catch (e) { hRefused = e; }
+  ok(hRefused?.statusCode === 400 && diff(h1, snap()).data === 0 && up.order.join() === "cost", `an over-bound stock-history is refused before its read, which never runs (${JSON.stringify(diff(h1, snap()))})`);
+  up.price = "0.00001";
+
+  // A warmer pre-read that is priced inline makes two upstream calls and
+  // counts both against the daily ceiling.
+  db.__resetDatabentoState();
+  await db.warmTick();
+  await quote({ symbol: "PREA" }); await quote({ symbol: "PREB" });
+  up.end = "2026-10-16"; up.costFail = "throw"; // the session's audit fails: pre-reads are priced inline
+  const w0 = snap(), b0 = db.quoteWarmerStatus().background.calls;
+  const pr = await db.warmTick();
+  const wd = diff(w0, snap());
+  up.costFail = null;
+  ok(pr.prefetched === 2 && wd.data === 2 && wd.cost === 3, `an unaudited session's pre-reads are priced inline (${JSON.stringify(wd)})`);
+  ok(db.quoteWarmerStatus().background.calls - b0 === total(wd), `every background upstream call is counted (${db.quoteWarmerStatus().background.calls - b0} counted, ${total(wd)} made)`);
+
+  // The self-check's own quote is not demand: no symbol, no warm-up.
+  db.__resetDatabentoState();
+  await db.warmTick();
+  await quote({ symbol: "SELF" }, { selfcheck: true });
+  ok(!db.warmSymbols().includes("SELF") && db.quoteWarmerStatus().trackedSymbols === 0, "a self-check quote adds no symbol to the warm list");
+  const s0 = snap();
+  ok((await db.warmTick()).skipped === "idle" && total(diff(s0, snap())) === 0, "...and counts as no demand (the next tick is idle)");
+  await FINANCE_TOOLS.find((t) => t.slug === "stock-history").handler({ symbol: "SELF", days: 5 }, { selfcheck: true });
+  ok((await db.warmTick()).skipped === "idle", "a self-check stock-history is no demand either");
+  await quote({ symbol: "PAID" });
+  ok(db.warmSymbols().includes("PAID"), "a buyer's quote still feeds the warm list");
 
   // No key: the warmer does not start and makes no call.
   db.__resetDatabentoState();

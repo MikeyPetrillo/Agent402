@@ -110,7 +110,9 @@ async function checkOne(def, timeoutMs) {
   let timer;
   try {
     const result = await Promise.race([
-      Promise.resolve().then(() => def.handler(input)),
+      // { selfcheck: true } lets a tool tell this call from a buyer's (the
+      // stock quote does not count it as demand for its warmer).
+      Promise.resolve().then(() => def.handler(input, { selfcheck: true })),
       new Promise((_, rej) => {
         timer = setTimeout(() => rej(Object.assign(new Error("selfcheck timeout"), { statusCode: 504 })), timeoutMs);
       }),

@@ -89,7 +89,7 @@ export const FINANCE_TOOLS = [
         },
       },
     },
-    handler: async (i) => {
+    handler: async (i, ctx) => {
       const symbol = assertSymbol(i.symbol);
       // The available end is served from memory once warm (the warmer in
       // databento.js re-reads it off the request path), so a symbol already
@@ -97,14 +97,15 @@ export const FINANCE_TOOLS = [
       // a single data read. Both say which they were: `cached` and
       // `fetchedAt` are the bars' own read time, `rangeCheckedAt` when the
       // session boundary was last confirmed.
-      const range = await availableEndInfo();
+      const range = await availableEndInfo({ demand: !ctx?.selfcheck });
       // A WEEK, not a year. Databento bills by bytes, and a 52-week lookback
       // priced above this tool's price - the cost guard refused it. Yahoo gave the 52-week range away inside one quote payload; here
       // it is a separate, larger query, so the fields are gone rather than
       // sold at a loss or silently narrowed. stock-history serves a range.
       const { start, end } = quoteWindow(range.end);
       const read = await dailyBarsRead({ symbol, start, end });
-      noteQuoteSymbol(symbol);
+      // The self-check's own call (/api/selfcheck) is not a buyer's demand.
+      if (!ctx?.selfcheck) noteQuoteSymbol(symbol);
       const bars = read.bars;
       const last = bars.at(-1), prev = bars.at(-2) || null;
       return {
@@ -167,7 +168,7 @@ export const FINANCE_TOOLS = [
         },
       },
     },
-    handler: async (i) => {
+    handler: async (i, ctx) => {
       const symbol = assertSymbol(i.symbol);
       // An explicit out-of-range `days` is refused rather than clamped: a
       // caller who asked for 9999 sessions and silently got 365 would build
@@ -185,7 +186,7 @@ export const FINANCE_TOOLS = [
         points = Number(i.points);
         if (!Number.isInteger(points) || points < 1 || points > 100) throw bad(`"points" must be a whole number from 1 to 100 (got ${JSON.stringify(i.points)}).`);
       }
-      const end = await availableEnd();
+      const end = await availableEnd({ demand: !ctx?.selfcheck });
       // N sessions span about 1.4N calendar days once weekends are counted,
       // so the lookback SCALES rather than adding a flat margin: a flat +10
       // returned 29 bars for a 30-session ask, and the shortfall grows with

@@ -71,19 +71,22 @@ await dailyBars(q);
 ok(dataReads === 5, `the oldest entry was dropped past the bound, so the first symbol reads again (${dataReads})`);
 __setBarsCacheMax();
 
-// The price check and the data read run side by side: two reads that each
-// take one upstream latency finish in about one, not two.
+// The price check runs BEFORE the data read: the read starts only once the
+// check has answered, so a query the check refuses is never read upstream.
 {
+  const order = [];
+  let inflight = 0, overlap = false;
   globalThis.fetch = async (url) => {
-    await new Promise((r) => setTimeout(r, 200));
-    if (String(url).includes("get_cost")) return new Response("0.00001", { status: 200 });
+    const kind = String(url).includes("get_cost") ? "cost" : "data";
+    order.push(`${kind}:start`); if (++inflight > 1) overlap = true;
+    await new Promise((r) => setTimeout(r, 50));
+    inflight--; order.push(`${kind}:end`);
+    if (kind === "cost") return new Response("0.00001", { status: 200 });
     const bar = { hd: { ts_event: String(Date.UTC(2026, 8, 3) * 1e6) }, open: "1e9", high: "2e9", low: "5e8", close: "1.5e9", volume: "100" };
     return new Response(JSON.stringify(bar) + "\n", { status: 200 });
   };
-  const t0 = Date.now();
   const bars = await dailyBars({ symbol: "MSFT", start: "2026-08-01", end: "2026-09-05" });
-  const took = Date.now() - t0;
-  ok(bars.length === 1 && took < 340, `a first read with two 200 ms upstream reads finishes in about one latency (${took} ms)`);
+  ok(bars.length === 1 && !overlap && order.join() === "cost:start,cost:end,data:start,data:end", `the price check answers before the data read starts (${order.join(" ")})`);
 }
 
 const worst = DATABENTO_TIMEOUTS_MS.range + DATABENTO_TIMEOUTS_MS.cost + DATABENTO_TIMEOUTS_MS.data;

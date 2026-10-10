@@ -114,14 +114,16 @@ function readRange() {
   }
   return rangeInflight;
 }
-export async function availableEndInfo() {
-  lastDemandAt = Date.now();
+/** `demand: false` (the self-check) reads the range without counting as a
+ *  buyer's demand, so it never keeps the warmer awake. */
+export async function availableEndInfo({ demand = true } = {}) {
+  if (demand) lastDemandAt = Date.now();
   const age = Date.now() - rangeState.at;
   if (rangeState.end && age < rangeMaxAgeMs()) return { end: rangeState.end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: age, cached: true };
   const end = await readRange();
   return { end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: 0, cached: false };
 }
-export async function availableEnd() { return (await availableEndInfo()).end; }
+export async function availableEnd(opts) { return (await availableEndInfo(opts)).end; }
 
 /** Price the query first and refuse anything unexpectedly large. */
 async function priceOf(params) {
@@ -156,20 +158,23 @@ export function barsCacheSize() { return barsCache.size; }
 
 // THE PRICE CHECK ON A QUOTE. metadata.get_cost is a spend guard: it prices a
 // query and refuses to answer one wider than DEFAULT_MAX_QUERY_USD, so a
-// malformed or over-wide range is caught rather than sold at a loss. It ran
-// beside the data read, so it never stopped the read itself; what it added was
-// a second upstream call on every first read of a symbol, and its own latency
-// tail on the request path.
+// malformed or over-wide range is caught rather than sold at a loss. On the
+// request path it runs before the data read, so a refused query is never read;
+// what it costs is a second upstream call on every first read of a symbol, and
+// its own latency, ahead of the read.
 //
 // A quote's read is bounded BY CONSTRUCTION: one symbol, the daily schema, and
 // a fixed lookback of QUOTE_LOOKBACK_DAYS calendar days, so its size (records
 // = days x venues) does not depend on the caller. For exactly that shape the
 // price is checked off the request path instead: the warmer prices the
 // canonical quote query (a liquid symbol, the full lookback, the upper bound
-// for the shape) once per session. If that check ever comes back over the
-// bound, the latch below puts the price check back on every quote read, inline,
-// as before. Every other shape (stock-history, any wider range) keeps the
-// inline check unchanged.
+// for the shape) once per session, and a quote read skips the inline check
+// only when that audit ran for the read's own session and came back within the
+// bound; before the first audit, with the warmer off, or after an audit that
+// threw or answered no number (retried on the next tick), it is priced inline.
+// If an audit ever comes back over the bound, the latch below puts the price
+// check back on every quote read, inline, as before. Every other shape
+// (stock-history, any wider range) keeps the inline check unchanged.
 export const QUOTE_LOOKBACK_DAYS = 10;
 const QUOTE_AUDIT_SYMBOL = "AAPL";
 let quotePriceInline = false;     // latched true by a failed audit
@@ -204,18 +209,20 @@ export async function dailyBarsRead({ symbol, start, end, maxUsd }) {
   return { bars: r.bars.map((b) => ({ ...b })), cached: false, fetchedAt: r.fetchedAt };
 }
 
+/** Whether a read of `params` is priced on the request path: always, except
+ *  a quote-shaped read of a session whose audit came back within the bound
+ *  (an audit that has not run, threw, or answered no number leaves it on). */
+export function readPricesInline(params, maxUsd) {
+  const audited = quotePriceAudit.ok === true && quotePriceAudit.end === params.end;
+  return quotePriceInline || !audited || !isQuoteShape(params) || (maxUsd !== undefined && maxUsd < DEFAULT_MAX_QUERY_USD);
+}
+
 async function readBars(params, key, maxUsd) {
-  // The price check, when it is on the request path, runs together with the
-  // data read: every caller bounds the range to one symbol and at most 250
-  // daily bars, so the read's cost is bounded by construction, and the check
-  // still refuses an unexpectedly wide query before anything is answered.
-  // Both settle before either outcome is acted on, so no read is left in
-  // flight behind an early refusal; the price check's own refusal wins.
-  const inlinePrice = quotePriceInline || !isQuoteShape(params) || (maxUsd !== undefined && maxUsd < DEFAULT_MAX_QUERY_USD);
-  const [priced, read] = await Promise.allSettled([inlinePrice ? assertAffordable(params, maxUsd) : null, post("timeseries.get_range", { ...params, encoding: "json" })]);
-  if (priced.status === "rejected") throw priced.reason;
-  if (read.status === "rejected") throw read.reason;
-  const text = read.value;
+  // The price check, when it is on the request path, runs BEFORE the data
+  // read: a query it refuses is never read (nor paid for upstream). Pricing
+  // that is unavailable does not fail the call (assertAffordable).
+  if (readPricesInline(params, maxUsd)) await assertAffordable(params, maxUsd);
+  const text = await post("timeseries.get_range", { ...params, encoding: "json" });
   const rows = text.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
   if (!rows.length) throw bad("No market data for that symbol in that range. US equities only.");
   const bars = consolidate(rows);
@@ -292,13 +299,14 @@ async function auditQuotePrice(end) {
   quotePriceAudit = { end, at: Date.now(), ok: null };
   try {
     const usd = await priceOf({ dataset: DATASET, symbols: QUOTE_AUDIT_SYMBOL, schema: "ohlcv-1d", ...quoteWindow(end) });
-    if (!Number.isFinite(usd)) return;
+    // No number: the session is not audited, and the next tick tries again.
+    if (!Number.isFinite(usd)) { quotePriceAudit.end = null; return; }
     quotePriceAudit.ok = usd <= DEFAULT_MAX_QUERY_USD;
     if (!quotePriceAudit.ok && !quotePriceInline) {
       quotePriceInline = true;
       console.warn("[databento] the quote-shaped query priced over its bound; the price check is back on every quote read");
     }
-  } catch { /* pricing unavailable: keep the current mode, as the inline check does */ }
+  } catch { quotePriceAudit.end = null; /* pricing unavailable: quotes stay priced inline; retried on the next tick */ }
 }
 
 /** One warmer pass. Exported for tests; the timer calls it. */
@@ -322,7 +330,9 @@ export async function warmTick() {
   for (const symbol of warmSymbols()) {
     const { start } = quoteWindow(end);
     if (barsCache.has(`${DATASET}|${symbol}|ohlcv-1d|${start}|${end}`)) continue;
+    // A pre-read priced inline is two upstream calls; both count.
     if (!spendBackground()) break;
+    if (readPricesInline({ dataset: DATASET, symbols: symbol, schema: "ohlcv-1d", start, end }) && !spendBackground()) break;
     try { await dailyBarsRead({ symbol, start, end }); read++; warm.prefetched++; } catch { /* a failed pre-read is a cold read later */ }
   }
   return { end, prefetched: read };
