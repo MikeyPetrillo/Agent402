@@ -151,6 +151,36 @@ try {
     await A.tick(); await B.tick();
     ok(sent.filter((x) => x.includes(":q@example.com:")).length === 1, "wallet-digest: the week is not sent again");
   }
+  // ---- monitor scheduler -------------------------------------------------------
+  {
+    const { createMonitorScheduler } = await import("../src/monitor-scheduler.js");
+    let clock = Date.parse("2026-10-09T00:00:00.000Z");
+    let generated = 0;
+    const subRec = { subId: "sub_ov", product: "domain-monitor", target: "example.com", status: "active" };
+    const deps = {
+      subs: { listActive: () => [subRec] }, now: () => clock,
+      generate: async () => { generated++; await new Promise((r) => setTimeout(r, 30)); return { report: "r", title: "t" }; },
+      probeDomain: async () => ({ signals: { grade: "A" }, fingerprint: "fp" }), normDomain: (d) => d,
+      latestFiling: async () => null, resolveManager: async () => null, notify: async () => true,
+      baseUrl: "https://t.example", log: quiet, sleep: async () => {},
+    };
+    const M = createMonitorScheduler({ ...deps, storePath: join(DIR, "m", "monitor-runs.json"), ownerId: "M" });
+    await M.ready();
+    // Two calls at once on one container: the second must not run a tick too.
+    const [t1, t2] = await Promise.all([M.tick(), M.tick()]);
+    ok([t1, t2].filter((t) => t.skipped === "busy").length === 1 && generated === 1, `two ticks started at once on one container: one runs, one is busy (${JSON.stringify([t1.skipped ?? "ran", t2.skipped ?? "ran"])}, ${generated} report)`);
+    // The tick's state is in the row by the time the tick has released its lease.
+    const row = (await sdb.documents.get("monitor-runs.json"))?.body;
+    ok(row?.lastTick?.owner === "M" && row?.subs?.sub_ov?.lastFullAt, "the tick's runs are stored before its lease is released");
+    // A run whose save never landed (the row still shows the older state): the
+    // next tick keeps the newer run in memory instead of paying for it again.
+    const older = JSON.parse(JSON.stringify(row));
+    older.subs.sub_ov = { failures: 0, runs: [] }; // the state from before the welcome run: its save never landed
+    await sdb.documents.put("monitor-runs.json", older);
+    clock += 60_000;
+    await M.tick();
+    ok(generated === 1, `a run this container made but the row lost is not run (and paid for) again (${generated} reports)`);
+  }
 } finally {
   relay.heal();
   for (let i = 0; i < 3; i++) { try { await sdb.__dropStateSchema(); break; } catch { /* a connection the cut killed */ } }

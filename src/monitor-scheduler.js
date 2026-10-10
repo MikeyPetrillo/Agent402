@@ -63,6 +63,22 @@ const STORE_PATH = () => join(existsSync("/data") ? "/data" : "/tmp", "monitor-r
 const shapeStore = (j) => (j && typeof j === "object"
   ? { lock: j.lock || null, subs: j.subs || {}, reports: j.reports || {}, lastTickAt: j.lastTickAt || null, lastTick: j.lastTick || null }
   : { lock: null, subs: {}, reports: {}, lastTickAt: null, lastTick: null });
+// When a run was last made for one subscription's state: its newest run, or
+// its newest check or full report.
+function lastActivity(st) {
+  if (!st || typeof st !== "object") return -Infinity;
+  const runs = Array.isArray(st.runs) ? st.runs : [];
+  const t = [Date.parse(runs[runs.length - 1]?.at || ""), Number(st.lastFullAt), Number(st.lastCheckAt)].filter(Number.isFinite);
+  return t.length ? Math.max(...t) : -Infinity;
+}
+/** Per subscription, the copy that ran last wins (the row on a tie). */
+export function mergeSubsByNewest(mine = {}, row = {}) {
+  const out = { ...mine };
+  for (const [id, st] of Object.entries(row || {})) {
+    if (!Object.hasOwn(out, id) || lastActivity(st) >= lastActivity(out[id])) out[id] = st;
+  }
+  return out;
+}
 // The lease that keeps two schedulers (two replicas, or the old and the new
 // container during a deploy) from running the same tick. On the volume it is
 // the `lock` field inside the store file; in the state database it is a row
@@ -141,15 +157,27 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
         // than a deploy's overlap is the only container, so paid reports keep
         // going out while the database is down; a young one defers.
         if (uptimeMs() < leaseFailOpenMs()) { log(`[monitors] lease: ${errMsg(e)}; tick skipped (container up ${Math.round(uptimeMs() / 1000)} s)`); return false; }
+        // Running without the database is only safe on a history this
+        // container has read: one whose row was never read would see every
+        // subscription as never run and pay for reports already delivered.
+        if (!doc.loaded) { log(`[monitors] lease: ${errMsg(e)}; tick skipped (the run history was never read from the database)`); return false; }
         log(`[monitors] lease: ${errMsg(e)}; running without it as the only container (up ${Math.round(uptimeMs() / 60_000)} min)`);
         store = { ...store, lock: { owner: me, at: now() } };
         return true;
       }
       if (!held) return false;
-      // The row is the freshest view: only a lease holder writes state, so
-      // another container's results win over our stale memory.
-      const row = shapeStore(await doc.load(null));
-      store = { ...store, lock: { owner: me, at: now() }, subs: { ...store.subs, ...row.subs }, reports: { ...store.reports, ...row.reports } };
+      // The row is the freshest view of what other containers ran; a
+      // subscription's state is taken from whichever copy ran it last, so a
+      // run of ours whose save did not land is not forgotten (and paid for
+      // again). A row that cannot be read skips the tick.
+      const r = await doc.read();
+      if (!r.ok) {
+        log(`[monitors] could not read the run history (${errMsg(doc.lastError || "")}); tick skipped`);
+        try { await leases.release(LEASE_NAME, { owner: me }); } catch { /* it expires on its own */ }
+        return false;
+      }
+      const row = shapeStore(r.exists ? r.body : null);
+      store = { ...store, lock: { owner: me, at: now() }, subs: mergeSubsByNewest(store.subs, row.subs), reports: { ...store.reports, ...row.reports } };
       return true;
     }
     const disk = shapeStore(doc.loadSync(null));
@@ -170,8 +198,12 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   }
   async function releaseLock() {
     if (store.lock?.owner !== me) return;
-    store.lock = null; persist();
-    if (usePg) { try { await leases.release(LEASE_NAME, { owner: me }); } catch { /* it expires on its own */ } }
+    store.lock = null;
+    if (!usePg) { persist(); return; }
+    // The tick's state lands before the lease goes: the next holder's read
+    // must see this tick's runs.
+    try { await doc.save(store); await doc.flush(); } catch { /* logged by the document */ }
+    try { await leases.release(LEASE_NAME, { owner: me }); } catch { /* it expires on its own */ }
   }
 
   // --- delivery ---------------------------------------------------------------
@@ -519,8 +551,14 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   let ticking = false;
   async function tick({ force = false, subId = null } = {}) {
     if (ticking) return { skipped: "busy" };
-    if (!(await acquireLock())) return { skipped: "locked" };
+    // Set before the first await: a second call while the lock is being
+    // taken must not pass the check too (the lease's owner is this process,
+    // so acquiring it again would succeed).
     ticking = true;
+    let locked = false;
+    try { locked = await acquireLock(); }
+    finally { if (!locked) ticking = false; }
+    if (!locked) return { skipped: "locked" };
     const started = now();
     const summary = { full: 0, alert: 0, checked: 0, skip: 0, error: 0, deferred: 0, active: 0 };
     let fullCount = 0;
