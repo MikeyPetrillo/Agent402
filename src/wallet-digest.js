@@ -21,7 +21,7 @@ import { creditsSalesEnabled } from "./credits-sales.js";
 import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { createJsonDocument } from "./json-document.js";
+import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
 
 const DAY = 86_400_000;
@@ -61,11 +61,44 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
   // database when one is configured (first load imports the file once).
   const doc = createJsonDocument({ file: storePath, log });
   const shape = (j) => (j && typeof j === "object" && j.subs ? j : { subs: {} });
+  // With the database two containers can hold this store at once (a deploy's
+  // overlap): each re-reads the row before a signup and at the start of every
+  // tick, and every change is a versioned read-modify-write of the records it
+  // touches, applied to the fresh row, never a whole-body put of a copy that
+  // may be stale. A digest is claimed in the row (its clock advanced) before
+  // it is sent, so two containers never send the same week twice.
+  const PG = doc.backend === "pg";
   let store = shape(doc.loadSync(null));
-  const ready = trackStoreReady(doc.backend === "pg" ? doc.load(null).then((j) => { store = shape(j); }) : Promise.resolve());
+  const ready = trackStoreReady(PG ? doc.load(null).then((j) => { store = shape(j); refreshedAt = Date.now(); }) : Promise.resolve());
   function persist() {
     void doc.save(store).then((stored) => { if (!stored) log(`[wallet-digest] persist failed: ${String(doc.lastError || "").slice(0, 120)}`); });
   }
+  const pending = new Set();
+  let refreshedAt = 0, refreshing = null;
+  function write(change) {
+    const p = doc.update((b) => { const body = shape(b); return change(body.subs) === SKIP_UPDATE ? SKIP_UPDATE : body; }, { fallback: { subs: {} } })
+      .then((r) => { if (r.ok) store = shape(r.body); else log(`[wallet-digest] write failed: ${String(r.error || "").slice(0, 120)}`); return r; });
+    pending.add(p); p.finally(() => pending.delete(p));
+    return p;
+  }
+  function apply(change) {
+    change(store.subs);
+    if (PG) return write(change);
+    persist();
+    return Promise.resolve({ ok: true, changed: true });
+  }
+  async function refresh() {
+    if (!PG) return true;
+    const r = await doc.read();
+    if (!r.ok) return false;
+    store = shape(r.exists ? r.body : null); refreshedAt = Date.now();
+    return true;
+  }
+  function kick(force = false) {
+    if (!PG || refreshing || (!force && Date.now() - refreshedAt < 30_000)) return;
+    refreshing = refresh().catch(() => false).finally(() => { refreshing = null; });
+  }
+  const own = (subs, id) => (Object.hasOwn(subs, id) ? subs[id] : null);
   let ticking = false;
 
   const emit = (step, extra = {}) => { try { onEvent?.({ step, ...extra }); } catch { /* telemetry never breaks a signup */ } };
@@ -91,12 +124,13 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
     if (!enabled()) throw bad("Digests are not available right now.", 503);
     const mail = normEmail(email);
     if (!EMAIL_RE.test(mail) || mail.length > 254) throw bad("Enter a valid email address.");
+    if (PG && !(await refresh())) throw bad("Digests are not available right now. Please try again in a few minutes.", 503);
     const dup = findExisting(payer, mail);
     if (dup) {
       if (dup.status === "active") return { ok: true, status: "active" };
       const sends = dup.confirmSends || 0;
       if (sends < 3 && (!dup.confirmSentAt || now() - dup.confirmSentAt >= 10 * 60_000)) {
-        if (await sendConfirm(dup)) { dup.confirmSends = sends + 1; dup.confirmSentAt = now(); persist(); }
+        if (await sendConfirm(dup)) { const at = now(); void apply((subs) => { const x = own(subs, dup.id); if (!x) return SKIP_UPDATE; x.confirmSends = (x.confirmSends || 0) + 1; x.confirmSentAt = at; }); }
       }
       return { ok: true, status: "pending" };
     }
@@ -104,10 +138,11 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
     if (mine.length >= MAX_PER_EMAIL) throw bad(`That address already has ${MAX_PER_EMAIL} digests. Unsubscribe from one first.`);
     if (Object.keys(store.subs).length >= MAX_STORE) throw bad("Digest signups are full right now. Please try again later.", 503);
     const rec = { id: newId(), kind, payer, email: mail, status: "pending", createdAt: now(), source: String(source || "").slice(0, 40), sends: 0, lastSentAt: null };
-    store.subs[rec.id] = rec;
-    persist();
-    if (!(await sendConfirm(rec))) { delete store.subs[rec.id]; persist(); throw bad("We could not send the confirmation email right now. Please try again in a few minutes.", 503); }
-    rec.confirmSends = 1; rec.confirmSentAt = now(); persist();
+    const stored = await apply((subs) => { if (Object.hasOwn(subs, rec.id)) return SKIP_UPDATE; subs[rec.id] = { ...rec }; });
+    if (!stored.ok) { delete store.subs[rec.id]; throw bad("Digests are not available right now. Please try again in a few minutes.", 503); }
+    if (!(await sendConfirm(rec))) { await apply((subs) => { if (!Object.hasOwn(subs, rec.id)) return SKIP_UPDATE; delete subs[rec.id]; }); throw bad("We could not send the confirmation email right now. Please try again in a few minutes.", 503); }
+    const sentAt = now();
+    await apply((subs) => { const x = own(subs, rec.id); if (!x) return SKIP_UPDATE; x.confirmSends = 1; x.confirmSentAt = sentAt; });
     emit("digest_signup", { kind });
     return { ok: true, status: "pending" };
   }
@@ -146,11 +181,14 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
     const mail = normEmail(email);
     if (!EMAIL_RE.test(mail) || !keyId) return null;
     const payer = `credits:${String(keyId)}`;
+    kick();
     let rec = findExisting(payer, mail);
     if (!rec) {
       if (Object.keys(store.subs).length >= MAX_STORE) return null;
       rec = { id: newId(), kind: "credits", payer, email: mail, status: "pending", createdAt: now(), source: "credits-claim", sends: 0, lastSentAt: null, confirmSends: 1, confirmSentAt: now() };
-      store.subs[rec.id] = rec; persist();
+      const r0 = rec;
+      void apply((subs) => { if (Object.hasOwn(subs, r0.id)) return SKIP_UPDATE; subs[r0.id] = { ...r0 }; });
+      rec = store.subs[r0.id] || r0;
     }
     return rec.status === "active" ? null : link(rec.id, "confirm");
   }
@@ -168,26 +206,37 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
   }
 
   function confirm(id, k) {
+    kick();
     const rec = recOf(id);
+    if (!rec && PG && ID_RE.test(String(id)) && verify(id, "confirm", k)) kick(true); // made on the other container: read the row again
     if (!rec || !verify(id, "confirm", k)) return { ok: false, reason: "invalid" };
     if (rec.status === "unsubscribed") return { ok: false, reason: "unsubscribed" };
-    if (rec.status !== "active") { rec.status = "active"; rec.confirmedAt = now(); persist(); emit("digest_confirmed", { kind: rec.kind }); }
+    if (rec.status !== "active") {
+      const at = now();
+      void apply((subs) => { const x = own(subs, id); if (!x || x.status === "active" || x.status === "unsubscribed") return SKIP_UPDATE; x.status = "active"; x.confirmedAt = at; });
+      emit("digest_confirmed", { kind: rec.kind });
+    }
     return { ok: true, kind: rec.kind };
   }
 
   function unsubscribe(id, k) {
+    kick();
+    const at = now();
+    const drop = (subs) => { const x = own(subs, id); if (!x || x.status === "unsubscribed") return SKIP_UPDATE; x.status = "unsubscribed"; x.unsubscribedAt = at; x.email = null; };
     const rec = recOf(id);
+    // Database mode: a signed link for a record this container has not read
+    // yet (made on the other one) still unsubscribes, on the row.
+    if (!rec && PG && ID_RE.test(String(id)) && verify(id, "unsubscribe", k)) { void write(drop); return { ok: true, kind: null }; }
     if (!rec || !verify(id, "unsubscribe", k)) return { ok: false, reason: "invalid" };
-    if (rec.status !== "unsubscribed") { rec.status = "unsubscribed"; rec.unsubscribedAt = now(); rec.email = null; persist(); emit("digest_unsubscribed", { kind: rec.kind }); }
+    if (rec.status !== "unsubscribed") { void apply(drop); emit("digest_unsubscribed", { kind: rec.kind }); }
+    else if (PG) void write(drop);
     return { ok: true, kind: rec.kind };
   }
 
   function sweep() {
-    let changed = false;
-    for (const [id, s] of Object.entries(store.subs)) {
-      if (s.status === "pending" && now() - s.createdAt > PENDING_TTL_MS) { delete store.subs[id]; changed = true; }
-    }
-    if (changed) persist();
+    const t = now();
+    const drop = (subs) => { let changed = false; for (const [id, x] of Object.entries(subs)) if (x.status === "pending" && t - x.createdAt > PENDING_TTL_MS) { delete subs[id]; changed = true; } return changed ? undefined : SKIP_UPDATE; };
+    if (Object.values(store.subs).some((x) => x.status === "pending" && t - x.createdAt > PENDING_TTL_MS)) void apply(drop);
   }
 
   /** The digest for one record, or null when there is nothing worth sending. */
@@ -252,6 +301,8 @@ ${d.balanceUsd == null ? "" : `<p style="margin:16px 0 0;">Credits balance: <b>$
     ticking = true;
     const out = { due: 0, sent: 0, quiet: 0, failed: 0 };
     try {
+      // Database mode: start from the row as it is now.
+      if (!(await refresh())) return { skipped: "store-unreadable" };
       sweep();
       const t = now();
       const due = Object.values(store.subs).filter((s) => s.status === "active" && (force || !s.lastSentAt || t - s.lastSentAt >= DIGEST_PERIOD_MS)).slice(0, limit);
@@ -259,11 +310,23 @@ ${d.balanceUsd == null ? "" : `<p style="margin:16px 0 0;">Credits balance: <b>$
       for (const rec of due) {
         let d = null;
         try { d = await buildDigest(rec); } catch (e) { out.failed++; log(`[wallet-digest] build failed for ${rec.id}: ${String(e?.message || e).slice(0, 120)}`); continue; }
+        if (PG) {
+          // Claim: advance this record's clock in the row only while it is
+          // still active and due there; the send follows only a won claim.
+          const isDue = (x) => x && x.status === "active" && x.email && (force || !x.lastSentAt || t - x.lastSentAt >= DIGEST_PERIOD_MS);
+          let prev = null, mine = null;
+          const c = await write((subs) => { const x = own(subs, rec.id); prev = null; mine = null; if (!isDue(x)) return SKIP_UPDATE; prev = { lastSentAt: x.lastSentAt ?? null, sends: x.sends || 0 }; x.lastSentAt = t; if (d) x.sends = (x.sends || 0) + 1; mine = { ...x, sends: prev.sends }; });
+          if (!c.ok || !c.changed) { if (!c.ok) out.failed++; continue; }
+          if (!d) { out.quiet++; continue; } // a quiet week still advances the clock
+          if (await sendDigest(mine, d)) { out.sent++; emit("digest_sent", { kind: rec.kind }); }
+          else { await write((subs) => { const x = own(subs, rec.id); if (!x || x.lastSentAt !== t) return SKIP_UPDATE; x.lastSentAt = prev.lastSentAt; x.sends = prev.sends; }); out.failed++; }
+          continue;
+        }
         if (!d) { rec.lastSentAt = t; out.quiet++; continue; } // a quiet week still advances the clock
         if (await sendDigest(rec, d)) { rec.sends = (rec.sends || 0) + 1; rec.lastSentAt = t; out.sent++; emit("digest_sent", { kind: rec.kind }); }
         else out.failed++;
       }
-      persist();
+      if (!PG) persist();
     } finally { ticking = false; }
     return out;
   }
@@ -277,12 +340,18 @@ ${inner}
 
   /** Counts only - never addresses or payers. */
   function stats() {
+    kick();
     const by = { pending: 0, active: 0, unsubscribed: 0 };
     const byKind = {};
     let sent = 0;
     for (const s of Object.values(store.subs)) { by[s.status] = (by[s.status] || 0) + 1; byKind[s.kind] = (byKind[s.kind] || 0) + (s.status === "active" ? 1 : 0); sent += s.sends || 0; }
     return { total: Object.keys(store.subs).length, ...by, activeByKind: byKind, digestsSent: sent, enabled: enabled(), storePath };
   }
+
+  // The link routes' async form: with the database a record the other
+  // container made since this one last read the row is read first.
+  async function confirmAsync(id, k) { if (PG && typeof id === "string" && !recOf(id)) await refresh().catch(() => false); return confirm(id, k); }
+  async function unsubscribeAsync(id, k) { if (PG && typeof id === "string" && !recOf(id)) await refresh().catch(() => false); return unsubscribe(id, k); }
 
   let timer = null;
   function start({ intervalMs = 60 * 60_000, firstMs = 10 * 60_000 } = {}) {
@@ -294,5 +363,5 @@ ${inner}
   }
   function stop() { if (timer) clearInterval(timer); timer = null; }
 
-  return { signup, preEnrolCredits, confirm, unsubscribe, tick, stats, start, stop, enabled, sign, ready: () => ready, flush: () => doc.flush(), _store: () => store };
+  return { confirmAsync, unsubscribeAsync, signup, preEnrolCredits, confirm, unsubscribe, tick, stats, start, stop, enabled, sign, ready: () => ready, flush: async () => { while (pending.size) await Promise.allSettled([...pending]); await doc.flush(); }, refresh, _store: () => store };
 }

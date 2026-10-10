@@ -343,14 +343,55 @@ function schedulePersist() {
   persistTimer.unref?.();
 }
 
+/**
+ * Two bodies' records as one: per list (the service-wide one and each key's),
+ * every record either side holds, a record that both hold counted once (the
+ * larger count of an identical [t, micro] pair), expired and malformed ones
+ * dropped. A record is never removed except by the window, so this is the
+ * union of two containers' records. Exported for tests.
+ */
+export function mergeHangupDocs(stored, mine, now = Date.now()) {
+  const { windowMs } = hangupForgivenessConfig();
+  const maxMicro = 1_000 * MICRO;
+  const valid = (d) => d && typeof d === "object" && d.v === FILE_VERSION;
+  if (!valid(stored)) return mine;
+  const union = (a, b) => {
+    const count = new Map();
+    const take = (list, side) => {
+      const seen = new Map();
+      for (const e of Array.isArray(list) ? list : []) {
+        const c = cleanEntry(e, now, windowMs, maxMicro); if (!c) continue;
+        const k = `${c[0]}:${c[1]}`;
+        seen.set(k, (seen.get(k) || 0) + 1);
+      }
+      for (const [k, n] of seen) { const cur = count.get(k) || [0, 0]; cur[side] = n; count.set(k, cur); }
+    };
+    take(a, 0); take(b, 1);
+    const out = [];
+    for (const [k, [x, y]] of count) { const [t, m] = k.split(":").map(Number); for (let i = 0; i < Math.max(x, y); i++) out.push([t, m]); }
+    return out.sort((p, q) => p[0] - q[0]);
+  };
+  const keyRe = /^(ip|tempo|credits|payer):[0-9a-f]{24}$/;
+  const keys = new Map();
+  for (const d of [stored, mine]) for (const row of Array.isArray(d.keys) ? d.keys : []) {
+    if (Array.isArray(row) && row.length === 2 && typeof row[0] === "string" && keyRe.test(row[0])) keys.set(row[0], null);
+  }
+  const listOf = (d, k) => (Array.isArray(d.keys) ? d.keys.find((r) => Array.isArray(r) && r[0] === k)?.[1] : null) || [];
+  const keyRows = [];
+  for (const k of keys.keys()) { const l = union(listOf(stored, k), listOf(mine, k)); if (l.length) keyRows.push([k, l]); }
+  return { v: FILE_VERSION, savedAt: now, global: union(stored.global, mine.global), keys: keyRows };
+}
+
 /** Write the abandoned records now (the document row with a state database,
- *  else the file, tmp + rename). Never throws. */
+ *  else the file, tmp + rename). Never throws. With a database the write
+ *  merges this container's records into the row's (a versioned
+ *  read-modify-write), so two containers never drop each other's records. */
 export async function persistNow() {
   const doc = stateDocument();
   if (doc) {
-    const stored = await doc.save(snapshotDoc());
-    lastPersistError = stored ? null : String(doc.lastError || "save failed").slice(0, 80);
-    return stored;
+    const r = await doc.update((stored) => mergeHangupDocs(stored, snapshotDoc()), { fallback: null });
+    lastPersistError = r.ok ? null : String(r.error || doc.lastError || "save failed").slice(0, 80);
+    return r.ok;
   }
   const path = persistPath();
   if (!path) return false;
@@ -381,7 +422,7 @@ export function flushHangupForgiveness() {
   const path = persistPath();
   if (!path && !doc) return false;
   if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
-  if (doc) { void doc.save(snapshotDoc()).catch(() => {}); }
+  if (doc) { void persistNow().catch(() => {}); }
   if (!path) return true;
   try {
     mkdirSync(dirname(path), { recursive: true });

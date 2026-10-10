@@ -1526,7 +1526,11 @@ export function setSellerFundingEnabled(enabled, { note = "", now = Date.now() }
   const before = sellerFundingEnabled();
   const next = { enabled, at: new Date(now).toISOString(), note: String(note || "").slice(0, 200), persisted: false };
   const d = docFor(LEADERBOARD_FUNDING_SWITCH_FILE);
-  if (d.backend !== "memory") { void d.save({ enabled: next.enabled, at: next.at, note: next.note }); next.persisted = true; }
+  const body = { enabled: next.enabled, at: next.at, note: next.note };
+  // `persisted` says whether the write landed: the file's write is known at
+  // once; the database's is in flight (null) until it resolves.
+  if (d.backend === "file") next.persisted = d.saveSync(body);
+  else if (d.backend === "pg") { next.persisted = null; void d.save(body).then((stored) => { next.persisted = stored === true; }); }
   fundingSwitch = next;
   fundingSwitchVersion++;
   evidenceMemo = { ev: null, ver: null, out: null };

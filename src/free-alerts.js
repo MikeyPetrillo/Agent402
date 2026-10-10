@@ -21,7 +21,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { createJsonDocument } from "./json-document.js";
+import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
 
 export const ALERT_KINDS = Object.freeze({
@@ -65,11 +65,47 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
   // database when one is configured (first load imports the file once).
   const doc = createJsonDocument({ file: storePath, log });
   const shape = (j) => (j && typeof j === "object" && j.alerts ? j : { alerts: {} });
+  // With the database two containers can hold this store at once (a deploy's
+  // overlap): each re-reads the row before a signup and at the start of every
+  // tick, and every change is a versioned read-modify-write of the records it
+  // touches, applied to the fresh row, never a whole-body put of a copy that
+  // may be stale. The change email is claimed in the row before it is sent.
+  const PG = doc.backend === "pg";
   let store = shape(doc.loadSync(null));
-  const ready = trackStoreReady(doc.backend === "pg" ? doc.load(null).then((j) => { store = shape(j); }) : Promise.resolve());
+  const ready = trackStoreReady(PG ? doc.load(null).then((j) => { store = shape(j); refreshedAt = Date.now(); }) : Promise.resolve());
   function persist() {
     void doc.save(store).then((stored) => { if (!stored) log(`[free-alerts] persist failed: ${String(doc.lastError || "").slice(0, 120)}`); });
   }
+  const pending = new Set();
+  let refreshedAt = 0, refreshing = null;
+  /** Database mode: apply `change(alerts)` to the row and adopt the fresh row. */
+  function write(change) {
+    const p = doc.update((b) => { const body = shape(b); return change(body.alerts) === SKIP_UPDATE ? SKIP_UPDATE : body; }, { fallback: { alerts: {} } })
+      .then((r) => { if (r.ok) store = shape(r.body); else log(`[free-alerts] write failed: ${String(r.error || "").slice(0, 120)}`); return r; });
+    pending.add(p); p.finally(() => pending.delete(p));
+    return p;
+  }
+  /** Change the local copy, then the row (database) or the file. Resolves the row write's result. */
+  function apply(change) {
+    change(store.alerts);
+    if (PG) return write(change);
+    persist();
+    return Promise.resolve({ ok: true, changed: true });
+  }
+  /** Re-read the row (database mode). False when it could not be read. */
+  async function refresh() {
+    if (!PG) return true;
+    const r = await doc.read();
+    if (!r.ok) return false;
+    store = shape(r.exists ? r.body : null); refreshedAt = Date.now();
+    return true;
+  }
+  /** Sync callers: refresh in the background when the copy is older than 30 s (or now, on a miss). */
+  function kick(force = false) {
+    if (!PG || refreshing || (!force && Date.now() - refreshedAt < 30_000)) return;
+    refreshing = refresh().catch(() => false).finally(() => { refreshing = null; });
+  }
+  const own = (alerts, id) => (Object.hasOwn(alerts, id) ? alerts[id] : null);
   let ticking = false;
 
   const emit = (step, extra = {}) => { try { onEvent?.({ step, ...extra }); } catch { /* telemetry never breaks a signup */ } };
@@ -107,6 +143,7 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
       try { canon = String(await validate(raw)); }
       catch (e) { if (e?.buyerSafe) throw bad(String(e.message).slice(0, 160), e.statusCode || 400); throw bad("We could not validate that target. Check it and try again."); }
     }
+    if (PG && !(await refresh())) throw bad("Alerts are unavailable right now. Please try again in a few minutes.", 503);
     sweep();
     const mine = Object.values(store.alerts).filter((a) => a.email === em && (a.status === "active" || a.status === "pending"));
     const dup = mine.find((a) => a.kind === kind && a.target === canon);
@@ -118,7 +155,7 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
       if (dup.status === "pending") {
         const sends = dup.confirmSends || 0;
         if (sends < 3 && (!dup.confirmSentAt || now() - dup.confirmSentAt >= 10 * 60_000)) {
-          if (await sendConfirm(dup)) { dup.confirmSends = sends + 1; dup.confirmSentAt = now(); persist(); }
+          if (await sendConfirm(dup)) { const at = now(); void apply((al) => { const x = own(al, dup.id); if (!x) return SKIP_UPDATE; x.confirmSends = (x.confirmSends || 0) + 1; x.confirmSentAt = at; }); }
         }
       }
       return { ok: true, status: dup.status, kind, target: canon };
@@ -127,14 +164,17 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
     if (Object.keys(store.alerts).length >= MAX_STORE) throw bad("Alerts are full right now. Please try again later.", 503);
     const id = `al_${randomBytes(9).toString("base64url")}`;
     const rec = { id, email: em, kind, target: canon, product: def.product, source: hdr(source, 80), status: "pending", createdAt: now(), baseline: null, lastCheckAt: null, lastNotifiedAt: null, notified: 0, failures: 0 };
-    store.alerts[id] = rec;
-    persist();
+    const stored = await apply((al) => { if (Object.hasOwn(al, id)) return SKIP_UPDATE; al[id] = { ...rec }; });
+    // Database mode: a record that could not be stored is not mailed (its
+    // confirm link would point at nothing).
+    if (!stored.ok) { delete store.alerts[id]; throw bad("Alerts are unavailable right now. Please try again in a few minutes.", 503); }
     emit("alert_signup", { kind });
     // No confirmation email = no alert: a record nobody can confirm would sit
     // pending until the sweep, and the visitor would wait for mail that never
     // comes. Tell them now, keep nothing.
-    if (!(await sendConfirm(rec))) { delete store.alerts[id]; persist(); throw bad("We could not send the confirmation email right now. Please try again in a few minutes.", 503); }
-    rec.confirmSends = 1; rec.confirmSentAt = now(); persist();
+    if (!(await sendConfirm(rec))) { await apply((al) => { if (!Object.hasOwn(al, id)) return SKIP_UPDATE; delete al[id]; }); throw bad("We could not send the confirmation email right now. Please try again in a few minutes.", 503); }
+    const sentAt = now();
+    await apply((al) => { const x = own(al, id); if (!x) return SKIP_UPDATE; x.confirmSends = 1; x.confirmSentAt = sentAt; });
     return { ok: true, status: "pending", kind, target: canon };
   }
 
@@ -151,29 +191,40 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
   }
 
   function confirm(id, k) {
+    kick();
     const rec = recOf(id);
+    if (!rec && PG && ID_RE.test(String(id)) && verify(id, "confirm", k)) kick(true); // made on the other container: read the row again
     if (!rec || !verify(id, "confirm", k)) return { ok: false, reason: "invalid" };
     if (rec.status === "unsubscribed") return { ok: false, reason: "unsubscribed" };
-    if (rec.status !== "active") { rec.status = "active"; rec.confirmedAt = now(); persist(); emit("alert_confirmed", { kind: rec.kind }); }
+    if (rec.status !== "active") {
+      const at = now();
+      void apply((al) => { const x = own(al, id); if (!x || x.status === "active" || x.status === "unsubscribed") return SKIP_UPDATE; x.status = "active"; x.confirmedAt = at; });
+      emit("alert_confirmed", { kind: rec.kind });
+    }
     return { ok: true, kind: rec.kind, target: rec.target, product: rec.product };
   }
 
   function unsubscribe(id, k) {
+    kick();
+    const at = now();
+    const drop = (al) => { const x = own(al, id); if (!x || x.status === "unsubscribed") return SKIP_UPDATE; x.status = "unsubscribed"; x.unsubscribedAt = at; x.email = null; };
     const rec = recOf(id);
+    // Database mode: a signed link for a record this container has not read
+    // yet (made on the other one) still unsubscribes, on the row.
+    if (!rec && PG && ID_RE.test(String(id)) && verify(id, "unsubscribe", k)) { void write(drop); return { ok: true, kind: null, target: "this alert" }; }
     if (!rec || !verify(id, "unsubscribe", k)) return { ok: false, reason: "invalid" };
     // The address is dropped with the consent: nothing is left to email, and
     // nothing rides the next backup. The target stays for the counts.
-    if (rec.status !== "unsubscribed") { rec.status = "unsubscribed"; rec.unsubscribedAt = now(); rec.email = null; persist(); emit("alert_unsubscribed", { kind: rec.kind }); }
+    if (rec.status !== "unsubscribed") { void apply(drop); emit("alert_unsubscribed", { kind: rec.kind }); }
+    else if (PG) void write(drop); // the row may not have it yet
     return { ok: true, kind: rec.kind, target: rec.target };
   }
 
   /** Forget unconfirmed signups past their TTL. */
   function sweep() {
-    let changed = false;
-    for (const [id, a] of Object.entries(store.alerts)) {
-      if (a.status === "pending" && now() - a.createdAt > PENDING_TTL_MS) { delete store.alerts[id]; changed = true; }
-    }
-    if (changed) persist();
+    const t = now();
+    const drop = (al) => { let changed = false; for (const [id, a] of Object.entries(al)) if (a.status === "pending" && t - a.createdAt > PENDING_TTL_MS) { delete al[id]; changed = true; } return changed ? undefined : SKIP_UPDATE; };
+    if (Object.values(store.alerts).some((a) => a.status === "pending" && t - a.createdAt > PENDING_TTL_MS)) void apply(drop);
   }
 
   /** One pass: probe every active alert that is due, email on NEW ids only. */
@@ -186,6 +237,9 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
     ticking = true;
     const out = { checked: 0, baselined: 0, notified: 0, unchanged: 0, failed: 0, skipped: 0 };
     try {
+      // Database mode: start from the row as it is now (signups, confirms and
+      // unsubscribes the other container took since this one last read it).
+      if (!(await refresh())) return { skipped: "store-unreadable" };
       sweep();
       const due = Object.values(store.alerts).filter((a) => a.status === "active" && (force || !a.lastCheckAt || now() - a.lastCheckAt >= CHECK_MS)).slice(0, limit);
       for (const a of due) {
@@ -196,10 +250,16 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
         out.checked++;
         let r;
         try { r = await probe(a.target); }
-        catch (e) { a.failures++; a.lastCheckAt = now(); a.lastError = String(e?.message || e).slice(0, 120); out.failed++; continue; }
+        catch (e) {
+          const at = now(), why = String(e?.message || e).slice(0, 120);
+          if (PG) await write((al) => { const x = own(al, a.id); if (!x) return SKIP_UPDATE; x.failures = (x.failures || 0) + 1; x.lastCheckAt = at; x.lastError = why; });
+          else { a.failures++; a.lastCheckAt = at; a.lastError = why; }
+          out.failed++; continue;
+        }
         const ids = Array.isArray(r?.ids) ? r.ids.map(String) : [];
-        a.lastCheckAt = now(); a.failures = 0; a.lastError = null;
         const version = String(probe.version || "");
+        if (PG) { await tickRow(a, ids, version, r, out); continue; }
+        a.lastCheckAt = now(); a.failures = 0; a.lastError = null;
         // A missing baseline, or one taken by a probe whose id space has since
         // changed, is (re)set silently: comparing across versions would mail
         // ids that are only "new" because the probe changed.
@@ -212,9 +272,46 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
         if (sent) { a.baseline = ids; a.baselineVersion = version; a.lastNotifiedAt = now(); a.notified++; out.notified++; emit("alert_sent", { kind: a.kind }); }
         else { out.failed++; }
       }
-      persist();
+      if (!PG) persist();
     } finally { ticking = false; }
     return out;
+  }
+
+  /**
+   * Database mode, one probed alert: the decision is made on the row's copy
+   * (an unsubscribe or a send the other container made since the tick began
+   * is seen), and a change email is claimed in the row first: the claim
+   * moves lastNotifiedAt and the baseline in one versioned write, so of two
+   * containers exactly one sends. A failed send puts the previous values back.
+   */
+  async function tickRow(a, ids, version, r, out) {
+    const at = now();
+    let verdict = "unchanged", fresh = [], prev = null, mine = null;
+    const res = await write((al) => {
+      const x = own(al, a.id);
+      verdict = "gone"; fresh = []; prev = null; mine = null;
+      if (!x || x.status !== "active" || !x.email) return SKIP_UPDATE;
+      x.lastCheckAt = at; x.failures = 0; x.lastError = null;
+      if (!Array.isArray(x.baseline) || String(x.baselineVersion || "") !== version) { x.baseline = ids; x.baselineVersion = version; verdict = "baselined"; return undefined; }
+      const seen = new Set(x.baseline);
+      fresh = ids.filter((y) => !seen.has(y));
+      if (!fresh.length) { verdict = "unchanged"; return undefined; }
+      if (x.lastNotifiedAt && at - x.lastNotifiedAt < NOTIFY_MIN_GAP_MS) { verdict = "gap"; return undefined; }
+      prev = { baseline: x.baseline, baselineVersion: x.baselineVersion, lastNotifiedAt: x.lastNotifiedAt ?? null, notified: x.notified || 0 };
+      x.baseline = ids; x.baselineVersion = version; x.lastNotifiedAt = at; x.notified = (x.notified || 0) + 1;
+      mine = { ...x }; verdict = "send";
+      return undefined;
+    });
+    if (!res.ok) { out.failed++; return false; }
+    if (verdict === "gone") { out.skipped++; return false; }
+    if (verdict === "baselined") { out.baselined++; return false; }
+    if (verdict === "unchanged") { out.unchanged++; return false; }
+    if (verdict === "gap") { out.skipped++; return false; }
+    const sent = await sendChange(mine, fresh, r);
+    if (sent) { out.notified++; emit("alert_sent", { kind: mine.kind }); return true; }
+    await write((al) => { const x = own(al, a.id); if (!x || x.lastNotifiedAt !== at) return SKIP_UPDATE; Object.assign(x, prev); });
+    out.failed++;
+    return false;
   }
 
   async function sendChange(a, fresh, r) {
@@ -244,12 +341,18 @@ ${inner}
 
   /** Counts only - never addresses. */
   function stats() {
+    kick();
     const by = { pending: 0, active: 0, unsubscribed: 0 };
     const byKind = {};
     let notified = 0;
     for (const a of Object.values(store.alerts)) { by[a.status] = (by[a.status] || 0) + 1; byKind[a.kind] = (byKind[a.kind] || 0) + (a.status === "active" ? 1 : 0); notified += a.notified || 0; }
     return { total: Object.keys(store.alerts).length, ...by, activeByKind: byKind, emailsSent: notified, enabled: enabled(), storePath };
   }
+
+  // The link routes' async form: with the database a record the other
+  // container made since this one last read the row is read first.
+  async function confirmAsync(id, k) { if (PG && typeof id === "string" && !recOf(id)) await refresh().catch(() => false); return confirm(id, k); }
+  async function unsubscribeAsync(id, k) { if (PG && typeof id === "string" && !recOf(id)) await refresh().catch(() => false); return unsubscribe(id, k); }
 
   let timer = null;
   function start({ intervalMs = 6 * 60 * 60_000, firstMs = 5 * 60_000 } = {}) {
@@ -261,7 +364,7 @@ ${inner}
   }
   function stop() { if (timer) clearInterval(timer); timer = null; }
 
-  return { signup, confirm, unsubscribe, tick, stats, start, stop, enabled, sign, ready: () => ready, flush: () => doc.flush(), _store: () => store };
+  return { confirmAsync, unsubscribeAsync, signup, confirm, unsubscribe, tick, stats, start, stop, enabled, sign, ready: () => ready, flush: async () => { while (pending.size) await Promise.allSettled([...pending]); await doc.flush(); }, refresh, _store: () => store };
 }
 
 /** The signup form for a page. CSP: behavior lives in /js/alert-signup.js. */

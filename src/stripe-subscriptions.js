@@ -122,7 +122,45 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       }
     })
     : Promise.resolve());
-  const saveTally = () => { void tallyDoc.save(tally); };
+  // With the database two containers count webhooks at once: each saves the
+  // counts it added since its last save (a delta) onto the row, a versioned
+  // read-modify-write, never its whole tally over the other's.
+  const TPG = tallyDoc.backend === "pg";
+  let delta = { counts: {}, byType: {}, fields: {} };
+  const addDelta = (into, d) => {
+    for (const [k, n] of Object.entries(d.counts)) into.counts[k] = (into.counts[k] || 0) + n;
+    for (const [k, n] of Object.entries(d.byType)) into.byType[k] = (into.byType[k] || 0) + n;
+    for (const [k, v] of Object.entries(d.fields)) if (!(k in into.fields)) into.fields[k] = v;
+  };
+  let tallySaving = null, tallyAgain = false;
+  function saveTally() {
+    if (!TPG) { void tallyDoc.save(tally); return; }
+    if (tallySaving) { tallyAgain = true; return; }
+    tallySaving = (async () => {
+      do {
+        tallyAgain = false;
+        const sent = delta; delta = { counts: {}, byType: {}, fields: {} };
+        const r = await tallyDoc.update((b) => {
+          const t = shapeTally(b);
+          for (const [k, n] of Object.entries(sent.counts)) t[k] = (Number(t[k]) || 0) + n;
+          for (const [k, n] of Object.entries(sent.byType)) if (Object.hasOwn(t.byType, k) || Object.keys(t.byType).length < MAX_TYPES) t.byType[k] = (t.byType[k] || 0) + n;
+          // The newest event wins the "last" fields (ISO times compare as strings).
+          if (sent.fields.lastAt && (!t.lastAt || sent.fields.lastAt >= t.lastAt)) { t.lastAt = sent.fields.lastAt; t.lastType = sent.fields.lastType ?? t.lastType; }
+          if (sent.fields.lastRejectAt && (!t.lastRejectAt || sent.fields.lastRejectAt >= t.lastRejectAt)) { t.lastRejectAt = sent.fields.lastRejectAt; t.lastRejectReason = sent.fields.lastRejectReason ?? t.lastRejectReason; }
+          return t;
+        }, { fallback: null });
+        if (!r.ok) { const back = { counts: {}, byType: {}, fields: {} }; addDelta(back, delta); addDelta(back, sent); delta = back; break; }
+        // The row now, plus what was counted here since this save began.
+        const now = shapeTally(r.body);
+        for (const [k, n] of Object.entries(delta.counts)) now[k] = (Number(now[k]) || 0) + n;
+        for (const [k, n] of Object.entries(delta.byType)) now.byType[k] = (now.byType[k] || 0) + n;
+        Object.assign(now, delta.fields);
+        for (const k of Object.keys(tally)) delete tally[k];
+        Object.assign(tally, now);
+      } while (tallyAgain);
+      tallySaving = null;
+    })();
+  }
   const MAX_TYPES = 64;
   // Verified events persist at once; the unauthenticated counters (received,
   // rejected, unconfigured) persist on a 5 s debounce so an unsigned flood costs
@@ -131,6 +169,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
   function bump(kind, extra) {
     tally[kind] += 1;
     Object.assign(tally, extra);
+    if (TPG) { delta.counts[kind] = (delta.counts[kind] || 0) + 1; Object.assign(delta.fields, extra); }
     if (kind === "verified") { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; } saveTally(); return; }
     if (!saveTimer) { saveTimer = setTimeout(() => { saveTimer = null; saveTally(); }, 5000); saveTimer.unref?.(); }
   }
@@ -233,7 +272,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     try { event = stripe.webhooks.constructEvent(rawBody, signature, secret); }
     catch (err) { bump("rejected", { lastRejectAt: now, lastRejectReason: "bad-signature" }); const e = new Error(`Webhook signature verification failed: ${err.message}`); e.statusCode = 400; throw e; }
     const type = String(event.type || "unknown").slice(0, 64);
-    if (Object.hasOwn(tally.byType, type) || Object.keys(tally.byType).length < MAX_TYPES) tally.byType[type] = (tally.byType[type] || 0) + 1;
+    if (Object.hasOwn(tally.byType, type) || Object.keys(tally.byType).length < MAX_TYPES) { tally.byType[type] = (tally.byType[type] || 0) + 1; if (TPG) delta.byType[type] = (delta.byType[type] || 0) + 1; }
     bump("verified", { lastAt: now, lastType: type });
     // Stripe's signature tolerance is 300 s: a captured delivery replays for
     // five minutes. Handlers are idempotent on their records, but a replayed

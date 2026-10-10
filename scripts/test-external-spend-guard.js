@@ -207,10 +207,10 @@ const A = "0xAbCdEf0123456789AbCdEf0123456789AbCdEf01";
 // repo keeps rediscovering, so the call site is read directly.
 {
   const src = await readFile(new URL("../src/tools/route-execute.js", import.meta.url), "utf8");
-  ok(/maySpend\(\s*spendPayer\s*,\s*cap\s*,\s*\{\s*chain\s*\}\s*\)/.test(src),
-    "route-execute authorizes against the tier cap, not the seller's declared price, and names the chain the spend leaves from");
-  ok(/noteSpend\(\s*spendPayer\s*,\s*cap\s*,\s*\{\s*chain\s*\}\s*\)/.test(src),
-    "route-execute books the tier cap as the worst-case exposure, against the chain wallet too");
+  ok(/reserveSpend\(\s*spendPayer\s*,\s*cap\s*,\s*\{\s*chain\s*\}\s*\)/.test(src),
+    "route-execute authorizes and books the tier cap (not the seller's declared price) in one step, naming the chain the spend leaves from");
+  ok(/const spendHandle = allowed\.handle;/.test(src) && !/await maySpend\(/.test(src) && !/await noteSpend\(/.test(src),
+    "route-execute books through that one step only (no separate check and book an await apart)");
   ok(/adjustSpend\(\s*spendHandle\s*,\s*underlyingUsd\s*\)/.test(src),
     "route-execute corrects the exposure down to the amount actually quoted");
   ok(src.indexOf("adjustSpend(spendHandle, underlyingUsd)") > src.indexOf("const underlyingUsd"),
@@ -354,12 +354,27 @@ const noEnv = () => { for (const k of Object.keys(process.env)) if (k.startsWith
 // when the wallet has hit its day.
 {
   const src = await readFile(new URL("../src/tools/attest-kit.js", import.meta.url), "utf8");
-  ok(/maySpend\(\s*null\s*,\s*MAX_GAS_USD\(\)\s*,\s*\{\s*chain:\s*"base"\s*\}\s*\)/.test(src), "attest checks the Base wallet's daily ceiling before signing");
-  ok(/noteSpend\(\s*null\s*,\s*MAX_GAS_USD\(\)\s*,\s*\{\s*chain:\s*"base"\s*\}\s*\)/.test(src), "attest books the gas ceiling against the Base wallet");
+  ok(/reserve\(\s*null\s*,\s*MAX_GAS_USD\(\)\s*,\s*\{\s*chain:\s*"base"\s*\}\s*\)/.test(src), "attest checks and books the gas ceiling against the Base wallet in one step before signing");
   ok(/adjustSpend\(\s*handle\s*,\s*estimate\s*\)/.test(src), "attest corrects the booking down to the estimate");
-  ok(src.indexOf("noteSpend(null, MAX_GAS_USD()") < src.indexOf("chain.attest(") && src.indexOf("adjustSpend(handle, estimate)") < src.indexOf("chain.attest("),
+  ok(src.indexOf("reserve(null, MAX_GAS_USD()") < src.indexOf("chain.attest(") && src.indexOf("adjustSpend(handle, estimate)") < src.indexOf("chain.attest("),
     "booked and corrected before the attestation is sent");
   ok(/Attestations are briefly paused[^\n]*,\s*503\)/.test(src), "a ceiling refusal there is a 503 (a >= 400 cancels the buyer's settlement)");
+}
+
+// --- check and book are one step ----------------------------------------------
+// Two calls in flight against a ceiling with room for one: the second must see
+// the first's booking. maySpend then noteSpend with an await between them let
+// both pass (two $0.60 calls against $1 both booked).
+{
+  const g = await import("../src/external-spend-guard.js");
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  g.__reset();
+  const two = await Promise.all([0, 1].map(async () => g.reserveSpend(null, 0.6, { chain: "tempo", walletDailyMaxUsd: 1 })));
+  ok(two.filter((d) => d.ok).length === 1 && near(g.walletDailySpentUsd("tempo"), 0.6), `two concurrent reservations, room for one: one booked (${two.map((d) => d.ok).join(",")}, spent ${g.walletDailySpentUsd("tempo")})`);
+  ok(two.find((d) => d.ok)?.handle?.chain === "tempo" && two.find((d) => !d.ok)?.code === "wallet_daily_ceiling", "the booked one carries its handle; the other names the ceiling");
+  const split = await Promise.all([0, 1].map(async () => { const d = await g.maySpend(null, 0.6, { chain: "solana", walletDailyMaxUsd: 1 }); if (d.ok) await g.noteSpend(null, 0.6, { chain: "solana" }); return d.ok; }));
+  ok(split.every(Boolean), "(control) a check and a booking an await apart both pass: the race reserveSpend closes");
+  g.__reset();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

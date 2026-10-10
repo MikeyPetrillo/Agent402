@@ -31,7 +31,7 @@
 import { createHash } from "node:crypto";
 import { assertSigningAllowed } from "../signing-halt.js";
 import { saleByTx, setAttestation } from "../sales-ledger.js";
-import { maySpend, noteSpend, adjustSpend } from "../external-spend-guard.js";
+import { maySpend, noteSpend, adjustSpend, reserveSpend, composeReserve } from "../external-spend-guard.js";
 import { payerFromRequest } from "../payer.js";
 
 // Slugs whose sales are never attestable (memory reads, the usage report):
@@ -234,7 +234,9 @@ async function realChain() {
 export function makeAttestHandler(deps = {}) {
   const lookup = deps.saleByTx || saleByTx;
   const persist = deps.setAttestation || setAttestation;
-  const spend = deps.spend || { maySpend, noteSpend, adjustSpend };
+  const spend = deps.spend || { maySpend, noteSpend, adjustSpend, reserveSpend };
+  // Check and book in one step; an injected { maySpend, noteSpend } (tests) composes into the same shape.
+  const reserve = spend.reserveSpend || composeReserve(spend.maySpend, spend.noteSpend);
   const getChain = deps.chain ? async () => deps.chain : realChain;
   const payerOf = deps.payerOf || payerFromRequest;
   return async (input, req) => {
@@ -273,9 +275,9 @@ export function makeAttestHandler(deps = {}) {
     // Bound the gas before anything is signed. The worst case is booked
     // against the Base wallet's daily ceiling first (a refusal there is a
     // pause, not a charge), then corrected to the estimate.
-    const allowed = await spend.maySpend(null, MAX_GAS_USD(), { chain: "base" });
+    const allowed = await reserve(null, MAX_GAS_USD(), { chain: "base" });
     if (!allowed.ok) throw bad(`Attestations are briefly paused: ${allowed.reason} Nothing was charged; retry later.`, 503);
-    const handle = await spend.noteSpend(null, MAX_GAS_USD(), { chain: "base" });
+    const handle = allowed.handle ?? null;
     // Where the call failed decides the booking: before the attest send no
     // transaction of ours exists, so the booking is released. A schema step
     // may have sent its own registration, so it keeps the booking.

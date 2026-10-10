@@ -48,8 +48,15 @@ if (url) process.env.STATE_DATABASE_URL = url;
 if (!String(process.env.STATE_DATABASE_URL || "").trim() && process.env.CI) { console.error("FAIL - CI needs STATE_DATABASE_URL_FOR_TEST for the Postgres half"); process.exit(1); }
 if (String(process.env.STATE_DATABASE_URL || "").trim()) {
   requireTestPg({ label: "test-json-document" });
-  const { createJsonDocument } = await import("../src/json-document.js?pg");
+  // Every query of this half goes through a relay the test can cut (an outage).
+  const { startPgRelay } = await import("./lib/pg-relay.js");
+  const relay = await startPgRelay(process.env.STATE_DATABASE_URL);
+  process.env.STATE_DATABASE_URL = relay.url;
+  const { createJsonDocument, SKIP_UPDATE, rowMarkOf } = await import("../src/json-document.js?pg");
   const sdb = await import("../src/state-db.js");
+  // After a heal the pool may still hand out a connection the cut killed; one
+  // good query clears them before the next assertion.
+  const heal = async () => { relay.heal(); for (let i = 0; i < 6; i++) { try { await sdb.stateQuery("SELECT 1"); return; } catch { /* a dead pooled connection */ } } };
   try {
     const file = join(DIR, "imp.json");
     writeFileSync(file, JSON.stringify({ from: "file", n: 7 }));
@@ -76,26 +83,93 @@ if (String(process.env.STATE_DATABASE_URL || "").trim()) {
     ok((await fresh.load("fb")) === "fb" && (await sdb.imports.done("fresh-doc")) === null, "no file, no row: fallback and no import record");
     const noimp = createJsonDocument({ file, name: "noimport", importFromFile: false, log: () => {} });
     ok((await noimp.load("fb")) === "fb", "importFromFile:false never reads the file");
-    // Roll-forward: a file written well after the row (the old build ran on the file alone) replaces the row.
-    const { utimesSync } = await import("node:fs");
+    // Roll-forward: the old build (file only) rewrote the file after this
+    // store's write-through of the row's current version: the file wins.
     const rb = createJsonDocument({ file: join(DIR, "rb.json"), log: () => {} });
     await rb.save({ gen: "row" });
+    ok(existsSync(rowMarkOf(join(DIR, "rb.json"))), "write-through records the row version it wrote in a sidecar");
     writeFileSync(join(DIR, "rb.json"), JSON.stringify({ gen: "rollback" }));
-    const later = new Date(Date.now() + 5 * 60_000);
-    utimesSync(join(DIR, "rb.json"), later, later);
     const rb2 = createJsonDocument({ file: join(DIR, "rb.json"), log: () => {} });
-    ok((await rb2.load()).gen === "rollback" && (await sdb.documents.get("rb.json")).body.gen === "rollback", "a file newer than its row by more than the grace re-imports and replaces the row");
+    ok((await rb2.load()).gen === "rollback" && (await sdb.documents.get("rb.json")).body.gen === "rollback", "a file changed after the write-through of the row's current version re-imports and replaces the row");
+    ok((await createJsonDocument({ file: join(DIR, "rb.json"), log: () => {} }).load()).gen === "rollback", "...once: the re-import's own write-through is not taken for another rollback");
+    // The untouched write-through file never replaces the row.
     const sameAge = createJsonDocument({ file: join(DIR, "sa.json"), log: () => {} });
     await sameAge.save({ gen: "row" });
-    writeFileSync(join(DIR, "sa.json"), JSON.stringify({ gen: "stale-write-through" }));
-    ok((await createJsonDocument({ file: join(DIR, "sa.json"), log: () => {} }).load()).gen === "row", "a file written within the grace (write-through) does not replace the row");
+    await sdb.documents.put("sa.json", { gen: "row-moved-on" }); // another writer advanced the row after the write-through
+    writeFileSync(join(DIR, "sa.json"), JSON.stringify({ gen: "stale" }));
+    ok((await createJsonDocument({ file: join(DIR, "sa.json"), log: () => {} }).load()).gen === "row-moved-on", "a file whose sidecar names an older row version does not replace the row");
+    // An empty file, however new, never replaces a populated row.
+    const { utimesSync } = await import("node:fs");
+    const al = createJsonDocument({ file: join(DIR, "alerts.json"), log: () => {} });
+    await al.save({ alerts: { a1: { id: "a1" }, a2: { id: "a2" } } });
+    writeFileSync(join(DIR, "alerts.json"), JSON.stringify({ alerts: {} }));
+    const later = new Date(Date.now() + 10 * 60_000);
+    utimesSync(join(DIR, "alerts.json"), later, later);
+    ok(Object.keys((await createJsonDocument({ file: join(DIR, "alerts.json"), log: () => {} }).load()).alerts).length === 2 && Object.keys((await sdb.documents.get("alerts.json")).body.alerts).length === 2, "an empty {alerts:{}} file newer than a populated row never replaces it");
+    // A foreign or freshly created file (no sidecar from this store) never replaces a row.
+    await sdb.documents.put("foreign.json", { keep: 1 });
+    writeFileSync(join(DIR, "foreign.json"), JSON.stringify({ other: 2 }));
+    utimesSync(join(DIR, "foreign.json"), later, later);
+    ok((await createJsonDocument({ file: join(DIR, "foreign.json"), log: () => {} }).load()).keep === 1, "a file this store never wrote through (no sidecar) does not replace the row, whatever its mtime");
+
+    // ---- a failed load never leads to an overwrite (H2) ----------------------
+    await sdb.documents.put("h2.json", { seqs: { a: 1, b: 2, c: 3 } });
+    const h2 = createJsonDocument({ name: "h2.json", log: () => {}, loadRetryDelaysMs: [20] });
+    relay.cut();
+    const during = await h2.load({ seqs: {} });
+    const rd = await h2.read();
+    await heal();
+    ok(Object.keys(during.seqs).length === 0 && h2.loaded === false && h2.loadState === "failed", "a load during an outage returns the fallback and leaves the document unloaded");
+    ok(rd.ok === false, "read() reports the outage as an error, not as a missing row");
+    const refused = await h2.save({ seqs: { d: 4 } });
+    const kept = (await sdb.documents.get("h2.json")).body.seqs;
+    ok(refused === false && kept.a === 1 && kept.b === 2 && kept.c === 3 && kept.d === undefined, "a save after a failed load is refused: the row keeps a, b and c");
+    const relo = await h2.load({ seqs: {} });
+    ok(relo.seqs.a === 1 && h2.loaded === true, "a later load reads the row and the document is loaded");
+    ok(await h2.save({ ...relo, seqs: { ...relo.seqs, d: 4 } }) === true && (await sdb.documents.get("h2.json")).body.seqs.d === 4, "...and saves go through again");
+    const retried = createJsonDocument({ name: "h2.json", log: () => {}, loadRetryDelaysMs: [300] });
+    relay.cut(); setTimeout(() => relay.heal(), 100);
+    ok((await retried.load({ seqs: {} })).seqs.c === 3 && retried.loaded, "a load that fails once is retried after a backoff and reads the row");
+    await heal();
+    const saveOnly = createJsonDocument({ name: "save-only.json", log: () => {} });
+    ok(await saveOnly.save({ s: 1 }) === true, "a store that never loads (a computed snapshot) may still save");
+
+    // ---- a failed save is reported, never dropped silently (e1) --------------
+    const bad = createJsonDocument({ name: "e1.json", log: () => {} });
+    await bad.save({ ok: 1 });
+    const badSave = await bad.save({ s: "nul\u0000inside" });
+    ok(badSave === false && /unsupported|0x00|null character/i.test(String(bad.lastError || "")), `a save the database rejects resolves false and records the error (${String(bad.lastError || "").slice(0, 60)})`);
+    ok((await sdb.documents.get("e1.json")).body.ok === 1, "...and the row is the last good body");
+    relay.cut();
+    const cutSave = await bad.save({ ok: 2 });
+    await heal();
+    ok(cutSave === false && bad.lastError, "a save during an outage resolves false and records the error");
+
+    // ---- update(): two writers never drop each other (H8) --------------------
+    const u1 = createJsonDocument({ name: "upd.json", log: () => {} });
+    const u2 = createJsonDocument({ name: "upd.json", log: () => {} });
+    await Promise.all(Array.from({ length: 20 }, (_, i) => (i % 2 ? u1 : u2).update((b) => { b.items[`k${i}`] = i; }, { fallback: { items: {} } })));
+    const ub = (await sdb.documents.get("upd.json")).body;
+    ok(Object.keys(ub.items).length === 20, `20 concurrent updates from two instances all land (${Object.keys(ub.items).length})`);
+    const sk = await u1.update(() => SKIP_UPDATE);
+    ok(sk.ok && sk.changed === false && (await sdb.documents.get("upd.json")).version === sk.version, "SKIP_UPDATE writes nothing");
+    let ran = 0;
+    const claim = (b) => { ran++; if (b.claimed) return SKIP_UPDATE; b.claimed = "x"; };
+    const [c1, c2] = await Promise.all([u1.update(claim), u2.update(claim)]);
+    ok([c1, c2].filter((r) => r.changed).length === 1, `a conditional claim is won by exactly one writer (mutator ran ${ran} times)`);
+    relay.cut();
+    const uo = await u1.update((b) => { b.x = 1; });
+    await heal();
+    ok(uo.ok === false && uo.error, "an update during an outage resolves ok:false");
     const mergedFirst = createJsonDocument({ file: join(DIR, "mf.json"), log: () => {} });
     writeFileSync(join(DIR, "mf.json"), JSON.stringify({ old: 1 }));
     const mm = await mergedFirst.mergeKeys({ new: 2 });
     ok(mm.old === 1 && mm.new === 2, "a first mergeKeys imports the file before merging");
   } finally {
-    await sdb.__dropStateSchema();
+    relay.heal();
+    for (let i = 0; i < 3; i++) { try { await sdb.__dropStateSchema(); break; } catch { /* a connection the cut killed; the pool opens a new one */ } }
     await sdb.closeStateDb();
+    await relay.close();
   }
 } else {
   console.log("SKIP - Postgres half: no STATE_DATABASE_URL_FOR_TEST");

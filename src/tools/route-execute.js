@@ -18,7 +18,7 @@
 // price instead.
 import { createHash } from "node:crypto";
 import { paymentHeaderOf, payerFromRequest } from "../payer.js";
-import { maySpend, noteSpend, adjustSpend } from "../external-spend-guard.js";
+import { maySpend, noteSpend, adjustSpend, reserveSpend } from "../external-spend-guard.js";
 import { findTools } from "../find.js";
 import { judgeTool, decide } from "../tool-judge.js";
 import { observeDelivery } from "../response-observation.js";
@@ -499,12 +499,14 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // books against that wallet's rolling 24 h ceiling (external-spend-
           // guard.js). A `wallet_daily_ceiling` refusal is a GLOBAL pause on
           // that chain and is worded so, not as this buyer's own limit.
-          const allowed = await maySpend(spendPayer, cap, { chain });
+          // Check and book in one step (reserveSpend), so two calls in flight
+          // cannot both pass a ceiling that has room for one.
+          const allowed = await reserveSpend(spendPayer, cap, { chain });
           if (!allowed.ok) {
-            if (allowed.code === "wallet_daily_ceiling") throw bad(`External routing on ${chain} is paused for everyone right now, not for this wallet in particular: ${allowed.reason} Nothing was charged.`, 429);
+            if (allowed.code === "wallet_daily_ceiling" || allowed.code === "spend_ledger_unreadable") throw bad(`External routing on ${chain} is paused for everyone right now, not for this wallet in particular: ${allowed.reason} Nothing was charged.`, 429);
             throw bad(`External routing is paused for this wallet: ${allowed.reason}`, 429);
           }
-          const spendHandle = await noteSpend(spendPayer, cap, { chain });
+          const spendHandle = allowed.handle;
           // Handed to server.js on the REQUEST, because a tool handler is called
           // as handler(input, req) and never receives `res`. The first draft
           // registered res.on("finish") here, where `res` is undefined - a guard

@@ -119,13 +119,18 @@ try {
     ok(b.reportView("rep_1")?.status === "done" && b._store().lastTickAt, "monitors: a fresh instance reads the tick's state from the row");
     // The database cannot answer: a young container skips, an old one delivers anyway.
     const liveUrl = process.env.STATE_DATABASE_URL;
+    // The old container read its run history while the database answered.
+    const old = createMonitorScheduler({ ...deps, storePath: join(D2, "monitor-runs.json"), ownerId: "O", uptimeMs: () => 11 * 60_000 });
+    await old.ready();
     await sdb.closeStateDb();
     process.env.STATE_DATABASE_URL = "postgres://postgres@127.0.0.1:1/none?sslmode=disable&connect_timeout=1";
     const young = createMonitorScheduler({ ...deps, storePath: join(D2, "monitor-runs.json"), ownerId: "Y", uptimeMs: () => 1000 });
     ok((await young.tick()).skipped === "locked", "monitors: with the database down a young container skips its tick");
-    const old = createMonitorScheduler({ ...deps, storePath: join(D2, "monitor-runs.json"), ownerId: "O", uptimeMs: () => 11 * 60_000 });
     const t2 = await old.tick();
-    ok(t2.skipped === undefined && typeof t2.active === "number", "monitors: with the database down an old container runs its tick as the only container");
+    ok(t2.skipped === undefined && typeof t2.active === "number", "monitors: with the database down an old container that read its history runs its tick as the only container");
+    const neverRead = createMonitorScheduler({ ...deps, storePath: join(D2, "monitor-runs.json"), ownerId: "N", uptimeMs: () => 11 * 60_000 });
+    await neverRead.ready();
+    ok((await neverRead.tick()).skipped === "locked", "monitors: an old container whose history was never read skips (it would pay again for delivered reports)");
     await sdb.closeStateDb();
     process.env.STATE_DATABASE_URL = liveUrl;
   }

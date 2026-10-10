@@ -47,9 +47,21 @@ export function providerErrorCode(bodyText) {
 }
 export function noteEmailOutcome(ok, { status = null, code = null, provider = null } = {}) {
   const o = loadOutcome();
-  o.ok = !!ok; o.at = new Date().toISOString(); o.status = status; o.code = ok ? null : code; o.provider = provider;
+  const at = new Date().toISOString();
+  o.ok = !!ok; o.at = at; o.status = status; o.code = ok ? null : code; o.provider = provider;
   if (ok) { o.failuresSinceOk = 0; o.sentTotal++; } else { o.failuresSinceOk++; o.failedTotal++; }
-  persistOutcome();
+  const d = outcomeStore();
+  if (d.backend === "pg") {
+    // Two containers send at once during a deploy: each outcome is applied
+    // to the row as it is (totals add, the newest outcome is the last one),
+    // never a whole-body put of one container's counts over the other's.
+    void d.update((b) => {
+      const r = b && typeof b === "object" ? { ...b } : { ok: null, at: null, status: null, code: null, provider: null, failuresSinceOk: 0, sentTotal: 0, failedTotal: 0 };
+      if (!r.at || at >= r.at) { r.ok = !!ok; r.at = at; r.status = status; r.code = ok ? null : code; r.provider = provider; }
+      if (ok) { r.failuresSinceOk = 0; r.sentTotal = (Number(r.sentTotal) || 0) + 1; } else { r.failuresSinceOk = (Number(r.failuresSinceOk) || 0) + 1; r.failedTotal = (Number(r.failedTotal) || 0) + 1; }
+      return r;
+    }, { fallback: null }).then((r) => { if (r.ok && r.body && typeof r.body === "object") Object.assign(outcome, r.body); });
+  } else persistOutcome();
   if (!ok) console.warn(`[email] send refused by ${provider || "provider"}: HTTP ${status ?? "error"}${code ? ` ${code}` : ""} (${o.failuresSinceOk} in a row since the last delivered send)`);
 }
 /** One word publicly; counts and the last code for the operator. */
