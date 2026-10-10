@@ -256,6 +256,7 @@ import { backupPlan, backupStatus, runBackup, startBackupScheduler } from "./bac
 import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
 import { datasetStatus, datasetRecorded, runDatasetSnapshot, startDatasetScheduler } from "./dataset-snapshot.js";
+import { startQuoteWarmer, quoteWarmerStatus } from "./tools/databento.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
 import { createAsyncJobs } from "./async-jobs.js";
@@ -10138,6 +10139,11 @@ bootStep("mppReconciler.start", () => mppReconciler.start());
 // failure mode this tool exists to avoid.
 bootStep("startSanctionsRefresh", () => startSanctionsRefresh());
 bootStep("startDatasetScheduler", () => startDatasetScheduler(datasetSources()));
+// Stock-quote warmer (src/tools/databento.js): keeps the session boundary and
+// the most-requested symbols' bars off the request path, under its own daily
+// ceiling of background calls. Started here, never from inside a request, so
+// its reads carry no request context. No key or DATABENTO_WARM=off: not started.
+bootStep("startQuoteWarmer", () => { if (startQuoteWarmer()) console.log("[databento] stock-quote warmer on"); });
 
 // Monitor scheduler timer (recurring report fulfilment). MONITOR_SCHEDULER=off
 // keeps the manual operator run available while disarming the timer.

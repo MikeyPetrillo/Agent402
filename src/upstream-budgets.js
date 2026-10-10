@@ -54,6 +54,8 @@ export const UPSTREAM_BUDGETS = [
     why: "the b2b enrichment tools; billed per lookup" },
   { match: "api.apollo.io", name: "apollo", env: "BUDGET_APOLLO_CALLS", dflt: 200,
     why: "the b2b enrichment tools; billed per lookup" },
+  { match: "hist.databento.com", name: "databento", env: "BUDGET_DATABENTO_CALLS", dflt: 3000,
+    why: "the equities tools plus the stock-quote warmer, which also holds its own daily ceiling" },
 ];
 
 // A budget whose vendor is ALSO an indexed seller cannot be read off host

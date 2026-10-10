@@ -14,14 +14,17 @@ globalThis.fetch = async () => { throw timeoutErr(); };
 try { await availableEnd(); ok(false, "range read times out"); }
 catch (e) { ok(e.statusCode === 504 && /did not answer/.test(e.message), `a timed-out range read is a 504 naming the upstream (${e.statusCode}: ${e.message})`); }
 
-try { await dailyBars({ symbol: "AAPL", start: "2026-09-01", end: "2026-09-05" }); ok(false, "data read times out"); }
+try { await dailyBars({ symbol: "AAPL", start: "2026-08-01", end: "2026-09-05" }); ok(false, "data read times out"); }
 catch (e) { ok(e.statusCode === 504, `a timed-out data read is a 504, not a 500 (${e.statusCode})`); }
 
 globalThis.fetch = async () => { throw new TypeError("fetch failed"); };
-try { await dailyBars({ symbol: "AAPL", start: "2026-09-01", end: "2026-09-05" }); ok(false, "unreachable"); }
+try { await dailyBars({ symbol: "AAPL", start: "2026-08-01", end: "2026-09-05" }); ok(false, "unreachable"); }
 catch (e) { ok(e.statusCode === 502 && /could not be reached/.test(e.message), `an unreachable upstream is a 502 (${e.statusCode})`); }
 
 // The cost read failing is not a reason to refuse: the data read still runs.
+// These reads use a range wider than a quote's lookback, the shape that keeps
+// its price check on the request path (a quote-shaped read is priced by the
+// warmer instead: scripts/test-stock-quote-speed.js).
 let calls = 0;
 globalThis.fetch = async (url) => {
   calls++;
@@ -29,7 +32,7 @@ globalThis.fetch = async (url) => {
   const bar = { hd: { ts_event: String(Date.UTC(2026, 8, 2) * 1e6) }, open: "1e9", high: "2e9", low: "5e8", close: "1.5e9", volume: "100" };
   return new Response(JSON.stringify(bar) + "\n", { status: 200 });
 };
-const bars = await dailyBars({ symbol: "AAPL", start: "2026-09-01", end: "2026-09-05" });
+const bars = await dailyBars({ symbol: "AAPL", start: "2026-08-01", end: "2026-09-05" });
 ok(calls === 2 && Array.isArray(bars) && bars.length === 1, `a timed-out cost read still serves the data (${calls} calls, ${bars.length} bar)`);
 
 // Bars are end-of-day data keyed by symbol and range: a repeat inside the
@@ -50,7 +53,7 @@ globalThis.fetch = async (url) => {
   }
   return new Response(JSON.stringify({ end: "2026-09-05" }), { status: 200 });
 };
-const q = { symbol: "aapl", start: "2026-09-01", end: "2026-09-05" };
+const q = { symbol: "aapl", start: "2026-08-01", end: "2026-09-05" };
 const first = await dailyBars(q);
 ok(dataReads === 1 && costReads === 1, `first read of a symbol and range costs one cost check and one data read (${costReads}/${dataReads})`);
 first[0].close = 0; // a caller mutating its copy must not poison the cache
@@ -78,7 +81,7 @@ __setBarsCacheMax();
     return new Response(JSON.stringify(bar) + "\n", { status: 200 });
   };
   const t0 = Date.now();
-  const bars = await dailyBars({ symbol: "MSFT", start: "2026-09-01", end: "2026-09-05" });
+  const bars = await dailyBars({ symbol: "MSFT", start: "2026-08-01", end: "2026-09-05" });
   const took = Date.now() - t0;
   ok(bars.length === 1 && took < 340, `a first read with two 200 ms upstream reads finishes in about one latency (${took} ms)`);
 }

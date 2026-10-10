@@ -40,6 +40,7 @@ const METERED = [
   "e2b.dev",
   "api.neynar.com",
   "alchemy.com",
+  "hist.databento.com",
 ];
 
 // Non-tool files allowed to reach a metered host, each with the bound that
@@ -82,6 +83,34 @@ for (const f of files) {
 }
 ok(offenders.length === 0,
   `every non-tool file reaching a metered upstream declares a bound${offenders.length ? `:\n     ${offenders.join("\n     ")}` : ""}`);
+
+// A tool KIT may call a metered host from its paid handler with no entry
+// here, but a kit that also runs its own background loop (a timer) reaches the
+// host with no buyer attached, which is this file's whole subject. Each such
+// kit is listed with the bound it must carry in its source.
+const TOOL_LOOPS = {
+  "databento.js": { why: "stock-quote warmer: range refresh and top-symbol pre-reads", bound: /DATABENTO_BACKGROUND_DAILY_MAX_CALLS/ },
+};
+const toolsDir = new URL("../src/tools/", import.meta.url);
+const loopOffenders = [];
+let loopKits = 0;
+for (const f of readdirSync(toolsDir).filter((x) => x.endsWith(".js"))) {
+  const src = readFileSync(new URL(f, toolsDir), "utf8");
+  const host = METERED.find((h) => src.includes(h));
+  if (!host || !/\bsetInterval\s*\(/.test(src)) continue;
+  loopKits++;
+  const rule = TOOL_LOOPS[f];
+  if (!rule) { loopOffenders.push(`tools/${f} runs a timer and reaches ${host} with no declared bound`); continue; }
+  if (!rule.bound.test(src)) loopOffenders.push(`tools/${f} is allowed for "${rule.why}" but its bound is missing from the source`);
+}
+ok(loopOffenders.length === 0, `every tool kit with a background loop on a metered host declares a bound${loopOffenders.length ? `:\n     ${loopOffenders.join("\n     ")}` : ""}`);
+ok(loopKits >= 1, `the tool-loop scan found ${loopKits} kit(s) (sanity: it is not blind)`);
+// The warmer's ceiling must default to a finite number, never to unbounded.
+{
+  const dbSrc = readFileSync(new URL("databento.js", toolsDir), "utf8");
+  const dflt = Number((dbSrc.match(/DATABENTO_BACKGROUND_DAILY_MAX_CALLS[\s\S]{0,400}?:\s*(\d+);/) || [])[1] || 0);
+  ok(dflt > 0 && dflt <= 500, `the stock-quote warmer's daily ceiling defaults to a small finite number (${dflt})`);
+}
 
 // The guard must actually be looking at something - an empty scan would pass
 // silently, which is the vacuous-green failure this codebase keeps producing.
