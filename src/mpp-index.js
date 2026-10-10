@@ -24,7 +24,12 @@
 // one discovery source (not four), no Bazaar-style pagination, no per-path
 // backoff matrix (one representative endpoint per seller, not four candidate
 // manifest paths) - grow this only if a second real MPP registry surfaces.
-import { readFileSync, writeFileSync } from "node:fs";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady, leased } from "./state-db.js";
+// Each store is one JSON document: on the volume, or in the state database
+// when one is configured (imported from the file once).
+const docs = new Map();
+const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
 import { timedSync } from "./boot-timing.js";
 import { safeFetch, assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins } from "./x402-index.js";
@@ -112,8 +117,19 @@ export function __testSetSubmittedCap(n) {
 }
 
 export function loadSubmittedSeeds() {
+  const d = docFor(MPP_SUBMITTED_SEEDS_FILE);
+  if (d.backend === "pg") {
+    // A submission made while the load is still reading the row is refused
+    // by the document (it would replace a body nobody read); it is kept in
+    // memory and saved merged with the stored list once the row is read,
+    // now or by the document's background re-read.
+    return trackStoreReady(d.load(null, { onLoad: (arr) => { applySubmittedSeeds(arr); if (submittedUnsaved) { submittedUnsaved = false; persistSubmittedSeeds(); } } }));
+  }
+  applySubmittedSeeds(d.loadSync(null));
+  return Promise.resolve();
+}
+function applySubmittedSeeds(arr) {
   try {
-    const arr = JSON.parse(readFileSync(MPP_SUBMITTED_SEEDS_FILE, "utf8"));
     for (const o of Array.isArray(arr) ? arr : []) {
       if (submittedSeeds.size >= submittedSeedsCap) break;
       // Two on-disk shapes: the original bare origin string, and (since the
@@ -128,10 +144,13 @@ export function loadSubmittedSeeds() {
   } catch { /* absent file / no volume - in-memory only */ }
 }
 
+let submittedUnsaved = false;
 function persistSubmittedSeeds() {
   try {
     const rows = [...submittedSeeds].map((origin) => (submittedHints.has(origin) ? { origin, ...submittedHints.get(origin) } : origin));
-    writeFileSync(MPP_SUBMITTED_SEEDS_FILE, JSON.stringify(rows, null, 2));
+    const d = docFor(MPP_SUBMITTED_SEEDS_FILE);
+    if (d.backend === "pg" && (d.loadState === "loading" || d.loadState === "failed")) { submittedUnsaved = true; return; }
+    void d.save(rows);
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -160,7 +179,8 @@ export function __testResetSubmitted() { submittedSeeds.clear(); submittedHints.
  *  (self-serve registration should keep requiring a bare origin from the
  *  submitter) - left for a follow-up if gateway-hosted MPP sellers turn out
  *  to be a meaningful share of the ecosystem going forward. */
-export async function discoverMppRegistry() {
+export const discoverMppRegistry = leased("mpp-index-discover-registry", { ttlMs: 10 * 60_000, failOpen: true }, discoverMppRegistryUnleased);
+async function discoverMppRegistryUnleased() {
   try {
     const { html } = await safeFetch(MPP_DISCOVERY_URL, { maxBytes: MAX_REGISTRY_BYTES, headers: { Accept: "application/json" } });
     const parsed = JSON.parse(html);
@@ -268,7 +288,8 @@ function mppScanListUrl(page) {
 /** Discover seeds from MPPScan: the tRPC list (all pages), falling back to
  *  the rendered page's origin list if the API fails or changes shape. Never
  *  throws. */
-export async function discoverMppScan() {
+export const discoverMppScan = leased("mpp-index-discover-scan", { ttlMs: 10 * 60_000, failOpen: true }, discoverMppScanUnleased);
+async function discoverMppScanUnleased() {
   const seen = new Set();
   let added = 0, total = 0, error = null, source = "api";
   try {
@@ -571,7 +592,8 @@ async function runPool(items, limit, worker) {
   await Promise.all(workers);
 }
 
-export async function runMppCrawl() {
+export const runMppCrawl = leased("mpp-index-crawl", { ttlMs: 30 * 60_000, failOpen: true }, runMppCrawlUnleased);
+async function runMppCrawlUnleased() {
   if (crawlInFlight) return;
   crawlInFlight = true;
   try {
@@ -596,7 +618,7 @@ export function persistMppIndexCache(file = MPP_INDEX_CACHE_FILE) {
     if (cache.size === 0) return false;
     const out = [...cache.entries()].filter(([, v]) => v.verified);
     if (!out.length) return false;
-    writeFileSync(file, JSON.stringify({ savedAt: Date.now(), entries: out }));
+    void docFor(file).save({ savedAt: Date.now(), entries: out });
     return true;
   } catch { return false; }
 }
@@ -605,8 +627,17 @@ export function loadPersistedMppIndexCache(file = MPP_INDEX_CACHE_FILE) {
   return timedSync("MPP index warm-start", file, () => _loadPersistedMppIndexCache(file));
 }
 function _loadPersistedMppIndexCache(file = MPP_INDEX_CACHE_FILE) {
+  const d = docFor(file);
+  if (d.backend === "pg") {
+    // The row arrives after boot: warm the cache when it does.
+    // onLoad also runs when a failed load's background re-read lands.
+    trackStoreReady(d.load(null, { onLoad: (parsed) => { const n = applyMppIndexCache(parsed); if (n) console.log(`[mpp-index] warm-started ${n} sellers from the state database`); } }));
+    return 0;
+  }
+  return applyMppIndexCache(d.loadSync(null));
+}
+function applyMppIndexCache(parsed) {
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
     const entries = Array.isArray(parsed?.entries) ? parsed.entries : [];
     let n = 0;
     for (const [origin, v] of entries) {

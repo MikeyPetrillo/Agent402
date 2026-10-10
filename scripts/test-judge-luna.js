@@ -6,6 +6,8 @@ import { readFileSync } from "node:fs";
 
 process.env.OPENAI_API_KEY = "sk-test-not-real";
 process.env.TYPESAFE_API_KEY = "ts-test-not-real";
+// Hermetic: Decision-1 is the third backend; scripts/test-decision-one.js covers it.
+delete process.env.OPENROUTER_API_KEY;
 const { setUpstreamCostsForTest, upstreamCostsGaps } = await import("../src/upstream-costs.js");
 const kit = await import("../src/tools/judge-kit.js");
 const { judge, decisions, lunaFits, lunaEnabled, judgeEnabled, LUNA, JUDGE_TOOLS, JUDGE_PRICE_USD } = kit;

@@ -82,7 +82,7 @@ export function makeFeedbackHandler(deps = {}) {
     if (!sale.payer || String(sale.payer).toLowerCase() !== String(caller).toLowerCase()) throw notYours();
 
     const prior = existing(tx);
-    const row = record({ tx, saleId: sale.id, slug: sale.slug, payer: caller, verdict, reason: reason || null });
+    const row = await record({ tx, saleId: sale.id, slug: sale.slug, payer: caller, verdict, reason: reason || null });
     if (!row) throw bad("The verdict could not be recorded. Nothing was charged.", 500);
 
     // A bad verdict is a buyer telling us something is broken, and that has one

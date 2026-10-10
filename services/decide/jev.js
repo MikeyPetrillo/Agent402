@@ -11,10 +11,21 @@
 // `tool` field of each question, already cleaned by judgeText(); the answer is
 // a number per question id we minted, so nothing the seller wrote can name a
 // tool we did not offer.
+//
+// FALLBACK. When Jev fails (non-ok, timeout, network, or no answers object),
+// Microsoft Decision-1 (src/decision-one.js) is asked the same questions over
+// OpenRouter within what is left of the timeout, booked against the same daily
+// ceiling and metered under its own model name. It also serves alone when no
+// TypeSafe key is set: the planner already falls back to the model judge on
+// null, so a second backend only adds answers.
+import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL } from "../../src/decision-one.js";
+import { upstreamCosts } from "../../src/upstream-costs.js";
 
 const ENDPOINT = () => (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 const MODEL = () => (process.env.TYPESAFE_MODEL || "jev-latest").trim();
 export const jevApiKey = () => (process.env.DECIDE_TYPESAFE_API_KEY || process.env.TYPESAFE_API_KEY || "").trim();
+// Decide may carry its own OpenRouter key, as llm.js does.
+export const decisionOneApiKey = () => (process.env.DECIDE_OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY || "").trim();
 
 // Daily ceiling on booked input tokens (one token per request byte, an
 // overestimate); 0 or "off" disables the judge. Past it, the model judge runs.
@@ -30,6 +41,8 @@ const usdPerMtok = () => {
   const n = Number(process.env.DECIDE_JEV_USD_PER_MTOK);
   return Number.isFinite(n) && n >= 0 && String(process.env.DECIDE_JEV_USD_PER_MTOK ?? "").trim() !== "" ? n : null;
 };
+// Decision-1's input rate (USD per 1M tokens) from the private table, or null.
+const decisionOneUsdPerMtok = () => upstreamCosts().vendor?.decisions?.decisionOne ?? null;
 
 export function jevQuestions(listing) {
   const questions = {};
@@ -69,39 +82,64 @@ export function jevChoiceQuestions(items, textOf = (t) => String(t || "").slice(
   return questions;
 }
 
-export function makeJevJudge({ apiKey = jevApiKey(), fetchImpl = fetch } = {}) {
+export function makeJevJudge({ apiKey = jevApiKey(), fetchImpl = fetch, decisionOneKey = decisionOneApiKey() } = {}) {
   const spend = { day: "", tokens: 0 };
   const roll = () => { const d = new Date().toISOString().slice(0, 10); if (spend.day !== d) { spend.day = d; spend.tokens = 0; } };
-  // One request under the daily ceiling; the parsed body, or null. Never throws.
+  // One request under the daily ceiling (Jev, then Decision-1 on a failure);
+  // the parsed body, or null. Never throws.
   async function ask(task, questions, stage, { timeoutMs = 8000, meter = null } = {}) {
-    if (!apiKey || !Object.keys(questions).length) return null;
+    const fallback = decisionOneEnabled(decisionOneKey);
+    if ((!apiKey && !fallback) || !Object.keys(questions).length) return null;
     const cap = dailyMaxTokens();
     if (!(cap > 0)) return null;
-    const body = JSON.stringify({ state: { task: String(task).slice(0, 2000) }, model: MODEL(), questions });
-    const est = Buffer.byteLength(body);
+    const payload = { state: { task: String(task).slice(0, 2000) }, model: MODEL(), questions };
+    const body = JSON.stringify(payload);
     roll();
     const t0 = Date.now();
-    const note = (outcome, j) => {
+    const deadline = t0 + Math.max(500, timeoutMs);
+    const noteFor = (model, rate, started) => (outcome, j) => {
       const input = Number(j?.usage?.input_tokens) || 0;
-      const rate = usdPerMtok();
-      meter?.push({ stage, model: `typesafe/${MODEL()}`, attempt: 0, outcome, ms: Date.now() - t0,
+      meter?.push({ stage, model, attempt: 0, outcome, ms: Date.now() - started,
         promptTokens: input, completionTokens: Number(j?.usage?.output_tokens) || 0, cachedTokens: 0,
         costUsd: outcome === "ok" && rate !== null ? (input / 1e6) * rate : (outcome === "ok" ? null : 0) });
     };
+    if (apiKey) {
+      const note = noteFor(`typesafe/${MODEL()}`, usdPerMtok(), t0);
+      const est = Buffer.byteLength(body);
+      if (spend.tokens + est > cap) { note("skipped_ceiling", null); return null; }
+      spend.tokens += est;
+      try {
+        const res = await fetchImpl(ENDPOINT(), {
+          method: "POST",
+          headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+          body,
+          signal: AbortSignal.timeout(Math.max(500, timeoutMs)),
+        });
+        if (!res.ok) note(`http_${res.status}`, null);
+        else {
+          const j = await res.json();
+          // Without a fallback the body is returned as before and the caller
+          // records it as unparseable.
+          if ((j?.answers && typeof j.answers === "object") || !fallback) return { j, note };
+          note("unparseable", j);
+        }
+      } catch (e) {
+        note(e?.name === "TimeoutError" || e?.name === "AbortError" ? "timeout" : "network", null);
+      }
+      if (!fallback) return null;
+    }
+    const left = deadline - Date.now();
+    if (left < 250) return null;
+    const t1 = Date.now();
+    const note = noteFor(DECISION_ONE_MODEL, decisionOneUsdPerMtok(), t1);
+    const est = Buffer.byteLength(JSON.stringify({ ...payload, model: DECISION_ONE_MODEL }));
     if (spend.tokens + est > cap) { note("skipped_ceiling", null); return null; }
     spend.tokens += est;
     try {
-      const res = await fetchImpl(ENDPOINT(), {
-        method: "POST",
-        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-        body,
-        signal: AbortSignal.timeout(Math.max(500, timeoutMs)),
-      });
-      if (!res.ok) { note(`http_${res.status}`, null); return null; }
-      const j = await res.json();
+      const j = await askDecisionOne(payload, { fetchImpl, timeoutMs: left, apiKey: decisionOneKey });
       return { j, note };
     } catch (e) {
-      note(e?.name === "TimeoutError" || e?.name === "AbortError" ? "timeout" : "network", null);
+      note(e?.statusCode === 504 ? "timeout" : e?.mayBeBilled ? "unparseable" : "failed", null);
       return null;
     }
   }

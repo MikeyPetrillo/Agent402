@@ -20,13 +20,16 @@
 // retired a data source once already for deriving income without permission.
 
 import { upstreamCosts } from "../upstream-costs.js";
+import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL } from "../decision-one.js";
 
-// TWO BACKENDS, one answer shape. On /v1/judge TypeSafe's Jev answers first
-// and OpenAI's Decisions API (gpt-6-luna) is the fallback; on /v1/decisions,
-// OpenAI's own wire, Luna answers first. A buyer of /v1/judge can name either
-// one first with "model". Both return probabilities over the same three
+// THREE BACKENDS, one answer shape. On /v1/judge TypeSafe's Jev answers first,
+// then Microsoft Decision-1 (over OpenRouter, the Jev wire with another model
+// id), then OpenAI's Decisions API (gpt-6-luna); on /v1/decisions, OpenAI's own
+// wire, Luna answers first, then Jev, then Decision-1. A buyer of /v1/judge can
+// name any one first with "model". All return probabilities over the same three
 // question kinds, so a Luna answer is translated into the shape /v1/judge has
-// always published, and the answer names the model that served.
+// always published, a Decision-1 answer already has it, and the answer names
+// the model that served.
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 const keyOf = () => (process.env.TYPESAFE_API_KEY || "").trim();
 export const LUNA = "gpt-6-luna";
@@ -37,17 +40,23 @@ const openaiKey = () => (process.env.OPENAI_API_KEY || "").trim();
 // offered: the route never sends a call it cannot price.
 const lunaRate = () => upstreamCosts().vendor?.decisions?.luna ?? null;
 const lunaMaxShare = () => upstreamCosts().vendor?.decisions?.maxShare ?? null;
+// The buyer's name for Decision-1 on /v1/judge.
+export const DECISION_ONE = "microsoft-decision-1";
+// Decision-1's input rate (USD per 1M tokens), from the private table under
+// the same rule as Luna's: no rate, no Decision-1 on the paid route.
+const decisionOneRate = () => upstreamCosts().vendor?.decisions?.decisionOne ?? null;
 export const jevEnabled = () => !!keyOf();
 export const lunaEnabled = () => !!openaiKey() && lunaRate() != null && lunaMaxShare() != null;
-export const judgeEnabled = () => jevEnabled() || lunaEnabled();
-// Both routes sell at this price. Luna is tried only when the request's worst
-// case (one token per byte of the body we send) stays within the table's
-// share of it; a larger request goes to Jev, whose rate fits the byte cap.
+export const decisionOneOffered = () => decisionOneEnabled() && decisionOneRate() != null && lunaMaxShare() != null;
+export const judgeEnabled = () => jevEnabled() || lunaEnabled() || decisionOneOffered();
+// Both routes sell at this price. Luna and Decision-1 are tried only when the
+// request's worst case (one token per byte of the body we send) stays within
+// the table's share of it; a larger request goes to Jev, whose rate fits the
+// byte cap.
 export const JUDGE_PRICE_USD = 0.001;
-export function lunaFits(bytes) {
-  const r = lunaRate(), share = lunaMaxShare();
-  return r != null && share != null && (bytes * r) / 1e6 <= share * JUDGE_PRICE_USD;
-}
+const fits = (r, share, bytes) => r != null && share != null && (bytes * r) / 1e6 <= share * JUDGE_PRICE_USD;
+export function lunaFits(bytes) { return fits(lunaRate(), lunaMaxShare(), bytes); }
+export function decisionOneFits(bytes) { return fits(decisionOneRate(), lunaMaxShare(), bytes); }
 
 // Every bound below exists to make the upstream token count knowable in advance.
 export const LIMITS = {
@@ -59,7 +68,7 @@ export const LIMITS = {
   scoreLevels: 10,              // the API's own maximum
   bodyBytes: Number(process.env.JUDGE_MAX_BODY_BYTES || 16_000),   // the money bound: one token per byte worst case
 };
-const MODELS = new Set([LUNA, "jev-latest", "jev-preview"]);
+const MODELS = new Set([LUNA, DECISION_ONE, "jev-latest", "jev-preview"]);
 const TIMEOUT_MS = 25_000;
 
 const bad = (msg) => { const e = new Error(msg); e.statusCode = 400; return e; };
@@ -125,8 +134,15 @@ export function validateJudgeRequest(input = {}) {
 }
 
 async function callJev(body, fetchImpl = fetch) {
-  return post(ENDPOINT, keyOf(), { ...body, model: body.model === LUNA ? "jev-latest" : body.model }, fetchImpl, (j) => j?.answers && typeof j.answers === "object");
+  const model = body.model === LUNA || body.model === DECISION_ONE ? "jev-latest" : body.model;
+  return post(ENDPOINT, keyOf(), { ...body, model }, fetchImpl, (j) => j?.answers && typeof j.answers === "object");
 }
+
+// The Jev body with only the model changed. Same error classes as post().
+async function callDecisionOne(body, fetchImpl = fetch) {
+  return askDecisionOne(body, { fetchImpl, timeoutMs: TIMEOUT_MS });
+}
+const decisionOneBytes = (body) => Buffer.byteLength(JSON.stringify({ ...body, model: DECISION_ONE_MODEL }));
 
 async function callLuna(request, fetchImpl = fetch) {
   return post(LUNA_ENDPOINT, openaiKey(), request, fetchImpl, (j) => Array.isArray(j?.answers));
@@ -215,12 +231,19 @@ function checkJev(answers, body) {
 }
 
 /** The order the backends are tried in: the one the buyer named first, the
- *  other as fallback, each only when it is configured and (Luna) fits. */
+ *  others as fallbacks, each only when it is configured and (Luna,
+ *  Decision-1) fits. Named Luna (and /v1/decisions): luna, jev, decision-one.
+ *  Named Decision-1: decision-one, jev, luna. Otherwise jev, decision-one,
+ *  luna. */
 function backends(body, lunaBytes) {
   const luna = lunaEnabled() && lunaFits(lunaBytes) ? ["luna"] : [];
   const jev = jevEnabled() ? ["jev"] : [];
-  return body.model === LUNA ? [...luna, ...jev] : [...jev, ...luna];
+  const d1 = decisionOneOffered() && decisionOneFits(decisionOneBytes(body)) ? ["decision-one"] : [];
+  if (body.model === LUNA) return [...luna, ...jev, ...d1];
+  if (body.model === DECISION_ONE) return [...d1, ...jev, ...luna];
+  return [...jev, ...d1, ...luna];
 }
+const nameOf = (b) => (b === "luna" ? LUNA : b === "decision-one" ? DECISION_ONE : "jev-latest");
 
 /** Try each backend in order; the first answer wins. A failure settles
  *  nothing for the buyer, but the next backend is tried only when the failed
@@ -247,12 +270,15 @@ export async function judge(input, { fetchImpl = fetch } = {}) {
   const order = backends(body, Buffer.byteLength(JSON.stringify(request)));
   const { backend, out } = await firstAnswer(order, async (b) => {
     if (b === "jev") { const j = await callJev(body, fetchImpl); return { j, answers: checkJev(j.answers, body), model: j.model || "jev-latest" }; }
+    // Decision-1 is named by the buyer's own enum value, not the dated
+    // upstream id the router answers with.
+    if (b === "decision-one") { const j = await callDecisionOne(body, fetchImpl); return { j, answers: checkJev(j.answers, body), model: DECISION_ONE }; }
     const j = await callLuna(request, fetchImpl);
     return { j, answers: fromDecisions(j, body, ids), model: j.model || LUNA };
   });
   return {
     model: out.model,
-    ...(backend !== order[0] ? { fallbackFrom: order[0] === "luna" ? LUNA : "jev-latest" } : {}),
+    ...(backend !== order[0] ? { fallbackFrom: nameOf(order[0]) } : {}),
     // Answers are shaped by the model over the BUYER'S OWN state, so they are
     // returned as-is. The state came from the caller; we add nothing to it.
     answers: out.answers,
@@ -369,12 +395,12 @@ export async function decisions(input, { fetchImpl = fetch } = {}) {
   const order = backends(body, Buffer.byteLength(JSON.stringify(request)));
   const { backend, out } = await firstAnswer(order, async (b) => {
     if (b === "luna") { const j = await callLuna(request, fetchImpl); return { j, answers: checkLuna(j.answers, request), model: j.model || LUNA }; }
-    const j = await callJev(body, fetchImpl);
-    return { j, answers: toDecisionsAnswers(checkJev(j.answers, body), request, levels), model: j.model || "jev-latest" };
+    const j = b === "jev" ? await callJev(body, fetchImpl) : await callDecisionOne(body, fetchImpl);
+    return { j, answers: toDecisionsAnswers(checkJev(j.answers, body), request, levels), model: b === "jev" ? j.model || "jev-latest" : DECISION_ONE };
   });
   return {
     model: out.model,
-    ...(backend !== order[0] ? { fallback_from: LUNA } : {}),
+    ...(backend !== order[0] ? { fallback_from: nameOf(order[0]) } : {}),
     answers: out.answers,
     usage: out.j.usage ? { input_tokens: out.j.usage.input_tokens, output_tokens: 0, total_tokens: out.j.usage.input_tokens } : undefined,
   };
@@ -386,7 +412,7 @@ export const JUDGE_TOOLS = [{
   slug: "judge",
   category: "ai",
   price: "$0.001",
-  description: "Ask a typed question about any content and get an answer your code can branch on, not prose to parse. Send state (the content, a string or object) and questions (your own ids mapped to question objects); get back answers keyed by those ids. Three question types: choice (pick one of your named options: returns choice, probabilities per option and confidence), score (a position on levels you describe, lowest first: returns score as a fractional level index, probabilities per level index, confidence and a legend naming each level), and noul (a yes/no: returns noul, the probability of yes from 0 to 1). Up to 8 questions per call, answered in parallel over one piece of state. Use it for routing, triage, classification and gating decisions. Served by jev-latest with gpt-6-luna as fallback (name either first with model); the answer names the model that served, and fallbackFrom when the first was unavailable. Model-backed, not deterministic.",
+  description: "Ask a typed question about any content and get an answer your code can branch on, not prose to parse. Send state (the content, a string or object) and questions (your own ids mapped to question objects); get back answers keyed by those ids. Three question types: choice (pick one of your named options: returns choice, probabilities per option and confidence), score (a position on levels you describe, lowest first: returns score as a fractional level index, probabilities per level index, confidence and a legend naming each level), and noul (a yes/no: returns noul, the probability of yes from 0 to 1). Up to 8 questions per call, answered in parallel over one piece of state. Use it for routing, triage, classification and gating decisions. Served by jev-latest, with Microsoft Decision-1 (microsoft-decision-1) and gpt-6-luna as fallbacks (name any one first with model); the answer names the model that served, and fallbackFrom when the first was unavailable. Model-backed, not deterministic.",
   tags: ["ai", "classify", "judgment", "routing", "extraction"],
   discovery: {
     bodyType: "json",
@@ -395,7 +421,7 @@ export const JUDGE_TOOLS = [{
       required: ["state", "questions"],
       properties: {
         state: { type: ["string", "object", "array"], description: `The content to judge. Up to ${LIMITS.stateChars} characters.` },
-        model: { type: "string", enum: [...MODELS], description: "Which model answers first; the other is the fallback. Defaults to jev-latest." },
+        model: { type: "string", enum: [...MODELS], description: "Which model answers first; the others are fallbacks. microsoft-decision-1 is Microsoft Decision-1, a model-backed judgment, not deterministic. Defaults to jev-latest." },
         questions: { type: "object", description: "Your own ids mapped to question objects. Each has type (choice/score/noul), instructions, and criteria for choice/score." },
       },
     },
@@ -434,7 +460,7 @@ export const JUDGE_TOOLS = [{
   slug: "decisions",
   category: "ai",
   price: "$0.001",
-  description: "OpenAI's Decisions API on its own wire: point an OpenAI SDK's base URL here and client.decisions.create works unchanged, paid per call. Send input (text, or user messages with input_text parts) and questions; get back answers your code can branch on. predicate returns the probability a condition holds; choice returns one of your values with probabilities and confidence; score returns a probability-weighted position on your ordered levels. Up to 8 questions per call. Served by gpt-6-luna with jev-latest as fallback; the answer names the model that served, and fallback_from when the first was unavailable. Text input only. Model-backed, not deterministic.",
+  description: "OpenAI's Decisions API on its own wire: point an OpenAI SDK's base URL here and client.decisions.create works unchanged, paid per call. Send input (text, or user messages with input_text parts) and questions; get back answers your code can branch on. predicate returns the probability a condition holds; choice returns one of your values with probabilities and confidence; score returns a probability-weighted position on your ordered levels. Up to 8 questions per call. Served by gpt-6-luna, with jev-latest and Microsoft Decision-1 as fallbacks; the answer names the model that served, and fallback_from when the first was unavailable. Text input only. Model-backed, not deterministic.",
   tags: ["ai", "classify", "judgment", "routing", "openai", "decisions"],
   discovery: {
     bodyType: "json",

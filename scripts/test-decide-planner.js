@@ -16,6 +16,10 @@ import { makeJevJudge, jevQuestions, jevChoiceQuestions, CHOOSE_CONFIDENCE } fro
 import { localToolRow, remoteToolRow } from "../src/decide/tool-rows.js";
 import { decideQuoteUsd } from "../src/tools/decide-kit.js";
 
+// Hermetic: a developer shell's OpenRouter key would turn on the Decision-1
+// fallback in jev.js; scripts/test-decision-one.js covers it.
+delete process.env.OPENROUTER_API_KEY; delete process.env.DECIDE_OPENROUTER_API_KEY;
+
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
 const rejects = async (fn, frag, m) => { let e = null; try { await fn(); } catch (x) { e = x; } ok(e && e.statusCode === 400 && String(e.message).includes(frag), `${m} (${e ? e.message.slice(0, 80) : "no throw"})`); };

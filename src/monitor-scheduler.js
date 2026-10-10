@@ -27,7 +27,9 @@
 // Nothing here charges the subscriber: billing is Stripe's recurring invoice;
 // this is fulfilment only. Rollout: mounts only when subscriptions are enabled;
 // MONITOR_SCHEDULER=off disables the timer (manual runs still work).
-import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
+import { trackStoreReady, withLease } from "./state-db.js";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
@@ -52,25 +54,39 @@ export const MAX_FULL_PER_SUB_30D = 4;   // welcome + scheduled + up to 4 change
 // Bounds a monthly subscription against its own MEASURED upstream per report,
 // net of card fees. The tier's own `maxUpstreamUsd` is a circuit breaker that downgrades the synthesis model, not
 // the normal cost; a run that hit it every time would still be capped here at 4.
+// Database mode: how long a paid run's claim on its subscription holds. A run
+// that outlives it (or a container that died mid-run) lets the next holder run
+// the subscription again; a claim never blocks longer than this.
+export const RUN_CLAIM_TTL_MS = 2 * HOUR;
 export const PERMANENT_FAIL_NOTICE_AT = 5; // consecutive failures before the subscriber is told (once)
 const REPORTS_PER_SUB = 12;
 const MAX_RUNS_KEPT = 24;
 
 const STORE_PATH = () => join(existsSync("/data") ? "/data" : "/tmp", "monitor-runs.json");
 
-function loadStore(path) {
-  try {
-    const j = JSON.parse(readFileSync(path, "utf8"));
-    return { lock: j.lock || null, subs: j.subs || {}, reports: j.reports || {}, lastTickAt: j.lastTickAt || null, lastTick: j.lastTick || null };
-  } catch { return { lock: null, subs: {}, reports: {}, lastTickAt: null, lastTick: null }; }
+const shapeStore = (j) => (j && typeof j === "object"
+  ? { lock: j.lock || null, subs: j.subs || {}, reports: j.reports || {}, lastTickAt: j.lastTickAt || null, lastTick: j.lastTick || null }
+  : { lock: null, subs: {}, reports: {}, lastTickAt: null, lastTick: null });
+// When a run was last made for one subscription's state: its newest run, or
+// its newest check or full report.
+function lastActivity(st) {
+  if (!st || typeof st !== "object") return -Infinity;
+  const runs = Array.isArray(st.runs) ? st.runs : [];
+  const t = [Date.parse(runs[runs.length - 1]?.at || ""), Number(st.lastFullAt), Number(st.lastCheckAt)].filter(Number.isFinite);
+  return t.length ? Math.max(...t) : -Infinity;
 }
-function saveStore(path, store) {
-  try {
-    const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(store));
-    renameSync(tmp, path);
-  } catch { /* best-effort; in-memory still works this process */ }
+/** Per subscription, the copy that ran last wins (the row on a tie). */
+export function mergeSubsByNewest(mine = {}, row = {}) {
+  const out = { ...mine };
+  for (const [id, st] of Object.entries(row || {})) {
+    if (!Object.hasOwn(out, id) || lastActivity(st) >= lastActivity(out[id])) out[id] = st;
+  }
+  return out;
 }
+// The lease that keeps two schedulers (two replicas, or the old and the new
+// container during a deploy) from running the same tick. On the volume it is
+// the `lock` field inside the store file; in the state database it is a row
+// in the leases table, so it holds across containers that share nothing else.
 const newReportId = () => randomBytes(16).toString("base64url");
 const errMsg = (e) => String(e?.message || e).replace(/[A-Za-z0-9_-]{32,}/g, "[redacted]").slice(0, 200);
 
@@ -123,31 +139,139 @@ export function describeDomainChanges(prev, next) {
  * @param {(s:string)=>void} [deps.log]
  * @param {(ms:number)=>Promise<void>} [deps.sleep]
  */
-export function createMonitorScheduler({ subs, generate, probeDomain, normDomain, latestFiling, resolveManager, notify, baseUrl, storePath, now = () => Date.now(), ownerId, log = console.log, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), manageUrlFor = () => `${baseUrl}/monitors`, refreshStatus = null, probeRecalls = null, probeIpos = null, probeInsiderFilings = null, probeTokenBrief = null, describeTokenChanges = null, probeCompanyFilings = null, describeFilingChanges = null }) {
+export function createMonitorScheduler({ subs, generate, probeDomain, normDomain, latestFiling, resolveManager, notify, baseUrl, storePath, now = () => Date.now(), ownerId, log = console.log, uptimeMs = () => process.uptime() * 1000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), manageUrlFor = () => `${baseUrl}/monitors`, refreshStatus = null, probeRecalls = null, probeIpos = null, probeInsiderFilings = null, probeTokenBrief = null, describeTokenChanges = null, probeCompanyFilings = null, describeFilingChanges = null }) {
   const path = storePath || STORE_PATH();
-  let store = loadStore(path);
+  const doc = createJsonDocument({ file: path, log });
+  const usePg = doc.backend === "pg";
+  let store = shapeStore(doc.loadSync(null));
+  const ready = trackStoreReady(usePg ? doc.load(null).then((j) => { store = shapeStore(j); }) : Promise.resolve());
   const me = ownerId || `${process.env.RAILWAY_REPLICA_ID || "local"}:${process.pid}:${randomBytes(3).toString("hex")}`;
-  const persist = () => saveStore(path, store);
-  const stateOf = (subId) => (store.subs[subId] ||= { failures: 0, runs: [] });
+  // Database mode: two containers can hold this store at once (a deploy's
+  // overlap, a lease that lapsed mid-run). Saves never put the whole body:
+  // they merge into the row the subscriptions this container touched (the
+  // copy that ran last wins, the row's run claim is kept) and the reports it
+  // added or pruned. On the volume the whole file is saved, as before.
+  const touched = new Set(), addedReports = new Set(), prunedReports = new Set();
+  let saving = null, saveAgain = false;
+  let lastSaveOk = true; // whether the latest merge reached the row (touched is kept until one does)
+  function mergeIntoRow(b) {
+    const body = shapeStore(b);
+    for (const id of touched) {
+      const mine = Object.hasOwn(store.subs, id) ? store.subs[id] : null;
+      if (!mine) continue;
+      const theirs = Object.hasOwn(body.subs, id) ? body.subs[id] : null;
+      // The other container delivered a report this copy has not seen, or ran it later: its record stands.
+      if (theirs && (Number(theirs.lastFullAt || 0) > Number(mine.lastFullAt || 0) || lastActivity(theirs) > lastActivity(mine))) continue;
+      const { runClaim: _local, ...m } = mine;
+      body.subs[id] = theirs?.runClaim ? { ...m, runClaim: theirs.runClaim } : m;
+    }
+    for (const id of addedReports) if (Object.hasOwn(store.reports, id)) body.reports[id] = store.reports[id];
+    for (const id of prunedReports) delete body.reports[id];
+    body.lock = store.lock; body.lastTickAt = store.lastTickAt; body.lastTick = store.lastTick;
+    return body;
+  }
+  function savePg() {
+    if (saving) { saveAgain = true; return saving; }
+    saving = (async () => {
+      do {
+        saveAgain = false;
+        const added = [...addedReports], pruned = [...prunedReports];
+        const r = await doc.update(mergeIntoRow, { fallback: shapeStore(null) });
+        lastSaveOk = r.ok === true;
+        if (r.ok) { for (const id of added) addedReports.delete(id); for (const id of pruned) prunedReports.delete(id); }
+        else log(`[monitors] save failed: ${errMsg(r.error || doc.lastError || "")}; the touched subscriptions are kept for the next save`);
+      } while (saveAgain);
+    })().finally(() => { saving = null; });
+    return saving;
+  }
+  const persist = () => { if (usePg) void savePg(); else void doc.save(store); };
+  const stateOf = (subId) => { if (usePg) touched.add(subId); return (store.subs[subId] ||= { failures: 0, runs: [] }); };
+
+  // Database mode: a paid run is claimed on its subscription's record in the
+  // row first, a conditional write that succeeds only while no other live
+  // claim exists and the row shows no report newer than the copy this run
+  // decided from. Only the claimer generates. The claim is cleared when the
+  // run's record is written (or the run fails).
+  const claimLost = () => { const e = new Error("the subscription's run is claimed elsewhere or already ran"); e.leaseLost = true; return e; };
+  async function claimRun(subId, st) {
+    const token = randomBytes(8).toString("hex");
+    let rowSt = null;
+    const r = await doc.update((b) => {
+      const body = shapeStore(b);
+      const cur = Object.hasOwn(body.subs, subId) ? body.subs[subId] : null;
+      rowSt = cur;
+      if (cur?.runClaim && Number(cur.runClaim.until) > now()) return SKIP_UPDATE;
+      if (cur && ((cur.lastReportId || null) !== (st.lastReportId || null) || Number(cur.lastFullAt || 0) > Number(st.lastFullAt || 0))) return SKIP_UPDATE;
+      body.subs[subId] = { ...(cur || { failures: 0, runs: [] }), runClaim: { by: me, token, until: now() + RUN_CLAIM_TTL_MS } };
+      return body;
+    }, { fallback: shapeStore(null) });
+    if (!r.ok) throw new Error(`could not claim the run: ${errMsg(r.error || doc.lastError || "")}`);
+    if (r.changed) return token;
+    // Not ours: take the row's copy, so no save of ours writes a stale one over it.
+    if (rowSt) { const { runClaim: _c, ...copy } = rowSt; store.subs[subId] = copy; }
+    return null;
+  }
+  async function endRun(subId, token, reportId = null) {
+    const r = await doc.update((b) => {
+      const body = shapeStore(b);
+      const cur = Object.hasOwn(body.subs, subId) ? body.subs[subId] : null;
+      const mine = Object.hasOwn(store.subs, subId) ? store.subs[subId] : null;
+      const claim = cur?.runClaim && cur.runClaim.token !== token ? cur.runClaim : null;
+      if (reportId && mine) {
+        const { runClaim: _c, ...m } = mine;
+        body.subs[subId] = claim ? { ...m, runClaim: claim } : m;
+        if (Object.hasOwn(store.reports, reportId)) body.reports[reportId] = store.reports[reportId];
+        for (const id of prunedReports) delete body.reports[id];
+      } else if (cur?.runClaim?.token === token) {
+        const { runClaim: _c, ...rest } = cur;
+        body.subs[subId] = rest;
+      } else return SKIP_UPDATE;
+      return body;
+    }, { fallback: shapeStore(null) });
+    if (!r.ok) log(`[monitors] ${subId}: the run record could not be written yet (${errMsg(r.error || doc.lastError || "")}); the next save carries it`);
+    else if (reportId) addedReports.delete(reportId);
+  }
 
   // --- shared-store lock -----------------------------------------------------
-  function acquireLock() {
-    const disk = loadStore(path);
+  // With the state database the tick runs under withLease (see tick() below):
+  // no fail-open, since a run pays for a report and emails it. On the volume
+  // the lock is the {owner, at} field in the shared file, as before.
+  async function acquireLock() {
+    const disk = shapeStore(doc.loadSync(null));
     const l = disk.lock;
     if (l && l.owner !== me && now() - l.at < LOCK_STALE_MS) return false;
     // Disk is the freshest view: only a lock holder writes state, and we are
     // not one yet - so another replica's results win over our stale memory.
     store = { ...store, lock: { owner: me, at: now() }, subs: { ...store.subs, ...disk.subs }, reports: { ...store.reports, ...disk.reports } };
     persist();
-    const check = loadStore(path).lock;
+    const check = shapeStore(doc.loadSync(null)).lock;
     return !!(check && check.owner === me);
   }
-  function releaseLock() { if (store.lock?.owner === me) { store.lock = null; persist(); } }
+  async function renewLock() {
+    if (store.lock?.owner !== me) return;
+    store.lock.at = now();
+    persist();
+  }
+  async function releaseLock() {
+    if (store.lock?.owner !== me) return;
+    store.lock = null;
+    if (!usePg) { persist(); return; }
+    // The tick's state lands before the lease goes: the next holder's read
+    // must see this tick's runs.
+    try { await savePg(); if (saveAgain || saving) await savePg(); await doc.flush(); } catch { lastSaveOk = false; /* logged */ }
+    // Only a save that landed lets go of what it carried: after a failed one
+    // the next save (the next tick's) merges these subscriptions again.
+    if (lastSaveOk) touched.clear();
+  }
+  // The fencing check for the tick in progress: false once its lease is
+  // lost, checked before each subscription and before each paid run.
+  let fence = () => true;
+  const leaseLost = () => { const e = new Error("the monitor lease was lost; stopping before a paid run"); e.leaseLost = true; return e; };
 
   // --- delivery ---------------------------------------------------------------
   function pruneReports(subId) {
     const mine = Object.entries(store.reports).filter(([, r]) => r.subId === subId).sort((a, b) => String(a[1].at).localeCompare(String(b[1].at)));
-    while (mine.length > REPORTS_PER_SUB) { const [id] = mine.shift(); delete store.reports[id]; }
+    while (mine.length > REPORTS_PER_SUB) { const [id] = mine.shift(); delete store.reports[id]; if (usePg) prunedReports.add(id); }
   }
 
   // Paid runs in the trailing 30 days (from the run log) - the per-sub cost cap.
@@ -169,10 +293,19 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   async function runFull(rec, st, reason, changes = []) {
     const p = MONITOR_PRODUCTS[rec.product];
     if (!(await stillActive(rec))) { const e = new Error("subscription no longer active"); e.inactive = true; throw e; }
+    if (!fence()) throw leaseLost();
+    const token = usePg ? await claimRun(rec.subId, st) : null;
+    if (usePg && !token) throw claimLost();
     const input = inputFor(p.kind, rec.target, st);
-    const g = await generate(p.kind, p.slug, input, { buyerKey: `sub:${rec.subId}`, rail: "monitor", priceUsd: Number(p.price) / 100 });
+    let g;
+    try {
+      g = await generate(p.kind, p.slug, input, { buyerKey: `sub:${rec.subId}`, rail: "monitor", priceUsd: Number(p.price) / 100 });
+      if (!((g && typeof g === "object") ? g.report : String(g ?? ""))) throw new Error("empty report");
+    } catch (e) {
+      if (token) await endRun(rec.subId, token).catch(() => {});
+      throw e;
+    }
     const bundle = (g && typeof g === "object") ? g : { report: String(g ?? "") };
-    if (!bundle.report) throw new Error("empty report");
     const id = newReportId();
     const at = new Date(now()).toISOString();
     store.reports[id] = {
@@ -184,7 +317,8 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     st.lastFullAt = now(); st.lastReportId = id; st.failures = 0; st.nextAttemptAt = null; st.lastError = null;
     st.runs = [...(st.runs || []), { at, reason, reportId: id }].slice(-MAX_RUNS_KEPT);
     pruneReports(rec.subId);
-    persist();
+    if (usePg) { addedReports.add(id); await endRun(rec.subId, token, id); }
+    else persist();
     if (rec.email) {
       // The manage link (a keyed bearer to the Stripe portal) rides ONLY in the
       // subscriber's email; the report JSON/page carry no bearer to the portal.
@@ -210,6 +344,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   function recovered(st) { st.failures = 0; st.nextAttemptAt = null; st.lastError = null; }
 
   function fail(st, e, rec = null) {
+    if (e?.leaseLost) return; // not a failure of this subscription: the next holder runs it
     if (e?.inactive) { st.lastError = "subscription not active"; st.nextAttemptAt = now() + DAY; persist(); return; }
     st.failures = (st.failures || 0) + 1;
     const backoff = Math.min(HOUR * 2 ** (st.failures - 1), MAX_BACKOFF_MS);
@@ -489,32 +624,60 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   let ticking = false;
   async function tick({ force = false, subId = null } = {}) {
     if (ticking) return { skipped: "busy" };
-    if (!acquireLock()) return { skipped: "locked" };
+    // Set before the first await: a second call while the lock is being
+    // taken must not pass the check too.
     ticking = true;
+    try {
+      if (usePg) {
+        await ready;
+        // The state database: the tick runs under the lease, renewed while it
+        // runs; when the database cannot say who holds it the tick is skipped
+        // (no fail-open: a run pays for a report and emails it).
+        const r = await withLease("monitor-scheduler", { owner: me, ttlMs: LOCK_STALE_MS, log }, async (lease) => {
+          // The row is the freshest view of what other containers ran; a
+          // subscription's state is taken from whichever copy ran it last, so a
+          // run of ours whose save did not land is not forgotten (and paid for
+          // again). A row that cannot be read skips the tick.
+          const rd = await doc.read();
+          if (!rd.ok) { log(`[monitors] could not read the run history (${errMsg(doc.lastError || "")}); tick skipped`); return { skipped: "locked" }; }
+          if (typeof subs.reload === "function") await subs.reload();
+          const row = shapeStore(rd.exists ? rd.body : null);
+          store = { ...store, lock: { owner: me, at: now() }, subs: mergeSubsByNewest(store.subs, row.subs), reports: { ...store.reports, ...row.reports } };
+          fence = () => lease.stillHeld();
+          try { return await runTick({ force, subId }); }
+          finally { fence = () => true; await releaseLock(); } // lands before the lease is released
+        });
+        return r.ran ? r.result : { skipped: "locked" };
+      }
+      if (!(await acquireLock())) return { skipped: "locked" };
+      try { return await runTick({ force, subId }); }
+      finally { await releaseLock(); }
+    } finally { ticking = false; }
+  }
+  async function runTick({ force, subId }) {
     const started = now();
     const summary = { full: 0, alert: 0, checked: 0, skip: 0, error: 0, deferred: 0, active: 0 };
     let fullCount = 0;
     const budget = { allow: () => { if (fullCount >= MAX_FULL_PER_TICK) { summary.deferred++; return false; } fullCount++; return true; } };
-    try {
-      const active = subs.listActive().filter((r) => !subId || r.subId === subId);
-      summary.active = active.length;
-      for (const rec of active) {
-        let r;
-        try { r = await processSub(rec, { force, budget }); }
-        catch (e) { fail(stateOf(rec.subId), e); r = "error"; }
-        summary[r] = (summary[r] || 0) + 1;
-        // Keep the lock fresh ON DISK during long ticks (10 paid reports can
-        // take longer than LOCK_STALE_MS) so another replica does not reclaim it.
-        if (store.lock?.owner === me) { store.lock.at = now(); persist(); }
-        await sleep(0);
-      }
-      // Drop state for subscriptions that no longer exist at all (not merely
-      // canceled - a resubscribe reuses nothing, and canceled history is kept).
-      store.lastTickAt = new Date(now()).toISOString();
-      store.lastTick = { ...summary, ms: now() - started, owner: me };
-      persist();
-    } finally { ticking = false; releaseLock(); }
-    log(`[monitors] tick: ${summary.active} active, ${summary.full} full, ${summary.alert} alerts, ${summary.checked} checked, ${summary.error} errors, ${summary.deferred} deferred (${now() - started}ms)`);
+    const active = subs.listActive().filter((r) => !subId || r.subId === subId);
+    summary.active = active.length;
+    for (const rec of active) {
+      // Fencing: a tick whose lease was lost stops here; the next holder
+      // picks up the subscriptions not yet run.
+      if (!fence()) { summary.lost = true; break; }
+      let r;
+      try { r = await processSub(rec, { force, budget }); }
+      catch (e) { fail(stateOf(rec.subId), e); r = "error"; }
+      summary[r] = (summary[r] || 0) + 1;
+      // Keep the lock fresh ON DISK during long ticks (10 paid reports can
+      // take longer than LOCK_STALE_MS) so another replica does not reclaim it.
+      await renewLock();
+      await sleep(0);
+    }
+    store.lastTickAt = new Date(now()).toISOString();
+    store.lastTick = { ...summary, ms: now() - started, owner: me };
+    persist();
+    log(`[monitors] tick: ${summary.active} active, ${summary.full} full, ${summary.alert} alerts, ${summary.checked} checked, ${summary.error} errors, ${summary.deferred} deferred${summary.lost ? ", stopped: lease lost" : ""} (${now() - started}ms)`);
     return summary;
   }
 
@@ -522,11 +685,18 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   // The delivered-report shape the report page polls (same as /api/r/:id).
   // A miss re-reads the shared store at most once per 5s (another replica may
   // have just delivered it) - an id scanner cannot turn every miss into a read.
+  // In the state database the store is read asynchronously: a miss schedules
+  // one re-read (throttled the same way) and the next poll of the report page
+  // sees it; on the volume the re-read is immediate.
   let lastMissReadAt = 0;
   function fromDisk(reportId) {
     if (now() - lastMissReadAt < 5000) return null;
     lastMissReadAt = now();
-    return loadStore(path).reports[reportId] || null;
+    if (usePg) {
+      void doc.load(null).then((j) => { const row = shapeStore(j); for (const [id, r] of Object.entries(row.reports)) if (!store.reports[id]) store.reports[id] = r; });
+      return null;
+    }
+    return shapeStore(doc.loadSync(null)).reports[reportId] || null;
   }
   function reportView(reportId) {
     const r = (Object.hasOwn(store.reports, reportId) ? store.reports[reportId] : null) || fromDisk(reportId);
@@ -571,5 +741,5 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   }
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
-  return { tick, reportView, subIdOfReport, status, start, stop, _store: () => store };
+  return { tick, reportView, subIdOfReport, status, start, stop, ready: () => ready, flush: () => doc.flush(), _store: () => store, _touchedCount: () => touched.size };
 }

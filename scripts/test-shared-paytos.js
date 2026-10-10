@@ -70,9 +70,9 @@ try {
   s1.load();
   ok(!s1.has(S) && s1.has(T) && s1.list()[0].source === "env", "a fresh store lists the env floor only");
   const v0 = s1.version;
-  const added = s1.add(S, { note: "split contract" });
+  const added = await s1.add(S, { note: "split contract" });
   ok(added.changed === true && s1.has(S) && s1.version > v0, "add lists the wallet at once and bumps the version");
-  ok(s1.add(S).changed === false, "adding it again changes nothing");
+  ok((await s1.add(S)).changed === false, "adding it again changes nothing");
   const onDisk = JSON.parse(readFileSync(file, "utf8"));
   ok(onDisk.wallets[S]?.note === "split contract" && !(T in onDisk.wallets), "persisted to the file (runtime entries only; the env floor is not copied)");
   ok(readdirSync(dir).every((f) => !f.endsWith(".tmp")), "written tmp + rename: no temp file is left behind");
@@ -80,12 +80,12 @@ try {
   s2.load();
   ok(s2.has(S) && s2.list().find((x) => x.wallet === S)?.source === "operator", "RESTART: a new instance over the same file still lists it");
   let threw = null;
-  try { s1.remove(T); } catch (e) { threw = e; }
+  try { await s1.remove(T); } catch (e) { threw = e; }
   ok(threw?.statusCode === 409, "an env-listed wallet cannot be removed at runtime (409)");
   threw = null;
-  try { s1.add("0x1234"); } catch (e) { threw = e; }
+  try { await s1.add("0x1234"); } catch (e) { threw = e; }
   ok(threw?.statusCode === 400, "a malformed wallet is refused (400)");
-  ok(s1.remove(S).changed === true && !s1.has(S), "remove unlists it");
+  ok((await s1.remove(S)).changed === true && !s1.has(S), "remove unlists it");
   const s3 = createSharedPayToStore({ file });
   s3.load();
   ok(!s3.has(S), "...and the removal persists");

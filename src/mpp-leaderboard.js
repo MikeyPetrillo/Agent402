@@ -24,7 +24,12 @@
 // spends real money on, disclosed as such. Counts feed the router's
 // proven-seller cache (tempo-buyer.js primeTempoInboundCount) so a routed
 // buy to a ranked seller does not re-scan the chain.
-import { readFileSync, writeFileSync } from "node:fs";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady, leased } from "./state-db.js";
+// Each store is one JSON document: on the volume, or in the state database
+// when one is configured (imported from the file once).
+const docs = new Map();
+const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
 import { timedSync } from "./boot-timing.js";
 import { redactSecrets } from "./tools/redact.js";
 import { mppIndexSnapshot } from "./mpp-index.js";
@@ -44,7 +49,7 @@ export function evidencePayerCount(payerSet, recipient, ours = OUR_EVM_WALLETS) 
   }
   return n;
 }
-import { tempoFeedEnabled, emptyFeedState, syncTempoTransfers, feedStats, feedHistoryDays, persistFeedStateAsync, loadFeedState, feedCovers } from "./tempo-transfers.js";
+import { tempoFeedEnabled, emptyFeedState, syncTempoTransfers, feedStats, feedHistoryDays, persistFeedStateAsync, loadFeedState, feedCovers, loadFeedStateAsync, feedStateUnread } from "./tempo-transfers.js";
 
 // Transfer-feed window when the Tempo data API is the source (a time window,
 // not a block window): 24h. The RPC path keeps its ~15h block window.
@@ -307,15 +312,22 @@ let inFlight = null;
 
 export function persistMppLeaderboard(file = MPP_LB_CACHE_FILE) {
   if (!current) return false;
-  try { writeFileSync(file, JSON.stringify(current)); return true; } catch { return false; }
+  try { return docFor(file).saveSync(current); } catch { return false; }
 }
 export function loadPersistedMppLeaderboard(file = MPP_LB_CACHE_FILE) {
   return timedSync("MPP leaderboard warm-start", file, () => _loadPersistedMppLeaderboard(file));
 }
+const wellFormedBoard = (j) => Boolean(j && Array.isArray(j.rows) && Number.isFinite(j.generatedAt));
 function _loadPersistedMppLeaderboard(file = MPP_LB_CACHE_FILE) {
+  const d = docFor(file);
+  if (d.backend === "pg") {
+    // onLoad also runs when a failed load's background re-read lands.
+    trackStoreReady(d.load(null, { onLoad: (j) => { if (wellFormedBoard(j) && !current) { current = j; console.log(`[mpp-leaderboard] warm-started ${j.rows.length} recipients from the state database`); } } }));
+    return false;
+  }
   try {
-    const j = JSON.parse(readFileSync(file, "utf8"));
-    if (j && Array.isArray(j.rows) && Number.isFinite(j.generatedAt)) { current = j; return true; }
+    const j = d.loadSync(null);
+    if (wellFormedBoard(j)) { current = j; return true; }
   } catch { /* cold start */ }
   return false;
 }
@@ -323,14 +335,24 @@ function _loadPersistedMppLeaderboard(file = MPP_LB_CACHE_FILE) {
 /** One rebuild, deduped (a burst of requests never fans out to N chain
  *  reads). On failure the previous snapshot stays, marked stale + lastError. */
 let feedState = null; // Tempo transfer-feed state (null until first load/sync)
-export function refreshMppLeaderboard(opts = {}) {
+let feedStandIn = false; // feedState was started while the stored copy was unreadable
+export const refreshMppLeaderboard = leased("mpp-leaderboard-refresh", { ttlMs: 20 * 60_000, failOpen: true }, refreshMppLeaderboardUnleased);
+function refreshMppLeaderboardUnleased(opts = {}) {
   if (inFlight) return inFlight;
   inFlight = (async () => {
     try {
       let feed = null;
       if (opts.feed !== undefined) feed = opts.feed; // test injection
       else if (tempoFeedEnabled()) {
-        feedState ??= loadFeedState() || emptyFeedState();
+        // A feed state started while the stored one could not be read is a
+        // stand-in (its saves are held): the stored state replaces it once
+        // a load reads it, so the history is not rebuilt from nothing.
+        if (!feedState || feedStandIn) {
+          const stored = await loadFeedStateAsync();
+          if (stored) { feedState = stored; feedStandIn = false; }
+          else if (!feedState) { feedState = loadFeedState() || emptyFeedState(); feedStandIn = feedStateUnread(); }
+          else feedStandIn = feedStateUnread();
+        }
         try {
           // Tracked recipients (full payer detail, 31 days) = the rankable
           // recipients in the current index snapshot + our own payTo; every

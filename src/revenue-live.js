@@ -9,7 +9,9 @@
 // "unavailable" for that rail instead of breaking the page. Balances and
 // transfers are public on-chain data — this page just saves the tab-cycling.
 import { tempoSelfRecipient } from "./mpp-tempo.js";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady } from "./state-db.js";
 import { standingBand } from "./standing.js";
 import { join } from "node:path";
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
@@ -1342,14 +1344,16 @@ let refreshing = null;
 // balances keep their original balanceAsOf, so the card honestly shows
 // "live · cached" rather than a fake-fresh reading.
 const LASTGOOD_PATH = join(existsSync("/data") ? "/data" : "/tmp", "revenue-lastgood.json");
-let diskLastGood = null;
-try { diskLastGood = JSON.parse(readFileSync(LASTGOOD_PATH, "utf8")); } catch { /* first boot or unreadable — in-memory behavior */ }
+const lastGoodDoc = createJsonDocument({ file: LASTGOOD_PATH, log: () => {} });
+let diskLastGood = lastGoodDoc.loadSync(null); // first boot or unreadable: in-memory behavior
+// onLoad also runs when a failed load's background re-read lands.
+if (lastGoodDoc.backend === "pg") trackStoreReady(lastGoodDoc.load(null, { onLoad: (j) => { if (j && !diskLastGood) diskLastGood = j; } }));
 function persistLastGood(rails) {
   try {
     const keep = rails
       .filter((r) => Number.isFinite(r.balance))
       .map((r) => ({ rail: r.rail, balance: r.balance, balanceAsOf: r.balanceAsOf || null, recent: (r.recent || []).slice(0, 10), lastInbound: r.lastInbound || null }));
-    if (keep.length) writeFileSync(LASTGOOD_PATH, JSON.stringify({ asOf: new Date().toISOString(), rails: keep }));
+    if (keep.length) void lastGoodDoc.save({ asOf: new Date().toISOString(), rails: keep });
   } catch { /* persistence must never break the snapshot */ }
 }
 // Snapshot freshness. 10 minutes (was 60s): the refresh fans out ~100 chunked
@@ -1533,9 +1537,9 @@ const netName = (n) => NET_ALIAS[n] || n;
 // mostly canary-proven so far; the page must not imply parity of volume).
 // ---------------------------------------------------------------------------
 const MPP_RAIL_META = {
-  base: { label: "Base", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://basescan.org/address/" },
-  celo: { label: "Celo", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://celoscan.io/address/" },
-  tempo: { label: "Tempo", asset: "USDC.e / PathUSD", how: "native tempo/charge via Tempo's relay", explorer: "https://explore.tempo.xyz/address/" },
+  base: { label: "Base", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://basescan.org/address/", tx: "https://basescan.org/tx/" },
+  celo: { label: "Celo", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://celoscan.io/address/", tx: "https://celoscan.io/tx/" },
+  tempo: { label: "Tempo", asset: "USDC.e / PathUSD", how: "native tempo/charge via Tempo's relay", explorer: "https://explore.tempo.xyz/address/", tx: "https://explore.tempo.xyz/tx/" },
   // Card payments over MPP settle in US dollars, not a stablecoin.
   stripe: { label: "Card", asset: "USD", how: "card over MPP" },
 };
@@ -1588,13 +1592,17 @@ function mppRailsSection(mpp, { wallets = {} } = {}) {
   const entries = Object.entries(rails).sort((a, b) => (b[1].count - a[1].count) || a[0].localeCompare(b[0]));
   const rows = entries.map(([n, r]) => {
     const meta = MPP_RAIL_META[n] || { label: mppRailLabel(n), asset: "USDC", how: "" };
-    // The proof is the receiving wallet's explorer page, the same rule the
-    // x402 table uses: every settlement on the rail is there, and a single
-    // transaction would name its payer. Card payments have no public ledger.
+    // Explorer: the rail's newest settlement on its block explorer (the
+    // transaction page shows the transfer itself), with the receiving wallet's
+    // page as the fallback when no transaction is on record. Card payments
+    // have no public ledger.
     const addr = wallets[n] || null;
-    const proof = meta.explorer && addr
-      ? `<a href="${esc(meta.explorer + addr)}" rel="noopener" title="${esc(addr)}">${esc(addr.slice(0, 6))}…${esc(addr.slice(-4))}</a>`
-      : n === "stripe" ? `<span style="color:var(--muted);">card, no public ledger</span>` : `<span style="color:var(--muted);">-</span>`;
+    const newestTx = Array.isArray(r.txs) ? r.txs.find((t) => /^0x[0-9a-fA-F]{64}$/.test(String(t || ""))) : null;
+    const proof = meta.tx && newestTx
+      ? `<a href="${esc(meta.tx + newestTx)}" rel="noopener" title="newest settlement ${esc(newestTx)}">tx ${esc(newestTx.slice(0, 8))}…${esc(newestTx.slice(-4))}</a>`
+      : meta.explorer && addr
+        ? `<a href="${esc(meta.explorer + addr)}" rel="noopener" title="${esc(addr)}">${esc(addr.slice(0, 6))}…${esc(addr.slice(-4))}</a>`
+        : n === "stripe" ? `<span style="color:var(--muted);">card, no public ledger</span>` : `<span style="color:var(--muted);">-</span>`;
     return `<tr>
       <td><strong>${esc(meta.label)}</strong> <span style="color:var(--muted);">${esc(meta.asset)}</span></td>
       <td class="num">${Number(r.count).toLocaleString()}</td>
@@ -1609,9 +1617,9 @@ function mppRailsSection(mpp, { wallets = {} } = {}) {
       <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0;">MPP wire <span style="color:var(--muted);font-weight:400;">· by rail</span></h2>
       <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><strong style="color:var(--ink);">${count.toLocaleString()}</strong> settlement${count === 1 ? "" : "s"} over <code>Authorization: Payment</code> · <a href="/api/revenue/mpp">/api/revenue/mpp</a></span>
     </div>
-    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;max-width:70ch;">Payments whose credential arrived over the <strong>MPP</strong> wire. Throughput, ours included: most of it is our own daily volume exercising the rails; the external columns are money from others. On Base and Celo an MPP payment settles as ordinary USDC through x402, so its dollars are already in the x402 table above; Tempo and card payments settle off that ledger and are counted here.</p>
+    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;">Payments whose credential arrived over the <strong>MPP</strong> wire. Throughput, ours included: most of it is our own daily volume exercising the rails; the external columns are money from others. On Base and Celo an MPP payment settles as ordinary USDC through x402, so its dollars are already in the x402 table above; Tempo and card payments settle off that ledger and are counted here.</p>
     <div class="rv-tablewrap"><table class="rv-table">
-      <thead><tr><th>Rail</th><th class="num">Settlements</th><th class="num">External</th><th class="num">External $</th><th>Last settled</th><th>Proof</th></tr></thead>
+      <thead><tr><th>Rail</th><th class="num">Settlements</th><th class="num">External</th><th class="num">External $</th><th>Last settled</th><th>Explorer</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
 }
@@ -1627,7 +1635,7 @@ export function decideSection(d) {
     return `<tr>
       <td><strong>${esc(label)}</strong> <span style="color:var(--muted);"><code>${esc(route)}</code></span></td>
       <td class="num">${Number(a.count || 0).toLocaleString()}</td>
-      <td class="num">${Number(a.external || 0).toLocaleString()}${a.sweeps?.count ? ` <span style="color:var(--muted);font-size:12px;">+${Number(a.sweeps.count).toLocaleString()} sweep${a.sweeps.count === 1 ? "" : "s"}</span>` : ""}</td>
+      <td class="num">${Number(a.external || 0).toLocaleString()}</td>
       <td class="num">${money(a.externalUsd)}</td>
       <td class="num">${Number(w.external || 0).toLocaleString()}</td>
       <td class="num">${Number(w.externalBuyers || 0).toLocaleString()}</td>
@@ -1639,7 +1647,7 @@ export function decideSection(d) {
       <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0;">Decide <span style="color:var(--muted);font-weight:400;">· plans and runs</span></h2>
       <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><a href="/api/revenue/decide">/api/revenue/decide</a></span>
     </div>
-    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;max-width:70ch;">Paid use of the planner and its execute route, on every rail. Settlements count ours too (canaries and tests); the external columns are other buyers. External $ is what they paid for the plan or the run, not the pass-through payments a run makes to outside sellers.</p>
+    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;">Paid use of the planner and its execute route, on every rail. Settlements count ours too (canaries and tests); the external columns are other buyers. External $ is what they paid for the plan or the run, not the pass-through payments a run makes to outside sellers.</p>
     <div class="rv-tablewrap"><table class="rv-table">
       <thead><tr><th>Route</th><th class="num">Settlements</th><th class="num">External</th><th class="num">External $</th><th class="num">External, ${Number(d.days || 30)}d</th><th class="num">Buyers, ${Number(d.days || 30)}d</th><th>Last outside buy</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -1724,7 +1732,7 @@ export function revenueChartSection() {
 export function revenueNextStep() {
   return `<div style="margin:36px 0 0;border:1px solid var(--hairline);background:var(--card);padding:22px 20px;">
     <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0 0 6px;">Put a line on this table.</h2>
-    <p style="font-size:14px;line-height:1.6;color:var(--muted);margin:0 0 14px;max-width:68ch;">Every number above is a settlement through the same gate this command hits. It costs a tenth of a cent and needs no account: the 402 comes back with the price and the rails, your client signs, the call is served.</p>
+    <p style="font-size:14px;line-height:1.6;color:var(--muted);margin:0 0 14px;">Every number above is a settlement through the same gate this command hits. It costs a tenth of a cent and needs no account: the 402 comes back with the price and the rails, your client signs, the call is served.</p>
     <pre style="margin:0 0 16px;padding:12px 14px;overflow-x:auto;background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:12.5px;line-height:1.5;"><code>curl -i https://agent402.tools/api/hash?text=hello</code></pre>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
       <a href="/markets" style="font-family:var(--font-mono);font-size:12.5px;border:1px solid var(--ink);padding:8px 12px;text-decoration:none;color:var(--btn-fg);background:var(--btn-bg);">Tools an agent can call &rarr;</a>
@@ -1820,7 +1828,7 @@ export function revenuePage(baseUrl, snap) {
     </p>
     ${standing}
     ${hero}
-    <p style="font-size:12px;line-height:1.55;color:var(--muted);margin:2px 0 14px;max-width:72ch;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. Operating history for a payments service, stated for transparency: information only, not an offer, a solicitation, a recommendation or investment advice, and not a projection. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
+    <p style="font-size:12px;line-height:1.55;color:var(--muted);margin:2px 0 14px;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. Operating history for a payments service, stated for transparency: information only, not an offer, a solicitation, a recommendation or investment advice, and not a projection. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
     <p style="font-family:var(--font-mono);font-size:12px;color:var(--muted);margin:0 0 28px;">balances as of ${esc(snap.asOf)}, refreshed hourly · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
     </section>
     <section>
@@ -1831,7 +1839,7 @@ export function revenuePage(baseUrl, snap) {
       <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0;">x402 rails <span style="color:var(--muted);font-weight:400;">· by chain</span></h2>
       <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><strong style="color:var(--ink);">${snap.rails.length}</strong> chains, ranked by transactions</span>
     </div>
-    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;max-width:70ch;">Transactions count every settlement on the rail, ours included. External is money from others. Latest settle is the newest payment on the rail, from an outside buyer or from our own canary and volume runs (marked ours), linked to our wallet on that chain's explorer.</p>
+    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;">Transactions count every settlement on the rail, ours included. External is money from others. Latest settle is the newest payment on the rail, from an outside buyer or from our own canary and volume runs (marked ours), linked to our wallet on that chain's explorer.</p>
     <div class="rv-tablewrap"><table class="rv-table">
       <thead><tr><th>Rail</th><th class="num">Transactions</th><th class="num">External</th><th class="num">External $</th><th>Latest settle</th><th>Status</th><th>Wallet</th></tr></thead>
       <tbody>${railsSorted.map(railRow).join("\n")}</tbody>
@@ -1848,7 +1856,7 @@ export function revenuePage(baseUrl, snap) {
     ${revenueNextStep()}
     </section>
     <section>
-    <p style="font-size:13.5px;color:var(--muted);margin-top:30px;max-width:70ch;">Check us independently: <a href="https://www.x402scan.com/server/07eb3020-932a-436d-a739-557b6e47101d" rel="noopener">x402scan indexes our settlements</a>. Their totals include our own traffic, so they read higher than the external figures here; <a href="/transparency#revenue-figures">why the two differ</a>.</p>
+    <p style="font-size:13.5px;color:var(--muted);margin-top:30px;">Check us independently: <a href="https://www.x402scan.com/server/07eb3020-932a-436d-a739-557b6e47101d" rel="noopener">x402scan indexes our settlements</a>. Their totals include our own traffic, so they read higher than the external figures here; <a href="/transparency#revenue-figures">why the two differ</a>.</p>
     </section>
   </div>
   ${ledgerFooterCompact(baseUrl)}`;

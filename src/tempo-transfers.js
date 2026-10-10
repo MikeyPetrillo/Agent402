@@ -24,9 +24,12 @@
 // pruned past 31 days, plus the sync cursor (ISO timestamp of the newest
 // transfer seen, minus a small overlap on the next sync; ids dedupe the
 // overlap). Persisted to /data so a redeploy does not start blind.
-import { readFileSync } from "node:fs";
+import { createJsonDocument } from "./json-document.js";
+// Each store is one JSON document: on the volume, or in the state database
+// when one is configured (imported from the file once).
+const docs = new Map();
+const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
 import { timedSync } from "./boot-timing.js";
-import { writeFile } from "node:fs/promises";
 import { redactSecrets } from "./tools/redact.js";
 
 export const TEMPO_TRANSFERS_API = (process.env.TEMPO_API_BASE_URL || "https://api.tempo.xyz").replace(/\/$/, "") + "/v1/transfers";
@@ -193,14 +196,55 @@ export function feedHistoryDays(state) {
 /** Async variant for the scheduler: the stringify is still on-thread, but the
  *  write is not, and a failure never throws into the rebuild. */
 export async function persistFeedStateAsync(state, file = TEMPO_TRANSFERS_CACHE_FILE) {
-  try { await writeFile(file, JSON.stringify(state)); return true; } catch { return false; }
+  try {
+    const d = docFor(file);
+    if (d.backend !== "pg") return await d.save(state);
+    // With a database the save is conditional on the row version this file's
+    // state was last read at (or saved as). A state built while the row was
+    // unread has none and is not saved: it would replace stored progress.
+    // When the row moved on, the stored state is taken into this object (the
+    // caller's reference) and this round's additions are left for the next
+    // sync to fetch again.
+    if (!feedVersions.has(file)) return false;
+    const r = await d.saveIfVersion(state, feedVersions.get(file));
+    if (r.ok) { feedVersions.set(file, r.version); return true; }
+    if (r.conflict) {
+      const row = await d.read();
+      const stored = row.ok && row.exists ? shapeFeedState(row.body) : null;
+      if (row.ok) feedVersions.set(file, Number(row.version) || 0);
+      if (stored && state && typeof state === "object") { for (const k of Object.keys(state)) delete state[k]; Object.assign(state, stored); }
+    }
+    return false;
+  } catch { return false; }
+}
+// file -> the row version the feed state was last read at or saved as (database only).
+const feedVersions = new Map();
+/** The database copy of the feed state; null without a database or a row. */
+export async function loadFeedStateAsync(file = TEMPO_TRANSFERS_CACHE_FILE) {
+  const d = docFor(file);
+  if (d.backend !== "pg") return null;
+  try {
+    const r = await d.read({ retry: true });
+    if (!r.ok) return null;
+    feedVersions.set(file, Number(r.version) || 0);
+    return r.exists ? shapeFeedState(r.body) : null;
+  } catch { return null; }
+}
+/** True while the database copy has not been read (its load failed and is re-reading): a state built meanwhile is a stand-in. */
+export function feedStateUnread(file = TEMPO_TRANSFERS_CACHE_FILE) {
+  const d = docFor(file);
+  return d.backend === "pg" && d.loadState !== "ok";
 }
 export function loadFeedState(file = TEMPO_TRANSFERS_CACHE_FILE) {
   return timedSync("Tempo transfer feed warm-start", file, () => _loadFeedState(file));
 }
 function _loadFeedState(file = TEMPO_TRANSFERS_CACHE_FILE) {
+  if (docFor(file).backend === "pg") return null; // see loadFeedStateAsync
+  try { return shapeFeedState(docFor(file).loadSync(null)); } catch { /* cold */ }
+  return null;
+}
+function shapeFeedState(s) {
   try {
-    const s = JSON.parse(readFileSync(file, "utf8"));
     if (s && typeof s === "object" && s.buckets && typeof s.buckets === "object") return { ...emptyFeedState(), ...s, recentIds: Array.isArray(s.recentIds) ? s.recentIds : [] };
   } catch { /* cold */ }
   return null;

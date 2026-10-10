@@ -31,7 +31,12 @@
 // Measures match the Base board: settled calls, USDC settled, distinct buyers,
 // over 24h / 7d / 30d. The buyer is the owner of the USDC account the payment
 // was debited from. Self-funded transfers are excluded (creditFromTx).
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady, leased } from "./state-db.js";
+// Each store is one JSON document: on the volume, or in the state database
+// when one is configured (imported from the file once).
+const docs = new Map();
+const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
 import { scanCoverage } from "./partial-answer.js";
 
 export const SOLANA_LB_CACHE_FILE = process.env.SOLANA_LB_CACHE_FILE || "/data/solana-leaderboard.json";
@@ -344,17 +349,18 @@ export function getSolanaLeaderboardSnapshot({ self = null, now = Date.now(), wi
 }
 
 export function persistSolanaLeaderboard(file = SOLANA_LB_CACHE_FILE) {
-  try {
-    const tmp = `${file}.tmp`;
-    writeFileSync(tmp, JSON.stringify(current));
-    renameSync(tmp, file);
-  } catch { /* the volume is best-effort; the next scan rebuilds */ }
+  try { docFor(file).saveSync(current); } catch { /* the volume is best-effort; the next scan rebuilds */ }
 }
 export function loadPersistedSolanaLeaderboard(file = SOLANA_LB_CACHE_FILE) {
-  try {
-    const j = JSON.parse(readFileSync(file, "utf8"));
-    if (j && Array.isArray(j.rows)) { current = { ...emptyBoard(), ...j, state: j.state || {}, warm: true }; return true; }
-  } catch { /* cold start */ }
+  const d = docFor(file);
+  const apply = (j) => { if (j && Array.isArray(j.rows)) { current = { ...emptyBoard(), ...j, state: j.state || {}, warm: true }; return true; } return false; };
+  if (d.backend === "pg") {
+    // onLoad also runs when a failed load's background re-read lands; a scan
+    // that finished meanwhile (current.at set) is newer and is kept.
+    trackStoreReady(d.load(null, { onLoad: (j) => { if (!current.warm && !current.at && apply(j)) console.log(`[solana-leaderboard] warm-started ${current.rows.length} payTos from the state database`); } }));
+    return false;
+  }
+  try { return apply(d.loadSync(null)); } catch { /* cold start */ }
   return false;
 }
 export function __setSolanaLeaderboardForTest(snap) { current = { ...current, ...snap }; }
@@ -362,7 +368,8 @@ export function __resetSolanaLeaderboardForTest() { current = emptyBoard(); }
 export function _stateForTest() { return current.state; }
 
 /** Rebuild: list payTos, scan incrementally against the persisted per-payTo state, prime the gate, persist. Deduped in flight. */
-export async function refreshSolanaLeaderboard({ listPayTos, rpc, creditFromTx, readFn = null, prime, windowHours = 168 } = {}) {
+export const refreshSolanaLeaderboard = leased("solana-leaderboard-refresh", { ttlMs: 30 * 60_000, failOpen: true }, refreshSolanaLeaderboardUnleased);
+async function refreshSolanaLeaderboardUnleased({ listPayTos, rpc, creditFromTx, readFn = null, prime, windowHours = 168 } = {}) {
   if (inFlight) return inFlight;
   inFlight = (async () => {
     try {

@@ -46,11 +46,21 @@
 // records carry across a restart only when the digest secret is stable
 // (HANGUP_FORGIVE_SALT, else POW_SECRET, else MPP_SECRET_KEY); the
 // service-wide record always does. Money is counted in integer micro-dollars.
+//
+// With the state database on (STATE_DATABASE_URL, src/state-db.js) the same
+// records are one JSON document named "hangup-forgiveness.json": the file is
+// imported once at the first boot, every persist writes the row (on the same
+// debounce) and writes the file through when the volume is there, and the
+// boot load is a promise the server awaits before it listens
+// (loadHangupForgiveness returns at once with `loaded: false` and a `ready`
+// promise in that mode). The budget survives a deploy either way.
 
 import { createHmac, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { writeFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { createJsonDocument } from "./json-document.js";
+import { stateDbEnabled, trackStoreReady } from "./state-db.js";
 
 const MICRO = 1_000_000;
 const MAX_KEYS = 20_000;
@@ -279,7 +289,7 @@ export function hangupForgivenessStatus(now = Date.now()) {
     abandonedUsdInWindow: sumOf(globalAbandoned) / MICRO,
     inflightUsd: globalInflight / MICRO,
     keysTracked: abandonedByKey.size,
-    persisted: persistPath() !== null,
+    persisted: persistPath() !== null || stateDbEnabled(),
     lastPersistError: lastPersistError,
     // Routes a hang-up is never forgiven on (their effect outlives the answer).
     neverForgiven: LASTING_EFFECT_SLUG_LIST,
@@ -301,24 +311,88 @@ export function persistPath() {
   return existsSync("/data") ? join("/data", "hangup-forgiveness.json") : null;
 }
 
-function snapshot(now = Date.now()) {
+function snapshotDoc(now = Date.now()) {
   const { windowMs } = hangupForgivenessConfig();
   globalAbandoned = prune(globalAbandoned, now, windowMs);
   const keys = [];
   for (const k of [...abandonedByKey.keys()]) {
     if (abandonedMicro(k, now, windowMs) > 0) keys.push([k, abandonedByKey.get(k)]);
   }
-  return JSON.stringify({ v: FILE_VERSION, savedAt: now, global: globalAbandoned, keys });
+  return { v: FILE_VERSION, savedAt: now, global: globalAbandoned, keys };
+}
+function snapshot(now = Date.now()) { return JSON.stringify(snapshotDoc(now)); }
+
+// The state-database document (null without a database). Built once per
+// persist path, so a test that moves HANGUP_FORGIVE_FILE gets a fresh one.
+export const HANGUP_DOCUMENT_NAME = "hangup-forgiveness.json";
+let stateDoc = null;
+let stateDocFile = undefined;
+function stateDocument() {
+  if (!stateDbEnabled()) return null;
+  const file = persistPath();
+  if (!stateDoc || stateDocFile !== file) {
+    stateDoc = createJsonDocument({ name: HANGUP_DOCUMENT_NAME, file, log: console.warn });
+    stateDocFile = file;
+  }
+  return stateDoc;
 }
 
 function schedulePersist() {
-  if (!persistPath() || persistTimer) return;
+  if ((!persistPath() && !stateDbEnabled()) || persistTimer) return;
   persistTimer = setTimeout(() => { persistTimer = null; void persistNow(); }, PERSIST_DEBOUNCE_MS);
   persistTimer.unref?.();
 }
 
-/** Write the abandoned records now (tmp + rename). Never throws. */
+/**
+ * Two bodies' records as one: per list (the service-wide one and each key's),
+ * every record either side holds, a record that both hold counted once (the
+ * larger count of an identical [t, micro] pair), expired and malformed ones
+ * dropped. A record is never removed except by the window, so this is the
+ * union of two containers' records. Exported for tests.
+ */
+export function mergeHangupDocs(stored, mine, now = Date.now()) {
+  const { windowMs } = hangupForgivenessConfig();
+  const maxMicro = 1_000 * MICRO;
+  const valid = (d) => d && typeof d === "object" && d.v === FILE_VERSION;
+  if (!valid(stored)) return mine;
+  const union = (a, b) => {
+    const count = new Map();
+    const take = (list, side) => {
+      const seen = new Map();
+      for (const e of Array.isArray(list) ? list : []) {
+        const c = cleanEntry(e, now, windowMs, maxMicro); if (!c) continue;
+        const k = `${c[0]}:${c[1]}`;
+        seen.set(k, (seen.get(k) || 0) + 1);
+      }
+      for (const [k, n] of seen) { const cur = count.get(k) || [0, 0]; cur[side] = n; count.set(k, cur); }
+    };
+    take(a, 0); take(b, 1);
+    const out = [];
+    for (const [k, [x, y]] of count) { const [t, m] = k.split(":").map(Number); for (let i = 0; i < Math.max(x, y); i++) out.push([t, m]); }
+    return out.sort((p, q) => p[0] - q[0]);
+  };
+  const keyRe = /^(ip|tempo|credits|payer):[0-9a-f]{24}$/;
+  const keys = new Map();
+  for (const d of [stored, mine]) for (const row of Array.isArray(d.keys) ? d.keys : []) {
+    if (Array.isArray(row) && row.length === 2 && typeof row[0] === "string" && keyRe.test(row[0])) keys.set(row[0], null);
+  }
+  const listOf = (d, k) => (Array.isArray(d.keys) ? d.keys.find((r) => Array.isArray(r) && r[0] === k)?.[1] : null) || [];
+  const keyRows = [];
+  for (const k of keys.keys()) { const l = union(listOf(stored, k), listOf(mine, k)); if (l.length) keyRows.push([k, l]); }
+  return { v: FILE_VERSION, savedAt: now, global: union(stored.global, mine.global), keys: keyRows };
+}
+
+/** Write the abandoned records now (the document row with a state database,
+ *  else the file, tmp + rename). Never throws. With a database the write
+ *  merges this container's records into the row's (a versioned
+ *  read-modify-write), so two containers never drop each other's records. */
 export async function persistNow() {
+  const doc = stateDocument();
+  if (doc) {
+    const r = await doc.update((stored) => mergeHangupDocs(stored, snapshotDoc()), { fallback: null });
+    lastPersistError = r.ok ? null : String(r.error || doc.lastError || "save failed").slice(0, 80);
+    return r.ok;
+  }
   const path = persistPath();
   if (!path) return false;
   if (persistWriting) { persistAgain = true; return false; }
@@ -339,11 +413,17 @@ export async function persistNow() {
   }
 }
 
-/** Synchronous flush for shutdown. Never throws. */
+/** Synchronous flush for shutdown. Never throws. With a state database the
+ *  row write is started here and finishes during the drain (true means
+ *  "started"); the file, when there is one, is still written synchronously so
+ *  a rollback reads a current one. */
 export function flushHangupForgiveness() {
+  const doc = stateDocument();
   const path = persistPath();
-  if (!path) return false;
+  if (!path && !doc) return false;
   if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+  if (doc) { void persistNow().catch(() => {}); }
+  if (!path) return true;
   try {
     mkdirSync(dirname(path), { recursive: true });
     const tmp = `${path}.tmp-${process.pid}-sync`;
@@ -374,11 +454,34 @@ function cleanEntry(e, now, windowMs, maxMicro) {
  * loaded; a missing file loads nothing.
  */
 export function loadHangupForgiveness(now = Date.now()) {
-  const path = persistPath();
   const out = { loaded: false, global: 0, keys: 0 };
+  const sdoc = stateDocument();
+  if (sdoc) {
+    // The row (the file imported once when there is no row yet), applied when
+    // it arrives; the server awaits every tracked store before it listens.
+    out.ready = trackStoreReady((async () => {
+      const body = await sdoc.load(null);
+      if (body === null) {
+        if (sdoc.lastError) { lastPersistError = `load: ${String(sdoc.lastError).slice(0, 60)}`; console.warn(`[hangup] forgiveness records not restored: ${sdoc.lastError}`); }
+        return { loaded: false, global: 0, keys: 0 };
+      }
+      const r = applyLoadedDoc(body, now);
+      if (r.loaded) console.log(`[hangup] forgiveness records restored from the state database: ${r.global} service-wide, ${r.keys} keys`);
+      return r;
+    })());
+    return out;
+  }
+  const path = persistPath();
   if (!path || !existsSync(path)) return out;
   let doc;
   try { doc = JSON.parse(readFileSync(path, "utf8")); } catch (err) { lastPersistError = `load: ${String(err?.code || err?.message || err).slice(0, 60)}`; return out; }
+  return applyLoadedDoc(doc, now);
+}
+
+/** The strict reader shared by the file and the document: a malformed,
+ *  expired, future or oversized record is dropped, a raw key refused. */
+function applyLoadedDoc(doc, now) {
+  const out = { loaded: false, global: 0, keys: 0 };
   if (!doc || typeof doc !== "object" || doc.v !== FILE_VERSION) return out;
   const { windowMs } = hangupForgivenessConfig();
   // A sanity bound only: a record is never larger than the per-key budget
@@ -408,4 +511,5 @@ export function _resetHangupForgiveness() {
   inflightByKey.clear(); globalInflight = 0; abandonedByKey.clear(); globalAbandoned = []; lastExhaustedLog = 0;
   if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
   lastPersistError = null;
+  stateDoc = null; stateDocFile = undefined;
 }

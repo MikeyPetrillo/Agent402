@@ -42,6 +42,14 @@ ok(bySlug["ghost"].ok === false && /not in catalog/.test(bySlug["ghost"].error),
 ok(r.ok === false && r.failing.sort().join(",") === "always-fail,ghost,slow", `top-level failing list is exactly the real failures (got ${JSON.stringify(r.failing)})`);
 ok(r.checked === 5, "checked count matches requested slugs");
 
+// The self-check marks its call, so a tool can tell it from a buyer's (the
+// stock quote does not count it as demand for its warmer).
+{
+  let seen = null;
+  await runSelfCheck({ ...def("ctx-probe", async (_i, ctx) => { seen = ctx; return { ok: 1 }; }) }, ["ctx-probe"], { timeoutMs: 200 });
+  ok(seen?.selfcheck === true, `the handler is called with { selfcheck: true } (${JSON.stringify(seen)})`);
+}
+
 // --- a broken metered tool must not bill us on every poll --------------------
 //
 // Keyed successes were cached for 6h but FAILURES were deliberately not cached,

@@ -454,6 +454,66 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
           fi
 
+      # The state database (src/state-db.js): the stores that left the /data
+      # volume and the leases every scheduled loop runs under. "degraded" is a
+      # connection-class failure (refused, reset, hung, timed out), a failed
+      # schema setup, or a store whose first load has not landed since boot;
+      # "off" (variable unset), "idle" and "on" never page. While it lasts the
+      # moved stores cannot be written and loops with external effects skip
+      # their ticks (only internal loops on a long-lived container run without
+      # the lease). Two readings 30 s apart, because a deploy's boot window
+      # can read degraded once.
+      - name: State database check (alarm on a degraded Postgres)
+        if: always()
+        continue-on-error: true
+        run: |
+          read_sdb() { curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.stateDb.status // "unknown"' 2>/dev/null || echo unknown; }
+          STATUS=$(read_sdb)
+          if [ "$STATUS" = "degraded" ]; then sleep 30; STATUS=$(read_sdb); fi
+          echo "state database: $STATUS"
+          TITLE="State database DEGRADED (Postgres)"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ "$STATUS" = "degraded" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status.stateDb reports **degraded** on two readings 30 s apart: the Postgres behind STATE_DATABASE_URL refused, dropped or hung on a statement, its schema setup failed, or a moved store has not loaded since boot. The moved stores (subscriptions, alerts, monitor runs, listings, leaderboards, logs) cannot be written while it lasts; loops with external effects skip their ticks, internal loops on a container up for more than ten minutes keep running without their lease. Check the Postgres service on Railway and the boot log ([state-db] lines). Auto-closes when the status reads on."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ)."
+            fi
+          elif [ "$STATUS" = "on" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the state database reads on at $(date -u +%FT%TZ)."
+          fi
+
+      # The nightly offsite backup (src/backup.js): one word on
+      # /api/gateway-status. held (a state table, or the whole database
+      # snapshot, did not go up), failed (the run threw) and stale (no
+      # successful run in 26 h while configured) page; ok closes; off and
+      # unknown do neither. Two readings 30 s apart, because a boot can read
+      # stale once before the persisted status has loaded.
+      - name: Offsite backup check (alarm on a held, failed or stale backup)
+        if: always()
+        continue-on-error: true
+        run: |
+          read_bk() { curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.backup.status // "unknown"' 2>/dev/null || echo unknown; }
+          WORD=$(read_bk)
+          case "$WORD" in held|failed|stale) sleep 30; WORD=$(read_bk) ;; esac
+          echo "offsite backup: $WORD"
+          TITLE="Offsite backup is not current"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            held|failed|stale)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports backup.status=$WORD on two readings 30 s apart. held: the last run left a state table, or the whole database snapshot, without an offsite copy (older days are kept, not pruned, while this lasts). failed: the last run threw (bucket unreachable, bill guard, unreadable data dir). stale: no successful run in 26 h. Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backup] log line; POST /__operator/backup/run retries. Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the offsite backup reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # The Stellar facilitator's own fee-paying account. It pays the
       # transaction fee on EVERY Stellar settlement, and until 2026-08-31 it
       # was the one spending wallet we run with no alarm on it. This is a slow
@@ -600,6 +660,40 @@ jobs:
             ok)
               if [ -n "$OPEN" ]; then
                 gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: refunds owed reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
+      # Money writes (sales, refund debts, card report records, subscription
+      # records, decide writes) kept on the container's local disk because the
+      # state database has not taken them (src/ledger-mirror.js): one word on
+      # /api/gateway-status. "stuck" means an entry has waited past
+      # LEDGER_DEAD_LETTER_STUCK_MINUTES; without the /data volume that disk
+      # dies with the container, so a redeploy would lose those rows. Two
+      # readings 30 s apart, like the state database check. "pending" (the
+      # replay is working through them), "none", "off" and "unknown" never page;
+      # none and off close.
+      - name: Ledger dead-letter check (alarm when money writes wait on local disk)
+        if: always()
+        continue-on-error: true
+        run: |
+          read_dl() { curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.ledgerDeadLetter.status // "unknown"' 2>/dev/null || echo unknown; }
+          WORD=$(read_dl)
+          if [ "$WORD" = "stuck" ]; then sleep 30; WORD=$(read_dl); fi
+          echo "ledger dead-letter: $WORD"
+          TITLE="Ledger rows waiting on local disk (dead-letter stuck)"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            stuck)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports ledgerDeadLetter.status=stuck on two readings 30 s apart: a money write (a sale, a refund debt, a card report's final record, a subscription record or a decide write) has waited on the container's local disk for the state database longer than LEDGER_DEAD_LETTER_STUCK_MINUTES (default 20). Each journal's replay retries on a timer; while it cannot land them they exist only on that container, so do not redeploy or restart it until they land. Check stateDb on the same endpoint, the Postgres service on Railway, and the [sales-ledger] / [refund-ledger] / [human-checkout] / [subscriptions] / [decide] log lines (a row the database refuses is named there). The operator read of /api/gateway-status has the counts per journal. Auto-closes when the word is none." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still stuck at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            none|off)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the ledger dead-letter reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
               fi
               ;;
           esac

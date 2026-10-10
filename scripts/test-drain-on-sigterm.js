@@ -94,7 +94,15 @@ ok(grace <= 300_000,
 const shutdownSrc = srvSrc.slice(srvSrc.indexOf("function shutdown(signal,"), srvSrc.indexOf('process.on("SIGTERM"'));
 ok(!/setInterval\([^)]*\)\s*;?\s*\n?[\s\S]*quiet/i.test(shutdownSrc) && !/lameDuck|LAME_DUCK|lastRequestAt/.test(srvSrc),
   "no lame-duck window or quiet-detection path remains in shutdown()");
-ok(/httpServer\.close\(\(\) => process\.exit\(code\)\)/.test(shutdownSrc), "shutdown() closes the listener synchronously on the signal");
+ok(/httpServer\.close\(\(\) => \{ flushStateQueues\(\)\.finally\(finish\); \}\)/.test(shutdownSrc), "shutdown() closes the listener synchronously on the signal (the queued state writes flush inside the close callback, bounded)");
+// finish(): release the leases and close the pool, each bounded, then exit.
+ok(/const finish = \(\) => \{[\s\S]*?releaseHeldLeases\([\s\S]*?closeStateDb\(\)[\s\S]*?\.finally\(\(\) => process\.exit\(code\)\)/.test(shutdownSrc), "after the flush, finish() releases the leases and closes the pool, each bounded, then exits");
+ok(/function flushStateQueues\(\{ timeoutMs = 10_000 \}/.test(srvSrc), "the flush is bounded so a slow database cannot hold the drain past its deadline");
+// The early finish (deadline minus 6 s) exists only to release leases and close
+// the pool; without a state database it would cut the drain short, so it is
+// scheduled only when the database is on (test-shutdown.js times the file-mode path).
+ok(/if \(stateDbEnabled\(\)\) setTimeout\(finish, Math\.max\(0, deadlineMs - 6_000\)\)/.test(shutdownSrc) && !/^\s*setTimeout\(finish,/m.test(shutdownSrc),
+  "the early finish is scheduled only with a state database; file mode keeps the full drain deadline");
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

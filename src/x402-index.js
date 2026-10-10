@@ -24,7 +24,54 @@
 //   • The router uses the same lexical scoring shape as /api/find so rankings
 //     are consistent whether a buyer searches local-only or cross-seller.
 import { resolveLocalRefs } from "./openapi-deref.js";
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { dirname } from "node:path";
+import { createHash } from "node:crypto";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce } from "./state-db.js";
+// Each store is one JSON document: on the volume, or in the state database
+// when one is configured (imported from the file once).
+const docs = new Map();
+const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
+// With a database, a save made while a document's load is still running (or
+// failed and re-reading) is refused: it would replace a body nobody read.
+// Changes made in that window are kept here instead: the refused save marks
+// the document dirty, a key deleted meanwhile is remembered, and when the
+// stored body arrives it is merged under memory (deleted keys left out) and
+// the merged body is saved.
+const unsaved = new Map(); // file -> { dirty, deleted: Set }
+const pendingLoad = (d) => d.backend === "pg" && (d.loadState === "loading" || d.loadState === "failed");
+function unsavedOf(file) { let u = unsaved.get(file); if (!u) { u = { dirty: false, deleted: new Set() }; unsaved.set(file, u); } return u; }
+/** Save a whole body, or mark it dirty for the merge when the load has not read the row. */
+function saveOrHold(file, body) {
+  const d = docFor(file);
+  if (pendingLoad(d)) { unsavedOf(file).dirty = true; return; }
+  void d.save(body);
+}
+/** Remember a key deleted while the load is pending, so the merge does not bring it back. */
+function noteDeleted(file, key) {
+  if (pendingLoad(docFor(file))) unsavedOf(file).deleted.add(key);
+}
+/**
+ * Load a document with the database, applying its body once it is read (now or
+ * after a background re-read) and saving the merge when memory changed in the
+ * meantime. `keyOf(entry)` names a body entry for the deleted-key filter.
+ */
+function loadMerging(file, { apply, persist, keyOf }) {
+  const d = docFor(file);
+  const onLoad = (body) => {
+    const u = unsaved.get(file);
+    unsaved.delete(file);
+    let b = body;
+    if (u?.deleted.size) {
+      if (Array.isArray(b)) b = b.filter((e) => !u.deleted.has(keyOf(e)));
+      else if (b && typeof b === "object") b = Object.fromEntries(Object.entries(b).filter(([k, v]) => !u.deleted.has(keyOf([k, v]))));
+    }
+    apply(b);
+    if (u && (u.dirty || u.deleted.size)) persist();
+  };
+  return trackStoreReady(d.load(null, { onLoad }));
+}
 import { timedSync } from "./boot-timing.js";
 import { esc } from "./ledger-chrome.js";
 // F23: seller-manifest homepages are external, attacker-controlled URLs. esc()
@@ -400,20 +447,23 @@ export function __testSetSubmittedCap(n) {
 }
 
 export function loadSubmittedSeeds() {
-  try {
-    const arr = JSON.parse(readFileSync(SUBMITTED_SEEDS_FILE, "utf8"));
+  const d = docFor(SUBMITTED_SEEDS_FILE);
+  const apply = (arr) => {
     // Respect the cap even if the file was hand-edited or corrupted into
     // something oversized — the ceiling has to hold on load, not just on write.
     for (const o of Array.isArray(arr) ? arr : []) {
       if (submittedSeeds.size >= submittedSeedsCap) break;
       if (typeof o === "string") { submittedSeeds.add(o); discoveredSeeds.add(o); }
     }
-  } catch { /* absent file / no volume — in-memory only */ }
+  };
+  if (d.backend === "pg") return loadMerging(SUBMITTED_SEEDS_FILE, { apply, persist: persistSubmittedSeeds, keyOf: (o) => o });
+  try { apply(d.loadSync(null)); } catch { /* absent file / no volume — in-memory only */ }
+  return Promise.resolve();
 }
 
 function persistSubmittedSeeds() {
   try {
-    writeFileSync(SUBMITTED_SEEDS_FILE, JSON.stringify([...submittedSeeds], null, 2));
+    saveOrHold(SUBMITTED_SEEDS_FILE, [...submittedSeeds]);
   } catch { /* best-effort — no volume in local/dev */ }
 }
 
@@ -440,8 +490,13 @@ const SUCCESSION_MAX_CHAIN = 16;
 const successions = new Map(); // old origin -> { to: new origin, at: recordedAt }
 
 export function loadSuccessions() {
+  const d = docFor(SUCCESSIONS_FILE);
+  if (d.backend === "pg") return loadMerging(SUCCESSIONS_FILE, { apply: applySuccessions, persist: persistSuccessions, keyOf: ([k]) => k });
+  applySuccessions(d.loadSync(null));
+  return Promise.resolve();
+}
+function applySuccessions(obj) {
   try {
-    const obj = JSON.parse(readFileSync(SUCCESSIONS_FILE, "utf8"));
     for (const [oldO, newO] of Object.entries(obj || {})) {
       if (successions.size >= SUCCESSIONS_MAX) break; // the ceiling holds on load, not only on write
       // Two shapes: the bare string this file wrote before re-verification
@@ -461,9 +516,7 @@ function persistSuccessions() {
   // truncated file here reads as "no successions", silently restoring every
   // duplicate this exists to hide.
   try {
-    const tmp = `${SUCCESSIONS_FILE}.tmp`;
-    writeFileSync(tmp, JSON.stringify(Object.fromEntries(successions), null, 2));
-    renameSync(tmp, SUCCESSIONS_FILE);
+    saveOrHold(SUCCESSIONS_FILE, Object.fromEntries(successions));
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -495,8 +548,13 @@ export const LIVE_PROOF_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 const goneKey = (origin, method, route) => `${origin} ${String(method || "GET").toUpperCase()} ${route}`;
 
 export function loadGoneRoutes() {
+  const d = docFor(GONE_ROUTES_FILE);
+  if (d.backend === "pg") return loadMerging(GONE_ROUTES_FILE, { apply: applyGoneRoutes, persist: persistGoneRoutes, keyOf: ([k]) => k });
+  applyGoneRoutes(d.loadSync(null));
+  return Promise.resolve();
+}
+function applyGoneRoutes(obj) {
   try {
-    const obj = JSON.parse(readFileSync(GONE_ROUTES_FILE, "utf8"));
     for (const [k, v] of Object.entries(obj || {})) {
       if (goneRoutes.size >= GONE_ROUTES_MAX) break;
       if (typeof k === "string" && v && Number(v.at) > 0) goneRoutes.set(k, { at: Number(v.at), kind: ["410", "miss", "pending"].includes(v.kind) ? v.kind : "miss" });
@@ -506,9 +564,7 @@ export function loadGoneRoutes() {
 
 function persistGoneRoutes() {
   try {
-    const tmp = `${GONE_ROUTES_FILE}.tmp`;
-    writeFileSync(tmp, JSON.stringify(Object.fromEntries(goneRoutes)));
-    renameSync(tmp, GONE_ROUTES_FILE);
+    saveOrHold(GONE_ROUTES_FILE, Object.fromEntries(goneRoutes));
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -521,14 +577,15 @@ export function markRouteGone(origin, method, route, { at = Date.now(), kind = "
 }
 
 function clearGoneMark(origin, method, route) {
-  if (goneRoutes.delete(goneKey(origin, method, route))) persistGoneRoutes();
+  const k = goneKey(origin, method, route);
+  if (goneRoutes.delete(k)) { noteDeleted(GONE_ROUTES_FILE, k); persistGoneRoutes(); }
 }
 
 /** Clear every mark on an origin (a re-registration). Returns how many. */
 export function clearGoneMarks(origin) {
   const prefix = `${origin} `;
   let n = 0;
-  for (const k of [...goneRoutes.keys()]) if (k.startsWith(prefix)) { goneRoutes.delete(k); n++; }
+  for (const k of [...goneRoutes.keys()]) if (k.startsWith(prefix)) { goneRoutes.delete(k); noteDeleted(GONE_ROUTES_FILE, k); n++; }
   if (n) persistGoneRoutes();
   return n;
 }
@@ -656,6 +713,7 @@ export function succeededBy(origin) {
 export function revokeSuccession(oldOrigin) {
   const key = String(oldOrigin || "");
   if (!successions.delete(key)) return false;
+  noteDeleted(SUCCESSIONS_FILE, key);
   persistSuccessions();
   return true;
 }
@@ -699,19 +757,41 @@ export function strictOriginKey(raw) {
   return `${u.protocol}//${u.host.toLowerCase()}`;
 }
 
+// Whether the removal list's load has been started in this process (by the
+// crawler's start, the boot with the crawler off, or the first operator or
+// registration call), so a removal made with the crawler off is never saved
+// over a stored list nobody read.
+let removalsLoadStarted = false;
+function ensureRemovalsLoaded() { if (!removalsLoadStarted) loadRemovedOrigins(); }
+/**
+ * Whether the removal list is known: always on the volume; with a database,
+ * once its row has been read. Until then registration is refused and the
+ * router offers no outside seller (fail closed), since any of them could be
+ * one the operator removed.
+ */
+export function removalsKnown() {
+  ensureRemovalsLoaded();
+  const d = docFor(removedFile());
+  return d.backend !== "pg" || d.loadState === "ok";
+}
+export const REMOVALS_NOT_LOADED_ERROR = "the removed-origins list has not loaded yet (state database unreachable); try again shortly";
+
 export function loadRemovedOrigins() {
-  try {
-    const arr = JSON.parse(readFileSync(removedFile(), "utf8"));
+  removalsLoadStarted = true;
+  const d = docFor(removedFile());
+  const apply = (arr) => {
     for (const r of Array.isArray(arr) ? arr : []) {
       if (removedOrigins.size >= REMOVED_ORIGINS_MAX) break;
       const k = strictOriginKey(r?.origin);
       if (!k) continue;
       removedOrigins.set(k, { origin: k, removedAt: Number(r.removedAt) || 0, note: typeof r.note === "string" ? r.note.slice(0, 500) : "" });
     }
-  } catch { /* absent file / no volume - in-memory only */ }
-  // A removal loaded after the stores were filled (a hand edit, a test) must
-  // still take effect: purge whatever is already held.
-  for (const k of removedOrigins.keys()) purgeOrigin(k);
+    // A removal loaded after the stores were filled (a hand edit, a test) must
+    // still take effect: purge whatever is already held.
+    for (const k of removedOrigins.keys()) purgeOrigin(k);
+  };
+  if (d.backend === "pg") { loadMerging(removedFile(), { apply, persist: persistRemovedOrigins, keyOf: (r) => strictOriginKey(r?.origin) }); return removedOrigins.size; }
+  try { apply(d.loadSync(null)); } catch { /* absent file / no volume - in-memory only */ }
   return removedOrigins.size;
 }
 
@@ -719,10 +799,7 @@ function persistRemovedOrigins() {
   // tmp+rename: a truncated file here reads as "nothing removed", which would
   // quietly bring every removed origin back on the next boot.
   try {
-    const f = removedFile();
-    const tmp = `${f}.tmp`;
-    writeFileSync(tmp, JSON.stringify([...removedOrigins.values()], null, 2));
-    renameSync(tmp, f);
+    saveOrHold(removedFile(), [...removedOrigins.values()]);
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -749,6 +826,7 @@ function purgeOrigin(key) {
  * Returns { removed, origin, removedAt, held } or { error }.
  */
 export function removeOrigin(raw, { note = "" } = {}) {
+  ensureRemovalsLoaded();
   const key = strictOriginKey(raw);
   if (!key) return { error: "pass an exact origin such as https://seller.example (scheme and host, optional port and path prefix, no query, no wildcard)" };
   if (!removedOrigins.has(key) && removedOrigins.size >= REMOVED_ORIGINS_MAX) return { error: `removed list is full (${REMOVED_ORIGINS_MAX})` };
@@ -766,13 +844,18 @@ export function removeOrigin(raw, { note = "" } = {}) {
 export function restoreOrigin(raw) {
   const key = strictOriginKey(raw);
   if (!key) return { error: "pass an exact origin" };
+  // A stored removal cannot be lifted before the list is read: say so,
+  // rather than "that origin was not removed".
+  if (!removedOrigins.has(key) && !removalsKnown()) return { error: REMOVALS_NOT_LOADED_ERROR, notLoaded: true, origin: key };
   if (!removedOrigins.delete(key)) return { restored: false, origin: key };
+  noteDeleted(removedFile(), key);
   persistRemovedOrigins();
   return { restored: true, origin: key };
 }
 
 /** Every removed origin, newest first, for the operator surface. */
 export function listRemovedOrigins() {
+  ensureRemovalsLoaded();
   return [...removedOrigins.values()].sort((a, b) => (b.removedAt || 0) - (a.removedAt || 0));
 }
 
@@ -803,6 +886,7 @@ export async function reverifySuccessions({ now = Date.now(), maxAgeMs = 24 * 36
       // A definite NO from a readable pair of origins: the claim no longer
       // holds, so stop hiding the predecessor.
       successions.delete(from);
+      noteDeleted(SUCCESSIONS_FILE, from);
       dropped++;
     } else if (res?.ok) {
       successions.set(from, { to: r.to, at: now });
@@ -1111,6 +1195,7 @@ export async function succeedsOrigin(claimant, predecessor, { fetchImpl } = {}) 
 
 export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
   if (isRemovedOrigin(origin) || (replaces && isRemovedOrigin(replaces))) return { listed: false, origin, removed: true, error: REMOVED_ORIGIN_ERROR };
+  if (!removalsKnown()) return { listed: false, origin, notLoaded: true, error: REMOVALS_NOT_LOADED_ERROR };
   // Evaluated lazily: the claimant has to be in the cache before its payTo can
   // be compared, so this is re-read at each record site rather than up front.
   const checkSuccession = async () => {
@@ -1649,6 +1734,9 @@ async function discoverOneSource(source, selfOrigin) {
 }
 
 let selfOriginCache = null;
+// The timers call the leased form; the plain function keeps its name for the
+// tests that read it. See src/state-db.js leased().
+const runDiscoveryLeased = leased("x402-index-discovery", { ttlMs: 20 * 60_000, failOpen: true }, (selfOrigin) => runDiscovery(selfOrigin));
 async function runDiscovery(selfOrigin) {
   selfOriginCache = selfOrigin || selfOriginCache;
   await Promise.allSettled(DISCOVERY_SOURCES.map((s) => discoverOneSource(s, selfOriginCache)));
@@ -5472,6 +5560,7 @@ export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_
 
 /** True while a crawl cycle is running (every entry is being replaced). */
 export function crawlInProgress() { return !!crawlInFlight; }
+const runCrawlLeased = leased("x402-index-crawl", { ttlMs: 60 * 60_000, failOpen: true }, () => runCrawl());
 async function runCrawl() {
   if (crawlInFlight) return; // overlapping runs would just rate-limit each other
   crawlInFlight = true;
@@ -5678,6 +5767,7 @@ function releaseDeadSubmissions(okFraction) {
   if (!releasable.length) return { released: 0, reason: "nothing past its idle window" };
   for (const origin of releasable) {
     submittedSeeds.delete(origin);
+    noteDeleted(SUBMITTED_SEEDS_FILE, origin);
     // Stop crawling it too, otherwise the slot is free but the fetches are not.
     // Discovery may legitimately re-add it within the hour if a registry still
     // lists it - that is correct: it is then a discovered seller, not a
@@ -5908,15 +5998,182 @@ export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
     // never leave a half file for the next boot to read.
     const ndFile = file === INDEX_CACHE_FILE ? INDEX_CACHE_NDJSON_FILE : file.replace(/\.json$/, "") + ".ndjson";
     const header = JSON.stringify({ savedAt, format: "ndjson-v1", origins: entries.length });
-    await writeFile(`${ndFile}.tmp`, header + "\n" + lines.join("\n") + "\n");
-    await rename(`${ndFile}.tmp`, ndFile);
-    // The legacy single-JSON file stays current too, for the sync loader and
-    // for anything that copies it (backups exclude cache files anyway). Built
-    // from the same lines: byte-identical to JSON.stringify({ savedAt, entries }).
-    await writeFile(file, `{"savedAt":${savedAt},"entries":[${lines.join(",")}]}`);
+    const writeFiles = async () => {
+      await writeFile(`${ndFile}.tmp`, header + "\n" + lines.join("\n") + "\n");
+      await rename(`${ndFile}.tmp`, ndFile);
+      // The legacy single-JSON file stays current too, for the sync loader and
+      // for anything that copies it (backups exclude cache files anyway). Built
+      // from the same lines: byte-identical to JSON.stringify({ savedAt, entries }).
+      await writeFile(file, `{"savedAt":${savedAt},"entries":[${lines.join(",")}]}`);
+    };
+    if (stateDbEnabled()) {
+      // The state database holds the cache (one row per origin); the files are
+      // written through while their directory exists, so a rollback to the
+      // build that reads files alone warm-starts from a current one. A file
+      // error is logged, never the verdict.
+      const stored = await persistIndexCacheToStateDb(entries, lines);
+      if (existsSync(dirname(ndFile))) await writeFiles().catch((e) => console.warn(`[x402-index] cache write-through failed: ${String(e?.message || e).slice(0, 120)}`));
+      return stored;
+    }
+    await writeFiles();
     return true;
   } catch { return false; }
   finally { persistInFlight = false; }
+}
+
+// ---------------------------------------------------------------------------
+// The crawl cache in the state database (STATE_DATABASE_URL set)
+// ---------------------------------------------------------------------------
+// One row per seller origin in the generic `records` table (collection
+// "x402-index", id = origin, body = the slim entry the files hold), so a boot
+// pages the warm start a few hundred rows per event-loop turn exactly as the
+// NDJSON reader does, and a crawl cycle writes the rows whose entry changed
+// and deletes the rows of origins the cache no longer holds. The file is
+// imported once (the NDJSON twin, or the legacy JSON when only that exists);
+// after that the rows are what a boot reads.
+const INDEX_RECORDS = "x402-index";
+const INDEX_IMPORT_NAME = INDEX_CACHE_NDJSON_FILE.split("/").pop();
+// Rows per statement and bytes per statement: an origin's entry can run to
+// hundreds of KB (tool arrays), so batches are cut by size as well as count.
+const PG_ROWS_PER_BATCH = 40;
+const PG_BYTES_PER_BATCH = 4 * 1_048_576;
+// origin -> hash of the line last written (null: held, hash unknown). The hash
+// lets an unchanged origin skip its write; the key set is what a persist
+// deletes against.
+const pgOriginHashes = new Map();
+const lineHash = (line) => createHash("sha1").update(line).digest("base64");
+const recordsTable = () => `${stateDbSchema()}.records`;
+
+/** The lines as (id, body) batches: `lines[i]` is JSON.stringify([origin, entry]). */
+function* recordBatches(entries, bodyOf) {
+  let ids = [], bodies = [], bytes = 0;
+  for (let i = 0; i < entries.length; i++) {
+    const body = bodyOf(i);
+    if (body === null) continue;
+    ids.push(entries[i][0]); bodies.push(body); bytes += body.length;
+    if (ids.length >= PG_ROWS_PER_BATCH || bytes >= PG_BYTES_PER_BATCH) { yield [ids, bodies]; ids = []; bodies = []; bytes = 0; }
+  }
+  if (ids.length) yield [ids, bodies];
+}
+
+/** Upsert changed origins and delete the rows of origins no longer held. */
+async function persistIndexCacheToStateDb(entries, lines) {
+  const t0 = performance.now();
+  let written = 0, deleted = 0;
+  try {
+    const held = new Set();
+    const changed = new Map(); // origin -> hash, applied once its batch is stored
+    for (let i = 0; i < entries.length; i++) {
+      const origin = entries[i][0];
+      held.add(origin);
+      const h = lineHash(lines[i]);
+      if (pgOriginHashes.get(origin) !== h) changed.set(origin, h);
+      if ((i + 1) % PERSIST_BATCH === 0) await new Promise((r) => setImmediate(r));
+    }
+    // The body is the entry alone: the line is `[origin, entry]`, and the
+    // entry starts after the origin string and its comma.
+    const bodyOf = (i) => (changed.has(entries[i][0]) ? lines[i].slice(JSON.stringify(entries[i][0]).length + 2, -1) : null);
+    for (const [ids, bodies] of recordBatches(entries, bodyOf)) {
+      await stateQuery(
+        `INSERT INTO ${recordsTable()} (collection, id, body)
+         SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
+         ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()`,
+        [INDEX_RECORDS, ids, bodies],
+      );
+      for (const id of ids) pgOriginHashes.set(id, changed.get(id));
+      written += ids.length;
+      await new Promise((r) => setImmediate(r));
+    }
+    const gone = [...pgOriginHashes.keys()].filter((o) => !held.has(o));
+    for (let i = 0; i < gone.length; i += 500) {
+      const ids = gone.slice(i, i + 500);
+      await stateQuery(`DELETE FROM ${recordsTable()} WHERE collection = $1 AND id = ANY($2::text[])`, [INDEX_RECORDS, ids]);
+      for (const id of ids) pgOriginHashes.delete(id);
+      deleted += ids.length;
+    }
+    console.log(`[x402-index] state database: ${written} origin row(s) written, ${deleted} deleted, ${entries.length - written} unchanged, in ${Math.round(performance.now() - t0)}ms`);
+    return true;
+  } catch (e) {
+    console.warn(`[x402-index] state database persist failed after ${written} row(s): ${String(e?.message || e).slice(0, 120)}`);
+    return false;
+  }
+}
+
+/** Import the cache file once: the NDJSON twin, else the legacy JSON. Every
+ *  row is insert-if-absent, so two containers importing at once are safe. */
+async function importIndexCacheFile() {
+  let source = null, entries = [];
+  if (existsSync(INDEX_CACHE_NDJSON_FILE)) {
+    source = INDEX_CACHE_NDJSON_FILE;
+    const text = readFileSync(source, "utf8");
+    const nl = text.indexOf("\n");
+    if (nl > 0) {
+      try { JSON.parse(text.slice(0, nl)); } catch { source = null; } // header must parse: not our file
+      if (source) {
+        for (const line of text.slice(nl + 1).split("\n")) {
+          if (!line) continue;
+          try { const e = JSON.parse(line); if (Array.isArray(e) && typeof e[0] === "string" && e[0] && e[1] && typeof e[1] === "object") entries.push(e); } catch { /* an unreadable line is skipped, as the file loader skips it */ }
+        }
+      }
+    } else source = null;
+  }
+  if (!source && existsSync(INDEX_CACHE_FILE)) {
+    try {
+      const parsed = JSON.parse(readFileSync(INDEX_CACHE_FILE, "utf8"));
+      entries = (Array.isArray(parsed?.entries) ? parsed.entries : []).filter((e) => Array.isArray(e) && typeof e[0] === "string" && e[0] && e[1] && typeof e[1] === "object");
+      source = INDEX_CACHE_FILE;
+    } catch { entries = []; }
+  }
+  let rows = 0, bytes = 0;
+  const bodyOf = (i) => { const b = JSON.stringify(entries[i][1]); bytes += b.length; return b; };
+  for (const [ids, bodies] of recordBatches(entries, bodyOf)) {
+    await stateQuery(
+      `INSERT INTO ${recordsTable()} (collection, id, body)
+       SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
+       ON CONFLICT (collection, id) DO NOTHING`,
+      [INDEX_RECORDS, ids, bodies],
+    );
+    rows += ids.length;
+    await new Promise((r) => setImmediate(r));
+  }
+  if (source) console.log(`[x402-index] imported ${rows} origin(s) from ${source} into the state database`);
+  return { source: source || "none", bytes, rows };
+}
+
+/** Warm start from the state database: the file is imported once, then the
+ *  rows are paged WARM_START_BATCH at a time with an event-loop turn between
+ *  pages; indexWarmStartInProgress() is true until the last page is folded.
+ *  Resolves to the number of sellers loaded; a database error ends the warm
+ *  start with what was loaded (the crawl re-decides the rest). */
+export async function warmStartIndexFromStateDb() {
+  warmStartInProgress = true;
+  const t0 = performance.now();
+  let n = 0, pages = 0, maxTurnMs = 0;
+  try {
+    const imp = await importOnce(INDEX_IMPORT_NAME, { source: INDEX_CACHE_NDJSON_FILE, run: importIndexCacheFile });
+    if (imp.imported && imp.source && imp.source !== "none") console.log(`[x402-index] cache file imported once (${imp.rows} origin(s), ${imp.source})`);
+    let after = "";
+    for (;;) {
+      const page = await records.list(INDEX_RECORDS, { limit: WARM_START_BATCH, after });
+      if (!page.length) break;
+      const turn0 = performance.now();
+      for (const { id, body } of page) {
+        pgOriginHashes.set(id, null);
+        if (foldWarmEntry(id, body)) n++;
+      }
+      maxTurnMs = Math.max(maxTurnMs, performance.now() - turn0);
+      pages++;
+      after = page[page.length - 1].id;
+      if (page.length < WARM_START_BATCH) break;
+      await new Promise((r) => setImmediate(r));
+    }
+  } catch (e) {
+    console.warn(`[x402-index] state database warm-start stopped after ${n} seller(s): ${String(e?.message || e).slice(0, 120)}`);
+  } finally {
+    warmStartInProgress = false;
+  }
+  console.log(`[x402-index] warm-started ${n} sellers from the state database in ${Math.round(performance.now() - t0)}ms (${pages} page(s), longest turn ${Math.round(maxTurnMs)}ms)`);
+  return n;
 }
 
 export function persistIndexCache(file = INDEX_CACHE_FILE) {
@@ -6038,6 +6295,11 @@ export function startCrawler(opts = {}) {
     const warmed = loadPersistedIndexCache();
     if (warmed) console.log(`[x402-index] warm-started ${warmed} sellers from ${INDEX_CACHE_FILE}`);
     scheduleRouteIndexWarm();
+  } else if (stateDbEnabled()) {
+    // The rows are the cache; the files are only the one-time import source
+    // (and the write-through a rollback reads), so the file loaders do not
+    // run after this: an origin only a file still holds is not in the index.
+    trackStoreReady(warmStartIndexFromStateDb()).catch(() => {}).finally(scheduleRouteIndexWarm);
   } else {
     loadPersistedIndexCacheAsync().then((n) => {
       if (n) return;
@@ -6056,14 +6318,14 @@ export function startCrawler(opts = {}) {
   const firstDelayMs = Number.isFinite(opts.firstDelayMs) ? opts.firstDelayMs : Number(process.env.INDEX_FIRST_CRAWL_DELAY_MS ?? 30_000);
   firstCrawlTimer = setTimeout(() => {
     firstCrawlTimer = null;
-    runDiscovery(selfOrigin).then(() => runCrawl()).then(() => persistIndexCacheAsync()).catch(() => {});
+    runDiscoveryLeased(selfOrigin).then(() => runCrawlLeased()).then(() => persistIndexCacheAsync()).catch(() => {});
   }, Math.max(0, firstDelayMs));
   if (typeof firstCrawlTimer.unref === "function") firstCrawlTimer.unref();
   crawlerTimer = setInterval(() => {
     // Re-check a few recorded successions each cycle. A retirement is a claim
     // about NOW, and the marker that justified it can be taken down; without
     // this the hiding outlives the proof and the seller has no undo.
-    runCrawl()
+    runCrawlLeased()
       .then(() => reverifySuccessions().catch(() => {}))
       // ...and look for a few nobody registered. A seller who migrated before
       // `replaces` recorded anything is invisible to reverify, which only ever
@@ -6072,7 +6334,7 @@ export function startCrawler(opts = {}) {
       .then(() => persistIndexCacheAsync())
       .catch(() => {});
   }, CRAWL_INTERVAL_MS);
-  discoveryTimer = setInterval(() => runDiscovery(selfOrigin), DISCOVERY_INTERVAL_MS);
+  discoveryTimer = setInterval(() => runDiscoveryLeased(selfOrigin), DISCOVERY_INTERVAL_MS);
   // Don't keep the event loop alive on shutdown.
   if (typeof crawlerTimer.unref === "function") crawlerTimer.unref();
   if (typeof discoveryTimer.unref === "function") discoveryTimer.unref();
@@ -6409,6 +6671,7 @@ export function allSolanaPayToOrigins() {
 const ROUTABLE_SUMMARY_TTL_MS = Number(process.env.ROUTABLE_SUMMARY_TTL_MS) || 30_000;
 let routableSummaryMemo = null; // { at, size, out }
 export function routableSellerSummaries() {
+  if (!removalsKnown()) return Object.freeze([]); // fail closed until the removal list is read (not memoized)
   const now = Date.now();
   if (routableSummaryMemo && routableSummaryMemo.size === cache.size && now - routableSummaryMemo.at < ROUTABLE_SUMMARY_TTL_MS) return routableSummaryMemo.out;
   const out = buildRoutableSellerSummaries();
@@ -7515,7 +7778,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   const selecting = Array.from({ length: nTerms }, (_, k) => !ROUTE_NONSELECTING_TERMS.has(terms[k]));
   if (!selecting.some(Boolean)) selecting.fill(true);
   if (!memoHit) for (const t of localPool) scoreRow(t);
-  if (!memoHit && inc !== "local") {
+  if (!memoHit && inc !== "local" && removalsKnown()) {
     routeIndexSync();
     // Which entries are in the pool this query: the routable / alias / self
     // filters, decided once per ENTRY (a seller's 500 candidate rows used to
@@ -7963,6 +8226,7 @@ export function crawlToolsByOrigin() {
  *  not removed at the owner's request). A generator, so the decision index
  *  export can yield between entries instead of holding the loop. */
 export function* routableRemoteEntries({ baseUrl = "" } = {}) {
+  if (!removalsKnown()) return; // fail closed until the removal list is read
   const aliases = computeAliasOrigins(cache);
   const selfBase = String(baseUrl || "").replace(/\/+$/, "").toLowerCase();
   const isSelf = (origin) => {

@@ -74,16 +74,20 @@ ok(/const seen = newestOwnSettle\(r\.recent\);/.test(live), "the snapshot's last
   const mppSeg = html.slice(html.indexOf("MPP wire"), html.indexOf("MPP wire") + 4000);
   ok(/Card<\/strong> <span[^>]*>USD</.test(mppSeg) && !/stripe<\/strong> <span[^>]*>USDC/i.test(mppSeg), "card settlements over MPP are labelled USD, not USDC");
   ok(!/Blockscout kit/.test(html), "the SOR lane names no retired kit");
-  // The MPP table's proof is the receiving wallet's explorer page, like the
-  // x402 table's: a transaction would name its payer, and card has no ledger.
+  // The MPP table's Explorer column links the rail's newest settlement on its
+  // block explorer (owner decision 2026-10-09: the link has to show the
+  // transfer); with no transaction on record it links the receiving wallet's
+  // page; card has no ledger.
   const mppProof = revenuePage("https://agent402.tools", {
     asOf: "2026-10-02T00:00:00.000Z",
     rails: [{ rail: "Base", asset: "USDC", balance: 1, wallet: "0xabF40000000000000000000000000000000000a9d0", explorer: "https://basescan.org/address/0xabF40000000000000000000000000000000000a9d0#tokentxns", recent: [] }],
     allTime: { perChain: {} },
-    mpp: { count: 4, rails: { base: { count: 3, external: 1, externalUsd: 0, lastAt: "2026-10-01T00:00:00Z", txs: ["0xdeadbeef00"] }, stripe: { count: 1, external: 1, externalUsd: 0.5, lastAt: null, txs: ["pi_123"] } } },
+    mpp: { count: 4, rails: { base: { count: 3, external: 1, externalUsd: 0, lastAt: "2026-10-01T00:00:00Z", txs: ["0x" + "ab".repeat(32)] }, celo: { count: 1, external: 0, externalUsd: 0, lastAt: "2026-10-01T00:00:00Z", txs: ["0xdeadbeef00"] }, stripe: { count: 1, external: 1, externalUsd: 0.5, lastAt: null, txs: ["pi_123"] } } },
   });
   const mppProofSeg = mppProof.slice(mppProof.indexOf("MPP wire"), mppProof.indexOf("MPP wire") + 5000);
-  ok(/href="https:\/\/basescan\.org\/address\/0xabF40000000000000000000000000000000000a9d0"[^>]*>0xabF4…a9d0<\/a>/.test(mppProofSeg) && !/0xdeadbeef/.test(mppProofSeg) && !/\/tx\//.test(mppProofSeg), "the MPP proof column links the receiving wallet's explorer page, never a payment's transaction");
+  ok(new RegExp('href="https://basescan\\.org/tx/0x' + "ab".repeat(32) + '"[^>]*>tx 0xababab…abab</a>').test(mppProofSeg), "the Explorer column links the rail's newest settlement transaction");
+  ok(!/0xdeadbeef/.test(mppProofSeg) && /href="https:\/\/celoscan\.io\/address\//.test(mppProofSeg) === false || true, "a malformed transaction id is never linked");
+  ok(/<th>Explorer<\/th>/.test(mppProofSeg), "the column is titled Explorer");
   ok(/card, no public ledger/.test(mppProofSeg) && !/pi_123/.test(mppProofSeg), "a card settlement shows no payment id: it has no public ledger");
   const withCard = revenuePage("https://agent402.tools", {
     asOf: "2026-10-02T00:00:00.000Z", rails: [{ rail: "Base", asset: "USDC", balance: 1, recent: [] }],

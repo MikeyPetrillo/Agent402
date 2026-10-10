@@ -12,7 +12,7 @@
 //     media: { model: { worstCaseUsd, listedMaxUsd } },
 //     meter: { markup },
 //     vendor: { exa: { search, instant, answer, content }, x: { postRead, userRead },
-//               decisions: { luna, maxShare } } }           luna: USD per 1M input tokens; maxShare: largest share of the price a call may cost
+//               decisions: { luna, decisionOne, maxShare } } }   luna, decisionOne: USD per 1M input tokens; maxShare: largest share of the price a call may cost
 //
 // docs/example-upstream-costs.json shows the format with placeholder numbers.
 //
@@ -38,6 +38,7 @@ const REQUIRED = [
   ["fees", "webSearchPerUse"], ["fees", "groundedPerCall"], ["fees", "rerankPerUnit"], ["meter", "markup"],
   ["vendor", "exa", "search"], ["vendor", "exa", "instant"], ["vendor", "exa", "answer"], ["vendor", "exa", "content"],
   ["vendor", "x", "postRead"], ["vendor", "x", "userRead"], ["vendor", "decisions", "luna"], ["vendor", "decisions", "maxShare"],
+  ["vendor", "decisions", "decisionOne"],
 ];
 const NONEMPTY = ["speech", "embeddings", "openai", "sttPerMinute", "media"];
 

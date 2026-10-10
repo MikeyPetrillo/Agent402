@@ -42,6 +42,12 @@ ok("incr default +1", memoryIncr(A, "ctr", undefined, A).value === 9);
 ok("incr negative", memoryIncr(A, "ctr", -4, A).value === 5);
 memoryPut(A, "word", "hello", { actor: A });
 throws("incr on non-numeric", () => memoryIncr(A, "word", 1, A), 400);
+// --- M9: retry-safe writes with a client request id ---
+ok("incr with a requestId applies", memoryIncr(A, "ridc", 1, A, { requestId: "r-1" }).value === 1);
+{ const again = memoryIncr(A, "ridc", 1, A, { requestId: "r-1" }); ok("a retry with the same requestId replays and counts once", again.value === 1 && again.replayed === true && memoryGet(A, "ridc", { actor: A }).value === 1); }
+throws("the same requestId for a different write is refused", () => memoryIncr(A, "ridc", 2, A, { requestId: "r-1" }), 409);
+ok("without a requestId every call counts", memoryIncr(A, "ridc", 1, A).value === 2);
+ok("a retried delete replays", memoryDelete(A, "ridc", { actor: A, requestId: "d-1" }).deleted === true && memoryDelete(A, "ridc", { actor: A, requestId: "d-1" }).deleted === true);
 
 // --- isolation: B cannot touch A without a grant ---
 throws("B read A (no grant)", () => memoryGet(A, "ctr", { actor: B }), 403);
@@ -212,6 +218,22 @@ ok("EVM normalized to lowercase", normalizePayerAddress("0x" + "AB".repeat(20)) 
   throws("incr creating a key at the cap -> 413", () => memoryIncr(F, "k5", 1, F), 413);
   throws("cas creating a key at the cap -> 413", () => memoryCas(F, "k6", null, "v", { hasValue: true }), 413);
   delete process.env.MEMORY_MAX_NS_KEYS;
+}
+
+// --- text the state database would change is refused in both backends ---
+// (U+0000 or an unpaired surrogate in the TEXT itself; a JSON escape of one
+// is plain text the database keeps, so it round-trips here too.)
+{
+  const N = rnd();
+  memoryPut(N, "nul", { keep: 1 });
+  throws("string value holding U+0000 -> 400", () => memoryPut(N, "nul", "a\u0000b"), 400);
+  throws("string value holding an unpaired surrogate -> 400", () => memoryPut(N, "nul", "a\udc00"), 400);
+  throws("incr on a key holding U+0000 -> 400", () => memoryIncr(N, "n\u0000", 1, N), 400);
+  ok("a refused write leaves the value as it was", JSON.stringify(memoryGet(N, "nul").value) === JSON.stringify({ keep: 1 }));
+  for (const [label, v] of [["object holding U+0000", { note: "a\u0000b" }], ["object holding an unpaired surrogate", { s: "\udc00" }], ["escaped backslash before u0000", { t: "a\\u0000b" }]]) {
+    memoryPut(N, "rt", v);
+    ok(`${label} round-trips`, JSON.stringify(memoryGet(N, "rt").value) === JSON.stringify(v));
+  }
 }
 
 const failed = checks.filter(([, c]) => !c);

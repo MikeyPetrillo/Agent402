@@ -76,6 +76,8 @@
 // tempo/charge, and no subscription call ever touches the relay.
 import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { assertSigningAllowed } from "./signing-halt.js";
+import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
+import { leaseOwnerId, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady, withLease } from "./state-db.js";
 import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { Challenge, Credential, Method, Receipt } from "mppx";
@@ -274,6 +276,10 @@ export async function expectedRenewalMemo({ lookupKey, subscriptionId, periodInd
 // (the disk-fill guard, same posture as the memory namespace byte budget).
 export const OFFER_SWEEP_AFTER_MS = 2 * CHALLENGE_TTL_MS;
 export const MAX_OPEN_OFFERS = 500;
+/** How long one container's pull of a subscription's due period holds the
+ *  cross-container lease (renewed while it runs): longer than a sync send
+ *  can take, short enough that a crashed holder frees it. */
+export const RENEWAL_LEASE_TTL_MS = 10 * 60_000;
 
 const SUB_PREFIX = "mpp_";                       // our subscription ids
 const REC_KEY = (subId) => `a402:sub:${subId}`;      // our records inside the shared kv
@@ -436,11 +442,14 @@ export function periodMs(periodCount = PERIOD_COUNT, periodUnit = PERIOD_UNIT) {
 }
 
 // ---------------------------------------------------------------------------
-// Store. ONE JSON file holds both mppx's own key-value entries (access keys,
-// subscription records, activation locks - all under mppx's own prefixes) and
-// our house subscriber records under `a402:sub:`. Same atomic tmp+rename and
-// merge-on-save discipline as stripe-subscriptions.js. Prod runs one replica,
-// so this is single-writer in practice; it is written to survive two anyway.
+// Store. ONE JSON document holds both mppx's own key-value entries (access
+// keys, subscription records, activation locks - all under mppx's own
+// prefixes) and our house subscriber records under `a402:sub:`. Without a
+// state database it is a file (same atomic tmp+rename and merge-on-save
+// discipline as stripe-subscriptions.js); with one (STATE_DATABASE_URL) the
+// same document lives in the database, imported from the file once at the
+// first load, and the file is kept current by write-through. Prod runs one
+// replica, so this is single-writer in practice; it is written to survive two.
 // ---------------------------------------------------------------------------
 const STORE_PATH = () => join(existsSync("/data") ? "/data" : "/tmp", "mpp-subscriptions.json");
 
@@ -474,6 +483,16 @@ export function createFileStore(path) {
       else if (change.op === "delete") { delete mem[key]; dirty.add(key); flush(); }
       return change.result;
     },
+    /** One process holds the file: the map is the fresh copy. */
+    async getFresh(key) { return key in mem ? clone(mem[key]) : null; },
+    async refreshAll() { return true; },
+    /** `decide(current)` returns the new value, or null to leave it; resolves { won, value }. */
+    async compareAndSet(key, decide) {
+      const next = decide(key in mem ? clone(mem[key]) : null);
+      if (next == null) return { won: false, value: key in mem ? clone(mem[key]) : null };
+      mem[key] = clone(next); dirty.add(key); flush();
+      return { won: true, value: clone(next) };
+    },
     // Test/ops visibility only. Never used for money decisions. `_snapshot`
     // exists so the engine can warm its synchronous read cache at construction:
     // the file was already read synchronously, and the scheduler calls
@@ -481,7 +500,144 @@ export function createFileStore(path) {
     // paid-up subscriber is invisible.
     _keys: () => Object.keys(mem),
     _snapshot: () => JSON.parse(JSON.stringify(mem)),
+    /** Same surface as the database store: the file was read at construction. */
+    _ready: Promise.resolve(),
+    backend: "file",
+    async flush() {},
   };
+}
+
+/**
+ * The same AtomicStore over the state database: the whole document is one
+ * row (src/json-document.js, named after the file, imported from it once),
+ * and this process keeps an in-memory map of it. Reads answer from the map,
+ * which the first load fills (`_ready`, registered with trackStoreReady so
+ * the server awaits it before listening) and every put/delete/update keeps
+ * current. Writes merge the touched keys into the row (merge-on-save, so two
+ * containers writing different keys never overwrite each other), one queue
+ * per store so they land in call order; put and delete resolve once their
+ * key is in the row and THROW when it is not, because a house record that
+ * carries `unconfirmedCharge` must be durable before the next pull can rely
+ * on it. A failed write leaves its keys dirty and the next write re-sends
+ * them. `update` applies to the map synchronously (mppx's contract: its
+ * callback is synchronous and side-effect free; the map is the only state it
+ * sees) and queues the write. Cross-container atomicity of a single update
+ * is NOT provided, exactly as the file never provided it: mppx's activation
+ * locks guard one HTTP request, which one container serves.
+ *
+ * Two containers overlap during a deploy, so the map is never the authority
+ * for a key another container may have written: get() reads the key from the
+ * row (a key with a write of ours still queued answers from the map, which
+ * outranks the row for it), getFresh() does the same and throws when the row
+ * cannot be read, refreshAll() re-reads the whole row into the map, and
+ * compareAndSet() is a versioned read-modify-write of one key, which is how
+ * a renewal claims its period.
+ */
+export function createDbStore(path, { log = console.warn } = {}) {
+  const doc = createJsonDocument({ file: path, log });
+  let mem = {};
+  // key -> sequence of its newest unflushed write (a delete marks the key
+  // absent from `mem`); the sequence tells a waiter whether ITS write landed
+  // or only a later one re-dirtied the key.
+  const dirty = new Map();
+  let seq = 0;
+  let chain = Promise.resolve();
+  const say = (m) => { try { log(`[mpp-subs] store: ${m}`); } catch { /* logging never throws */ } };
+  const clone = (v) => (v === undefined ? null : JSON.parse(JSON.stringify(v)));
+  // One key straight from the row (JSONB path), so a key the other container
+  // wrote is seen without reading the whole document.
+  async function readKey(key) {
+    const r = await stateQuery(`SELECT body -> $2 AS v FROM ${stateDbSchema()}.documents WHERE name = $1`, [doc.name, String(key)]);
+    return r.rows[0] ? (r.rows[0].v ?? null) : null;
+  }
+  const adopt = (key, v) => { if (v === null || v === undefined) delete mem[key]; else mem[key] = v; };
+  const _ready = trackStoreReady(doc.load(null).then((body) => {
+    const loaded = body && typeof body === "object" && !Array.isArray(body) ? body : {};
+    // A write made before the row arrived outranks the row for its key.
+    for (const [k, v] of Object.entries(loaded)) if (!dirty.has(k)) mem[k] = v;
+  }).catch((e) => { say(`first load failed: ${String(e?.message || e).slice(0, 120)}`); }));
+
+  // One flush per queued step; a step after one that already sent every
+  // dirty key finds nothing to do. Never rejects: a waiter reads `dirty`.
+  function flushDirty() {
+    chain = chain.then(async () => {
+      if (!dirty.size) return;
+      const sent = new Map(dirty);
+      const patch = {}; const drop = [];
+      for (const [k] of sent) { if (k in mem) patch[k] = mem[k]; else drop.push(k); }
+      const body = await doc.mergeKeys(patch, drop);
+      if (body === null) { say(`write of ${sent.size} key(s) failed: ${String(doc.lastError || "").slice(0, 120)}; kept dirty for the next write`); return; }
+      for (const [k, n] of sent) if (dirty.get(k) === n) dirty.delete(k);
+    }).catch((e) => { say(`write failed: ${String(e?.message || e).slice(0, 120)}`); });
+    return chain;
+  }
+  async function write(key, apply) {
+    apply();
+    const mine = ++seq;
+    dirty.set(key, mine);
+    await flushDirty();
+    const left = dirty.get(key);
+    if (left !== undefined && left <= mine) throw new Error(`subscription store write did not land: ${String(doc.lastError || "database write failed").slice(0, 120)}`);
+  }
+  return {
+    async get(key) {
+      if (!dirty.has(key)) {
+        try { adopt(key, await readKey(key)); }
+        catch (e) { say(`read of one key failed, answering from memory: ${String(e?.message || e).slice(0, 120)}`); }
+      }
+      return key in mem ? clone(mem[key]) : null;
+    },
+    async getFresh(key) {
+      if (dirty.has(key)) { await flushDirty(); if (dirty.has(key)) throw new Error("subscription store write did not land"); }
+      adopt(key, await readKey(key));
+      return key in mem ? clone(mem[key]) : null;
+    },
+    /** Re-read the whole row into the map (keys with a queued write of ours keep it). False when unreadable. */
+    async refreshAll() {
+      const r = await doc.read();
+      if (!r.ok) return false;
+      const body = r.exists && r.body && typeof r.body === "object" && !Array.isArray(r.body) ? r.body : {};
+      for (const k of Object.keys(mem)) if (!dirty.has(k) && !Object.hasOwn(body, k)) delete mem[k];
+      for (const [k, v] of Object.entries(body)) if (!dirty.has(k)) mem[k] = v;
+      return true;
+    },
+    async compareAndSet(key, decide) {
+      if (dirty.has(key)) { await flushDirty(); if (dirty.has(key)) throw new Error("subscription store write did not land"); }
+      const r = await doc.update((b) => {
+        const body = b && typeof b === "object" && !Array.isArray(b) ? b : {};
+        const next = decide(Object.hasOwn(body, key) ? clone(body[key]) : null);
+        if (next == null) return SKIP_UPDATE;
+        body[key] = clone(next);
+        return body;
+      }, { fallback: {} });
+      if (!r.ok) throw new Error(`subscription store claim failed: ${String(r.error || "").slice(0, 120)}`);
+      const cur = r.body && Object.hasOwn(r.body, key) ? r.body[key] : null;
+      if (!dirty.has(key)) adopt(key, cur);
+      return { won: r.changed === true, value: clone(cur) };
+    },
+    put(key, value) { return write(key, () => { mem[key] = clone(value); }); },
+    delete(key) { return write(key, () => { delete mem[key]; }); },
+    // Synchronous over the map up to the queued write (no await before it),
+    // which the next awaited put or delete also waits for.
+    async update(key, fn) {
+      const change = fn(key in mem ? clone(mem[key]) : null);
+      if (change.op === "set") { mem[key] = clone(change.value); dirty.set(key, ++seq); void flushDirty(); }
+      else if (change.op === "delete") { delete mem[key]; dirty.set(key, ++seq); void flushDirty(); }
+      return change.result;
+    },
+    _keys: () => Object.keys(mem),
+    _snapshot: () => JSON.parse(JSON.stringify(mem)),
+    _ready,
+    backend: "pg",
+    /** Resolves once every queued write has been attempted (tests, shutdown). */
+    async flush() { await chain; },
+    get lastError() { return doc.lastError; },
+  };
+}
+
+/** The store for this process: the database when STATE_DATABASE_URL is set, the file otherwise. */
+export function createSubscriptionStore(path, { log = console.warn } = {}) {
+  return stateDbEnabled() ? createDbStore(path, { log }) : createFileStore(path);
 }
 
 // ---------------------------------------------------------------------------
@@ -638,7 +794,7 @@ export function createMppSubscriptions({
   const recipient = envRecipient();
   const currency = envCurrency();
   const decimals = envDecimals();
-  const kv = createFileStore(storePath || STORE_PATH());
+  const kv = createSubscriptionStore(storePath || STORE_PATH(), { log });
   const subStore = Tempo.Subscription.fromStore(kv);
   const PERIOD_MS = periodMs();
 
@@ -741,7 +897,32 @@ export function createMppSubscriptions({
     cache.set(next.subId, next);   // listActive/get are synchronous for the scheduler
     return next;
   }
+  /**
+   * A write from a copy read before a slow step (a renewal's chain check,
+   * signature and send take seconds) keeps a cancel stored meanwhile, by this
+   * request or the other container, instead of overwriting the whole record.
+   * A requested cancel that meets a period just paid stays "active until the
+   * period ends", as cancel() itself decides; anything else stays canceled.
+   */
+  async function writeRecKeepingCancel(rec) {
+    const r = await kv.compareAndSet(REC_KEY(rec.subId), (cur) => {
+      const out = { ...rec, updatedAt: new Date(now()).toISOString() };
+      if (cur && cur.cancelAtPeriodEnd && !out.cancelAtPeriodEnd) {
+        out.cancelAtPeriodEnd = true; out.canceledAt = cur.canceledAt; out.canceledReason = cur.canceledReason;
+      }
+      if (cur && cur.status === "canceled" && out.status !== "canceled" && out.status !== "expired") {
+        const paidOn = cur.canceledReason === "requested" && !isCanaryProduct(out.product) && out.status === "active" && now() < paidThroughAt(out);
+        if (!paidOn) { out.status = "canceled"; out.canceledAt = cur.canceledAt; out.canceledReason = cur.canceledReason; }
+      }
+      return out;
+    });
+    const next = r.value || { ...rec };
+    cache.set(rec.subId, next);   // listActive/get are synchronous for the scheduler
+    return next;
+  }
   async function allRecs() {
+    // The other container's records (and its cancels) are in the row, not in this map.
+    await kv.refreshAll().catch(() => false);
     const out = [];
     for (const k of kv._keys()) if (k.startsWith("a402:sub:")) { const v = await kv.get(k); if (v) out.push(v); }
     return out;
@@ -827,6 +1008,7 @@ export function createMppSubscriptions({
    *  authorization against a target we cannot watch is a subscription we would
    *  bill and never serve. Returns the WWW-Authenticate value. */
   async function mintOffer({ product, target, email, canary = false }) {
+    await ready;
     // The canary product is mintable ONLY when the caller proved the heartbeat
     // token; server.js is what establishes that, and it must pass it here.
     // Without the flag this resolver behaves exactly as it did: real products
@@ -916,6 +1098,7 @@ export function createMppSubscriptions({
    * key, and only then does anything settle.
    */
   async function activateFromCredential(authorizationHeader) {
+    await ready;
     const b = checkSubscriptionBinding(authorizationHeader, { secretKey, realm, now: now() });
     if (!b.ok) { const e = new Error(b.reason); e.statusCode = 402; e.binding = true; throw e; }
 
@@ -1082,29 +1265,100 @@ export function createMppSubscriptions({
    * Returns "active" | "past_due" | "canceled" | "expired", or null for unknown.
    */
   async function refreshStatus(subId) {
-    let rec = await readRec(subId);
+    await ready;
+    const rec = await readRec(subId);
     if (!rec) return null;
     const at = now();
-    if (rec.status === "canceled" || rec.status === "expired") return rec.status;
+    const first = await decide(rec, at);
+    if (first.status !== undefined) return first.status;
+    if (inFlight.has(subId)) return rec.status === "active" ? "past_due" : rec.status;
 
+    // The same guard across containers: with a state database the pull for
+    // this subscription runs under a lease, so two containers overlapping in
+    // a deploy never sign the same renewal. When another holder has it (or
+    // the database could not say) this call answers as it does for a pull
+    // already in flight here, and signs nothing. Without a database the
+    // lease is held trivially.
+    //
+    // Inside the lease the record is read again from the store (the other
+    // container may have charged this period, or the subscriber cancelled
+    // there, after the read above), the decision is made again on that copy,
+    // and the attempt is claimed on the record itself: a versioned write that
+    // only succeeds while the period is still unpaid and no claim for this
+    // period and attempt exists. Only the claimer signs.
+    const held = await withLease(`mpp-sub-renewal:${subId}`, { ttlMs: RENEWAL_LEASE_TTL_MS, log }, async (lease) => {
+      let fresh;
+      try { fresh = await kv.getFresh(REC_KEY(subId)); }
+      catch (e) { log(`[mpp-subs] ${subId}: could not re-read the record before a renewal (${String(e?.message || e).slice(0, 120)}); nothing signed`); return rec.status === "active" ? "past_due" : rec.status; }
+      if (!fresh) return null;
+      if (fresh.status !== rec.status || fresh.cancelAtPeriodEnd !== rec.cancelAtPeriodEnd) cache.set(subId, fresh);
+      const again = await decide(fresh, at);
+      if (again.status !== undefined) return again.status;
+      const due = again.due;
+      // The claim is live while a pull runs and is cleared when it ends; one
+      // left by a container that died mid-pull expires with the lease's TTL
+      // (a send that may have landed is covered by unconfirmedCharge, which
+      // asks the chain before any second signature).
+      const token = randomBytes(8).toString("hex");
+      let claim;
+      try {
+        claim = await kv.compareAndSet(REC_KEY(subId), (cur) => {
+          if (!cur || cur.status === "canceled" || cur.status === "expired" || cur.cancelAtPeriodEnd) return null;
+          if ((cur.lastChargedPeriod ?? 0) >= due) return null;
+          const c = cur.chargeClaim;
+          if (c && Date.parse(c.until) > at) return null;
+          return { ...cur, chargeClaim: { period: due, token, by: leaseOwnerId(), until: new Date(at + RENEWAL_LEASE_TTL_MS).toISOString() } };
+        });
+      } catch (e) {
+        log(`[mpp-subs] ${subId}: renewal claim failed (${String(e?.message || e).slice(0, 120)}); nothing signed`);
+        return fresh.status === "active" ? "past_due" : fresh.status;
+      }
+      if (!claim.won) {
+        const seen = claim.value || fresh;
+        cache.set(subId, seen);
+        if ((seen.lastChargedPeriod ?? 0) >= due) return "active";
+        log(`[mpp-subs] ${subId}: a pull for period ${due} is already claimed; nothing signed here`);
+        return seen.status === "active" ? "past_due" : seen.status;
+      }
+      // Fencing: pull() checks the lease right before it signs, so a renewal
+      // whose lease was lost (another container may hold it now) signs
+      // nothing; the claim above already keeps a second container from
+      // pulling the same period.
+      try { return await pull(claim.value, subId, due, at, () => lease.stillHeld()); }
+      finally {
+        await kv.compareAndSet(REC_KEY(subId), (cur) => (cur?.chargeClaim?.token === token ? { ...cur, chargeClaim: null } : null))
+          .then((r) => { if (r.value) cache.set(subId, r.value); })
+          .catch((e) => log(`[mpp-subs] ${subId}: clearing the renewal claim failed (${String(e?.message || e).slice(0, 120)}); it expires on its own`));
+      }
+    });
+    if (!held.ran) return rec.status === "active" ? "past_due" : rec.status;
+    return held.result;
+  }
+  /**
+   * The status decision for one record at `at`: { status } when the answer
+   * needs no charge (after any status write it implies), or { due } when a
+   * period is owed and may be pulled.
+   */
+  async function decide(rec, at) {
+    if (rec.status === "canceled" || rec.status === "expired") return { status: rec.status };
     // The standing authorization has a hard end. Past it no pull can succeed,
     // so stop pretending otherwise.
     const term = Date.parse(rec.subscriptionExpires);
-    if (Number.isFinite(term) && at >= term) { await writeRec({ ...rec, status: "expired" }); return "expired"; }
-
+    if (Number.isFinite(term) && at >= term) { await writeRecKeepingCancel({ ...rec, status: "expired" }); return { status: "expired" }; }
     const due = currentPeriodIndex(rec, at);
     if (due <= (rec.lastChargedPeriod ?? 0)) {
-      if (rec.status !== "active") await writeRec({ ...rec, status: "active" });
-      return "active";
+      if (rec.status !== "active") await writeRecKeepingCancel({ ...rec, status: "active" });
+      return { status: "active" };
     }
     // A new period is due.
     if (rec.cancelAtPeriodEnd) {
-      await writeRec({ ...rec, status: "canceled", canceledAt: rec.canceledAt || new Date(at).toISOString(), canceledReason: rec.canceledReason || "requested" });
-      return "canceled";
+      await writeRecKeepingCancel({ ...rec, status: "canceled", canceledAt: rec.canceledAt || new Date(at).toISOString(), canceledReason: rec.canceledReason || "requested" });
+      return { status: "canceled" };
     }
-    if (rec.nextChargeAttemptAt && at < Date.parse(rec.nextChargeAttemptAt)) return rec.status === "active" ? "past_due" : rec.status;
-    if (inFlight.has(subId)) return rec.status === "active" ? "past_due" : rec.status;
-
+    if (rec.nextChargeAttemptAt && at < Date.parse(rec.nextChargeAttemptAt)) return { status: rec.status === "active" ? "past_due" : rec.status };
+    return { due };
+  }
+  async function pull(rec, subId, due, at, stillHeld = () => true) {
     inFlight.add(subId);
     try {
       // CHAIN TRUTH FIRST. A previous pull for this period died in the send
@@ -1116,7 +1370,7 @@ export function createMppSubscriptions({
         const verdict = await find({ rec, mppxRec, periodIndex: due, sinceMs: Date.parse(rec.unconfirmedCharge.at) - UNCONFIRMED_LOOKBACK_MS });
         if (verdict === null) {
           const next = { ...rec, status: rec.status === "active" ? "past_due" : rec.status, nextChargeAttemptAt: new Date(at + TRANSIENT_CHARGE_BACKOFF_MS).toISOString() };
-          await writeRec(next);
+          await writeRecKeepingCancel(next);
           log(`[mpp-subs] ${subId}: unconfirmed period ${due} and the chain is unreadable - waiting, not re-charging`);
           return next.status;
         }
@@ -1128,7 +1382,7 @@ export function createMppSubscriptions({
             ...rec, status: "active", lastChargedPeriod: due, lastChargeTx: verdict.tx, lastChargeAt: new Date(at).toISOString(),
             chargeFailures: 0, firstFailedAt: null, nextChargeAttemptAt: null, lastChargeError: null, unconfirmedCharge: null,
           };
-          await writeRec(next);
+          await writeRecKeepingCancel(next);
           bookCharge(next, due, verdict.tx);
           log(`[mpp-subs] reconciled ${subId} period ${due} from the chain: the send that timed out had landed, tx=${verdict.tx} - not charged twice`);
           return "active";
@@ -1139,13 +1393,17 @@ export function createMppSubscriptions({
           (Date.parse(rec.unconfirmedCharge.at) + renewalValidForS * 1000 + SETTLEABLE_SLACK_MS);
         if (at < settleableUntil) {
           const next = { ...rec, status: rec.status === "active" ? "past_due" : rec.status, nextChargeAttemptAt: new Date(settleableUntil).toISOString() };
-          await writeRec(next);
+          await writeRecKeepingCancel(next);
           log(`[mpp-subs] ${subId}: unconfirmed period ${due} not on chain yet and still settleable - waiting, not re-charging`);
           return next.status;
         }
         rec = { ...rec, unconfirmedCharge: null };
-        await writeRec(rec);
+        await writeRecKeepingCancel(rec);
         log(`[mpp-subs] ${subId}: the send that timed out for period ${due} never landed - charging now`);
+      }
+      if (!stillHeld()) {
+        log(`[mpp-subs] ${subId}: the renewal lease was lost before period ${due} was signed; nothing signed`);
+        return rec.status === "active" ? "past_due" : rec.status;
       }
       const charge = injectedChargePeriod || defaultChargePeriod;
       const result = await charge(rec, { periodIndex: due });
@@ -1161,7 +1419,7 @@ export function createMppSubscriptions({
         lastChargeAt: new Date(at).toISOString(),
         chargeFailures: 0, firstFailedAt: null, nextChargeAttemptAt: null, lastChargeError: null, unconfirmedCharge: null,
       };
-      await writeRec(next);
+      await writeRecKeepingCancel(next);
       bookCharge(next, charged, next.lastChargeTx);
       log(`[mpp-subs] charged ${subId} period ${charged} tx=${next.lastChargeTx || "?"}`);
       return "active";
@@ -1189,7 +1447,7 @@ export function createMppSubscriptions({
         status: givenUp ? "canceled" : "past_due",
         ...(givenUp ? { canceledAt: new Date(at).toISOString(), canceledReason: "unpaid" } : {}),
       };
-      await writeRec(next);
+      await writeRecKeepingCancel(next);
       log(`[mpp-subs] period charge failed for ${subId} (attempt ${failures}${givenUp ? ", giving up: past the grace window" : `, retry in ${Math.round(backoff / 60000)}m${transient ? " (transient)" : ""}${ambiguous ? ", chain checked before any retry" : ""}`}): ${diagnoseError(err)}`);
       return next.status;
     } finally { inFlight.delete(subId); }
@@ -1201,6 +1459,7 @@ export function createMppSubscriptions({
    *  active until that period ends. Requires the manage token minted at
    *  activation, which only the subscriber (and their email) ever saw. */
   async function cancel(subId, token) {
+    await ready;
     const rec = await readRec(subId);
     if (!rec) { const e = new Error("Unknown subscription"); e.statusCode = 404; throw e; }
     if (!manageTokenOk(subId, token)) { const e = new Error("Not authorized to manage this subscription"); e.statusCode = 403; throw e; }
@@ -1213,17 +1472,27 @@ export function createMppSubscriptions({
     // its product, and only the canary's own ?refresh=1 pulls it), so "cancel
     // at period end" left canary records reading `active` indefinitely.
     const canaryRec = isCanaryProduct(rec.product);
-    const stillPaid = !canaryRec && at < endsAt && rec.status === "active";
-    const next = {
-      ...rec, cancelAtPeriodEnd: true,
-      canceledAt: new Date(at).toISOString(), canceledReason: "requested",
-      status: stillPaid ? "active" : "canceled",
-    };
-    await writeRec(next);
+    let stillPaid = !canaryRec && at < endsAt && rec.status === "active";
+    let endsAtNow = endsAt;
+    // Decided on the record as it is when written (a renewal on either
+    // container may have just paid a period), never on the copy read above.
+    const r = await kv.compareAndSet(REC_KEY(subId), (cur) => {
+      if (!cur || cur.status === "canceled") return null;
+      endsAtNow = paidThroughAt(cur);
+      stillPaid = !canaryRec && at < endsAtNow && cur.status === "active";
+      return {
+        ...cur, cancelAtPeriodEnd: true,
+        canceledAt: new Date(at).toISOString(), canceledReason: "requested",
+        status: stillPaid ? "active" : "canceled",
+        updatedAt: new Date(at).toISOString(),
+      };
+    });
+    const next = r.value || rec;
+    cache.set(subId, next);   // listActive/get are synchronous for the scheduler
     // A closed canary record's access key is never needed again; drop our
     // private half so the burner's standing authorization is inert.
     if (canaryRec) await destroyAccessKey(rec.accessKeyAddress);
-    log(`[mpp-subs] canceled ${subId} (${stillPaid ? `active until ${new Date(endsAt).toISOString()}` : "immediately"})`);
+    if (r.won) log(`[mpp-subs] canceled ${subId} (${stillPaid ? `active until ${new Date(endsAtNow).toISOString()}` : "immediately"})`);
     return publicView(next);
   }
 
@@ -1236,6 +1505,7 @@ export function createMppSubscriptions({
    *  only: no money moves and nothing is signed. Returns what it closed, with
    *  each record's access key address so the burner can revoke it on-chain. */
   async function sweepStaleCanaries({ olderThanMs = CANARY_SWEEP_AFTER_MS } = {}) {
+    await ready;
     const at = now();
     const swept = [];
     let skippedYoung = 0;
@@ -1244,7 +1514,11 @@ export function createMppSubscriptions({
       if (rec.status === "canceled" || rec.status === "expired") continue;
       const born = Date.parse(rec.createdAt || rec.billingAnchor || "");
       if (Number.isFinite(born) && at - born < olderThanMs) { skippedYoung++; continue; }
-      await writeRec({ ...rec, status: "canceled", cancelAtPeriodEnd: true, canceledAt: rec.canceledAt || new Date(at).toISOString(), canceledReason: rec.canceledReason || "canary-sweep" });
+      const r = await kv.compareAndSet(REC_KEY(rec.subId), (cur) => (cur && cur.status !== "canceled" && cur.status !== "expired" && isCanaryProduct(cur.product)
+        ? { ...cur, status: "canceled", cancelAtPeriodEnd: true, canceledAt: cur.canceledAt || new Date(at).toISOString(), canceledReason: cur.canceledReason || "canary-sweep", updatedAt: new Date(at).toISOString() }
+        : null));
+      if (r.value) cache.set(rec.subId, r.value);
+      if (!r.won) continue;
       const keysDestroyed = await destroyAccessKey(rec.accessKeyAddress);
       swept.push({ subId: rec.subId, accessKeyAddress: rec.accessKeyAddress || null, keysDestroyed });
     }
@@ -1295,7 +1569,24 @@ export function createMppSubscriptions({
     return cache;
   }
   warmSync();   // no boot window with an invisible subscriber
+  // With a state database the row arrives after construction: the server
+  // awaits every store's first load before it listens (trackStoreReady), and
+  // every async entry point here awaits it too, so no pull or activation
+  // runs against an empty map.
+  const ready = kv._ready.then(() => { warmSync(); });
+  // The scheduler reads listActive() synchronously; with a database the
+  // other container's activations and cancels reach it through a background
+  // re-read of the row at most every 30 s (refreshStatus re-reads each record
+  // before any charge whatever this mirror says).
+  let mirrorAt = Date.now(), mirroring = null;
+  function refreshMirror(force = false) {
+    if (kv.backend !== "pg" || mirroring || (!force && Date.now() - mirrorAt < 30_000)) return mirroring;
+    mirroring = kv.refreshAll().then((okRead) => { if (okRead) { warmSync(); mirrorAt = Date.now(); } return okRead; })
+      .catch(() => false).finally(() => { mirroring = null; });
+    return mirroring;
+  }
   function listActive(kind) {
+    refreshMirror();
     const out = [];
     for (const rec of cache.values()) {
       const p = MONITOR_PRODUCTS[rec.product];
@@ -1335,7 +1626,8 @@ export function createMppSubscriptions({
 
   return {
     offerInfo, mintOffer, activateFromCredential, refreshStatus, cancel, isCanarySub, sweepStaleCanaries,
-    listActive, get, isMine, status, warm, warmSync, manageToken, manageTokenOk, publicView,
+    listActive, get, isMine, status, warm, warmSync, refreshMirror, manageToken, manageTokenOk, publicView,
+    ready: () => ready, flush: () => kv.flush(),
     _store: kv, _subStore: subStore, _method: method,
     _feePayer: feePayer, _feePayerPolicy: feePayer ? subscriptionFeePayerPolicy() : null,
     _client: tempoClient, _renewalClient: tempoRenewalClient, _renewalValidForS: renewalValidForS,

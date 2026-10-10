@@ -47,7 +47,7 @@
 // response body is third-party text, so it is truncated and marked untrusted.
 import { markUntrusted } from "./provenance.js";
 import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_SELLER_ALLOWANCE_MS } from "../evm-validity.js";
-import { maySpend as realMaySpend, noteSpend as realNoteSpend, adjustSpend as realAdjustSpend } from "../external-spend-guard.js";
+import { maySpend as realMaySpend, noteSpend as realNoteSpend, adjustSpend as realAdjustSpend, reserveSpend as realReserveSpend, composeReserve } from "../external-spend-guard.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail } from "../evm-usdc-domain.js";
 import { payerFromRequest } from "../payer.js";
 import { acceptsFromLive402, quoteFromAccepts } from "../x402-live-quote.js";
@@ -169,7 +169,7 @@ export function payabilityFlags({ bare, challenge, domains, paid, receipt, settl
  *  SSRF-guarded fetch. */
 export function buildSellerPayabilityTool({
   pay, spendChain = "base", fetchImpl, assertPublicUrl, now = () => Date.now(),
-  maySpend = realMaySpend, noteSpend = realNoteSpend, adjustSpend = realAdjustSpend,
+  maySpend = realMaySpend, noteSpend = realNoteSpend, adjustSpend = realAdjustSpend, reserveSpend = null,
   spendingWalletStatus = cachedSpendingWalletStatus,
 } = {}) {
   async function handler(input, req) {
@@ -218,13 +218,15 @@ export function buildSellerPayabilityTool({
     const spendPayer = payerFromRequest(req)
       || (req?.mppTempoSender ? `tempo:${req.mppTempoSender}` : null)
       || (req?.ip ? `ip:${req.ip}` : null);
-    const allowed = maySpend(spendPayer, maxUsd, { chain: spendChain });
+    // Check and book in one step; injected maySpend/noteSpend (tests) compose into the same shape.
+    const reserve = reserveSpend || (maySpend === realMaySpend && noteSpend === realNoteSpend ? realReserveSpend : composeReserve(maySpend, noteSpend));
+    const allowed = await reserve(spendPayer, maxUsd, { chain: spendChain });
     if (!allowed?.ok) {
       throw bad(allowed?.code === "wallet_daily_ceiling"
         ? "The Base spending wallet has reached its daily ceiling; payability checks resume tomorrow (nobody was charged)"
         : "Upstream spend is paused right now; try again shortly (nobody was charged)", 429);
     }
-    const spendHandle = noteSpend(spendPayer, maxUsd, { chain: spendChain });
+    const spendHandle = allowed.handle ?? null;
     // server.js resolves this on the post-settlement finish hook; without it
     // the worst-case booking stands for the whole window whatever happened.
     if (spendHandle && req && typeof req === "object") req.__externalSpend = spendHandle;

@@ -25,16 +25,47 @@
 //     tx so the ledger stays auditable.
 //   * never throws into the serving path - recording a debt must not break
 //     the response that just failed.
+//
+// Where it lives. Without a state database (STATE_DATABASE_URL unset) the
+// table is the SQLite file on the volume and every export is synchronous, as
+// it always was. With one, the table is in Postgres and the SQLite handle
+// below is an in-memory MIRROR of it: the readers (listRefunds, refundTotals,
+// refundAlarmStatus, refundsCreatedBetween, refundsForPayer, refundByEvidence)
+// stay synchronous and read the mirror; every WRITE is one Postgres statement
+// with RETURNING, lands in call order, is written into the mirror when it
+// lands, and the function returns a Promise of the same verdict it returns
+// synchronously in file mode. A status transition is decided by Postgres
+// alone (UPDATE ... WHERE status = ... RETURNING), so two containers can never
+// both claim one row. The mirror pulls other containers' writes every
+// REFRESH_MS. The file is imported once (agent402-refunds.db in the imports
+// table) at the first boot with the database on, and while its directory is
+// there every landed write is also written into it (write-through), so a
+// rollback to the file-only build reads a current ledger; at every boot while
+// the file exists its rows are reconciled into the table per row
+// (reconcileFile: insert-if-absent by evidence, forward-only status). A debt
+// Postgres refuses is kept in a local dead-letter and replayed.
 import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
+import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, NEWER_FILE_GRACE_MS, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError, createLedgerWriter } from "./ledger-mirror.js";
+import { retryingLoad } from "./store-retry.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DATA_DIR = process.env.REFUND_DB_DIR || (HAS_DATA_DIR ? "/data" : "/tmp");
-const db = new Database(join(DATA_DIR, "agent402-refunds.db"));
-db.pragma("journal_mode = WAL");
+const DB_FILE = join(DATA_DIR, "agent402-refunds.db");
+const IMPORT_NAME = "agent402-refunds.db";
+const USE_PG = stateDbEnabled();
+/** "pg" when the ledger lives in the state database, "file" when it is the SQLite file. */
+export const refundLedgerBackend = USE_PG ? "pg" : "file";
+const db = new Database(USE_PG ? ":memory:" : DB_FILE);
+if (!USE_PG) db.pragma("journal_mode = WAL");
+// Write-through (database mode): while the volume is still mounted, every
+// landed write is also applied to the file, so a rollback to the previous
+// build reads a current ledger. Best effort, never the verdict, logged once.
+const fileDb = USE_PG && existsSync(DATA_DIR) ? (() => { try { const f = new Database(DB_FILE); f.pragma("journal_mode = WAL"); return f; } catch { return null; } })() : null;
 
-db.exec(`
+for (const h of [db, fileDb]) if (h) h.exec(`
   CREATE TABLE IF NOT EXISTS refunds (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     evidence TEXT NOT NULL UNIQUE,      -- settle tx, or payer|slug|minute fallback
@@ -56,7 +87,7 @@ db.exec(`
 // ("x402", "mpp", "mpp-tempo", "mpp-stripe"). The MPP reconciliation job
 // (src/mpp-reconcile.js) counts paid-but-failed MPP calls from it; a NULL is
 // a row recorded before the column existed.
-try { db.exec("ALTER TABLE refunds ADD COLUMN wire TEXT"); } catch { /* exists */ }
+for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE refunds ADD COLUMN wire TEXT"); } catch { /* exists */ } }
 // Additive column: on a disconnect debt (http 499), why the run was not
 // forgiven - the forgiveness ticket's denial reason ("payer budget", "ip
 // budget", "global budget", "lasting effect", ...), "settled in flight" when a
@@ -64,12 +95,12 @@ try { db.exec("ALTER TABLE refunds ADD COLUMN wire TEXT"); } catch { /* exists *
 // none was reserved. The refund planner holds the budget denials for review
 // (scripts/refund-run.js). NULL on every other debt and on rows written before
 // the column existed.
-try { db.exec("ALTER TABLE refunds ADD COLUMN hangupReason TEXT"); } catch { /* exists */ }
+for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE refunds ADD COLUMN hangupReason TEXT"); } catch { /* exists */ } }
 // Additive column (2026-10-06): when a row was claimed for sending, so the
 // refund alarm can tell a run in progress (seconds) from a row stuck mid-send.
 // NULL on a sending row means it was claimed before the column existed:
 // treated as stuck.
-try { db.exec("ALTER TABLE refunds ADD COLUMN claimedAt INTEGER"); } catch { /* exists */ }
+for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE refunds ADD COLUMN claimedAt INTEGER"); } catch { /* exists */ } }
 
 const insertOwed = db.prepare(`
   INSERT OR IGNORE INTO refunds (evidence, slug, network, payer, priceUsd, httpStatus, synthetic, createdAt, wire, hangupReason, note)
@@ -120,6 +151,316 @@ const totalsQ = db.prepare(`
   FROM refunds GROUP BY status
 `);
 
+// ---- the state database -------------------------------------------------------
+// Postgres columns are snake_case; the mirror keeps the file's camelCase so
+// every reader above, and every consumer of its rows, sees the same shape.
+const T = (t) => `${stateDbSchema()}.${t}`;
+const PG_COLS = ["id", "evidence", "slug", "network", "payer", "price_usd", "http_status", "synthetic", "status", "paid_tx", "note", "created_at", "resolved_at", "wire", "hangup_reason", "claimed_at"];
+const PG_DDL = () => `
+  CREATE TABLE IF NOT EXISTS ${T("refunds")} (
+    id            BIGSERIAL PRIMARY KEY,
+    evidence      TEXT NOT NULL UNIQUE,
+    slug          TEXT NOT NULL,
+    network       TEXT,
+    payer         TEXT,
+    price_usd     DOUBLE PRECISION NOT NULL DEFAULT 0,
+    http_status   INTEGER,
+    synthetic     INTEGER NOT NULL DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'owed',
+    paid_tx       TEXT,
+    note          TEXT,
+    created_at    BIGINT NOT NULL,
+    resolved_at   BIGINT,
+    wire          TEXT,
+    hangup_reason TEXT,
+    claimed_at    BIGINT,
+    updated_at    BIGINT NOT NULL DEFAULT ${PG_NOW_MS}
+  );
+  CREATE INDEX IF NOT EXISTS refunds_status ON ${T("refunds")} (status);
+  CREATE INDEX IF NOT EXISTS refunds_updated_at ON ${T("refunds")} (updated_at);
+`;
+const mirrorUpsert = db.prepare(`
+  INSERT OR REPLACE INTO refunds (id, evidence, slug, network, payer, priceUsd, httpStatus, synthetic, status, paidTx, note, createdAt, resolvedAt, wire, hangupReason, claimedAt)
+  VALUES (@id, @evidence, @slug, @network, @payer, @priceUsd, @httpStatus, @synthetic, @status, @paidTx, @note, @createdAt, @resolvedAt, @wire, @hangupReason, @claimedAt)
+`);
+const fileUpsert = fileDb ? fileDb.prepare(mirrorUpsert.source) : null;
+// Beside each written-through row, the table's updated_at it was written at
+// (its own table in the file, so the refunds table keeps the file-only build's
+// shape; named *_meta so the migration check reads it as bookkeeping). At the next boot's reconcile, a file row whose stamp still equals
+// the table row's updated_at was changed in the file alone since (a rollback);
+// any other difference means the table moved on, and the table wins.
+if (fileDb) { try { fileDb.exec("CREATE TABLE IF NOT EXISTS pg_sync_meta (evidence TEXT PRIMARY KEY, updated_at INTEGER NOT NULL)"); } catch { /* best effort */ } }
+const fileSync = fileDb ? (() => { try { return fileDb.prepare("INSERT OR REPLACE INTO pg_sync_meta (evidence, updated_at) VALUES (?, ?)"); } catch { return null; } })() : null;
+const num = (v) => (v == null ? null : Number(v));
+let watermark = 0;     // refresh pulls rows stamped after this (database clock, ms)
+let importedThrough = 0; // the newest updated_at an import in this process wrote (database clock, ms)
+let loaded = false;    // the first pull finished: the readers answer from a full mirror
+let refreshing = false;
+const warnOnce = makeWarnOnce("refund-ledger");
+const enqueue = serialQueue();
+
+const pgToMirror = (r) => ({
+  id: Number(r.id), evidence: r.evidence, slug: r.slug, network: r.network ?? null, payer: r.payer ?? null,
+  priceUsd: Number(r.price_usd) || 0, httpStatus: num(r.http_status), synthetic: Number(r.synthetic) || 0,
+  status: r.status, paidTx: r.paid_tx ?? null, note: r.note ?? null, createdAt: Number(r.created_at),
+  resolvedAt: num(r.resolved_at), wire: r.wire ?? null, hangupReason: r.hangup_reason ?? null, claimedAt: num(r.claimed_at),
+});
+function applyPgRow(r) {
+  mirrorUpsert.run(pgToMirror(r));
+}
+let writeThroughWarned = false;
+/** The landed row into the file (same id, same evidence), so a rolled-back build reads it. */
+function writeThroughRow(r) {
+  if (!fileUpsert) return;
+  try { fileUpsert.run(pgToMirror(r)); if (fileSync && r.updated_at != null) fileSync.run(r.evidence, Number(r.updated_at)); }
+  catch (e) { if (!writeThroughWarned) { writeThroughWarned = true; console.warn(`[refund-ledger] write-through to ${DB_FILE} failed: ${String(e?.message || e).slice(0, 120)}`); } }
+}
+const applyPgRows = db.transaction((rows) => { for (const r of rows) applyPgRow(r); });
+const fileToPg = (r) => cleanRow({
+  id: r.id, evidence: r.evidence, slug: r.slug, network: r.network ?? null, payer: r.payer ?? null,
+  price_usd: Number(r.priceUsd) || 0, http_status: r.httpStatus ?? null, synthetic: r.synthetic ? 1 : 0,
+  status: r.status || "owed", paid_tx: r.paidTx ?? null, note: r.note ?? null, created_at: Number(r.createdAt) || 0,
+  resolved_at: r.resolvedAt ?? null, wire: r.wire ?? null, hangup_reason: r.hangupReason ?? null, claimed_at: r.claimedAt ?? null,
+});
+// A debt, and every change to an owed debt's status or note, is written here
+// (the ledger file while it is open, else an NDJSON beside it) when it is
+// queued and removed once Postgres holds it; an entry left behind (refused,
+// timed out, killed) is replayed in the order it was written: a debt insert-
+// if-absent by evidence, a change as the same guarded UPDATE. See
+// createDeadLetter.
+const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: join(DATA_DIR, "agent402-refunds.dead-letter.ndjson"), name: "refunds" }) : null;
+const INSERT_OWED_SQL = () => `INSERT INTO ${T("refunds")} (evidence, slug, network, payer, price_usd, http_status, synthetic, created_at, wire, hangup_reason, note)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (evidence) DO NOTHING RETURNING *`;
+const owedParams = (row) => [row.evidence, row.slug, row.network, row.payer, row.priceUsd, row.httpStatus, row.synthetic, row.createdAt, row.wire, row.hangupReason, row.note];
+const NOTE_CASE = (p) => `CASE WHEN note IS NULL OR note = '' THEN ${p}::text ELSE note || '; ' || ${p}::text END`;
+/**
+ * The changes to an OWED debt that the Tempo push flow makes (src/tempo-push-
+ * debts.js), by name, each one guarded UPDATE keyed on evidence ($1). Every
+ * guard reads the state the change moves FROM (status owed, and the note it
+ * rewrites), so running one twice, or after the row moved on, changes
+ * nothing: safe to replay.
+ */
+const OWED_CHANGES = {
+  void: () => `UPDATE ${T("refunds")} SET status = 'void', note = ${NOTE_CASE("$2")}, resolved_at = $3, updated_at = ${PG_NOW_MS}
+         WHERE evidence = $1 AND status = 'owed' RETURNING *`,
+  renote: () => `UPDATE ${T("refunds")} SET note = $3, updated_at = ${PG_NOW_MS} WHERE evidence = $1 AND status = 'owed' AND note = $2 RETURNING *`,
+  promote: () => `UPDATE ${T("refunds")} SET http_status = 499, hangup_reason = $3, note = ${NOTE_CASE("$4")}, updated_at = ${PG_NOW_MS}
+         WHERE evidence = $1 AND status = 'owed' AND note = $2 RETURNING *`,
+  restate: () => `UPDATE ${T("refunds")} SET http_status = $3, note = ${NOTE_CASE("$4")}, updated_at = ${PG_NOW_MS}
+         WHERE evidence = $1 AND status = 'owed' AND note = $2 RETURNING *`,
+};
+let replaying = false;
+/**
+ * Land every dead-lettered debt and change, oldest first (a change after the
+ * debt it changes), skipping entries whose write this process still has
+ * queued. Stops at the first connection failure (the next tick retries).
+ */
+async function replayDeadLetters() {
+  if (!deadLetter || replaying) return 0;
+  replaying = true;
+  let landed = 0;
+  try {
+    for (const e of deadLetter.list()) {
+      const v = e.payload;
+      const isDebt = e.kind === "refund" && v?.evidence;
+      const isChange = e.kind === "refund-change" && OWED_CHANGES[v?.op] && Array.isArray(v.params) && v.params[0];
+      if (!isDebt && !isChange) { deadLetter.remove(e.id); continue; }
+      let r;
+      try { r = await stateQuery(isDebt ? INSERT_OWED_SQL() : OWED_CHANGES[v.op](), isDebt ? owedParams(v) : v.params); writer.answered(); }
+      catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); continue; } writer.failed(err); throw err; }
+      if (r.rows[0]) { applyPgRow(r.rows[0]); writeThroughRow(r.rows[0]); landed++; }
+      else await refreshWhere("evidence = $1", [isDebt ? v.evidence : v.params[0]]).catch(() => {});
+      deadLetter.remove(e.id);
+    }
+  } finally { replaying = false; }
+  if (landed) console.log(`[refund-ledger] landed ${landed} debt(s) or change(s) that had waited in the local dead-letter`);
+  return landed;
+}
+
+/** The file's rows into the table, once: insert-if-absent, so a second container importing at the same time is harmless. */
+async function importFile() {
+  const { rows, bytes } = sqliteFileRows(DB_FILE, "refunds");
+  if (!rows.length) return { bytes, rows: 0 };
+  const n = await insertRows(stateQuery, T("refunds"), PG_COLS, rows.map(fileToPg), { conflict: "ON CONFLICT DO NOTHING" });
+  await syncIdSequence(stateQuery, T("refunds"));
+  // The newest stamp the import wrote: the boot pull holds those rows, so
+  // the refreshes start after it (see pullAll).
+  if (n) importedThrough = Number((await stateQuery(`SELECT MAX(updated_at) AS m FROM ${T("refunds")}`)).rows[0]?.m) || 0;
+  console.log(`[refund-ledger] imported ${n} of ${rows.length} row(s) from ${DB_FILE}`);
+  return { bytes, rows: n };
+}
+const RANK = { owed: 0, sending: 1, paid: 2, void: 2 };
+const rankOf = (st) => RANK[st] ?? 0;
+const COMPARE_COLS = ["status", "paid_tx", "note", "resolved_at", "http_status", "hangup_reason", "claimed_at"];
+const same = (a, b) => (a == null && b == null) || (a != null && b != null && String(a) === String(b));
+/**
+ * Every boot while the ledger file exists: the file's rows against the table,
+ * per row, never by file mtime against the table's newest stamp.
+ *  - A debt the table lacks (by evidence) is inserted, with the file's id when
+ *    that id is free and a fresh one otherwise. This lands what a file-only
+ *    build wrote during the cutover window or a rollback.
+ *  - A debt the table holds moves FORWARD only, judged per row, never by
+ *    the file's mtime alone (a container clock ahead of the database's, or a
+ *    copied file, stamps a stale file in the future). The file row is applied
+ *    when its status is further along (owed < sending < paid/void), the file
+ *    was written after the table row, and the table row has not been written
+ *    since the file row's own step: its write-through stamp (pg_sync_meta) still
+ *    equals the table's updated_at, or the step's own time (claimedAt for
+ *    sending, resolvedAt for paid/void) is at or after it. At the same,
+ *    unresolved status only when the stamp still equals the table's
+ *    updated_at and the file was written past the grace after it. A table
+ *    row that is further along, resolved, or written since is never
+ *    overwritten, so a stale or foreign file can never turn paid back into
+ *    owed, send a released row again, or drop a held hang-up's reason.
+ */
+async function reconcileFile() {
+  const mtime = ledgerFileMtime(DB_FILE);
+  if (!Number.isFinite(mtime)) return null;
+  const { rows } = sqliteFileRows(DB_FILE, "refunds");
+  if (!rows.length) return null;
+  const file = rows.map(fileToPg).filter((v) => v.evidence);
+  const synced = new Map(sqliteFileRows(DB_FILE, "pg_sync_meta").rows.map((x) => [x.evidence, Number(x.updated_at)]));
+  const cur = new Map();
+  for (let i = 0; i < file.length; i += 1000) {
+    const r = await stateQuery(`SELECT * FROM ${T("refunds")} WHERE evidence = ANY($1::text[])`, [file.slice(i, i + 1000).map((v) => v.evidence)]);
+    for (const x of r.rows) cur.set(x.evidence, x);
+  }
+  let inserted = 0, advanced = 0;
+  const cols = PG_COLS.filter((c) => c !== "id");
+  for (const v of file) {
+    const d = cur.get(v.evidence);
+    if (!d) {
+      let r = await stateQuery(
+        `INSERT INTO ${T("refunds")} (${PG_COLS.join(", ")}) VALUES (${PG_COLS.map((_, i) => `$${i + 1}`).join(", ")}) ON CONFLICT DO NOTHING RETURNING id`,
+        PG_COLS.map((c) => v[c] ?? null));
+      if (!r.rows[0]) {
+        r = await stateQuery(
+          `INSERT INTO ${T("refunds")} (${cols.join(", ")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")}) ON CONFLICT (evidence) DO NOTHING RETURNING id`,
+          cols.map((c) => v[c] ?? null));
+      }
+      if (r.rows[0]) inserted++;
+      continue;
+    }
+    if (COMPARE_COLS.every((c) => same(v[c], d[c]))) continue;
+    const rf = rankOf(v.status), rd = rankOf(d.status), du = Number(d.updated_at) || 0;
+    // The table row as the file last saw it: nothing has written it since.
+    const untouched = synced.has(v.evidence) && synced.get(v.evidence) === du;
+    // When the file row took the step it is ahead by (container clock, ms).
+    const stepAt = Number(rf === 1 ? v.claimed_at : v.resolved_at) || 0;
+    const forward = rf > rd && du <= mtime && (untouched || stepAt >= du);
+    const sameStage = rf === rd && rd < 2 && du + NEWER_FILE_GRACE_MS < mtime && untouched;
+    if (!forward && !sameStage) continue;
+    // Guarded on the row as compared: a write that landed since is never overwritten.
+    const r = await stateQuery(
+      `UPDATE ${T("refunds")} SET ${COMPARE_COLS.map((c, i) => `${c} = $${i + 3}`).join(", ")}, updated_at = ${PG_NOW_MS}
+       WHERE evidence = $1 AND updated_at = $2 RETURNING *`,
+      [v.evidence, d.updated_at, ...COMPARE_COLS.map((c) => v[c] ?? null)]);
+    if (r.rows[0]) { writeThroughRow(r.rows[0]); advanced++; }
+  }
+  if (inserted) await syncIdSequence(stateQuery, T("refunds"));
+  if (inserted || advanced) console.log(`[refund-ledger] reconciled ${DB_FILE}: ${inserted} debt(s) the table lacked inserted, ${advanced} row(s) moved forward`);
+  return { inserted, advanced };
+}
+async function pullAll() {
+  const now = await pgNowMs(stateQuery);
+  const r = await stateQuery(`SELECT * FROM ${T("refunds")} ORDER BY id`);
+  db.transaction((rows) => { db.exec("DELETE FROM refunds"); for (const x of rows) applyPgRow(x); })(r.rows);
+  // An import this process just ran stamped every row it inserted within
+  // the margin: the full pull holds them, so the refreshes start after the
+  // newest imported stamp instead of pulling them again.
+  watermark = Math.max(now - REFRESH_MARGIN_MS, importedThrough);
+  loaded = true;
+}
+/**
+ * Rows another container wrote since the last pull. The watermark advances to
+ * the database clock (minus REFRESH_MARGIN_MS) read before the query, not to
+ * the newest stamp seen, so rows sharing one stamp range (an import) are not
+ * pulled again on every refresh. Returns how many rows were pulled.
+ */
+async function refresh() {
+  if (refreshing) return 0;
+  refreshing = true;
+  try {
+    const now = await pgNowMs(stateQuery);
+    const r = await stateQuery(`SELECT * FROM ${T("refunds")} WHERE updated_at > $1 ORDER BY updated_at, id`, [Math.max(0, watermark)]);
+    writer.answered();
+    if (r.rows.length) applyPgRows(r.rows);
+    watermark = Math.max(watermark, now - REFRESH_MARGIN_MS);
+    return r.rows.length;
+  } finally { refreshing = false; }
+}
+async function refreshWhere(where, params) {
+  const r = await stateQuery(`SELECT * FROM ${T("refunds")} WHERE ${where}`, params);
+  if (r.rows.length) applyPgRows(r.rows);
+}
+async function firstLoad() {
+  await withSchemaLock((c) => c.query(PG_DDL())); // two boots at once never race on the catalog
+  await importOnce(IMPORT_NAME, { source: DB_FILE, run: importFile });
+  await reconcileFile();
+  await replayDeadLetters();
+  await pullAll();
+  everyMs(() => enqueue(replayDeadLetters).then(refresh), REFRESH_MS);
+}
+// The first load is retried until it lands (src/store-retry.js): a failed
+// attempt is forgotten so the next write or refresh tries again, and a
+// backoff timer retries it when nothing calls, so a database blip at boot
+// never leaves the mirror empty until the next deploy.
+const loader = USE_PG ? retryingLoad("refund ledger", firstLoad, { log: (m) => console.warn(m) }) : null;
+function readyP() { return loader ? loader.ready() : Promise.resolve(); }
+if (USE_PG) {
+  trackStoreReady(loader.eventually);
+  readyP().catch(() => {});
+  // A dead-lettered debt is retried even while the first load keeps failing
+  // (the refresh timer starts only after it succeeds).
+  everyMs(() => (deadLetter.size() ? enqueue(async () => { await readyP(); await replayDeadLetters(); }) : null), REFRESH_MS);
+}
+
+// The queued write path: write-ahead to the dead-letter for debts and their
+// changes, fail fast on a hung database, and before every write the
+// dead-lettered entries older than it land first, so a void or a claim never
+// runs ahead of the debt it acts on. See createLedgerWriter.
+const writer = createLedgerWriter({
+  enqueue, ready: () => readyP(), deadLetter, warnOnce, label: "refund-ledger",
+  before: async () => { if (deadLetter.list().length) await replayDeadLetters(); },
+});
+/** One queued Postgres write: lands after every earlier write, never rejects (a failed write resolves false, logged once a minute). */
+function pgWrite(label, fn) {
+  return writer.write(label, fn);
+}
+/** One change to an owed debt (OWED_CHANGES), dead-lettered while it is queued; resolves true when it changed the row. */
+function owedChange(label, op, params) {
+  return writer.write(label, async () => {
+    const r = await stateQuery(OWED_CHANGES[op](), params);
+    return applyOrRefresh(r, "evidence = $1", [params[0]]);
+  }, { kind: "refund-change", payload: { op, params } });
+}
+/** A refusal before any write: the same `false`, in the mode's shape. */
+const refuse = () => (USE_PG ? Promise.resolve(false) : false);
+/** Apply an UPDATE's RETURNING row; on no row, re-read what another container left there. */
+async function applyOrRefresh(r, where, params) {
+  if (r.rows[0]) { applyPgRow(r.rows[0]); writeThroughRow(r.rows[0]); return true; }
+  await refreshWhere(where, params).catch(() => {});
+  return false;
+}
+
+/** Resolves once the first load (DDL, the one-time file import, the full pull) is done; immediately in file mode. */
+export function refundLedgerReady() { return readyP().catch(() => {}); }
+/** Resolves once every queued write has landed (tests and shutdown). */
+export function refundLedgerFlush() { return enqueue(async () => {}); }
+/** Land any dead-lettered debts, then pull other containers' writes now (the timer does this every REFRESH_MS). Resolves the rows pulled. */
+export async function refundLedgerRefresh() {
+  if (!USE_PG) return 0;
+  await readyP();
+  await enqueue(replayDeadLetters);
+  return refresh();
+}
+/** Debts waiting in the local dead-letter (database mode; 0 in file mode). */
+export function refundDeadLetterCount() { return deadLetter ? deadLetter.size() : 0; }
+/** The dead-letter for the gateway-status word: entries waiting for the replay, all entries on disk, and when the oldest was written (null when none). */
+export function refundDeadLetterState() {
+  return deadLetter ? { waiting: deadLetter.list().length, total: deadLetter.size(), oldestAt: deadLetter.oldestAt() } : { waiting: 0, total: 0, oldestAt: null };
+}
+
 /**
  * Does this settle receipt PROVE the buyer was charged?
  *
@@ -140,13 +481,15 @@ export function receiptProvesCharge(receipt) {
 
 /** Record a debt. Returns true when a NEW row was created (false = duplicate
  *  evidence, already on the books). Addresses are stored exactly as given -
- *  base58/base32 rails are case-sensitive and must never be folded. */
+ *  base58/base32 rails are case-sensitive and must never be folded.
+ *  Database mode: returns a Promise of that verdict, resolved only once the
+ *  row is in Postgres (the write is queued behind earlier writes). */
 export function recordRefundOwed({ slug, network, payer, priceUsd, tx, httpStatus, synthetic, wire, hangupReason, note = null } = {}) {
   try {
     const evidence = (typeof tx === "string" && tx.trim())
       ? tx.trim()
       : `${payer || "unknown"}|${slug || "unknown"}|${Math.floor(Date.now() / 60_000)}`;
-    const info = insertOwed.run({
+    const row = cleanRow({
       evidence,
       slug: String(slug || "unknown"),
       network: network ? String(network) : null,
@@ -159,12 +502,23 @@ export function recordRefundOwed({ slug, network, payer, priceUsd, tx, httpStatu
       hangupReason: hangupReason ? String(hangupReason).slice(0, 40) : null,
       note: typeof note === "string" && note.trim() ? note.trim().slice(0, 200) : null,
     });
+    if (USE_PG) {
+      // On local disk BEFORE it is queued, removed once it lands: a debt that
+      // is refused, times out, or whose process is killed first is replayed
+      // insert-if-absent by evidence, so it is never dropped.
+      return writer.write("record", async () => {
+        const r = await stateQuery(INSERT_OWED_SQL(), owedParams(row));
+        return applyOrRefresh(r, "evidence = $1", [row.evidence]);
+      }, { kind: "refund", payload: row });
+    }
+    const info = insertOwed.run(row);
     return info.changes > 0;
   } catch {
-    return false; // recording a debt must never break the serving path
+    return refuse(); // recording a debt must never break the serving path
   }
 }
 
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function listRefunds({ status = "owed", limit = 200 } = {}) {
   try {
     return status === "all" ? selectAll.all(limit) : selectByStatus.all(status, limit);
@@ -186,9 +540,21 @@ export function listRefunds({ status = "owed", limit = 200 } = {}) {
  * refuses to touch and a human resolves. A stuck row costs a delay; a double
  * refund costs money twice and is invisible.
  *
- * Returns true only for the claimer that won the row.
+ * Returns true only for the claimer that won the row. Database mode: a
+ * Promise of it, decided by one `UPDATE ... WHERE status = 'owed' RETURNING`
+ * in Postgres, so two containers can never both win.
  */
 export function claimRefundForSend(id, note = null) {
+  if (USE_PG) {
+    return pgWrite("claim", async () => {
+      const r = await stateQuery(
+        `UPDATE ${T("refunds")} SET status = 'sending', note = $2, resolved_at = NULL, claimed_at = $3, updated_at = ${PG_NOW_MS}
+         WHERE id = $1 AND status = 'owed' RETURNING *`,
+        [Number(id), note, Date.now()],
+      );
+      return applyOrRefresh(r, "id = $1", [Number(id)]);
+    });
+  }
   try { return claimRow.run({ id, note, claimedAt: Date.now() }).changes > 0; } catch { return false; }
 }
 
@@ -197,22 +563,45 @@ export function claimRefundForSend(id, note = null) {
  * has checked the chain and found that nothing left the wallet (no transfer to
  * the payer, nonce not advanced): the next run then verifies and pays it like
  * any other debt. Requires a note saying what was checked. Never touches an
- * owed, paid or void row.
+ * owed, paid or void row. Database mode: a Promise of the verdict.
  */
 export function releaseStuckSend(id, note) {
-  if (!note || typeof note !== "string" || !note.trim()) return false;
+  if (!note || typeof note !== "string" || !note.trim()) return refuse();
+  if (USE_PG) {
+    return pgWrite("release", async () => {
+      const r = await stateQuery(
+        `UPDATE ${T("refunds")} SET status = 'owed', note = $2, resolved_at = NULL, claimed_at = NULL, updated_at = ${PG_NOW_MS}
+         WHERE id = $1 AND status = 'sending' RETURNING *`,
+        [Number(id), note.trim()],
+      );
+      return applyOrRefresh(r, "id = $1", [Number(id)]);
+    });
+  }
   try { return releaseRow.run({ id, note: note.trim() }).changes > 0; } catch { return false; }
 }
 
+function resolvePg(label, id, status, paidTx, note) {
+  return pgWrite(label, async () => {
+    const r = await stateQuery(
+      `UPDATE ${T("refunds")} SET status = $2, paid_tx = $3, note = $4, resolved_at = $5, updated_at = ${PG_NOW_MS}
+       WHERE id = $1 AND status IN ('owed', 'sending') RETURNING *`,
+      [Number(id), status, paidTx, note, Date.now()],
+    );
+    return applyOrRefresh(r, "id = $1", [Number(id)]);
+  });
+}
+
 /** Mark a debt repaid. Requires the outbound transaction - a refund without
- *  evidence is a deletion wearing a nicer name. Only `owed` rows transition. */
+ *  evidence is a deletion wearing a nicer name. Only `owed` rows transition.
+ *  Database mode: a Promise of the verdict. */
 export function markRefundPaid(id, paidTx, note = null) {
   // "undefined"/"null" as a STRING is what a sender produces when it reads the
   // wrong field off an SDK response. It passes a non-empty check while being
   // no evidence at all, in the one column the ledger treats as proof.
   const bad = new Set(["undefined", "null", "nan", "false", "0"]);
-  if (!paidTx || typeof paidTx !== "string" || !paidTx.trim()) return false;
-  if (bad.has(paidTx.trim().toLowerCase())) return false;
+  if (!paidTx || typeof paidTx !== "string" || !paidTx.trim()) return refuse();
+  if (bad.has(paidTx.trim().toLowerCase())) return refuse();
+  if (USE_PG) return resolvePg("paid", id, "paid", paidTx.trim(), note);
   try {
     return resolveRow.run({ id, status: "paid", paidTx: paidTx.trim(), note, resolvedAt: Date.now() }).changes > 0;
   } catch { return false; }
@@ -220,15 +609,18 @@ export function markRefundPaid(id, paidTx, note = null) {
 
 /** Void a debt (bad detection, unreachable payer, dust). Requires a note -
  *  writing off a customer's money silently is exactly what this ledger exists
- *  to prevent. */
+ *  to prevent. Database mode: a Promise of the verdict. */
 export function markRefundVoid(id, note) {
-  if (!note || typeof note !== "string" || !note.trim()) return false;
+  if (!note || typeof note !== "string" || !note.trim()) return refuse();
+  if (USE_PG) return resolvePg("void", id, "void", null, note.trim());
   try {
     return resolveRow.run({ id, status: "void", paidTx: null, note: note.trim(), resolvedAt: Date.now() }).changes > 0;
   } catch { return false; }
 }
 
-/** The row recorded under this evidence (a settle tx or push hash), or null. */
+/** The row recorded under this evidence (a settle tx or push hash), or null.
+ *  Database mode: from the mirror (this process's landed writes, plus other
+ *  containers' writes as of the last refresh). */
 export function refundByEvidence(evidence) {
   try { return (typeof evidence === "string" && evidence.trim() && selectByEvidence.get(evidence.trim())) || null; } catch { return null; }
 }
@@ -237,41 +629,63 @@ export function refundByEvidence(evidence) {
  *  paid (a Tempo push transfer refused on input, then presented again and
  *  served): void it, so the buyer is never both served and refunded. Requires
  *  a note like every void; touches an OWED row only. Returns true when a row
- *  was voided. */
+ *  was voided (database mode: a Promise of it). */
 export function voidOwedOnClaim(evidence, note) {
-  if (typeof evidence !== "string" || !evidence.trim() || !note || typeof note !== "string" || !note.trim()) return false;
+  if (typeof evidence !== "string" || !evidence.trim() || !note || typeof note !== "string" || !note.trim()) return refuse();
+  if (USE_PG) {
+    return owedChange("void-on-claim", "void", [evidence.trim(), noNul(note.trim()), Date.now()]);
+  }
   try { return voidOwedByEvidence.run({ evidence: evidence.trim(), note: note.trim(), resolvedAt: Date.now() }).changes > 0; } catch { return false; }
 }
 
-/** Replace an owed row's note when it currently reads `from`. Returns true
- *  when it did (so a caller can act once per transition). */
+/** Rewrite an OWED row's note from `from` to `to`, exactly once: the row
+ *  changes only while its note currently reads `from`. Returns true
+ *  when it did (so a caller can act once per transition); database mode: a
+ *  Promise of it. */
 export function renoteOwedRefund(evidence, from, to) {
+  if (USE_PG) {
+    const ev = String(evidence || "").trim();
+    if (!ev) return refuse();
+    return owedChange("renote", "renote", [ev, from, noNul(to)]);
+  }
   try { return renoteOwed.run({ evidence: String(evidence || "").trim(), from, to }).changes > 0; } catch { return false; }
 }
 
 /** Turn an OWED row whose note reads `from` into a disconnect debt (http 499,
  *  `hangupReason`, `append` added to the note), so the refund planner's
  *  hang-up holds apply to it. Never touches a sending, paid or void row.
- *  Returns true when it did. */
+ *  Returns true when it did; database mode: a Promise of it. */
 export function promoteOwedToHangup(evidence, { from, hangupReason, append } = {}) {
-  if (typeof evidence !== "string" || !evidence.trim() || !from || !append) return false;
+  if (typeof evidence !== "string" || !evidence.trim() || !from || !append) return refuse();
+  const ev = evidence.trim();
+  const reason = hangupReason ? String(hangupReason).slice(0, 40) : null;
+  const add = String(append).slice(0, 120);
+  if (USE_PG) {
+    return owedChange("promote-hangup", "promote", [ev, from, noNul(reason), noNul(add)]);
+  }
   try {
-    return promoteHangup.run({ evidence: evidence.trim(), from, append: String(append).slice(0, 120), hangupReason: hangupReason ? String(hangupReason).slice(0, 40) : null }).changes > 0;
+    return promoteHangup.run({ evidence: ev, from, append: add, hangupReason: reason }).changes > 0;
   } catch { return false; }
 }
 
 /** An OWED row whose note is exactly `from` takes a handler's failure status
  *  (>= 400, never 499: disconnects go through promoteOwedToHangup) and gains
  *  `append` in its note. Rows being sent, paid or void are never touched.
- *  True when the row changed. */
+ *  True when the row changed; database mode: a Promise of it. */
 export function restateOwedAsHandlerFailure(evidence, { from, httpStatus, append } = {}) {
   const st = Number(httpStatus);
-  if (typeof evidence !== "string" || !evidence.trim() || !from || !append || !Number.isInteger(st) || st < 400 || st === 499) return false;
+  if (typeof evidence !== "string" || !evidence.trim() || !from || !append || !Number.isInteger(st) || st < 400 || st === 499) return refuse();
+  const ev = evidence.trim();
+  const add = String(append).slice(0, 120);
+  if (USE_PG) {
+    return owedChange("restate-failure", "restate", [ev, from, st, noNul(add)]);
+  }
   try {
-    return restateHandlerFailure.run({ evidence: evidence.trim(), from, append: String(append).slice(0, 120), httpStatus: st }).changes > 0;
+    return restateHandlerFailure.run({ evidence: ev, from, append: add, httpStatus: st }).changes > 0;
   } catch { return false; }
 }
 
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function refundTotals() {
   try {
     const out = { owed: { n: 0, usd: 0 }, paid: { n: 0, usd: 0 }, void: { n: 0, usd: 0 } };
@@ -290,10 +704,12 @@ export function refundTotals() {
  *  - "aging": a debt has been owed longer than `owedHours`. Debts held for
  *    review (hang-up budget denials) count too: 44 of them sat unnoticed for
  *    a day before this alarm existed.
- *  - "ok" otherwise; "unknown" if the ledger cannot be read.
+ *  - "ok" otherwise; "unknown" if the ledger cannot be read (in database
+ *    mode, also until the first pull from Postgres has finished).
  * Counts are for the operator view only; the public view is the word.
  */
 export function refundAlarmStatus({ owedHours = 48, stuckMinutes = 30, now = Date.now() } = {}) {
+  if (USE_PG && !loaded) return { status: "unknown" };
   try {
     const owed = oldestOwedQ.get(now - owedHours * 3600_000);
     const stuck = stuckSendingQ.get(now - stuckMinutes * 60_000);
@@ -309,6 +725,7 @@ const selectCreatedBetween = db.prepare(
 /** Debts recorded in [sinceMs, untilMs), WITHOUT the payer column: the
  *  reconciliation job reads this and publishes counts, and nothing it holds
  *  should be able to leak an address. Bounded by `limit`. */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function refundsCreatedBetween(sinceMs, untilMs = Date.now(), { limit = 5000 } = {}) {
   try { return selectCreatedBetween.all(Number(sinceMs) || 0, Number(untilMs) || Date.now(), limit); } catch { return []; }
 }
@@ -323,6 +740,7 @@ const selectForPayerExact = db.prepare(
 const selectForPayerEvm = db.prepare(
   "SELECT evidence, network, priceUsd, status, paidTx, createdAt, resolvedAt FROM refunds WHERE lower(payer) = ? ORDER BY id DESC LIMIT ?"
 );
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function refundsForPayer(payer, { limit = 50 } = {}) {
   const p = typeof payer === "string" ? payer.trim() : "";
   if (!p) return [];
@@ -332,5 +750,15 @@ export function refundsForPayer(payer, { limit = 50 } = {}) {
   } catch { return []; }
 }
 
-/** Test seam. */
-export function __resetRefunds() { db.exec("DELETE FROM refunds"); }
+/** Test seam. Database mode: a Promise, and the Postgres table is emptied too. */
+export function __resetRefunds() {
+  if (USE_PG) {
+    return enqueue(async () => {
+      await readyP();
+      await stateQuery(`DELETE FROM ${T("refunds")}`);
+      db.exec("DELETE FROM refunds");
+      if (fileDb) fileDb.exec("DELETE FROM refunds");
+    });
+  }
+  db.exec("DELETE FROM refunds");
+}

@@ -13,8 +13,11 @@
 // - The webhook is only VERIFIED when STRIPE_WEBHOOK_SECRET is set; until then
 //   it refuses unverified events (never trusts an unsigned body).
 // Rollout switch = STRIPE_SECRET_KEY (same key as the one-shot checkout).
-import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady } from "./state-db.js";
+import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 
 // The monitoring products. Each subscribes to a `target` (a domain, a fund,
 // etc.) and re-runs a report kind on a cadence (src/monitor-scheduler.js).
@@ -70,23 +73,22 @@ const webhookSecret = () => (process.env.STRIPE_WEBHOOK_SECRET || "").trim();
 const STORE_PATH = () => join(existsSync("/data") ? "/data" : "/tmp", "stripe-subscriptions.json");
 const MAX_STORE = 20000;
 
-function loadStore(path) {
-  try { return new Map(Object.entries(JSON.parse(readFileSync(path, "utf8")))); } catch { return new Map(); }
+const toMap = (j) => (j && typeof j === "object" && !Array.isArray(j) ? new Map(Object.entries(j)) : new Map());
+// Merge-on-save: only OUR changed keys are written into the stored object, so
+// a second process's records are never dropped by a whole-map overwrite. On
+// the file this is tmp + rename; in the state database it is a key merge.
+async function saveKeys(doc, map, keys) {
+  const patch = {};
+  for (const k of keys) if (map.has(k)) patch[k] = map.get(k);
+  const merged = await doc.mergeKeys(patch);
+  if (merged && Object.keys(merged).length > MAX_STORE) {
+    const drop = Object.keys(merged).slice(0, Object.keys(merged).length - MAX_STORE);
+    await doc.mergeKeys({}, drop);
+  }
+  return merged !== null;
 }
-// Merge-on-save + atomic rename: re-read the file, apply OUR changed keys on
-// top, write tmp + rename - so a second process's records are never dropped by
-// a whole-map overwrite, and a crash mid-write never leaves a torn file.
-function saveKeys(path, map, keys) {
-  try {
-    const disk = loadStore(path);
-    for (const k of keys) if (map.has(k)) disk.set(k, map.get(k));
-    const entries = [...disk.entries()];
-    const keep = entries.length > MAX_STORE ? entries.slice(-MAX_STORE) : entries;
-    const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(Object.fromEntries(keep)));
-    renameSync(tmp, path);
-  } catch { /* best-effort */ }
-}
+// The newer of two records of one subscription (by updatedAt; ISO strings compare as strings).
+const newer = (a, b) => (!a ? b : !b ? a : String(b.updatedAt || "") > String(a.updatedAt || "") ? b : a);
 
 // Webhook receipt tally. The handler is otherwise silent on success, so
 // nothing on our side could say whether Stripe is DELIVERING events at all
@@ -95,12 +97,7 @@ function saveKeys(path, map, keys) {
 // reset it to a reassuring-looking zero. Counts only, never event bodies.
 const TALLY_SUFFIX = ".webhooks.json";
 const emptyTally = () => ({ received: 0, verified: 0, rejected: 0, unconfigured: 0, byType: {}, lastAt: null, lastType: null, lastRejectAt: null, lastRejectReason: null, since: new Date().toISOString() });
-function loadTally(path) {
-  try { const t = JSON.parse(readFileSync(path, "utf8")); return { ...emptyTally(), ...t, byType: t.byType || {} }; } catch { return emptyTally(); }
-}
-function saveTally(path, t) {
-  try { const tmp = `${path}.${process.pid}.tmp`; writeFileSync(tmp, JSON.stringify(t)); renameSync(tmp, path); } catch { /* best-effort */ }
-}
+const shapeTally = (t) => (t && typeof t === "object" ? { ...emptyTally(), ...t, byType: t.byType || {} } : emptyTally());
 
 /**
  * @param {object} deps
@@ -110,9 +107,64 @@ function saveTally(path, t) {
  */
 export function createStripeSubscriptions({ stripe, baseUrl, storePath, validateTarget = {}, onInvoicePaid, onPaymentSession, onChargeReversed }) {
   const path = storePath || STORE_PATH();
-  const store = loadStore(path);          // subId -> record
-  const tallyPath = path + TALLY_SUFFIX;
-  const tally = loadTally(tallyPath);
+  const doc = createJsonDocument({ file: path, log: () => {} });
+  const tallyDoc = createJsonDocument({ file: path + TALLY_SUFFIX, log: () => {} });
+  const store = toMap(doc.loadSync(null));          // subId -> record
+  const tally = shapeTally(tallyDoc.loadSync(null));
+  // In the state database the first load is asynchronous: the maps fill when
+  // the rows arrive (the file is imported once); the server awaits every
+  // store before it listens.
+  const ready = trackStoreReady(doc.backend === "pg"
+    ? Promise.all([doc.load(null), tallyDoc.load(null)]).then(([j, t]) => {
+      for (const [k, v] of toMap(j)) if (!store.has(k)) store.set(k, v);
+      // Counts bumped before the row arrived are deltas on top of it.
+      const row = shapeTally(t);
+      for (const [k, v] of Object.entries(row)) {
+        if (k === "byType") { for (const [ty, n] of Object.entries(v || {})) tally.byType[ty] = (tally.byType[ty] || 0) + (Number(n) || 0); }
+        else if (typeof v === "number") tally[k] = (Number(tally[k]) || 0) + v;
+        else if (tally[k] == null && v != null) tally[k] = v;
+      }
+    })
+    : Promise.resolve());
+  // With the database two containers count webhooks at once: each saves the
+  // counts it added since its last save (a delta) onto the row, a versioned
+  // read-modify-write, never its whole tally over the other's.
+  const TPG = tallyDoc.backend === "pg";
+  let delta = { counts: {}, byType: {}, fields: {} };
+  const addDelta = (into, d) => {
+    for (const [k, n] of Object.entries(d.counts)) into.counts[k] = (into.counts[k] || 0) + n;
+    for (const [k, n] of Object.entries(d.byType)) into.byType[k] = (into.byType[k] || 0) + n;
+    for (const [k, v] of Object.entries(d.fields)) if (!(k in into.fields)) into.fields[k] = v;
+  };
+  let tallySaving = null, tallyAgain = false;
+  function saveTally() {
+    if (!TPG) { void tallyDoc.save(tally); return; }
+    if (tallySaving) { tallyAgain = true; return; }
+    tallySaving = (async () => {
+      do {
+        tallyAgain = false;
+        const sent = delta; delta = { counts: {}, byType: {}, fields: {} };
+        const r = await tallyDoc.update((b) => {
+          const t = shapeTally(b);
+          for (const [k, n] of Object.entries(sent.counts)) t[k] = (Number(t[k]) || 0) + n;
+          for (const [k, n] of Object.entries(sent.byType)) if (Object.hasOwn(t.byType, k) || Object.keys(t.byType).length < MAX_TYPES) t.byType[k] = (t.byType[k] || 0) + n;
+          // The newest event wins the "last" fields (ISO times compare as strings).
+          if (sent.fields.lastAt && (!t.lastAt || sent.fields.lastAt >= t.lastAt)) { t.lastAt = sent.fields.lastAt; t.lastType = sent.fields.lastType ?? t.lastType; }
+          if (sent.fields.lastRejectAt && (!t.lastRejectAt || sent.fields.lastRejectAt >= t.lastRejectAt)) { t.lastRejectAt = sent.fields.lastRejectAt; t.lastRejectReason = sent.fields.lastRejectReason ?? t.lastRejectReason; }
+          return t;
+        }, { fallback: null });
+        if (!r.ok) { const back = { counts: {}, byType: {}, fields: {} }; addDelta(back, delta); addDelta(back, sent); delta = back; break; }
+        // The row now, plus what was counted here since this save began.
+        const now = shapeTally(r.body);
+        for (const [k, n] of Object.entries(delta.counts)) now[k] = (Number(now[k]) || 0) + n;
+        for (const [k, n] of Object.entries(delta.byType)) now.byType[k] = (now.byType[k] || 0) + n;
+        Object.assign(now, delta.fields);
+        for (const k of Object.keys(tally)) delete tally[k];
+        Object.assign(tally, now);
+      } while (tallyAgain);
+      tallySaving = null;
+    })();
+  }
   const MAX_TYPES = 64;
   // Verified events persist at once; the unauthenticated counters (received,
   // rejected, unconfigured) persist on a 5 s debounce so an unsigned flood costs
@@ -121,15 +173,86 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
   function bump(kind, extra) {
     tally[kind] += 1;
     Object.assign(tally, extra);
-    if (kind === "verified") { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; } saveTally(tallyPath, tally); return; }
-    if (!saveTimer) { saveTimer = setTimeout(() => { saveTimer = null; saveTally(tallyPath, tally); }, 5000); saveTimer.unref?.(); }
+    if (TPG) { delta.counts[kind] = (delta.counts[kind] || 0) + 1; Object.assign(delta.fields, extra); }
+    if (kind === "verified") { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; } saveTally(); return; }
+    if (!saveTimer) { saveTimer = setTimeout(() => { saveTimer = null; saveTally(); }, 5000); saveTimer.unref?.(); }
   }
 
-  function upsert(subId, patch) {
-    if (!subId) return;
+  // On the state database a record whose merge did not land (a paid
+  // subscription, a cancellation) is kept on local disk beside the store
+  // file and replayed on a timer, so a restart before the database answers
+  // again loses none; the replay writes it only over an older copy of the
+  // same subscription (by updatedAt), never over a newer one.
+  const PG = doc.backend === "pg";
+  const pending = PG ? createDeadLetter({ file: `${path}.pending.ndjson`, name: "subscriptions" }) : null;
+  const unsaved = new Set(); // subIds whose latest record has not landed
+  // Resolves false only in database mode when the record did not reach the
+  // database (it waits in the local journal); the webhook then answers 503
+  // so Stripe delivers the event again.
+  async function upsert(subId, patch) {
+    if (!subId) return true;
+    if (PG && !store.has(subId)) {
+      // A subscription another container recorded since this one loaded:
+      // its stored record is the base, so a partial patch (a webhook's
+      // status) never replaces the whole record.
+      try { const r = await doc.read(); const v = r.ok && r.exists ? r.body?.[subId] : null; if (v && !store.has(subId)) store.set(subId, v); } catch { /* the patch alone */ }
+    }
     const prev = store.get(subId) || {};
     store.set(subId, { ...prev, ...patch, updatedAt: new Date().toISOString() });
-    saveKeys(path, store, [subId]);
+    if (!PG) { void saveKeys(doc, store, [subId]); return true; }
+    let landed = false;
+    try { landed = await saveKeys(doc, store, [subId]); } catch { landed = false; }
+    if (landed) { unsaved.delete(subId); return true; }
+    unsaved.add(subId);
+    if (!pending.add("sub", { subId, rec: store.get(subId) })) console.error(`[subscriptions] the record of ${subId} could not be kept on local disk`);
+    return false;
+  }
+  let replaying = false;
+  async function replayPending() {
+    if (!pending || replaying || !pending.size()) return 0;
+    replaying = true;
+    let landed = 0;
+    try {
+      for (const e of pending.list()) {
+        const { subId, rec } = e.payload || {};
+        if (!subId || !rec) { pending.remove(e.id); continue; }
+        const mine = newer(rec, unsaved.has(subId) ? store.get(subId) : null);
+        const r = await doc.update((b) => {
+          const body = b && typeof b === "object" && !Array.isArray(b) ? b : {};
+          body[subId] = newer(body[subId], mine);
+          return body;
+        }, { fallback: {} });
+        if (!r.ok) break; // the database is still away: the next tick retries
+        const stored = r.body?.[subId];
+        if (stored) store.set(subId, newer(store.get(subId), stored));
+        if (stored === mine || String(stored?.updatedAt || "") >= String(mine.updatedAt || "")) unsaved.delete(subId);
+        pending.remove(e.id);
+        landed++;
+      }
+    } finally { replaying = false; }
+    if (landed) console.log(`[subscriptions] landed ${landed} record(s) kept on local disk`);
+    return landed;
+  }
+  if (PG) {
+    ready.then(() => replayPending()).catch(() => {});
+    everyMs(() => replayPending(), Number(process.env.SUBSCRIPTIONS_REPLAY_MS) || 15_000);
+  }
+  // Reads the stored records again (database mode): a subscription another
+  // container recorded since this one loaded is seen, and the newer copy of
+  // each wins. The monitor scheduler calls it inside its lease, before a tick
+  // reads listActive. Resolves how many records changed here.
+  async function reload() {
+    if (!PG) return 0;
+    await replayPending().catch(() => 0);
+    const r = await doc.read();
+    if (!r.ok) return 0;
+    let changed = 0;
+    for (const [k, v] of toMap(r.exists ? r.body : null)) {
+      const cur = store.get(k);
+      const win = newer(cur, v);
+      if (win !== cur) { store.set(k, win); changed++; }
+    }
+    return changed;
   }
 
   // Create a subscription Checkout Session for a monitor product + target.
@@ -206,7 +329,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       email: session.customer_details?.email || session.customer_email || existing?.email || null,
       createdAt: existing?.createdAt || new Date().toISOString(),
     };
-    upsert(subId, rec);
+    await upsert(subId, rec);
     const p = MONITOR_PRODUCTS[rec.product];
     return { status, subId, customer: rec.customer, product: rec.product, label: p?.label || "monitor", target: rec.target };
   }
@@ -223,7 +346,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     try { event = stripe.webhooks.constructEvent(rawBody, signature, secret); }
     catch (err) { bump("rejected", { lastRejectAt: now, lastRejectReason: "bad-signature" }); const e = new Error(`Webhook signature verification failed: ${err.message}`); e.statusCode = 400; throw e; }
     const type = String(event.type || "unknown").slice(0, 64);
-    if (Object.hasOwn(tally.byType, type) || Object.keys(tally.byType).length < MAX_TYPES) tally.byType[type] = (tally.byType[type] || 0) + 1;
+    if (Object.hasOwn(tally.byType, type) || Object.keys(tally.byType).length < MAX_TYPES) { tally.byType[type] = (tally.byType[type] || 0) + 1; if (TPG) delta.byType[type] = (delta.byType[type] || 0) + 1; }
     bump("verified", { lastAt: now, lastType: type });
     // Stripe's signature tolerance is 300 s: a captured delivery replays for
     // five minutes. Handlers are idempotent on their records, but a replayed
@@ -233,6 +356,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       seenEvents.set(event.id, Date.now());
       if (seenEvents.size > 5000) for (const [k, t] of seenEvents) { if (Date.now() - t > 86_400_000 || seenEvents.size > 5000) seenEvents.delete(k); else break; }
     }
+    let stored = true; // every record this event writes reached the database
     switch (event.type) {
       case "checkout.session.completed": {
         const s = event.data.object;
@@ -245,7 +369,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
           // Stripe retries and reorders events: a completed-checkout event must
           // never overwrite a status the subscription lifecycle already set.
           const prev = store.get(id);
-          upsert(id, {
+          stored = stored && await upsert(id, {
             customer: s.customer, status: prev?.status || "active",
             product: s.metadata?.product || prev?.product || null, target: s.metadata?.target || prev?.target || null,
             email: s.customer_details?.email || s.customer_email || prev?.email || null,
@@ -256,7 +380,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       case "customer.subscription.created":
       case "customer.subscription.updated": {
         const sub = event.data.object;
-        upsert(sub.id, {
+        stored = stored && await upsert(sub.id, {
           customer: sub.customer, status: sub.status,
           product: sub.metadata?.product || store.get(sub.id)?.product || null,
           target: sub.metadata?.target || store.get(sub.id)?.target || null,
@@ -267,7 +391,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       }
       case "customer.subscription.deleted": {
         const sub = event.data.object;
-        upsert(sub.id, { status: "canceled" });
+        stored = stored && await upsert(sub.id, { status: "canceled" });
         break;
       }
       case "invoice.paid": {
@@ -277,10 +401,13 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
         const inv = event.data.object;
         const subId = typeof inv.subscription === "string" ? inv.subscription : inv.subscription?.id || inv.parent?.subscription_details?.subscription || null;
         const rec = subId ? store.get(subId) : null;
-        if (typeof onInvoicePaid === "function" && inv.amount_paid > 0) {
+        // The record first: an event answered 503 (its record not stored) is
+        // delivered again, so the sale is booked on the delivery that stores
+        // it, never once per delivery.
+        if (subId && rec) stored = stored && await upsert(subId, { lastInvoiceId: inv.id, lastPaidAt: new Date().toISOString() });
+        if (stored && typeof onInvoicePaid === "function" && inv.amount_paid > 0) {
           try { onInvoicePaid({ invoiceId: inv.id, subId, product: rec?.product || null, amountUsd: inv.amount_paid / 100, customer: inv.customer }); } catch { /* accounting never breaks the webhook */ }
         }
-        if (subId && rec) upsert(subId, { lastInvoiceId: inv.id, lastPaidAt: new Date().toISOString() });
         break;
       }
       case "charge.refunded":
@@ -293,6 +420,15 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       }
       default: break; // ignore unrelated events
     }
+    if (!stored) {
+      // Database mode: a record waits in the local journal (a backstop). The
+      // event is not acknowledged until the record is in the database, so
+      // Stripe delivers it again; its id is forgotten so that retry is applied.
+      if (event.id) seenEvents.delete(event.id);
+      const e = new Error("Webhook received; its record is not stored yet, retry later");
+      e.statusCode = 503;
+      throw e;
+    }
     return { received: true, type: event.type };
   }
 
@@ -304,7 +440,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     if (!subId) return null;
     try {
       const sub = await stripe.subscriptions.retrieve(subId);
-      if (sub?.status) { upsert(subId, { status: sub.status, currentPeriodEnd: sub.current_period_end || null, cancelAtPeriodEnd: !!sub.cancel_at_period_end }); return sub.status; }
+      if (sub?.status) { await upsert(subId, { status: sub.status, currentPeriodEnd: sub.current_period_end || null, cancelAtPeriodEnd: !!sub.cancel_at_period_end }); return sub.status; }
     } catch { /* unreadable */ }
     return null;
   }
@@ -332,5 +468,5 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     return { ...tally, byType: { ...tally.byType }, configured: Boolean(webhookSecret()) };
   }
 
-  return { createCheckout, recordFromSession, handleWebhook, portalSession, listActive, get, refreshStatus, webhookStats, _store: store };
+  return { createCheckout, recordFromSession, handleWebhook, portalSession, listActive, get, refreshStatus, webhookStats, reload, replayPending, _store: store };
 }

@@ -87,6 +87,21 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
     `a short-name solana row normalizes and is held for the REAL reason - no sender - not "unsupported network" (got ${heldReasons})`);
 }
 
+// 6c. Every network label the server writes (stats.js CAIP2_NAMES, including
+// "robinhood (USDG)") normalizes to a chain the planner knows, never
+// "unsupported network". A Robinhood debt was held on that label 2026-10-10.
+{
+  const { CAIP2_NAMES } = await import("../src/stats.js");
+  const { normalizeNetwork, familyOf } = await import("./refund-run.js");
+  const unknown = Object.entries(CAIP2_NAMES)
+    .filter(([caip]) => !/sepolia|devnet|testnet/.test(caip + CAIP2_NAMES[caip]))
+    .filter(([caip, label]) => normalizeNetwork(label) !== caip || familyOf(normalizeNetwork(label)) === "unknown")
+    .map(([, label]) => label);
+  ok(!unknown.length, `every mainnet network label normalizes to its CAIP-2 and a known family (unmapped: ${unknown.join(", ") || "none"})`);
+  const p = planRefunds([mk({ id: 1, network: "robinhood (USDG)" })], { senders: SENDERS });
+  ok(p.send.length === 1 && p.send[0].network === "eip155:4663", `a "robinhood (USDG)" row plans as an evm refund on eip155:4663 (held: ${Object.keys(p.held).join("|") || "none"})`);
+}
+
 // 7. Synthetic rows are HELD by default - refunding our own canary is churn.
 {
   const p = planRefunds([mk({ synthetic: 1 })], { senders: SENDERS });

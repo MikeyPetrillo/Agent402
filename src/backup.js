@@ -1,4 +1,5 @@
-// Nightly offsite backup of /data to an S3-compatible bucket (Railway
+// Nightly offsite backup of /data and of the state database (every table,
+// one consistent snapshot, uploaded first) to an S3-compatible bucket (Railway
 // Buckets). The volume holds the money-adjacent state — refund ledger,
 // stats, status history, leads, buyer memory — with nothing but platform
 // snapshots behind it; this module puts a bounded, priced copy elsewhere.
@@ -37,12 +38,14 @@
 //   BACKUP_MAX_TOTAL_GB  default 20  (stored, bill guard)
 
 import { createHash, createHmac } from "node:crypto";
-import { createReadStream, createWriteStream, statSync, readdirSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
-import { createGzip } from "node:zlib";
+import { createReadStream, createWriteStream, statSync, readdirSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { createGzip, gzipSync } from "node:zlib";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady, leased, stateDbEnabled, stateDbSchema, stateQuery, withStateTx } from "./state-db.js";
 
 const cfg = () => ({
   endpoint: (process.env.BACKUP_S3_ENDPOINT || "").trim().replace(/\/+$/, ""),
@@ -107,14 +110,14 @@ const PRIORITY = ["agent402-refunds.db", "agent402-sales.db", "credits", "human-
 // plan skipped every directory, so prepaid credit balances and every purchased
 // report had NO offsite copy while the module said the volume was covered.
 const DIR_BUNDLE_MAX_FILES = 50_000;
-const EXCLUDE = [/cache/i, /\btmp\b|\.tmp$/i, /-wal$/, /-shm$/, /\.log$/i, /^backup-status\.json$/];
+const EXCLUDE = [/cache/i, /\btmp\b|\.tmp$/i, /-wal$/, /-shm$/, /\.log$/i, /^backup-status\.json(\.rowmark)?$/]; // the status file and, on the database, its write-through mark
 
 /** Inventory of /data: what a run would consider, with sizes and the
  *  exclude/include decision per file. Pure read — safe pre-bucket. */
 export function backupPlan() {
   const c = cfg();
   let names = [];
-  try { names = readdirSync(c.dataDir); } catch (e) { return { dataDir: c.dataDir, error: String(e.message) }; }
+  try { names = readdirSync(c.dataDir); } catch (e) { return { dataDir: c.dataDir, error: String(e.message), missing: e?.code === "ENOENT" }; }
   const files = [];
   for (const name of names) {
     let st;
@@ -250,7 +253,7 @@ export async function objectExists(key) {
   return found.some((o) => o.key === key);
 }
 
-async function listAll(prefix) {
+export async function listAll(prefix) {
   // ListObjectsV2, paginated. Returns [{key, size}].
   const out = [];
   let token = "";
@@ -274,23 +277,73 @@ async function listAll(prefix) {
 // backup that fails forever must be VISIBLE, not quietly absent.
 const status = {
   lastAttempt: null, lastSuccess: null, lastError: null,
-  lastUploaded: [], lastHeld: [], lastPruned: 0, storedBytes: null,
+  lastUploaded: [], lastHeld: [], lastHeldState: [], lastPruned: 0, storedBytes: null,
+  // "ok" | "held" (a state table did not go up) | "failed" (the run threw).
+  lastResult: null,
 };
 // Persisted beside the data it describes, so /__operator/backup.json still
 // shows the last run after a redeploy (it read null on every fresh container
 // until 2026-10-02). Best-effort both ways: a status file is never worth a
 // failed backup.
 const statusFile = () => join(cfg().dataDir, "backup-status.json");
+let statusDoc = null;
+const statusStore = () => (statusDoc ||= createJsonDocument({ file: statusFile(), log: () => {} }));
 let statusLoaded = false;
+let statusDirty = false; // a status save refused while the row was unread
+let statusReady = Promise.resolve();
+const absorbStatus = (saved) => {
+  if (!saved || typeof saved !== "object") return;
+  for (const k of Object.keys(status)) if (k in saved && status[k] == null) status[k] = saved[k];
+  if (saved?.encrypted !== undefined && status.encrypted === undefined) status.encrypted = saved.encrypted;
+};
 function loadStatus() {
   if (statusLoaded) return;
   statusLoaded = true;
-  try { const saved = JSON.parse(readFileSync(statusFile(), "utf8")); if (saved && typeof saved === "object") for (const k of Object.keys(status)) if (k in saved && status[k] == null) status[k] = saved[k]; if (saved?.encrypted !== undefined && status.encrypted === undefined) status.encrypted = saved.encrypted; } catch { /* no saved status yet */ }
+  const d = statusStore();
+  absorbStatus(d.loadSync(null));
+  // On the database the synchronous read is only the fallback: the row
+  // arrives here, so a boot that calls this early has it before any reader.
+  // A read that outlasts its retries lands later through onLoad (the
+  // document's background re-read), so the word never stays stale on it.
+  // A status saved while the row is unread is refused; it is saved again
+  // (merged over the stored one) once the row arrives.
+  if (d.backend === "pg") statusReady = trackStoreReady(d.load(null, { onLoad: (saved) => { absorbStatus(saved); if (statusDirty) { statusDirty = false; saveStatus(); } } }).then(() => {}, () => {}));
 }
+/** True while the database copy of the status has not been read (the word is unknown, not stale). */
+function statusUnread() {
+  const d = statusStore();
+  return d.backend === "pg" && !d.loaded;
+}
+/** Settles once the persisted status has been read (immediately in file
+ *  mode). Does not start the read: startBackupScheduler does, at boot. */
+export const backupStatusLoaded = () => statusReady;
 function saveStatus() {
-  try { writeFileSync(statusFile(), JSON.stringify(status)); } catch { /* best-effort */ }
+  if (statusUnread()) { statusDirty = true; return; } // saved once the stored status is read
+  void statusStore().save(status); // best-effort; a failed save is re-sent by the document
 }
 export const backupStatus = () => { loadStatus(); return { ...status, configured: backupConfigured() }; };
+
+// The backup alarm as one word, never a number (/api/gateway-status; the
+// heartbeat pages on held / failed / stale):
+//   off     BACKUP_S3_* not configured
+//   failed  the last run threw (nothing or only part went up)
+//   held    the last run left a state table without an offsite copy
+//   stale   no successful run within BACKUP_STALE_HOURS (26: one nightly
+//           window plus slack), including none at all since configured
+//   ok      the last run succeeded and is recent
+//   unknown the stored status has not been read yet (database unreachable)
+//           and this process has not run a backup: no page either way
+export function backupAlarmStatus(now = Date.now()) {
+  if (!backupConfigured()) return "off";
+  loadStatus();
+  if (statusUnread() && !status.lastAttempt) return "unknown";
+  const result = status.lastResult || (status.lastAttempt ? (status.lastError ? "failed" : "ok") : null);
+  if (result === "failed" || result === "held") return result;
+  const staleMs = clampInt(process.env.BACKUP_STALE_HOURS, 26, 2, 24 * 30) * 3600_000;
+  const last = Date.parse(status.lastSuccess || "");
+  if (!Number.isFinite(last) || now - last > staleMs) return "stale";
+  return "ok";
+}
 
 let running = false;
 export async function runBackup({ log = console.log } = {}) {
@@ -313,13 +366,64 @@ export async function runBackup({ log = console.log } = {}) {
       throw new Error(`bucket holds ${(storedBytes / 1024 ** 3).toFixed(1)}GB > BACKUP_MAX_TOTAL_GB=${c.maxTotalGb} - refusing to add more; investigate retention`);
     }
 
-    const plan = backupPlan();
-    if (plan.error) throw new Error(`data dir unreadable: ${plan.error}`);
-    const candidates = plan.files.filter((f) => !f.excluded);
-    order(candidates);
-
     let budget = c.maxRunMb * 1024 * 1024;
     const uploaded = [], held = [];
+    // Encrypt (when a key is set), check the budget, upload. Returns false
+    // when the object was held over budget.
+    const ship = async (gz, objName, name, extra = {}) => {
+      let up = gz, suffix = ".gz";
+      if (c.encKey) {
+        const enc = gz + ".enc";
+        writeFileSync(enc, encryptBackupBuffer(readFileSync(gz), c.encKey));
+        rmSync(gz, { force: true });
+        up = enc; suffix = ".gz.enc";
+      }
+      const bytes = statSync(up).size;
+      if (bytes > budget) {
+        held.push({ name, reason: `over budget (${(bytes / 1e6).toFixed(1)}MB compressed, ${(budget / 1e6).toFixed(1)}MB left)` });
+        rmSync(up, { force: true });
+        return false;
+      }
+      const key = `backups/${day}/${objName}${suffix}`;
+      const res = await s3("PUT", key, { body: createReadStream(up), contentLength: bytes });
+      if (!res.ok) throw new Error(`upload ${key} failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+      budget -= bytes;
+      uploaded.push({ name, gzBytes: bytes, encrypted: Boolean(c.encKey), ...extra });
+      rmSync(up, { force: true });
+      return true;
+    };
+
+    // The state database (src/state-db.js) FIRST: once the stores leave the
+    // volume it is the only copy of the money ledgers, so it takes the run
+    // budget before any volume file. Every table is read inside ONE
+    // repeatable-read transaction (stageStateTables), so the objects are one
+    // consistent snapshot, staged to the temp dir before anything uploads.
+    // Each table goes up as gzip'd NDJSON under state/, beside a schema
+    // object (state/_schema.json) that lets scripts/state-restore.js create
+    // the tables in an empty database. Restore: scripts/state-restore.js
+    // --dir <day>/state, or scripts/backup-restore.js --state-dir (or on one
+    // state/ object).
+    const heldState = [];
+    if (stateDbEnabled()) {
+      let staged = null;
+      try { staged = await stageStateTables(join(tmp, "state")); }
+      catch (e) { held.push({ name: "state/*", reason: `snapshot failed: ${String(e?.message || e).slice(0, 120)}` }); heldState.push("state/*"); }
+      if (staged) {
+        for (const f of staged.failed) { const name = `state/${f.table}.ndjson`; held.push({ name, reason: `stage failed: ${f.error}` }); heldState.push(name); }
+        if (!(await ship(staged.schemaFile, "state/_schema.json", "state/_schema.json"))) heldState.push("state/_schema.json");
+        for (const t of orderStateTables(staged.tables)) {
+          const name = `state/${t.table}.ndjson`;
+          if (!(await ship(t.file, name, name, { rows: t.rows }))) heldState.push(name);
+        }
+      }
+    }
+
+    // Volume files. With the state database on, a missing data dir is what
+    // /data is once the volume is removed: an empty file plan, not a failure.
+    const plan = backupPlan();
+    if (plan.error && !(plan.missing && stateDbEnabled())) throw new Error(`data dir unreadable: ${plan.error}`);
+    const candidates = plan.error ? [] : plan.files.filter((f) => !f.excluded);
+    order(candidates);
     for (const f of candidates) {
       const src = join(c.dataDir, f.name);
       const objName = f.dir ? `${f.name}.ndjson` : f.name;
@@ -331,26 +435,7 @@ export async function runBackup({ log = console.log } = {}) {
         held.push({ name: f.name, reason: `stage failed: ${e.message}` });
         continue;
       }
-      // Encrypt in place when a key is set; the object name says which it is.
-      let up = gz, suffix = ".gz";
-      if (c.encKey) {
-        const enc = gz + ".enc";
-        writeFileSync(enc, encryptBackupBuffer(readFileSync(gz), c.encKey));
-        rmSync(gz, { force: true });
-        up = enc; suffix = ".gz.enc";
-      }
-      const bytes = statSync(up).size;
-      if (bytes > budget) {
-        held.push({ name: f.name, reason: `over budget (${(bytes / 1e6).toFixed(1)}MB compressed, ${(budget / 1e6).toFixed(1)}MB left)` });
-        rmSync(up, { force: true });
-        continue;
-      }
-      const key = `backups/${day}/${objName}${suffix}`;
-      const res = await s3("PUT", key, { body: createReadStream(up), contentLength: bytes });
-      if (!res.ok) throw new Error(`upload ${key} failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
-      budget -= bytes;
-      uploaded.push({ name: f.name, gzBytes: bytes, encrypted: Boolean(c.encKey) });
-      rmSync(up, { force: true });
+      await ship(gz, objName, f.name);
     }
 
     // Retention: delete whole date prefixes older than keepDays. Dates sort
@@ -358,7 +443,11 @@ export async function runBackup({ log = console.log } = {}) {
     // on object timestamps.
     const cutoff = new Date(Date.now() - c.keepDays * 86_400_000).toISOString().slice(0, 10);
     let pruned = 0;
-    for (const obj of existing) {
+    // A run that left the database without a complete offsite copy (the
+    // snapshot failed, or a state table was held) prunes NOTHING: the older
+    // days may hold the only good copy, and keepDays such nights in a row
+    // would otherwise delete every one of them.
+    for (const obj of heldState.length ? [] : existing) {
       const m = /^backups\/(\d{4}-\d{2}-\d{2})\//.exec(obj.key);
       if (m && m[1] < cutoff) {
         const res = await s3("DELETE", obj.key);
@@ -367,16 +456,29 @@ export async function runBackup({ log = console.log } = {}) {
       }
     }
 
-    status.lastSuccess = new Date().toISOString();
-    status.lastError = null;
     status.lastUploaded = uploaded;
     status.encrypted = Boolean(c.encKey);
     status.lastHeld = held;
+    status.lastHeldState = heldState;
     status.lastPruned = pruned;
-    log(`[backup] OK day=${day} uploaded=${uploaded.length} (${(uploaded.reduce((a, u) => a + u.gzBytes, 0) / 1e6).toFixed(1)}MB gz) held=${held.length} pruned=${pruned} stored=${(storedBytes / 1e6).toFixed(0)}MB`);
-    return { ok: true, day, uploaded, held, pruned };
+    const summary = `day=${day} uploaded=${uploaded.length} (${(uploaded.reduce((a, u) => a + u.gzBytes, 0) / 1e6).toFixed(1)}MB gz) held=${held.length} pruned=${pruned} stored=${(storedBytes / 1e6).toFixed(0)}MB`;
+    // A state table that did not go up leaves the database without an offsite
+    // copy of it: that is a failed run, named, never a quiet success.
+    if (heldState.length) {
+      const error = `state tables held: ${heldState.join(", ")}`;
+      status.lastError = `${new Date().toISOString()} ${error.slice(0, 300)}`;
+      status.lastResult = "held";
+      log(`[backup] INCOMPLETE ${summary} - ${error}`);
+      return { ok: false, error, day, uploaded, held, heldState, pruned };
+    }
+    status.lastSuccess = new Date().toISOString();
+    status.lastError = null;
+    status.lastResult = "ok";
+    log(`[backup] OK ${summary}`);
+    return { ok: true, day, uploaded, held, heldState, pruned };
   } catch (e) {
     status.lastError = `${new Date().toISOString()} ${String(e.message).slice(0, 300)}`;
+    status.lastResult = "failed";
     log(`[backup] FAILED: ${e.message}`);
     return { ok: false, error: String(e.message) };
   } finally {
@@ -384,6 +486,146 @@ export async function runBackup({ log = console.log } = {}) {
     rmSync(tmp, { recursive: true, force: true });
     running = false;
   }
+}
+
+/** The tables in the state schema (names only, from the catalog). */
+export async function stateTables() {
+  const r = await stateQuery("SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_type = 'BASE TABLE' ORDER BY table_name", [stateDbSchema()]);
+  return r.rows.map((x) => String(x.table_name)).filter((t) => TABLE_RE.test(t));
+}
+const TABLE_RE = /^[a-z_][a-z0-9_]*$/;
+// Live locks: never backed up, never restored.
+const STATE_SKIP = new Set(["leases"]);
+// Rows per FETCH. A cursor page is held in memory whole (rows, then their
+// JSON text), so a table whose single rows can be very large reads a few at a
+// time: one documents row is a whole store (two 150 MB documents in one page
+// took the process past 600 MB), a records row can be a delivered report.
+// Every other table keeps the caller's page.
+const STATE_PAGE_ROWS = { documents: 1, records: 200 };
+export const statePageRows = (table, dflt = 5000) => Math.min(dflt, STATE_PAGE_ROWS[table] ?? dflt);
+// The money ledgers go up first when the budget is tight; the rest follow
+// smallest first.
+const STATE_PRIORITY = ["refunds", "sales", "sale_feedback", "records", "decide_ledger_credits", "decide_ledger_runs", "decide_ledger_decisions", "decide_ledger_seller_spend", "decide_ledger_feedback", "revenue_transfers", "revenue_cursors", "stripe_shadow", "documents", "log_lines", "imports"];
+function orderStateTables(tables) {
+  return [...tables].sort((a, b) => {
+    const pa = STATE_PRIORITY.indexOf(a.table), pb = STATE_PRIORITY.indexOf(b.table);
+    if (pa !== -1 || pb !== -1) return (pa === -1 ? 1e9 : pa) - (pb === -1 ? 1e9 : pb);
+    return a.bytes - b.bytes;
+  });
+}
+
+/** Run fn(client) inside one REPEATABLE READ READ ONLY transaction on a
+ *  dedicated connection: every read in it sees the same snapshot. It runs
+ *  in withStateTx, so a connection that drops mid-snapshot is an error the
+ *  caller sees (never an uncaught one) and the client is discarded. */
+async function withSnapshot(fn) {
+  if (!stateDbEnabled()) throw new Error("state database not configured");
+  return withStateTx(async (client) => {
+    await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+    return fn(client);
+  });
+}
+
+/** Stream one table through a server-side cursor into gzip'd NDJSON (one
+ *  row_to_json object per line). The row is read as TEXT, so no value passes
+ *  through a JavaScript number: a bigint above 2^53 is written exactly. */
+async function stageOnClient(client, schema, table, gzPath, pageRows) {
+  if (!TABLE_RE.test(table)) throw new Error("bad table name");
+  const out = createGzip({ level: 6 });
+  const done = pipeline(out, createWriteStream(gzPath));
+  let n = 0;
+  try {
+    await client.query(`DECLARE a402_backup_cur NO SCROLL CURSOR FOR SELECT row_to_json(t)::text AS r FROM ${schema}.${table} t`);
+    for (;;) {
+      const page = await client.query(`FETCH ${Math.max(1, Math.floor(pageRows))} FROM a402_backup_cur`);
+      for (const row of page.rows) {
+        if (!out.write(row.r + "\n")) await new Promise((r) => out.once("drain", r));
+        n++;
+      }
+      if (page.rows.length === 0) break;
+    }
+    await client.query("CLOSE a402_backup_cur");
+  } finally {
+    out.end();
+    await done;
+  }
+  return n;
+}
+
+/** The DDL to recreate every table in the schema from the catalog: columns
+ *  (serial and identity columns as such), constraints and indexes, with the
+ *  schema name left as {{schema}} for the restore to fill in. */
+async function captureSchema(client, schema, tables) {
+  const out = { format: "a402-state-schema-v1", tables: [] };
+  for (const table of tables) {
+    const rel = `${schema}.${table}`;
+    const cols = (await client.query(`
+      SELECT a.attname AS name, format_type(a.atttypid, a.atttypmod) AS type, a.attnotnull AS notnull,
+             pg_get_expr(d.adbin, d.adrelid) AS dflt, a.attidentity AS identity
+        FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+       WHERE a.attrelid = $1::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum`, [rel])).rows;
+    const serialOf = { bigint: "BIGSERIAL", integer: "SERIAL", smallint: "SMALLSERIAL" };
+    const colDefs = cols.map((col) => {
+      const q = `"${col.name.replace(/"/g, '""')}"`;
+      if (col.dflt && /^nextval\(/.test(col.dflt) && serialOf[col.type]) return `${q} ${serialOf[col.type]}${col.notnull ? " NOT NULL" : ""}`;
+      const ident = col.identity === "a" ? " GENERATED ALWAYS AS IDENTITY" : col.identity === "d" ? " GENERATED BY DEFAULT AS IDENTITY" : "";
+      return `${q} ${col.type}${col.notnull ? " NOT NULL" : ""}${col.dflt && !ident ? ` DEFAULT ${col.dflt}` : ""}${ident}`;
+    });
+    const cons = (await client.query(`SELECT conname AS name, pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = $1::regclass AND contype IN ('p', 'u', 'c', 'x') ORDER BY conname`, [rel])).rows;
+    const consDefs = cons.map((k) => `CONSTRAINT "${k.name.replace(/"/g, '""')}" ${k.def}`);
+    const idx = (await client.query(`
+      SELECT i.indexname AS name, i.indexdef AS def FROM pg_indexes i
+       WHERE i.schemaname = $1 AND i.tablename = $2
+         AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = $3::regclass AND k.conname = i.indexname)
+       ORDER BY i.indexname`, [schema, table, rel])).rows;
+    const onSchema = new RegExp(` ON (ONLY )?${schema}\\.`);
+    out.tables.push({
+      name: table,
+      create: `CREATE TABLE IF NOT EXISTS {{schema}}.${table} (\n  ${[...colDefs, ...consDefs].join(",\n  ")}\n)`,
+      indexes: idx.map((i) => i.def.replace(/^CREATE (UNIQUE )?INDEX /, "CREATE $1INDEX IF NOT EXISTS ").replace(onSchema, " ON $1{{schema}}.")),
+    });
+  }
+  return out;
+}
+
+/** Stage every state table (or `tables`) into `dir` as gzip'd NDJSON, all
+ *  read inside one repeatable-read transaction: one consistent snapshot of
+ *  the whole database, written to disk before anything uploads. A table that
+ *  fails to stage is reported in `failed` and the others still stage. Also
+ *  writes the schema object (`schemaFile`). */
+export async function stageStateTables(dir, { pageRows = 5000, tables = null } = {}) {
+  mkdirSync(dir, { recursive: true });
+  const schema = stateDbSchema();
+  return withSnapshot(async (client) => {
+    const names = (tables || (await client.query("SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_type = 'BASE TABLE' ORDER BY table_name", [schema])).rows.map((x) => String(x.table_name)))
+      .filter((t) => TABLE_RE.test(t) && !STATE_SKIP.has(t));
+    const staged = [], failed = [];
+    for (const table of names) {
+      const file = join(dir, `state-${table}.ndjson.gz`);
+      await client.query("SAVEPOINT a402_table");
+      try {
+        const rows = await stageOnClient(client, schema, table, file, statePageRows(table, pageRows));
+        await client.query("RELEASE SAVEPOINT a402_table");
+        staged.push({ table, file, rows, bytes: statSync(file).size });
+      } catch (e) {
+        await client.query("ROLLBACK TO SAVEPOINT a402_table");
+        rmSync(file, { force: true });
+        failed.push({ table, error: String(e?.message || e).slice(0, 120) });
+      }
+    }
+    const schemaDoc = await captureSchema(client, schema, staged.map((t) => t.table));
+    const schemaFile = join(dir, "state-_schema.json.gz");
+    writeFileSync(schemaFile, gzipSync(Buffer.from(JSON.stringify(schemaDoc))));
+    return { tables: staged, failed, schemaFile };
+  });
+}
+
+/** Stage one state table as gzip'd NDJSON (its own snapshot transaction,
+ *  read through a cursor so a large table never sits in memory at once). */
+export async function stageStateTable(table, gzPath, { pageRows = 5000 } = {}) {
+  if (!TABLE_RE.test(table)) throw new Error("bad table name");
+  const schema = stateDbSchema();
+  return withSnapshot((client) => stageOnClient(client, schema, table, gzPath, statePageRows(table, pageRows)));
 }
 
 /** Stage a directory store as one gzip'd NDJSON bundle: {"path","body"} per
@@ -426,18 +668,23 @@ async function stageCopy(src, name, gzPath, tmp) {
 // day, which is safe: date-keyed objects overwrite, they never accumulate.
 let lastDay = null;
 export function startBackupScheduler({ log = console.log } = {}) {
+  // Read the persisted status now, not at the first operator read: on the
+  // database the first synchronous read is only the fallback (null).
+  try { loadStatus(); } catch { /* best-effort: a status read never blocks boot */ }
   if (!backupConfigured()) {
     log("[backup] not configured (BACKUP_S3_* unset) - nightly offsite backup disabled, plan endpoint still live");
     return null;
   }
-  const timer = setInterval(() => {
+  // The run itself is awaited under the lease, so two containers inside the
+  // same hour do not both upload; the day is taken only once the lease is held.
+  const nightly = leased("backup-nightly", { ttlMs: 60 * 60_000, log, failOpen: true }, async () => {
     const now = new Date();
     const day = now.toISOString().slice(0, 10);
-    if (now.getUTCHours() === cfg().utcHour && lastDay !== day) {
-      lastDay = day;
-      runBackup({ log }).catch((e) => log(`[backup] scheduler run threw: ${e.message}`));
-    }
-  }, 10 * 60 * 1000);
+    if (now.getUTCHours() !== cfg().utcHour || lastDay === day) return;
+    lastDay = day;
+    await runBackup({ log }).catch((e) => log(`[backup] scheduler run threw: ${e.message}`));
+  });
+  const timer = setInterval(() => { nightly().catch(() => {}); }, 10 * 60 * 1000);
   timer.unref?.(); // never keep the process alive for the backup timer
   log(`[backup] nightly scheduler armed (UTC hour ${cfg().utcHour}, keep ${cfg().keepDays} days, run cap ${cfg().maxRunMb}MB, bill guard ${cfg().maxTotalGb}GB, ${cfg().encKey ? "AES-256-GCM client-side encryption ON" : "WARNING: BACKUP_ENCRYPTION_KEY unset - objects upload as plain gzip"})`);
   return timer;

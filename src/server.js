@@ -146,6 +146,14 @@ function tempoPushHashOf(req) {
   const h = Object.hasOwn(req, "mppTempoPushHash") ? req.mppTempoPushHash : null;
   return typeof h === "string" && h ? h : null;
 }
+// A ledger write answers a boolean on the volume and a promise of one with
+// the state database on (src/refund-ledger.js): run `then` with the verdict
+// either way, and read the write as booked meanwhile.
+function whenVerdict(r, then) {
+  if (r && typeof r.then === "function") { r.then((v) => { try { then(v); } catch { /* bookkeeping only */ } }).catch(() => {}); return true; }
+  then(r);
+  return Boolean(r);
+}
 function recordHangupDebt(req, res) {
   const def = CATALOG[`${req.method} ${req.path}`];
   if (!def) return null;
@@ -198,11 +206,12 @@ function recordHangupDebt(req, res) {
   // hang-up) for review instead of repaying it as an ordinary debt.
   const denied = hangupTicketDenial(req);
   const hangupReason = denied || (hangupForgiven(req) ? "settled in flight" : "no ticket");
-  let created = recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason });
   // The same push transfer was refused on input earlier and booked as owed
   // under its hash; INSERT OR IGNORE kept that 400 row. It is a disconnect
   // now: promote it, or the hang-up holds never see it.
-  if (!created && req.tempoSettled && tempoPushHashOf(req) === row.tx) created = tempoPushDebts?.hungUp(row.tx, hangupReason) === true;
+  const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason }), (made) => {
+    if (!made && req.tempoSettled && tempoPushHashOf(req) === row.tx) void tempoPushDebts?.hungUp(row.tx, hangupReason);
+  });
   console.warn(`[hangup] CHARGED-BUT-NOT-SERVED: client disconnected before the settled response was delivered (${req.method} ${req.path} rail=${row.wire} tx=${row.tx || "?"}) - ${created ? "recorded as owed in the refund ledger" : "already on the books"}${denied ? `; not forgiven: ${denied}` : ""}`);
   return row;
 }
@@ -243,10 +252,12 @@ import { probeDomain, normDomain } from "./tools/domain-audit-kit.js";
 import { latest13fFiling, resolveManager as edgarResolveManager } from "./tools/edgar-kit.js";
 import { resolveSpend as resolveExternalSpend } from "./external-spend-guard.js";
 import { registerWellKnown, removeWellKnown, getWellKnown, listWellKnown } from "./well-known-store.js";
-import { backupPlan, backupStatus, runBackup, startBackupScheduler } from "./backup.js";
+import { backupAlarmStatus, backupPlan, backupStatus, runBackup, startBackupScheduler } from "./backup.js";
 import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
 import { datasetStatus, datasetRecorded, runDatasetSnapshot, startDatasetScheduler } from "./dataset-snapshot.js";
+import { startQuoteWarmer, quoteWarmerStatus } from "./tools/databento.js";
+import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary } from "./paid-phase-timing.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
 import { createAsyncJobs } from "./async-jobs.js";
@@ -254,7 +265,7 @@ import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
 import { admitCoveredRun } from "./inflight-cover.js";
 import { paymentReplayKey, createReplayGuard } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
-import { recordProbes } from "./status-store.js";
+import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
 import { tollboothCloudPage } from "./tollbooth-cloud.js";
 import { tollboothWaitlistPage } from "./tollbooth-waitlist.js";
@@ -344,6 +355,9 @@ const decideLedger = () => {
   try { _decideLedger = openDecideLedger(); } catch (e) { console.error("[decide] ledger failed to open - decide stays off:", String(e?.message || e).slice(0, 200)); _decideLedger = false; }
   return _decideLedger || null;
 };
+// With the state database on, open the ledger at boot so its one-time import
+// from the file runs before the first request, not inside it.
+if (stateDbEnabled()) decideLedger();
 import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums } from "./payments.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
@@ -528,16 +542,21 @@ import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
 import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerBuyerRepeat7, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
 import { upstreamCostsLoaded, upstreamCostsSummary, upstreamCostsGaps, upstreamCostsStatus } from "./upstream-costs.js";
-import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot } from "./x402-economy.js";
+import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, economyHistoryFlush } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
+import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores } from "./state-db.js";
+import { ledgerDeadLetterStatus } from "./ledger-mirror.js";
+import { flushJsonDocuments } from "./json-document.js";
+import { loadRemovedOrigins } from "./x402-index.js";
+import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly } from "./sales-ledger.js";
+import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -625,7 +644,7 @@ import { payX402, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sel
 import { readTextCapped } from "./capped-body.js";
 import { svmBuyerConfigured, svmBuyerStatus, SOLANA_NETWORK_LABELS } from "./solana-buyer.js";
 import { payTempo, tempoBuyerConfigured, tempoBuyerStatus, tempoRpc } from "./tempo-buyer.js";
-import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken, PROBE_POW_SLUG } from "./pow.js";
+import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken, PROBE_POW_SLUG, powReplayFlush } from "./pow.js";
 import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL, limiterKey } from "./rate-limit.js";
 import { classifyWishes, wishClassifyEnabled } from "./wish-classify.js";
 import { rerankMisses, rerankEnabled } from "./discovery-rerank.js";
@@ -685,8 +704,8 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundsForPayer } from "./refund-ledger.js";
-import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince } from "./stats.js";
+import { recordRefundOwed, refundByEvidence, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundsForPayer, refundLedgerFlush } from "./refund-ledger.js";
+import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
 const PORT = process.env.PORT || 3000;
@@ -861,6 +880,7 @@ const CATALOG = {
           ttlSeconds: { type: "number", description: "Optional: auto-expire the key after N seconds" },
           owner: { type: "string", description: "Optional 0x namespace to write into (requires a readwrite grant)" },
           delete: { type: "boolean", description: "Set true to delete the key instead" },
+          requestId: { type: "string", description: "Optional client id for this write; a retry with the same id returns the first answer" },
         },
         required: ["key"],
       },
@@ -896,7 +916,7 @@ const CATALOG = {
     category: "memory",
     price: "$0.001",
     description:
-      "Atomically increment (or decrement) a numeric key and return the new value - a coordination primitive for counters, locks, and rate budgets shared across agents. Creates the key at 0 if absent.",
+      "Atomically increment (or decrement) a numeric key and return the new value - a coordination primitive for counters, locks, and rate budgets shared across agents. Creates the key at 0 if absent. Retry safely with a requestId: a repeat with the same id returns the first answer and counts once; a retry without one counts again.",
     tags: ["memory", "counter", "atomic", "coordination", "lock"],
     discovery: {
       bodyType: "json",
@@ -906,6 +926,7 @@ const CATALOG = {
           key: { type: "string", description: "Counter key" },
           by: { type: "number", description: "Amount to add (default 1; negative to decrement)" },
           owner: { type: "string", description: "Optional 0x namespace (requires a readwrite grant)" },
+          requestId: { type: "string", description: "Optional client id for this write (1-128 chars); a retry with the same id returns the first answer instead of counting again" },
         },
         required: ["key"],
       },
@@ -930,6 +951,7 @@ const CATALOG = {
           value: { description: "New value to set on match; omit to DELETE on match (lock release)" },
           ttlSeconds: { type: "number", description: "Optional TTL for the written value (lease for locks)" },
           owner: { type: "string", description: "Optional 0x namespace (requires a readwrite grant)" },
+          requestId: { type: "string", description: "Optional client id for this write; a retry with the same id returns the first answer" },
         },
         required: ["key"],
       },
@@ -2159,17 +2181,32 @@ const surfaceMemo = new Map();
 // request waits on a slow synchronous build (the /revenue ledger series took
 // up to 1.2 s). A failed rebuild keeps the previous value. Only the first
 // build of a key is paid by a request.
+// A value built while a state-database store has not loaded yet (the boot
+// wait timed out, or a first load failed and is retrying) is partial: it is
+// kept for PARTIAL_MEMO_MS at most, so the full answer replaces it as soon as
+// the store lands instead of a minute later.
+const PARTIAL_MEMO_MS = 2_000;
+const memoFresh = (hit, now, ttlMs) => now - hit.at < (hit.partial ? Math.min(ttlMs, PARTIAL_MEMO_MS) : ttlMs);
+// A JSON body built that way also says so in fields a machine reads (the
+// rule in src/partial-answer.js): partial, and why.
+const PARTIAL_STATE_NOTE = "Built while a stored dataset was still loading: figures may be incomplete. The full answer replaces this one within seconds of the load.";
+function markPartialState(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return value;
+  return { ...value, partial: true, partialReason: "state-loading", partialNote: PARTIAL_STATE_NOTE };
+}
 function memoSurface(key, ttlMs, build) {
   const hit = surfaceMemo.get(key);
   const now = Date.now();
-  if (hit && now - hit.at < ttlMs) return hit.value;
+  if (hit && memoFresh(hit, now, ttlMs)) return hit.value;
   if (hit) {
     if (!hit.rebuilding) {
       hit.rebuilding = true;
       setImmediate(() => {
         try {
-          const value = build();
-          if (surfaceMemo.get(key) === hit) surfaceMemo.set(key, { at: Date.now(), value });
+          const partial = !stateStoresLoaded();
+          const built = build();
+          const value = partial ? markPartialState(built) : built;
+          if (surfaceMemo.get(key) === hit) surfaceMemo.set(key, { at: Date.now(), value, partial });
         } catch (e) {
           console.warn(`[surface-memo] ${key} rebuild failed: ${String(e?.message || e).slice(0, 120)}`);
         } finally { hit.rebuilding = false; }
@@ -2177,8 +2214,10 @@ function memoSurface(key, ttlMs, build) {
     }
     return hit.value;
   }
-  const value = build();
-  surfaceMemo.set(key, { at: now, value });
+  const partial = !stateStoresLoaded();
+  const built = build();
+  const value = partial ? markPartialState(built) : built;
+  surfaceMemo.set(key, { at: now, value, partial });
   return value;
 }
 // memoSurface for a builder that yields between steps: the first build is
@@ -2187,13 +2226,15 @@ const surfaceBuilds = new Map();
 async function memoSurfaceAsync(key, ttlMs, buildAsync) {
   const hit = surfaceMemo.get(key);
   const now = Date.now();
-  if (hit && now - hit.at < ttlMs) return hit.value;
+  if (hit && memoFresh(hit, now, ttlMs)) return hit.value;
   let pending = surfaceBuilds.get(key);
   if (!pending) {
     pending = (async () => {
       try {
-        const value = await buildAsync();
-        surfaceMemo.set(key, { at: Date.now(), value });
+        const partial = !stateStoresLoaded();
+        const built = await buildAsync();
+        const value = partial ? markPartialState(built) : built;
+        surfaceMemo.set(key, { at: Date.now(), value, partial });
         return value;
       } finally { surfaceBuilds.delete(key); }
     })();
@@ -2445,13 +2486,20 @@ const _followups = createFollowups({
   onEvent: ({ step, kind }) => { try { capturePostHogHumanFunnel({ step, kind }); } catch { /* telemetry never breaks the engine */ } },
 });
 if (process.env.FOLLOWUPS !== "off") _followups.start();
-app.get("/followups/stop", (req, res) => {
-  const r = _followups.stop(String(req.query.id || ""), String(req.query.k || ""));
+// An email link whose row write could not land answers 503 (a mail client's
+// one-click POST retries it; the page asks the person to try again).
+function emailLinkUnavailable(res, html) {
+  res.status(503).set("Retry-After", "30");
+  return html ? res.send(alertPage("Please try again", `<p>We could not save that just now. Please open the link again in a minute.</p>`)) : res.json({ ok: false, error: "unavailable" });
+}
+app.get("/followups/stop", async (req, res) => {
+  const r = await _followups.stopAsync(String(req.query.id || ""), String(req.query.k || ""));
   res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
+  if (r.reason === "unavailable") return emailLinkUnavailable(res, true);
   if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The link is invalid. <a href="/company#contact">Contact us</a> and we will stop the emails by hand.</p>`));
   res.send(alertPage("Done", `<p>No more follow-up emails about that purchase. Your report link keeps working.</p><p><a href="/reports">Back to reports</a></p>`));
 });
-app.post("/followups/stop", (req, res) => { const r = _followups.stop(String(req.query.id || ""), String(req.query.k || "")); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
+app.post("/followups/stop", async (req, res) => { const r = await _followups.stopAsync(String(req.query.id || ""), String(req.query.k || "")); if (r.reason === "unavailable") return emailLinkUnavailable(res, false); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
 app.get("/__operator/followups.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json(_followups.stats());
@@ -2488,20 +2536,22 @@ app.post("/api/alerts", express.json({ limit: "4kb" }), async (req, res) => {
     res.status(500).json({ error: "Could not sign you up. Please try again." });
   }
 });
-app.get("/alerts/confirm", (req, res) => {
-  const r = _freeAlerts.confirm(String(req.query.id || ""), String(req.query.k || ""));
+app.get("/alerts/confirm", async (req, res) => {
+  const r = await _freeAlerts.confirmAsync(String(req.query.id || ""), String(req.query.k || ""));
   res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
+  if (r.reason === "unavailable") return emailLinkUnavailable(res, true);
   if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The confirmation link is invalid or the alert was unsubscribed. <a href="/reports">Back to reports</a>.</p>`));
   res.send(alertPage("Alert confirmed", `<p>You will get an email when there are new ${escHtml(ALERT_KIND_LABEL(r.kind, r.target))}. One a day at most, only when something changes.</p><p><a href="/monitors?product=${encodeURIComponent(r.product)}&target=${encodeURIComponent(r.target)}">Want the full report re-run and emailed automatically?</a></p><p><a href="/reports">Back to reports</a></p>`));
 });
-app.get("/alerts/unsubscribe", (req, res) => {
-  const r = _freeAlerts.unsubscribe(String(req.query.id || ""), String(req.query.k || ""));
+app.get("/alerts/unsubscribe", async (req, res) => {
+  const r = await _freeAlerts.unsubscribeAsync(String(req.query.id || ""), String(req.query.k || ""));
   res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
+  if (r.reason === "unavailable") return emailLinkUnavailable(res, true);
   if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The unsubscribe link is invalid. <a href="/company#contact">Contact us</a> and we will remove you by hand.</p>`));
   res.send(alertPage("Unsubscribed", `<p>No more emails about ${escHtml(r.target)}. <a href="/reports">Back to reports</a></p>`));
 });
 // One-click unsubscribe (RFC 8058): mail clients POST the List-Unsubscribe URL.
-app.post("/alerts/unsubscribe", (req, res) => { const r = _freeAlerts.unsubscribe(String(req.query.id || ""), String(req.query.k || "")); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
+app.post("/alerts/unsubscribe", async (req, res) => { const r = await _freeAlerts.unsubscribeAsync(String(req.query.id || ""), String(req.query.k || "")); if (r.reason === "unavailable") return emailLinkUnavailable(res, false); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
 // ---- weekly digest routes (src/wallet-digest.js) ----
 app.get("/digest", (_req, res) => htmlCache(res, 300, 900).send(digestPage(BASE_URL)));
 app.post("/api/digest", express.json({ limit: "8kb" }), async (req, res) => {
@@ -2517,19 +2567,21 @@ app.post("/api/digest", express.json({ limit: "8kb" }), async (req, res) => {
     res.status(500).json({ error: "Could not subscribe. Please try again." });
   }
 });
-app.get("/digest/confirm", (req, res) => {
-  const r = _walletDigest.confirm(String(req.query.id || ""), String(req.query.k || ""));
+app.get("/digest/confirm", async (req, res) => {
+  const r = await _walletDigest.confirmAsync(String(req.query.id || ""), String(req.query.k || ""));
   res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
+  if (r.reason === "unavailable") return emailLinkUnavailable(res, true);
   if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The confirmation link is invalid or the digest was unsubscribed. <a href="/digest">Subscribe again</a>.</p>`));
   res.send(alertPage("Digest confirmed", `<p>Your first digest arrives within the hour, then one a week. Nothing is sent for a quiet week. <a href="/tools/my-usage">See the full history now</a>.</p>`));
 });
-app.get("/digest/unsubscribe", (req, res) => {
-  const r = _walletDigest.unsubscribe(String(req.query.id || ""), String(req.query.k || ""));
+app.get("/digest/unsubscribe", async (req, res) => {
+  const r = await _walletDigest.unsubscribeAsync(String(req.query.id || ""), String(req.query.k || ""));
   res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
+  if (r.reason === "unavailable") return emailLinkUnavailable(res, true);
   if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The unsubscribe link is invalid. <a href="/company#contact">Contact us</a> and we will remove you by hand.</p>`));
   res.send(alertPage("Unsubscribed", `<p>No more digests. Your address has been removed. <a href="/digest">Subscribe again</a> any time.</p>`));
 });
-app.post("/digest/unsubscribe", (req, res) => { const r = _walletDigest.unsubscribe(String(req.query.id || ""), String(req.query.k || "")); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
+app.post("/digest/unsubscribe", async (req, res) => { const r = await _walletDigest.unsubscribeAsync(String(req.query.id || ""), String(req.query.k || "")); if (r.reason === "unavailable") return emailLinkUnavailable(res, false); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
 app.get("/__operator/digest.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json(_walletDigest.stats());
@@ -3181,6 +3233,20 @@ app.get("/api/gateway-status", async (req, res) => {
     // status Worker can page on halted / no_credentials / refused / in_doubt;
     // the operator also gets the mode and counts. Never an id or text.
     tweetQueue: (() => { try { return _tweetQueue.alarmStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // The state database (the stores that left the volume): one word.
+    stateDb: { status: stateDbStatus() },
+    // Money writes waiting on this container's local disk for the database
+    // (src/ledger-mirror.js journals: sales, refund debts, card checkout
+    // finals, subscription records, decide writes): none / pending / stuck
+    // (an entry older than LEDGER_DEAD_LETTER_STUCK_MINUTES, which dies with
+    // the container), off without a state database. One word publicly;
+    // counts per journal for the operator.
+    ledgerDeadLetter: (() => {
+      try { return ledgerDeadLetterStatus({ full, enabled: stateDbEnabled() }); }
+      catch { return { status: "unknown" }; }
+    })(),
+    // The nightly offsite backup (src/backup.js): off / ok / held / failed / stale. One word.
+    backup: { status: (() => { try { return backupAlarmStatus(); } catch { return "unknown"; } })() },
     // One word, never a value: whether the private upstream-cost table loaded.
     upstreamCosts: { status: upstreamCostsStatus() },
     // The ElevenLabs breaker on /api/tts and /api/tts-hd (src/tools/tts-kit.js):
@@ -3549,7 +3615,7 @@ app.get("/api/revenue/decide", (_req, res) => {
     res.set("Cache-Control", "public, max-age=60").json(memoSurface("revenue:decide", 60_000, () => ({
       asOf: new Date().toISOString(),
       ...decideSales({ days: 30 }),
-      note: "Paid settlements of POST /api/decide and POST /api/decide/execute. internal = our own canaries and tests; external = outside buyers, less catalog sweeps (a wallet that bought " + SWEEP_DISTINCT_TOOLS_PER_DAY + " or more distinct tools in one UTC day, counted under sweeps). externalUsd is what outside buyers paid us for these two routes; an execute run's pass-through payments to outside sellers are not included.",
+      note: "Paid settlements of POST /api/decide and POST /api/decide/execute. internal = our own canaries and tests; external = outside buyers, catalog sweepers included (a wallet that bought " + SWEEP_DISTINCT_TOOLS_PER_DAY + " or more distinct tools in one UTC day; sweeps says how many external settlements came from such wallets). externalUsd is what outside buyers paid us for these two routes; an execute run's pass-through payments to outside sellers are not included.",
     })));
   } catch (e) {
     res.status(500).json({ error: "decide revenue failed", detail: String(e?.message || e).slice(0, 120) });
@@ -3760,21 +3826,21 @@ if (_credits) {
     try { res.json(await _credits.claim(String(req.query.session || ""))); }
     catch (e) { console.warn("[credits] claim failed:", String(e?.message || e).slice(0, 200)); res.status(500).json({ status: "error", error: "Could not claim the key right now." }); }
   });
-  app.get("/api/credits/balance", (req, res) => {
+  app.get("/api/credits/balance", async (req, res) => {
     res.set("Cache-Control", "no-store");
     const auth = String(req.headers.authorization || "");
-    const b = /^Bearer a402_/.test(auth) ? _credits.balance(auth.slice(7).trim()) : null;
+    const b = /^Bearer a402_/.test(auth) ? await _credits.balance(auth.slice(7).trim()) : null;
     if (!b) return res.status(401).json({ error: "Send your credits key as Authorization: Bearer a402_…", ...creditsTopupFields(BASE_URL) });
     res.json(b);
   });
-  app.get("/__operator/credits.json", (req, res) => {
+  app.get("/__operator/credits.json", async (req, res) => {
     if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-    res.set("Cache-Control", "no-store").json(_credits.status());
+    res.set("Cache-Control", "no-store").json(await _credits.status());
   });
-  app.post("/__operator/credits/disable", express.json(), (req, res) => {
+  app.post("/__operator/credits/disable", express.json(), async (req, res) => {
     if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
     const { keyId, disabled = true } = req.body || {};
-    res.json({ ok: _credits.setDisabled(String(keyId || ""), !!disabled) });
+    res.json({ ok: await _credits.setDisabled(String(keyId || ""), !!disabled) });
   });
 } else {
   app.post("/api/credits/checkout", (_req, res) => res.status(503).json({
@@ -3810,9 +3876,9 @@ if (humanCheckoutEnabled()) {
     // re-driven shortly after boot - the buyer may have closed the tab.
     const _sweep = setTimeout(() => { _humanCheckout.recoverAbandoned().catch(() => {}); }, 45_000);
     _sweep.unref?.();
-    app.get("/__operator/human-checkout.json", (req, res) => {
+    app.get("/__operator/human-checkout.json", async (req, res) => {
       if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-      res.set("Cache-Control", "no-store").json({ ...(_humanCheckout.listIssues()), compositeUsage: compositeUsageSnapshot(), compositeGuard: _compositeGuardState(), stripeWebhooks: _subs?.webhookStats?.() || null });
+      res.set("Cache-Control", "no-store").json({ ...(await _humanCheckout.listIssues()), compositeUsage: compositeUsageSnapshot(), compositeGuard: _compositeGuardState(), stripeWebhooks: _subs?.webhookStats?.() || null });
     });
     app.post("/api/buy", async (req, res) => {
       if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
@@ -3840,9 +3906,9 @@ if (humanCheckoutEnabled()) {
       res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(reportDeliveryPage(String(req.params.sessionId || ""), { baseUrl: BASE_URL, robots: "noindex, nofollow" }));
     });
     // The session id is the bearer: only its holder can publish or unpublish.
-    app.post("/api/r/:sessionId/public", express.json({ limit: "2kb" }), (req, res) => {
+    app.post("/api/r/:sessionId/public", express.json({ limit: "2kb" }), async (req, res) => {
       if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
-      const r = _humanCheckout.setPublic(String(req.params.sessionId || ""), req.body?.public === true);
+      const r = await _humanCheckout.setPublic(String(req.params.sessionId || ""), req.body?.public === true);
       if (r.status !== "done") return res.status(r.status === "invalid" ? 400 : 404).json(r);
       try { capturePostHogHumanFunnel({ step: r.public ? "report_published" : "report_unpublished" }); } catch { /* telemetry never breaks the request */ }
       res.set("Cache-Control", "no-store").json({ ...r, url: r.public ? `${BASE_URL}/reports/public/${r.publicId}` : null });
@@ -4890,7 +4956,7 @@ app.get("/__operator/perf.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // ?reset=1 clears the stall high-water mark first (the load test reads a fresh one per scenario).
   if (req.query.reset === "1") resetLoopLag();
-  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), inFlight: inFlightCount(), shed: shedStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
+  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), inFlight: inFlightCount(), shed: shedStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), paidPhases: paidPhaseSummary(), stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
 });
 // One short CPU-profile window on demand (stall attribution without the
 // per-minute cost of continuous profiling). Answers the longest busy run:
@@ -5061,11 +5127,11 @@ app.get("/__operator/backup.json", (req, res) => {
 // remains the sole payer (dry-run by default, capped, and it re-derives the
 // inbound payment from the chain before every send). Dry by default here too:
 // ?write=1 is what actually mints.
-app.post("/__operator/refunds/backfill", (req, res) => {
+app.post("/__operator/refunds/backfill", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorHeavyLimited(req, res)) return;
   try {
-    res.json(backfillBrokenPackRefunds({ write: String(req.query.write || "") === "1" }));
+    res.json(await backfillBrokenPackRefunds({ write: String(req.query.write || "") === "1" }));
   } catch (e) {
     res.status(500).json({ error: String(e.message) });
   }
@@ -5210,14 +5276,14 @@ app.get(["/__operator/shared-paytos", "/__operator/shared-paytos.json"], (req, r
   }
   res.set("Cache-Control", "no-store").json({ ...store.counts(), wallets: store.list(), note: `GET ?wallet=0x... for who that wallet's history is credited to; POST {"action":"add"|"remove","wallet":"0x...","note":"..."} to change it` });
 });
-app.post("/__operator/shared-paytos", express.json(), (req, res) => {
+app.post("/__operator/shared-paytos", express.json(), async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   const { action, wallet, note } = req.body || {};
   const store = sharedPayToStore();
   let r;
   try {
-    if (action === "add") r = store.add(wallet, { note: typeof note === "string" ? note : "" });
-    else if (action === "remove") r = store.remove(wallet);
+    if (action === "add") r = await store.add(wallet, { note: typeof note === "string" ? note : "" });
+    else if (action === "remove") r = await store.remove(wallet);
     else return res.status(400).json({ error: 'pass {"action":"add"|"remove","wallet":"0x...","note":"optional"}' });
   } catch (e) {
     return res.status(e?.statusCode || 400).json({ error: String(e?.message || e).slice(0, 200) });
@@ -5255,7 +5321,7 @@ app.get(["/__operator/seller-funding", "/__operator/seller-funding.json"], (req,
   }
   res.set("Cache-Control", "no-store").json({ ...sellerFundingStatus(), cleared: store.list(), note: 'GET ?wallet=0x... for one wallet; POST {"action":"clear"|"restore","wallet":"0x...","note":"..."} to change it; POST {"action":"disable"|"enable","note":"..."} turns the whole reader off or on' });
 });
-app.post("/__operator/seller-funding", express.json(), (req, res) => {
+app.post("/__operator/seller-funding", express.json(), async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   const { action, wallet, note } = req.body || {};
   if (action === "disable" || action === "enable") {
@@ -5266,8 +5332,8 @@ app.post("/__operator/seller-funding", express.json(), (req, res) => {
   const store = selfFundingClearedStore();
   let r;
   try {
-    if (action === "clear") r = store.add(wallet, { note: typeof note === "string" ? note : "" });
-    else if (action === "restore") r = store.remove(wallet);
+    if (action === "clear") r = await store.add(wallet, { note: typeof note === "string" ? note : "" });
+    else if (action === "restore") r = await store.remove(wallet);
     else return res.status(400).json({ error: 'pass {"action":"clear"|"restore","wallet":"0x...","note":"optional"} or {"action":"disable"|"enable"}' });
   } catch (e) {
     return res.status(e?.statusCode || 400).json({ error: String(e?.message || e).slice(0, 200) });
@@ -5338,6 +5404,9 @@ app.post("/__operator/sellers/restore", express.json(), (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorHeavyLimited(req, res)) return;
   const r = restoreOrigin(req.body?.origin);
+  // The removal list has not been read yet (the state database is down): a
+  // retry is the remedy, so say 503 with when to try, not a bad request.
+  if (r.notLoaded) return res.status(503).set("Retry-After", "30").set("Cache-Control", "no-store").json({ error: r.error, origin: r.origin, notLoaded: true });
   if (r.error) return res.status(400).json({ error: r.error });
   res.set("Cache-Control", "no-store").json({ ...r, note: r.restored ? "the owner can register the origin again" : "that origin was not removed" });
 });
@@ -5378,22 +5447,22 @@ app.get("/__operator/seller-registrations.json", (req, res) => {
     registrations: rows,
   });
 });
-app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), (req, res) => {
+app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorLedgerLimited(req, res)) return;   // see refunds.json above
   const { id, action, tx, note } = req.body || {};
   const rowId = Number(id);
   if (!Number.isInteger(rowId) || rowId <= 0) return res.status(400).json({ error: "id required" });
   let ok = false;
-  if (action === "paid") ok = markRefundPaid(rowId, tx, note || null);
-  else if (action === "void") ok = markRefundVoid(rowId, note);
+  if (action === "paid") ok = await markRefundPaid(rowId, tx, note || null);
+  else if (action === "void") ok = await markRefundVoid(rowId, note);
   // `claim` moves owed -> sending before any broadcast, so a crash between
   // sending and marking paid cannot be re-sent by the next run. Only one
   // caller can win a given row.
-  else if (action === "claim") ok = claimRefundForSend(rowId, note || null);
+  else if (action === "claim") ok = await claimRefundForSend(rowId, note || null);
   // `release` puts a row stuck in `sending` back to owed, after a human has
   // checked the chain and found nothing was sent. It needs that note.
-  else if (action === "release") ok = releaseStuckSend(rowId, note);
+  else if (action === "release") ok = await releaseStuckSend(rowId, note);
   else return res.status(400).json({ error: 'action must be "claim", "release" (requires note), "paid" (requires tx) or "void" (requires note)' });
   if (!ok) return res.status(409).json({ error: "not updated - row missing, already resolved, not sending (release), or evidence missing (paid needs tx, void and release need a note)" });
   res.json({ ok: true, id: rowId, action, totals: refundTotals() });
@@ -7023,6 +7092,16 @@ app.post("/api/index/register", async (req, res) => {
     replaces = rv.origin;
   }
   const result = await registerOrigin(v.origin, { replaces });
+  if (result?.notLoaded) {
+    // The removal list has not been read yet (the state database is down):
+    // nothing was fetched or listed, so the call gives back both of its
+    // slots and answers 503 with when to try again.
+    const gi = regGlobal.lastIndexOf(now);
+    if (gi >= 0) regGlobal.splice(gi, 1);
+    const mi = mine.lastIndexOf(now);
+    if (mi >= 0) mine.splice(mi, 1);
+    return res.status(503).set("Retry-After", "30").json(result);
+  }
   // A re-registration that landed inside both of the origin's windows fetched
   // nothing, so it gives back its slot in the GLOBAL budget: repeated calls
   // about one known origin must not use up the hour for new sellers. (The
@@ -8269,6 +8348,9 @@ if (!FREE_MODE) {
   // socket. A charge that was taken anyway (no ticket, a Tempo push
   // credential, or a close during the settle call itself) is booked as owed
   // in the refund ledger.
+  // Arrival stamp for the per-phase timing of paid calls
+  // (src/paid-phase-timing.js); before every gate, so gate time is measured.
+  app.use(phaseArrivalMiddleware());
   app.use(createHangupSettlementHook({ onUndelivered: recordHangupOutcome }));
 
   // Tempo support for MPP (src/mpp-tempo.js) — a SECOND, independent
@@ -9183,7 +9265,9 @@ app.use((req, res, next) => {
         const tx = req.tempoSettled ? (tempoPushHashOf(req) || tempoTxFromReceiptHeader(res.getHeader("Payment-Receipt"))) : stripeTxFromReceiptHeader(res.getHeader("Payment-Receipt"));
         recordChargedFailure(def.slug, res.statusCode);
         whenTempoLedgerPayerKnown(req, "refund-ledger", () => {
-          const created = recordRefundOwed({
+          // A corrected push retry: its hash already carries the owed
+          // input-refused row, which the insert below leaves alone.
+          whenVerdict(recordRefundOwed({
             slug: def.slug,
             network: req.tempoSettled ? "tempo" : "stripe",
             payer: req.tempoSettled ? tempoLedgerPayer(req) : null,
@@ -9192,10 +9276,9 @@ app.use((req, res, next) => {
             httpStatus: res.statusCode,
             synthetic: isSyntheticRequest(req),
             wire: req.tempoSettled ? "mpp-tempo" : "mpp-stripe",
+          }), (created) => {
+            if (!created && req.tempoSettled && tempoPushDebts && typeof tx === "string") void tempoPushDebts.handlerFailed(tx, res.statusCode);
           });
-          // A corrected push retry: its hash already carries the owed
-          // input-refused row, which the insert above left alone.
-          if (!created && req.tempoSettled && tempoPushDebts && typeof tx === "string") tempoPushDebts.handlerFailed(tx, res.statusCode);
         });
       }
     });
@@ -9246,6 +9329,10 @@ if (!FREE_MODE) {
     // (a Tempo push credential) is not forgivable: an undelivered answer on it
     // is owed, so it takes no ticket and spends none of the budget.
     req.__a402HandlerStarted = Date.now();
+    // Handler start and end for the per-phase timing (every rail); its res.end
+    // wrapper is outside every gate's buffering one, so it marks the handler's
+    // own end.
+    markPaidHandlerStart(req, res, def.slug);
     if (req.tempoSettled) return next();
     reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: quotedPriceUsd(def, req), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true });
     res.once("close", () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) }));
@@ -9436,16 +9523,19 @@ const memHandler = (fn) => async (req, res) => {
   }
 };
 
+// Optional client request id: a retried write returns the first answer instead of applying twice.
+const memRequestId = (req) => req.body?.requestId ?? req.header("x-memory-request-id") ?? undefined;
 app.post("/api/memory", memHandler((req, actor, owner) => {
   const { key, value, delete: del, ttlSeconds } = req.body ?? {};
-  return del ? memoryDelete(owner, key, { actor }) : memoryPut(owner, key, value, { actor, ttlSeconds });
+  const requestId = memRequestId(req);
+  return del ? memoryDelete(owner, key, { actor, requestId }) : memoryPut(owner, key, value, { actor, ttlSeconds, requestId });
 }));
 app.get("/api/memory", memHandler((req, actor, owner) => memoryGet(owner, req.query.key, { actor })));
 
 // Coordination + provenance + recall (all wallet-only; identity = payment).
-app.post("/api/memory/incr", memHandler((req, actor, owner) => memoryIncr(owner, req.body?.key, req.body?.by, actor)));
+app.post("/api/memory/incr", memHandler((req, actor, owner) => memoryIncr(owner, req.body?.key, req.body?.by, actor, { requestId: memRequestId(req) })));
 app.post("/api/memory/cas", memHandler((req, actor, owner) =>
-  memoryCas(owner, req.body?.key, req.body?.expected, req.body?.value, { actor, ttlSeconds: req.body?.ttlSeconds, hasValue: "value" in (req.body || {}) })
+  memoryCas(owner, req.body?.key, req.body?.expected, req.body?.value, { actor, ttlSeconds: req.body?.ttlSeconds, hasValue: "value" in (req.body || {}), requestId: memRequestId(req) })
 ));
 app.post("/api/memory/grant", memHandler((req, actor) => grant(actor, req.body?.grantee, req.body?.mode, req.body?.ttlSeconds)));
 app.post("/api/memory/revoke", memHandler((req, actor) => revoke(actor, req.body?.grantee)));
@@ -9932,6 +10022,18 @@ app.use((err, req, res, _next) => {
 
 // One word, never a value: whether the private upstream-cost table loaded.
 console.log(`[upstream-costs] ${upstreamCostsLoaded() ? `loaded (${upstreamCostsSummary().models} model rows, fingerprint ${upstreamCostsSummary().fingerprint})${upstreamCostsGaps().length ? ` PARTIAL - missing: ${upstreamCostsGaps().join(", ")}` : ""}` : "MISSING - metered tier refuses, flat tiers price at their bound"}`);
+// Every store that lives in the state database has registered its first
+// load; wait for them (bounded) so no request sees a store still empty
+// because its row has not arrived. Without a database this resolves at once.
+// The stores that retry their own first load (src/store-retry.js) report
+// by label through the probe, so the status and this line name them.
+setUnloadedStoresProbe(unloadedStores);
+{
+  const t0 = Date.now();
+  const r = await stateStoresReady({ timeoutMs: 15_000 });
+  if (r !== "ready") console.warn(`[state-db] stores not ready after ${Date.now() - t0}ms (${r}); serving with what has loaded (still loading: ${unloadedStateStores().slice(0, 12).join(", ") || "none named"})`);
+  else if (stateDbEnabled()) console.log(`[state-db] stores loaded in ${Date.now() - t0}ms; listening`);
+}
 const httpServer = app.listen(PORT, () =>
   console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`)
 );
@@ -9989,6 +10091,7 @@ else console.log(`[posthog] disabled (${posthogInit.reason || "unknown"})`);
 // outbound load on other people's hosts that no test ever looked at.
 if (String(process.env.X402_INDEX_CRAWL || "").toLowerCase() === "off") {
   console.log("[index] crawler disabled (X402_INDEX_CRAWL=off)");
+  loadRemovedOrigins(); // the operator's removals load regardless, so a removal never saves over a list nobody read
 } else {
   startCrawler({ selfOrigin: BASE_URL });
 }
@@ -10094,6 +10197,11 @@ bootStep("mppReconciler.start", () => mppReconciler.start());
 // failure mode this tool exists to avoid.
 bootStep("startSanctionsRefresh", () => startSanctionsRefresh());
 bootStep("startDatasetScheduler", () => startDatasetScheduler(datasetSources()));
+// Stock-quote warmer (src/tools/databento.js): keeps the session boundary and
+// the most-requested symbols' bars off the request path, under its own daily
+// ceiling of background calls. Started here, never from inside a request, so
+// its reads carry no request context. No key or DATABENTO_WARM=off: not started.
+bootStep("startQuoteWarmer", () => { if (startQuoteWarmer()) console.log("[databento] stock-quote warmer on"); });
 
 // Monitor scheduler timer (recurring report fulfilment). MONITOR_SCHEDULER=off
 // keeps the manual operator run available while disarming the timer.
@@ -10199,6 +10307,13 @@ let shuttingDown = false;
 // `code`/`deadlineMs` default to the graceful-redeploy values. The fatal path
 // below reuses this with a non-zero code and a short deadline - same drain
 // machinery, different exit semantics.
+function flushStateQueues({ timeoutMs = 10_000 } = {}) {
+  const flushes = [salesLedgerFlush, refundLedgerFlush, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => flushJsonDocuments({ timeoutMs })]
+    .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
+  let timer;
+  const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });
+  return Promise.race([Promise.allSettled(flushes), deadline]).finally(() => clearTimeout(timer));
+}
 function shutdown(signal, { code = 0, deadlineMs = DRAIN_DEADLINE_MS } = {}) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -10217,14 +10332,45 @@ function shutdown(signal, { code = 0, deadlineMs = DRAIN_DEADLINE_MS } = {}) {
   // deadline with the money spent and nobody to receive the answer.
   const cut = abortInFlightComposites(signal);
   if (cut) console.log(`[drain] aborted ${cut} in-flight composite run(s) - upstream calls cut, nobody charged`);
-  httpServer.close(() => process.exit(code));
+  // Scheduled loops: every one runs under a lease (src/state-db.js), so no
+  // new tick starts from here on, and a tick still running is told (its lease
+  // signal aborts, leaseStillHeld reads false) so it stops before its next
+  // external effect. The rows are released just before exit (below), so the
+  // other container picks the loops up at once instead of at the ttl.
+  try { stopLeases(); } catch { /* never blocks the drain */ }
+  // The last step, once: release every lease this process holds, then close
+  // the pool. Each step is bounded; the exit never waits on the database.
+  let exiting = false;
+  const finish = () => {
+    if (exiting) return;
+    exiting = true;
+    const bounded = (p, ms) => Promise.race([Promise.resolve(p).catch(() => {}), new Promise((r) => setTimeout(r, ms).unref())]);
+    bounded(releaseHeldLeases({ timeoutMs: 3_000 }), 3_500)
+      .then(() => bounded(closeStateDb(), 2_000))
+      .finally(() => process.exit(code));
+  };
+  // The queued state-database writes (ledgers, tallies, replay rows) land
+  // before the process exits, bounded so a slow database cannot hold the
+  // drain past its deadline: one flush round, at most 10 s, each statement
+  // under the pool's own time limits. Without a database every flush
+  // resolves at once. During a database outage that round fails; sales and
+  // refund debts were written to the ledgers' local dead-letter when they
+  // were queued, so they wait on this container's disk for the next boot's
+  // replay (ledgerDeadLetter on /api/gateway-status pages while they wait).
+  // Other stores' queued writes are lost with the process; while the /data
+  // volume exists the stores that write through to it keep their copy.
+  httpServer.close(() => { flushStateQueues().finally(finish); });
   // server.close() waits for ALL connections, including idle keep-alive
   // sockets agents hold open between calls. Sweep those now and every few
   // seconds (a socket goes idle the moment its in-flight response finishes),
   // so an idle connection can't pin the drain to the hard deadline.
   httpServer.closeIdleConnections();
   setInterval(() => httpServer.closeIdleConnections(), 5_000).unref();
-  // Hard deadline so a stuck request can't block the redeploy.
+  // Hard deadline so a stuck request can't block the redeploy. With a state
+  // database the lease release and pool close start early enough to finish
+  // inside it; without one there is nothing to release, so in-flight requests
+  // keep the whole deadline (file mode drains exactly as it always did).
+  if (stateDbEnabled()) setTimeout(finish, Math.max(0, deadlineMs - 6_000)).unref();
   setTimeout(() => process.exit(code), deadlineMs).unref();
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));

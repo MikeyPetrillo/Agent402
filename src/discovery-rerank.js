@@ -35,11 +35,15 @@
 // /api/find returns to anyone.
 import { logSafe } from "./log-safe.js";
 import { looksLikeListingInjection } from "./x402-index.js";
+import { askDecisionOne, decisionOneEnabled } from "./decision-one.js";
 
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 const MODEL = (process.env.TYPESAFE_MODEL || "jev-latest").trim();
 const keyOf = () => (process.env.TYPESAFE_API_KEY || "").trim();
-export const rerankEnabled = () => !!keyOf();
+// Microsoft Decision-1 answers when Jev fails, and alone when no TypeSafe key
+// is set: this surface is operator-only and fails open per row, so a second
+// backend only adds answers.
+export const rerankEnabled = () => !!keyOf() || decisionOneEnabled();
 
 const MAX_ROWS = Number(process.env.RERANK_MAX_ROWS || 40);
 const CANDIDATES = Number(process.env.RERANK_CANDIDATES || 5);
@@ -77,23 +81,38 @@ export function buildCriteria(results, { descMax = DESC_MAX } = {}) {
   return criteria;
 }
 
+// Jev first; Decision-1 with the same body when Jev fails or answers in a
+// shape this cannot read. Throws only when neither gave a usable answer.
 async function ask(query, criteria, fetchImpl) {
-  const res = await fetchImpl(ENDPOINT, {
-    method: "POST",
-    headers: { authorization: `Bearer ${keyOf()}`, "content-type": "application/json" },
-    body: JSON.stringify({
-      state: `An AI agent searched a catalog of paid API tools for: "${String(query).slice(0, 400)}"`,
-      model: MODEL,
-      questions: { best: { type: "choice", instructions: "Which listed tool actually performs the job the agent asked for?", criteria } },
-    }),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
-  if (!res.ok) throw new Error(`typesafe HTTP ${res.status}`);
-  const a = (await res.json())?.answers?.best;
-  const choice = typeof a?.choice === "string" ? a.choice : null;
-  const confidence = typeof a?.confidence === "number" ? a.confidence : null;
-  if (!choice || confidence == null) throw new Error("unusable answer shape");
-  return { choice, confidence };
+  const body = {
+    state: `An AI agent searched a catalog of paid API tools for: "${String(query).slice(0, 400)}"`,
+    model: MODEL,
+    questions: { best: { type: "choice", instructions: "Which listed tool actually performs the job the agent asked for?", criteria } },
+  };
+  const read = (j) => {
+    const a = j?.answers?.best;
+    const choice = typeof a?.choice === "string" ? a.choice : null;
+    const confidence = typeof a?.confidence === "number" ? a.confidence : null;
+    if (!choice || confidence == null) throw new Error("unusable answer shape");
+    return { choice, confidence };
+  };
+  let jevError = null;
+  if (keyOf()) {
+    try {
+      const res = await fetchImpl(ENDPOINT, {
+        method: "POST",
+        headers: { authorization: `Bearer ${keyOf()}`, "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      if (!res.ok) throw new Error(`typesafe HTTP ${res.status}`);
+      return read(await res.json());
+    } catch (e) {
+      jevError = e;
+    }
+  }
+  if (!decisionOneEnabled()) throw jevError || new Error("no judgment backend");
+  return read(await askDecisionOne(body, { fetchImpl, timeoutMs: TIMEOUT_MS }));
 }
 
 /**

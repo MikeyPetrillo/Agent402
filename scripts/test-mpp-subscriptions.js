@@ -769,6 +769,34 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   if (prev === undefined) delete process.env.MPP_SUB_FEE_PAYER_MAX_GAS; else process.env.MPP_SUB_FEE_PAYER_MAX_GAS = prev;
 }
 
+// --- a cancel during an in-flight renewal (one process, the file store) -------
+// The renewal's charge takes seconds; a cancel that lands meanwhile must not be
+// undone by the renewal's write, and the next period must not be pulled.
+{
+  const { engine: E, calls, setCharge } = makeEngine({ name: "cancel-race" });
+  const offer = await E.mintOffer({ product: "domain-monitor", target: "race.example" });
+  const { header } = await signCredential(Challenge.deserialize(offer.header));
+  const sub = await E.activateFromCredential(header);
+  advance(PERIOD);
+  // After the charge, the renewal's next write of the record (a put or a
+  // conditional write) first lets a whole cancel run.
+  let charged = false;
+  setCharge(() => { charged = true; return { reference: "0xrace" }; });
+  const kv = E._store, realPut = kv.put, realCas = kv.compareAndSet;
+  const cancelFirst = async (k) => { if (k === `a402:sub:${sub.subId}` && charged) { charged = false; await E.cancel(sub.subId, sub.manageToken); } };
+  kv.put = async (k, v) => { await cancelFirst(k); return realPut.call(kv, k, v); };
+  kv.compareAndSet = async (k, d) => { await cancelFirst(k); return realCas.call(kv, k, d); };
+  let st0;
+  try { st0 = await E.refreshStatus(sub.subId); } finally { kv.put = realPut; kv.compareAndSet = realCas; }
+  const rec = await E._readRec(sub.subId);
+  ok(rec.cancelAtPeriodEnd === true && rec.lastChargedPeriod === 1, `file store: a cancel during the renewal survives its write and the charge stands (cancel=${rec.cancelAtPeriodEnd}, period=${rec.lastChargedPeriod})`);
+  ok(rec.status === "active" && st0 === "active", `file store: the period the renewal paid is honoured until it ends (record ${rec.status}, answer ${st0})`);
+  advance(PERIOD);
+  const before = calls.charge;
+  const st = await E.refreshStatus(sub.subId);
+  ok(st === "canceled" && calls.charge === before, `file store: the next period is not charged after that cancel (status ${st})`);
+}
+
 // --- validity window on SERVER-SIGNED renewals ------------------------------
 {
   ok(renewalValidForSeconds(undefined) === 120 && renewalValidForSeconds("") === 120, "renewal window defaults to 120 s");

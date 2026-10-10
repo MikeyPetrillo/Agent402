@@ -2,7 +2,11 @@
 // outside-seller leg and /api/route. It chooses only among candidates it is
 // given and may answer "none of these". No model writes the answer: the chosen
 // tool runs unchanged. Fails open to the lexical order; ROUTE_JUDGE=off disables.
+// Microsoft Decision-1 (src/decision-one.js) answers when Jev fails, and alone
+// when no TypeSafe key is set: every caller here already degrades to the
+// lexical order on a null, so a second backend only adds answers.
 import { createHash } from "node:crypto";
+import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL } from "./decision-one.js";
 
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 const MODEL = (process.env.TYPESAFE_MODEL || "jev-latest").trim();
@@ -16,7 +20,7 @@ const TIMEOUT_MS = () => Number(process.env.ROUTE_JUDGE_TIMEOUT_MS || 4000);
 // Description window the judge reads, plus the curated tags.
 const DESC_MAX = 300;
 
-export const toolJudgeEnabled = () => !!keyOf() && String(process.env.ROUTE_JUDGE || "").toLowerCase() !== "off";
+export const toolJudgeEnabled = () => (!!keyOf() || decisionOneEnabled()) && String(process.env.ROUTE_JUDGE || "").toLowerCase() !== "off";
 
 // ---------------------------------------------------------------------------
 // Guards: every judgment is cached per question for a day and booked against a
@@ -63,33 +67,61 @@ function remember(key, value) {
   cache.set(key, { at: Date.now(), value });
 }
 
-/** One Jev call under the ceiling, or null. Never throws. `pool: "free"`
- *  books the call against the free share of the ceiling as well. `outcome`
- *  (optional object) learns `skipped: "budget"` when a ceiling refused it. */
-async function callJev(payload, fetchImpl, timeoutMs, { pool = "paid", outcome = null } = {}) {
-  if (!keyOf()) return null;
-  const cap = jevDailyMaxTokens();
-  if (!(cap > 0)) return null;
-  const body = JSON.stringify(payload);
-  const est = Buffer.byteLength(body) + OUTPUT_ALLOWANCE_TOKENS;
+// Books `est` tokens against the ceiling (and the free share for `free`), or
+// counts a refusal and answers false.
+function book(est, cap, free, outcome) {
   rollDay();
-  const free = pool === "free";
   if (spend.tokens + est > cap || (free && spend.freeTokens + est > cap * freeShare())) {
     spend.refused++;
     if (outcome) outcome.skipped = "budget";
-    return null;
+    return false;
   }
   spend.tokens += est; spend.calls++;
   if (free) spend.freeTokens += est;
+  return true;
+}
+const hasAnswers = (j) => !!j?.answers && typeof j.answers === "object";
+
+/** One judgment under the ceiling, or null. Never throws. Jev first; when it
+ *  fails (non-ok, timeout, network, or an answer `usable` rejects), Decision-1
+ *  is asked the same questions within what is left of the timeout, booked
+ *  against the same ceiling and free share. `pool: "free"` books against the
+ *  free share as well. `outcome` (optional object) learns `skipped: "budget"`
+ *  when a ceiling refused it. */
+async function callJev(payload, fetchImpl, timeoutMs, { pool = "paid", outcome = null, usable = hasAnswers } = {}) {
+  const fallback = decisionOneEnabled();
+  if (!keyOf() && !fallback) return null;
+  const cap = jevDailyMaxTokens();
+  if (!(cap > 0)) return null;
+  const free = pool === "free";
+  const deadline = Date.now() + (timeoutMs || TIMEOUT_MS());
+  if (keyOf()) {
+    const body = JSON.stringify(payload);
+    if (!book(Buffer.byteLength(body) + OUTPUT_ALLOWANCE_TOKENS, cap, free, outcome)) return null;
+    try {
+      const res = await fetchImpl(ENDPOINT, {
+        method: "POST",
+        headers: { authorization: `Bearer ${keyOf()}`, "content-type": "application/json" },
+        body,
+        signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        // Without a fallback an unusable answer is returned as before (the
+        // caller reads it as no judgment and caches that).
+        if (usable(j) || !fallback) return j;
+      }
+    } catch { /* fall through to Decision-1 */ }
+    if (!fallback) return null;
+  }
+  // Too little time left to be worth a second call.
+  const left = deadline - Date.now();
+  if (left < 250) return null;
+  const est = Buffer.byteLength(JSON.stringify({ ...payload, model: DECISION_ONE_MODEL })) + OUTPUT_ALLOWANCE_TOKENS;
+  if (!book(est, cap, free, outcome)) return null;
   try {
-    const res = await fetchImpl(ENDPOINT, {
-      method: "POST",
-      headers: { authorization: `Bearer ${keyOf()}`, "content-type": "application/json" },
-      body,
-      signal: AbortSignal.timeout(timeoutMs || TIMEOUT_MS()),
-    });
-    if (!res.ok) return null;
-    return await res.json();
+    const j = await askDecisionOne(payload, { fetchImpl, timeoutMs: left });
+    return usable(j) ? j : null;
   } catch {
     return null;
   }
@@ -123,7 +155,7 @@ export async function judgeTool(task, candidates, { fetchImpl = fetch, timeoutMs
     state: `An AI agent asked a tool router to run this task: "${String(task).slice(0, 400)}"`,
     model: MODEL,
     questions: { best: { type: "choice", instructions: "Which listed tool actually performs the job the agent asked for?", criteria: criteriaFor(candidates) } },
-  }, fetchImpl, timeoutMs, { pool, outcome });
+  }, fetchImpl, timeoutMs, { pool, outcome, usable: (j) => typeof j?.answers?.best?.choice === "string" && typeof j.answers.best.confidence === "number" });
   const a = out?.answers?.best;
   const choice = typeof a?.choice === "string" ? a.choice : null;
   const confidence = typeof a?.confidence === "number" ? a.confidence : null;
@@ -208,7 +240,7 @@ export async function judgeFreeResponse(body, contentType, { fetchImpl = fetch }
     state: `An unauthenticated GET request to a web API route returned HTTP 200 with this body (truncated): ${text}`,
     model: MODEL,
     questions: { kind: { type: "choice", instructions: "Is this body the route successfully serving its content, or a refusal / error about the request (missing input, missing credentials, not allowed)?", criteria: { serving: "The route worked and returned its content.", error: "The body reports an error or refusal about the request." } } },
-  }, fetchImpl);
+  }, fetchImpl, undefined, { usable: (j) => typeof j?.answers?.kind?.choice === "string" && typeof j.answers.kind.confidence === "number" });
   const a = out?.answers?.kind;
   let value = null;
   if (typeof a?.confidence === "number" && a.confidence >= PICK_CONFIDENCE()) value = a.choice === "serving" ? "free" : a.choice === "error" ? "error" : null;

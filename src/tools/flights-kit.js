@@ -29,7 +29,7 @@
 // call (uncharged to the buyer) rather than paying a second seller.
 import { markUntrusted } from "./provenance.js";
 import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_SELLER_ALLOWANCE_MS } from "../evm-validity.js";
-import { maySpend as realMaySpend, noteSpend as realNoteSpend, adjustSpend as realAdjustSpend } from "../external-spend-guard.js";
+import { maySpend as realMaySpend, noteSpend as realNoteSpend, adjustSpend as realAdjustSpend, reserveSpend as realReserveSpend, composeReserve } from "../external-spend-guard.js";
 import { payerFromRequest } from "../payer.js";
 
 function bad(message, statusCode = 400) {
@@ -269,8 +269,10 @@ async function buyFirst(sellers, params, { req, pay, kind, spend, now }) {
 
 /** Deps are injectable so the whole flow is testable offline with a stub
  *  seller; the defaults are the real spend guard and payer. */
-export function buildFlightTools({ sellers, pay, now = () => Date.now(), maySpend = realMaySpend, noteSpend = realNoteSpend, adjustSpend = realAdjustSpend } = {}) {
+export function buildFlightTools({ sellers, pay, now = () => Date.now(), maySpend = realMaySpend, noteSpend = realNoteSpend, adjustSpend = realAdjustSpend, reserveSpend = null } = {}) {
   if (!sellers) return [];
+  // Check and book in one step; injected maySpend/noteSpend (tests) compose into the same shape.
+  const reserve = reserveSpend || (maySpend === realMaySpend && noteSpend === realNoteSpend ? realReserveSpend : composeReserve(maySpend, noteSpend));
   function make(kind) {
     const list = sellers[kind] || [];
     if (!list.length) return null;
@@ -278,13 +280,13 @@ export function buildFlightTools({ sellers, pay, now = () => Date.now(), maySpen
     return async (input, req) => {
       const params = kind === "search" ? validateSearch(input, now()) : validateStatus(input, now());
       const spendPayer = payerFromRequest(req) || (req?.mppTempoSender ? `tempo:${req.mppTempoSender}` : null) || (req?.ip ? `ip:${req.ip}` : null);
-      const allowed = maySpend(spendPayer, worst, { chain: "base" });
+      const allowed = await reserve(spendPayer, worst, { chain: "base" });
       if (!allowed?.ok) {
         throw bad(allowed?.code === "wallet_daily_ceiling"
           ? "Flight data purchases have reached today's ceiling; they resume tomorrow (nothing was charged)"
           : "Flight data purchases are paused right now; try again shortly (nothing was charged)", 429);
       }
-      const handle = noteSpend(spendPayer, worst, { chain: "base" });
+      const handle = allowed.handle ?? null;
       if (handle && req && typeof req === "object") req.__externalSpend = handle;
       const spend = { paid: 0 };
       try {

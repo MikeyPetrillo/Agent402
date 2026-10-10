@@ -1,6 +1,7 @@
 import { handlerInputOf } from "./handler-input.js";
 import { boundedResponseSchemaFor, boundedSchema } from "./openapi-schema.js";
 import { paymentMiddlewareFromHTTPServer, x402HTTPResourceServer } from "@x402/express";
+import { registerPhaseTimingHooks } from "./paid-phase-timing.js";
 import { createGuardedInit, withGuardedInit } from "./x402-boot-init.js";
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import { installAcceptOutputSchema, withOutputSchemaOnFirstAccept, outputSchemaFromExtensions, acceptOutputSchemaEnabled } from "./accept-output-schema.js";
@@ -1237,6 +1238,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   registerWalletBlocklistHook(server);
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
+  // Per-phase timing (src/paid-phase-timing.js). Registered last: a hook
+  // that aborts settlement first leaves no settle mark, which is the truth.
+  registerPhaseTimingHooks(server);
   // Log the OFFERED set, not the requested one: the drop-don't-break guards
   // above (Robinhood/Monad/Celo/Solvador-primary) may have removed EVM chains,
   // and a boot log claiming an unoffered rail sends the next debugger the

@@ -20,9 +20,11 @@
 // module keeps only the history recorder and the snapshot builder; the JSON
 // endpoint (/api/x402-economy) is unchanged and still machine-readable.
 import Database from "better-sqlite3";
-import { existsSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { existsSync, mkdirSync, statSync } from "node:fs";
+import { join, dirname, basename } from "node:path";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady, withSchemaLock } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
 
 // Persistent daily history — the live query only reaches back 30 days, so
 // every snapshot upserts its daily rows into SQLite (same /data-volume
@@ -33,15 +35,22 @@ import { CDP_TOOLS } from "./tools/cdp-kit.js";
 // missing/deleted DB directory must degrade to "history unavailable" - it
 // must never crash the server (it did exactly that in CI, 2026-07-11, via an
 // inherited X402_ECONOMY_DB pointing into a removed temp dir).
+//
+// With STATE_DATABASE_URL set (src/state-db.js) the history lives in the
+// state database instead: see "Postgres mode" below. The SQLite file is then
+// never opened for serving, only read once for the import.
 const HISTORY_DB = process.env.X402_ECONOMY_DB || join(existsSync("/data") ? "/data" : "/tmp", "agent402-economy.db");
+const PG = stateDbEnabled();
 let hdb = null;
-try {
-  mkdirSync(dirname(HISTORY_DB), { recursive: true });
-  hdb = new Database(HISTORY_DB);
-  hdb.pragma("journal_mode = WAL");
-} catch (e) {
-  console.warn(`x402-economy: history DB unavailable (${String(e?.message || e).slice(0, 120)}) - daily history disabled`);
-  hdb = null;
+if (!PG) {
+  try {
+    mkdirSync(dirname(HISTORY_DB), { recursive: true });
+    hdb = new Database(HISTORY_DB);
+    hdb.pragma("journal_mode = WAL");
+  } catch (e) {
+    console.warn(`x402-economy: history DB unavailable (${String(e?.message || e).slice(0, 120)}) - daily history disabled`);
+    hdb = null;
+  }
 }
 let upsertDay = null;
 if (hdb) {
@@ -56,8 +65,120 @@ if (hdb) {
   ON CONFLICT (day) DO UPDATE SET settlements = excluded.settlements, payers = excluded.payers, updated_ts = excluded.updated_ts`);
 }
 
-/** Upsert a snapshot's daily rows into the persistent history. Exported for tests. */
+// ── Postgres mode ────────────────────────────────────────────────────────────
+// One row per day in `<schema>.economy_daily`, upserted per snapshot. The
+// reader (weeklyFromHistory) is synchronous, so it answers from a mirror of
+// the whole table (one row per day: small forever) filled at the first load,
+// which also imports the SQLite file once; each record updates the mirror at
+// once and queues its upsert in order. Two containers write the same days
+// from the same upstream, so the last upsert wins and nothing is lost.
+const T = () => `${stateDbSchema()}.economy_daily`;
+const history = new Map(); // day -> { settlements, payers }
+let loader = null; // the first load, retried until it lands
+// Days recorded but not yet written (the newest values per day). A failed
+// upsert keeps them here; the next record, flush or retry timer writes them.
+const pendingDays = new Map(); // day -> { row, updatedTs }
+let draining = null;
+let drainTimer = null;
+const DRAIN_RETRY_MS = 5_000;
+let lastQueueError = "";
+const say = (m) => console.warn(`x402-economy: ${m}`);
+const dayRows = (daily) => {
+  const out = [];
+  for (const d of daily || []) if (d?.day && Number.isFinite(d.settlements)) out.push({ day: String(d.day), settlements: Math.floor(d.settlements), payers: Math.floor(Number(d.payers ?? 0)) || 0 });
+  return out;
+};
+async function pgUpsert(rows, updatedTs) {
+  if (!rows.length) return;
+  const params = [];
+  const values = rows.map((r, j) => { params.push(r.day, r.settlements, r.payers, updatedTs); const b = j * 4; return `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4})`; });
+  await stateQuery(`INSERT INTO ${T()} (day, settlements, payers, updated_ts) VALUES ${values.join(", ")}
+    ON CONFLICT (day) DO UPDATE SET settlements = EXCLUDED.settlements, payers = EXCLUDED.payers, updated_ts = EXCLUDED.updated_ts`, params);
+}
+async function importSqlite() {
+  if (!existsSync(HISTORY_DB)) return { bytes: 0, rows: 0 };
+  let src = null;
+  try {
+    src = new Database(HISTORY_DB, { readonly: true, fileMustExist: true });
+    if (!src.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'daily'").get()) return { bytes: statSync(HISTORY_DB).size, rows: 0 };
+    const rows = src.prepare("SELECT day, settlements, payers, updated_ts FROM daily ORDER BY day").all();
+    // Insert-if-absent: a row the other container already advanced is kept.
+    for (let i = 0; i < rows.length; i += 500) {
+      const chunk = rows.slice(i, i + 500);
+      const params = [];
+      const values = chunk.map((r, j) => { params.push(String(r.day), Number(r.settlements) || 0, Number(r.payers) || 0, r.updated_ts ?? null); const b = j * 4; return `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4})`; });
+      await stateQuery(`INSERT INTO ${T()} (day, settlements, payers, updated_ts) VALUES ${values.join(", ")} ON CONFLICT (day) DO NOTHING`, params);
+    }
+    say(`imported ${rows.length} day(s) from ${HISTORY_DB}`);
+    return { bytes: statSync(HISTORY_DB).size, rows: rows.length };
+  } finally { try { src?.close(); } catch { /* read-only handle */ } }
+}
+/** Write the pending days; resolves true when none is left, false (retry scheduled) when a write failed. */
+function drain() {
+  if (draining) return draining;
+  draining = (async () => {
+    try {
+      try { await loader.ready(); } catch { scheduleDrain(); return false; } // the table may not exist yet
+      while (pendingDays.size) {
+        const batch = [...pendingDays.values()];
+        try {
+          // One statement per updated_ts keeps each row's own stamp.
+          for (const ts of new Set(batch.map((b) => b.updatedTs))) await pgUpsert(batch.filter((b) => b.updatedTs === ts).map((b) => b.row), ts);
+        } catch (e) {
+          const why = String(e?.message || e).slice(0, 120);
+          if (why !== lastQueueError) say(`history write failed, kept for retry (${why})`);
+          lastQueueError = why;
+          scheduleDrain();
+          return false;
+        }
+        // A day recorded again while the write was in flight stays pending.
+        for (const b of batch) if (pendingDays.get(b.row.day) === b) pendingDays.delete(b.row.day);
+        lastQueueError = "";
+      }
+      return true;
+    } finally { draining = null; }
+  })();
+  return draining;
+}
+function scheduleDrain() {
+  if (drainTimer) return;
+  drainTimer = setTimeout(() => { drainTimer = null; void drain(); }, DRAIN_RETRY_MS);
+  drainTimer.unref?.();
+}
+if (PG) {
+  // Retried until it lands (a failed attempt is forgotten and tried again by
+  // the next call and a background timer), so a blip at boot never leaves the
+  // history dead until the next deploy.
+  loader = retryingLoad("economy history", async () => {
+    await withSchemaLock((c) => c.query(`CREATE TABLE IF NOT EXISTS ${T()} (day TEXT PRIMARY KEY, settlements BIGINT NOT NULL, payers BIGINT NOT NULL, updated_ts BIGINT)`));
+    await importOnce(basename(HISTORY_DB), { source: HISTORY_DB, run: importSqlite });
+    const r = await stateQuery(`SELECT day, settlements, payers FROM ${T()}`);
+    history.clear();
+    for (const x of r.rows) history.set(x.day, { settlements: Number(x.settlements), payers: Number(x.payers) });
+    // Days recorded here that are not written yet keep their newer values.
+    for (const { row } of pendingDays.values()) history.set(row.day, { settlements: row.settlements, payers: row.payers });
+  }, { log: say, onLoaded: () => { if (pendingDays.size) void drain(); } });
+  trackStoreReady(loader.eventually);
+  loader.ready().catch(() => {});
+}
+/** Resolves true once the first load has landed (at once without the database); false while it has not. */
+export function economyHistoryReady() { return PG ? loader.ready().then(() => true, () => false) : Promise.resolve(true); }
+/** Resolves once every pending write has been tried (at once without the database). */
+export async function economyHistoryFlush() { if (PG) await drain(); }
+
+/** Upsert a snapshot's daily rows into the persistent history. Exported for tests.
+ *  Returns nothing in SQLite mode (written before it returns). With the
+ *  database on, the mirror is updated at once and the upsert is queued in
+ *  order; the returned promise resolves true when it landed, false when it
+ *  failed (logged), and never rejects. */
 export function recordDailyHistory(daily) {
+  if (PG) {
+    const rows = dayRows(daily);
+    for (const r of rows) history.set(r.day, { settlements: r.settlements, payers: r.payers });
+    const now = Math.floor(Date.now() / 1000);
+    for (const r of rows) pendingDays.set(r.day, { row: r, updatedTs: now });
+    return drain();
+  }
   if (!hdb) return; // history disabled - nothing to record
   const now = Math.floor(Date.now() / 1000);
   const tx = hdb.transaction((rows) => {
@@ -73,8 +194,10 @@ export function recordDailyHistory(daily) {
 /** Week-over-week from stored history: the trailing 7 COMPLETE days (today
  *  excluded — it's partial) vs the 7 before them. Exported for tests. */
 export function weeklyFromHistory(todayIso = new Date().toISOString().slice(0, 10)) {
-  if (!hdb) return { thisWeek: null, lastWeek: null, growthPct: null, historyDays: 0 };
-  const rows = hdb.prepare("SELECT day, settlements, payers FROM daily WHERE day < ? ORDER BY day DESC LIMIT 14").all(todayIso);
+  if (!PG && !hdb) return { thisWeek: null, lastWeek: null, growthPct: null, historyDays: 0 };
+  const rows = PG
+    ? [...history.entries()].filter(([day]) => day < todayIso).sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0)).slice(0, 14).map(([day, v]) => ({ day, settlements: v.settlements, payers: v.payers }))
+    : hdb.prepare("SELECT day, settlements, payers FROM daily WHERE day < ? ORDER BY day DESC LIMIT 14").all(todayIso);
   const sum = (slice) => ({
     settlements: slice.reduce((s, r) => s + r.settlements, 0),
     payersPeak: slice.reduce((m, r) => Math.max(m, r.payers), 0),
@@ -85,7 +208,7 @@ export function weeklyFromHistory(todayIso = new Date().toISOString().slice(0, 1
   const growthPct = lastWeek.settlements > 0
     ? Number((((thisWeek.settlements - lastWeek.settlements) / lastWeek.settlements) * 100).toFixed(1))
     : null;
-  return { thisWeek, lastWeek, growthPct, historyDays: hdb.prepare("SELECT COUNT(*) AS n FROM daily").get().n };
+  return { thisWeek, lastWeek, growthPct, historyDays: PG ? history.size : hdb.prepare("SELECT COUNT(*) AS n FROM daily").get().n };
 }
 
 const USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";

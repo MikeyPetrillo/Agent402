@@ -142,7 +142,7 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   failNext = { ok: false, cls: "unknown", error: "relay said no", reason: "relay said no" };
   await post(c2, { text: "x" });
   ok(rowsFor(h2).length === 1 && rowsFor(h2)[0].status === "owed" && failures.length === 2, `input refused then finalize refused: one row, one charged failure (${failures.length})`);
-  ok(debts.notClaimed({ method: "POST", path: "/paid" }, { hash: h2, payer: SENDER, amountUsd: 0.05 }) === true && failures.length === 2, "a repeat finalize failure for the same hash counts nothing new");
+  ok((await debts.notClaimed({ method: "POST", path: "/paid" }, { hash: h2, payer: SENDER, amountUsd: 0.05 })) === true && failures.length === 2, "a repeat finalize failure for the same hash counts nothing new");
   // Our own synthetic traffic: booked (flagged) but not counted.
   synthetic = true;
   const h3 = hashFor(6);
@@ -177,28 +177,28 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   await post(pushCred(h), {});
   const hangupRow = { slug: "paid-tool", network: "tempo", payer: SENDER, priceUsd: 0.05, tx: h, httpStatus: HANGUP_STATUS, synthetic: false, wire: "mpp-tempo", hangupReason: "payer budget" };
   ok(ledger.recordRefundOwed(hangupRow) === false, "setup: the disconnect insert on the same hash is ignored (the input-refused row holds it)");
-  ok(debts.hungUp(h, "payer budget") === true, "hungUp promotes the owed input-refused row");
+  ok((await debts.hungUp(h, "payer budget")) === true, "hungUp promotes the owed input-refused row");
   const [row] = rowsFor(h);
   ok(rowsFor(h).length === 1 && row.status === "owed" && row.httpStatus === 499 && row.hangupReason === "payer budget" && row.note.includes(PUSH_INPUT_REFUSED_NOTE) && row.note.includes(PUSH_HANGUP_AFTER_CLAIM_NOTE),
     `the row is now the disconnect it is: 499, the reason, and a note that says it was claimed then disconnected (${JSON.stringify(row)})`);
   ok(isRepeatHangup(row) === true, "...so the planner's repeat-hang-up hold applies to it");
   ok(isLastingEffectHangup({ ...row, slug: "route-execute" }) === true, "...and so does the lasting-effect hold (keyed on 499 + slug)");
-  ok(debts.hungUp(h, "no ticket") === false && rowsFor(h)[0].hangupReason === "payer budget", "a second promotion changes nothing (the note no longer reads the input refusal)");
+  ok((await debts.hungUp(h, "no ticket")) === false && rowsFor(h)[0].hangupReason === "payer budget", "a second promotion changes nothing (the note no longer reads the input refusal)");
   // Controls: never a row that is being sent, paid or void; never a finalize-refused row.
   const hs = hashFor(11);
   await post(pushCred(hs), {});
   // Claimed with its note unchanged, so only the status guard stands between it and a rewrite.
   ok(ledger.claimRefundForSend(rowsFor(hs)[0].id, PUSH_INPUT_REFUSED_NOTE), "setup: claimed for sending, note unchanged");
-  ok(debts.hungUp(hs, "no ticket") === false && rowsFor(hs)[0].status === "sending" && rowsFor(hs)[0].httpStatus === 400, "a row being sent is never rewritten");
+  ok((await debts.hungUp(hs, "no ticket")) === false && rowsFor(hs)[0].status === "sending" && rowsFor(hs)[0].httpStatus === 400, "a row being sent is never rewritten");
   const hv = hashFor(12);
   const cv = pushCred(hv);
   await post(cv, {}); await post(cv, { text: "fixed" });
-  ok(rowsFor(hv)[0].status === "void" && debts.hungUp(hv, "no ticket") === false && rowsFor(hv)[0].httpStatus === 400, "a void row (claimed and served) is never rewritten");
+  ok(rowsFor(hv)[0].status === "void" && (await debts.hungUp(hv, "no ticket")) === false && rowsFor(hv)[0].httpStatus === 400, "a void row (claimed and served) is never rewritten");
   const hf = hashFor(13);
   failNext = { ok: false, cls: "unknown", error: "relay said no", reason: "relay said no" };
   await post(pushCred(hf), { text: "x" });
-  ok(debts.hungUp(hf, "no ticket") === false && rowsFor(hf)[0].httpStatus === 402, "a finalize-refused row is not a disconnect and is never rewritten");
-  ok(debts.hungUp(hashFor(14), "no ticket") === false && rowsFor(hashFor(14)).length === 0, "no row, nothing written");
+  ok((await debts.hungUp(hf, "no ticket")) === false && rowsFor(hf)[0].httpStatus === 402, "a finalize-refused row is not a disconnect and is never rewritten");
+  ok((await debts.hungUp(hashFor(14), "no ticket")) === false && rowsFor(hashFor(14)).length === 0, "no row, nothing written");
 }
 
 // Refused on input, then the corrected retry is claimed and the HANDLER fails
@@ -210,18 +210,18 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   await post(pushCred(h), {});
   const failRow = { slug: "paid-tool", network: "tempo", payer: SENDER, priceUsd: 0.05, tx: h, httpStatus: 502, synthetic: false, wire: "mpp-tempo" };
   ok(ledger.recordRefundOwed(failRow) === false, "setup: the handler-failure insert on the same hash is ignored (the input-refused row holds it)");
-  ok(debts.handlerFailed(h, 502) === true, "handlerFailed restates the owed input-refused row");
+  ok((await debts.handlerFailed(h, 502)) === true, "handlerFailed restates the owed input-refused row");
   const [row] = rowsFor(h);
   ok(rowsFor(h).length === 1 && row.status === "owed" && row.httpStatus === 502 && row.note.includes(PUSH_INPUT_REFUSED_NOTE) && row.note.includes(PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE),
     `the row now reads the handler failure: 502 and a note that says it was claimed then failed (${JSON.stringify(row)})`);
-  ok(debts.handlerFailed(h, 500) === false && rowsFor(h)[0].httpStatus === 502, "a second restatement changes nothing (the note no longer reads the input refusal)");
+  ok((await debts.handlerFailed(h, 500)) === false && rowsFor(h)[0].httpStatus === 502, "a second restatement changes nothing (the note no longer reads the input refusal)");
   // Controls: a disconnect status is not a handler failure; a row being sent is never rewritten.
   const hd = hashFor(21);
   await post(pushCred(hd), {});
-  ok(debts.handlerFailed(hd, 499) === false && rowsFor(hd)[0].httpStatus === 400, "499 is refused here (disconnects go through hungUp)");
-  ok(debts.handlerFailed(hd, 200) === false && rowsFor(hd)[0].httpStatus === 400, "a success status is refused");
+  ok((await debts.handlerFailed(hd, 499)) === false && rowsFor(hd)[0].httpStatus === 400, "499 is refused here (disconnects go through hungUp)");
+  ok((await debts.handlerFailed(hd, 200)) === false && rowsFor(hd)[0].httpStatus === 400, "a success status is refused");
   ok(ledger.claimRefundForSend(rowsFor(hd)[0].id, PUSH_INPUT_REFUSED_NOTE), "setup: claimed for sending, note unchanged");
-  ok(debts.handlerFailed(hd, 502) === false && rowsFor(hd)[0].status === "sending" && rowsFor(hd)[0].httpStatus === 400, "a row being sent is never rewritten");
+  ok((await debts.handlerFailed(hd, 502)) === false && rowsFor(hd)[0].status === "sending" && rowsFor(hd)[0].httpStatus === 400, "a row being sent is never rewritten");
 }
 
 // THE HANDLER NEVER WAITS ON THE SENDER READ (2026-09-28). A slow Tempo RPC
@@ -271,8 +271,8 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   srv.close();
   const src = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/if \(!FREE_MODE\) whenTempoLedgerPayerKnown\(req, "sales", \(\) => \{/.test(src), "server.js books the sale through the wait");
-  ok(/whenTempoLedgerPayerKnown\(req, "refund-ledger", \(\) => \{\s*const created = recordRefundOwed\(/.test(src), "...and a Tempo/Stripe handler-failure debt");
-  ok(/if \(!created && req\.tempoSettled && tempoPushDebts && typeof tx === "string"\) tempoPushDebts\.handlerFailed\(tx, res\.statusCode\)/.test(src), "...which restates a stale input-refused push row when the insert found one");
+  ok(/whenTempoLedgerPayerKnown\(req, "refund-ledger", \(\) => \{[\s\S]{0,400}whenVerdict\(recordRefundOwed\(/.test(src), "...and a Tempo/Stripe handler-failure debt (booked through the verdict helper)");
+  ok(/if \(!created && req\.tempoSettled && tempoPushDebts && typeof tx === "string"\) void tempoPushDebts\.handlerFailed\(tx, res\.statusCode\)/.test(src), "...which restates a stale input-refused push row when the insert found one");
   ok(/if \(req\.tempoSettled && tempoLedgerPayerPending\(req\)\) \{\s*\n\s*whenTempoLedgerPayerKnown\(req, "hangup"/.test(src), "...and a disconnect debt");
   const tempoSrc = (await import("node:fs")).readFileSync(new URL("../src/mpp-tempo.js", import.meta.url), "utf8");
   ok(!/req\.mppTempoLedgerPayer = await readPushSender\(\)/.test(tempoSrc), "the gate no longer awaits the sender read before next()");
@@ -294,7 +294,7 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   ok(/recordSale\(\{[\s\S]{0,1200}tempoPushDebts\?\.served\(req, res\)/.test(src), "server.js voids a served push claim's debt right after booking the sale");
   const hang = src.slice(src.indexOf("function recordHangupDebt("), src.indexOf("function recordHangupOutcome("));
   ok(/tx: req\.tempoSettled \? \(tempoPushHashOf\(req\) \|\|/.test(hang), "a push disconnect is keyed on the credential's (lowercased) hash, the evidence the input-refused row used");
-  ok(/if \(!created && req\.tempoSettled && tempoPushHashOf\(req\) === row\.tx\) created = tempoPushDebts\?\.hungUp\(row\.tx, hangupReason\)/.test(hang), "recordHangupDebt promotes an existing input-refused row instead of ignoring it");
+  ok(/if \(!made && req\.tempoSettled && tempoPushHashOf\(req\) === row\.tx\) void tempoPushDebts\?\.hungUp\(row\.tx, hangupReason\)/.test(hang), "recordHangupDebt promotes an existing input-refused row instead of ignoring it (on the write's verdict)");
   ok(/promoteToHangup: promoteOwedToHangup/.test(src), "server.js wires the promotion to the refund ledger");
   ok(/const tx = req\.tempoSettled \? \(tempoPushHashOf\(req\) \|\| tempoTxFromReceiptHeader/.test(src), "a push handler failure is keyed on the same hash too, so a mixed-case relay reference cannot book a second row for one transfer");
 }

@@ -352,7 +352,7 @@ rmSync(dir, { recursive: true, force: true });
   ok(decideSection(null) === "", "no data renders nothing, never a zero table");
 }
 
-// --- decideSales: a catalog sweep is not demand -----------------------------------
+// --- decideSales: a catalog sweeper is still an outside buyer; sweeps is information -----------------------------------
 {
   const { decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY } = await import("../src/sales-ledger.js");
   const { decideSection } = await import("../src/revenue-live.js");
@@ -361,11 +361,12 @@ rmSync(dir, { recursive: true, force: true });
   for (let i = 0; i < SWEEP_DISTINCT_TOOLS_PER_DAY - 1; i++) recordSale({ slug: `sweep-tool-${i}`, priceUsd: 0.001, rail: "usdc", network: "eip155:8453", payer: S, tx: `0xS${i}`, synthetic: false });
   recordSale({ slug: "decide", priceUsd: 0.005, rail: "usdc", network: "eip155:8453", payer: S, tx: "0xSD", synthetic: false });
   const d = decideSales({ days: 30 });
-  ok(d.allTime.decide.external === before.allTime.decide.external && d.allTime.decide.externalBuyers === before.allTime.decide.externalBuyers && d.allTime.decide.externalUsd === before.allTime.decide.externalUsd, "a wallet whose day reaches 30 distinct tools, the plan included, is not an outside plan buyer");
+  ok(d.allTime.decide.external - before.allTime.decide.external === 1 && d.allTime.decide.externalBuyers - before.allTime.decide.externalBuyers === 1 && Math.abs(d.allTime.decide.externalUsd - before.allTime.decide.externalUsd - 0.005) < 1e-9, "a wallet that swept the catalog is still an outside buyer: its plan counts as external");
   ok(d.allTime.decide.sweeps.count - before.allTime.decide.sweeps.count === 1 && d.allTime.decide.sweeps.buyers - before.allTime.decide.sweeps.buyers === 1 && Math.abs(d.allTime.decide.sweeps.usd - before.allTime.decide.sweeps.usd - 0.005) < 1e-9, "its plan is counted under sweeps instead");
   ok(d.allTime.decide.count - before.allTime.decide.count === 1, "the settlement still counts in the total");
   ok(/distinct tools/.test(d.sweepRule) && new RegExp(String(SWEEP_DISTINCT_TOOLS_PER_DAY)).test(d.sweepRule), "the rule is stated on the surface");
-  ok(/sweep/.test(decideSection(d)), "the /revenue section shows the sweep count beside the outside count");
+  ok(!/sweep/.test(decideSection(d)), "the /revenue section shows the outside count alone, no sweep annotation");
+  ok(/sweepers included/.test(d.sweepRule) || /count as external/.test(d.sweepRule), "the rule says sweepers count as external");
   const S2 = "0x7777777777777777777777777777777777777777";
   for (let i = 0; i < SWEEP_DISTINCT_TOOLS_PER_DAY - 2; i++) recordSale({ slug: `few-tool-${i}`, priceUsd: 0.001, rail: "usdc", network: "eip155:8453", payer: S2, tx: `0xF${i}`, synthetic: false });
   recordSale({ slug: "decide", priceUsd: 0.005, rail: "usdc", network: "eip155:8453", payer: S2, tx: "0xFD", synthetic: false });

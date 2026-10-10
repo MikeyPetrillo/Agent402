@@ -50,7 +50,8 @@
 //     answer; nothing accumulates.
 //   * Leaf module: every source is injected (server.js wires the real ones),
 //     so the whole thing runs offline in scripts/test-mpp-reconcile.js.
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { createJsonDocument } from "./json-document.js";
+import { trackStoreReady, leased } from "./state-db.js";
 
 export const CATEGORIES = Object.freeze([
   "served_unpaid", "paid_unrecorded", "charged_failed", "amount_mismatch", "wrong_currency",
@@ -362,15 +363,31 @@ export function createMppReconciler({
   maxEvmChecks = 50, maxStripeChecks = 50, keepDays = 14, now = () => Date.now(), log = console.log,
 } = {}) {
   let state = { days: {}, window: null, lastRunAt: null, lastError: null, runs: 0 };
-  try {
-    const s = JSON.parse(readFileSync(file, "utf8"));
-    if (s && typeof s === "object" && s.days && typeof s.days === "object") state = { ...state, ...s };
-  } catch { /* cold */ }
+  const doc = createJsonDocument({ file, log: () => {} });
+  const absorb = (s) => { if (s && typeof s === "object" && s.days && typeof s.days === "object") state = { ...state, ...s }; };
+  absorb(doc.loadSync(null));
+  const ready = trackStoreReady(doc.backend === "pg" ? doc.load(null).then(absorb) : Promise.resolve());
   let running = null;
   let timer = null, firstTimer = null;
 
-  const persist = () => {
-    try { const tmp = `${file}.tmp`; writeFileSync(tmp, JSON.stringify(state)); renameSync(tmp, file); return true; } catch { return false; }
+  // With the database the other container may have run (and stored) a day
+  // this one has not: a run starts from the row, and its save writes only
+  // the day it computed and the run fields onto the row as it is then.
+  const PG = doc.backend === "pg";
+  const persist = (d = null) => {
+    if (!PG) { void doc.save(state); return true; }
+    const mine = { ...state };
+    return doc.update((b) => {
+      const row = b && typeof b === "object" && b.days && typeof b.days === "object" ? b : { days: {}, window: null, lastRunAt: null, lastError: null, runs: 0 };
+      const days = { ...row.days, ...(d && mine.days[d] ? { [d]: mine.days[d] } : {}) };
+      for (const k of Object.keys(days).sort().slice(0, -keepDays)) delete days[k];
+      const newer = !row.lastRunAt || (mine.lastRunAt && mine.lastRunAt >= row.lastRunAt);
+      return {
+        ...row, days,
+        ...(newer ? { window: d ? mine.window : row.window, lastRunAt: mine.lastRunAt, lastError: mine.lastError, ...(d ? { lastDay: d } : {}) } : {}),
+        runs: Math.max(Number(row.runs) || 0, Number(mine.runs) || 0),
+      };
+    }, { fallback: null }).then((r) => { if (r.ok) absorb(r.body); return r.ok; });
   };
 
   async function evmChecksFor(rows) {
@@ -410,9 +427,13 @@ export function createMppReconciler({
 
   /** Reconcile the previous UTC day (or `day`) and the rolling 7 days ending
    *  at that day's end. Concurrent calls share one run. */
-  async function runOnce({ day = null } = {}) {
+  // Under a lease: two containers (a deploy's overlap, a second replica)
+  // never run this tick at once; without a database it is the plain tick.
+  const runOnce = leased("mpp-reconcile-run", { ttlMs: 1200000, log: log, failOpen: true }, runOnceUnleased);
+  async function runOnceUnleased({ day = null } = {}) {
     if (running) return running;
     running = (async () => {
+      if (PG) { const r = await doc.read(); if (r.ok && r.exists) absorb(r.body); }
       const t = now();
       const d = day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : utcDay(t - DAY_MS);
       const start = dayStartMs(d), end = start + DAY_MS;
@@ -434,13 +455,13 @@ export function createMppReconciler({
         state.lastDay = d;
         state.lastError = null;
         state.runs = (state.runs || 0) + 1;
-        persist();
+        await persist(d);
         log(`[mpp-reconcile] ${d}: ${daySum.mismatchTotal} mismatch(es), chain ${daySum.sources.chain.source || "-"}${daySum.sources.chain.complete ? "" : " (incomplete)"}; 7d ${winSum.mismatchTotal}`);
         return { ok: true, day: d, summary: state.days[d], window: state.window };
       } catch (e) {
         state.lastError = String(e?.message || e).slice(0, 200);
         state.lastRunAt = new Date(t).toISOString();
-        persist();
+        await persist();
         log(`[mpp-reconcile] run failed: ${state.lastError}`);
         return { ok: false, error: state.lastError };
       } finally { running = null; }

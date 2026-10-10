@@ -14,7 +14,7 @@ import { runInAbortableScope } from "../drain-abort.js";
 import { decideConfig, priceForDepth, DEPTHS } from "../decide/config.js";
 import { recordWish } from "../wish.js";
 import { payerFromRequest } from "../payer.js";
-import { openDecideLedger, hashToken } from "../decide/ledger.js";
+import { openDecideLedger, hashToken, newCreditToken } from "../decide/ledger.js";
 import { validateParams, fitParamsToSchema } from "../decide/params.js";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { dispatchable } from "./route-execute.js";
@@ -83,6 +83,49 @@ const payerOf = (req) => (req ? payerFromRequest(req) || (req.mppTempoSender ? `
 // resolves __onSettled through hangup-settlement's onSettleOutcome).
 const onSettled = (req, fn) => { if (req && typeof req === "object") (req.__onSettled ||= []).push(fn); };
 const roundUsd = (x) => Math.round(x * 1e6) / 1e6;
+// A ledger write made AFTER money may have left (an outside seller paid, a
+// step's spend booked) must never turn the run into a 500: x402 never settles
+// a 500, so the buyer would not pay for what we already paid out. Such a write
+// is awaited once; on failure it is logged and retried in the background on
+// this schedule (every write retried here is idempotent: an UPDATE to a fixed
+// state), and the run still answers.
+const LEDGER_RETRY_MS = [1_000, 5_000, 30_000, 120_000, 600_000];
+function retryLedgerWrite(label, thunk, delays = LEDGER_RETRY_MS, attempt = 0) {
+  if (attempt >= delays.length) { console.error(`[decide] ${label}: ledger write still failing after ${delays.length} retries; left for the operator`); return; }
+  const t = setTimeout(async () => {
+    try { await thunk(); console.log(`[decide] ${label}: ledger write landed on retry ${attempt + 1}`); }
+    catch { retryLedgerWrite(label, thunk, delays, attempt + 1); }
+  }, delays[attempt]);
+  t.unref?.();
+}
+/** Await a ledger write; a failure is logged and queued for retry, never thrown. True when it landed now.
+ *  `journal`, when given, records the write on local disk (the ledger's
+ *  pending-write journal, replayed at boot and on a timer) before this
+ *  resolves, so the write outlives the process. */
+async function ledgerWriteAfterSpend(label, thunk, delays = LEDGER_RETRY_MS, journal = null) {
+  try { await thunk(); return true; }
+  catch (e) {
+    let kept = false;
+    try { kept = journal ? Boolean(journal()) : false; } catch { kept = false; } // the journal answers its entry id (or true) when on disk
+    console.warn(`[decide] ${label}: ledger write failed (${String(e?.message || e).slice(0, 120)}); queued for retry${kept ? " and journaled" : ""}`);
+    retryLedgerWrite(label, thunk, delays);
+    return false;
+  }
+}
+/** A settlement-hook write, made after the answer and awaited by nobody: a
+ *  failure is logged and retried, never thrown into a response already gone. */
+const fireRetry = (label, thunk, delays = LEDGER_RETRY_MS, journal = null) => { ledgerWriteAfterSpend(label, thunk, delays, journal).catch(() => {}); };
+/** The journal step for a write, when the ledger keeps one (the state database ledger). */
+const journalOf = (ledger, kind, payload) => (typeof ledger?.journal === "function" ? () => ledger.journal(kind, payload) : null);
+/** Activate a credit; a credit not recorded yet throws (so the write is retried), one already past pending is done. */
+async function activateRecorded(ledger, token, hash) {
+  if (await ledger.activateCredit(hash)) return;
+  if (!(await ledger.creditState(token))) throw new Error("the credit is not recorded yet");
+}
+/** The settled mark; a decision not recorded yet throws (the database ledger says so), so the mark is retried. */
+async function markSettledRecorded(ledger, decisionId) {
+  if ((await ledger.markDecisionSettled(decisionId)) === false) throw new Error("the decision is not recorded yet");
+}
 
 /** Fire-and-forget: reliability observations to the decide service. Never
  *  awaited by a paid request, never able to fail one. */
@@ -120,15 +163,30 @@ export function makeDecideHandler({ ledger, now = () => Date.now() }) {
     // The decision is kept here (money side) so execute can price from it;
     // its credit counts only once THIS payment settles.
     const feedbackToken = `fb_${randomBytes(18).toString("base64url")}`;
-    ledger.saveDecision({ decisionId: out.decisionId, depth, priceUsd, payer, plan: out.plan, costViaUsd: out.estimatedCostViaAgent402Usd || 0, feedbackHash: hashToken(feedbackToken), now: now() });
+    // Past this point the decision cost a model call: a ledger failure is
+    // retried and journaled, never a 500 (a 500 is never charged). A retry
+    // writes the row only when absent, so it cannot unsettle it.
+    const id = out.decisionId;
+    const row = { decisionId: id, depth, priceUsd, payer, plan: out.plan, costViaUsd: out.estimatedCostViaAgent402Usd || 0, feedbackHash: hashToken(feedbackToken), now: now() };
+    let firstSave = true;
+    await ledgerWriteAfterSpend(`save decision ${id}`, () => {
+      if (firstSave || typeof ledger.saveDecisionIfAbsent !== "function") { firstSave = false; return ledger.saveDecision(row); }
+      return ledger.saveDecisionIfAbsent(row);
+    }, LEDGER_RETRY_MS, journalOf(ledger, "saveDecision", row));
+    const settleMark = () => fireRetry(`settle decision ${id}`, () => markSettledRecorded(ledger, id), LEDGER_RETRY_MS, journalOf(ledger, "markDecisionSettled", { decisionId: id }));
     const amount = roundUsd(priceUsd * cfg.credit.percentOfFee / 100);
     let executionCredit = null;
     if (amount > 0 && out.plan?.length) {
-      const c = ledger.mintCredit({ decisionId: out.decisionId, amountUsd: amount, ttlMs: cfg.credit.ttlHours * 3_600_000, payer, now: now() });
-      onSettled(req, (settledOk) => { if (settledOk) { ledger.activateCredit(c.hash); ledger.markDecisionSettled(out.decisionId); } });
-      executionCredit = { amountUsd: c.amountUsd, expiresAt: new Date(c.expiresAt).toISOString(), token: c.token, redeemWith: "POST /api/decide/execute { decisionId, creditToken }", activeAfterPaymentSettles: true };
+      // The token is drawn first, so a retried or journaled mint names the same credit.
+      const token = newCreditToken();
+      const hash = hashToken(token);
+      const t0 = now();
+      const mintArgs = { decisionId: id, amountUsd: amount, expiresAt: t0 + cfg.credit.ttlHours * 3_600_000, payer, now: t0, token };
+      const minted = await ledgerWriteAfterSpend(`mint credit ${id}`, () => ledger.mintCredit(mintArgs), LEDGER_RETRY_MS, journalOf(ledger, "mintCredit", mintArgs));
+      onSettled(req, (settledOk) => { if (settledOk) { fireRetry(`activate credit ${id}`, () => activateRecorded(ledger, token, hash), LEDGER_RETRY_MS, journalOf(ledger, "activateCredit", { hash })); settleMark(); } });
+      executionCredit = { amountUsd: roundUsd(amount), expiresAt: new Date(mintArgs.expiresAt).toISOString(), token, redeemWith: "POST /api/decide/execute { decisionId, creditToken }", activeAfterPaymentSettles: true, ...(minted ? {} : { recordPending: true }) };
     } else {
-      onSettled(req, (settledOk) => { if (settledOk) ledger.markDecisionSettled(out.decisionId); });
+      onSettled(req, (settledOk) => { if (settledOk) settleMark(); });
     }
     return {
       ...out,
@@ -145,10 +203,12 @@ export function makeDecideHandler({ ledger, now = () => Date.now() }) {
 // ---------------------------------------------------------------- execute
 
 /** What an execute call is priced at: its budget less a valid credit, never
- *  under the settlement floor. Sync: reads the local ledger only. */
+ *  under the settlement floor. Sync: reads the ledger's synchronous view
+ *  (the file, or the mirror on the state database, which the handler then
+ *  re-validates against the database before anything is charged). */
 export function executeQuoteUsd(body, { ledger, now = Date.now(), getCatalog = null }) {
   const floor = 0.001;
-  const d = body?.decisionId ? ledger.getDecision(String(body.decisionId)) : null;
+  const d = body?.decisionId ? (ledger.getDecisionSync ? ledger.getDecisionSync(String(body.decisionId)) : ledger.getDecision(String(body.decisionId))) : null;
   if (!d) {
     // A sketch run (steps, no decision) is quoted at its steps' list prices;
     // the handler refuses a step it cannot run before anything is charged.
@@ -158,7 +218,7 @@ export function executeQuoteUsd(body, { ledger, now = Date.now(), getCatalog = n
     }
     return floor;
   }
-  const credit = ledger.creditAvailableUsd(body?.creditToken, d.id, now);
+  const credit = ledger.creditAvailableUsdSync ? ledger.creditAvailableUsdSync(body?.creditToken, d.id, now) : ledger.creditAvailableUsd(body?.creditToken, d.id, now);
   const budget = executeBudgetUsd(body, d, undefined, credit);
   return Math.max(floor, roundUsd(budget - credit));
 }
@@ -195,7 +255,13 @@ function priceOfDef(def) {
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
-export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(), isComposite = (slug) => EXPENSIVE_COMPOSITE_SLUGS.has(slug), runBudgetMs = (req) => evmCredentialBudgetMs(req), spendingWalletStatus = async () => (await import("../upstream-buyer-status.js")).upstreamBuyerStatus() }) {
+export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(), isComposite = (slug) => EXPENSIVE_COMPOSITE_SLUGS.has(slug), runBudgetMs = (req) => evmCredentialBudgetMs(req), spendingWalletStatus = async () => (await import("../upstream-buyer-status.js")).upstreamBuyerStatus(), ledgerRetryMs = LEDGER_RETRY_MS }) {
+  // A write after money may have moved: awaited once, then retried and
+  // journaled (kind, payload) on local disk before the run answers.
+  const afterSpend = (label, kind, payload, thunk) => ledgerWriteAfterSpend(label, thunk, ledgerRetryMs, journalOf(ledger, kind, payload));
+  const finish = (args) => afterSpend(`finish run ${args.runId}`, "finishRun", args, () => ledger.finishRun(args));
+  const restore = (token, runId) => afterSpend(`restore credit ${runId}`, "restoreCredit", { token, runId }, () => ledger.restoreCredit(token, runId));
+  const settleHold = (runId, holdId, amountUsd) => afterSpend(`${amountUsd > 0 ? "settle" : "drop"} hold ${runId}`, "settleSellerHold", { holdId, amountUsd }, () => ledger.settleSellerHold(holdId, amountUsd));
   return async function executeHandler(input, req) {
     const cfg = decideConfig();
     if (input.params != null && (typeof input.params !== "object" || Array.isArray(input.params))) throw bad('"params" must be an object keyed by step number');
@@ -209,7 +275,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     let d = null;
     let persistSketch = null, sketchFeedbackToken = null;
     if (decisionId) {
-      d = ledger.getDecision(decisionId);
+      d = await ledger.getDecision(decisionId);
       if (!d) throw bad("Unknown decisionId - decisions are kept for this server's own answers only", 404);
       if (!d.settled) throw bad("That decision's payment has not settled, so it cannot be executed", 409);
     } else if (Array.isArray(input?.steps)) {
@@ -231,7 +297,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       decisionId = runKey
         ? `skt_${createHash("sha256").update(`${payer || ""}|${runKey}|${sk.plan.map((p) => p.tool.slug).join(",")}`).digest("hex").slice(0, 24)}`
         : `skt_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-      const prior = runKey ? ledger.getDecision(decisionId) : null;
+      const prior = runKey ? await ledger.getDecision(decisionId) : null;
       if (prior) d = prior;
       else {
         // Kept like a paid decision (feedback token included), priced at zero
@@ -240,16 +306,16 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         const feedbackToken = `fb_${randomBytes(18).toString("base64url")}`;
         sketchFeedbackToken = feedbackToken;
         d = { id: decisionId, createdAt: t, depth: "sketch", priceUsd: 0, payer, plan: sk.plan, costViaUsd: sk.costUsd, settled: true };
-        persistSketch = () => {
-          ledger.saveDecision({ decisionId, depth: "sketch", priceUsd: 0, payer, plan: sk.plan, costViaUsd: sk.costUsd, feedbackHash: hashToken(feedbackToken), now: t });
-          ledger.markDecisionSettled(decisionId);
+        persistSketch = async () => {
+          await ledger.saveDecision({ decisionId, depth: "sketch", priceUsd: 0, payer, plan: sk.plan, costViaUsd: sk.costUsd, feedbackHash: hashToken(feedbackToken), now: t });
+          await ledger.markDecisionSettled(decisionId);
         };
       }
     } else {
       throw bad(`"decisionId" (from POST /api/decide) or "steps" (the tool slugs of a free plan sketch from /api/find or /api/route, ${SKETCH_MIN_STEPS} to ${SKETCH_MAX_STEPS}, in order) is required`);
     }
     const startedAt = Date.now();
-    const budget = executeBudgetUsd(input, d, cfg, ledger.creditAvailableUsd(input.creditToken, d.id, t));
+    const budget = executeBudgetUsd(input, d, cfg, await ledger.creditAvailableUsd(input.creditToken, d.id, t));
     if (budget <= 0) throw bad("Nothing to execute: the plan has no priced steps; pass maxBudgetUsd", 400);
 
     // WHAT WAS PAID is the quote the payment gate settled against (stashed on
@@ -258,7 +324,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     const quoted = Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0 ? req.__meteredQuoteUsd : executeQuoteUsd(input, { ledger, now: t, getCatalog });
     const creditAssumed = roundUsd(Math.max(0, budget - quoted));
 
-    const prior = ledger.runByKey(d.id, runKey);
+    const prior = await ledger.runByKey(d.id, runKey);
     if (prior) {
       // The payer that ran it gets that run's outcome back with the refusal
       // (still a 409, so nothing is charged again); anyone else gets the id only.
@@ -279,33 +345,54 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     }
 
     // Caps, checked before anything is spent (a >= 400 is never charged).
-    // From here to createRun there is no await: the checks and the booking of
-    // this run happen in one turn, so concurrent requests cannot all pass on
-    // the same reading.
-    if (payer && ledger.payerExposureUsd(payer, t - 3_600_000) + budget > cfg.execute.perWalletHourUsd) throw bad(`This wallet has reached its hourly execution ceiling ($${cfg.execute.perWalletHourUsd}); nothing was charged`, 429);
+    // These reads refuse early with the right message; the booking below
+    // (bookRun) checks the same ceilings again in the same atomic step as the
+    // insert, so concurrent requests, in this process or in another
+    // container, cannot all pass on the same reading.
+    const payerDayCap = cfg.execute.globalDayUsd * cfg.execute.perPayerDayShare;
+    const capRefused = (reason) => reason === "payerHour" ? bad(`This wallet has reached its hourly execution ceiling ($${cfg.execute.perWalletHourUsd}); nothing was charged`, 429)
+      : reason === "global" ? bad("Outside steps are paused for everyone for up to 24 hours; nothing was charged", 429)
+      : bad(`This wallet has reached its daily execution ceiling ($${roundUsd(payerDayCap)}); nothing was charged`, 429);
+    if (payer && await ledger.payerExposureUsd(payer, t - 3_600_000) + budget > cfg.execute.perWalletHourUsd) throw capRefused("payerHour");
     // Only a plan that can pay outside sellers is held to the wallet's
     // global daily ceiling; our own tools do not draw on that wallet.
-    if (hasOutside && ledger.globalExposureUsd(t - 86_400_000) + budget > cfg.execute.globalDayUsd) throw bad("Outside steps are paused for everyone for up to 24 hours; nothing was charged", 429);
-    const payerDayCap = cfg.execute.globalDayUsd * cfg.execute.perPayerDayShare;
-    if (payer && ledger.payerExposureUsd(payer, t - 86_400_000) + budget > payerDayCap) throw bad(`This wallet has reached its daily execution ceiling ($${roundUsd(payerDayCap)}); nothing was charged`, 429);
+    if (hasOutside && await ledger.globalExposureUsd(t - 86_400_000) + budget > cfg.execute.globalDayUsd) throw capRefused("global");
+    if (payer && await ledger.payerExposureUsd(payer, t - 86_400_000) + budget > payerDayCap) throw capRefused("payerDay");
 
     const runId = `run_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
     let redeemed = 0;
+    // A ledger failure from the redeem to the booking (refused, or a reply
+    // lost after the write landed) must not strand the credit or the run
+    // key: nothing is spent yet, so the run is closed as failed (which frees
+    // its key) and the credit restored, both conditional on this runId and
+    // harmless when neither write landed. A 503, not charged.
+    const unbook = async (e) => {
+      await finish({ runId, status: "failed", spentUsd: 0, steps: [], now: now() });
+      if (input.creditToken) await restore(input.creditToken, runId);
+      return Object.assign(bad("The execution ledger is unavailable; nothing was charged - retry shortly", 503), { cause: e });
+    };
     if (creditAssumed > 0) {
-      redeemed = ledger.redeemCredit(input.creditToken, d.id, runId, t);
+      try { redeemed = await ledger.redeemCredit(input.creditToken, d.id, runId, t); }
+      catch (e) { throw await unbook(e); }
       // The price assumed this credit; if it is gone (used by another run,
       // expired), refuse before spending anything. Not charged.
       if (redeemed + 1e-9 < creditAssumed) {
-        if (redeemed) ledger.restoreCredit(input.creditToken, runId);
+        if (redeemed) await restore(input.creditToken, runId);
         throw bad("The execution credit this price assumed is no longer available (already used or expired); nothing was charged - request a fresh quote", 409);
       }
     }
     const spendable = roundUsd(Math.min(budget, quoted + redeemed));
-    if (persistSketch) { persistSketch(); persistSketch = null; }
-    if (!ledger.createRun({ runId, decisionId: d.id, payer, budgetUsd: spendable, creditUsd: redeemed, runKey, now: t })) {
-      // Lost a race with a concurrent request carrying the same key.
-      if (redeemed) ledger.restoreCredit(input.creditToken, runId);
-      throw bad("This decision already has a run with that key; nothing was charged", 409);
+    let booked;
+    try {
+      if (persistSketch) { await persistSketch(); persistSketch = null; }
+      booked = await ledger.bookRun({ runId, decisionId: d.id, payer, budgetUsd: spendable, creditUsd: redeemed, runKey, now: t,
+        caps: { payerHourUsd: cfg.execute.perWalletHourUsd, globalDayUsd: hasOutside ? cfg.execute.globalDayUsd : null, payerDayUsd: payerDayCap, hourSinceMs: t - 3_600_000, daySinceMs: t - 86_400_000 } });
+    } catch (e) { throw await unbook(e); }
+    if (!booked.ok) {
+      // Lost a race: a concurrent request carrying the same key, or one that
+      // took the last of a ceiling's headroom. Nothing was booked.
+      if (redeemed) await restore(input.creditToken, runId);
+      throw booked.reason === "key" ? bad("This decision already has a run with that key; nothing was charged", 409) : capRefused(booked.reason);
     }
 
     // One deadline for the whole run, inside what the buyer's payment can
@@ -393,15 +480,31 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         const maxUsd = Math.min(roundUsd((spendable - spent) / (1 + cfg.routingFeePct / 100)), roundUsd(listPrice * 1.5), cfg.execute.perCallMaxUsd);
         // Checked and held in one turn, before the payment: concurrent runs
         // see this leg's worst case against the seller's daily ceiling.
-        if (ledger.sellerSpendUsd(tool.seller, t - 86_400_000) + maxUsd > cfg.execute.perSellerDayUsd) { attempts.push({ id: tool.id, skipped: "this seller's daily execution ceiling is reached" }); continue; }
-        const hold = ledger.holdSellerSpend({ runId, seller: tool.seller, amountUsd: maxUsd, now: now() });
+        // A hold the ledger cannot book (refused, or its reply lost) is a leg
+        // not paid. After money moved the run goes on without it (a 500 now
+        // would leave that spend uncharged); before, the run is refused
+        // (503, not charged). A hold row that may have landed is dropped.
+        let hold;
+        const holdAt = now();
+        try { hold = await ledger.holdSellerSpend({ runId, seller: tool.seller, amountUsd: maxUsd, now: holdAt, capUsd: cfg.execute.perSellerDayUsd, sinceMs: t - 86_400_000 }); }
+        catch (e) {
+          if (typeof ledger.dropSellerHold === "function") {
+            const lost = { runId, seller: tool.seller, amountUsd: maxUsd, now: holdAt };
+            await afterSpend(`drop unbooked hold ${runId}`, "dropSellerHold", lost, () => ledger.dropSellerHold(lost));
+          }
+          if (spent > 0 || mayHaveSpentOutside || results.some((r) => r.status === "ok")) { attempts.push({ id: tool.id, skipped: "the spend ledger is unavailable; this leg was not paid" }); continue; }
+          await finish({ runId, status: "failed", spentUsd: 0, steps: [], now: now() });
+          if (redeemed) await restore(input.creditToken, runId);
+          throw Object.assign(bad("The execution ledger is unavailable; nothing was charged - retry shortly", 503), { cause: e });
+        }
+        if (hold === false) { attempts.push({ id: tool.id, skipped: "this seller's daily execution ceiling is reached" }); continue; }
         try {
           const r = await withTimeout(router.handler({ task: `${step.purpose} (${tool.name})`, include: "external", target: tool.endpoint, params: toolParams, maxUsd }, req), Math.min(left(), cfg.execute.externalStepTimeoutMs), tool.seller);
           const underlying = Number(r?.receipt?.underlyingPriceUsd);
           const paidOut = Number.isFinite(underlying) && underlying > 0 ? underlying : maxUsd; // unknown: book the worst case
           const fee = roundUsd(paidOut * cfg.routingFeePct / 100);
           spent = roundUsd(spent + paidOut + fee);
-          ledger.settleSellerHold(hold, paidOut);
+          await settleHold(runId, hold, paidOut);
           // The router's receipt prices the router's own call (paidUsd is its
           // tier price, routingFeeUsd the tier price minus the seller's). This
           // run charges the seller's price plus decide's fee, so those two
@@ -425,11 +528,11 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
             const signed = Number(e?.signedUsd);
             const exposure = Number.isFinite(signed) && signed >= 0 && !timedOut ? Math.min(signed, maxUsd) : maxUsd;
             spent = roundUsd(spent + exposure * (1 + cfg.routingFeePct / 100));
-            ledger.settleSellerHold(hold, exposure);
+            await settleHold(runId, hold, exposure);
             attempts[attempts.length - 1].bookedUsd = roundUsd(exposure); // the worst case booked for this leg (read by the reconciliation)
             break;
           }
-          ledger.settleSellerHold(hold, 0); // refused before any payment: nothing left
+          await settleHold(runId, hold, 0); // refused before any payment: nothing left
         }
       }
       if (done) { outputs[String(step.step)] = done.result; results.push({ step: step.step, status: "ok", ...done, ...(attempts.length ? { attempts } : {}) }); }
@@ -448,16 +551,19 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     const okSteps = results.filter((r) => r.status === "ok").length;
     const nothingSpent = spent === 0 && !mayHaveSpentOutside;
     if (!okSteps) {
-      ledger.finishRun({ runId, status: "failed", spentUsd: spent, steps: results, now: now() });
+      const failedAt = now();
+      await finish({ runId, status: "failed", spentUsd: spent, steps: results, now: failedAt });
       // A credit comes back only when nothing left our wallet.
-      if (redeemed && nothingSpent) ledger.restoreCredit(input.creditToken, runId);
+      if (redeemed && nothingSpent) await restore(input.creditToken, runId);
       // Caused by the caller's own inputs (skipped steps, params that do not
       // fit, 4xx answers) with nothing spent: a 400, which the spend-then-fail
       // breaker does not count. A tool-side failure or any spend: a 502.
       const callerCaused = nothingSpent && results.every((r) => r.status === "skipped" || (r.attempts || []).every((a) => a.skipped || (a.status >= 400 && a.status < 500)));
       throw Object.assign(bad(`No step of the plan could be run (${results.map((r) => `step ${r.step}: ${r.reason || (r.attempts || []).map((a) => a.error || a.skipped).join(" / ")}`).join("; ").slice(0, 600)}). Nothing was charged.`, callerCaused ? 400 : 502), { steps: results });
     }
-    ledger.finishRun({ runId, status: okSteps === results.length ? "complete" : "partial", spentUsd: spent, steps: results.map(({ result, ...r }) => r), now: now() });
+    const finishedAt = now();
+    const finalSteps = results.map(({ result, ...r }) => r);
+    await finish({ runId, status: okSteps === results.length ? "complete" : "partial", spentUsd: spent, steps: finalSteps, now: finishedAt });
     // Unspent funds (what was paid plus the credit, less what was spent)
     // return as a credit on the same decision, live once this payment settles
     // and expiring WITH the decision, so a credit is never rolled forward.
@@ -465,13 +571,38 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     const decisionExpiry = d.createdAt + cfg.credit.ttlHours * 3_600_000;
     let leftoverCredit = null;
     if (leftover >= 0.001 && decisionExpiry > now() + 60_000) {
-      const c = ledger.mintCredit({ decisionId: d.id, amountUsd: leftover, expiresAt: decisionExpiry, payer, now: now() });
-      onSettled(req, (settledOk) => { if (settledOk) ledger.activateCredit(c.hash); });
-      leftoverCredit = { amountUsd: c.amountUsd, expiresAt: new Date(c.expiresAt).toISOString(), token: c.token, activeAfterPaymentSettles: true };
+      // The token is drawn first, so every attempt mints the same credit: a
+      // mint that fails here is queued for retry like the other writes after
+      // a spend, and the buyer gets the token now. The credit is activated
+      // once the payment settles and the mint has landed (the activation
+      // retries until the row exists); a settlement that fails leaves it
+      // pending, never spendable.
+      const token = newCreditToken();
+      const hash = hashToken(token);
+      const mintArgs = { decisionId: d.id, amountUsd: leftover, expiresAt: decisionExpiry, payer, now: now(), token };
+      let c = null;
+      for (let i = 0; i < 2 && !c; i++) {
+        try { c = await ledger.mintCredit(mintArgs); }
+        catch (e) { console.warn(`[decide] mint leftover credit ${runId}: ledger write failed (${String(e?.message || e).slice(0, 120)})`); }
+      }
+      const minted = Boolean(c);
+      // A mint that did not land is journaled before the answer and retried;
+      // the activation (after settlement) retries until the mint is in, and
+      // is journaled too, behind the mint. Both are idempotent.
+      if (!minted) {
+        journalOf(ledger, "mintCredit", mintArgs)?.();
+        retryLedgerWrite(`mint leftover credit ${runId}`, () => ledger.mintCredit(mintArgs), ledgerRetryMs);
+      }
+      onSettled(req, (settledOk) => {
+        if (!settledOk) return;
+        fireRetry(`activate credit ${runId}`, () => activateRecorded(ledger, token, hash), ledgerRetryMs, journalOf(ledger, "activateCredit", { hash }));
+      });
+      const expiresAt = c ? c.expiresAt : decisionExpiry;
+      leftoverCredit = { amountUsd: c ? c.amountUsd : roundUsd(leftover), expiresAt: new Date(expiresAt).toISOString(), token, activeAfterPaymentSettles: true, ...(minted ? {} : { recordPending: true }) };
     }
     // A settlement that fails after this run spent money forfeits the credit:
     // restoring it would let the same credit fund run after run.
-    if (redeemed && nothingSpent) onSettled(req, (settledOk) => { if (!settledOk) ledger.restoreCredit(input.creditToken, runId); });
+    if (redeemed && nothingSpent) onSettled(req, (settledOk) => { if (!settledOk) fireRetry(`restore credit ${runId}`, () => ledger.restoreCredit(input.creditToken, runId), ledgerRetryMs, journalOf(ledger, "restoreCredit", { token: input.creditToken, runId })); });
     // What the spend was, on separate lines: our own tools, what was passed
     // through to outside sellers, and the routing fee on it.
     const okResults = results.filter((r) => r.status === "ok");
@@ -494,13 +625,31 @@ const OUTCOMES = new Set(["success", "failure"]);
 
 /** Free: a buyer's verdict on one step of a decision they bought. */
 export function makeFeedbackHandler({ ledger, send = callService, now = () => Date.now() }) {
+  const refusal = () => bad("decisionId and feedbackToken do not match a decision", 403);
+  // One answer for "unknown decision" and "wrong token": a stranger learns
+  // nothing about which decisions exist. The ledger on the state database
+  // answers in promises, so the handler is async there and sync on the file.
+  if (ledger.async) {
+    return async function feedback(body) {
+      const b = body && typeof body === "object" ? body : {};
+      const decisionId = String(b.decisionId || "");
+      if (!(await ledger.feedbackTokenOk(decisionId, b.feedbackToken))) throw refusal();
+      const d = await ledger.getDecision(decisionId);
+      const v = validate(b, d);
+      const replaced = await ledger.saveFeedback({ decisionId, ...v, now: now() });
+      return finish(decisionId, d, v, replaced);
+    };
+  }
   return function feedback(body) {
     const b = body && typeof body === "object" ? body : {};
     const decisionId = String(b.decisionId || "");
-    // One answer for "unknown decision" and "wrong token": a stranger learns
-    // nothing about which decisions exist.
-    if (!ledger.feedbackTokenOk(decisionId, b.feedbackToken)) throw bad("decisionId and feedbackToken do not match a decision", 403);
+    if (!ledger.feedbackTokenOk(decisionId, b.feedbackToken)) throw refusal();
     const d = ledger.getDecision(decisionId);
+    const v = validate(b, d);
+    const replaced = ledger.saveFeedback({ decisionId, ...v, now: now() });
+    return finish(decisionId, d, v, replaced);
+  };
+  function validate(b, d) {
     const step = Number(b.step);
     const planned = d.plan.find((p) => p.step === step);
     if (!Number.isInteger(step) || !planned) throw bad(`"step" must be one of ${d.plan.map((p) => p.step).join(", ") || "(none)"}`);
@@ -514,11 +663,13 @@ export function makeFeedbackHandler({ ledger, send = callService, now = () => Da
     const ids = [planned.tool.id, ...(planned.fallbacks || []).map((f) => f.id)];
     const toolId = b.toolId === undefined ? planned.tool.id : String(b.toolId);
     if (!ids.includes(toolId)) throw bad('"toolId" must be the step\'s tool or one of its fallbacks');
-    const replaced = ledger.saveFeedback({ decisionId, step, toolId, outcome, quality, latencyMs, now: now() });
+    return { step, toolId, outcome, quality, latencyMs };
+  }
+  function finish(decisionId, d, { step, toolId, outcome }, replaced) {
     // A replaced verdict is not counted twice.
     if (!replaced) sendObservations([{ toolId, ok: outcome === "success", source: "feedback", by: observerId(d.payer) }], { send });
     return { ok: true, decisionId, step, toolId, outcome, replaced };
-  };
+  }
 }
 
 

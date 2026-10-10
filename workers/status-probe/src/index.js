@@ -465,6 +465,43 @@ Auto-closes when the word is ok.`;
     },
   },
   {
+    // Money writes (sales, refund debts, checkout finals, subscription and
+    // decide records) kept on the container's local disk because the
+    // state database has not taken them (ledgerDeadLetter on
+    // /api/gateway-status, src/ledger-mirror.js). stuck pages; none and off
+    // clear; pending (the replay is working) and unknown do neither. Title
+    // matches heartbeat.yml's.
+    title: "Ledger rows waiting on local disk (dead-letter stuck)",
+    verdict: ({ gateway: b }) => {
+      const w = b.ledgerDeadLetter?.status;
+      if (w === "stuck") return "bad";
+      return w === "none" || w === "off" ? "good" : "quiet";
+    },
+    body: () =>
+      `/api/gateway-status reports ledgerDeadLetter.status=stuck: a money write (a sale, a refund debt, a card report's final record, a subscription record or a decide write) has waited on the container's local disk for the state database longer than LEDGER_DEAD_LETTER_STUCK_MINUTES (default 20). Each journal's replay retries on a timer; while it cannot land them they exist only on that container, so do not redeploy or restart it until they land. Check stateDb on the same endpoint, the Postgres service on Railway, and the [sales-ledger] / [refund-ledger] / [human-checkout] / [subscriptions] / [decide] log lines (a row the database refuses is named there). The operator read of /api/gateway-status has the counts per journal. Auto-closes when the word is none.`,
+  },
+  {
+    // The nightly offsite backup (backup on /api/gateway-status,
+    // src/backup.js). held, failed and stale page; ok clears; off and
+    // unknown do neither. Title matches heartbeat.yml's.
+    title: "Offsite backup is not current",
+    verdict: ({ gateway: b }) => {
+      const w = b.backup?.status;
+      if (BACKUP_BAD.has(w)) return "bad";
+      return w === "ok" ? "good" : "quiet";
+    },
+    body: ({ gateway: b }) => {
+      const w = BACKUP_BAD.has(b.backup?.status) ? b.backup.status : "unknown";
+      return `/api/gateway-status reports backup.status=${w}.
+
+- held: the last run left a state table, or the whole database snapshot, without an offsite copy (older days are kept, not pruned, while this lasts).
+- failed: the last run threw (bucket unreachable, bill guard, unreadable data dir).
+- stale: no successful run in 26 h while configured.
+
+Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backup] log line; POST /__operator/backup/run retries. Auto-closes when the word is ok.`;
+    },
+  },
+  {
     // Settlement freshness. The daily canary must actually BUY, not merely
     // conclude green: on 2026-08-02 a gate skipped every scheduled purchase for
     // five days while the workflow reported success, so this watches the
@@ -499,6 +536,7 @@ This observer cannot dispatch the canary itself (it holds an issues-only credent
 ];
 
 const TWEET_QUEUE_BAD = new Set(["halted", "no_credentials", "refused", "in_doubt"]);
+const BACKUP_BAD = new Set(["held", "failed", "stale"]);
 
 // The shape shared by every wallet balance: low pages, ok clears, and
 // unknown/unconfigured do neither.

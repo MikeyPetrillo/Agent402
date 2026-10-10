@@ -1180,6 +1180,20 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
+      # A REAL Postgres for the state-database suites (src/state-db.js): the
+      # stores that left the /data volume. Each suite makes and drops its own
+      # schema. Under CI a missing database FAILS those suites (scripts/lib/test-pg.js).
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
       # A fork PR cannot read the secret; its cost-table suites skip instead of failing.
@@ -1295,6 +1309,86 @@ jobs:
         env:
           REDIS_URL: redis://127.0.0.1:6379
         run: node scripts/test-replay-guard-redis.js
+
+      - name: "State database (REAL postgres: documents/records/log lines/leases; every migrated store imports its file once and reads the row; loops skip under another holder's lease; idempotency answers and claims shared over REAL redis)"
+        env:
+          REDIS_URL: redis://127.0.0.1:6379
+          STATE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+          STATE_DATABASE_URL_FOR_TEST: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+        run: |
+          set -euo pipefail
+          t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
+          t node scripts/test-state-db.js
+          t node scripts/test-stores-pg.js
+          # Two containers on one schema: the email stores never undo or repeat each other.
+          t node scripts/test-overlap-stores-pg.js
+          # A signed email link for a record the other container made works here.
+          t node scripts/test-email-links-pg.js
+          # A link whose row write cannot land answers unavailable (503), never ok.
+          t node scripts/test-email-links-outage-pg.js
+          t node scripts/test-leased-loops.js
+          # A tick whose lease was lost stops before its next send, pull or paid run.
+          t node scripts/test-lease-fencing-pg.js
+          # A paid monitor run is claimed on its record; saves merge, never erase.
+          t node scripts/test-monitor-scheduler-pg.js
+          t node scripts/test-idempotency-store.js
+          # Every store that left the volume: file imported once, rows win, invariant on Postgres.
+          t node scripts/test-stats-pg.js
+          t node scripts/test-status-store-pg.js
+          t node scripts/test-x402-economy-pg.js
+          t node scripts/test-pow-pg.js
+          t node scripts/test-memory-pg.js
+          t node scripts/test-stripe-shadow-ledger-pg.js
+          t node scripts/test-traffic-classifier-pg.js
+          t node scripts/test-tweet-queue-pg.js
+          t node scripts/test-x402-index-pg.js
+          t node scripts/test-x402-removals-pg.js
+          t node scripts/test-scan-state-version-pg.js
+          t node scripts/test-revenue-ledger-pg.js
+          t node scripts/test-revenue-ledger-enable-pg.js
+          t node scripts/test-refund-ledger-pg.js
+          t node scripts/test-sales-ledger-pg.js
+          t node scripts/test-ledger-dead-letter-pg.js
+          t node scripts/test-mcp-tasks-pg.js
+          t node scripts/test-hangup-forgiveness-pg.js
+          t node scripts/test-external-spend-guard-pg.js
+          t node scripts/test-mpp-subscriptions-pg.js
+          t node scripts/test-decide-ledger-pg.js
+          # A paid step is never turned into a 500 by a later ledger failure; writes after a spend survive an exit.
+          t node scripts/test-decide-ledger-failures-pg.js
+          t node scripts/test-credits-pg.js
+          # A retried settle books what the first one took; another container's sweep leaves a live hold.
+          t node scripts/test-credits-failures-pg.js
+          t node scripts/test-human-checkout-pg.js
+          # A report made is never refunded or regenerated over a database failure; a refund is recorded first.
+          t node scripts/test-human-checkout-failures-pg.js
+          # A paid subscription recorded while the database is away survives a restart; reload shows another container's.
+          t node scripts/test-stripe-subscriptions-pg.js
+          t node scripts/test-wish-pg.js
+          # A first load that failed is retried until it lands; DDL from two boots never races;
+          # a failed write is kept and retried; a stats batch whose COMMIT reply was lost counts once.
+          t node scripts/test-store-boot-blip-pg.js
+          t node scripts/test-store-retry-recovery-pg.js
+          t node scripts/test-json-document-outage-pg.js
+          t node scripts/test-store-ddl-race-pg.js
+          t node scripts/test-store-write-retry-pg.js
+          t node scripts/test-stats-ack-loss-pg.js
+          # The nightly backup stages every state table and the restore brings one back.
+          t node scripts/test-backup-state.js
+          t node scripts/test-backup-no-volume-pg.js
+          t node scripts/test-backup-stage-concurrent-pg.js
+          t node scripts/test-state-roundtrip-pg.js
+          t node scripts/test-state-migration-verify-pg.js
+          t node scripts/test-state-ledger-checksum-pg.js
+          t node scripts/test-state-cutover-check-pg.js
+          t node scripts/test-state-export-pg.js
+          # The server through a Postgres outage and back, a burst, a clean drain; two processes on one schema.
+          t node scripts/test-state-db-resilience.js
+          t node scripts/test-surface-memo-partial-pg.js
+          t node scripts/test-index-unloaded-503-pg.js
+          t node scripts/test-state-db-overlap.js
+          # The file/memory half runs without the database; the Postgres half with it.
+          t node scripts/test-json-document.js
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
@@ -2342,6 +2436,8 @@ jobs:
           # Finance-kit tests (Yahoo chart quote+history, Nasdaq earnings calendar — keyless live APIs)
           t node scripts/test-finance-kit.js
           t node scripts/test-databento-timeouts.js
+          # "stock-quote: warm symbol answers with no upstream call, cold symbol with one; warmer ceiling (offline, stubbed)"
+          t node scripts/test-stock-quote-speed.js
           # "Operator bulk seed route: token-only, bounded, same validation as /sell, dry by default"
           t node scripts/test-operator-seed.js
           # "MPP self-registration probe hint (optional path/method: validated, probed, kept only on success, persisted with the seed - offline)"
@@ -2857,6 +2953,8 @@ jobs:
           t node scripts/test-judge-kit.js
           # Judgment backends: order, the private-table bound on Luna, one answer shape per route, /v1/decisions wire (offline, stubbed)
           t node scripts/test-judge-luna.js
+          # Decision-1: the shared client, the internal fallback at every Jev call site, the third paid backend and its private-table bound (offline, stubbed)
+          t node scripts/test-decision-one.js
           # Wish-board input hygiene (a client bug is not market demand)
           t node scripts/test-wish-hygiene.js
 
@@ -3527,6 +3625,8 @@ jobs:
           t node scripts/test-mcp-mpp.js
           # A paid call whose client hangs up is settled once and recorded once as owed (boots a paid server against a slow-settle stub facilitator - offline)
           t node scripts/test-hangup-settlement.js
+          # Per-phase timing of paid calls: verify, handler and settle measured against injected stub delays, filed under the right rail (x402 vs mpp-evm), a hang-up marked gone, summary operator-only (boots a paid server against stub facilitator and market-data stubs - offline)
+          t node scripts/test-paid-phase-timing.js
           # A paid run that never gets paid meets a bound: a hang-up whose settle fails is counted, a short EVM authorization on a slow route is refused before the handler, one wallet cannot trip the report pause alone, and concurrent runs must be covered by the balance (boots a paid server against a stub facilitator and a stub OpenRouter - offline)
           t node scripts/test-paytime-bounds.js
           # One-product MCP endpoint (/mcp/sec): profile lists only the SEC tools, hides the catalog meta tools, /mcp unchanged (boots a free server)

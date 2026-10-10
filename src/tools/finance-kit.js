@@ -14,7 +14,7 @@
 // separate OPRA build), premarket-quote (extended-hours needs the live feed)
 // and stock-dividends (corporate actions are not market data and Databento
 // does not carry them). Removing beat keeping an unlicensed source.
-import { availableEnd, dailyBars, DATASET, VENUES } from "./databento.js";
+import { availableEnd, availableEndInfo, dailyBars, dailyBarsRead, noteQuoteSymbol, quoteWindow, DATASET, VENUES } from "./databento.js";
 import { computeIndicators } from "./crypto-signals-kit.js";
 
 function bad(message, statusCode = 400) {
@@ -58,7 +58,7 @@ export const FINANCE_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "End-of-day US equity quote: last close, day range, previous close and the change between them. US equities only; indices, FX and crypto are not covered (crypto-price serves those). Built from a three-venue consolidation (Databento DBEQ.BASIC), so the prices track the wider market but the volume counts those three venues only and is returned as venueVolume rather than as a total. No 52-week range and no intraday print: for a date range call stock-history.",
+      "End-of-day US equity quote: last close, day range, previous close and the change between them. US equities only; indices, FX and crypto are not covered (crypto-price serves those). Built from a three-venue consolidation (Databento DBEQ.BASIC), so the prices track the wider market but the volume counts those three venues only and is returned as venueVolume rather than as a total. No 52-week range and no intraday print: for a date range call stock-history. Each answer says whether its bars came from this session's cache (cached, fetchedAt).",
     tags: ["finance", "stocks", "quote", "market-data", "price"],
     discovery: {
       input: { symbol: "AAPL" },
@@ -82,19 +82,31 @@ export const FINANCE_TOOLS = [
           asOf: "2026-09-18",
           venues: VENUES,
           source: "databento.com DBEQ.BASIC",
+          cached: true,
+          fetchedAt: "2026-09-19T13:05:12.000Z",
+          rangeCheckedAt: "2026-09-19T13:00:03.000Z",
           note: "End-of-day close from a three-venue consolidation. Not a live intraday quote, not consolidated-tape volume, and no 52-week range - use stock-history for a range.",
         },
       },
     },
-    handler: async (i) => {
+    handler: async (i, ctx) => {
       const symbol = assertSymbol(i.symbol);
-      const end = await availableEnd();
+      // The available end is served from memory once warm (the warmer in
+      // databento.js re-reads it off the request path), so a symbol already
+      // read this session answers with no upstream call, and a cold one with
+      // a single data read. Both say which they were: `cached` and
+      // `fetchedAt` are the bars' own read time, `rangeCheckedAt` when the
+      // session boundary was last confirmed.
+      const range = await availableEndInfo({ demand: !ctx?.selfcheck });
       // A WEEK, not a year. Databento bills by bytes, and a 52-week lookback
       // priced above this tool's price - the cost guard refused it. Yahoo gave the 52-week range away inside one quote payload; here
       // it is a separate, larger query, so the fields are gone rather than
       // sold at a loss or silently narrowed. stock-history serves a range.
-      const start = new Date(new Date(end) - 10 * 864e5).toISOString().slice(0, 10);
-      const bars = await dailyBars({ symbol, start, end });
+      const { start, end } = quoteWindow(range.end);
+      const read = await dailyBarsRead({ symbol, start, end });
+      // The self-check's own call (/api/selfcheck) is not a buyer's demand.
+      if (!ctx?.selfcheck) noteQuoteSymbol(symbol);
+      const bars = read.bars;
       const last = bars.at(-1), prev = bars.at(-2) || null;
       return {
         symbol,
@@ -111,6 +123,9 @@ export const FINANCE_TOOLS = [
         asOf: last.day,
         venues: VENUES,
         source: "databento.com " + DATASET,
+        cached: read.cached,
+        fetchedAt: read.fetchedAt,
+        rangeCheckedAt: range.checkedAt,
         note: "End-of-day close from a three-venue consolidation. Not a live intraday quote, not consolidated-tape volume, and no 52-week range - use stock-history for a range.",
       };
     },
@@ -153,7 +168,7 @@ export const FINANCE_TOOLS = [
         },
       },
     },
-    handler: async (i) => {
+    handler: async (i, ctx) => {
       const symbol = assertSymbol(i.symbol);
       // An explicit out-of-range `days` is refused rather than clamped: a
       // caller who asked for 9999 sessions and silently got 365 would build
@@ -171,7 +186,7 @@ export const FINANCE_TOOLS = [
         points = Number(i.points);
         if (!Number.isInteger(points) || points < 1 || points > 100) throw bad(`"points" must be a whole number from 1 to 100 (got ${JSON.stringify(i.points)}).`);
       }
-      const end = await availableEnd();
+      const end = await availableEnd({ demand: !ctx?.selfcheck });
       // N sessions span about 1.4N calendar days once weekends are counted,
       // so the lookback SCALES rather than adding a flat margin: a flat +10
       // returned 29 bars for a 30-session ask, and the shortfall grows with

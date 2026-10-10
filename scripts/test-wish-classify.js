@@ -9,6 +9,9 @@
 //
 //   node scripts/test-wish-classify.js
 let pass = 0;
+// Hermetic: a developer shell's OpenRouter key would turn on the Decision-1
+// fallback (src/decision-one.js); scripts/test-decision-one.js covers it.
+delete process.env.OPENROUTER_API_KEY; delete process.env.DECIDE_OPENROUTER_API_KEY;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
 
 const KEY = "ts_test_key";

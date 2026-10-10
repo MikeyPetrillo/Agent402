@@ -17,9 +17,22 @@
 // it, and how it ended.
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { logLines, stateDbEnabled, trackStoreReady, reconcileLogFile, markStoreFailed, markStoreLoaded } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
+
+export const OUTBOUND_STREAM = "outbound-spend";
 
 const FILE = (process.env.OUTBOUND_LEDGER_FILE || "/data/outbound-spend.ndjson").trim();
 const DISABLED = /^(0|false|off|no)$/i.test((process.env.OUTBOUND_LEDGER ?? "").trim());
+// Boot: lines the file holds past the stream (written while rolled back to a
+// build that used the file alone) are appended to the stream.
+// A reconcile that fails is retried with a backoff and the store reads
+// unloaded until one lands (it is never reported loaded on a failure).
+const STORE_NAME = "outbound-ledger reconcile";
+if (stateDbEnabled() && !DISABLED) {
+  const load = retryingLoad(STORE_NAME, () => reconcileLogFile(OUTBOUND_STREAM, FILE), { onLoaded: () => markStoreLoaded(STORE_NAME) });
+  trackStoreReady(load.ready().catch(() => { markStoreFailed(STORE_NAME); }), STORE_NAME);
+}
 
 let warnedAt = 0;
 function warnOnce(msg) {
@@ -62,6 +75,15 @@ export function recordOutbound({ chain, payTo, amountAtomic, asset, usd, slug, o
       result: result || "unknown",
       tx: tx || null,
     }) + "\n";
+    if (stateDbEnabled()) {
+      // One row per payment in the state database; a failed insert is warned
+      // about like a failed append and never reaches the payment path.
+      logLines.append(OUTBOUND_STREAM, JSON.parse(line)).catch((e) => warnOnce(`write failed (${e?.code || e?.message}) - the payment itself is unaffected`));
+      // Write-through to the volume while it exists, so the nightly backup
+      // keeps the record of money paid out; best effort, never the verdict.
+      try { appendFileSync(FILE, line); } catch { /* no volume */ }
+      return;
+    }
     try { appendFileSync(FILE, line); }
     catch (e) {
       if (e?.code === "ENOENT") { mkdirSync(dirname(FILE), { recursive: true }); appendFileSync(FILE, line); }

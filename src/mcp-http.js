@@ -752,7 +752,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         return translateMppResponse(entry, meta, params, startedAt, isNamed, gate.r, { softAsk: false });
       }
 
-      const rec = tasks.create({ slug: entry.def.slug, controller });
+      // With the state database on, create() resolves once the row is stored
+      // (file mode returns the record at once; await is a no-op there).
+      const rec = await tasks.create({ slug: entry.def.slug, controller });
       if (!rec) {
         // Durability failed, so we cannot promise a handle. Stop waiting on the
         // run and say so. The run has already cleared the paywall and keeps
@@ -764,13 +766,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         };
       }
 
-      settled.then(({ r, e }) => {
+      settled.then(async ({ r, e }) => {
         if (e) {
           const aborted = e?.name === "AbortError" || e?.name === "TimeoutError";
-          if (aborted && tasks.get(rec.taskId)?.status === "cancelled") return; // cancel() already wrote the terminal state
+          let current = null;
+          try { current = await tasks.get(rec.taskId); } catch { current = null; }
+          if (aborted && current?.status === "cancelled") return; // cancel() already wrote the terminal state
           onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: true, statusCode: 504, errorMessage: aborted ? "task run aborted" : "task run failed", inputKeys: Object.keys(params || {}) });
           // Never relay an upstream/internal error body to the buyer.
-          tasks.fail(rec.taskId, { code: TASK_INTERNAL_ERROR, message: aborted ? "The connector stopped waiting for the run." : "The run did not complete." },
+          await tasks.fail(rec.taskId, { code: TASK_INTERNAL_ERROR, message: aborted ? "The connector stopped waiting for the run." : "The run did not complete." },
             `The run's result did not reach this connector. ${PAID_CUTOFF_TEXT}`);
           return;
         }
@@ -782,14 +786,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // JSON-RPC error on the underlying request, so the task FAILED - and
           // the challenges ride along so the client can pay and call again.
           const code = err instanceof McpError ? err.code : TASK_INTERNAL_ERROR;
-          tasks.fail(rec.taskId, { code, message: err?.message || "Payment required.", ...(err?.data ? { data: err.data } : {}) }, "Payment was required for this call. You were not charged.");
+          await tasks.fail(rec.taskId, { code, message: err?.message || "Payment required.", ...(err?.data ? { data: err.data } : {}) }, "Payment was required for this call. You were not charged.");
           return;
         }
         // Spec: `failed` is for JSON-RPC errors only. A tool result that
         // completed carrying isError:true is a COMPLETED task whose result says
         // it went wrong (and our text already says "not charged"), so a caller
         // can never mistake it for a silent empty success.
-        tasks.complete(rec.taskId, out, { receipt: receiptFromHeader(r.headers?.get?.("payment-receipt")), priceUsd: toolPriceUsd(entry.def.slug) });
+        await tasks.complete(rec.taskId, out, { receipt: receiptFromHeader(r.headers?.get?.("payment-receipt")), priceUsd: toolPriceUsd(entry.def.slug) });
       }).catch(() => { /* settled never rejects; belt and braces */ });
 
       return createTaskResult(rec);
@@ -1298,7 +1302,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
    * short TTL - the same model as /r/:sessionId. The 2026-07-28 extension has
    * no tasks/list, so there is no enumeration surface to withhold.
    */
-  function handleTaskRpc(body) {
+  async function handleTaskRpc(body) {
     const id = body?.id ?? null;
     const err = (code, message, data) => ({ jsonrpc: "2.0", id, error: { code, message, ...(data ? { data } : {}) } });
     const okResult = (result) => ({ jsonrpc: "2.0", id, result });
@@ -1314,7 +1318,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     if (typeof taskId !== "string" || !taskId) return err(TASK_INVALID_PARAMS, "Failed to retrieve task: taskId is required and must be a string");
 
     let rec;
-    try { rec = tasks.get(taskId); } catch { return err(TASK_INTERNAL_ERROR, "Internal error reading task state"); }
+    try { rec = await tasks.get(taskId); } catch { return err(TASK_INTERNAL_ERROR, "Internal error reading task state"); }
     if (rec === "expired") return err(TASK_INVALID_PARAMS, "Failed to retrieve task: Task has expired");
     if (!rec) return err(TASK_INVALID_PARAMS, "Failed to retrieve task: Task not found");
 
@@ -1322,7 +1326,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     if (body.method === "tasks/cancel") {
       // Cooperative and eventually consistent: we abort the live run, which
       // makes the paid request a non-200 and CANCELS settlement.
-      try { tasks.cancel(taskId); } catch { return err(TASK_INTERNAL_ERROR, "Internal error cancelling task"); }
+      try { await tasks.cancel(taskId); } catch { return err(TASK_INTERNAL_ERROR, "Internal error cancelling task"); }
       return okResult(taskAck());
     }
     // tasks/update: this connector never elicits, so it never surfaces
@@ -1363,7 +1367,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     // It stays behind the per-IP request limiter above - the spec asks for rate
     // limiting on task operations to bound polling and id enumeration.
     if (tasks && isTaskMethod(req.body?.method)) {
-      const handled = handleTaskRpc(req.body);
+      const handled = await handleTaskRpc(req.body);
       return res.status(200).json(handled);
     }
     // R-11 outer gate #2: global in-flight transport ceiling, BEFORE building

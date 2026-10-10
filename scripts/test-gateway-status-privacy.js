@@ -39,6 +39,11 @@ const pubBody = await pub.json();
 const opRes = await fetch(`${base}/api/gateway-status`, { headers: { Authorization: `Bearer ${TOKEN}` } });
 const opBody = await opRes.json();
 
+// --- the ledgers' local dead-letter: one word publicly, counts for the operator ---
+ok(pubBody?.ledgerDeadLetter?.status === "off" && Object.keys(pubBody.ledgerDeadLetter).join(",") === "status", `ledgerDeadLetter publishes its word only (${JSON.stringify(pubBody?.ledgerDeadLetter)}; off without a state database)`);
+ok(opBody?.ledgerDeadLetter?.status === "off" && typeof opBody?.ledgerDeadLetter?.sales?.onDisk === "number", "the operator view of ledgerDeadLetter carries the counts");
+ok(["sales", "refunds", "checkoutFinals", "subscriptions", "decide"].every((n) => typeof opBody?.ledgerDeadLetter?.[n]?.onDisk === "number"), `the operator view counts every local money journal (${Object.keys(opBody?.ledgerDeadLetter || {}).join(",")})`);
+
 // --- the money fields, by name ---------------------------------------------
 const MONEY = /"(capUsd|spentUsd|budget|callsToday|fundedUsd|remainingUsd|spentSinceRestartUsd|refusedToday|lowBelowFraction)":\s*-?[0-9]/;
 ok(!MONEY.test(JSON.stringify(pubBody)),
@@ -71,6 +76,7 @@ ok(/max-age/.test(pub.headers.get("cache-control") || ""), "the public read is s
 {
   ok(typeof pubBody?.operatorAuth?.status === "string", "operatorAuth still publishes its verdict publicly");
   ok(!("failures1h" in (pubBody.operatorAuth || {})), "the PUBLIC view carries no live failure counter");
+  ok(JSON.stringify(pubBody.backup) === JSON.stringify({ status: "off" }), `the offsite backup is one word, off without a bucket (${JSON.stringify(pubBody.backup)})`);
   ok(!("threshold" in (pubBody.operatorAuth || {})), "and never the alarm threshold");
   ok(typeof opBody?.operatorAuth?.failures1h === "number" && typeof opBody?.operatorAuth?.threshold === "number",
      "the OPERATOR view keeps both - you cannot act on a verdict alone");

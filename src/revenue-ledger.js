@@ -17,8 +17,14 @@
 // Zero config: runs whenever /data exists (i.e., prod) or when
 // REVENUE_LEDGER=true forces it (local/dev); CI test boots have neither, so
 // tests never hammer public RPCs.
+//
+// With STATE_DATABASE_URL set the transfers and cursors live in the state
+// database and the SQLite file is a local read mirror of them (see "The
+// ledger in the state database" below); without it nothing here changes.
 import Database from "better-sqlite3";
-import { existsSync } from "node:fs";
+import { leased, stateDbEnabled, stateQuery, stateDbSchema, withStateTx, importOnce, trackStoreReady, withSchemaLock } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   EVM, SOLANA_RPCS, rpcCall, pad, TRANSFER_TOPIC, USDC_SOL_MINT,
@@ -31,7 +37,8 @@ import { createBlockClock, rpcHeaderReader, dateFromAnchors } from "./block-cloc
 
 const HAS_DATA_DIR = existsSync("/data");
 const DB_PATH = process.env.REVENUE_LEDGER_DB || join(HAS_DATA_DIR ? "/data" : "/tmp", "agent402-revenue.db");
-export const ledgerPersistent = HAS_DATA_DIR || Boolean(process.env.REVENUE_LEDGER_DB);
+const USE_PG = stateDbEnabled();
+export const ledgerPersistent = HAS_DATA_DIR || Boolean(process.env.REVENUE_LEDGER_DB) || USE_PG;
 
 // Before the wallet's first funding (service launched 2026-06-12; margin
 // back to May). Per-chain block time turns this into a start block, so no
@@ -124,6 +131,212 @@ const putCursor = db.prepare(`INSERT INTO cursors (chain, wallet, next_block, ne
     next_block = excluded.next_block, newest_sig = excluded.newest_sig,
     backfilled = excluded.backfilled, caught_up = excluded.caught_up, updated_ts = excluded.updated_ts`);
 
+// ---------------------------------------------------------------------------
+// The ledger in the state database (STATE_DATABASE_URL set)
+// ---------------------------------------------------------------------------
+// With a database the transfers and cursors live in two tables of the state
+// schema and the SQLite file above becomes a LOCAL READ MIRROR of them: filled
+// from the tables at the first load (trackStoreReady, so the server waits
+// before it listens) and refreshed after every sync tick, so every reader
+// below keeps its synchronous signature and its SQL unchanged. The sync loop
+// reads its cursors from the tables (the truth, which another container may
+// have advanced), writes a chunk's transfers and its cursor in ONE transaction
+// (a cursor never advances past rows that are not stored), then applies the
+// same rows to the mirror. The file is imported into the tables once
+// (insert-if-absent, so two containers booting at once are safe); after that
+// it is a mirror, and on a container without the volume it is a scratch file
+// rebuilt from the tables at boot. A rollback to the build that reads the
+// file alone resumes from the file's own cursors, and the primary key makes
+// its rescan a no-op for every row it already holds.
+//
+// The SQLite-era migrations above (ledger_meta, user_version) keep running
+// on the file: every row they would touch was migrated before the import.
+const T = (t) => `${stateDbSchema()}.${t}`;
+const PG_DDL = () => `
+  CREATE TABLE IF NOT EXISTS ${T("revenue_transfers")} (
+    seq      BIGSERIAL,
+    chain    TEXT NOT NULL,
+    wallet   TEXT NOT NULL,
+    txid     TEXT NOT NULL,
+    tx_hash  TEXT NOT NULL,
+    block    BIGINT,
+    when_ts  BIGINT,
+    payer    TEXT,
+    usd      DOUBLE PRECISION NOT NULL,
+    asset    TEXT NOT NULL,
+    external SMALLINT NOT NULL,
+    PRIMARY KEY (chain, wallet, txid)
+  );
+  CREATE INDEX IF NOT EXISTS revenue_transfers_seq ON ${T("revenue_transfers")} (seq);
+  CREATE TABLE IF NOT EXISTS ${T("revenue_cursors")} (
+    chain      TEXT NOT NULL,
+    wallet     TEXT NOT NULL,
+    next_block BIGINT,
+    newest_sig TEXT,
+    backfilled SMALLINT NOT NULL DEFAULT 0,
+    caught_up  SMALLINT NOT NULL DEFAULT 0,
+    updated_ts BIGINT,
+    PRIMARY KEY (chain, wallet)
+  );
+`;
+let pgTablesReady = null;
+// Under the schema lock: two containers creating these at once would otherwise race on the catalog.
+const pgTables = () => (pgTablesReady ||= withSchemaLock((c) => c.query(PG_DDL())).catch((e) => { pgTablesReady = null; throw e; }));
+const intOrNull = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Math.trunc(Number(v)));
+// A row as the tables and the mirror both store it: the SQLite shape with the
+// integer columns made integers (a chain timestamp is whole seconds).
+const pgRow = (row) => ({
+  chain: String(row.chain), wallet: String(row.wallet), txid: String(row.txid), tx_hash: row.tx_hash ?? null,
+  block: intOrNull(row.block), when_ts: intOrNull(row.when_ts), payer: row.payer ?? null,
+  usd: Number(row.usd), asset: row.asset ?? null, external: row.external ? 1 : 0,
+});
+const cursorFromPg = (r) => (r ? {
+  chain: r.chain, wallet: r.wallet, next_block: intOrNull(r.next_block), newest_sig: r.newest_sig ?? null,
+  backfilled: Number(r.backfilled) || 0, caught_up: Number(r.caught_up) || 0, updated_ts: intOrNull(r.updated_ts),
+} : undefined);
+
+async function pgInsertTransfers(client, rows) {
+  if (!rows.length) return;
+  const col = (k) => rows.map((r) => r[k] ?? null);
+  await client.query(
+    `INSERT INTO ${T("revenue_transfers")} (chain, wallet, txid, tx_hash, block, when_ts, payer, usd, asset, external)
+     SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::bigint[], $6::bigint[], $7::text[], $8::float8[], $9::text[], $10::smallint[])
+     ON CONFLICT (chain, wallet, txid) DO NOTHING`,
+    [col("chain"), col("wallet"), col("txid"), col("tx_hash"), col("block"), col("when_ts"), col("payer"), col("usd"), col("asset"), col("external")],
+  );
+}
+async function pgPutCursor(client, c, { ifAbsent = false } = {}) {
+  await client.query(
+    `INSERT INTO ${T("revenue_cursors")} (chain, wallet, next_block, newest_sig, backfilled, caught_up, updated_ts)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (chain, wallet) DO ${ifAbsent ? "NOTHING" : `UPDATE SET next_block = EXCLUDED.next_block, newest_sig = EXCLUDED.newest_sig,
+       backfilled = EXCLUDED.backfilled, caught_up = EXCLUDED.caught_up, updated_ts = EXCLUDED.updated_ts`}`,
+    [String(c.chain), String(c.wallet), intOrNull(c.next_block), c.newest_sig ?? null, c.backfilled ? 1 : 0, c.caught_up ? 1 : 0, intOrNull(c.updated_ts)],
+  );
+}
+async function pgGetCursor(chain, wallet) {
+  await pgTables();
+  const r = await stateQuery(`SELECT * FROM ${T("revenue_cursors")} WHERE chain = $1 AND wallet = $2`, [chain, wallet]);
+  return cursorFromPg(r.rows[0]);
+}
+
+// The mirror never decides anything: a failed mirror write is logged once and
+// the next refresh pulls the row again.
+let mirrorWarned = false;
+function mirror(fn) {
+  try { db.transaction(fn)(); }
+  catch (e) {
+    if (mirrorWarned) return;
+    mirrorWarned = true;
+    console.warn(`revenue-ledger: mirror write failed (${String(e?.message || e).slice(0, 100)}); the next refresh retries`);
+  }
+}
+
+// Transfers a scan found, waiting for the cursor write that covers them.
+const staged = new Map(); // "chain|wallet" -> rows
+const stageKey = (chain, wallet) => `${chain}|${wallet}`;
+/** A transfer found by a scan. On the file it is written at once (as before);
+ *  with a database it is held until writeCursor() stores it with its cursor. */
+function stageTransfer(row) {
+  if (!USE_PG) { recordTransfer(row); return; }
+  const r = pgRow(row);
+  const k = stageKey(r.chain, r.wallet);
+  if (!staged.has(k)) staged.set(k, []);
+  staged.get(k).push(r);
+}
+/** Write a cursor; with a database, the transfers staged for it land in the
+ *  same transaction, so the cursor can never say "scanned" about rows that
+ *  are not stored. On a failure nothing is kept: the scan replays from the
+ *  stored cursor on the next tick and the primary key dedupes the replay. */
+async function writeCursor(cur) {
+  if (!USE_PG) { putCursor.run(cur); return; }
+  const k = stageKey(cur.chain, cur.wallet);
+  const rows = staged.get(k) || [];
+  staged.delete(k);
+  await pgTables();
+  await withStateTx(async (client) => {
+    await pgInsertTransfers(client, rows);
+    await pgPutCursor(client, cur);
+  });
+  mirror(() => { for (const r of rows) upsertTransfer.run(r); putCursor.run(cur); });
+}
+/** The cursor a scan resumes from: the tables with a database, the file without. */
+const readCursor = (chain, wallet) => (USE_PG ? pgGetCursor(chain, wallet) : getCursor.get(chain, wallet));
+
+/** Import the file once. The mirror IS the file at this point (nothing has
+ *  been pulled yet), so its tables hold exactly what the file held; every row
+ *  is insert-if-absent. */
+const IMPORT_NAME = DB_PATH.split("/").pop();
+const IMPORT_PAGE = 2000;
+async function importSqliteFile() {
+  let rows = 0, cursors = 0;
+  const page = db.prepare("SELECT rowid, chain, wallet, txid, tx_hash, block, when_ts, payer, usd, asset, external FROM transfers WHERE rowid > ? ORDER BY rowid LIMIT ?");
+  let after = 0;
+  for (;;) {
+    const batch = page.all(after, IMPORT_PAGE);
+    if (!batch.length) break;
+    await withStateTx((client) => pgInsertTransfers(client, batch.map(pgRow)));
+    rows += batch.length;
+    after = batch[batch.length - 1].rowid;
+    if (batch.length < IMPORT_PAGE) break;
+    await new Promise((r) => setImmediate(r));
+  }
+  const curs = db.prepare("SELECT * FROM cursors").all();
+  if (curs.length) {
+    await withStateTx(async (client) => { for (const c of curs) await pgPutCursor(client, c, { ifAbsent: true }); });
+    cursors = curs.length;
+  }
+  let bytes = 0;
+  try { bytes = statSync(DB_PATH).size; } catch { /* no file yet: nothing to measure */ }
+  if (rows || cursors) console.log(`revenue-ledger: imported ${rows} transfer(s) and ${cursors} cursor(s) from ${DB_PATH} into the state database`);
+  return { bytes, rows, cursors };
+}
+
+// Pull what the tables hold past the mirror's watermark, a page per turn.
+// The watermark is this process's: a boot pulls everything (a container
+// without the volume starts from an empty file). A row another container
+// committed with a lower seq after this process read past it is picked up at
+// the next boot; the lease keeps two ticks from writing at once, so that is
+// the hand-over moment at most.
+let mirrorSeq = 0;
+const MIRROR_PAGE = 2000;
+async function refreshMirror() {
+  await pgTables();
+  for (;;) {
+    const r = await stateQuery(
+      `SELECT seq, chain, wallet, txid, tx_hash, block, when_ts, payer, usd, asset, external FROM ${T("revenue_transfers")} WHERE seq > $1 ORDER BY seq LIMIT $2`,
+      [mirrorSeq, MIRROR_PAGE],
+    );
+    if (!r.rows.length) break;
+    const rows = r.rows.map(pgRow);
+    mirror(() => { for (const x of rows) upsertTransfer.run(x); });
+    mirrorSeq = Number(r.rows[r.rows.length - 1].seq);
+    if (r.rows.length < MIRROR_PAGE) break;
+    await new Promise((res) => setImmediate(res));
+  }
+  const c = await stateQuery(`SELECT * FROM ${T("revenue_cursors")}`);
+  const curs = c.rows.map(cursorFromPg);
+  mirror(() => { for (const x of curs) putCursor.run(x); });
+}
+
+// The first load is retried until it lands, within the boot: a failed
+// attempt is forgotten and tried again by a background timer (and by the next
+// tick), so a blip at boot never leaves the import or the mirror undone.
+const storeLoader = USE_PG ? retryingLoad("revenue-ledger: state database", async () => {
+  await pgTables();
+  const imp = await importOnce(IMPORT_NAME, { source: DB_PATH, run: importSqliteFile });
+  await refreshMirror();
+  return imp;
+}) : null;
+if (storeLoader) { trackStoreReady(storeLoader.eventually); storeLoader.ready().catch(() => {}); }
+const storeReadyP = () => (storeLoader ? storeLoader.ready().catch(() => ({ imported: false, error: true })) : Promise.resolve({ imported: false }));
+/** Resolves once the first load has finished (the file imported once, the
+ *  mirror filled), `{ error: true }` while it has not landed yet (it is
+ *  retried); already resolved without a database. */
+export function ledgerStoreReady() { return storeReadyP(); }
+/** Tests and operators: pull the tables into the mirror now. No-op without a database. */
+export async function refreshLedgerMirror() { if (USE_PG) await refreshMirror(); }
+
 // One-off reclassification (user_version-gated): `external` is stamped at
 // record time, so rule changes (the $0.50→$0.75 ceiling; wallets later added
 // to the OUR_* sets, e.g. the SOR spending wallets) never touched stored
@@ -179,9 +392,16 @@ function datedAnchors(chain, wallet) {
   return pts;
 }
 
-/** Record one transfer (idempotent — the PK dedupes replays/rescans). */
+/** Record one transfer (idempotent: the PK dedupes replays/rescans).
+ *  Synchronous on the file. With a database it returns a promise that
+ *  resolves once the row is stored in the tables (and mirrored); a caller
+ *  that must know the row is durable awaits it. */
 export function recordTransfer(row) {
-  upsertTransfer.run({ when_ts: null, payer: null, ...row, external: row.external ? 1 : 0 });
+  if (!USE_PG) { upsertTransfer.run({ when_ts: null, payer: null, ...row, external: row.external ? 1 : 0 }); return; }
+  const r = pgRow(row);
+  return pgTables()
+    .then(() => withStateTx((client) => pgInsertTransfers(client, [r])))
+    .then(() => { mirror(() => upsertTransfer.run(r)); });
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -285,7 +505,7 @@ async function getLogsAdaptive(c, wallet, from, to, onNarrow) {
 async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
   const c = EVM[chain];
   const head = parseInt(await rpcCall(c.rpcs, "eth_blockNumber", [], 6000), 16);
-  const cur = getCursor.get(chain, wallet);
+  const cur = await readCursor(chain, wallet);
   let next = cur?.next_block ?? await startBlockFor(chain, head);
   // Capped at 9,000 blocks like the other two scanners (revenue-scan.js and
   // the live view's recentInbound) — Alchemy rejects getLogs ranges over 10k
@@ -316,7 +536,7 @@ async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
     for (const l of Array.isArray(logs) ? logs : []) {
       const usd = Number(BigInt(l.data && l.data !== "0x" ? l.data : "0x0")) / 1e6;
       const payer = l.topics?.[1] ? ("0x" + l.topics[1].slice(-40)).toLowerCase() : null;
-      recordTransfer({
+      stageTransfer({
         chain, wallet,
         txid: `${l.transactionHash}:${parseInt(l.logIndex ?? "0x0", 16)}`,
         tx_hash: l.transactionHash,
@@ -328,7 +548,7 @@ async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
     }
     next = scannedTo + 1;   // only past what was actually scanned
     chunks++;
-    putCursor.run({
+    await writeCursor({
       chain, wallet, next_block: next, newest_sig: null, backfilled: 1,
       caught_up: next > head ? 1 : 0, updated_ts: Math.floor(Date.now() / 1000),
     });
@@ -344,9 +564,9 @@ async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
 // arrived - /revenue showed Algorand "still syncing" for ten hours on 2026-09-09
 // with the scan actually complete (6,220 rows, indexer answering in 200 ms).
 // The cursor itself is unchanged; only the verdict and the timestamp move.
-function markCaughtUp(chain, wallet) {
-  const cur = getCursor.get(chain, wallet);
-  putCursor.run({
+async function markCaughtUp(chain, wallet) {
+  const cur = await readCursor(chain, wallet);
+  await writeCursor({
     chain, wallet,
     next_block: cur?.next_block ?? null, newest_sig: cur?.newest_sig ?? null,
     backfilled: 1, caught_up: 1, updated_ts: Math.floor(Date.now() / 1000),
@@ -363,7 +583,7 @@ export async function syncSolana(wallet, { maxPages = 5 } = {}) {
   const accts = await rpcCall(SOLANA_RPCS, "getTokenAccountsByOwner", [wallet, { mint: USDC_SOL_MINT }, { encoding: "jsonParsed" }], 8000);
   const tokenAccount = accts?.value?.[0]?.pubkey;
   if (!tokenAccount) throw new Error("no USDC token account found for the wallet");
-  const cur = getCursor.get(chain, wallet);
+  const cur = await readCursor(chain, wallet);
   // next_block (unused on Solana) doubles as a mode sentinel: cursors written
   // before the token-account fix lack it, and their backfilled flag and
   // newest anchor describe the owner's history — discard both so the first
@@ -380,7 +600,7 @@ export async function syncSolana(wallet, { maxPages = 5 } = {}) {
     if (backfilled && newest) opts.until = newest;
     if (!backfilled && before) opts.before = before;
     const sigs = await rpcCall(SOLANA_RPCS, "getSignaturesForAddress", [tokenAccount, opts], 8000);
-    if (!Array.isArray(sigs) || !sigs.length) { sawEnd = true; markCaughtUp(chain, wallet); break; }
+    if (!Array.isArray(sigs) || !sigs.length) { sawEnd = true; await markCaughtUp(chain, wallet); break; }
     if (!newest) newest = sigs[0].signature;
     if (backfilled) newest = sigs[0].signature; // follow mode: advance the anchor
     for (const s of sigs) {
@@ -396,7 +616,7 @@ export async function syncSolana(wallet, { maxPages = 5 } = {}) {
       const usd = Number(usdcDeltaForOwner(txn?.meta, wallet).toFixed(6));
       if (usd > 0) {
         const payer = payerFromMeta(txn?.meta, wallet);
-        recordTransfer({
+        stageTransfer({
           chain, wallet, txid: s.signature, tx_hash: s.signature,
           block: s.slot ?? null, when_ts: s.blockTime ?? null,
           payer, usd, asset: "USDC",
@@ -410,7 +630,7 @@ export async function syncSolana(wallet, { maxPages = 5 } = {}) {
     before = sigs[sigs.length - 1].signature;
     if (sigs.length < 100) { sawEnd = true; break; }
   }
-  putCursor.run({
+  await writeCursor({
     chain, wallet, next_block: 1, newest_sig: newest,
     backfilled: sawEnd ? 1 : 0, caught_up: sawEnd ? 1 : 0,
     updated_ts: Math.floor(Date.now() / 1000),
@@ -428,7 +648,7 @@ export async function syncSolana(wallet, { maxPages = 5 } = {}) {
  *  the change's `from` is the actual payer). */
 export async function syncStellar(wallet, { maxPages = 5 } = {}) {
   const chain = "stellar";
-  const cur = getCursor.get(chain, wallet);
+  const cur = await readCursor(chain, wallet);
   let cursor = cur?.newest_sig || null;
   const ours = new Set([...OUR_STELLAR_WALLETS, wallet]);
   let sawEnd = false;
@@ -440,7 +660,7 @@ export async function syncStellar(wallet, { maxPages = 5 } = {}) {
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) throw new Error(`Horizon HTTP ${res.status}`);
     const records = (await res.json())?._embedded?.records || [];
-    if (!records.length) { sawEnd = true; markCaughtUp(chain, wallet); break; }
+    if (!records.length) { sawEnd = true; await markCaughtUp(chain, wallet); break; }
     for (const r of records) {
       cursor = r.paging_token;
       let usd = null, payer = null;
@@ -456,7 +676,7 @@ export async function syncStellar(wallet, { maxPages = 5 } = {}) {
         usd = Number(changes.reduce((s, c) => s + Number(c.amount || 0), 0).toFixed(7));
         payer = changes[0].from || null;
       } else continue;
-      recordTransfer({
+      stageTransfer({
         chain, wallet, txid: String(r.id), tx_hash: r.transaction_hash,
         block: null, when_ts: r.created_at ? Math.floor(Date.parse(r.created_at) / 1000) : null,
         payer, usd, asset: "USDC",
@@ -464,7 +684,7 @@ export async function syncStellar(wallet, { maxPages = 5 } = {}) {
       });
     }
     if (records.length < 200) sawEnd = true;
-    putCursor.run({
+    await writeCursor({
       chain, wallet, next_block: null, newest_sig: cursor,
       backfilled: sawEnd ? 1 : 0, caught_up: sawEnd ? 1 : 0,
       updated_ts: Math.floor(Date.now() / 1000),
@@ -493,7 +713,7 @@ const ALGORAND_INDEXER_LIST = process.env.ALGORAND_INDEXER_URL
 const ALGORAND_USDC_ASA = 31566704;
 export async function syncAlgorand(wallet, { maxPages = 5 } = {}) {
   const chain = "algorand";
-  const cur = getCursor.get(chain, wallet);
+  const cur = await readCursor(chain, wallet);
   const ours = new Set([...OUR_ALGORAND_WALLETS, wallet]);
   // The indexer serves an account's transactions NEWEST FIRST and has no order
   // parameter, so one tick is one WALK: min-round pinned at the cursor for the
@@ -529,7 +749,7 @@ export async function syncAlgorand(wallet, { maxPages = 5 } = {}) {
       if (!xfer || xfer["asset-id"] !== ALGORAND_USDC_ASA || xfer.receiver !== wallet) continue;
       const usd = Number(xfer.amount) / 1e6;
       const payer = t.sender || null;
-      recordTransfer({
+      stageTransfer({
         chain, wallet, txid: t.id, tx_hash: t.id,
         block: t["confirmed-round"] ?? null,
         when_ts: t["round-time"] ?? null,
@@ -541,13 +761,13 @@ export async function syncAlgorand(wallet, { maxPages = 5 } = {}) {
     const nextToken = typeof res.json?.["next-token"] === "string" ? res.json["next-token"] : null;
     if (txns.length < 1000 || !nextToken) {
       sawEnd = true;
-      putCursor.run({
+      await writeCursor({
         chain, wallet, next_block: highestRound + 1, newest_sig: null,
         backfilled: 1, caught_up: 1, updated_ts: Math.floor(Date.now() / 1000),
       });
     } else {
       token = nextToken;
-      putCursor.run({
+      await writeCursor({
         chain, wallet, next_block: minRound, newest_sig: JSON.stringify({ walkFrom: minRound, next: token, high: highestRound }),
         backfilled: cur?.backfilled ? 1 : 0, caught_up: 0, updated_ts: Math.floor(Date.now() / 1000),
       });
@@ -1382,12 +1602,22 @@ export function ledgerBuyerRepeat7(wallets, { events, now = Date.now(), weeks = 
   };
 }
 
+// The loop runs wherever its rows persist: the volume, REVENUE_LEDGER=true,
+// or the state database (the only place they persist once the volume is gone).
+export function revenueLedgerLoopEnabled(env = process.env, { hasDataDir = HAS_DATA_DIR } = {}) {
+  return hasDataDir || env.REVENUE_LEDGER === "true" || stateDbEnabled(env);
+}
+
 export function startRevenueLedger({ walletAddress, solanaWallet, stellarWallet, algorandWallet, baseExtraWallets = [], algorandExtraWallets = [] }) {
-  const enabled = HAS_DATA_DIR || process.env.REVENUE_LEDGER === "true";
+  const enabled = revenueLedgerLoopEnabled();
   if (loopStarted || !enabled || (!walletAddress && !solanaWallet && !stellarWallet && !algorandWallet)) return false;
   loopStarted = true;
-  const tick = async () => {
+  // The sync work runs under a lease (two containers never advance the
+  // cursors at once); the re-arm is outside it, so a skipped tick (another
+  // holder, a database error) tries again rather than ending the loop.
+  const syncOnce = leased("revenue-ledger-tick", { ttlMs: 10 * 60_000, failOpen: true }, async () => {
     let allCaughtUp = true;
+    if (USE_PG) { await storeReadyP(); staged.clear(); }
     if (walletAddress) {
       for (const chain of Object.keys(EVM)) {
         try {
@@ -1451,9 +1681,21 @@ export function startRevenueLedger({ walletAddress, solanaWallet, stellarWallet,
         console.warn(`revenue-ledger: algorand extra-wallet sync tick failed (will retry): ${String(e?.message || e).slice(0, 100)}`);
       }
     }
+    // The readers' mirror follows the tables after every tick (rows another
+    // container wrote included).
+    if (USE_PG) {
+      try { await refreshMirror(); }
+      catch (e) { console.warn(`revenue-ledger: mirror refresh failed (will retry next tick): ${String(e?.message || e).slice(0, 100)}`); }
+    }
+    return allCaughtUp;
+  });
+  const tick = async () => {
+    let allCaughtUp = false;
+    try { const r = await syncOnce(); allCaughtUp = r === true; }
+    catch (e) { console.warn(`revenue-ledger: sync tick threw (will retry): ${String(e?.message || e).slice(0, 100)}`); }
     setTimeout(tick, allCaughtUp ? 300_000 : 20_000).unref?.();
   };
   setTimeout(tick, 5_000).unref?.(); // let boot settle first
-  console.log(`revenue-ledger: sync loop started (db: ${DB_PATH})`);
+  console.log(`revenue-ledger: sync loop started (${USE_PG ? `state database; mirror: ${DB_PATH}` : `db: ${DB_PATH}`})`);
   return true;
 }

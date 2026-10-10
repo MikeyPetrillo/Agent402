@@ -15,10 +15,16 @@ import {
 import { join } from "node:path";
 import { createHmac } from "node:crypto";
 import { logSafe } from "./log-safe.js";
+import { logLines, imports, stateDbEnabled, stateDbSchema, trackStoreReady, reconcileLogFile, withSchemaLock } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DATA_DIR = HAS_DATA_DIR ? "/data" : "/tmp";
-let WISH_FILE = join(DATA_DIR, "wishes.jsonl");
+let WISH_FILE = process.env.WISH_FILE || join(DATA_DIR, "wishes.jsonl");
+// In the state database the log is the "wishes" stream of log_lines (one row
+// per line, imported from the file once); the file stays the record without one.
+export const WISH_STREAM = "wishes";
+let importedFromFile = false;
 
 const NEED_MAX = 500;
 const CONTEXT_MAX = 300;
@@ -253,8 +259,72 @@ function upsertCluster(key, source, ts, caller) {
   return c;
 }
 
+// ---- the state database path ------------------------------------------------
+// A line is cleaned of what a JSONB column cannot hold (NUL, lone surrogates),
+// queued, and appended in order; the file write-through follows the row, so
+// the file never holds a line the stream lacks. A failed append keeps its line
+// (and every later one) and is retried by the next wish, flush or retry
+// timer; past PENDING_APPENDS_MAX the oldest waiting line is dropped, logged.
+const PENDING_APPENDS_MAX = 10_000;
+const APPEND_RETRY_MS = 5_000;
+const pendingAppends = [];
+let appendDraining = null;
+let appendRetry = null;
+let lastAppendError = "";
+let wishLoader = null;
+let loaderGen = 0;
+const wellFormed = (s) => {
+  const t = s.replace(/\u0000/g, "");
+  return typeof t.toWellFormed === "function" ? t.toWellFormed() : t;
+};
+/** A copy any JSONB column accepts: strings without NUL and with no lone surrogate. */
+export function cleanForJsonb(v) {
+  if (typeof v === "string") return wellFormed(v);
+  if (Array.isArray(v)) return v.map(cleanForJsonb);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [wellFormed(k), cleanForJsonb(x)]));
+  return v;
+}
+function drainAppends() {
+  if (appendDraining) return appendDraining;
+  appendDraining = (async () => {
+    try {
+      try { await wishLoader.ready(); } catch { scheduleAppendRetry(); return false; }
+      while (pendingAppends.length) {
+        const obj = pendingAppends[0];
+        try { await logLines.append(WISH_STREAM, obj); }
+        catch (e) {
+          const why = String(e?.message || e).slice(0, 120);
+          // A data error answers the same every time: that line is dropped, loudly.
+          if (/^22/.test(String(e?.code || ""))) { console.warn(`[wish] a line the database refuses (${e.code}) was dropped: ${why}`); pendingAppends.shift(); continue; }
+          if (why !== lastAppendError) console.warn(`[wish] append failed, kept for retry: ${why}`);
+          lastAppendError = why;
+          scheduleAppendRetry();
+          return false;
+        }
+        pendingAppends.shift(); lastAppendError = "";
+        try { appendFileSync(WISH_FILE, JSON.stringify(obj) + "\n"); } catch { /* no volume: the row is the record */ }
+      }
+      return true;
+    } finally { appendDraining = null; }
+  })();
+  return appendDraining;
+}
+function scheduleAppendRetry() {
+  if (appendRetry) return;
+  appendRetry = setTimeout(() => { appendRetry = null; void drainAppends(); }, APPEND_RETRY_MS);
+  appendRetry.unref?.();
+}
+
 function appendLine(obj) {
   if (capReached) return;
+  if (stateDbEnabled()) {
+    lineCount++;
+    pendingAppends.push(cleanForJsonb(obj));
+    if (pendingAppends.length > PENDING_APPENDS_MAX) { pendingAppends.shift(); console.warn(`[wish] more than ${PENDING_APPENDS_MAX} lines waiting for the database; the oldest was dropped`); }
+    void drainAppends();
+    if (lineCount >= MAX_LINES) { capReached = true; console.warn(`[wish] line cap (${MAX_LINES}) reached - further wishes are still counted/clustered but no longer stored.`); }
+    return;
+  }
   try {
     appendFileSync(WISH_FILE, JSON.stringify(obj) + "\n");
     lineCount++;
@@ -291,35 +361,96 @@ function rebuildFromFile() {
   clusters = new Map();
   lineCount = 0;
   capReached = false;
+  if (stateDbEnabled()) {
+    // Retried until it lands (a failed attempt is forgotten and tried again
+    // by a background timer), so a blip at boot never leaves the board empty.
+    const gen = ++loaderGen;
+    wishLoader = retryingLoad("[wish] board", () => (gen === loaderGen ? rebuildFromStateDb() : undefined), {
+      onLoaded: () => { if (pendingAppends.length) void drainAppends(); },
+    });
+    trackStoreReady(wishLoader.eventually);
+    wishLoader.ready().catch(() => {});
+    return;
+  }
   if (!existsSync(WISH_FILE)) return;
   try {
     const { text, truncated, size } = readTail(WISH_FILE, MAX_READ_BYTES);
     let lines = text.split("\n").filter(Boolean);
     // A truncated read may start mid-line; drop the (possibly partial) first line.
     if (truncated && lines.length) lines.shift();
-    for (const line of lines) {
-      let rec;
-      try { rec = JSON.parse(line); } catch { continue; }
-      if (rec && rec.type === "threshold" && typeof rec.key === "string") {
+    applyLines(lines.map((line) => { try { return JSON.parse(line); } catch { return null; } }));
+    lineCount = truncated && lines.length ? Math.round(size / (text.length / lines.length)) : lines.length;
+  } catch {
+    clusters = new Map();
+    lineCount = 0;
+  }
+  if (lineCount >= MAX_LINES) capReached = true;
+}
+/**
+ * The file into the stream, once: every line (up to the cap) and the import
+ * mark in ONE transaction under the schema lock, the mark re-checked inside
+ * it. A crash mid-import rolls the whole import back (the next boot runs it
+ * again from the start); a second container waits for the lock and finds the
+ * mark. Each line is cleaned for JSONB first.
+ */
+async function importFileOnce() {
+  if (importedFromFile) return;
+  if (await imports.done(WISH_STREAM)) { importedFromFile = true; return; }
+  // No file at the first boot: nothing to import, and the mark says so, so
+  // the write-through file this process creates is never imported later.
+  if (!existsSync(WISH_FILE)) { await imports.mark(WISH_STREAM, { source: WISH_FILE, bytes: 0 }); importedFromFile = true; return; }
+  const { text } = readTail(WISH_FILE, 64 * 1024 * 1024);
+  const recs = [];
+  for (const line of text.split("\n").filter(Boolean)) {
+    let rec; try { rec = JSON.parse(line); } catch { continue; }
+    if (rec && typeof rec === "object") { recs.push(JSON.stringify(cleanForJsonb(rec))); if (recs.length >= MAX_LINES) break; }
+  }
+  const s = stateDbSchema();
+  const n = await withSchemaLock(async (c) => {
+    if ((await c.query(`SELECT 1 FROM ${s}.imports WHERE name = $1`, [WISH_STREAM])).rowCount) return null;
+    for (let i = 0; i < recs.length; i += 1000) {
+      await c.query(`INSERT INTO ${s}.log_lines (stream, body) SELECT $1, b FROM unnest($2::jsonb[]) WITH ORDINALITY AS t(b, o) ORDER BY o`, [WISH_STREAM, recs.slice(i, i + 1000)]);
+    }
+    await c.query(`INSERT INTO ${s}.imports (name, source, bytes) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING`, [WISH_STREAM, WISH_FILE, Buffer.byteLength(text)]);
+    return recs.length;
+  });
+  importedFromFile = true;
+  if (n !== null) console.log(`[wish] imported ${n} line(s) from ${WISH_FILE} into the state database`);
+}
+/** The database copy: import the file once, then rebuild from the newest rows. Throws when the database cannot answer (the loader retries). */
+async function rebuildFromStateDb() {
+  await importFileOnce();
+  // Lines the file holds past the stream (written while rolled back). A line
+  // that cannot be appended must not cost the board: the rebuild goes on.
+  try { await reconcileLogFile(WISH_STREAM, WISH_FILE); }
+  catch (e) { console.warn(`[wish] could not roll the file's newer lines forward (the board is rebuilt from the stream): ${String(e?.message || e).slice(0, 120)}`); }
+  const rows = await logLines.tail(WISH_STREAM, 50_000);
+  const total = await logLines.count(WISH_STREAM);
+  rows.reverse();
+  clusters = new Map();
+  applyLines(rows.map((r) => r.body));
+  applyLines(pendingAppends); // recorded here, not written yet
+  lineCount = total + pendingAppends.length;
+  capReached = lineCount >= MAX_LINES;
+}
+function applyLines(recs) {
+  let skipped = 0;
+  for (const rec of recs) {
+    // One unreadable line is skipped, never the board.
+    try {
+      if (!rec || typeof rec !== "object") { if (rec) skipped++; continue; }
+      if (rec.type === "threshold" && typeof rec.key === "string") {
         const c = clusters.get(rec.key);
         if (c) c.issueOpened = true;
         continue;
       }
-      if (rec && typeof rec.need === "string") {
+      if (typeof rec.need === "string") {
         const key = normalize(rec.need);
         if (key) upsertCluster(key, ["api", "mcp", "find-miss"].includes(rec.source) ? rec.source : "api", rec.ts || Date.now(), typeof rec.caller === "string" ? rec.caller : null);
       }
-    }
-    if (!truncated) {
-      lineCount = lines.length;
-    } else {
-      const avgLineLen = text.length / Math.max(lines.length, 1);
-      lineCount = Math.round(size / Math.max(avgLineLen, 1));
-      if (lineCount >= MAX_LINES) capReached = true;
-    }
-  } catch {
-    /* best-effort rebuild; start clean on any surprise */
+    } catch { skipped++; }
   }
+  if (skipped) console.warn(`[wish] ${skipped} unreadable line(s) skipped while rebuilding the board`);
 }
 rebuildFromFile();
 
@@ -578,6 +709,10 @@ export function __testReset() {
   globalHits = [];
   rebuildFromFile();
 }
+/** Resolves true once the board has been rebuilt from the state database (at once without one). */
+export function wishStoreReady() { return wishLoader && stateDbEnabled() ? wishLoader.ready().then(() => true, () => false) : Promise.resolve(true); }
+/** Resolves once every waiting line has been tried (at once without the database). */
+export async function wishFlush() { return stateDbEnabled() && wishLoader ? drainAppends() : true; }
 export function __testSetLineCap(n) {
   MAX_LINES = n == null ? 50_000 : n;
 }

@@ -11,14 +11,22 @@
 //   - not-configured mode: zero network calls, plan still readable
 //   - SigV4: requests carry a well-formed AWS4-HMAC-SHA256 authorization
 //
+//   - the alarm word (backupAlarmStatus): off / ok / failed / stale
+//   - the status read back at boot, also with STATE_DATABASE_URL set (the
+//     suite runs in both modes; with it set it uses its own schema)
+//
 //   node scripts/test-backup.js
 import { createServer } from "node:http";
+import { requireTestPg } from "./lib/test-pg.js";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import Database from "better-sqlite3";
 
+// With a database named, the suite runs on its own schema (dropped at the end).
+const DB_MODE = Boolean(String(process.env.STATE_DATABASE_URL || "").trim());
+if (DB_MODE) requireTestPg({ label: "test-backup" });
 let passed = 0, failed = 0;
 const ok = (cond, msg) => {
   if (cond) { passed++; console.log(`ok - ${msg}`); }
@@ -72,7 +80,8 @@ process.env.BACKUP_DATA_DIR = dataDir;
 process.env.BACKUP_KEEP_DAYS = "14";
 
 process.env.BACKUP_ENCRYPTION_KEY = "ab".repeat(32); // 32-byte test key built at runtime (no key-shaped literal in the tree for the secret scanner)
-const { backupPlan, runBackup, backupStatus, backupConfigured, decryptBackupBuffer, parseEncKey } = await import("../src/backup.js");
+const { backupPlan, runBackup, backupStatus, backupConfigured, backupAlarmStatus, decryptBackupBuffer, parseEncKey } = await import("../src/backup.js");
+ok(backupAlarmStatus() === "stale", `configured with no successful run yet: the alarm word is stale (${backupAlarmStatus()})`);
 
 // --- plan ------------------------------------------------------------------
 mkdirSync(join(dataDir, "credits"), { recursive: true });
@@ -122,6 +131,9 @@ ok(!objects.has(`backups/${oldDay}/stale.db.gz`), `retention pruned the ${oldDay
 ok(objects.has(`backups/${recentDay}/fresh.db.gz`), "recent prefix survives retention");
 ok(objects.has("unrelated/keep.txt"), "foreign keys outside backups/ untouched");
 ok(run1.pruned === 1, `exactly one object pruned (got ${run1.pruned})`);
+ok(backupAlarmStatus() === "ok", "after a clean run the alarm word is ok");
+ok(backupAlarmStatus(Date.now() + 27 * 3600_000) === "stale", "27 h after the last success the alarm word is stale");
+ok(backupAlarmStatus(Date.now() + 25 * 3600_000) === "ok", "25 h after it, still ok");
 
 // Consistency: the uploaded sqlite snapshot is a valid, row-complete db.
 {
@@ -139,11 +151,19 @@ ok(requests.every((r) => r.auth.startsWith("AWS4-HMAC-SHA256 Credential=test-key
 ok(requests.some((r) => r.auth.includes("SignedHeaders=") && r.auth.includes("Signature=")), "authorization carries SignedHeaders + Signature");
 
 // Same-day rerun overwrites, never accumulates.
-const countAfterRun1 = [...objects.keys()].filter((k) => k.startsWith(`backups/${day}/`)).length;
+// Volume objects are compared by count; state tables can be created between
+// runs (the status document's own table), so with a database those are
+// compared as a set: every key run 1 wrote is rewritten, none is duplicated.
+const dayKeys = () => [...objects.keys()].filter((k) => k.startsWith(`backups/${day}/`));
+const volumeKeys = () => dayKeys().filter((k) => !k.includes("/state/"));
+const countAfterRun1 = volumeKeys().length, stateAfterRun1 = dayKeys().filter((k) => k.includes("/state/"));
+const putsBeforeRun2 = requests.filter((r) => r.method === "PUT").length;
 const run2 = await runBackup({ log: () => {} });
 ok(run2.ok === true, "same-day rerun succeeds");
-const countAfterRun2 = [...objects.keys()].filter((k) => k.startsWith(`backups/${day}/`)).length;
+const countAfterRun2 = volumeKeys().length;
 ok(countAfterRun2 === countAfterRun1, `same-day keys overwrite (still ${countAfterRun1} objects, no growth)`);
+const run2Puts = requests.slice(0).filter((r) => r.method === "PUT").slice(putsBeforeRun2).map((r) => r.key);
+ok(stateAfterRun1.every((k) => run2Puts.includes(k)) && new Set(run2Puts).size === run2Puts.length, `same-day state objects are rewritten in place (${stateAfterRun1.length} from run 1, ${run2Puts.length} puts in run 2)`);
 
 // --- budget: tiny run cap holds bulk but the refund ledger still ships -----
 {
@@ -170,6 +190,7 @@ ok(countAfterRun2 === countAfterRun1, `same-day keys overwrite (still ${countAft
   ok(guarded.ok === false && String(guarded.error).includes("BACKUP_MAX_TOTAL_GB"), `bill guard refuses the run and names the knob (${String(guarded.error).slice(0, 80)})`);
   ok(requests.filter((r) => r.method === "PUT").length === putsBefore, "...and uploads NOTHING while over the cap");
   ok(String(backupStatus().lastError || "").includes("BACKUP_MAX_TOTAL_GB"), "...and the refusal is visible in status");
+  ok(backupAlarmStatus() === "failed", `a refused run sets the alarm word to failed (${backupAlarmStatus()})`);
   objects.delete("backups/2026-08-01/huge.bin.gz");
   sizeOverride.clear();
   delete process.env.BACKUP_MAX_TOTAL_GB;
@@ -183,19 +204,44 @@ ok(countAfterRun2 === countAfterRun1, `same-day keys overwrite (still ${countAft
   ok(r.skipped?.includes("not configured"), "unconfigured run is a clean skip");
   ok(requests.length === before, "…and makes zero network calls");
   ok(backupPlan().files.length > 0 && backupPlan().configured === false, "plan endpoint still inventories without creds");
+  ok(backupAlarmStatus() === "off", "not configured: the alarm word is off");
 }
 
 // The status outlives a restart: a fresh module instance (a new container)
 // reads the last run back from /data instead of reporting null.
 {
   const fresh = await import("../src/backup.js?restart=1");
+  // Boot: the scheduler reads the persisted status (on the database the
+  // first synchronous read is only the fallback, so the boot read is what
+  // makes the first operator read right).
+  fresh.startBackupScheduler({ log: () => {} });
+  await fresh.backupStatusLoaded();
   const st = fresh.backupStatus();
   ok(typeof st.lastAttempt === "string" && st.lastAttempt.length > 0, `status survives a restart (lastAttempt ${st.lastAttempt})`);
   ok(byName["backup-status.json"] === undefined || byName["backup-status.json"].excluded === true, "the status file itself is never backed up");
+  ok(![...objects.keys()].some((k) => k.includes("backup-status.json")), "neither the status file nor its write-through mark was uploaded");
+}
+
+// The alarm leg: the gateway status publishes the word, the heartbeat pages
+// on held / failed / stale after a second reading and closes on ok.
+{
+  const { readFileSync } = await import("node:fs");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/\n\s+backup: \{ status: \(\(\) => \{ try \{ return backupAlarmStatus\(\); \}/.test(server), "/api/gateway-status publishes backup.status from backupAlarmStatus()");
+  const hb = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
+  const leg = hb.slice(hb.indexOf("Offsite backup check"), hb.indexOf("Offsite backup check") + 3000);
+  ok(/\.backup\.status/.test(leg), "the heartbeat reads backup.status");
+  ok(/held\|failed\|stale\) sleep 30; WORD=\$\(read_bk\)/.test(leg), "...re-reads once before paging");
+  ok(/held\|failed\|stale\)\n\s+if \[ -z "\$OPEN" \]; then\n\s+gh issue create/.test(leg) && /ok\)\n\s+if \[ -n "\$OPEN" \]; then\n\s+gh issue close/.test(leg), "...opens an issue on held/failed/stale and closes it on ok");
 }
 
 db.close();
 stub.close();
+if (DB_MODE) {
+  const sdb = await import("../src/state-db.js");
+  try { await sdb.__dropStateSchema(); } catch { /* dropped */ }
+  await sdb.closeStateDb();
+}
 rmSync(dataDir, { recursive: true, force: true });
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

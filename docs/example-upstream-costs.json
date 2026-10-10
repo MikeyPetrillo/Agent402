@@ -15,6 +15,6 @@
   "vendor": {
     "exa": { "search": 1, "instant": 1, "answer": 1, "content": 1 },
     "x": { "postRead": 1, "userRead": 1 },
-    "decisions": { "luna": 1, "maxShare": 1 }
+    "decisions": { "luna": 1, "decisionOne": 1, "maxShare": 1 }
   }
 }
