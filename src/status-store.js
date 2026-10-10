@@ -662,7 +662,7 @@ if (PG) {
   // Retried until it lands: a failed attempt is forgotten and tried again
   // (on the next call, and by a background timer), so a blip at boot never
   // leaves the history dead until the next deploy.
-  loader = retryingLoad("[status-store]", async () => {
+  loader = retryingLoad("status history", async () => {
     await ensureTable();
     await importOnce(basename(DB_PATH), { source: DB_PATH, run: importSqlite });
     await loadMirror();

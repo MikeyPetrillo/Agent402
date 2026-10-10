@@ -7,7 +7,7 @@
 // forgotten, so the next caller tries again, and a background timer retries
 // with backoff, so a store nobody calls recovers too.
 //
-//   const load = retryingLoad("[stats]", async () => { ... });
+//   const load = retryingLoad("stats tally", async () => { ... });
 //   await load.ready();          // the load's value, or the attempt's error
 //   load.isLoaded();             // true once an attempt has succeeded
 //   trackStoreReady(load.eventually);  // resolves on the first success

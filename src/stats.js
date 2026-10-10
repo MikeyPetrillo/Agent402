@@ -531,7 +531,7 @@ function openPg(file) {
   // The first load is retried until it lands (a failed attempt is
   // forgotten; a background timer tries again), so a blip at boot never
   // leaves the tally, or /health, dead until the next deploy.
-  const loader = retryingLoad("[stats]", async () => {
+  const loader = retryingLoad("stats tally", async () => {
     try {
       await ensureTables();
       await importOnce(STATS_IMPORT_NAME, { source: file, run: importSqlite });

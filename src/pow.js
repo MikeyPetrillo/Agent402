@@ -168,7 +168,7 @@ if (PG) {
   // Retried until it lands (a failed attempt is forgotten and tried again by
   // the next call and a background timer); the pull timer starts when it
   // does, however late, so the replay window never stays open.
-  pgLoader = retryingLoad("[pow] shared replay store:", async () => {
+  pgLoader = retryingLoad("shared replay store", async () => {
     const s = stateDbSchema();
     await withSchemaLock((c) => c.query(`
       CREATE TABLE IF NOT EXISTS ${s}.pow_used (challenge TEXT PRIMARY KEY, exp BIGINT NOT NULL, used_at TIMESTAMPTZ NOT NULL DEFAULT now());

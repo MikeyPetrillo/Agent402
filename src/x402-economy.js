@@ -149,7 +149,7 @@ if (PG) {
   // Retried until it lands (a failed attempt is forgotten and tried again by
   // the next call and a background timer), so a blip at boot never leaves the
   // history dead until the next deploy.
-  loader = retryingLoad("x402-economy: history", async () => {
+  loader = retryingLoad("economy history", async () => {
     await withSchemaLock((c) => c.query(`CREATE TABLE IF NOT EXISTS ${T()} (day TEXT PRIMARY KEY, settlements BIGINT NOT NULL, payers BIGINT NOT NULL, updated_ts BIGINT)`));
     await importOnce(basename(HISTORY_DB), { source: HISTORY_DB, run: importSqlite });
     const r = await stateQuery(`SELECT day, settlements, payers FROM ${T()}`);
