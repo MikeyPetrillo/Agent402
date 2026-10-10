@@ -17,6 +17,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady } from "./state-db.js";
+import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 
 // The monitoring products. Each subscribes to a `target` (a domain, a fund,
 // etc.) and re-runs a report kind on a cadence (src/monitor-scheduler.js).
@@ -84,7 +85,10 @@ async function saveKeys(doc, map, keys) {
     const drop = Object.keys(merged).slice(0, Object.keys(merged).length - MAX_STORE);
     await doc.mergeKeys({}, drop);
   }
+  return merged !== null;
 }
+// The newer of two records of one subscription (by updatedAt; ISO strings compare as strings).
+const newer = (a, b) => (!a ? b : !b ? a : String(b.updatedAt || "") > String(a.updatedAt || "") ? b : a);
 
 // Webhook receipt tally. The handler is otherwise silent on success, so
 // nothing on our side could say whether Stripe is DELIVERING events at all
@@ -174,11 +178,77 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     if (!saveTimer) { saveTimer = setTimeout(() => { saveTimer = null; saveTally(); }, 5000); saveTimer.unref?.(); }
   }
 
-  function upsert(subId, patch) {
+  // On the state database a record whose merge did not land (a paid
+  // subscription, a cancellation) is kept on local disk beside the store
+  // file and replayed on a timer, so a restart before the database answers
+  // again loses none; the replay writes it only over an older copy of the
+  // same subscription (by updatedAt), never over a newer one.
+  const PG = doc.backend === "pg";
+  const pending = PG ? createDeadLetter({ file: `${path}.pending.ndjson` }) : null;
+  const unsaved = new Set(); // subIds whose latest record has not landed
+  async function upsert(subId, patch) {
     if (!subId) return;
+    if (PG && !store.has(subId)) {
+      // A subscription another container recorded since this one loaded:
+      // its stored record is the base, so a partial patch (a webhook's
+      // status) never replaces the whole record.
+      try { const r = await doc.read(); const v = r.ok && r.exists ? r.body?.[subId] : null; if (v && !store.has(subId)) store.set(subId, v); } catch { /* the patch alone */ }
+    }
     const prev = store.get(subId) || {};
     store.set(subId, { ...prev, ...patch, updatedAt: new Date().toISOString() });
-    void saveKeys(doc, store, [subId]);
+    if (!PG) { void saveKeys(doc, store, [subId]); return; }
+    let landed = false;
+    try { landed = await saveKeys(doc, store, [subId]); } catch { landed = false; }
+    if (landed) { unsaved.delete(subId); return; }
+    unsaved.add(subId);
+    if (!pending.add("sub", { subId, rec: store.get(subId) })) console.error(`[subscriptions] the record of ${subId} could not be kept on local disk`);
+  }
+  let replaying = false;
+  async function replayPending() {
+    if (!pending || replaying || !pending.size()) return 0;
+    replaying = true;
+    let landed = 0;
+    try {
+      for (const e of pending.list()) {
+        const { subId, rec } = e.payload || {};
+        if (!subId || !rec) { pending.remove(e.id); continue; }
+        const mine = newer(rec, unsaved.has(subId) ? store.get(subId) : null);
+        const r = await doc.update((b) => {
+          const body = b && typeof b === "object" && !Array.isArray(b) ? b : {};
+          body[subId] = newer(body[subId], mine);
+          return body;
+        }, { fallback: {} });
+        if (!r.ok) break; // the database is still away: the next tick retries
+        const stored = r.body?.[subId];
+        if (stored) store.set(subId, newer(store.get(subId), stored));
+        if (stored === mine || String(stored?.updatedAt || "") >= String(mine.updatedAt || "")) unsaved.delete(subId);
+        pending.remove(e.id);
+        landed++;
+      }
+    } finally { replaying = false; }
+    if (landed) console.log(`[subscriptions] landed ${landed} record(s) kept on local disk`);
+    return landed;
+  }
+  if (PG) {
+    ready.then(() => replayPending()).catch(() => {});
+    everyMs(() => replayPending(), Number(process.env.SUBSCRIPTIONS_REPLAY_MS) || 15_000);
+  }
+  // Reads the stored records again (database mode): a subscription another
+  // container recorded since this one loaded is seen, and the newer copy of
+  // each wins. The monitor scheduler calls it inside its lease, before a tick
+  // reads listActive. Resolves how many records changed here.
+  async function reload() {
+    if (!PG) return 0;
+    await replayPending().catch(() => 0);
+    const r = await doc.read();
+    if (!r.ok) return 0;
+    let changed = 0;
+    for (const [k, v] of toMap(r.exists ? r.body : null)) {
+      const cur = store.get(k);
+      const win = newer(cur, v);
+      if (win !== cur) { store.set(k, win); changed++; }
+    }
+    return changed;
   }
 
   // Create a subscription Checkout Session for a monitor product + target.
@@ -255,7 +325,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       email: session.customer_details?.email || session.customer_email || existing?.email || null,
       createdAt: existing?.createdAt || new Date().toISOString(),
     };
-    upsert(subId, rec);
+    await upsert(subId, rec);
     const p = MONITOR_PRODUCTS[rec.product];
     return { status, subId, customer: rec.customer, product: rec.product, label: p?.label || "monitor", target: rec.target };
   }
@@ -294,7 +364,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
           // Stripe retries and reorders events: a completed-checkout event must
           // never overwrite a status the subscription lifecycle already set.
           const prev = store.get(id);
-          upsert(id, {
+          await upsert(id, {
             customer: s.customer, status: prev?.status || "active",
             product: s.metadata?.product || prev?.product || null, target: s.metadata?.target || prev?.target || null,
             email: s.customer_details?.email || s.customer_email || prev?.email || null,
@@ -305,7 +375,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       case "customer.subscription.created":
       case "customer.subscription.updated": {
         const sub = event.data.object;
-        upsert(sub.id, {
+        await upsert(sub.id, {
           customer: sub.customer, status: sub.status,
           product: sub.metadata?.product || store.get(sub.id)?.product || null,
           target: sub.metadata?.target || store.get(sub.id)?.target || null,
@@ -316,7 +386,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       }
       case "customer.subscription.deleted": {
         const sub = event.data.object;
-        upsert(sub.id, { status: "canceled" });
+        await upsert(sub.id, { status: "canceled" });
         break;
       }
       case "invoice.paid": {
@@ -329,7 +399,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
         if (typeof onInvoicePaid === "function" && inv.amount_paid > 0) {
           try { onInvoicePaid({ invoiceId: inv.id, subId, product: rec?.product || null, amountUsd: inv.amount_paid / 100, customer: inv.customer }); } catch { /* accounting never breaks the webhook */ }
         }
-        if (subId && rec) upsert(subId, { lastInvoiceId: inv.id, lastPaidAt: new Date().toISOString() });
+        if (subId && rec) await upsert(subId, { lastInvoiceId: inv.id, lastPaidAt: new Date().toISOString() });
         break;
       }
       case "charge.refunded":
@@ -353,7 +423,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     if (!subId) return null;
     try {
       const sub = await stripe.subscriptions.retrieve(subId);
-      if (sub?.status) { upsert(subId, { status: sub.status, currentPeriodEnd: sub.current_period_end || null, cancelAtPeriodEnd: !!sub.cancel_at_period_end }); return sub.status; }
+      if (sub?.status) { await upsert(subId, { status: sub.status, currentPeriodEnd: sub.current_period_end || null, cancelAtPeriodEnd: !!sub.cancel_at_period_end }); return sub.status; }
     } catch { /* unreadable */ }
     return null;
   }
@@ -381,5 +451,5 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     return { ...tally, byType: { ...tally.byType }, configured: Boolean(webhookSecret()) };
   }
 
-  return { createCheckout, recordFromSession, handleWebhook, portalSession, listActive, get, refreshStatus, webhookStats, _store: store };
+  return { createCheckout, recordFromSession, handleWebhook, portalSession, listActive, get, refreshStatus, webhookStats, reload, replayPending, _store: store };
 }
