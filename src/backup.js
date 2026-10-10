@@ -302,7 +302,9 @@ function loadStatus() {
   absorbStatus(d.loadSync(null));
   // On the database the synchronous read is only the fallback: the row
   // arrives here, so a boot that calls this early has it before any reader.
-  if (d.backend === "pg") statusReady = trackStoreReady(d.load(null).then(absorbStatus, () => {}));
+  // A read that outlasts its retries lands later through onLoad (the
+  // document's background re-read), so the word never stays stale on it.
+  if (d.backend === "pg") statusReady = trackStoreReady(d.load(null, { onLoad: absorbStatus }).then(() => {}, () => {}));
 }
 /** Settles once the persisted status has been read (immediately in file
  *  mode). Does not start the read: startBackupScheduler does, at boot. */

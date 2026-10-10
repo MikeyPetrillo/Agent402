@@ -119,6 +119,24 @@ await sdb.documents.put("loading-doc", { kept: true });
   ok(await until(async () => (await sdb.logLines.count(ob.OUTBOUND_STREAM)) === 1), "the retried reconcile restores the file's line to the stream");
 }
 
+// ---- a store that reads its document at boot takes the late body ----------
+// The offsite backup's status (src/backup.js) is read once at boot; when that
+// read outlasts its retries, the background re-read must still hand the row
+// to the store, or the alarm word reads "stale" (no success on record) for
+// the container's life while the stored status says ok.
+{
+  Object.assign(process.env, { BACKUP_S3_ENDPOINT: "http://127.0.0.1:9", BACKUP_S3_BUCKET: "b", BACKUP_S3_KEY_ID: "k", BACKUP_S3_SECRET: "s", BACKUP_DATA_DIR: join(DIR, "bk") });
+  const recent = new Date(Date.now() - 3600_000).toISOString();
+  await sdb.documents.put("backup-status.json", { lastAttempt: recent, lastSuccess: recent, lastResult: "ok", lastError: null });
+  relay.cut();
+  const { backupAlarmStatus, backupStatusLoaded } = await import("../src/backup.js");
+  const first = backupAlarmStatus();
+  await backupStatusLoaded();
+  ok(first === "stale" && backupAlarmStatus() === "stale", `while the boot read cannot land, the word is stale (${first}, ${backupAlarmStatus()})`);
+  relay.heal();
+  ok(await until(() => backupAlarmStatus() === "ok", 10_000), `once the database is back the stored status reaches the store and the word is ok (${backupAlarmStatus()})`);
+}
+
 await sdb.__dropStateSchema().catch(() => {});
 await sdb.closeStateDb();
 await relay.close();
