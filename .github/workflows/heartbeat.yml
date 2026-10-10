@@ -483,6 +483,37 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the state database reads on at $(date -u +%FT%TZ)."
           fi
 
+      # The nightly offsite backup (src/backup.js): one word on
+      # /api/gateway-status. held (a state table, or the whole database
+      # snapshot, did not go up), failed (the run threw) and stale (no
+      # successful run in 26 h while configured) page; ok closes; off and
+      # unknown do neither. Two readings 30 s apart, because a boot can read
+      # stale once before the persisted status has loaded.
+      - name: Offsite backup check (alarm on a held, failed or stale backup)
+        if: always()
+        continue-on-error: true
+        run: |
+          read_bk() { curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.backup.status // "unknown"' 2>/dev/null || echo unknown; }
+          WORD=$(read_bk)
+          case "$WORD" in held|failed|stale) sleep 30; WORD=$(read_bk) ;; esac
+          echo "offsite backup: $WORD"
+          TITLE="Offsite backup is not current"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            held|failed|stale)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports backup.status=$WORD on two readings 30 s apart. held: the last run left a state table, or the whole database snapshot, without an offsite copy (older days are kept, not pruned, while this lasts). failed: the last run threw (bucket unreachable, bill guard, unreadable data dir). stale: no successful run in 26 h. Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backup] log line; POST /__operator/backup/run retries. Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the offsite backup reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # The Stellar facilitator's own fee-paying account. It pays the
       # transaction fee on EVERY Stellar settlement, and until 2026-08-31 it
       # was the one spending wallet we run with no alarm on it. This is a slow

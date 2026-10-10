@@ -6,6 +6,10 @@
 //     large volume file never spends the run budget the database needed
 //   - a state table the run could not upload (held) is not a clean success:
 //     lastError names it, lastHeldState lists it, lastSuccess does not move
+//   - a run that held a state table, or could not snapshot the database at
+//     all, prunes no older day: those days may hold the only good copy
+//   - backupAlarmStatus() is the one word the gateway status publishes
+//   - the documents table is read one row per FETCH (a row is a whole store)
 // Requires STATE_DATABASE_URL (CI fails without it).
 import { createServer } from "node:http";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -13,6 +17,8 @@ import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { spawn } from "node:child_process";
+import pg from "pg";
 import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-backup-no-volume-pg" });
 
@@ -43,12 +49,33 @@ Object.assign(process.env, {
   BACKUP_DATA_DIR: join(SCRATCH, "no-such-volume"),
 });
 delete process.env.BACKUP_ENCRYPTION_KEY;
-const { runBackup, backupStatus } = await import("../src/backup.js");
+const { runBackup, backupStatus, backupAlarmStatus } = await import("../src/backup.js");
+// Every FETCH page size, by the table its cursor reads.
+const fetches = [];
+{
+  const q = pg.Client.prototype.query;
+  let cursorTable = null;
+  pg.Client.prototype.query = function (text, ...rest) {
+    const t = typeof text === "string" ? text : text?.text;
+    if (typeof t === "string") {
+      const d = /DECLARE a402_backup_cur .* FROM \S+\.(\w+) t$/.exec(t);
+      if (d) cursorTable = d[1];
+      const f = /^FETCH (\d+) FROM a402_backup_cur/.exec(t);
+      if (f) fetches.push({ table: cursorTable, n: Number(f[1]) });
+    }
+    return q.call(this, text, ...rest);
+  };
+}
+const oldDay = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+const plantOld = () => { objects.set(`backups/${oldDay}/state/sales.ndjson.gz`, Buffer.from("older good copy")); objects.set(`backups/${oldDay}/state/refunds.ndjson.gz`, Buffer.from("older good copy")); };
+const oldLeft = () => [...objects.keys()].filter((k) => k.startsWith(`backups/${oldDay}/`)).length;
 const sdb = await import("../src/state-db.js");
 const S = sdb.stateDbSchema();
 const stateKeys = () => [...objects.keys()].filter((k) => k.includes("/state/"));
 try {
   await sdb.documents.put("followups.json", { seqs: { a: 1 } });
+  await sdb.documents.put("second.json", { b: 2 });
+  await sdb.documents.put("third.json", { c: 3 });
   await sdb.records.put("credits", "k_1", { balanceMicro: 5 });
   await sdb.logLines.append("outbound-spend", { usd: 0.01 });
 
@@ -61,6 +88,10 @@ try {
   ok(stateKeys().some((k) => k.endsWith("/state/_schema.json.gz")), "the schema object goes up beside the tables (a restore needs no boot)");
   const st1 = backupStatus();
   ok(st1.lastError === null && Boolean(st1.lastSuccess) && Array.isArray(st1.lastHeldState) && st1.lastHeldState.length === 0, "status: success, no error, nothing held");
+  ok(backupAlarmStatus() === "ok", `the alarm word after a clean run is ok (${backupAlarmStatus()})`);
+  const docFetches = fetches.filter((f) => f.table === "documents");
+  ok(docFetches.length >= 4 && docFetches.every((f) => f.n === 1), `the documents table is read one row per FETCH (${JSON.stringify(docFetches.slice(0, 3))})`);
+  ok(fetches.some((f) => f.table === "log_lines" && f.n === 5000), "a table of small rows keeps the full page");
 
   // 2. State first: a volume file that alone nearly fills the run budget must
   // not push the state tables out of it.
@@ -86,6 +117,7 @@ try {
   // ~40 MB of hex: gzip leaves it well over the 16 MB run cap.
   await sdb.stateQuery(`INSERT INTO ${S}.bulk_blob SELECT g, (SELECT string_agg(md5(random()::text || g || i), '') FROM generate_series(1, 40) i) FROM generate_series(1, 32000) g`);
   await new Promise((r) => setTimeout(r, 5));
+  plantOld();
   const r3 = await runBackup({ log: () => {} });
   const st3 = backupStatus();
   ok((r3.held || []).some((h) => h.name === "state/bulk_blob.ndjson"), "the oversize state table is held and named");
@@ -94,6 +126,36 @@ try {
   ok(Array.isArray(st3.lastHeldState) && st3.lastHeldState.includes("state/bulk_blob.ndjson"), "lastHeldState lists it on the operator status");
   ok(st3.lastSuccess === before, "lastSuccess does not move on a run that held a state table");
   ok(stateKeys().some((k) => k.endsWith("/state/documents.ndjson.gz")), "the other state tables still went up");
+  ok(r3.pruned === 0 && oldLeft() === 2, `a run that held a state table prunes no older day (pruned ${r3.pruned}, ${oldLeft()} old objects left)`);
+  ok(backupAlarmStatus() === "held", `the alarm word after a held state table is held (${backupAlarmStatus()})`);
+  await sdb.stateQuery(`DROP TABLE ${S}.bulk_blob`);
+  const r3b = await runBackup({ log: () => {} });
+  ok(r3b.ok === true && r3b.pruned === 2 && oldLeft() === 0, `the next complete run prunes the older day (pruned ${r3b.pruned})`);
+  ok(backupAlarmStatus() === "ok", "...and the alarm word is ok again");
+
+  // 4. The database cannot be snapshotted at all (nothing listens): the run
+  // fails and the older days stay. A child process, so its unreachable URL
+  // does not touch this process's pool.
+  objects.clear();
+  plantOld();
+  // Async: the stub S3 the child talks to runs on this process's event loop.
+  const child = await new Promise((resolve) => {
+    const p = spawn(process.execPath, ["--input-type=module", "-e", `
+    const { runBackup, backupAlarmStatus } = await import(${JSON.stringify(new URL("../src/backup.js", import.meta.url).href)});
+    const r = await runBackup({ log: () => {} });
+    console.log(JSON.stringify({ ok: r.ok, pruned: r.pruned ?? null, heldState: r.heldState ?? null, alarm: backupAlarmStatus() }));
+    process.exit(0);`], {
+    env: { ...process.env, STATE_DATABASE_URL: "postgres://postgres@127.0.0.1:1/a402?sslmode=disable", STATE_DB_CONNECT_TIMEOUT_MS: "1000", BACKUP_DATA_DIR: join(SCRATCH, "no-such-volume") },
+    });
+    let stdout = "", stderr = "";
+    p.stdout.on("data", (d) => { stdout += d; }); p.stderr.on("data", (d) => { stderr += d; });
+    const kill = setTimeout(() => p.kill(), 60_000);
+    p.on("close", () => { clearTimeout(kill); resolve({ stdout, stderr }); });
+  });
+  let r4 = null; try { r4 = JSON.parse(String(child.stdout).trim().split("\n").pop()); } catch { /* reported below */ }
+  ok(r4 && r4.ok === false && (r4.heldState || []).includes("state/*"), `a run whose snapshot failed is not ok and names state/* (${String(child.stdout).slice(-200)}${String(child.stderr).slice(-200)})`);
+  ok(r4 && !r4.pruned && oldLeft() === 2, `a run whose snapshot failed prunes no older day (${oldLeft()} old objects left)`);
+  ok(r4 && r4.alarm === "held", `the alarm word after a failed snapshot is held (${r4?.alarm})`);
 } finally {
   try { await sdb.__dropStateSchema(); } catch { /* dropped */ }
   await sdb.closeStateDb();

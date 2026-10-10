@@ -110,7 +110,7 @@ const PRIORITY = ["agent402-refunds.db", "agent402-sales.db", "credits", "human-
 // plan skipped every directory, so prepaid credit balances and every purchased
 // report had NO offsite copy while the module said the volume was covered.
 const DIR_BUNDLE_MAX_FILES = 50_000;
-const EXCLUDE = [/cache/i, /\btmp\b|\.tmp$/i, /-wal$/, /-shm$/, /\.log$/i, /^backup-status\.json$/];
+const EXCLUDE = [/cache/i, /\btmp\b|\.tmp$/i, /-wal$/, /-shm$/, /\.log$/i, /^backup-status\.json(\.rowmark)?$/]; // the status file and, on the database, its write-through mark
 
 /** Inventory of /data: what a run would consider, with sizes and the
  *  exclude/include decision per file. Pure read — safe pre-bucket. */
@@ -278,6 +278,8 @@ export async function listAll(prefix) {
 const status = {
   lastAttempt: null, lastSuccess: null, lastError: null,
   lastUploaded: [], lastHeld: [], lastHeldState: [], lastPruned: 0, storedBytes: null,
+  // "ok" | "held" (a state table did not go up) | "failed" (the run threw).
+  lastResult: null,
 };
 // Persisted beside the data it describes, so /__operator/backup.json still
 // shows the last run after a redeploy (it read null on every fresh container
@@ -287,6 +289,7 @@ const statusFile = () => join(cfg().dataDir, "backup-status.json");
 let statusDoc = null;
 const statusStore = () => (statusDoc ||= createJsonDocument({ file: statusFile(), log: () => {} }));
 let statusLoaded = false;
+let statusReady = Promise.resolve();
 const absorbStatus = (saved) => {
   if (!saved || typeof saved !== "object") return;
   for (const k of Object.keys(status)) if (k in saved && status[k] == null) status[k] = saved[k];
@@ -297,12 +300,36 @@ function loadStatus() {
   statusLoaded = true;
   const d = statusStore();
   absorbStatus(d.loadSync(null));
-  if (d.backend === "pg") trackStoreReady(d.load(null).then(absorbStatus));
+  // On the database the synchronous read is only the fallback: the row
+  // arrives here, so a boot that calls this early has it before any reader.
+  if (d.backend === "pg") statusReady = trackStoreReady(d.load(null).then(absorbStatus, () => {}));
 }
+/** Settles once the persisted status has been read (immediately in file
+ *  mode). Does not start the read: startBackupScheduler does, at boot. */
+export const backupStatusLoaded = () => statusReady;
 function saveStatus() {
   void statusStore().save(status); // best-effort
 }
 export const backupStatus = () => { loadStatus(); return { ...status, configured: backupConfigured() }; };
+
+// The backup alarm as one word, never a number (/api/gateway-status; the
+// heartbeat pages on held / failed / stale):
+//   off     BACKUP_S3_* not configured
+//   failed  the last run threw (nothing or only part went up)
+//   held    the last run left a state table without an offsite copy
+//   stale   no successful run within BACKUP_STALE_HOURS (26: one nightly
+//           window plus slack), including none at all since configured
+//   ok      the last run succeeded and is recent
+export function backupAlarmStatus(now = Date.now()) {
+  if (!backupConfigured()) return "off";
+  loadStatus();
+  const result = status.lastResult || (status.lastAttempt ? (status.lastError ? "failed" : "ok") : null);
+  if (result === "failed" || result === "held") return result;
+  const staleMs = clampInt(process.env.BACKUP_STALE_HOURS, 26, 2, 24 * 30) * 3600_000;
+  const last = Date.parse(status.lastSuccess || "");
+  if (!Number.isFinite(last) || now - last > staleMs) return "stale";
+  return "ok";
+}
 
 let running = false;
 export async function runBackup({ log = console.log } = {}) {
@@ -402,7 +429,11 @@ export async function runBackup({ log = console.log } = {}) {
     // on object timestamps.
     const cutoff = new Date(Date.now() - c.keepDays * 86_400_000).toISOString().slice(0, 10);
     let pruned = 0;
-    for (const obj of existing) {
+    // A run that left the database without a complete offsite copy (the
+    // snapshot failed, or a state table was held) prunes NOTHING: the older
+    // days may hold the only good copy, and keepDays such nights in a row
+    // would otherwise delete every one of them.
+    for (const obj of heldState.length ? [] : existing) {
       const m = /^backups\/(\d{4}-\d{2}-\d{2})\//.exec(obj.key);
       if (m && m[1] < cutoff) {
         const res = await s3("DELETE", obj.key);
@@ -422,15 +453,18 @@ export async function runBackup({ log = console.log } = {}) {
     if (heldState.length) {
       const error = `state tables held: ${heldState.join(", ")}`;
       status.lastError = `${new Date().toISOString()} ${error.slice(0, 300)}`;
+      status.lastResult = "held";
       log(`[backup] INCOMPLETE ${summary} - ${error}`);
       return { ok: false, error, day, uploaded, held, heldState, pruned };
     }
     status.lastSuccess = new Date().toISOString();
     status.lastError = null;
+    status.lastResult = "ok";
     log(`[backup] OK ${summary}`);
     return { ok: true, day, uploaded, held, heldState, pruned };
   } catch (e) {
     status.lastError = `${new Date().toISOString()} ${String(e.message).slice(0, 300)}`;
+    status.lastResult = "failed";
     log(`[backup] FAILED: ${e.message}`);
     return { ok: false, error: String(e.message) };
   } finally {
@@ -448,6 +482,13 @@ export async function stateTables() {
 const TABLE_RE = /^[a-z_][a-z0-9_]*$/;
 // Live locks: never backed up, never restored.
 const STATE_SKIP = new Set(["leases"]);
+// Rows per FETCH. A cursor page is held in memory whole (rows, then their
+// JSON text), so a table whose single rows can be very large reads a few at a
+// time: one documents row is a whole store (two 150 MB documents in one page
+// took the process past 600 MB), a records row can be a delivered report.
+// Every other table keeps the caller's page.
+const STATE_PAGE_ROWS = { documents: 1, records: 200 };
+export const statePageRows = (table, dflt = 5000) => Math.min(dflt, STATE_PAGE_ROWS[table] ?? dflt);
 // The money ledgers go up first when the budget is tight; the rest follow
 // smallest first.
 const STATE_PRIORITY = ["refunds", "sales", "sale_feedback", "records", "decide_ledger_credits", "decide_ledger_runs", "decide_ledger_decisions", "decide_ledger_seller_spend", "decide_ledger_feedback", "revenue_transfers", "revenue_cursors", "stripe_shadow", "documents", "log_lines", "imports"];
@@ -549,7 +590,7 @@ export async function stageStateTables(dir, { pageRows = 5000, tables = null } =
       const file = join(dir, `state-${table}.ndjson.gz`);
       await client.query("SAVEPOINT a402_table");
       try {
-        const rows = await stageOnClient(client, schema, table, file, pageRows);
+        const rows = await stageOnClient(client, schema, table, file, statePageRows(table, pageRows));
         await client.query("RELEASE SAVEPOINT a402_table");
         staged.push({ table, file, rows, bytes: statSync(file).size });
       } catch (e) {
@@ -570,7 +611,7 @@ export async function stageStateTables(dir, { pageRows = 5000, tables = null } =
 export async function stageStateTable(table, gzPath, { pageRows = 5000 } = {}) {
   if (!TABLE_RE.test(table)) throw new Error("bad table name");
   const schema = stateDbSchema();
-  return withSnapshot((client) => stageOnClient(client, schema, table, gzPath, pageRows));
+  return withSnapshot((client) => stageOnClient(client, schema, table, gzPath, statePageRows(table, pageRows)));
 }
 
 /** Stage a directory store as one gzip'd NDJSON bundle: {"path","body"} per
@@ -613,6 +654,9 @@ async function stageCopy(src, name, gzPath, tmp) {
 // day, which is safe: date-keyed objects overwrite, they never accumulate.
 let lastDay = null;
 export function startBackupScheduler({ log = console.log } = {}) {
+  // Read the persisted status now, not at the first operator read: on the
+  // database the first synchronous read is only the fallback (null).
+  try { loadStatus(); } catch { /* best-effort: a status read never blocks boot */ }
   if (!backupConfigured()) {
     log("[backup] not configured (BACKUP_S3_* unset) - nightly offsite backup disabled, plan endpoint still live");
     return null;

@@ -252,7 +252,7 @@ import { probeDomain, normDomain } from "./tools/domain-audit-kit.js";
 import { latest13fFiling, resolveManager as edgarResolveManager } from "./tools/edgar-kit.js";
 import { resolveSpend as resolveExternalSpend } from "./external-spend-guard.js";
 import { registerWellKnown, removeWellKnown, getWellKnown, listWellKnown } from "./well-known-store.js";
-import { backupPlan, backupStatus, runBackup, startBackupScheduler } from "./backup.js";
+import { backupAlarmStatus, backupPlan, backupStatus, runBackup, startBackupScheduler } from "./backup.js";
 import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
 import { datasetStatus, datasetRecorded, runDatasetSnapshot, startDatasetScheduler } from "./dataset-snapshot.js";
@@ -3250,6 +3250,8 @@ app.get("/api/gateway-status", async (req, res) => {
           refunds: { waiting: refunds.waiting, onDisk: refunds.total, oldestMinutes: age(refunds) } };
       } catch { return { status: "unknown" }; }
     })(),
+    // The nightly offsite backup (src/backup.js): off / ok / held / failed / stale. One word.
+    backup: { status: (() => { try { return backupAlarmStatus(); } catch { return "unknown"; } })() },
     // One word, never a value: whether the private upstream-cost table loaded.
     upstreamCosts: { status: upstreamCostsStatus() },
     // The ElevenLabs breaker on /api/tts and /api/tts-hd (src/tools/tts-kit.js):

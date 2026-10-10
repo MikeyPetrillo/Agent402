@@ -265,7 +265,7 @@ const DOWN = reply(503, {});
   {
     const s = stub({ [TYPESAFE]: DOWN, [OPENROUTER]: D1_OK, [OPENAI]: LUNA_OK });
     const r = await judge(JUDGE_IN, { fetchImpl: s.fetchImpl });
-    ok(s.hosts() === `${TYPESAFE},${OPENROUTER}` && r.model === `${DECISION_ONE_MODEL}-20261009` && r.fallbackFrom === "jev-latest", "/v1/judge: a Jev outage is answered by Decision-1, fallbackFrom names Jev");
+    ok(s.hosts() === `${TYPESAFE},${OPENROUTER}` && r.model === DECISION_ONE && r.fallbackFrom === "jev-latest", `/v1/judge: a Jev outage is answered by Decision-1, named by the buyer's model value (${r.model}), fallbackFrom names Jev`);
     ok(r.answers.team.choice === "frontend" && r.answers.repro.noul === 0.32 && r.usage.input_tokens === 290, "...in /v1/judge's own answer shape");
     ok(withoutModel(s.calls[1].body) === withoutModel(s.calls[0].body) && s.calls[0].body.model === "jev-latest" && s.calls[1].body.model === DECISION_ONE_MODEL, "...and Decision-1 receives Jev's body with only the model changed");
     ok(Object.entries(OPENROUTER_ATTRIBUTION).every(([k, v]) => s.calls[1].headers[k] === v), "...with the attribution headers");
@@ -274,6 +274,7 @@ const DOWN = reply(503, {});
     const s = stub({ [OPENROUTER]: D1_OK });
     const r = await judge({ ...JUDGE_IN, model: DECISION_ONE }, { fetchImpl: s.fetchImpl });
     ok(s.hosts() === OPENROUTER && !("fallbackFrom" in r), "/v1/judge naming microsoft-decision-1 is served by Decision-1 alone");
+    ok(r.model === DECISION_ONE && JUDGE_TOOLS[0].discovery.inputSchema.properties.model.enum.includes(r.model), `...and the answer's model is the enum value the buyer named (${r.model}), not the dated upstream id`);
   }
   {
     const s = stub({ [OPENROUTER]: DOWN, [TYPESAFE]: JEV_OK });
@@ -307,9 +308,9 @@ const DOWN = reply(503, {});
     ok(e?.statusCode >= 500 && s.hosts() === `${OPENAI},${TYPESAFE},${OPENROUTER}`, `/v1/decisions: luna -> jev -> decision-one (${s.hosts()})`);
   }
   {
-    const s = stub({ [OPENAI]: DOWN, [TYPESAFE]: DOWN, [OPENROUTER]: reply(200, { model: DECISION_ONE_MODEL, answers: { angry: { type: "noul", noul: 0.4 } }, usage: { input_tokens: 50 } }) });
+    const s = stub({ [OPENAI]: DOWN, [TYPESAFE]: DOWN, [OPENROUTER]: reply(200, { model: `${DECISION_ONE_MODEL}-20261009`, answers: { angry: { type: "noul", noul: 0.4 } }, usage: { input_tokens: 50 } }) });
     const r = await decisions(DEC_IN, { fetchImpl: s.fetchImpl });
-    ok(r.fallback_from === LUNA && r.model === DECISION_ONE_MODEL && r.answers[0].type === "predicate" && r.answers[0].probability === 0.4, "/v1/decisions: Decision-1 answers in the Decisions shape; fallback_from names Luna");
+    ok(r.fallback_from === LUNA && r.model === DECISION_ONE && r.answers[0].type === "predicate" && r.answers[0].probability === 0.4, "/v1/decisions: Decision-1 answers in the Decisions shape; fallback_from names Luna");
     ok(withoutModel(s.calls[2].body) === withoutModel(s.calls[1].body), "...with Jev's body, only the model changed");
   }
 

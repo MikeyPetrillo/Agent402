@@ -75,6 +75,7 @@ ok(/max-age/.test(pub.headers.get("cache-control") || ""), "the public read is s
 {
   ok(typeof pubBody?.operatorAuth?.status === "string", "operatorAuth still publishes its verdict publicly");
   ok(!("failures1h" in (pubBody.operatorAuth || {})), "the PUBLIC view carries no live failure counter");
+  ok(JSON.stringify(pubBody.backup) === JSON.stringify({ status: "off" }), `the offsite backup is one word, off without a bucket (${JSON.stringify(pubBody.backup)})`);
   ok(!("threshold" in (pubBody.operatorAuth || {})), "and never the alarm threshold");
   ok(typeof opBody?.operatorAuth?.failures1h === "number" && typeof opBody?.operatorAuth?.threshold === "number",
      "the OPERATOR view keeps both - you cannot act on a verdict alone");
