@@ -1,6 +1,11 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { isComputePayable } from "./pow.js";
 
+// Each chain feeds the next step what the previous one returns (render and
+// extract return markdown, not HTML; pdf-to-markdown returns markdown, not
+// tables), so no step after them takes HTML or CSV; scripts/test-workflows-page.js
+// holds that, and runs the chains it can against a booted server.
+//
 // Per-run cost is DERIVED from the live catalog at render time: the sum of
 // each step's list price, and "free via proof-of-work" only when every step
 // is compute-payable. A step whose slug is not in the catalog is dropped from
@@ -18,14 +23,14 @@ export function workflowCost(steps, catalog) {
   return { known: new Set(defs.map((d) => d.slug)), total, allFree, label };
 }
 
-const WORKFLOWS = [
+export const WORKFLOWS = [
   {
     title: "Research a company",
-    description: "Search the web for a company, render a key page, extract structured data, pull a company profile, and retrieve SEC filings - all in one chain.",
+    description: "Search the web for a company, read its homepage as clean markdown, pull its key reported financials, and retrieve its recent SEC filings - all in one chain.",
     steps: [
       { slug: "search", label: "Search the web for the company" },
-      { slug: "render", label: "Render the company homepage" },
-      { slug: "extract", label: "Extract structured data from the page" },
+      { slug: "extract", label: "Read the homepage as markdown" },
+      { slug: "company-financials", label: "Pull key reported financials" },
       { slug: "edgar-filings", label: "Retrieve SEC filings from EDGAR" },
     ],
   },
@@ -42,22 +47,22 @@ const WORKFLOWS = [
     ],
   },
   {
-    title: "Process PDF invoices",
-    description: "Convert a PDF invoice to markdown, extract line items and totals into structured JSON, then validate the output as clean CSV.",
+    title: "Read a PDF document",
+    description: "Check a PDF's page count and metadata, convert it to markdown for a model's context, then measure the text: words, sentences, reading time and a token estimate.",
     steps: [
-      { slug: "pdf-to-markdown", label: "Convert PDF to markdown text" },
-      { slug: "extract", label: "Extract line items and totals" },
-      { slug: "csv-lint", label: "Validate and lint the CSV output" },
+      { slug: "pdf-info", label: "Read page count and metadata" },
+      { slug: "pdf-to-markdown", label: "Convert the PDF to markdown" },
+      { slug: "text-stats", label: "Count words, tokens and reading time" },
     ],
   },
   {
     title: "Monitor a webpage",
-    description: "Render a JavaScript-heavy page, extract a target element, write the result to wallet-keyed memory, and read back previous snapshots for change detection.",
+    description: "Render a JavaScript-heavy page as markdown, read the previous snapshot from wallet-keyed memory, diff the two line by line, and save the new snapshot for the next run.",
     steps: [
-      { slug: "render", label: "Render the target page" },
-      { slug: "extract", label: "Extract the monitored element" },
-      { slug: "memory-write", label: "Save snapshot to memory" },
-      { slug: "memory-read", label: "Read previous snapshots" },
+      { slug: "render", label: "Render the page as markdown" },
+      { slug: "memory-read", label: "Read the previous snapshot" },
+      { slug: "text-diff", label: "Diff old and new, line by line" },
+      { slug: "memory-write", label: "Save the new snapshot" },
     ],
   },
   {
@@ -75,7 +80,7 @@ const WORKFLOWS = [
 export function workflowsPage(baseUrl, catalog = {}) {
   const canonical = `${baseUrl}/workflows`;
   const pageTitle = "Workflows - tool chaining examples for Agent402";
-  const pageDesc = "See how agents chain Agent402 tools into multi-step workflows: company research, domain audits, PDF processing, web monitoring, and macro dashboards.";
+  const pageDesc = "See how agents chain Agent402 tools into multi-step workflows: company research, domain audits, reading a PDF, web monitoring, and macro dashboards.";
 
   const jsonLd = {
     "@context": "https://schema.org",

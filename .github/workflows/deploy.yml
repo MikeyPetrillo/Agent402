@@ -2488,6 +2488,8 @@ jobs:
           t node scripts/test-contribute-page.js
           # /integrations pages: installs carry every imported package, credits copy reads the sales switch, shape note and tool cards derived (offline)
           t node scripts/test-integration-pages.js
+          # /workflows chains: no step after a markdown producer takes HTML or CSV; copy promises only what steps return (offline)
+          t node scripts/test-workflows-page.js
           # /SKILL.md agent-onboarding sheet (frontmatter, section order, every named route registered, house style - offline)
           t node scripts/test-skill-md.js
           # Manifest resources[] dedup (a tool registered under 2 HTTP methods lists its URL once, not twice)
