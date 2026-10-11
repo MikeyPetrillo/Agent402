@@ -317,7 +317,7 @@ function liveSection(live, stats) {
   if (live.upstreamBuyerTempo) rows.push(["Upstream buyer wallet, Tempo", bucket(live.upstreamBuyerTempo), esc(live.upstreamBuyerTempo), "Funds the router's purchases from MPP sellers on Tempo."]);
   const last = stats?.recentCalls?.[0];
   if (last) {
-    rows.push(["Last call served", "ok", `${esc(last.slug)} · ${esc(agoStr(last.at))}`, `Paid with ${last.paidWith === "proof-of-work" ? "proof-of-work" : "USDC"}.`]);
+    rows.push(["Last call served", "ok", `${esc(agoStr(last.at))} · ${esc(last.slug)}`, `Paid with ${last.paidWith === "proof-of-work" ? "proof-of-work" : "USDC"}.`]);
   }
   if (!rows.length) return "";
   return `<h2 id="live">Live checks</h2>
@@ -409,9 +409,9 @@ const CSS = `
 .comp-f em{font-style:normal;color:var(--faint)}
 .nomeasure{margin:0;font-size:var(--fs-sm);color:var(--faint);border-left:2px solid var(--dash);padding-left:10px}
 .live{display:grid;gap:10px;margin:14px 0 30px}
-.lrow{display:grid;grid-template-columns:12px 1fr auto;gap:9px;align-items:center;border:1px solid var(--hairline);border-radius:var(--radius);padding:12px 14px;background:var(--card)}
+.lrow{display:grid;grid-template-columns:12px auto minmax(0,1fr);gap:9px;align-items:center;border:1px solid var(--hairline);border-radius:var(--radius);padding:12px 14px;background:var(--card)}
 .lrow .ln{font-weight:600;font-size:var(--fs-md)}
-.lrow .lv{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted)}
+.lrow .lv{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);min-width:0;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lrow .lb{grid-column:2/4;margin:2px 0 0;font-size:var(--fs-sm);color:var(--faint)}
 table.inc{width:100%;border-collapse:collapse;margin:12px 0 30px;font-size:var(--fs-md)}
 table.inc th,table.inc td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--hairline);vertical-align:top}
@@ -541,7 +541,7 @@ ${liveSection(snap.live, stats)}
 <div class="method">
 <ul>
 <li><b>The observers sit outside the service.</b> A Cloudflare cron probe checks production every 5 minutes and a GitHub Actions heartbeat checks it again; each records what it saw, and this page only stores and renders those observations.</li>
-<li><b>An outage appears as a gap.</b> When production is down the probe cannot report in either, so the record shows missing observations rather than a tidy row of failures. Gaps are never counted as uptime.</li>
+<li><b>An outage appears as a gap.</b> When production is down the probe cannot report in either, so the record shows missing observations rather than a tidy row of failures. Gaps are never counted as uptime or as downtime: each percentage is taken over the probes that reported.</li>
 <li><b>Percentages carry their denominator.</b> 100% of three probes is a weaker claim than 100% of three thousand, and the page shows which one you are reading.</li>
 <li><b>Stale means unknown, not healthy.</b> A component whose most recent observation has aged out is reported as not measured.</li>
 <li><b>One observer cannot clear another's failure.</b> The two observers walk different proof-of-work challenges on the paid call path, so a failure either one records stands until that same observer sees the path work again.</li>
