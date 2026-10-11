@@ -2383,6 +2383,8 @@ jobs:
           t node scripts/test-path-scoped-sellers.js
           # re-registration re-check: per-origin window + hourly route allowance
           t node scripts/test-register-recheck-cooldown.js
+          # A registration answers by its deadline (202 pending) and stops starting probes past it.
+          t node scripts/test-index-register-deadline.js
           # Settlement-derived proven-ness + discovery-gap honesty
           t node scripts/test-settlement-proof.js
           # "A venue with many payees is not one seller (multi-payTo index — offline)"

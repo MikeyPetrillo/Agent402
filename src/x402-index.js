@@ -1194,9 +1194,42 @@ export async function succeedsOrigin(claimant, predecessor, { fetchImpl } = {}) 
   return markers;
 }
 
-export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
+// A registration is answered by its deadline (INDEX_REGISTER_DEADLINE_MS,
+// default 25 s). Verifying an origin probes its documents and every route it
+// lists, and a discovery document that names slow third-party resources (a
+// host still cold-starting) held the request for minutes. Past the deadline
+// the caller gets `pending` (the route answers 202) and the verification goes
+// on in the background, where the probing itself stops starting new probes
+// at the same deadline (crawlSeller and enrichLiveQuotes take `deadlineAt`);
+// the listing lands when it finishes. A second call for
+// the same origin while one runs joins it instead of starting another.
+const registerDeadlineMs = () => { const n = Number(process.env.INDEX_REGISTER_DEADLINE_MS); return Number.isFinite(n) && n >= 50 ? n : 25_000; };
+const registrationsInFlight = new Map(); // origin + replaces -> the running verification
+const REGISTER_PENDING = Symbol("register-pending");
+const REGISTER_PENDING_NOTE = "verification of this origin is still running (its discovery lists resources that are slow to answer); the listing completes in the background when it finishes. Check GET /api/index?seller=<origin> in a minute or two; if the origin is not listed then, its x402 surface could not be verified, and registering again retries.";
+export async function registerOrigin(origin, { crawl, replaces = null, deadlineMs = registerDeadlineMs() } = {}) {
   if (isRemovedOrigin(origin) || (replaces && isRemovedOrigin(replaces))) return { listed: false, origin, removed: true, error: REMOVED_ORIGIN_ERROR };
   if (!removalsKnown()) return { listed: false, origin, notLoaded: true, error: REMOVALS_NOT_LOADED_ERROR };
+  const key = `${origin} ${replaces || ""}`;
+  let run = registrationsInFlight.get(key);
+  if (!run) {
+    const t0 = Date.now();
+    run = registerOriginNow(origin, { crawl, replaces, deadlineAt: t0 + deadlineMs });
+    registrationsInFlight.set(key, run);
+    run.then((r) => {
+      const ms = Date.now() - t0;
+      if (ms > deadlineMs) console.log(`[x402-index] registration of ${origin} finished in the background after ${Math.round(ms / 1000)} s (listed: ${Boolean(r?.listed)})`);
+    }, (e) => console.warn(`[x402-index] registration of ${origin} failed: ${String(e?.message || e).slice(0, 160)}`))
+      .finally(() => { if (registrationsInFlight.get(key) === run) registrationsInFlight.delete(key); });
+  }
+  let timer;
+  const deadline = new Promise((r) => { timer = setTimeout(() => r(REGISTER_PENDING), deadlineMs); }); // cleared on an answer; held so a caller awaiting it is answered
+  const out = await Promise.race([run, deadline]).finally(() => clearTimeout(timer));
+  if (out !== REGISTER_PENDING) return out;
+  return { listed: false, pending: true, origin, status: "verifying", note: REGISTER_PENDING_NOTE, retryAfterSeconds: 60 };
+}
+
+async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 0 } = {}) {
   // Evaluated lazily: the claimant has to be in the cache before its payTo can
   // be compared, so this is re-read at each record site rather than up front.
   const checkSuccession = async () => {
@@ -1264,7 +1297,7 @@ export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
         noteForcedCrawl(origin);
         clearOriginProbeState(origin);
         reread = true;
-        if (crawl) await crawl(origin); else await crawlSeller(origin);
+        if (crawl) await crawl(origin, { deadlineAt }); else await crawlSeller(origin, { deadlineAt });
       }
       const fresh = cache.get(origin);
       const tools = Array.isArray(fresh?.tools) && fresh.tools.length ? fresh.tools : existing.tools;
@@ -1279,7 +1312,7 @@ export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
         const allowance = repriceAllowance(origin);
         if (allowance > 0) {
           noteReprice(origin);
-          await enrichLiveQuotes(tools, origin, { ignoreBudget: true, maxProbes: allowance, onProbed: (n) => { routesProbed = n; spendRepriceAllowance(origin, n); } });
+          await enrichLiveQuotes(tools, origin, { ignoreBudget: true, maxProbes: allowance, deadlineAt, onProbed: (n) => { routesProbed = n; spendRepriceAllowance(origin, n); } });
           repriced = true;
         }
       }
@@ -1310,9 +1343,9 @@ export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
   if (!submittedSeeds.has(origin) && submittedSeeds.size >= submittedSeedsCap) {
     return { listed: false, origin, error: "submission list is full - slots free up after 30 days with no successful probe; open a GitHub issue to get seeded sooner" };
   }
-  const doCrawl = crawl || (async (o) => { await crawlSeller(o); return cache.get(o); });
+  const doCrawl = crawl || (async (o, opts) => { await crawlSeller(o, opts); return cache.get(o); });
   let v;
-  try { v = await doCrawl(origin); } catch (e) { v = { error: String(e?.message || e) }; }
+  try { v = await doCrawl(origin, { deadlineAt }); } catch (e) { v = { error: String(e?.message || e) }; }
   // Injected test crawlers return the entry directly; the real path re-reads cache.
   if (v && !v.error && (v.tools?.length || v.manifest)) {
     submittedSeeds.add(origin);
@@ -4088,7 +4121,7 @@ export function adoptLivePrice(row, livePrice, originUrl = "") {
   delete row.quoteCarriedForward;
 }
 
-export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null } = {}) {
+export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0 } = {}) {
   if (!Array.isArray(tools) || !tools.length) return tools;
   dropGoneRoutes(tools, originUrl);
   if (!tools.length) return tools;
@@ -4178,7 +4211,12 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
 
   const { assertPublicUrl, ssrfDispatcher } = await import("./tools/fetch-guard.js");
   const dropped = new Set();
+  // Past the caller's deadline (a registration answering in bounded time) no
+  // new probe starts; a probe in flight finishes on its own limit. The routes
+  // not reached stay candidates for the next crawl.
+  const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;
   for (const tool of rotated) {
+    if (pastDeadline()) break;
     let learned = null;
     let freeObserved = false;
     let gone = false;
@@ -4194,6 +4232,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       if (!firstOutcome) firstOutcome = k;
     };
     probe: for (const { target, method, body: reqBody } of probeAttemptsFor(originUrl, tool)) {
+      if (pastDeadline()) break;
       try {
         // Crawled URLs are external data and could DNS-rebind between crawl and
         // now: validate then pin, exactly as probePaywall does.
@@ -4913,7 +4952,8 @@ function oncePerCrawl() {
   };
 }
 
-async function crawlSeller(originUrl) {
+async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
+  const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;
   const once = oncePerCrawl();
   // `manifestPublished` is set by the well-known branch only: once the seller's
   // manifest is in hand, robotsForbids reads /openapi.json under a blanket
@@ -4992,7 +5032,7 @@ async function crawlSeller(originUrl) {
     // Keep what earlier crawls already learned, THEN spend the probe budget on
     // routes we still know nothing about.
     tools = carryForwardLearnedQuotes(tools, prev);
-    tools = await enrichLiveQuotes(tools, originUrl);
+    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt });
 
     cache.set(originUrl, {
       manifest,
@@ -5016,7 +5056,7 @@ async function crawlSeller(originUrl) {
       fallbackErrors: undefined,
       // Not this seller's turn: carry the last reading forward rather than
       // dropping it — null must mean "never probed", not "not probed today".
-      paywall: paywallProbeDue() ? await probePaywall(tools) : (prev?.paywall ?? null),
+      paywall: paywallProbeDue() && !pastDeadline() ? await probePaywall(tools) : (prev?.paywall ?? null),
     });
   } catch (e) {
     // No /.well-known/x402 — two fallback surfaces, richest metadata wins:
@@ -5117,7 +5157,7 @@ async function crawlSeller(originUrl) {
       // FALLBACK surfaces is even less likely to have published a price, so
       // skipping it here would leave the worst-served sellers unpriced.
       carryForwardLearnedQuotes(tools, prev);
-      await enrichLiveQuotes(tools, originUrl);
+      await enrichLiveQuotes(tools, originUrl, { deadlineAt });
       // A real (non-synthesized) manifest from a past crawl is kept; a stale
       // synthesized one is rebuilt so a newly appeared openapi title wins.
       const keepManifest = prev?.manifest && !prev.manifest.synthesized ? prev.manifest : null;
@@ -5168,7 +5208,7 @@ async function crawlSeller(originUrl) {
         // while never having responded — and the marketplace rendered them
         // "healthy". A crawl completing is not a seller answering.
         originResponded: openapiTools.length > 0,
-        paywall: paywallProbeDue() ? await probePaywall(tools) : (prev?.paywall ?? null),
+        paywall: paywallProbeDue() && !pastDeadline() ? await probePaywall(tools) : (prev?.paywall ?? null),
       });
       return;
     }
