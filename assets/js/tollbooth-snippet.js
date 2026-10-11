@@ -8,19 +8,33 @@
     var wallet=esc((w.value||'').trim()||'0xYourWalletHere');
     var price=esc((p.value||'').trim()||'$0.002');
     var mode=esc(m.value);
+    // Options and comments match tollbooth/index.js: `observe` is its own
+    // boolean (a mode value of "observe" would charge), and the x402
+    // middleware is what verifies and settles USDC (scripts/test-tollbooth-landing.js
+    // runs this exact text against the package for every mode).
     var modeLine = mode==='observe'
-      ? '<span class="kw">observe</span>: <span class="num">true</span>,                       <span class="com">// no 402s yet - watch first</span>'
-      : '<span class="kw">mode</span>: <span class="str">"'+mode+'"</span>,                   <span class="com">// '+(mode==='bots'?'charge AI crawlers; humans pass':mode==='all'?'charge everything non-human':'paywall everyone')+'</span>';
+      ? '  <span class="kw">observe</span>: <span class="num">true</span>,   <span class="com">// count would-charge requests, never 402</span>\n'
+      : '  <span class="kw">mode</span>: <span class="str">"'+mode+'"</span>,   <span class="com">// '+(mode==='bots'?'charge known AI crawler user-agents; people pass':mode==='strict'?'charge anything that is not a real browser':'charge every client, people included')+'</span>\n';
     out.innerHTML =
       '<span class="kw">import</span> express <span class="kw">from</span> <span class="str">"express"</span>;\n' +
-      '<span class="kw">import</span> { createTollbooth } <span class="kw">from</span> <span class="str">"agent402-tollbooth"</span>;\n\n' +
+      '<span class="kw">import</span> { createTollbooth } <span class="kw">from</span> <span class="str">"agent402-tollbooth"</span>;\n' +
+      '<span class="kw">import</span> { paymentMiddleware } <span class="kw">from</span> <span class="str">"@x402/express"</span>;\n' +
+      '<span class="kw">import</span> { HTTPFacilitatorClient, x402ResourceServer } <span class="kw">from</span> <span class="str">"@x402/core/server"</span>;\n' +
+      '<span class="kw">import</span> { ExactEvmScheme } <span class="kw">from</span> <span class="str">"@x402/evm/exact/server"</span>;\n\n' +
+      '<span class="kw">const</span> payTo = <span class="str">"'+wallet+'"</span>;\n' +
+      '<span class="kw">const</span> price = <span class="str">"'+price+'"</span>;\n\n' +
+      '<span class="com">// USDC on Base, verified and settled by the x402 facilitator you choose</span>\n' +
+      '<span class="kw">const</span> x402 = <span class="kw">paymentMiddleware</span>(\n' +
+      '  { <span class="str">"/*"</span>: { accepts: [{ scheme: <span class="str">"exact"</span>, network: <span class="str">"eip155:8453"</span>, price, payTo }] } },\n' +
+      '  <span class="kw">new</span> x402ResourceServer(<span class="kw">new</span> HTTPFacilitatorClient({ url: process.env.<span class="kw">X402_FACILITATOR_URL</span> }))\n' +
+      '    .register(<span class="str">"eip155:8453"</span>, <span class="kw">new</span> ExactEvmScheme()),\n' +
+      ');\n\n' +
+      '<span class="kw">const</span> gate = <span class="kw">createTollbooth</span>({\n' +
+      '  payTo, price, x402,\n' +
+      modeLine +
+      '});\n\n' +
       '<span class="kw">const</span> app = <span class="kw">express</span>();\n' +
-      'app.<span class="kw">use</span>(<span class="kw">createTollbooth</span>({\n' +
-      '  <span class="kw">payTo</span>: <span class="str">"'+wallet+'"</span>,\n' +
-      '  <span class="kw">price</span>: <span class="str">"'+price+'"</span>,\n' +
-      '  ' + modeLine + '\n' +
-      '  <span class="kw">statsToken</span>: process.env.<span class="kw">TOLLBOOTH_STATS_TOKEN</span>,\n' +
-      '}));\n' +
+      'app.<span class="kw">use</span>(gate);\n' +
       'app.<span class="kw">use</span>(yourExistingRoutes);\n' +
       'app.<span class="kw">listen</span>(<span class="num">3000</span>);';
   }

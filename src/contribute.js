@@ -50,7 +50,7 @@ export function contributePage(baseUrl) {
 
 <div class="ct-eyebrow">$ GET /contribute</div>
 <h1 class="ct-title">Contribute to Agent402</h1>
-<p class="ct-subtitle">Add a tool kit, write a guide, or submit a skill pack. Every contribution ships to 500+ tools that agents pay for per call.</p>
+<p class="ct-subtitle">Add a tool kit, write a guide, or submit a skill pack. Every contribution ships in a catalog of 500+ tools that agents pay for per call.</p>
 
 <!-- Section 1: Add a tool kit -->
 <div class="ct-section">
@@ -125,8 +125,18 @@ TARGET_URL=http://localhost:3000 node scripts/test-all.js</code></pre>
 <button class="ct-copy" aria-label="Copy">Copy</button>
 </div>
 
+<h3>Step 4 - Record the route</h3>
+<p>Every route ever published is recorded so a retired one can answer 410 with its replacement. Record the new route (the script boots its own free server), then run the two guards CI runs on it.</p>
+
+<div class="ct-code-wrap">
+<pre><code>node scripts/published-slugs.js --write
+node scripts/sync-count.js --check
+node scripts/test-retired-routes.js</code></pre>
+<button class="ct-copy" aria-label="Copy">Copy</button>
+</div>
+
 <div class="ct-note">
-<strong>Key rules:</strong> Utility tools must be deterministic - same input, same output, every time. No LLM calls, no non-deterministic dependencies. Pure-CPU tools are automatically eligible for the free proof-of-work tier. Tools that make external network requests must be added to <code>WALLET_ONLY_SLUGS</code> in <code>src/pow.js</code>.
+<strong>Key rules:</strong> Utility tools must be deterministic - same input, same output, every time. No LLM calls, no non-deterministic dependencies. New tools are wallet-only by default. To offer a pure-CPU tool free (no network, no API key, no model), add its slug to <code>FREE_TIER_SLUGS</code> in <code>src/free-tier.js</code>; <code>scripts/test-free-tier-egress.js</code> proves it makes no outbound calls. <code>WALLET_ONLY_SLUGS</code> in <code>src/pow.js</code> is a reviewed override that keeps a listed slug wallet-only.
 </div>
 
 <h3>Tool object shape</h3>
@@ -210,7 +220,7 @@ Use ## for top-level sections within the guide.
 <p>A skill pack is a curated, multi-tool workflow that solves a job no single tool covers. Instead of guessing which tools to call, the agent gets a ready-to-run plan with the right tools wired in the right order.</p>
 
 <h3>How skill packs work</h3>
-<p>Skill packs are defined in <code>src/skills.js</code> in the <code>SKILL_PACKS</code> array. Each pack is both a server-rendered page at <code>/skills/&lt;slug&gt;</code> and an MCP prompt template that agents discover via <code>prompts/list</code>. Payment only happens when the agent actually calls each tool - the template itself is free.</p>
+<p>Skill packs are defined in <code>src/skills.js</code> in the <code>SKILL_PACKS</code> array. Each pack works three ways: a server-rendered page at <code>/skills/&lt;slug&gt;</code>; an MCP prompt template that agents discover via <code>prompts/list</code>, which is free, with each tool the agent then calls paid on its own; and a server-side run at <code>POST /api/skill/&lt;slug&gt;</code>, where <code>src/tools/skill-runner.js</code> runs every step for one payment. That price is generated, never typed: it is the sum of the pack's tools less a bundle discount, written into <code>PACK_PRICES</code> by <code>scripts/pack-prices.js</code>.</p>
 
 <h3>Pack shape</h3>
 <p>A skill pack has these fields:</p>
@@ -219,7 +229,7 @@ Use ## for top-level sections within the guide.
   <li><code>title</code> - human-readable name</li>
   <li><code>tagline</code> - one-sentence summary of what the pack solves</li>
   <li><code>useCase</code> - when to reach for this pack</li>
-  <li><code>promptArgs</code> - array of <code>{ name, description, required, substitute }</code> arguments</li>
+  <li><code>promptArgs</code> - the prompt arguments, each an object with <code>name</code>, <code>description</code>, <code>required</code> and <code>substitute</code></li>
   <li><code>toolSlugs</code> - ordered array of tool slugs the pack orchestrates</li>
   <li><code>workflow</code> - array of strings, one per step, describing what each tool contributes</li>
   <li><code>claudePrompt</code> - a copy-pastable Claude prompt that exercises the pack</li>
@@ -262,7 +272,11 @@ Use ## for top-level sections within the guide.
 <div class="ct-code-wrap">
 <pre><code># Boot the server and run the MCP test suite
 FREE_MODE=true PORT=3000 node src/server.js
-TARGET_URL=http://localhost:3000 node scripts/test-mcp-all.js</code></pre>
+TARGET_URL=http://localhost:3000 node scripts/test-mcp-all.js
+
+# Generate the pack's price from its tools, and record its route
+TARGET_URL=http://localhost:3000 node scripts/pack-prices.js --write
+node scripts/published-slugs.js --write</code></pre>
 <button class="ct-copy" aria-label="Copy">Copy</button>
 </div>
 
