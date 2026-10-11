@@ -122,6 +122,7 @@ const redisRelay = await startPgRelay(REDIS_DIRECT); // a TCP relay: any protoco
 const DIR = mkdtempSync(join(tmpdir(), "jr-A-"));
 process.env.STATE_DATABASE_URL = pgRelay.url;
 process.env.REDIS_URL = redisRelay.url;
+process.env.LEDGER_JOURNAL_REDIS = "on";
 process.env.STATE_DB_CONNECT_TIMEOUT_MS = "1500";
 process.env.STATE_DB_QUERY_TIMEOUT_MS = "2500";
 process.env.LEDGER_JOURNAL_LEASE_MS = "1500";

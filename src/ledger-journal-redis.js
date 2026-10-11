@@ -26,9 +26,13 @@ import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { getSharedRedisClient } from "./shared-limit.js";
 
-/** Journals in Redis when REDIS_URL is set (LEDGER_JOURNAL_REDIS=off keeps them on local disk). */
+/**
+ * Journals in Redis only when LEDGER_JOURNAL_REDIS=on and REDIS_URL is set.
+ * Opt-in: Redis holds a journal durably only with append-only persistence on,
+ * so the switch is set after that is confirmed; unset keeps them on local disk.
+ */
 export function redisJournalConfigured(env = process.env) {
-  return Boolean(String(env.REDIS_URL || "").trim()) && !/^(0|off|false|no)$/i.test(String(env.LEDGER_JOURNAL_REDIS ?? "").trim());
+  return Boolean(String(env.REDIS_URL || "").trim()) && /^(1|on|true|yes)$/i.test(String(env.LEDGER_JOURNAL_REDIS ?? "").trim());
 }
 /** How long a holder keeps an entry (or the drain) without renewing it. */
 export const JOURNAL_LEASE_MS = () => Math.max(200, Number(process.env.LEDGER_JOURNAL_LEASE_MS) || 60_000);
