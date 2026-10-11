@@ -200,7 +200,7 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
     const text = `Confirm to receive one email a week with what ${who} spent on Agent402: calls, dollars, the tools and chains.\n\n${url}\n\nNothing is sent for a quiet week. If you did not ask for this, ignore it and nothing will be sent.`;
     const html = shell(`<h2 style="margin:0 0 10px;font-size:17px;">Confirm your weekly digest</h2>
 <p>One email a week with what ${esc(who)} spent on Agent402: calls, dollars, the tools and the chains.</p>
-<p style="margin:18px 0;"><a href="${esc(url)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:6px;display:inline-block;">Confirm the digest</a></p>
+<p style="margin:18px 0;"><a href="${esc(url)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:999px;display:inline-block;">Confirm the digest</a></p>
 <p style="color:#626970;font-size:13px;">Nothing is sent for a quiet week. If you did not ask for this, ignore it and nothing will be sent.</p>`);
     return sendEmail({ to: rec.email, subject, html, text });
   }

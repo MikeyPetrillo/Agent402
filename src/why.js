@@ -90,7 +90,7 @@ export function whyPage(baseUrl) {
   <div class="why-2col" style="display:grid;grid-template-columns:220px 1fr;gap:30px;padding-bottom:44px;border-bottom:1px solid var(--hairline);">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);">${esc(w.kicker)}</div>
     <div>
-      <h2 style="font-weight:800;font-size:var(--fs-2xl);line-height:1.08;letter-spacing:-.02em;margin:0 0 14px;color:var(--ink);">${esc(w.h)}</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-2xl);line-height:1.08;letter-spacing:-.02em;margin:0 0 14px;color:var(--ink);">${esc(w.h)}</h2>
       <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">${esc(w.p)}</p>
       <div style="display:flex;gap:18px;flex-wrap:wrap;">${w.links.map(([href, label]) => linkHtml(href, label)).join("")}</div>
     </div>
@@ -103,17 +103,17 @@ export function whyPage(baseUrl) {
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;">
       <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">why pay here</span>
     </nav>
-    <h1 style="font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.035em;margin:0 0 22px;color:var(--ink);max-width:900px;">Seven things that are different about paying here.</h1>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 22px;color:var(--ink);max-width:900px;">Seven things that are different about paying here.</h1>
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Every claim on this page links to the surface that proves it: what the server does, measured on the server, on the open protocols anyone can build on, x402 and MPP.</p>
   </div>
 </header>
 ${pointsHtml}
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 56px;">
   <div style="background:var(--panel);border:1px solid var(--hairline);padding:44px 40px;">
-    <h2 style="font-weight:800;font-size:var(--fs-2xl);line-height:1.05;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Start with one call.</h2>
+    <h2 style="font-weight:700;font-size:var(--fs-2xl);line-height:1.05;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Start with one call.</h2>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 24px;max-width:600px;">Add the hosted MCP connector, pay per call in USDC from a wallet, or buy a finished report by card. Selling into it is open too: the tollbooth charges agents per request on your own API over both protocols.</p>
     <div style="display:flex;gap:11px;flex-wrap:wrap;">
-      <a href="/docs#add" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:14px 24px;">ADD TO YOUR AGENT →</a>
+      <a class="btn btn-primary" href="/docs#add">Add to your agent →</a>
       <a href="/reports" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">GET A REPORT</a>
       <a href="/sell" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">SELL YOUR API</a>
     </div>

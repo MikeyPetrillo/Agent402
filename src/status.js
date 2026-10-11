@@ -366,11 +366,11 @@ ${incidents
 
 const CSS = `
 .st-wrap{max-width:1180px;margin:0 auto;padding:56px 30px}
-.st-h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.98;letter-spacing:-.03em;margin:0 0 10px}
+.st-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.98;margin:0 0 10px}
 .st-sub{color:var(--muted);margin:0 0 26px;font-size:var(--fs-base);line-height:1.55}
 .st-sub a{color:var(--accent);text-decoration:none}
 .st-sub a:hover{text-decoration:underline}
-.hero{border:1px solid var(--hairline);border-radius:2px;padding:22px;margin:0 0 26px;background:var(--card);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.hero{border:1px solid var(--hairline);border-radius:var(--radius);padding:22px;margin:0 0 26px;background:var(--card);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .hero .hw{font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl)}
 .hero .hm{color:var(--muted);font-size:var(--fs-md);width:100%;margin:0}
 .dot{width:11px;height:11px;border-radius:50%;display:inline-block;flex:0 0 auto;background:var(--dash)}
@@ -379,9 +379,9 @@ const CSS = `
 .dot.bad{background:var(--bad)}
 .dot.unk{background:var(--dash)}
 .wins{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 30px;padding:0;list-style:none}
-.wins li{border:1px solid var(--hairline);border-radius:2px;padding:10px 14px;background:var(--card);font-family:var(--font-mono);font-size:var(--fs-sm)}
+.wins li{border:1px solid var(--hairline);border-radius:var(--radius);padding:10px 14px;background:var(--card);font-family:var(--font-mono);font-size:var(--fs-sm)}
 .wins b{font-family:var(--font-body)}
-.comp{border:1px solid var(--hairline);border-radius:2px;padding:16px 18px;margin:0 0 14px;background:var(--card)}
+.comp{border:1px solid var(--hairline);border-radius:var(--radius);padding:16px 18px;margin:0 0 14px;background:var(--card)}
 .comp-h{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
 .comp-n{font-weight:700}
 .comp-s{margin-left:auto;font-size:var(--fs-xs);font-family:var(--font-mono);color:var(--muted)}
@@ -389,13 +389,13 @@ const CSS = `
 .comp-s.bad{color:var(--bad)}
 .comp-b{margin:6px 0 12px;color:var(--muted);font-size:var(--fs-md)}
 .bars{display:flex;gap:2px;align-items:stretch;height:34px}
-.bars .b{flex:1 1 0;min-width:2px;border-radius:1px;background:var(--dash)}
+.bars .b{flex:1 1 0;min-width:2px;border-radius:0;background:var(--dash)}
 .bars .b.up{background:var(--ok)}
 .bars .b.partial{background:var(--warn)}
 .bars .b.down{background:var(--bad)}
 .bars .b.nodata{background:var(--hairline);opacity:.5}
 .bar-legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:-8px 0 18px}
-.bar-legend .b{display:inline-block;width:10px;height:14px;border-radius:1px;background:var(--dash);flex:none}
+.bar-legend .b{display:inline-block;width:10px;height:14px;border-radius:0;background:var(--dash);flex:none}
 .bar-legend .b.up{background:var(--ok)}
 .bar-legend .b.partial{background:var(--warn)}
 .bar-legend .b.down{background:var(--bad)}
@@ -407,7 +407,7 @@ const CSS = `
 .comp-f em{font-style:normal;color:var(--faint)}
 .nomeasure{margin:0;font-size:var(--fs-sm);color:var(--faint);border-left:2px solid var(--dash);padding-left:10px}
 .live{display:grid;gap:10px;margin:14px 0 30px}
-.lrow{display:grid;grid-template-columns:12px 1fr auto;gap:9px;align-items:center;border:1px solid var(--hairline);border-radius:2px;padding:12px 14px;background:var(--card)}
+.lrow{display:grid;grid-template-columns:12px 1fr auto;gap:9px;align-items:center;border:1px solid var(--hairline);border-radius:var(--radius);padding:12px 14px;background:var(--card)}
 .lrow .ln{font-weight:600;font-size:var(--fs-md)}
 .lrow .lv{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted)}
 .lrow .lb{grid-column:2/4;margin:2px 0 0;font-size:var(--fs-sm);color:var(--faint)}
@@ -417,9 +417,9 @@ table.inc th{font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.06
 .mono{font-family:var(--font-mono);font-size:var(--fs-sm);white-space:nowrap}
 .faint{color:var(--faint)}
 .lead{color:var(--muted);margin:0 0 14px;font-size:var(--fs-md);line-height:1.6}
-.method{border:1px solid var(--hairline);border-radius:2px;padding:6px 22px 16px;background:var(--card);margin:0 0 26px}
+.method{border:1px solid var(--hairline);border-radius:var(--radius);padding:6px 22px 16px;background:var(--card);margin:0 0 26px}
 .method li{margin:9px 0;color:var(--muted);font-size:var(--fs-md);line-height:1.6}
-h2{font-family:var(--font-body);font-weight:800;letter-spacing:-.02em;margin:34px 0 6px}
+h2{font-family:var(--font-body);font-weight:700;letter-spacing:-.02em;margin:34px 0 6px}
 .st-links{margin-top:26px;color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-sm)}
 .st-links a{color:var(--accent);text-decoration:none}
 .st-links a:hover{text-decoration:underline}
@@ -449,7 +449,7 @@ h2{font-family:var(--font-body);font-weight:800;letter-spacing:-.02em;margin:34p
 .inc-scroll .inc{min-width:0}
 table.inc thead{display:none}
 table.inc,table.inc tbody,table.inc tr,table.inc td{display:block;width:100%}
-table.inc tr{border:1px solid var(--hairline);border-radius:2px;background:var(--card);padding:8px 12px;margin:0 0 8px}
+table.inc tr{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:8px 12px;margin:0 0 8px}
 table.inc td{border:none;padding:2px 0;text-align:left;white-space:normal}
 table.inc td.mono{white-space:normal}
 table.inc td::before{content:attr(data-l) ": ";color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.05em}

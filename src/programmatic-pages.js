@@ -428,28 +428,28 @@ export const PROGRAMMATIC_CSS = `
 .pg-chg{color:var(--muted);font-size:var(--fs-xs);}
 
   .pg-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:12px;line-height:1.6}
-  .pg-table-wrap{overflow-x:auto;border:1px solid var(--hairline);border-radius:14px;background:var(--card);margin-top:18px}
+  .pg-table-wrap{overflow-x:auto;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);margin-top:18px}
   .pg-table{border-collapse:collapse;width:100%;min-width:640px;font-size:var(--fs-md)}
   .pg-table th{text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:12px 14px;border-bottom:1px solid var(--hairline);white-space:nowrap}
   .pg-table td{padding:11px 14px;border-bottom:1px solid var(--hairline);color:var(--muted);vertical-align:top}
   .pg-table tr:last-child td{border-bottom:0}
   .pg-table td.num{font-family:var(--font-mono);text-align:right;white-space:nowrap;color:var(--ink)}
   .pg-table td.who{color:var(--ink)}
-  .pg-buy{border:1px solid var(--hairline);border-radius:18px;background:var(--card);padding:26px;margin-top:26px;box-shadow:inset 0 1px 0 var(--card-inset),0 1px 2px rgba(0,0,0,.08)}
-  .pg-buy h2{font-weight:500;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 8px;color:var(--ink)}
+  .pg-buy{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:26px;margin-top:26px;box-shadow:inset 0 1px 0 var(--card-inset),0 1px 2px rgba(0,0,0,.08)}
+  .pg-buy h2{font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 8px;color:var(--ink)}
   .pg-buy p{color:var(--muted);font-size:var(--fs-base);line-height:1.55;margin:0 0 16px;font-weight:300}
-  .pg-agent{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);background:var(--chip-bg);border:1px solid var(--hairline);border-radius:12px;padding:12px 14px;margin-top:16px;line-height:1.7;overflow-x:auto}
+  .pg-agent{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);background:var(--chip-bg);border:1px solid var(--hairline);border-radius:var(--radius);padding:12px 14px;margin-top:16px;line-height:1.7;overflow-x:auto}
   .pg-links{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}
-  .pg-links a{font-size:var(--fs-md);color:var(--ink);text-decoration:none;border:1px solid var(--dash);border-radius:999px;padding:8px 14px}
+  .pg-links a{font-size:var(--fs-md);color:var(--ink);text-decoration:none;border:1px solid var(--dash);border-radius:var(--radius);padding:8px 14px}
   .pg-links a:hover{border-color:var(--ink)}
   .pg-note{color:var(--faint);font-size:var(--fs-sm);line-height:1.6;margin-top:22px;font-weight:300}
-  .pg-empty{border:1px dashed var(--dash);border-radius:14px;padding:22px;color:var(--muted);margin-top:18px;font-weight:300}
+  .pg-empty{border:1px dashed var(--dash);border-radius:var(--radius);padding:22px;color:var(--muted);margin-top:18px;font-weight:300}
   .pg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px;margin-top:20px}
-  .pg-grid a{display:block;border:1px solid var(--hairline);border-radius:12px;background:var(--card);padding:12px 14px;text-decoration:none;color:var(--ink);font-size:var(--fs-base)}
+  .pg-grid a{display:block;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:12px 14px;text-decoration:none;color:var(--ink);font-size:var(--fs-base)}
   .pg-grid a:hover{border-color:var(--ink)}
   .pg-grid a span{display:block;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:3px}
   .pg-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-top:20px}
-  .pg-fact{border:1px solid var(--hairline);border-radius:14px;background:var(--card);padding:14px 16px}
+  .pg-fact{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:14px 16px}
   .pg-fact .l{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint)}
   .pg-fact .v{font-size:var(--fs-lg);color:var(--ink);margin-top:5px;line-height:1.35}
 `;

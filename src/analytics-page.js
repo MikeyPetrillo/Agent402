@@ -48,7 +48,7 @@ function sparkline(series, { width = 720, height = 80 } = {}) {
 
 const AN_EXTRA_CSS = `
 .an-wrap{max-width:1180px;margin:0 auto;padding:56px 30px}
-.an-h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 6px}
+.an-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 6px}
 .an-sub{color:var(--muted);margin:0 0 22px;font-size:var(--fs-base);max-width:680px;line-height:1.55}
 .an-sub b{color:var(--ink);font-weight:600}
 .an-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin:0 0 22px}

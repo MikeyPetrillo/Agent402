@@ -48,7 +48,7 @@ export function playgroundPage(baseUrl, catalog) {
   .crumb a{color:var(--faint);text-decoration:none}
   .crumb a:hover{color:var(--accent)}
   .pg-title{max-width:1180px;margin:0 auto;padding:10px 30px 0}
-  .pg-title h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 8px}
+  .pg-title h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 8px}
   .pg-title p{color:var(--muted);font-size:var(--fs-base);margin-top:4px}
   .pg-wrap{max-width:1180px;margin:24px auto 0;padding:0 30px;display:flex;gap:20px}
   .pg-left{flex:0 0 60%;min-width:0}

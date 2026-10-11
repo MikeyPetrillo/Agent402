@@ -120,7 +120,7 @@ function leaderboardHtml(lb, host = null) {
   const zero = rows.length - active.length; // host row already left out of both
   // (rows here are lb.rows; a row is active with a window OR a 30d count)
   return `
-  <h2 id="leaderboard" style="font-size:var(--fs-xl);font-weight:800;margin:40px 0 6px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">MPP leaderboard &middot; settled on Tempo${staleNote}</h2>
+  <h2 id="leaderboard" style="font-size:var(--fs-xl);font-weight:700;margin:40px 0 6px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">MPP leaderboard &middot; settled on Tempo${staleNote}</h2>
   <p style="font-size:var(--fs-sm);color:var(--faint);margin:0 0 12px;max-width:820px;">Verified sellers ranked by inbound USDC.e transfers on Tempo (chain 4217) to the recipient address their <em>live</em> MPP challenge names, ${windowSource}. A window, not lifetime; an inbound transfer is the same proxy the <a href="/guides/smart-order-router" style="color:var(--muted);">router</a> requires before it spends (<span class="mpr-proven" style="margin:0;">routable</span> = ${esc(ruleText)}).${histNote} Our own recipient is not ranked; it is disclosed below the table. Ranked by 7d, then window. Machine-readable: <a href="/api/mpp-leaderboard" style="color:var(--muted);">/api/mpp-leaderboard</a>.</p>
   ${table}
   ${hostRowHtml(host)}
@@ -237,7 +237,7 @@ export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = nu
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
           <input id="reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:2 1 220px;font-family:var(--font-mono);font-size:var(--fs-sm);padding:9px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);" aria-label="https://api.yourdomain.com">
           <input id="reg-path" type="text" placeholder="/v1/priced-endpoint (optional)" aria-label="Priced path to probe (optional)" style="flex:1 1 160px;font-family:var(--font-mono);font-size:var(--fs-sm);padding:9px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);">
-          <button id="reg-go" data-endpoint="/api/mpp-index/register" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);border:none;padding:9px 16px;cursor:pointer;">SUBMIT</button>
+          <button class="btn btn-primary btn-sm" id="reg-go" data-endpoint="/api/mpp-index/register">Submit</button>
         </div>
         <div id="reg-out" role="status" aria-live="polite" data-listed-note="Appears on /mpp-marketplace." style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);margin-top:8px;">Free, no account - we probe your origin for a genuine MPP challenge and list you if it answers. A seller not yet in the mpp.dev registry needs its paywall reachable at the bare origin root to verify today.</div>
       </div>
@@ -249,7 +249,7 @@ export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = nu
   const methodSection = `
   <div style="padding:26px;border:1px solid var(--hairline);background:var(--card);margin-top:48px;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">HOW THIS INDEX IS BUILT</div>
-    <h2 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Crawled and verified, not curated</h2>
+    <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Crawled and verified, not curated</h2>
     <div style="display:flex;flex-direction:column;">${[
       "Discovery: the public mpp.dev services registry, MPPScan's origin list, and anyone who self-registers at POST /api/mpp-index/register.",
       "Every listed origin gets a real, unpaid request to one of its actual advertised endpoints (from the registry, the seller's own /openapi.json discovery document, or the submitter's hint) - a registry claim alone never counts.",
@@ -266,10 +266,10 @@ export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = nu
     { q: "How is the MPP leaderboard ranked?", a: "By what the chain shows, not by what anyone claims: for every verified seller we take the recipient address its live MPP challenge names, then count inbound USDC.e transfers to that address on Tempo over the most recent read window (24 hours from Tempo's own transfer index when it is available, otherwise about fifteen hours of blocks read from the RPC, its per-query cap), plus distinct payers and volume. It is a window, not lifetime, and an inbound transfer is a proxy for a settlement rather than proof of one - the same proxy Agent402's own router requires before it spends money with a seller, which is why rows that also clear its distinct-payer rule and offer tempo/charge are marked routable." },
     { q: "Why do discovered and verified counts differ?", a: "Discovery finds candidate origins from the mpp.dev registry and MPPScan; verification is our own real probe of each one. A gap between the two is normal - a fresh discovery awaiting its first probe, or a listing that no longer answers - and is always shown, never hidden." },
   ];
-  const faqHtml = MPP_FAQS.map((f) => `<article style="padding:22px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`).join("");
+  const faqHtml = MPP_FAQS.map((f) => `<article style="padding:22px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`).join("");
   const faqSection = `
   <div style="max-width:760px;margin:56px 0 0;">
-    <h2 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 20px;color:var(--ink);">About this index.</h2>
+    <h2 style="font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 20px;color:var(--ink);">About this index.</h2>
     <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">${faqHtml}</div>
   </div>`;
 

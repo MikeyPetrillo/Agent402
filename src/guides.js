@@ -1725,12 +1725,12 @@ outside production.
 const GUIDE_INDEX_CSS = `
 .gi-wrap{max-width:1180px;margin:0 auto;padding:56px 30px;}
 .gi-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;}
-.gi-wrap h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 14px;}
+.gi-wrap h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;}
 .gi-desc{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px;max-width:640px;}
 .gi-list{display:flex;flex-direction:column;gap:20px;}
 .gi-card{display:block;background:var(--card);border:1px solid var(--hairline);padding:24px 26px;text-decoration:none;transition:border-color .2s;}
 .gi-card:hover{border-color:var(--accent);}
-.gi-card h2{font-family:var(--font-body);font-weight:800;font-size:var(--fs-lg);line-height:1.15;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink);}
+.gi-card h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-lg);line-height:1.15;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink);}
 .gi-card p{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0;}
 @media(max-width:600px){.gi-wrap h1{font-size:var(--fs-3xl);}}
 `;
@@ -1743,7 +1743,7 @@ const GUIDE_PAGE_CSS = `
 .gp-crumb a:hover{text-decoration:underline;}
 .gp-wrap h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 28px;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis;}
 .gp-body{font-size:var(--fs-base);line-height:1.55;color:var(--muted);}
-.gp-body h2{font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);line-height:1.1;letter-spacing:-.02em;color:var(--ink);margin:32px 0 12px;}
+.gp-body h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);line-height:1.1;letter-spacing:-.02em;color:var(--ink);margin:32px 0 12px;}
 .gp-body p{margin:0 0 16px;}
 .gp-body ul,.gp-body ol{margin:0 0 16px;padding-left:24px;}
 .gp-body li{margin-bottom:6px;}

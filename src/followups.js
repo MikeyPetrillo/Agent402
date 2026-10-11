@@ -224,7 +224,7 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
     const text = `Two days ago you bought a ${r.label} on ${r.input}. The ${mon.label} re-runs it when something changes and emails you the new report, ${mon.priceUsd} a month, cancel any time:\n${url}\n\nStop these emails: ${stopLink(r.id)}\n\nAgent402`;
     const html = shell(`<h2 style="margin:0 0 10px;font-size:17px;">Keep ${esc(r.input || "it")} watched</h2>
 <p>Two days ago you bought a ${esc(r.label)} on ${esc(r.input)}. The ${esc(mon.label)} re-runs it when something changes and emails you the new report, ${esc(mon.priceUsd)} a month, cancel any time.</p>
-<p style="margin:18px 0;"><a href="${esc(url)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:6px;display:inline-block;">Start the ${esc(mon.label)}</a></p>
+<p style="margin:18px 0;"><a href="${esc(url)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:999px;display:inline-block;">Start the ${esc(mon.label)}</a></p>
 ${footer(r)}`);
     return sendEmail({ to: r.email, subject, html, text, headers: unsubHeaders(r) });
   }
@@ -237,7 +237,7 @@ ${footer(r)}`);
     const html = shell(`<h2 style="margin:0 0 10px;font-size:17px;">Another report?</h2>
 <p>A week ago you bought a ${esc(r.label)}. If you need another one, every report type has a real, free sample you can read before paying:</p>
 <ul style="padding-left:18px;">${list.map((s) => `<li><a href="${esc(s.url)}" style="color:#0F5E43;">${esc(s.label)}</a></li>`).join("")}</ul>
-<p style="margin:18px 0;"><a href="${esc(baseUrl)}/reports" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:6px;display:inline-block;">All reports</a></p>
+<p style="margin:18px 0;"><a href="${esc(baseUrl)}/reports" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:999px;display:inline-block;">All reports</a></p>
 ${footer(r)}`);
     return sendEmail({ to: r.email, subject, html, text, headers: unsubHeaders(r) });
   }

@@ -116,7 +116,7 @@ export function solanaSectionHtml(sol) {
   return `
   <section id="solana" style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:16px;">
-      <h2 class="lb-h2" style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Solana, ranked by USDC received.</h2>
+      <h2 class="lb-h2" style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Solana, ranked by USDC received.</h2>
       <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">${esc(win)} window · USDC on Solana${notes.length ? ` · ${esc(notes.join(" · "))}` : ""}</span>
     </div>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:760px;margin:0 0 26px;">Every inbound USDC transfer into each seller's Solana payTo, read from the chain. Unlike the Base table there is no price match and no per-call ceiling, so a transfer here may be a tool call or any other payment: these are transfers, not calls. A buyer is the wallet whose USDC paid, and transfers a seller sends itself are excluded.</p>
@@ -226,7 +226,7 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
     .join("");
 
   const faqHtml = faqs
-    .map((f) => `<article style="padding:24px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`)
+    .map((f) => `<article style="padding:24px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`)
     .join("");
 
   // --- Page body ---------------------------------------------------------------
@@ -237,13 +237,13 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
       <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">leaderboard</span></nav>
       <div class="lb-2col" style="display:grid;grid-template-columns:1.15fr .85fr;gap:50px;align-items:start;">
         <div>
-          <h1 class="lb-h1" style="font-weight:800;font-size:var(--fs-5xl);line-height:.95;letter-spacing:-.035em;margin:0 0 22px;color:var(--ink);">Who is actually<br>settling <span style="color:var(--accent);">x402</span>?</h1>
+          <h1 class="lb-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.95;margin:0 0 22px;color:var(--ink);">Who is actually<br>settling <span style="color:var(--accent);">x402</span>?</h1>
           <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 18px;">The x402 sellers we can crawl, ranked by <strong style="color:var(--ink);font-weight:700;">real Base USDC settled on chain</strong> - not self-reported traffic, not a press release. Read from event logs, refreshed hourly, and free to query. The table below is the head of the board, and says how many rows of how many it is showing.</p>
           <p style="font-size:var(--fs-base);line-height:1.6;color:var(--faint);margin:0 0 24px;">Agent402 is excluded from this ranking by default. An index that puts itself first is not evidence of anything, so our own figure is published separately below.</p>
           ${partialNote ? `<p style="font-size:var(--fs-sm);font-family:var(--font-mono);color:var(--accent);max-width:620px;margin:0 0 20px;">${esc(partialNote)}</p>` : ""}
           <div style="display:flex;flex-wrap:wrap;gap:11px;">
-            <a class="ml-cta" href="/api/leaderboard?include=external" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:12px 18px;">GET /api/leaderboard</a>
-            <a class="ml-cta" href="/marketplace" style="background:transparent;border:1.5px solid var(--dash);color:var(--muted);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:12px 18px;">Browse every seller</a>
+            <a class="btn btn-secondary ml-cta" href="/api/leaderboard?include=external">GET /api/leaderboard</a>
+            <a class="btn btn-secondary ml-cta" href="/marketplace">Browse every seller</a>
           </div>
         </div>
         <div style="border:1px solid var(--hairline);background:var(--panel);">
@@ -260,7 +260,7 @@ ${standingBand(standing || {})}
 
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:16px;">
-      <h2 class="lb-h2" style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Ranked by USDC settled.</h2>
+      <h2 class="lb-h2" style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Ranked by USDC settled.</h2>
       <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">${esc(windowLabel)} window · top ${rows.length} of ${fmtNum(boardRows)} ranked rows · include=external</span>
     </div>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:760px;margin:0 0 26px;">Volume alone can be manufactured by paying yourself, so every row also carries distinct paying wallets and an organic ratio of buyers to calls. A thousand calls from two wallets reads very differently from a thousand from four hundred.</p>
@@ -280,7 +280,7 @@ ${solanaSectionHtml(solana)}
     <div class="lb-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);">
       <div style="padding:28px;border-right:1px solid var(--hairline);background:var(--card);">
         <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">OUR OWN ROW, DISCLOSED</div>
-        <h2 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Agent402, for comparison</h2>
+        <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Agent402, for comparison</h2>
         <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;">We run the index, so we keep ourselves out of the ranking above. Here are our own figures instead, from our sales ledger: settlements and rails count outside buyers only, and the proof-of-work row counts free calls, excluding our own monitoring probes.</p>
         <table style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--hairline);"><tbody>
           <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">free calls over proof-of-work</th><td style="padding:11px 14px;text-align:right;color:var(--ink);">${esc(selfPow)}</td></tr>
@@ -295,7 +295,7 @@ ${solanaSectionHtml(solana)}
       </div>
       <div style="padding:28px;background:var(--card);">
         <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">METHOD</div>
-        <h2 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">How the number is built</h2>
+        <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">How the number is built</h2>
         <div style="display:flex;flex-direction:column;gap:0;">${stepsHtml}</div>
         <p style="font-size:var(--fs-md);line-height:1.6;color:var(--faint);margin:16px 0 0;">What the Base table cannot see: settlements on other chains (Solana is read separately above, as inbound transfers), payments to addresses a seller never advertised, and which specific tool was bought. Those are limits of on-chain data, not of the crawler.</p>
         <!-- This table names outside businesses, so it states what it is not.
@@ -310,19 +310,18 @@ ${solanaSectionHtml(solana)}
   </section>
 
   <section style="max-width:900px;margin:0 auto;padding:56px 30px 0;">
-    <h2 class="lb-h2" style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 26px;color:var(--ink);">Questions about this table.</h2>
+    <h2 class="lb-h2" style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 26px;color:var(--ink);">Questions about this table.</h2>
     <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">${faqHtml}</div>
   </section>
 
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 64px;">
     <div style="background:var(--panel);border:1px solid var(--hairline);padding:48px 44px;position:relative;overflow:hidden;">
-      <div style="position:absolute;right:26px;top:-36px;font-weight:900;font-size:var(--fs-mark);line-height:1;color:transparent;-webkit-text-stroke:2px var(--on-panel-mark);pointer-events:none;">402</div>
       <div style="position:relative;">
-        <h2 class="lb-h2" style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Want a row here?</h2>
+        <h2 class="lb-h2" style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Want a row here?</h2>
         <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:540px;">Serve x402 challenges, register your origin, and the crawler picks you up on the next pass. Free, no signup, nothing deducted from your price.</p>
         <div style="display:flex;gap:11px;flex-wrap:wrap;">
-          <a class="ml-cta" href="/sell" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:14px 24px;">List your API - free →</a>
-          <a class="ml-cta" href="/what-is-x402" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">WHAT IS x402?</a>
+          <a class="btn btn-primary on-panel ml-cta" href="/sell">List your API - free →</a>
+          <a class="btn btn-secondary on-panel ml-cta" href="/what-is-x402">What is x402?</a>
         </div>
       </div>
     </div>

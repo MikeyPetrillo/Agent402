@@ -125,7 +125,7 @@ export function badgesPage(baseUrl) {
 .bdg-subtitle{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px}
 
 .bdg-section{background:var(--card);border:1px solid var(--hairline);padding:24px;margin-bottom:20px}
-.bdg-section h3{font-family:var(--font-body);font-weight:800;font-size:var(--fs-lg);margin:0 0 4px;color:var(--ink)}
+.bdg-section h3{font-family:var(--font-body);font-weight:600;font-size:var(--fs-lg);margin:0 0 4px;color:var(--ink)}
 .bdg-desc{color:var(--muted);font-size:var(--fs-md);line-height:1.55;margin:0 0 16px}
 
 .bdg-preview{background:var(--paper);border:1px solid var(--hairline);padding:20px;text-align:center;margin-bottom:20px}
@@ -140,7 +140,7 @@ export function badgesPage(baseUrl) {
 .bdg-code-wrap .bdg-copy.copied{color:var(--accent);border-color:var(--accent)}
 
 .bdg-note{background:var(--card);border:1px solid var(--hairline);padding:24px;margin-top:32px}
-.bdg-note h3{font-family:var(--font-body);font-weight:800;font-size:var(--fs-lg);margin:0 0 6px;color:var(--ink)}
+.bdg-note h3{font-family:var(--font-body);font-weight:600;font-size:var(--fs-lg);margin:0 0 6px;color:var(--ink)}
 .bdg-note p{color:var(--muted);font-size:var(--fs-md);line-height:1.55;margin:0}
 .bdg-note code{font-family:var(--font-mono);background:var(--panel);color:var(--on-panel);padding:2px 7px;font-size:var(--fs-sm);border:1px solid var(--hairline)}
 

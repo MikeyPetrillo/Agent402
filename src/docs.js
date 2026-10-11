@@ -251,9 +251,9 @@ export const DOCS_LAYOUT_CSS = `
   .ml-docs-layout { display:block; }
   .ml-docs-side { display:none; }
   .ml-docs-main { min-width:0; }
-  .ml-docs-main h1 { font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:1;letter-spacing:-.02em;margin:0 0 18px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis; }
+  .ml-docs-main h1 {font-family:var(--font-display);font-weight:400;letter-spacing:-.01em; font-size:var(--fs-4xl);line-height:1;margin:0 0 18px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis; }
   .ml-docs-main h2 { font-size:var(--fs-lg);margin-top:36px;color:var(--accent);font-weight:700; }
-  .ml-docs-main h3 { font-size:var(--fs-lg);margin-top:26px;font-weight:700; }
+  .ml-docs-main h3 { font-size:var(--fs-lg);margin-top:26px;font-weight:600; }
   .ml-docs-main p, .ml-docs-main li { color:var(--ink);line-height:1.7; }
   .ml-docs-main .muted { color:var(--muted); }
   .ml-docs-main pre { background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);border:0;padding:14px 16px;overflow-x:auto;font-size:var(--fs-md);line-height:1.55; }

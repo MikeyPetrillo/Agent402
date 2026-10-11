@@ -21,7 +21,7 @@ export function quickstartPage(baseUrl) {
 
 .qs-panel{display:none;padding:28px 0 0}
 .qs-panel.active{display:block}
-.qs-panel h2{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink)}
+.qs-panel h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink)}
 .qs-panel .qs-oneliner{color:var(--muted);margin:0 0 20px;font-size:var(--fs-base);line-height:1.55}
 
 .qs-code-wrap{position:relative;margin-bottom:20px}
@@ -45,7 +45,7 @@ export function quickstartPage(baseUrl) {
 .qs-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:48px}
 .qs-card{background:var(--card);border:1px solid var(--hairline);padding:24px;text-decoration:none;color:var(--ink);transition:border-color .15s,transform .15s}
 .qs-card:hover{border-color:var(--accent);transform:translateY(-2px)}
-.qs-card h3{margin:0 0 6px;font-family:var(--font-body);font-weight:800;font-size:var(--fs-lg)}
+.qs-card h3{margin:0 0 6px;font-family:var(--font-body);font-weight:600;font-size:var(--fs-lg)}
 .qs-card p{margin:0;color:var(--muted);font-size:var(--fs-md);line-height:1.55}
 
 @media(max-width:600px){

@@ -6,7 +6,7 @@ export function digestPage(baseUrl) {
   const body = `
 <main style="max-width:720px;margin:0 auto;padding:56px 24px 80px;">
   <p style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:0 0 12px;">weekly digest</p>
-  <h1 style="font-weight:600;font-size:var(--fs-3xl);letter-spacing:-.02em;margin:0 0 14px;color:var(--ink);">Your week, from the wallet you pay with.</h1>
+  <h1 style="font-weight:800;font-size:var(--fs-3xl);letter-spacing:-.02em;margin:0 0 14px;color:var(--ink);">Your week, from the wallet you pay with.</h1>
   <p class="hm-lede" style="font-size:var(--fs-lg);max-width:600px;margin:0 0 26px;">One email a week: calls, dollars, the tools you used and the chains you paid on. For a credits key, its balance too. Nothing is sent for a quiet week, and every email carries an unsubscribe link. Your address is stored only after you click the confirmation.</p>
 
   <form class="dg-form" data-mode="wallet" style="display:grid;gap:12px;max-width:560px;border:1px solid var(--hairline);background:var(--card);padding:22px;">
@@ -15,7 +15,7 @@ export function digestPage(baseUrl) {
     <input class="dg-email" type="email" required aria-label="Email address for the weekly digest" placeholder="you@example.com" autocomplete="email" style="padding:11px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-size:var(--fs-base);">
     <input class="dg-wallet" type="text" required aria-label="Wallet address you pay from" placeholder="0x… the address you pay from" style="padding:11px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);">
     <input class="dg-hp" type="text" name="website" tabindex="-1" autocomplete="off" style="position:absolute;left:-9999px;" aria-hidden="true">
-    <button class="dg-submit hm-btn hm-btn-dark" type="submit">Sign with wallet and subscribe</button>
+    <button class="dg-submit btn btn-primary" type="submit">Sign with wallet and subscribe</button>
     <div class="dg-msg" style="font-size:var(--fs-md);color:var(--muted);min-height:1.4em;" aria-live="polite"></div>
   </form>
 
@@ -25,7 +25,7 @@ export function digestPage(baseUrl) {
     <input class="dg-email" type="email" required aria-label="Email address for the weekly digest" placeholder="you@example.com" autocomplete="email" style="padding:11px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-size:var(--fs-base);">
     <input class="dg-key" type="password" required aria-label="Prepaid credits key" placeholder="a402_…" autocomplete="off" style="padding:11px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);">
     <input class="dg-hp" type="text" name="website" tabindex="-1" autocomplete="off" style="position:absolute;left:-9999px;" aria-hidden="true">
-    <button class="dg-submit hm-btn hm-btn-dark" type="submit">Subscribe</button>
+    <button class="dg-submit btn btn-primary" type="submit">Subscribe</button>
     <div class="dg-msg" style="font-size:var(--fs-md);color:var(--muted);min-height:1.4em;" aria-live="polite"></div>
   </form>
 

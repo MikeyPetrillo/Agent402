@@ -77,7 +77,7 @@ export function proofPage(baseUrl, feed, standing = null) {
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;">
       <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/why" style="color:var(--muted);text-decoration:none;">why pay here</a> / <span style="color:var(--ink);">receipts</span>
     </nav>
-    <h1 style="font-weight:800;font-size:var(--fs-4xl);line-height:.98;letter-spacing:-.035em;margin:0 0 20px;color:var(--ink);max-width:900px;">Settled under the ceiling you saw first.</h1>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 20px;color:var(--ink);max-width:900px;">Settled under the ceiling you saw first.</h1>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:820px;margin:0;">Every call to the metered route (<code>POST /v1/metered/chat/completions</code>) is quoted from its own body before payment. A buyer whose client speaks the <code>upto</code> scheme, or who pays by card or credits, settles what the call actually used, never more than the quote. The ledger records both numbers per settlement. Our own canary row links its settle transaction on-chain; an outside buyer's transaction is not listed, because a hash names its payer. Machine-readable: <a href="/api/proof" style="color:var(--ink);">/api/proof</a>.</p>
   </div>
 </header>

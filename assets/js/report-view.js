@@ -147,7 +147,7 @@
       "<p>" + esc(m.label) + ", " + esc(m.priceUsd) + " a month. We re-check it for you on a schedule and email you a new cited report when something moves. Cancel any time, no account needed.</p>" +
       '<div class="row">' +
         '<button class="btn btn-primary" id="up-go">Start monitoring, ' + esc(m.priceUsd) + " a month →</button>" +
-        '<a class="btn btn-ghost" href="/monitors?product=' + encodeURIComponent(m.product) + "&amp;target=" + encodeURIComponent(target) + '">See what is included</a>' +
+        '<a class="btn btn-secondary" href="/monitors?product=' + encodeURIComponent(m.product) + "&amp;target=" + encodeURIComponent(target) + '">See what is included</a>' +
       "</div>" +
       '<div class="err" id="up-err"></div>' +
     "</div>";
@@ -229,7 +229,7 @@
 
     // Action bar (never printed).
     var dl = tables.map(function (t, i) {
-      return '<button class="btn btn-ghost dl-csv" data-i="' + i + '">Download ' + esc(t.label) + " (CSV)</button>";
+      return '<button class="btn btn-secondary dl-csv" data-i="' + i + '">Download ' + esc(t.label) + " (CSV)</button>";
     }).join("");
     var included = [];
     if (sources.length) included.push(sources.length + " cited sources");
@@ -239,9 +239,9 @@
       '<div class="report-actions no-print">' +
         '<button class="btn btn-primary" id="dl-pdf">Download PDF</button>' +
         dl +
-        '<button class="btn btn-ghost" id="dl-json">Download all data (JSON)</button>' +
-        '<a class="btn btn-ghost" id="copy-link" href="#">Copy link</a>' +
-        (s.sample !== true && s.publicView !== true && s.status === "done" ? '<button class="btn btn-ghost" id="mk-public">' + (s.public === true ? "Make private" : "Make public") + "</button>" : "") +
+        '<button class="btn btn-secondary" id="dl-json">Download all data (JSON)</button>' +
+        '<a class="btn btn-secondary" id="copy-link" href="#">Copy link</a>' +
+        (s.sample !== true && s.publicView !== true && s.status === "done" ? '<button class="btn btn-secondary" id="mk-public">' + (s.public === true ? "Make private" : "Make public") + "</button>" : "") +
       "</div>" +
       (s.sample !== true && s.publicView !== true && s.public === true && s.publicId ? '<div class="keep-hint no-print" id="public-note">Public at <a href="/reports/public/' + esc(s.publicId) + '">' + esc(location.origin + "/reports/public/" + s.publicId) + "</a>. Anyone with that link can read it and search engines may index it; make it private again any time.</div>" : "") +
       (s.sample === true || s.publicView === true
@@ -269,7 +269,7 @@
       var first = im.files && im.files[0];
       var prev = first ? '<img src="data:' + esc(first.media_type || "image/jpeg") + ';base64,' + first.b64 + '" alt="' + esc(im.alt || "") + '" style="max-width:100%;height:auto;border:1px solid var(--hairline);">' : "";
       var files = (im.files || []).map(function (f, j) {
-        return '<button class="btn btn-ghost dl-img" data-i="' + i + '" data-j="' + j + '">' + esc(f.name) + " " + f.width + "x" + f.height + " (" + Math.round((f.bytes || 0) / 1024) + " KB)</button>";
+        return '<button class="btn btn-secondary dl-img" data-i="' + i + '" data-j="' + j + '">' + esc(f.name) + " " + f.width + "x" + f.height + " (" + Math.round((f.bytes || 0) / 1024) + " KB)</button>";
       }).join(" ");
       return '<div class="rpt-image"><div class="rpt-meta">' + esc(im.slot || "image") + (im.alt ? " · " + esc(im.alt) : "") + "</div>" + prev + '<div class="report-actions no-print">' + files + "</div></div>";
     }).join("") + "</div>" : "";

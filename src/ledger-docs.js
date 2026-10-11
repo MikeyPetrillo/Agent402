@@ -43,7 +43,7 @@ export function ledgerDocsPage(baseUrl, catalog) {
 
   const main = `
       <section>
-      <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 14px;">Quickstart.</h1>
+      <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Quickstart.</h1>
       <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 30px;">Add ${fmtNum(totalCount)} tools - plus an open cross-seller Index, Smart Order Router, and an OpenAI-compatible /v1 gateway - to your agent in about a minute. No signup, no API key - start free with proof-of-work, settle ${RAILS_PAREN} when you scale.</p>
 
       <div id="quickstart" style="border:1px solid var(--hairline);background:var(--panel);margin-bottom:14px;">
@@ -61,7 +61,7 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
 
       <!-- HOW -->
       <section>
-      <h2 id="how" style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 18px;">How payment works.</h2>
+      <h2 id="how" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 18px;">How payment works.</h2>
       <div style="border:1px solid var(--hairline);background:var(--card);margin-bottom:44px;">
         <div style="display:grid;grid-template-columns:44px 1fr;gap:16px;padding:18px 20px;border-bottom:1px solid var(--hairline);"><span style="font-family:var(--font-mono);font-weight:700;color:var(--accent);font-size:var(--fs-lg);">01</span><span style="font-size:var(--fs-base);line-height:1.5;color:var(--muted);">Your agent calls a paid endpoint and receives <strong>HTTP 402 Payment Required</strong> with the price and payment details.</span></div>
         <div style="display:grid;grid-template-columns:44px 1fr;gap:16px;padding:18px 20px;border-bottom:1px solid var(--hairline);"><span style="font-family:var(--font-mono);font-weight:700;color:var(--accent);font-size:var(--fs-lg);">02</span><span style="font-size:var(--fs-base);line-height:1.5;color:var(--muted);">An x402 client (<span style="font-family:var(--font-mono);font-size:var(--fs-sm);">@x402/fetch</span>, axios, or any framework adapter) signs a USDC payment from its wallet and retries.</span></div>
@@ -71,7 +71,7 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
 
       <!-- THREE WAYS -->
       <section>
-      <h2 id="add" style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 18px;">Three ways in.</h2>
+      <h2 id="add" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 18px;">Three ways in.</h2>
 
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:8px;">A / MCP - Claude &amp; any MCP client</div>
       <div style="border:1px solid var(--hairline);background:var(--panel);margin-bottom:22px;"><pre style="margin:0;padding:16px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.8;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># Claude Code - hosted flagship MCP (search/answer first)
@@ -107,14 +107,14 @@ const out = await a.call("hash", { text: "hello", algo: "sha256" });</pre></div>
 
       <!-- FREE -->
       <section>
-      <h2 id="free" style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 14px;">Free tier - proof-of-work.</h2>
+      <h2 id="free" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 14px;">Free tier - proof-of-work.</h2>
       <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">The ${fmtNum(freeCount)} pure-CPU tools (of ${fmtNum(totalCount)} in the catalog) work with no wallet. Instead of paying USDC, your machine solves a short sha256 puzzle - a fraction of a second of CPU - and the call goes through. Nothing here consumes AI tokens.</p>
       <div style="border:1px solid var(--hairline);background:var(--card);padding:16px 20px;font-family:var(--font-mono);font-size:var(--fs-sm);margin-bottom:44px;"><span style="color:var(--ok);font-weight:700;">GET</span> <span style="color:var(--ink);">/api/pow</span>  <span style="color:var(--faint);">&rarr; returns a challenge; solve and resubmit. Free, rate-limited.</span></div>
       </section>
 
       <!-- GATEWAY -->
       <section>
-      <h2 id="gateway" style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 14px;">/v1 - OpenAI-compatible LLM gateway.</h2>
+      <h2 id="gateway" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 14px;">/v1 - OpenAI-compatible LLM gateway.</h2>
       <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">Point any OpenAI SDK at <code>base_url https://agent402.tools/v1</code> and pay per call in USDC over x402 - no API key, no signup, same wallet-is-the-identity model as every other tool. Chat has flat quality tiers ($0.003 nano to $0.50 premium) plus a $0.01 auto tier that routes on your prompt with no model required; embeddings are $0.002 with a default-on cache; image generation is $0.08 per image. A flat-tier answer carries <code>agent402_metered</code> whenever the same body would have been materially cheaper on the metered route, with the two figures and the endpoint to point at.</p>
       <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:var(--fs-sm);margin-bottom:44px;">
         <div style="display:grid;grid-template-columns:60px 1fr auto;gap:14px;padding:12px 18px;border-bottom:1px solid var(--hairline);"><span style="color:var(--accent);font-weight:700;">POST</span><span>/v1/metered/chat/completions</span><span style="color:var(--faint);">from $0.001 &middot; quoted per request from its body, settles what the call used under that quote</span></div>
@@ -130,7 +130,7 @@ const out = await a.call("hash", { text: "hello", algo: "sha256" });</pre></div>
 
       ${catalog["POST /api/decide"] ? (() => { const c = decideConfig(); return `<!-- DECIDE -->
       <section>
-      <h2 id="decide" style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 14px;">Decide - a plan for any job.</h2>
+      <h2 id="decide" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 14px;">Decide - a plan for any job.</h2>
       <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 12px;">Describe a job and get a call-ready plan over this catalog and indexed x402/MPP sellers with a recent live 402. Each step names its tool, endpoint, price and fallbacks, with params that validate against the tool's input schema. Needs no indexed tool covers come back as gaps.</p>
       <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 12px;">Every candidate is scored by one formula with the same weights: fit, observed reliability, price, schema quality and a freshness pass mark, with no term for who sells the tool. An outside tool is eligible when a live 402 was seen in the last ${Math.round(c.liveWithinHours / 24)} days and its input schema is known. Every tool in a plan carries <code>firstParty</code>, so you always see whose tool it is.</p>
       <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">The decide fee comes back as a credit, valid ${c.credit.ttlHours} hours, toward running that plan with <code>/api/decide/execute</code>. First-party steps run at list price; third-party steps are bought from the seller and resold at the seller's price plus a ${c.routingFeePct}% markup. Spend stops at your budget, and any unspent amount returns as credit until the decision's window closes.</p>
@@ -143,7 +143,7 @@ const out = await a.call("hash", { text: "hello", algo: "sha256" });</pre></div>
 
 `; })() : ""}      <!-- ENDPOINTS -->
       <section>
-      <h2 id="endpoints" style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 18px;">Reference endpoints.</h2>
+      <h2 id="endpoints" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 18px;">Reference endpoints.</h2>
       <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:var(--fs-sm);">
         <div style="display:grid;grid-template-columns:60px 1fr auto;gap:14px;padding:12px 18px;border-bottom:1px solid var(--hairline);"><span style="color:var(--ok);font-weight:700;">GET</span><span>/api/pricing</span><span style="color:var(--faint);">machine-readable catalog</span></div>
         <div style="display:grid;grid-template-columns:60px 1fr auto;gap:14px;padding:12px 18px;border-bottom:1px solid var(--hairline);"><span style="color:var(--ok);font-weight:700;">GET</span><span>/openapi.json</span><span style="color:var(--faint);">full OpenAPI 3.1 spec</span></div>

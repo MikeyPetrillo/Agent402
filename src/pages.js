@@ -438,7 +438,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   .tp-sub { color:var(--muted); font-size:var(--fs-lg); line-height:1.6; max-width:760px; }
   .tp-lead { color:var(--ink); font-size:var(--fs-lg); line-height:1.6; max-width:760px; margin:14px 0 6px; }
   .tp-sub code, .tp-lead code, .tp-facts code { background:var(--card); border:1px solid var(--hairline); font-family:var(--font-mono); padding:1px 5px; font-size:var(--fs-code-inline); }
-  .tp-h2 { font-weight:800; font-size:var(--fs-xl); margin:40px 0 10px; letter-spacing:-.01em; }
+  .tp-h2 { font-weight:700; font-size:var(--fs-xl); margin:40px 0 10px; letter-spacing:-.01em; }
   .tp-table { border-collapse:collapse; width:100%; font-size:var(--fs-md); }
   .tp-table td, .tp-table th { border:1px solid var(--hairline); padding:10px 12px; text-align:left; vertical-align:top; }
   .tp-table th { background:var(--card); font-weight:700; }
@@ -466,7 +466,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   <p class="tp-lead">${summary}</p>
   ${restOfDescription ? `<p class="tp-sub">${e(restOfDescription)}</p>` : ""}
   <p class="tp-meta">Category: <a href="${e(catHref)}" style="color:var(--accent);">${e(catLabel)}</a>${tagsLine ? ` · Tags: ${tagsLine}` : ""}${aliases.length ? ` · Also found as: ${aliases.slice(0, 6).map((a) => `<code>${e(a)}</code>`).join(" ")}` : ""}${isPack ? ` · <a href="/skills/${e(packSlug)}" style="color:var(--accent);">Pack overview</a>` : ""}</p>
-  <p style="margin:16px 0 0;"><a class="ml-cta" href="/playground?slug=${e(tool.slug)}" style="display:inline-block;background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);text-decoration:none;padding:11px 16px;">TRY IN PLAYGROUND →</a></p>
+  <p style="margin:16px 0 0;"><a class="btn btn-secondary btn-sm ml-cta" href="/playground?slug=${e(tool.slug)}" style="display:inline-block;">Try in playground →</a></p>
 
   <h2 class="tp-h2">Parameters</h2>
   ${paramRows ? `<div class="tp-tw"><table class="tp-table"><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>${paramRows}</table></div>` : `<p class="tp-sub">${e(tool.name)} takes no parameters.</p>`}
@@ -666,7 +666,7 @@ export function faqPage(baseUrl) {
   const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
   <section>
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;">FAQ</div>
-  <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:.96;letter-spacing:-.03em;margin-bottom:14px;">Frequently asked questions</h1>
+  <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.96;margin-bottom:14px;">Frequently asked questions</h1>
   <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.6;max-width:720px;margin-bottom:32px;">Agent402 is the open-source, self-hostable applied layer of Agentic Finance for x402 and MPP (+ MCP server): an open cross-seller Index, Smart Order Router, on-chain leaderboard and MPP marketplace, built on pay-per-call web tools for AI agents - free via proof-of-work, or paid in ${RAILS_AMP} over x402, or over MPP (Base/Celo USDC, native Tempo).</p>
   </section>
   <section>

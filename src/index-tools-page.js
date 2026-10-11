@@ -31,10 +31,10 @@ const fmtPrice = (p) => (typeof p === "number" && p > 0 ? `$${p < 0.01 ? p.toFix
 
 const CSS = `
 .ix-wrap{max-width:1180px;margin:0 auto;padding:52px 30px}
-.ix-h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:1;letter-spacing:-.03em;margin:0 0 12px}
+.ix-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1;margin:0 0 12px}
 .ix-sub{color:var(--muted);margin:0 0 24px;font-size:var(--fs-base);line-height:1.6;max-width:760px}
 .ix-note{border:1px solid var(--hairline);background:var(--card);padding:18px 20px;margin:0 0 26px}
-.ix-note h2{font-family:var(--font-body);font-weight:800;font-size:var(--fs-lg);margin:0 0 8px}
+.ix-note h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-lg);margin:0 0 8px}
 .ix-note ul{margin:0;padding-left:18px}
 .ix-note li{color:var(--muted);font-size:var(--fs-md);line-height:1.65;margin:5px 0}
 .ix-note b{color:var(--ink)}

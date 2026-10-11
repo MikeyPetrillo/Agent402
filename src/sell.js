@@ -108,7 +108,7 @@ const formHtml = `
     <label for="reg-origin" style="display:block;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Your API's origin</label>
     <div style="display:flex;gap:10px;">
       <input id="reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;font-family:var(--font-mono);font-size:var(--fs-sm);padding:9px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);">
-      <button id="reg-go" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);border:none;padding:9px 16px;cursor:pointer;">SUBMIT</button>
+      <button class="btn btn-primary btn-sm" id="reg-go">Submit</button>
     </div>
     <div id="reg-out" role="status" aria-live="polite" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);margin-top:8px;">Free, no account - we probe your origin's x402 surface and list you if it answers. An app served under a path on a shared host registers with that path (https://host/app/name); its documents are read from under it. Unreachable sellers drop out of routing (never off the roster) until they recover.</div>
     <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:10px 0 0;">Speak MPP? Register your MPP server on the <a href="/mpp-marketplace#list-api" style="color:var(--muted);">MPP marketplace →</a> (one call, or <code>POST /api/mpp-index/register {"origin", "path"}</code>); dual-stack sellers our x402 crawl already sees answering MPP are picked up automatically.</p>
@@ -142,7 +142,7 @@ table{border-collapse:collapse;width:100%}
     `<tr style="border-bottom:1px solid var(--hairline);"><td style="padding:13px 18px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">${String(i + 1).padStart(2, "0")}</td><th scope="row" style="text-align:left;font-weight:700;padding:13px 18px;color:var(--ink);font-size:var(--fs-base);">${esc(lane)}</th><td style="padding:13px 18px;color:var(--muted);font-size:var(--fs-md);line-height:1.5;">${esc(body)}</td></tr>`
   ).join("");
   const registerStepsHtml = REGISTER_STEPS.map(([n, t, b]) =>
-    `<li style="display:grid;grid-template-columns:52px 1fr;gap:14px;padding:20px 22px;border-bottom:1px solid var(--hairline);"><span style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);color:var(--accent);">${esc(n)}</span><div><h3 style="font-weight:800;font-size:var(--fs-lg);margin:0 0 7px;color:var(--ink);">${esc(t)}</h3><p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0;">${esc(b)}</p></div></li>`
+    `<li style="display:grid;grid-template-columns:52px 1fr;gap:14px;padding:20px 22px;border-bottom:1px solid var(--hairline);"><span style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);color:var(--accent);">${esc(n)}</span><div><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 7px;color:var(--ink);">${esc(t)}</h3><p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0;">${esc(b)}</p></div></li>`
   ).join("");
   const whatWeReadHtml = WHAT_WE_READ.map(([label, value]) =>
     `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:9px 13px;color:var(--muted);">${esc(label)}</th><td style="padding:9px 13px;text-align:right;color:var(--ink);">${esc(value)}</td></tr>`
@@ -162,7 +162,7 @@ table{border-collapse:collapse;width:100%}
     `<tr style="border-bottom:1px solid var(--hairline);"><td style="padding:12px 14px;color:var(--accent);font-family:var(--font-mono);font-size:var(--fs-sm);width:26px;">✓</td><td style="padding:12px 14px;color:var(--muted);font-size:var(--fs-md);line-height:1.5;">${esc(c)}</td></tr>`
   ).join("");
   const faqHtml = FAQS.map(([q, a]) =>
-    `<article style="padding:24px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${esc(a)}</p></article>`
+    `<article style="padding:24px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${esc(a)}</p></article>`
   ).join("");
 
   const body = `
@@ -174,12 +174,12 @@ table{border-collapse:collapse;width:100%}
     <div class="sl-hero" style="display:grid;grid-template-columns:1.1fr .9fr;gap:52px;align-items:start;">
       <div>
         <div style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:20px;">for api operators &amp; site owners</div>
-        <h1 style="font-weight:800;font-size:var(--fs-5xl);line-height:.94;letter-spacing:-.035em;margin:0 0 22px;color:var(--ink);">Agents are buying.<br>Get <span style="color:var(--accent);">paid</span> for it.</h1>
+        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 22px;color:var(--ink);">Agents are buying.<br>Get <span style="color:var(--accent);">paid</span> for it.</h1>
         <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 16px;">An AI agent cannot sign up for your API. It has no email, no card, and no way to accept your terms. What it can do is <strong style="color:var(--ink);font-weight:700;">pay a fraction of a cent per call, unattended</strong>, from its own wallet.</p>
         <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0 0 30px;">Serve an x402 challenge, register your origin, and the index routes matching buyer tasks to you. Money moves buyer wallet to your wallet. We never hold it, and nothing is deducted from your price.</p>
         <div style="display:flex;flex-wrap:wrap;gap:11px;">
-          <a href="#register" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:14px 22px;">LIST AN x402 API →</a>
-          <a href="/tollbooth" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 22px;">Tollbooth a site</a>
+          <a class="btn btn-primary" href="#register">List an x402 API →</a>
+          <a class="btn btn-secondary" href="/tollbooth">Tollbooth a site</a>
         </div>
       </div>
       <div style="border:1px solid var(--hairline);background:var(--panel);">
@@ -194,7 +194,7 @@ table{border-collapse:collapse;width:100%}
 <section style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/bestsellers · $0.005 per read</div>
   <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
-    <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Demand you can't get anywhere else.</h2>
+    <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Demand you can't get anywhere else.</h2>
     <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">lanes shown · figures are a paid read</span>
   </div>
   <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 28px;">Settlements land on chain, but <em style="color:var(--ink);">which tool an agent bought</em> never does - so this ledger cannot be reconstructed from a block explorer by anyone, including us. It is the one dataset in the x402 ecosystem that only the seller who served the call can see. Here are the lanes agents spend most in, in order. The numbers behind them are a tool, not a marketing page.</p>
@@ -209,12 +209,12 @@ table{border-collapse:collapse;width:100%}
   </div>
   <div class="sl-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);border-top:none;">
     <div style="padding:24px;border-right:1px solid var(--hairline);background:var(--footer-bg);">
-      <h3 style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 12px;">The unmet half</h3>
+      <h3 style="font-family:var(--font-mono);font-weight:600;font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 12px;">The unmet half</h3>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 14px;">We also log what agents searched for and <strong style="color:var(--ink);">did not find</strong>. Those wish clusters are ranked at <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);">/api/demand-radar</span>, tagged by whether agents asked outright or simply failed to discover something that already exists - and flagged when a cluster is within two signals of the build threshold. It is the closest thing to a build list for an x402 seller, and nobody else is sitting on the data.</p>
       <a href="/tools/demand-radar" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">demand radar → $0.005 per read</a>
     </div>
     <div style="padding:24px;background:var(--footer-bg);">
-      <h3 style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 12px;">What sells here</h3>
+      <h3 style="font-family:var(--font-mono);font-weight:600;font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 12px;">What sells here</h3>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">Not novelty. The heaviest lanes are dull, deterministic and cheap - the calls an agent makes dozens of times inside a single job, where a wrong answer breaks the whole chain. You do not need novelty to sell into that. You need to be callable, correctly priced, and reachable when the router asks.</p>
     </div>
   </div>
@@ -222,13 +222,13 @@ table{border-collapse:collapse;width:100%}
 
 <section style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
   <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
-    <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Two ways in.</h2>
+    <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Two ways in.</h2>
     <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">whether or not you speak the protocol yet</span>
   </div>
   <div class="sl-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);margin-top:14px;">
     <div style="padding:28px;border-right:1px solid var(--hairline);background:var(--card);display:flex;flex-direction:column;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:16px;">01 / YOU HAVE AN API</div>
-      <h3 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">List it and get routed</h3>
+      <h3 style="font-weight:600;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">List it and get routed</h3>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Return a 402 with your price, asset, network and payTo on the endpoints you want to charge for. Register the origin and the crawler reads your manifest at once, then re-probes it ${crawlIntervalLabel()}. From then on the Smart Order Router can send you work, ranked against our own tools on the same terms.</p>
       <pre style="margin:0 0 18px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># what a buyer's agent sees
 </span>HTTP/1.1 402 Payment Required
@@ -237,22 +237,22 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
 </span>{"x402Version":2,"accepts":[{"scheme":"exact",
   "network":"eip155:8453","amount":"4000",
   "asset":"0x833589fC&hellip;02913","payTo":"0xYourWallet&hellip;"}]}</pre>
-      <a href="#register" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);text-decoration:none;padding:12px 18px;align-self:flex-start;">REGISTER YOUR ORIGIN →</a>
+      <a class="btn btn-primary btn-sm" href="#register" style="align-self:flex-start;">Register your origin →</a>
     </div>
     <div style="padding:28px;background:var(--card);display:flex;flex-direction:column;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:16px;">02 / YOU HAVE A SITE</div>
-      <h3 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">Charge the crawlers instead</h3>
+      <h3 style="font-weight:600;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">Charge the crawlers instead</h3>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">If AI crawlers are already taking your content for free, tollbooth is the open answer. Humans browse normally; known bots get a 402 and either pay in USDC or solve a proof-of-work. MIT licensed, one middleware, no CDN lock-in and no merchant of record standing between you and the money.</p>
       <pre style="margin:0 0 18px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># express · next.js · cloudflare · proxy · wordpress
 </span>npm i agent402-tollbooth</pre>
-      <a href="/guides/coinbase-business-get-paid-by-agents" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);text-decoration:none;margin-right:14px;">Coinbase Business account? →</a><a href="/tollbooth" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);text-decoration:none;padding:11px 18px;align-self:flex-start;">Gate your crawlers →</a>
+      <a href="/guides/coinbase-business-get-paid-by-agents" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);text-decoration:none;margin-right:14px;">Coinbase Business account? →</a><a class="btn btn-secondary btn-sm" href="/tollbooth" style="align-self:flex-start;">Gate your crawlers →</a>
     </div>
   </div>
 </section>
 
 <section id="register" style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ POST /api/index/register</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--ink);">Five steps, no account.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--ink);">Five steps, no account.</h2>
   <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:700px;margin:0 0 30px;">There is no dashboard to log into and nothing to wait for. You serve a 402, you tell us where you live, and the crawler does the rest.</p>
   <div class="sl-2col" style="display:grid;grid-template-columns:1.05fr .95fr;gap:0;border:1px solid var(--hairline);">
     <ol style="margin:0;padding:0;list-style:none;background:var(--card);">${registerStepsHtml}</ol>
@@ -273,7 +273,7 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
 <section style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ POST /api/route</div>
   <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
-    <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">How buyers reach you.</h2>
+    <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">How buyers reach you.</h2>
     <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">match score → judged fit → price</span>
   </div>
   <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 28px;">Four surfaces, and the router is the one that matters. A buyer describes a task, the router resolves it to a tool, and it does not care whose tool it is. New sellers get the benefit of the doubt on health rather than being buried until they have a track record.</p>
@@ -288,7 +288,7 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
 
 <section style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /.well-known/x402</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--ink);">Get paid on the chains you accept.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--ink);">Get paid on the chains you accept.</h2>
   <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 28px;">Advertise every rail you support: each one is another set of buyers who can pay you directly. ${esc(ROUTER_CHAIN_SENTENCE)} Gas is sponsored by the facilitator on EVM chains, so neither side needs the native token.</p>
   <div style="border:1px solid var(--hairline);background:var(--card);padding:26px;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:18px;">x402 settlement rails - each links to that chain's marketplace</div>
@@ -301,14 +301,14 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
   <div class="sl-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);">
     <div style="padding:30px;border-right:1px solid var(--hairline);background:var(--footer-bg);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">HOW WE MAKE MONEY</div>
-      <h2 style="font-weight:800;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Buyer side, and only there</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Buyer side, and only there</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 14px;">A buyer who discovers you and pays you directly costs you nothing and earns us nothing. That is most traffic, and it is the point.</p>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 14px;">We earn when the <strong style="color:var(--ink);">router</strong> buys from you and resells the result to a buyer: the buyer pays us one flat price for the convenience of not integrating you, and we pay you your full advertised price. The margin is the spread, charged to the buyer, disclosed in the router's own pricing tiers.</p>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">We would rather write that down than let you find it out. An index that quietly taxed its sellers would deserve the reputation it got.</p>
     </div>
     <div style="padding:30px;background:var(--footer-bg);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">WHAT WE WON'T DO</div>
-      <h2 style="font-weight:800;font-size:var(--fs-2xl);margin:0 0 18px;color:var(--ink);">The commitments</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 18px;color:var(--ink);">The commitments</h2>
       <table style="font-size:var(--fs-md);border:1px solid var(--hairline);"><tbody>${commitmentsHtml}</tbody></table>
       <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:14px 0 0;">verify in <a href="${esc(REPO)}/blob/main/src/x402-index.js" rel="noopener" style="color:var(--muted);">src/x402-index.js →</a></p>
     </div>
@@ -316,20 +316,19 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
 </section>
 
 <section style="max-width:900px;margin:0 auto;padding:60px 30px 0;">
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 26px;color:var(--ink);">Seller questions.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 26px;color:var(--ink);">Seller questions.</h2>
   <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">${faqHtml}</div>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:48px 30px 56px;">
   <div style="background:var(--panel);border:1px solid var(--hairline);padding:52px 44px;position:relative;overflow:hidden;">
-    <div style="position:absolute;right:26px;top:-36px;font-weight:900;font-size:var(--fs-mark);line-height:1;color:transparent;-webkit-text-stroke:2px var(--on-panel-mark);pointer-events:none;">402</div>
     <div style="position:relative;">
-      <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">One curl and you're listed.</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">One curl and you're listed.</h2>
       <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 28px;max-width:520px;">No account, no review, nothing deducted. If the crawler can reach your 402, you are in the index on the next pass.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a href="#register" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:14px 24px;">REGISTER YOUR ORIGIN →</a>
-        <a href="/tollbooth" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">Tollbooth a site</a>
-        <a href="/leaderboard" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel-dim);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">SEE THE LEADERBOARD</a>
+        <a class="btn btn-primary on-panel" href="#register">Register your origin →</a>
+        <a class="btn btn-secondary on-panel" href="/tollbooth">Tollbooth a site</a>
+        <a class="btn btn-secondary on-panel" href="/leaderboard">See the leaderboard</a>
       </div>
     </div>
   </div>

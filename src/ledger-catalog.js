@@ -87,7 +87,7 @@ table{border-collapse:collapse;width:100%}
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:18px;">
       <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">our tools</span>
     </nav>
-    <h1 style="font-weight:800;font-size:var(--fs-4xl);line-height:1;letter-spacing:-.03em;margin:0 0 12px;color:var(--ink);">Our tools</h1>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1;margin:0 0 12px;color:var(--ink);">Our tools</h1>
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0;max-width:640px;">${fmtNum(count)} tools an agent can call and pay for per request. Around ${fmtNum(freeCount)} of them run free on proof-of-work. This is <em style="color:var(--on-panel-soft);">our own</em> catalog - for every tool in the index, ours and other sellers', see <a href="/marketplace/tools" style="color:var(--ink);border-bottom:1px solid var(--accent);text-decoration:none;">all indexed tools</a>.</p>
 
     <div class="cat-search-wrap" style="display:flex;gap:0;background:var(--card);max-width:760px;margin:22px 0 0;">
@@ -111,7 +111,7 @@ table{border-collapse:collapse;width:100%}
 <section style="max-width:1180px;margin:0 auto;padding:52px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/pricing</div>
   <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
-    <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Browse by category.</h2>
+    <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Browse by category.</h2>
     <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">counts from the live catalog</span>
   </div>
   <div class="cat-scroll" style="border:1px solid var(--hairline);background:var(--card);">
@@ -135,7 +135,7 @@ table{border-collapse:collapse;width:100%}
   <div class="cat-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);">
     <div style="padding:28px;border-right:1px solid var(--hairline);background:var(--footer-bg);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ok);margin-bottom:14px;">FREE TIER</div>
-      <h2 style="font-weight:800;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Pay with CPU, not USDC</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Pay with CPU, not USDC</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Every pure-CPU tool is payable in compute. Your machine solves a single-use sha256 puzzle - about 85,000 hashes, a tenth of a second - and the call goes through. No wallet, no funding, no signup.</p>
       <pre style="margin:0 0 16px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># the MCP connector solves it for you
 </span>claude mcp add --transport http \
@@ -144,7 +144,7 @@ table{border-collapse:collapse;width:100%}
     </div>
     <div style="padding:28px;background:var(--footer-bg);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">PAID TOOLS</div>
-      <h2 style="font-weight:800;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Quoted before you're charged</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Quoted before you're charged</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Anything that costs us money to run - live search, browser rendering, inference, stored memory - is priced per call and states its price in the 402 challenge. A failed x402 call is not charged, and there is no key to leak.</p>
       <pre style="margin:0 0 16px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># price, asset and rail, before paying
 </span>curl -i https://agent402.tools/api/search \
@@ -156,14 +156,13 @@ table{border-collapse:collapse;width:100%}
 
 <section style="max-width:1180px;margin:0 auto;padding:44px 30px 52px;">
   <div style="background:var(--panel);border:1px solid var(--hairline);padding:46px 40px;position:relative;overflow:hidden;">
-    <div style="position:absolute;right:24px;top:-32px;font-weight:900;font-size:var(--fs-mark);line-height:1;color:transparent;-webkit-text-stroke:2px var(--on-panel-mark);pointer-events:none;">402</div>
     <div style="position:relative;">
-      <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Don't browse. Just ask.</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Don't browse. Just ask.</h2>
       <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:520px;">Paste the MCP URL and describe the job. The connector picks the tool, solves the proof-of-work or signs the payment, and hands back the result.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a href="/docs#add" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:14px 24px;">Add to your agent →</a>
-        <a href="/playground" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">TRY THE PLAYGROUND</a>
-        <a href="/skills" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel-dim);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">BIGGER JOBS → SKILL PACKS</a>
+        <a class="btn btn-primary on-panel" href="/docs#add">Add to your agent →</a>
+        <a class="btn btn-secondary on-panel" href="/playground">Try the playground</a>
+        <a class="btn btn-secondary on-panel" href="/skills">Bigger jobs → skill packs</a>
       </div>
     </div>
   </div>

@@ -20,7 +20,7 @@ export function companyPage(baseUrl) {
   const row = (h, body, links = []) => `
 <section style="max-width:1180px;margin:0 auto;padding:40px 30px 0;">
   <div class="co-2col" style="display:grid;grid-template-columns:220px 1fr;gap:30px;padding-bottom:36px;border-bottom:1px solid var(--hairline);">
-    <h2 style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);font-weight:600;margin:4px 0 0;">${esc(h)}</h2>
+    <h2 style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);font-weight:700;margin:4px 0 0;">${esc(h)}</h2>
     <div><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 14px;">${body}</p>
     <div style="display:flex;gap:18px;flex-wrap:wrap;">${links.map(([href, label]) => `<a href="${esc(href)}" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">${esc(label)} →</a>`).join("")}</div></div>
   </div>
@@ -29,7 +29,7 @@ export function companyPage(baseUrl) {
 <header style="border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">company</span></nav>
-    <h1 style="font-weight:800;font-size:var(--fs-4xl);line-height:.98;letter-spacing:-.035em;margin:0 0 18px;color:var(--ink);max-width:900px;">Havok Holdings LLC.</h1>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);max-width:900px;">Havok Holdings LLC.</h1>
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Agent402.Tools is built and operated by <a href="https://havok.holdings" rel="noopener" style="color:var(--ink);">Havok Holdings LLC</a>, a North Carolina company. We run the hosted service at agent402.tools, publish the server under AGPL-3.0 and the client packages under MIT, and settle paid calls on public blockchains, or by card through Stripe.</p>
   </div>
 </header>
@@ -42,13 +42,13 @@ ${row("Identity", `The operator is identified on-chain as well as on this page: 
 ${row("Contact", `General, security, legal and abuse: <a href="mailto:mike@agent402.tools" style="color:var(--ink);">mike@agent402.tools</a> (security reports: the private advisory on GitHub is preferred, see /security). Investors and partnerships: <a href="mailto:hello@havok.holdings" style="color:var(--ink);">hello@havok.holdings</a>. Updates and quick questions: <a href="https://x.com/Agent402Tools" rel="noopener" style="color:var(--ink);">@Agent402Tools</a>; bugs and contributions: <a href="${REPO_URL}" rel="noopener" style="color:var(--ink);">the repository</a>.`, [["https://havok.holdings", "havok.holdings"], [REPO_URL, "Source"], ["https://x.com/Agent402Tools", "X"]])}
 <section style="max-width:1180px;margin:0 auto;padding:40px 30px 48px;">
   <div class="co-form" style="max-width:640px;background:var(--card);border:1px solid var(--hairline);padding:28px 28px 24px;">
-    <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);margin:0 0 6px;">Send a message.</h2>
+    <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);margin:0 0 6px;">Send a message.</h2>
     <p style="color:var(--muted);font-size:var(--fs-md);margin:0 0 20px;">Opens in your email app, pre-filled and ready to send.</p>
     <form id="contactForm" action="mailto:mike@agent402.tools" method="POST" enctype="text/plain">
       <div class="co-field"><label for="ct-name">Name</label><input type="text" id="ct-name" name="name" required placeholder="Your name"></div>
       <div class="co-field"><label for="ct-email">Email</label><input type="email" id="ct-email" name="email" required placeholder="you@example.com"></div>
       <div class="co-field"><label for="ct-msg">Message</label><textarea id="ct-msg" name="message" required placeholder="What's on your mind?"></textarea></div>
-      <button type="submit" class="co-submit">Send message &rarr;</button>
+      <button type="submit" class="btn btn-secondary co-submit">Send message &rarr;</button>
     </form>
     <p style="color:var(--faint);font-size:var(--fs-sm);margin:14px 0 0;line-height:1.5;">No email app on this device? Copy the address instead: <a href="mailto:mike@agent402.tools" style="color:var(--muted);">mike@agent402.tools</a></p>
   </div>
@@ -60,7 +60,7 @@ ${ledgerFooterCompact()}`;
 .co-field input,.co-field textarea{width:100%;padding:11px 14px;background:var(--paper);border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-body);font-size:var(--fs-md);outline:none}
 .co-field input:focus,.co-field textarea:focus{border-color:var(--accent)}
 .co-field textarea{min-height:120px;resize:vertical}
-.co-submit{background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);border:none;padding:12px 24px;cursor:pointer}
+.co-submit{align-self:flex-start}
 .co-submit:hover{opacity:.85}`;
   const jsonLd = [
     { "@type": "Organization", "@id": `${baseUrl}/#org`, name: "Havok Holdings LLC", legalName: "Havok Holdings LLC", duns: "142233542", foundingLocation: { "@type": "Place", address: { "@type": "PostalAddress", addressRegion: "NC", addressCountry: "US" } }, url: "https://havok.holdings", sameAs: ["https://havok.holdings", ...ORG_SAME_AS], brand: { "@type": "Brand", name: "Agent402", alternateName: "Agent402.Tools", url: baseUrl }, contactPoint: [{ "@type": "ContactPoint", contactType: "customer support", email: "mike@agent402.tools" }, { "@type": "ContactPoint", contactType: "security", email: "mike@agent402.tools" }, { "@type": "ContactPoint", contactType: "investor relations", email: "hello@havok.holdings" }] },

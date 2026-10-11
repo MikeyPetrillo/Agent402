@@ -51,12 +51,12 @@ export const SLIDES = [
     body: `<div class="s101-demo" id="s101-demo">
   <div class="s101-step" data-step="1">
     <div class="s101-step-h"><span class="s101-num">1</span><strong>Ask without paying.</strong> <span class="s101-muted">The agent calls a tool on this server with no payment attached.</span></div>
-    <button class="s101-btn" id="s101-ask" type="button">GET agent402.tools/api/uuid &rarr;</button>
+    <button class="btn btn-secondary s101-btn" id="s101-ask" type="button">GET agent402.tools/api/uuid &rarr;</button>
     <div class="s101-out" id="s101-ask-out" aria-live="polite"></div>
   </div>
   <div class="s101-step" data-step="2">
     <div class="s101-step-h"><span class="s101-num">2</span><strong>Pay.</strong> <span class="s101-muted">Two ways to put a coin in: money from a wallet, or, on the free tier, a short burst of computer work (a puzzle: ${esc(powCostPhrase())}). This browser has no wallet, so it will solve the puzzle.</span></div>
-    <button class="s101-btn" id="s101-pay" type="button" disabled>Solve the puzzle and retry &rarr;</button>
+    <button class="btn btn-secondary s101-btn" id="s101-pay" type="button" disabled>Solve the puzzle and retry &rarr;</button>
     <div class="s101-out" id="s101-pay-out" aria-live="polite"></div>
   </div>
   <div class="s101-step" data-step="3">
@@ -169,8 +169,6 @@ html{scroll-behavior:smooth}
 .s101-step-h{font-size:var(--fs-lg);line-height:1.5;color:var(--ink);margin-bottom:10px}
 .s101-num{display:inline-block;width:24px;height:24px;border:1px solid var(--hairline);text-align:center;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:22px;margin-right:10px}
 .s101-muted{color:var(--muted);font-weight:400}
-.s101-btn{background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);border:none;padding:11px 16px;cursor:pointer}
-.s101-btn[disabled]{background:var(--hairline);color:var(--faint);cursor:not-allowed}
 .s101-out{font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.7;margin-top:12px;white-space:pre-wrap;word-break:break-word;color:var(--ink)}
 .s101-out .ok{color:var(--ok);font-weight:700}
 .s101-out .k{color:var(--muted)}

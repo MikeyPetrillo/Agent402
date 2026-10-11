@@ -40,20 +40,20 @@ export function x402TestPage(baseUrl) {
     <nav aria-label="Breadcrumb" style="${mono}font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;">
       <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">test your client</span>
     </nav>
-    <h1 style="font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.035em;margin:0 0 22px;color:var(--ink);max-width:900px;">Test your x402 client against a real endpoint.</h1>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 22px;color:var(--ink);max-width:900px;">Test your x402 client against a real endpoint.</h1>
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Every refusal here tells you what was actually wrong: which field differs from what was advertised, which schemes and networks the route offers, whether the amount or the validity window is the problem. Refusals are free, because an error status cancels settlement. You pay only when it works, and then it costs ${esc(PROBE_PRICE)}.</p>
   </div>
 </header>
 
 <section style="max-width:1180px;margin:0 auto;padding:44px 30px 0;">
-  <h2 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 16px;color:var(--ink);">1. Get a challenge</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 16px;color:var(--ink);">1. Get a challenge</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">Any paid route answers one. This is the cheapest: pure computation, no upstream.</p>
   ${pre(`curl -sD - -X POST ${baseUrl}${PROBE_PATH} \\\n  -H 'content-type: application/json' \\\n  -d '{"text":"hello"}'`)}
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">The terms are in the <code>PAYMENT-REQUIRED</code> response header as base64 JSON, which is where the x402 v2 spec puts them, and the JSON body carries the same object, so a client that reads either one finds the offer. The header is authoritative. MPP clients get <code>WWW-Authenticate: Payment</code> challenges on the same response.</p>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:36px 30px 0;">
-  <h2 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 16px;color:var(--ink);">2. Pay it, and read the refusal</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 16px;color:var(--ink);">2. Pay it, and read the refusal</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">Retry with your client's <code>PAYMENT-SIGNATURE</code> header. If it is wrong, the 402 body carries a <code>reason</code>, a <code>hint</code> in words, and a <code>retry</code> telling you what kind of change is needed, ahead of the same offer the header carries. The header's one-line <code>error</code> is left out of a refusal's body, so a client that reads <code>error</code> first reads the hint instead. Here is a real one, with the offer trimmed. A route that also takes proof-of-work puts an <code>altPayment</code> pointer first.</p>
   ${pre(`{
   "reason": "unsupported-scheme",
@@ -68,14 +68,14 @@ export function x402TestPage(baseUrl) {
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:36px 30px 0;">
-  <h2 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 16px;color:var(--ink);">Every reason this server emits</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 16px;color:var(--ink);">Every reason this server emits</h2>
   <div style="overflow-x:auto;">
     <table style="border-collapse:collapse;width:100%;max-width:960px;"><tbody>${rows}</tbody></table>
   </div>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:36px 30px 0;">
-  <h2 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 16px;color:var(--ink);">3. When it works</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 16px;color:var(--ink);">3. When it works</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">You get a 200, the tool's answer, and a <code>PAYMENT-RESPONSE</code> receipt naming the settlement transaction, verifiable on the chain you paid on without asking us. At that point your client is integrated with the whole catalog: the same credential pays for 500+ tools, five model tiers on four wires, embeddings, images, speech and finished reports.</p>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">If a receipt says a payment settled and the call still failed to deliver, that payment is recorded as owed and repaid to the paying wallet after review. Check any payment by its settlement transaction at <code>GET /api/refunds/lookup?tx=&lt;hash&gt;</code>: free, and it answers with the refund status and, once sent, our refund transaction.</p>
   <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:8px;">
@@ -88,10 +88,10 @@ export function x402TestPage(baseUrl) {
 
 <section style="max-width:1180px;margin:0 auto;padding:44px 30px 56px;">
   <div style="background:var(--panel);border:1px solid var(--hairline);padding:44px 40px;">
-    <h2 style="font-weight:800;font-size:var(--fs-2xl);line-height:1.05;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">If the refusal looks wrong, it may be ours.</h2>
+    <h2 style="font-weight:700;font-size:var(--fs-2xl);line-height:1.05;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">If the refusal looks wrong, it may be ours.</h2>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 24px;max-width:640px;">A refusal we cannot classify is as likely to be a defect on this server as a fault in your client, and we would rather hear about it than have you work around it. Two of the classes in the table above exist because someone outside told us their client was being refused for a reason that turned out to be ours.</p>
     <div style="display:flex;gap:11px;flex-wrap:wrap;">
-      <a href="${repoUrl("issues/new")}" style="background:var(--accent);color:var(--on-accent);${mono}font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:14px 24px;">TELL US →</a>
+      <a class="btn btn-secondary on-panel" href="${repoUrl("issues/new")}">Tell us →</a>
       <a href="/status" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);${mono}font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">UPTIME, MEASURED OUTSIDE</a>
     </div>
   </div>

@@ -3032,11 +3032,11 @@ app.use(securityHeaders());
 function notFoundPage(res, { what = "Page", href = "/", label = "Home" } = {}) {
   const body = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
       <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">404</div>
-      <h1 style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${escHtml(what)} not found</h1>
+      <h1 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${escHtml(what)} not found</h1>
       <p style="color:var(--muted);margin:0 0 28px;font-weight:300;">There is nothing at this address.</p>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-        <a href="${escHtml(href)}" style="display:inline-block;padding:11px 18px;background:var(--btn-bg);color:var(--btn-fg);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">${escHtml(label)}</a>
-        <a href="/" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">Home</a>
+        <a class="btn btn-secondary" href="${escHtml(href)}">${escHtml(label)}</a>
+        <a class="btn btn-secondary" href="/">Home</a>
       </div>
     </div>${ledgerFooterCompact()}`;
   return res.status(404).type("html").send(ledgerShell({ title: `${what} not found - Agent402`, description: `${what} not found`, canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
@@ -3661,7 +3661,7 @@ app.get("/revenue", async (_req, res) => {
     res.set("Cache-Control", "no-cache").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: standingFigures() }));
   } catch (e) {
     if (e?.snapshotWarming) {
-      res.status(200).type("html").send('<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body style="font-family:system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 24px;color:#111315"><h2 style="font-weight:500">Warming up…</h2><p style="color:#626970">The live on-chain transaction view is loading for the first time since a deploy. It refreshes here automatically in a few seconds.</p><p><a href="/" style="color:#0F5E43">Home</a></p></body>'); // design-tokens: literal (standalone fallback page, no stylesheet)
+      res.status(200).type("html").send('<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body style="font-family:system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 24px;color:#111315"><h2 style="font-weight:700">Warming up…</h2><p style="color:#626970">The live on-chain transaction view is loading for the first time since a deploy. It refreshes here automatically in a few seconds.</p><p><a href="/" style="color:#0F5E43">Home</a></p></body>'); // design-tokens: literal (standalone fallback page, no stylesheet)
     } else {
       res.status(500).type("html").send('<p>Revenue view temporarily unavailable. <a href="/">Home</a></p>');
     }
@@ -7424,7 +7424,7 @@ const fontB64 = (f) => readFileSync(new URL(`../assets/fonts/${f}`, import.meta.
 // render-blocking third-party Google Fonts stylesheet (worth ~1.9s of mobile
 // render-block + a cross-origin request chain) and gives repeat visits a free
 // cache hit. Filenames are strictly validated — no path traversal.
-const FONT_FILE_RE = /^((archivo|spacemono)-(400|500|600|700|800|900)|(geist|geist-mono)-(300|400|500|600|700)-(latin|latin-ext))\.woff2$/;
+const FONT_FILE_RE = /^((archivo|spacemono)-(400|500|600|700|800|900)|(geist|geist-mono)-(300|400|500|600|700)-(latin|latin-ext)|instrument-serif-400-(latin|latin-ext))\.woff2$/;
 app.get("/fonts/:file", (req, res) => {
   const file = String(req.params.file || "");
   if (!FONT_FILE_RE.test(file)) return res.status(404).end();
@@ -9969,12 +9969,12 @@ app.use((req, res) => {
   }
   const body = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
       <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">404</div>
-      <h1 style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">Page not found</h1>
+      <h1 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">Page not found</h1>
       <p style="color:var(--muted);margin:0 0 28px;font-weight:300;">The page you're looking for doesn't exist.</p>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-        <a href="/" style="display:inline-block;padding:11px 18px;background:var(--btn-bg);color:var(--btn-fg);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">Home</a>
-        <a href="/tools" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">Browse tools</a>
-        <a href="/api/find" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">Find a tool</a>
+        <a class="btn btn-secondary" href="/">Home</a>
+        <a class="btn btn-secondary" href="/tools">Browse tools</a>
+        <a class="btn btn-secondary" href="/api/find">Find a tool</a>
       </div>
     </div>${ledgerFooterCompact()}`;
   res.status(404).type("html").send(ledgerShell({ title: "Page not found - Agent402", description: "Page not found", canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
@@ -10011,12 +10011,12 @@ app.use((err, req, res, _next) => {
     const m = is404 ? "The page you\u2019re looking for doesn\u2019t exist." : "Something went wrong. Try again in a moment.";
     const errBody = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
       <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">${status}</div>
-      <h1 style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${t}</h1>
+      <h1 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${t}</h1>
       <p style="color:var(--muted);margin:0 0 28px;font-weight:300;">${m}</p>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-        <a href="/" style="display:inline-block;padding:11px 18px;background:var(--btn-bg);color:var(--btn-fg);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">Home</a>
-        <a href="/tools" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">Browse tools</a>
-        <a href="/api/find" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">Find a tool</a>
+        <a class="btn btn-secondary" href="/">Home</a>
+        <a class="btn btn-secondary" href="/tools">Browse tools</a>
+        <a class="btn btn-secondary" href="/api/find">Find a tool</a>
       </div>
       <div style="margin-top:30px;color:var(--faint);font-size:var(--fs-md);font-family:var(--font-mono);">or try: <a href="/playground" style="color:var(--ink);">playground</a> · <a href="/docs" style="color:var(--ink);">docs</a> · <a href="/quickstart" style="color:var(--ink);">quickstart</a></div>
     </div>${ledgerFooterCompact()}`;

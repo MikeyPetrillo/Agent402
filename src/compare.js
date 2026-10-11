@@ -16,10 +16,10 @@ export function comparePage(baseUrl) {
   const extraCss = `
 .cmp-wrap{max-width:960px;margin:0 auto;padding:56px 30px}
 .cmp-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
-.cmp-h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 14px}
+.cmp-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px}
 .cmp-intro{max-width:760px;font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px}
 .cmp-section{margin-bottom:48px}
-.cmp-section h2{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 10px;color:var(--ink)}
+.cmp-section h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 10px;color:var(--ink)}
 .cmp-section p.cmp-desc{color:var(--muted);font-size:var(--fs-base);line-height:1.55;margin:0 0 20px;max-width:760px}
 .cmp-scroll{overflow-x:auto}
 .cmp-table{width:100%;min-width:520px;border-collapse:collapse;background:var(--card);border:1px solid var(--hairline);overflow:hidden;font-size:var(--fs-md)}
@@ -36,10 +36,8 @@ export function comparePage(baseUrl) {
 .cross{color:var(--faint);font-size:var(--fs-lg)}
 @media(max-width:640px){.cmp-table{font-size:var(--fs-sm)}.cmp-table th,.cmp-table td{padding:10px 12px}.cmp-h1{font-size:var(--fs-3xl) !important}}
 .cmp-cta{text-align:center;margin:40px 0 48px;padding:36px 24px;background:var(--card);border:1px solid var(--hairline)}
-.cmp-cta h2{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 12px;color:var(--ink)}
+.cmp-cta h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 12px;color:var(--ink)}
 .cmp-cta p{color:var(--muted);font-size:var(--fs-base);margin:0 0 20px;line-height:1.55}
-.cmp-cta a.btn{display:inline-block;background:var(--accent);color:var(--on-accent);padding:12px 30px;font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;border:1.5px solid var(--accent)}
-.cmp-cta a.btn:hover{opacity:.9}
 `;
 
   const body = `
@@ -124,7 +122,7 @@ export function comparePage(baseUrl) {
 <div class="cmp-cta">
 <h2>Ready to get started?</h2>
 <p>Connect your agent to 500+ tools in under five minutes. No API keys, no subscriptions, no lock-in.</p>
-<a class="btn" href="/quickstart">Start building &rarr;</a>
+<a class="btn btn-primary" href="/quickstart">Start building &rarr;</a>
 </div>
 </section>
 </div>

@@ -23,10 +23,10 @@ export function tollboothCloudPage(baseUrl) {
 
   const extraCss = `
   .tc-wrap { max-width:1180px; margin:0 auto; padding:56px 30px; }
-  h1 { font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 14px; }
+  h1 {font-family:var(--font-display);font-weight:400;letter-spacing:-.01em; font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px; }
   .lede { color:var(--muted); margin:0 0 28px; font-size:var(--fs-lg); max-width:760px; line-height:1.6; }
   .lede a { color:var(--accent); text-decoration:none; }
-  h2 { font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:36px 0 12px;color:var(--accent); }
+  h2 { font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:36px 0 12px;color:var(--accent); }
   h3 { font-size:var(--fs-lg); margin:0 0 6px; }
   a { color:var(--accent); text-decoration:none; }
   a:hover { text-decoration:underline; }

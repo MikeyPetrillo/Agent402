@@ -36,7 +36,7 @@ export function ledgerIntegrationsPage(baseUrl) {
   <!-- HEAD -->
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 30px;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:14px;">$ GET /integrations</div>
-    <h1 class="ml-h1" style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 14px;">Framework adapters.<br>One surface underneath.</h1>
+    <h1 class="ml-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Framework adapters.<br>One surface underneath.</h1>
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:620px;margin:0;">Packages that turn the catalog into native tool objects for your stack, with payment handled underneath: proof-of-work for free tools, x402 or MPP for paid ones, or a prepaid credits key. Each package has its own page with the install line, a working example and how it pays. New to the protocols? Start with <a href="/learn" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">the explainers</a>.</p>
   </section>
 
@@ -50,7 +50,7 @@ export function ledgerIntegrationsPage(baseUrl) {
   <!-- EXAMPLE -->
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">// same shape everywhere</div>
-    <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 22px;">Install, get tools, pass them in.</h2>
+    <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 22px;">Install, get tools, pass them in.</h2>
     <div style="border:1px solid var(--hairline);background:var(--panel);"><pre style="margin:0;padding:18px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.85;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># pick your stack
 </span>npm install agent402-openai-tools @x402/fetch @x402/core @x402/evm viem
 
@@ -69,12 +69,12 @@ import { agent402Tools } from "agent402-openai-tools";
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 64px;">
     <div style="border:1px solid var(--hairline);background:var(--card);padding:32px 30px;display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap;">
       <div>
-        <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-2xl);line-height:1;letter-spacing:-.02em;margin:0 0 6px;">Wire it into your framework.</h2>
+        <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);line-height:1;letter-spacing:-.02em;margin:0 0 6px;">Wire it into your framework.</h2>
         <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);margin:0;">zero-dep &middot; non-custodial &middot; proof-of-work or USDC</p>
       </div>
       <div style="display:flex;gap:11px;">
-        <a href="/docs" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 20px;">QUICKSTART &rarr;</a>
-        <a href="/tools" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:12px 20px;">Browse tools</a>
+        <a class="btn btn-secondary" href="/docs">Quickstart &rarr;</a>
+        <a class="btn btn-secondary" href="/tools">Browse tools</a>
       </div>
     </div>
   </section>

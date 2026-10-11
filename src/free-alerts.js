@@ -185,7 +185,7 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
     const text = `Confirm to start receiving email when there are new ${def.what(rec.target)}:\n\n${url}\n\nOne email per day at most, only when something changes. If you did not ask for this, ignore it and nothing will be sent.`;
     const html = shell(`<h2 style="margin:0 0 10px;font-size:17px;">Confirm your alert</h2>
 <p>Click to start receiving email when there are new ${esc(def.what(rec.target))}.</p>
-<p style="margin:18px 0;"><a href="${esc(url)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:6px;display:inline-block;">Confirm alerts for ${esc(rec.target)}</a></p>
+<p style="margin:18px 0;"><a href="${esc(url)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:999px;display:inline-block;">Confirm alerts for ${esc(rec.target)}</a></p>
 <p style="color:#626970;font-size:13px;">One email per day at most, only when something changes. If you did not ask for this, ignore it and nothing will be sent.</p>`);
     return sendEmail({ to: rec.email, subject: hdr(subject), html, text });
   }
@@ -341,7 +341,7 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
     const text = `${subject}.\n\n${lines ? lines + "\n\n" : ""}Read the free page and get the full report: ${reportUrl}\nHave this re-run and emailed automatically: ${monitorUrl}\n\nYou asked for this alert on agent402.tools. Unsubscribe: ${unsub}`;
     const html = shell(`<h2 style="margin:0 0 10px;font-size:17px;">${esc(subject)}</h2>
 ${items.length ? `<ul style="padding-left:18px;margin:0 0 14px;">${items.map((it) => `<li>${it.url && /^https:\/\//.test(it.url) ? `<a href="${esc(it.url)}" style="color:#0F5E43;">${esc(it.label)}</a>` : esc(it.label)}</li>`).join("")}</ul>` : ""}
-<p style="margin:18px 0 8px;"><a href="${esc(reportUrl)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:6px;display:inline-block;">Read the free page and get the full report</a></p>
+<p style="margin:18px 0 8px;"><a href="${esc(reportUrl)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:999px;display:inline-block;">Read the free page and get the full report</a></p>
 <p style="margin:0 0 18px;font-size:14px;">Or have it re-run and emailed automatically: <a href="${esc(monitorUrl)}" style="color:#0F5E43;">subscribe to the monitor</a>.</p>
 <p style="color:#626970;font-size:12px;">You asked for this alert on agent402.tools. <a href="${esc(unsub)}" style="color:#626970;">Unsubscribe</a>.</p>`);
     return sendEmail({ to: a.email, subject: hdr(subject), html, text, headers: { "List-Unsubscribe": `<${unsub}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } });
@@ -411,7 +411,7 @@ export function alertFormHtml({ kind, target, source = "" } = {}) {
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
     <input id="${fid}" class="field al-email" type="email" required autocomplete="email" placeholder="you@example.com" style="flex:1 1 220px;" aria-label="Email address">
     <input class="al-hp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;">
-    <button class="btn btn-primary al-submit" type="submit">Email me</button>
+    <button class="btn btn-secondary al-submit" type="submit">Email me</button>
   </div>
   <div class="al-msg" role="status" style="font-size:13px;color:var(--muted);margin-top:8px;"></div>
   <p style="font-size:12px;color:var(--faint);margin:8px 0 0;">Free. One email a day at most, only when something changes. Confirm by email first; unsubscribe with one click. <a href="/privacy" style="color:var(--faint);">Privacy</a>.</p>

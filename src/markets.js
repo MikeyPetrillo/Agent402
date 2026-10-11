@@ -86,7 +86,7 @@ export function marketsPage(baseUrl, catalog) {
   const groupsHtml = GROUPS.map((g) => `
 <section id="${g.id}" style="max-width:1180px;margin:0 auto;padding:40px 30px 0;">
   <div style="display:flex;align-items:baseline;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
-    <h2 style="font-weight:800;font-size:var(--fs-2xl);line-height:1.1;letter-spacing:-.02em;margin:0;color:var(--ink);">${esc(g.h)}</h2>
+    <h2 style="font-weight:700;font-size:var(--fs-2xl);line-height:1.1;letter-spacing:-.02em;margin:0;color:var(--ink);">${esc(g.h)}</h2>
     <p style="font-size:var(--fs-base);color:var(--muted);margin:0;">${esc(g.p)}</p>
   </div>
   <div class="mk-grid">${cardsHtml(g)}</div>
@@ -100,12 +100,12 @@ export function marketsPage(baseUrl, catalog) {
     </nav>
     <div class="mk-hero">
       <div>
-        <h1 style="font-weight:800;font-size:var(--fs-4xl);line-height:.98;letter-spacing:-.035em;margin:0 0 18px;color:var(--ink);">The whole crypto market in one call.</h1>
+        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);">The whole crypto market in one call.</h1>
         <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 18px;">${esc(hero?.name || "Market pulse")} returns breadth, volume, open interest, funding extremes, the day's gainers and losers and BTC and ETH at a glance - one request, ${esc(hero?.price || "")}, no API key. ${tools.length - 1} more calls below cover perps, options, DeFi and stablecoins at ${esc(fmtUsd(lo))} to ${esc(fmtUsd(hi))} each.</p>
         <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 22px;">Pay per request in USDC over <a href="/what-is-x402" style="color:var(--ink);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);">MPP</a> from any wallet. The first call answers 402 with the price; the paid retry returns the data. A call that fails is not charged on x402.</p>
         <div style="display:flex;gap:11px;flex-wrap:wrap;">
-          <a href="/playground?slug=${esc(MARKETS_HERO_SLUG)}" style="background:var(--btn-bg);color:var(--btn-fg);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 22px;">TRY IT IN THE PLAYGROUND →</a>
-          <a href="/tools/${esc(MARKETS_HERO_SLUG)}" style="border:1.5px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:12px 22px;">DOCS + SAMPLE OUTPUT</a>
+          <a class="btn btn-secondary" href="/playground?slug=${esc(MARKETS_HERO_SLUG)}">Try it in the playground →</a>
+          <a class="btn btn-secondary" href="/tools/${esc(MARKETS_HERO_SLUG)}">Docs + sample output</a>
         </div>
       </div>
       <div>
@@ -119,10 +119,10 @@ export function marketsPage(baseUrl, catalog) {
 ${groupsHtml}
 <section style="max-width:1180px;margin:0 auto;padding:48px 30px 56px;">
   <div style="background:var(--panel);border:1px solid var(--hairline);padding:40px 40px;">
-    <h2 style="font-weight:800;font-size:var(--fs-2xl);line-height:1.05;letter-spacing:-.025em;margin:0 0 12px;color:var(--on-panel);">Wire it into an agent.</h2>
+    <h2 style="font-weight:700;font-size:var(--fs-2xl);line-height:1.05;letter-spacing:-.025em;margin:0 0 12px;color:var(--on-panel);">Wire it into an agent.</h2>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 22px;max-width:640px;">Add the hosted MCP connector and these calls appear as tools, or call the routes directly with the x402 client of your choice. Every route here is also discoverable at /api/find by task ("funding rates", "stablecoin supply").</p>
     <div style="display:flex;gap:11px;flex-wrap:wrap;">
-      <a href="/docs#add" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:14px 24px;">ADD TO YOUR AGENT →</a>
+      <a class="btn btn-primary" href="/docs#add">Add to your agent →</a>
       <a href="/tools/category/crypto" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">EVERY CRYPTO TOOL</a>
     </div>
   </div>

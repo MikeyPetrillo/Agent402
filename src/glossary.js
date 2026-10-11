@@ -131,7 +131,7 @@ export function glossaryPage(baseUrl) {
     const seeList = [...(learn ? [[`/learn/${learn.slug}`, `${learn.term}, explained`]] : []), ...(t.see || [])];
     const see = seeList.length ? `<div style="font-family:var(--font-mono);font-size:var(--fs-sm);margin-top:14px;">${seeList.map(([href, label]) => `<a href="${esc(href)}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);margin-right:16px;">${esc(label)} →</a>`).join("")}</div>` : "";
     return `<article id="${esc(t.id)}" class="gl-term gl-row" style="display:grid;grid-template-columns:300px 1fr;gap:28px;padding:26px 24px;border-bottom:1px solid var(--hairline);">
-      <div><h2 style="font-weight:800;font-size:var(--fs-xl);line-height:1.15;margin:0 0 8px;color:var(--ink);"><dfn style="font-style:normal;">${esc(t.name)}</dfn></h2>${alt}<a href="#${esc(t.id)}" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);text-decoration:none;">#${esc(t.id)}</a></div>
+      <div><h2 style="font-weight:700;font-size:var(--fs-xl);line-height:1.15;margin:0 0 8px;color:var(--ink);"><dfn style="font-style:normal;">${esc(t.name)}</dfn></h2>${alt}<a href="#${esc(t.id)}" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);text-decoration:none;">#${esc(t.id)}</a></div>
       <div><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">${esc(t.def)}</p>${see}</div>
     </article>`;
   }).join("");
@@ -144,7 +144,7 @@ export function glossaryPage(baseUrl) {
     </nav>
     <div class="gl-2col" style="display:grid;grid-template-columns:1.1fr .9fr;gap:50px;align-items:start;">
       <div>
-        <h1 style="font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.035em;margin:0 0 24px;color:var(--ink);">The <span style="color:var(--accent);">Agentic Finance</span> glossary</h1>
+        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 24px;color:var(--ink);">The <span style="color:var(--accent);">Agentic Finance</span> glossary</h1>
         <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--on-panel-soft);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">Every term the agentic-finance stack uses, defined once.</strong> From the HTTP status code that started it to the facilitators, receipts and routers built on top. Each entry links to the page that goes deep, and each has its own anchor so any page can point at a definition instead of restating it.</p>
         <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">Start with <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">what Agentic Finance (AIFI) is</a>, then the two wires: <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">x402</a> and <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">MPP</a>. Longer explainers with real headers are in <a href="/learn" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Learn</a>.</p>
       </div>
@@ -162,13 +162,12 @@ export function glossaryPage(baseUrl) {
 
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 56px;">
   <div style="background:var(--panel);border:1px solid var(--hairline);padding:52px 44px;position:relative;overflow:hidden;">
-    <div style="position:absolute;right:26px;top:-36px;font-weight:900;font-size:var(--fs-mark);line-height:1;color:transparent;-webkit-text-stroke:2px var(--on-panel-mark);pointer-events:none;">402</div>
     <div style="position:relative;">
-      <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--on-panel);">Now see it settle.</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--on-panel);">Now see it settle.</h2>
       <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 28px;max-width:560px;">Give your agent 500+ tools it can pay for over x402 or MPP, or put a price on your own API. Both are free to start.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a href="/docs#add" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:14px 24px;">ADD TO YOUR AGENT →</a>
-        <a href="/agentic-finance" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">WHAT IS AGENTIC FINANCE?</a>
+        <a class="btn btn-primary on-panel" href="/docs#add">Add to your agent →</a>
+        <a class="btn btn-secondary on-panel" href="/agentic-finance">What is agentic finance?</a>
       </div>
     </div>
   </div>

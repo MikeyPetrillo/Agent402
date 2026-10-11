@@ -14,8 +14,8 @@ export function contributePage(baseUrl) {
 .ct-subtitle{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px}
 
 .ct-section{margin-bottom:48px}
-.ct-section h2{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 12px;color:var(--ink)}
-.ct-section h3{font-family:var(--font-body);font-weight:800;font-size:var(--fs-lg);margin:24px 0 8px;color:var(--ink)}
+.ct-section h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 12px;color:var(--ink)}
+.ct-section h3{font-family:var(--font-body);font-weight:600;font-size:var(--fs-lg);margin:24px 0 8px;color:var(--ink)}
 .ct-section p{color:var(--muted);margin:0 0 12px;font-size:var(--fs-base);line-height:1.55}
 .ct-section ul,.ct-section ol{margin:0 0 16px;padding:0 0 0 22px;font-size:var(--fs-base);line-height:1.55;color:var(--muted)}
 .ct-section li{margin-bottom:6px}
@@ -35,7 +35,7 @@ export function contributePage(baseUrl) {
 .ct-divider{border:none;border-top:1px solid var(--hairline);margin:40px 0}
 
 .ct-bottom{background:var(--card);border:1px solid var(--hairline);padding:32px;text-align:center;margin-top:48px}
-.ct-bottom h3{font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink)}
+.ct-bottom h3{font-family:var(--font-body);font-weight:600;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink)}
 .ct-bottom p{color:var(--muted);font-size:var(--fs-base);line-height:1.55;margin:0 0 6px}
 .ct-bottom a{color:var(--accent);text-decoration:none}
 .ct-bottom a:hover{text-decoration:underline}

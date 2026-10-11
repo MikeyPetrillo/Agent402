@@ -20,11 +20,11 @@ export function tollboothLandingPage(baseUrl) {
 
   const extraCss = `
   .tb-wrap { max-width:1180px; margin:0 auto; padding:56px 30px; }
-  h1 { font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 12px; }
+  h1 {font-family:var(--font-display);font-weight:400;letter-spacing:-.01em; font-size:var(--fs-5xl);line-height:.96;margin:0 0 12px; }
   .lede { color:var(--muted); margin:0 0 32px; font-size:var(--fs-lg); line-height:1.6; }
   .lede a { color:var(--accent); text-decoration:none; }
   .lede a:hover { text-decoration:underline; }
-  h2 { font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:36px 0 12px;color:var(--accent); }
+  h2 { font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:36px 0 12px;color:var(--accent); }
   .config { background:var(--card); border:1px solid var(--hairline); padding:18px; margin:0 0 14px; display:grid; gap:14px; grid-template-columns:1fr 160px 1fr; align-items:end; }
   .config label { display:block; }
   .config .k { color:var(--faint); font-family:var(--font-mono); font-size:var(--fs-xs); letter-spacing:.06em; text-transform:uppercase; margin-bottom:6px; }

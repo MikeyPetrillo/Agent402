@@ -23,30 +23,26 @@ export const REPORTS_CSS = `
   .wrap{max-width:940px;margin:0 auto;padding:0 26px}
   @media screen{#app[data-api]{min-height:100vh}}
   .eyebrow{font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
-  .btn{font-family:var(--font-body);font-size:var(--fs-base);font-weight:500;border-radius:999px;border:1px solid transparent;cursor:pointer;padding:11px 18px;transition:transform .12s ease,border-color .15s ease;display:inline-flex;gap:8px;align-items:center;text-decoration:none;white-space:nowrap}
-  .btn:hover{transform:translateY(-1px)}
-  .btn-primary{background:var(--btn-bg);color:var(--btn-fg);box-shadow:var(--btn-shadow)}
-  .btn-ghost{background:var(--chip-bg);color:var(--ink);border-color:var(--dash)}.btn-ghost:hover{border-color:var(--ink);color:var(--ink)}
-  .btn:disabled{opacity:.5;cursor:default;transform:none}
-  .hero{padding:64px 0 20px}.hero h1{font-weight:500;font-size:clamp(var(--fs-3xl),5vw,var(--fs-4xl));line-height:1.02;letter-spacing:-.035em;margin:14px 0 0;color:var(--ink);text-wrap:balance}.hero h1 em{font-style:normal;color:var(--faint)}
+  .hero{padding:64px 0 20px}.hero h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:clamp(var(--fs-3xl),5vw,var(--fs-4xl));line-height:1.02;margin:14px 0 0;color:var(--ink);text-wrap:balance}.hero h1 em{font-style:normal;color:var(--faint)}
   .lede{font-size:var(--fs-lg);line-height:1.5;color:var(--muted);max-width:620px;margin:16px 0 0;font-weight:300}.lede b{color:var(--ink);font-weight:500}
   .products{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:18px;margin-top:8px}
   /* Cards are a flex column so the buy button sits on one baseline across a
      grid row however long the copy above it runs (the error slot takes the
      slack); the grid already stretches cards to equal height. */
-  .pcard{display:flex;flex-direction:column;border:1px solid var(--hairline);border-radius:18px;background:var(--card);padding:24px;box-shadow:inset 0 1px 0 var(--card-inset),0 1px 2px rgba(0,0,0,.08)}
+  .pcard.receipt{padding-bottom:32px}
+  .pcard{display:flex;flex-direction:column;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:24px;box-shadow:inset 0 1px 0 var(--card-inset),0 1px 2px rgba(0,0,0,.08)}
   .pcard .err{margin-top:auto;padding-top:8px}
-  .pcard h3{font-weight:500;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0;color:var(--ink)}.pcard .k{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
+  .pcard h3{font-weight:600;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0;color:var(--ink)}.pcard .k{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
   .pcard p{color:var(--muted);font-size:var(--fs-base);line-height:1.5;margin:8px 0 16px;font-weight:300}
   /* Report bodies can carry markdown tables (filings, holders). Wide tables get
      their own scroll so the page body never scrolls sideways. */
-  .tablewrap{overflow-x:auto;margin:14px 0;border:1px solid var(--hairline);border-radius:12px}
+  .tablewrap{overflow-x:auto;margin:14px 0;border:1px solid var(--hairline);border-radius:var(--radius)}
   .tablewrap table{width:100%;border-collapse:collapse;font-size:var(--fs-md)}
   .tablewrap th{text-align:left;font-weight:500;font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);padding:9px 12px;border-bottom:1px solid var(--hairline);white-space:nowrap}
   .tablewrap td{padding:9px 12px;border-bottom:1px solid var(--hairline);vertical-align:top;font-variant-numeric:tabular-nums}
   .tablewrap tr:last-child td{border-bottom:0}
   .pcard.sel{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
-  .field{display:flex;gap:8px;background:var(--paper);border:1px solid var(--dash);border-radius:12px;padding:6px 6px 6px 14px;margin-bottom:12px}
+  .field{display:flex;gap:8px;background:var(--paper);border:1px solid var(--dash);border-radius:var(--radius);padding:6px 6px 6px 14px;margin-bottom:12px}
   .field:focus-within{border-color:var(--ink)}
   .field input{flex:1;border:0;background:transparent;color:var(--ink);font-family:var(--font-body);font-size:var(--fs-lg);outline:none;min-width:0}
   .gets{font-size:var(--fs-md);line-height:1.55;color:var(--muted);margin:0 0 6px}.gets b{color:var(--ink);font-weight:500}
@@ -54,15 +50,15 @@ export const REPORTS_CSS = `
   .err{color:var(--bad);font-size:var(--fs-md);margin-top:8px;min-height:18px}
   .trust{display:flex;gap:20px;flex-wrap:wrap;color:var(--muted);font-size:var(--fs-md);margin-top:16px}
   .trust span{display:inline-flex;gap:7px;align-items:center}.dot{width:5px;height:5px;border-radius:50%;background:var(--accent)}
-  .report{background:var(--card);border:1px solid var(--hairline);border-radius:18px;padding:34px 38px;margin-top:24px}
-  .report h1{font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.03em;margin:0 0 6px;color:var(--ink)}.report h2{font-weight:500;font-size:var(--fs-xl);letter-spacing:-.02em;margin:28px 0 8px;color:var(--ink)}.report h3{font-weight:500;font-size:var(--fs-lg);margin:20px 0 6px;color:var(--ink)}
+  .report{background:var(--card);border:1px solid var(--hairline);border-radius:var(--radius);padding:34px 38px;margin-top:24px}
+  .report h1{font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.03em;margin:0 0 6px;color:var(--ink)}.report h2{font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:28px 0 8px;color:var(--ink)}.report h3{font-weight:600;font-size:var(--fs-lg);margin:20px 0 6px;color:var(--ink)}
   .report p{color:var(--muted);margin:0 0 14px;line-height:1.65}.report a{word-break:break-word;color:var(--accent)}
   .report ol,.report ul{color:var(--muted);line-height:1.6}
   .cite{font-family:var(--font-mono);font-size:var(--fs-code-inline);font-weight:500;color:var(--accent);vertical-align:super}
   @keyframes sp{to{transform:rotate(360deg)}}
   .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--dash);border-top-color:var(--ink);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-3px;margin-right:8px}
-  .status{background:var(--card);border:1px solid var(--hairline);border-radius:18px;padding:44px 34px;text-align:center;margin-top:24px}
-  .status h2{font-weight:500;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink)}.status p{color:var(--muted);max-width:460px;margin:0 auto 8px;line-height:1.55}
+  .status{background:var(--card);border:1px solid var(--hairline);border-radius:var(--radius);padding:44px 34px;text-align:center;margin-top:24px}
+  .status h2{font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink)}.status p{color:var(--muted);max-width:460px;margin:0 auto 8px;line-height:1.55}
   .report-actions{display:flex;gap:10px;align-items:center;margin:22px 0 4px;flex-wrap:wrap}
   .keep-hint{color:var(--muted);font-size:var(--fs-sm);margin-top:8px;line-height:1.5}
   .keep-hint ul{margin:6px 0 0;padding-left:18px}
@@ -71,9 +67,9 @@ export const REPORTS_CSS = `
   .rpt-brand .n{font-weight:500;color:var(--ink);font-size:var(--fs-base)}.rpt-brand .s{font-size:var(--fs-2xs);letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
   .rpt-title{font-weight:500;font-size:var(--fs-3xl);letter-spacing:-.03em;line-height:1.08;margin:0;color:var(--ink);text-wrap:balance}
   .rpt-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:10px}
-  .upsell{border:1px solid var(--hairline);border-radius:18px;background:var(--card);padding:24px 26px;margin-top:24px;box-shadow:inset 0 1px 0 var(--card-inset)}
+  .upsell{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:24px 26px;margin-top:24px;box-shadow:inset 0 1px 0 var(--card-inset)}
   .upsell .k{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
-  .upsell h3{font-weight:500;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0;color:var(--ink)}
+  .upsell h3{font-weight:600;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0;color:var(--ink)}
   .upsell p{color:var(--muted);font-size:var(--fs-base);line-height:1.5;margin:8px 0 16px;font-weight:300}
   .upsell .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   /* design-tokens: literal-start (print: paper is always white, whatever the screen theme) */
@@ -112,7 +108,7 @@ export function humanReportsPage(baseUrl) {
   const buyBtn = (kind, key, label) => `<button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:12px" data-buy="${esc(kind)}" data-price-for="${esc(kind)}">${esc(label)} <span class="bprice">${usd(R[key].price)}</span></button>`;
   const body = `
 <div class="wrap">
-  <div id="checkout-note" hidden class="note" style="margin:0 0 18px;padding:12px 16px;border:1px solid var(--hairline);border-radius:12px;background:var(--card);">
+  <div id="checkout-note" hidden class="note" style="margin:0 0 18px;padding:12px 16px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);">
     Checkout canceled, nothing was charged. Pick a report below whenever you are ready. Every price is on its button.
   </div>
   <section class="hero">
@@ -129,7 +125,7 @@ export function humanReportsPage(baseUrl) {
     <h2 class="sr-section">Every report you can buy</h2>
     <p class="note" style="margin:0 0 16px;">Card prices include payment processing. An agent paying per call over x402 or MPP pays the tool's own price instead. Both buy the same report.</p>
     <div class="products">
-      <div class="pcard" data-kind="research">
+      <div class="pcard receipt" data-kind="research">
         <div class="k">Deep research</div>
         <h3>Ask a hard question</h3>
         <p>Multiple live web searches, ranked sources, a cited report on whatever you ask.</p>
@@ -139,7 +135,7 @@ export function humanReportsPage(baseUrl) {
         ${buyBtn("research", "research", "Get report")}
         <div class="note" style="margin-top:10px;">${sampleLink("research")}<a href="/tools/research" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
-      <div class="pcard" data-kind="dossier">
+      <div class="pcard receipt" data-kind="dossier">
         <div class="k">Due-diligence dossier</div>
         <h3>Everything on a public company</h3>
         <p>SEC filings, insider filings, financials and red flags - cited. Data a chatbot can't reach.</p>
@@ -149,7 +145,7 @@ export function humanReportsPage(baseUrl) {
         ${buyBtn("dossier", "dossier", "Get dossier")}
         <div class="note" style="margin-top:10px;">${sampleLink("dossier")}<a href="/tools/dossier" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
-      <div class="pcard" data-kind="filing">
+      <div class="pcard receipt" data-kind="filing">
         <div class="k">SEC filing report</div>
         <h3>What did they just file</h3>
         <p>The company's newest SEC filings, with the document itself read and explained in plain language, cited to the filing.</p>
@@ -159,7 +155,7 @@ export function humanReportsPage(baseUrl) {
         ${buyBtn("filing", "filing-report", "Get the report")}
         <div class="note" style="margin-top:10px;"><a href="/tools/filing-report" style="color:var(--muted);">Sample output + API docs &rarr;</a></div>
       </div>
-      <div class="pcard" data-kind="ticker">
+      <div class="pcard receipt" data-kind="ticker">
         <div class="k">Ticker pack</div>
         <h3>One ticker, the whole picture</h3>
         <p>Company dossier, recent SEC filings, insider buying and selling, and which institutions hold it, in one cited report.</p>
@@ -169,7 +165,7 @@ export function humanReportsPage(baseUrl) {
         ${buyBtn("ticker", "ticker-pack", "Get the pack")}
         <div class="note" style="margin-top:10px;"><a href="/tools/ticker-pack" style="color:var(--muted);">Sample output + API docs &rarr;</a></div>
       </div>
-      <div class="pcard" data-kind="token">
+      <div class="pcard receipt" data-kind="token">
         <div class="k">Token due diligence</div>
         <h3>Is this Solana token safe to touch</h3>
         <p>Mint and freeze authority, LP lock, holder concentration, liquidity and every named risk flag, graded and cited from on-chain sources.</p>
@@ -179,7 +175,7 @@ export function humanReportsPage(baseUrl) {
         ${buyBtn("token", "token-brief", "Get the brief")}
         <div class="note" style="margin-top:10px;"><a href="/tools/token-brief" style="color:var(--muted);">Sample output + API docs &rarr;</a></div>
       </div>
-      <div class="pcard" data-kind="fund">
+      <div class="pcard receipt" data-kind="fund">
         <div class="k">Fund tracker</div>
         <h3>Follow the smart money</h3>
         <p>What a fund holds, and what it bought, added, trimmed and exited last quarter, from SEC 13F filings, cited.</p>
@@ -189,7 +185,7 @@ export function humanReportsPage(baseUrl) {
         ${buyBtn("fund", "fund-report", "Get report")}
         <div class="note" style="margin-top:10px;">${sampleLink("fund-report")}<a href="/tools/fund-report" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
-      <div class="pcard" data-kind="insider">
+      <div class="pcard receipt" data-kind="insider">
         <div class="k">Insider flow</div>
         <h3>Who's buying, who's selling</h3>
         <p>The newest Form 4 filings against a company (up to ${INSIDER_MAX_FILINGS}, last ${INSIDER_DEFAULT_DAYS} days) with the actual transactions parsed: open-market buys and sales by insider, awards and exercises set apart, a grounded signal read. SEC EDGAR, cited.</p>
@@ -199,7 +195,7 @@ export function humanReportsPage(baseUrl) {
         ${buyBtn("insider", "insider-report", "Get report")}
         <div class="note" style="margin-top:10px;">${sampleLink("insider-report")}<a href="/tools/insider-report" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
-      <div class="pcard" data-kind="market">
+      <div class="pcard receipt" data-kind="market">
         <div class="k">Market / competitor brief</div>
         <h3>Who's in the market, and how they differ</h3>
         <p>Market at a glance, the key players and pricing, recent moves, differentiation, risks and a bottom line. Live web research with citations, nothing from memory.</p>
@@ -209,7 +205,7 @@ export function humanReportsPage(baseUrl) {
         ${buyBtn("market", "market-brief", "Get brief")}
         <div class="note" style="margin-top:10px;">${sampleLink("market-brief")}<a href="/tools/market-brief" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
-      <div class="pcard" data-kind="linkedin">
+      <div class="pcard receipt" data-kind="linkedin">
         <div class="k">LinkedIn article</div>
         <h3>A publish-ready LinkedIn article, with the images</h3>
         <p>Grounded research with cited sources, three headline options, a hook-first body with facts linked to their sources, key takeaways, a companion post with hashtags, and generated images at LinkedIn's own sizes: cover 1920x1080, link-share 1200x627, feed square and portrait. Paste and publish.</p>
@@ -219,7 +215,7 @@ export function humanReportsPage(baseUrl) {
         ${buyBtn("linkedin", "linkedin-article", "Get the article")}
         <div class="note" style="margin-top:10px;">${sampleLink("linkedin-article")}<a href="/tools/linkedin-article" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
-      <div class="pcard" data-kind="recall">
+      <div class="pcard receipt" data-kind="recall">
         <div class="k">FDA recall report</div>
         <h3>Is it recalled?</h3>
         <p>The newest FDA drug, food and device recall records for a product, brand or ingredient (up to ${RECALL_PER_FEED} per feed): firm, class, reason, status, distribution. Organized and explained, cited to the FDA feeds.</p>
@@ -229,7 +225,7 @@ export function humanReportsPage(baseUrl) {
         ${buyBtn("recall", "recall-report", "Get report")}
         <div class="note" style="margin-top:10px;">${sampleLink("recall-report")}<a href="/tools/recall-report" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
-      <div class="pcard" data-kind="domain">
+      <div class="pcard receipt" data-kind="domain">
         <div class="k">Domain audit</div>
         <h3>Is your domain secure?</h3>
         <p>SPF, DMARC, DKIM, TLS and security headers, one graded report with the exact fixes. Why your mail hits spam, answered.</p>

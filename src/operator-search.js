@@ -50,7 +50,7 @@ export function operatorSearchPage(baseUrl, data) {
     : `<p class="os-empty">${esc(data.note || "No search source is configured on this instance.")}</p>`;
   const extraCss = `
 .os-wrap{max-width:1180px;margin:0 auto;padding:56px 30px}
-.os-h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:1;letter-spacing:-.03em;margin:0 0 6px}
+.os-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1;margin:0 0 6px}
 .os-sub{color:var(--muted);margin:0 0 22px;font-size:var(--fs-sm);line-height:1.55;font-family:var(--font-mono)}
 .os-sub a{color:var(--accent)}
 .os-wrap h2{font-size:var(--fs-xl);margin:36px 0 12px}

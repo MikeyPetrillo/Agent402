@@ -307,7 +307,7 @@ const LEARN_CSS = `
 .lp-body p{margin:0 0 16px}
 .lp-body ul,.lp-body ol{padding-left:22px;margin:0 0 18px}
 .lp-body li{margin:0 0 8px}
-.lp-body h2{font-family:var(--font-body);font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:38px 0 14px;color:var(--ink)}
+.lp-body h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:38px 0 14px;color:var(--ink)}
 .lp-body code{font-family:var(--font-mono);font-size:var(--fs-code-inline);color:var(--ink)}
 .lp-body strong{color:var(--ink)}
 .lp-body pre{background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0 0 18px;overflow-x:auto;white-space:pre}
@@ -359,7 +359,7 @@ export function learnPage(baseUrl, slug) {
   const body = `
   <article style="max-width:1000px;margin:0 auto;padding:50px 30px 60px;">
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/learn" style="color:var(--muted);text-decoration:none;">learn</a> / <span style="color:var(--ink);">${esc(l.slug)}</span></nav>
-    <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:1.02;letter-spacing:-.03em;margin:0 0 18px;max-width:860px;">${esc(l.term)}</h1>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 18px;max-width:860px;">${esc(l.term)}</h1>
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--ink);margin:0 0 8px;max-width:780px;">${esc(l.summary)}</p>
     <div class="lp-body">
 ${sections}
@@ -391,13 +391,13 @@ export function learnIndex(baseUrl) {
     itemListElement: LEARN.map((l, i) => ({ "@type": "ListItem", position: i + 1, url: `${baseUrl}/learn/${l.slug}`, name: l.term })),
   };
   const cards = LEARN.map((l) => `<a href="/learn/${l.slug}" style="display:block;border:1px solid var(--hairline);background:var(--card);padding:20px 22px;text-decoration:none;color:var(--ink);">
-      <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);margin:0 0 8px;">${esc(l.term)}</h2>
+      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);margin:0 0 8px;">${esc(l.term)}</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">${esc(l.summary)}</p>
     </a>`).join("\n");
   const body = `
   <section style="max-width:1180px;margin:0 auto;padding:52px 30px 64px;">
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">learn</span></nav>
-    <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:1;letter-spacing:-.03em;margin:0 0 16px;">How agents pay for APIs</h1>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1;margin:0 0 16px;">How agents pay for APIs</h1>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 34px;">Six explainers, each with a working example. For one-paragraph definitions of every term, see the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>; to wire payments into a framework, see <a href="/integrations" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">integrations</a>.</p>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;">
 ${cards}

@@ -72,7 +72,7 @@ export function adapterDocsIndex(baseUrl) {
 
   const cards = ADAPTERS.map((a) => `
     <a class="ml-ad-card" href="/docs/adapters/${esc(a.slug)}">
-      <h3 style="margin:0 0 6px;font-size:var(--fs-lg);font-weight:700;color:var(--ink);">${esc(a.name)}</h3>
+      <h3 style="margin:0 0 6px;font-size:var(--fs-lg);font-weight:600;color:var(--ink);">${esc(a.name)}</h3>
       <code style="display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:8px;">${esc(a.pkg)}</code>
       <p style="margin:0 0 10px;color:var(--muted);font-size:var(--fs-md);line-height:1.5;">${esc(a.tagline)}</p>
       <span style="color:var(--accent);font-size:var(--fs-md);font-weight:600;">View docs &rarr;</span>
@@ -87,7 +87,7 @@ export function adapterDocsIndex(baseUrl) {
   const body = `
   <div style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;">
     <p style="font-size:var(--fs-md);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--faint);text-decoration:none;">Home</a> &rsaquo; <a href="/docs" style="color:var(--faint);text-decoration:none;">Docs</a> &rsaquo; Adapters</p>
-    <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 14px;">Framework Adapters.</h1>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Framework Adapters.</h1>
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 36px;">Plug Agent402 into your agent framework. Each adapter returns native tool objects and handles payment underneath.</p>
 
     <div class="ml-ad-grid">
@@ -166,13 +166,13 @@ export function adapterDocPage(baseUrl, slug) {
     <!-- CONTENT -->
     <div>
       <p style="font-size:var(--fs-md);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--faint);text-decoration:none;">Home</a> &rsaquo; <a href="/docs" style="color:var(--faint);text-decoration:none;">Docs</a> &rsaquo; <a href="/docs/adapters" style="color:var(--faint);text-decoration:none;">Adapters</a> &rsaquo; ${esc(adapter.name)}</p>
-      <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:1;letter-spacing:-.02em;margin:0 0 10px;">${esc(adapter.name)} Adapter</h1>
+      <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1;margin:0 0 10px;">${esc(adapter.name)} Adapter</h1>
       <span style="display:inline-block;font-family:var(--font-mono);font-size:var(--fs-md);color:var(--accent);margin-bottom:18px;">${esc(adapter.pkg)}</span>
       <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.7;margin:0 0 36px;max-width:720px;">${esc(adapter.desc)}</p>
 
       <!-- Install -->
       <div id="install" style="margin-bottom:36px;">
-        <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Install</h2>
+        <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Install</h2>
         <div style="position:relative;">
           <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.install)}</code></pre>
           <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--panel-rule);border:1px solid var(--panel-rule-2);color:var(--on-panel-dim);font-size:var(--fs-xs);padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
@@ -181,7 +181,7 @@ export function adapterDocPage(baseUrl, slug) {
 
       <!-- Quick start -->
       <div id="quickstart" style="margin-bottom:36px;">
-        <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Quick start</h2>
+        <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Quick start</h2>
         <div style="position:relative;">
           <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.quickstart)}</code></pre>
           <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--panel-rule);border:1px solid var(--panel-rule-2);color:var(--on-panel-dim);font-size:var(--fs-xs);padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
@@ -197,7 +197,7 @@ export function adapterDocPage(baseUrl, slug) {
       </div>` : ""}
 
       ${adapter.walletExample ? `<div id="paid" style="margin-bottom:36px;">
-        <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Paid tools</h2>
+        <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Paid tools</h2>
         <div style="position:relative;">
           <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.walletExample)}</code></pre>
           <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--panel-rule);border:1px solid var(--panel-rule-2);color:var(--on-panel-dim);font-size:var(--fs-xs);padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
@@ -206,7 +206,7 @@ export function adapterDocPage(baseUrl, slug) {
 
       <!-- Configuration -->
       ${adapter.config && adapter.config.length ? `<div id="config" style="margin-bottom:36px;">
-        <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Configuration</h2>
+        <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Configuration</h2>
         <table style="width:100%;border-collapse:collapse;margin-bottom:14px;font-size:var(--fs-md);">
           <thead>
             <tr><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--hairline);font-size:var(--fs-sm);text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Option</th><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--hairline);font-size:var(--fs-sm);text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Type</th><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--hairline);font-size:var(--fs-sm);text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Description</th></tr>
@@ -223,7 +223,7 @@ ${configRows}
 
       <!-- Works with -->
       ${adapter.worksWith && adapter.worksWith.length ? `<div id="compat" style="margin-bottom:36px;">
-        <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Works with</h2>
+        <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Works with</h2>
         <div style="display:flex;flex-wrap:wrap;gap:8px;">
           ${worksWithTags}
         </div>

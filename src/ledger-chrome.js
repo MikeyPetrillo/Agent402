@@ -52,6 +52,7 @@ const GITHUB_ICON_SVG = `<svg width="19" height="19" viewBox="0 0 16 16" fill="c
 
 export const LEDGER_HEAD = `<link rel="preload" href="/fonts/geist-500-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/geist-mono-400-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/instrument-serif-400-latin.woff2" as="font" type="font/woff2" crossorigin>
 <style>
 @font-face{font-family:'Geist';font-style:normal;font-weight:300;font-display:swap;src:url(/fonts/geist-300-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
 @font-face{font-family:'Geist';font-style:normal;font-weight:300;font-display:swap;src:url(/fonts/geist-300-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
@@ -75,6 +76,12 @@ export const LEDGER_HEAD = `<link rel="preload" href="/fonts/geist-500-latin.wof
    the SAME box as the web font, so the swap never reflows (CLS ~0) and the
    brand font shows the moment it loads. Overrides apply to whichever local()
    resolves, so vertical metrics stay matched even on Arial-less systems. */
+@font-face{font-family:'Instrument Serif';font-style:normal;font-weight:400;font-display:swap;src:url(/fonts/instrument-serif-400-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:'Instrument Serif';font-style:normal;font-weight:400;font-display:swap;src:url(/fonts/instrument-serif-400-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C4,U+2113,U+2C60-2C7F,U+A720-A7FF}
+/* Instrument Serif fallback: Georgia scaled to the same advance width and
+   vertical box (measured in Chromium from the woff2 against Georgia), so the
+   display headline does not reflow when the web font swaps in. */
+@font-face{font-family:'Instrument Serif Fallback';src:local('Georgia'),local('Times New Roman');size-adjust:76.09%;ascent-override:130.11%;descent-override:40.74%;line-gap-override:0%}
 @font-face{font-family:'Geist Fallback';src:local('Arial'),local('Roboto'),local('Helvetica Neue');size-adjust:128.4531%;ascent-override:78.2387%;descent-override:22.9656%;line-gap-override:0%}
 @font-face{font-family:'Geist Mono Fallback';src:local('Courier New'),local('Courier'),local('Roboto Mono');size-adjust:99.9837%;ascent-override:100.5164%;descent-override:29.5048%;line-gap-override:0%}
 </style>
@@ -136,7 +143,6 @@ html { overflow-x: clip; }
   --on-panel-bad: #FF8A7A;
   --on-panel-warn: #E0A040;
   --on-panel-violet: #A78BFA;
-  --on-panel-mark: #ffffff10;
   --on-accent-lit: #0B0C0E;
   --ok: #6FCF97;
   --warn: #E0A040;
@@ -180,6 +186,7 @@ html { overflow-x: clip; }
      decorative watermark. A page never invents a size between two steps. */
   --font-body: 'Geist', 'Geist Fallback', system-ui, sans-serif;
   --font-mono: 'Geist Mono', 'Geist Mono Fallback', monospace;
+  --font-display: 'Instrument Serif', 'Instrument Serif Fallback', Georgia, 'Times New Roman', serif;
   --fs-2xs: 11px;
   --fs-xs: 12px;
   --fs-sm: 13px;
@@ -192,12 +199,10 @@ html { overflow-x: clip; }
   --fs-4xl: 48px;
   --fs-5xl: 58px;
   --fs-hero: 72px;
-  --fs-mark: 220px;
   --fs-code-inline: .88em;
-  --radius-xs: 2px;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 18px;
+  /* Radius stance: every surface and control is 4px; the pill belongs to the
+     primary (money) button alone; 50% only draws a dot. */
+  --radius: 4px;
   --radius-pill: 999px;
   --accent: #0F5E43;
   --accent-lit: #9EF0B0;
@@ -223,7 +228,6 @@ html { overflow-x: clip; }
   --on-panel-bad: #FF8A7A;
   --on-panel-warn: #E0A040;
   --on-panel-violet: #A78BFA;
-  --on-panel-mark: #ffffff10;
   --on-accent-lit: #0B0C0E;
   --ok: #23774F;
   --warn: #8A5A12;
@@ -281,20 +285,20 @@ body { transition: background-color .18s ease, color .18s ease; }
 /* --- mobile hamburger menu (the hover nav dropdowns don't work on touch, and
    the inline links get squeezed to zero on a phone - so ≤880px collapses the
    whole nav into a tap menu) --- */
-.ml-burger { display:none; align-items:center; justify-content:center; width:38px; height:34px; padding:0; border:1px solid var(--hairline); border-radius:8px; background:var(--card); color:var(--ink); cursor:pointer; }
+.ml-burger { display:none; align-items:center; justify-content:center; width:38px; height:34px; padding:0; border:1px solid var(--hairline); border-radius:var(--radius); background:var(--card); color:var(--ink); cursor:pointer; }
 .ml-burger .ml-burger-close { display:none; }
-.ml-theme-toggle { display:inline-flex; align-items:center; justify-content:center; width:36px; height:34px; padding:0; border:1px solid var(--hairline); border-radius:999px; background:var(--card); color:var(--ink); cursor:pointer; }
+.ml-theme-toggle { display:inline-flex; align-items:center; justify-content:center; width:36px; height:34px; padding:0; border:1px solid var(--hairline); border-radius:var(--radius); background:var(--card); color:var(--ink); cursor:pointer; }
 .ml-theme-toggle .ml-moon { display:none; } :root[data-theme="dark"] .ml-theme-toggle .ml-moon { display:inline; } :root[data-theme="dark"] .ml-theme-toggle .ml-sun { display:none; }
 .ml-mobile-menu { display:none; border-top:1px solid var(--hairline); background:var(--paper); max-height:calc(100vh - 62px); overflow-y:auto; -webkit-overflow-scrolling:touch; }
 .ml-mm-h { padding:12px 20px 4px; font-family:var(--font-mono); font-size:var(--fs-2xs); letter-spacing:.14em; text-transform:uppercase; color:var(--faint); }
 .ml-mm-group { display:flex; flex-direction:column; }
 .ml-mm-link { padding:12px 20px; font-family:var(--font-body); font-size:var(--fs-base); color:var(--ink); text-decoration:none; border-bottom:1px solid var(--hairline); }
 .ml-mm-chains { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px; padding:12px 20px; border-bottom:1px solid var(--hairline); }
-.ml-mm-chip { display:block; padding:9px 12px; border:1px solid var(--hairline); border-radius:8px; background:var(--card); color:var(--ink); text-decoration:none; font-family:var(--font-mono); font-size:var(--fs-sm); text-align:center; }
+.ml-mm-chip { display:block; padding:9px 12px; border:1px solid var(--hairline); border-radius:var(--radius); background:var(--card); color:var(--ink); text-decoration:none; font-family:var(--font-mono); font-size:var(--fs-sm); text-align:center; }
 .ml-mm-chip.ml-mm-active { border-color:var(--accent); color:var(--accent); }
 .ml-mm-link:hover, .ml-mm-link:active { background:var(--card-zebra); }
 .ml-mm-active { color:var(--accent); font-weight:700; }
-.ml-mm-cta { background:var(--btn-bg); color:var(--btn-fg); font-weight:500; border-bottom:none; margin:12px 20px; border-radius:999px; text-align:center; padding:12px 18px; }
+.ml-mm-cta { background:var(--btn-bg); color:var(--btn-fg); font-weight:500; border-bottom:none; margin:12px 20px; border-radius:var(--radius-pill); text-align:center; padding:12px 18px; }
 /* Two-stage collapse (Aug 2026 revamp): the link row + github hide first at
    1100px and the burger takes over; the CTA button keeps its own slot next to
    the burger until 900px, then folds into the burger menu too (as its first
@@ -435,13 +439,39 @@ a { color: inherit; }
   .ml-cta:hover { transform: none; }
   .ml-reveal, .ml-reveal.ml-reveal-in { opacity: 1 !important; transform: none !important; transition: none !important; }
 }
+/* --- receipt edge (DESIGN.md signature) -----------------------------------
+   A perforated tear-off along the bottom of a surface: a row of half-circle
+   notches painted in the ground color (--receipt-ground, default the page)
+   plus a dashed tear line just above them. Gradients only, no image. Used on
+   exactly three surfaces: the home live panel, the report product cards and
+   the pricing pair. Content needs >= 20px of bottom padding to clear it. */
+.receipt { position:relative; border-bottom-left-radius:0 !important; border-bottom-right-radius:0 !important; }
+.receipt::after { content:""; position:absolute; left:0; right:0; bottom:0; height:6px; background:radial-gradient(circle at 7px 6px, var(--receipt-ground, var(--paper)) 4.5px, transparent 5px) 0 0 / 14px 6px repeat-x; pointer-events:none; z-index:2; }
+.receipt::before { content:""; position:absolute; left:14px; right:14px; bottom:13px; border-top:1px dashed var(--receipt-tear, var(--dash)); pointer-events:none; z-index:2; }
+.receipt.hm-obsidian, .receipt.on-panel-ground { --receipt-tear: var(--panel-rule-2); }
+/* --- buttons (DESIGN.md): one primary, one secondary ---------------------
+   Primary is the pill and is reserved for the action that spends or earns
+   money (buy, subscribe, add to your agent, list your API). Everything else is
+   secondary: 4px, transparent, no color. On an obsidian panel, wrap the
+   buttons in .on-panel (or add it to the button). */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; font-family:var(--font-body); font-weight:500; font-size:var(--fs-md); line-height:1.2; text-decoration:none; padding:11px 20px; border:1px solid transparent; cursor:pointer; white-space:nowrap; transition:transform .12s ease, border-color .15s ease; }
+.btn:hover { transform:translateY(-1px); }
+.btn:disabled { opacity:.5; cursor:default; transform:none; }
+.btn-sm { font-size:var(--fs-sm); padding:9px 14px; }
+.btn-primary { background:var(--btn-bg); color:var(--btn-fg); box-shadow:var(--btn-shadow); border-radius:var(--radius-pill); }
+.btn-secondary { background:transparent; color:var(--ink); border-color:var(--dash); border-radius:var(--radius); }
+.btn-secondary:hover { border-color:var(--ink); }
+.on-panel .btn-primary, .btn-primary.on-panel { background:var(--accent-lit); color:var(--on-accent-lit); box-shadow:none; }
+.on-panel .btn-secondary, .btn-secondary.on-panel { color:var(--on-panel); border-color:var(--panel-rule-2); }
+.on-panel .btn-secondary:hover, .btn-secondary.on-panel:hover { border-color:var(--on-panel); }
+@media (prefers-reduced-motion: reduce) { .btn, .btn:hover { transition:none; transform:none; } }
 .mfb-label{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:700;}
-.mfb-tab{font-family:var(--font-mono);font-size:var(--fs-xs);padding:5px 11px;border:1px solid var(--hairline);border-radius:999px;background:var(--card);color:var(--ink);text-decoration:none;white-space:nowrap;}
+.mfb-tab{font-family:var(--font-mono);font-size:var(--fs-xs);padding:5px 11px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);color:var(--ink);text-decoration:none;white-space:nowrap;}
 /* Active tab: accent-as-background - the one pattern that stays legible in BOTH
    themes (white on #BF360C is 5.8:1; --ink/--on-panel flip light in dark mode and
    made the active tab a white blob with invisible text). */
 .mfb-tab.on{background:var(--accent);color:var(--on-accent);border-color:var(--accent);}
-.mfb-sel,.mfb-search{font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 10px;border:1px solid var(--hairline);border-radius:8px;background:var(--card);color:var(--ink);}
+.mfb-sel,.mfb-search{font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 10px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);color:var(--ink);}
 .mfb-search{flex:1;min-width:120px;}
 `;
 
@@ -603,7 +633,7 @@ function marketPanelNav(chainInfo) {
   // leaderboard and the transactions ledger are four views of one seller
   // set. Explainers (what is x402, agentic finance) live under Docs.
   return `<span class="mlnav-dd">
-              <span style="display:block;width:340px;border:1px solid var(--hairline);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
+              <span style="display:block;width:340px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
                 <span class="mlnav-label">SELLERS, INDEXED AND VERIFIED</span>
                 <a href="/marketplace" class="mlnav-row"><span style="font-weight:700;">x402 marketplace</span><span class="mlnav-faint">every indexed seller</span></a>
                 <a href="/mpp-marketplace" class="mlnav-row"><span style="font-weight:700;">MPP marketplace</span><span class="mlnav-faint">verified sellers</span></a>
@@ -620,7 +650,7 @@ function marketPanelNav(chainInfo) {
 // "For people" dropdown under Reports: the three card-payable doors.
 function peoplePanelNav() {
   return `<span class="mlnav-dd">
-              <span style="display:block;width:300px;border:1px solid var(--hairline);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
+              <span style="display:block;width:300px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
                 <span class="mlnav-label">FOR PEOPLE · CARD OR USDC</span>
                 <a href="/reports" class="mlnav-row"><span style="font-weight:700;">reports</span><span class="mlnav-faint">finished, cited, $2 and up</span></a>
                 <a href="/monitors" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">monitors</span><span class="mlnav-faint">watch one target monthly</span></a>
@@ -634,7 +664,7 @@ function peoplePanelNav() {
 // seven-column footer and went unlinked for a day.
 function docsPanelNav() {
   return `<span class="mlnav-dd">
-              <span style="display:block;width:300px;border:1px solid var(--hairline);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
+              <span style="display:block;width:300px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
                 <span class="mlnav-label">BUILD ON AGENT402</span>
                 <a href="/docs" class="mlnav-row"><span style="font-weight:700;">docs</span><span class="mlnav-faint">API, MCP, SDKs</span></a>
                 <a href="/quickstart" class="mlnav-row"><span style="font-weight:700;">quickstart</span><span class="mlnav-faint">first paid call in a minute</span></a>
@@ -652,7 +682,7 @@ function docsPanelNav() {
 // under Docs): why pay here, then what x402, MPP and agentic finance are.
 function whyPanelNav() {
   return `<span class="mlnav-dd">
-              <span style="display:block;width:300px;border:1px solid var(--hairline);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
+              <span style="display:block;width:300px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
                 <span class="mlnav-label">WHY PAY HERE</span>
                 <a href="/why" class="mlnav-row"><span style="font-weight:700;">seven things</span><span class="mlnav-faint">each with its proof</span></a>
                 <a href="/proof" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">receipts</span><span class="mlnav-faint">metered calls against their quotes</span></a>
@@ -669,7 +699,7 @@ function whyPanelNav() {
 
 function ourToolsPanelNav() {
   return `<span class="mlnav-dd">
-              <span style="display:block;width:280px;border:1px solid var(--hairline);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
+              <span style="display:block;width:280px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
                 <span class="mlnav-label">OUR 500+ TOOL CATALOG</span>
                 <a href="/tools" class="mlnav-row"><span style="font-weight:700;">catalog</span><span class="mlnav-faint">browse by category</span></a>
                 <a href="/skills" class="mlnav-row"><span style="font-weight:700;">skill packs</span><span class="mlnav-faint">one payment, N tools</span></a>
@@ -685,7 +715,7 @@ function ourToolsPanelNav() {
 
 function sellPanelHtml() {
   return `<span class="mlnav-dd">
-              <span style="display:block;width:330px;border:1px solid var(--hairline);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
+              <span style="display:block;width:330px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
                 <span class="mlnav-label">FOR API SELLERS - GET PAID PER CALL</span>
                 <a href="/sell" class="mlnav-row"><span style="font-weight:700;">list your API</span><span class="mlnav-faint">free · health-ranked</span></a>
                 <a href="/tollbooth" class="mlnav-row"><span style="font-weight:700;">tollbooth</span><span class="mlnav-faint">pay-per-crawl</span></a>
@@ -836,10 +866,10 @@ function nav(activePath) {
       ${zone3}
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;">
-      <a class="ml-nav-gh ml-nav-live" href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:6px 11px;border:1px solid var(--hairline);border-radius:8px;background:var(--card);" title="Watch x402 and MPP payments settle, read from the chain"><svg width="15" height="13" viewBox="0 0 24 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="13" rx="2"/><path d="M8 19h8"/><path d="M10.5 6.2v4.6l4-2.3z" fill="currentColor" stroke="none"/></svg>live</a>
+      <a class="ml-nav-gh ml-nav-live" href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:6px 11px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);" title="Watch x402 and MPP payments settle, read from the chain"><svg width="15" height="13" viewBox="0 0 24 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="13" rx="2"/><path d="M8 19h8"/><path d="M10.5 6.2v4.6l4-2.3z" fill="currentColor" stroke="none"/></svg>live</a>
       <a class="ml-nav-gh" href="/status" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;" title="Uptime from two outside observers"><span aria-hidden="true" style="width:7px;height:7px;border-radius:50%;background:var(--ok);display:inline-block;"></span>status</a>
-      <a class="ml-nav-gh" href="/llms.txt" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);text-decoration:none;padding:8px 13px;border:1px solid var(--hairline);border-radius:999px;background:var(--card);white-space:nowrap;">llms.txt</a>
-      ${activePath === "/reports" ? "" : `<a class="ml-nav-cta" href="/reports" style="background:var(--btn-bg);color:var(--btn-fg);font-family:var(--font-body);font-weight:500;font-size:var(--fs-md);text-decoration:none;padding:9px 16px;border-radius:999px;box-shadow:var(--btn-shadow);white-space:nowrap;">Get a report</a>`}
+      <a class="ml-nav-gh" href="/llms.txt" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);text-decoration:none;padding:8px 13px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);white-space:nowrap;">llms.txt</a>
+      ${activePath === "/reports" ? "" : `<a class="ml-nav-cta" href="/reports" style="background:var(--btn-bg);color:var(--btn-fg);font-family:var(--font-body);font-weight:500;font-size:var(--fs-md);text-decoration:none;padding:9px 16px;border-radius:var(--radius-pill);box-shadow:var(--btn-shadow);white-space:nowrap;">Get a report</a>`}
       <button type="button" class="ml-theme-toggle" aria-label="Switch between dark and light theme" title="Theme">
         <svg class="ml-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
         <svg class="ml-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>

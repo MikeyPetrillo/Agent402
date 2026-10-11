@@ -34,28 +34,28 @@ export function webhooksPage(baseUrl) {
     <!-- CONTENT -->
     <div>
       <p style="font-size:var(--fs-md);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--faint);text-decoration:none;">Home</a> &rsaquo; <a href="/docs" style="color:var(--faint);text-decoration:none;">Docs</a> &rsaquo; Webhooks &amp; Callbacks</p>
-      <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:1;letter-spacing:-.02em;margin:0 0 14px;">Webhooks &amp; Callbacks</h1>
+      <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1;margin:0 0 14px;">Webhooks &amp; Callbacks</h1>
       <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 36px;">How to handle async workflows, retries, and long-running tool chains with Agent402.</p>
 
-      <h2 id="patterns" style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Current async patterns</h2>
+      <h2 id="patterns" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Current async patterns</h2>
       <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">All Agent402 tools return results synchronously in the HTTP response. For workflows that chain multiple tools, here are the patterns available today:</p>
 
       <div class="ml-wh-cards">
         <div style="background:var(--card);border:1px solid var(--hairline);padding:20px 22px;">
-          <h3 style="font-weight:700;font-size:var(--fs-lg);margin:0 0 8px;">Idempotent retries <span style="display:inline-block;background:var(--panel);color:var(--ok);font-size:var(--fs-xs);font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Available</span></h3>
+          <h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 8px;">Idempotent retries <span style="display:inline-block;background:var(--panel);color:var(--ok);font-size:var(--fs-xs);font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Available</span></h3>
           <p style="color:var(--muted);font-size:var(--fs-md);line-height:1.6;margin:0;">Add an <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">Idempotency-Key</code> header to any request. If a network error occurs mid-flight, retry safely - the server returns the cached result without re-charging.</p>
         </div>
         <div style="background:var(--card);border:1px solid var(--hairline);padding:20px 22px;">
-          <h3 style="font-weight:700;font-size:var(--fs-lg);margin:0 0 8px;">Sequential chaining <span style="display:inline-block;background:var(--panel);color:var(--ok);font-size:var(--fs-xs);font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Available</span></h3>
+          <h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 8px;">Sequential chaining <span style="display:inline-block;background:var(--panel);color:var(--ok);font-size:var(--fs-xs);font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Available</span></h3>
           <p style="color:var(--muted);font-size:var(--fs-md);line-height:1.6;margin:0;">Chain tools by calling them in sequence, for example <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">render</code> &rarr; <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">extract</code> &rarr; <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">memory-write</code> (wallet-only tools, paid per call). Each call is independent and stateless. Use <a href="/workflows" style="color:var(--accent);">workflow examples</a> for patterns.</p>
         </div>
         <div style="background:var(--card);border:1px solid var(--hairline);padding:20px 22px;">
-          <h3 style="font-weight:700;font-size:var(--fs-lg);margin:0 0 8px;">Wallet-keyed state <span style="display:inline-block;background:var(--panel);color:var(--ok);font-size:var(--fs-xs);font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Available</span></h3>
+          <h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 8px;">Wallet-keyed state <span style="display:inline-block;background:var(--panel);color:var(--ok);font-size:var(--fs-xs);font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Available</span></h3>
           <p style="color:var(--muted);font-size:var(--fs-md);line-height:1.6;margin:0;">Use the memory tools (<code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">memory-write</code>, <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">memory-read</code>) to persist intermediate results across tool calls. Your wallet address is your identity - no accounts needed.</p>
         </div>
       </div>
 
-      <h2 id="idempotent" style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Idempotent retries in practice</h2>
+      <h2 id="idempotent" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Idempotent retries in practice</h2>
       <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">Pass an <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">Idempotency-Key</code> header with any unique string. The server caches the result keyed to your request + credential combination:</p>
 
       <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0 0 14px;overflow-x:auto;">curl -X POST https://agent402.tools/api/hash \\
@@ -71,7 +71,7 @@ curl -X POST https://agent402.tools/api/hash \\
 
       <p style="color:var(--muted);line-height:1.7;margin:0 0 36px;">The cache key is <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">sha256(METHOD /path + key + credential)</code>, so different callers with the same idempotency key don't collide.</p>
 
-      <h2 id="chaining" style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Chaining with agent402-client</h2>
+      <h2 id="chaining" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Chaining with agent402-client</h2>
       <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0 0 36px;overflow-x:auto;">import { Agent402 } from "agent402-client";
 
 // Free tier: each call settles its own proof-of-work, no wallet needed
@@ -86,11 +86,11 @@ const paid = new Agent402({ fetch: payFetch });
 const page = await paid.call("extract", { url: "https://example.com" });
 await paid.call("memory-write", { key: "example-title", value: page.title });</pre>
 
-      <h2 id="planned" style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Planned: webhook callbacks <span style="display:inline-block;background:var(--card);border:1px solid var(--hairline);color:var(--accent);font-size:var(--fs-xs);font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Planned</span></h2>
+      <h2 id="planned" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Planned: webhook callbacks <span style="display:inline-block;background:var(--card);border:1px solid var(--hairline);color:var(--accent);font-size:var(--fs-xs);font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Planned</span></h2>
       <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">We're designing a webhook system for long-running chains. The planned flow:</p>
 
       <div style="background:var(--card);border:1px solid var(--hairline);padding:20px 22px;margin-bottom:14px;">
-        <h3 style="font-weight:700;font-size:var(--fs-lg);margin:0 0 8px;">How it will work</h3>
+        <h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 8px;">How it will work</h3>
         <p style="color:var(--muted);font-size:var(--fs-md);line-height:1.7;margin:0;">1. Submit a tool call with a <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">X-Callback-URL</code> header pointing to your endpoint.<br>
         2. Agent402 returns <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">202 Accepted</code> with a job ID immediately.<br>
         3. When the tool completes, Agent402 POSTs the result to your callback URL with an HMAC signature for verification.<br>
@@ -99,7 +99,7 @@ await paid.call("memory-write", { key: "example-title", value: page.title });</p
 
       <p style="color:var(--muted);line-height:1.7;margin:0 0 36px;">Want to be notified when webhooks launch? Follow <a href="https://x.com/Agent402Tools" rel="noopener" style="color:var(--accent);">@Agent402Tools</a> or watch the <a href="${REPO_URL}" rel="noopener" style="color:var(--accent);">GitHub repo</a>.</p>
 
-      <h2 id="related" style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Related</h2>
+      <h2 id="related" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Related</h2>
       <p style="color:var(--muted);line-height:1.7;margin:0;">
         <a href="/workflows" style="color:var(--accent);text-decoration:none;">Workflow examples</a> - see how tools chain together<br>
         <a href="/quickstart" style="color:var(--accent);text-decoration:none;">Quickstart</a> - get your first call working in 60 seconds<br>

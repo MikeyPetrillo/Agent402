@@ -131,7 +131,7 @@ table{border-collapse:collapse;width:100%}
   ).join("");
 
   const stepsHtml = STEPS.map(([n, t, b]) =>
-    `<div style="padding:22px 24px;border-bottom:1px solid var(--hairline);"><div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:9px;">${esc(n)}</div><h3 style="font-weight:800;font-size:var(--fs-lg);margin:0 0 8px;color:var(--ink);">${esc(t)}</h3><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">${esc(b)}</p></div>`
+    `<div style="padding:22px 24px;border-bottom:1px solid var(--hairline);"><div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:9px;">${esc(n)}</div><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 8px;color:var(--ink);">${esc(t)}</h3><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">${esc(b)}</p></div>`
   ).join("");
 
   const compareRowsHtml = COMPARE.map(([label, x, m]) =>
@@ -149,7 +149,7 @@ table{border-collapse:collapse;width:100%}
     : `<tr><td colspan="5" style="padding:20px 18px;color:var(--on-panel-faint);">unavailable: the leaderboard snapshot has not populated yet</td></tr>`;
 
   const faqHtml = FAQS.map(([q, a]) =>
-    `<article style="padding:26px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:var(--fs-lg);margin:0 0 12px;color:var(--ink);">${esc(q)}</h3><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">${esc(a)}</p></article>`
+    `<article style="padding:26px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 12px;color:var(--ink);">${esc(q)}</h3><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">${esc(a)}</p></article>`
   ).join("");
 
   const body = `
@@ -160,7 +160,7 @@ table{border-collapse:collapse;width:100%}
     </nav>
     <div class="wx-2col" style="display:grid;grid-template-columns:1.1fr .9fr;gap:50px;align-items:start;">
       <div>
-        <h1 style="font-weight:800;font-size:var(--fs-5xl);line-height:.94;letter-spacing:-.035em;margin:0 0 24px;color:var(--ink);">What are <span style="color:var(--accent);">x402</span> and <span style="color:var(--accent);">MPP</span>?</h1>
+        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);">What are <span style="color:var(--accent);">x402</span> and <span style="color:var(--accent);">MPP</span>?</h1>
         <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--on-panel-soft);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">x402 is an open protocol that lets software pay for a single HTTP request in stablecoins.</strong> The server answers <span style="font-family:var(--font-mono);font-size:var(--fs-lg);">402 Payment Required</span> with a price, the client signs a payment, and the same request completes. <strong style="color:var(--ink);font-weight:700;">MPP, the Machine Payments Protocol, is the IETF-track version of that same handshake</strong>, carried in standard HTTP authentication headers.</p>
         <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">No subscription, no checkout page, no account. That matters because an AI agent cannot open one: paying per call is the only purchase an autonomous program can actually make on its own. Both protocols are the wire underneath <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Agentic Finance</a>, agents that pay and get paid on their own; every term on this page is defined in the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>. New to all of it? Start with the <a href="/101" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">ten-minute 101</a>.</p>
       </div>
@@ -174,7 +174,7 @@ table{border-collapse:collapse;width:100%}
 
 <section id="402" style="max-width:900px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">01 / HISTORY</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">The status code the web reserved and never used.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">The status code the web reserved and never used.</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0 0 18px;">When HTTP/1.1 was written in 1997 its authors set aside a response code for the case where a client had to pay before it could have something: <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--ink);">402 Payment Required</span>. The spec marked it reserved for future use, and there it sat for roughly thirty years, one of the few status codes almost no server ever sent.</p>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0 0 18px;">The reason was not neglect. Card payments cannot fit inside one HTTP response: they need a redirect to a hosted page, a session, a stored credential, and a human to approve the charge. A protocol-level "pay me for this request" was unimplementable with the payment rails of the time.</p>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">Stablecoins changed the arithmetic. A signed transfer authorization is small enough to travel in a header, cheap enough to be worth a tenth of a cent, and needs no merchant account. x402 is what the 402 status code looks like once a payment system exists that can settle inside a single round trip.</p>
@@ -182,7 +182,7 @@ table{border-collapse:collapse;width:100%}
 
 <section id="how" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">02 / THE HANDSHAKE</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">How a paid request actually works.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">How a paid request actually works.</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 32px;">Four steps, one round trip from the caller's point of view. Nothing here requires a browser, a human, or an account.</p>
   <div class="wx-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);">
     <div style="background:var(--card);border-right:1px solid var(--hairline);">${stepsHtml}</div>
@@ -210,7 +210,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
 
 <section id="compare" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">03 / COMPARISON</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">x402 vs MPP, side by side.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">x402 vs MPP, side by side.</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 30px;">They differ in wire format, not in economics. Same signed authorization, same facilitator, same price, same guarantee. A server can answer both on one route, which is what Agent402 does, so the buyer's client decides which dialect to speak.</p>
   <div class="wx-scroll">
     <table style="font-size:var(--fs-base);border:1px solid var(--hairline);background:var(--card);">
@@ -222,7 +222,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
 
 <section id="agentic" style="max-width:900px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">04 / AGENTIC PAYMENTS</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">What agentic payments are, and why they had to exist.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">What agentic payments are, and why they had to exist.</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0 0 18px;"><strong style="color:var(--ink);font-weight:700;">Agentic payments are purchases made by software rather than people.</strong> An AI agent working a real task keeps running into things it cannot answer from memory: fetch a live page, pull a filing, convert a file, check an address on a chain.</p>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0 0 18px;">Signing up for twenty APIs is not something it can do. It has no email inbox to confirm, no credit card, no authority to accept terms of service, and no way to rotate the keys it would collect. Every one of those is a human step wedged in front of a machine task.</p>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0 0 24px;">Paying a fraction of a cent per call, from a wallet it controls, is a step it can take unattended. That inverts the model: instead of registering for access, the agent simply pays for the one thing it needs, and the payment is the identity. Nothing to sign up for means nothing to leak.</p>
@@ -234,7 +234,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
 
 <section id="chains" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">05 / SETTLEMENT</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">Which chains settle x402 payments?</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">Which chains settle x402 payments?</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 30px;">The protocol is chain-agnostic; each server picks what it accepts. Agent402 settles x402 on twelve chains, so a buyer pays on whichever chain it already holds stablecoins on. Gas is sponsored by the facilitator on EVM chains, which means a caller needs only the stablecoin and no native gas token. Counts below are real settled calls per rail.</p>
   <div class="wx-scroll">
     <table style="font-size:var(--fs-base);border:1px solid var(--hairline);background:var(--card);">
@@ -248,7 +248,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
 <section id="who" style="background:var(--panel);margin-top:64px;border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">06 / ADOPTION</div>
-    <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--on-panel);">Who is actually settling x402 payments?</h2>
+    <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--on-panel);">Who is actually settling x402 payments?</h2>
     <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--on-panel-muted);max-width:820px;margin:0 0 30px;">Not a forecast: a ranking of real sellers by Base USDC settled volume, built by crawling public x402 sellers and reading the chain. Agent402 is excluded from this view, because a neutral index should be checkable against itself.</p>
     <div class="wx-scroll">
       <table style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1.5px solid var(--panel-rule-2);background:var(--card);">
@@ -266,46 +266,45 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
 
 <section id="start" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">07 / GET STARTED</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">Start on either side of the 402.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">Start on either side of the 402.</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 30px;">x402 has two sides, and both are open. Charge for what you serve, or pay for what you need.</p>
   <div class="wx-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);">
     <div style="padding:26px;border-right:1px solid var(--hairline);background:var(--card);display:flex;flex-direction:column;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:16px;">SELL</div>
-      <h3 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">Charge agents for your API</h3>
+      <h3 style="font-weight:600;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">Charge agents for your API</h3>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Put an x402 paywall in front of your endpoint, then register the origin so buyers and routers can find you. Free to list, no signup, and nothing deducted from your price: buyers pay straight into your wallet.</p>
       <pre style="margin:0 0 18px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># we probe, you appear
 </span>curl -X POST https://agent402.tools/api/index/register \
   -H 'content-type: application/json' \
   -d '{"origin":"https://seller.example"}'</pre>
-      <a href="/sell" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);text-decoration:none;padding:12px 18px;align-self:flex-start;">List your API →</a>
+      <a class="btn btn-primary btn-sm" href="/sell" style="align-self:flex-start;">List your API →</a>
     </div>
     <div style="padding:26px;background:var(--card);display:flex;flex-direction:column;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:16px;">BUY</div>
-      <h3 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">Let your agent pay for tools</h3>
+      <h3 style="font-weight:600;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">Let your agent pay for tools</h3>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Paste one MCP URL into Claude, Cursor, or any streamable-HTTP client and your agent can buy from 500+ tools. Pure-CPU tools run free over proof-of-work, so you can try it without a wallet.</p>
       <pre style="margin:0 0 18px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># zero install
 </span>claude mcp add --transport http \
   agent402 https://agent402.tools/mcp</pre>
-      <a href="/docs#add" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);text-decoration:none;padding:11px 18px;align-self:flex-start;">Add to your agent →</a>
+      <a class="btn btn-secondary btn-sm" href="/docs#add" style="align-self:flex-start;">Add to your agent →</a>
     </div>
   </div>
 </section>
 
 <section id="faq" style="max-width:900px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">08 / QUESTIONS</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 30px;color:var(--ink);">Questions people and agents ask.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 30px;color:var(--ink);">Questions people and agents ask.</h2>
   <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">${faqHtml}</div>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 56px;">
   <div style="background:var(--panel);border:1px solid var(--hairline);padding:52px 44px;position:relative;overflow:hidden;">
-    <div style="position:absolute;right:26px;top:-36px;font-weight:900;font-size:var(--fs-mark);line-height:1;color:transparent;-webkit-text-stroke:2px var(--on-panel-mark);pointer-events:none;">402</div>
     <div style="position:relative;">
-      <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--on-panel);">Now put it to work.</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--on-panel);">Now put it to work.</h2>
       <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 28px;max-width:540px;">Agent402 is the applied layer for both protocols: an open index, a neutral router, and an on-chain ranking of the x402 sellers that settle. Free to list, free to browse.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a href="/sell" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:14px 24px;">List your API - free →</a>
-        <a href="/" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">SEE THE INDEX</a>
+        <a class="btn btn-primary on-panel" href="/sell">List your API - free →</a>
+        <a class="btn btn-secondary on-panel" href="/">See the index</a>
       </div>
     </div>
   </div>

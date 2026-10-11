@@ -154,7 +154,7 @@ function renderTask(task, catalog) {
 
 const SHOP_CSS = `
   .sh-task { background:var(--card); border:1px solid var(--hairline); padding:20px 22px; margin:14px 0; }
-  .sh-task h2 { font-family:var(--font-body); font-weight:800; font-size:var(--fs-lg); margin:0 0 6px; }
+  .sh-task h2 { font-family:var(--font-body); font-weight:700; font-size:var(--fs-lg); margin:0 0 6px; }
   .sh-task-answer { color:var(--muted); font-size:var(--fs-md); margin-bottom:10px; line-height:1.6; }
   .sh-task-primary { font-size:var(--fs-base); margin-bottom:4px; }
   .sh-task-name { color:var(--ink); text-decoration:none; font-weight:700; }
@@ -198,7 +198,7 @@ export function shopPage(baseUrl, catalog) {
 
   const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;">SHOP</div>
-  <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:.96;letter-spacing:-.03em;margin-bottom:14px;">What does your agent want to do?</h1>
+  <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.96;margin-bottom:14px;">What does your agent want to do?</h1>
   <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.6;max-width:720px;margin-bottom:8px;">A task-indexed buyer's guide to the ${Object.keys(catalog).length.toLocaleString()} APIs at Agent402 - written from the agent's side of the call. Each row maps a real goal to the cheapest tool that solves it. Browse the full category-organized catalogue at <a href="/tools" style="color:var(--accent);">/tools</a>, walk the multi-tool workflows at <a href="/skills" style="color:var(--accent);">/skills</a>, or ask the discovery endpoint directly: <code style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);padding:2px 6px;font-size:var(--fs-sm);">/api/find?q=&lt;your task&gt;</code>.</p>
   ${missingNotice}
   ${tasks}

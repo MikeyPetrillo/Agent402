@@ -113,7 +113,7 @@
       }
 
       var sec4=el('div','ae-section');
-      var tryBtn=el('a','ae-try-btn','Try in Playground →');
+      var tryBtn=el('a','btn btn-secondary btn-sm ae-try-btn','Try in playground →');
       tryBtn.href='/playground';
       sec4.appendChild(tryBtn);
       body.appendChild(sec4);

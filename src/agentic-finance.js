@@ -69,10 +69,10 @@ export function agenticFinancePage(baseUrl) {
     `<div style="display:grid;grid-template-columns:150px 1fr 220px;gap:20px;padding:20px 24px;border-bottom:1px solid var(--hairline);align-items:baseline;" class="af-stack-row"><div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">0${i + 1} · <span style="color:var(--ink);font-weight:800;font-family:var(--font-body);font-size:var(--fs-lg);">${esc(layer)}</span></div><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">${esc(what)}</p><div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">${esc(who)}</div></div>`
   ).join("");
   const rolesHtml = ROLES.map(([tag, h, p, href, cta]) =>
-    `<div style="padding:24px;border-right:1px solid var(--hairline);border-bottom:1px solid var(--hairline);background:var(--card);display:flex;flex-direction:column;"><div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:12px;">${esc(tag)}</div><h3 style="font-weight:800;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(h)}</h3><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;flex:1;">${esc(p)}</p><a href="${href}" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);align-self:flex-start;">${esc(cta)} →</a></div>`
+    `<div style="padding:24px;border-right:1px solid var(--hairline);border-bottom:1px solid var(--hairline);background:var(--card);display:flex;flex-direction:column;"><div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:12px;">${esc(tag)}</div><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(h)}</h3><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;flex:1;">${esc(p)}</p><a href="${href}" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);align-self:flex-start;">${esc(cta)} →</a></div>`
   ).join("");
   const faqHtml = FAQS.map((f) =>
-    `<article style="padding:26px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:var(--fs-lg);margin:0 0 12px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`
+    `<article style="padding:26px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 12px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`
   ).join("");
 
   const body = `
@@ -83,7 +83,7 @@ export function agenticFinancePage(baseUrl) {
     </nav>
     <div class="af-2col" style="display:grid;grid-template-columns:1.1fr .9fr;gap:50px;align-items:start;">
       <div>
-        <h1 style="font-weight:800;font-size:var(--fs-5xl);line-height:.94;letter-spacing:-.035em;margin:0 0 24px;color:var(--ink);">Agentic Finance <span style="color:var(--accent);">(AIFI)</span></h1>
+        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);">Agentic Finance <span style="color:var(--accent);">(AIFI)</span></h1>
         <p id="definition" style="font-size:var(--fs-lg);line-height:1.5;color:var(--on-panel-soft);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">Agentic Finance is software agents transacting on their own:</strong> discovering a service, reading a machine-readable price, paying per request from a non-custodial wallet over open protocols like <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">x402</a> and <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">MPP</a>, receiving a verifiable receipt, and, on the other side, earning per request for what they serve.</p>
         <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">No accounts, no API keys, no invoices. The payment is the identity and every settlement is on a public ledger. <strong style="color:var(--ink);">Agent402 is the applied layer of agentic finance</strong>: the tools agents buy, the index and router that find and pay the best seller, the tollbooth that lets any site earn from agents, and the transparency that proves it all on chain.</p>
       </div>
@@ -97,7 +97,7 @@ export function agenticFinancePage(baseUrl) {
 
 <section id="stack" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">01 / THE STACK</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">Four layers, top to bottom.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">Four layers, top to bottom.</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 30px;">Agentic payments are the wire. Agentic finance is what forms on top of it once thousands of agents and sellers are transacting: price discovery, routing between competing sellers, reliability signals, spend controls, receipts and transparent revenue. The middle two layers are where the leverage is.</p>
   <div style="border:1px solid var(--hairline);background:var(--card);">${stackHtml}</div>
 </section>
@@ -105,7 +105,7 @@ export function agenticFinancePage(baseUrl) {
 <section id="agent402" style="background:var(--panel);margin-top:64px;border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">02 / THE APPLIED LAYER</div>
-    <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--on-panel);">Where Agent402 sits.</h2>
+    <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--on-panel);">Where Agent402 sits.</h2>
     <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--on-panel-muted);max-width:820px;margin:0 0 30px;">Open source, self-hostable, two-sided, and live on both open protocols. Everything below settles on mainnet today, and every claim links to the surface that proves it.</p>
     <div class="af-4col" style="display:grid;grid-template-columns:repeat(4,1fr);border:1.5px solid var(--panel-rule-2);border-right:none;border-bottom:none;">${rolesHtml}</div>
   </div>
@@ -113,25 +113,24 @@ export function agenticFinancePage(baseUrl) {
 
 <section id="proof" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">03 / IS IT REAL?</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">Settling on mainnet, every day.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">Settling on mainnet, every day.</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">Agent402 publishes its own agentic-finance numbers live rather than asserting them: external per-call payments settled on chain by rail and by wire on the <a href="/revenue" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">revenue page</a>, the on-chain <a href="/leaderboard" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">seller leaderboard</a>, availability measured from outside on the <a href="/status" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">status page</a>, and a daily canary that buys real tools over both x402 and MPP so "it works" is re-proven continuously. Machine-readable: <a href="/api/revenue" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">/api/revenue</a>, <a href="/api/leaderboard" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">/api/leaderboard</a>, <a href="/api/status" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">/api/status</a>.</p>
 </section>
 
 <section id="faq" style="max-width:900px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">04 / QUESTIONS</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 30px;color:var(--ink);">Questions people and agents ask about agentic finance.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 30px;color:var(--ink);">Questions people and agents ask about agentic finance.</h2>
   <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">${faqHtml}</div>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 56px;">
   <div style="background:var(--panel);border:1px solid var(--hairline);padding:52px 44px;position:relative;overflow:hidden;">
-    <div style="position:absolute;right:26px;top:-36px;font-weight:900;font-size:var(--fs-mark);line-height:1;color:transparent;-webkit-text-stroke:2px var(--on-panel-mark);pointer-events:none;">402</div>
     <div style="position:relative;">
-      <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--on-panel);">Take part in agentic finance.</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--on-panel);">Take part in agentic finance.</h2>
       <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 28px;max-width:560px;">Give your agent 500+ tools it can pay for over x402 or MPP, or put a price on your own API and let agents pay you. Both are free to start.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a href="/docs#add" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:14px 24px;">ADD TO YOUR AGENT →</a>
-        <a href="/sell" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">SELL YOUR API</a>
+        <a class="btn btn-primary on-panel" href="/docs#add">Add to your agent →</a>
+        <a class="btn btn-secondary on-panel" href="/sell">Sell your API</a>
       </div>
     </div>
   </div>

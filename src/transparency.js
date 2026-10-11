@@ -54,14 +54,14 @@ export function transparencyPage(baseUrl, traffic = null) {
   const extraCss = `
 .tp-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
 .tp-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
-.tp-h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 14px}
+.tp-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px}
 .tp-updated{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:0 0 32px}
 .tp-body p,.tp-body li{font-size:var(--fs-base);line-height:1.55;color:var(--muted)}
 .tp-body p{margin:0 0 14px}
 .tp-body ul{margin:0 0 18px;padding:0 0 0 22px}
 .tp-body li{margin-bottom:8px}
-.tp-body h2{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:36px 0 14px;color:var(--ink)}
-.tp-body h3{font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.01em;margin:28px 0 10px;color:var(--ink)}
+.tp-body h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:36px 0 14px;color:var(--ink)}
+.tp-body h3{font-family:var(--font-body);font-weight:600;font-size:var(--fs-xl);letter-spacing:-.01em;margin:28px 0 10px;color:var(--ink)}
 .tp-body a{color:var(--accent);text-decoration:none}
 .tp-body a:hover{text-decoration:underline}
 .tp-body b,.tp-body strong{color:var(--ink);font-weight:600}

@@ -107,12 +107,12 @@ export function communityPage(baseUrl) {
 
 /* hero */
 .cm-hero{text-align:center;padding:0 0 32px}
-.cm-hero h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 14px;color:var(--ink)}
+.cm-hero h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;color:var(--ink)}
 .cm-hero p{font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:620px;margin:0 auto}
 
 /* section headings */
 .cm-section{margin:40px 0 18px}
-.cm-section h2{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 6px;color:var(--ink)}
+.cm-section h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 6px;color:var(--ink)}
 .cm-section p{color:var(--muted);font-size:var(--fs-base);line-height:1.55;margin:0}
 
 /* stat cards */
@@ -128,7 +128,7 @@ export function communityPage(baseUrl) {
 .cm-grid-4{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;margin-bottom:32px}
 @media(max-width:640px){.cm-grid-4{grid-template-columns:1fr}}
 .cm-card{background:var(--card);border:1px solid var(--hairline);padding:22px 24px}
-.cm-card h3{margin:0 0 8px;font-family:var(--font-body);font-weight:800;font-size:var(--fs-lg);color:var(--ink)}
+.cm-card h3{margin:0 0 8px;font-family:var(--font-body);font-weight:600;font-size:var(--fs-lg);color:var(--ink)}
 .cm-card-desc{color:var(--muted);font-size:var(--fs-md);line-height:1.55;margin:0 0 12px}
 .cm-card-link{color:var(--accent);text-decoration:none;font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700}
 .cm-card-link:hover{text-decoration:underline}

@@ -1614,7 +1614,7 @@ function mppRailsSection(mpp, { wallets = {} } = {}) {
   }).join("\n");
   return `
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:40px 0 6px;">
-      <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">MPP wire <span style="color:var(--muted);font-weight:400;">· by rail</span></h2>
+      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">MPP wire <span style="color:var(--muted);font-weight:400;">· by rail</span></h2>
       <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);"><strong style="color:var(--ink);">${count.toLocaleString()}</strong> settlement${count === 1 ? "" : "s"} over <code>Authorization: Payment</code> · <a href="/api/revenue/mpp">/api/revenue/mpp</a></span>
     </div>
     <p style="font-size:var(--fs-md);color:var(--muted);margin:0 0 12px;">Payments whose credential arrived over the <strong>MPP</strong> wire. Throughput, ours included: most of it is our own daily volume exercising the rails; the external columns are money from others. On Base and Celo an MPP payment settles as ordinary USDC through x402, so its dollars are already in the x402 table above; Tempo and card payments settle off that ledger and are counted here.</p>
@@ -1644,7 +1644,7 @@ export function decideSection(d) {
   }).join("\n");
   return `
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:40px 0 6px;">
-      <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">Decide <span style="color:var(--muted);font-weight:400;">· plans and runs</span></h2>
+      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">Decide <span style="color:var(--muted);font-weight:400;">· plans and runs</span></h2>
       <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);"><a href="/api/revenue/decide">/api/revenue/decide</a></span>
     </div>
     <p style="font-size:var(--fs-md);color:var(--muted);margin:0 0 12px;">Paid use of the planner and its execute route, on every rail. Settlements count ours too (canaries and tests); the external columns are other buyers. External $ is what they paid for the plan or the run, not the pass-through payments a run makes to outside sellers.</p>
@@ -1733,7 +1733,7 @@ export function revenueChartSection() {
  */
 export function revenueNextStep() {
   return `<div style="margin:36px 0 0;border:1px solid var(--hairline);background:var(--card);padding:22px 20px;">
-    <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0 0 6px;">Put a line on this table.</h2>
+    <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0 0 6px;">Put a line on this table.</h2>
     <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 14px;">Every number above is a settlement through the same gate this command hits. It costs a tenth of a cent and needs no account: the 402 comes back with the price and the rails, your client signs, the call is served.</p>
     <pre style="margin:0 0 16px;padding:12px 14px;overflow-x:auto;background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.5;"><code>curl -i https://agent402.tools/api/hash?text=hello</code></pre>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
@@ -1824,7 +1824,7 @@ export function revenuePage(baseUrl, snap) {
   <div style="max-width:1100px;margin:0 auto;padding:56px 30px;">
     <section>
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/revenue</div>
-    <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:1.05;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink);">Transactions.</h1>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.05;margin:0 0 8px;color:var(--ink);">Transactions.</h1>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:60ch;margin:0;">
       Every payment through our rails, on both wires (<strong>x402</strong> and <strong>MPP</strong>) plus card purchases, read from the chain. Revenue counts only money from others; throughput counts our own canary and volume runs too. <a href="/transparency#revenue-figures">How the two are told apart</a>.
     </p>
@@ -1838,7 +1838,7 @@ export function revenuePage(baseUrl, snap) {
     </section>
     <section>
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:36px 0 6px;">
-      <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">x402 rails <span style="color:var(--muted);font-weight:400;">· by chain</span></h2>
+      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">x402 rails <span style="color:var(--muted);font-weight:400;">· by chain</span></h2>
       <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);"><strong style="color:var(--ink);">${snap.rails.length}</strong> chains, ranked by transactions</span>
     </div>
     <p style="font-size:var(--fs-md);color:var(--muted);margin:0 0 12px;">Transactions count every settlement on the rail, ours included. External is money from others. Latest settle is the newest payment on the rail, from an outside buyer or from our own canary and volume runs (marked ours), linked to our wallet on that chain's explorer.</p>

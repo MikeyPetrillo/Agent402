@@ -110,11 +110,11 @@ export function workflowsPage(baseUrl, catalog = {}) {
   const extraCss = `
 .wf-wrap{max-width:960px;margin:0 auto;padding:56px 30px}
 .wf-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
-.wf-h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 14px}
+.wf-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px}
 .wf-intro{max-width:760px;font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px}
 .wf-grid{display:flex;flex-direction:column;gap:20px;margin-bottom:48px}
 .wf-card{background:var(--card);border:1px solid var(--hairline);padding:24px 26px}
-.wf-card h3{margin:0 0 8px;font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);color:var(--ink)}
+.wf-card h3{margin:0 0 8px;font-family:var(--font-body);font-weight:600;font-size:var(--fs-xl);color:var(--ink)}
 .wf-desc{color:var(--muted);font-size:var(--fs-md);line-height:1.55;margin:0 0 20px}
 .wf-flow{display:flex;align-items:stretch;gap:0;flex-wrap:nowrap;overflow-x:auto;padding:4px 0}
 .wf-step{display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--card);border:1px solid var(--hairline);padding:12px 16px;min-width:120px;max-width:170px;text-decoration:none;transition:border-color .15s;flex-shrink:0}

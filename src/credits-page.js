@@ -40,7 +40,7 @@ export function creditsPage(baseUrl, salesEnabled = false) {
     <p class="note">${salesEnabled ? "Your key is shown once on the next page and emailed to you · " : ""}keep it secret · balance at <span style="font-family:var(--font-mono);">GET /api/credits/balance</span> · agents with a wallet pay per call over x402 / MPP</p>
   </section>
   <section>
-    <div class="hm-obsidian" style="border-radius:18px;background:var(--obsidian-bg);border:1px solid var(--obsidian-border);color:var(--on-panel);padding:26px 28px;">
+    <div class="hm-obsidian" style="border-radius:var(--radius);background:var(--obsidian-bg);border:1px solid var(--obsidian-border);color:var(--on-panel);padding:26px 28px;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--on-panel-dim);margin-bottom:12px;">How it works</div>
       <pre style="margin:0;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.8;color:var(--on-panel-soft);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># any paid tool, any language - just the header</span>
 curl -H "Authorization: Bearer a402_…" ${esc(baseUrl)}/api/whois?domain=example.com

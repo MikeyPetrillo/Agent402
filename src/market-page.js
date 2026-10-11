@@ -500,7 +500,7 @@ export function marketActivityHtml(chainKey, activity, selected) {
       ? `activity unavailable for this seller - no ${C.chainName} payTo advertised in its 402s, or the scan failed`
       : "activity scan temporarily unavailable";
     return `
-  <h2 id="activity" style="font-size:var(--fs-xl);font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Activity</h2>
+  <h2 id="activity" style="font-size:var(--fs-xl);font-weight:700;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Activity</h2>
   <p style="color:var(--muted);font-size:var(--fs-md);margin:0;">${why} - settlements remain independently verifiable on ${esc(C.explorerUrl)}</p>`;
   }
   const bars = (key) => {
@@ -529,7 +529,7 @@ export function marketActivityHtml(chainKey, activity, selected) {
   ].filter(Boolean).join(" · ");
   return `
   <div id="activity" style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">
-    <h2 style="font-size:var(--fs-xl);font-weight:800;margin:0;">Activity</h2>
+    <h2 style="font-size:var(--fs-xl);font-weight:700;margin:0;">Activity</h2>
     <span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">${scopeLabel} · PAST ${esc(activity.days)} DAYS</span>
   </div>
   <div class="ml-2col" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;">
@@ -834,7 +834,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
     <label for="reg-origin" style="display:block;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Your API's origin</label>
     <div style="display:flex;gap:10px;">
       <input id="reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;font-family:var(--font-mono);font-size:var(--fs-sm);padding:9px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);" aria-label="https://api.yourdomain.com">
-      <button id="reg-go" style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);border:none;padding:9px 16px;cursor:pointer;">SUBMIT</button>
+      <button class="btn btn-primary btn-sm" id="reg-go">Submit</button>
     </div>
     <div id="reg-out" role="status" aria-live="polite" data-listed-note="${esc(C.chainName)} sellers appear on this page; all sellers appear on /index." style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);margin-top:8px;">Free, no account - we probe your origin's x402 surface and list you if it answers. Ranking is health-based.</div>
   </div>
@@ -944,7 +944,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   });
 
   const rosterHtml = `
-  <h2 id="sellers" style="font-size:var(--fs-xl);font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Sellers accepting ${esc(C.chainName)}</h2>
+  <h2 id="sellers" style="font-size:var(--fs-xl);font-weight:700;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Sellers accepting ${esc(C.chainName)}</h2>
   <p style="font-size:var(--fs-sm);color:var(--faint);margin:-6px 0 12px;">pick a seller to scope the activity charts · THIS HOST = run by agent402 · every other seller is independent, found by the open crawl · ${measured ? `tx = settled calls on ${esc(C.chainName)}${lbWindow ? `, last ${esc(lbWindow)}` : ""}, from the seller leaderboard` : `per-seller settlement counts are measured on ${esc(CHAIN_PAGES[LEADERBOARD_CHAIN].chainName)} only, so this roster shows none for ${esc(C.chainName)}; pick a seller to scan its ${esc(C.chainName)} wallet`}</p>
   ${compact
     ? `<div style="display:flex;flex-direction:column;gap:8px;">${sellersHtml}</div>`
@@ -953,7 +953,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   ${honesty}`;
 
   const sellSectionHtml = `
-  <h2 style="font-size:var(--fs-xl);font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Sell on ${esc(C.chainName)}</h2>
+  <h2 style="font-size:var(--fs-xl);font-weight:700;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Sell on ${esc(C.chainName)}</h2>
   <div class="ml-2col" style="display:grid;grid-template-columns:1.1fr .9fr;gap:18px;align-items:start;">
     <div>
       <p style="font-size:var(--fs-base);line-height:1.65;">${C.sellParagraphHtml}</p>
@@ -991,7 +991,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   </section>
 
   <section>
-    <h2 style="font-size:var(--fs-xl);font-weight:800;margin:40px 0 10px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Buy tools with ${esc(C.asset)} on ${esc(C.chainName)}</h2>
+    <h2 style="font-size:var(--fs-xl);font-weight:700;margin:40px 0 10px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Buy tools with ${esc(C.asset)} on ${esc(C.chainName)}</h2>
     <p style="font-size:var(--fs-base);color:var(--muted);margin:0 0 10px;">${payableSentence(payable, C)}, from ${usd(low)} to ${usd(high)} a call${groups.length ? `, across ${groups.map((g) => esc(g.label.toLowerCase())).slice(0, 6).join(", ")} and more` : ""}. The catalog page carries the category browser; this page is the chain's ledger.</p>
     <p style="font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--card-zebra);padding:10px 14px;margin:0;">agents: GET ${esc(baseUrl)}/api/route?q=&lt;task&gt;&amp;network=${esc(C.networkParam)}</p>
   </section>
@@ -1064,7 +1064,7 @@ function economyStripHtml(economySnap) {
     : `<p style="color:var(--muted);font-size:var(--fs-md);margin:0;">chain-wide settlement stats unavailable right now - detail in <a href="/api/x402-economy">/api/x402-economy</a></p>`;
   return `
   <div id="economy" style="margin:40px 0 0;">
-    <h2 style="font-size:var(--fs-xl);font-weight:800;margin:0 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">The economy</h2>
+    <h2 style="font-size:var(--fs-xl);font-weight:700;margin:0 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">The economy</h2>
     ${inner}
   </div>`;
 }
@@ -1213,7 +1213,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
     : "";
 
   const rosterHtml = `
-  <h2 id="sellers" style="font-size:var(--fs-xl);font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Every seller, every chain</h2>
+  <h2 id="sellers" style="font-size:var(--fs-xl);font-weight:700;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Every seller, every chain</h2>
   <p style="font-size:var(--fs-sm);color:var(--faint);margin:-6px 0 12px;">THIS HOST = run by agent402 · every other seller is independent, found by the open crawl · Chain shows the networks each seller's 402 advertises · tx = settled calls on Base${leaderboardSnap?.windowLabel ? `, last ${esc(leaderboardSnap.windowLabel)}` : ""}, from the seller leaderboard</p>
   <div style="display:flex;flex-direction:column;gap:8px;">${rows}</div>
   ${capNote}
@@ -1294,7 +1294,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   }).join("");
 
   const chainGridSection = `
-  <h2 style="font-size:var(--fs-xl);font-weight:800;margin:48px 0 4px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Markets by chain</h2>
+  <h2 style="font-size:var(--fs-xl);font-weight:700;margin:48px 0 4px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Markets by chain</h2>
   <p style="font-size:var(--fs-sm);color:var(--faint);margin:8px 0 16px;">every rail has its own market page - a seller appears under every chain it accepts, so these do not sum to a distinct total</p>
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:0;border:1px solid var(--hairline);">${chainGridHtml}</div>
   <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:12px;">Buying from a seller on another rail? The Smart Order Router settles with them on their chain and relays the result.</p>`;
@@ -1303,7 +1303,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   <div class="ml-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);margin-top:48px;">
     <div style="padding:26px;border-right:1px solid var(--hairline);background:var(--card);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">$ POST /api/route</div>
-      <h2 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Or skip the browsing</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Or skip the browsing</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Describe the task and the Smart Order Router resolves it to a tool - from this index, ours or anyone else's - then runs it. ${esc(routerRankingSentence())} It buys from external sellers and resells the result to you.</p>
       <pre style="margin:0 0 14px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># free to resolve, you only pay to execute
 </span>curl 'https://agent402.tools/api/find?q=ocr+an+image'</pre>
@@ -1311,7 +1311,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
     </div>
     <div style="padding:26px;background:var(--card);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">HOW THE INDEX IS BUILT</div>
-      <h2 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Crawled, not curated</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Crawled, not curated</h2>
       <div style="display:flex;flex-direction:column;">${[
         "Discovery: the Coinbase CDP Bazaar plus our own crawler, plus anyone who self-registers at POST /api/index/register.",
         "We read each seller's manifest for its tools, routes and prices, and its live 402 challenge for the chains it accepts.",
@@ -1329,20 +1329,20 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
     { q: "My listing is wrong. How do I correct or remove it?", a: "Write to mike@agent402.tools. Every figure here is a reading of public data - the seller's own manifest and 402 challenges, plus on-chain settlements - taken at the scan time shown, so it can go stale or fold to the wrong operator. We re-scan and correct or withdraw a row on request." },
     { q: "Why do tool counts and settled volume disagree?", a: "Tool counts are what a seller advertises; settled volume is what buyers actually paid for. A large catalog with no settlements has not found buyers yet, and a small catalog with heavy volume has found exactly the right one. Both numbers are shown so you can see the difference." },
   ];
-  const faqHtml = MARKET_FAQS.map((f) => `<article style="padding:22px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`).join("");
+  const faqHtml = MARKET_FAQS.map((f) => `<article style="padding:22px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`).join("");
   const faqSection = `
   <div style="max-width:760px;margin:56px 0 0;">
-    <h2 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 20px;color:var(--ink);">About this index.</h2>
+    <h2 style="font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 20px;color:var(--ink);">About this index.</h2>
     <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">${faqHtml}</div>
   </div>`;
 
   const closingCta = `
   <div style="margin:48px 0 0;background:var(--panel);border:1px solid var(--hairline);padding:40px 36px;position:relative;overflow:hidden;">
     <div style="position:relative;">
-      <h2 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 12px;color:var(--on-panel);">Add your API to the index.</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 12px;color:var(--on-panel);">Add your API to the index.</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-muted);margin:0 0 22px;max-width:520px;">Free, no signup, nothing deducted. Serve a 402 and register the origin: the crawler reads it at once and re-probes it ${crawlIntervalLabel()}.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a href="/sell" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 22px;">List your API - free →</a>
+        <a class="btn btn-primary" href="/sell">List your API - free →</a>
         <a href="/leaderboard" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:12px 22px;">SEE THE LEADERBOARD</a>
       </div>
     </div>

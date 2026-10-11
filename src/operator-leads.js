@@ -75,7 +75,7 @@ export function operatorLeadsPage({ ok, rows, total, byPlan, dbEnabled }) {
 
   const extraCss = `
 .ol-wrap{max-width:1180px;margin:0 auto;padding:56px 30px}
-.ol-h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 6px}
+.ol-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 6px}
 .ol-sub{color:var(--muted);margin:0 0 22px;font-size:var(--fs-md);line-height:1.55}
 .ol-sub a{color:var(--accent);text-decoration:none}
 .ol-sub a:hover{text-decoration:underline}

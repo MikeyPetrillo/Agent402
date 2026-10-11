@@ -69,12 +69,12 @@ export function decidePage(baseUrl, catalog) {
 .dc-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 .dc-depths{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .dc-card{background:var(--card);border:1px solid var(--hairline);padding:20px 22px}
-.dc-card h3{font-size:var(--fs-lg);font-weight:700;margin:0 0 8px;color:var(--ink)}
+.dc-card h3{font-size:var(--fs-lg);font-weight:600;margin:0 0 8px;color:var(--ink)}
 .dc-card p{font-size:var(--fs-md);line-height:1.55;color:var(--muted);margin:0}
 .dc-num{font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:10px}
 .dc-price{font-family:var(--font-mono);font-size:var(--fs-xl);letter-spacing:-.02em;color:var(--ink);margin:6px 0 10px}
 .dc-pre{background:var(--panel);color:var(--on-panel);border:1px solid var(--hairline);padding:18px 20px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.6;overflow-x:auto;margin:0;white-space:pre}
-.dc-h2{font-weight:800;font-size:var(--fs-2xl);line-height:1.05;letter-spacing:-.025em;margin:0 0 12px;color:var(--ink)}
+.dc-h2{font-weight:700;font-size:var(--fs-2xl);line-height:1.05;letter-spacing:-.025em;margin:0 0 12px;color:var(--ink)}
 .dc-lede{font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0 0 22px;max-width:720px}
 @media (max-width:900px){.dc-hero,.dc-steps,.dc-depths{grid-template-columns:minmax(0,1fr)}}
 `;
@@ -101,12 +101,12 @@ export function decidePage(baseUrl, catalog) {
     <div class="dc-hero">
       <div>
         <div class="dc-num">Agent402 Decide</div>
-        <h1 style="font-weight:800;font-size:var(--fs-4xl);line-height:.98;letter-spacing:-.035em;margin:0 0 18px;color:var(--ink);">Describe the job. Get the plan.</h1>
+        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);">Describe the job. Get the plan.</h1>
         <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 18px;">One paid call returns a call-ready plan over this catalog and outside x402 sellers with a recently verified 402: which tools, in what order, with fallbacks and params that validate. Run it yourself, or have Agent402 run it and the fee comes back as credit.</p>
         <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 22px;">${usd(p.quick)} to ${usd(p.full)} per decision, paid per request in USDC over <a href="/what-is-x402" style="color:var(--ink);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);">MPP</a>. No account.</p>
         <div style="display:flex;gap:11px;flex-wrap:wrap;">
-          <a href="#connect" style="background:var(--btn-bg);color:var(--btn-fg);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 22px;">ADD TO YOUR AGENT →</a>
-          <a href="/docs#decide" style="border:1.5px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:12px 22px;">DOCS</a>
+          <a class="btn btn-primary" href="#connect">Add to your agent →</a>
+          <a class="btn btn-secondary" href="/docs#decide">Docs</a>
         </div>
       </div>
       <div>

@@ -57,7 +57,7 @@ function startHereSection(baseUrl, catalog) {
   return `
 <section id="start-here" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">04 / START HERE</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">New to MPP? Try these routes first.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">New to MPP? Try these routes first.</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 26px;">${rows.length} fast, low-priced routes across web search, crypto and market data, macro and SEC filings, DNS and network, weather and utilities. Every one answers in one call, returns JSON, and the routes ${esc(mppFlagshipOffersPhrase())}. The same list is in <a href="/llms.txt" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">/llms.txt</a> and marked <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--ink);">x-mpp-flagship</span> in <a href="/openapi.json" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">/openapi.json</a>.</p>
   <div class="wm-scroll">
     <table style="font-size:var(--fs-base);border:1px solid var(--hairline);background:var(--card);">
@@ -99,7 +99,7 @@ table{border-collapse:collapse;width:100%}
   ).join("");
 
   const stepsHtml = STEPS.map(([n, t, b]) =>
-    `<div style="padding:22px 24px;border-bottom:1px solid var(--hairline);"><div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:9px;">${esc(n)}</div><h3 style="font-weight:800;font-size:var(--fs-lg);margin:0 0 8px;color:var(--ink);">${esc(t)}</h3><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">${esc(b)}</p></div>`
+    `<div style="padding:22px 24px;border-bottom:1px solid var(--hairline);"><div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:9px;">${esc(n)}</div><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 8px;color:var(--ink);">${esc(t)}</h3><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">${esc(b)}</p></div>`
   ).join("");
 
   const compareRowsHtml = COMPARE.map(([label, x, m]) =>
@@ -107,7 +107,7 @@ table{border-collapse:collapse;width:100%}
   ).join("");
 
   const faqHtml = FAQS.map((f) =>
-    `<article style="padding:26px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:var(--fs-lg);margin:0 0 12px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`
+    `<article style="padding:26px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 12px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`
   ).join("");
 
   const body = `
@@ -118,7 +118,7 @@ table{border-collapse:collapse;width:100%}
     </nav>
     <div class="wm-2col" style="display:grid;grid-template-columns:1.1fr .9fr;gap:50px;align-items:start;">
       <div>
-        <h1 style="font-weight:800;font-size:var(--fs-5xl);line-height:.94;letter-spacing:-.035em;margin:0 0 24px;color:var(--ink);">What is <span style="color:var(--accent);">MPP</span>?</h1>
+        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);">What is <span style="color:var(--accent);">MPP</span>?</h1>
         <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--on-panel-soft);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">MPP, the Machine Payments Protocol, is an open, IETF-track standard</strong> that lets software pay for web services per request through HTTP's native authentication headers. A paid endpoint answers with <span style="font-family:var(--font-mono);font-size:var(--fs-lg);">402 Payment Required</span> and a <span style="font-family:var(--font-mono);font-size:var(--fs-base);">WWW-Authenticate: Payment</span> challenge; the client answers with a signed stablecoin payment; the server verifies, settles on chain, and returns a signed receipt.</p>
         <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">No accounts, no API keys, no subscriptions. For the broader story of why machine payments exist and how x402 fits alongside MPP, see <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">What is x402?</a> MPP is one of the two wires underneath <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Agentic Finance</a>; the vocabulary (challenge, credential, receipt, facilitator, settlement) is defined in the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>.</p>
       </div>
@@ -132,7 +132,7 @@ table{border-collapse:collapse;width:100%}
 
 <section id="how" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">01 / THE HANDSHAKE</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">How one MPP payment works.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">How one MPP payment works.</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 32px;">Two HTTP round trips, typically a couple of seconds. Because it rides the standard <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--ink);">WWW-Authenticate</span> / <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--ink);">Authorization</span> machinery defined in RFC 9110 - the same one behind every login prompt on the web - payment becomes just another HTTP auth scheme.</p>
   <div class="wm-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);">
     <div style="background:var(--card);border-right:1px solid var(--hairline);">${stepsHtml}</div>
@@ -161,7 +161,7 @@ Payment-Receipt: eyJtZXRob2QiOiJldm0i&hellip;
 
 <section id="compare" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">02 / COMPARISON</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">MPP vs x402, side by side.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">MPP vs x402, side by side.</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 30px;">Two dialects of the same idea: pay-per-request over HTTP 402, settled in stablecoins, no accounts. They differ in which headers carry the handshake, not in economics. A server can speak both from the same URL at the same price - that is how Agent402 runs today, one paywall, two wire formats. Settlement itself now branches: MPP's evm method still shares x402's exact settlement path, but Agent402 also speaks MPP's own tempo method natively - a genuinely separate settlement mechanism (Tempo's own relay), not a translation of the other two. (<a href="/glossary#facilitator" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Facilitator</a>, <a href="/glossary#settlement" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">settlement</a> and <a href="/glossary#payment-receipt" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">receipt</a> are defined in the glossary.)</p>
   <div class="wm-scroll">
     <table style="font-size:var(--fs-base);border:1px solid var(--hairline);background:var(--card);">
@@ -174,7 +174,7 @@ Payment-Receipt: eyJtZXRob2QiOiJldm0i&hellip;
 <section id="live" style="background:var(--panel);margin-top:64px;border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">03 / IS IT REAL?</div>
-    <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--on-panel);">Where MPP settles today.</h2>
+    <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--on-panel);">Where MPP settles today.</h2>
     <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--on-panel-muted);max-width:820px;margin:0 0 20px;">Every paid endpoint on <a href="/" style="color:var(--accent-lit);">Agent402.Tools</a> is dual-stack: the same 402 carries an x402 offer <em>and</em> an MPP challenge, a stock <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--on-panel);">mppx</span> client works unmodified, and a real purchase settles over the native MPP wire every day as part of the service's paid canary - so "MPP works here" is continuously re-proven on mainnet, not demonstrated once. Other x402 sellers have begun advertising MPP as an alternate rail as well.</p>
     <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-faint);margin:0;">Reference tooling: <a href="https://github.com/tempoxyz/mpp" rel="noopener" style="color:var(--accent-lit);">tempoxyz/mpp</a> on GitHub. Spec: the Payment auth scheme at <a href="https://paymentauth.org" rel="noopener" style="color:var(--accent-lit);">paymentauth.org</a>.</p>
   </div>
@@ -183,39 +183,38 @@ Payment-Receipt: eyJtZXRob2QiOiJldm0i&hellip;
 ${startHere}
 <section id="start" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">${startHere ? "05" : "04"} / ACCEPT IT</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">How do I accept MPP payments on my own API?</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">How do I accept MPP payments on my own API?</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 30px;">If you already speak x402, a translation layer can add MPP without touching settlement: answer 402s with an additional <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--ink);">WWW-Authenticate: Payment</span> challenge derived from your existing offer, and re-encode inbound <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--ink);">Authorization: Payment</span> credentials into your existing verification path. Agent402's implementation of exactly that pattern is open source (AGPL) in its server repository, and the mppx tooling in tempoxyz/mpp provides the client and codec primitives.</p>
   <div class="wm-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);">
     <div style="padding:26px;border-right:1px solid var(--hairline);background:var(--card);display:flex;flex-direction:column;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:16px;">SELL</div>
-      <h3 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">List your API, both wires included</h3>
+      <h3 style="font-weight:600;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">List your API, both wires included</h3>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Serve x402, register your origin, and MPP dual-stack support ships free alongside it. No signup, nothing deducted from your price.</p>
-      <a href="/sell" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);text-decoration:none;padding:12px 18px;align-self:flex-start;">List your API →</a>
+      <a class="btn btn-primary btn-sm" href="/sell" style="align-self:flex-start;">List your API →</a>
     </div>
     <div style="padding:26px;background:var(--card);display:flex;flex-direction:column;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:16px;">BUY</div>
-      <h3 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">Pay in either dialect</h3>
+      <h3 style="font-weight:600;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">Pay in either dialect</h3>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">An mppx client and an @x402/fetch client both work unmodified against every paid route on Agent402 - the buyer's client picks.</p>
-      <a href="/docs#add" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);text-decoration:none;padding:11px 18px;align-self:flex-start;">Add to your agent →</a>
+      <a class="btn btn-secondary btn-sm" href="/docs#add" style="align-self:flex-start;">Add to your agent →</a>
     </div>
   </div>
 </section>
 
 <section id="faq" style="max-width:900px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">${startHere ? "06" : "05"} / QUESTIONS</div>
-  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 30px;color:var(--ink);">Questions people and agents ask.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 30px;color:var(--ink);">Questions people and agents ask.</h2>
   <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">${faqHtml}</div>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 56px;">
   <div style="background:var(--panel);border:1px solid var(--hairline);padding:52px 44px;position:relative;overflow:hidden;">
-    <div style="position:absolute;right:26px;top:-36px;font-weight:900;font-size:var(--fs-mark);line-height:1;color:transparent;-webkit-text-stroke:2px var(--on-panel-mark);pointer-events:none;">402</div>
     <div style="position:relative;">
-      <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--on-panel);">Now put it to work.</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--on-panel);">Now put it to work.</h2>
       <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 28px;max-width:540px;">Agent402 speaks x402 and MPP on the same routes at the same price. Free to list, free to browse.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a href="/sell" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:14px 24px;">List your API - free →</a>
-        <a href="/what-is-x402" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">WHAT IS x402?</a>
+        <a class="btn btn-primary on-panel" href="/sell">List your API - free →</a>
+        <a class="btn btn-secondary on-panel" href="/what-is-x402">What is x402?</a>
       </div>
     </div>
   </div>

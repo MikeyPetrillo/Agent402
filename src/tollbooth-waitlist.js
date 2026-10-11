@@ -59,7 +59,6 @@ export function tollboothWaitlistPage(baseUrl, { plan = "team", kind = "waitlist
   textarea { min-height:88px; resize:vertical; }
   .grid2 { display:grid; gap:12px; grid-template-columns:1fr 1fr; }
   @media (max-width:560px){ .grid2 { grid-template-columns:1fr; } }
-  .cta { background:var(--panel); color:var(--on-panel); border:none; padding:12px 18px; font:inherit; font-family:var(--font-mono); font-weight:700; cursor:pointer; }
   .cta:hover { opacity:.9; }
   .alt { color:var(--faint); font-size:var(--fs-md); text-align:center; margin-top:6px; }
   .alt a { color:var(--accent); }
@@ -97,7 +96,7 @@ export function tollboothWaitlistPage(baseUrl, { plan = "team", kind = "waitlist
   <label><span class="k">Anything else? (optional)</span><textarea id="f_msg" name="message" placeholder="What problem are you trying to solve? Which AI crawlers are hitting you hardest? What stack do these sites run on?"></textarea></label>
   <!-- honeypot: real visitors leave this empty -->
   <label style="position:absolute; left:-10000px; top:auto; width:1px; height:1px; overflow:hidden;" aria-hidden="true"><input id="f_hp" name="website" type="text" tabindex="-1" autocomplete="off"></label>
-  <button id="wl_submit" class="cta" type="submit">${isPartner ? "Apply as partner →" : isEnterprise ? "Request a call →" : "Join waitlist →"}</button>
+  <button id="wl_submit" class="btn btn-secondary cta" type="submit">${isPartner ? "Apply as partner →" : isEnterprise ? "Request a call →" : "Join waitlist →"}</button>
   <div id="wl_err" style="display:none; color:var(--bad); font-size:var(--fs-md);"></div>
 </form>
 
