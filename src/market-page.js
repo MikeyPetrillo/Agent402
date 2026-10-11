@@ -29,7 +29,8 @@ const ROSTER_CSS = `
 .mlr-row{display:grid;grid-template-columns:1fr auto auto auto;gap:14px;align-items:center;padding:9px 14px;border:1px solid var(--hairline);background:var(--card);color:var(--ink);text-decoration:none}
 .mlr-row.sel{border:2px solid var(--accent)}
 .mlr-name{font-weight:700;font-size:var(--fs-md)}
-.mlr-host{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint)}
+.mlr-row>*{min-width:0}
+.mlr-host{display:block;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .mlr-tools{color:var(--muted);font-family:var(--font-mono);font-size:var(--fs-sm)}
 .mlr-stat{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ok)}
 .mlr-stat.bad{color:var(--bad)}
@@ -764,7 +765,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
     ? (localSellerPinned ? [localSellerPinned, ...rankedForCap.slice(0, ALL_ROW_CAP)] : rankedForCap.slice(0, ALL_ROW_CAP))
     : rosterSellers;
   const rosterCapNote = rosterTruncated
-    ? `<p class="chips-note" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:10px 0 0;">showing the top ${ALL_ROW_CAP} of ${rankedForCap.length} sellers &middot; <a href="/${chainKey}?all=1" style="color:var(--muted);">show all &rarr;</a></p>`
+    ? `<p class="chips-note ml-meta" style="font-size:var(--fs-xs);">${["showing the top " + ALL_ROW_CAP + " of " + rankedForCap.length + " sellers", `<a href="/${chainKey}?all=1" style="color:var(--muted);">show all &rarr;</a>`].map((t) => `<span>${t}</span>`).join("")}</p>`
     : "";
   // "+N more endpoints" on the surviving row so the collapsed hosts are disclosed, not hidden.
   const endpointsNote = (s) => { const gid = s.local ? null : sellerStat(s)?.gid; const n = gid ? extraByGid.get(gid) || 0 : 0; return n > 0 ? ` &middot; +${n} more endpoint${n === 1 ? "" : "s"}` : ""; };
@@ -799,7 +800,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
         return `
     <a href="${activityHref(s)}"${rowData(s)} data-seller-link data-seller-host="${s.local ? "" : esc(hostOf(s.homepage).toLowerCase())}" data-seller-local="${s.local ? "1" : "0"}" class="ml-roster-compact mlr-row${isSelected(s) ? " sel" : ""}">
       <span class="mlr-name">${esc(s.displayName)}${s.local ? ' <span class="mlr-badge">THIS HOST</span>' : ""}${s.mpp === true ? ' <span class="mlr-mpp" title="Also reachable over the native MPP wire">MPP</span>' : ""}</span>
-      <span class="mlr-host">${esc(hostOf(s.homepage))}</span>
+      <span class="mlr-host" title="${esc(hostOf(s.homepage))}">${esc(hostOf(s.homepage))}</span>
       <span class="mlr-tools">${Number(s.toolCount) || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
       <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${s.local ? "live" : (s.routable ? "healthy" : "unreachable")}</span>${dispatchBadge(s, chainKey)}
     </a>`;
@@ -813,7 +814,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
         <a href="${safeHref(s.homepage)}" rel="noopener"${apiOriginTitle(s)} style="color:var(--ink);text-decoration:none;font-weight:700;font-size:var(--fs-base);">${esc(s.displayName)}</a>
         ${s.local ? '<span class="mlr-badge">THIS HOST</span>' : ""}${s.mpp === true ? '<span class="mlr-mpp" title="Also reachable over the native MPP wire">MPP</span>' : ""}
       </div>
-      <div class="mlr-host">${esc(hostOf(s.homepage))}</div>
+      <div class="mlr-host" title="${esc(hostOf(s.homepage))}">${esc(hostOf(s.homepage))}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
         <span style="color:var(--muted);font-family:var(--font-mono);font-size:var(--fs-sm);">${Number(s.toolCount) || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
         <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${health}</span>${dispatchBadge(s, chainKey)}
@@ -1211,7 +1212,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   const rankedVisible = truncated ? ranked.slice(0, ALL_ROW_CAP) : ranked;
   const visibleSellers = localSeller ? [localSeller, ...rankedVisible] : rankedVisible;
   const capNote = truncated
-    ? `<p class="chips-note" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:10px 0 0;">this host pinned · showing the top ${ALL_ROW_CAP} of ${ranked.length} independent sellers &middot; <a href="/marketplace?all=1" style="color:var(--muted);">show all &rarr;</a></p>`
+    ? `<p class="chips-note ml-meta" style="font-size:var(--fs-xs);">${["this host pinned", "showing the top " + ALL_ROW_CAP + " of " + ranked.length + " independent sellers", '<a href="/marketplace?all=1" style="color:var(--muted);">show all &rarr;</a>'].map((t) => `<span>${t}</span>`).join("")}</p>`
     : "";
 
   // Grid rows, not a <table> - reuses the exact .mlr-row/.ml-roster-compact
@@ -1232,7 +1233,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
     <div${rowData(s)} class="mlr-row ml-roster-compact"${s.local ? ' style="background:var(--card-zebra);"' : ""}>
       <div>
         <a href="${safeHref(s.homepage)}" rel="noopener"${apiOriginTitle(s)} style="color:var(--ink);text-decoration:none;font-weight:700;">${esc(s.displayName)}</a>${s.local ? ' <span class="mlr-badge">THIS HOST</span>' : ""}${s.mpp === true ? ' <span class="mlr-mpp" title="Also reachable over the native MPP wire">MPP</span>' : ""}
-        <div class="mlr-host">${esc(hostOf(s.homepage))}</div>
+        <div class="mlr-host" title="${esc(hostOf(s.homepage))}">${esc(hostOf(s.homepage))}</div>
       </div>
       <span style="font-family:var(--font-mono);font-size:var(--fs-sm);">${chainCell(s)}</span>
       <span class="mlr-tools">${Number(s.toolCount) || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>

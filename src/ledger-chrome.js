@@ -415,8 +415,10 @@ a { color: inherit; }
   /* Long unbreakable strings - seller hosts, payTo addresses, package names -
      must wrap on phones instead of forcing a fixed grid column (and the page)
      wider than the viewport. This is the main source of the horizontal scroll:
-     an unwrappable host in a 1fr column sets a min-content floor above 375px. */
-  .lb-name, .lb-addr, .mlr-name, .mlr-host, .lb-addr a, pre, code { overflow-wrap: anywhere !important; word-break: break-word !important; }
+     an unwrappable host in a 1fr column sets a min-content floor above 375px.
+     .mlr-host stays on one line and ends in an ellipsis instead (market-page.js
+     ROSTER_CSS); its title carries the whole host. */
+  .lb-name, .lb-addr, .mlr-name, .lb-addr a, pre, code { overflow-wrap: anywhere !important; word-break: break-word !important; }
   /* pre code blocks: wrap long unbreakable tokens (URLs, hashes, one-line
      commands) so they never widen a column past the phone viewport. */
   pre { white-space: pre-wrap !important; }

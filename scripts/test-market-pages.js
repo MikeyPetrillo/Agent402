@@ -280,7 +280,7 @@ for (const c of NEW_CHAINS) {
   // 101 rows, and the note counts INDEPENDENT sellers (120 of the 121, since
   // one is the pinned host).
   ok((capped.match(/<div data-mfb-row/g) || []).length === 101, `all view: cap renders pinned local + top 100 ranked (got ${(capped.match(/<div data-mfb-row/g) || []).length})`);
-  ok(capped.includes("this host pinned · showing the top 100 of 120 independent sellers"), "all view: cap note discloses the pin + truncation honestly");
+  ok(capped.includes("<span>this host pinned</span><span>showing the top 100 of 120 independent sellers</span>"), "all view: cap note discloses the pin + truncation honestly");
   ok(capped.includes('href="/marketplace?all=1"'), "all view: cap note links the ?all=1 escape hatch");
   ok(/<div data-mfb-row data-local="1"/.test(capped), "all view: the local seller survives the cap (ranked or appended, never dropped)");
   ok(/SELLERS LISTED<\/div><div[^>]*>120</.test(capped), "all view: SELLERS LISTED card counts the full roster (120 independent sellers, host not counted), not the capped table");
@@ -485,6 +485,7 @@ for (const c of NEW_CHAINS) {
   // +1 for the pinned local seller, which is never part of the capped count.
   ok(rowCount(capped) === ROW_CAP + 1, `roster caps at ${ROW_CAP} + pinned local row (got ${rowCount(capped)})`);
   ok(/showing the top 100 of 150 sellers/.test(capped), "cap note states the true total (150), not the capped count");
+  ok(/class="mlr-host" title="[^"]+">/.test(capped) && /\.mlr-host\{[^}]*white-space:nowrap[^}]*text-overflow:ellipsis/.test(capped), "a seller host stays on one line, ellipsized, with the whole host in its title");
   ok(/href="\/base\?all=1"/.test(capped), "cap note links to this chain's own ?all=1, not /marketplace");
   ok(/SELLERS LISTED[\s\S]{0,200}>150</.test(capped), "SELLERS LISTED stat stays the full honest count (150 independent sellers, host not counted), unaffected by the render cap");
 
