@@ -55,7 +55,8 @@ export const TOKEN_BRIEF_TIERS = {
     // margin review can compare it against the price.
     price: "$0.60", maxUpstreamUsd: 0.35,
     holders: 15, pairs: 8, markets: 6, lockers: 6, risks: 20,
-    synthMaxTokens: 6000, words: "~2,000",
+    // Headroom over the word target: a ~1,800-word brief used 5,500 of 6,000.
+    synthMaxTokens: 7500, words: "~2,000",
   },
 };
 

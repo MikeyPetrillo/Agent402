@@ -13,10 +13,14 @@ const RANGE = /(\d)\s*[—–]\s*(\d)/g;
 // An unspaced en dash joining two words is a compound ("California–based"),
 // so it becomes a plain hyphen, not a spaced one.
 const COMPOUND = /(\p{L})–(\p{L})/gu;
+// A dash written as a minus sign ("**–$71.4M**", "(–3.2%)"): no space after
+// it and a figure next. It stays attached as "-", or a spaced hyphen would
+// split the number and break the bold around it.
+const MINUS = /(^|[\s*_(\[])[—–](?=[$\d])/g;
 
 export function houseStyleText(s, { heading = false } = {}) {
   if (typeof s !== "string" || !DASH.test(s)) return s;
-  let out = s.replace(/\u2212/g, "-").replace(RANGE, "$1-$2").replace(COMPOUND, "$1-$2");
+  let out = s.replace(/−/g, "-").replace(RANGE, "$1-$2").replace(COMPOUND, "$1-$2").replace(MINUS, "$1-");
   out = out.replace(/\s*[—–]+\s*/g, heading ? ": " : " - ");
   return out.replace(/ {2,}/g, " ");
 }

@@ -804,7 +804,10 @@ export const NETWORK_TOOLS = [
           // The tags the parser already had and the tool used to drop: a report
           // that recommends "the DMARC record to publish" must know whether
           // reporting (rua/ruf), subdomain policy and alignment are set.
-          ...(dmarcParsed ? { subdomainPolicy: dmarcParsed.subdomainPolicy, alignment: dmarcParsed.alignment, reportingUris: dmarcParsed.reportingUris, failureOptions: dmarcParsed.failureOptions } : {}),
+          // The record itself rides along: the domain audit lists the tags it
+          // carries apart from the defaults that apply, and without it every
+          // tag (sp, rua, ruf, fo) read as absent.
+          ...(dmarcParsed ? { raw: dmarcRaw, subdomainPolicy: dmarcParsed.subdomainPolicy, alignment: dmarcParsed.alignment, reportingUris: dmarcParsed.reportingUris, failureOptions: dmarcParsed.failureOptions } : {}),
         },
         dkim: { found: foundDkim, probed: selectors, providerSelectors: mxProvider?.selectors || [] },
         mx: { count: mxHosts.length, records: mxHosts.slice(0, 10), provider: mxProvider?.provider || null, lookupError: mxRecs.error || null },

@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 // A report synthesis that stops for length is retried once inside the budget
 // and, failing that, trimmed to a complete block and marked. Offline.
+import { DOMAIN_AUDIT_TIERS } from "../src/tools/domain-audit-kit.js";
+import { RECALL_TIERS } from "../src/tools/recall-report-kit.js";
+import { FILING_TIERS } from "../src/tools/filing-watch-kit.js";
+import { TOKEN_BRIEF_TIERS } from "../src/tools/token-brief-kit.js";
+import { TICKER_PACK_TIERS } from "../src/tools/ticker-pack-kit.js";
 import { stoppedForLength, trimToCompleteBlock, completeSynthesis, proseOf, SHORTENED_NOTE, lengthRetryNote } from "../src/report-synthesis.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -34,6 +39,14 @@ ok(trimToCompleteBlock("only a partial line with no break") === "only a partial 
   const r = await completeSynthesis(async (note) => (note ? resp("", "length") : resp("first draft cut", "length")), null);
   ok(r.sd.choices[0].message.content === "first draft cut" && r.cutShort === true, "an empty retry keeps the first draft");
   ok(/shorter/.test(lengthRetryNote(null)) && !/undefined|null/.test(lengthRetryNote(null)), "without a word budget the note still asks for shorter");
+}
+// Budget headroom: these tiers' first synthesis stopped for length at about 3
+// output tokens per target word (tables, recall numbers, figures), and the
+// domain audit and recall report stopped again on the retry, so a sold report
+// shipped shortened. Each cap now carries at least 3.5 tokens per target word.
+for (const [slug, t] of Object.entries({ ...DOMAIN_AUDIT_TIERS, ...RECALL_TIERS, ...FILING_TIERS, ...TOKEN_BRIEF_TIERS, ...TICKER_PACK_TIERS })) {
+  const words = Number(String(t.words).replace(/[^0-9]/g, ""));
+  ok(words > 0 && t.synthMaxTokens / words >= 3.5, `${slug}: synthesis cap ${t.synthMaxTokens} carries >= 3.5 tokens per target word (${t.words})`);
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
