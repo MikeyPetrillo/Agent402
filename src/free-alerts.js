@@ -183,10 +183,10 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
     const url = link(rec.id, "confirm");
     const subject = `Confirm your ${def.noun} alert for ${rec.target}`;
     const text = `Confirm to start receiving email when there are new ${def.what(rec.target)}:\n\n${url}\n\nOne email per day at most, only when something changes. If you did not ask for this, ignore it and nothing will be sent.`;
-    const html = shell(`<h2 style="margin:0 0 10px;font-size:18px;">Confirm your alert</h2>
+    const html = shell(`<h2 style="margin:0 0 10px;font-size:17px;">Confirm your alert</h2>
 <p>Click to start receiving email when there are new ${esc(def.what(rec.target))}.</p>
 <p style="margin:18px 0;"><a href="${esc(url)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:6px;display:inline-block;">Confirm alerts for ${esc(rec.target)}</a></p>
-<p style="color:#5C6963;font-size:13px;">One email per day at most, only when something changes. If you did not ask for this, ignore it and nothing will be sent.</p>`);
+<p style="color:#626970;font-size:13px;">One email per day at most, only when something changes. If you did not ask for this, ignore it and nothing will be sent.</p>`);
     return sendEmail({ to: rec.email, subject: hdr(subject), html, text });
   }
 
@@ -339,17 +339,17 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
     const unsub = link(a.id, "unsubscribe");
     const lines = items.map((it) => `- ${it.label}${it.url ? ` ${it.url}` : ""}`).join("\n");
     const text = `${subject}.\n\n${lines ? lines + "\n\n" : ""}Read the free page and get the full report: ${reportUrl}\nHave this re-run and emailed automatically: ${monitorUrl}\n\nYou asked for this alert on agent402.tools. Unsubscribe: ${unsub}`;
-    const html = shell(`<h2 style="margin:0 0 10px;font-size:18px;">${esc(subject)}</h2>
+    const html = shell(`<h2 style="margin:0 0 10px;font-size:17px;">${esc(subject)}</h2>
 ${items.length ? `<ul style="padding-left:18px;margin:0 0 14px;">${items.map((it) => `<li>${it.url && /^https:\/\//.test(it.url) ? `<a href="${esc(it.url)}" style="color:#0F5E43;">${esc(it.label)}</a>` : esc(it.label)}</li>`).join("")}</ul>` : ""}
 <p style="margin:18px 0 8px;"><a href="${esc(reportUrl)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:6px;display:inline-block;">Read the free page and get the full report</a></p>
 <p style="margin:0 0 18px;font-size:14px;">Or have it re-run and emailed automatically: <a href="${esc(monitorUrl)}" style="color:#0F5E43;">subscribe to the monitor</a>.</p>
-<p style="color:#5C6963;font-size:12px;">You asked for this alert on agent402.tools. <a href="${esc(unsub)}" style="color:#5C6963;">Unsubscribe</a>.</p>`);
+<p style="color:#626970;font-size:12px;">You asked for this alert on agent402.tools. <a href="${esc(unsub)}" style="color:#626970;">Unsubscribe</a>.</p>`);
     return sendEmail({ to: a.email, subject: hdr(subject), html, text, headers: { "List-Unsubscribe": `<${unsub}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } });
   }
 
   function shell(inner) {
-    return `<div style="font-family:system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#141A17;max-width:520px;">
-<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#5C6963;margin-bottom:14px;">agent402 · free alert</div>
+    return `<div style="font-family:system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#111315;max-width:520px;">
+<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#626970;margin-bottom:14px;">agent402 · free alert</div>
 ${inner}
 </div>`;
   }

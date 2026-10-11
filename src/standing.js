@@ -76,8 +76,8 @@ export function standingBand({ sellers, listings, settled, rails } = {}) {
   return `
 <section style="max-width:1180px;margin:0 auto;padding:22px 30px 0;">
   <div style="border:1px solid var(--hairline);border-left:3px solid var(--accent);background:var(--card);padding:18px 22px;">
-    <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0;max-width:900px;">
-      <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;color:var(--accent);display:block;margin-bottom:6px;">WHAT THIS PAGE IS MEASURING</span>
+    <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;max-width:900px;">
+      <span style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--accent);display:block;margin-bottom:6px;">WHAT THIS PAGE IS MEASURING</span>
       ${esc(bits.join(" · "))}. We index this market, we are not trying to be it.
       The leaderboard on this site ranks other sellers above this one and excludes the host from every count, because an index that ranks itself first proves nothing.
     </p>

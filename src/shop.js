@@ -11,7 +11,6 @@
 // goes missing the page silently drops the row — better than a 500 —
 // and the missing tool shows up as a soft-warning at the top.
 
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc } from "./ledger-chrome.js";
 import { isComputePayable } from "./pow.js";
 import { RAILS_SHORT } from "./rails.js";
@@ -155,19 +154,19 @@ function renderTask(task, catalog) {
 
 const SHOP_CSS = `
   .sh-task { background:var(--card); border:1px solid var(--hairline); padding:20px 22px; margin:14px 0; }
-  .sh-task h2 { font-family:var(--font-body); font-weight:800; font-size:18px; margin:0 0 6px; }
-  .sh-task-answer { color:var(--muted); font-size:14px; margin-bottom:10px; line-height:1.6; }
-  .sh-task-primary { font-size:15px; margin-bottom:4px; }
+  .sh-task h2 { font-family:var(--font-body); font-weight:800; font-size:var(--fs-lg); margin:0 0 6px; }
+  .sh-task-answer { color:var(--muted); font-size:var(--fs-md); margin-bottom:10px; line-height:1.6; }
+  .sh-task-primary { font-size:var(--fs-base); margin-bottom:4px; }
   .sh-task-name { color:var(--ink); text-decoration:none; font-weight:700; }
   .sh-task-name:hover { color:var(--accent); }
-  .sh-task-price { color:var(--faint); font-family:var(--font-mono); font-size:12px; margin-left:10px; }
-  .sh-task-alts { color:var(--faint); font-size:13px; margin-top:4px; }
+  .sh-task-price { color:var(--faint); font-family:var(--font-mono); font-size:var(--fs-xs); margin-left:10px; }
+  .sh-task-alts { color:var(--faint); font-size:var(--fs-sm); margin-top:4px; }
   .sh-task-alts a { color:var(--muted); text-decoration:none; }
   .sh-task-alts a:hover { color:var(--accent); }
   .sh-task-example { margin-top:8px; }
-  .sh-task-example code { background:var(--surface); color:var(--on-dark); padding:4px 10px; font-family:var(--font-mono); font-size:12px; }
-  .sh-missing { background:var(--card); border:1.5px solid var(--accent); padding:10px 14px; margin:12px 0; font-size:14px; color:var(--accent); }
-  .sh-free { display:inline-block; background:var(--green); color:#08130b; font-weight:700; font-size:11px; letter-spacing:.02em; padding:1px 7px; font-family:var(--font-mono); }
+  .sh-task-example code { background:var(--panel); color:var(--on-panel); padding:4px 10px; font-family:var(--font-mono); font-size:var(--fs-xs); }
+  .sh-missing { background:var(--card); border:1.5px solid var(--bad); padding:10px 14px; margin:12px 0; font-size:var(--fs-md); color:var(--bad); }
+  .sh-free { display:inline-block; background:var(--ok); color:var(--paper); font-weight:700; font-size:var(--fs-2xs); letter-spacing:.02em; padding:1px 7px; font-family:var(--font-mono); }
 `;
 
 export function shopPage(baseUrl, catalog) {
@@ -181,7 +180,7 @@ export function shopPage(baseUrl, catalog) {
     t.slugs.filter((s) => !Object.values(catalog).find((c) => c.slug === s))
   );
   const missingNotice = missingSlugs.length
-    ? `<div class="sh-missing">Note: ${missingSlugs.length} tool slug(s) listed here are no longer in the catalog: <code style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:2px 6px;font-size:13px;">${e(missingSlugs.join(", "))}</code>. Rest of the page is still accurate.</div>`
+    ? `<div class="sh-missing">Note: ${missingSlugs.length} tool slug(s) listed here are no longer in the catalog: <code style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);padding:2px 6px;font-size:var(--fs-sm);">${e(missingSlugs.join(", "))}</code>. Rest of the page is still accurate.</div>`
     : "";
 
   const tasks = TASKS.map((t) => renderTaskLedger(t, catalog)).join("\n");
@@ -198,9 +197,9 @@ export function shopPage(baseUrl, catalog) {
   };
 
   const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
-  <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;">SHOP</div>
-  <h1 style="font-family:var(--font-body);font-weight:800;font-size:42px;line-height:.96;letter-spacing:-.03em;margin-bottom:14px;">What does your agent want to do?</h1>
-  <p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;margin-bottom:8px;">A task-indexed buyer's guide to the ${Object.keys(catalog).length.toLocaleString()} APIs at Agent402 - written from the agent's side of the call. Each row maps a real goal to the cheapest tool that solves it. Browse the full category-organized catalogue at <a href="/tools" style="color:var(--accent);">/tools</a>, walk the multi-tool workflows at <a href="/skills" style="color:var(--accent);">/skills</a>, or ask the discovery endpoint directly: <code style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:2px 6px;font-size:13px;">/api/find?q=&lt;your task&gt;</code>.</p>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;">SHOP</div>
+  <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:.96;letter-spacing:-.03em;margin-bottom:14px;">What does your agent want to do?</h1>
+  <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.6;max-width:720px;margin-bottom:8px;">A task-indexed buyer's guide to the ${Object.keys(catalog).length.toLocaleString()} APIs at Agent402 - written from the agent's side of the call. Each row maps a real goal to the cheapest tool that solves it. Browse the full category-organized catalogue at <a href="/tools" style="color:var(--accent);">/tools</a>, walk the multi-tool workflows at <a href="/skills" style="color:var(--accent);">/skills</a>, or ask the discovery endpoint directly: <code style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);padding:2px 6px;font-size:var(--fs-sm);">/api/find?q=&lt;your task&gt;</code>.</p>
   ${missingNotice}
   ${tasks}
 </div>

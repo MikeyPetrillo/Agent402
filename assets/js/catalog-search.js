@@ -38,27 +38,27 @@
     var packs = (data && data.packs) || [];
     resultsShown = tools.length + packs.length;
     if (resultsShown === 0) { resultsBox.style.display = 'none'; applyFilter(); return; }
-    var head = el('div', 'font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);padding:10px 16px;border-bottom:1px solid var(--hairline);', 'tools matching "' + q + '" · GET /api/find');
+    var head = el('div', 'font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);padding:10px 16px;border-bottom:1px solid var(--hairline);', 'tools matching "' + q + '" · GET /api/find');
     resultsBox.appendChild(head);
     tools.slice(0, 8).forEach(function(t) {
       var row = el('a', 'display:flex;align-items:baseline;gap:12px;padding:10px 16px;text-decoration:none;border-bottom:1px solid var(--hairline);color:var(--ink);');
       row.href = '/tools/' + encodeURIComponent(t.slug);
-      row.appendChild(el('span', 'font-weight:700;font-size:14px;white-space:nowrap;', t.name || t.slug));
-      row.appendChild(el('span', 'font-family:var(--font-mono);font-size:11.5px;color:var(--faint);white-space:nowrap;', t.route || ''));
+      row.appendChild(el('span', 'font-weight:700;font-size:var(--fs-md);white-space:nowrap;', t.name || t.slug));
+      row.appendChild(el('span', 'font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);white-space:nowrap;', t.route || ''));
       var desc = String(t.description || '');
       if (desc.length > 90) desc = desc.slice(0, 87) + '…';
-      row.appendChild(el('span', 'font-size:12.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;', desc));
-      row.appendChild(el('span', 'font-family:var(--font-mono);font-size:12px;color:var(--accent);white-space:nowrap;margin-left:auto;', t.price || ''));
+      row.appendChild(el('span', 'font-size:var(--fs-sm);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;', desc));
+      row.appendChild(el('span', 'font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);white-space:nowrap;margin-left:auto;', t.price || ''));
       resultsBox.appendChild(row);
     });
     packs.slice(0, 2).forEach(function(p) {
       var row = el('a', 'display:flex;align-items:baseline;gap:12px;padding:10px 16px;text-decoration:none;border-bottom:1px solid var(--hairline);color:var(--ink);');
       row.href = '/skills/' + encodeURIComponent(p.slug);
-      row.appendChild(el('span', 'font-weight:700;font-size:14px;white-space:nowrap;', p.title || p.slug));
-      row.appendChild(el('span', 'font-family:var(--font-mono);font-size:11.5px;color:var(--green);white-space:nowrap;', 'skill pack'));
+      row.appendChild(el('span', 'font-weight:700;font-size:var(--fs-md);white-space:nowrap;', p.title || p.slug));
+      row.appendChild(el('span', 'font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ok);white-space:nowrap;', 'skill pack'));
       var tag = String(p.tagline || '');
       if (tag.length > 90) tag = tag.slice(0, 87) + '…';
-      row.appendChild(el('span', 'font-size:12.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;', tag));
+      row.appendChild(el('span', 'font-size:var(--fs-sm);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;', tag));
       resultsBox.appendChild(row);
     });
     var last = resultsBox.lastChild;

@@ -28,7 +28,6 @@ import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse
 import express from "express";
 import compression from "compression";
 import { readFileSync } from "node:fs";
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { llmsLinkMiddleware } from "./llms-link.js";
 import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
@@ -2522,7 +2521,7 @@ const alertsSignupLimiter = createRateLimiter("alerts-signup", { perMin: 6, perH
 // A second bound keyed on the ADDRESS (hashed), so a distributed source cannot
 // flood one victim's inbox with confirmations by rotating IPs.
 const alertsEmailLimiter = createRateLimiter("alerts-email", { perMin: 2, perHour: 5 });
-const alertPage = (title, body) => ledgerShell({ title: `${title} - Agent402`, description: "Free email alerts from Agent402.", canonical: `${BASE_URL}/reports`, baseUrl: BASE_URL, activePath: "/reports", robots: "noindex, nofollow", body: `<div class="wrap" style="padding:40px 30px;max-width:640px;"><h1 style="font-size:26px;margin:0 0 12px;">${title}</h1>${body}</div>${ledgerFooterCompact()}` });
+const alertPage = (title, body) => ledgerShell({ title: `${title} - Agent402`, description: "Free email alerts from Agent402.", canonical: `${BASE_URL}/reports`, baseUrl: BASE_URL, activePath: "/reports", robots: "noindex, nofollow", body: `<div class="wrap" style="padding:40px 30px;max-width:640px;"><h1 style="font-size:var(--fs-2xl);margin:0 0 12px;">${title}</h1>${body}</div>${ledgerFooterCompact()}` });
 app.post("/api/alerts", express.json({ limit: "4kb" }), async (req, res) => {
   if (alertsSignupLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many signups from this address. Try again in a few minutes." });
   const b = req.body || {};
@@ -3032,12 +3031,12 @@ app.use(securityHeaders());
 // design system on seven routes (review 2026-08-28).
 function notFoundPage(res, { what = "Page", href = "/", label = "Home" } = {}) {
   const body = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
-      <div style="font-family:var(--font-mono);font-weight:500;font-size:72px;line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">404</div>
-      <h1 style="font-weight:500;font-size:26px;letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${escHtml(what)} not found</h1>
+      <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">404</div>
+      <h1 style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${escHtml(what)} not found</h1>
       <p style="color:var(--muted);margin:0 0 28px;font-weight:300;">There is nothing at this address.</p>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-        <a href="${escHtml(href)}" style="display:inline-block;padding:11px 18px;background:var(--btn-bg);color:var(--btn-fg);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">${escHtml(label)}</a>
-        <a href="/" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Home</a>
+        <a href="${escHtml(href)}" style="display:inline-block;padding:11px 18px;background:var(--btn-bg);color:var(--btn-fg);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">${escHtml(label)}</a>
+        <a href="/" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">Home</a>
       </div>
     </div>${ledgerFooterCompact()}`;
   return res.status(404).type("html").send(ledgerShell({ title: `${what} not found - Agent402`, description: `${what} not found`, canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
@@ -3662,7 +3661,7 @@ app.get("/revenue", async (_req, res) => {
     res.set("Cache-Control", "no-cache").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: standingFigures() }));
   } catch (e) {
     if (e?.snapshotWarming) {
-      res.status(200).type("html").send('<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body style="font-family:system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 24px;color:#14201b"><h2 style="font-weight:500">Warming up…</h2><p style="color:#5d675f">The live on-chain transaction view is loading for the first time since a deploy. It refreshes here automatically in a few seconds.</p><p><a href="/" style="color:#15654a">Home</a></p></body>');
+      res.status(200).type("html").send('<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body style="font-family:system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 24px;color:#111315"><h2 style="font-weight:500">Warming up…</h2><p style="color:#626970">The live on-chain transaction view is loading for the first time since a deploy. It refreshes here automatically in a few seconds.</p><p><a href="/" style="color:#0F5E43">Home</a></p></body>'); // design-tokens: literal (standalone fallback page, no stylesheet)
     } else {
       res.status(500).type("html").send('<p>Revenue view temporarily unavailable. <a href="/">Home</a></p>');
     }
@@ -7524,7 +7523,9 @@ const BRAND_FONT_STYLE = `<style>
 // obsidian + milled system of the 2026-08-22 redesign (dark ground, light
 // milled mark, phosphor accent for signal text only - never as a fill under
 // dark text).
+// design-tokens: off-start (rasterized logo, favicon and social-card SVG: no CSS engine)
 const BRAND = { paper: "#0B0C0E", card: "#141619", panel: "#141619", panel2: "#1C2024", ink: "#E9EAEC", muted: "#B3B9C0", faint: "#868D95", hairline: "#2C3136", accent: "#9EF0B0", amber: "#F0B35E", milledA: "#F6F7F8", milledB: "#C9CED3", mono: "'Geist Mono',Menlo,Consolas,monospace", display: "'Geist',system-ui,sans-serif" };
+// design-tokens: off-end
 const BRAND_DEFS = `<defs><linearGradient id="milled" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.milledA}"/><stop offset="1" stop-color="${BRAND.milledB}"/></linearGradient><linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.panel2}"/><stop offset="1" stop-color="${BRAND.paper}"/></linearGradient></defs>`;
 
 // Brand mark — the milled square: a light brushed-aluminum rounded square on
@@ -9964,13 +9965,13 @@ app.use((req, res) => {
     return res.status(404).json({ ok: false, error: "not-found" });
   }
   const body = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
-      <div style="font-family:var(--font-mono);font-weight:500;font-size:72px;line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">404</div>
-      <h1 style="font-weight:500;font-size:26px;letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">Page not found</h1>
+      <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">404</div>
+      <h1 style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">Page not found</h1>
       <p style="color:var(--muted);margin:0 0 28px;font-weight:300;">The page you're looking for doesn't exist.</p>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-        <a href="/" style="display:inline-block;padding:11px 18px;background:var(--btn-bg);color:var(--btn-fg);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Home</a>
-        <a href="/tools" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Browse tools</a>
-        <a href="/api/find" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Find a tool</a>
+        <a href="/" style="display:inline-block;padding:11px 18px;background:var(--btn-bg);color:var(--btn-fg);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">Home</a>
+        <a href="/tools" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">Browse tools</a>
+        <a href="/api/find" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">Find a tool</a>
       </div>
     </div>${ledgerFooterCompact()}`;
   res.status(404).type("html").send(ledgerShell({ title: "Page not found - Agent402", description: "Page not found", canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
@@ -10006,15 +10007,15 @@ app.use((err, req, res, _next) => {
     const t = is404 ? "Page not found" : `Error ${status}`;
     const m = is404 ? "The page you\u2019re looking for doesn\u2019t exist." : "Something went wrong. Try again in a moment.";
     const errBody = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
-      <div style="font-family:var(--font-mono);font-weight:500;font-size:72px;line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">${status}</div>
-      <h1 style="font-weight:500;font-size:26px;letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${t}</h1>
+      <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">${status}</div>
+      <h1 style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${t}</h1>
       <p style="color:var(--muted);margin:0 0 28px;font-weight:300;">${m}</p>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-        <a href="/" style="display:inline-block;padding:11px 18px;background:var(--btn-bg);color:var(--btn-fg);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Home</a>
-        <a href="/tools" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Browse tools</a>
-        <a href="/api/find" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Find a tool</a>
+        <a href="/" style="display:inline-block;padding:11px 18px;background:var(--btn-bg);color:var(--btn-fg);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">Home</a>
+        <a href="/tools" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">Browse tools</a>
+        <a href="/api/find" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:var(--fs-md);">Find a tool</a>
       </div>
-      <div style="margin-top:30px;color:var(--faint);font-size:13.5px;font-family:var(--font-mono);">or try: <a href="/playground" style="color:var(--ink);">playground</a> · <a href="/docs" style="color:var(--ink);">docs</a> · <a href="/quickstart" style="color:var(--ink);">quickstart</a></div>
+      <div style="margin-top:30px;color:var(--faint);font-size:var(--fs-md);font-family:var(--font-mono);">or try: <a href="/playground" style="color:var(--ink);">playground</a> · <a href="/docs" style="color:var(--ink);">docs</a> · <a href="/quickstart" style="color:var(--ink);">quickstart</a></div>
     </div>${ledgerFooterCompact()}`;
     res.status(status).type("html").send(ledgerShell({ title: `${t} - Agent402`, description: t, canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", body: errBody }));
   }

@@ -617,7 +617,7 @@ const LEARN_LABELS = {
 
 // Inline code spans in the short prose fields use backticks; render them as
 // <code> after escaping.
-const inline = (s) => esc(s).replace(/`([^`]+)`/g, '<code style="font-family:var(--font-mono);font-size:.9em;">$1</code>');
+const inline = (s) => esc(s).replace(/`([^`]+)`/g, '<code style="font-family:var(--font-mono);font-size:var(--fs-code-inline);">$1</code>');
 
 const guideTitle = (slug) => slug.replace(/-/g, " ");
 
@@ -626,9 +626,9 @@ function toolsFor(i, catalog) {
   return (i.tools || []).map((s) => bySlug.get(s)).filter(Boolean);
 }
 
-const H2 = 'style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;"';
-const PRE = 'style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;padding:16px;margin:0;overflow-x:auto;white-space:pre;"';
-const LI = 'style="color:var(--muted);font-size:.95rem;line-height:1.65;margin:0 0 8px;"';
+const H2 = 'style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;"';
+const PRE = 'style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0;overflow-x:auto;white-space:pre;"';
+const LI = 'style="color:var(--muted);font-size:var(--fs-base);line-height:1.65;margin:0 0 8px;"';
 const A = 'style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);"';
 
 export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
@@ -663,8 +663,8 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
   };
 
   const toolCards = tools.map((t) => `<a href="/tools/${esc(t.slug)}" style="display:block;border:1px solid var(--hairline);background:var(--card);padding:14px 16px;text-decoration:none;color:var(--ink);">
-      <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;"><span style="font-weight:700;font-size:15px;">${esc(t.name || t.slug)}</span><span style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">${esc(t.price || "")}</span></div>
-      <div style="font-family:var(--font-mono);font-size:11.5px;color:var(--faint);margin-top:4px;">${esc(t.slug)}</div>
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;"><span style="font-weight:700;font-size:var(--fs-base);">${esc(t.name || t.slug)}</span><span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">${esc(t.price || "")}</span></div>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:4px;">${esc(t.slug)}</div>
     </a>`).join("\n");
 
   const learnLinks = (i.learn || ["x402", "mpp"]).filter((s) => LEARN_LABELS[s])
@@ -674,10 +674,10 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
 
   const body = `
   <div style="max-width:980px;margin:0 auto;padding:50px 30px 64px;">
-    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/integrations" style="color:var(--muted);text-decoration:none;">integrations</a> / <span style="color:var(--ink);">${esc(i.slug)}</span></nav>
-    <h1 style="font-family:var(--font-body);font-weight:800;font-size:44px;line-height:1.02;letter-spacing:-.025em;margin:0 0 10px;">${esc(i.name)}</h1>
-    <div style="font-family:var(--font-mono);font-size:.9rem;color:var(--accent);margin-bottom:18px;">${esc(i.pkg)} &middot; ${esc(registryLabel(i))} &middot; MIT</div>
-    <p style="color:var(--muted);font-size:1.05rem;line-height:1.7;margin:0 0 34px;max-width:760px;">${inline(i.what)}</p>
+    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/integrations" style="color:var(--muted);text-decoration:none;">integrations</a> / <span style="color:var(--ink);">${esc(i.slug)}</span></nav>
+    <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 10px;">${esc(i.name)}</h1>
+    <div style="font-family:var(--font-mono);font-size:var(--fs-md);color:var(--accent);margin-bottom:18px;">${esc(i.pkg)} &middot; ${esc(registryLabel(i))} &middot; MIT</div>
+    <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.7;margin:0 0 34px;max-width:760px;">${inline(i.what)}</p>
 
     <section style="margin-bottom:34px;">
       <h2 ${H2}>Install</h2>
@@ -687,7 +687,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
     <section style="margin-bottom:34px;">
       <h2 ${H2}>Example</h2>
       <pre ${PRE}><code>${esc(i.example)}</code></pre>
-      ${i.noWalletExample ? `<p style="color:var(--muted);font-size:.95rem;line-height:1.6;margin:16px 0 10px;"><strong style="color:var(--ink);">No wallet yet?</strong> ${inline(NO_WALLET_NOTE)}</p>
+      ${i.noWalletExample ? `<p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:16px 0 10px;"><strong style="color:var(--ink);">No wallet yet?</strong> ${inline(NO_WALLET_NOTE)}</p>
       <pre ${PRE}><code>${esc(i.noWalletExample)}</code></pre>` : ""}
     </section>
 
@@ -700,7 +700,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
       <h2 ${H2}>How payment works</h2>
       <ul style="padding-left:20px;margin:0 0 16px;">${i.payment.map((e) => `<li ${LI}>${inline(e)}</li>`).join("")}</ul>
       ${i.walletExample ? `<pre ${PRE}><code>${esc(i.walletExample)}</code></pre>` : ""}
-      <p style="color:var(--muted);font-size:.92rem;line-height:1.6;margin:14px 0 0;">A call that fails is not charged: settlement runs after the tool and only on a successful response. Background: ${learnLinks}.</p>
+      <p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:14px 0 0;">A call that fails is not charged: settlement runs after the tool and only on a successful response. Background: ${learnLinks}.</p>
     </section>
 
     ${tools.length ? `<section style="margin-bottom:34px;">
@@ -708,12 +708,12 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;">
 ${toolCards}
       </div>
-      <p style="color:var(--muted);font-size:.9rem;margin:12px 0 0;">Every tool, price and input schema: <a href="/tools" ${A}>the catalog</a>.</p>
+      <p style="color:var(--muted);font-size:var(--fs-md);margin:12px 0 0;">Every tool, price and input schema: <a href="/tools" ${A}>the catalog</a>.</p>
     </section>` : ""}
 
     <section style="margin-bottom:10px;">
       <h2 ${H2}>Links</h2>
-      <p style="color:var(--muted);font-size:.95rem;line-height:1.8;margin:0;">
+      <p style="color:var(--muted);font-size:var(--fs-base);line-height:1.8;margin:0;">
         <a href="${esc(registryUrl(i))}" rel="noopener" ${A}>${esc(i.pkg)} on ${esc(registryLabel(i))}</a> &middot; <a href="${esc(github)}" rel="noopener" ${A}>source on GitHub</a>${docsLink}<br>
         ${guideLinks ? `Guides: ${guideLinks}<br>` : ""}
         <a href="/integrations" ${A}>All integrations</a>

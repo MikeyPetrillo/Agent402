@@ -29,7 +29,7 @@ export function monitorsPage(baseUrl = "https://agent402.tools", prefill = null)
     <div class="pcard${key === wanted ? " sel" : ""}" data-product="${esc(key)}"${key === wanted ? ' id="prefilled"' : ""}>
       <div class="k">${esc(p.kind)} monitor</div>
       <h3>${esc(p.label)}</h3>
-      <div style="font-family:var(--font-mono);font-size:22px;color:var(--ink);margin:6px 0 8px;">$${(p.price / 100).toFixed(0)}<span style="font-size:12px;color:var(--faint);letter-spacing:.04em;"> / month</span></div>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xl);color:var(--ink);margin:6px 0 8px;">$${(p.price / 100).toFixed(0)}<span style="font-size:var(--fs-xs);color:var(--faint);letter-spacing:.04em;"> / month</span></div>
       <p>${esc(p.blurb)}</p>
       <div class="field"><input id="in-${esc(key)}" type="text" aria-label="${esc(p.label)}: ${esc(p.inputLabel)}" placeholder="${esc(p.inputLabel)}"${key === wanted && wantedTarget ? ` value="${esc(wantedTarget)}" autofocus` : ""}></div>
       <div class="err" id="err-${esc(key)}"></div>

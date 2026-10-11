@@ -125,17 +125,22 @@ html { overflow-x: clip; }
   --faint: #8B929A;
   --hairline: #24282C;
   --dash: #353B41;
-  --dark-border: #2C3136;
-  --dark-border2: #3A4148;
-  --cream: #0B0C0E;
-  --cream2: #141619;
-  --surface: #16191D;
-  --on-dark: #E9EAEC;
-  --on-dark2: #C9CED3;
-  --dk-muted: #9AA1A9;
-  --dk-muted2: #B3B9C0;
-  --dk-muted3: #868D95;
-  --green: #6FCF97;
+  --panel-rule: #2C3136;
+  --panel-rule-2: #3A4148;
+  --panel: #16191D;
+  --on-panel: #E9EAEC;
+  --on-panel-soft: #C9CED3;
+  --on-panel-dim: #9AA1A9;
+  --on-panel-muted: #B3B9C0;
+  --on-panel-faint: #868D95;
+  --on-panel-bad: #FF8A7A;
+  --on-panel-warn: #E0A040;
+  --on-panel-violet: #A78BFA;
+  --on-panel-mark: #ffffff10;
+  --on-accent-lit: #0B0C0E;
+  --ok: #6FCF97;
+  --warn: #E0A040;
+  --bad: #FF8A7A;
   --nav-bg: rgba(11,12,14,.82);
   --btn-bg: linear-gradient(180deg,#F6F7F8,#D9DDE1);
   --btn-fg: #0B0C0E;
@@ -168,9 +173,32 @@ html { overflow-x: clip; }
 :root { color-scheme: light; }
 :root[data-theme="dark"] { color-scheme: dark; }
 :root {
-  /* Typography is theme-independent: declared once on the default root. */
+  /* Theme-independent tokens (type, scale, radius, elevation shape): declared
+     once on the default root. DESIGN.md at the repo root is the contract for
+     every value here; scripts/test-design-tokens.js keeps page modules on it.
+     Type scale: five text steps (11-15), six display steps (17-72), one
+     decorative watermark. A page never invents a size between two steps. */
   --font-body: 'Geist', 'Geist Fallback', system-ui, sans-serif;
   --font-mono: 'Geist Mono', 'Geist Mono Fallback', monospace;
+  --fs-2xs: 11px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-base: 15px;
+  --fs-lg: 17px;
+  --fs-xl: 22px;
+  --fs-2xl: 28px;
+  --fs-3xl: 38px;
+  --fs-4xl: 48px;
+  --fs-5xl: 58px;
+  --fs-hero: 72px;
+  --fs-mark: 220px;
+  --fs-code-inline: .88em;
+  --radius-xs: 2px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
   --accent: #0F5E43;
   --accent-lit: #9EF0B0;
   --on-accent: #FFFFFF;
@@ -184,17 +212,22 @@ html { overflow-x: clip; }
   --faint: #626970;
   --hairline: #D9DDE1;
   --dash: #C3C9CF;
-  --dark-border: #24282C;
-  --dark-border2: #353B41;
-  --cream: #F3F4F5;
-  --cream2: #FFFFFF;
-  --surface: #0C0D0F;
-  --on-dark: #E9EAEC;
-  --on-dark2: #C9CED3;
-  --dk-muted: #9AA1A9;
-  --dk-muted2: #B3B9C0;
-  --dk-muted3: #868D95;
-  --green: #23774F;
+  --panel-rule: #24282C;
+  --panel-rule-2: #353B41;
+  --panel: #0C0D0F;
+  --on-panel: #E9EAEC;
+  --on-panel-soft: #C9CED3;
+  --on-panel-dim: #9AA1A9;
+  --on-panel-muted: #B3B9C0;
+  --on-panel-faint: #868D95;
+  --on-panel-bad: #FF8A7A;
+  --on-panel-warn: #E0A040;
+  --on-panel-violet: #A78BFA;
+  --on-panel-mark: #ffffff10;
+  --on-accent-lit: #0B0C0E;
+  --ok: #23774F;
+  --warn: #8A5A12;
+  --bad: #B4402F;
   --nav-bg: rgba(243,244,245,.86);
   --btn-bg: linear-gradient(180deg,#2A2D31,#111315);
   --btn-fg: #FFFFFF;
@@ -253,11 +286,11 @@ body { transition: background-color .18s ease, color .18s ease; }
 .ml-theme-toggle { display:inline-flex; align-items:center; justify-content:center; width:36px; height:34px; padding:0; border:1px solid var(--hairline); border-radius:999px; background:var(--card); color:var(--ink); cursor:pointer; }
 .ml-theme-toggle .ml-moon { display:none; } :root[data-theme="dark"] .ml-theme-toggle .ml-moon { display:inline; } :root[data-theme="dark"] .ml-theme-toggle .ml-sun { display:none; }
 .ml-mobile-menu { display:none; border-top:1px solid var(--hairline); background:var(--paper); max-height:calc(100vh - 62px); overflow-y:auto; -webkit-overflow-scrolling:touch; }
-.ml-mm-h { padding:12px 20px 4px; font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--faint); }
+.ml-mm-h { padding:12px 20px 4px; font-family:var(--font-mono); font-size:var(--fs-2xs); letter-spacing:.14em; text-transform:uppercase; color:var(--faint); }
 .ml-mm-group { display:flex; flex-direction:column; }
-.ml-mm-link { padding:12px 20px; font-family:var(--font-body); font-size:15px; color:var(--ink); text-decoration:none; border-bottom:1px solid var(--hairline); }
+.ml-mm-link { padding:12px 20px; font-family:var(--font-body); font-size:var(--fs-base); color:var(--ink); text-decoration:none; border-bottom:1px solid var(--hairline); }
 .ml-mm-chains { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px; padding:12px 20px; border-bottom:1px solid var(--hairline); }
-.ml-mm-chip { display:block; padding:9px 12px; border:1px solid var(--hairline); border-radius:8px; background:var(--card); color:var(--ink); text-decoration:none; font-family:var(--font-mono); font-size:13px; text-align:center; }
+.ml-mm-chip { display:block; padding:9px 12px; border:1px solid var(--hairline); border-radius:8px; background:var(--card); color:var(--ink); text-decoration:none; font-family:var(--font-mono); font-size:var(--fs-sm); text-align:center; }
 .ml-mm-chip.ml-mm-active { border-color:var(--accent); color:var(--accent); }
 .ml-mm-link:hover, .ml-mm-link:active { background:var(--card-zebra); }
 .ml-mm-active { color:var(--accent); font-weight:700; }
@@ -288,7 +321,7 @@ body { background: var(--paper); font-family: var(--font-body); color: var(--ink
    two-line title splits evenly. Browsers without the property wrap as before. */
 p, li, dd, blockquote, figcaption, td, .lead, .tp-lead, .ml-lead { text-wrap: pretty; }
 h1, h2, h3 { text-wrap: balance; }
-::selection { background: #34A87744; }
+::selection { background: color-mix(in srgb, var(--accent) 27%, transparent); }
 a { color: inherit; }
 
 /* --- nav dropdowns (CSS-only, zero-JS safe) --- */
@@ -297,10 +330,11 @@ a { color: inherit; }
 .mlnav-g:hover > .mlnav-dd, .mlnav-g:focus-within > .mlnav-dd { display: block; }
 .mlnav-row { display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink); }
 .mlnav-row--sep { border-bottom: 1px solid var(--hairline); }
-.mlnav-label { display:block;padding:10px 16px 8px;font-size:11px;letter-spacing:.1em;color:var(--faint);border-bottom:1px solid var(--hairline); }
+.mlnav-label { display:block;padding:10px 16px 8px;font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--faint);border-bottom:1px solid var(--hairline); }
 .mlnav-faint { color: var(--faint); }
 .mlnav-row:hover { background: var(--card-zebra); }
-.ml-nav-link { color: var(--muted); text-decoration: none; border-bottom: 1.5px solid transparent; padding-bottom: 2px; transition: color .15s ease, border-color .15s ease; }
+/* nowrap: a dropdown trigger and its caret are one unit; at 1180px with the CTA the row is tight and the caret used to wrap under the label. */
+.ml-nav-link { white-space: nowrap; color: var(--muted); text-decoration: none; border-bottom: 1.5px solid transparent; padding-bottom: 2px; transition: color .15s ease, border-color .15s ease; }
 .ml-nav-link:hover { color: var(--ink); border-bottom-color: var(--dash); }
 .ml-nav-link-on { color: var(--ink); font-weight: 500; border-bottom-color: var(--ink); }
 .ml-nav-link-on:hover { border-bottom-color: var(--accent); }
@@ -342,16 +376,16 @@ a { color: inherit; }
   }
   .ml-nav-links > * { flex: none !important; }
   .ml-nav-gh  { display: none !important; }
-  .ml-h1      { font-size: 40px !important; }
-  .ml-hero-h1 { font-size: 42px !important; }
+  .ml-h1      { font-size: var(--fs-3xl) !important; }
+  .ml-hero-h1 { font-size: var(--fs-3xl) !important; }
   .ml-spec-cell { border-right: none !important; }
   .ml-hero-ctas a { flex: 1 1 100%; text-align: center; }
   .ml-hero-eyebrow { display: none !important; }
-  .ml-chain-strip-label { font-size: 11px !important; }
+  .ml-chain-strip-label { font-size: var(--fs-2xs) !important; }
   .ml-proof-row { grid-template-columns: 1fr !important; row-gap: 6px !important; }
   .ml-proof-row code { justify-self: start !important; }
   .ml-roster-compact { grid-template-columns: 1fr !important; row-gap: 4px !important; }
-  .sl-h1      { font-size: 40px !important; }
+  .sl-h1      { font-size: var(--fs-3xl) !important; }
   .sl-steps   { grid-template-columns: 1fr !important; }
   /* Long unbreakable strings - seller hosts, payTo addresses, package names -
      must wrap on phones instead of forcing a fixed grid column (and the page)
@@ -374,7 +408,7 @@ a { color: inherit; }
 }
 
 /* --- home hero (settled-calls proof, spec strip, staggered load) --- */
-@keyframes ml-ring { 0% { box-shadow: 0 0 0 0 #34A87766; } 70% { box-shadow: 0 0 0 7px #34A87700; } 100% { box-shadow: 0 0 0 0 #34A87700; } }
+@keyframes ml-ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 @keyframes ml-rise { to { opacity: 1; transform: none; } }
 .ml-stagger > * { opacity: 0; transform: translateY(8px); animation: ml-rise .6s ease forwards; }
 .ml-stagger > *:nth-child(1) { animation-delay: .02s; }
@@ -401,13 +435,13 @@ a { color: inherit; }
   .ml-cta:hover { transform: none; }
   .ml-reveal, .ml-reveal.ml-reveal-in { opacity: 1 !important; transform: none !important; transition: none !important; }
 }
-.mfb-label{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:700;}
-.mfb-tab{font-family:var(--font-mono);font-size:12px;padding:5px 11px;border:1px solid var(--hairline);border-radius:999px;background:var(--card);color:var(--ink);text-decoration:none;white-space:nowrap;}
+.mfb-label{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:700;}
+.mfb-tab{font-family:var(--font-mono);font-size:var(--fs-xs);padding:5px 11px;border:1px solid var(--hairline);border-radius:999px;background:var(--card);color:var(--ink);text-decoration:none;white-space:nowrap;}
 /* Active tab: accent-as-background - the one pattern that stays legible in BOTH
-   themes (white on #BF360C is 5.8:1; --ink/--on-dark flip light in dark mode and
+   themes (white on #BF360C is 5.8:1; --ink/--on-panel flip light in dark mode and
    made the active tab a white blob with invisible text). */
 .mfb-tab.on{background:var(--accent);color:var(--on-accent);border-color:var(--accent);}
-.mfb-sel,.mfb-search{font-family:var(--font-mono);font-size:12px;padding:6px 10px;border:1px solid var(--hairline);border-radius:8px;background:var(--card);color:var(--ink);}
+.mfb-sel,.mfb-search{font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 10px;border:1px solid var(--hairline);border-radius:8px;background:var(--card);color:var(--ink);}
 .mfb-search{flex:1;min-width:120px;}
 `;
 
@@ -423,10 +457,10 @@ a { color: inherit; }
 // would just go stale); "12 rails" is RAILS.length, always live-accurate
 // since RAILS is this repo's single source of truth for chain count.
 function statusLine() {
-  return `<div style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:12px;letter-spacing:.02em;border-bottom:1px solid var(--dark-border);">
+  return `<div style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.02em;border-bottom:1px solid var(--panel-rule);">
   <div class="ml-status-in" style="max-width:1180px;margin:0 auto;padding:8px 30px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
-    <span class="ml-status-left" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">HTTP/1.1 <span style="color:var(--accent-lit);font-weight:700;">402</span> PAYMENT REQUIRED · <a href="/agentic-finance" style="color:var(--dk-muted);text-decoration:none;">Agentic Finance (AIFI)</a> · <span style="color:var(--dk-muted);">x402 + MPP dual-stack</span></span>
-    <span class="ml-status-ticker" style="color:var(--dk-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">500+ tools · ${RAILS.length} rails · <span style="color:var(--accent-lit);">0%</span> seller fee</span>
+    <span class="ml-status-left" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">HTTP/1.1 <span style="color:var(--accent-lit);font-weight:700;">402</span> PAYMENT REQUIRED · <a href="/agentic-finance" style="color:var(--on-panel-dim);text-decoration:none;">Agentic Finance (AIFI)</a> · <span style="color:var(--on-panel-dim);">x402 + MPP dual-stack</span></span>
+    <span class="ml-status-ticker" style="color:var(--on-panel-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">500+ tools · ${RAILS.length} rails · <span style="color:var(--accent-lit);">0%</span> seller fee</span>
   </div>
 </div>`;
 }
@@ -510,9 +544,11 @@ let navDataProvider = null;
 // The "402" tile from /logo.svg, drawn inline at nav/footer size (no request,
 // no font file: the page already loads Geist Mono). Gradient ids carry a
 // suffix because the nav and footer marks share one page.
+// design-tokens: off-start (the brand mark is drawn with fixed colors: it is the same tile in both themes)
 export function brandMark(size, id) {
   return `<svg aria-hidden="true" focusable="false" width="${size}" height="${size}" viewBox="0 0 512 512" style="display:block;flex:none;"><defs><linearGradient id="bm-${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F6F7F8"/><stop offset="1" stop-color="#C9CED3"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="#0B0C0E"/><rect x="104" y="104" width="304" height="304" rx="64" fill="url(#bm-${id})"/><text x="256" y="300" font-size="150" font-weight="700" font-family="'Geist Mono',Menlo,Consolas,monospace" text-anchor="middle" letter-spacing="-9" fill="#0B0C0E">402</text></svg>`;
 }
+// design-tokens: off-end
 
 export function setNavIndexProvider(fn) { navDataProvider = fn; }
 
@@ -548,7 +584,7 @@ function chainRowHtml(c, live) {
     const toolsSpan = typeof c.tools === "number" && c.tools > 0
       ? `<span class="mlnav-faint">${fmt(c.tools)} tool${c.tools === 1 ? "" : "s"}</span>`
       : "";
-    return `<a href="${esc(c.href)}" class="mlnav-row"><span style="font-weight:700;">${esc(c.label)}</span><span style="display:inline-flex;align-items:center;gap:10px;"><span style="display:inline-flex;align-items:center;gap:6px;color:var(--green);"><span style="width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;"></span>${fmt(c.sellers)} seller${c.sellers === 1 ? "" : "s"}</span>${toolsSpan}</span></a>`;
+    return `<a href="${esc(c.href)}" class="mlnav-row"><span style="font-weight:700;">${esc(c.label)}</span><span style="display:inline-flex;align-items:center;gap:10px;"><span style="display:inline-flex;align-items:center;gap:6px;color:var(--ok);"><span style="width:7px;height:7px;border-radius:50%;background:var(--ok);display:inline-block;"></span>${fmt(c.sellers)} seller${c.sellers === 1 ? "" : "s"}</span>${toolsSpan}</span></a>`;
   }
   // Provider returned this chain but its data failed - honesty rule:
   // "unavailable", never zero.
@@ -576,7 +612,7 @@ function marketPanelNav(chainInfo) {
                 <a href="/marketplace/tools" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">every tool indexed</span><span class="mlnav-faint">ours + third-party</span></a>
                 <span class="mlnav-label">BY CHAIN</span>
                 ${rows}
-                <a href="/guides/smart-order-router" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--surface);color:var(--on-dark);"><span style="font-weight:700;">buy from any seller with one call</span><span style="opacity:.7;">→</span></a>
+                <a href="/guides/smart-order-router" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">buy from any seller with one call</span><span style="opacity:.7;">→</span></a>
               </span>
             </span>`;
 }
@@ -588,7 +624,7 @@ function peoplePanelNav() {
                 <span class="mlnav-label">FOR PEOPLE · CARD OR USDC</span>
                 <a href="/reports" class="mlnav-row"><span style="font-weight:700;">reports</span><span class="mlnav-faint">finished, cited, $2 and up</span></a>
                 <a href="/monitors" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">monitors</span><span class="mlnav-faint">watch one target monthly</span></a>
-                <a href="/reports" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--surface);color:var(--on-dark);"><span style="font-weight:700;">get a report</span><span style="opacity:.7;">→</span></a>
+                <a href="/reports" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">get a report</span><span style="opacity:.7;">→</span></a>
               </span>
             </span>`;
 }
@@ -607,7 +643,7 @@ function docsPanelNav() {
                 <a href="/x402-test" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">test your client</span><span class="mlnav-faint">why a payment was refused</span></a>
                 <a href="/blog" class="mlnav-row"><span style="font-weight:700;">blog</span><span class="mlnav-faint"></span></a>
                 <a href="/changelog" class="mlnav-row"><span style="font-weight:700;">changelog</span><span class="mlnav-faint">what shipped</span></a>
-                <a href="/docs" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--surface);color:var(--on-dark);"><span style="font-weight:700;">read the docs</span><span style="opacity:.7;">→</span></a>
+                <a href="/docs" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">read the docs</span><span style="opacity:.7;">→</span></a>
               </span>
             </span>`;
 }
@@ -626,7 +662,7 @@ function whyPanelNav() {
                 <a href="/what-is-mpp" class="mlnav-row"><span style="font-weight:700;">what is MPP</span><span class="mlnav-faint">the Payment auth scheme</span></a>
                 <a href="/agentic-finance" class="mlnav-row"><span style="font-weight:700;">agentic finance</span><span class="mlnav-faint">the category</span></a>
                 <a href="/glossary" class="mlnav-row"><span style="font-weight:700;">glossary</span><span class="mlnav-faint">the terms</span></a>
-                <a href="/why" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--surface);color:var(--on-dark);"><span style="font-weight:700;">why pay here</span><span style="opacity:.7;">→</span></a>
+                <a href="/why" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">why pay here</span><span style="opacity:.7;">→</span></a>
               </span>
             </span>`;
 }
@@ -642,7 +678,7 @@ function ourToolsPanelNav() {
                 <a href="/tools/category/ai" class="mlnav-row"><span style="font-weight:700;">speech &amp; transcription</span><span class="mlnav-faint">text-to-speech · audio to text</span></a>
                 <a href="/markets" class="mlnav-row"><span style="font-weight:700;">market data</span><span class="mlnav-faint">quotes · funding · on-chain</span></a>
                 <a href="/playground" class="mlnav-row"><span style="font-weight:700;">playground</span><span class="mlnav-faint">try free · PoW</span></a>
-                <a href="/pricing" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--surface);color:var(--on-dark);"><span style="font-weight:700;">pricing →</span><span style="color:var(--dk-muted);">/pricing</span></a>
+                <a href="/pricing" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">pricing →</span><span style="color:var(--on-panel-dim);">/pricing</span></a>
               </span>
             </span>`;
 }
@@ -654,7 +690,7 @@ function sellPanelHtml() {
                 <a href="/sell" class="mlnav-row"><span style="font-weight:700;">list your API</span><span class="mlnav-faint">free · health-ranked</span></a>
                 <a href="/tollbooth" class="mlnav-row"><span style="font-weight:700;">tollbooth</span><span class="mlnav-faint">pay-per-crawl</span></a>
                 <a href="/contribute" class="mlnav-row"><span style="font-weight:700;">contribute a tool</span><span class="mlnav-faint">AGPL · ~15 lines</span></a>
-                <a href="/sell" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--surface);color:var(--on-dark);"><span style="font-weight:700;">start selling →</span><span style="color:var(--dk-muted);">/sell</span></a>
+                <a href="/sell" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">start selling →</span><span style="color:var(--on-panel-dim);">/sell</span></a>
               </span>
             </span>`;
 }
@@ -673,7 +709,7 @@ function groupTriggerHtml(item, active, panelHtml) {
   const glyph = item.icon === "market" ? `${MARKET_GLYPH} ` : "";
   const title = item.title ? ` title="${esc(item.title)}" aria-label="${esc(item.title)}"` : "";
   return `<span class="mlnav-g" style="display:inline-flex;">
-        <a class="ml-nav-link${active ? " ml-nav-link-on" : ""}${item.icon ? " ml-nav-link-market" : ""}" href="${item.href}"${title}>${glyph}${item.label} <span style="font-size:10px;">▾</span></a>
+        <a class="ml-nav-link${active ? " ml-nav-link-on" : ""}${item.icon ? " ml-nav-link-market" : ""}" href="${item.href}"${title}>${glyph}${item.label} <span style="font-size:var(--fs-2xs);">▾</span></a>
         ${panelHtml}
       </span>`;
 }
@@ -790,9 +826,9 @@ function nav(activePath) {
   <div class="ml-nav-in" style="max-width:1180px;margin:0 auto;padding:15px 30px;display:flex;align-items:center;gap:26px;">
     <a href="/" style="display:flex;align-items:center;gap:11px;text-decoration:none;color:var(--ink);">
       ${brandMark(24, "n")}
-      <span style="font-weight:600;font-size:16px;letter-spacing:-.01em;">Agent402</span>
+      <span style="font-weight:600;font-size:var(--fs-lg);letter-spacing:-.01em;">Agent402</span>
     </a>
-    <div class="ml-nav-links" style="display:flex;align-items:center;gap:22px;margin-left:10px;font-family:var(--font-body);font-size:14px;">
+    <div class="ml-nav-links" style="display:flex;align-items:center;gap:22px;margin-left:10px;font-family:var(--font-body);font-size:var(--fs-md);">
       ${zone1}
       ${divider}
       ${zone2}
@@ -800,10 +836,10 @@ function nav(activePath) {
       ${zone3}
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;">
-      <a class="ml-nav-gh ml-nav-live" href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:6px 11px;border:1px solid var(--hairline);border-radius:8px;background:var(--card);" title="Watch x402 and MPP payments settle, read from the chain"><svg width="15" height="13" viewBox="0 0 24 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="13" rx="2"/><path d="M8 19h8"/><path d="M10.5 6.2v4.6l4-2.3z" fill="currentColor" stroke="none"/></svg>live</a>
-      <a class="ml-nav-gh" href="/status" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;" title="Uptime from two outside observers"><span aria-hidden="true" style="width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;"></span>status</a>
-      <a class="ml-nav-gh" href="/llms.txt" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:none;padding:8px 13px;border:1px solid var(--hairline);border-radius:999px;background:var(--card);white-space:nowrap;">llms.txt</a>
-      ${activePath === "/reports" ? "" : `<a class="ml-nav-cta" href="/reports" style="background:var(--btn-bg);color:var(--btn-fg);font-family:var(--font-body);font-weight:500;font-size:13.5px;text-decoration:none;padding:9px 16px;border-radius:999px;box-shadow:var(--btn-shadow);white-space:nowrap;">Get a report</a>`}
+      <a class="ml-nav-gh ml-nav-live" href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:6px 11px;border:1px solid var(--hairline);border-radius:8px;background:var(--card);" title="Watch x402 and MPP payments settle, read from the chain"><svg width="15" height="13" viewBox="0 0 24 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="13" rx="2"/><path d="M8 19h8"/><path d="M10.5 6.2v4.6l4-2.3z" fill="currentColor" stroke="none"/></svg>live</a>
+      <a class="ml-nav-gh" href="/status" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;" title="Uptime from two outside observers"><span aria-hidden="true" style="width:7px;height:7px;border-radius:50%;background:var(--ok);display:inline-block;"></span>status</a>
+      <a class="ml-nav-gh" href="/llms.txt" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);text-decoration:none;padding:8px 13px;border:1px solid var(--hairline);border-radius:999px;background:var(--card);white-space:nowrap;">llms.txt</a>
+      ${activePath === "/reports" ? "" : `<a class="ml-nav-cta" href="/reports" style="background:var(--btn-bg);color:var(--btn-fg);font-family:var(--font-body);font-weight:500;font-size:var(--fs-md);text-decoration:none;padding:9px 16px;border-radius:999px;box-shadow:var(--btn-shadow);white-space:nowrap;">Get a report</a>`}
       <button type="button" class="ml-theme-toggle" aria-label="Switch between dark and light theme" title="Theme">
         <svg class="ml-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
         <svg class="ml-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
@@ -845,9 +881,9 @@ export function ledgerFooterCompact() {
   // test-mcp-self-consistency reads our published text to check an agent can
   // find what we say exists.
   return `<footer style="border-top:1px solid var(--hairline);background:var(--footer-bg);">
-  <div style="max-width:1180px;margin:0 auto;padding:26px 30px;font-family:var(--font-mono);font-size:12px;color:var(--faint);">
+  <div style="max-width:1180px;margin:0 auto;padding:26px 30px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
-      <a href="/" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);">${brandMark(20, "f")}<span style="font-weight:600;font-size:14px;font-family:var(--font-sans);letter-spacing:-.01em;">Agent402</span></a>
+      <a href="/" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);">${brandMark(20, "f")}<span style="font-weight:600;font-size:var(--fs-md);font-family:var(--font-body);letter-spacing:-.01em;">Agent402</span></a>
       <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/reports" style="color:var(--muted);text-decoration:none;">reports</a><a href="/monitors" style="color:var(--muted);text-decoration:none;">monitors</a><a href="/tools" style="color:var(--muted);text-decoration:none;">catalog</a>${DECIDE_LIVE ? `<a href="/decide" style="color:var(--muted);text-decoration:none;">decide</a>` : ""}<a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/marketplace" style="color:var(--muted);text-decoration:none;">marketplace</a><a href="/revenue" style="color:var(--muted);text-decoration:none;">transactions</a><a href="/sell" style="color:var(--muted);text-decoration:none;">sell</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a><a href="/why" style="color:var(--muted);text-decoration:none;">why</a><a href="/company" style="color:var(--muted);text-decoration:none;">company</a></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--hairline);">

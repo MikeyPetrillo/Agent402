@@ -211,7 +211,7 @@
         var off = document.createElement('canvas');
         off.width = W; off.height = H;
         var octx = off.getContext('2d');
-        octx.fillStyle = '#fff';
+        octx.fillStyle = 'black'; // an alpha mask: only coverage is read back, never the color
         octx.beginPath();
         window.d3.geoPath(proj, octx)(land);
         octx.fill();
@@ -234,14 +234,15 @@
 
       function draw(t) {
         ctx.clearRect(0, 0, W, H);
-        ctx.fillStyle = '#8C8C88';
+        var rootStyle = getComputedStyle(document.documentElement);
+        ctx.fillStyle = rootStyle.getPropertyValue('--faint').trim() || 'gray';
         ctx.globalAlpha = 0.44;
         for (var i = 0; i < dots.length; i++) { ctx.beginPath(); ctx.arc(dots[i][0], dots[i][1], 1.05, 0, 6.2832); ctx.fill(); }
         for (var j = 0; j < arcs.length; j++) {
           var arc = arcs[j], a = arc.a, b = arc.b;
           var span = Math.hypot(a[0] - b[0], a[1] - b[1]);
           var mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2 - span * 0.34;
-          var accent = (getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#34A877').trim();
+          var accent = rootStyle.getPropertyValue('--accent').trim() || 'seagreen';
           ctx.globalAlpha = 0.2; ctx.strokeStyle = accent; ctx.lineWidth = 1;
           ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.quadraticCurveTo(mx, my, b[0], b[1]); ctx.stroke();
           ctx.fillStyle = accent; ctx.globalAlpha = 0.7;

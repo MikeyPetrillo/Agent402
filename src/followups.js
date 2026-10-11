@@ -134,7 +134,7 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
     const subject = `Your ${hdr(label || "report", 60)} could not be completed`;
     const body = refunded ? "Your payment has been refunded in full; the refund appears on your statement within a few business days." : "Your refund is being processed and will appear on your statement within a few business days.";
     const text = `We could not complete your ${label || "report"}. ${body}\n\nIf you want to try again with a different input: ${baseUrl}/reports\n\nAgent402`;
-    const html = shell(`<h2 style="margin:0 0 10px;font-size:18px;">Your ${esc(label || "report")} could not be completed</h2><p>${esc(body)}</p><p style="margin:18px 0 0;font-size:14px;">If you want to try again with a different input: <a href="${esc(baseUrl)}/reports" style="color:#0F5E43;">agent402.tools/reports</a></p>`);
+    const html = shell(`<h2 style="margin:0 0 10px;font-size:17px;">Your ${esc(label || "report")} could not be completed</h2><p>${esc(body)}</p><p style="margin:18px 0 0;font-size:14px;">If you want to try again with a different input: <a href="${esc(baseUrl)}/reports" style="color:#0F5E43;">agent402.tools/reports</a></p>`);
     const okSent = await sendEmail({ to, subject, html, text });
     if (okSent) emit("followup_failed_sent");
     return okSent;
@@ -222,7 +222,7 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
     const url = `${baseUrl}/monitors?product=${encodeURIComponent(mon.product)}&target=${encodeURIComponent(r.input)}`;
     const subject = `Keep ${hdr(r.input, 40) || "it"} watched: the ${hdr(mon.label, 40)}`;
     const text = `Two days ago you bought a ${r.label} on ${r.input}. The ${mon.label} re-runs it when something changes and emails you the new report, ${mon.priceUsd} a month, cancel any time:\n${url}\n\nStop these emails: ${stopLink(r.id)}\n\nAgent402`;
-    const html = shell(`<h2 style="margin:0 0 10px;font-size:18px;">Keep ${esc(r.input || "it")} watched</h2>
+    const html = shell(`<h2 style="margin:0 0 10px;font-size:17px;">Keep ${esc(r.input || "it")} watched</h2>
 <p>Two days ago you bought a ${esc(r.label)} on ${esc(r.input)}. The ${esc(mon.label)} re-runs it when something changes and emails you the new report, ${esc(mon.priceUsd)} a month, cancel any time.</p>
 <p style="margin:18px 0;"><a href="${esc(url)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:6px;display:inline-block;">Start the ${esc(mon.label)}</a></p>
 ${footer(r)}`);
@@ -234,7 +234,7 @@ ${footer(r)}`);
     const subject = `Another report? Read the free samples first`;
     const lines = list.map((s) => `- ${s.label}: ${s.url}`).join("\n");
     const text = `A week ago you bought a ${r.label}. If you need another one, every report type has a real, free sample you can read before paying:\n${lines}\n\nAll reports: ${baseUrl}/reports\n\nStop these emails: ${stopLink(r.id)}\n\nAgent402`;
-    const html = shell(`<h2 style="margin:0 0 10px;font-size:18px;">Another report?</h2>
+    const html = shell(`<h2 style="margin:0 0 10px;font-size:17px;">Another report?</h2>
 <p>A week ago you bought a ${esc(r.label)}. If you need another one, every report type has a real, free sample you can read before paying:</p>
 <ul style="padding-left:18px;">${list.map((s) => `<li><a href="${esc(s.url)}" style="color:#0F5E43;">${esc(s.label)}</a></li>`).join("")}</ul>
 <p style="margin:18px 0;"><a href="${esc(baseUrl)}/reports" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:6px;display:inline-block;">All reports</a></p>
@@ -243,8 +243,8 @@ ${footer(r)}`);
   }
 
   const unsubHeaders = (r) => ({ "List-Unsubscribe": `<${stopLink(r.id)}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" });
-  const footer = (r) => `<p style="color:#5C6963;font-size:12px;">You are getting this because you bought a report on agent402.tools. This is the ${r.sent.monitor ? "last" : "first of at most two"} follow-ups. <a href="${esc(stopLink(r.id))}" style="color:#5C6963;">Stop these emails</a>.</p>`;
-  function shell(inner) { return `<div style="font-family:system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#141A17;max-width:520px;"><div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#5C6963;margin-bottom:14px;">agent402 · reports</div>${inner}</div>`; }
+  const footer = (r) => `<p style="color:#626970;font-size:12px;">You are getting this because you bought a report on agent402.tools. This is the ${r.sent.monitor ? "last" : "first of at most two"} follow-ups. <a href="${esc(stopLink(r.id))}" style="color:#626970;">Stop these emails</a>.</p>`;
+  function shell(inner) { return `<div style="font-family:system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#111315;max-width:520px;"><div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#626970;margin-bottom:14px;">agent402 · reports</div>${inner}</div>`; }
 
   /** Drop finished sequences older than 30 days so the store stays bounded. */
   function prune() {

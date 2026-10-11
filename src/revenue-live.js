@@ -1614,10 +1614,10 @@ function mppRailsSection(mpp, { wallets = {} } = {}) {
   }).join("\n");
   return `
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:40px 0 6px;">
-      <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0;">MPP wire <span style="color:var(--muted);font-weight:400;">· by rail</span></h2>
-      <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><strong style="color:var(--ink);">${count.toLocaleString()}</strong> settlement${count === 1 ? "" : "s"} over <code>Authorization: Payment</code> · <a href="/api/revenue/mpp">/api/revenue/mpp</a></span>
+      <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">MPP wire <span style="color:var(--muted);font-weight:400;">· by rail</span></h2>
+      <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);"><strong style="color:var(--ink);">${count.toLocaleString()}</strong> settlement${count === 1 ? "" : "s"} over <code>Authorization: Payment</code> · <a href="/api/revenue/mpp">/api/revenue/mpp</a></span>
     </div>
-    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;">Payments whose credential arrived over the <strong>MPP</strong> wire. Throughput, ours included: most of it is our own daily volume exercising the rails; the external columns are money from others. On Base and Celo an MPP payment settles as ordinary USDC through x402, so its dollars are already in the x402 table above; Tempo and card payments settle off that ledger and are counted here.</p>
+    <p style="font-size:var(--fs-md);color:var(--muted);margin:0 0 12px;">Payments whose credential arrived over the <strong>MPP</strong> wire. Throughput, ours included: most of it is our own daily volume exercising the rails; the external columns are money from others. On Base and Celo an MPP payment settles as ordinary USDC through x402, so its dollars are already in the x402 table above; Tempo and card payments settle off that ledger and are counted here.</p>
     <div class="rv-tablewrap"><table class="rv-table">
       <thead><tr><th>Rail</th><th class="num">Settlements</th><th class="num">External</th><th class="num">External $</th><th>Last settled</th><th>Explorer</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -1644,10 +1644,10 @@ export function decideSection(d) {
   }).join("\n");
   return `
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:40px 0 6px;">
-      <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0;">Decide <span style="color:var(--muted);font-weight:400;">· plans and runs</span></h2>
-      <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><a href="/api/revenue/decide">/api/revenue/decide</a></span>
+      <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">Decide <span style="color:var(--muted);font-weight:400;">· plans and runs</span></h2>
+      <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);"><a href="/api/revenue/decide">/api/revenue/decide</a></span>
     </div>
-    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;">Paid use of the planner and its execute route, on every rail. Settlements count ours too (canaries and tests); the external columns are other buyers. External $ is what they paid for the plan or the run, not the pass-through payments a run makes to outside sellers.</p>
+    <p style="font-size:var(--fs-md);color:var(--muted);margin:0 0 12px;">Paid use of the planner and its execute route, on every rail. Settlements count ours too (canaries and tests); the external columns are other buyers. External $ is what they paid for the plan or the run, not the pass-through payments a run makes to outside sellers.</p>
     <div class="rv-tablewrap"><table class="rv-table">
       <thead><tr><th>Route</th><th class="num">Settlements</th><th class="num">External</th><th class="num">External $</th><th class="num">External, ${Number(d.days || 30)}d</th><th class="num">Buyers, ${Number(d.days || 30)}d</th><th>Last outside buy</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -1667,30 +1667,32 @@ export function decideSection(d) {
 export function revenueChartSection() {
   return `
   <style>
+  /* design-tokens: off-start (categorical chart series, a data-viz palette pinned by test-theme.js) */
   .rvz{--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767;--sfree:#9aa0aa;--stempo:#0ea5b8;--snewbuyers:#199e70;--sretbuyers:#9085e9;--scumbuyers:#3987e5;--vsurf:var(--card)}
+  /* design-tokens: off-end */
   .rvz{border:1px solid var(--hairline);background:var(--card);padding:18px 20px;margin:0 0 26px}
   .rvz-controls{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
   .rvz-seg{display:inline-flex;border:1px solid var(--hairline)}
-  .rvz-seg button{background:transparent;border:none;border-right:1px solid var(--hairline);color:var(--muted);font-family:var(--font-mono);font-size:12px;padding:6px 12px;cursor:pointer}
+  .rvz-seg button{background:transparent;border:none;border-right:1px solid var(--hairline);color:var(--muted);font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 12px;cursor:pointer}
   .rvz-seg button:last-child{border-right:none}
-  .rvz-seg button.on{background:var(--surface);color:var(--on-dark);font-weight:700}
-  .rvz-legend{display:flex;gap:12px;flex-wrap:wrap;font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:10px 0 0}
+  .rvz-seg button.on{background:var(--panel);color:var(--on-panel);font-weight:700}
+  .rvz-legend{display:flex;gap:12px;flex-wrap:wrap;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:10px 0 0}
   .rvz-legend span{display:inline-flex;align-items:center;gap:5px}
   .rvz-legend i{width:10px;height:10px;display:inline-block}
-  .rvz-tip{position:absolute;pointer-events:none;background:var(--surface);color:var(--on-dark);border:1px solid var(--hairline);font-family:var(--font-mono);font-size:11.5px;line-height:1.6;padding:8px 11px;display:none;z-index:5;max-width:260px}
+  .rvz-tip{position:absolute;pointer-events:none;background:var(--panel);color:var(--on-panel);border:1px solid var(--hairline);font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.6;padding:8px 11px;display:none;z-index:5;max-width:260px}
   .rvz-wrap{position:relative}
-  .rvz-empty{font-family:var(--font-mono);font-size:12.5px;color:var(--muted);padding:30px 0;text-align:center}
-  .rvz details{margin-top:12px;font-size:12.5px}
+  .rvz-empty{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);padding:30px 0;text-align:center}
+  .rvz details{margin-top:12px;font-size:var(--fs-sm)}
   .rvz details.rvz-adv{margin-top:0}
   .rvz details summary{cursor:pointer;font-family:var(--font-mono);color:var(--muted)}
-  .rvz table{border-collapse:collapse;font-family:var(--font-mono);font-size:11.5px;margin-top:8px;width:100%}
+  .rvz table{border-collapse:collapse;font-family:var(--font-mono);font-size:var(--fs-xs);margin-top:8px;width:100%}
   .rvz th,.rvz td{border:1px solid var(--dash);padding:3px 8px;text-align:right}
   .rvz th:first-child,.rvz td:first-child{text-align:left}
   </style>
   <div class="rvz" id="rvz">
     <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;">
-      <span style="font-weight:800;font-size:17px;">Over time <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">· by chain · external only unless you widen it</span></span>
-      <a href="/api/revenue/daily" style="font-family:var(--font-mono);font-size:12px;">raw data →</a>
+      <span style="font-weight:800;font-size:var(--fs-lg);">Over time <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);">· by chain · external only unless you widen it</span></span>
+      <a href="/api/revenue/daily" style="font-family:var(--font-mono);font-size:var(--fs-xs);">raw data →</a>
     </div>
     <div class="rvz-controls" style="margin-top:12px">
       <span class="rvz-seg" id="rvzMode"><button data-v="cum" class="on">Cumulative</button><button data-v="daily">Daily</button><button data-v="weekly">Weekly</button><button data-v="monthly">Monthly</button></span>
@@ -1705,11 +1707,11 @@ export function revenueChartSection() {
         <span class="rvz-seg" id="rvzSettle"><button data-v="all" class="on">All revenue</button><button data-v="sor">SOR (self-funded)</button><button data-v="direct">Direct</button></span>
       </div>
     </details>
-    <p id="rvzBuyersNote" style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:0 0 10px;display:none;"></p>
-    <p id="rvzFreeNote" style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:0 0 10px;display:none;"></p>
-    <p id="rvzScopeNote" style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:0 0 10px;display:none;"></p>
-    <p id="rvzWireNote" style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:0 0 10px;display:none;">MPP-wire settlements are identified by tx hash from the sales ledger, which began recording the wire on 2026-07-24 - earlier days read as x402 because the wire was not recorded, not because no MPP traffic existed. The teal Tempo lane is always MPP-wire (it's never x402-settleable) and drops out under the x402 filter.</p>
-    <p id="rvzSettleNote" style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:0 0 10px;display:none;">SOR = revenue settled on-chain to the dedicated spending wallet that pays external sellers (the route-execute tiers today) - the self-funding loop. Direct = everything settled to the treasury. The split is by receiving wallet, so revenue from before a tool joined the self-funding set reads as Direct - that is what the chain says, not a gap. The wire split is not tracked within this lane, so selecting it resets the wire filter.</p>
+    <p id="rvzBuyersNote" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 10px;display:none;"></p>
+    <p id="rvzFreeNote" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 10px;display:none;"></p>
+    <p id="rvzScopeNote" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 10px;display:none;"></p>
+    <p id="rvzWireNote" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 10px;display:none;">MPP-wire settlements are identified by tx hash from the sales ledger, which began recording the wire on 2026-07-24 - earlier days read as x402 because the wire was not recorded, not because no MPP traffic existed. The teal Tempo lane is always MPP-wire (it's never x402-settleable) and drops out under the x402 filter.</p>
+    <p id="rvzSettleNote" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 10px;display:none;">SOR = revenue settled on-chain to the dedicated spending wallet that pays external sellers (the route-execute tiers today) - the self-funding loop. Direct = everything settled to the treasury. The split is by receiving wallet, so revenue from before a tool joined the self-funding set reads as Direct - that is what the chain says, not a gap. The wire split is not tracked within this lane, so selecting it resets the wire filter.</p>
     <div class="rvz-wrap"><svg id="rvzSvg" viewBox="0 0 940 300" width="100%" role="img" aria-label="Stacked daily revenue by chain"></svg><div class="rvz-tip" id="rvzTip"></div></div>
     <div class="rvz-legend" id="rvzLegend"></div>
     <details><summary>view as table</summary><div id="rvzTable" style="overflow-x:auto"></div></details>
@@ -1731,13 +1733,13 @@ export function revenueChartSection() {
  */
 export function revenueNextStep() {
   return `<div style="margin:36px 0 0;border:1px solid var(--hairline);background:var(--card);padding:22px 20px;">
-    <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0 0 6px;">Put a line on this table.</h2>
-    <p style="font-size:14px;line-height:1.6;color:var(--muted);margin:0 0 14px;">Every number above is a settlement through the same gate this command hits. It costs a tenth of a cent and needs no account: the 402 comes back with the price and the rails, your client signs, the call is served.</p>
-    <pre style="margin:0 0 16px;padding:12px 14px;overflow-x:auto;background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:12.5px;line-height:1.5;"><code>curl -i https://agent402.tools/api/hash?text=hello</code></pre>
+    <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0 0 6px;">Put a line on this table.</h2>
+    <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 14px;">Every number above is a settlement through the same gate this command hits. It costs a tenth of a cent and needs no account: the 402 comes back with the price and the rails, your client signs, the call is served.</p>
+    <pre style="margin:0 0 16px;padding:12px 14px;overflow-x:auto;background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.5;"><code>curl -i https://agent402.tools/api/hash?text=hello</code></pre>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
-      <a href="/markets" style="font-family:var(--font-mono);font-size:12.5px;border:1px solid var(--ink);padding:8px 12px;text-decoration:none;color:var(--btn-fg);background:var(--btn-bg);">Tools an agent can call &rarr;</a>
-      <a href="/sell" style="font-family:var(--font-mono);font-size:12.5px;border:1px solid var(--hairline);padding:8px 12px;text-decoration:none;color:var(--ink);">Get paid on these rails &rarr;</a>
-      <a href="/reports" style="font-family:var(--font-mono);font-size:12.5px;border:1px solid var(--hairline);padding:8px 12px;text-decoration:none;color:var(--ink);">Buy a finished report &rarr;</a>
+      <a href="/markets" style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--ink);padding:8px 12px;text-decoration:none;color:var(--btn-fg);background:var(--btn-bg);">Tools an agent can call &rarr;</a>
+      <a href="/sell" style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--hairline);padding:8px 12px;text-decoration:none;color:var(--ink);">Get paid on these rails &rarr;</a>
+      <a href="/reports" style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--hairline);padding:8px 12px;text-decoration:none;color:var(--ink);">Buy a finished report &rarr;</a>
     </div>
   </div>`;
 }
@@ -1763,7 +1765,7 @@ export function revenuePage(baseUrl, snap) {
     // means the chain is live and settling; only a rail never read is
     // unreachable. Carried-forward reads say "cached" so freshness is honest.
     const hasBalance = r.balance != null;
-    const status = !hasBalance ? `<span style="color:var(--accent);">unreachable</span>` : r.staleBalance ? `<span style="color:var(--green);">live</span> <span style="color:var(--muted);">cached</span>` : `<span style="color:var(--green);">live</span>`;
+    const status = !hasBalance ? `<span style="color:var(--bad);">unreachable</span>` : r.staleBalance ? `<span style="color:var(--ok);">live</span> <span style="color:var(--muted);">cached</span>` : `<span style="color:var(--ok);">live</span>`;
     // The newest settlement on the rail, whoever paid (owner's call 2026-10-04:
     // the column shows the latest payment through the rail, not only our own
     // canary). Read from the recent rows and our own newest settle. The link is
@@ -1778,7 +1780,7 @@ export function revenuePage(baseUrl, snap) {
       : `<span style="color:var(--muted);">${hasBalance ? "none read yet" : "-"}</span>`;
     return `<tr>
       <td><strong>${esc(r.rail)}</strong> <span style="color:var(--muted);">${esc(r.asset)}</span></td>
-      <td class="num">${c ? Number(c.inboundCount).toLocaleString() : "-"}${c && !c.caughtUp ? `<span style="display:block;font-size:10.5px;font-weight:400;color:var(--muted);">still syncing</span>` : ""}</td>
+      <td class="num">${c ? Number(c.inboundCount).toLocaleString() : "-"}${c && !c.caughtUp ? `<span style="display:block;font-size:var(--fs-2xs);font-weight:400;color:var(--muted);">still syncing</span>` : ""}</td>
       <td class="num">${c && c.externalCount ? Number(c.externalCount).toLocaleString() : "0"}</td>
       <td class="num">${c ? esc(usdCell(c.externalUsd)) : "$0"}</td>
       <td>${proof}</td>
@@ -1807,44 +1809,44 @@ export function revenuePage(baseUrl, snap) {
   const agents = Number(snap.agents?.buyers || 0);
   const big = (n, label, sub) => `
     <div style="min-width:0;">
-      <div style="font-family:var(--font-mono);font-size:40px;font-weight:700;color:var(--accent);line-height:1.05;">${n.toLocaleString()}</div>
-      <div style="font-size:14px;color:var(--ink);margin-top:6px;">${label}</div>
-      <div style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin-top:3px;">${sub}</div>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-3xl);font-weight:700;color:var(--accent);line-height:1.05;">${n.toLocaleString()}</div>
+      <div style="font-size:var(--fs-md);color:var(--ink);margin-top:6px;">${label}</div>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin-top:3px;">${sub}</div>
     </div>`;
   const hero = throughput ? `
     <div class="ml-2col" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;margin:22px 0 14px;max-width:720px;">
       ${big(throughput, "settled transactions, all-time", `x402 + MPP, ours included${at.syncing ? " · ledger still backfilling" : ""}`)}
       ${agents ? big(agents, `distinct agent${agents === 1 ? "" : "s"} have paid us on-chain`, `unique outside wallets${snap.agents?.scope?.since ? `, since ${esc(snap.agents.scope.since)}` : ""}${snap.agents?.top5SharePct != null ? ` · top 5 = ${snap.agents.top5SharePct}% of their payments` : ""}`) : ""}
     </div>
-    <p style="font-family:var(--font-mono);font-size:13px;color:var(--ink);margin:0 0 4px;"><strong>${extCount.toLocaleString()}</strong> external payment${extCount === 1 ? "" : "s"} · <strong>$${extUsd.toFixed(2)}</strong> revenue, settled on-chain (x402 rails + Tempo MPP)${snap.card?.allTimeCount ? ` · <strong>${Number(snap.card.allTimeCount).toLocaleString()}</strong> card purchase${snap.card.allTimeCount === 1 ? "" : "s"} ($${Number(snap.card.allTimeUsd).toFixed(2)}) <span style="color:var(--muted);font-weight:400;">by card, not on-chain</span>` : ""}</p>` : "";
+    <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);margin:0 0 4px;"><strong>${extCount.toLocaleString()}</strong> external payment${extCount === 1 ? "" : "s"} · <strong>$${extUsd.toFixed(2)}</strong> revenue, settled on-chain (x402 rails + Tempo MPP)${snap.card?.allTimeCount ? ` · <strong>${Number(snap.card.allTimeCount).toLocaleString()}</strong> card purchase${snap.card.allTimeCount === 1 ? "" : "s"} ($${Number(snap.card.allTimeUsd).toFixed(2)}) <span style="color:var(--muted);font-weight:400;">by card, not on-chain</span>` : ""}</p>` : "";
 
   const body = `
   <div style="max-width:1100px;margin:0 auto;padding:56px 30px;">
     <section>
-    <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">$ GET /api/revenue</div>
-    <h1 style="font-family:var(--font-body);font-weight:800;font-size:44px;line-height:1.05;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink);">Transactions.</h1>
-    <p style="font-size:16px;line-height:1.6;color:var(--muted);max-width:60ch;margin:0;">
+    <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/revenue</div>
+    <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:1.05;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink);">Transactions.</h1>
+    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:60ch;margin:0;">
       Every payment through our rails, on both wires (<strong>x402</strong> and <strong>MPP</strong>) plus card purchases, read from the chain. Revenue counts only money from others; throughput counts our own canary and volume runs too. <a href="/transparency#revenue-figures">How the two are told apart</a>.
     </p>
     ${standing}
     ${hero}
-    <p style="font-size:12px;line-height:1.55;color:var(--muted);margin:2px 0 14px;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. Operating history for a payments service, stated for transparency: information only, not an offer, a solicitation, a recommendation or investment advice, and not a projection. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
-    <p style="font-family:var(--font-mono);font-size:12px;color:var(--muted);margin:0 0 28px;">balances as of ${esc(snap.asOf)}, refreshed hourly · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
+    <p style="font-size:var(--fs-xs);line-height:1.55;color:var(--muted);margin:2px 0 14px;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. Operating history for a payments service, stated for transparency: information only, not an offer, a solicitation, a recommendation or investment advice, and not a projection. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
+    <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">balances as of ${esc(snap.asOf)}, refreshed hourly · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
     </section>
     <section>
     ${revenueChartSection()}
     </section>
     <section>
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:36px 0 6px;">
-      <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0;">x402 rails <span style="color:var(--muted);font-weight:400;">· by chain</span></h2>
-      <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><strong style="color:var(--ink);">${snap.rails.length}</strong> chains, ranked by transactions</span>
+      <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">x402 rails <span style="color:var(--muted);font-weight:400;">· by chain</span></h2>
+      <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);"><strong style="color:var(--ink);">${snap.rails.length}</strong> chains, ranked by transactions</span>
     </div>
-    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;">Transactions count every settlement on the rail, ours included. External is money from others. Latest settle is the newest payment on the rail, from an outside buyer or from our own canary and volume runs (marked ours), linked to our wallet on that chain's explorer.</p>
+    <p style="font-size:var(--fs-md);color:var(--muted);margin:0 0 12px;">Transactions count every settlement on the rail, ours included. External is money from others. Latest settle is the newest payment on the rail, from an outside buyer or from our own canary and volume runs (marked ours), linked to our wallet on that chain's explorer.</p>
     <div class="rv-tablewrap"><table class="rv-table">
       <thead><tr><th>Rail</th><th class="num">Transactions</th><th class="num">External</th><th class="num">External $</th><th>Latest settle</th><th>Status</th><th>Wallet</th></tr></thead>
       <tbody>${railsSorted.map(railRow).join("\n")}</tbody>
     </table></div>
-    ${partialNotes ? `<p style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:8px 0 0;">${partialNotes} rail${partialNotes === 1 ? "" : "s"} read partially from public RPCs this refresh (balances are live; detail in <a href="/api/revenue">/api/revenue</a>).</p>` : ""}
+    ${partialNotes ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:8px 0 0;">${partialNotes} rail${partialNotes === 1 ? "" : "s"} read partially from public RPCs this refresh (balances are live; detail in <a href="/api/revenue">/api/revenue</a>).</p>` : ""}
     </section>
     <section>
     ${mppRailsSection(snap.mpp, { wallets: mppWallets(snap.rails) })}
@@ -1856,7 +1858,7 @@ export function revenuePage(baseUrl, snap) {
     ${revenueNextStep()}
     </section>
     <section>
-    <p style="font-size:13.5px;color:var(--muted);margin-top:30px;">Check us independently: <a href="https://www.x402scan.com/server/07eb3020-932a-436d-a739-557b6e47101d" rel="noopener">x402scan indexes our settlements</a>. Their totals include our own traffic, so they read higher than the external figures here; <a href="/transparency#revenue-figures">why the two differ</a>.</p>
+    <p style="font-size:var(--fs-md);color:var(--muted);margin-top:30px;">Check us independently: <a href="https://www.x402scan.com/server/07eb3020-932a-436d-a739-557b6e47101d" rel="noopener">x402scan indexes our settlements</a>. Their totals include our own traffic, so they read higher than the external figures here; <a href="/transparency#revenue-figures">why the two differ</a>.</p>
     </section>
   </div>
   ${ledgerFooterCompact(baseUrl)}`;
@@ -1864,9 +1866,9 @@ export function revenuePage(baseUrl, snap) {
     title, description, canonical, baseUrl, activePath: "/revenue",
     jsonLd: { "@context": "https://schema.org", "@type": "WebPage", name: title, url: canonical, description },
     extraCss: `.rv-tablewrap{overflow-x:auto;border:1px solid var(--hairline);background:var(--card)}
-.rv-table{border-collapse:collapse;width:100%;min-width:640px;font-family:var(--font-mono);font-size:12.5px}
+.rv-table{border-collapse:collapse;width:100%;min-width:640px;font-family:var(--font-mono);font-size:var(--fs-sm)}
 .rv-table th,.rv-table td{padding:8px 12px;border-bottom:1px solid var(--dash);text-align:left;white-space:nowrap;vertical-align:baseline}
-.rv-table th{font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.rv-table th{font-size:var(--fs-2xs);font-weight:600;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
 .rv-table th.num,.rv-table td.num{text-align:right;font-variant-numeric:tabular-nums}
 .rv-table tbody tr:last-child td{border-bottom:none}`,
     body,

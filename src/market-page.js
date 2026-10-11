@@ -28,15 +28,15 @@ import { standingCountsExcludingHost } from "./standing.js";
 const ROSTER_CSS = `
 .mlr-row{display:grid;grid-template-columns:1fr auto auto auto;gap:14px;align-items:center;padding:9px 14px;border:1px solid var(--hairline);background:var(--card);color:var(--ink);text-decoration:none}
 .mlr-row.sel{border:2px solid var(--accent)}
-.mlr-name{font-weight:700;font-size:14px}
-.mlr-host{font-family:var(--font-mono);font-size:12px;color:var(--faint)}
-.mlr-tools{color:var(--muted);font-family:var(--font-mono);font-size:12.5px}
-.mlr-stat{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:12px;color:var(--green)}
-.mlr-stat.bad{color:var(--accent)}
-.mlr-dot{width:7px;height:7px;border-radius:50%;background:var(--green)}
-.mlr-stat.bad .mlr-dot{background:var(--accent)}
-.mlr-badge{background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-size:10px;font-weight:700;padding:1px 5px}
-.mlr-mpp{border:1px solid var(--green);color:var(--green);font-family:var(--font-mono);font-size:10px;font-weight:700;padding:0 4px;margin-left:4px}
+.mlr-name{font-weight:700;font-size:var(--fs-md)}
+.mlr-host{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint)}
+.mlr-tools{color:var(--muted);font-family:var(--font-mono);font-size:var(--fs-sm)}
+.mlr-stat{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ok)}
+.mlr-stat.bad{color:var(--bad)}
+.mlr-dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.mlr-stat.bad .mlr-dot{background:var(--bad)}
+.mlr-badge{background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-size:var(--fs-2xs);font-weight:700;padding:1px 5px}
+.mlr-mpp{border:1px solid var(--ok);color:var(--ok);font-family:var(--font-mono);font-size:var(--fs-2xs);font-weight:700;padding:0 4px;margin-left:4px}
 .ml-chain-h1-wrap{min-height:80px}
 @media (max-width: 900px) { .ml-chain-h1-wrap{min-height:120px} }
 .mkt-search-wrap{border:1px solid var(--hairline)}
@@ -399,7 +399,7 @@ export function marketFilterBar(chainKey, _baseUrl) {
     <select class="mfb-sel" data-mfb-sort><option value="calls">most settled</option><option value="usd">volume</option><option value="buyers">buyers</option><option value="tools">tools</option><option value="health">health</option></select>
     <input class="mfb-search" data-mfb-search placeholder="search sellers" aria-label="Search sellers">
   </div>
-  <p class="mfb-legend" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:6px 0 0;line-height:1.5;"><strong style="color:var(--muted);">healthy</strong> = the last crawl of the origin succeeded, nothing more. <strong style="color:var(--muted);">dispatch</strong> = this host's router will buy from this seller right now; a seller can be listed, healthy and still not dispatch-eligible (no known payment network, or no settlement history on Base yet). The reason is on each row and on <code>/api/index</code> as <code>routerDispatchReason</code>.</p>
+  <p class="mfb-legend" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:6px 0 0;line-height:1.5;"><strong style="color:var(--muted);">healthy</strong> = the last crawl of the origin succeeded, nothing more. <strong style="color:var(--muted);">dispatch</strong> = this host's router will buy from this seller right now; a seller can be listed, healthy and still not dispatch-eligible (no known payment network, or no settlement history on Base yet). The reason is on each row and on <code>/api/index</code> as <code>routerDispatchReason</code>.</p>
   <script src="/js/market-filter-bar.js"></script>`;
 }
 
@@ -410,8 +410,8 @@ function dispatchBadge(s) {
   if (s.local || s.routerDispatchEligible === undefined) return "";
   const reason = String(s.routerDispatchReason || "").replace(/_/g, " ");
   return s.routerDispatchEligible
-    ? ` <span class="mlr-dispatch" title="the router will buy from this seller (${esc(reason)})" style="font-family:var(--font-mono);font-size:11px;color:var(--accent);">dispatch</span>`
-    : ` <span class="mlr-dispatch off" title="not dispatch-eligible: ${esc(reason)}" style="font-family:var(--font-mono);font-size:11px;color:var(--faint);">no dispatch &middot; ${esc(reason)}</span>`;
+    ? ` <span class="mlr-dispatch" title="the router will buy from this seller (${esc(reason)})" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--accent);">dispatch</span>`
+    : ` <span class="mlr-dispatch off" title="not dispatch-eligible: ${esc(reason)}" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);">no dispatch &middot; ${esc(reason)}</span>`;
 }
 
 function categoryGroups(tools, { maxCategories = 12, maxPerCategory = 6 } = {}) {
@@ -460,7 +460,7 @@ function canaryManifestStatus(rail) {
   if (!latest || !Number.isFinite(ts)) return { text: "unavailable", color: "var(--muted)" };
   const ageMs = Date.now() - ts;
   if (ageMs < 0 || ageMs >= 36 * 3600_000) return { text: "unavailable", color: "var(--muted)" };
-  return { text: `✓ settled ${agoLabel(ageMs)}`, color: "var(--green)" };
+  return { text: `✓ settled ${agoLabel(ageMs)}`, color: "var(--ok)" };
 }
 
 // The SELLERS LISTED card's caption: the host is not counted (its own card
@@ -500,8 +500,8 @@ export function marketActivityHtml(chainKey, activity, selected) {
       ? `activity unavailable for this seller - no ${C.chainName} payTo advertised in its 402s, or the scan failed`
       : "activity scan temporarily unavailable";
     return `
-  <h2 id="activity" style="font-size:21px;font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Activity</h2>
-  <p style="color:var(--muted);font-size:13.5px;margin:0;">${why} - settlements remain independently verifiable on ${esc(C.explorerUrl)}</p>`;
+  <h2 id="activity" style="font-size:var(--fs-xl);font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Activity</h2>
+  <p style="color:var(--muted);font-size:var(--fs-md);margin:0;">${why} - settlements remain independently verifiable on ${esc(C.explorerUrl)}</p>`;
   }
   const bars = (key) => {
     const max = Math.max(...activity.buckets.map((b) => Number(b[key]) || 0));
@@ -516,8 +516,8 @@ export function marketActivityHtml(chainKey, activity, selected) {
   };
   const card = (label, value, key) => `
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;">
-      <div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">${label}</div>
-      <div style="font-size:26px;font-weight:800;">${value}</div>${bars(key)}
+      <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">${label}</div>
+      <div style="font-size:var(--fs-2xl);font-weight:800;">${value}</div>${bars(key)}
     </div>`;
   const t = activity.totals || {};
   const note = [
@@ -529,15 +529,15 @@ export function marketActivityHtml(chainKey, activity, selected) {
   ].filter(Boolean).join(" · ");
   return `
   <div id="activity" style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">
-    <h2 style="font-size:21px;font-weight:800;margin:0;">Activity</h2>
-    <span style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">${scopeLabel} · PAST ${esc(activity.days)} DAYS</span>
+    <h2 style="font-size:var(--fs-xl);font-weight:800;margin:0;">Activity</h2>
+    <span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">${scopeLabel} · PAST ${esc(activity.days)} DAYS</span>
   </div>
   <div class="ml-2col" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;">
     ${card("TRANSACTIONS", Number(t.tx || 0).toLocaleString("en-US"), "tx")}
     ${card("VOLUME", usd(t.usd || 0), "usd")}
     ${card("BUYERS", Number(t.buyers || 0).toLocaleString("en-US"), "buyers")}
   </div>
-  <p style="font-family:var(--font-mono);font-size:11.5px;color:var(--faint);margin:8px 0 0;">${note}</p>`;
+  <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:8px 0 0;">${note}</p>`;
 }
 
 // Seller card — shown when an external seller is selected from the roster. The
@@ -580,30 +580,30 @@ export function sellerCardHtml(chainKey, seller, sel, activity, stat, payTo, win
   const host = String(sel.host || "");
   const name = sel.name || seller.displayName || host;
   const cell = (label, value) => `<div style="padding:12px 14px;">
-      <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;color:var(--dk-muted);">${label}</div>
-      <div style="font-size:22px;font-weight:800;color:var(--on-dark2);margin-top:2px;font-variant-numeric:tabular-nums;">${value}</div></div>`;
+      <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);">${label}</div>
+      <div style="font-size:var(--fs-xl);font-weight:800;color:var(--on-panel-soft);margin-top:2px;font-variant-numeric:tabular-nums;">${value}</div></div>`;
   return `
-  <div id="seller-card" style="background:var(--surface);--accent:var(--accent-lit);border:1px solid var(--hairline);margin:28px 0 0;">
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--dark-border2);">
+  <div id="seller-card" style="background:var(--panel);--accent:var(--accent-lit);border:1px solid var(--hairline);margin:28px 0 0;">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--panel-rule-2);">
       <div style="min-width:0;">
-        <div style="font-family:var(--font-mono);font-size:11px;color:var(--dk-muted);letter-spacing:.08em;">SELLER &middot; ${esc(C.chainName.toUpperCase())}</div>
-        <a href="${safeHref(seller.homepage)}" rel="noopener" style="font-weight:800;font-size:18px;color:var(--on-dark2);text-decoration:none;overflow-wrap:anywhere;">${esc(name)}</a>
-        <div style="font-family:var(--font-mono);font-size:12px;color:var(--dk-muted);overflow-wrap:anywhere;">${esc(host)}</div>
+        <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);letter-spacing:.08em;">SELLER &middot; ${esc(C.chainName.toUpperCase())}</div>
+        <a href="${safeHref(seller.homepage)}" rel="noopener" style="font-weight:800;font-size:var(--fs-lg);color:var(--on-panel-soft);text-decoration:none;overflow-wrap:anywhere;">${esc(name)}</a>
+        <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-dim);overflow-wrap:anywhere;">${esc(host)}</div>
       </div>
-      <div style="display:flex;gap:12px;align-items:center;font-family:var(--font-mono);font-size:12px;white-space:nowrap;">
-        <span style="color:${seller.routable ? "var(--accent-lit)" : "var(--dk-muted)"};">&#9679; ${health}</span>
-        <a href="/${chainKey}" data-seller-link data-seller-host="" data-seller-local="1" style="color:var(--dk-muted);text-decoration:none;">clear &#10005;</a>
+      <div style="display:flex;gap:12px;align-items:center;font-family:var(--font-mono);font-size:var(--fs-xs);white-space:nowrap;">
+        <span style="color:${seller.routable ? "var(--accent-lit)" : "var(--on-panel-dim)"};">&#9679; ${health}</span>
+        <a href="/${chainKey}" data-seller-link data-seller-host="" data-seller-local="1" style="color:var(--on-panel-dim);text-decoration:none;">clear &#10005;</a>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));border-bottom:1px solid var(--dark-border2);">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));border-bottom:1px solid var(--panel-rule-2);">
       ${cell("SETTLED CALLS", calls.toLocaleString("en-US") + plus)}
       ${cell("VOLUME", usd(vol) + plus)}
       ${cell("BUYERS", buyers.toLocaleString("en-US") + plus)}
       ${cell("TOOLS", toolN.toLocaleString("en-US"))}
     </div>
-    ${note ? `<div style="padding:10px 16px;font-family:var(--font-mono);font-size:11px;color:var(--dk-muted);line-height:1.7;border-bottom:1px solid var(--dark-border2);overflow-wrap:anywhere;">discovery &middot; ${esc(note)}</div>` : ""}
-    <div style="padding:10px 16px;font-family:var(--font-mono);font-size:11px;color:var(--dk-muted);line-height:1.7;overflow-wrap:anywhere;">rolling ${esc(winLabel)} totals${capped ? " (scan capped - a floor)" : ""} &middot; payTo ${payTo ? esc(payTo) : `not advertised on ${esc(C.chainName)}`}${firstSeen ? ` &middot; first settlement ${esc(firstSeen)}` : ""}${payTo ? ` &middot; <a href="${esc(C.explorerWalletUrl(payTo))}" rel="noopener" style="color:var(--accent-lit);text-decoration:none;">verify on ${esc(C.explorerUrl)} &rarr;</a>` : ""}</div>
-    ${seller.bazaar && (seller.bazaar.calls30d > 0 || seller.bazaar.payers30d > 0) ? `<div style="padding:10px 16px;font-family:var(--font-mono);font-size:11px;color:var(--dk-muted);line-height:1.7;border-top:1px solid var(--dark-border2);overflow-wrap:anywhere;">Coinbase Bazaar, last 30 days (their measurement, not ours) &middot; ${Number(seller.bazaar.calls30d || 0).toLocaleString("en-US")} calls &middot; ${Number(seller.bazaar.payers30d || 0).toLocaleString("en-US")} distinct payers${seller.bazaar.lastCalledAt ? ` &middot; last call ${esc(String(seller.bazaar.lastCalledAt).slice(0, 10))}` : ""}</div>` : ""}
+    ${note ? `<div style="padding:10px 16px;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);line-height:1.7;border-bottom:1px solid var(--panel-rule-2);overflow-wrap:anywhere;">discovery &middot; ${esc(note)}</div>` : ""}
+    <div style="padding:10px 16px;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);line-height:1.7;overflow-wrap:anywhere;">rolling ${esc(winLabel)} totals${capped ? " (scan capped - a floor)" : ""} &middot; payTo ${payTo ? esc(payTo) : `not advertised on ${esc(C.chainName)}`}${firstSeen ? ` &middot; first settlement ${esc(firstSeen)}` : ""}${payTo ? ` &middot; <a href="${esc(C.explorerWalletUrl(payTo))}" rel="noopener" style="color:var(--accent-lit);text-decoration:none;">verify on ${esc(C.explorerUrl)} &rarr;</a>` : ""}</div>
+    ${seller.bazaar && (seller.bazaar.calls30d > 0 || seller.bazaar.payers30d > 0) ? `<div style="padding:10px 16px;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);line-height:1.7;border-top:1px solid var(--panel-rule-2);overflow-wrap:anywhere;">Coinbase Bazaar, last 30 days (their measurement, not ours) &middot; ${Number(seller.bazaar.calls30d || 0).toLocaleString("en-US")} calls &middot; ${Number(seller.bazaar.payers30d || 0).toLocaleString("en-US")} distinct payers${seller.bazaar.lastCalledAt ? ` &middot; last call ${esc(String(seller.bazaar.lastCalledAt).slice(0, 10))}` : ""}</div>` : ""}
   </div>`;
 }
 
@@ -736,7 +736,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
     ? (localSellerPinned ? [localSellerPinned, ...rankedForCap.slice(0, ALL_ROW_CAP)] : rankedForCap.slice(0, ALL_ROW_CAP))
     : rosterSellers;
   const rosterCapNote = rosterTruncated
-    ? `<p class="chips-note" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:10px 0 0;">showing the top ${ALL_ROW_CAP} of ${rankedForCap.length} sellers &middot; <a href="/${chainKey}?all=1" style="color:var(--muted);">show all &rarr;</a></p>`
+    ? `<p class="chips-note" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:10px 0 0;">showing the top ${ALL_ROW_CAP} of ${rankedForCap.length} sellers &middot; <a href="/${chainKey}?all=1" style="color:var(--muted);">show all &rarr;</a></p>`
     : "";
   // "+N more endpoints" on the surviving row so the collapsed hosts are disclosed, not hidden.
   const endpointsNote = (s) => { const gid = s.local ? null : sellerStat(s)?.gid; const n = gid ? extraByGid.get(gid) || 0 : 0; return n > 0 ? ` &middot; +${n} more endpoint${n === 1 ? "" : "s"}` : ""; };
@@ -779,28 +779,28 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
         return `
     <div${rowData(s)} style="border:${isSelected(s) ? "2px solid var(--accent)" : "1px solid var(--hairline)"};background:var(--card);padding:16px 18px;display:flex;flex-direction:column;gap:6px;">
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;">
-        <a href="${safeHref(s.homepage)}" rel="noopener" style="color:var(--ink);text-decoration:none;font-weight:700;font-size:15px;">${esc(s.displayName)}</a>
+        <a href="${safeHref(s.homepage)}" rel="noopener" style="color:var(--ink);text-decoration:none;font-weight:700;font-size:var(--fs-base);">${esc(s.displayName)}</a>
         ${s.local ? '<span class="mlr-badge">THIS HOST</span>' : ""}${s.mpp === true ? '<span class="mlr-mpp" title="Also reachable over the native MPP wire">MPP</span>' : ""}
       </div>
       <div class="mlr-host">${esc(hostOf(s.homepage))}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
-        <span style="color:var(--muted);font-family:var(--font-mono);font-size:13px;">${Number(s.toolCount) || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
+        <span style="color:var(--muted);font-family:var(--font-mono);font-size:var(--fs-sm);">${Number(s.toolCount) || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
         <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${health}</span>${dispatchBadge(s)}
       </div>
-      <a href="${activityHref(s)}" data-seller-link data-seller-host="${s.local ? "" : esc(hostOf(s.homepage).toLowerCase())}" data-seller-local="${s.local ? "1" : "0"}" style="font-family:var(--font-mono);font-size:12px;color:var(--accent);text-decoration:none;margin-top:2px;">${isSelected(s) ? "activity shown above" : "view activity →"}</a>
+      <a href="${activityHref(s)}" data-seller-link data-seller-host="${s.local ? "" : esc(hostOf(s.homepage).toLowerCase())}" data-seller-local="${s.local ? "1" : "0"}" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);text-decoration:none;margin-top:2px;">${isSelected(s) ? "activity shown above" : "view activity →"}</a>
     </div>`;
       }).join("");
 
   const statsHtml = `
   <div class="ml-2col" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 0;">
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:26px;font-weight:800;">${sellerCount.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">${sellersListedNote(measured, sellers.filter((s) => !s.local).length)}</div></div>
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">TOOLS (THIS HOST)</div><div style="font-size:26px;font-weight:800;">${tools.length.toLocaleString("en-US")}</div></div>
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">OUR LATEST SETTLE</div><div style="font-size:26px;font-weight:800;">${latest && latest.usd != null ? usd(latest.usd) : "-"}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">our own canary or volume run</div></div>
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">PRICE FLOOR</div><div style="font-size:26px;font-weight:800;">${usd(low)}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${sellerCount.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">${sellersListedNote(measured, sellers.filter((s) => !s.local).length)}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">TOOLS (THIS HOST)</div><div style="font-size:var(--fs-2xl);font-weight:800;">${tools.length.toLocaleString("en-US")}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">OUR LATEST SETTLE</div><div style="font-size:var(--fs-2xl);font-weight:800;">${latest && latest.usd != null ? usd(latest.usd) : "-"}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">our own canary or volume run</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">PRICE FLOOR</div><div style="font-size:var(--fs-2xl);font-weight:800;">${usd(low)}</div></div>
   </div>`;
 
   const honesty = rosterSellers.length === 1 && rosterSellers[0]?.local
-    ? `<p style="color:var(--muted);font-size:13.5px;">1 seller live - discovery is open, and external sellers are added automatically when their x402 challenges advertise ${C.honestyNetworkPhrase}.</p>`
+    ? `<p style="color:var(--muted);font-size:var(--fs-md);">1 seller live - discovery is open, and external sellers are added automatically when their x402 challenges advertise ${C.honestyNetworkPhrase}.</p>`
     : "";
 
   const jsonLd = [
@@ -830,13 +830,13 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
 
   const formHtml = `
   <div id="list-api" style="border:1px solid var(--hairline);background:var(--card);padding:18px 20px;margin-top:16px;">
-    <div style="font-weight:800;font-size:15px;margin-bottom:8px;">List your API</div>
-    <label for="reg-origin" style="display:block;font-family:var(--font-mono);font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Your API's origin</label>
+    <div style="font-weight:800;font-size:var(--fs-base);margin-bottom:8px;">List your API</div>
+    <label for="reg-origin" style="display:block;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Your API's origin</label>
     <div style="display:flex;gap:10px;">
-      <input id="reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;font-family:var(--font-mono);font-size:13px;padding:9px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);" aria-label="https://api.yourdomain.com">
-      <button id="reg-go" style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:13px;border:none;padding:9px 16px;cursor:pointer;">SUBMIT</button>
+      <input id="reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;font-family:var(--font-mono);font-size:var(--fs-sm);padding:9px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);" aria-label="https://api.yourdomain.com">
+      <button id="reg-go" style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);border:none;padding:9px 16px;cursor:pointer;">SUBMIT</button>
     </div>
-    <div id="reg-out" role="status" aria-live="polite" data-listed-note="${esc(C.chainName)} sellers appear on this page; all sellers appear on /index." style="font-family:var(--font-mono);font-size:12.5px;color:var(--muted);margin-top:8px;">Free, no account - we probe your origin's x402 surface and list you if it answers. Ranking is health-based.</div>
+    <div id="reg-out" role="status" aria-live="polite" data-listed-note="${esc(C.chainName)} sellers appear on this page; all sellers appear on /index." style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);margin-top:8px;">Free, no account - we probe your origin's x402 surface and list you if it answers. Ranking is health-based.</div>
   </div>
   <script src="/js/reg-form.js"></script>`;
 
@@ -844,8 +844,8 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   const manifestRow = (label, value) => `<div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);flex:none;">${label}</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><span style="font-weight:700;min-width:0;overflow-wrap:anywhere;text-align:right;">${value}</span></div>`;
   const railManifestHtml = `
     <div style="border:1px solid var(--hairline);background:var(--card);padding:18px 20px;">
-      <div style="display:flex;flex-direction:column;gap:4px;font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;color:var(--muted);border-bottom:1px dashed var(--dash);padding-bottom:10px;margin-bottom:12px;"><span>·· RAIL MANIFEST ··</span><span>${esc(C.tickerLabel)}</span></div>
-      <div style="display:flex;flex-direction:column;gap:9px;font-family:var(--font-mono);font-size:13px;">
+      <div style="display:flex;flex-direction:column;gap:4px;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--muted);border-bottom:1px dashed var(--dash);padding-bottom:10px;margin-bottom:12px;"><span>·· RAIL MANIFEST ··</span><span>${esc(C.tickerLabel)}</span></div>
+      <div style="display:flex;flex-direction:column;gap:9px;font-family:var(--font-mono);font-size:var(--fs-sm);">
         ${manifestRow("network", esc(C.caip2))}
         ${manifestRow("wires", C.mpp ? "x402 + MPP" : "x402")}
         ${manifestRow("asset", esc(C.asset))}
@@ -855,7 +855,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
         <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">explorer</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><a href="${esc(walletExplorerUrl)}" rel="noopener" style="font-weight:700;color:var(--accent);text-decoration:none;">${esc(C.explorerUrl)} →</a></div>
         <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">daily canary</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><span style="font-weight:700;color:${canary.color};">${esc(canary.text)}</span></div>
       </div>
-      <div style="margin-top:14px;padding-top:10px;border-top:1px dashed var(--dash);font-family:var(--font-mono);font-size:11px;color:var(--faint);line-height:1.6;">agents: GET /api/route?q=&lt;task&gt;&amp;network=${esc(C.networkParam)}</div>
+      <div style="margin-top:14px;padding-top:10px;border-top:1px dashed var(--dash);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);line-height:1.6;">agents: GET /api/route?q=&lt;task&gt;&amp;network=${esc(C.networkParam)}</div>
     </div>`;
 
   // Switcher strip — one row per chain page that actually exists today
@@ -872,25 +872,25 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   <div class="ml-2col" style="display:grid;grid-template-columns:1.15fr .85fr;gap:34px;align-items:start;">
     <div>
       <div class="ml-chain-h1-wrap" style="display:flex;align-items:flex-start;gap:14px;margin-bottom:12px;">
-        <span style="width:44px;height:44px;flex:none;border:1px solid var(--hairline);color:var(--ink);display:flex;align-items:center;justify-content:center;" title="${esc(C.chainName)}">${chainMark(chainKey, 26) || `<span style="font-family:var(--font-mono);font-weight:700;font-size:12px;">${esc(C.ticker)}</span>`}</span>
-        <h1 style="font-size:34px;font-weight:800;letter-spacing:-.02em;line-height:1.15;margin:0;">The ${esc(C.chainName)} x402 marketplace</h1>
+        <span style="width:44px;height:44px;flex:none;border:1px solid var(--hairline);color:var(--ink);display:flex;align-items:center;justify-content:center;" title="${esc(C.chainName)}">${chainMark(chainKey, 26) || `<span style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-xs);">${esc(C.ticker)}</span>`}</span>
+        <h1 style="font-size:var(--fs-3xl);font-weight:800;letter-spacing:-.02em;line-height:1.15;margin:0;">The ${esc(C.chainName)} x402 marketplace</h1>
       </div>
-      <p style="font-size:16.5px;color:var(--muted);margin:0;max-width:640px;">${subheadHtml}</p>
+      <p style="font-size:var(--fs-lg);color:var(--muted);margin:0;max-width:640px;">${subheadHtml}</p>
       <div style="margin:16px 0 0;padding:16px 18px;border:1px solid var(--hairline);background:var(--card);">
-        <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;color:var(--faint);margin-bottom:10px;">START HERE · BUYER PATH</div>
+        <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--faint);margin-bottom:10px;">START HERE · BUYER PATH</div>
         <form action="/tools" method="get" class="mkt-search-wrap" style="display:flex;gap:0;background:var(--paper);max-width:520px;margin-bottom:12px;">
-          <input name="q" type="search" placeholder="what do you need? e.g. pdf ocr, web search" style="flex:1;border:none;background:transparent;font-family:var(--font-mono);font-size:13px;color:var(--ink);padding:11px 14px;outline:none;" / aria-label="what do you need? e.g. pdf ocr, web search">
-          <button type="submit" style="border:none;border-left:1px solid var(--hairline);background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:12px;padding:0 16px;cursor:pointer;">FIND →</button>
+          <input name="q" type="search" placeholder="what do you need? e.g. pdf ocr, web search" style="flex:1;border:none;background:transparent;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);padding:11px 14px;outline:none;" / aria-label="what do you need? e.g. pdf ocr, web search">
+          <button type="submit" style="border:none;border-left:1px solid var(--hairline);background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-xs);padding:0 16px;cursor:pointer;">FIND →</button>
         </form>
-        <div style="display:flex;flex-wrap:wrap;gap:14px;font-family:var(--font-mono);font-size:12.5px;">
+        <div style="display:flex;flex-wrap:wrap;gap:14px;font-family:var(--font-mono);font-size:var(--fs-sm);">
           <a href="/guides/smart-order-router" style="color:var(--accent);text-decoration:none;font-weight:700;">auto-route a task →</a>${decideLive() ? `<a href="/decide" style="color:var(--accent);text-decoration:none;font-weight:700;">plan a multi-step job →</a>` : ""}
           <a href="/playground" style="color:var(--muted);text-decoration:none;">try playground</a>
           <a href="#sellers" style="color:var(--muted);text-decoration:none;">browse sellers</a>
         </div>
       </div>
-      <p style="font-size:13px;color:var(--faint);margin:10px 0 0;">An open index of the whole ${esc(C.chainName)} x402 economy - this host plus every independent seller the crawl finds (CDP Bazaar included), each re-probed ${crawlIntervalLabel()}. Not a walled market: other venues' listings appear here too.</p>
+      <p style="font-size:var(--fs-sm);color:var(--faint);margin:10px 0 0;">An open index of the whole ${esc(C.chainName)} x402 economy - this host plus every independent seller the crawl finds (CDP Bazaar included), each re-probed ${crawlIntervalLabel()}. Not a walled market: other venues' listings appear here too.</p>
       ${receiptHtml}
-      <p style="font-size:13px;line-height:1.45;color:var(--faint);margin:4px 0 0;min-height:56px;">${C.canaryLine}</p>
+      <p style="font-size:var(--fs-sm);line-height:1.45;color:var(--faint);margin:4px 0 0;min-height:56px;">${C.canaryLine}</p>
     </div>
     ${railManifestHtml}
   </div>
@@ -944,8 +944,8 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   });
 
   const rosterHtml = `
-  <h2 id="sellers" style="font-size:21px;font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Sellers accepting ${esc(C.chainName)}</h2>
-  <p style="font-size:13px;color:var(--faint);margin:-6px 0 12px;">pick a seller to scope the activity charts · THIS HOST = run by agent402 · every other seller is independent, found by the open crawl · ${measured ? `tx = settled calls on ${esc(C.chainName)}${lbWindow ? `, last ${esc(lbWindow)}` : ""}, from the seller leaderboard` : `per-seller settlement counts are measured on ${esc(CHAIN_PAGES[LEADERBOARD_CHAIN].chainName)} only, so this roster shows none for ${esc(C.chainName)}; pick a seller to scan its ${esc(C.chainName)} wallet`}</p>
+  <h2 id="sellers" style="font-size:var(--fs-xl);font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Sellers accepting ${esc(C.chainName)}</h2>
+  <p style="font-size:var(--fs-sm);color:var(--faint);margin:-6px 0 12px;">pick a seller to scope the activity charts · THIS HOST = run by agent402 · every other seller is independent, found by the open crawl · ${measured ? `tx = settled calls on ${esc(C.chainName)}${lbWindow ? `, last ${esc(lbWindow)}` : ""}, from the seller leaderboard` : `per-seller settlement counts are measured on ${esc(CHAIN_PAGES[LEADERBOARD_CHAIN].chainName)} only, so this roster shows none for ${esc(C.chainName)}; pick a seller to scan its ${esc(C.chainName)} wallet`}</p>
   ${compact
     ? `<div style="display:flex;flex-direction:column;gap:8px;">${sellersHtml}</div>`
     : `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;">${sellersHtml}</div>`}
@@ -953,19 +953,19 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   ${honesty}`;
 
   const sellSectionHtml = `
-  <h2 style="font-size:21px;font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Sell on ${esc(C.chainName)}</h2>
+  <h2 style="font-size:var(--fs-xl);font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Sell on ${esc(C.chainName)}</h2>
   <div class="ml-2col" style="display:grid;grid-template-columns:1.1fr .9fr;gap:18px;align-items:start;">
     <div>
-      <p style="font-size:14.5px;line-height:1.65;">${C.sellParagraphHtml}</p>
+      <p style="font-size:var(--fs-base);line-height:1.65;">${C.sellParagraphHtml}</p>
       ${formHtml}
     </div>
-    <div style="background:var(--surface);border:1px solid var(--hairline);">
-      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 10px;padding:10px 15px;border-bottom:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11px;color:var(--dk-muted);letter-spacing:.06em;"><span>402 challenge · accepts[]</span><span>JSON</span></div>
-      <pre style="margin:0;padding:16px 18px;font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--on-dark);white-space:pre-wrap;word-break:break-word;">{
-  <span style="color:var(--dk-muted3);">"scheme"</span>: "exact",
-  <span style="color:var(--dk-muted3);">"network"</span>: <span style="color:var(--accent);">"${esc(C.acceptNetwork)}"</span>,
-  <span style="color:var(--dk-muted3);">"asset"</span>: "${esc(C.asset)}",
-  <span style="color:var(--dk-muted3);">"payTo"</span>: "your-wallet"
+    <div style="background:var(--panel);border:1px solid var(--hairline);">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 10px;padding:10px 15px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);letter-spacing:.06em;"><span>402 challenge · accepts[]</span><span>JSON</span></div>
+      <pre style="margin:0;padding:16px 18px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.8;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;">{
+  <span style="color:var(--on-panel-faint);">"scheme"</span>: "exact",
+  <span style="color:var(--on-panel-faint);">"network"</span>: <span style="color:var(--accent);">"${esc(C.acceptNetwork)}"</span>,
+  <span style="color:var(--on-panel-faint);">"asset"</span>: "${esc(C.asset)}",
+  <span style="color:var(--on-panel-faint);">"payTo"</span>: "your-wallet"
 }</pre>
     </div>
   </div>`;
@@ -991,14 +991,14 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   </section>
 
   <section>
-    <h2 style="font-size:21px;font-weight:800;margin:40px 0 10px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Buy tools with ${esc(C.asset)} on ${esc(C.chainName)}</h2>
-    <p style="font-size:14.5px;color:var(--muted);margin:0 0 10px;">${payableSentence(payable, C)}, from ${usd(low)} to ${usd(high)} a call${groups.length ? `, across ${groups.map((g) => esc(g.label.toLowerCase())).slice(0, 6).join(", ")} and more` : ""}. The catalog page carries the category browser; this page is the chain's ledger.</p>
-    <p style="font-family:var(--font-mono);font-size:13px;background:var(--card-zebra);padding:10px 14px;margin:0;">agents: GET ${esc(baseUrl)}/api/route?q=&lt;task&gt;&amp;network=${esc(C.networkParam)}</p>
+    <h2 style="font-size:var(--fs-xl);font-weight:800;margin:40px 0 10px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Buy tools with ${esc(C.asset)} on ${esc(C.chainName)}</h2>
+    <p style="font-size:var(--fs-base);color:var(--muted);margin:0 0 10px;">${payableSentence(payable, C)}, from ${usd(low)} to ${usd(high)} a call${groups.length ? `, across ${groups.map((g) => esc(g.label.toLowerCase())).slice(0, 6).join(", ")} and more` : ""}. The catalog page carries the category browser; this page is the chain's ledger.</p>
+    <p style="font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--card-zebra);padding:10px 14px;margin:0;">agents: GET ${esc(baseUrl)}/api/route?q=&lt;task&gt;&amp;network=${esc(C.networkParam)}</p>
   </section>
 
   <section>${sellSectionHtml}</section>
 
-  <p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-top:28px;">machine-readable: <a href="/api/route?q=hash&amp;network=${esc(C.networkParam)}">/api/route?network=${esc(C.networkParam)}</a> · <a href="/.well-known/x402">/.well-known/x402</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/api/reliability">/api/reliability</a></p>
+  <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:28px;">machine-readable: <a href="/api/route?q=hash&amp;network=${esc(C.networkParam)}">/api/route?network=${esc(C.networkParam)}</a> · <a href="/.well-known/x402">/.well-known/x402</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/api/reliability">/api/reliability</a></p>
 </div>
 <script src="/js/market-seller-switch.js"></script>
 <script src="/js/market-terminal.js"></script>
@@ -1043,7 +1043,7 @@ function economyStripHtml(economySnap) {
   const num = (v) => (v == null ? null : Number.isFinite(Number(v)) ? Number(v) : null);
   const fmt = (n) => n.toLocaleString("en-US");
   const cell = (label, value) => `
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">${label}</div><div style="font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;">${value}</div></div>`;
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">${label}</div><div style="font-size:var(--fs-2xl);font-weight:800;font-variant-numeric:tabular-nums;">${value}</div></div>`;
   const cells = [];
   const s7 = num(t7.settlements);
   if (s7 != null) cells.push(cell("SETTLEMENTS · 7D", fmt(s7)));
@@ -1060,11 +1060,11 @@ function economyStripHtml(economySnap) {
   if (s30 != null) cells.push(cell("SETTLEMENTS · 30D", fmt(s30)));
   const inner = cells.length
     ? `<div class="ml-2col" style="display:grid;grid-template-columns:repeat(${Math.min(cells.length, 5)},1fr);gap:14px;">${cells.join("")}</div>
-  <p style="font-family:var(--font-mono);font-size:11.5px;color:var(--faint);margin:8px 0 0;">every gasless EIP-3009 USDC settlement on Base - the primitive x402 uses - counted chain-wide across every seller, not just this host · machine-readable at <a href="/api/x402-economy" style="color:var(--muted);">/api/x402-economy</a></p>`
-    : `<p style="color:var(--muted);font-size:13.5px;margin:0;">chain-wide settlement stats unavailable right now - detail in <a href="/api/x402-economy">/api/x402-economy</a></p>`;
+  <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:8px 0 0;">every gasless EIP-3009 USDC settlement on Base - the primitive x402 uses - counted chain-wide across every seller, not just this host · machine-readable at <a href="/api/x402-economy" style="color:var(--muted);">/api/x402-economy</a></p>`
+    : `<p style="color:var(--muted);font-size:var(--fs-md);margin:0;">chain-wide settlement stats unavailable right now - detail in <a href="/api/x402-economy">/api/x402-economy</a></p>`;
   return `
   <div id="economy" style="margin:40px 0 0;">
-    <h2 style="font-size:21px;font-weight:800;margin:0 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">The economy</h2>
+    <h2 style="font-size:var(--fs-xl);font-weight:800;margin:0 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">The economy</h2>
     ${inner}
   </div>`;
 }
@@ -1179,7 +1179,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   const rankedVisible = truncated ? ranked.slice(0, ALL_ROW_CAP) : ranked;
   const visibleSellers = localSeller ? [localSeller, ...rankedVisible] : rankedVisible;
   const capNote = truncated
-    ? `<p class="chips-note" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:10px 0 0;">this host pinned · showing the top ${ALL_ROW_CAP} of ${ranked.length} independent sellers &middot; <a href="/marketplace?all=1" style="color:var(--muted);">show all &rarr;</a></p>`
+    ? `<p class="chips-note" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:10px 0 0;">this host pinned · showing the top ${ALL_ROW_CAP} of ${ranked.length} independent sellers &middot; <a href="/marketplace?all=1" style="color:var(--muted);">show all &rarr;</a></p>`
     : "";
 
   // Grid rows, not a <table> - reuses the exact .mlr-row/.ml-roster-compact
@@ -1202,19 +1202,19 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
         <a href="${safeHref(s.homepage)}" rel="noopener" style="color:var(--ink);text-decoration:none;font-weight:700;">${esc(s.displayName)}</a>${s.local ? ' <span class="mlr-badge">THIS HOST</span>' : ""}${s.mpp === true ? ' <span class="mlr-mpp" title="Also reachable over the native MPP wire">MPP</span>' : ""}
         <div class="mlr-host">${esc(hostOf(s.homepage))}</div>
       </div>
-      <span style="font-family:var(--font-mono);font-size:12.5px;">${chainCell(s)}</span>
+      <span style="font-family:var(--font-mono);font-size:var(--fs-sm);">${chainCell(s)}</span>
       <span class="mlr-tools">${Number(s.toolCount) || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
       <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${health}</span>${dispatchBadge(s)}
     </div>`;
   }).join("");
 
   const honesty = rosterSellers.length === 1 && rosterSellers[0]?.local
-    ? `<p style="color:var(--muted);font-size:13.5px;">1 seller live - discovery is open, and external sellers are added automatically the moment their x402 challenges are crawled, on any supported chain.</p>`
+    ? `<p style="color:var(--muted);font-size:var(--fs-md);">1 seller live - discovery is open, and external sellers are added automatically the moment their x402 challenges are crawled, on any supported chain.</p>`
     : "";
 
   const rosterHtml = `
-  <h2 id="sellers" style="font-size:21px;font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Every seller, every chain</h2>
-  <p style="font-size:13px;color:var(--faint);margin:-6px 0 12px;">THIS HOST = run by agent402 · every other seller is independent, found by the open crawl · Chain shows the networks each seller's 402 advertises · tx = settled calls on Base${leaderboardSnap?.windowLabel ? `, last ${esc(leaderboardSnap.windowLabel)}` : ""}, from the seller leaderboard</p>
+  <h2 id="sellers" style="font-size:var(--fs-xl);font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Every seller, every chain</h2>
+  <p style="font-size:var(--fs-sm);color:var(--faint);margin:-6px 0 12px;">THIS HOST = run by agent402 · every other seller is independent, found by the open crawl · Chain shows the networks each seller's 402 advertises · tx = settled calls on Base${leaderboardSnap?.windowLabel ? `, last ${esc(leaderboardSnap.windowLabel)}` : ""}, from the seller leaderboard</p>
   <div style="display:flex;flex-direction:column;gap:8px;">${rows}</div>
   ${capNote}
   ${honesty}`;
@@ -1237,10 +1237,10 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
 
   const statsHtml = `
   <div class="ml-2col ml-4col" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 0;">
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:26px;font-weight:800;">${marketOperatorCount(null, snapshot, leaderboardSnap).toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">${sellersListedNote(true, standingCounts.sellers)}</div></div>
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">TOOL LISTINGS</div><div style="font-size:26px;font-weight:800;">${totalToolListings.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">advertised by other sellers</div></div>
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">CHAINS SUPPORTED</div><div style="font-size:26px;font-weight:800;">${Object.keys(CHAIN_PAGES).length}</div></div>
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">TOOLS (THIS HOST)</div><div style="font-size:26px;font-weight:800;">${(sellers.find((s) => s.local)?.toolCount || 0).toLocaleString("en-US")}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${marketOperatorCount(null, snapshot, leaderboardSnap).toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">${sellersListedNote(true, standingCounts.sellers)}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">TOOL LISTINGS</div><div style="font-size:var(--fs-2xl);font-weight:800;">${totalToolListings.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">advertised by other sellers</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">CHAINS SUPPORTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${Object.keys(CHAIN_PAGES).length}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">TOOLS (THIS HOST)</div><div style="font-size:var(--fs-2xl);font-weight:800;">${(sellers.find((s) => s.local)?.toolCount || 0).toLocaleString("en-US")}</div></div>
   </div>`;
 
   // "Sellers on Base" for the hero subhead - live, not the design's frozen
@@ -1250,26 +1250,26 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
 
   const headerHtml = `
   <div>
-    <h1 style="font-size:34px;font-weight:800;letter-spacing:-.02em;margin:0 0 8px;">The x402 marketplace.</h1>
-    <p style="font-size:16.5px;color:var(--muted);margin:0;max-width:640px;">The open index of paid APIs for agentic commerce - ${baseSellerCount.toLocaleString("en-US")} independent sellers on Base alone besides this host, with what they charge and what they have actually settled.</p>
+    <h1 style="font-size:var(--fs-3xl);font-weight:800;letter-spacing:-.02em;margin:0 0 8px;">The x402 marketplace.</h1>
+    <p style="font-size:var(--fs-lg);color:var(--muted);margin:0;max-width:640px;">The open index of paid APIs for agentic commerce - ${baseSellerCount.toLocaleString("en-US")} independent sellers on Base alone besides this host, with what they charge and what they have actually settled.</p>
     <div style="margin:18px 0 0;padding:16px 18px;border:1px solid var(--hairline);background:var(--card);max-width:640px;">
-      <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;color:var(--faint);margin-bottom:10px;">START HERE · BUYER PATH</div>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--faint);margin-bottom:10px;">START HERE · BUYER PATH</div>
       <form action="/tools" method="get" class="mkt-search-wrap" style="display:flex;gap:0;background:var(--paper);margin-bottom:12px;">
         <span aria-hidden="true" style="display:flex;align-items:center;padding:0 0 0 13px;color:var(--faint);"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:block;"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4.5-4.5"></path></svg></span>
-        <input name="q" type="search" placeholder="what do you need? e.g. pdf ocr, web search" style="flex:1;min-width:0;border:none;background:transparent;font-family:var(--font-mono);font-size:13px;color:var(--ink);padding:11px 12px;outline:none;" / aria-label="what do you need? e.g. pdf ocr, web search">
-        <button type="submit" style="border:none;border-left:1px solid var(--hairline);background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:12px;padding:0 16px;cursor:pointer;white-space:nowrap;">FIND →</button>
+        <input name="q" type="search" placeholder="what do you need? e.g. pdf ocr, web search" style="flex:1;min-width:0;border:none;background:transparent;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);padding:11px 12px;outline:none;" / aria-label="what do you need? e.g. pdf ocr, web search">
+        <button type="submit" style="border:none;border-left:1px solid var(--hairline);background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-xs);padding:0 16px;cursor:pointer;white-space:nowrap;">FIND →</button>
       </form>
-      <div style="display:flex;flex-wrap:wrap;gap:14px;font-family:var(--font-mono);font-size:12.5px;">
+      <div style="display:flex;flex-wrap:wrap;gap:14px;font-family:var(--font-mono);font-size:var(--fs-sm);">
         <a href="/guides/smart-order-router" style="color:var(--accent);text-decoration:none;font-weight:700;">auto-route a task →</a>${decideLive() ? `<a href="/decide" style="color:var(--accent);text-decoration:none;font-weight:700;">plan a multi-step job →</a>` : ""}
         <a href="/playground" style="color:var(--muted);text-decoration:none;">try playground</a>
         <a href="#sellers" style="color:var(--muted);text-decoration:none;">browse all sellers</a>
       </div>
     </div>
-    <p style="font-size:13px;color:var(--faint);margin:10px 0 0;">Describe the job, not the tool name - FIND searches every tool and shows live results. Resolving is free (<span style="color:var(--muted);">GET /api/find</span>), you only pay to execute. This is the neutral x402 index: every seller, not just ours.</p>
+    <p style="font-size:var(--fs-sm);color:var(--faint);margin:10px 0 0;">Describe the job, not the tool name - FIND searches every tool and shows live results. Resolving is free (<span style="color:var(--muted);">GET /api/find</span>), you only pay to execute. This is the neutral x402 index: every seller, not just ours.</p>
     <div style="margin:12px 0 0;padding:12px 18px;border:1px solid var(--hairline);background:var(--card);max-width:640px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
-      <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;color:var(--faint);">SELLER PATH</span>
-      <span style="font-size:13.5px;color:var(--muted);flex:1;min-width:220px;">Selling an x402 API? Listing is free, takes no signup, and deducts nothing from your price.</span>
-      <a href="/sell" style="font-family:var(--font-mono);font-size:12.5px;font-weight:700;color:var(--accent);text-decoration:none;white-space:nowrap;">list your API →</a>
+      <span style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--faint);">SELLER PATH</span>
+      <span style="font-size:var(--fs-md);color:var(--muted);flex:1;min-width:220px;">Selling an x402 API? Listing is free, takes no signup, and deducts nothing from your price.</span>
+      <a href="/sell" style="font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;color:var(--accent);text-decoration:none;white-space:nowrap;">list your API →</a>
     </div>
     ${statsHtml}
   </div>`;
@@ -1288,37 +1288,37 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
     const toolCount = chainSellers.reduce((sum, s) => sum + (Number(s.toolCount) || 0), 0);
     const asset = CHAIN_PAGES[slug]?.asset || "USDC";
     return `<a href="/${slug}" title="${esc(name)} x402 marketplace" style="display:block;padding:17px 19px;border-right:1px solid var(--hairline);border-bottom:1px solid var(--hairline);background:var(--card);text-decoration:none;color:var(--muted);">
-      <span style="display:flex;align-items:center;gap:9px;margin-bottom:12px;">${chainMark(slug, 19)}<span style="font-family:var(--font-mono);font-size:13px;font-weight:700;color:var(--ink);white-space:nowrap;">${esc(name)}</span><span style="font-family:var(--font-mono);font-size:10px;color:var(--faint);white-space:nowrap;margin-left:auto;">${asset}</span></span>
-      <span style="display:flex;align-items:baseline;gap:6px;font-family:var(--font-mono);font-size:12.5px;flex-wrap:wrap;"><span style="color:var(--green);font-variant-numeric:tabular-nums;">${sellerCount.toLocaleString("en-US")}</span><span style="color:var(--faint);font-size:11px;">seller${sellerCount === 1 ? "" : "s"}</span><span style="color:var(--muted);font-variant-numeric:tabular-nums;margin-left:6px;">${toolCount.toLocaleString("en-US")}</span><span style="color:var(--faint);font-size:11px;">tool${toolCount === 1 ? "" : "s"}</span></span>
+      <span style="display:flex;align-items:center;gap:9px;margin-bottom:12px;">${chainMark(slug, 19)}<span style="font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;color:var(--ink);white-space:nowrap;">${esc(name)}</span><span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);white-space:nowrap;margin-left:auto;">${asset}</span></span>
+      <span style="display:flex;align-items:baseline;gap:6px;font-family:var(--font-mono);font-size:var(--fs-sm);flex-wrap:wrap;"><span style="color:var(--ok);font-variant-numeric:tabular-nums;">${sellerCount.toLocaleString("en-US")}</span><span style="color:var(--faint);font-size:var(--fs-2xs);">seller${sellerCount === 1 ? "" : "s"}</span><span style="color:var(--muted);font-variant-numeric:tabular-nums;margin-left:6px;">${toolCount.toLocaleString("en-US")}</span><span style="color:var(--faint);font-size:var(--fs-2xs);">tool${toolCount === 1 ? "" : "s"}</span></span>
     </a>`;
   }).join("");
 
   const chainGridSection = `
-  <h2 style="font-size:21px;font-weight:800;margin:48px 0 4px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Markets by chain</h2>
-  <p style="font-size:13px;color:var(--faint);margin:8px 0 16px;">every rail has its own market page - a seller appears under every chain it accepts, so these do not sum to a distinct total</p>
+  <h2 style="font-size:var(--fs-xl);font-weight:800;margin:48px 0 4px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Markets by chain</h2>
+  <p style="font-size:var(--fs-sm);color:var(--faint);margin:8px 0 16px;">every rail has its own market page - a seller appears under every chain it accepts, so these do not sum to a distinct total</p>
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:0;border:1px solid var(--hairline);">${chainGridHtml}</div>
-  <p style="font-family:var(--font-mono);font-size:11.5px;color:var(--faint);margin-top:12px;">Buying from a seller on another rail? The Smart Order Router settles with them on their chain and relays the result.</p>`;
+  <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:12px;">Buying from a seller on another rail? The Smart Order Router settles with them on their chain and relays the result.</p>`;
 
   const routerAndMethodSection = `
   <div class="ml-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);margin-top:48px;">
     <div style="padding:26px;border-right:1px solid var(--hairline);background:var(--card);">
-      <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">$ POST /api/route</div>
-      <h2 style="font-weight:800;font-size:22px;margin:0 0 14px;color:var(--ink);">Or skip the browsing</h2>
-      <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 16px;">Describe the task and the Smart Order Router resolves it to a tool - from this index, ours or anyone else's - then runs it. ${esc(routerRankingSentence())} It buys from external sellers and resells the result to you.</p>
-      <pre style="margin:0 0 14px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># free to resolve, you only pay to execute
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">$ POST /api/route</div>
+      <h2 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Or skip the browsing</h2>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Describe the task and the Smart Order Router resolves it to a tool - from this index, ours or anyone else's - then runs it. ${esc(routerRankingSentence())} It buys from external sellers and resells the result to you.</p>
+      <pre style="margin:0 0 14px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># free to resolve, you only pay to execute
 </span>curl 'https://agent402.tools/api/find?q=ocr+an+image'</pre>
-      <a href="/guides/smart-order-router" style="font-family:var(--font-mono);font-size:12.5px;color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">how the router ranks →</a>
+      <a href="/guides/smart-order-router" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">how the router ranks →</a>
     </div>
     <div style="padding:26px;background:var(--card);">
-      <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">HOW THE INDEX IS BUILT</div>
-      <h2 style="font-weight:800;font-size:22px;margin:0 0 14px;color:var(--ink);">Crawled, not curated</h2>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">HOW THE INDEX IS BUILT</div>
+      <h2 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Crawled, not curated</h2>
       <div style="display:flex;flex-direction:column;">${[
         "Discovery: the Coinbase CDP Bazaar plus our own crawler, plus anyone who self-registers at POST /api/index/register.",
         "We read each seller's manifest for its tools, routes and prices, and its live 402 challenge for the chains it accepts.",
         `A probe ${crawlIntervalLabel()} records whether the manifest and challenge still respond. Probes are never paid calls.`,
         "Rolling health feeds the Smart Order Router, which breaks ties on health rather than price alone and routes around sellers that are down.",
-      ].map((body_, i) => `<div style="display:grid;grid-template-columns:26px 1fr;gap:12px;padding:11px 0;border-bottom:1px solid var(--hairline);"><span style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">${String(i + 1).padStart(2, "0")}</span><span style="font-size:13.5px;line-height:1.55;color:var(--muted);">${esc(body_)}</span></div>`).join("")}</div>
-      <p style="font-size:13px;line-height:1.6;color:var(--faint);margin:14px 0 0;">No editorial gate and no pay-for-placement. A row can be corrected or withdrawn on request (see below), and a seller that stops answering is marked unreachable.</p>
+      ].map((body_, i) => `<div style="display:grid;grid-template-columns:26px 1fr;gap:12px;padding:11px 0;border-bottom:1px solid var(--hairline);"><span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">${String(i + 1).padStart(2, "0")}</span><span style="font-size:var(--fs-md);line-height:1.55;color:var(--muted);">${esc(body_)}</span></div>`).join("")}</div>
+      <p style="font-size:var(--fs-sm);line-height:1.6;color:var(--faint);margin:14px 0 0;">No editorial gate and no pay-for-placement. A row can be corrected or withdrawn on request (see below), and a seller that stops answering is marked unreachable.</p>
     </div>
   </div>`;
 
@@ -1329,21 +1329,21 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
     { q: "My listing is wrong. How do I correct or remove it?", a: "Write to mike@agent402.tools. Every figure here is a reading of public data - the seller's own manifest and 402 challenges, plus on-chain settlements - taken at the scan time shown, so it can go stale or fold to the wrong operator. We re-scan and correct or withdraw a row on request." },
     { q: "Why do tool counts and settled volume disagree?", a: "Tool counts are what a seller advertises; settled volume is what buyers actually paid for. A large catalog with no settlements has not found buyers yet, and a small catalog with heavy volume has found exactly the right one. Both numbers are shown so you can see the difference." },
   ];
-  const faqHtml = MARKET_FAQS.map((f) => `<article style="padding:22px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:17.5px;margin:0 0 10px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:15px;line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`).join("");
+  const faqHtml = MARKET_FAQS.map((f) => `<article style="padding:22px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`).join("");
   const faqSection = `
   <div style="max-width:760px;margin:56px 0 0;">
-    <h2 style="font-weight:800;font-size:26px;letter-spacing:-.02em;margin:0 0 20px;color:var(--ink);">About this index.</h2>
+    <h2 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 20px;color:var(--ink);">About this index.</h2>
     <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">${faqHtml}</div>
   </div>`;
 
   const closingCta = `
-  <div style="margin:48px 0 0;background:var(--surface);border:1px solid var(--hairline);padding:40px 36px;position:relative;overflow:hidden;">
+  <div style="margin:48px 0 0;background:var(--panel);border:1px solid var(--hairline);padding:40px 36px;position:relative;overflow:hidden;">
     <div style="position:relative;">
-      <h2 style="font-weight:800;font-size:30px;letter-spacing:-.02em;margin:0 0 12px;color:var(--on-dark);">Add your API to the index.</h2>
-      <p style="font-size:15.5px;line-height:1.6;color:var(--dk-muted2);margin:0 0 22px;max-width:520px;">Free, no signup, nothing deducted. Serve a 402 and register the origin: the crawler reads it at once and re-probes it ${crawlIntervalLabel()}.</p>
+      <h2 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 12px;color:var(--on-panel);">Add your API to the index.</h2>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-muted);margin:0 0 22px;max-width:520px;">Free, no signup, nothing deducted. Serve a 402 and register the origin: the crawler reads it at once and re-probes it ${crawlIntervalLabel()}.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a href="/sell" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 22px;">List your API - free →</a>
-        <a href="/leaderboard" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:12px 22px;">SEE THE LEADERBOARD</a>
+        <a href="/sell" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 22px;">List your API - free →</a>
+        <a href="/leaderboard" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:12px 22px;">SEE THE LEADERBOARD</a>
       </div>
     </div>
   </div>`;
@@ -1413,7 +1413,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   <section>${closingCta}</section>
   <section>
     ${faqSection}
-    <p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-top:28px;">machine-readable: <a href="/.well-known/x402">/.well-known/x402</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/api/reliability">/api/reliability</a></p>
+    <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:28px;">machine-readable: <a href="/.well-known/x402">/.well-known/x402</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/api/reliability">/api/reliability</a></p>
   </section>
 </div>
 ${ledgerFooterCompact()}`;

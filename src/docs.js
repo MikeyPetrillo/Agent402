@@ -251,15 +251,15 @@ export const DOCS_LAYOUT_CSS = `
   .ml-docs-layout { display:block; }
   .ml-docs-side { display:none; }
   .ml-docs-main { min-width:0; }
-  .ml-docs-main h1 { font-family:var(--font-body);font-weight:800;font-size:42px;line-height:1;letter-spacing:-.02em;margin:0 0 18px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis; }
-  .ml-docs-main h2 { font-size:1.2rem;margin-top:36px;color:var(--accent);font-weight:700; }
-  .ml-docs-main h3 { font-size:1.02rem;margin-top:26px;font-weight:700; }
+  .ml-docs-main h1 { font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:1;letter-spacing:-.02em;margin:0 0 18px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis; }
+  .ml-docs-main h2 { font-size:var(--fs-lg);margin-top:36px;color:var(--accent);font-weight:700; }
+  .ml-docs-main h3 { font-size:var(--fs-lg);margin-top:26px;font-weight:700; }
   .ml-docs-main p, .ml-docs-main li { color:var(--ink);line-height:1.7; }
   .ml-docs-main .muted { color:var(--muted); }
-  .ml-docs-main pre { background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);border:0;padding:14px 16px;overflow-x:auto;font-size:.85rem;line-height:1.55; }
+  .ml-docs-main pre { background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);border:0;padding:14px 16px;overflow-x:auto;font-size:var(--fs-md);line-height:1.55; }
   .ml-docs-main code { font-family:var(--font-mono); }
-  .ml-docs-main p > code, .ml-docs-main li > code, .ml-docs-main td > code, .ml-docs-main h3 > code { background:var(--card);border:1px solid var(--hairline);padding:1px 6px;font-size:.85em; }
-  .ml-docs-main table { border-collapse:collapse;width:100%;margin:18px 0;font-size:.92rem; }
+  .ml-docs-main p > code, .ml-docs-main li > code, .ml-docs-main td > code, .ml-docs-main h3 > code { background:var(--card);border:1px solid var(--hairline);padding:1px 6px;font-size:var(--fs-code-inline); }
+  .ml-docs-main table { border-collapse:collapse;width:100%;margin:18px 0;font-size:var(--fs-base); }
   .ml-docs-main th, .ml-docs-main td { border:1px solid var(--hairline);padding:8px 12px;text-align:left;vertical-align:top; }
   .ml-docs-main th { background:var(--card);color:var(--accent);font-weight:600; }
   .ml-docs-main blockquote { border-left:3px solid var(--accent);margin:16px 0;padding:4px 16px;color:var(--muted);background:rgba(214,60,26,.04); }
@@ -267,31 +267,31 @@ export const DOCS_LAYOUT_CSS = `
   .ml-docs-main a { color:var(--accent);text-decoration:none; }
   .ml-docs-main a:hover { text-decoration:underline; }
   .ml-docs-main img { max-width:100%; }
-  .ml-docs-crumbs { color:var(--faint);font-size:.85rem;margin-bottom:14px; }
+  .ml-docs-crumbs { color:var(--faint);font-size:var(--fs-md);margin-bottom:14px; }
   .ml-docs-crumbs a { color:var(--faint);text-decoration:none; }
   .ml-docs-crumbs a:hover { color:var(--accent); }
   .ml-docs-search { margin-bottom:14px; }
-  .ml-docs-search input { width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-size:.85rem;padding:8px 10px;outline:none; }
+  .ml-docs-search input { width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);padding:8px 10px;outline:none; }
   .ml-docs-search input:focus { border-color:var(--accent); }
-  .ml-docs-mobile-toggle { display:block;width:100%;box-sizing:border-box;margin-bottom:16px;padding:11px 14px;background:var(--card);border:1px solid var(--ink);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:13px;text-align:left;cursor:pointer; }
+  .ml-docs-mobile-toggle { display:block;width:100%;box-sizing:border-box;margin-bottom:16px;padding:11px 14px;background:var(--card);border:1px solid var(--ink);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);text-align:left;cursor:pointer; }
   .ml-docs-side.ml-docs-side-open { display:block !important; }
-  .ml-docs-side-h { font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:18px 0 6px; }
+  .ml-docs-side-h { font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:18px 0 6px; }
   .ml-docs-side-ul { list-style:none;padding:0;margin:0 0 8px; }
   .ml-docs-side-ul li { margin:0; }
-  .ml-docs-side-a { display:block;padding:5px 10px;margin:1px 0;color:var(--ink);text-decoration:none;font-size:.92rem;line-height:1.35; }
+  .ml-docs-side-a { display:block;padding:5px 10px;margin:1px 0;color:var(--ink);text-decoration:none;font-size:var(--fs-base);line-height:1.35; }
   .ml-docs-side-a:hover { background:var(--card); }
   .ml-docs-side-a.active { background:var(--card);color:var(--accent);border-left:2px solid var(--accent);padding-left:8px;font-weight:600; }
   .ml-docs-side-hidden { display:none !important; }
-  .ml-docs-api-cat { font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.02em;margin:28px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--hairline);color:var(--ink); }
-  .ml-docs-api-row { display:grid;grid-template-columns:1.2fr 2fr .5fr;gap:14px;padding:8px 0;border-bottom:1px solid var(--hairline);font-size:.9rem; }
+  .ml-docs-api-cat { font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:28px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--hairline);color:var(--ink); }
+  .ml-docs-api-row { display:grid;grid-template-columns:1.2fr 2fr .5fr;gap:14px;padding:8px 0;border-bottom:1px solid var(--hairline);font-size:var(--fs-md); }
   .ml-docs-api-row .slug { font-family:var(--font-mono);color:var(--ink); }
   .ml-docs-api-row .desc { color:var(--muted); }
-  .ml-docs-api-row .price { color:var(--accent);text-align:right;font-family:var(--font-mono);font-size:.85rem;font-weight:700; }
+  .ml-docs-api-row .price { color:var(--accent);text-align:right;font-family:var(--font-mono);font-size:var(--fs-md);font-weight:700; }
   .ml-docs-pn { display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:48px;padding-top:24px;border-top:1px solid var(--hairline); }
   .ml-docs-pn-a { display:flex;flex-direction:column;gap:4px;padding:14px 16px;border:1px solid var(--hairline);background:var(--card);text-decoration:none; }
   .ml-docs-pn-a:hover { border-color:var(--accent);text-decoration:none; }
-  .ml-docs-pn-label { font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint); }
-  .ml-docs-pn-title { color:var(--ink);font-weight:700;font-size:.95rem; }
+  .ml-docs-pn-label { font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint); }
+  .ml-docs-pn-title { color:var(--ink);font-weight:700;font-size:var(--fs-base); }
   @media (min-width:900px) {
     .ml-docs-layout { display:grid;grid-template-columns:240px 1fr;gap:44px;align-items:start; }
     .ml-docs-side { display:block;position:sticky;top:92px;max-height:calc(100vh - 100px);overflow-y:auto;padding-right:8px; }
@@ -384,7 +384,7 @@ export function docsApi(baseUrl, catalog) {
       const price = t.price === 0 ? "free" : (typeof t.price === "number" ? `$${t.price.toFixed(4)}` : esc(String(t.price ?? "-")));
       return `<div class="ml-docs-api-row"><div class="slug">${slug}</div><div class="desc">${desc}</div><div class="price">${esc(price)}</div></div>`;
     }).join("");
-    return `<h2 class="ml-docs-api-cat">${esc(cat)} <span style="font-size:13px;font-weight:400;color:var(--faint);font-family:var(--font-mono);">&middot; ${tools.length}</span></h2>${rows}`;
+    return `<h2 class="ml-docs-api-cat">${esc(cat)} <span style="font-size:var(--fs-sm);font-weight:400;color:var(--faint);font-family:var(--font-mono);">&middot; ${tools.length}</span></h2>${rows}`;
   }).join("\n");
 
   const body = `<div class="ml-docs-crumbs"><a href="/docs">Docs</a> &rsaquo; API Reference</div>

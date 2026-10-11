@@ -103,17 +103,17 @@ export function hostCardHtml(f) {
   return `
   <div data-host-card style="border:1px solid var(--hairline);background:var(--card);padding:18px 20px;margin:0 0 22px;">
     <div style="display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:baseline;">
-      <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;color:var(--accent);">THIS SITE &middot; HOST &middot; NOT RANKED, NOT COUNTED</div>
-      <div style="font-family:var(--font-mono);font-size:11.5px;color:var(--faint);">${f.networkLabel ? `outside buyers on ${esc(f.networkLabel)} only` : "outside buyers only"}</div>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--accent);">THIS SITE &middot; HOST &middot; NOT RANKED, NOT COUNTED</div>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">${f.networkLabel ? `outside buyers on ${esc(f.networkLabel)} only` : "outside buyers only"}</div>
     </div>
-    <div style="display:flex;gap:26px;flex-wrap:wrap;margin:12px 0 10px;font-family:var(--font-mono);font-size:13px;color:var(--ink);">
+    <div style="display:flex;gap:26px;flex-wrap:wrap;margin:12px 0 10px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);">
       <span><strong>${fmt(f.external30d.settlements)}</strong> <span style="color:var(--faint);">settlements, 30 days</span></span>
       <span><strong>${fmt(f.external30d.buyers)}</strong> <span style="color:var(--faint);">distinct buyers, 30 days</span></span>
       <span><strong>${fmt(f.externalAllTime.settlements)}</strong> <span style="color:var(--faint);">settlements, ${esc(wideLabel(f))}</span></span>
       <span><strong>${fmt(f.externalAllTime.buyers)}</strong> <span style="color:var(--faint);">distinct buyers, ${esc(wideLabel(f))}</span></span>
     </div>
-    <p style="font-size:13px;line-height:1.55;color:var(--muted);margin:0 0 10px;">Agent402 runs this index and sells 500+ tools, metered models and reports on the same rails. ${esc(HOST_EXCLUSION_NOTE)}${f.externalAllTime.since ? ` ${esc(HOST_LEDGER_START_NOTE(f.externalAllTime.since))}` : ""}</p>
-    <div style="display:flex;gap:16px;flex-wrap:wrap;font-family:var(--font-mono);font-size:12.5px;">
+    <p style="font-size:var(--fs-sm);line-height:1.55;color:var(--muted);margin:0 0 10px;">Agent402 runs this index and sells 500+ tools, metered models and reports on the same rails. ${esc(HOST_EXCLUSION_NOTE)}${f.externalAllTime.since ? ` ${esc(HOST_LEDGER_START_NOTE(f.externalAllTime.since))}` : ""}</p>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font-family:var(--font-mono);font-size:var(--fs-sm);">
       <a href="/tools" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);">tools &rarr;</a>
       <a href="/why" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);">why pay here &rarr;</a>
       <a href="/revenue" style="color:var(--muted);text-decoration:none;">every settlement &rarr;</a>
@@ -124,13 +124,13 @@ export function hostCardHtml(f) {
 /** Leaderboard row: pinned, labelled, never numbered. `dark` picks the on-dark tokens. */
 export function hostRowHtml(f, { dark = false } = {}) {
   if (!f) return "";
-  const ink = dark ? "var(--on-dark)" : "var(--ink)";
-  const faint = dark ? "var(--dk-muted3)" : "var(--faint)";
+  const ink = dark ? "var(--on-panel)" : "var(--ink)";
+  const faint = dark ? "var(--on-panel-faint)" : "var(--faint)";
   return `
-  <div data-host-row style="border:1px solid var(--hairline);${dark ? "background:var(--surface);" : "background:var(--card);"}padding:14px 18px;margin-top:12px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:baseline;">
-    <span style="font-family:var(--font-mono);font-size:12.5px;color:${ink};"><span style="font-size:10.5px;letter-spacing:.1em;color:var(--accent);margin-right:10px;">HOST &middot; NOT RANKED</span><strong>Agent402</strong> <span style="color:${faint};">(this site)</span></span>
-    <span style="font-family:var(--font-mono);font-size:12.5px;color:${ink};font-variant-numeric:tabular-nums;">${fmt(f.external30d.settlements)} settlements &middot; ${fmt(f.external30d.buyers)} buyers <span style="color:${faint};">(30 days, outside buyers only)</span> &middot; ${fmt(f.externalAllTime.settlements)} ${esc(wideLabel(f))}</span>
-    <span style="flex-basis:100%;font-family:var(--font-mono);font-size:11.5px;line-height:1.5;color:${faint};">${esc(HOST_EXCLUSION_NOTE)}${f.externalAllTime.since ? ` ${esc(HOST_LEDGER_START_NOTE(f.externalAllTime.since))}` : ""}</span>
+  <div data-host-row style="border:1px solid var(--hairline);${dark ? "background:var(--panel);" : "background:var(--card);"}padding:14px 18px;margin-top:12px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:baseline;">
+    <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:${ink};"><span style="font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--accent);margin-right:10px;">HOST &middot; NOT RANKED</span><strong>Agent402</strong> <span style="color:${faint};">(this site)</span></span>
+    <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:${ink};font-variant-numeric:tabular-nums;">${fmt(f.external30d.settlements)} settlements &middot; ${fmt(f.external30d.buyers)} buyers <span style="color:${faint};">(30 days, outside buyers only)</span> &middot; ${fmt(f.externalAllTime.settlements)} ${esc(wideLabel(f))}</span>
+    <span style="flex-basis:100%;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.5;color:${faint};">${esc(HOST_EXCLUSION_NOTE)}${f.externalAllTime.since ? ` ${esc(HOST_LEDGER_START_NOTE(f.externalAllTime.since))}` : ""}</span>
   </div>`;
 }
 

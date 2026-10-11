@@ -43,14 +43,14 @@ export function tollboothWaitlistPage(baseUrl, { plan = "team", kind = "waitlist
 
   const extraCss = `
   .tw-wrap { max-width:680px; margin:0 auto; padding:56px 30px 60px; }
-  .crumbs { color:var(--faint); font-family:var(--font-mono); font-size:.85rem; margin-bottom:14px; }
+  .crumbs { color:var(--faint); font-family:var(--font-mono); font-size:var(--fs-md); margin-bottom:14px; }
   .crumbs a { color:var(--faint); text-decoration:none; }
   .crumbs a:hover { color:var(--accent); }
-  h1 { font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 8px; }
+  h1 { font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 8px; }
   .lede { color:var(--muted); margin:0 0 24px; line-height:1.55; }
   form { background:var(--card); border:1px solid var(--hairline); padding:22px; display:grid; gap:16px; }
-  label { display:grid; gap:6px; font-size:.92rem; }
-  label .k { color:var(--faint); font-family:var(--font-mono); font-size:.82rem; letter-spacing:.02em; text-transform:uppercase; }
+  label { display:grid; gap:6px; font-size:var(--fs-base); }
+  label .k { color:var(--faint); font-family:var(--font-mono); font-size:var(--fs-sm); letter-spacing:.02em; text-transform:uppercase; }
   input, select, textarea {
     background:var(--paper); border:1px solid var(--hairline);
     color:var(--ink); padding:10px 12px; font:inherit; font-family:var(--font-body); outline:none;
@@ -59,15 +59,15 @@ export function tollboothWaitlistPage(baseUrl, { plan = "team", kind = "waitlist
   textarea { min-height:88px; resize:vertical; }
   .grid2 { display:grid; gap:12px; grid-template-columns:1fr 1fr; }
   @media (max-width:560px){ .grid2 { grid-template-columns:1fr; } }
-  .cta { background:var(--surface); color:var(--on-dark); border:none; padding:12px 18px; font:inherit; font-family:var(--font-mono); font-weight:700; cursor:pointer; }
+  .cta { background:var(--panel); color:var(--on-panel); border:none; padding:12px 18px; font:inherit; font-family:var(--font-mono); font-weight:700; cursor:pointer; }
   .cta:hover { opacity:.9; }
-  .alt { color:var(--faint); font-size:.85rem; text-align:center; margin-top:6px; }
+  .alt { color:var(--faint); font-size:var(--fs-md); text-align:center; margin-top:6px; }
   .alt a { color:var(--accent); }
-  .note { color:var(--faint); font-size:.82rem; margin-top:14px; }
-  .badge { display:inline-block; background:var(--card); border:1px solid var(--hairline); padding:2px 10px; color:var(--accent); font-family:var(--font-mono); font-size:.78rem; letter-spacing:.04em; text-transform:uppercase; margin-bottom:10px; }
+  .note { color:var(--faint); font-size:var(--fs-sm); margin-top:14px; }
+  .badge { display:inline-block; background:var(--card); border:1px solid var(--hairline); padding:2px 10px; color:var(--accent); font-family:var(--font-mono); font-size:var(--fs-xs); letter-spacing:.04em; text-transform:uppercase; margin-bottom:10px; }
   a { color:var(--accent); text-decoration:none; }
   a:hover { text-decoration:underline; }
-  code { font-family:var(--font-mono); font-size:.86rem; }
+  code { font-family:var(--font-mono); font-size:var(--fs-md); }
   `;
 
   const body = `<div class="tw-wrap">
@@ -98,11 +98,11 @@ export function tollboothWaitlistPage(baseUrl, { plan = "team", kind = "waitlist
   <!-- honeypot: real visitors leave this empty -->
   <label style="position:absolute; left:-10000px; top:auto; width:1px; height:1px; overflow:hidden;" aria-hidden="true"><input id="f_hp" name="website" type="text" tabindex="-1" autocomplete="off"></label>
   <button id="wl_submit" class="cta" type="submit">${isPartner ? "Apply as partner →" : isEnterprise ? "Request a call →" : "Join waitlist →"}</button>
-  <div id="wl_err" style="display:none; color:#c0392b; font-size:.88rem;"></div>
+  <div id="wl_err" style="display:none; color:var(--bad); font-size:var(--fs-md);"></div>
 </form>
 
 <div id="wl_done" style="display:none; background:var(--card); border:1px solid var(--hairline); padding:22px;">
-  <h2 style="margin:0 0 6px; color:var(--accent); font-size:1.2rem;">Got it - you're on the list.</h2>
+  <h2 style="margin:0 0 6px; color:var(--accent); font-size:var(--fs-lg);">Got it - you're on the list.</h2>
   <p style="margin:0; color:var(--muted);">We'll be in touch within 1 business day. In the meantime, <a href="/tollbooth">install the OSS gate</a> in observe mode and you'll have a week of bot-traffic data ready when we onboard you.</p>
 </div>
 

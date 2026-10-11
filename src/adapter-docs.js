@@ -72,10 +72,10 @@ export function adapterDocsIndex(baseUrl) {
 
   const cards = ADAPTERS.map((a) => `
     <a class="ml-ad-card" href="/docs/adapters/${esc(a.slug)}">
-      <h3 style="margin:0 0 6px;font-size:1.1rem;font-weight:700;color:var(--ink);">${esc(a.name)}</h3>
-      <code style="display:inline-block;font-family:var(--font-mono);font-size:.8rem;color:var(--accent);margin-bottom:8px;">${esc(a.pkg)}</code>
-      <p style="margin:0 0 10px;color:var(--muted);font-size:.9rem;line-height:1.5;">${esc(a.tagline)}</p>
-      <span style="color:var(--accent);font-size:.88rem;font-weight:600;">View docs &rarr;</span>
+      <h3 style="margin:0 0 6px;font-size:var(--fs-lg);font-weight:700;color:var(--ink);">${esc(a.name)}</h3>
+      <code style="display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:8px;">${esc(a.pkg)}</code>
+      <p style="margin:0 0 10px;color:var(--muted);font-size:var(--fs-md);line-height:1.5;">${esc(a.tagline)}</p>
+      <span style="color:var(--accent);font-size:var(--fs-md);font-weight:600;">View docs &rarr;</span>
     </a>`).join("\n");
 
   const extraCss = `
@@ -86,15 +86,15 @@ export function adapterDocsIndex(baseUrl) {
 
   const body = `
   <div style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;">
-    <p style="font-size:.85rem;color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--faint);text-decoration:none;">Home</a> &rsaquo; <a href="/docs" style="color:var(--faint);text-decoration:none;">Docs</a> &rsaquo; Adapters</p>
-    <h1 style="font-family:var(--font-body);font-weight:800;font-size:52px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;">Framework Adapters.</h1>
-    <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 36px;">Plug Agent402 into your agent framework. Each adapter returns native tool objects and handles payment underneath.</p>
+    <p style="font-size:var(--fs-md);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--faint);text-decoration:none;">Home</a> &rsaquo; <a href="/docs" style="color:var(--faint);text-decoration:none;">Docs</a> &rsaquo; Adapters</p>
+    <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 14px;">Framework Adapters.</h1>
+    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 36px;">Plug Agent402 into your agent framework. Each adapter returns native tool objects and handles payment underneath.</p>
 
     <div class="ml-ad-grid">
 ${cards}
     </div>
 
-    <div style="text-align:center;margin:2rem 0 0;"><a href="/integrations" style="color:var(--accent);font-weight:600;text-decoration:none;font-size:1rem;">See all integrations (MCP, SDKs, and more) &rarr;</a></div>
+    <div style="text-align:center;margin:2rem 0 0;"><a href="/integrations" style="color:var(--accent);font-weight:600;text-decoration:none;font-size:var(--fs-lg);">See all integrations (MCP, SDKs, and more) &rarr;</a></div>
   </div>
   ${ledgerFooterCompact()}`;
 
@@ -134,15 +134,15 @@ export function adapterDocPage(baseUrl, slug) {
 
   const configRows = (adapter.config || []).map((c) => `
         <tr>
-          <td style="font-family:var(--font-mono);color:var(--accent);font-size:.84rem;"><code>${esc(c.option)}</code></td>
-          <td style="font-family:var(--font-mono);color:var(--faint);font-size:.82rem;"><code>${esc(c.type)}</code></td>
-          <td style="color:var(--ink);font-size:.88rem;">${esc(c.desc)}</td>
+          <td style="font-family:var(--font-mono);color:var(--accent);font-size:var(--fs-sm);"><code>${esc(c.option)}</code></td>
+          <td style="font-family:var(--font-mono);color:var(--faint);font-size:var(--fs-sm);"><code>${esc(c.type)}</code></td>
+          <td style="color:var(--ink);font-size:var(--fs-md);">${esc(c.desc)}</td>
         </tr>`).join("\n");
 
   const configExamples = (adapter.config || []).map((c) => `// ${esc(c.desc)}\n${esc(c.example)}`).join("\n\n");
 
   const worksWithTags = (adapter.worksWith || []).map((w) =>
-    `<span style="background:var(--card);border:1px solid var(--hairline);color:var(--muted);font-size:.82rem;padding:4px 12px;font-family:var(--font-mono);">${esc(w)}</span>`
+    `<span style="background:var(--card);border:1px solid var(--hairline);color:var(--muted);font-size:var(--fs-sm);padding:4px 12px;font-family:var(--font-mono);">${esc(w)}</span>`
   ).join("\n        ");
 
   const extraCss = `
@@ -155,8 +155,8 @@ export function adapterDocPage(baseUrl, slug) {
   <div class="ml-adp-grid" style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;display:grid;grid-template-columns:200px 1fr;gap:44px;align-items:start;">
 
     <!-- TOC -->
-    <aside class="ml-adp-toc" style="position:sticky;top:92px;font-family:var(--font-mono);font-size:13px;">
-      <div style="font-size:11px;color:var(--accent);letter-spacing:.1em;margin-bottom:14px;">ADAPTER</div>
+    <aside class="ml-adp-toc" style="position:sticky;top:92px;font-family:var(--font-mono);font-size:var(--fs-sm);">
+      <div style="font-size:var(--fs-2xs);color:var(--accent);letter-spacing:.1em;margin-bottom:14px;">ADAPTER</div>
       <div style="display:flex;flex-direction:column;gap:11px;border-left:1px solid var(--hairline);padding-left:16px;">
         ${tocLinks}
         <a href="/docs/adapters" style="color:var(--faint);text-decoration:none;">&larr; all adapters</a>
@@ -165,65 +165,65 @@ export function adapterDocPage(baseUrl, slug) {
 
     <!-- CONTENT -->
     <div>
-      <p style="font-size:.85rem;color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--faint);text-decoration:none;">Home</a> &rsaquo; <a href="/docs" style="color:var(--faint);text-decoration:none;">Docs</a> &rsaquo; <a href="/docs/adapters" style="color:var(--faint);text-decoration:none;">Adapters</a> &rsaquo; ${esc(adapter.name)}</p>
-      <h1 style="font-family:var(--font-body);font-weight:800;font-size:42px;line-height:1;letter-spacing:-.02em;margin:0 0 10px;">${esc(adapter.name)} Adapter</h1>
-      <span style="display:inline-block;font-family:var(--font-mono);font-size:.85rem;color:var(--accent);margin-bottom:18px;">${esc(adapter.pkg)}</span>
-      <p style="color:var(--muted);font-size:1rem;line-height:1.7;margin:0 0 36px;max-width:720px;">${esc(adapter.desc)}</p>
+      <p style="font-size:var(--fs-md);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--faint);text-decoration:none;">Home</a> &rsaquo; <a href="/docs" style="color:var(--faint);text-decoration:none;">Docs</a> &rsaquo; <a href="/docs/adapters" style="color:var(--faint);text-decoration:none;">Adapters</a> &rsaquo; ${esc(adapter.name)}</p>
+      <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:1;letter-spacing:-.02em;margin:0 0 10px;">${esc(adapter.name)} Adapter</h1>
+      <span style="display:inline-block;font-family:var(--font-mono);font-size:var(--fs-md);color:var(--accent);margin-bottom:18px;">${esc(adapter.pkg)}</span>
+      <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.7;margin:0 0 36px;max-width:720px;">${esc(adapter.desc)}</p>
 
       <!-- Install -->
       <div id="install" style="margin-bottom:36px;">
-        <h2 style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Install</h2>
+        <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Install</h2>
         <div style="position:relative;">
-          <pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.install)}</code></pre>
-          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--dark-border);border:1px solid var(--dark-border2);color:var(--dk-muted);font-size:.72rem;padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
+          <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.install)}</code></pre>
+          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--panel-rule);border:1px solid var(--panel-rule-2);color:var(--on-panel-dim);font-size:var(--fs-xs);padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
         </div>
       </div>
 
       <!-- Quick start -->
       <div id="quickstart" style="margin-bottom:36px;">
-        <h2 style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Quick start</h2>
+        <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Quick start</h2>
         <div style="position:relative;">
-          <pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.quickstart)}</code></pre>
-          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--dark-border);border:1px solid var(--dark-border2);color:var(--dk-muted);font-size:.72rem;padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
+          <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.quickstart)}</code></pre>
+          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--panel-rule);border:1px solid var(--panel-rule-2);color:var(--on-panel-dim);font-size:var(--fs-xs);padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
         </div>
       </div>
 
       ${adapter.noWalletExample ? `<div id="no-wallet" style="margin-bottom:36px;">
-        <p style="color:var(--muted);font-size:.95rem;line-height:1.6;margin:0 0 12px;"><strong style="color:var(--ink);">No wallet yet?</strong> ${esc(NO_WALLET_NOTE)}</p>
+        <p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:0 0 12px;"><strong style="color:var(--ink);">No wallet yet?</strong> ${esc(NO_WALLET_NOTE)}</p>
         <div style="position:relative;">
-          <pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.noWalletExample)}</code></pre>
-          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--dark-border);border:1px solid var(--dark-border2);color:var(--dk-muted);font-size:.72rem;padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
+          <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.noWalletExample)}</code></pre>
+          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--panel-rule);border:1px solid var(--panel-rule-2);color:var(--on-panel-dim);font-size:var(--fs-xs);padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
         </div>
       </div>` : ""}
 
       ${adapter.walletExample ? `<div id="paid" style="margin-bottom:36px;">
-        <h2 style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Paid tools</h2>
+        <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Paid tools</h2>
         <div style="position:relative;">
-          <pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.walletExample)}</code></pre>
-          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--dark-border);border:1px solid var(--dark-border2);color:var(--dk-muted);font-size:.72rem;padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
+          <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.walletExample)}</code></pre>
+          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--panel-rule);border:1px solid var(--panel-rule-2);color:var(--on-panel-dim);font-size:var(--fs-xs);padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
         </div>
       </div>` : ""}
 
       <!-- Configuration -->
       ${adapter.config && adapter.config.length ? `<div id="config" style="margin-bottom:36px;">
-        <h2 style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Configuration</h2>
-        <table style="width:100%;border-collapse:collapse;margin-bottom:14px;font-size:.88rem;">
+        <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Configuration</h2>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:14px;font-size:var(--fs-md);">
           <thead>
-            <tr><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--hairline);font-size:.82rem;text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Option</th><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--hairline);font-size:.82rem;text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Type</th><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--hairline);font-size:.82rem;text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Description</th></tr>
+            <tr><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--hairline);font-size:var(--fs-sm);text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Option</th><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--hairline);font-size:var(--fs-sm);text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Type</th><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--hairline);font-size:var(--fs-sm);text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Description</th></tr>
           </thead>
           <tbody>
 ${configRows}
           </tbody>
         </table>
         <div style="position:relative;">
-          <pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${configExamples}</code></pre>
-          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--dark-border);border:1px solid var(--dark-border2);color:var(--dk-muted);font-size:.72rem;padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
+          <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${configExamples}</code></pre>
+          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--panel-rule);border:1px solid var(--panel-rule-2);color:var(--on-panel-dim);font-size:var(--fs-xs);padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
         </div>
       </div>` : ""}
 
       <!-- Works with -->
       ${adapter.worksWith && adapter.worksWith.length ? `<div id="compat" style="margin-bottom:36px;">
-        <h2 style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Works with</h2>
+        <h2 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Works with</h2>
         <div style="display:flex;flex-wrap:wrap;gap:8px;">
           ${worksWithTags}
         </div>
@@ -231,9 +231,9 @@ ${configRows}
 
       <!-- Navigation links -->
       <div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:36px;padding-top:20px;border-top:1px solid var(--hairline);">
-        <a href="/docs/adapters" style="color:var(--accent);text-decoration:none;font-size:.92rem;font-weight:600;">&larr; All adapters</a>
-        <a href="/integrations" style="color:var(--accent);text-decoration:none;font-size:.92rem;font-weight:600;">Integrations overview</a>
-        <a href="${esc(adapter.github)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-size:.92rem;font-weight:600;">GitHub source &rarr;</a>
+        <a href="/docs/adapters" style="color:var(--accent);text-decoration:none;font-size:var(--fs-base);font-weight:600;">&larr; All adapters</a>
+        <a href="/integrations" style="color:var(--accent);text-decoration:none;font-size:var(--fs-base);font-weight:600;">Integrations overview</a>
+        <a href="${esc(adapter.github)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-size:var(--fs-base);font-weight:600;">GitHub source &rarr;</a>
       </div>
     </div>
   </div>

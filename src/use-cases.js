@@ -111,21 +111,21 @@ export function useCasesPage(baseUrl, catalog = {}) {
 
   const extraCss = `
 .uc-wrap{max-width:960px;margin:0 auto;padding:56px 30px}
-.uc-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:18px}
-.uc-h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px}
-.uc-intro{max-width:760px;font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 40px}
+.uc-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
+.uc-h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 14px}
+.uc-intro{max-width:760px;font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px}
 .uc-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;margin-bottom:48px}
-@media(max-width:740px){.uc-grid{grid-template-columns:1fr}.uc-h1{font-size:36px !important}}
+@media(max-width:740px){.uc-grid{grid-template-columns:1fr}.uc-h1{font-size:var(--fs-3xl) !important}}
 .uc-card{background:var(--card);border:1px solid var(--hairline);padding:24px 26px}
-.uc-card h3{margin:0 0 10px;font-family:var(--font-body);font-weight:800;font-size:20px;color:var(--ink)}
-.uc-story{color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 16px}
-.uc-tools,.uc-cost{font-size:14px;margin:6px 0;color:var(--muted)}
+.uc-card h3{margin:0 0 10px;font-family:var(--font-body);font-weight:800;font-size:var(--fs-lg);color:var(--ink)}
+.uc-story{color:var(--muted);font-size:var(--fs-md);line-height:1.55;margin:0 0 16px}
+.uc-tools,.uc-cost{font-size:var(--fs-md);margin:6px 0;color:var(--muted)}
 .uc-label{color:var(--ink);font-weight:600}
 .uc-price{color:var(--accent);font-family:var(--font-mono);font-weight:700}
-.uc-tool-link{color:var(--accent);text-decoration:none;font-family:var(--font-mono);font-size:13px}
+.uc-tool-link{color:var(--accent);text-decoration:none;font-family:var(--font-mono);font-size:var(--fs-sm)}
 .uc-tool-link:hover{text-decoration:underline}
 .uc-cta{text-align:center;margin:32px 0 48px}
-.uc-cta a{color:var(--accent);font-family:var(--font-mono);font-weight:700;text-decoration:none;font-size:15px}
+.uc-cta a{color:var(--accent);font-family:var(--font-mono);font-weight:700;text-decoration:none;font-size:var(--fs-base)}
 .uc-cta a:hover{text-decoration:underline}
 `;
 
