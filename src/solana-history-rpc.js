@@ -154,7 +154,10 @@ export async function solanaHistoryRead(method, params, opts = {}) {
   const publicTimeoutMs = opts.publicTimeoutMs ?? num(env.SOLANA_HISTORY_PUBLIC_TIMEOUT_MS, 4000);
   const maxWaitMs = opts.maxWaitMs ?? (keyedFirst ? 0 : env.SOLANA_HISTORY_PUBLIC_MAX_WAIT_MS != null ? Math.max(0, Number(env.SOLANA_HISTORY_PUBLIC_MAX_WAIT_MS) || 0) : 10_000);
   const note = (o) => { if (!keyedFirst) noteOutcome(o); };
-  const rps = num(env.SOLANA_HISTORY_PUBLIC_RPS, 3);
+  // The public mainnet RPC answered about ten requests per ten seconds from
+  // one IP when measured (the eleventh was rate-limited), under its published
+  // per-method figure, so the default pace leaves headroom below that.
+  const rps = num(env.SOLANA_HISTORY_PUBLIC_RPS, 0.8);
   const cacheMax = env.SOLANA_HISTORY_CACHE != null ? Math.max(0, Number(env.SOLANA_HISTORY_CACHE) || 0) : 256;
 
   const ck = cacheKey(method, params);
@@ -174,7 +177,12 @@ export async function solanaHistoryRead(method, params, opts = {}) {
       const at = Math.max(now, st.nextAt);
       if (at - now > maxWaitMs) { c.skipped++; failures.push(`${laneLabel(lane.url)}: paced`); continue; }
       st.nextAt = at + 1000 / rps;
-      if (at > now) await sleep(at - now);
+      if (at > now) {
+        await sleep(at - now);
+        // A rate limit that landed while this read waited for its slot cools
+        // the lane for it too.
+        if (st.coolUntil > Date.now()) { c.skipped++; failures.push(`${laneLabel(lane.url)}: cooling`); continue; }
+      }
     }
     let out;
     try { out = await postOnce(lane.url, method, params, lane.keyed ? timeoutMs : publicTimeoutMs, fetchImpl); }
