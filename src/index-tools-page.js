@@ -125,7 +125,7 @@ export function indexToolsPage(baseUrl, data, categories, params = {}) {
 <div class="ix-note">
   <h2>What each badge means</h2>
   <ul>
-    <li><span class="ix-badge ours">OURS</span> <b>We build, host and stand behind these.</b> They are priced by us and covered by the paywall guarantees on <a href="/tools">our catalog</a>. The ones CI can run without spending at an upstream answer their own documented example on every deploy; the metered ones (model tiers, search, reports) are outside that sweep. On the x402 and prepaid-credit paths, a call that answers an error is not charged. ${fmtNum(data.ours)} of the ${fmtNum(data.total)} rows here.</li>
+    <li><span class="ix-badge ours">OURS</span> <b>We build, host and stand behind these.</b> They are priced by us and covered by the paywall guarantees on <a href="/tools">our tools</a>. The ones CI can run without spending at an upstream answer their own documented example on every deploy; the metered ones (model tiers, search, reports) are outside that sweep. On the x402 and prepaid-credit paths, a call that answers an error is not charged. ${fmtNum(data.ours)} of the ${fmtNum(data.total)} rows here.</li>
     <li><span class="ix-badge third">3rd party</span> <b>Someone else's endpoint. We do not operate, host, or test it.</b> Everything below applies only to these rows:</li>
   </ul>
   <ul>
@@ -142,7 +142,7 @@ export function indexToolsPage(baseUrl, data, categories, params = {}) {
   <li><a href="${esc(qs({ source: "ours", page: 1 }))}"><b>${fmtNum(data.ours)}</b> ours</a></li>
   <li><a href="${esc(qs({ source: "third-party", page: 1 }))}"><b>${fmtNum(data.thirdParty)}</b> third-party</a></li>
   <li><b>${fmtNum(data.described)}</b> of ${fmtNum(data.matched)} shown have a description</li>
-  <li>browse just <a href="/tools">our own catalog →</a></li>
+  <li>browse just <a href="/tools">our own tools →</a></li>
 </ul>
 
 <form class="ix-search" method="get" action="/marketplace/tools">

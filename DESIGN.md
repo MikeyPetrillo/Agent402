@@ -160,6 +160,21 @@ rules below.
 - Radius: `var(--radius)` (4px) on every surface and control, `var(--radius-pill)` on the
   primary button alone, 50% for dots. The guard rejects any other radius.
 
+## Wrap
+- Headings get `text-wrap: balance`, running text `text-wrap: pretty` (both global in
+  `ledger-chrome.js`).
+- **Prose takes its section's width up to a reading measure**: `max-width: 76ch`
+  (`.ml-measure`), 64ch inside a CTA panel. No narrow pixel caps beside empty space.
+- **Section meta goes under its heading**, never floated right of it: `sectionMeta([...])`
+  or `.ml-meta`, whose tags each stay on one line and wrap between tags.
+- **A short label never breaks inside itself**: chips, stat labels, link labels and buttons
+  are `white-space: nowrap`; shorten the words when they do not fit. A row of links or tags
+  is `.ml-items`, so it wraps as whole items.
+- **Side-by-side cards read as a pair**: the same parts in the same order (kicker, heading,
+  one short paragraph, `.ml-ticks` list, code, action row pinned to the bottom with
+  `margin-top: auto`). Split a long paragraph into a sentence plus a list, never a wall.
+- A list section (FAQ) sits in the 1180px container, left-aligned, its rows capped at 900px.
+
 ## Signature: the receipt edge
 - A paid call returns a receipt, so the surfaces that sell or prove one end in a perforated
   tear-off: add `class="receipt"`. It is used on exactly three surfaces (the home live panel,

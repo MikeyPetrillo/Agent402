@@ -325,6 +325,20 @@ body { background: var(--paper); font-family: var(--font-body); color: var(--ink
    two-line title splits evenly. Browsers without the property wrap as before. */
 p, li, dd, blockquote, figcaption, td, .lead, .tp-lead, .ml-lead { text-wrap: pretty; }
 h1, h2, h3 { text-wrap: balance; }
+/* Wrap rules (DESIGN.md "Wrap"). Prose takes its section's width up to a
+   reading measure instead of a narrow pixel cap beside empty space; a short
+   label, chip or link never breaks inside itself; a row of links or tags wraps
+   as whole items; section meta sits under its heading, never floated right. */
+.ml-measure { max-width: 76ch; }
+.ml-nowrap { white-space: nowrap; }
+.ml-items { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; }
+.ml-items > * { white-space: nowrap; max-width: 100%; }
+.ml-meta { display: flex; flex-wrap: wrap; gap: 4px 0; margin: 10px 0 0; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--faint); }
+.ml-meta > span { white-space: nowrap; }
+.ml-meta > span + span::before { content: "·"; padding: 0 10px; }
+.ml-ticks { list-style: none; margin: 0 0 18px; padding: 0; display: flex; flex-direction: column; gap: 7px; font-size: var(--fs-md); line-height: 1.45; color: var(--ink); }
+.ml-ticks li { position: relative; padding-left: 22px; }
+.ml-ticks li::before { content: "+"; position: absolute; left: 0; font-family: var(--font-mono); color: var(--accent); }
 ::selection { background: color-mix(in srgb, var(--accent) 27%, transparent); }
 a { color: inherit; }
 
@@ -530,21 +544,19 @@ const DECIDE_NAV_ITEM = { href: "/decide", label: "Decide" };
 
 const NAV_ZONES = [
   [
-    // Reports carries the whole "for people" set (reports, monitors, credits):
-    // Monitors is a subscription to a report, not a second product line.
-    { href: "/reports", label: "For people", panel: "people" },
+    // Buy side: our tools, then every seller's. People reach reports and
+    // monitors through the "Get a report" button on the right (/reports
+    // offers both), so there is no separate "for people" word to repeat it.
     { href: "/tools", label: "Tools", panel: "tools" },
-  ],
-  [
     // ONE marketplace word: the x402 index, the MPP index and the leaderboard
     // are three views of the same seller set and live in one dropdown.
     { href: "/marketplace", label: "Marketplace", panel: "marketplace", icon: "market", title: "x402 and MPP marketplaces" },
   ],
   [
     { href: "/sell", label: "Sell", panel: "sell" },
-    // Docs carries the "why pay here" points (/docs#why) and the concept
-    // pages; there is no separate Why entry. Last item, so its panel opens
-    // right-aligned.
+    // Docs carries the build pages and the concept pages. The case for paying
+    // here is the home page itself (/#why), so it has no nav entry. Last item,
+    // so its panel opens right-aligned.
     { href: "/docs", label: "Docs", panel: "docs", align: "end" },
   ],
 ];
@@ -586,6 +598,13 @@ export function brandMark(size, id) {
 // design-tokens: off-end
 
 export function setNavIndexProvider(fn) { navDataProvider = fn; }
+
+// Section meta: short mono tags under a heading ("free listing · nothing
+// deducted"). Each tag stays on one line and the row wraps between tags, so a
+// tag never splits and nothing floats beside the heading.
+export function sectionMeta(tags, style = "") {
+  return `<div class="ml-meta"${style ? ` style="${style}"` : ""}>${tags.map((t) => `<span>${t}</span>`).join("")}</div>`;
+}
 
 function chainRows() {
   try {
@@ -652,22 +671,9 @@ function marketPanelNav(chainInfo) {
             </span>`;
 }
 
-// "For people" dropdown under Reports: the three card-payable doors.
-function peoplePanelNav() {
-  return `<span class="mlnav-dd">
-              <span style="display:block;width:300px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
-                <span class="mlnav-label">FOR PEOPLE · CARD OR USDC</span>
-                <a href="/reports" class="mlnav-row"><span style="font-weight:700;">reports</span><span class="mlnav-faint">finished, cited, $2 and up</span></a>
-                <a href="/monitors" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">monitors</span><span class="mlnav-faint">watch one target monthly</span></a>
-                <a href="/reports" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">get a report</span><span style="opacity:.7;">→</span></a>
-              </span>
-            </span>`;
-}
-
 // Docs dropdown: two columns. Left, the build pages (blog, changelog,
-// quickstart and guides have their chrome link here). Right, why pay here
-// (the #why section of /docs, seven points each with its proof) and the
-// concept pages: what x402, MPP and agentic finance are.
+// quickstart and guides have their chrome link here). Right, the receipts
+// page and the concept pages: what x402, MPP and agentic finance are.
 function docsPanelNav() {
   return `<span class="mlnav-dd">
               <span style="display:block;width:560px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
@@ -683,8 +689,7 @@ function docsPanelNav() {
                 <a href="/changelog" class="mlnav-row"><span style="font-weight:700;">changelog</span><span class="mlnav-faint">what shipped</span></a>
                 </span>
                 <span style="display:block;">
-                <span class="mlnav-label">WHY PAY HERE</span>
-                <a href="/docs#why" class="mlnav-row"><span style="font-weight:700;">seven things</span><span class="mlnav-faint">each with its proof</span></a>
+                <span class="mlnav-label">PROOF</span>
                 <a href="/proof" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">receipts</span><span class="mlnav-faint">calls vs quotes</span></a>
                 <span class="mlnav-label">WHAT THIS IS</span>
                 <a href="/101" class="mlnav-row"><span style="font-weight:700;">x402 &amp; MPP 101</span><span class="mlnav-faint">walkthrough</span></a>
@@ -702,8 +707,8 @@ function docsPanelNav() {
 function ourToolsPanelNav() {
   return `<span class="mlnav-dd">
               <span style="display:block;width:280px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
-                <span class="mlnav-label">OUR 500+ TOOL CATALOG</span>
-                <a href="/tools" class="mlnav-row"><span style="font-weight:700;">catalog</span><span class="mlnav-faint">browse by category</span></a>
+                <span class="mlnav-label">OUR 500+ TOOLS</span>
+                <a href="/tools" class="mlnav-row"><span style="font-weight:700;">all tools</span><span class="mlnav-faint">browse by category</span></a>
                 <a href="/skills" class="mlnav-row"><span style="font-weight:700;">skill packs</span><span class="mlnav-faint">one payment, N tools</span></a>
                 <a href="/tools/category/crypto" class="mlnav-row"><span style="font-weight:700;">crypto, DeFi &amp; Solana</span><span class="mlnav-faint">perps · yields · token risk</span></a>
                 <a href="/tools/category/llm" class="mlnav-row"><span style="font-weight:700;">LLM gateway</span><span class="mlnav-faint">chat · messages · metered · images</span></a>
@@ -727,7 +732,7 @@ function sellPanelHtml() {
             </span>`;
 }
 
-const PANEL_HTML = { marketplace: marketPanelNav, people: () => peoplePanelNav(), sell: sellPanelHtml, tools: () => ourToolsPanelNav(), docs: () => docsPanelNav() };
+const PANEL_HTML = { marketplace: marketPanelNav, sell: sellPanelHtml, tools: () => ourToolsPanelNav(), docs: () => docsPanelNav() };
 
 function directLinkHtml(l, activePath) {
   const active = l.href === activePath;
@@ -773,14 +778,9 @@ function mobileMenuHtml(chainInfo, activePath) {
     <div class="ml-mm-group">
       ${mmLink("/decide", "decide · a plan for any job", activePath === "/decide")}
     </div>` : ""}
-    <div class="ml-mm-h">For people</div>
+    <div class="ml-mm-h">Tools</div>
     <div class="ml-mm-group">
-      ${mmLink("/reports", "reports · card or USDC", activePath === "/reports")}
-      ${mmLink("/monitors", "monitors · monthly, cancel anytime", activePath === "/monitors")}
-    </div>
-    <div class="ml-mm-h">Buy</div>
-    <div class="ml-mm-group">
-      ${mmLink("/tools", "our tools · 500+", activePath === "/tools")}
+      ${mmLink("/tools", "all tools · 500+", activePath === "/tools")}
       ${mmLink("/skills", "skill packs", activePath === "/skills")}
       ${mmLink("/tools/category/crypto", "crypto, DeFi & Solana", activePath === "/tools/category/crypto")}
       ${mmLink("/tools/category/llm", "images, video & LLM gateway", activePath === "/tools/category/llm")}
@@ -806,7 +806,6 @@ function mobileMenuHtml(chainInfo, activePath) {
     <div class="ml-mm-group">
       ${mmLink("/markets", "markets · crypto data", activePath === "/markets")}
       ${mmLink("/docs", "docs", activePath === "/docs")}
-      ${mmLink("/docs#why", "why pay here · seven things, each with its proof", false)}
       ${mmLink("/proof", "receipts", activePath === "/proof")}
       ${mmLink("/101", "x402 & MPP 101 · walkthrough", activePath === "/101")}
       ${mmLink("/what-is-x402", "what is x402 / MPP", activePath === "/what-is-x402")}
@@ -843,7 +842,6 @@ function nav(activePath) {
     // its own top-level item (not folded into this set) since it's no longer
     // inside the marketplace panel either.
     marketplace: new Set(["/marketplace", "/mpp-marketplace", "/leaderboard", "/revenue", "/marketplace/tools", ...chainInfo.chains.map((c) => c.href)]),
-    people: new Set(["/reports", "/monitors", "/credits"]),
     docs: new Set(["/docs", "/quickstart", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
     sell: new Set(["/sell", "/tollbooth", "/contribute"]),
     tools: new Set(["/tools", "/skills", "/playground", "/pricing"]),
@@ -851,7 +849,6 @@ function nav(activePath) {
 
   const zone1 = (DECIDE_LIVE ? [DECIDE_NAV_ITEM, ...NAV_ZONES[0]] : NAV_ZONES[0]).map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");
   const zone2 = NAV_ZONES[1].map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");
-  const zone3 = NAV_ZONES[2].map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");
   const divider = `<span style="width:1px;height:15px;background:var(--hairline);flex:none;"></span>`;
 
   return `<nav style="border-bottom:1px solid var(--hairline);background:var(--nav-bg);backdrop-filter:saturate(1.4) blur(14px);-webkit-backdrop-filter:saturate(1.4) blur(14px);position:sticky;top:0;z-index:50;">
@@ -864,8 +861,6 @@ function nav(activePath) {
       ${zone1}
       ${divider}
       ${zone2}
-      ${divider}
-      ${zone3}
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;">
       <a class="ml-nav-gh ml-nav-live" href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:6px 11px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);" title="Watch x402 and MPP payments settle, read from the chain"><svg width="15" height="13" viewBox="0 0 24 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="13" rx="2"/><path d="M8 19h8"/><path d="M10.5 6.2v4.6l4-2.3z" fill="currentColor" stroke="none"/></svg>live</a>
@@ -913,7 +908,7 @@ export function ledgerFooterCompact() {
   <div style="max-width:1180px;margin:0 auto;padding:26px 30px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
       <a href="/" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);">${brandMark(20, "f")}<span style="font-weight:600;font-size:var(--fs-md);font-family:var(--font-body);letter-spacing:-.01em;">Agent402</span></a>
-      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/reports" style="color:var(--muted);text-decoration:none;">reports</a><a href="/monitors" style="color:var(--muted);text-decoration:none;">monitors</a><a href="/tools" style="color:var(--muted);text-decoration:none;">catalog</a>${DECIDE_LIVE ? `<a href="/decide" style="color:var(--muted);text-decoration:none;">decide</a>` : ""}<a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/marketplace" style="color:var(--muted);text-decoration:none;">marketplace</a><a href="/revenue" style="color:var(--muted);text-decoration:none;">transactions</a><a href="/sell" style="color:var(--muted);text-decoration:none;">sell</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a></span>
+      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/reports" style="color:var(--muted);text-decoration:none;">reports</a><a href="/monitors" style="color:var(--muted);text-decoration:none;">monitors</a><a href="/tools" style="color:var(--muted);text-decoration:none;">tools</a>${DECIDE_LIVE ? `<a href="/decide" style="color:var(--muted);text-decoration:none;">decide</a>` : ""}<a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/marketplace" style="color:var(--muted);text-decoration:none;">marketplace</a><a href="/revenue" style="color:var(--muted);text-decoration:none;">transactions</a><a href="/sell" style="color:var(--muted);text-decoration:none;">sell</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--hairline);">
       <span>© 2026 <a href="https://havok.holdings" rel="noopener" style="color:var(--muted);text-decoration:underline;">Havok Holdings LLC</a> · <a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:underline;">mike@agent402.tools</a></span>

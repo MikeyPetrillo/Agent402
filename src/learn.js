@@ -259,7 +259,7 @@ export const LEARN = [
         P(`Signing and settling every request on chain is the right shape for occasional calls and the wrong one for thousands. ${creditsSalesEnabled() ? "Two options avoid it: a prepaid credits key (one card purchase, then a Bearer header on each call, debited per success) or, with a wallet on Base, a one-time Permit2 approval so metered calls settle at actual usage. Both keep the per-request price; only the settlement changes." : "With a wallet on Base, a one-time Permit2 approval lets metered calls settle at actual usage under the quoted ceiling; the per-request price stays the same, only the settlement changes. A prepaid credits key bought earlier also avoids per-call signing (new keys are not on sale)."}`),
       ]],
     ],
-    links: [["/pricing", "How this server prices"], ["/api/pricing", "Machine-readable prices"], ["/tools", "The catalog"], ["/integrations/client", "agent402-client"], ["/integrations/tollbooth", "Sell your own API per call"]],
+    links: [["/pricing", "How this server prices"], ["/api/pricing", "Machine-readable prices"], ["/tools", "Our tools"], ["/integrations/client", "agent402-client"], ["/integrations/tollbooth", "Sell your own API per call"]],
   },
   {
     slug: "mcp-payments",

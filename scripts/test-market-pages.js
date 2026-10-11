@@ -546,12 +546,12 @@ for (const c of NEW_CHAINS) {
   ok(sol.payable === 1 && sol.total === 4, `solana: identity-bound, long-running and network-pinned tools are not payable there (got ${sol.payable}/${sol.total})`);
   ok(base.payable === 4 && poly.payable === 3, "EVM rails take identity-bound and long-running tools; a pinned tool only on its own network");
   const solPage = marketPage("solana", "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, payable: sol });
-  ok(/1 of the <a href="\/tools">4 tools in the catalog<\/a> take USDC on Solana/.test(solPage) && !/Every one of the/.test(solPage), "solana page states the derived payable count, never 'every tool'");
+  ok(/1 of <a href="\/tools">our 4 tools<\/a> take USDC on Solana/.test(solPage) && !/Every one of/.test(solPage), "solana page states the derived payable count, never 'every tool'");
   const polyPage = marketPage("polygon", "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, payable: poly });
-  ok(/3 of the <a href="\/tools">4 tools in the catalog<\/a> take USDC on Polygon \(1 tool is offered on Base only\)/.test(polyPage) && !/EVM rails only/.test(polyPage), "an EVM chain page names the real reason (a route offered on Base only), never 'EVM rails only'");
+  ok(/3 of <a href="\/tools">our 4 tools<\/a> take USDC on Polygon \(1 tool is offered on Base only\)/.test(polyPage) && !/EVM rails only/.test(polyPage), "an EVM chain page names the real reason (a route offered on Base only), never 'EVM rails only'");
   ok(/\(2 identity-bound or long-running tools settle on the EVM rails only; 1 tool is offered on Base only\)/.test(solPage), "solana page names both reasons with their counts");
   const unknown = marketPage("solana", "https://agent402.tools", { snapshot: { sellers: [LOCAL] } });
-  ok(!/Every one of the|500\+ tools in the catalog/.test(unknown), "without derived figures the page claims no count");
+  ok(!/Every one of|of <a href="\/tools">our/.test(unknown), "without derived figures the page claims no count");
 
   const rows = Array.from({ length: 3 }, (_, i) => ({ host: `h${i}.example`, calls: 5, usd: 1, buyers: 2, tools: 1, routable: true }));
   const capped = marketTerminalHtml({ chainName: "Base", rows, totalSellers: 1234 });

@@ -476,16 +476,16 @@ function sellersListedNote(merged, origins) {
 function payableSentence(p, C) {
   const n = Number(p?.payable), t = Number(p?.total);
   if (Number.isFinite(n) && Number.isFinite(t) && t > 0) {
-    if (n === t) return `Every one of the <a href="/tools">${t.toLocaleString("en-US")} tools in the catalog</a> takes ${esc(C.asset)} on ${esc(C.chainName)}`;
+    if (n === t) return `Every one of <a href="/tools">our ${t.toLocaleString("en-US")} tools</a> takes ${esc(C.asset)} on ${esc(C.chainName)}`;
     const x = p.excluded || {};
     const k = (c) => c.toLocaleString("en-US");
     const why = [
       ...(x.evmOnly ? [`${k(x.evmOnly)} identity-bound or long-running tool${x.evmOnly === 1 ? " settles" : "s settle"} on the EVM rails only`] : []),
       ...(Array.isArray(x.pinned) ? x.pinned : []).map((g) => `${k(g.count)} tool${g.count === 1 ? " is" : "s are"} offered on ${esc(g.networks)} only`),
     ];
-    return `${n.toLocaleString("en-US")} of the <a href="/tools">${t.toLocaleString("en-US")} tools in the catalog</a> take ${esc(C.asset)} on ${esc(C.chainName)}${why.length ? ` (${why.join("; ")})` : ""}`;
+    return `${n.toLocaleString("en-US")} of <a href="/tools">our ${t.toLocaleString("en-US")} tools</a> take ${esc(C.asset)} on ${esc(C.chainName)}${why.length ? ` (${why.join("; ")})` : ""}`;
   }
-  return `Tools in the <a href="/tools">catalog</a> take ${esc(C.asset)} on ${esc(C.chainName)}`;
+  return `<a href="/tools">Our tools</a> take ${esc(C.asset)} on ${esc(C.chainName)}`;
 }
 
 // Activity section — x402scan-style Transactions / Volume / Buyers cards
@@ -875,7 +875,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
         <span style="width:44px;height:44px;flex:none;border:1px solid var(--hairline);color:var(--ink);display:flex;align-items:center;justify-content:center;" title="${esc(C.chainName)}">${chainMark(chainKey, 26) || `<span style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-xs);">${esc(C.ticker)}</span>`}</span>
         <h1 style="font-size:var(--fs-3xl);font-weight:800;letter-spacing:-.02em;line-height:1.15;margin:0;">The ${esc(C.chainName)} x402 marketplace</h1>
       </div>
-      <p style="font-size:var(--fs-lg);color:var(--muted);margin:0;max-width:640px;">${subheadHtml}</p>
+      <p style="font-size:var(--fs-lg);color:var(--muted);margin:0;max-width:76ch;">${subheadHtml}</p>
       <div style="margin:16px 0 0;padding:16px 18px;border:1px solid var(--hairline);background:var(--card);">
         <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--faint);margin-bottom:10px;">START HERE · BUYER PATH</div>
         <form action="/tools" method="get" class="mkt-search-wrap" style="display:flex;gap:0;background:var(--paper);max-width:520px;margin-bottom:12px;">
@@ -1251,7 +1251,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   const headerHtml = `
   <div>
     <h1 style="font-size:var(--fs-3xl);font-weight:800;letter-spacing:-.02em;margin:0 0 8px;">The x402 marketplace.</h1>
-    <p style="font-size:var(--fs-lg);color:var(--muted);margin:0;max-width:640px;">The open index of paid APIs for agentic commerce - ${baseSellerCount.toLocaleString("en-US")} independent sellers on Base alone besides this host, with what they charge and what they have actually settled.</p>
+    <p style="font-size:var(--fs-lg);color:var(--muted);margin:0;max-width:76ch;">The open index of paid APIs for agentic commerce - ${baseSellerCount.toLocaleString("en-US")} independent sellers on Base alone besides this host, with what they charge and what they have actually settled.</p>
     <div style="margin:18px 0 0;padding:16px 18px;border:1px solid var(--hairline);background:var(--card);max-width:640px;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--faint);margin-bottom:10px;">START HERE · BUYER PATH</div>
       <form action="/tools" method="get" class="mkt-search-wrap" style="display:flex;gap:0;background:var(--paper);margin-bottom:12px;">
@@ -1340,7 +1340,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   <div style="margin:48px 0 0;background:var(--panel);border:1px solid var(--hairline);padding:40px 36px;position:relative;overflow:hidden;">
     <div style="position:relative;">
       <h2 style="font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 12px;color:var(--on-panel);">Add your API to the index.</h2>
-      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-muted);margin:0 0 22px;max-width:520px;">Free, no signup, nothing deducted. Serve a 402 and register the origin: the crawler reads it at once and re-probes it ${crawlIntervalLabel()}.</p>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-muted);margin:0 0 22px;max-width:64ch;">Free, no signup, nothing deducted. Serve a 402 and register the origin: the crawler reads it at once and re-probes it ${crawlIntervalLabel()}.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
         <a class="btn btn-primary" href="/sell">List your API - free →</a>
         <a href="/leaderboard" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:12px 22px;">SEE THE LEADERBOARD</a>

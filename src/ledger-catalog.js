@@ -46,7 +46,7 @@ export function ledgerCatalogPage(baseUrl, catalog, skillPacks) {
 
   // ---- SEO ----
   const canonical = baseUrl + "/tools";
-  const title = `${fmtNum(count)} pay-per-call tools for AI agents - the Agent402 catalog`;
+  const title = `${fmtNum(count)} pay-per-call tools for AI agents - Agent402 Tools`;
   const description = `${fmtNum(count)} tools an AI agent can call and pay for per request in USDC. ${fmtNum(freeCount)} run free on proof-of-work. No signup, no API keys. Browse by category, or describe a task and let the router resolve it.`;
 
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, sameAs: ORG_SAME_AS };
@@ -54,9 +54,9 @@ export function ledgerCatalogPage(baseUrl, catalog, skillPacks) {
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Our tools", item: canonical },
   ] };
-  const pageLd = { "@type": "CollectionPage", "@id": `${canonical}#page`, name: "Agent402 tool catalog", url: canonical, description, isPartOf: { "@id": `${baseUrl}/#organization` }, mainEntity: { "@id": `${canonical}#categories` } };
+  const pageLd = { "@type": "CollectionPage", "@id": `${canonical}#page`, name: "Agent402 Tools", url: canonical, description, isPartOf: { "@id": `${baseUrl}/#organization` }, mainEntity: { "@id": `${canonical}#categories` } };
   const listLd = { "@type": "ItemList", "@id": `${canonical}#categories`, name: "Tool categories", itemListOrder: "https://schema.org/ItemListUnordered", itemListElement: catData.map((c, i) => ({ "@type": "ListItem", position: i + 1, name: c.label, url: `${baseUrl}${c.href}` })) };
-  const appLd = { "@type": "SoftwareApplication", "@id": `${canonical}#app`, name: "Agent402 tool catalog", applicationCategory: "DeveloperApplication", operatingSystem: "HTTP, MCP (streamable HTTP)", offers: { "@type": "AggregateOffer", offerCount: String(count), lowPrice: "0.001", highPrice: "1.50", priceCurrency: "USD", description: "Per-call micropayments in USDC, or free via single-use sha256 proof-of-work on pure-CPU tools" } };
+  const appLd = { "@type": "SoftwareApplication", "@id": `${canonical}#app`, name: "Agent402 Tools", applicationCategory: "DeveloperApplication", operatingSystem: "HTTP, MCP (streamable HTTP)", offers: { "@type": "AggregateOffer", offerCount: String(count), lowPrice: "0.001", highPrice: "1.50", priceCurrency: "USD", description: "Per-call micropayments in USDC, or free via single-use sha256 proof-of-work on pure-CPU tools" } };
 
   const extraCss = `
 .cat-scroll{overflow-x:auto}
@@ -88,7 +88,7 @@ table{border-collapse:collapse;width:100%}
       <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">our tools</span>
     </nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1;margin:0 0 12px;color:var(--ink);">Our tools</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0;max-width:640px;">${fmtNum(count)} tools an agent can call and pay for per request. Around ${fmtNum(freeCount)} of them run free on proof-of-work. This is <em style="color:var(--on-panel-soft);">our own</em> catalog - for every tool in the index, ours and other sellers', see <a href="/marketplace/tools" style="color:var(--ink);border-bottom:1px solid var(--accent);text-decoration:none;">all indexed tools</a>.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0;max-width:76ch;">${fmtNum(count)} tools an agent can call and pay for per request. Around ${fmtNum(freeCount)} of them run free on proof-of-work. These are <em style="color:var(--ink);font-style:normal;font-weight:500;">our own</em> tools; for every tool in the index, ours and other sellers', see <a href="/marketplace/tools" style="color:var(--ink);border-bottom:1px solid var(--accent);text-decoration:none;">all indexed tools</a>.</p>
 
     <div class="cat-search-wrap" style="display:flex;gap:0;background:var(--card);max-width:760px;margin:22px 0 0;">
       <label for="cat-search" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);">Search tools</label>
@@ -110,10 +110,8 @@ table{border-collapse:collapse;width:100%}
 
 <section style="max-width:1180px;margin:0 auto;padding:52px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/pricing</div>
-  <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
-    <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Browse by category.</h2>
-    <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">counts from the live catalog</span>
-  </div>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Browse by category.</h2>
+  <div class="ml-meta" style="margin:10px 0 14px;"><span>counts from the live catalog</span></div>
   <div class="cat-scroll" style="border:1px solid var(--hairline);background:var(--card);">
     <table style="font-size:var(--fs-md);">
       <thead>
@@ -158,7 +156,7 @@ table{border-collapse:collapse;width:100%}
   <div style="background:var(--panel);border:1px solid var(--hairline);padding:46px 40px;position:relative;overflow:hidden;">
     <div style="position:relative;">
       <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Don't browse. Just ask.</h2>
-      <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:520px;">Paste the MCP URL and describe the job. The connector picks the tool, solves the proof-of-work or signs the payment, and hands back the result.</p>
+      <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:64ch;">Paste the MCP URL and describe the job. The connector picks the tool, solves the proof-of-work or signs the payment, and hands back the result.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
         <a class="btn btn-primary on-panel" href="/docs#add">Add to your agent →</a>
         <a class="btn btn-secondary on-panel" href="/playground">Try the playground</a>

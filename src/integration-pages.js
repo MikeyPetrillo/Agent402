@@ -708,7 +708,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;">
 ${toolCards}
       </div>
-      <p style="color:var(--muted);font-size:var(--fs-md);margin:12px 0 0;">Every tool, price and input schema: <a href="/tools" ${A}>the catalog</a>.</p>
+      <p style="color:var(--muted);font-size:var(--fs-md);margin:12px 0 0;">Every tool, price and input schema: <a href="/tools" ${A}>our tools</a>.</p>
     </section>` : ""}
 
     <section style="margin-bottom:10px;">

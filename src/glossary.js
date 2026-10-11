@@ -77,7 +77,7 @@ export const GLOSSARY = [
     see: [["/pricing", "how Agent402 prices"], ["/tools", "500+ priced tools"]] },
   { id: "deterministic-tool", name: "Deterministic tool", alt: ["deterministic endpoint"],
     def: "A tool whose output is a pure function of its input: same request, same answer, every time, with no language model in the serving path. Determinism is what lets an agent cache, retry safely and verify a paid answer, and what lets a catalog be tested end to end (every Agent402 tool that CI can run without a third-party key answers its own documented example there; the metered tools that need one are left out of that sweep so CI never spends upstream).",
-    see: [["/tools", "the catalog"], ["/blog/why-we-built-agent402", "why deterministic"]] },
+    see: [["/tools", "our tools"], ["/blog/why-we-built-agent402", "why deterministic"]] },
   { id: "idempotency-key", name: "Idempotency key", alt: ["Idempotency-Key header", "paid retry"],
     def: "A caller-chosen header that lets a paid request be retried without paying twice: the seller stores the first settled answer under the key and replays it to an identical retry. Agent402 commits the cached body only after settlement succeeds, so an unsettled attempt is never replayed as if it were paid, and a copy sent while the first is still running gets 409 instead of running twice.",
     see: [["/docs", "developer docs"]] },
