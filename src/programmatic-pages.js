@@ -427,7 +427,7 @@ export const PROGRAMMATIC_CSS = `
 .pg-glance p{margin:0 0 10px;line-height:1.6;}
 .pg-chg{color:var(--muted);font-size:var(--fs-xs);}
 
-  .pg-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:12px;line-height:1.6}
+  .pg-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:12px;line-height:1.6}.pg-meta-tags{display:flex;flex-wrap:wrap;row-gap:2px}.pg-meta-tags>span{white-space:nowrap}.pg-meta-tags>span+span::before{content:"·";padding:0 8px}
   .pg-table-wrap{overflow-x:auto;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);margin-top:18px}
   .pg-table{border-collapse:collapse;width:100%;min-width:640px;font-size:var(--fs-md)}
   .pg-table th{text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:12px 14px;border-bottom:1px solid var(--hairline);white-space:nowrap}
@@ -438,7 +438,8 @@ export const PROGRAMMATIC_CSS = `
   .pg-buy{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:26px;margin-top:26px;box-shadow:inset 0 1px 0 var(--card-inset),0 1px 2px rgba(0,0,0,.08)}
   .pg-buy h2{font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 8px;color:var(--ink)}
   .pg-buy p{color:var(--muted);font-size:var(--fs-base);line-height:1.55;margin:0 0 16px;font-weight:300}
-  .pg-agent{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);background:var(--chip-bg);border:1px solid var(--hairline);border-radius:var(--radius);padding:12px 14px;margin-top:16px;line-height:1.7;overflow-x:auto}
+  .pg-agent{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);background:var(--chip-bg);border:1px solid var(--hairline);border-radius:var(--radius);padding:12px 14px;margin-top:16px;line-height:1.7;overflow-x:auto;display:flex;flex-wrap:wrap;column-gap:.6em}
+  .pg-agent>span{white-space:nowrap}
   .pg-links{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}
   .pg-links a{font-size:var(--fs-md);color:var(--ink);text-decoration:none;border:1px solid var(--dash);border-radius:var(--radius);padding:8px 14px}
   .pg-links a:hover{border-color:var(--ink)}
@@ -468,7 +469,7 @@ function buySection({ family, input, headline, blurb, alertKind = null }) {
   <p>${esc(blurb)}</p>
   <button class="btn btn-primary" data-buy-product="${esc(family.product)}" data-buy-input="${esc(input)}">Get the full report, $${esc(price)} →</button>
   <div class="err" id="err-buy"></div>
-  <div class="pg-agent">agents: ${esc(family.route)} with ${esc(family.agentBody(input))} over x402 or MPP, ${esc(family.agentPrice())}</div>
+  <div class="pg-agent"><span>agents: ${esc(family.route)}</span> <span>with ${esc(family.agentBody(input))}</span> <span>over x402 or MPP, ${esc(family.agentPrice())}</span></div>
   <p class="note" style="margin-top:12px;"><a href="/tools/${esc(family.toolSlug)}" style="color:var(--muted);">Sample output and API docs</a> · <a href="/reports" style="color:var(--muted);">all reports</a></p>
 </div>`;
 }
@@ -506,6 +507,12 @@ function datasetLd(baseUrl, { name, description, canonical, modified }) {
   };
 }
 
+/** A meta line of whole items: each stays on one line, the row wraps between
+ *  them. Items are already-escaped HTML; falsy items are left out. */
+function metaTags(items) {
+  return `<div class="pg-meta pg-meta-tags">${items.filter(Boolean).map((x) => `<span>${x}</span>`).join("")}</div>`;
+}
+
 function shell({ title, description, canonical, baseUrl, body, jsonLd }) {
   return ledgerShell({
     title, description, canonical, baseUrl, activePath: "/reports",
@@ -534,10 +541,10 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
     : `<div class="pg-empty">${degraded || !data ? "SEC EDGAR could not be read for this company just now. The filings themselves are unaffected: try again shortly, or buy the full report, which reads them at request time." : data.partial ? `Form 4 filings exist for ${esc(name)} in this window, but their transaction detail could not be read just now. The paid report reads the newest ${INSIDER_TIERS["insider-report"].maxFilings} filings at request time.` : `No Form 4 transactions were filed against ${esc(name)} in the last ${data.windowDays} days. An agent calling the report can widen the window to ${INSIDER_MAX_DAYS} days with <code>days</code>; a card purchase reads the last ${INSIDER_DEFAULT_DAYS}.`}</div>`;
   const body = `
 <section class="hero">
-  <div class="eyebrow">SEC Form 4 · insider transactions · free</div>
+  <div class="eyebrow eyebrow-tags"><span>SEC Form 4</span><span>insider transactions</span><span>free</span></div>
   <h1>${esc(name)} <em>insider buying and selling</em></h1>
   <p class="lede">${data ? `${esc(String(data.filingsInWindow))} Form 4 filings against ${esc(name)} (${esc(ticker)}) in the last ${esc(String(data.windowDays))} days. Below are the transactions from ${esc(String(data.filingsRead))} recent filings, one per insider where the window allows, as filed.` : `The latest SEC Form 4 filings against ${esc(ticker)}, as filed.`}</p>
-  <div class="pg-meta">${data ? `Window ${esc(data.startDate)} to ${esc(data.endDate)} · CIK ${esc(data.cik)}${data.latestFiledDate ? ` · newest filing ${esc(data.latestFiledDate)}` : ""} · ` : ""}source: SEC EDGAR full-text search and the Form 4 XML itself</div>
+  ${metaTags([data && `Window ${esc(data.startDate)} to ${esc(data.endDate)}`, data && `CIK ${esc(data.cik)}`, data?.latestFiledDate && `newest filing ${esc(data.latestFiledDate)}`, "source: SEC EDGAR, Form 4 XML"])}
 </section>
 <section>
   ${table}
@@ -587,10 +594,10 @@ export function fundPage({ slug, data, baseUrl, degraded = false }) {
     : `<div class="pg-empty">${degraded || !data ? "SEC EDGAR could not be read for this manager just now. Try again shortly, or buy the full report, which reads the filing at request time." : esc(data.holdingsNote || "No holdings table was available for this filing.")}</div>`;
   const body = `
 <section class="hero">
-  <div class="eyebrow">SEC Form 13F-HR · institutional holdings · free</div>
+  <div class="eyebrow eyebrow-tags"><span>SEC Form 13F-HR</span><span>institutional holdings</span><span>free</span></div>
   <h1>${esc(name)} <em>13F holdings</em></h1>
   <p class="lede">${data ? `The latest 13F-HR filed by ${esc(name)} covers the period ending ${esc(data.reportDate || "")}${data.holdingsAvailable ? `, with ${esc(fmtInt(data.totalHoldings))} reported positions.` : "."} The largest positions by reported value are below, as filed.` : `The latest SEC 13F-HR portfolio filed by ${esc(name)}, as filed.`}</p>
-  <div class="pg-meta">${data ? `CIK ${esc(data.cik)} · accession ${esc(data.accession || "")} · <a href="${esc(data.filingUrl)}" rel="nofollow">view the filings on SEC EDGAR</a> · ` : ""}source: SEC EDGAR, Form 13F-HR information table</div>
+  ${metaTags([data && `CIK ${esc(data.cik)}`, data && `accession ${esc(data.accession || "")}`, data && `<a href="${esc(data.filingUrl)}" rel="nofollow">view the filings on SEC EDGAR</a>`, "source: SEC EDGAR, 13F-HR table"])}
 </section>
 <section>
   ${facts}
@@ -602,7 +609,7 @@ export function fundPage({ slug, data, baseUrl, degraded = false }) {
     { href: "/reports/fund", label: "All 13F fund pages" },
     { href: "/reports/insider", label: "Insider filings by ticker" },
     { href: "/reports", label: "All reports" },
-    { href: "/monitors", label: `Watch ${name} for new 13F filings` },
+    { href: "/monitors", label: "Watch this fund for new 13F filings" },
   ])}
   <p class="pg-note">${esc(DISCLAIMER)}</p>
 </section>`;
@@ -664,10 +671,10 @@ export function dossierPage({ ticker, data, baseUrl, degraded = false }) {
     : `<div class="pg-empty">${degraded || !data ? "SEC EDGAR could not be read for this company just now. Try again shortly, or buy the full dossier, which reads the filings at request time." : "No 10-K, 10-Q or 8-K appears in this company's recent EDGAR index."}</div>`;
   const body = `
 <section class="hero">
-  <div class="eyebrow">SEC EDGAR · company profile · free</div>
+  <div class="eyebrow eyebrow-tags"><span>SEC EDGAR</span><span>company profile</span><span>free</span></div>
   <h1>${esc(name)} <em>due diligence</em></h1>
   <p class="lede">${data ? `Who ${esc(name)} (${esc(ticker)}) is on the public record: identity, annual results, what it filed in the last year and why, straight from SEC EDGAR.` : `Who ${esc(ticker)} is on the public record: identity, industry classification and the most recent periodic filings from SEC EDGAR.`}</p>
-  <div class="pg-meta">${data ? `${esc(String(data.filingsIndexed))} filings in EDGAR's recent index${data.form4Count ? `, ${esc(String(data.form4Count))} of them Form 4 insider filings` : ""} · <a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=${esc(data.cik)}&amp;type=10-K&amp;dateb=&amp;owner=include&amp;count=10" rel="nofollow">view the filings on SEC EDGAR</a> · ` : ""}source: SEC EDGAR submissions index and XBRL financial data</div>
+  ${metaTags([data && `${esc(String(data.filingsIndexed))} filings in EDGAR's recent index`, data?.form4Count && `${esc(String(data.form4Count))} of them Form 4 filings`, data && `<a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=${esc(data.cik)}&amp;type=10-K&amp;dateb=&amp;owner=include&amp;count=10" rel="nofollow">view the filings on SEC EDGAR</a>`, "source: SEC EDGAR, XBRL data"])}
 </section>
 <section>
   ${dossierAtAGlance(data)}
@@ -735,7 +742,7 @@ export function hubPage({ kind, baseUrl }) {
   const others = Object.keys(HUBS).filter((k) => k !== kind).map((k) => ({ href: `/reports/${k}`, label: HUBS[k].h1 }));
   const body = `
 <section class="hero">
-  <div class="eyebrow">${esc(h.eyebrow)}</div>
+  <div class="eyebrow eyebrow-tags">${h.eyebrow.split(" · ").map((t) => `<span>${esc(t)}</span>`).join("")}</div>
   <h1>${esc(h.h1)} <em>${esc(h.em)}</em></h1>
   <p class="lede">${esc(h.lede)}</p>
 </section>
@@ -745,7 +752,7 @@ export function hubPage({ kind, baseUrl }) {
     <h2>Want the whole thing, not the teaser?</h2>
     <p>${esc(h.buy())}</p>
     <a class="btn btn-primary" href="/reports">Buy a report, $${esc(cardUsd(family.product))} →</a>
-    <div class="pg-agent">agents: ${esc(family.route)} with ${esc(family.agentBody(kind === "fund" ? "Berkshire Hathaway" : "AAPL"))} over x402 or MPP, ${esc(family.agentPrice())}</div>
+    <div class="pg-agent"><span>agents: ${esc(family.route)}</span> <span>with ${esc(family.agentBody(kind === "fund" ? "Berkshire Hathaway" : "AAPL"))}</span> <span>over x402 or MPP, ${esc(family.agentPrice())}</span></div>
   </div>
   ${crossLinks([...others, { href: "/reports", label: "All reports" }, { href: "/monitors", label: "Standing monitors" }])}
   <p class="pg-note">${esc(DISCLAIMER)}${h.offList ? ` ${esc(h.offList)}` : ""}</p>
