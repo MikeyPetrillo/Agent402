@@ -216,6 +216,12 @@ function getPool() {
     idle_in_transaction_session_timeout: t.idleTxMs,
     keepAlive: true,
     keepAliveInitialDelayMillis: 10_000,
+    // An idle connection never holds the process open. A statement sent after
+    // closeStateDb (a store's first load still in flight, an unref'd refresh
+    // timer) opens a new pool; without this, its idle connection kept a script
+    // that ended on closeStateDb alive, and a timer reusing it every few
+    // seconds kept it alive for good. A server stays up by its listener.
+    allowExitOnIdle: true,
   });
   pool.on("error", (err) => { noteFailure(err); console.error("[state-db] pool error:", lastError); });
   return pool;

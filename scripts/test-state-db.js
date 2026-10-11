@@ -512,6 +512,34 @@ try {
   ok(await stateDb(), "the real database is reachable again afterwards");
   await documents.put("after", { ok: true });
   ok(stateDbStatus() === "on", "a good query restores the status word to on");
+
+  // ---- a process that ends on closeStateDb exits ------------------------------
+  // A store whose first load is still in flight when a script closes the pool
+  // sends its next statement after the close, which opens a new pool, and its
+  // unref'd refresh timer reuses that connection every few seconds. The
+  // process must still exit once nothing but idle connections and unref'd
+  // timers is left.
+  {
+    const { spawn } = await import("node:child_process");
+    const src = `
+      const sdb = await import(${JSON.stringify(new URL("../src/state-db.js", import.meta.url).href)});
+      await sdb.stateQuery("SELECT 1");
+      const t = setInterval(() => { sdb.stateQuery("SELECT 1").catch(() => {}); }, 300); t.unref();
+      await sdb.closeStateDb();
+      await sdb.stateQuery("SELECT 1"); // the late first-load statement
+      console.log("CLOSED");
+    `;
+    const child = spawn(process.execPath, ["--input-type=module", "-e", src], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (b) => { out += b; });
+    child.stderr.on("data", (b) => { out += b; });
+    const t0 = Date.now();
+    const code = await new Promise((resolve) => {
+      const kill = setTimeout(() => { child.kill("SIGKILL"); resolve("hung"); }, 8_000);
+      child.on("exit", (c) => { clearTimeout(kill); resolve(c); });
+    });
+    ok(code === 0 && out.includes("CLOSED"), `a process with a statement after closeStateDb and a timer reusing its connection exits on its own (${code} after ${Date.now() - t0} ms${code === 0 ? "" : `: ${out.slice(-200)}`})`);
+  }
 } finally {
   await __dropStateSchema();
   await closeStateDb();
