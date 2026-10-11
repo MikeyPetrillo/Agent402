@@ -15,7 +15,7 @@ import {
 import { join } from "node:path";
 import { createHmac } from "node:crypto";
 import { logSafe } from "./log-safe.js";
-import { logLines, imports, stateDbEnabled, stateDbSchema, trackStoreReady, reconcileLogFile, withSchemaLock } from "./state-db.js";
+import { logLines, imports, stateDbEnabled, stateDbSchema, trackStoreReady, reconcileLogFile, withSchemaLock, withImportSlot } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
 
 const HAS_DATA_DIR = existsSync("/data");
@@ -406,14 +406,14 @@ async function importFileOnce() {
     if (rec && typeof rec === "object") { recs.push(JSON.stringify(cleanForJsonb(rec))); if (recs.length >= MAX_LINES) break; }
   }
   const s = stateDbSchema();
-  const n = await withSchemaLock(async (c) => {
+  const n = await withImportSlot(() => withSchemaLock(async (c) => {
     if ((await c.query(`SELECT 1 FROM ${s}.imports WHERE name = $1`, [WISH_STREAM])).rowCount) return null;
     for (let i = 0; i < recs.length; i += 1000) {
       await c.query(`INSERT INTO ${s}.log_lines (stream, body) SELECT $1, b FROM unnest($2::jsonb[]) WITH ORDINALITY AS t(b, o) ORDER BY o`, [WISH_STREAM, recs.slice(i, i + 1000)]);
     }
     await c.query(`INSERT INTO ${s}.imports (name, source, bytes) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING`, [WISH_STREAM, WISH_FILE, Buffer.byteLength(text)]);
     return recs.length;
-  });
+  }));
   importedFromFile = true;
   if (n !== null) console.log(`[wish] imported ${n} line(s) from ${WISH_FILE} into the state database`);
 }

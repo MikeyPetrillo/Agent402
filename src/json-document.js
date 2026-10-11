@@ -48,7 +48,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { documents, imports, onStateDbRecovered, setUnloadedStoresProbe, setUnsavedStoresProbe, stateDbEnabled, stateDbSchema, stateQuery } from "./state-db.js";
+import { documents, imports, onStateDbRecovered, setUnloadedStoresProbe, setUnsavedStoresProbe, stateDbEnabled, stateDbSchema, stateQuery, withImportSlot } from "./state-db.js";
 
 /** Returned by an update() mutator to leave the stored body unchanged. */
 export const SKIP_UPDATE = Symbol("json-document.skip-update");
@@ -352,10 +352,14 @@ export function createJsonDocument({ name = null, file = null, log = console.war
     }
     const { body, bytes } = parsed;
     try {
-      // Put-if-absent: two containers booting at once cannot overwrite a row
-      // the other one already imported and advanced.
-      await documents.putIfAbsent(docName, body);
-      await imports.mark(docName, { source: file, bytes });
+      // One import at a time per slot (state-db's withImportSlot): a first
+      // boot importing every store at once never takes every pooled connection.
+      await withImportSlot(async () => {
+        // Put-if-absent: two containers booting at once cannot overwrite a row
+        // the other one already imported and advanced.
+        await documents.putIfAbsent(docName, body);
+        await imports.mark(docName, { source: file, bytes });
+      });
     } catch (e) {
       alert(`import from ${file} failed: ${String(e?.message || e).slice(0, 120)}; the document stays unloaded and is re-read`);
       throw e;
