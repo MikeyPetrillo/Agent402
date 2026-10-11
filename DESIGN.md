@@ -141,8 +141,9 @@ size off the scale.
 - First-party and affirmative; no competitor names; no em dashes.
 - Say **"500+ tools"** on marketing and static surfaces; exact counts only where derived at
   runtime.
-- Model-backed tools are labeled as model-backed; never claim "every tool is deterministic"
-  or "no model in the serving path" without scope.
+- Model-backed tools are labeled as model-backed. Any claim about determinism or about models
+  being absent is scoped to the utility tools it is true of (scripts/test-copy-absolutes.js
+  lists the phrasings it refuses).
 - Copy that offers something reads the switch that sells it.
 
 ## Allowed literals (the guard's allowlist)
