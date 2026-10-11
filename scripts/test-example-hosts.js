@@ -102,5 +102,21 @@ for (const p of Object.values(PENDING)) {
 // Control: the scan finds fixture URLs at all, so an empty map is not a pass.
 ok(fixtures.size >= 3, `the scan found ${fixtures.size} fixture files named by examples`);
 
+// No published example (input or answer) prints one of this server's own
+// operating wallets: an example is copied into buyers' code and docs. The
+// list is the revenue classifier's own-wallet default (src/revenue-live.js).
+{
+  const live = readFileSync(join(ROOT, "src", "revenue-live.js"), "utf8");
+  const own = new Set(((/process\.env\.OUR_WALLETS \|\| "([^"]+)"/.exec(live) || [])[1] || "").toLowerCase().split(",").map((x) => x.trim()).filter(Boolean));
+  ok(own.size >= 2, `read ${own.size} own operating wallets from revenue-live.js`);
+  const hits = [];
+  for (const [path, ops] of Object.entries(spec.paths || {})) {
+    for (const [method, op] of Object.entries(ops)) {
+      walk(op, (s) => { for (const m of String(s).matchAll(/0x[0-9a-fA-F]{40}/g)) if (own.has(m[0].toLowerCase())) hits.push(`${method.toUpperCase()} ${path}`); });
+    }
+  }
+  ok(!hits.length, `no published example names an operating wallet${hits.length ? `: ${[...new Set(hits)].join(", ")}` : ""}`);
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
