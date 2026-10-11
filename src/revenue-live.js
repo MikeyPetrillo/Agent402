@@ -1936,7 +1936,7 @@ export function revenuePage(baseUrl, snap) {
     <section>
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/revenue</div>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.05;margin:0 0 8px;color:var(--ink);">Transactions.</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:60ch;margin:0;">
+    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0;">
       Every payment through our rails, on both wires (<strong>x402</strong> and <strong>MPP</strong>) plus card purchases, read from the chain. Revenue counts only money from others; throughput counts our own canary and volume runs too. <a href="/transparency#revenue-figures">How the two are told apart</a>.
     </p>
     ${standing}

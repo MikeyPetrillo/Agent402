@@ -37,7 +37,7 @@ export function ledgerIntegrationsPage(baseUrl) {
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 30px;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:14px;">$ GET /integrations</div>
     <h1 class="ml-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Framework adapters.<br>One surface underneath.</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:620px;margin:0;">Packages that turn the catalog into native tool objects for your stack, with payment handled underneath: proof-of-work for free tools, x402 or MPP for paid ones, or a prepaid credits key. Each package has its own page with the install line, a working example and how it pays. New to the protocols? Start with <a href="/learn" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">the explainers</a>.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:76ch;margin:0;">Packages that turn the catalog into native tool objects for your stack, with payment handled underneath: proof-of-work for free tools, x402 or MPP for paid ones, or a prepaid credits key. Each package has its own page with the install line, a working example and how it pays. New to the protocols? Start with <a href="/learn" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">the explainers</a>.</p>
   </section>
 
   <!-- ADAPTERS -->

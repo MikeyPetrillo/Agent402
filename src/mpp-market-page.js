@@ -121,7 +121,7 @@ function leaderboardHtml(lb, host = null) {
   // (rows here are lb.rows; a row is active with a window OR a 30d count)
   return `
   <h2 id="leaderboard" style="font-size:var(--fs-xl);font-weight:700;margin:40px 0 6px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">MPP leaderboard &middot; settled on Tempo${staleNote}</h2>
-  <p style="font-size:var(--fs-sm);color:var(--faint);margin:0 0 12px;max-width:820px;">Verified sellers ranked by inbound USDC.e transfers on Tempo (chain 4217) to the recipient address their <em>live</em> MPP challenge names, ${windowSource}. A window, not lifetime; an inbound transfer is the same proxy the <a href="/guides/smart-order-router" style="color:var(--muted);">router</a> requires before it spends (<span class="mpr-proven" style="margin:0;">routable</span> = ${esc(ruleText)}).${histNote} Our own recipient is not ranked; it is disclosed below the table. Ranked by 7d, then window. Machine-readable: <a href="/api/mpp-leaderboard" style="color:var(--muted);">/api/mpp-leaderboard</a>.</p>
+  <p style="font-size:var(--fs-sm);color:var(--faint);margin:0 0 12px;max-width:76ch;">Verified sellers ranked by inbound USDC.e transfers on Tempo (chain 4217) to the recipient address their <em>live</em> MPP challenge names, ${windowSource}. A window, not lifetime; an inbound transfer is the same proxy the <a href="/guides/smart-order-router" style="color:var(--muted);">router</a> requires before it spends (<span class="mpr-proven" style="margin:0;">routable</span> = ${esc(ruleText)}).${histNote} Our own recipient is not ranked; it is disclosed below the table. Ranked by 7d, then window. Machine-readable: <a href="/api/mpp-leaderboard" style="color:var(--muted);">/api/mpp-leaderboard</a>.</p>
   ${table}
   ${hostRowHtml(host)}
   ${zero > 0 ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:10px;">${zero.toLocaleString("en-US")} more verified recipient${zero === 1 ? "" : "s"} with no inbound transfer observed (listed below, not ranked).</p>` : ""}`;
@@ -179,14 +179,14 @@ export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = nu
         const names = challengeRails.map((r) => esc(r.name));
         const namesJoined = names.length > 1 ? `${names.slice(0, -1).join(", ")} & ${names.at(-1)}` : names[0];
         const assetsJoined = [...new Set(challengeRails.map((r) => r.asset))].join(" / ");
-        return `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:10px 0 0;max-width:640px;">Agent402 itself accepts MPP payment on ${namesJoined} (${esc(assetsJoined)}) - <a href="/what-is-mpp" style="color:inherit;">how MPP works here</a>.</p>`;
+        return `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:10px 0 0;max-width:76ch;">Agent402 itself accepts MPP payment on ${namesJoined} (${esc(assetsJoined)}) - <a href="/what-is-mpp" style="color:inherit;">how MPP works here</a>.</p>`;
       })()
     : "";
   // Tempo is a SEPARATE MPP payment method, not an x402-settled chain (it
   // rides Tempo's own TIP-1034 relay, never @x402/express) — deliberately
   // never folded into chainsNote above, which describes x402-derived rails.
   const tempoNote = tempoEnabled()
-    ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:6px 0 0;max-width:640px;">...and natively via Tempo (its own MPP payment method, not an x402-settled chain).</p>`
+    ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:6px 0 0;max-width:76ch;">...and natively via Tempo (its own MPP payment method, not an x402-settled chain).</p>`
     : "";
   const categories = [...new Set(sellers.flatMap((s) => s.categories || []))];
 
@@ -227,7 +227,7 @@ export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = nu
   const headerHtml = `
   <div>
     <h1 style="font-size:var(--fs-3xl);font-weight:800;letter-spacing:-.02em;margin:0 0 8px;">The MPP marketplace.</h1>
-    <p style="font-size:var(--fs-lg);color:var(--muted);margin:0;max-width:640px;">A live-verified index of sellers on the MPP payment protocol - ${verifiedCount.toLocaleString("en-US")} confirmed by a real, unpaid probe of their actual endpoint, not just claimed by a registry.</p>
+    <p style="font-size:var(--fs-lg);color:var(--muted);margin:0;max-width:76ch;">A live-verified index of sellers on the MPP payment protocol - ${verifiedCount.toLocaleString("en-US")} confirmed by a real, unpaid probe of their actual endpoint, not just claimed by a registry.</p>
     ${chainsNote}
     ${tempoNote}
     <div style="margin:18px 0 0;padding:16px 18px;border:1px solid var(--hairline);background:var(--paper);max-width:640px;">

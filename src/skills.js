@@ -2774,10 +2774,8 @@ export function skillsIndex(baseUrl) {
 
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ POST /api/skill/security-audit</div>
-  <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
-    <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Partial success is a result, not an error.</h2>
-    <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">the part that matters</span>
-  </div>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Partial success is a result, not an error.</h2>
+  <div class="ml-meta" style="margin:10px 0 14px;"><span>the part that matters</span></div>
   <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:740px;margin:0 0 28px;">This is the real difference, and it only shows up when something goes wrong. Orchestrate seven calls yourself and a failure on step six leaves you holding five results you have already paid for, a broken chain, and the job of working out what to retry. A pack returns the whole ledger: what succeeded, what did not, and why - in one response you can act on.</p>
   <div class="sk-scroll" style="border:1px solid var(--hairline);background:var(--panel);">
     <table style="font-family:var(--font-body);font-size:var(--fs-md);">

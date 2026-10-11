@@ -5,6 +5,7 @@
 // classes below are consumed by assets/js/reports.js and report-view.js
 // (keep the class names stable - the scripts select on them).
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
+import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { sampleLinkFor, SAMPLES } from "./sample-reports.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { monitorMapJson } from "./report-upgrade.js";
@@ -24,7 +25,7 @@ export const REPORTS_CSS = `
   @media screen{#app[data-api]{min-height:100vh}}
   .eyebrow{font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
   .hero{padding:64px 0 20px}.hero h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:clamp(var(--fs-3xl),5vw,var(--fs-4xl));line-height:1.02;margin:14px 0 0;color:var(--ink);text-wrap:balance}.hero h1 em{font-style:normal;color:var(--faint)}
-  .lede{font-size:var(--fs-lg);line-height:1.5;color:var(--muted);max-width:620px;margin:16px 0 0;font-weight:300}.lede b{color:var(--ink);font-weight:500}
+  .lede{font-size:var(--fs-lg);line-height:1.5;color:var(--muted);max-width:76ch;margin:16px 0 0;font-weight:300}.lede b{color:var(--ink);font-weight:500}
   .products{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:18px;margin-top:8px}
   /* Cards are a flex column so the buy button sits on one baseline across a
      grid row however long the copy above it runs (the error slot takes the
@@ -46,10 +47,12 @@ export const REPORTS_CSS = `
   .field:focus-within{border-color:var(--ink)}
   .field input{flex:1;border:0;background:transparent;color:var(--ink);font-family:var(--font-body);font-size:var(--fs-lg);outline:none;min-width:0}
   .gets{font-size:var(--fs-md);line-height:1.55;color:var(--muted);margin:0 0 6px}.gets b{color:var(--ink);font-weight:500}
-  .note{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:16px}
+  .note{font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin-top:16px}.pcard .note a{white-space:nowrap;margin-right:12px}
   .err{color:var(--bad);font-size:var(--fs-md);margin-top:8px;min-height:18px}
   .trust{display:flex;gap:20px;flex-wrap:wrap;color:var(--muted);font-size:var(--fs-md);margin-top:16px}
-  .trust span{display:inline-flex;gap:7px;align-items:center}.dot{width:5px;height:5px;border-radius:50%;background:var(--accent)}
+  .trust span{display:inline-flex;gap:7px;align-items:center;white-space:nowrap}
+  .mon-offer{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 20px;margin-top:18px;padding:14px 18px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card)}
+  .mon-offer p{flex:1 1 380px;margin:0;font-size:var(--fs-md);line-height:1.5;color:var(--muted)}.mon-offer b{color:var(--ink);font-weight:600}.dot{width:5px;height:5px;border-radius:50%;background:var(--accent)}
   .report{background:var(--card);border:1px solid var(--hairline);border-radius:var(--radius);padding:34px 38px;margin-top:24px}
   .report h1{font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.03em;margin:0 0 6px;color:var(--ink)}.report h2{font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:28px 0 8px;color:var(--ink)}.report h3{font-weight:600;font-size:var(--fs-lg);margin:20px 0 6px;color:var(--ink)}
   .report p{color:var(--muted);margin:0 0 14px;line-height:1.65}.report a{word-break:break-word;color:var(--accent)}
@@ -91,6 +94,14 @@ export const REPORTS_CSS = `
   /* design-tokens: literal-end */
 `;
 
+// The cheapest monitor, read from the product table (never typed).
+function monitorPriceLabel() {
+  const cents = Object.values(MONITOR_PRODUCTS || {}).map((m) => Number(m?.price)).filter((n) => Number.isFinite(n) && n > 0);
+  if (!cents.length) return "Monthly";
+  const lo = Math.min(...cents);
+  return `${lo % 100 === 0 ? `$${lo / 100}` : `$${(lo / 100).toFixed(2)}`} a month`;
+}
+
 export function humanReportsPage(baseUrl) {
   // DERIVED, never typed: this string is the meta + og description, i.e. what
   // Google and every link preview show. It said "$1 or $2 by card and $0.20 to
@@ -112,10 +123,11 @@ export function humanReportsPage(baseUrl) {
     Checkout canceled, nothing was charged. Pick a report below whenever you are ready. Every price is on its button.
   </div>
   <section class="hero">
-    <div class="eyebrow">Cited reports · one price per report · no subscription · price on every button</div>
+    <div class="eyebrow">Cited reports · one price per report · price on every button</div>
     <h1>A finished report, <em>not a chat answer.</em></h1>
     <p class="lede">Deep research on any question, due diligence on any public company, a 13F breakdown of any fund, a graded audit of any domain. Built from live data, research and filing reports cited to their sources, delivered in ${REPORT_TURNAROUND}. <b>Nothing to sign up for, nothing recurring.</b> Pay by card at checkout and the report is yours. Agents skip the card and pay per call over x402 or MPP.</p>
-    <div class="trust"><span><span class="dot"></span> Built from live data</span><span><span class="dot"></span> If a report fails, you're auto-refunded</span><span><span class="dot"></span> Secured by Stripe</span><span><span class="dot"></span> PDF download, data tables where the report has them</span></div>
+    <div class="trust"><span><span class="dot"></span> Built from live data</span><span><span class="dot"></span> Auto-refunded if a report fails</span><span><span class="dot"></span> Secured by Stripe</span><span><span class="dot"></span> PDF and data tables</span></div>
+    <div class="mon-offer"><p><b>Need it again when something changes?</b> A monitor watches one target and re-runs the report when the facts move. ${esc(monitorPriceLabel())}, cancel anytime.</p><a class="btn btn-secondary btn-sm" href="/monitors">See monitors →</a></div>
     <div class="samples-strip" style="margin-top:18px;padding:14px 16px;border:1px solid var(--hairline);background:var(--card);">
     <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;">read a real one first</div>
     <div style="display:flex;gap:8px 18px;flex-wrap:wrap;font-size:var(--fs-md);">${Object.values(SAMPLES).map((x) => `<a href="/reports/sample/${esc(x.product)}" style="color:var(--ink);">${esc(x.label)}: ${esc(x.input)} →</a>`).join("")}</div>
