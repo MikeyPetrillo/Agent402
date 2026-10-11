@@ -153,7 +153,7 @@ const ident2 = (t) => String(t).split(".").map(ident).join(".");
  * removes an entry only once Postgres holds it.
  */
 // Every local money journal by name (sales, refunds, checkout finals,
-// subscriptions, decide), so the dead-letter word on /api/gateway-status
+// subscriptions, decide, outbound), so the dead-letter word on /api/gateway-status
 // covers each of them. A name may have several journals (one per store
 // directory); their states are summed, and two instances over the same file
 // count it once (the newest instance is kept).
@@ -570,7 +570,7 @@ export function deadLetterWord(states, { enabled = true, now = Date.now(), stuck
   return waiting > 0 ? "pending" : "none";
 }
 /** The journals the dead-letter word always names (zeros when one is not open). */
-export const MONEY_JOURNALS = ["sales", "refunds", "checkoutFinals", "subscriptions", "decide"];
+export const MONEY_JOURNALS = ["sales", "refunds", "checkoutFinals", "subscriptions", "decide", "outbound"];
 /**
  * ledgerDeadLetter on /api/gateway-status: one word over every money
  * journal (see deadLetterWord); `full` (the operator) adds the counts per

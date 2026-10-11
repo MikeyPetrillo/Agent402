@@ -1,8 +1,8 @@
 // The shared half of the local money journals (src/ledger-mirror.js
 // createDeadLetter): with REDIS_URL set, a journal entry (a sale, a refund
 // debt, a card checkout's final record, a subscription record, a decide
-// write) is kept in Redis instead of on the container's disk, so it outlives
-// the container and any container can land it.
+// write, an outbound payment record) is kept in Redis instead of on the
+// container's disk, so it outlives the container and any container can land it.
 //
 // Per journal, under one hash-tagged prefix:
 //   items  HASH  id -> the entry as JSON ({ id, kind, payload, at })

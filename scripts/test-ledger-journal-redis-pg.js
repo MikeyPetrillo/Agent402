@@ -24,6 +24,17 @@
 //      B's takeover is the one outcome (a regeneration, or a refund), and
 //      A's late replay books nothing over it, even while B's regeneration is
 //      still running.
+//  10. Outbound spend records (src/outbound-ledger.js), Postgres down: the
+//      lines go to Redis (the word "pending", nothing on local disk);
+//      Postgres back: the boot reconcile of the file and the replay together
+//      add each line once.
+//  11. Outbound, Redis down too: the lines go to local disk, the word reads
+//      "local"; Postgres back: the replay lands them from disk, once.
+//  12. Outbound, two replayers: one that inserted every line and was killed
+//      before removing any (the other applies them again after the lease
+//      lapses and adds nothing), then A and container B draining one journal
+//      live: every line added exactly once, and an entry whose line already
+//      landed adds nothing.
 // Requires STATE_DATABASE_URL and REDIS_URL (under CI a missing one fails).
 import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -82,6 +93,27 @@ if (MODE === "claim-die" || MODE === "pending-die") {
   await new Promise((r) => process.stdout.write("", r));
   process.kill(process.pid, "SIGKILL");
 }
+if (MODE === "outbound-b") {
+  process.env.OUTBOUND_LEDGER_FILE = join(mkdtempSync(join(tmpdir(), "jr-ob-B-")), "outbound-spend.ndjson");
+  process.env.OUTBOUND_JOURNAL_REPLAY_MS = "3600000";
+  const sdb = await import("../src/state-db.js");
+  const ob = await import("../src/outbound-ledger.js");
+  let landed = 0;
+  for (let i = 0; i < 40; i++) { landed += await ob.replayOutboundJournal(); await wait(15); }
+  console.log(JSON.stringify({ landed }));
+  await sdb.closeStateDb();
+  process.exit(0);
+}
+if (MODE === "outbound-apply-die") {
+  const sdb = await import("../src/state-db.js");
+  const { createDeadLetter } = await import("../src/ledger-mirror.js");
+  const dl = createDeadLetter({ file: join(mkdtempSync(join(tmpdir(), "jr-obd-")), "j.ndjson"), journalKey: `${sdb.stateDbSchema()}:outbound` });
+  const got = await dl.claim();
+  for (const e of got) await sdb.logLines.appendOnce("outbound-spend", e.payload);
+  console.log(JSON.stringify({ applied: got.length }));
+  await new Promise((r) => process.stdout.write("", r));
+  process.kill(process.pid, "SIGKILL");
+}
 if (MODE === "hc-b") {
   process.env.HUMAN_CHECKOUT_REPLAY_MS = "200";
   const sdb = await import("../src/state-db.js");
@@ -131,6 +163,9 @@ process.env.LEDGER_JOURNAL_REDIS_DOWN_MS = "200";
 process.env.HUMAN_CHECKOUT_REPLAY_MS = "200";
 process.env.REFUND_DB_DIR = DIR;
 process.env.SALES_LEDGER_DB = join(DIR, "agent402-sales.db");
+const OB_FILE = join(DIR, "outbound-spend.ndjson");
+process.env.OUTBOUND_LEDGER_FILE = OB_FILE;
+process.env.OUTBOUND_JOURNAL_REPLAY_MS = "3600000"; // the test drives the replay
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -166,6 +201,7 @@ const rl = await import("../src/refund-ledger.js");
 const sl = await import("../src/sales-ledger.js");
 const { createDeadLetter, flushJournals, ledgerDeadLetterStatus } = await import("../src/ledger-mirror.js");
 const { createHumanCheckout } = await import("../src/human-checkout.js");
+const ob = await import("../src/outbound-ledger.js");
 const PAYER = "0x4444444444444444444444444444444444444444";
 const sale = (tx) => sl.recordSale({ slug: "hash", priceUsd: 0.002, rail: "usdc", network: "base", payer: PAYER, tx, wire: "x402" });
 const debt = (tx) => rl.recordRefundOwed({ slug: "hash", network: "eip155:8453", payer: PAYER, priceUsd: 0.002, tx, httpStatus: 502, wire: "x402" });
@@ -313,6 +349,113 @@ try {
     await Y.drain(apply);
     const twice = [...committed].filter(([, c]) => c > 1).length;
     ok(committed.size === 10 && twice === 0, `the next pass lands the rest, the failed one included, each once (${committed.size}, twice ${twice})`);
+  }
+
+  // ---- outbound spend -------------------------------------------------------------
+  // Each call writes one line (with its own ref) through to the file; the refs come back from it.
+  const fileRefs = () => (existsSync(OB_FILE) ? readFileSync(OB_FILE, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).ref) : []);
+  const pay = (k, i) => ob.recordOutbound({ chain: "base", payTo: "0x" + "b".repeat(40), amountAtomic: "1000", asset: "USDC", usd: 0.001, slug: `ob${k}-${i}`, origin: "https://seller.test/x", result: "delivered", tx: null });
+  const record = (k, count) => { const before = fileRefs().length; for (let i = 0; i < count; i++) pay(k, i); return fileRefs().slice(before); };
+  const rowsOfRef = (ref) => n(`SELECT count(*) AS n FROM ${schema}.log_lines WHERE stream = 'outbound-spend' AND body->>'ref' = $1`, [ref]);
+  const eachOnce = async (refs) => (await Promise.all(refs.map(rowsOfRef))).every((c) => c === 1);
+  const obState = () => ledgerDeadLetterStatus({ full: true }).outbound;
+  const until = async (pred, ms = 8000) => { for (const end = Date.now() + ms; Date.now() < end; await wait(50)) if (await pred()) return true; return pred(); };
+  // True once a journal entry this process adds lands in Redis (its client reconnected after a cut).
+  const probe = createDeadLetter({ file: join(mkdtempSync(join(DIR, "probe-")), "j.ndjson"), journalKey: `${schema}:probe` });
+  const redisBack = () => until(async () => { const { id, where } = await probe.addAsync("probe", {}); if (where === "redis") await probe.remove(id); return where === "redis"; });
+
+  // ---- 10. outbound, Postgres down: Redis; back: reconcile + replay add once ----
+  {
+    pgRelay.cut();
+    const refs = record(10, 3);
+    ok(refs.length === 3 && new Set(refs).size === 3, "three outbound payments, each line with its own ref");
+    // The inserts fail against the cut database and release their entries to the replay.
+    ok(await until(() => obState().waiting === 3), `the lines wait in the journal once their inserts fail (${obState().waiting})`);
+    await flushJournals();
+    const st = ledgerDeadLetterStatus({ full: true });
+    ok(await hlen("outbound") === 3 && st.outbound.onLocalDisk === 0 && st.status === "pending", `they are in Redis, none on local disk; the word reads ${st.status} (${await hlen("outbound")})`);
+    ok(await ob.replayOutboundJournal() === 0 && await hlen("outbound") === 3, "a replay against a database still away keeps them");
+    pgRelay.heal();
+    // A restart with the volume: the boot reconcile restores the file's lines first.
+    const restored = await sdb.reconcileLogFile(ob.OUTBOUND_STREAM, OB_FILE, { log: () => {} });
+    ok(restored === 3 && await eachOnce(refs), `the boot reconcile adds the file's lines (${restored})`);
+    const landed = await ob.replayOutboundJournal();
+    ok(landed === 3 && await eachOnce(refs) && await hlen("outbound") === 0, `the replay then adds nothing twice and empties the journal (landed ${landed}, Redis ${await hlen("outbound")})`);
+    ok(ledgerDeadLetterStatus().status === "none", "...the word reads none");
+    ok(await sdb.reconcileLogFile(ob.OUTBOUND_STREAM, OB_FILE, { log: () => {} }) === 0 && await ob.replayOutboundJournal() === 0 && await eachOnce(refs), "a second reconcile and replay add nothing");
+    // Without a volume there is no file to reconcile: the replay alone lands them.
+    pgRelay.cut();
+    const refs2 = record(10.5, 2);
+    ok(await until(() => obState().waiting === 2), "two more wait in the journal");
+    pgRelay.heal();
+    ok(await ob.replayOutboundJournal() === 2 && await eachOnce(refs2) && await hlen("outbound") === 0, "with no file reconcile, the replay alone adds each once");
+    // Healthy: the write lands at once and leaves nothing behind.
+    const refs3 = record(10.7, 2);
+    ok(await until(async () => (await eachOnce(refs3)) && obState().onDisk === 0) && await hlen("outbound") === 0, "with the database up a line lands at once and its entry is removed");
+    // Two identical payments in one tick (same everything, no tx): two lines, not one.
+    const twin = () => ob.recordOutbound({ chain: "base", payTo: "0x" + "c".repeat(40), amountAtomic: "1000", asset: "USDC", usd: 0.001, slug: "ob10-twin", origin: "https://seller.test/x", result: "undelivered", tx: null });
+    twin(); twin();
+    const twins = () => n(`SELECT count(*) AS n FROM ${schema}.log_lines WHERE stream = 'outbound-spend' AND body->>'slug' = 'ob10-twin'`);
+    ok(await until(async () => (await twins()) === 2) && await twins() === 2, "two identical payments in one tick are two lines (each has its own ref)");
+  }
+
+  // ---- 11. outbound, Redis down too: local disk, the word "local" --------------
+  {
+    pgRelay.cut(); redisRelay.cut();
+    const refs = record(11, 2);
+    ok(await until(() => obState().waiting === 2), `the lines wait once their inserts fail (${obState().waiting})`);
+    await flushJournals();
+    const st = ledgerDeadLetterStatus({ full: true });
+    ok(st.status === "local" && st.outbound.onLocalDisk === 2, `with Redis away the lines are on local disk and the word reads ${st.status} (${st.outbound.onLocalDisk})`);
+    ok(existsSync(`${OB_FILE}.pending.ndjson`), "...in the journal file beside the ledger file");
+    pgRelay.heal(); // Redis still away
+    ok(await ob.replayOutboundJournal() === 2 && await eachOnce(refs), "Postgres back (Redis still away): the replay lands them from disk, once");
+    ok(ledgerDeadLetterStatus().status === "none", "...and the word reads none");
+    redisRelay.heal();
+    // Past the outbound journal's own down window (a failed command sends its adds to disk for LEDGER_JOURNAL_REDIS_DOWN_MS).
+    await wait(Number(process.env.LEDGER_JOURNAL_REDIS_DOWN_MS) + 100);
+    ok(await redisBack(), "Redis back: a new journal entry reaches Redis again");
+    await ob.replayOutboundJournal();
+    ok(await eachOnce(refs) && await hlen("outbound") === 0, "Redis back: nothing added twice");
+  }
+
+  // ---- 12. outbound, two replayers ----------------------------------------------
+  {
+    const DRAIN = `a402:journal:{${schema}:outbound}:drain`;
+    // (a) A replayer that inserted every line and died before removing any
+    // entry: the other replayer applies them all again, and adds nothing.
+    pgRelay.cut();
+    const refs = record(12, 30);
+    ok(await until(() => obState().waiting === 30, 15000), `thirty lines wait in Redis (${obState().waiting})`);
+    await flushJournals();
+    pgRelay.heal();
+    const died = await child(["outbound-apply-die"]);
+    ok(died.applied === 30 && died.sig === "SIGKILL" && await eachOnce(refs) && await hlen("outbound") === 30, `a replayer inserted all ${died.applied} lines and was killed before removing them (journal ${await hlen("outbound")})`);
+    ok(await ob.replayOutboundJournal() === 0, "inside its lease the other replayer takes none of them");
+    await wait(Number(process.env.LEDGER_JOURNAL_LEASE_MS) + 300);
+    const again = await ob.replayOutboundJournal();
+    ok(again === 30 && await eachOnce(refs) && await hlen("outbound") === 0, `once the lease lapses it applies all ${again} again: every line still once, the journal empty`);
+
+    // (b) Two live replayers: B claims first, A drains alongside; one more
+    // entry's line already reached the stream (its removal was lost).
+    pgRelay.cut();
+    const refs2 = record(12.5, 20);
+    ok(await until(() => obState().waiting === 20, 15000), `twenty more wait in Redis (${obState().waiting})`);
+    const done = { at: new Date().toISOString(), chain: "base", payTo: null, amountAtomic: "1", asset: null, usd: 0.000001, slug: "ob12-landed", origin: null, result: "delivered", tx: null, ref: randomBytes(9).toString("hex") };
+    await pgDirect(`INSERT INTO ${schema}.log_lines (stream, body, line_key) VALUES ('outbound-spend', $1::jsonb, $2)`, [JSON.stringify(done), sdb.logLineKey(done)]);
+    const side = createDeadLetter({ file: join(mkdtempSync(join(DIR, "ob-")), "j.ndjson"), journalKey: `${schema}:outbound` });
+    side.add("outbound", done);
+    await flushJournals();
+    ok(await hlen("outbound") === 21, `the journal holds 21 entries (${await hlen("outbound")})`);
+    pgRelay.heal();
+    let bDone = false;
+    const bP = child(["outbound-b"]).finally(() => { bDone = true; });
+    await until(async () => bDone || Boolean(await rd.get(DRAIN)), 15000);
+    let aLanded = 0;
+    for (let i = 0; i < 40; i++) { aLanded += await ob.replayOutboundJournal(); await wait(15); }
+    const b = await bP;
+    ok(b.landed > 0 && aLanded + b.landed === 21, `A and B together land each entry once (A ${aLanded}, B ${b.landed})`);
+    ok(await eachOnce([...refs2, done.ref]) && await hlen("outbound") === 0, "every line is in the stream exactly once, the already-landed one included, and the journal is empty");
   }
 
   // ---- card checkout -------------------------------------------------------------

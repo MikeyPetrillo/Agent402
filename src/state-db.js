@@ -438,6 +438,23 @@ export const logLines = {
     const r = await stateQuery(`INSERT INTO ${T("log_lines")} (stream, body) VALUES ($1, $2::jsonb) RETURNING id`, [checkName(stream, "stream"), JSON.stringify(body ?? null)]);
     return Number(r.rows[0].id);
   },
+  /**
+   * Append a line whose body is unique on its own (it carries a random ref),
+   * keyed the way reconcileLogFile keys the same line restored from the file
+   * (content hash, first occurrence): a retried append, a journal replay and
+   * the boot reconcile add it once. Resolves true when this call added it,
+   * false when the stream already held it.
+   */
+  async appendOnce(stream, body) {
+    const clean = JSON.parse(cleanPgText(JSON.stringify(body ?? null)));
+    const r = await stateQuery(
+      `INSERT INTO ${T("log_lines")} (stream, body, line_key) VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (stream, line_key) WHERE line_key IS NOT NULL DO NOTHING`,
+      [checkName(stream, "stream"), JSON.stringify(clean), logLineKey(clean)],
+      { idempotent: true },
+    );
+    return r.rowCount > 0;
+  },
   /** Lines after `afterId`, oldest first. */
   async read(stream, { afterId = 0, limit = 1000 } = {}) {
     const r = await stateQuery(
@@ -477,6 +494,8 @@ const sortKeys = (v) => {
   return v;
 };
 const lineHash = (body) => createHash("sha256").update(JSON.stringify(sortKeys(body))).digest("hex").slice(0, 32);
+/** The key reconcileLogFile gives the first occurrence of a (cleaned) body; logLines.appendOnce uses the same. */
+export function logLineKey(body) { return `${lineHash(body)}:1`; }
 export async function reconcileLogFile(stream, file, { maxBytes = 64 * 1024 * 1024, log = console.log } = {}) {
   if (!file) return 0;
   let text;
