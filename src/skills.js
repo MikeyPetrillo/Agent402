@@ -2726,7 +2726,7 @@ export function skillsIndex(baseUrl) {
     ["payments to sign", "7", "1", false],
     ["round trips", "7", "1", false],
     ["settlements to reconcile", "7", "1", false],
-    ["failure paths to handle", "7", "0", false],
+    ["failure paths to handle", "7", "1 envelope", false],
     ["orchestration code", "yours", "none", true],
   ].map(([label, alone, packed, green]) =>
     `<tr style="border-bottom:1px solid var(--panel-rule);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 18px;color:var(--on-panel-faint);">${e(label)}</th><td style="padding:11px 18px;text-align:right;color:var(--on-panel-muted);">${e(alone)}</td><td style="padding:11px 18px;text-align:right;color:${green ? "var(--accent-lit)" : "var(--on-panel)"};font-weight:700;">${e(packed)}</td></tr>`
@@ -2756,7 +2756,7 @@ export function skillsIndex(baseUrl) {
       <div>
         <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 20px;color:var(--ink);">Seven tools.<br>One <span style="color:var(--accent);">payment</span>.</h1>
         <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 16px;">A real job is never one call. Auditing a domain takes seven tools; parsing a document takes seven more. Orchestrate that yourself and you are running seven payments, seven round trips and seven failure modes - and writing the code that holds it together.</p>
-        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount}+ packs, ${PACK_PRICE_RANGE.text}, none priced above the sum of its tools.</strong></p>
+        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount} packs, ${PACK_PRICE_RANGE.text}, none priced above the sum of its tools.</strong></p>
         <div style="display:flex;flex-wrap:wrap;gap:11px;">
           <a class="btn btn-secondary ml-cta" href="#packs">Browse the packs →</a>
           <a class="btn btn-secondary ml-cta" href="/api/skill-packs.json">skill-packs.json</a>
@@ -2852,7 +2852,7 @@ ${ledgerFooterCompact()}`;
 
   const canonical = `${baseUrl}/skills`;
   const title = "Skill packs - multi-tool agent workflows for one x402 payment";
-  const description = `${packCount}+ skill packs run a whole multi-tool job server-side for one payment: several tools, one settlement, one response. Partial-success envelope means a failed step never costs you the whole call. ${PACK_PRICE_RANGE.text} per pack, no signup.`;
+  const description = `${packCount} skill packs run a whole multi-tool job server-side for one payment: several tools, one settlement, one response. Partial-success envelope means a failed step never costs you the whole call. ${PACK_PRICE_RANGE.text} per pack, no signup.`;
 
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, sameAs: ORG_SAME_AS };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
@@ -2860,7 +2860,7 @@ ${ledgerFooterCompact()}`;
     { "@type": "ListItem", position: 2, name: "Our tools", item: `${baseUrl}/tools` },
     { "@type": "ListItem", position: 3, name: "Skill packs", item: canonical },
   ] };
-  const collectionLd = { "@type": "CollectionPage", "@id": `${canonical}#page`, name: "Agent402 skill packs", url: canonical, description: `${packCount}+ multi-tool workflows that run server-side in one request: one payment, one settlement, and a single response with a partial-success envelope if a step fails.`, isPartOf: { "@id": `${baseUrl}/#organization` }, mainEntity: { "@id": `${canonical}#packs` } };
+  const collectionLd = { "@type": "CollectionPage", "@id": `${canonical}#page`, name: "Agent402 skill packs", url: canonical, description: `${packCount} multi-tool workflows that run server-side in one request: one payment, one settlement, and a single response with a partial-success envelope if a step fails.`, isPartOf: { "@id": `${baseUrl}/#organization` }, mainEntity: { "@id": `${canonical}#packs` } };
   const appLd = { "@type": "SoftwareApplication", "@id": `${canonical}#app`, name: "Agent402 skill packs", applicationCategory: "DeveloperApplication", operatingSystem: "HTTP, MCP (streamable HTTP)", offers: { "@type": "AggregateOffer", offerCount: String(packCount), lowPrice: PACK_PRICE_RANGE.min.toFixed(3), highPrice: PACK_PRICE_RANGE.max.toFixed(3), priceCurrency: "USD", description: `One payment per pack run, on ${RAILS_SHORT}. No signup, no API key.` } };
   const itemListLd = { "@type": "ItemList", "@id": `${canonical}#packs`, name: "Featured skill packs", itemListElement: flagship.map((p, i) => ({ "@type": "ListItem", position: i + 1, name: p.slug, url: `${baseUrl}/skills/${p.slug}` })) };
   const faqLd = { "@type": "FAQPage", "@id": `${canonical}#faq`, mainEntity: SKILLS_FAQS.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
