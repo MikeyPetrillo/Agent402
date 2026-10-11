@@ -42,14 +42,14 @@ const isLight = (h) => /^#[C-Fc-f]/.test(h);  // #F3F4F5, #FFFFFF, #E9EAEC…
 ok(isLight(tok("--paper")), `default page background is light (--paper ${tok("--paper")})`);
 ok(isDark(tok("--ink")), `default foreground is dark (--ink ${tok("--ink")})`);
 ok(isLight(tok("--card")), `default cards are light (--card ${tok("--card")})`);
-ok(isLight(tok("--on-dark")), `text on obsidian surfaces stays light in both themes (--on-dark ${tok("--on-dark")})`);
+ok(isLight(tok("--on-panel")), `text on obsidian surfaces stays light in both themes (--on-panel ${tok("--on-panel")})`);
 ok(/:root \{ color-scheme: light; \}/.test(LEDGER_CSS), "bare :root declares color-scheme: light (form controls + scrollbars match the default)");
 
 // --- the dark theme is a complete override, not a partial one ------------------
 ok(darkBlock.length > 0, "a :root[data-theme=\"dark\"] override block exists");
 ok(isDark(dtok("--paper")) && isLight(dtok("--ink")) && isDark(dtok("--card")), `dark override flips paper/ink/card (${dtok("--paper")} / ${dtok("--ink")} / ${dtok("--card")})`);
 ok(/:root\[data-theme="dark"\] \{ color-scheme: dark; \}/.test(LEDGER_CSS), "dark override sets color-scheme: dark");
-const rootNames = [...rootBlock.matchAll(/--([a-z0-9-]+):/g)].map((m) => m[1]).filter((n) => !n.startsWith("font-"));
+const rootNames = [...rootBlock.matchAll(/--([a-z0-9-]+):/g)].map((m) => m[1]).filter((n) => !/^(font|fs|radius)-/.test(n)); // type, scale and radius are theme-independent
 const darkNames = new Set([...darkBlock.matchAll(/--([a-z0-9-]+):/g)].map((m) => m[1]));
 const missing = rootNames.filter((n) => !darkNames.has(n));
 ok(missing.length === 0, `every default token has a dark counterpart${missing.length ? ` - MISSING: ${missing.map((n) => "--" + n).join(", ")}` : ""}`);
@@ -89,18 +89,18 @@ ok(/\.rvz\{--s1:#3987e5/.test(revenueSrc), "the chart's dark series palette is t
 
 // ---- No dark-theme text on a light-theme surface, on the same element ---------
 // Found 2026-09-02 on prod's /tools: two <pre> blocks styled
-// background:var(--paper) + color:var(--on-dark) - a leftover from the
+// background:var(--paper) + color:var(--on-panel) - a leftover from the
 // dark-first day - rendered near-white text on the light page, i.e. an
 // invisible code sample (seven such blocks across /tools, /sell and
 // /what-is-x402). The light palette is the default, so a light ground token
 // paired with a dark-ground ink token on one element is always unreadable in
 // the default theme. Every page module is swept; the only legal pairing for
-// on-dark / dk-muted text is an obsidian ground (--surface, --ink-panel,
-// --obsidian-bg, --dark-border panels).
+// on-panel text is an obsidian ground (--panel, --ink-panel,
+// --obsidian-bg, --panel-rule panels).
 {
   const { readdirSync } = await import("node:fs");
   const LIGHT_GROUND = /background(?:-color)?:\s*var\(--(?:paper|card|card-zebra|milled-bg)\)/;
-  const DARK_INK = /color:\s*var\(--(?:on-dark2?|dk-muted[23]?)\)/;
+  const DARK_INK = /color:\s*var\(--on-panel(?:-soft|-muted|-dim|-faint)?\)/;
   const offenders = [];
   for (const f of readdirSync(new URL("../src/", import.meta.url)).filter((n) => n.endsWith(".js"))) {
     const src = readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");

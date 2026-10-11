@@ -12,7 +12,6 @@
 // descriptions, and routes stay accurate even as tools evolve. If a pack
 // references a tool that's been removed, the page surfaces a "missing" placeholder
 // rather than crashing — useful for catching dead references in the test suite.
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc } from "./ledger-chrome.js";
 import { RAILS_SHORT } from "./rails.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
@@ -2637,11 +2636,11 @@ const SKILLS_CSS = `
 @media (max-width:640px){ .sk-cardgrid { grid-template-columns:1fr; } }
 .sk-flagship { display:flex; flex-direction:column; gap:11px; padding:24px; background:var(--card); color:inherit; text-decoration:none; }
 .sk-flagship:hover .sk-flagship-slug { color:var(--accent); }
-.sk-flagship-slug { font-family:var(--font-mono); font-weight:700; font-size:16px; color:var(--ink); transition:color .15s; }
-.sk-flagship-body { font-size:14px; line-height:1.55; color:var(--muted); flex:1; }
-.sk-flagship-tools { font-family:var(--font-mono); font-size:11px; line-height:1.6; color:var(--faint); }
-.sk-flagship-cta { font-family:var(--font-mono); font-size:11.5px; color:var(--accent); }
-.sk-rest-chip { display:inline-block; border:1px solid var(--hairline); padding:7px 11px; font-family:var(--font-mono); font-size:12px; color:var(--muted); text-decoration:none; }
+.sk-flagship-slug { font-family:var(--font-mono); font-weight:700; font-size:var(--fs-lg); color:var(--ink); transition:color .15s; }
+.sk-flagship-body { font-size:var(--fs-md); line-height:1.55; color:var(--muted); flex:1; }
+.sk-flagship-tools { font-family:var(--font-mono); font-size:var(--fs-2xs); line-height:1.6; color:var(--faint); }
+.sk-flagship-cta { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--accent); }
+.sk-rest-chip { display:inline-block; border:1px solid var(--hairline); padding:7px 11px; font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--muted); text-decoration:none; }
 .sk-rest-chip:hover { border-color:var(--accent); color:var(--ink); }
 .sk-scroll { overflow-x:auto; }
 .sk-scroll table { min-width:640px; }
@@ -2653,19 +2652,19 @@ const SKILLS_CSS = `
 .sk-tl .name a:hover { color:var(--accent); }
 .sk-buy { border:1px solid var(--hairline); background:var(--card); padding:18px 20px; margin:24px 0 0; max-width:720px; }
 .sk-buy-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
-.sk-buy-price { font-family:var(--font-mono); font-size:26px; font-weight:700; color:var(--accent); }
-.sk-buy-unit { color:var(--muted); font-size:14px; }
-.sk-buy-route { font-family:var(--font-mono); font-size:13px; color:var(--ink); margin-top:6px; }
-.sk-buy-note { color:var(--muted); font-size:14px; line-height:1.7; margin:10px 0 0; }
-.sk-tl .price { color:var(--accent); font-family:var(--font-mono); font-size:13px; }
-.sk-tl .route { color:var(--faint); font-family:var(--font-mono); font-size:12px; }
-.sk-tl .desc { display:block; margin-top:6px; color:var(--muted); font-size:14px; line-height:1.55; }
-.sk-tl .missing { color:var(--accent); font-style:italic; }
+.sk-buy-price { font-family:var(--font-mono); font-size:var(--fs-2xl); font-weight:700; color:var(--accent); }
+.sk-buy-unit { color:var(--muted); font-size:var(--fs-md); }
+.sk-buy-route { font-family:var(--font-mono); font-size:var(--fs-sm); color:var(--ink); margin-top:6px; }
+.sk-buy-note { color:var(--muted); font-size:var(--fs-md); line-height:1.7; margin:10px 0 0; }
+.sk-tl .price { color:var(--accent); font-family:var(--font-mono); font-size:var(--fs-sm); }
+.sk-tl .route { color:var(--faint); font-family:var(--font-mono); font-size:var(--fs-xs); }
+.sk-tl .desc { display:block; margin-top:6px; color:var(--muted); font-size:var(--fs-md); line-height:1.55; }
+.sk-tl .missing { color:var(--bad); font-style:italic; }
 .sk-wf { counter-reset:step; margin:18px 0; padding:0; list-style:none; }
-.sk-wf li { position:relative; padding:16px 18px 16px 56px; border-left:2px solid var(--hairline); margin-bottom:8px; color:var(--muted); font-size:15px; line-height:1.65; counter-increment:step; }
-.sk-wf li::before { content:counter(step); position:absolute; left:14px; top:16px; width:26px; height:26px; background:var(--surface); color:var(--accent); font-family:var(--font-mono); font-weight:700; font-size:13px; display:flex; align-items:center; justify-content:center; }
+.sk-wf li { position:relative; padding:16px 18px 16px 56px; border-left:2px solid var(--hairline); margin-bottom:8px; color:var(--muted); font-size:var(--fs-base); line-height:1.65; counter-increment:step; }
+.sk-wf li::before { content:counter(step); position:absolute; left:14px; top:16px; width:26px; height:26px; background:var(--panel); color:var(--accent); font-family:var(--font-mono); font-weight:700; font-size:var(--fs-sm); display:flex; align-items:center; justify-content:center; }
 .sk-prompt { position:relative; margin:14px 0; }
-.sk-prompt pre { background:var(--surface); color:var(--on-dark); font-family:var(--font-mono); padding:18px 20px; overflow-x:auto; font-size:13px; line-height:1.6; white-space:pre-wrap; border:none; }
+.sk-prompt pre { background:var(--panel); color:var(--on-panel); font-family:var(--font-mono); padding:18px 20px; overflow-x:auto; font-size:var(--fs-sm); line-height:1.6; white-space:pre-wrap; border:none; }
 `;
 
 const SKILLS_TABS = [
@@ -2728,11 +2727,11 @@ export function skillsIndex(baseUrl) {
     ["failure paths to handle", "7", "0", false],
     ["orchestration code", "yours", "none", true],
   ].map(([label, alone, packed, green]) =>
-    `<tr style="border-bottom:1px solid var(--dark-border);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 18px;color:var(--dk-muted3);">${e(label)}</th><td style="padding:11px 18px;text-align:right;color:var(--dk-muted2);">${e(alone)}</td><td style="padding:11px 18px;text-align:right;color:${green ? "var(--accent-lit)" : "var(--on-dark)"};font-weight:700;">${e(packed)}</td></tr>`
+    `<tr style="border-bottom:1px solid var(--panel-rule);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 18px;color:var(--on-panel-faint);">${e(label)}</th><td style="padding:11px 18px;text-align:right;color:var(--on-panel-muted);">${e(alone)}</td><td style="padding:11px 18px;text-align:right;color:${green ? "var(--accent-lit)" : "var(--on-panel)"};font-weight:700;">${e(packed)}</td></tr>`
   ).join("");
 
   const illustrativeRowsHtml = ILLUSTRATIVE_RUN.map(([n, tool, out, okStep]) =>
-    `<tr style="border-bottom:1px solid var(--hairline);"><td style="padding:12px 18px;font-family:var(--font-mono);font-size:12px;color:var(--faint);">${e(n)}</td><th scope="row" style="text-align:left;font-weight:700;padding:12px 18px;font-family:var(--font-mono);font-size:13px;color:var(--ink);white-space:nowrap;">${e(tool)}</th><td style="padding:12px 18px;color:var(--muted);font-size:13.5px;line-height:1.5;">${e(out)}</td><td style="padding:12px 18px;text-align:right;font-family:var(--font-mono);font-size:12px;white-space:nowrap;"><span style="color:${okStep ? "var(--accent-lit)" : "var(--accent)"};">${okStep ? "ok" : "failed"}</span></td></tr>`
+    `<tr style="border-bottom:1px solid var(--panel-rule);"><td style="padding:12px 18px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-faint);">${e(n)}</td><th scope="row" style="text-align:left;font-weight:700;padding:12px 18px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel);white-space:nowrap;">${e(tool)}</th><td style="padding:12px 18px;color:var(--on-panel-muted);font-size:var(--fs-md);line-height:1.5;">${e(out)}</td><td style="padding:12px 18px;text-align:right;font-family:var(--font-mono);font-size:var(--fs-xs);white-space:nowrap;"><span style="color:${okStep ? "var(--accent-lit)" : "var(--on-panel-bad)"};">${okStep ? "ok" : "failed"}</span></td></tr>`
   ).join("");
 
   const flagshipCardsHtml = flagship.map((p) =>
@@ -2741,68 +2740,68 @@ export function skillsIndex(baseUrl) {
 
   const restChipsHtml = rest.map((p) => `<a class="sk-rest-chip" href="/skills/${e(p.slug)}">${e(p.slug)}</a>`).join("");
 
-  const faqHtml = SKILLS_FAQS.map((f) => `<article style="padding:22px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:17.5px;margin:0 0 10px;color:var(--ink);">${e(f.q)}</h3><p style="font-size:15.5px;line-height:1.65;color:var(--muted);margin:0;">${e(f.a)}</p></article>`).join("");
+  const faqHtml = SKILLS_FAQS.map((f) => `<article style="padding:22px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${e(f.q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${e(f.a)}</p></article>`).join("");
 
   const body = `
 <div style="border-bottom:1px solid var(--hairline);background:var(--footer-bg);">
-  <div style="max-width:1180px;margin:0 auto;padding:0 30px;display:flex;gap:0;overflow-x:auto;font-family:var(--font-mono);font-size:12.5px;">${tabsHtml}</div>
+  <div style="max-width:1180px;margin:0 auto;padding:0 30px;display:flex;gap:0;overflow-x:auto;font-family:var(--font-mono);font-size:var(--fs-sm);">${tabsHtml}</div>
 </div>
 
 <header style="border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:40px 30px 38px;">
-    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-bottom:20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/tools" style="color:var(--muted);text-decoration:none;">our tools</a> / <span style="color:var(--ink);">skill packs</span></nav>
+    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/tools" style="color:var(--muted);text-decoration:none;">our tools</a> / <span style="color:var(--ink);">skill packs</span></nav>
     <div class="sk-hero" style="grid-template-columns:1.05fr .95fr;gap:50px;align-items:start;">
       <div>
-        <h1 style="font-weight:800;font-size:56px;line-height:.96;letter-spacing:-.035em;margin:0 0 20px;color:var(--ink);">Seven tools.<br>One <span style="color:var(--accent);">payment</span>.</h1>
-        <p style="font-size:18px;line-height:1.55;color:var(--muted);margin:0 0 16px;">A real job is never one call. Auditing a domain takes seven tools; parsing a document takes seven more. Orchestrate that yourself and you are running seven payments, seven round trips and seven failure modes - and writing the code that holds it together.</p>
-        <p style="font-size:16px;line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount}+ packs, ${PACK_PRICE_RANGE.text}, none priced above the sum of its tools.</strong></p>
+        <h1 style="font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.035em;margin:0 0 20px;color:var(--ink);">Seven tools.<br>One <span style="color:var(--accent);">payment</span>.</h1>
+        <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 16px;">A real job is never one call. Auditing a domain takes seven tools; parsing a document takes seven more. Orchestrate that yourself and you are running seven payments, seven round trips and seven failure modes - and writing the code that holds it together.</p>
+        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount}+ packs, ${PACK_PRICE_RANGE.text}, none priced above the sum of its tools.</strong></p>
         <div style="display:flex;flex-wrap:wrap;gap:11px;">
-          <a class="ml-cta" href="#packs" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:14px 22px;">Browse the packs →</a>
-          <a class="ml-cta" href="/api/skill-packs.json" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 22px;">skill-packs.json</a>
+          <a class="ml-cta" href="#packs" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:14px 22px;">Browse the packs →</a>
+          <a class="ml-cta" href="/api/skill-packs.json" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 22px;">skill-packs.json</a>
         </div>
       </div>
-      <div style="border:1px solid var(--hairline);background:var(--surface);">
-        <div style="padding:12px 18px;border-bottom:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;color:var(--dk-muted);display:flex;justify-content:space-between;gap:12px;"><span>THE SAME JOB, TWO WAYS</span><span style="color:var(--dk-muted3);">security-audit</span></div>
-        <table style="font-family:var(--font-mono);font-size:12.5px;">
-          <thead><tr style="border-bottom:1px solid var(--dark-border);color:var(--dk-muted3);"><th scope="col" style="text-align:left;font-weight:400;padding:10px 18px;"></th><th scope="col" style="text-align:right;font-weight:400;padding:10px 18px;">you orchestrate</th><th scope="col" style="text-align:right;font-weight:700;padding:10px 18px;color:var(--accent);">one pack</th></tr></thead>
+      <div style="border:1px solid var(--hairline);background:var(--panel);">
+        <div style="padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);display:flex;justify-content:space-between;gap:12px;"><span>THE SAME JOB, TWO WAYS</span><span style="color:var(--on-panel-faint);">security-audit</span></div>
+        <table style="font-family:var(--font-mono);font-size:var(--fs-sm);">
+          <thead><tr style="border-bottom:1px solid var(--panel-rule);color:var(--on-panel-faint);"><th scope="col" style="text-align:left;font-weight:400;padding:10px 18px;"></th><th scope="col" style="text-align:right;font-weight:400;padding:10px 18px;">you orchestrate</th><th scope="col" style="text-align:right;font-weight:700;padding:10px 18px;color:var(--accent);">one pack</th></tr></thead>
           <tbody>${comparisonRowsHtml}</tbody>
         </table>
-        <div style="padding:12px 18px;border-top:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11px;color:var(--dk-muted3);">the pack still runs all seven tools - you just stop managing them</div>
+        <div style="padding:12px 18px;border-top:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-faint);">the pack still runs all seven tools - you just stop managing them</div>
       </div>
     </div>
   </div>
 </header>
 
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
-  <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">$ POST /api/skill/security-audit</div>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ POST /api/skill/security-audit</div>
   <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
-    <h2 style="font-weight:800;font-size:40px;line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Partial success is a result, not an error.</h2>
-    <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--faint);">the part that matters</span>
+    <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Partial success is a result, not an error.</h2>
+    <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">the part that matters</span>
   </div>
-  <p style="font-size:16.5px;line-height:1.6;color:var(--muted);max-width:740px;margin:0 0 28px;">This is the real difference, and it only shows up when something goes wrong. Orchestrate seven calls yourself and a failure on step six leaves you holding five results you have already paid for, a broken chain, and the job of working out what to retry. A pack returns the whole ledger: what succeeded, what did not, and why - in one response you can act on.</p>
-  <div class="sk-scroll" style="border:1px solid var(--hairline);background:var(--surface);">
-    <table style="font-family:var(--font-body);font-size:14px;">
-      <caption style="text-align:left;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);padding:14px 18px;border-bottom:1px solid var(--dark-border);">One run · a step failed · the response is still usable</caption>
-      <thead><tr style="border-bottom:1.5px solid var(--dark-border2);font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dk-muted3);"><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;width:44px;">step</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">tool</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">outcome</th><th scope="col" style="text-align:right;font-weight:700;padding:12px 18px;">status</th></tr></thead>
+  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:740px;margin:0 0 28px;">This is the real difference, and it only shows up when something goes wrong. Orchestrate seven calls yourself and a failure on step six leaves you holding five results you have already paid for, a broken chain, and the job of working out what to retry. A pack returns the whole ledger: what succeeded, what did not, and why - in one response you can act on.</p>
+  <div class="sk-scroll" style="border:1px solid var(--hairline);background:var(--panel);">
+    <table style="font-family:var(--font-body);font-size:var(--fs-md);">
+      <caption style="text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);padding:14px 18px;border-bottom:1px solid var(--panel-rule);">One run · a step failed · the response is still usable</caption>
+      <thead><tr style="border-bottom:1.5px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);"><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;width:44px;">step</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">tool</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">outcome</th><th scope="col" style="text-align:right;font-weight:700;padding:12px 18px;">status</th></tr></thead>
       <tbody>
         ${illustrativeRowsHtml}
-        <tr style="background:var(--footer-bg);border-top:1.5px solid var(--dark-border2);"><td style="padding:16px 18px;"></td><th scope="row" style="text-align:left;font-weight:700;padding:16px 18px;color:var(--on-dark);font-family:var(--font-mono);font-size:13px;">charged</th><td style="padding:16px 18px;color:var(--dk-muted2);font-size:13.5px;line-height:1.5;">One settlement for the run. Six of seven steps returned data, and you have the reason for the seventh - no second payment to find out.</td><td style="padding:16px 18px;text-align:right;font-family:var(--font-mono);font-size:13px;color:var(--accent-lit);white-space:nowrap;">1 payment</td></tr>
+        <tr style="border-top:1.5px solid var(--panel-rule-2);"><td style="padding:16px 18px;"></td><th scope="row" style="text-align:left;font-weight:700;padding:16px 18px;color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);">charged</th><td style="padding:16px 18px;color:var(--on-panel-muted);font-size:var(--fs-md);line-height:1.5;">One settlement for the run. Six of seven steps returned data, and you have the reason for the seventh - no second payment to find out.</td><td style="padding:16px 18px;text-align:right;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent-lit);white-space:nowrap;">1 payment</td></tr>
       </tbody>
     </table>
   </div>
-  <p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:14px 0 0;">Illustrative run. Each pack's exact step list and response contract is on its own page and in <a href="/api/skill-packs.json" style="color:var(--muted);">/api/skill-packs.json</a>.</p>
+  <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:14px 0 0;">Illustrative run. Each pack's exact step list and response contract is on its own page and in <a href="/api/skill-packs.json" style="color:var(--muted);">/api/skill-packs.json</a>.</p>
 </section>
 
 <section id="packs" style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
-  <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">$ GET /api/skill-packs.json</div>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/skill-packs.json</div>
   <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
-    <h2 style="font-weight:800;font-size:40px;line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Every pack, and what it runs.</h2>
-    <a href="/api/skill-packs.json" style="font-family:var(--font-mono);font-size:12.5px;color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">the machine-readable list →</a>
+    <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Every pack, and what it runs.</h2>
+    <a href="/api/skill-packs.json" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">the machine-readable list →</a>
   </div>
-  <p style="font-size:16px;line-height:1.6;color:var(--muted);max-width:700px;margin:0 0 28px;">Every pack publishes its tool sequence before you pay. These are deterministic sequences, not an agent improvising - the same inputs run the same steps in the same order, every time. Six are set out in full below; the rest of the ${packCount} follow.</p>
+  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:700px;margin:0 0 28px;">Every pack publishes its tool sequence before you pay. These are deterministic sequences, not an agent improvising - the same inputs run the same steps in the same order, every time. Six are set out in full below; the rest of the ${packCount} follow.</p>
   <div class="sk-cardgrid">${flagshipCardsHtml}</div>
   <div style="border:1px solid var(--hairline);border-top:none;background:var(--footer-bg);padding:22px 24px;">
-    <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dk-muted3);margin-bottom:14px;">${rest.length} more · every pack links to its own sequence</div>
+    <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--on-panel-faint);margin-bottom:14px;">${rest.length} more · every pack links to its own sequence</div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;">${restChipsHtml}</div>
   </div>
 </section>
@@ -2810,41 +2809,41 @@ export function skillsIndex(baseUrl) {
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
   <div class="sk-2col" style="grid-template-columns:1fr 1fr;border:1px solid var(--hairline);">
     <div style="padding:28px;border-right:1px solid var(--hairline);background:var(--card);">
-      <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">IN CODE</div>
-      <h2 style="font-weight:800;font-size:24px;margin:0 0 14px;color:var(--ink);">One POST, over x402 or MPP</h2>
-      <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 16px;">The pack quotes its price in the 402 challenge, your client signs once, and the response carries every step. Nothing to install and no key to rotate.</p>
-      <pre style="margin:0;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:15px;font-family:var(--font-mono);font-size:11.5px;line-height:1.8;white-space:pre-wrap;word-break:break-word;">curl -X POST \\
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">IN CODE</div>
+      <h2 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">One POST, over x402 or MPP</h2>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">The pack quotes its price in the 402 challenge, your client signs once, and the response carries every step. Nothing to install and no key to rotate.</p>
+      <pre style="margin:0;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:15px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.8;white-space:pre-wrap;word-break:break-word;">curl -X POST \\
   https://agent402.tools/api/skill/security-audit \\
   -H 'content-type: application/json' \\
   -d '{"domain":"example.com"}'</pre>
     </div>
     <div style="padding:28px;background:var(--card);">
-      <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">IN CLAUDE</div>
-      <h2 style="font-weight:800;font-size:24px;margin:0 0 14px;color:var(--ink);">One tool call, payment handled</h2>
-      <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 16px;">Through MCP a pack is a single tool the model can pick. Ask for the job in words - the connector chooses the pack, settles the payment, and returns the ledger.</p>
-      <pre style="margin:0 0 16px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:15px;font-family:var(--font-mono);font-size:11.5px;line-height:1.8;white-space:pre-wrap;word-break:break-word;">claude mcp add agent402 -s user -- npx -y agent402-mcp@latest
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">IN CLAUDE</div>
+      <h2 style="font-weight:800;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">One tool call, payment handled</h2>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Through MCP a pack is a single tool the model can pick. Ask for the job in words - the connector chooses the pack, settles the payment, and returns the ledger.</p>
+      <pre style="margin:0 0 16px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:15px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.8;white-space:pre-wrap;word-break:break-word;">claude mcp add agent402 -s user -- npx -y agent402-mcp@latest
 
-<span style="color:var(--dk-muted3);">"run a security audit on example.com"</span></pre>
-      <a href="/docs#add" style="font-family:var(--font-mono);font-size:12.5px;color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">connector setup →</a>
+<span style="color:var(--on-panel-faint);">"run a security audit on example.com"</span></pre>
+      <a href="/docs#add" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">connector setup →</a>
     </div>
   </div>
 </section>
 
 <section style="max-width:900px;margin:0 auto;padding:56px 30px 0;">
-  <h2 style="font-weight:800;font-size:34px;line-height:1.02;letter-spacing:-.025em;margin:0 0 24px;color:var(--ink);">About skill packs.</h2>
+  <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 24px;color:var(--ink);">About skill packs.</h2>
   <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">${faqHtml}</div>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:44px 30px 52px;">
-  <div style="background:var(--surface);border:1px solid var(--hairline);padding:46px 40px;position:relative;overflow:hidden;">
-    <div style="position:absolute;right:24px;top:-32px;font-weight:900;font-size:210px;line-height:1;color:transparent;-webkit-text-stroke:2px #ffffff10;pointer-events:none;">402</div>
+  <div style="background:var(--panel);border:1px solid var(--hairline);padding:46px 40px;position:relative;overflow:hidden;">
+    <div style="position:absolute;right:24px;top:-32px;font-weight:900;font-size:var(--fs-mark);line-height:1;color:transparent;-webkit-text-stroke:2px var(--on-panel-mark);pointer-events:none;">402</div>
     <div style="position:relative;">
-      <h2 style="font-weight:800;font-size:36px;line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-dark);">Stop writing the glue.</h2>
-      <p style="font-size:16px;line-height:1.6;color:var(--dk-muted2);margin:0 0 26px;max-width:520px;">Describe the job and let the pack run the sequence. One payment, one response, and a result you can use even when a step fails.</p>
+      <h2 style="font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Stop writing the glue.</h2>
+      <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:520px;">Describe the job and let the pack run the sequence. One payment, one response, and a result you can use even when a step fails.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a class="ml-cta" href="/docs#add" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:14px 24px;">Add to your agent →</a>
-        <a class="ml-cta" href="#packs" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 24px;">Browse the packs</a>
-        <a class="ml-cta" href="/tools" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--dk-muted);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 24px;">SINGLE TOOLS</a>
+        <a class="ml-cta" href="/docs#add" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:14px 24px;">Add to your agent →</a>
+        <a class="ml-cta" href="#packs" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">Browse the packs</a>
+        <a class="ml-cta" href="/tools" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel-dim);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">SINGLE TOOLS</a>
       </div>
     </div>
   </div>
@@ -2954,8 +2953,8 @@ export function skillPackPage(baseUrl, slug, catalog) {
   const packExample = packTool?.discovery?.output?.example;
   const exampleSteps = Array.isArray(packExample?.steps) ? packExample.steps : [];
   const returnsHtml = packExample && typeof packExample === "object"
-    ? `<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">What one call returns</h2>
-<p style="color:var(--muted);font-size:15px;line-height:1.7;">A JSON object with ${Object.keys(packExample).map((k) => `<code>${e(k)}</code>`).join(", ")}${exampleSteps.length ? `; <code>steps</code> holds one entry per tool (${exampleSteps.slice(0, 8).map((s) => e(s.tool || s.slug || s.name || "")).filter(Boolean).join(", ")}${exampleSteps.length > 8 ? ", ..." : ""}), each with its own result or error` : ""}. Full example on the <a href="/tools/skill-${e(pack.slug)}" style="color:var(--accent);">API page</a>.</p>`
+    ? `<h2 style="font-weight:800;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">What one call returns</h2>
+<p style="color:var(--muted);font-size:var(--fs-base);line-height:1.7;">A JSON object with ${Object.keys(packExample).map((k) => `<code>${e(k)}</code>`).join(", ")}${exampleSteps.length ? `; <code>steps</code> holds one entry per tool (${exampleSteps.slice(0, 8).map((s) => e(s.tool || s.slug || s.name || "")).filter(Boolean).join(", ")}${exampleSteps.length > 8 ? ", ..." : ""}), each with its own result or error` : ""}. Full example on the <a href="/tools/skill-${e(pack.slug)}" style="color:var(--accent);">API page</a>.</p>`
     : "";
 
   const jsonLd = {
@@ -2972,8 +2971,8 @@ export function skillPackPage(baseUrl, slug, catalog) {
   };
 
   const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
-<h1 style="font-family:var(--font-body);font-weight:800;font-size:38px;line-height:1;letter-spacing:-.02em;margin-bottom:10px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis;" title="${e(pack.title)}">${e(pack.title)}</h1>
-<p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;">${e(pack.tagline)}</p>
+<h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin-bottom:10px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis;" title="${e(pack.title)}">${e(pack.title)}</h1>
+<p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.6;max-width:720px;">${e(pack.tagline)}</p>
 ${packTool ? `
 <div class="sk-buy">
   <div class="sk-buy-head">
@@ -2981,39 +2980,39 @@ ${packTool ? `
     <span class="sk-buy-unit">per call &middot; one payment for the whole workflow</span>
   </div>
   <div class="sk-buy-route">${e(packTool.route)}</div>
-  <div style="font-family:var(--font-mono);font-size:12.5px;margin:8px 0 0;"><a href="/tools/skill-${e(pack.slug)}" style="color:var(--muted);">Sample output + API docs &rarr;</a></div>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);margin:8px 0 0;"><a href="/tools/skill-${e(pack.slug)}" style="color:var(--muted);">Sample output + API docs &rarr;</a></div>
   <p class="sk-buy-note">${pack.toolSlugs.length} tools run server-side in one request. You pay once, settle once, and get a single response - no orchestration, no per-step payments, and a partial-success envelope if any step fails. USDC over x402 on any supported chain.</p>
 </div>` : ""}
 
-<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">When to use this pack</h2>
-<p style="color:var(--muted);font-size:15px;line-height:1.7;">${e(pack.useCase)}</p>
+<h2 style="font-weight:800;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">When to use this pack</h2>
+<p style="color:var(--muted);font-size:var(--fs-base);line-height:1.7;">${e(pack.useCase)}</p>
 
-<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Tools in this pack</h2>
-<p style="color:var(--muted);font-size:14.5px;line-height:1.7;margin:0 0 4px;">${packTool ? `All ${pack.toolSlugs.length} run inside the single ${e(packTool.price)} call above.` : `The ${pack.toolSlugs.length} tools this workflow composes.`} Each is also callable on its own if you only need one part.</p>
+<h2 style="font-weight:800;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Tools in this pack</h2>
+<p style="color:var(--muted);font-size:var(--fs-base);line-height:1.7;margin:0 0 4px;">${packTool ? `All ${pack.toolSlugs.length} run inside the single ${e(packTool.price)} call above.` : `The ${pack.toolSlugs.length} tools this workflow composes.`} Each is also callable on its own if you only need one part.</p>
 <ul class="sk-tl">${tools}</ul>
 
-${priceNote ? `<p style="color:var(--muted);font-size:14.5px;line-height:1.7;margin:14px 0 0;">${priceNote}</p>` : ""}
+${priceNote ? `<p style="color:var(--muted);font-size:var(--fs-base);line-height:1.7;margin:14px 0 0;">${priceNote}</p>` : ""}
 
-<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Workflow</h2>
+<h2 style="font-weight:800;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Workflow</h2>
 <ol class="sk-wf">${steps}</ol>
 
 ${argRows ? `
-<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Arguments</h2>
-<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;font-size:14px;"><tr><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Name</th><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Required</th><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Description</th><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Example</th></tr>${argRows}</table></div>` : ""}
+<h2 style="font-weight:800;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Arguments</h2>
+<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;font-size:var(--fs-md);"><tr><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Name</th><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Required</th><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Description</th><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Example</th></tr>${argRows}</table></div>` : ""}
 
 ${returnsHtml}
 
 ${packTool ? `
-<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Call it directly</h2>
-<p style="color:var(--muted);font-size:15px;line-height:1.7;">Any x402 client pays the 402 and gets the whole workflow back in one response. With the <code>agent402-client</code> SDK (<code>npm i agent402-client</code>, an ES module):</p>
-<pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:18px 20px;font-size:13px;line-height:1.6;border:none;margin-top:12px;overflow-x:auto;">${e(packClientSnippet(packTool.slug, Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute ?? "..."]))))}</pre>` : ""}
+<h2 style="font-weight:800;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Call it directly</h2>
+<p style="color:var(--muted);font-size:var(--fs-base);line-height:1.7;">Any x402 client pays the 402 and gets the whole workflow back in one response. With the <code>agent402-client</code> SDK (<code>npm i agent402-client</code>, an ES module):</p>
+<pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);padding:18px 20px;font-size:var(--fs-sm);line-height:1.6;border:none;margin-top:12px;overflow-x:auto;">${e(packClientSnippet(packTool.slug, Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute ?? "..."]))))}</pre>` : ""}
 
-<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Run it in Claude</h2>
-<pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:18px 20px;font-size:13px;line-height:1.6;border:none;margin-top:12px;">claude mcp add agent402 -s user -- npx -y agent402-mcp@latest</pre>
-<p style="color:var(--muted);font-size:15px;margin-top:12px;">Then paste this prompt into Claude:</p>
+<h2 style="font-weight:800;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Run it in Claude</h2>
+<pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);padding:18px 20px;font-size:var(--fs-sm);line-height:1.6;border:none;margin-top:12px;">claude mcp add agent402 -s user -- npx -y agent402-mcp@latest</pre>
+<p style="color:var(--muted);font-size:var(--fs-base);margin-top:12px;">Then paste this prompt into Claude:</p>
 <div class="sk-prompt"><pre>${e(pack.claudePrompt)}</pre></div>
 
-<p style="color:var(--faint);font-size:14px;margin-top:36px;"><a href="/skills" style="color:var(--accent);text-decoration:none;">\u2190 All skill packs</a></p>
+<p style="color:var(--faint);font-size:var(--fs-md);margin-top:36px;"><a href="/skills" style="color:var(--accent);text-decoration:none;">\u2190 All skill packs</a></p>
 </div>
 ${ledgerFooterCompact()}`;
 

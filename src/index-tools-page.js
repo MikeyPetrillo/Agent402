@@ -31,42 +31,42 @@ const fmtPrice = (p) => (typeof p === "number" && p > 0 ? `$${p < 0.01 ? p.toFix
 
 const CSS = `
 .ix-wrap{max-width:1180px;margin:0 auto;padding:52px 30px}
-.ix-h1{font-family:var(--font-body);font-weight:800;font-size:46px;line-height:1;letter-spacing:-.03em;margin:0 0 12px}
-.ix-sub{color:var(--muted);margin:0 0 24px;font-size:15px;line-height:1.6;max-width:760px}
+.ix-h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-4xl);line-height:1;letter-spacing:-.03em;margin:0 0 12px}
+.ix-sub{color:var(--muted);margin:0 0 24px;font-size:var(--fs-base);line-height:1.6;max-width:760px}
 .ix-note{border:1px solid var(--hairline);background:var(--card);padding:18px 20px;margin:0 0 26px}
-.ix-note h2{font-family:var(--font-body);font-weight:800;font-size:17px;margin:0 0 8px}
+.ix-note h2{font-family:var(--font-body);font-weight:800;font-size:var(--fs-lg);margin:0 0 8px}
 .ix-note ul{margin:0;padding-left:18px}
-.ix-note li{color:var(--muted);font-size:13.5px;line-height:1.65;margin:5px 0}
+.ix-note li{color:var(--muted);font-size:var(--fs-md);line-height:1.65;margin:5px 0}
 .ix-note b{color:var(--ink)}
 .ix-stats{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 20px;padding:0;list-style:none}
-.ix-stats li{border:1px solid var(--hairline);background:var(--card);padding:9px 13px;font-family:var(--font-mono);font-size:12.5px}
+.ix-stats li{border:1px solid var(--hairline);background:var(--card);padding:9px 13px;font-family:var(--font-mono);font-size:var(--fs-sm)}
 .ix-stats b{font-family:var(--font-body)}
 .ix-search{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
-.ix-search input{flex:1;min-width:220px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:13px;padding:10px 12px}
-.ix-search button{border:1px solid var(--hairline);background:var(--ink);color:var(--paper);font-family:var(--font-mono);font-size:13px;font-weight:700;padding:10px 18px;cursor:pointer}
+.ix-search input{flex:1;min-width:220px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-sm);padding:10px 12px}
+.ix-search button{border:1px solid var(--hairline);background:var(--ink);color:var(--paper);font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;padding:10px 18px;cursor:pointer}
 .ix-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 22px}
-.ix-chips a{border:1px solid var(--hairline);background:var(--card);color:var(--muted);font-family:var(--font-mono);font-size:11.5px;text-decoration:none;padding:5px 10px}
+.ix-chips a{border:1px solid var(--hairline);background:var(--card);color:var(--muted);font-family:var(--font-mono);font-size:var(--fs-xs);text-decoration:none;padding:5px 10px}
 .ix-chips a.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
-table.ix{width:100%;border-collapse:collapse;font-size:14px}
-table.ix th{text-align:left;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:8px 10px;border-bottom:1px solid var(--hairline)}
+table.ix{width:100%;border-collapse:collapse;font-size:var(--fs-md)}
+table.ix th{text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:8px 10px;border-bottom:1px solid var(--hairline)}
 table.ix td{padding:11px 10px;border-bottom:1px solid var(--hairline);vertical-align:top}
 table.ix tr:nth-child(even) td{background:var(--card-zebra)}
-.ix-badge{display:inline-block;font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;padding:2px 6px;margin-right:7px;vertical-align:1px;border:1px solid var(--dash);color:var(--faint)}
-.ix-badge.ours{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+.ix-badge{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.06em;padding:2px 6px;margin-right:7px;vertical-align:1px;border:1px solid var(--dash);color:var(--faint)}
+.ix-badge.ours{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:700}
 table.ix tr.is-ours td{background:color-mix(in srgb,var(--accent) 7%,var(--card))}
 table.ix tr.is-ours td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 .ix-name{font-weight:600;display:block;word-break:break-word}
-.ix-desc{color:var(--muted);font-size:13px;line-height:1.5;margin-top:3px;display:block}
-.ix-nodesc{color:var(--faint);font-size:12.5px;font-style:italic;margin-top:3px;display:block}
-.ix-seller a{color:var(--accent);text-decoration:none;font-family:var(--font-mono);font-size:12.5px;word-break:break-all}
+.ix-desc{color:var(--muted);font-size:var(--fs-sm);line-height:1.5;margin-top:3px;display:block}
+.ix-nodesc{color:var(--faint);font-size:var(--fs-sm);font-style:italic;margin-top:3px;display:block}
+.ix-seller a{color:var(--accent);text-decoration:none;font-family:var(--font-mono);font-size:var(--fs-sm);word-break:break-all}
 .ix-seller a:hover{text-decoration:underline}
-.ix-meth{font-family:var(--font-mono);font-size:11px;color:var(--faint)}
-.ix-price{font-family:var(--font-mono);font-size:13px;white-space:nowrap}
-.ix-pager{display:flex;gap:10px;align-items:center;justify-content:center;margin:26px 0 0;font-family:var(--font-mono);font-size:13px}
+.ix-meth{font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint)}
+.ix-price{font-family:var(--font-mono);font-size:var(--fs-sm);white-space:nowrap}
+.ix-pager{display:flex;gap:10px;align-items:center;justify-content:center;margin:26px 0 0;font-family:var(--font-mono);font-size:var(--fs-sm)}
 .ix-pager a{border:1px solid var(--hairline);color:var(--ink);text-decoration:none;padding:8px 16px}
 .ix-pager span{color:var(--faint)}
 .ix-empty{border:1px solid var(--hairline);background:var(--card);padding:26px;text-align:center;color:var(--muted)}
-@media(max-width:720px){.ix-h1{font-size:32px}.ix-wrap{padding:34px 18px}table.ix th:nth-child(3),table.ix td:nth-child(3){display:none}}
+@media(max-width:720px){.ix-h1{font-size:var(--fs-2xl)}.ix-wrap{padding:34px 18px}table.ix th:nth-child(3),table.ix td:nth-child(3){display:none}}
 `;
 
 /** One row. Third-party text is seller-supplied and only ever escaped; our own

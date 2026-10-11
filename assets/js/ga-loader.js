@@ -62,7 +62,7 @@
     var bar = document.createElement("div");
     bar.setAttribute("role", "region");
     bar.setAttribute("aria-label", "Analytics choice");
-    bar.style.cssText = "position:fixed;left:12px;right:12px;bottom:12px;z-index:50;max-width:620px;margin:0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:12px 14px;border-radius:12px;background:var(--card,#141619);color:var(--ink,#E9EAEC);border:1px solid var(--hairline,#2C3136);box-shadow:0 10px 30px rgba(0,0,0,.35);font:14px/1.45 Geist,system-ui,sans-serif";
+    bar.style.cssText = "position:fixed;left:12px;right:12px;bottom:12px;z-index:50;max-width:620px;margin:0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:12px 14px;border-radius:12px;background:var(--card);color:var(--ink);border:1px solid var(--hairline);box-shadow:0 10px 30px rgba(0,0,0,.35);font:var(--fs-md)/1.45 Geist,system-ui,sans-serif";
     var text = document.createElement("span");
     text.style.cssText = "flex:1 1 260px";
     text.appendChild(document.createTextNode("We use Google Analytics to count visits. Allow its measurement cookie? "));
@@ -75,7 +75,7 @@
       var b = document.createElement("button");
       b.type = "button";
       b.textContent = label;
-      b.style.cssText = "font:500 13px Geist,system-ui,sans-serif;border-radius:999px;padding:7px 14px;cursor:pointer;border:1px solid var(--hairline,#2C3136);" + (primary ? "background:var(--ink,#E9EAEC);color:var(--paper,#0B0C0E);" : "background:transparent;color:inherit;");
+      b.style.cssText = "font:500 var(--fs-sm) Geist,system-ui,sans-serif;border-radius:999px;padding:7px 14px;cursor:pointer;border:1px solid var(--hairline);" + (primary ? "background:var(--ink);color:var(--paper);" : "background:transparent;color:inherit;");
       b.addEventListener("click", function () {
         store.set("a402-analytics-consent", value);
         if (value === "granted") gtag("consent", "update", { analytics_storage: "granted" });

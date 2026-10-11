@@ -10,6 +10,7 @@ export function badgeSvg(style) {
   return defaultBadge(); // "default" or fallback
 }
 
+// design-tokens: literal-start (standalone SVG badges embedded in other sites' READMEs: no stylesheet)
 function defaultBadge() {
   const leftText = "Agent402";
   const rightText = "500+ tools";
@@ -21,19 +22,19 @@ function defaultBadge() {
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalWidth}" height="${h}">
   <linearGradient id="s" x2="0" y2="100%">
-    <stop offset="0" stop-color="#fff" stop-opacity=".1"/>
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity=".1"/>
     <stop offset="1" stop-opacity=".1"/>
   </linearGradient>
-  <clipPath id="c"><rect width="${totalWidth}" height="${h}" rx="${r}" fill="#fff"/></clipPath>
+  <clipPath id="c"><rect width="${totalWidth}" height="${h}" rx="${r}" fill="#FFFFFF"/></clipPath>
   <g clip-path="url(#c)">
-    <rect width="${leftWidth}" height="${h}" fill="#555"/>
-    <rect x="${leftWidth}" width="${rightWidth}" height="${h}" fill="#4ade80"/>
+    <rect width="${leftWidth}" height="${h}" fill="#3A3F45"/>
+    <rect x="${leftWidth}" width="${rightWidth}" height="${h}" fill="#0F5E43"/>
     <rect width="${totalWidth}" height="${h}" fill="url(#s)"/>
   </g>
-  <g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11" text-rendering="geometricPrecision">
-    <text x="${leftWidth / 2}" y="14" fill="#010101" fill-opacity=".3">${leftText}</text>
+  <g fill="#FFFFFF" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11" text-rendering="geometricPrecision">
+    <text x="${leftWidth / 2}" y="14" fill="#0B0C0E" fill-opacity=".3">${leftText}</text>
     <text x="${leftWidth / 2}" y="13">${leftText}</text>
-    <text x="${leftWidth + rightWidth / 2}" y="14" fill="#010101" fill-opacity=".3">${rightText}</text>
+    <text x="${leftWidth + rightWidth / 2}" y="14" fill="#0B0C0E" fill-opacity=".3">${rightText}</text>
     <text x="${leftWidth + rightWidth / 2}" y="13">${rightText}</text>
   </g>
 </svg>`;
@@ -48,9 +49,9 @@ function flatBadge() {
   const h = 20;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalWidth}" height="${h}">
-  <rect width="${leftWidth}" height="${h}" fill="#555"/>
-  <rect x="${leftWidth}" width="${rightWidth}" height="${h}" fill="#4ade80"/>
-  <g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11" text-rendering="geometricPrecision">
+  <rect width="${leftWidth}" height="${h}" fill="#3A3F45"/>
+  <rect x="${leftWidth}" width="${rightWidth}" height="${h}" fill="#0F5E43"/>
+  <g fill="#FFFFFF" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11" text-rendering="geometricPrecision">
     <text x="${leftWidth / 2}" y="14">${leftText}</text>
     <text x="${leftWidth + rightWidth / 2}" y="14">${rightText}</text>
   </g>
@@ -64,11 +65,13 @@ function poweredByBadge() {
   const r = 4;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">
-  <rect width="${w}" height="${h}" rx="${r}" fill="#131826"/>
-  <rect x=".5" y=".5" width="${w - 1}" height="${h - 1}" rx="${r}" fill="none" stroke="#4ade80" stroke-opacity=".4"/>
-  <text x="${w / 2}" y="18" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="12" fill="#4ade80" text-rendering="geometricPrecision">${text}</text>
+  <rect width="${w}" height="${h}" rx="${r}" fill="#0B0C0E"/>
+  <rect x=".5" y=".5" width="${w - 1}" height="${h - 1}" rx="${r}" fill="none" stroke="#34A877" stroke-opacity=".4"/>
+  <text x="${w / 2}" y="18" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="12" fill="#0F5E43" text-rendering="geometricPrecision">${text}</text>
 </svg>`;
 }
+
+// design-tokens: literal-end
 
 /* ------------------------------------------------------------------ */
 /*  Badges page HTML                                                   */
@@ -117,32 +120,32 @@ export function badgesPage(baseUrl) {
 
   const extraCss = `
 .bdg-wrap{max-width:860px;margin:0 auto;padding:56px 30px}
-.bdg-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:18px}
-.bdg-title{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 10px}
-.bdg-subtitle{font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 40px}
+.bdg-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
+.bdg-title{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 10px}
+.bdg-subtitle{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px}
 
 .bdg-section{background:var(--card);border:1px solid var(--hairline);padding:24px;margin-bottom:20px}
-.bdg-section h3{font-family:var(--font-body);font-weight:800;font-size:20px;margin:0 0 4px;color:var(--ink)}
-.bdg-desc{color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 16px}
+.bdg-section h3{font-family:var(--font-body);font-weight:800;font-size:var(--fs-lg);margin:0 0 4px;color:var(--ink)}
+.bdg-desc{color:var(--muted);font-size:var(--fs-md);line-height:1.55;margin:0 0 16px}
 
 .bdg-preview{background:var(--paper);border:1px solid var(--hairline);padding:20px;text-align:center;margin-bottom:20px}
 .bdg-preview img{display:inline-block;vertical-align:middle}
 
-.bdg-label{display:inline-block;font-family:var(--font-mono);font-size:13px;color:var(--faint);margin-bottom:8px}
+.bdg-label{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:8px}
 
 .bdg-code-wrap{position:relative;margin-bottom:16px}
-.bdg-code-wrap pre{background:var(--surface);border:1px solid var(--hairline);padding:16px;overflow-x:auto;margin:0;font-family:var(--font-mono);font-size:13px;line-height:1.55;color:var(--on-dark);white-space:pre-wrap;word-break:break-all}
-.bdg-code-wrap .bdg-copy{position:absolute;top:8px;right:8px;background:var(--surface);border:1.5px solid var(--cream);color:var(--on-dark);font-family:var(--font-mono);font-size:11px;padding:4px 10px;cursor:pointer;transition:all .15s}
-.bdg-code-wrap .bdg-copy:hover{background:var(--cream);color:var(--ink)}
+.bdg-code-wrap pre{background:var(--panel);border:1px solid var(--hairline);padding:16px;overflow-x:auto;margin:0;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;color:var(--on-panel);white-space:pre-wrap;word-break:break-all}
+.bdg-code-wrap .bdg-copy{position:absolute;top:8px;right:8px;background:var(--panel);border:1.5px solid var(--paper);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-2xs);padding:4px 10px;cursor:pointer;transition:all .15s}
+.bdg-code-wrap .bdg-copy:hover{background:var(--paper);color:var(--ink)}
 .bdg-code-wrap .bdg-copy.copied{color:var(--accent);border-color:var(--accent)}
 
 .bdg-note{background:var(--card);border:1px solid var(--hairline);padding:24px;margin-top:32px}
-.bdg-note h3{font-family:var(--font-body);font-weight:800;font-size:18px;margin:0 0 6px;color:var(--ink)}
-.bdg-note p{color:var(--muted);font-size:14px;line-height:1.55;margin:0}
-.bdg-note code{font-family:var(--font-mono);background:var(--surface);color:var(--on-dark);padding:2px 7px;font-size:13px;border:1px solid var(--hairline)}
+.bdg-note h3{font-family:var(--font-body);font-weight:800;font-size:var(--fs-lg);margin:0 0 6px;color:var(--ink)}
+.bdg-note p{color:var(--muted);font-size:var(--fs-md);line-height:1.55;margin:0}
+.bdg-note code{font-family:var(--font-mono);background:var(--panel);color:var(--on-panel);padding:2px 7px;font-size:var(--fs-sm);border:1px solid var(--hairline)}
 
 @media(max-width:600px){
-  .bdg-title{font-size:36px !important}
+  .bdg-title{font-size:var(--fs-3xl) !important}
 }
 `;
 

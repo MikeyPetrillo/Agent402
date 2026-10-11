@@ -60,7 +60,7 @@
       var feedHtml=(d.recentCalls||[]).map(function(x){
         var m=x.paidWith==='proof-of-work'?'PoW':x.paidWith==='heartbeat'?'HB':'$ USDC';
         return '<li><span class="op-rs">'+esc(x.slug)+'</span><span class="op-rm">'+m+'</span><span class="op-ra">'+esc(x.at)+'</span></li>';
-      }).join('') || '<li style="text-align:center;color:var(--dk-muted);padding:16px;">No recent activity.</li>';
+      }).join('') || '<li style="text-align:center;color:var(--on-panel-dim);padding:16px;">No recent activity.</li>';
       feed.innerHTML = feedHtml; /* eslint-disable-line -- pre-existing AJAX feed refresh; all values esc()-d */
     } catch(e) { /* ignore */ }
   }

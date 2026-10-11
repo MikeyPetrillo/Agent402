@@ -135,12 +135,12 @@ function decideDoorHtml() {
   const usd = (n) => `$${Number(n).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}`;
   return `<div class="hm-milled hm-decide" style="margin-top:20px;padding:28px 32px;display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:28px;align-items:center;">
     <div style="display:flex;flex-direction:column;gap:12px;">
-      <div style="font-family:var(--font-mono);font-size:11.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);">Agent402 Decide</div>
-      <h2 class="hm-h2" style="font-size:30px;margin:0;">Describe the job. Get the plan.</h2>
-      <p class="hm-lede" style="margin:0;font-size:15.5px;">One call returns which tools to use, in what order, with fallbacks and params that validate, across this catalog and outside x402 sellers. Every seller is scored by the same formula. ${esc(usd(c.prices.quick))} to ${esc(usd(c.prices.full))} a decision, returned as credit when Agent402 runs the plan.</p>
-      <a href="/decide" style="font-size:14.5px;font-weight:500;color:var(--ink);text-decoration:none;">See how it decides →</a>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--faint);">Agent402 Decide</div>
+      <h2 class="hm-h2" style="font-size:var(--fs-2xl);margin:0;">Describe the job. Get the plan.</h2>
+      <p class="hm-lede" style="margin:0;font-size:var(--fs-base);">One call returns which tools to use, in what order, with fallbacks and params that validate, across this catalog and outside x402 sellers. Every seller is scored by the same formula. ${esc(usd(c.prices.quick))} to ${esc(usd(c.prices.full))} a decision, returned as credit when Agent402 runs the plan.</p>
+      <a href="/decide" style="font-size:var(--fs-base);font-weight:500;color:var(--ink);text-decoration:none;">See how it decides →</a>
     </div>
-    <div style="font-family:var(--font-mono);display:flex;flex-direction:column;border:1px solid var(--hairline);background:var(--card);font-size:12.5px;">
+    <div style="font-family:var(--font-mono);display:flex;flex-direction:column;border:1px solid var(--hairline);background:var(--card);font-size:var(--fs-sm);">
       <a href="/decide" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid var(--hairline);text-decoration:none;color:var(--ink);"><span>POST /api/decide</span><span style="color:var(--accent);">from ${esc(usd(c.prices.quick))}</span></a>
       <a href="/decide#connect" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid var(--hairline);text-decoration:none;color:var(--ink);"><span>POST /api/decide/execute</span><span style="color:var(--accent);">credit applies</span></a>
       <a href="/decide#connect" style="display:flex;justify-content:space-between;padding:11px 16px;text-decoration:none;color:var(--ink);"><span>POST /api/decide/feedback</span><span style="color:var(--accent);">free</span></a>
@@ -211,20 +211,20 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
 .hm-proof { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; }
 .hm-card { border-radius: 18px; background: var(--card); border: 1px solid var(--hairline); box-shadow: inset 0 1px 0 var(--card-inset), 0 1px 2px rgba(0,0,0,.08); }
 .hm-milled { border-radius: 18px; background: var(--milled-bg); border: 1px solid var(--milled-border); box-shadow: inset 0 1px 0 var(--card-inset), inset 0 -1px 0 rgba(0,0,0,.06), var(--shadow-lg); }
-.hm-obsidian { border-radius: 18px; background: var(--obsidian-bg); color: var(--on-dark); border: 1px solid var(--obsidian-border); box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 18px 40px rgba(0,0,0,.22); }
-.hm-btn { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-body); font-weight: 500; font-size: 15px; text-decoration: none; padding: 13px 22px; border-radius: 999px; white-space: nowrap; transition: transform .12s ease, box-shadow .12s ease; }
+.hm-obsidian { border-radius: 18px; background: var(--obsidian-bg); color: var(--on-panel); border: 1px solid var(--obsidian-border); box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 18px 40px rgba(0,0,0,.22); }
+.hm-btn { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-body); font-weight: 500; font-size: var(--fs-base); text-decoration: none; padding: 13px 22px; border-radius: 999px; white-space: nowrap; transition: transform .12s ease, box-shadow .12s ease; }
 .hm-btn:hover { transform: translateY(-1px); }
 .hm-btn-dark { color: var(--btn-fg); background: var(--btn-bg); box-shadow: var(--btn-shadow); border: 0; cursor: pointer; }
 .hm-btn-ghost { color: var(--ink); border: 1px solid var(--dash); background: var(--chip-bg); }
 .hm-btn-ghost:hover { border-color: var(--ink); }
-.hm-btn-lit { color: #0B0C0E; background: var(--accent-lit); border: 0; cursor: pointer; } /* phosphor reads dark-on-green in both themes */
-.hm-kicker { font-family: var(--font-mono); font-size: 12.5px; color: var(--accent); margin-bottom: 12px; }
-.hm-h2 { font-weight: 500; font-size: 40px; line-height: 1.05; letter-spacing: -.03em; margin: 0; color: var(--ink); text-wrap: balance; }
-.hm-lede { font-size: 16.5px; line-height: 1.55; color: var(--muted); font-weight: 300; }
+.hm-btn-lit { color: var(--on-accent-lit); background: var(--accent-lit); border: 0; cursor: pointer; } /* phosphor reads dark-on-green in both themes */
+.hm-kicker { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--accent); margin-bottom: 12px; }
+.hm-h2 { font-weight: 500; font-size: var(--fs-3xl); line-height: 1.05; letter-spacing: -.03em; margin: 0; color: var(--ink); text-wrap: balance; }
+.hm-lede { font-size: var(--fs-lg); line-height: 1.55; color: var(--muted); font-weight: 300; }
 .hm-row { display: grid; grid-template-columns: 170px 1fr 200px; gap: 24px; padding: 22px 0; border-bottom: 1px solid var(--hairline); align-items: baseline; }
-.hm-chip { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); padding: 8px 12px; border: 1px solid var(--dash); border-radius: 8px; background: var(--chip-bg); text-decoration: none; }
-.hm-term { font-family: var(--font-mono); font-size: 12.5px; line-height: 1.8; color: var(--on-dark2); white-space: pre-wrap; word-break: break-word; margin: 0; }
-@media (max-width: 900px) { .hm-hero, .hm-2col, .hm-doors, .hm-decide { grid-template-columns: minmax(0,1fr) !important; } .hm-proof, .hm-why { grid-template-columns: 1fr 1fr !important; } .hm-row { grid-template-columns: 1fr !important; gap: 6px; } .hm-h2 { font-size: 32px; } }
+.hm-chip { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--muted); padding: 8px 12px; border: 1px solid var(--dash); border-radius: 8px; background: var(--chip-bg); text-decoration: none; }
+.hm-term { font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.8; color: var(--on-panel-soft); white-space: pre-wrap; word-break: break-word; margin: 0; }
+@media (max-width: 900px) { .hm-hero, .hm-2col, .hm-doors, .hm-decide { grid-template-columns: minmax(0,1fr) !important; } .hm-proof, .hm-why { grid-template-columns: 1fr 1fr !important; } .hm-row { grid-template-columns: 1fr !important; gap: 6px; } .hm-h2 { font-size: var(--fs-2xl); } }
 @media (max-width: 480px) { .hm-reg-row { flex-direction: column !important; } .hm-reg-row button { width: 100%; } .hm-proof, .hm-why { grid-template-columns: 1fr !important; } }
 #hm-demo-in { border: 1px solid var(--dash); border-radius: 10px; }
 #hm-demo-in:focus { border-color: var(--accent); outline: none; }
@@ -242,19 +242,19 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
     : "";
 
   const railRowsHtml = rails.map((r) =>
-    `<a href="${esc(r.href)}" title="${esc(r.title)}" style="display:flex;flex-direction:column;gap:9px;padding:15px 16px;text-decoration:none;color:var(--on-dark2);border-right:1px solid var(--dark-border);border-bottom:1px solid var(--dark-border);"><span style="display:flex;align-items:center;gap:9px;">${chainMark(r.slug, 19)}<span style="font-weight:500;font-size:14.5px;color:var(--on-dark);">${esc(r.name)}</span></span><span style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-family:var(--font-mono);"><span style="font-weight:500;font-size:17px;color:var(--on-dark);font-variant-numeric:tabular-nums;">${esc(r.calls)}</span><span style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dk-muted3);">calls · ${esc(r.asset)}</span></span></a>`
+    `<a href="${esc(r.href)}" title="${esc(r.title)}" style="display:flex;flex-direction:column;gap:9px;padding:15px 16px;text-decoration:none;color:var(--on-panel-soft);border-right:1px solid var(--panel-rule);border-bottom:1px solid var(--panel-rule);"><span style="display:flex;align-items:center;gap:9px;">${chainMark(r.slug, 19)}<span style="font-weight:500;font-size:var(--fs-base);color:var(--on-panel);">${esc(r.name)}</span></span><span style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-family:var(--font-mono);"><span style="font-weight:500;font-size:var(--fs-lg);color:var(--on-panel);font-variant-numeric:tabular-nums;">${esc(r.calls)}</span><span style="font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--on-panel-faint);">calls · ${esc(r.asset)}</span></span></a>`
   ).join("");
 
   const leaderboardRowsHtml = board.length
-    ? board.map((r) => `<tr style="border-bottom:1px solid var(--dark-border);color:var(--on-dark);"><td style="padding:11px 18px;color:var(--dk-muted3);">${esc(r.rank)}</td><td style="padding:11px 18px;">${esc(r.name)}</td><td style="padding:11px 18px;text-align:right;color:var(--on-dark2);">${esc(r.usd)}</td><td style="padding:11px 18px;text-align:right;color:var(--dk-muted2);">${esc(r.calls)}</td><td style="padding:11px 18px;text-align:right;color:var(--dk-muted2);">${esc(r.buyers)}</td></tr>`).join("")
-    : `<tr><td colspan="5" style="padding:20px 18px;color:var(--dk-muted3);">unavailable - the leaderboard snapshot has not populated yet</td></tr>`;
+    ? board.map((r) => `<tr style="border-bottom:1px solid var(--panel-rule);color:var(--on-panel);"><td style="padding:11px 18px;color:var(--on-panel-faint);">${esc(r.rank)}</td><td style="padding:11px 18px;">${esc(r.name)}</td><td style="padding:11px 18px;text-align:right;color:var(--on-panel-soft);">${esc(r.usd)}</td><td style="padding:11px 18px;text-align:right;color:var(--on-panel-muted);">${esc(r.calls)}</td><td style="padding:11px 18px;text-align:right;color:var(--on-panel-muted);">${esc(r.buyers)}</td></tr>`).join("")
+    : `<tr><td colspan="5" style="padding:20px 18px;color:var(--on-panel-faint);">unavailable - the leaderboard snapshot has not populated yet</td></tr>`;
 
   const demandLanesHtml = DEMAND_LANES.map(([lane, body_], i) =>
-    `<div style="display:grid;grid-template-columns:28px 1fr;gap:14px;align-items:center;padding:16px 20px;border-bottom:1px solid var(--hairline);"><span style="font-family:var(--font-mono);font-size:12px;color:var(--faint);">${String(i + 1).padStart(2, "0")}</span><div><div style="font-size:15px;color:var(--ink);font-weight:500;">${esc(lane)}</div><div style="font-size:13.5px;color:var(--muted);margin-top:2px;font-weight:300;">${esc(body_)}</div></div></div>`
+    `<div style="display:grid;grid-template-columns:28px 1fr;gap:14px;align-items:center;padding:16px 20px;border-bottom:1px solid var(--hairline);"><span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">${String(i + 1).padStart(2, "0")}</span><div><div style="font-size:var(--fs-base);color:var(--ink);font-weight:500;">${esc(lane)}</div><div style="font-size:var(--fs-md);color:var(--muted);margin-top:2px;font-weight:300;">${esc(body_)}</div></div></div>`
   ).join("");
 
   const faqHtml = faqs.map((f) =>
-    `<details style="border-bottom:1px solid var(--hairline);"><summary style="list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 0;"><h3 style="font-weight:500;font-size:17px;margin:0;color:var(--ink);">${esc(f.q)}</h3><span class="ml-faq-mark" style="font-family:var(--font-mono);font-weight:400;font-size:20px;color:var(--accent);line-height:1;flex:none;">+</span></summary><p style="font-size:15.5px;line-height:1.65;color:var(--muted);margin:0;padding:0 0 20px;max-width:760px;font-weight:300;">${esc(f.a)}</p></details>`
+    `<details style="border-bottom:1px solid var(--hairline);"><summary style="list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 0;"><h3 style="font-weight:500;font-size:var(--fs-lg);margin:0;color:var(--ink);">${esc(f.q)}</h3><span class="ml-faq-mark" style="font-family:var(--font-mono);font-weight:400;font-size:var(--fs-lg);color:var(--accent);line-height:1;flex:none;">+</span></summary><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;padding:0 0 20px;max-width:760px;font-weight:300;">${esc(f.a)}</p></details>`
   ).join("");
 
   const body = `
@@ -262,16 +262,16 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
   <div style="max-width:1180px;margin:0 auto;padding:84px 30px 56px;position:relative;">
     <div class="hm-hero">
       <div class="ml-stagger" style="display:flex;flex-direction:column;gap:26px;">
-        <div class="ml-hero-eyebrow" style="font-family:var(--font-mono);font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);">No account. No API key. No card on file.</div>
-        <h1 class="ml-hero-h1" style="font-weight:500;font-size:72px;line-height:.98;letter-spacing:-.04em;margin:0;color:var(--ink);text-wrap:balance;">Pay for any API call <span style="color:var(--faint);">without an account.</span></h1>
-        <p class="hm-def" style="font-size:15px;line-height:1.55;max-width:560px;margin:14px 0 0;color:var(--muted);"><strong style="color:var(--ink);font-weight:600;">Agent402</strong> is the open-source paid door for AI agents at agent402.tools: 500+ tools, metered models and finished reports, paid per call in USDC over x402 and MPP, or by card.</p>
-        <p class="hm-lede" style="font-size:19px;max-width:560px;margin:0;">An agent sends a request, gets a price back in the <span style="font-family:var(--font-mono);font-size:16px;color:var(--ink);">402</span>, pays it from its own wallet over <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">MPP</a>, and the call is served: 500+ tools priced in cents, models metered under a quoted ceiling, finished reports priced in dollars. People pay the same price list by card. A receipt on every settled call, and nothing to sign up for first - the applied layer of <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">agentic finance</a>.</p>
+        <div class="ml-hero-eyebrow" style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--faint);">No account. No API key. No card on file.</div>
+        <h1 class="ml-hero-h1" style="font-weight:500;font-size:var(--fs-hero);line-height:.98;letter-spacing:-.04em;margin:0;color:var(--ink);text-wrap:balance;">Pay for any API call <span style="color:var(--faint);">without an account.</span></h1>
+        <p class="hm-def" style="font-size:var(--fs-base);line-height:1.55;max-width:560px;margin:14px 0 0;color:var(--muted);"><strong style="color:var(--ink);font-weight:600;">Agent402</strong> is the open-source paid door for AI agents at agent402.tools: 500+ tools, metered models and finished reports, paid per call in USDC over x402 and MPP, or by card.</p>
+        <p class="hm-lede" style="font-size:var(--fs-lg);max-width:560px;margin:0;">An agent sends a request, gets a price back in the <span style="font-family:var(--font-mono);font-size:var(--fs-lg);color:var(--ink);">402</span>, pays it from its own wallet over <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">MPP</a>, and the call is served: 500+ tools priced in cents, models metered under a quoted ceiling, finished reports priced in dollars. People pay the same price list by card. A receipt on every settled call, and nothing to sign up for first - the applied layer of <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">agentic finance</a>.</p>
         <div class="ml-hero-ctas" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
           <a class="hm-btn hm-btn-dark" href="/reports">Buy a report</a>
-          <a class="hm-btn hm-btn-ghost" href="/docs#add" style="font-family:var(--font-mono);font-size:13.5px;">Add to Claude</a>
-          <a href="/guides/agent-hosts" style="font-family:var(--font-mono);font-size:12.5px;color:var(--muted);text-decoration:none;border-bottom:1px solid var(--hairline);">or Cursor, VS Code, Windsurf, Cline, Codex, Gemini CLI →</a>
+          <a class="hm-btn hm-btn-ghost" href="/docs#add" style="font-family:var(--font-mono);font-size:var(--fs-md);">Add to Claude</a>
+          <a href="/guides/agent-hosts" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);text-decoration:none;border-bottom:1px solid var(--hairline);">or Cursor, VS Code, Windsurf, Cline, Codex, Gemini CLI →</a>
         </div>
-        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;font-family:var(--font-mono);font-size:12.5px;color:var(--muted);">
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);">
           <span class="ml-dot"></span><span>${rails.length} rails live</span>
           <a href="/status" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">status</a>
           <a href="/api/reliability" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">reliability</a>
@@ -282,28 +282,28 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
 
       <div class="hm-obsidian" style="overflow:hidden;">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.07);">
-          <span style="font-family:var(--font-mono);font-size:11.5px;color:var(--dk-muted);display:inline-flex;align-items:center;gap:8px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent-lit);box-shadow:0 0 10px var(--accent-lit);animation:ml-pulse 1.8s ease-in-out infinite;"></span>live · every x402 and MPP payment we see on chain</span>
-          <a href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:11.5px;color:var(--accent-lit);text-decoration:none;white-space:nowrap;">watch full screen ↗</a>
+          <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-dim);display:inline-flex;align-items:center;gap:8px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent-lit);box-shadow:0 0 10px var(--accent-lit);animation:ml-pulse 1.8s ease-in-out infinite;"></span>live · every x402 and MPP payment we see on chain</span>
+          <a href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent-lit);text-decoration:none;white-space:nowrap;">watch full screen ↗</a>
         </div>
         ${liveEmbed
-          ? `<iframe id="hm-live" src="https://live.agent402.tools/embed" title="Live x402 and MPP payments, read from the chain" style="display:block;width:100%;height:340px;border:0;background:#0A0E14;"></iframe>`
-          : `<a id="hm-live-link" href="https://live.agent402.tools" style="display:flex;align-items:center;justify-content:center;height:340px;background:#0A0E14;color:var(--accent-lit);font-family:var(--font-mono);font-size:13px;text-decoration:none;">watch every x402 and MPP payment, live ↗</a>`}
+          ? `<iframe id="hm-live" src="https://live.agent402.tools/embed" title="Live x402 and MPP payments, read from the chain" style="display:block;width:100%;height:340px;border:0;background:var(--panel);"></iframe>`
+          : `<a id="hm-live-link" href="https://live.agent402.tools" style="display:flex;align-items:center;justify-content:center;height:340px;background:var(--panel);color:var(--accent-lit);font-family:var(--font-mono);font-size:var(--fs-sm);text-decoration:none;">watch every x402 and MPP payment, live ↗</a>`}
         <div style="padding:16px 22px 14px;border-top:1px solid rgba(255,255,255,.07);display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;">
-          <div><div id="hm-live-n" style="font-weight:500;font-size:28px;letter-spacing:-.03em;color:var(--on-dark);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dk-muted3);margin-top:6px;">payments · last hour</div></div>
-          <div><div id="hm-live-usd" style="font-weight:500;font-size:28px;letter-spacing:-.03em;color:var(--on-dark);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dk-muted3);margin-top:6px;">settled</div></div>
-          <div><div id="hm-live-buyers" style="font-weight:500;font-size:28px;letter-spacing:-.03em;color:var(--on-dark);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dk-muted3);margin-top:6px;">paying agents</div></div>
-          <div><div id="hm-live-pm" style="font-weight:500;font-size:28px;letter-spacing:-.03em;color:var(--on-dark);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dk-muted3);margin-top:6px;">per minute</div></div>
+          <div><div id="hm-live-n" style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.03em;color:var(--on-panel);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:6px;">payments · last hour</div></div>
+          <div><div id="hm-live-usd" style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.03em;color:var(--on-panel);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:6px;">settled</div></div>
+          <div><div id="hm-live-buyers" style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.03em;color:var(--on-panel);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:6px;">paying agents</div></div>
+          <div><div id="hm-live-pm" style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.03em;color:var(--on-panel);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:6px;">per minute</div></div>
         </div>
         <div style="padding:12px 22px 16px;border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;">
           <div>
-            <div id="hm-counter" data-via-usdc="${esc(heroCount)}" style="font-family:var(--font-body);font-weight:500;font-size:26px;line-height:.95;letter-spacing:-.035em;color:var(--on-dark);font-variant-numeric:tabular-nums;">${heroCount ? fmtNum(heroCount) : ""}</div>
+            <div id="hm-counter" data-via-usdc="${esc(heroCount)}" style="font-family:var(--font-body);font-weight:500;font-size:var(--fs-2xl);line-height:.95;letter-spacing:-.035em;color:var(--on-panel);font-variant-numeric:tabular-nums;">${heroCount ? fmtNum(heroCount) : ""}</div>
             <div id="hm-counter-empty" style="display:${heroCount ? "none" : "flex"};align-items:center;gap:11px;">
               <span style="width:8px;height:8px;border-radius:50%;background:var(--accent-lit);flex:none;animation:ml-pulse 1.6s ease-in-out infinite;"></span>
-              <span style="font-family:var(--font-mono);font-size:15px;color:var(--on-dark2);">Settlement count loading</span>
+              <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--on-panel-soft);">Settlement count loading</span>
             </div>
-            <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dk-muted3);margin-top:8px;">${heroLabel}</div>
+            <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:8px;">${heroLabel}</div>
           </div>
-          <div style="font-family:var(--font-mono);font-size:12px;color:var(--dk-muted3);text-align:right;">+ <strong id="hm-freepow" style="color:var(--on-dark2);font-weight:500;">${fmtNum(viaPow)}</strong> more served free over proof-of-work<br><a href="https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns" style="color:var(--accent-lit);text-decoration:none;">verify on Basescan ↗</a></div>
+          <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-faint);text-align:right;">+ <strong id="hm-freepow" style="color:var(--on-panel-soft);font-weight:500;">${fmtNum(viaPow)}</strong> more served free over proof-of-work<br><a href="https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns" style="color:var(--accent-lit);text-decoration:none;">verify on Basescan ↗</a></div>
         </div>
       </div>
     </div>
@@ -313,30 +313,30 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
 <section style="max-width:1180px;margin:0 auto;padding:0 30px 20px;">
   <div class="hm-doors">
     <div class="hm-milled" style="padding:32px;display:flex;flex-direction:column;gap:16px;">
-      <div style="font-family:var(--font-mono);font-size:11.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);">For people</div>
-      <h2 class="hm-h2" style="font-size:30px;">A finished report, cited and delivered.</h2>
-      <p class="hm-lede" style="margin:0;font-size:15.5px;">Due-diligence dossier, 13F fund report, domain security audit, deep research. Built from live data, with a PDF download and data tables where the report has them, refunded if it fails. Or subscribe and get the re-run in your inbox when something moves.</p>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--faint);">For people</div>
+      <h2 class="hm-h2" style="font-size:var(--fs-2xl);">A finished report, cited and delivered.</h2>
+      <p class="hm-lede" style="margin:0;font-size:var(--fs-base);">Due-diligence dossier, 13F fund report, domain security audit, deep research. Built from live data, with a PDF download and data tables where the report has them, refunded if it fails. Or subscribe and get the re-run in your inbox when something moves.</p>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px;">
         ${[["dossier", "Dossier"], ["fund-report", "Fund 13F"], ["domain-audit", "Domain audit"], ["research", "Deep research"]]
-          .map(([product, label]) => `<a href="/reports" class="hm-chip" style="font-family:var(--font-body);font-size:13px;border-radius:999px;">${esc(label)} ${esc(cardPrice(product))}</a>`)
+          .map(([product, label]) => `<a href="/reports" class="hm-chip" style="font-family:var(--font-body);font-size:var(--fs-sm);border-radius:999px;">${esc(label)} ${esc(cardPrice(product))}</a>`)
           .join("\n        ")}
-        <a href="/monitors" class="hm-chip" style="font-family:var(--font-body);font-size:13px;border-radius:999px;">Monitor ${esc(monitorPrice())}/mo</a>
+        <a href="/monitors" class="hm-chip" style="font-family:var(--font-body);font-size:var(--fs-sm);border-radius:999px;">Monitor ${esc(monitorPrice())}/mo</a>
       </div>
-      <a href="/reports" style="margin-top:6px;font-size:14.5px;font-weight:500;color:var(--ink);text-decoration:none;">Browse reports →</a>
-      <p style="margin:10px 0 0;font-size:13px;color:var(--muted);">Free previews from the filings: <a href="/reports/insider" style="color:var(--ink);">insider trades by ticker</a> · <a href="/reports/fund" style="color:var(--ink);">fund holdings (13F)</a> · <a href="/reports/dossier" style="color:var(--ink);">company dossiers</a></p>
+      <a href="/reports" style="margin-top:6px;font-size:var(--fs-base);font-weight:500;color:var(--ink);text-decoration:none;">Browse reports →</a>
+      <p style="margin:10px 0 0;font-size:var(--fs-sm);color:var(--muted);">Free previews from the filings: <a href="/reports/insider" style="color:var(--ink);">insider trades by ticker</a> · <a href="/reports/fund" style="color:var(--ink);">fund holdings (13F)</a> · <a href="/reports/dossier" style="color:var(--ink);">company dossiers</a></p>
     </div>
     <div class="hm-obsidian" style="padding:32px;display:flex;flex-direction:column;gap:16px;">
-      <div style="font-family:var(--font-mono);font-size:11.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--dk-muted);">For agents</div>
-      <h2 class="hm-h2" style="font-size:30px;color:var(--on-dark);">Find a tool, pay the 402, get JSON.</h2>
-      <p style="margin:0;color:var(--dk-muted2);font-size:15.5px;line-height:1.5;font-weight:300;">Resolve any task in one free call, then pay per request in USDC on ${RAILS.length} chains or natively over MPP${tempoChipHtml ? " on Tempo" : ""}. Free tier by proof-of-work. Discoverable from <a href="/llms.txt" style="color:var(--on-dark);text-decoration:none;border-bottom:1px solid var(--dark-border2);">llms.txt</a>, <a href="/openapi.json" style="color:var(--on-dark);text-decoration:none;border-bottom:1px solid var(--dark-border2);">openapi.json</a>, <a href="/.well-known/x402" style="color:var(--on-dark);text-decoration:none;border-bottom:1px solid var(--dark-border2);">.well-known/x402</a> and the <a href="/docs#add" style="color:var(--on-dark);text-decoration:none;border-bottom:1px solid var(--dark-border2);">MCP connector</a>.</p>
-      <div style="font-family:var(--font-mono);display:flex;flex-direction:column;border:1px solid rgba(255,255,255,.08);border-radius:12px;overflow:hidden;font-size:12.5px;">
-        <a href="/api/find?q=whois" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);text-decoration:none;color:var(--on-dark2);"><span>GET /api/find?q=</span><span style="color:var(--accent-lit);">free</span></a>
-        <a href="/tools" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);text-decoration:none;color:var(--on-dark2);"><span>GET /api/&lt;tool&gt;</span><span style="color:var(--accent-lit);">from $0.001</span></a>
-        <a href="/guides/agent-hosts" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);text-decoration:none;color:var(--on-dark2);"><span>POST /v1/metered/chat/completions</span><span style="color:var(--accent-lit);">from ${esc(slugPrice(tools, "v1-chat-metered"))}</span></a>
-        <a href="/tools/answer" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);text-decoration:none;color:var(--on-dark2);"><span>GET /api/answer</span><span style="color:var(--accent-lit);">${esc(slugPrice(tools, "answer"))}</span></a>
-        <a href="/guides/smart-order-router" style="display:flex;justify-content:space-between;padding:11px 16px;text-decoration:none;color:var(--on-dark2);"><span>POST /api/route/execute</span><span style="color:var(--accent-lit);">${esc(slugPrice(tools, "route-execute"))} + seller</span></a>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--on-panel-dim);">For agents</div>
+      <h2 class="hm-h2" style="font-size:var(--fs-2xl);color:var(--on-panel);">Find a tool, pay the 402, get JSON.</h2>
+      <p style="margin:0;color:var(--on-panel-muted);font-size:var(--fs-base);line-height:1.5;font-weight:300;">Resolve any task in one free call, then pay per request in USDC on ${RAILS.length} chains or natively over MPP${tempoChipHtml ? " on Tempo" : ""}. Free tier by proof-of-work. Discoverable from <a href="/llms.txt" style="color:var(--on-panel);text-decoration:none;border-bottom:1px solid var(--panel-rule-2);">llms.txt</a>, <a href="/openapi.json" style="color:var(--on-panel);text-decoration:none;border-bottom:1px solid var(--panel-rule-2);">openapi.json</a>, <a href="/.well-known/x402" style="color:var(--on-panel);text-decoration:none;border-bottom:1px solid var(--panel-rule-2);">.well-known/x402</a> and the <a href="/docs#add" style="color:var(--on-panel);text-decoration:none;border-bottom:1px solid var(--panel-rule-2);">MCP connector</a>.</p>
+      <div style="font-family:var(--font-mono);display:flex;flex-direction:column;border:1px solid rgba(255,255,255,.08);border-radius:12px;overflow:hidden;font-size:var(--fs-sm);">
+        <a href="/api/find?q=whois" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);text-decoration:none;color:var(--on-panel-soft);"><span>GET /api/find?q=</span><span style="color:var(--accent-lit);">free</span></a>
+        <a href="/tools" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);text-decoration:none;color:var(--on-panel-soft);"><span>GET /api/&lt;tool&gt;</span><span style="color:var(--accent-lit);">from $0.001</span></a>
+        <a href="/guides/agent-hosts" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);text-decoration:none;color:var(--on-panel-soft);"><span>POST /v1/metered/chat/completions</span><span style="color:var(--accent-lit);">from ${esc(slugPrice(tools, "v1-chat-metered"))}</span></a>
+        <a href="/tools/answer" style="display:flex;justify-content:space-between;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);text-decoration:none;color:var(--on-panel-soft);"><span>GET /api/answer</span><span style="color:var(--accent-lit);">${esc(slugPrice(tools, "answer"))}</span></a>
+        <a href="/guides/smart-order-router" style="display:flex;justify-content:space-between;padding:11px 16px;text-decoration:none;color:var(--on-panel-soft);"><span>POST /api/route/execute</span><span style="color:var(--accent-lit);">${esc(slugPrice(tools, "route-execute"))} + seller</span></a>
       </div>
-      <div style="display:flex;gap:18px;font-family:var(--font-mono);font-size:12.5px;color:var(--dk-muted);flex-wrap:wrap;"><span title="POST-only JSON-RPC endpoint - not a browsable page">/mcp</span><a href="/api/pricing" style="color:var(--dk-muted);text-decoration:none;">/api/pricing</a><a href="/playground" style="color:var(--dk-muted);text-decoration:none;">playground · free</a></div>
+      <div style="display:flex;gap:18px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel-dim);flex-wrap:wrap;"><span title="POST-only JSON-RPC endpoint - not a browsable page">/mcp</span><a href="/api/pricing" style="color:var(--on-panel-dim);text-decoration:none;">/api/pricing</a><a href="/playground" style="color:var(--on-panel-dim);text-decoration:none;">playground · free</a></div>
     </div>
   </div>
   ${decideLive() ? decideDoorHtml() : ""}
@@ -344,10 +344,10 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
 
 <section style="max-width:1180px;margin:0 auto;padding:36px 30px 0;">
   <div class="hm-proof" style="padding:26px 0;border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline);">
-    <div style="display:flex;flex-direction:column;gap:4px;"><span style="font-family:var(--font-mono);font-size:26px;letter-spacing:-.02em;color:var(--ink);font-variant-numeric:tabular-nums;">${heroCount ? fmtNum(heroCount) : "·"}</span><span style="font-size:13px;color:var(--faint);">${heroLabel}</span></div>
-    <div style="display:flex;flex-direction:column;gap:4px;"><span style="font-family:var(--font-mono);font-size:26px;letter-spacing:-.02em;color:var(--ink);font-variant-numeric:tabular-nums;">${fmtNum(count)}</span><span style="font-size:13px;color:var(--faint);">priced tools · ${packCount} are skill packs</span></div>
-    <div style="display:flex;flex-direction:column;gap:4px;"><span style="font-family:var(--font-mono);font-size:26px;letter-spacing:-.02em;color:var(--ink);font-variant-numeric:tabular-nums;">${rails.length}</span><span style="font-size:13px;color:var(--faint);">settlement rails · x402 + MPP</span></div>
-    <div style="display:flex;flex-direction:column;gap:4px;"><span style="font-family:var(--font-mono);font-size:26px;letter-spacing:-.02em;color:var(--accent);">0%</span><span style="font-size:13px;color:var(--faint);">deducted from sellers · open source</span></div>
+    <div style="display:flex;flex-direction:column;gap:4px;"><span style="font-family:var(--font-mono);font-size:var(--fs-2xl);letter-spacing:-.02em;color:var(--ink);font-variant-numeric:tabular-nums;">${heroCount ? fmtNum(heroCount) : "·"}</span><span style="font-size:var(--fs-sm);color:var(--faint);">${heroLabel}</span></div>
+    <div style="display:flex;flex-direction:column;gap:4px;"><span style="font-family:var(--font-mono);font-size:var(--fs-2xl);letter-spacing:-.02em;color:var(--ink);font-variant-numeric:tabular-nums;">${fmtNum(count)}</span><span style="font-size:var(--fs-sm);color:var(--faint);">priced tools · ${packCount} are skill packs</span></div>
+    <div style="display:flex;flex-direction:column;gap:4px;"><span style="font-family:var(--font-mono);font-size:var(--fs-2xl);letter-spacing:-.02em;color:var(--ink);font-variant-numeric:tabular-nums;">${rails.length}</span><span style="font-size:var(--fs-sm);color:var(--faint);">settlement rails · x402 + MPP</span></div>
+    <div style="display:flex;flex-direction:column;gap:4px;"><span style="font-family:var(--font-mono);font-size:var(--fs-2xl);letter-spacing:-.02em;color:var(--accent);">0%</span><span style="font-size:var(--fs-sm);color:var(--faint);">deducted from sellers · open source</span></div>
   </div>
 </section>
 
@@ -356,36 +356,36 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
   <div class="hm-kicker">$ GET /api/pow/challenge?slug=hash</div>
   <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
     <h2 class="hm-h2">Or pay with CPU instead.</h2>
-    <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--faint);">no wallet · no signup · runs in this tab</span>
+    <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">no wallet · no signup · runs in this tab</span>
   </div>
   <p class="hm-lede" style="max-width:700px;margin:0 0 26px;">The pure-CPU tools are payable in compute: the server issues a signed sha256 puzzle, your machine solves it (${esc(powCostPhrase())}), and the call is served free. Press the button: your browser fetches a real challenge from the live server, solves it here, and makes a real call.</p>
   <div class="hm-2col" style="gap:0;border-radius:18px;overflow:hidden;border:1px solid var(--hairline);">
     <div style="padding:26px;background:var(--card);border-right:1px solid var(--hairline);">
-      <label for="hm-demo-in" style="display:block;font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:10px;">Text to hash</label>
-      <input id="hm-demo-in" type="text" value="hello" placeholder="anything at all" style="width:100%;background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:14px;padding:13px 14px;margin-bottom:14px;box-sizing:border-box;" / aria-label="anything at all">
-      <button type="button" id="hm-demo-run" class="hm-btn hm-btn-dark" style="width:100%;justify-content:center;font-size:14px;">Run it free →</button>
+      <label for="hm-demo-in" style="display:block;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:10px;">Text to hash</label>
+      <input id="hm-demo-in" type="text" value="hello" placeholder="anything at all" style="width:100%;background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);padding:13px 14px;margin-bottom:14px;box-sizing:border-box;" / aria-label="anything at all">
+      <button type="button" id="hm-demo-run" class="hm-btn hm-btn-dark" style="width:100%;justify-content:center;font-size:var(--fs-md);">Run it free →</button>
       <ol style="margin:20px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">
-        <li style="display:grid;grid-template-columns:22px 1fr;gap:12px;padding:13px 0;border-bottom:1px solid var(--hairline);"><span id="hm-step1-mark" style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">·</span><span><span style="font-size:14px;color:var(--ink);font-weight:500;">Request a challenge</span><br><span id="hm-step1" style="font-family:var(--font-mono);font-size:11.5px;color:var(--faint);">signed, single-use, scoped to one tool</span></span></li>
-        <li style="display:grid;grid-template-columns:22px 1fr;gap:12px;padding:13px 0;border-bottom:1px solid var(--hairline);"><span id="hm-step2-mark" style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">·</span><span><span style="font-size:14px;color:var(--ink);font-weight:500;">Solve it in your browser</span><br><span id="hm-step2" style="font-family:var(--font-mono);font-size:11.5px;color:var(--faint);">~65k hashes at 16 bits</span></span></li>
-        <li style="display:grid;grid-template-columns:22px 1fr;gap:12px;padding:13px 0;"><span id="hm-step3-mark" style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">·</span><span><span style="font-size:14px;color:var(--ink);font-weight:500;">Call the tool, free</span><br><span id="hm-step3" style="font-family:var(--font-mono);font-size:11.5px;color:var(--faint);">hash the challenge, submit the token</span></span></li>
+        <li style="display:grid;grid-template-columns:22px 1fr;gap:12px;padding:13px 0;border-bottom:1px solid var(--hairline);"><span id="hm-step1-mark" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">·</span><span><span style="font-size:var(--fs-md);color:var(--ink);font-weight:500;">Request a challenge</span><br><span id="hm-step1" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">signed, single-use, scoped to one tool</span></span></li>
+        <li style="display:grid;grid-template-columns:22px 1fr;gap:12px;padding:13px 0;border-bottom:1px solid var(--hairline);"><span id="hm-step2-mark" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">·</span><span><span style="font-size:var(--fs-md);color:var(--ink);font-weight:500;">Solve it in your browser</span><br><span id="hm-step2" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">~65k hashes at 16 bits</span></span></li>
+        <li style="display:grid;grid-template-columns:22px 1fr;gap:12px;padding:13px 0;"><span id="hm-step3-mark" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">·</span><span><span style="font-size:var(--fs-md);color:var(--ink);font-weight:500;">Call the tool, free</span><br><span id="hm-step3" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">hash the challenge, submit the token</span></span></li>
       </ol>
     </div>
-    <div style="background:var(--surface);color:var(--on-dark);display:flex;flex-direction:column;">
-      <div style="padding:14px 20px;border-bottom:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;color:var(--dk-muted);display:flex;justify-content:space-between;gap:12px;">
+    <div style="background:var(--panel);color:var(--on-panel);display:flex;flex-direction:column;">
+      <div style="padding:14px 20px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);display:flex;justify-content:space-between;gap:12px;">
         <span>POST /api/hash</span>
-        <span id="hm-demo-status" style="color:var(--dk-muted3);">ready</span>
+        <span id="hm-demo-status" style="color:var(--on-panel-faint);">ready</span>
       </div>
-      <pre id="hm-demo-out" class="hm-term" style="padding:20px;flex:1;color:var(--on-dark);"># the same three steps, from a shell:
+      <pre id="hm-demo-out" class="hm-term" style="padding:20px;flex:1;color:var(--on-panel);"># the same three steps, from a shell:
 curl -s '/api/pow/challenge?slug=hash'
 # solve: sha256("&lt;challenge&gt;:" + nonce) with N leading zero bits
 curl -X POST /api/hash \\
   -H 'content-type: application/json' \\
   -H 'X-Pow-Solution: &lt;token&gt;:&lt;nonce&gt;' \\
   -d '{"text":"hello","algo":"sha256"}'</pre>
-      <div id="hm-demo-receipt" style="padding:14px 20px;border-top:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11.5px;color:var(--accent-lit);">no wallet needed · press Run to spend CPU instead</div>
+      <div id="hm-demo-receipt" style="padding:14px 20px;border-top:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent-lit);">no wallet needed · press Run to spend CPU instead</div>
     </div>
   </div>
-  <div style="margin-top:16px;display:flex;gap:20px;flex-wrap:wrap;font-family:var(--font-mono);font-size:13px;">
+  <div style="margin-top:16px;display:flex;gap:20px;flex-wrap:wrap;font-family:var(--font-mono);font-size:var(--fs-sm);">
     <a href="/playground" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">try every free tool in the playground →</a>
     <a href="/guides/x402-in-5-minutes" style="color:var(--muted);text-decoration:none;">how the free tier works →</a>
   </div>
@@ -395,36 +395,36 @@ curl -X POST /api/hash \\
   <div class="hm-kicker">$ POST /api/index/register</div>
   <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
     <h2 class="hm-h2">Sell into the agent economy.</h2>
-    <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--faint);">free listing · nothing deducted · non-custodial</span>
+    <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">free listing · nothing deducted · non-custodial</span>
   </div>
   <p class="hm-lede" style="max-width:680px;margin:0 0 30px;">Agents are already buying, and they cannot fill in a signup form. If you run an API - or a site AI crawlers keep scraping for free - the same rails that let them buy let you charge. Money moves buyer wallet → your wallet. Nothing sits in between.</p>
   <div class="hm-2col" style="margin-bottom:20px;">
     <div class="hm-card" style="padding:26px;display:flex;flex-direction:column;">
-      <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">01 / LIST AN x402 API</div>
-      <h3 style="font-weight:500;font-size:22px;margin:0 0 10px;color:var(--ink);letter-spacing:-.02em;">Get routed by the Smart Order Router</h3>
-      <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;font-weight:300;">Serve x402 challenges, register your origin, and the index crawler reads it at once and re-probes it ${esc(crawlIntervalLabel())}. You get ranked next to ${fmtNum(count)} of our own tools on the same terms. ${esc(routerRankingSentence())} A public leaderboard row follows once your on-chain volume shows up.</p>
-      <pre class="hm-term" style="margin:0 0 14px;background:var(--surface);color:var(--on-dark);padding:14px;border-radius:12px;font-size:11.5px;"><span style="color:var(--dk-muted3);"># or paste your origin below - same call, no terminal needed
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">01 / LIST AN x402 API</div>
+      <h3 style="font-weight:500;font-size:var(--fs-xl);margin:0 0 10px;color:var(--ink);letter-spacing:-.02em;">Get routed by the Smart Order Router</h3>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;font-weight:300;">Serve x402 challenges, register your origin, and the index crawler reads it at once and re-probes it ${esc(crawlIntervalLabel())}. You get ranked next to ${fmtNum(count)} of our own tools on the same terms. ${esc(routerRankingSentence())} A public leaderboard row follows once your on-chain volume shows up.</p>
+      <pre class="hm-term" style="margin:0 0 14px;background:var(--panel);color:var(--on-panel);padding:14px;border-radius:12px;font-size:var(--fs-xs);"><span style="color:var(--on-panel-faint);"># or paste your origin below - same call, no terminal needed
 </span>curl -X POST https://agent402.tools/api/index/register \\
   -H 'content-type: application/json' \\
   -d '{"origin":"https://seller.example"}'</pre>
       <div class="hm-reg-row" style="display:flex;gap:10px;margin-top:auto;">
-        <input id="hm-reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;min-width:0;font-family:var(--font-mono);font-size:13px;padding:11px 14px;border:1px solid var(--dash);border-radius:999px;background:var(--paper);color:var(--ink);" aria-label="https://api.yourdomain.com">
-        <button id="hm-reg-go" class="hm-btn hm-btn-dark" style="font-size:13.5px;padding:11px 18px;">List it →</button>
+        <input id="hm-reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;min-width:0;font-family:var(--font-mono);font-size:var(--fs-sm);padding:11px 14px;border:1px solid var(--dash);border-radius:999px;background:var(--paper);color:var(--ink);" aria-label="https://api.yourdomain.com">
+        <button id="hm-reg-go" class="hm-btn hm-btn-dark" style="font-size:var(--fs-md);padding:11px 18px;">List it →</button>
       </div>
-      <div id="hm-reg-out" style="font-family:var(--font-mono);font-size:11.5px;color:var(--faint);margin-top:8px;">Free, no account - we probe your origin's x402 surface and list you if it answers.</div>
+      <div id="hm-reg-out" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:8px;">Free, no account - we probe your origin's x402 surface and list you if it answers.</div>
     </div>
     <div class="hm-card" style="padding:26px;display:flex;flex-direction:column;">
-      <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">02 / Tollbooth a site</div>
-      <h3 style="font-weight:500;font-size:22px;margin:0 0 10px;color:var(--ink);letter-spacing:-.02em;">Charge AI crawlers per page</h3>
-      <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;font-weight:300;">Humans browse free; known bots get <span style="font-family:var(--font-mono);font-size:13px;color:var(--ink);">402 Payment Required</span> and either pay in USDC or solve a proof-of-work. The open, crypto-native answer to closed pay-per-crawl: no CDN lock-in, no merchant-of-record, no signup.</p>
-      <pre class="hm-term" style="margin:0 0 18px;background:var(--surface);color:var(--on-dark);padding:14px;border-radius:12px;font-size:11.5px;"><span style="color:var(--dk-muted3);"># express · next.js · cloudflare · proxy · wordpress
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">02 / Tollbooth a site</div>
+      <h3 style="font-weight:500;font-size:var(--fs-xl);margin:0 0 10px;color:var(--ink);letter-spacing:-.02em;">Charge AI crawlers per page</h3>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;font-weight:300;">Humans browse free; known bots get <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);">402 Payment Required</span> and either pay in USDC or solve a proof-of-work. The open, crypto-native answer to closed pay-per-crawl: no CDN lock-in, no merchant-of-record, no signup.</p>
+      <pre class="hm-term" style="margin:0 0 18px;background:var(--panel);color:var(--on-panel);padding:14px;border-radius:12px;font-size:var(--fs-xs);"><span style="color:var(--on-panel-faint);"># express · next.js · cloudflare · proxy · wordpress
 </span>npm i agent402-tollbooth</pre>
-      <a class="hm-btn hm-btn-ghost" href="/tollbooth" style="align-self:flex-start;font-size:13.5px;">Gate your crawlers →</a>
+      <a class="hm-btn hm-btn-ghost" href="/tollbooth" style="align-self:flex-start;font-size:var(--fs-md);">Gate your crawlers →</a>
     </div>
   </div>
 
-  <table style="font-family:var(--font-mono);font-size:13px;border:1px solid var(--hairline);border-radius:14px;overflow:hidden;background:var(--card);width:100%;max-width:480px;border-collapse:separate;border-spacing:0;">
-    <caption style="text-align:left;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);padding:0 0 10px;">What a seller gets - full detail at <a href="/sell" style="color:var(--faint);">/sell</a></caption>
+  <table style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--hairline);border-radius:14px;overflow:hidden;background:var(--card);width:100%;max-width:480px;border-collapse:separate;border-spacing:0;">
+    <caption style="text-align:left;font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);padding:0 0 10px;">What a seller gets - full detail at <a href="/sell" style="color:var(--faint);">/sell</a></caption>
     <tbody>
       <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:500;padding:13px 18px;color:var(--ink);width:230px;border-bottom:1px solid var(--hairline);">Listing fee</th><td style="padding:13px 18px;text-align:right;color:var(--accent);white-space:nowrap;border-bottom:1px solid var(--hairline);">$0</td></tr>
       <tr><th scope="row" style="text-align:left;font-weight:500;padding:13px 18px;color:var(--ink);border-bottom:1px solid var(--hairline);">Commission</th><td style="padding:13px 18px;text-align:right;color:var(--accent);white-space:nowrap;border-bottom:1px solid var(--hairline);">0%</td></tr>
@@ -434,46 +434,46 @@ curl -X POST /api/hash \\
       <tr><th scope="row" style="text-align:left;font-weight:500;padding:13px 18px;color:var(--ink);">Cross-chain buyers</th><td style="padding:13px 18px;text-align:right;color:var(--muted);white-space:nowrap;">Base · Algorand</td></tr>
     </tbody>
   </table>
-  <p style="font-family:var(--font-mono);font-size:12.5px;line-height:1.6;color:var(--faint);margin:14px 0 0;">No listing fee and no commission. A buyer pays your wallet directly from your own 402, which names your payTo and not ours, so nothing is deducted and nothing routes through us unless a buyer asks our router to buy from you and resell the result.</p>
-  <div style="margin-top:16px;font-family:var(--font-mono);font-size:13px;"><a href="/sell" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">everything for sellers → /sell</a></div>
+  <p style="font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.6;color:var(--faint);margin:14px 0 0;">No listing fee and no commission. A buyer pays your wallet directly from your own 402, which names your payTo and not ours, so nothing is deducted and nothing routes through us unless a buyer asks our router to buy from you and resell the result.</p>
+  <div style="margin-top:16px;font-family:var(--font-mono);font-size:var(--fs-sm);"><a href="/sell" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">everything for sellers → /sell</a></div>
 </section>
 
 <section style="max-width:1180px;margin:64px auto 0;padding:0 30px;">
   <div class="hm-obsidian" style="padding:48px 40px;">
     <div class="hm-kicker" style="color:var(--accent-lit);">$ GET /api/leaderboard?include=external</div>
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
-      <h2 class="hm-h2" style="color:var(--on-dark);">The open index for every seller.</h2>
-      <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--dk-muted3);">hourly on-chain snapshot · Bazaar → eth_getLogs → aggregate by payTo</span>
+      <h2 class="hm-h2" style="color:var(--on-panel);">The open index for every seller.</h2>
+      <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel-faint);">hourly on-chain snapshot · Bazaar → eth_getLogs → aggregate by payTo</span>
     </div>
-    <p style="font-size:16px;line-height:1.6;color:var(--dk-muted2);max-width:700px;margin:0 0 30px;font-weight:300;">The x402 sellers we can crawl, ranked by <strong style="color:var(--on-dark);font-weight:500;">real Base USDC settled volume</strong> - not self-reported traffic. The rows below are the head of the board; the full ranking is at <a href="/leaderboard" style="color:var(--on-dark);">/leaderboard</a>. <span style="font-family:var(--font-mono);font-size:14px;color:var(--on-dark);">include=external</span> excludes us from our own ranking, because a neutral index has to be checkable.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);max-width:700px;margin:0 0 30px;font-weight:300;">The x402 sellers we can crawl, ranked by <strong style="color:var(--on-panel);font-weight:500;">real Base USDC settled volume</strong> - not self-reported traffic. The rows below are the head of the board; the full ranking is at <a href="/leaderboard" style="color:var(--on-panel);">/leaderboard</a>. <span style="font-family:var(--font-mono);font-size:var(--fs-md);color:var(--on-panel);">include=external</span> excludes us from our own ranking, because a neutral index has to be checkable.</p>
 
-    <div style="border:1px solid var(--dark-border2);border-radius:14px;overflow:hidden;background:rgba(255,255,255,.025);">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 18px;border-bottom:1px solid var(--dark-border2);font-family:var(--font-mono);">
-        <span style="font-size:11px;color:var(--dk-muted2);letter-spacing:.1em;">OTHER SELLERS · BY USDC SETTLED · 7d</span>
-        <span style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--accent-lit);"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent-lit);display:inline-block;animation:ml-pulse 1.8s ease-in-out infinite;"></span>LIVE</span>
+    <div style="border:1px solid var(--panel-rule-2);border-radius:14px;overflow:hidden;background:rgba(255,255,255,.025);">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);">
+        <span style="font-size:var(--fs-2xs);color:var(--on-panel-muted);letter-spacing:.1em;">OTHER SELLERS · BY USDC SETTLED · 7d</span>
+        <span style="display:flex;align-items:center;gap:6px;font-size:var(--fs-2xs);color:var(--accent-lit);"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent-lit);display:inline-block;animation:ml-pulse 1.8s ease-in-out infinite;"></span>LIVE</span>
       </div>
       <!-- Five mono columns are ~520px wide; inside the card's overflow:hidden
            at a 375px viewport the usdc/calls/buyers columns were clipped with
            no way to reach them (reported from outside 2026-09-08). Wide content
            scrolls inside its own container; the page never scrolls sideways. -->
       <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;" tabindex="0" aria-label="Seller leaderboard table, scrolls sideways on narrow screens">
-      <table style="font-family:var(--font-mono);font-size:12.5px;width:100%;min-width:520px;">
-        <thead><tr style="border-bottom:1px solid var(--dark-border);color:var(--dk-muted3);"><th scope="col" style="text-align:left;font-weight:400;padding:9px 18px;width:34px;">#</th><th scope="col" style="text-align:left;font-weight:400;padding:9px 18px;">seller</th><th scope="col" style="text-align:right;font-weight:400;padding:9px 18px;">usdc settled</th><th scope="col" style="text-align:right;font-weight:400;padding:9px 18px;">calls</th><th scope="col" style="text-align:right;font-weight:400;padding:9px 18px;">buyers</th></tr></thead>
+      <table style="font-family:var(--font-mono);font-size:var(--fs-sm);width:100%;min-width:520px;">
+        <thead><tr style="border-bottom:1px solid var(--panel-rule);color:var(--on-panel-faint);"><th scope="col" style="text-align:left;font-weight:400;padding:9px 18px;width:34px;">#</th><th scope="col" style="text-align:left;font-weight:400;padding:9px 18px;">seller</th><th scope="col" style="text-align:right;font-weight:400;padding:9px 18px;">usdc settled</th><th scope="col" style="text-align:right;font-weight:400;padding:9px 18px;">calls</th><th scope="col" style="text-align:right;font-weight:400;padding:9px 18px;">buyers</th></tr></thead>
         <tbody>${leaderboardRowsHtml}</tbody>
       </table>
       </div>
-      <div style="padding:11px 18px;border-top:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11px;color:var(--dk-muted3);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;"><span>Agent402 excluded · hourly snapshot</span><a href="/leaderboard" style="color:var(--accent-lit);text-decoration:none;">full leaderboard →</a></div>
+      <div style="padding:11px 18px;border-top:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-faint);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;"><span>Agent402 excluded · hourly snapshot</span><a href="/leaderboard" style="color:var(--accent-lit);text-decoration:none;">full leaderboard →</a></div>
     </div>
 
-    <div style="margin-top:30px;border-top:1px solid var(--dark-border2);padding-top:24px;">
+    <div style="margin-top:30px;border-top:1px solid var(--panel-rule-2);padding-top:24px;">
       <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:16px;">
-        <h3 style="font-weight:500;font-size:22px;margin:0;color:var(--on-dark);letter-spacing:-.02em;">Settled on every rail, not just Base.</h3>
-        <span style="font-family:var(--font-mono);font-size:12px;color:var(--dk-muted3);">calls settled per rail · live from /api/stats</span>
+        <h3 style="font-weight:500;font-size:var(--fs-xl);margin:0;color:var(--on-panel);letter-spacing:-.02em;">Settled on every rail, not just Base.</h3>
+        <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-faint);">calls settled per rail · live from /api/stats</span>
       </div>
-      <p style="font-size:15px;line-height:1.6;color:var(--dk-muted2);max-width:700px;margin:0 0 20px;font-weight:300;">All ${rails.length} rails${rails.length > RAILS.length ? ` (${RAILS.length} x402 chains plus Tempo over MPP)` : ""} carry real settled traffic, not just the headline one. Buyers pay on the chain they already hold stablecoins on, gas is sponsored on EVM, and the router pays external sellers on that same chain.</p>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:0;border:1px solid var(--dark-border2);border-radius:12px;overflow:hidden;">${railRowsHtml}</div>
-      <div style="display:flex;flex-wrap:wrap;gap:10px 26px;margin-top:16px;font-family:var(--font-mono);font-size:12.5px;color:var(--dk-muted3);">
-        <span><strong style="color:var(--on-dark);font-weight:500;">${fmtNum(attributed)}</strong> of ${fmtNum(viaUsdc)} paid calls carry a per-rail tag</span>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-muted);max-width:700px;margin:0 0 20px;font-weight:300;">All ${rails.length} rails${rails.length > RAILS.length ? ` (${RAILS.length} x402 chains plus Tempo over MPP)` : ""} carry real settled traffic, not just the headline one. Buyers pay on the chain they already hold stablecoins on, gas is sponsored on EVM, and the router pays external sellers on that same chain.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:0;border:1px solid var(--panel-rule-2);border-radius:12px;overflow:hidden;">${railRowsHtml}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px 26px;margin-top:16px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel-faint);">
+        <span><strong style="color:var(--on-panel);font-weight:500;">${fmtNum(attributed)}</strong> of ${fmtNum(viaUsdc)} paid calls carry a per-rail tag</span>
         <span><strong style="color:var(--accent-lit);font-weight:500;">${fmtNum(mppWire)}</strong> settled over the MPP wire</span>
         <a href="/what-is-x402" style="color:var(--accent-lit);text-decoration:none;">how the dual stack works →</a>
       </div>
@@ -485,18 +485,18 @@ curl -X POST /api/hash \\
   <div class="hm-kicker">$ GET /api/bestsellers · ${esc(slugPrice(tools, "bestsellers"))}</div>
   <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
     <h2 class="hm-h2">What agents actually pay for.</h2>
-    <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--faint);">lanes shown · figures are a paid read</span>
+    <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">lanes shown · figures are a paid read</span>
   </div>
   <p class="hm-lede" style="max-width:700px;margin:0 0 24px;">Settlements are on chain, but <em style="color:var(--ink);font-style:normal;font-weight:400;">which tool an agent bought</em> is not - so this is the one demand signal no block explorer can reconstruct. Here are the lanes agents spend most in. The full per-tool ranking is itself a paid tool.</p>
   <div class="hm-card" style="overflow:hidden;">
     ${demandLanesHtml}
-    <a href="/tools/bestsellers" style="display:grid;grid-template-columns:28px 1fr auto;gap:14px;align-items:center;padding:16px 20px;text-decoration:none;background:var(--surface);color:var(--on-dark);">
-      <span style="font-family:var(--font-mono);font-size:12px;color:var(--dk-muted3);">·</span>
-      <span style="font-family:var(--font-mono);font-size:13px;color:var(--dk-muted2);">the full ranking, plus buyer-diversity, revenue and trend lenses</span>
-      <span style="font-family:var(--font-mono);font-size:13px;color:var(--accent-lit);white-space:nowrap;">${esc(slugPrice(tools, "bestsellers"))} →</span>
+    <a href="/tools/bestsellers" style="display:grid;grid-template-columns:28px 1fr auto;gap:14px;align-items:center;padding:16px 20px;text-decoration:none;background:var(--panel);color:var(--on-panel);">
+      <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-faint);">·</span>
+      <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel-muted);">the full ranking, plus buyer-diversity, revenue and trend lenses</span>
+      <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent-lit);white-space:nowrap;">${esc(slugPrice(tools, "bestsellers"))} →</span>
     </a>
   </div>
-  <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:16px;font-family:var(--font-mono);font-size:13px;">
+  <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:16px;font-family:var(--font-mono);font-size:var(--fs-sm);">
     <a href="/sell" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">list an API in one of these lanes →</a>
     <a href="/tools" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">all ${fmtNum(count)} tools →</a>
     <a href="/pricing" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">price list →</a>
@@ -504,7 +504,7 @@ curl -X POST /api/hash \\
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
-  <div style="font-family:var(--font-mono);font-size:12px;color:var(--faint);letter-spacing:.14em;text-transform:uppercase;margin-bottom:14px;">settles on</div>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);letter-spacing:.14em;text-transform:uppercase;margin-bottom:14px;">settles on</div>
   <div style="display:flex;flex-wrap:wrap;gap:10px;">${railLinksHtml}${tempoChipHtml}<a href="/reports" class="hm-chip" style="background:var(--btn-bg);color:var(--btn-fg);border-color:transparent;">Card via Stripe</a></div>
 </section>
 
@@ -512,20 +512,20 @@ curl -X POST /api/hash \\
   <div class="hm-kicker">$ GET /faq</div>
   <h2 class="hm-h2" style="margin:0 0 28px;">Questions people and agents ask.</h2>
   <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">${faqHtml}</div>
-  <p style="font-family:var(--font-mono);font-size:13px;color:var(--muted);margin:20px 0 0;">More, including data handling and the OpenAI-compatible gateway: <a href="/faq" style="color:var(--accent);font-weight:500;">/faq</a></p>
+  <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);margin:20px 0 0;">More, including data handling and the OpenAI-compatible gateway: <a href="/faq" style="color:var(--accent);font-weight:500;">/faq</a></p>
   <style>section details > summary::-webkit-details-marker{display:none;} section details[open] .ml-faq-mark{transform:rotate(45deg);} .ml-faq-mark{transition:transform .15s ease;display:inline-block;}</style>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:30px 30px 64px;">
   <div class="hm-obsidian" style="padding:56px 46px;position:relative;overflow:hidden;">
-    <div aria-hidden="true" style="position:absolute;right:26px;top:-36px;font-weight:600;font-size:240px;line-height:1;color:transparent;-webkit-text-stroke:1.5px #ffffff12;pointer-events:none;">402</div>
+    <div aria-hidden="true" style="position:absolute;right:26px;top:-36px;font-weight:600;font-size:var(--fs-mark);line-height:1;color:transparent;-webkit-text-stroke:1.5px var(--on-panel-mark);pointer-events:none;">402</div>
     <div style="position:relative;">
-      <h2 class="hm-h2" style="color:var(--on-dark);margin:0 0 16px;">Not x402-native yet?<br>You still have a way in.</h2>
-      <p style="font-size:16.5px;line-height:1.6;color:var(--dk-muted2);margin:0 0 30px;max-width:560px;font-weight:300;">You do not have to rebuild anything. <strong style="color:var(--on-dark);font-weight:500;">agent402-tollbooth</strong> drops a pay-per-crawl gate in front of a site that speaks no protocol at all, and adding a tool to the catalog itself is roughly fifteen lines. Either route, you keep your own paywall and your own wallet.</p>
+      <h2 class="hm-h2" style="color:var(--on-panel);margin:0 0 16px;">Not x402-native yet?<br>You still have a way in.</h2>
+      <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 30px;max-width:560px;font-weight:300;">You do not have to rebuild anything. <strong style="color:var(--on-panel);font-weight:500;">agent402-tollbooth</strong> drops a pay-per-crawl gate in front of a site that speaks no protocol at all, and adding a tool to the catalog itself is roughly fifteen lines. Either route, you keep your own paywall and your own wallet.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
         <a class="hm-btn hm-btn-lit" href="#sell">List your API - free →</a>
-        <a class="hm-btn" href="/tollbooth" style="color:var(--on-dark);border:1px solid var(--dark-border2);">Tollbooth a site</a>
-        <a class="hm-btn" href="/contribute" style="color:var(--dk-muted);border:1px solid var(--dark-border2);">Contribute a tool</a>
+        <a class="hm-btn" href="/tollbooth" style="color:var(--on-panel);border:1px solid var(--panel-rule-2);">Tollbooth a site</a>
+        <a class="hm-btn" href="/contribute" style="color:var(--on-panel-dim);border:1px solid var(--panel-rule-2);">Contribute a tool</a>
       </div>
     </div>
   </div>

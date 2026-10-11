@@ -103,24 +103,24 @@ export function communityPage(baseUrl) {
 
   const extraCss = `
 .cm-wrap{max-width:960px;margin:0 auto;padding:56px 30px}
-.cm-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:18px}
+.cm-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
 
 /* hero */
 .cm-hero{text-align:center;padding:0 0 32px}
-.cm-hero h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;color:var(--ink)}
-.cm-hero p{font-size:15px;line-height:1.55;color:var(--muted);max-width:620px;margin:0 auto}
+.cm-hero h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 14px;color:var(--ink)}
+.cm-hero p{font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:620px;margin:0 auto}
 
 /* section headings */
 .cm-section{margin:40px 0 18px}
-.cm-section h2{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 6px;color:var(--ink)}
-.cm-section p{color:var(--muted);font-size:15px;line-height:1.55;margin:0}
+.cm-section h2{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 6px;color:var(--ink)}
+.cm-section p{color:var(--muted);font-size:var(--fs-base);line-height:1.55;margin:0}
 
 /* stat cards */
 .cm-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:32px}
-@media(max-width:640px){.cm-stats{grid-template-columns:repeat(2,1fr)}.cm-hero h1{font-size:36px !important}}
+@media(max-width:640px){.cm-stats{grid-template-columns:repeat(2,1fr)}.cm-hero h1{font-size:var(--fs-3xl) !important}}
 .cm-stat{background:var(--card);border:1px solid var(--hairline);padding:20px 22px;text-align:center}
-.cm-stat-value{font-size:24px;font-weight:700;color:var(--accent);font-family:var(--font-mono);margin-bottom:4px}
-.cm-stat-label{font-size:14px;color:var(--muted)}
+.cm-stat-value{font-size:var(--fs-xl);font-weight:700;color:var(--accent);font-family:var(--font-mono);margin-bottom:4px}
+.cm-stat-label{font-size:var(--fs-md);color:var(--muted)}
 
 /* card grid */
 .cm-grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-bottom:32px}
@@ -128,18 +128,18 @@ export function communityPage(baseUrl) {
 .cm-grid-4{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;margin-bottom:32px}
 @media(max-width:640px){.cm-grid-4{grid-template-columns:1fr}}
 .cm-card{background:var(--card);border:1px solid var(--hairline);padding:22px 24px}
-.cm-card h3{margin:0 0 8px;font-family:var(--font-body);font-weight:800;font-size:18px;color:var(--ink)}
-.cm-card-desc{color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 12px}
-.cm-card-link{color:var(--accent);text-decoration:none;font-family:var(--font-mono);font-size:13px;font-weight:700}
+.cm-card h3{margin:0 0 8px;font-family:var(--font-body);font-weight:800;font-size:var(--fs-lg);color:var(--ink)}
+.cm-card-desc{color:var(--muted);font-size:var(--fs-md);line-height:1.55;margin:0 0 12px}
+.cm-card-link{color:var(--accent);text-decoration:none;font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700}
 .cm-card-link:hover{text-decoration:underline}
 
 /* showcase badge */
 .cm-showcase{position:relative}
-.cm-badge{display:inline-block;background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:11px;font-weight:700;padding:3px 10px;margin-bottom:10px;letter-spacing:.04em;text-transform:uppercase}
+.cm-badge{display:inline-block;background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-2xs);font-weight:700;padding:3px 10px;margin-bottom:10px;letter-spacing:.04em;text-transform:uppercase}
 
 /* cta */
 .cm-cta{text-align:center;margin:40px 0 48px}
-.cm-cta a{display:inline-block;background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;text-decoration:none;font-size:14px;padding:14px 30px;border:1.5px solid var(--accent)}
+.cm-cta a{display:inline-block;background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;text-decoration:none;font-size:var(--fs-md);padding:14px 30px;border:1.5px solid var(--accent)}
 .cm-cta a:hover{opacity:.9}
 `;
 

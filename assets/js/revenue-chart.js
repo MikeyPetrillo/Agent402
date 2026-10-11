@@ -140,7 +140,7 @@
           rows+='<div><i style="display:inline-block;width:8px;height:8px;background:'+css(s)+';margin-right:5px"></i>'+NAMES[s]+" "+fmt(v)+"</div>";
           if(s===8&&d.oth){Object.keys(d.oth).sort().forEach(function(c){if(d.oth[c]>0)
             rows+='<div style="padding-left:13px;color:var(--muted)">'+chainName(c)+" "+fmt(d.oth[c])+"</div>"})}}
-        tip.innerHTML="<b>"+(d.week?"week of "+d.day+(d.partial?" (in progress)":""):d.month?d.day.slice(0,7)+(d.partial?" (in progress)":""):d.day)+"</b>"+rows+"<div style='border-top:1px dashed var(--dark-border2);margin-top:3px'>total "+fmt(tot)+"</div>";
+        tip.innerHTML="<b>"+(d.week?"week of "+d.day+(d.partial?" (in progress)":""):d.month?d.day.slice(0,7)+(d.partial?" (in progress)":""):d.day)+"</b>"+rows+"<div style='border-top:1px dashed var(--panel-rule-2);margin-top:3px'>total "+fmt(tot)+"</div>";
         var wr=document.querySelector(".rvz-wrap").getBoundingClientRect();
         tip.style.display="block";tip.style.left=Math.min(ev.clientX-wr.left+14,wr.width-270)+"px";tip.style.top=(ev.clientY-wr.top+10)+"px"};
       svg.onmouseleave=function(){tip.style.display="none"};

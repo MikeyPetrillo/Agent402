@@ -11,7 +11,7 @@
         '<div class="eyebrow">Credits loaded · $' + esc(s.balanceUsd) + '</div>' +
         '<h2 style="margin-top:10px">Your key. Shown once.</h2>' +
         '<p>Copy it now and keep it secret; we also emailed it to you. Use it on any paid tool as <span style="font-family:var(--font-mono)">Authorization: Bearer &lt;key&gt;</span>.</p>' +
-        '<pre id="key-box" style="background:var(--surface);color:var(--on-dark);padding:14px 16px;border-radius:12px;font-family:var(--font-mono);font-size:13px;overflow:auto;margin:16px 0;user-select:all">' + esc(s.key) + '</pre>' +
+        '<pre id="key-box" style="background:var(--panel);color:var(--on-panel);padding:14px 16px;border-radius:12px;font-family:var(--font-mono);font-size:var(--fs-sm);overflow:auto;margin:16px 0;user-select:all">' + esc(s.key) + '</pre>' +
         '<div class="report-actions"><button class="btn btn-primary" id="copy-key">Copy key</button><a class="btn btn-ghost" href="/tools">Browse tools</a><a class="btn btn-ghost" href="/credits">Buy more</a></div>' +
         '<p class="note">Balance: <span style="font-family:var(--font-mono)">curl -H "Authorization: Bearer &lt;key&gt;" ' + esc(location.origin) + '/api/credits/balance</span></p>' +
         '</div>';

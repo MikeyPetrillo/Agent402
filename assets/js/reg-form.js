@@ -42,7 +42,7 @@
       } else {
         detail = "";
       }
-      out.style.color = j.listed ? "var(--green)" : "var(--accent-lit)";
+      out.style.color = j.listed ? "var(--ok)" : "var(--accent-lit)";
       out.textContent = j.listed
         ? ("Listed - " + name + (detail ? " (" + detail + ")" : "") + ". " + note)
         : ("Not listed: " + (j.error || "unknown error"));

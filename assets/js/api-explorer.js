@@ -74,7 +74,7 @@
         var sec=el('div','ae-section');
         sec.appendChild(el('div','ae-section-title','Description'));
         var p=el('p','',ep.desc);
-        p.style.cssText='font-size:.9rem;color:var(--muted);margin:0';
+        p.style.cssText='font-size:var(--fs-md);color:var(--muted);margin:0';
         sec.appendChild(p);
         body.appendChild(sec);
       }

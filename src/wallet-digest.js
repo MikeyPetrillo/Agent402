@@ -198,10 +198,10 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
     const who = rec.kind === "credits" ? "your credits key" : `wallet ${rec.payer.slice(0, 6)}…${rec.payer.slice(-4)}`;
     const subject = "Confirm your weekly Agent402 spend digest";
     const text = `Confirm to receive one email a week with what ${who} spent on Agent402: calls, dollars, the tools and chains.\n\n${url}\n\nNothing is sent for a quiet week. If you did not ask for this, ignore it and nothing will be sent.`;
-    const html = shell(`<h2 style="margin:0 0 10px;font-size:18px;">Confirm your weekly digest</h2>
+    const html = shell(`<h2 style="margin:0 0 10px;font-size:17px;">Confirm your weekly digest</h2>
 <p>One email a week with what ${esc(who)} spent on Agent402: calls, dollars, the tools and the chains.</p>
 <p style="margin:18px 0;"><a href="${esc(url)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 18px;border-radius:6px;display:inline-block;">Confirm the digest</a></p>
-<p style="color:#5C6963;font-size:13px;">Nothing is sent for a quiet week. If you did not ask for this, ignore it and nothing will be sent.</p>`);
+<p style="color:#626970;font-size:13px;">Nothing is sent for a quiet week. If you did not ask for this, ignore it and nothing will be sent.</p>`);
     return sendEmail({ to: rec.email, subject, html, text });
   }
 
@@ -288,14 +288,14 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
     const text = `Spend for ${who} on Agent402, last 7 days:\n\nCalls: ${d.calls}\nPaid: ${money(d.paidUsd)}\n\nTop tools:\n${topText}\n${chainText ? `\nChains:\n${chainText}\n` : ""}${balanceText}${refundText}\nFull history (paid, wallet-keyed): ${baseUrl}/tools/my-usage\n\nUnsubscribe: ${unsub}`;
     const rows = d.top.map((t) => `<tr><td style="padding:4px 10px 4px 0;font-family:ui-monospace,Menlo,monospace;font-size:13px;">${esc(t.slug)}</td><td style="padding:4px 10px;text-align:right;">${t.calls}</td><td style="padding:4px 0;text-align:right;">${money(t.usd)}</td></tr>`).join("");
     const chainRows = d.chains.map(([n, v]) => `<tr><td style="padding:4px 10px 4px 0;font-family:ui-monospace,Menlo,monospace;font-size:13px;">${esc(n)}</td><td style="padding:4px 10px;text-align:right;">${v.calls}</td><td style="padding:4px 0;text-align:right;">${money(v.usd)}</td></tr>`).join("");
-    const html = shell(`<h2 style="margin:0 0 6px;font-size:18px;">Your week on Agent402</h2>
-<p style="margin:0 0 14px;color:#5C6963;">${esc(who)}, last 7 days</p>
+    const html = shell(`<h2 style="margin:0 0 6px;font-size:17px;">Your week on Agent402</h2>
+<p style="margin:0 0 14px;color:#626970;">${esc(who)}, last 7 days</p>
 <p style="font-size:22px;margin:0 0 16px;"><b>${d.calls}</b> call${d.calls === 1 ? "" : "s"} &middot; <b>${money(d.paidUsd)}</b></p>
 ${rows ? `<h3 style="font-size:14px;margin:16px 0 6px;">Top tools</h3><table style="border-collapse:collapse;">${rows}</table>` : "<p>No calls this week.</p>"}
 ${chainRows ? `<h3 style="font-size:14px;margin:16px 0 6px;">Chains</h3><table style="border-collapse:collapse;">${chainRows}</table>` : ""}
-${refundList.length ? `<h3 style="font-size:14px;margin:16px 0 6px;">Refunds</h3><ul style="margin:0;padding-left:18px;">${refundList.map((r) => `<li>${esc(refundLine(r).replace(/: https?:\/\/\S+$/, ""))}${r.status === "paid" && r.refundTxUrl ? ` (<a href="${esc(r.refundTxUrl)}">refund tx</a>)` : ""}${r.tx ? ` <span style="font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#5C6963;">for ${esc(r.tx.slice(0, 10))}…</span>` : ""}</li>`).join("")}</ul><p style="margin:6px 0 0;font-size:13px;color:#5C6963;">Look up any payment at ${esc(baseUrl)}/api/refunds/lookup?tx=&lt;settlement tx&gt;</p>` : ""}
+${refundList.length ? `<h3 style="font-size:14px;margin:16px 0 6px;">Refunds</h3><ul style="margin:0;padding-left:18px;">${refundList.map((r) => `<li>${esc(refundLine(r).replace(/: https?:\/\/\S+$/, ""))}${r.status === "paid" && r.refundTxUrl ? ` (<a href="${esc(r.refundTxUrl)}">refund tx</a>)` : ""}${r.tx ? ` <span style="font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#626970;">for ${esc(r.tx.slice(0, 10))}…</span>` : ""}</li>`).join("")}</ul><p style="margin:6px 0 0;font-size:13px;color:#626970;">Look up any payment at ${esc(baseUrl)}/api/refunds/lookup?tx=&lt;settlement tx&gt;</p>` : ""}
 ${d.balanceUsd == null ? "" : `<p style="margin:16px 0 0;">Credits balance: <b>${money(d.balanceUsd)}</b>${creditsSalesEnabled() ? ` &middot; <a href="${esc(baseUrl)}/credits">top up</a>` : ""}</p>`}
-<p style="margin:18px 0 0;font-size:13px;color:#5C6963;">Full history, paid and wallet-keyed: <a href="${esc(baseUrl)}/tools/my-usage">my-usage</a>. <a href="${esc(unsub)}">Unsubscribe</a>.</p>`);
+<p style="margin:18px 0 0;font-size:13px;color:#626970;">Full history, paid and wallet-keyed: <a href="${esc(baseUrl)}/tools/my-usage">my-usage</a>. <a href="${esc(unsub)}">Unsubscribe</a>.</p>`);
     return sendEmail({ to: rec.email, subject, html, text, headers: { "List-Unsubscribe": `<${unsub}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } });
   }
 
@@ -347,8 +347,8 @@ ${d.balanceUsd == null ? "" : `<p style="margin:16px 0 0;">Credits balance: <b>$
   }
 
   function shell(inner) {
-    return `<div style="font-family:system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#141A17;max-width:520px;">
-<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#5C6963;margin-bottom:14px;">agent402 &middot; weekly digest</div>
+    return `<div style="font-family:system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#111315;max-width:520px;">
+<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#626970;margin-bottom:14px;">agent402 &middot; weekly digest</div>
 ${inner}
 </div>`;
   }

@@ -22,75 +22,77 @@ const RECALL_PER_FEED = RECALL_TIERS["recall-report"].perFeed;
 export const REPORTS_CSS = `
   .wrap{max-width:940px;margin:0 auto;padding:0 26px}
   @media screen{#app[data-api]{min-height:100vh}}
-  .eyebrow{font-family:var(--font-mono);font-size:11.5px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
-  .btn{font-family:var(--font-body);font-size:15px;font-weight:500;border-radius:999px;border:1px solid transparent;cursor:pointer;padding:11px 18px;transition:transform .12s ease,border-color .15s ease;display:inline-flex;gap:8px;align-items:center;text-decoration:none;white-space:nowrap}
+  .eyebrow{font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+  .btn{font-family:var(--font-body);font-size:var(--fs-base);font-weight:500;border-radius:999px;border:1px solid transparent;cursor:pointer;padding:11px 18px;transition:transform .12s ease,border-color .15s ease;display:inline-flex;gap:8px;align-items:center;text-decoration:none;white-space:nowrap}
   .btn:hover{transform:translateY(-1px)}
   .btn-primary{background:var(--btn-bg);color:var(--btn-fg);box-shadow:var(--btn-shadow)}
   .btn-ghost{background:var(--chip-bg);color:var(--ink);border-color:var(--dash)}.btn-ghost:hover{border-color:var(--ink);color:var(--ink)}
   .btn:disabled{opacity:.5;cursor:default;transform:none}
-  .hero{padding:64px 0 20px}.hero h1{font-weight:500;font-size:clamp(34px,5vw,56px);line-height:1.02;letter-spacing:-.035em;margin:14px 0 0;color:var(--ink);text-wrap:balance}.hero h1 em{font-style:normal;color:var(--faint)}
-  .lede{font-size:19px;line-height:1.5;color:var(--muted);max-width:620px;margin:16px 0 0;font-weight:300}.lede b{color:var(--ink);font-weight:500}
+  .hero{padding:64px 0 20px}.hero h1{font-weight:500;font-size:clamp(var(--fs-3xl),5vw,var(--fs-4xl));line-height:1.02;letter-spacing:-.035em;margin:14px 0 0;color:var(--ink);text-wrap:balance}.hero h1 em{font-style:normal;color:var(--faint)}
+  .lede{font-size:var(--fs-lg);line-height:1.5;color:var(--muted);max-width:620px;margin:16px 0 0;font-weight:300}.lede b{color:var(--ink);font-weight:500}
   .products{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:18px;margin-top:8px}
   /* Cards are a flex column so the buy button sits on one baseline across a
      grid row however long the copy above it runs (the error slot takes the
      slack); the grid already stretches cards to equal height. */
   .pcard{display:flex;flex-direction:column;border:1px solid var(--hairline);border-radius:18px;background:var(--card);padding:24px;box-shadow:inset 0 1px 0 var(--card-inset),0 1px 2px rgba(0,0,0,.08)}
   .pcard .err{margin-top:auto;padding-top:8px}
-  .pcard h3{font-weight:500;font-size:21px;letter-spacing:-.02em;margin:0;color:var(--ink)}.pcard .k{font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
-  .pcard p{color:var(--muted);font-size:15px;line-height:1.5;margin:8px 0 16px;font-weight:300}
+  .pcard h3{font-weight:500;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0;color:var(--ink)}.pcard .k{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
+  .pcard p{color:var(--muted);font-size:var(--fs-base);line-height:1.5;margin:8px 0 16px;font-weight:300}
   /* Report bodies can carry markdown tables (filings, holders). Wide tables get
      their own scroll so the page body never scrolls sideways. */
   .tablewrap{overflow-x:auto;margin:14px 0;border:1px solid var(--hairline);border-radius:12px}
-  .tablewrap table{width:100%;border-collapse:collapse;font-size:14px}
-  .tablewrap th{text-align:left;font-weight:500;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);padding:9px 12px;border-bottom:1px solid var(--hairline);white-space:nowrap}
+  .tablewrap table{width:100%;border-collapse:collapse;font-size:var(--fs-md)}
+  .tablewrap th{text-align:left;font-weight:500;font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);padding:9px 12px;border-bottom:1px solid var(--hairline);white-space:nowrap}
   .tablewrap td{padding:9px 12px;border-bottom:1px solid var(--hairline);vertical-align:top;font-variant-numeric:tabular-nums}
   .tablewrap tr:last-child td{border-bottom:0}
   .pcard.sel{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
   .field{display:flex;gap:8px;background:var(--paper);border:1px solid var(--dash);border-radius:12px;padding:6px 6px 6px 14px;margin-bottom:12px}
   .field:focus-within{border-color:var(--ink)}
-  .field input{flex:1;border:0;background:transparent;color:var(--ink);font-family:var(--font-body);font-size:16px;outline:none;min-width:0}
-  .gets{font-size:13.5px;line-height:1.55;color:var(--muted);margin:0 0 6px}.gets b{color:var(--ink);font-weight:500}
-  .note{font-family:var(--font-mono);font-size:11.5px;color:var(--faint);margin-top:16px}
-  .err{color:#A5322B;font-size:14px;margin-top:8px;min-height:18px}
-  .trust{display:flex;gap:20px;flex-wrap:wrap;color:var(--muted);font-size:14px;margin-top:16px}
+  .field input{flex:1;border:0;background:transparent;color:var(--ink);font-family:var(--font-body);font-size:var(--fs-lg);outline:none;min-width:0}
+  .gets{font-size:var(--fs-md);line-height:1.55;color:var(--muted);margin:0 0 6px}.gets b{color:var(--ink);font-weight:500}
+  .note{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:16px}
+  .err{color:var(--bad);font-size:var(--fs-md);margin-top:8px;min-height:18px}
+  .trust{display:flex;gap:20px;flex-wrap:wrap;color:var(--muted);font-size:var(--fs-md);margin-top:16px}
   .trust span{display:inline-flex;gap:7px;align-items:center}.dot{width:5px;height:5px;border-radius:50%;background:var(--accent)}
   .report{background:var(--card);border:1px solid var(--hairline);border-radius:18px;padding:34px 38px;margin-top:24px}
-  .report h1{font-weight:500;font-size:30px;letter-spacing:-.03em;margin:0 0 6px;color:var(--ink)}.report h2{font-weight:500;font-size:22px;letter-spacing:-.02em;margin:28px 0 8px;color:var(--ink)}.report h3{font-weight:500;font-size:18px;margin:20px 0 6px;color:var(--ink)}
+  .report h1{font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.03em;margin:0 0 6px;color:var(--ink)}.report h2{font-weight:500;font-size:var(--fs-xl);letter-spacing:-.02em;margin:28px 0 8px;color:var(--ink)}.report h3{font-weight:500;font-size:var(--fs-lg);margin:20px 0 6px;color:var(--ink)}
   .report p{color:var(--muted);margin:0 0 14px;line-height:1.65}.report a{word-break:break-word;color:var(--accent)}
   .report ol,.report ul{color:var(--muted);line-height:1.6}
-  .cite{font-family:var(--font-mono);font-size:.72em;font-weight:500;color:var(--accent);vertical-align:super}
+  .cite{font-family:var(--font-mono);font-size:var(--fs-code-inline);font-weight:500;color:var(--accent);vertical-align:super}
   @keyframes sp{to{transform:rotate(360deg)}}
   .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--dash);border-top-color:var(--ink);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-3px;margin-right:8px}
   .status{background:var(--card);border:1px solid var(--hairline);border-radius:18px;padding:44px 34px;text-align:center;margin-top:24px}
-  .status h2{font-weight:500;font-size:24px;letter-spacing:-.02em;margin:0 0 10px;color:var(--ink)}.status p{color:var(--muted);max-width:460px;margin:0 auto 8px;line-height:1.55}
+  .status h2{font-weight:500;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink)}.status p{color:var(--muted);max-width:460px;margin:0 auto 8px;line-height:1.55}
   .report-actions{display:flex;gap:10px;align-items:center;margin:22px 0 4px;flex-wrap:wrap}
-  .keep-hint{color:var(--muted);font-size:13px;margin-top:8px;line-height:1.5}
+  .keep-hint{color:var(--muted);font-size:var(--fs-sm);margin-top:8px;line-height:1.5}
   .keep-hint ul{margin:6px 0 0;padding-left:18px}
   .rpt-head{border-bottom:1px solid var(--ink);padding-bottom:18px;margin-bottom:26px}
   .rpt-brand{display:flex;align-items:baseline;gap:9px;font-family:var(--font-mono);margin-bottom:14px}
-  .rpt-brand .n{font-weight:500;color:var(--ink);font-size:15px}.rpt-brand .s{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
-  .rpt-title{font-weight:500;font-size:34px;letter-spacing:-.03em;line-height:1.08;margin:0;color:var(--ink);text-wrap:balance}
-  .rpt-meta{font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-top:10px}
+  .rpt-brand .n{font-weight:500;color:var(--ink);font-size:var(--fs-base)}.rpt-brand .s{font-size:var(--fs-2xs);letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+  .rpt-title{font-weight:500;font-size:var(--fs-3xl);letter-spacing:-.03em;line-height:1.08;margin:0;color:var(--ink);text-wrap:balance}
+  .rpt-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:10px}
   .upsell{border:1px solid var(--hairline);border-radius:18px;background:var(--card);padding:24px 26px;margin-top:24px;box-shadow:inset 0 1px 0 var(--card-inset)}
-  .upsell .k{font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
-  .upsell h3{font-weight:500;font-size:21px;letter-spacing:-.02em;margin:0;color:var(--ink)}
-  .upsell p{color:var(--muted);font-size:15px;line-height:1.5;margin:8px 0 16px;font-weight:300}
+  .upsell .k{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
+  .upsell h3{font-weight:500;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0;color:var(--ink)}
+  .upsell p{color:var(--muted);font-size:var(--fs-base);line-height:1.5;margin:8px 0 16px;font-weight:300}
   .upsell .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  /* design-tokens: literal-start (print: paper is always white, whatever the screen theme) */
   @media print{
     @page{margin:18mm 16mm}
     nav,footer,.no-print,.ml-mobile-menu{display:none!important}
-    html,body{background:#fff;color:#111}
+    html,body{background:#fff;color:#111315}
     .wrap{max-width:100%;padding:0}
     .report{border:0;padding:0;margin:0;background:#fff;box-shadow:none}
-    .rpt-head{border-bottom-color:#111;margin-bottom:22px}
-    .rpt-brand .n{color:#111}.rpt-brand .s,.rpt-meta{color:#555}
-    .rpt-title,.report h1,.report h2,.report h3{color:#0d1a14}
-    .report p,.report ol,.report ul{color:#222}
+    .rpt-head{border-bottom-color:#111315;margin-bottom:22px}
+    .rpt-brand .n{color:#111315}.rpt-brand .s,.rpt-meta{color:#626970}
+    .rpt-title,.report h1,.report h2,.report h3{color:#111315}
+    .report p,.report ol,.report ul{color:#3A3F45}
     .cite{color:#0F5E43}
     .report a{color:#0F5E43;text-decoration:none}
     h1,h2,h3,.rpt-head{break-after:avoid;page-break-after:avoid}
     p,li{orphans:3;widows:3}
   }
+  /* design-tokens: literal-end */
 `;
 
 export function humanReportsPage(baseUrl) {
@@ -119,8 +121,8 @@ export function humanReportsPage(baseUrl) {
     <p class="lede">Deep research on any question, due diligence on any public company, a 13F breakdown of any fund, a graded audit of any domain. Built from live data, research and filing reports cited to their sources, delivered in ${REPORT_TURNAROUND}. <b>Nothing to sign up for, nothing recurring.</b> Pay by card at checkout and the report is yours. Agents skip the card and pay per call over x402 or MPP.</p>
     <div class="trust"><span><span class="dot"></span> Built from live data</span><span><span class="dot"></span> If a report fails, you're auto-refunded</span><span><span class="dot"></span> Secured by Stripe</span><span><span class="dot"></span> PDF download, data tables where the report has them</span></div>
     <div class="samples-strip" style="margin-top:18px;padding:14px 16px;border:1px solid var(--hairline);background:var(--card);">
-    <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;">read a real one first</div>
-    <div style="display:flex;gap:8px 18px;flex-wrap:wrap;font-size:14px;">${Object.values(SAMPLES).map((x) => `<a href="/reports/sample/${esc(x.product)}" style="color:var(--ink);">${esc(x.label)}: ${esc(x.input)} →</a>`).join("")}</div>
+    <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;">read a real one first</div>
+    <div style="display:flex;gap:8px 18px;flex-wrap:wrap;font-size:var(--fs-md);">${Object.values(SAMPLES).map((x) => `<a href="/reports/sample/${esc(x.product)}" style="color:var(--ink);">${esc(x.label)}: ${esc(x.input)} →</a>`).join("")}</div>
   </div>
 </section>
   <section>
@@ -260,7 +262,7 @@ const sampleLink = (slug) => { const p = sampleLinkFor(slug); return p ? `<a hre
 export function reportDeliveryPage(sessionId, { api = "/api/r/", waitCopy = `Reports take ${REPORT_TURNAROUND}. Keep this page open, it appears here automatically.`, baseUrl = "https://agent402.tools", robots = "noindex, nofollow", title = "Your report - Agent402", description = "Your Agent402 report.", canonical = `${baseUrl}/reports`, note = "Your report is yours to keep - bookmark this page or use the link we emailed you.", jsonLd, extraHtml = "", extraScripts = "" } = {}) {
   const body = `
 <div class="wrap" style="padding-top:28px;">
-  <div id="app" data-session="${esc(sessionId)}" data-api="${esc(api)}" data-monitors="${esc(monitorMapJson())}"><div class="status">${/^index/.test(robots) ? `<h1>${esc(title)}</h1><p><span class="spin"></span>${esc(waitCopy)}</p>` : `<h2><span class="spin"></span>Preparing your report…</h2><p>${esc(waitCopy)}</p>`}<p id="rv-elapsed" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);"></p></div></div>
+  <div id="app" data-session="${esc(sessionId)}" data-api="${esc(api)}" data-monitors="${esc(monitorMapJson())}"><div class="status">${/^index/.test(robots) ? `<h1>${esc(title)}</h1><p><span class="spin"></span>${esc(waitCopy)}</p>` : `<h2><span class="spin"></span>Preparing your report…</h2><p>${esc(waitCopy)}</p>`}<p id="rv-elapsed" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);"></p></div></div>
   ${extraHtml}
   ${note ? `<p class="note no-print">${esc(note)}</p>` : ""}
 </div>

@@ -249,7 +249,7 @@
           '<form class="sample-buy no-print" id="sample-buy" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 22px;">' +
             '<input id="sample-input" class="field" style="flex:1 1 240px;" placeholder="Your own ' + esc(inputNoun(s.kind)) + '" aria-label="Your own ' + esc(inputNoun(s.kind)) + '">' +
             '<button class="btn btn-primary" type="submit">Get this report, ' + "$" + esc(String(Math.round(s.priceUsd || 0))) + ' →</button>' +
-            '<span id="sample-err" style="color:var(--muted);font-size:13px;"></span>' +
+            '<span id="sample-err" style="color:var(--muted);font-size:var(--fs-sm);"></span>' +
           "</form>"
         : included.length ? '<div class="keep-hint no-print">Includes ' + included.join(" · ") + ". This page is yours to keep, bookmark it or use the link we emailed you.</div>"
                           : '<div class="keep-hint no-print">This page is yours to keep, bookmark it or use the link we emailed you.</div>');

@@ -53,32 +53,32 @@ export function transparencyPage(baseUrl, traffic = null) {
 
   const extraCss = `
 .tp-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
-.tp-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:18px}
-.tp-h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px}
-.tp-updated{font-family:var(--font-mono);font-size:13px;color:var(--faint);margin:0 0 32px}
-.tp-body p,.tp-body li{font-size:15px;line-height:1.55;color:var(--muted)}
+.tp-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
+.tp-h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 14px}
+.tp-updated{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:0 0 32px}
+.tp-body p,.tp-body li{font-size:var(--fs-base);line-height:1.55;color:var(--muted)}
 .tp-body p{margin:0 0 14px}
 .tp-body ul{margin:0 0 18px;padding:0 0 0 22px}
 .tp-body li{margin-bottom:8px}
-.tp-body h2{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:36px 0 14px;color:var(--ink)}
-.tp-body h3{font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:28px 0 10px;color:var(--ink)}
+.tp-body h2{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:36px 0 14px;color:var(--ink)}
+.tp-body h3{font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.01em;margin:28px 0 10px;color:var(--ink)}
 .tp-body a{color:var(--accent);text-decoration:none}
 .tp-body a:hover{text-decoration:underline}
 .tp-body b,.tp-body strong{color:var(--ink);font-weight:600}
-.tp-body code{font-family:var(--font-mono);font-size:13px;background:var(--surface);color:var(--on-dark);padding:2px 7px;border:1px solid var(--hairline)}
-.tp-ca{font-family:var(--font-mono);font-size:14px;word-break:break-all;background:var(--surface);color:var(--on-dark);border:1px solid var(--hairline);padding:14px 16px;margin:0 0 8px}
-.tp-ca-label{font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin:18px 0 6px}
-.tp-receipts{width:100%;border-collapse:collapse;margin:14px 0 22px;font-family:var(--font-mono);font-size:12.5px}
-.tp-receipts th{text-align:left;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:600;padding:6px 10px 6px 0;border-bottom:1px solid var(--hairline)}
+.tp-body code{font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--panel);color:var(--on-panel);padding:2px 7px;border:1px solid var(--hairline)}
+.tp-ca{font-family:var(--font-mono);font-size:var(--fs-md);word-break:break-all;background:var(--panel);color:var(--on-panel);border:1px solid var(--hairline);padding:14px 16px;margin:0 0 8px}
+.tp-ca-label{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin:18px 0 6px}
+.tp-receipts{width:100%;border-collapse:collapse;margin:14px 0 22px;font-family:var(--font-mono);font-size:var(--fs-sm)}
+.tp-receipts th{text-align:left;font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:600;padding:6px 10px 6px 0;border-bottom:1px solid var(--hairline)}
 .tp-receipts td{padding:8px 10px 8px 0;border-bottom:1px solid var(--hairline);color:var(--muted);vertical-align:top}
 .tp-receipts td a{word-break:break-all}
 .tp-note{border:1px solid var(--hairline);background:var(--card);padding:16px 18px;margin:22px 0}
 .tp-note p{margin:0}
 .tp-fold{border:1.5px solid var(--hairline);background:var(--card);padding:14px 18px;margin:0 0 26px}
-.tp-fold summary{cursor:pointer;font-size:15px;color:var(--ink)}
+.tp-fold summary{cursor:pointer;font-size:var(--fs-base);color:var(--ink)}
 .tp-fold[open]{padding-bottom:20px}
-.tp-fold h3{font-size:19px !important;margin:22px 0 8px !important}
-@media(max-width:600px){.tp-h1{font-size:36px !important}}
+.tp-fold h3{font-size:var(--fs-lg) !important;margin:22px 0 8px !important}
+@media(max-width:600px){.tp-h1{font-size:var(--fs-3xl) !important}}
 `;
 
   const body = `
@@ -86,7 +86,7 @@ export function transparencyPage(baseUrl, traffic = null) {
 <section>
 <div class="tp-eyebrow">$ GET /transparency</div>
 <h1 class="tp-h1">Disclosures</h1>
-<p style="font-size:15px;color:var(--muted);">What the company publishes about itself, in one place: uptime from two outside observers at <a href="/status">/status</a>, every settled transaction by rail at <a href="/revenue">/revenue</a>, metered receipts against their quotes at <a href="/proof">/proof</a>, and how the service is secured at <a href="/security">/security</a>. The material disclosures below are kept verbatim, with on-chain receipts.</p>
+<p style="font-size:var(--fs-base);color:var(--muted);">What the company publishes about itself, in one place: uptime from two outside observers at <a href="/status">/status</a>, every settled transaction by rail at <a href="/revenue">/revenue</a>, metered receipts against their quotes at <a href="/proof">/proof</a>, and how the service is secured at <a href="/security">/security</a>. The material disclosures below are kept verbatim, with on-chain receipts.</p>
 <p class="tp-updated">Agent402 (agent402.tools) · last updated 2026-07-29.</p>
 </section>
 
@@ -124,7 +124,7 @@ that it existed, or that this launch capability existed on Bankr at all, until 2
 
 <div class="tp-ca-label">Contract address (created by the community, not by the Agent402.Tools team)</div>
 <div class="tp-ca">${TOKEN_CA}</div>
-<p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:0 0 18px">Verify, don't trust:
+<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 18px">Verify, don't trust:
 <a href="${SCOUT}/token/${TOKEN_CA}" rel="noopener">token on Blockscout</a> ·
 <a href="${SCOUT}/tx/${CREATION_TX}" rel="noopener">creation transaction</a> ·
 launched by <a href="${SCOUT}/address/${LAUNCHER}" rel="noopener">${LAUNCHER.slice(0, 10)}…${LAUNCHER.slice(-4)}</a></p>

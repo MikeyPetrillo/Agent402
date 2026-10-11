@@ -12,20 +12,20 @@ export function privacyPage(baseUrl) {
 
   const extraCss = `
 .pv-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
-.pv-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:18px}
-.pv-h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px}
-.pv-updated{font-family:var(--font-mono);font-size:13px;color:var(--faint);margin:0 0 32px}
-.pv-body p,.pv-body li{font-size:15px;line-height:1.55;color:var(--muted)}
+.pv-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
+.pv-h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 14px}
+.pv-updated{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:0 0 32px}
+.pv-body p,.pv-body li{font-size:var(--fs-base);line-height:1.55;color:var(--muted)}
 .pv-body p{margin:0 0 14px}
 .pv-body ul{margin:0 0 18px;padding:0 0 0 22px}
 .pv-body li{margin-bottom:8px}
-.pv-body h2{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:36px 0 14px;color:var(--ink)}
+.pv-body h2{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:36px 0 14px;color:var(--ink)}
 .pv-body a{color:var(--accent);text-decoration:none}
 .pv-body a:hover{text-decoration:underline}
 .pv-body b,.pv-body strong{color:var(--ink);font-weight:600}
 .pv-body i{font-style:italic}
-.pv-body code{font-family:var(--font-mono);font-size:13px;background:var(--surface);color:var(--on-dark);padding:2px 7px;border:1px solid var(--hairline)}
-@media(max-width:600px){.pv-h1{font-size:36px !important}}
+.pv-body code{font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--panel);color:var(--on-panel);padding:2px 7px;border:1px solid var(--hairline)}
+@media(max-width:600px){.pv-h1{font-size:var(--fs-3xl) !important}}
 `;
 
   const body = `

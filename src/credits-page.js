@@ -14,7 +14,7 @@ export function creditsPage(baseUrl, salesEnabled = false) {
   const cards = Object.entries(CREDIT_PACKS).map(([key, p]) => `
     <div class="pcard" data-pack="${esc(key)}" style="text-align:center;">
       <div class="k">${esc(p.label)}</div>
-      <div style="font-family:var(--font-mono);font-size:34px;color:var(--ink);letter-spacing:-.02em;margin:6px 0 2px;">$${(p.cents / 100).toFixed(0)}</div>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-3xl);color:var(--ink);letter-spacing:-.02em;margin:6px 0 2px;">$${(p.cents / 100).toFixed(0)}</div>
       <p style="margin:4px 0 16px;">${esc(p.cents === 2000 ? "about 20,000 calls at the $0.001 floor, or fifty deep research reports" : p.cents === 5000 ? "try the whole catalog; research, dossiers, audits included" : "for a team or an agent fleet; never expires")}</p>
       <button class="btn btn-primary" style="width:100%;justify-content:center" data-pack-buy="${esc(key)}">Buy $${(p.cents / 100).toFixed(0)} of credits →</button>
       <div class="err" id="err-${esc(key)}"></div>
@@ -40,17 +40,17 @@ export function creditsPage(baseUrl, salesEnabled = false) {
     <p class="note">${salesEnabled ? "Your key is shown once on the next page and emailed to you · " : ""}keep it secret · balance at <span style="font-family:var(--font-mono);">GET /api/credits/balance</span> · agents with a wallet pay per call over x402 / MPP</p>
   </section>
   <section>
-    <div class="hm-obsidian" style="border-radius:18px;background:var(--obsidian-bg);border:1px solid var(--obsidian-border);color:var(--on-dark);padding:26px 28px;">
-      <div style="font-family:var(--font-mono);font-size:11.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--dk-muted);margin-bottom:12px;">How it works</div>
-      <pre style="margin:0;font-family:var(--font-mono);font-size:12.5px;line-height:1.8;color:var(--on-dark2);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># any paid tool, any language - just the header</span>
+    <div class="hm-obsidian" style="border-radius:18px;background:var(--obsidian-bg);border:1px solid var(--obsidian-border);color:var(--on-panel);padding:26px 28px;">
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--on-panel-dim);margin-bottom:12px;">How it works</div>
+      <pre style="margin:0;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.8;color:var(--on-panel-soft);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># any paid tool, any language - just the header</span>
 curl -H "Authorization: Bearer a402_…" ${esc(baseUrl)}/api/whois?domain=example.com
 <span style="color:var(--accent-lit);">HTTP/2 200</span>  X-Credits-Balance: 19.999
 
-<span style="color:var(--dk-muted3);"># a report, the same way</span>
+<span style="color:var(--on-panel-faint);"># a report, the same way</span>
 curl -X POST -H "Authorization: Bearer a402_…" -H "content-type: application/json" \\
   -d '{"ticker":"AAPL"}' ${esc(baseUrl)}/v1/dossier
 
-<span style="color:var(--dk-muted3);"># balance</span>
+<span style="color:var(--on-panel-faint);"># balance</span>
 curl -H "Authorization: Bearer a402_…" ${esc(baseUrl)}/api/credits/balance</pre>
     </div>
   </section>

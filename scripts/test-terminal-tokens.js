@@ -40,9 +40,9 @@ const selfDeclared = new Set([...TERMINAL_CSS.matchAll(/(--[a-z0-9-]+)\s*:/g)].m
 const used = [...new Set([...TERMINAL_CSS.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]))];
 ok(used.length >= 15, `the stylesheet is actually token-driven (${used.length} distinct tokens referenced)`);
 
-// Typography is theme-independent by design and lives only on the default
+// Typography, the type scale and radius are theme-independent by design and live only on the default
 // root - the same carve-out scripts/test-theme.js makes.
-const needsBothThemes = used.filter((v) => !v.startsWith("--font-") && !selfDeclared.has(v));
+const needsBothThemes = used.filter((v) => !/^--(font|fs|radius)-/.test(v) && !selfDeclared.has(v));
 const unresolved = needsBothThemes.filter((v) => !light.includes(`${v}:`) || !dark.includes(`${v}:`));
 ok(unresolved.length === 0, `every themed token the terminal uses is defined in BOTH themes${unresolved.length ? ` - MISSING: ${unresolved.join(", ")}` : ""}`);
 

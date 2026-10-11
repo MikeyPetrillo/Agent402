@@ -12,12 +12,12 @@ import { ledgerShell, ledgerFooterCompact, esc, jsonScriptTag } from "./ledger-c
 export function operatorLoginPage(baseUrl) {
   const extraCss = `
 .opl-wrap{max-width:420px;margin:0 auto;padding:80px 30px}
-.opl-h1{font-family:var(--font-body);font-weight:800;font-size:40px;line-height:1;letter-spacing:-.02em;margin:0 0 8px}
-.opl-sub{color:var(--muted);margin:0 0 24px;font-size:14px}
+.opl-h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 8px}
+.opl-sub{color:var(--muted);margin:0 0 24px;font-size:var(--fs-md)}
 .opl-form{display:flex;flex-direction:column;gap:12px}
-.opl-form input{font-family:var(--font-mono);font-size:14px;padding:12px 14px;border:1px solid var(--hairline);background:var(--surface);color:var(--on-dark)}
-.opl-form button{font-family:var(--font-body);font-weight:700;font-size:15px;padding:12px 14px;border:1px solid var(--hairline);background:var(--ink);color:var(--surface);cursor:pointer}
-.opl-err{color:#b8842e;font-size:13px;min-height:18px}
+.opl-form input{font-family:var(--font-mono);font-size:var(--fs-md);padding:12px 14px;border:1px solid var(--hairline);background:var(--panel);color:var(--on-panel)}
+.opl-form button{font-family:var(--font-body);font-weight:700;font-size:var(--fs-base);padding:12px 14px;border:1px solid var(--hairline);background:var(--ink);color:var(--panel);cursor:pointer}
+.opl-err{color:var(--warn);font-size:var(--fs-sm);min-height:18px}
 `;
   const body = `
 <div class="opl-wrap">
@@ -70,46 +70,46 @@ export function operatorPage(baseUrl, data) {
 
   const extraCss = `
 .op-wrap{max-width:1180px;margin:0 auto;padding:56px 30px}
-.op-h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 6px}
-.op-sub{color:var(--muted);margin:0 0 22px;font-size:14px;line-height:1.55}
+.op-h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 6px}
+.op-sub{color:var(--muted);margin:0 0 22px;font-size:var(--fs-md);line-height:1.55}
 .op-sub a{color:var(--accent);text-decoration:none}
 .op-sub a:hover{text-decoration:underline}
-.op-sub code{font-family:var(--font-mono);font-size:12px;background:var(--surface);color:var(--on-dark);padding:2px 7px;border:1px solid var(--hairline)}
+.op-sub code{font-family:var(--font-mono);font-size:var(--fs-xs);background:var(--panel);color:var(--on-panel);padding:2px 7px;border:1px solid var(--hairline)}
 .op-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin:0 0 22px}
-.op-stat{background:var(--surface);border:1px solid var(--hairline);padding:16px}
-.op-stat .op-k{color:var(--dk-muted);font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
-.op-stat .op-v{font-family:var(--font-mono);font-size:1.45rem;color:var(--on-dark);margin-top:4px}
-.op-stat .op-s{color:var(--dk-muted);font-family:var(--font-mono);font-size:12px;margin-top:3px}
+.op-stat{background:var(--panel);border:1px solid var(--hairline);padding:16px}
+.op-stat .op-k{color:var(--on-panel-dim);font-family:var(--font-mono);font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.06em}
+.op-stat .op-v{font-family:var(--font-mono);font-size:var(--fs-xl);color:var(--on-panel);margin-top:4px}
+.op-stat .op-s{color:var(--on-panel-dim);font-family:var(--font-mono);font-size:var(--fs-xs);margin-top:3px}
 .op-layout{display:grid;gap:18px;grid-template-columns:1fr 320px}
 @media(max-width:880px){.op-layout{grid-template-columns:1fr}}
-.op-panel{background:var(--surface);border:1px solid var(--hairline);overflow:hidden}
-.op-ph{padding:12px 16px;border-bottom:1px solid var(--dark-border);display:flex;justify-content:space-between;align-items:center}
-.op-ph h2{margin:0;font-size:.95rem;color:var(--accent);font-family:var(--font-body);font-weight:700}
-.op-ph input{background:var(--ink-panel);color:var(--on-dark);border:1px solid var(--dark-border);padding:5px 8px;font-family:var(--font-mono);font-size:12px}
+.op-panel{background:var(--panel);border:1px solid var(--hairline);overflow:hidden}
+.op-ph{padding:12px 16px;border-bottom:1px solid var(--panel-rule);display:flex;justify-content:space-between;align-items:center}
+.op-ph h2{margin:0;font-size:var(--fs-base);color:var(--accent);font-family:var(--font-body);font-weight:700}
+.op-ph input{background:var(--ink-panel);color:var(--on-panel);border:1px solid var(--panel-rule);padding:5px 8px;font-family:var(--font-mono);font-size:var(--fs-xs)}
 .op-ph input:focus{outline:none;border-color:var(--accent)}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;color:var(--dk-muted);font-weight:500;font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:9px 14px;border-bottom:1px solid var(--dark-border);position:sticky;top:0;background:var(--surface);cursor:pointer;user-select:none}
+table{width:100%;border-collapse:collapse;font-size:var(--fs-sm)}
+th{text-align:left;color:var(--on-panel-dim);font-weight:500;font-family:var(--font-mono);font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.04em;padding:9px 14px;border-bottom:1px solid var(--panel-rule);position:sticky;top:0;background:var(--panel);cursor:pointer;user-select:none}
 th.num{text-align:right}
-td{padding:8px 14px;border-bottom:1px solid var(--dark-border);color:var(--on-dark);font-family:var(--font-mono);font-size:13px}
+td{padding:8px 14px;border-bottom:1px solid var(--panel-rule);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm)}
 td.num{text-align:right}
-td.op-paid{color:var(--green)}
-td.op-pow{color:#7cb3e0}
-td.op-hb{color:#b0a0d0}
+td.op-paid{color:var(--ok)}
+td.op-pow{color:var(--t-cyan)}
+td.op-hb{color:var(--t-violet)}
 td.op-rev{color:var(--accent);font-weight:600}
-td.op-muted{color:var(--dk-muted)}
-td a{color:var(--on-dark);text-decoration:none}
+td.op-muted{color:var(--on-panel-dim)}
+td a{color:var(--on-panel);text-decoration:none}
 td a:hover{color:var(--accent)}
 .op-tbody-scroll{max-height:560px;overflow:auto}
 .op-feed{max-height:560px;overflow:auto}
 .op-feed ul{list-style:none;margin:0;padding:0}
-.op-feed li{display:grid;grid-template-columns:1fr auto;gap:4px 10px;padding:10px 16px;border-bottom:1px solid var(--dark-border);font-size:12px}
-.op-rs{font-family:var(--font-mono);color:var(--on-dark)}
-.op-rm{color:var(--dk-muted);font-family:var(--font-mono);font-size:12px}
-.op-ra{grid-column:1/-1;color:var(--dk-muted);font-family:var(--font-mono);font-size:11px}
-.op-badge{display:inline-block;font-family:var(--font-mono);font-size:10px;font-weight:600;padding:1px 6px;margin-left:6px;letter-spacing:.04em;vertical-align:middle}
-.op-badge-pow{background:rgba(124,179,224,.12);color:#7cb3e0;border:1px solid rgba(124,179,224,.3)}
-.op-badge-wallet{background:rgba(111,174,141,.12);color:var(--green);border:1px solid rgba(111,174,141,.3)}
-@media(max-width:600px){.op-h1{font-size:36px !important}}
+.op-feed li{display:grid;grid-template-columns:1fr auto;gap:4px 10px;padding:10px 16px;border-bottom:1px solid var(--panel-rule);font-size:var(--fs-xs)}
+.op-rs{font-family:var(--font-mono);color:var(--on-panel)}
+.op-rm{color:var(--on-panel-dim);font-family:var(--font-mono);font-size:var(--fs-xs)}
+.op-ra{grid-column:1/-1;color:var(--on-panel-dim);font-family:var(--font-mono);font-size:var(--fs-2xs)}
+.op-badge{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-2xs);font-weight:600;padding:1px 6px;margin-left:6px;letter-spacing:.04em;vertical-align:middle}
+.op-badge-pow{background:rgba(124,179,224,.12);color:var(--t-cyan);border:1px solid rgba(124,179,224,.3)}
+.op-badge-wallet{background:rgba(111,174,141,.12);color:var(--ok);border:1px solid rgba(111,174,141,.3)}
+@media(max-width:600px){.op-h1{font-size:var(--fs-3xl) !important}}
 `;
 
   // Auth is the /__operator session cookie (set by the POST login form),
@@ -143,7 +143,7 @@ td a:hover{color:var(--accent)}
 
   <div class="op-panel op-feed">
     <div class="op-ph"><h2>Recent calls</h2></div>
-    <ul id="feed">${feed || `<li style="text-align:center;color:var(--dk-muted);padding:16px;">No recent activity.</li>`}</ul>
+    <ul id="feed">${feed || `<li style="text-align:center;color:var(--on-panel-dim);padding:16px;">No recent activity.</li>`}</ul>
   </div>
 </div>
 
@@ -151,13 +151,13 @@ td a:hover{color:var(--accent)}
   <div class="op-panel">
     <div class="op-ph"><h2>Top by revenue vs top by calls</h2></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:0">
-      <div style="border-right:1px solid var(--dark-border)">
-        <div style="padding:8px 14px;color:var(--dk-muted);font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--dark-border)">By revenue</div>
-        <ol style="list-style:none;margin:0;padding:0">${topByRevenue.length ? topByRevenue.map((r) => `<li style="padding:8px 14px;border-bottom:1px solid var(--dark-border);font-family:var(--font-mono);font-size:13px;display:flex;justify-content:space-between;gap:8px"><a href="/tools/${esc(r.slug)}" style="color:var(--on-dark);text-decoration:none">${esc(r.slug)}</a><span class="op-rev">$${esc(r.revenueUsd.toFixed(4))}</span></li>`).join("") : `<li style="padding:16px;text-align:center;color:var(--dk-muted)">No data yet.</li>`}</ol>
+      <div style="border-right:1px solid var(--panel-rule)">
+        <div style="padding:8px 14px;color:var(--on-panel-dim);font-family:var(--font-mono);font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--panel-rule)">By revenue</div>
+        <ol style="list-style:none;margin:0;padding:0">${topByRevenue.length ? topByRevenue.map((r) => `<li style="padding:8px 14px;border-bottom:1px solid var(--panel-rule);font-family:var(--font-mono);font-size:var(--fs-sm);display:flex;justify-content:space-between;gap:8px"><a href="/tools/${esc(r.slug)}" style="color:var(--on-panel);text-decoration:none">${esc(r.slug)}</a><span class="op-rev">$${esc(r.revenueUsd.toFixed(4))}</span></li>`).join("") : `<li style="padding:16px;text-align:center;color:var(--on-panel-dim)">No data yet.</li>`}</ol>
       </div>
       <div>
-        <div style="padding:8px 14px;color:var(--dk-muted);font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--dark-border)">By calls</div>
-        <ol style="list-style:none;margin:0;padding:0">${topByCalls.length ? topByCalls.map((r) => `<li style="padding:8px 14px;border-bottom:1px solid var(--dark-border);font-family:var(--font-mono);font-size:13px;display:flex;justify-content:space-between;gap:8px"><a href="/tools/${esc(r.slug)}" style="color:var(--on-dark);text-decoration:none">${esc(r.slug)}</a><span class="op-muted">${esc(r.calls)}</span></li>`).join("") : `<li style="padding:16px;text-align:center;color:var(--dk-muted)">No data yet.</li>`}</ol>
+        <div style="padding:8px 14px;color:var(--on-panel-dim);font-family:var(--font-mono);font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--panel-rule)">By calls</div>
+        <ol style="list-style:none;margin:0;padding:0">${topByCalls.length ? topByCalls.map((r) => `<li style="padding:8px 14px;border-bottom:1px solid var(--panel-rule);font-family:var(--font-mono);font-size:var(--fs-sm);display:flex;justify-content:space-between;gap:8px"><a href="/tools/${esc(r.slug)}" style="color:var(--on-panel);text-decoration:none">${esc(r.slug)}</a><span class="op-muted">${esc(r.calls)}</span></li>`).join("") : `<li style="padding:16px;text-align:center;color:var(--on-panel-dim)">No data yet.</li>`}</ol>
       </div>
     </div>
   </div>
@@ -167,10 +167,10 @@ td a:hover{color:var(--accent)}
     <div style="max-height:280px;overflow:auto">
       <table>
         <thead><tr><th>Rail</th><th class="num">Settled calls</th></tr></thead>
-        <tbody>${railBreakdown.length ? railBreakdown.map((r) => `<tr><td>${esc(r.network)}${r.settledCalls === 0 ? ` <span class="op-badge" style="background:rgba(184,132,46,.14);color:#b8842e;border:1px solid rgba(184,132,46,.35)">ZERO REVENUE</span>` : ""}</td><td class="num${r.settledCalls === 0 ? " op-muted" : " op-paid"}">${esc(r.settledCalls)}</td></tr>`).join("") : `<tr><td colspan="2" class="op-muted" style="padding:16px;text-align:center">No configured rails.</td></tr>`}</tbody>
+        <tbody>${railBreakdown.length ? railBreakdown.map((r) => `<tr><td>${esc(r.network)}${r.settledCalls === 0 ? ` <span class="op-badge" style="background:rgba(184,132,46,.14);color:var(--warn);border:1px solid rgba(184,132,46,.35)">ZERO REVENUE</span>` : ""}</td><td class="num${r.settledCalls === 0 ? " op-muted" : " op-paid"}">${esc(r.settledCalls)}</td></tr>`).join("") : `<tr><td colspan="2" class="op-muted" style="padding:16px;text-align:center">No configured rails.</td></tr>`}</tbody>
       </table>
     </div>
-    <p style="padding:10px 14px;margin:0;color:var(--dk-muted);font-size:12px;border-top:1px solid var(--dark-border)">Rails currently in PAYMENT_NETWORKS with zero lifetime settled calls still carry facilitator config, canary legs, and test maintenance for zero return.</p>
+    <p style="padding:10px 14px;margin:0;color:var(--on-panel-dim);font-size:var(--fs-xs);border-top:1px solid var(--panel-rule)">Rails currently in PAYMENT_NETWORKS with zero lifetime settled calls still carry facilitator config, canary legs, and test maintenance for zero return.</p>
   </div>
 </div>
 
