@@ -57,7 +57,6 @@ const walk = (dir) => readdirSync(dir).flatMap((n) => {
 // Deliberate keeps, each with its reason stated. A file added here needs one.
 const EXEMPT = new Map([
   ["src/repo-link.js", "the definition itself"],
-  ["src/tools/enrich-kit.js", "a documented EXAMPLE INPUT for the github-repo tool, not a link to us; the CI example check drives it against the live API, so the repo named there is test data"],
 ]);
 
 const files = walk(join(ROOT, "src")).map((p) => relative(ROOT, p));

@@ -560,7 +560,7 @@ export const ENRICH_TOOLS = [
     tags: ["data", "github", "repository", "oss", "enrichment", "dev", "stars"],
     discovery: {
       bodyType: "json",
-      input: { owner: "MikeyPetrillo", repo: "Agent402" },
+      input: { owner: "expressjs", repo: "express" },
       inputSchema: {
         properties: {
           owner: { type: "string", description: "Repository owner (user or org)." },
@@ -570,16 +570,16 @@ export const ENRICH_TOOLS = [
       },
       output: {
         example: {
-          fullName: "MikeyPetrillo/Agent402",
-          description: "Open-source x402 + MCP tool server",
-          stars: 12, forks: 3, watchers: 12, openIssues: 4,
-          license: "MIT", topics: ["x402", "mcp"],
+          fullName: "expressjs/express",
+          description: "Fast, unopinionated, minimalist web framework for node.",
+          stars: 66000, forks: 17000, watchers: 66000, openIssues: 150,
+          license: "MIT", topics: ["express", "javascript", "nodejs", "server"],
           language: "JavaScript",
-          languages: [{ language: "JavaScript", bytes: 1000000, percent: 98.2 }],
-          pushedAt: "2026-07-12T20:11:04Z", createdAt: "2026-05-28T01:02:03Z",
-          defaultBranch: "main", archived: false, fork: false,
-          homepage: "https://agent402.tools",
-          url: "https://github.com/MikeyPetrillo/Agent402",
+          languages: [{ language: "JavaScript", bytes: 1000000, percent: 99.9 }],
+          pushedAt: "2026-07-12T20:11:04Z", createdAt: "2009-06-26T18:56:01Z",
+          defaultBranch: "master", archived: false, fork: false,
+          homepage: "https://expressjs.com",
+          url: "https://github.com/expressjs/express",
           source: "api.github.com",
         },
       },

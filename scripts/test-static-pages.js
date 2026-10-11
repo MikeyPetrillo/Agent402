@@ -23,6 +23,7 @@ import { WHY_POINTS, WHY_COMPARE } from "../src/why.js";
 import { USE_CASES, useCaseCost } from "../src/use-cases.js";
 import { BADGE_STYLES } from "../src/badges.js";
 import { esc } from "../src/ledger-chrome.js";
+import { REPO_SLUG } from "../src/repo-link.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 3089;
@@ -173,6 +174,38 @@ try {
     if (hits.length) bad.push(`${p.path}: ${[...new Set(hits)].slice(0, 3).join(" ")}`);
   }
   ok(bad.length === 0, `no page ships an uninterpolated template placeholder${bad.length ? ` - ${bad.join(" | ")}` : ""}`);
+}
+
+// --- the repository path lives in hrefs, never in visible text ----------------
+// Pages link the source with neutral words ("the source repository on
+// GitHub", "open source"); the owner/name path appears only inside an href.
+// Machine surfaces (llms.txt, openapi, JSON-LD) are not HTML text and stay URLs.
+{
+  const visibleText = (html) => String(html)
+    .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&quot;/g, '"').replace(/&#47;|&#x2f;/gi, "/");
+  const reEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const slugRe = new RegExp(reEsc(REPO_SLUG), "i");
+  const ownerRe = new RegExp("\\b" + reEsc(REPO_SLUG.split("/")[0]) + "\\b", "i");
+  ok(slugRe.test(visibleText(`<p>see github.com/${REPO_SLUG} here</p>`)) && !slugRe.test(visibleText(`<a href="https://github.com/${REPO_SLUG}">source</a>`)),
+    "control: the repo-path check sees printed text and ignores an href");
+  const paths = new Set([...PAGES.map((p) => p.path), "/terms", "/privacy", "/company", "/security", "/transparency", "/tools/github-repo"]);
+  const xml = await (await fetch(`${BASE}/sitemap.xml`)).text().catch(() => "");
+  for (const m of xml.matchAll(/<loc>https?:\/\/[^/<]+(\/[^<]*)<\/loc>/g)) paths.add(m[1].replace(/&amp;/g, "&"));
+  const shown = [];
+  let scanned = 0;
+  for (const path of paths) {
+    const res = await fetch(`${BASE}${path}`).catch(() => null);
+    if (!res || !(res.headers.get("content-type") || "").includes("text/html")) continue;
+    scanned++;
+    const text = visibleText(await res.text());
+    const m = text.match(slugRe) || text.match(ownerRe);
+    if (m) shown.push(`${path}: "${m[0]}"`);
+  }
+  ok(scanned >= PAGES.length, `the repo-path check read every HTML page (${scanned})`);
+  ok(shown.length === 0, `no served HTML page prints the repository path as text${shown.length ? ` - ${shown.slice(0, 8).join(" | ")}` : ""}`);
 }
 
 // --- no page sells credits while credits are off ----------------------------
