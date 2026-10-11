@@ -265,7 +265,7 @@ try {
     ok(!/href="\/company["#]/.test(chrome), `${p} nav/footer carries no /company link`);
     ok(/© \d{4} <a href="https:\/\/havok\.holdings" rel="noopener"[^>]*>Havok Holdings LLC<\/a>/.test(footHtml), `${p} footer links the copyright entity to https://havok.holdings`);
     // Reports stay one click away: the CTA everywhere but /reports itself, and the footer.
-    if (p !== "/reports") ok(/class="ml-nav-cta" href="\/reports"/.test(navHtml), `${p} nav keeps the Get a report button`);
+    ok(!/class="ml-nav-cta"/.test(navHtml) && /href="\/reports"[^>]*>\s*Reports/.test(navHtml), `${p} nav lists Reports as a plain link and carries no button`);
     ok(footHtml.includes('href="/reports"') && footHtml.includes('href="/monitors"'), `${p} footer links reports and monitors`);
   }
   const reports = await (await fetch(`${BASE}/reports`)).text();
