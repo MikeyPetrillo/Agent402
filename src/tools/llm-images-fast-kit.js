@@ -429,7 +429,7 @@ async function videosHandler(input, req) {
 }
 
 // ---------------------------------------------------------------------------
-const SHARED_TAGS = ["ai", "generation", "gateway", "openai-compatible", "openrouter"];
+const SHARED_TAGS = ["ai", "generation", "gateway", "openai-compatible"];
 const imageInputSchema = {
   properties: {
     prompt: { type: "string", description: `Text description of the image to generate (up to ${IMAGE_MAX_PROMPT_CHARS.toLocaleString()} chars)` },

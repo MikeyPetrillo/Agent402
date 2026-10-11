@@ -374,8 +374,8 @@ export const MEV_AND_L2_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Last N MEV-Boost-built blocks via the Flashbots relay. For each block: slot, block number/hash, builder pubkey, proposer pubkey, gas used/limit, ETH paid to the proposer, and tx count. Use to monitor block-builder market share, proposer revenue, or to correlate an arbitrage opportunity with the block it landed in.",
-    tags: ["mev", "flashbots", "mev-boost", "builder", "block-payment"],
+      "Last N MEV-Boost-built blocks from a major MEV-Boost relay's public data API. For each block: slot, block number/hash, builder pubkey, proposer pubkey, gas used/limit, ETH paid to the proposer, and tx count. Use to monitor block-builder market share, proposer revenue, or to correlate an arbitrage opportunity with the block it landed in.",
+    tags: ["mev", "mev-boost", "builder", "block-payment"],
     discovery: {
       bodyType: "json",
       input: { limit: 5 },
@@ -418,8 +418,8 @@ export const MEV_AND_L2_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Builder market share aggregated over the last N MEV-Boost blocks via the Flashbots relay. Returns per-builder block count, share percent, total ETH paid to proposers, and average per block. Use to track block-builder concentration or detect a new builder gaining share.",
-    tags: ["mev", "flashbots", "builder-share", "concentration", "market-structure"],
+      "Builder market share aggregated over the last N MEV-Boost blocks from a major MEV-Boost relay's public data API. Returns per-builder block count, share percent, total ETH paid to proposers, and average per block. Use to track block-builder concentration or detect a new builder gaining share.",
+    tags: ["mev", "builder-share", "concentration", "market-structure"],
     discovery: {
       bodyType: "json",
       input: { window: 100 },
@@ -454,8 +454,8 @@ export const MEV_AND_L2_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Look up the MEV-Boost payment for a specific slot or block number via the Flashbots relay. Returns the builder, proposer, value paid in ETH, gas usage, and tx count. Returns found=false if the block was built locally or via a different MEV-Boost relay (Flashbots is one of several).",
-    tags: ["mev", "flashbots", "block-payment", "lookup"],
+      "Look up the MEV-Boost payment for a specific slot or block number from a major MEV-Boost relay's public data API. Returns the builder, proposer, value paid in ETH, gas usage, and tx count. Returns found=false if the block was built locally or via a different MEV-Boost relay (this relay is one of several).",
+    tags: ["mev", "block-payment", "lookup"],
     discovery: {
       bodyType: "json",
       // A block the Flashbots relay delivered, so the documented call returns
@@ -496,7 +496,7 @@ export const MEV_AND_L2_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Top L2s by Total Value Locked (TVL) via DeFiLlama. Returns each L2 with TVL in USD, native token symbol, and CoinGecko/CMC ids. Classification combines DeFiLlama's parent-chain hint with a curated list of well-known L2s (Arbitrum, Optimism, Base, zkSync Era, Linea, Scroll, Mantle, Polygon zkEVM, Starknet, Blast, Mode, Manta, Metis, Polygon, Taiko, Immutable zkEVM, World Chain).",
+      "Top L2s by Total Value Locked (TVL) from an open DeFi analytics API. Returns each L2 with TVL in USD, native token symbol, and market-data coin ids. Classification combines the source's parent-chain hint with a curated list of well-known L2s (Arbitrum, Optimism, Base, zkSync Era, Linea, Scroll, Mantle, Polygon zkEVM, Starknet, Blast, Mode, Manta, Metis, Polygon, Taiko, Immutable zkEVM, World Chain).",
     // Vocabulary the ASKERS use, not just ours. Measured against the live
     // catalog: `l2beat` resolved to ZERO results while this tool shipped, and
     // `rollup tvs` scraped a weak 22. L2Beat is the canonical rollup-data site
@@ -518,7 +518,7 @@ export const MEV_AND_L2_TOOLS = [
     // per token, so the plural reached NOTHING here and "total value locked on
     // rollups" resolved to crypto-global at score 2 (pre-existing, found by the
     // test below). The description now spells TVL out for the same reason.
-    tags: ["l2", "tvl", "defillama", "rollup", "rollups", "ranking", "l2beat", "tvs"],
+    tags: ["l2", "tvl", "rollup", "rollups", "ranking", "l2beat", "tvs"],
     discovery: {
       bodyType: "json",
       input: { limit: 10 },

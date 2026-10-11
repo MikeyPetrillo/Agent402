@@ -788,7 +788,7 @@ export const FARCASTER_SOCIAL_TOOLS = [
     category: "web",
     price: "$0.003",
     description:
-      "Search Farcaster users by name or username fragment. Returns up to 10 compact profiles: fid, username, display name, bio, follower and following counts, Neynar quality score, primary verified Ethereum address. Use to resolve a person or brand to a fid before fc-user-casts, or to find who to follow on a topic.",
+      "Search Farcaster users by name or username fragment. Returns up to 10 compact profiles: fid, username, display name, bio, follower and following counts, account quality score, primary verified Ethereum address. Use to resolve a person or brand to a fid before fc-user-casts, or to find who to follow on a topic.",
     tags: ["farcaster", "social", "user", "search", "profile"],
     discovery: {
       bodyType: "json",

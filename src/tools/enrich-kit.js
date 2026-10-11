@@ -572,7 +572,7 @@ export const ENRICH_TOOLS = [
         example: {
           fullName: "expressjs/express",
           description: "Fast, unopinionated, minimalist web framework for node.",
-          stars: 66000, forks: 17000, watchers: 66000, openIssues: 150,
+          stars: 69000, forks: 25000, watchers: 1700, openIssues: 230,
           license: "MIT", topics: ["express", "javascript", "nodejs", "server"],
           language: "JavaScript",
           languages: [{ language: "JavaScript", bytes: 1000000, percent: 99.9 }],

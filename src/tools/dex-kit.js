@@ -414,14 +414,14 @@ export const DEX_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "Top DEX pools (Uniswap, Sushi, Curve, Aerodrome, etc.) ranked by current TVL - filterable by chain and project. Sourced from DeFiLlama's public Yields API (keyless). Each row carries chain, project slug, symbol pair, TVL in USD, current APY, and pool ID for follow-up queries.",
-    tags: ["crypto", "dex", "tvl", "defillama", "pools", "yield"],
+      "Top DEX pools (Uniswap, Sushi, Curve, Aerodrome, etc.) ranked by current TVL - filterable by chain and project. Sourced from an open DeFi analytics yields API (keyless). Each row carries chain, project slug, symbol pair, TVL in USD, current APY, and pool ID for follow-up queries.",
+    tags: ["crypto", "dex", "tvl", "pools", "yield"],
     discovery: {
       bodyType: "json",
       input: { chain: "Base", project: "uniswap-v3", limit: 5 },
       inputSchema: {
         properties: {
-          chain: { type: "string", description: "Chain name as DeFiLlama uses it (Ethereum, Base, Polygon, Arbitrum, Optimism, etc.). Case-insensitive. Omit for all chains." },
+          chain: { type: "string", description: "Chain name as the source uses it (Ethereum, Base, Polygon, Arbitrum, Optimism, etc.). Case-insensitive. Omit for all chains." },
           project: { type: "string", description: "Project slug substring (uniswap-v3, aerodrome-v1, curve-dex, etc.). Case-insensitive substring match. Omit for all DEXes." },
           limit: { type: "number", description: "Max pools to return (1-50, default 10)." },
         },

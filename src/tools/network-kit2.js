@@ -626,7 +626,7 @@ export const NETWORK_TOOLS2 = [
     category: "network",
     price: "$0.001",
     description:
-      "Look up the Autonomous System (ASN), prefix, country, registry, and allocation date for an IPv4 address - or for a hostname (which is resolved first). Uses Team Cymru's free DNS-based IP→ASN mapping; no HTTPS upstream, no auth, no rate-limit headaches.",
+      "Look up the Autonomous System (ASN), prefix, country, registry, and allocation date for an IPv4 address - or for a hostname (which is resolved first). Uses a free public DNS-based IP→ASN mapping service; no HTTPS upstream, no auth, no rate-limit headaches.",
     tags: ["security", "network", "geolocation", "asn"],
     discovery: {
       bodyType: "json",
