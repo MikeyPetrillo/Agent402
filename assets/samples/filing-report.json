@@ -1,46 +1,101 @@
 {
  "product": "filing-report",
  "input": "AAPL",
- "title": "AAPL",
- "report": "# SEC Filing Report: Apple Inc. (AAPL)\n\n**Last 30 days** · 6 filings (4 x3, 144 x1, 10-Q x1, 8-K x1) · 3 primary documents read in full · 4 ownership forms parsed\n\n---\n\n## SNAPSHOT\n\nSix filings appear in the 30-day window, spanning **July 30, 2026 to August 27, 2026**: one Form 8-K [2], one Form 10-Q [1], one Form 144 [7], and three Form 4 insider transaction reports [4][5][6].\n\nThe single most consequential item is the **fiscal 2026 third-quarter results package** - the Item 2.02 Form 8-K furnished July 30, 2026 with the earnings press release as Exhibit 99.1 [2][3], followed the next day by the Form 10-Q for the quarter ended June 27, 2026 [1]. Apple reported quarterly revenue of $109.4 billion, up 16% year over year, and diluted EPS of $2.02, up 29% year over year, with gross margin of 50.1% that the press release states included an approximately 2-percentage-point favorable impact from tariff refunds ($0.11 per diluted share) [3]. Alongside the growth, the 10-Q management's discussion states the Company is experiencing supply constraints and rising component costs for advanced semiconductors, NAND storage and DRAM memory, and expects those trends to intensify [1].\n\nThree documents were read in full or in part here: the 10-Q (**EXCERPTED** - cover and financial statements, notes, MD&A, legal proceedings and risk factors; sections not listed were not read) [1], the 8-K body [2], and Exhibit 99.1 to the 8-K [3]. The Form 144 [7] and the three Form 4s [4][5][6] were not read as documents; what follows for those is limited to the structured fields extracted from the filings themselves.\n\n---\n\n## WHAT WAS FILED\n\n**Periodic report (1)** - Form 10-Q filed July 31, 2026 for the quarterly period ended June 27, 2026 (accession 0000320193-26-000020) [1].\n\n**Current report (1)** - Form 8-K filed July 30, 2026, period July 30, 2026, under Item 2.02 (results of operations and financial condition) and Item 9.01 (financial statements and exhibits), with Exhibit 99.1 (press release) and Exhibit 104 (Inline XBRL cover page) [2][3].\n\n**Insider ownership forms (4)** - All four relate to the same officer, Jennifer Newstead, Senior Vice President, General Counsel and Secretary:\n\n- **Form 144** filed August 11, 2026: notice of proposed sale of 8,632 shares of common stock, aggregate market value $2,660,900.32, on or about 08/11/2026 on NASDAQ through Morgan Stanley Smith Barney LLC Executive Financial Services (1 New York Plaza, 8th Floor, New York, NY 10004). The shares were acquired as restricted stock units from the issuer; the notice cites a Rule 10b5-1 plan adopted 05/05/2026 and lists 14,594,180,000 units outstanding [7].\n- **Form 4** filed August 13, 2026 (transaction date August 11, 2026): sale (code S, disposed) of 1,439 shares of common stock at $307.75; 40,107 shares owned directly after the transaction. Footnotes cite a Rule 10b5-1 plan [6].\n- **Form 4** filed August 20, 2026 (transaction date August 18, 2026): sale of 1,439 shares at $307.49; 38,668 shares owned directly after [5].\n- **Form 4** filed August 27, 2026 (transaction date August 25, 2026): sale of 1,439 shares at $310.95; 37,229 shares owned directly after [4].\n\nNone of the three Form 4s report derivative transactions [4][5][6]. Taken together, the three reports cover 4,317 shares sold in equal weekly tranches under a 10b5-1 plan.\n\n---\n\n## WHAT THE DOCUMENTS SAY\n\n### The Q3 FY2026 results (8-K and Exhibit 99.1)\n\nThe 8-K body states that on July 30, 2026 Apple issued a press release on results for the third fiscal quarter ended June 27, 2026, attached as Exhibit 99.1, and includes the customary statement that the information is not deemed \"filed\" for Section 18 purposes. It is signed by Kevan Parekh, Senior Vice President, Chief Financial Officer [2].\n\nThe press release is headlined as reporting June-quarter records for total company revenue and EPS, and June-quarter records for iPhone, Mac and Services revenue [3]. As stated: revenue $109.4 billion (up 16% YoY); gross margin 50.1%, including roughly 2 points of favorable impact from tariff refunds; diluted EPS $2.02 (up 29% YoY), including $0.11 of favorable impact from tariff refunds [3].\n\nCEO Tim Cook is quoted describing \"our strongest June quarter ever,\" with double-digit revenue growth across iPhone, Mac and Services and in every geographic segment, and referencing the introduction at WWDC26 of \"the all-new Siri AI,\" other software, and new child safety features [3]. CFO Kevan Parekh is quoted citing new June-quarter records for EPS and operating cash flow, and an installed base of active devices at a new all-time high across all major product categories and geographic segments [3].\n\nThe board declared a cash dividend of **$0.27 per share**, payable August 13, 2026 to shareholders of record as of the close of business on August 10, 2026 [3].\n\n### The 10-Q financial statements\n\nFor the three months ended June 27, 2026 versus June 28, 2025: total net sales $109,417 million vs. $94,036 million; Products $78,678M vs. $66,613M; Services $30,739M vs. $27,423M; gross margin $54,770M vs. $43,718M; R&D $11,729M vs. $8,866M; SG&A $7,346M vs. $6,650M; operating income $35,695M vs. $28,202M; net income $29,789M vs. $23,434M; basic EPS $2.03 vs. $1.57 and diluted EPS $2.02 vs. $1.57 [1][3].\n\nNine-month figures: net sales $364,357M vs. $313,695M; operating income $122,432M vs. $100,623M; net income $101,464M vs. $84,544M; diluted EPS $6.88 vs. $5.62 [1].\n\nBalance sheet at June 27, 2026 vs. September 27, 2025: total assets $383,266M vs. $359,241M; cash and cash equivalents $39,544M vs. $35,934M; inventories $11,092M vs. $5,718M; intangible assets, net $20,342M vs. $11,093M; total liabilities $275,746M vs. $285,508M; total shareholders' equity $107,520M vs. $73,733M, with retained earnings of $11,326M against an accumulated deficit of $(14,264)M at the prior date [1].\n\nNine-month cash flows: cash generated by operating activities $116,996M vs. $81,754M; repurchases of common stock $(62,094)M vs. $(70,579)M; dividends and dividend equivalents paid $(11,778)M vs. $(11,559)M; capital expenditures $(6,799)M vs. $(9,473)M; cash paid for income taxes, net, $26,555M vs. $37,332M [1].\n\nNote 7 states that during the nine months ended June 27, 2026 the Company repurchased 215 million shares for $61.8 billion, and that the repurchase programs do not obligate the Company to acquire a minimum amount of shares [1]. Note 6 disclosure read here gives Notes with an aggregate carrying amount of $82.3 billion at June 27, 2026 versus $90.7 billion at September 27, 2025, with Level 2 fair value of $71.2 billion and $80.4 billion respectively [1].\n\nDividends and dividend equivalents declared per share or RSU were $0.27 for the quarter (vs. $0.26) and $0.79 for nine months (vs. $0.76) [1]. Shares issued and outstanding were 14,608,963 thousand at June 27, 2026 vs. 14,773,260 thousand at September 27, 2025; the cover states 14,594,180,000 shares outstanding as of July 17, 2026 [1].\n\n### Segments, categories and margin (MD&A)\n\nQ3 net sales by segment with the Company's stated change: Americas $45,781M (+11%), Europe $29,395M (+22%), Greater China $18,816M (+22%), Japan $6,554M (+13%), Rest of Asia Pacific $8,871M (+16%) [1]. By category: iPhone $54,252M (+22%), Mac $10,352M (+29%), iPad $6,191M (-6%), Wearables/Home/Accessories $7,883M (+6%), Services $30,739M (+12%) [1].\n\nThe MD&A attributes iPhone growth primarily to higher Pro-model net sales, Mac growth to laptops, the iPad decline to lower iPad mini and iPad Air net sales, and Services growth primarily to advertising and cloud services [1]. It cites currency effects by segment, including a favorable renminbi impact in Greater China and an unfavorable yen impact in Japan [1].\n\nGross margin percentage: Products 40.1% vs. 34.5%; Services 75.6% vs. 75.6%; total 50.1% vs. 46.5% for the quarter, and 49.1% vs. 46.8% for nine months [1].\n\n### Tariffs, supply and legal\n\nThe MD&A states that beginning in Q2 2025 new U.S. tariffs were announced on imports including from China, India, Japan, South Korea, Taiwan, Vietnam and the EU, and that several countries imposed or threatened reciprocal measures [1]. It states that on January 14, 2026 initial results of the Section 232 semiconductor investigation were published and did not impose additional tariffs affecting Apple's products; that on February 20, 2026 the U.S. Supreme Court struck down certain tariffs previously imposed under the International Emergency Economic Powers Act of 1977; and that Apple has applied for refunds through U.S. Customs and Border Protection processes and recognizes refunds received as a reduction of products cost of sales [1]. It also notes recent Section 301 tariffs and that further changes could be made [1].\n\nLegal proceedings, as read: the Company is subject to various legal proceedings and claims arising in the ordinary course; in management's opinion there was not at least a reasonable possibility of a material loss, or a material loss greater than a recorded accrual, for asserted legal and other claims [1].\n\nThe risk-factor text read here states there have been no material changes to risk factors since the 2025 Form 10-K, and then sets out the component/computing-resource supply risk, including single-source exposure and the current constraint on advanced semiconductors, NAND and DRAM [1].\n\n---\n\n## WHAT CHANGED\n\nThe comparisons above are those the documents make explicitly, via prior-period columns (three- and nine-month FY2025 columns; September 27, 2025 balance sheet column) or the Company's own stated percentage changes and \"compared to the same periods in 2025\" narrative [1][3]. Explicit changes the filings themselves flag: dividend declared per share rose to $0.27 from $0.26 [1]; total gross margin percentage rose to 50.1% from 46.5% [1]; R&D rose to $11,729M from $8,866M [1]; equity moved to positive retained earnings of $11,326M from an accumulated deficit [1]; and the risk-factor section read here states no material changes since the 2025 Form 10-K [1]. The Form 4s show the officer's directly held share count declining across the three reports, from 40,107 to 38,668 to 37,229 [4][5][6]. No restatement or amendment notice appears in the documents read.\n\n---\n\n## WHAT TO WATCH\n\n- Whether the intensifying component supply constraints and cost pressure described in the MD&A and risk factors affect reported gross margin percentage in the fiscal Q4/full-year filings [1].\n- The size and recurrence of tariff-refund benefits, which the press release quantified for Q3 at ~2 points of gross margin and $0.11 of diluted EPS, and how future Section 232 and Section 301 developments are described [1][3].\n- Inventories ($11,092M vs. $5,718M) and intangible assets, net\n\n## Sources\n[1] 10-Q filed 2026-07-31 (period 2026-06-27) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000032019326000020/aapl-20260627.htm\n[2] 8-K filed 2026-07-30 (period 2026-07-30) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/aapl-20260730.htm\n[3] 8-K EX-99.1 filed 2026-07-30 (period 2026-07-30) (exhibit to accession 0000320193-26-000018) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/a8-kex991q3202606272026.htm\n[4] 4 filed 2026-08-27 (period 2026-08-25) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126034741/xslF345X06/form4.xml\n[5] 4 filed 2026-08-20 (period 2026-08-18) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126033928/xslF345X06/form4.xml\n[6] 4 filed 2026-08-13 (period 2026-08-11) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126032884/xslF345X06/form4.xml\n[7] 144 filed 2026-08-11 - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000195004726007959/xsl144X01/primary_doc.xml\n[8] SEC EDGAR submissions index for Apple Inc. (CIK 0000320193) - https://data.sec.gov/submissions/CIK0000320193.json",
+ "title": "SEC filings: Apple Inc. (AAPL)",
+ "report": "# SEC Filing Report: Apple Inc. (AAPL)\n\n**Last 30 days** · 18 filings (4 x14, 144 x4) · 3 primary documents read in full · 9 ownership forms parsed\n\n---\n\n## SNAPSHOT\n\nApple Inc. (CIK 0000320193, Nasdaq: AAPL, SIC Electronic Computers, fiscal year end 09/26) made **18 filings** in the window, spanning **2026-09-17 to 2026-10-08**. All 18 are insider-related: **14 Forms 4** (Section 16 statements of changes in beneficial ownership) and **4 Forms 144** (notices of proposed sale under Securities Act Rule 144). No periodic or current reports (10-K, 10-Q, 8-K) appear in the index for this window.\n\nOf these, **3 documents were read in full**, **9 routine forms were parsed** from their structured fields, and **6 filings were not fetched** and are described here only from index facts.\n\nThe single most consequential item is the **October 1, 2026 settlement of a performance-based RSU award granted October 1, 2023**, disclosed in Timothy D. Cook's Form 4 [2] and Deirdre O'Brien's Form 4 [3]. Those filings state that Apple's total shareholder return for the three-year performance period was **90.67%**, ranking **115 of the 480 companies** in the S&P 500 for the period - the **76.20th percentile** - and that this determined the payout percentage applied to each target award [2][3]. This is a disclosed company-level performance metric, not merely an ownership change.\n\n---\n\n## WHAT WAS FILED\n\n**Forms 4 - Section 16 insider transaction reports (14 filings).**\nFiled 2026-10-08 (period 10/06) [1]; 2026-10-05 (period 10/01), four separate filings [2][3][4][5]; 2026-10-01 (period 09/29) [9]; 2026-09-29 (period 09/27), six separate filings [10][11][12][13][14][15]; 2026-09-24 (period 09/22) [16]; and 2026-09-17 (period 09/15) [18]. The 09/29 cluster [14][15] and the filings dated 2026-09-24 [16] and 2026-09-17 [18] were **not fetched**; nothing beyond form type, filing date and period is known about them.\n\n**Forms 144 - notices of proposed sale under Rule 144 (4 filings).**\nThree were filed 2026-10-02 [6][7][8] and one 2026-09-22 [17]. Two of the October 2 notices were parsed [7][8]; the third 2026-10-02 notice [6] and the 2026-09-22 notice [17] were **not fetched**.\n\n---\n\n## WHAT THE DOCUMENTS SAY\n\n### Timothy D. Cook: Form 4 filed 2026-10-05 [2]\nCook is reported as both a **Director and Officer, with the title \"Executive Chair\"** [2]. On 10/01/2026, a code **M** transaction settled **374,541 RSUs** into common stock, leaving 3,654,959 shares beneficially owned; shares are held through Mr. Cook's trust [2]. Apple then withheld **199,038 shares at $330.32** for tax withholding on vesting (code F), leaving 3,455,921 [2].\n\nOn 10/02/2026, four code **S** sales were reported, each a weighted-average price for multiple trades: 23,143 shares at $331.44 (range $330.66 - $331.655); 39,492 at $332.16 ($331.66 - $332.65); 88,239 at $333.26 ($332.66 - $333.655); and 40,879 at $333.94 ($333.66 - $334.50) [2]. The filing states these sales were made pursuant to a **Rule 10b5-1 trading plan adopted May 28, 2026** [2]. A **gift (code G) of 26,325 shares at $0** on 10/02/2026 brought reported holdings to **3,237,843 shares** [2].\n\nThe award terms as stated: granted **October 1, 2023** for a **target of 219,030 RSUs**, settling October 1, 2026 based on relative TSR versus the S&P 500 across Apple's fiscal 2024-2026 [2]. Apple's beginning TSR value was **$175.08** (average close of the first 20 trading days) and ending value **$333.82** (final 20 trading days) [2]. The vesting scale: 200% of target at or above the 85th percentile, 100% at or above the 55th, 25% at or above the 25th, 0% below the 25th, with straight-line interpolation between levels [2]. At the 76.20th percentile, **374,541 performance RSUs vested** [2].\n\n### Deirdre O'Brien: Form 4 filed 2026-10-05 [3]\nO'Brien is reported as an Officer, **Senior Vice President** [3]. On 10/01/2026, **99,878 RSUs** settled (code M), bringing holdings to 236,688; **53,489 shares at $330.32** were withheld for taxes, leaving 183,199 [3]. On 10/02/2026, two code S sales: **40,764 shares at a weighted-average $333.35** ($332.77 - $333.76) and **5,625 at $333.91** ($333.775 - $334.115), ending at **136,810 shares**, pursuant to a **Rule 10b5-1 plan adopted November 24, 2025** [3]. Her award was granted October 1, 2023 for a **target of 58,408 RSUs**, with the identical TSR mechanics, values and percentile cited above, yielding **99,878 RSUs vested** [3].\n\n### Jennifer Newstead: Form 4 filed 2026-10-08 [1]\nNewstead is reported as Officer, **SVP, GC and Government Affairs** [1]. A single code **S** sale of **2,399 shares at $332.01** on 10/06/2026 left **39,593 shares** held directly; the footnote cites a **Rule 10b5-1 plan adopted May 5, 2026** [1]. The form reports no derivative transactions [1].\n\n### Routine forms parsed\n**John Ternus (reported as director, CEO)** [4]: 99,878 RSUs settled 10/01/2026 (M), 49,054 shares withheld at $330.32 (F), then four 10/02 sales - 3,564 at $331.38, 5,348 at $332.26, 12,746 at $333.34, 3,754 at $334.05 - ending at **59,567 shares**, with footnotes citing a Rule 10b5-1 plan [4].\n\n**Sabih Khan (COO)** [5]: 99,878 RSUs settled 10/01/2026; **52,854 shares withheld at $330.32**, leaving **1,120,919 shares**; no sales reported on that form [5].\n\n**Jennifer Newstead** [9]: sale of 2,399 shares at $336.18 on 09/29/2026, 41,992 held after, under a Rule 10b5-1 plan [9].\n\n**RSU grants dated 09/27/2026** [10][11][12][13]: Khan, Newstead, O'Brien and **Kevan Parekh (SVP, CFO)** each received **two awards of 47,645 RSUs** (each on 47,645 common shares), with no non-derivative transactions reported on those forms [10][11][12][13].\n\n**Forms 144 parsed.** Cook proposes to sell **218,078 shares** on or about 10/02/2026 on Nasdaq through Fidelity Brokerage Services LLC (245 Summer Street, Boston MA), shares acquired via RSU vesting from Apple, under a **10b5-1 plan adopted 05/27/2026**; aggregate market value is stated as **$3,329,584** and units outstanding as **14,594,180,000** [7]. O'Brien proposes to sell **46,389 shares** on or about 10/02/2026 on Nasdaq through UBS Financial Services Inc. (11 Madison Avenue, New York NY), acquired by vesting of a stock award, under a **10b5-1 plan adopted 11/24/2025**; aggregate market value **$15,459,598.14**, units outstanding **1,459,418,000** [8]. Readers should note these two notices' stated value and share-count fields are internally inconsistent with each other and should be verified against the filings themselves.\n\n---\n\n## WHAT CHANGED\n\nPeriod-over-period comparison is limited to what the documents make explicit. The Forms 4 are inherently comparative in one respect: each reports beneficial ownership **following** each transaction, so the running balances above are stated changes in holdings - Cook from 3,654,959 down to 3,237,843 shares across 10/01-10/02 [2]; O'Brien from 236,688 to 136,810 [3]; Newstead to 39,593 after the 10/06 sale [1], versus 41,992 after her 09/29 sale [9]; Ternus to 59,567 [4]; Khan to 1,120,919 [5].\n\nThe Cook and O'Brien Forms 4 also make an explicit award-versus-target comparison: payout was measured against the October 1, 2023 target grants of 219,030 and 58,408 RSUs respectively, with Apple's 76.20th-percentile TSR ranking determining the settled amounts of 374,541 and 99,878 RSUs [2][3].\n\nBeyond these, **the documents read here do not compare fiscal periods** and contain no revenue, earnings, segment or guidance figures. No amendments or restatements appear in the index for this window. No comparison to prior-period operating results has been computed, because none of this material supplies one.\n\n---\n\n## WHAT TO WATCH\n\n- **The six filings not fetched** - Forms 4 of 2026-09-29 (0001140361-26-038022; 0001140361-26-038021), 2026-09-24 (0001140361-26-037584) and 2026-09-17 (0001140361-26-037020), and Forms 144 of 2026-10-02 (0001958244-26-000636) and 2026-09-22 (0001950047-26-009738) - can be read directly on EDGAR to identify the insiders and transactions involved.\n- **Whether the proposed sales in the Forms 144 are subsequently reported on Forms 4**, and whether the share counts match the 218,078 and 46,389 figures noticed [7][8] against the executed sales reported by Cook [2] and O'Brien [3].\n- **Vesting of the two 47,645-RSU awards dated 09/27/2026** to Khan, Newstead, O'Brien and Parekh [10][11][12][13] - future Forms 4 should disclose settlement dates, any performance conditions and withholding.\n- **Continued activity under the named Rule 10b5-1 plans**: Cook's plan adopted 05/28/2026 [2] (and the 05/27/2026 plan cited in his Form 144 [7]), O'Brien's 11/24/2025 plan [3][8], Newstead's 05/05/2026 plan [1], and the unnamed plan footnoted in Ternus's filing [4].\n- **Apple's next periodic report**, which the index shows was not filed in this window, for the operating and fiscal-period detail absent from these ownership forms.\n- **The role designations themselves**, which differ across forms in this set - Cook as Director and \"Executive Chair\" [2], Ternus as director and CEO [4], Khan as COO [5] - and which can be checked against future Section 16 filings and proxy materials.\n\n---\n\n*This report summarizes public SEC filings by Apple Inc. and its insiders in the stated window. It is not investment advice, not a recommendation, and contains no valuation opinion. Figures, dates, parties and terms are as stated in the cited filings; the six filings identified as not fetched have not been reviewed.*\n\n## Sources\n[1] 4 filed 2026-10-08 (period 2026-10-06) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126039158/xslF345X06/form4.xml\n[2] 4 filed 2026-10-05 (period 2026-10-01) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126038674/xslF345X06/form4.xml\n[3] 4 filed 2026-10-05 (period 2026-10-01) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126038672/xslF345X06/form4.xml\n[4] 4 filed 2026-10-05 (period 2026-10-01) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126038669/xslF345X06/form4.xml\n[5] 4 filed 2026-10-05 (period 2026-10-01) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126038667/xslF345X06/form4.xml\n[6] 144 filed 2026-10-02 - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000195824426000636/xsl144X01/primary_doc.xml\n[7] 144 filed 2026-10-02 - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000195917326007235/xsl144X01/primary_doc.xml\n[8] 144 filed 2026-10-02 - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000196922326001055/xsl144X01/primary_doc.xml\n[9] 4 filed 2026-10-01 (period 2026-09-29) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126038307/xslF345X06/form4.xml\n[10] 4 filed 2026-09-29 (period 2026-09-27) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126038028/xslF345X06/form4.xml\n[11] 4 filed 2026-09-29 (period 2026-09-27) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126038027/xslF345X06/form4.xml\n[12] 4 filed 2026-09-29 (period 2026-09-27) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126038026/xslF345X06/form4.xml\n[13] 4 filed 2026-09-29 (period 2026-09-27) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126038024/xslF345X06/form4.xml\n[14] 4 filed 2026-09-29 (period 2026-09-27) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126038022/xslF345X06/form4.xml\n[15] 4 filed 2026-09-29 (period 2026-09-27) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126038021/xslF345X06/form4.xml\n[16] 4 filed 2026-09-24 (period 2026-09-22) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126037584/xslF345X06/form4.xml\n[17] 144 filed 2026-09-22 - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000195004726009738/xsl144X01/primary_doc.xml\n[18] 4 filed 2026-09-17 (period 2026-09-15) - Apple Inc. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/320193/000114036126037020/xslF345X06/form4.xml\n[19] SEC EDGAR submissions index for Apple Inc. (CIK 0000320193) - https://data.sec.gov/submissions/CIK0000320193.json",
  "sources": [
   {
    "n": 1,
-   "title": "10-Q filed 2026-07-31 (period 2026-06-27) - Apple Inc. - SEC EDGAR",
-   "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000020/aapl-20260627.htm"
+   "title": "4 filed 2026-10-08 (period 2026-10-06) - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126039158/xslF345X06/form4.xml"
   },
   {
    "n": 2,
-   "title": "8-K filed 2026-07-30 (period 2026-07-30) - Apple Inc. - SEC EDGAR",
-   "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/aapl-20260730.htm"
+   "title": "4 filed 2026-10-05 (period 2026-10-01) - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126038674/xslF345X06/form4.xml"
   },
   {
    "n": 3,
-   "title": "8-K EX-99.1 filed 2026-07-30 (period 2026-07-30) (exhibit to accession 0000320193-26-000018) - Apple Inc. - SEC EDGAR",
-   "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/a8-kex991q3202606272026.htm"
+   "title": "4 filed 2026-10-05 (period 2026-10-01) - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126038672/xslF345X06/form4.xml"
   },
   {
    "n": 4,
-   "title": "4 filed 2026-08-27 (period 2026-08-25) - Apple Inc. - SEC EDGAR",
-   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126034741/xslF345X06/form4.xml"
+   "title": "4 filed 2026-10-05 (period 2026-10-01) - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126038669/xslF345X06/form4.xml"
   },
   {
    "n": 5,
-   "title": "4 filed 2026-08-20 (period 2026-08-18) - Apple Inc. - SEC EDGAR",
-   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126033928/xslF345X06/form4.xml"
+   "title": "4 filed 2026-10-05 (period 2026-10-01) - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126038667/xslF345X06/form4.xml"
   },
   {
    "n": 6,
-   "title": "4 filed 2026-08-13 (period 2026-08-11) - Apple Inc. - SEC EDGAR",
-   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126032884/xslF345X06/form4.xml"
+   "title": "144 filed 2026-10-02 - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000195824426000636/xsl144X01/primary_doc.xml"
   },
   {
    "n": 7,
-   "title": "144 filed 2026-08-11 - Apple Inc. - SEC EDGAR",
-   "url": "https://www.sec.gov/Archives/edgar/data/320193/000195004726007959/xsl144X01/primary_doc.xml"
+   "title": "144 filed 2026-10-02 - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000195917326007235/xsl144X01/primary_doc.xml"
   },
   {
    "n": 8,
+   "title": "144 filed 2026-10-02 - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000196922326001055/xsl144X01/primary_doc.xml"
+  },
+  {
+   "n": 9,
+   "title": "4 filed 2026-10-01 (period 2026-09-29) - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126038307/xslF345X06/form4.xml"
+  },
+  {
+   "n": 10,
+   "title": "4 filed 2026-09-29 (period 2026-09-27) - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126038028/xslF345X06/form4.xml"
+  },
+  {
+   "n": 11,
+   "title": "4 filed 2026-09-29 (period 2026-09-27) - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126038027/xslF345X06/form4.xml"
+  },
+  {
+   "n": 12,
+   "title": "4 filed 2026-09-29 (period 2026-09-27) - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126038026/xslF345X06/form4.xml"
+  },
+  {
+   "n": 13,
+   "title": "4 filed 2026-09-29 (period 2026-09-27) - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126038024/xslF345X06/form4.xml"
+  },
+  {
+   "n": 14,
+   "title": "4 filed 2026-09-29 (period 2026-09-27) - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126038022/xslF345X06/form4.xml"
+  },
+  {
+   "n": 15,
+   "title": "4 filed 2026-09-29 (period 2026-09-27) - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126038021/xslF345X06/form4.xml"
+  },
+  {
+   "n": 16,
+   "title": "4 filed 2026-09-24 (period 2026-09-22) - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126037584/xslF345X06/form4.xml"
+  },
+  {
+   "n": 17,
+   "title": "144 filed 2026-09-22 - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000195004726009738/xsl144X01/primary_doc.xml"
+  },
+  {
+   "n": 18,
+   "title": "4 filed 2026-09-17 (period 2026-09-15) - Apple Inc. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126037020/xslF345X06/form4.xml"
+  },
+  {
+   "n": 19,
    "title": "SEC EDGAR submissions index for Apple Inc. (CIK 0000320193)",
    "url": "https://data.sec.gov/submissions/CIK0000320193.json"
   }
@@ -61,64 +116,184 @@
    ],
    "rows": [
     [
-     "2026-08-27",
+     "2026-10-08",
      "4",
      "insider transaction report",
-     "2026-08-25",
+     "2026-10-06",
      "FORM 4",
-     "0001140361-26-034741",
-     "",
-     "https://www.sec.gov/Archives/edgar/data/320193/000114036126034741/xslF345X06/form4.xml"
+     "0001140361-26-039158",
+     "yes",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126039158/xslF345X06/form4.xml"
     ],
     [
-     "2026-08-20",
+     "2026-10-05",
      "4",
      "insider transaction report",
-     "2026-08-18",
+     "2026-10-01",
      "FORM 4",
-     "0001140361-26-033928",
-     "",
-     "https://www.sec.gov/Archives/edgar/data/320193/000114036126033928/xslF345X06/form4.xml"
+     "0001140361-26-038674",
+     "yes",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126038674/xslF345X06/form4.xml"
     ],
     [
-     "2026-08-13",
+     "2026-10-05",
      "4",
      "insider transaction report",
-     "2026-08-11",
+     "2026-10-01",
      "FORM 4",
-     "0001140361-26-032884",
-     "",
-     "https://www.sec.gov/Archives/edgar/data/320193/000114036126032884/xslF345X06/form4.xml"
+     "0001140361-26-038672",
+     "yes",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126038672/xslF345X06/form4.xml"
     ],
     [
-     "2026-08-11",
+     "2026-10-05",
+     "4",
+     "insider transaction report",
+     "2026-10-01",
+     "FORM 4",
+     "0001140361-26-038669",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126038669/xslF345X06/form4.xml"
+    ],
+    [
+     "2026-10-05",
+     "4",
+     "insider transaction report",
+     "2026-10-01",
+     "FORM 4",
+     "0001140361-26-038667",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126038667/xslF345X06/form4.xml"
+    ],
+    [
+     "2026-10-02",
      "144",
      "notice of proposed sale of securities",
      "",
      "",
-     "0001950047-26-007959",
+     "0001958244-26-000636",
      "",
-     "https://www.sec.gov/Archives/edgar/data/320193/000195004726007959/xsl144X01/primary_doc.xml"
+     "https://www.sec.gov/Archives/edgar/data/320193/000195824426000636/xsl144X01/primary_doc.xml"
     ],
     [
-     "2026-07-31",
-     "10-Q",
-     "quarterly report",
-     "2026-06-27",
-     "10-Q",
-     "0000320193-26-000020",
-     "yes",
-     "https://www.sec.gov/Archives/edgar/data/320193/000032019326000020/aapl-20260627.htm"
+     "2026-10-02",
+     "144",
+     "notice of proposed sale of securities",
+     "",
+     "",
+     "0001959173-26-007235",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/320193/000195917326007235/xsl144X01/primary_doc.xml"
     ],
     [
-     "2026-07-30",
-     "8-K",
-     "current report (material event)",
-     "2026-07-30",
-     "8-K",
-     "0000320193-26-000018",
-     "yes",
-     "https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/aapl-20260730.htm"
+     "2026-10-02",
+     "144",
+     "notice of proposed sale of securities",
+     "",
+     "",
+     "0001969223-26-001055",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/320193/000196922326001055/xsl144X01/primary_doc.xml"
+    ],
+    [
+     "2026-10-01",
+     "4",
+     "insider transaction report",
+     "2026-09-29",
+     "FORM 4",
+     "0001140361-26-038307",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126038307/xslF345X06/form4.xml"
+    ],
+    [
+     "2026-09-29",
+     "4",
+     "insider transaction report",
+     "2026-09-27",
+     "FORM 4",
+     "0001140361-26-038028",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126038028/xslF345X06/form4.xml"
+    ],
+    [
+     "2026-09-29",
+     "4",
+     "insider transaction report",
+     "2026-09-27",
+     "FORM 4",
+     "0001140361-26-038027",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126038027/xslF345X06/form4.xml"
+    ],
+    [
+     "2026-09-29",
+     "4",
+     "insider transaction report",
+     "2026-09-27",
+     "FORM 4",
+     "0001140361-26-038026",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126038026/xslF345X06/form4.xml"
+    ],
+    [
+     "2026-09-29",
+     "4",
+     "insider transaction report",
+     "2026-09-27",
+     "FORM 4",
+     "0001140361-26-038024",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126038024/xslF345X06/form4.xml"
+    ],
+    [
+     "2026-09-29",
+     "4",
+     "insider transaction report",
+     "2026-09-27",
+     "FORM 4",
+     "0001140361-26-038022",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126038022/xslF345X06/form4.xml"
+    ],
+    [
+     "2026-09-29",
+     "4",
+     "insider transaction report",
+     "2026-09-27",
+     "FORM 4",
+     "0001140361-26-038021",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126038021/xslF345X06/form4.xml"
+    ],
+    [
+     "2026-09-24",
+     "4",
+     "insider transaction report",
+     "2026-09-22",
+     "FORM 4",
+     "0001140361-26-037584",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126037584/xslF345X06/form4.xml"
+    ],
+    [
+     "2026-09-22",
+     "144",
+     "notice of proposed sale of securities",
+     "",
+     "",
+     "0001950047-26-009738",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/320193/000195004726009738/xsl144X01/primary_doc.xml"
+    ],
+    [
+     "2026-09-17",
+     "4",
+     "insider transaction report",
+     "2026-09-15",
+     "FORM 4",
+     "0001140361-26-037020",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126037020/xslF345X06/form4.xml"
     ]
    ]
   },
@@ -137,34 +312,34 @@
    ],
    "rows": [
     [
-     "0000320193-26-000020",
-     "10-Q",
-     "2026-07-31",
-     "1018210",
-     "36629",
-     "yes",
-     "read",
-     "https://www.sec.gov/Archives/edgar/data/320193/000032019326000020/aapl-20260627.htm"
-    ],
-    [
-     "0000320193-26-000018",
-     "8-K",
-     "2026-07-30",
-     "38350",
-     "3471",
+     "0001140361-26-039158",
+     "4",
+     "2026-10-08",
+     "15736",
+     "3855",
      "",
      "read",
-     "https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/aapl-20260730.htm"
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126039158/xslF345X06/form4.xml"
     ],
     [
-     "0000320193-26-000018",
-     "8-K EX-99.1",
-     "2026-07-30",
-     "173484",
-     "10456",
+     "0001140361-26-038674",
+     "4",
+     "2026-10-05",
+     "25812",
+     "8273",
      "",
      "read",
-     "https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/a8-kex991q3202606272026.htm"
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126038674/xslF345X06/form4.xml"
+    ],
+    [
+     "0001140361-26-038672",
+     "4",
+     "2026-10-05",
+     "22548",
+     "7241",
+     "",
+     "read",
+     "https://www.sec.gov/Archives/edgar/data/320193/000114036126038672/xslF345X06/form4.xml"
     ]
    ]
   }
@@ -175,26 +350,24 @@
   "ticker": "AAPL",
   "cik": "0000320193",
   "window_days": 30,
-  "start": "2026-07-30",
-  "end": "2026-08-27",
-  "filings": 6,
+  "start": "2026-09-17",
+  "end": "2026-10-08",
+  "filings": 18,
   "form_counts": {
-   "4": 3,
-   "144": 1,
-   "10-Q": 1,
-   "8-K": 1
+   "4": 14,
+   "144": 4
   },
-  "documents_selected": 2,
+  "documents_selected": 3,
   "documents_read": 3,
-  "routine_forms_parsed": 4,
-  "document_bytes": 1230044,
-  "truncated_documents": 1,
+  "routine_forms_parsed": 9,
+  "document_bytes": 64096,
+  "truncated_documents": 0,
   "forms_filter": null,
   "forms_excluded": null,
-  "sources_cited": 8,
+  "sources_cited": 19,
   "synthesis_model": "anthropic/claude-opus-5",
   "disclaimer": "SEC filings as filed with the Commission (public domain); summary of public documents, not investment advice."
  },
- "at": "2026-08-28T16:51:07.580Z",
+ "at": "2026-10-11T10:13:47.326Z",
  "generatedWith": "the production handler, FREE_MODE local run"
 }

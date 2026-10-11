@@ -35,6 +35,14 @@ for (const product of SAMPLE_PRODUCTS) {
   // than cites; every other kind is a web/EDGAR synthesis with many sources.
   const minSources = s.kind === "domain" ? 0 : s.kind === "recall" ? 3 : 5;
   ok(s.sources.length >= minSources, `${product}: cites at least ${minSources} sources (${s.sources.length})`);
+  // Complete: no section stops mid-sentence. Each block of text under a
+  // heading ends on terminal punctuation, a table row, a rule, a link, a
+  // hashtag line or a short list item (a headline option). The first
+  // section is the code-written title and coverage line.
+  const cut = s.report.split(/\n(?=#{1,4} )/).slice(1).map((sec) => sec.trim()).filter((sec) => sec.includes("\n"))
+    .map((sec) => sec.slice(sec.lastIndexOf("\n") + 1).trim())
+    .filter((last) => last && !/^#{1,4} /.test(last) && !/[.!?:)"'`*_|\]]$/.test(last) && !/^(---|\|.*\|)$/.test(last) && !/https?:\/\/\S+$/.test(last) && !/#\w+$/.test(last) && !/^- .{1,80}$/.test(last));
+  ok(cut.length === 0, `${product}: every section ends on a complete sentence${cut.length ? ` (cut: ${JSON.stringify(cut[0].slice(-80))})` : ""}`);
 }
 ok(sampleLinkFor("dossier") === "/reports/sample/dossier" && sampleLinkFor("research-pro") === null, "sampleLinkFor: a slug with a fixture links, one without does not");
 ok(samplePaths().every((p) => p.startsWith("/reports/sample/")), "sample paths live under /reports/sample/");
