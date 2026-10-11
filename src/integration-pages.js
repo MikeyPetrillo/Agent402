@@ -61,13 +61,13 @@ const META_PAYMENT = [
 export const INTEGRATIONS = [
   {
     slug: "openai",
-    meta: "Agent402 tools as OpenAI function-calling definitions for chat.completions, Assistants and Responses. Free tier by proof-of-work; paid tools over x402 or MPP.",
+    meta: "Agent402 tools as OpenAI function-calling definitions for chat.completions and the Responses API. Free tier by proof-of-work; paid tools over x402 or MPP.",
     name: "OpenAI function calling",
     short: "OpenAI",
     pkg: "agent402-openai-tools",
     dir: "adapters/openai-tools",
     docsSlug: "openai",
-    what: "Turns Agent402 tools into OpenAI function-calling definitions. The returned `tools` array is the same JSON used by chat.completions, Assistants v2 and the Responses API, and `execute` runs whatever tool call the model returns.",
+    what: "Turns Agent402 tools into OpenAI function-calling definitions. The returned `tools` array is the same JSON used by chat.completions and the Responses API, and `execute` runs whatever tool call the model returns.",
     install: "npm install openai agent402-openai-tools @x402/fetch @x402/core @x402/evm viem",
     example: `import OpenAI from "openai";
 import { agent402Tools } from "agent402-openai-tools";
@@ -167,16 +167,16 @@ const { text } = await generateText({
     dir: "adapters/langchain",
     docsSlug: "langchain",
     what: "LangChain.js tool objects for Agent402, ready for any LangChain or LangGraph agent. Four meta tools cover the whole catalog, so the agent's tool budget stays small however many endpoints the catalog holds.",
-    install: "npm install agent402-langchain @langchain/core @langchain/langgraph @langchain/openai zod @x402/fetch @x402/core @x402/evm viem",
+    install: "npm install agent402-langchain langchain @langchain/core @langchain/openai zod @x402/fetch @x402/core @x402/evm viem",
     example: `import { agent402Tools } from "agent402-langchain";
 import { ChatOpenAI } from "@langchain/openai";
-import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { createAgent } from "langchain";
 
 ${X402_FETCH}
 
 // an array of four tools; agent402_call pays search and answer through this fetch
 const tools = await agent402Tools({ fetch: payFetch });
-const agent = createReactAgent({ llm: new ChatOpenAI({ model: "gpt-4o-mini" }), tools });
+const agent = createAgent({ model: new ChatOpenAI({ model: "gpt-4o-mini" }), tools });
 
 const result = await agent.invoke({
   messages: [{ role: "user", content: "${SEARCH_THEN_ANSWER}" }],
@@ -256,7 +256,7 @@ const { tools } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "tex
     dir: "adapters/google-adk",
     docsSlug: "google-adk",
     what: "ADK `FunctionTool` instances for Gemini agents built on the Agent Development Kit. Both peers are optional: without `@google/adk` and `zod`, `agent402ToolSpecs()` gives the same four tools with no dependencies.",
-    install: "npm install agent402-google-adk @google/adk zod",
+    install: "npm install agent402-google-adk @google/adk zod @x402/fetch @x402/core @x402/evm viem",
     example: `import { agent402Tools } from "agent402-google-adk";
 import { LlmAgent } from "@google/adk";
 
@@ -536,8 +536,9 @@ app.use(createTollbooth({ price: "$0.002" }));
 
 app.get("/article", (_req, res) => res.send("...your content..."));
 app.listen(3000);`,
-    walletExample: `# reverse proxy in front of any site, settling over x402 and MPP from env alone
-npm i @x402/express @x402/core @x402/evm
+    walletExample: `# reverse proxy in front of any site, settling over x402 and MPP from env alone;
+# install the gate with its x402 peers in one folder and run it from there
+npm i agent402-tollbooth @x402/express @x402/core @x402/evm
 TOLLBOOTH_UPSTREAM=https://your-site.com \\
 TOLLBOOTH_PAYTO=0xYourWallet \\
 TOLLBOOTH_FACILITATOR_URL=https://x402.org/facilitator \\
@@ -574,7 +575,10 @@ openclaw gateway restart`,
     walletExample: `# ${CREDITS_ON ? "pay by card instead: buy a credits pack, then" : "already hold a credits key? use it instead of a wallet"}
 AGENT402_CREDITS_KEY=a402_... npx agent402-openclaw setup --write
 
-# no OpenClaw? run the proxy alone and point any OpenAI client at it
+# no OpenClaw? run the proxy alone and point any OpenAI client at it;
+# install it with its wallet peers in one folder and run it from there
+npm i agent402-openclaw @x402/fetch @x402/evm viem
+export AGENT402_WALLET_KEY=0x...   # an EVM key holding USDC on Base
 npx agent402-openclaw proxy   # http://127.0.0.1:8412/v1, model "auto"`,
     exposes: [
       "`auto` (routed per prompt) plus every model id from GET /v1/models.",
