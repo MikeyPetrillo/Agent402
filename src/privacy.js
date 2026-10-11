@@ -5,6 +5,9 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 import { REPO_URL, repoUrl } from "./repo-link.js";
 import { DEFAULTS as TRAFFIC_DEFAULTS } from "./traffic-classifier.js";
+import { backupKeepDays } from "./backup.js";
+import { WISH_STALE_DAYS } from "./wish.js";
+import { IDEM_TTL_MS } from "./idempotency-store.js";
 export function privacyPage(baseUrl) {
   const title = "Privacy - Agent402";
   const description = "Agent402's privacy policy: no accounts, no ad trackers, page analytics with a consent choice in Europe. What we process, why, how long we keep it, and how to have it erased.";
@@ -40,7 +43,8 @@ export function privacyPage(baseUrl) {
 <div class="pv-body">
 <p>Agent402 has no accounts and no ad trackers on its pages. Pages run a first-party page counter
 (PostHog, served from our own domain: page path, referrer and screen size, a random per-visit id held in
-session storage, never a cookie, never your IP forwarded to the analytics provider). It keeps no session
+session storage, never a cookie; our server relays the events and forwards only their body and content
+type, so your IP address is not passed on to the analytics provider). It keeps no session
 replay: nothing you click, type or see on a page is recorded. Pages also run
 <b>Google Analytics</b> to count visits and see how people find the site. It sets a measurement cookie
 (<code>_ga</code>) and Google receives your IP address and browser details under
@@ -51,7 +55,7 @@ cookieless pings before that; your choice is kept in your browser. Pages whose a
 link (a paid report, a receipt, a signed alert or manage link) do not load Google Analytics. Free email
 alerts are the form that takes an address, and it
 says so where you enter it; a card purchase gives us the email you enter at checkout. Everything we
-keep, and for how long, is listed below. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
+keep, and for how long, is listed below, including the backups of it. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
 so every claim below is verifiable in code.</p>
 
 <h2>What we process, and why</h2>
@@ -63,10 +67,12 @@ so every claim below is verifiable in code.</p>
     <li>some tools that read public data cache their answer for between one minute and one day, keyed
     by the input that produced it (a domain, an address to geocode, a URL), so a repeat call is faster;
     identical repeat calls to the AI gateway and identical retries carrying an
-    <code>Idempotency-Key</code> are cached for up to ten minutes;</li>
+    <code>Idempotency-Key</code> (or the x402 payment-identifier) are cached for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes;</li>
     <li>a search on <code>/api/find</code> or the connector's <code>catalog.find</code> that finds no
     matching tool, and a request sent to <code>/api/wish</code>, is kept as text on our demand board
-    together with a hash of your IP address combined with the day (never the address itself);</li>
+    together with a hash of your IP address combined with the day (never the address itself); an entry
+    leaves the public board after ${WISH_STALE_DAYS} days without a repeat, and the text stays in our records
+    until we clear them;</li>
     <li>for a decision bought on <code>/api/decide</code>, we keep the task you describe, the plan we
     returned, the paying wallet and any feedback you report on its steps, for 30 days;</li>
     <li>for a paid call, the sales ledger keeps the tool's name and a SHA-256 hash of the response we
@@ -76,21 +82,23 @@ so every claim below is verifiable in code.</p>
   </ul></li>
   <li><b>IP addresses.</b> Used for rate limiting and in standard operational logs (request path, status
   code) for abuse prevention and debugging. Most rate-limit counters are kept in process memory for up
-  to one hour. The free trial's counters are kept in our Redis store, with the address (for IPv6, its
+  to one hour. The free trial's counters (the <code>?trial=1</code> allowance on the pure-CPU tools, see the
+  <a href="/terms">terms</a>) are kept in our Redis store, with the address (for IPv6, its
   /64 prefix) in the counter's key, for one hour, or 24 hours for the per-client daily allowance. We also
   keep keyed hashes of addresses, never the addresses themselves: in daily traffic statistics (request
   classes, paths and User-Agent product names; each day is deleted after ${TRAFFIC_DEFAULTS.retentionDays} days), in the record that limits how often a dropped
   connection is excused from payment (24 hours), and on the demand board (combined with the day).
   The tollbooth waitlist form is closed, and every record it collected has been deleted from our
   database; those records were never part of our offsite backups.</li>
-  <li><b>AI gateway inputs.</b> Prompts and inputs sent to the <code>/v1</code> endpoints (chat,
-  embeddings, images, speech) and other AI-proxy tools are <b>forwarded to the upstream model
+  <li><b>AI gateway inputs.</b> Prompts and inputs sent to the <code>/v1</code> endpoints (chat in the
+  OpenAI, Anthropic and Gemini wire formats, embeddings, images, speech and transcription, including the
+  audio you upload) and other AI-proxy tools are <b>forwarded to the upstream model
   provider</b> (OpenAI, or the model operator serving the request via OpenRouter) to generate the
   response, subject to that provider's own privacy terms. We don't store gateway inputs or outputs
   beyond short-lived caches (minutes) that make repeated identical calls cheaper.</li>
   <li><b>On-chain payments.</b> For x402 and MPP payments there are no card numbers, names, or emails.
   Payments settle in USDC on the public Base blockchain (or the other chains listed at <a href="/pricing">/pricing</a>,
-  USDG on Robinhood Chain, or MPP on Tempo) via the x402 or MPP protocol; wallet addresses, amounts, and
+  USDG on Robinhood Chain, or MPP on Base, Celo or Tempo) via the x402 or MPP protocol; wallet addresses, amounts, and
   timestamps are public on-chain by the protocol's design, not collected by us. Payment verification is
   performed by the payment facilitators (Coinbase CDP and per-chain facilitators, or Tempo's relay) and
   we keep a sales ledger of settled payments (wallet address, amount, chain, transaction id) for accounting
@@ -100,11 +108,13 @@ so every claim below is verifiable in code.</p>
   numbers. Stripe gives us the email address you entered, a customer and session id, and the payment
   status. A delivered report is private to its link unless you choose "Make public" on it, which gives it a second, unguessable address that anyone can read and search engines may index (you can make it private again any time, and the report never contains your name or email). We use the email to deliver what you bought and, after a one-off report, for at most two follow-up emails about that purchase (the monitor for the same subject two days later, other reports a week later), each carrying a link that stops them; if a report fails we email you about the refund. The report link, monitor reports and alerts are
   sent through a transactional email provider (ZeptoMail, with Resend as a fallback). Stripe keeps the
-  email address with your payment; the record on our server holds the session id, your input and the
-  finished report, not the email. Prepaid credits are not currently sold; for a key that already exists
+  email address with your payment; the report record on our server holds the session id, your input and the
+  finished report, not the email. The email is kept in the follow-up and monitor records described here,
+  and a failed report is counted against a SHA-256 hash of the address (never the address) for 24 hours so
+  repeated failures for one buyer stop further charges. Prepaid credits are not currently sold; for a key that already exists
   we keep a hash of the key (never the key), its balance and the calls it paid for. For a monitor
-  we also keep the subject you asked us to watch (a domain, ticker, fund, token or query) and the
-  reports we generated, for the life of the subscription. The input you give a report (a ticker, a
+  we also keep the subject you asked us to watch (a domain, ticker, fund, token or query), your email
+  and the most recent 12 reports we generated, for the life of the subscription. The input you give a report (a ticker, a
   domain, a research question) is stored with the paid session so the report can be generated once and
   served back to you; the finished report is served at an unguessable link and is not published.</li>
   <li><b>Operational telemetry.</b> The server records service events (tool called, payment settled,
@@ -112,17 +122,24 @@ so every claim below is verifiable in code.</p>
   address (already public on-chain) and, on a settled payment, the first word of the caller's
   User-Agent - in a server-side analytics tool (PostHog). This is used to run
   the service: reliability, abuse prevention, and knowing what sells. It does not include tool inputs,
-  prompts, outputs, cookies, or browser fingerprints; an error event carries our error message (at
-  most 200 characters), which can name the input value that was refused.</li>
-  <li><b>Payment metadata.</b> An x402 payment token can carry optional annotation fields (a resource URL, a
-  description, a <code>reason</code> string) that some buyers use to label a purchase. Agent402 reads <i>only</i>
-  the cryptographically-signed payer wallet address from the token - the exact field the settlement authorization
-  covers, and one that is already public on-chain. Those annotation fields are never parsed, logged, or retained,
-  so a buyer that inadvertently placed personal data in them does not expose it to us. Data-minimisation by
-  construction, not by policy.</li>
+  prompts, outputs, cookies, or browser fingerprints, with these exceptions: a tool call can carry a keyed
+  hash of one declared input field (for example the ticker), so repeat use is countable without the value;
+  a refused payment carries the resource URL the payment names and a coarse balance bucket for the paying
+  wallet; and an error event carries our error message (at most 200 characters), which can name the input
+  value that was refused.</li>
+  <li><b>Payment metadata.</b> Beyond what the payment protocol needs to verify and settle a payment, our
+  code reads these fields of a payment: the signed payer wallet address (already public on-chain), the
+  scheme and network it settles on, the optional <code>payment-identifier</code> (used as an idempotency key
+  and kept with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), the signers of a Solana payment (stored only
+  as a keyed hash), the source address of a Tempo credential, the payer the settlement receipt names, and,
+  on a refused payment, the resource URL it names (see telemetry above). The optional description and
+  <code>reason</code> annotation fields are not read, logged or retained. The machine-readable list is in
+  <a href="/.well-known/x402">/.well-known/x402</a> under <code>payment.dataHandling</code>.</li>
   <li><b>Memory tools.</b> Data written via <code>/api/memory</code> is stored on our server keyed to the
   paying wallet, readable only by that wallet (or wallets it explicitly grants), until the owner deletes
-  it or its TTL expires. A tamper-evident audit log of accesses is kept for the namespace owner.</li>
+  it or its TTL expires. A tamper-evident audit log of accesses is kept for the namespace owner: each entry
+  records the key name and the action, and for counters and compare-and-set the values involved. The log
+  is kept after a key is deleted or expires, so the history stays verifiable.</li>
   <li><b>Free email alerts.</b> If you enter an email on a free report page to be told when a company, fund, domain or product changes, we store that address, the subject you chose and the dates we checked and emailed, and we send you a confirmation link first: nothing is watched and nothing else is sent until you click it. Alert emails go out at most once a day, only when something changed, through the same transactional provider, and every one carries a one-click unsubscribe link that ends the alert and stops all email. We do not use the address for anything else and do not share it.</li>
 </ul>
 
@@ -147,7 +164,8 @@ so every claim below is verifiable in code.</p>
   the report's inputs and source material, not your email. When the optional Stripe ledger mirror is on,
   settled on-chain payments (wallet address, transaction id, amount) are recorded in Stripe for
   bookkeeping; no email or card data is involved in that mirror.</li>
-  <li>Hosting is on Railway. On-chain settlement is on Base (Coinbase CDP facilitator) and the other
+  <li>Hosting is on Railway, and the nightly backups described below are stored in object storage there.
+  On-chain settlement is on Base (Coinbase CDP facilitator) and the other
   facilitators named at <a href="/pricing">/pricing</a>.</li>
   <li>We do not sell or share data with anyone for advertising or any other purpose.</li>
 </ul>
@@ -164,11 +182,16 @@ persists until deleted by its owner or TTL expiry. Card-purchase records (sessio
 finished report) are kept while the report link or subscription is live and for accounting afterwards.
 Free-alert records keep your email until you unsubscribe, when the address is
 removed; an unconfirmed signup is deleted after three days. Follow-up email records drop the address
-when you stop them. Decisions bought on <code>/api/decide</code> are deleted after 30 days. You can ask
+when you stop them; otherwise the address stays in the record after the last follow-up is sent, until
+you ask us to delete it. Decisions bought on <code>/api/decide</code> are deleted after 30 days. You can ask
 us at the address below to delete your email from our alert, follow-up and subscription
 records; the card processor's copy is deleted through Stripe. The sales ledger keeps wallet addresses and transaction ids, which are already public
 on-chain. Aggregate, non-personal counters (total calls served per tool) are kept for the public
 <a href="/api/stats">/api/stats</a> page.</p>
+<p><b>Backups.</b> Each night we copy the stored records above (the state database and the data volume,
+including the email, memory and ledger records) to separate object storage, and each copy is deleted
+after ${backupKeepDays()} days. A deletion you ask for therefore reaches the last backup that still holds
+the record within ${backupKeepDays()} days.</p>
 
 <h2>Abuse &amp; legal requests</h2>
 <p>Wallet addresses associated with <a href="/terms">terms</a> violations may be blocked and retained

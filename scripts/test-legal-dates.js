@@ -7,8 +7,8 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
 const PINS = {
-  "src/terms.js": { date: "2026-10-09", sha: "ab36cb1b7b8a8d9c" },
-  "src/privacy.js": { date: "2026-10-11", sha: "2aeeb73316ba133a" },
+  "src/terms.js": { date: "2026-10-11", sha: "34afac5b45d39c1a" },
+  "src/privacy.js": { date: "2026-10-11", sha: "eb93b2e256364e61" },
 };
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };

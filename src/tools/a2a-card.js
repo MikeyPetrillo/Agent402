@@ -9,6 +9,8 @@
 // this set are ignored, never silently "passing" something unchecked — same
 // honesty rule as agent-kit's JSON-Schema validator. Deterministic, no LLM.
 
+import { creditsSalesEnabled } from "../credits-sales.js";
+
 const KNOWN_TRANSPORTS = new Set(["JSONRPC", "GRPC", "HTTP+JSON"]);
 const CAPABILITY_FLAGS = ["streaming", "pushNotifications", "stateTransitionHistory"];
 
@@ -39,6 +41,11 @@ export const A2A_WELL_KNOWN_PATHS = ["/.well-known/agent-card.json", "/.well-kno
  * that without it the standard is used for discovery only. Discovery is exactly
  * what we are claiming; a trust model we have not implemented is not.
  */
+// The ways to pay besides a wallet, read from the switch that sells prepaid
+// credits: while sales are off the description must not offer them.
+const payTail = () => (creditsSalesEnabled()
+  ? "free via proof of work on the pure-CPU tools, or prepaid by card."
+  : "or free via proof of work on the pure-CPU tools.");
 export const ERC8004_IDENTITY_REGISTRY = { chain: "eip155:8453", address: "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432" };
 
 export function buildAgentRegistration({ baseUrl, agentId, toolCount } = {}) {
@@ -54,7 +61,7 @@ export function buildAgentRegistration({ baseUrl, agentId, toolCount } = {}) {
     name: "Agent402",
     description:
       `Pay-per-call web tools for autonomous agents: ${catalog} settled in USDC over x402 or MPP, ` +
-      "free via proof of work, or prepaid by card. No account and no API key.",
+      `${payTail()} No account and no API key.`,
     image: `${base}/logo.png`,
     // { name, endpoint }, the spec's field names. The first cut used
     // { type, url }, which parses to zero usable services.
@@ -104,7 +111,7 @@ export function buildOurAgentCard({ baseUrl, version, toolCount } = {}) {
     name: "Agent402",
     description:
       `Pay-per-call web tools for autonomous agents: ${catalog} settled in USDC over x402 or MPP, ` +
-      "free via proof of work, or prepaid by card. No account and no API key. The same catalog is " +
+      `${payTail()} No account and no API key. The same catalog is ` +
       `callable over MCP at ${base}/mcp and documented at ${base}/openapi.json.`,
     url: `${base}/api`,
     preferredTransport: "HTTP+JSON",

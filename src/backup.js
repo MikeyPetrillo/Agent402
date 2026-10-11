@@ -60,6 +60,9 @@ const cfg = () => ({
   maxRunMb: clampInt(process.env.BACKUP_MAX_RUN_MB, 512, 16, 4096),
   maxTotalGb: clampInt(process.env.BACKUP_MAX_TOTAL_GB, 20, 1, 500),
 });
+/** Days a nightly backup is kept before retention deletes it (the legal and
+ *  security pages quote this, so the stated period is the one the code runs). */
+export const backupKeepDays = () => cfg().keepDays;
 function clampInt(v, dflt, lo, hi) {
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;

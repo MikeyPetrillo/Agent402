@@ -7,6 +7,7 @@ import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 
 import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
+import { ERC8004_IDENTITY_REGISTRY } from "./tools/a2a-card.js";
 const usd0 = (cents) => `$${(cents / 100).toFixed(0)}`;
 
 export function companyPage(baseUrl) {
@@ -15,8 +16,17 @@ export function companyPage(baseUrl) {
   const lo = cardCents.length ? Math.min(...cardCents) : 200, hi = cardCents.length ? Math.max(...cardCents) : 500;
   const mon = Object.values(MONITOR_PRODUCTS).map((p) => Number(p.price)).filter((n) => n > 0);
   const monUsd = mon.length ? usd0(Math.min(...mon)) : "$5";
+  // The on-chain identity is read from the same setting the registration file
+  // publishes (ERC8004_AGENT_ID), so this page and the chain cannot disagree.
+  const agentId = /^[1-9][0-9]*$/.test(String(process.env.ERC8004_AGENT_ID || "").trim()) ? String(process.env.ERC8004_AGENT_ID).trim() : null;
+  const reg = ERC8004_IDENTITY_REGISTRY;
+  const regLink = `<a href="https://basescan.org/address/${esc(reg.address)}" rel="noopener" style="color:var(--ink);">ERC-8004 Identity Registry</a>`;
+  const files = `<a href="/.well-known/agent-registration.json" style="color:var(--ink);">/.well-known/agent-registration.json</a>, which names this service, its endpoints and its payment support; an A2A agent card sits beside it at <a href="/.well-known/agent-card.json" style="color:var(--ink);">/.well-known/agent-card.json</a>`;
+  const identityText = agentId
+    ? `The operator is identified on-chain as well as on this page: Agent402 is <strong>agent ${esc(agentId)}</strong> in the ${regLink} on Base, owned by the treasury wallet that receives payment. The registration points at ${files}. An agent can resolve who operates this catalog from the chain rather than taking a web page's word for it.`
+    : `This instance publishes ${files}. It has no on-chain registration in the ${regLink} configured, so the file carries no agent id.`;
   const title = "Havok Holdings LLC";
-  const description = `Agent402.Tools is built and operated by Havok Holdings LLC: per-call tools and metered models for AI agents over x402 and MPP, finished reports (${usd0(lo)} to ${usd0(hi)}) and monitors (${monUsd} a month) for people by card, and a pay-per-crawl gate for site owners. Proof, security and contact.`;
+  const description = `Agent402.Tools is built and operated by Havok Holdings LLC: per-call tools and metered models for AI agents over x402 and MPP, finished reports (${usd0(lo)} to ${usd0(hi)}) and monitors (${monUsd} a month) for people by card, and an open-source pay-per-crawl gate for site owners. Proof, security and contact.`;
   const row = (h, body, links = []) => `
 <section style="max-width:1180px;margin:0 auto;padding:40px 30px 0;">
   <div class="co-2col" style="display:grid;grid-template-columns:220px 1fr;gap:30px;padding-bottom:36px;border-bottom:1px solid var(--hairline);">
@@ -33,11 +43,11 @@ export function companyPage(baseUrl) {
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Agent402.Tools is built and operated by <a href="https://havok.holdings" rel="noopener" style="color:var(--ink);">Havok Holdings LLC</a>, a North Carolina company. We run the hosted service at agent402.tools, publish the server under AGPL-3.0 and the client packages under MIT, and settle paid calls on public blockchains, or by card through Stripe.</p>
   </div>
 </header>
-${row("What we sell", `Per-call tools and metered models to AI agents, paid in USDC over x402 and MPP. Finished, cited reports (${esc(usd0(lo))} to ${esc(usd0(hi))}) and monitors (${esc(monUsd)} a month) to people, by card. A pay-per-crawl gate, the tollbooth, to site owners who want to charge crawlers and agents for their content.`, [["/reports", "Reports"], ["/pricing", "Pricing"], ["/tollbooth", "Tollbooth"]])}
-${row("Proof", `Uptime from two outside observers at /status. Every settled transaction by rail and wire at /revenue. Metered receipts against their quotes at /proof. Material disclosures with on-chain receipts at /transparency. All of it is computed from observations and ledgers, none of it is typed by hand.`, [["/status", "Status"], ["/revenue", "Transactions"], ["/proof", "Receipts"], ["/transparency", "Disclosures"]])}
+${row("What we sell", `Per-call tools and metered models to AI agents, paid in USDC over x402 and MPP. Finished, cited reports (${esc(usd0(lo))} to ${esc(usd0(hi))}) and monitors (${esc(monUsd)} a month) to people, by card. An open-source pay-per-crawl gate, the tollbooth, for site owners who want to charge crawlers and agents for their content.`, [["/reports", "Reports"], ["/pricing", "Pricing"], ["/tollbooth", "Tollbooth"]])}
+${row("Proof", `Uptime from two outside observers at /status. Every settled transaction by rail and wire at /revenue. Metered receipts against their quotes at /proof. Material disclosures with on-chain receipts at /transparency. The status, transaction and receipt figures are computed from observations and ledgers; the disclosures link to the on-chain records they describe.`, [["/status", "Status"], ["/revenue", "Transactions"], ["/proof", "Receipts"], ["/transparency", "Disclosures"]])}
 ${row("Security", `Non-custodial on the payment rails (a buyer signs with their own key and no customer key or crypto balance is held; prepaid card credits are a held balance, stated plainly), open source end to end, with vulnerability disclosure, safe harbor, the data inventory and the controls in the serving path and on the code stated on one page.`, [["/security", "Security"], ["/privacy", "Privacy"], ["/terms", "Terms"]])}
-${row("Entity", `Havok Holdings LLC, a North Carolina limited liability company. D-U-N-S number 142233542. Company site: <a href="https://havok.holdings" rel="noopener" style="color:var(--ink);">havok.holdings</a>. Operator of agent402.tools and publisher of the agent402 npm packages (author field on every package).`, [["https://havok.holdings", "havok.holdings"], ["https://www.npmjs.com/package/agent402-mcp", "npm"]])}
-${row("Identity", `The operator is identified on-chain as well as on this page: Agent402 is <strong>agent 94639</strong> in the <a href="https://basescan.org/address/0x8004A169FB4a3325136EB29fA0ceB6D2e539a432" rel="noopener" style="color:var(--ink);">ERC-8004 Identity Registry</a> on Base, owned by the treasury wallet that receives payment. The registration points at <a href="/.well-known/agent-registration.json" style="color:var(--ink);">/.well-known/agent-registration.json</a>, which names this service, its endpoints and its payment support; an A2A agent card sits beside it at <a href="/.well-known/agent-card.json" style="color:var(--ink);">/.well-known/agent-card.json</a>. An agent can resolve who operates this catalog from the chain rather than taking a web page's word for it.`, [["/.well-known/agent-registration.json", "registration"], ["/.well-known/agent-card.json", "agent card"]])}
+${row("Entity", `Havok Holdings LLC, a North Carolina limited liability company. D-U-N-S number 142233542. Company site: <a href="https://havok.holdings" rel="noopener" style="color:var(--ink);">havok.holdings</a>. Operator of agent402.tools and publisher of the agent402 npm packages (author field on every package).`, [["https://havok.holdings", "havok.holdings"], ["https://www.npmjs.com/search?q=agent402", "npm"]])}
+${row("Identity", identityText, [["/.well-known/agent-registration.json", "registration"], ["/.well-known/agent-card.json", "agent card"]])}
 <div id="contact"></div>
 ${row("Contact", `General, security, legal and abuse: <a href="mailto:mike@agent402.tools" style="color:var(--ink);">mike@agent402.tools</a> (security reports: the private advisory on GitHub is preferred, see /security). Investors and partnerships: <a href="mailto:hello@havok.holdings" style="color:var(--ink);">hello@havok.holdings</a>. Updates and quick questions: <a href="https://x.com/Agent402Tools" rel="noopener" style="color:var(--ink);">@Agent402Tools</a>; bugs and contributions: <a href="${REPO_URL}" rel="noopener" style="color:var(--ink);">the repository</a>.`, [["https://havok.holdings", "havok.holdings"], [REPO_URL, "Source"], ["https://x.com/Agent402Tools", "X"]])}
 <section style="max-width:1180px;margin:0 auto;padding:40px 30px 48px;">

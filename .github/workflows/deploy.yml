@@ -1783,6 +1783,8 @@ jobs:
           # A cached repeat's "payment is not charged" copy names the Tempo transfer exception (offline)
           t node scripts/test-cache-repeat-copy.js
           t node scripts/test-legal-dates.js
+          # Legal, security and machine copy state what the code does (backups, refunds, CSP, MPP chains; offline)
+          t node scripts/test-legal-claims.js
           t node scripts/test-wire-count-copy.js
           t node scripts/test-pack-copy-retired.js
           # Retired hosted tollbooth: no surface offers it; retired URLs 301, the intake 410s; the operator leads page is gone (boots a server)
