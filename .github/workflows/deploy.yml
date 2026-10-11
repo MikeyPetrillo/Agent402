@@ -3895,9 +3895,12 @@ jobs:
       # row ending on one stray link, a code name split mid-word, or text past the
       # viewport fails (DESIGN.md "Wrap"). Every hand-written page in the sitemap and
       # every wiki page; each generated family is a fixed sample of 25 (WRAP_ALL=1
-      # runs all of them by hand).
+      # runs all of them by hand). The script boots its own server with the index
+      # crawlers off: the shared server on :3000 crawls live sellers, and their names
+      # and counts change between runs, so the pages it measured were never the same
+      # twice. The templates are what this guards; seller data is not in the repo.
       - name: Wrap quality (rendered line boxes, 1440 + 400 px, sitemap + wiki, families sampled)
-        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-wrap-quality.js
+        run: node scripts/test-wrap-quality.js
 
   test-sweeps2:
     # The second half of test-sweeps (2026-08-25, split by the seconds each item
