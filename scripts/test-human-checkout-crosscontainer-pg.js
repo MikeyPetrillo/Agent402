@@ -12,6 +12,9 @@
 //   - A report made by a container that cannot land its final record is
 //     marked generated on the claim by the next heartbeat that lands; a
 //     takeover of such a claim generates again, never refunds.
+//   - The owner's heartbeat landing between B's read and B's claim: B's claim
+//     (the regeneration's, and the one a refund takes first) is guarded on
+//     the silence it read, so it fails and B does nothing.
 //   - Same container restarted on the same disk: B lands A's journal before it
 //     decides, so it neither generates nor refunds.
 // Requires STATE_DATABASE_URL (CI fails without it).
@@ -36,6 +39,18 @@ if (process.argv[2] === "child") {
   process.env.HUMAN_CHECKOUT_REPLAY_MS = "200";
   const { createHumanCheckout } = await import("../src/human-checkout.js");
   const sdb = await import("../src/state-db.js");
+  if (process.env.XC_BEAT_BEFORE_CLAIM) {
+    // The owner's heartbeat lands after B read the claim and before B's claim statement.
+    const pool = await sdb.stateDb();
+    const orig = pool.query.bind(pool);
+    pool.query = async (text, values, cb) => {
+      const sql = typeof text === "string" ? text : text?.text || "";
+      if (/DO UPDATE SET body = EXCLUDED\.body/.test(sql) && /'beatAt'/.test(sql) && Array.isArray(values)) {
+        await orig(`UPDATE ${sdb.stateDbSchema()}.records SET body = body || jsonb_build_object('beatAt', $2::bigint) WHERE collection = 'human-checkout' AND id = $1`, [values[1], Date.now()]);
+      }
+      return orig(text, values, cb);
+    };
+  }
   let gens = 0; const refunds = [];
   const hc = createHumanCheckout({ stripe: stripeOf(refunds), baseUrl: "https://example.test", storeDir: process.env.XC_SAME_DIR || mkdtempSync(join(tmpdir(), "hc-xc-B-")), log: () => {}, generate: async () => { gens++; return { report: "# B" }; } });
   await hc.ready();
@@ -135,7 +150,18 @@ try {
     relay.heal();
   }
 
-  // ---- 4. same container restarted on the same disk ------------------------------
+  // ---- 4. the owner beats between B's read and B's claim -----------------------
+  for (const takeovers of [0, 1]) {
+    const id = `cs_xb${takeovers}_${randomBytes(3).toString("hex")}`;
+    await generateThenLoseDb(A, id);
+    await ageClaim(id, { claimMs: 11 * 60_000, beatMs: 11 * 60_000, takeovers });
+    const b = runB(id, { XC_BEAT_BEFORE_CLAIM: "1" });
+    ok(b.gens === 0 && b.refunds === 0 && b.status === "generating", `beat after B's read, takeovers=${takeovers}: B's guarded claim fails, so it neither generates nor refunds (B generations ${b.gens}, refunds ${b.refunds}, answers ${b.status})`);
+    const row = await healAndLand(id);
+    ok(row?.status === "done" && row.report === "# A delivered", `beat after B's read, takeovers=${takeovers}: A's record lands (row ${row?.status})`);
+  }
+
+  // ---- 5. same container restarted on the same disk ------------------------------
   {
     const id = `cs_xr_${randomBytes(3).toString("hex")}`;
     await generateThenLoseDb(A, id);
