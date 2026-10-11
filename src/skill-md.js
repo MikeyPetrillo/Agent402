@@ -13,6 +13,7 @@
 // public instruction sheet an agent will read verbatim.
 import { REPO_URL } from "./repo-link.js";
 import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
+import { RAILS } from "./rails.js";
 // (isComputePayable + POW_DIFFICULTY both live in pow.js - same import seo.js uses)
 
 function toolList(catalog) {
@@ -23,6 +24,17 @@ export function skillMd(baseUrl, catalog) {
   const tools = toolList(catalog);
   const powCount = tools.filter(isComputePayable).length;
   const total = tools.length;
+  // Chains read from RAILS, never typed: the EVM rails one EVM key pays on,
+  // and the non-EVM rails that need their own key.
+  const evmUsdc = RAILS.filter((r) => r.chainId && r.asset === "USDC").map((r) => r.name);
+  const evmOther = RAILS.filter((r) => r.chainId && r.asset !== "USDC").map((r) => `${r.asset} on ${r.name}`);
+  const nonEvm = RAILS.filter((r) => !r.chainId).map((r) => r.name);
+  const orList = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(", ")} or ${xs.at(-1)}` : xs.join(""));
+  const x402Need = `An EVM private key whose address holds USDC on ${orList(evmUsdc)}${evmOther.length ? `, or ${evmOther.join(", ")}` : ""}${nonEvm.length ? `; or a ${orList(nonEvm)} key with USDC` : ""}`;
+  // Prices quoted below are read from the catalog, never typed.
+  const priceOf = (slug) => tools.find((t) => t.slug === slug)?.price || null;
+  const tierFix = [["/v1/chat/completions", priceOf("v1-chat")], ["/v1/pro/chat/completions", priceOf("v1-chat-pro")]]
+    .filter(([, p]) => p).map(([r, p]) => "`" + r + "` " + p).join(", ");
   return `---
 name: agent402
 description: >
@@ -39,8 +51,9 @@ description: >
 # agent402
 
 Agent402.Tools is an open-source, pay-per-call tool catalog for AI agents at
-${baseUrl}. Every endpoint answers HTTP 402 with a machine-readable price and
-two ways to pay (x402 and MPP); a prepaid credits key already issued also works
+${baseUrl}. Every priced endpoint answers an unpaid call with HTTP 402: a
+machine-readable price and the ways this instance takes payment (x402, and MPP
+where it is enabled); a prepaid credits key already issued also works
 as a Bearer key (new credits are not on sale). There is no signup and no human in the loop: the
 payment is the identity. Maintainer: Havok Holdings LLC. Source:
 ${REPO_URL}
@@ -67,8 +80,8 @@ Pick ONE payment mode. Ask the user which before spending money.
 | Mode | What you need | Covers |
 |------|---------------|--------|
 | Proof-of-work (free) | Nothing. A few ms of CPU per call. | ${powCount} pure-compute tools |
-| x402 (USDC) | An EVM private key whose address holds USDC on Base (or another of the 12 supported chains), or a Solana key | every tool |
-| MPP (USDC / Tempo) | An EVM private key with USDC on Base/Celo, or USDC.e/PathUSD on Tempo | every tool |
+| x402 (USDC) | ${x402Need} | every tool on EVM; identity-bound and long-running routes take EVM only |
+| MPP (USDC / Tempo) | An EVM private key with USDC on Base/Celo, or USDC.e/PathUSD on Tempo | every tool on Base/Celo; Tempo is not offered on identity-bound or long-running routes |
 
 Gas is sponsored on EVM chains: the wallet only needs the stablecoin. Never
 paste a private key into a prompt, log or file; read it from an environment
@@ -161,7 +174,7 @@ your choice, or solve proof-of-work by hand.
 
 ## After Setup
 
-Verify with one free call:
+Verify with one unpaid call (nothing is charged):
 
 \`\`\`bash
 curl -s -X POST ${baseUrl}/api/hash -H 'content-type: application/json' -d '{"text":"hello","algo":"sha256"}'
@@ -218,8 +231,10 @@ curl -s -X POST ${baseUrl}/v1/auto/chat/completions -H 'content-type: applicatio
   were not charged, retry with a fresh authorization.
 - **400** - your input failed validation; the body says what to fix. Not charged.
 - **413** - wallet-keyed memory quota full. Not charged.
-- **502/503** - upstream or capacity failure. Not charged (settlement runs after
-  the handler and only for a successful response). Retry later.
+- **502/503** - upstream or capacity failure. Not charged on x402 (settlement runs
+  after the handler and only for a successful response). Retry later. Exception: a
+  Tempo transfer sent before the call is final when sent; if the call then fails,
+  the amount is recorded as a refund owed to that wallet.
 - **\`X-Cache: hit\`** - a cached repeat served free (prompt cache / embeddings); the payment it carried is not charged, except a Tempo transfer sent before the call, which is final when sent.
 
 On x402 a failed call is not charged by construction: settlement happens AFTER the
@@ -247,6 +262,6 @@ of the response you hold, without trusting this document.
 | 402 with \`success: false\` receipt | Facilitator rejected settlement (empty wallet, wrong chain, expired auth) | Fund the wallet / pick a chain from \`accepts\`; you were not charged |
 | Tool not found by \`/api/find\` | Wording too broad | Rephrase with the concrete input/output; browse ${baseUrl}/api/pricing; or request it via \`/api/wish\` |
 | 413 on \`/api/memory*\` | Namespace quota (10k keys / 32MB) | Delete keys or use another wallet namespace |
-| LLM gateway 400 "over budget" | Prompt too large for the tier's flat price | Use a higher tier (\`/v1/chat/completions\` $0.02, \`/v1/pro/chat/completions\` $0.10) or shorten the input |
+| LLM gateway 400 "over budget" | Prompt too large for the tier's flat price | Use a higher tier (${tierFix || "see /api/pricing"}) or shorten the input |
 `;
 }

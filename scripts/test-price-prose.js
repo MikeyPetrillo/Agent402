@@ -110,6 +110,13 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   ok(figures.length >= 20 && bad.length === 0, `llms.txt reports paragraph: ${figures.length} dollar figures, every one a real price${bad.length ? ` (stale: ${bad.join(", ")})` : ""}`);
   ok(para.includes(`POST /v1/research (${REPORT_TIERS["research"].price})`) && para.includes(`for $${(Math.min(...Object.values(HUMAN_PRODUCTS).map((p) => p.price)) / 100).toFixed(2)} to $`) && para.includes(`Monitors ($${(Math.min(...Object.values(MONITOR_PRODUCTS).map((m) => m.price)) / 100).toFixed(2)}/month`), "paragraph carries the agent route prices, the card range and the monitor price from the tables");
   ok(!para.includes("$0.35)") && !para.includes("$3/month"), "the two stale figures that shipped 2026-08-23..27 cannot come back");
+  // The stated agent range covers every product the paragraph lists (the IPO
+  // digest included), so no listed price sits outside it.
+  {
+    const m = para.match(/An agent pays the tool price per call, \$(\d+\.\d{2}) to \$(\d+\.\d{2})\./);
+    const listed = [...para.matchAll(/POST \/v1\/[a-z0-9-]+ \(\$(\d+\.\d{2})\)/g)].map((x) => Number(x[1]));
+    ok(m && listed.length > 0 && listed.every((n) => n >= Number(m[1]) && n <= Number(m[2])), `the agent price range (${m ? `$${m[1]} to $${m[2]}` : "missing"}) covers every listed report price`);
+  }
 }
 
 // --- the BODY of a page, and the MCP payload, not only its meta description --

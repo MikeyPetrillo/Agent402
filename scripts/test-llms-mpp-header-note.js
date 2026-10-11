@@ -27,7 +27,7 @@ const text = llmsTxt("https://agent402.tools", FIXTURE_CATALOG);
 ok(text.includes("How to read our 402 if you only speak one dialect"), "the new section heading is present");
 ok(text.includes("PAYMENT-REQUIRED"), "names the real x402 header explicitly");
 ok(text.includes("WWW-Authenticate"), "names the MPP header explicitly");
-ok(text.includes("#794"), "cites the real incident (issue #794), not a hypothetical");
+ok(!/#\d+/.test(text.slice(text.indexOf("How to read our 402"), text.indexOf("How to read our 402") + 1500)), "states the failure mode as mechanism, citing no incident number");
 ok(/additive, never a replacement/.test(text), "states the two headers coexist, neither replaces the other");
 // The note must land AFTER the existing MPP dual-stack paragraph, not before
 // it — a reader needs the dual-stack context first to make sense of "if you
