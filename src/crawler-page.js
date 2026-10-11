@@ -56,7 +56,7 @@ const SECTIONS = [
     ],
   },
   {
-    h: "The other thing that visits you",
+    h: "Router purchases",
     p: [
       `A crawl and a purchase are different acts and this page is linked from both, so it should say so. When our router buys from a service to resell the result to a caller it sends a real HTTP 402 payment, which is not a crawl: it is a customer.`,
       `Those requests identify themselves as <code>${esc(ROUTER_UA)}</code> and carry <code>X-Agent402-Via: router</code>. Either one separates a purchase from a probe in your logs.`,
@@ -71,7 +71,7 @@ const SECTIONS = [
     ],
   },
   {
-    h: "What we publish, and what we do not",
+    h: "What we publish",
     p: [
       `The public index carries what a service advertises about itself: its endpoints, the prices and payment networks it declares, whether our own probe could reach it, and the payout addresses it names in its own challenges. Payout addresses are public infrastructure - they appear in every challenge the service hands to every buyer.`,
       `We publish counts of settled payments per payee, read from public chains, and buyer figures in the index are counts. Payments on public chains are public: some of our pages show individual payments as the chain records them, for example the live view on our home page, which shows shortened payer addresses with links to the public transactions. We do not sell payer data.`,

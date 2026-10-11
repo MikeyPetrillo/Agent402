@@ -229,7 +229,7 @@ Use ## for top-level sections within the guide.
   <li><code>title</code> - human-readable name</li>
   <li><code>tagline</code> - one-sentence summary of what the pack solves</li>
   <li><code>useCase</code> - when to reach for this pack</li>
-  <li><code>promptArgs</code> - array of <code>{ name, description, required, substitute }</code> arguments</li>
+  <li><code>promptArgs</code> - the prompt arguments, each an object with <code>name</code>, <code>description</code>, <code>required</code> and <code>substitute</code></li>
   <li><code>toolSlugs</code> - ordered array of tool slugs the pack orchestrates</li>
   <li><code>workflow</code> - array of strings, one per step, describing what each tool contributes</li>
   <li><code>claudePrompt</code> - a copy-pastable Claude prompt that exercises the pack</li>

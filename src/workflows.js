@@ -122,9 +122,9 @@ export function workflowsPage(baseUrl, catalog = {}) {
 .wf-card h3{margin:0 0 8px;font-family:var(--font-body);font-weight:600;font-size:var(--fs-xl);color:var(--ink)}
 .wf-desc{color:var(--muted);font-size:var(--fs-md);line-height:1.55;margin:0 0 20px}
 .wf-flow{display:flex;align-items:stretch;gap:0;flex-wrap:nowrap;overflow-x:auto;padding:4px 0}
-.wf-step{display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--card);border:1px solid var(--hairline);padding:12px 16px;min-width:120px;max-width:170px;text-decoration:none;transition:border-color .15s;flex-shrink:0}
+.wf-step{display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--card);border:1px solid var(--hairline);padding:12px 16px;min-width:120px;max-width:200px;text-decoration:none;transition:border-color .15s;flex-shrink:0}
 .wf-step:hover{border-color:var(--accent)}
-.wf-step-name{color:var(--accent);font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;margin-bottom:4px}
+.wf-step-name{color:var(--accent);font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;margin-bottom:4px;white-space:nowrap}
 .wf-step-desc{color:var(--muted);font-size:var(--fs-xs);line-height:1.35;text-align:center}
 .wf-arrow{display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:var(--fs-lg);padding:0 8px;flex-shrink:0}
 .wf-cost{font-size:var(--fs-md);margin:14px 0 0;color:var(--muted)}

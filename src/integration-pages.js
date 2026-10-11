@@ -696,8 +696,6 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
 
   const learnLinks = (i.learn || ["x402", "mpp"]).filter((s) => LEARN_LABELS[s])
     .map((s) => `<a href="/learn/${s}" ${A}>${esc(LEARN_LABELS[s])}</a>`).join(" &middot; ");
-  const guideLinks = (i.guides || []).map((g) => `<a href="/guides/${esc(g)}" ${A}>${esc(guideTitles[g] || guideTitle(g))}</a>`).join(" &middot; ");
-  const docsLink = i.docsSlug ? ` &middot; <a href="/docs/adapters/${esc(i.docsSlug)}" ${A}>configuration reference</a>` : "";
 
   const body = `
   <div style="max-width:980px;margin:0 auto;padding:50px 30px 64px;">
@@ -732,7 +730,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
 
     ${tools.length ? `<section style="margin-bottom:34px;">
       <h2 ${H2}>Tools to try first</h2>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;">
+      <div class="ip-tools" style="display:grid;grid-template-columns:repeat(${tools.length % 3 === 1 && tools.length > 1 ? 2 : 3},minmax(0,1fr));gap:10px;">
 ${toolCards}
       </div>
       <p style="color:var(--muted);font-size:var(--fs-md);margin:12px 0 0;">Every tool, price and input schema: <a href="/tools" ${A}>our tools</a>.</p>
@@ -740,14 +738,17 @@ ${toolCards}
 
     <section style="margin-bottom:10px;">
       <h2 ${H2}>Links</h2>
-      <p style="color:var(--muted);font-size:var(--fs-base);line-height:1.8;margin:0;">
-        <a href="${esc(registryUrl(i))}" rel="noopener" ${A}>${esc(i.pkg)} on ${esc(registryLabel(i))}</a> &middot; <a href="${esc(github)}" rel="noopener" ${A}>source on GitHub</a>${docsLink}<br>
-        ${guideLinks ? `Guides: ${guideLinks}<br>` : ""}
-        <a href="/integrations" ${A}>All integrations</a>
-      </p>
+      <ul style="list-style:none;padding:0;margin:0;">
+        <li ${LI}><a href="${esc(registryUrl(i))}" rel="noopener" ${A}>${esc(i.pkg)} on ${esc(registryLabel(i))}</a></li>
+        <li ${LI}><a href="${esc(github)}" rel="noopener" ${A}>source on GitHub</a></li>
+        ${i.docsSlug ? `<li ${LI}><a href="/docs/adapters/${esc(i.docsSlug)}" ${A}>configuration reference</a></li>` : ""}
+        ${(i.guides || []).map((g) => `<li ${LI}>Guide: <a href="/guides/${esc(g)}" ${A}>${esc(guideTitles[g] || guideTitle(g))}</a></li>`).join("")}
+        <li ${LI}><a href="/integrations" ${A}>All integrations</a></li>
+      </ul>
     </section>
   </div>
   ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd: [breadcrumbLd, codeLd], body });
+  const extraCss = `@media (max-width:720px){.ip-tools{grid-template-columns:minmax(0,1fr)!important}}`;
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd: [breadcrumbLd, codeLd], extraCss, body });
 }
