@@ -1400,6 +1400,8 @@ jobs:
           t node scripts/test-store-import-fail-pg.js
           # A first boot's imports share two slots: no connect timeouts, serving reads not starved.
           t node scripts/test-state-db-import-congestion-pg.js
+          # A blocked event loop is not a hung database: queries in flight across a block answer; schema-lock waiters hold no connection.
+          t node scripts/test-state-db-stall-timeout-pg.js
           t node scripts/test-store-ddl-race-pg.js
           t node scripts/test-store-write-retry-pg.js
           t node scripts/test-stats-ack-loss-pg.js
@@ -1642,6 +1644,8 @@ jobs:
           t node scripts/test-wish-reports.js
           t node scripts/test-x402-spend-controls.js
           t node scripts/test-x402-boot-init.js
+          # The vendor's per-route bazaar check runs after boot in short slices, never as one boot-time loop.
+          t node scripts/test-bazaar-route-check.js
           t node scripts/test-solana-kit-deps.js
           t node scripts/test-workflow-client-pins.js
 
