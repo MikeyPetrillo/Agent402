@@ -12,7 +12,7 @@
 //   - POST /api/decide answers its paid decision when the ledger is down
 //     after the model call, and the decision and its credit land later.
 // Requires STATE_DATABASE_URL (CI fails without it).
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -21,6 +21,7 @@ import { randomBytes } from "node:crypto";
 import Database from "better-sqlite3";
 import { requireTestPg } from "./lib/test-pg.js";
 import { startPgRelay } from "./lib/pg-relay.js";
+import { journalHolds } from "./lib/journal-probe.js";
 
 const CHILD = process.env.DECIDE_FAIL_CHILD === "1";
 if (!CHILD) requireTestPg({ label: "test-decide-ledger-failures-pg" });
@@ -230,7 +231,7 @@ if (CHILD) {
       const o = JSON.parse(buf.split("\n").find((l) => l.startsWith("{")) || "{}");
       const before = (await q(`SELECT status FROM ${T("runs")} WHERE id = $1`, [o.runId]))[0];
       ok(o.status === "complete" && o.leftover?.token && before?.status === "running", `the child answered ${o.status} with a leftover credit, then exited; the run reads ${before?.status} in the database`);
-      ok(existsSync(join(childDir, "ledger.db.pending.ndjson")), "...its journal is on the volume beside the ledger file");
+      ok(await journalHolds({ schema: process.env.STATE_DB_SCHEMA, prefix: "decide", needle: o.runId, file: join(childDir, "ledger.db.pending.ndjson") }), "...its journal is kept (in Redis with REDIS_URL set, else beside the ledger file)");
       const L2 = openDecideLedger(join(childDir, "ledger.db"));
       await L2.ready;
       for (let i = 0; i < 30 && L2.pendingCount(); i++) await wait(100);

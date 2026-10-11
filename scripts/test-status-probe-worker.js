@@ -621,10 +621,15 @@ for (const [name, over, detail] of failCases) {
     assert.match(a.body({ gateway: { refundsOwed: { status: "<b>x</b>" } } }), /refundsOwed\.status=aging\./);
   });
 
-  await acheck("ledger dead-letter: stuck pages, none and off clear, pending and unknown do neither", async () => {
-    const { judge } = await import("../workers/status-probe/src/index.js");
+  await acheck("ledger dead-letter: stuck and local page, none and off clear, pending and unknown do neither", async () => {
+    const { judge, ALARMS } = await import("../workers/status-probe/src/index.js");
     const T = "Ledger rows waiting on local disk (dead-letter stuck)";
     assert.equal(judge({ gateway: { ledgerDeadLetter: { status: "stuck" } } })[T], "bad");
+    assert.equal(judge({ gateway: { ledgerDeadLetter: { status: "local" } } })[T], "bad");
+    const a = ALARMS.find((x) => x.title === T);
+    assert.match(a.body({ gateway: { ledgerDeadLetter: { status: "local" } } }), /ledgerDeadLetter\.status=local\./);
+    // An unexpected word is never echoed.
+    assert.match(a.body({ gateway: { ledgerDeadLetter: { status: "<b>x</b>" } } }), /ledgerDeadLetter\.status=stuck\./);
     assert.equal(judge({ gateway: { ledgerDeadLetter: { status: "none" } } })[T], "good");
     assert.equal(judge({ gateway: { ledgerDeadLetter: { status: "off" } } })[T], "good");
     assert.equal(judge({ gateway: { ledgerDeadLetter: { status: "pending" } } })[T], "quiet");

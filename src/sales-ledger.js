@@ -246,7 +246,9 @@ function writeThrough(stmt, row) {
 // file while it is open, else an NDJSON beside it) and is replayed
 // insert-if-absent (a sale by ts/slug/rail/payer/tx, never by tx alone; a
 // verdict by tx, never over a newer one); see createDeadLetter.
-const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: `${DB_PATH}.dead-letter.ndjson`, name: "sales" }) : null;
+// With REDIS_URL set the entries live in Redis, shared by every container on
+// this database (src/ledger-journal-redis.js), and the file is the fallback.
+const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: `${DB_PATH}.dead-letter.ndjson`, name: "sales", journalKey: `${stateDbSchema()}:sales` }) : null;
 // The queued write path (write-ahead to the dead-letter, fail fast on a hung
 // database); see createLedgerWriter. readyP is hoisted (a function).
 const writer = createLedgerWriter({ enqueue, ready: () => readyP(), deadLetter, warnOnce, label: "sales-ledger" });
@@ -283,22 +285,23 @@ async function replayDeadLetters() {
   replaying = true;
   let landed = 0;
   try {
-    for (const e of deadLetter.list()) {
+    // Claimed (one drainer per journal across containers), each entry
+    // removed only once its row is in the table.
+    landed = await deadLetter.drain(async (e) => {
       const v = e.payload;
-      let r;
       try {
         if (e.kind === "sale" && Array.isArray(v)) {
           const row = await insertSaleIfAbsent(v);
           writer.answered();
-          if (row) { applySale(row); writeThrough(fileSale, saleRowOf(row)); landed++; }
+          if (row) { applySale(row); writeThrough(fileSale, saleRowOf(row)); return "landed"; }
         } else if (e.kind === "feedback" && v?.tx) {
-          r = await stateQuery(FEEDBACK_IF_NEWER(), [v.tx, v.saleId, v.slug, v.payer, v.verdict, v.reason, v.ts]);
+          const r = await stateQuery(FEEDBACK_IF_NEWER(), [v.tx, v.saleId, v.slug, v.payer, v.verdict, v.reason, v.ts]);
           writer.answered();
-          if (r.rows[0]) { applyFeedback(r.rows[0]); writeThrough(fileFeedback, feedbackRowOf(r.rows[0])); landed++; }
+          if (r.rows[0]) { applyFeedback(r.rows[0]); writeThrough(fileFeedback, feedbackRowOf(r.rows[0])); return "landed"; }
         }
-      } catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); continue; } writer.failed(err); throw err; }
-      deadLetter.remove(e.id);
-    }
+        return "drop";
+      } catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); return "keep"; } writer.failed(err); throw err; }
+    });
   } finally { replaying = false; }
   if (landed) console.log(`[sales-ledger] landed ${landed} row(s) that had waited in the local dead-letter`);
   return landed;
@@ -477,10 +480,10 @@ export async function salesLedgerRefresh() {
 export function salesDeadLetterCount() { return deadLetter ? deadLetter.size() : 0; }
 /** The dead-letter for the gateway-status word: entries waiting for the replay, all entries on disk, and when the oldest was written (null when none). */
 export function salesDeadLetterState() {
-  return deadLetter ? { waiting: deadLetter.list().length, total: deadLetter.size(), oldestAt: deadLetter.oldestAt() } : { waiting: 0, total: 0, oldestAt: null };
+  return deadLetter ? deadLetter.state() : { waiting: 0, total: 0, oldestAt: null };
 }
-/** Test hook: the queued entries, oldest first. */
-export function _salesDeadLetterEntries() { return deadLetter ? deadLetter.list() : []; }
+/** Test hook: the queued entries (Redis and local disk), oldest first. */
+export async function _salesDeadLetterEntries() { return deadLetter ? deadLetter.entries() : []; }
 
 const insertSale = db.prepare(
   "INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"

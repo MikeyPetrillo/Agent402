@@ -1,7 +1,10 @@
 // Two containers, one card checkout, on a REAL Postgres. Container A (this
 // process, behind a relay the test cuts) generates a report and loses the
 // database before its final record lands, so the record waits in A's local
-// journal and A serves it from memory. Container B (a child process with its
+// journal and A does NOT serve it (a record on one container's disk alone
+// may yet be superseded by a takeover; the buyer reads "generating"). This
+// suite runs the local-disk journal (no REDIS_URL); the Redis journal's
+// cross-container cases are in test-ledger-journal-redis-pg.js. Container B (a child process with its
 // own store directory and a healthy connection) then polls the same session.
 //   - A beats its claim while the job runs: a claim that is OLD (a long
 //     generation) but whose owner beat moments ago is never taken over, so B
@@ -72,6 +75,7 @@ if (process.argv[2] === "child") {
 }
 
 requireTestPg({ label: "test-human-checkout-crosscontainer-pg" });
+delete process.env.REDIS_URL; // B inherits this environment
 const DIRECT = process.env.STATE_DATABASE_URL;
 const relay = await startPgRelay(DIRECT);
 process.env.STATE_DATABASE_URL = relay.url;
@@ -102,11 +106,12 @@ function containerA({ dir = mkdtempSync(join(tmpdir(), "hc-xc-A-")) } = {}) {
     generate: async () => { st.gens++; await wait(450); if (st.cut) relay.cut(); return { report: "# A delivered", title: "t", sources: [], tables: [] }; } });
   return st;
 }
-// A generates while connected, the database goes away as the report is made, A serves it from memory.
+// A generates while connected, the database goes away as the report is made; A keeps it on its disk and answers "generating".
 async function generateThenLoseDb(a, id) {
   a.cut = true;
   await a.hc.fulfill(id);
-  let p; for (let i = 0; i < 80; i++) { p = await a.hc.peek(id).catch(() => null); if (p && p.status !== "generating") break; await wait(50); }
+  for (let i = 0; i < 80 && !(existsSync(join(a.dir, "_pending-finals.ndjson")) && readFileSync(join(a.dir, "_pending-finals.ndjson"), "utf8").includes(id)); i++) await wait(50);
+  const p = await a.hc.peek(id).catch(() => null);
   a.cut = false;
   const kept = existsSync(join(a.dir, "_pending-finals.ndjson")) && readFileSync(join(a.dir, "_pending-finals.ndjson"), "utf8").includes(id);
   return { served: p?.status, kept };
@@ -120,7 +125,7 @@ try {
   for (const takeovers of [0, 1]) {
     const id = `cs_xl${takeovers}_${randomBytes(3).toString("hex")}`;
     const a = await generateThenLoseDb(A, id);
-    ok(a.served === "done" && a.kept, `live owner, takeovers=${takeovers}: A served the report (${a.served}) and kept its record on local disk (${a.kept})`);
+    ok(a.served === "generating" && a.kept, `live owner, takeovers=${takeovers}: A kept its record on local disk (${a.kept}) and answers ${a.served}, never the report from its disk alone`);
     const r0 = await rowOf(id);
     ok(r0?.status === "generating" && Number(r0.beatAt) > Number(r0.claimedAt), `live owner, takeovers=${takeovers}: A beat its claim while the job ran (beatAt ${r0?.beatAt ?? "absent"}, claimedAt ${r0?.claimedAt})`);
     await ageClaim(id, { claimMs: 11 * 60_000, takeovers }); // a long generation; the last beat stays as A wrote it

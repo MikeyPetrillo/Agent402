@@ -245,14 +245,19 @@ const pgPutIfAbsent = async (id, body) => (await stateQuery(`INSERT INTO ${RT()}
 // A final record (done, or an error): it replaces only a "generating" claim
 // or an error whose refund is not recorded yet, so a replayed write never
 // undoes a report delivered (or made public) or a refund already recorded.
-// Resolves true when it wrote; false means the row already holds a final
-// record (a retry whose first attempt landed).
-const pgPutFinal = async (id, body) => (await stateQuery(
+// With `claimId` (the claim the writer held when it made the record) it
+// replaces a "generating" claim only while that claim is still the writer's:
+// once another container took the claim over (and regenerates or refunds),
+// a late record from the old owner books nothing. Resolves true when it
+// wrote; false means the row holds a final record, or a claim not the
+// writer's.
+const pgPutFinal = async (id, body, claimId = null) => (await stateQuery(
   `INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb)
    ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
-   WHERE ${RT()}.body ->> 'status' = 'generating'
+   WHERE (${RT()}.body ->> 'status' = 'generating'
+          AND ($4::text IS NULL OR ${RT()}.body ->> 'claimId' IS NOT DISTINCT FROM $4::text))
       OR (${RT()}.body ->> 'status' = 'error' AND EXCLUDED.body ->> 'status' = 'error' AND ${RT()}.body ->> 'refundId' IS NULL)`,
-  [COLL, id, JSON.stringify(body)],
+  [COLL, id, JSON.stringify(body), claimId == null ? null : String(claimId)],
 )).rowCount === 1;
 const pgIds = async () => (await stateQuery(`SELECT id FROM ${RT()} WHERE collection = $1`, [COLL])).rows.map((r) => r.id);
 const pgClear = async () => { await stateQuery(`DELETE FROM ${RT()} WHERE collection = $1`, [COLL]); };
@@ -448,18 +453,32 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     };
   // ---- final records that must outlive a database failure (database mode) --
   // A delivered report (after the upstream spend) and an error record (before
-  // its refund is issued) are written with pgPutFinal; one that does not land
-  // is kept on local disk (an NDJSON file in the store directory) and in
-  // memory, served from memory to this container's polls, and replayed on a
-  // timer until Postgres holds it. Never a refund for a report that was made.
+  // its refund is issued) are written with pgPutFinal under the writer's
+  // claim; one that does not land is kept in the journal (Redis with
+  // REDIS_URL set, shared by every container; else, or when Redis does not
+  // take it, an NDJSON file in the store directory) and in memory, and
+  // replayed on a timer until Postgres holds it. Never a refund for a report
+  // that was made.
+  // ONE OUTCOME PER PURCHASE. A record kept only on this container's disk is
+  // never answered to the buyer (they see "generating"), and its delivery
+  // (the email, the follow-ups, the sale) waits for its replay: if another
+  // container takes the stale claim over first, it regenerates or refunds,
+  // and this record's replay, written under the old claim, books nothing. A
+  // record in Redis is answered at once and delivered: another container
+  // that finds the claim stale books it from the journal instead of taking
+  // over (and, when it cannot read the journal, waits).
   const pendingFinals = new Map(); // sessionId -> record not yet in the database
+  const sharedFinals = new Set(); // sessionIds whose pending record is in a shared store (Redis)
   const heldAnswers = new WeakSet(); // recordError answers whose record the row refused
-  const finalsDeadLetter = USE_PG ? createDeadLetter({ file: join(dir, "_pending-finals.ndjson"), name: "checkoutFinals" }) : null;
+  const finalsDeadLetter = USE_PG ? createDeadLetter({ file: join(dir, "_pending-finals.ndjson"), name: "checkoutFinals", journalKey: `${stateDbSchema()}:checkoutFinals` }) : null;
   const FINALS_REPLAY_MS = Number(process.env.HUMAN_CHECKOUT_REPLAY_MS) || 5_000;
   // Claims this container holds (sessionId -> claimedAt): beaten while the
   // job runs or its final record waits here (see pgBeat). Dropped when the
   // job ends with nothing waiting, or once the final record lands or is refused.
   const owned = new Map();
+  // The claim id (claimId on the row) each claim this container made carries;
+  // a final record is written under it (see pgPutFinal).
+  const claimIds = new Map(); // sessionId -> claimId
   const releaseOwned = (id) => { if (!inFlight.has(id) && !pendingFinals.has(id)) owned.delete(id); };
   let beating = false;
   async function beat() {
@@ -489,25 +508,64 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
    * caller must not act as if it had been (no refund, no issues entry), and
    * false when it was kept on local disk for replay.
    */
+  // Resolves "shared" when the record did not reach Postgres but is in Redis
+  // (the buyer may be answered and the report delivered), false when it is
+  // kept on this container's disk or in memory only (neither, yet).
   async function landFinal(id, rec) {
+    const claimId = claimIds.get(id) ?? null;
     try {
       await readyP();
-      const wrote = await pgPutFinal(id, rec);
+      const wrote = await pgPutFinal(id, rec, claimId);
       pendingFinals.delete(id);
+      sharedFinals.delete(id);
       owned.delete(id);
+      claimIds.delete(id);
       if (!wrote) return "held";
       through(recPath(id), rec);
       await afterFinal(id, rec);
       return true;
     } catch (e) {
       pendingFinals.set(id, rec);
+      sharedFinals.delete(id);
       // Say so on the claim at once if a short statement still lands (a
       // final refused on its own): a report exists, never refund this claim.
       beat().catch(() => {});
-      const kept = finalsDeadLetter.add("final", { id, rec });
-      log(`[human-checkout] the ${rec.status} record for ${id} did not land (${String(e?.message || e).slice(0, 120)}); kept ${kept ? "on local disk" : "in memory only"} for replay`);
-      return false;
+      // In Redis the writer delivers (it answers the buyer now); on local
+      // disk the replay that books it delivers.
+      const { where } = await finalsDeadLetter.addAsync("final", { id, rec, claimId, deliver: "writer" }, { localPayload: { id, rec, claimId, deliver: "replay" } });
+      if (where === "redis" && pendingFinals.get(id) === rec) sharedFinals.add(id);
+      log(`[human-checkout] the ${rec.status} record for ${id} did not land (${String(e?.message || e).slice(0, 120)}); kept ${where === "redis" ? "in Redis" : where === "local" ? "on local disk" : "in memory only"} for replay`);
+      return where === "redis" ? "shared" : false;
     }
+  }
+  // Book a record a journal holds: under the claim it was made for, so a
+  // record whose claim was taken over books nothing. A record that waited on
+  // local disk is delivered by the write that books it.
+  async function bookJournaled(id, payload) {
+    const { rec, claimId = null, deliver: by = null } = payload;
+    const newest = pendingFinals.get(id);
+    const body = newest && Date.parse(newest.at || 0) > Date.parse(rec.at || 0) ? newest : rec;
+    let wrote = await pgPutFinal(id, body, claimId);
+    if (wrote) through(recPath(id), body);
+    else {
+      // The row may hold this very record (its first write landed and the
+      // reply was lost): that is this record booked, not another outcome.
+      const row = await pgGet(id);
+      const same = row && row.status === body.status && row.at === body.at && row.report === body.report && row.refundId === body.refundId;
+      if (same) wrote = true;
+      else log(`[human-checkout] the journaled ${body.status} record for ${id} booked nothing: the row holds a final record or a claim taken over since`);
+    }
+    const held = pendingFinals.get(id);
+    if (held && !(Date.parse(held.at || 0) > Date.parse(body.at || 0))) { pendingFinals.delete(id); sharedFinals.delete(id); }
+    releaseOwned(id);
+    // A record the row refused (it holds a delivered report, a recorded
+    // refund, or another container's claim) is dropped without touching the
+    // issues index.
+    if (wrote) {
+      await afterFinal(id, body);
+      if (by === "replay" && body.status === "done") await deliverLater(id).catch((e) => log(`[human-checkout] delivery of ${id} after its replay failed: ${String(e?.message || e).slice(0, 120)}`));
+    }
+    return wrote;
   }
   // One replay at a time; a caller arriving during one waits for it.
   let replayingFinals = null;
@@ -520,23 +578,15 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     let landed = 0;
     try {
       await readyP();
-      for (const e of finalsDeadLetter.list()) {
+      // Claimed (one drainer across containers), each entry removed only
+      // once its write committed. A newer final for the same session (a
+      // refund recorded after its intent) replaces an older one.
+      landed = await finalsDeadLetter.drain(async (e) => {
         const { id, rec } = e.payload || {};
-        if (!SESSION_RE.test(String(id)) || !rec) { finalsDeadLetter.remove(e.id); continue; }
-        // A newer final for the same session (a refund recorded after its intent) replaces an older one.
-        const newest = pendingFinals.get(id);
-        const body = newest && Date.parse(newest.at || 0) > Date.parse(rec.at || 0) ? newest : rec;
-        const wrote = await pgPutFinal(id, body);
-        if (wrote) through(recPath(id), body);
-        const held = pendingFinals.get(id);
-        if (held && !(Date.parse(held.at || 0) > Date.parse(body.at || 0))) pendingFinals.delete(id);
-        releaseOwned(id);
-        // A record the row refused (it holds a delivered report or a recorded
-        // refund) is dropped without touching the issues index.
-        if (wrote) await afterFinal(id, body);
-        finalsDeadLetter.remove(e.id);
-        landed++;
-      }
+        if (!SESSION_RE.test(String(id)) || !rec) return "drop";
+        await bookJournaled(id, e.payload);
+        return "landed";
+      });
     } catch { /* the database is still away: the next tick retries */ }
     if (landed) log(`[human-checkout] landed ${landed} record(s) kept on local disk`);
     return landed;
@@ -663,18 +713,43 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     ? async (k) => { if (!k) return; await readyP(); through(FAILURES, await pgAppendFailure(k, now())); }
     : (k) => { if (!k) return; patchIndex(FAILURES, k, [...recentFailures(k), now()]); };
 
+  // A delivered report's effects: the ready email, the follow-ups and the
+  // sale. Run once per report, by the container whose record the buyer is
+  // answered from (see ONE OUTCOME above).
+  function deliver(sessionId, session, p, input) {
+    const email = session.customer_details?.email || session.customer_email;
+    // `kind` + baseUrl let the email carry the matching MONITOR offer with
+    // this target prefilled (the retention loop); a kind with no monitor
+    // simply gets no offer. See src/report-upgrade.js.
+    if (email) sendReportReadyEmail({ to: email, reportUrl: `${baseUrl}/r/${sessionId}`, productLabel: p.label, subjectOf: input, kind: p.kind, baseUrl }).catch(() => {});
+    // Post-purchase sequence (src/followups.js): the only moment the buyer's
+    // address is in hand next to what they bought. Never stored on the record.
+    if (email) { try { onDelivered?.({ sessionId, email, product: p.slug, kind: p.kind, label: p.label, input }); } catch { /* follow-ups never break delivery */ } }
+    // Book what Stripe actually collected (a promotion code lowers it), never the list price.
+    const paidUsd = Number.isFinite(Number(session.amount_total)) ? Number(session.amount_total) / 100 : p.price / 100;
+    try { onSale?.({ sessionId, product: p.slug, priceUsd: paidUsd, listPriceUsd: p.price / 100, paymentIntent: typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id || null }); } catch { /* accounting never breaks delivery */ }
+  }
+  // The same, for a record a replay booked: the session (the address, what
+  // was paid) is read again from Stripe, never kept in the journal.
+  async function deliverLater(sessionId) {
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const p = Object.hasOwn(HUMAN_PRODUCTS, String(session?.metadata?.product)) ? HUMAN_PRODUCTS[session.metadata.product] : null;
+    if (!p) return;
+    deliver(sessionId, session, p, unchunkInput(session.metadata || {}));
+  }
+
   // `seenClaimedAt` is the claimedAt of the stale claim this call is taking
   // over (null when it saw no record): the claim lands only if that is still
   // what the store holds, so a session is generated by exactly one job.
   function startJob(sessionId, session, p, input, { takeover = 0, seenClaimedAt = null } = {}) {
-    const claim = { status: "generating", kind: p.kind, slug: p.slug, at: new Date(now()).toISOString(), claimedAt: now(), takeovers: takeover, pid: process.pid };
+    const claim = { status: "generating", kind: p.kind, slug: p.slug, at: new Date(now()).toISOString(), claimedAt: now(), claimId: randomBytes(9).toString("base64url"), takeovers: takeover, pid: process.pid };
     const job = (async () => {
       try {
         // On the files these three steps stay synchronous (no await), so the
         // generation starts in the same turn as the claim, as it always did.
         const held = USE_PG ? await claimRec(sessionId, claim, seenClaimedAt) : claimRec(sessionId, claim, seenClaimedAt);
         if (!held) return { status: "generating", claimedElsewhere: true };
-        if (USE_PG) owned.set(sessionId, claim.claimedAt);
+        if (USE_PG) { owned.set(sessionId, claim.claimedAt); claimIds.set(sessionId, claim.claimId); }
         if (USE_PG) await patchIndex(INFLIGHT, sessionId, now()); else patchIndex(INFLIGHT, sessionId, now());
         const failKey = failKeyOf(session);
         const failures = USE_PG ? await recentFailures(failKey) : recentFailures(failKey);
@@ -701,19 +776,14 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
           };
           // The report exists and the upstream spend is made: from here a
           // database failure keeps the record for replay, never a refund.
-          if (USE_PG) await landFinal(sessionId, rec);
-          else { await writeRec(sessionId, rec); await patchIndex(INFLIGHT, sessionId, null); }
-          const email = session.customer_details?.email || session.customer_email;
-          // `kind` + baseUrl let the email carry the matching MONITOR offer with
-          // this target prefilled (the retention loop); a kind with no monitor
-          // simply gets no offer. See src/report-upgrade.js.
-          if (email) sendReportReadyEmail({ to: email, reportUrl: `${baseUrl}/r/${sessionId}`, productLabel: p.label, subjectOf: input, kind: p.kind, baseUrl }).catch(() => {});
-          // Post-purchase sequence (src/followups.js): the only moment the buyer's
-          // address is in hand next to what they bought. Never stored on the record.
-          if (email) { try { onDelivered?.({ sessionId, email, product: p.slug, kind: p.kind, label: p.label, input }); } catch { /* follow-ups never break delivery */ } }
-          // Book what Stripe actually collected (a promotion code lowers it), never the list price.
-          const paidUsd = Number.isFinite(Number(session.amount_total)) ? Number(session.amount_total) / 100 : p.price / 100;
-          try { onSale?.({ sessionId, product: p.slug, priceUsd: paidUsd, listPriceUsd: p.price / 100, paymentIntent: typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id || null }); } catch { /* accounting never breaks delivery */ }
+          if (USE_PG) {
+            const landed = await landFinal(sessionId, rec);
+            // On local disk only: the buyer is not answered and nothing is
+            // delivered until a replay books it (see ONE OUTCOME above).
+            if (landed === false) return { status: "generating" };
+            if (landed === "held") { log(`[human-checkout] ${sessionId}: the report was made but the row holds another outcome; nothing delivered from this container`); return { status: "generating" }; }
+          } else { await writeRec(sessionId, rec); await patchIndex(INFLIGHT, sessionId, null); }
+          deliver(sessionId, session, p, input);
           return rec;
         } catch (err) {
           log(`[human-checkout] report failed for ${sessionId} (${p.slug}): ${String(err?.message || err).slice(0, 160)}`);
@@ -747,13 +817,35 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     if (cached) return cached.status === "error" ? retryOwedRefund(sessionId, cached) : cached;
     if (inFlight.has(sessionId)) return { status: "generating" };
     const kept = USE_PG ? pendingFinals.get(sessionId) : null;
-    if (kept) return kept.status === "error" ? retryOwedRefund(sessionId, kept) : kept;
+    if (kept) {
+      // Only a record in a shared store is answered: one on this disk alone
+      // may yet be superseded by another container's takeover.
+      if (!sharedFinals.has(sessionId)) return { status: "generating" };
+      return kept.status === "error" ? retryOwedRefund(sessionId, kept) : kept;
+    }
     let disk = await readRec(sessionId);
-    // A stale claim with records waiting in this store's own journal (a
-    // restart on the same disk): land them first, then decide on the row.
+    // A stale claim with records waiting in the journal (this store's own
+    // disk after a restart, or another container's in Redis): land them
+    // first, then decide on the row.
     if (USE_PG && disk?.status === "generating" && now() - lastSignOf(disk) >= STALE_CLAIM_MS && finalsDeadLetter.size()) {
       await replayFinals();
       disk = await readRec(sessionId);
+    }
+    // Before taking a stale claim over: a final record for THIS claim in the
+    // shared journal (its owner answered the buyer from it) is booked, never
+    // regenerated or refunded. A journal that cannot be read is not "empty":
+    // the claim is left alone until it can be.
+    if (USE_PG && disk?.status === "generating" && now() - lastSignOf(disk) >= STALE_CLAIM_MS) {
+      let entries;
+      try { entries = await finalsDeadLetter.entries({ strict: true }); }
+      catch { return { status: "generating" }; }
+      const mine = entries.filter((e) => e.kind === "final" && e.payload?.id === sessionId && e.payload?.rec
+        && (e.payload.claimId == null || e.payload.claimId === disk.claimId));
+      mine.sort((a, b) => Date.parse(b.payload.rec.at || 0) - Date.parse(a.payload.rec.at || 0));
+      if (mine.length) {
+        await bookJournaled(sessionId, mine[0].payload);
+        disk = await readRec(sessionId);
+      }
     }
     if (disk && (disk.status === "done" || disk.status === "error")) {
       if (!USE_PG) writeRec(sessionId, disk); // warms the memory cache
@@ -798,7 +890,9 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       if (USE_PG) {
         if (inFlight.has(sessionId)) return { status: "generating" };
         let held = false;
-        try { held = await claimRec(sessionId, { status: "generating", kind: p.kind, slug: p.slug, at: new Date(now()).toISOString(), claimedAt: now(), takeovers: takeover, pid: process.pid }, seenClaimedAt); } catch { held = false; }
+        const claim = { status: "generating", kind: p.kind, slug: p.slug, at: new Date(now()).toISOString(), claimedAt: now(), claimId: randomBytes(9).toString("base64url"), takeovers: takeover, pid: process.pid };
+        try { held = await claimRec(sessionId, claim, seenClaimedAt); } catch { held = false; }
+        if (held) { owned.set(sessionId, claim.claimedAt); claimIds.set(sessionId, claim.claimId); } // the refund's records are written under this claim
         if (!held) {
           // The row moved since it was read: answer with what it holds now.
           let cur = null;
@@ -846,7 +940,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
 
   function peek(sessionId) {
     const valid = SESSION_RE.test(String(sessionId));
-    if (USE_PG) return (async () => { if (valid && pendingFinals.has(sessionId)) return pendingFinals.get(sessionId); const rec = valid ? await readRec(sessionId) : null; if (rec) return rec; if (inFlight.has(sessionId)) return { status: "generating" }; return null; })();
+    if (USE_PG) return (async () => { if (valid && pendingFinals.has(sessionId)) return sharedFinals.has(sessionId) ? pendingFinals.get(sessionId) : { status: "generating" }; const rec = valid ? await readRec(sessionId) : null; if (rec) return rec; if (inFlight.has(sessionId)) return { status: "generating" }; return null; })();
     const rec = mem.get(sessionId) || (valid ? readRec(sessionId) : null);
     if (rec) return rec;
     if (inFlight.has(sessionId)) return { status: "generating" };
