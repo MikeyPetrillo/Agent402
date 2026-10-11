@@ -4,7 +4,8 @@
 // for CAA/DNSSEC, advisory cross-origin headers, CSP quality, www/apex twin,
 // server-header severity, and JSON on the report link. Offline.
 import { readFileSync } from "node:fs";
-import { PROVIDER_DKIM_SELECTORS, providerForMx } from "../src/tools/network-kit.js";
+import { PROVIDER_DKIM_SELECTORS, providerForMx, NETWORK_TOOLS } from "../src/tools/network-kit.js";
+import { promises as dnsPromises } from "node:dns";
 import { analyzeSecurity, cspQuality } from "../src/tools/network-kit2.js";
 import { DNS_HOSTS, dnsHostFor, probeWwwPair, reportMailboxesFrom, dmarcFacts } from "../src/tools/domain-audit-kit.js";
 let pass = 0, fail = 0;
@@ -101,6 +102,26 @@ ok(/app\.get\("\/reports\/public\/:publicId", \(req, res, next\) => \{\s*if \(wa
   const g = dmarcFacts({ raw: "v=DMARC1; p=reject; sp=none; aspf=s; ruf=mailto:f@x.test; fo=1", policy: "reject", percent: 100, valid: true });
   ok(/tags present: p=reject sp=none aspf=s ruf=mailto:f@x.test fo=1/.test(g) && /defaults apply\): adkim \(default r\), ri \(default 86400\), pct \(default 100\)$/.test(g), "a record with explicit tags lists only the rest as defaults");
   ok(/record: "v=DMARC1; p=reject; sp=none; aspf=s; ruf=mailto:f@x.test; fo=1"/.test(g), "the raw record rides along verbatim");
+}
+
+// ---- DMARC facts through the caller path: the email-deliverability tool the
+// audit calls must hand over the record, or every tag reads as absent.
+{
+  const realResolve = dnsPromises.resolve;
+  const rec = "v=DMARC1; p=quarantine; sp=reject; pct=100; rua=mailto:dmarc@x.test; ruf=mailto:dmarc@x.test; fo=1";
+  dnsPromises.resolve = async (host, type) => {
+    if (type === "MX") return [{ exchange: "x-test.mail.protection.outlook.com", priority: 0 }];
+    if (type === "TXT" && host === "_dmarc.x.test") return [[rec]];
+    if (type === "TXT" && host === "x.test") return [["v=spf1 -all"]];
+    const e = new Error("queryTxt ENOTFOUND"); e.code = "ENOTFOUND"; throw e;
+  };
+  try {
+    const email = await NETWORK_TOOLS.find((t) => t.slug === "email-deliverability").handler({ domain: "x.test" });
+    ok(email.dmarc.raw === rec, "the email-deliverability tool returns the DMARC record it parsed");
+    const f = dmarcFacts(email.dmarc);
+    ok(/tags present: p=quarantine sp=reject pct=100 rua=mailto:dmarc@x.test ruf=mailto:dmarc@x.test fo=1/.test(f), "the audit's DMARC facts list the record's own tags on the real tool output");
+    ok(!/no ruf tag/.test(f) && !/sp \(not set/.test(f), "a published ruf and sp are never described as absent");
+  } finally { dnsPromises.resolve = realResolve; }
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
