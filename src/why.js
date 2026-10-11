@@ -1,9 +1,10 @@
-// /why - what is actually different about paying here, in one page, every
-// claim linked to the surface that proves it. Written for the agent-facing
-// surfaces (llms.txt, MCP instructions, package READMEs) to point at, so the
+// "Why pay here" - what is actually different about paying here, every claim
+// linked to the surface that proves it. Rendered as the #why section of /docs
+// (src/ledger-docs.js); /why answers a 301 to /docs#why. The agent-facing
+// surfaces (llms.txt, MCP instructions, package READMEs) point at it, so the
 // seven points live in ONE place and read the same everywhere. First-party
 // claims only: no comparisons, no third-party names, evergreen "500+" counts.
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
 import { RAILS } from "./rails.js";
 import { STRIPE_MIN_USD } from "./mpp-stripe.js";
@@ -67,59 +68,50 @@ export function whyPointsPlain() {
   return WHY_POINTS.map((w) => `${w.h} ${w.p}`);
 }
 
-export function whyPage(baseUrl) {
-  const canonical = `${baseUrl}/why`;
-  const title = "Why pay here: seven things that are different about Agent402";
-  const description =
-    "What is different about buying tools, models and reports from Agent402: pay actual usage under a quoted ceiling, failed calls not charged with the receipt as proof, one key for everything, no wallet needed, finished reports, routing that sources from other sellers, and proof you can check.";
+/** Where the seven points are published: the #why section of /docs. */
+export const WHY_PATH = "/docs#why";
 
-  const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
-    { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
-    { "@type": "ListItem", position: 2, name: "Why pay here", item: canonical },
-  ] };
-  const listLd = { "@type": "ItemList", "@id": `${canonical}#list`, name: title, itemListElement: WHY_POINTS.map((w, i) => ({ "@type": "ListItem", position: i + 1, name: w.h, description: w.p, url: `${canonical}#${w.id}` })) };
-  const articleLd = { "@type": "Article", "@id": `${canonical}#article`, headline: title, description, publisher: { "@type": "Organization", name: "Agent402", url: baseUrl }, mainEntityOfPage: canonical };
+/** JSON-LD for the #why section: the seven points as an ItemList anchored
+ * on the docs page. */
+export function whyJsonLd(baseUrl) {
+  const at = `${baseUrl}/docs`;
+  return {
+    "@context": "https://schema.org",
+    "@type": "ItemList",
+    "@id": `${at}#why`,
+    name: "Why pay here: seven things that are different about Agent402",
+    itemListElement: WHY_POINTS.map((w, i) => ({ "@type": "ListItem", position: i + 1, name: w.h, description: w.p, url: `${at}#why-${w.id}` })),
+  };
+}
 
-  const extraCss = `
-@media (max-width:900px){.why-2col{grid-template-columns:minmax(0,1fr)!important}}
+/** CSS for the #why section (appended to the docs page's extraCss). */
+export const WHY_SECTION_CSS = `
+  #why, .why-pt { scroll-margin-top: 110px; }
+  .why-pt { display:grid;grid-template-columns:150px minmax(0,1fr);gap:22px;padding:22px 0;border-top:1px solid var(--hairline); }
+  .ml-docs-main .why-pt h3 { font-family:var(--font-body);font-weight:600;font-size:var(--fs-xl);line-height:1.2;letter-spacing:-.01em;margin:0 0 8px;color:var(--ink); }
+  .ml-docs-main .why-pt p { font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 12px; }
+  .ml-docs-main .why-pt a.why-proof { font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px; }
+  @media (max-width:900px){ .why-pt { grid-template-columns:minmax(0,1fr);gap:6px; } }`;
+
+/** The "Why pay here" section of /docs: all seven points with their proof
+ * links, under the anchor #why. */
+export function whySectionHtml() {
+  const linkHtml = ([href, label]) => `<a class="why-proof" href="${esc(href)}">${esc(label)} &rarr;</a>`;
+  const points = WHY_POINTS.map((w) => `
+        <div class="why-pt" id="why-${esc(w.id)}">
+          <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);">${esc(w.kicker)}</div>
+          <div>
+            <h3>${esc(w.h)}</h3>
+            <p>${esc(w.p)}</p>
+            <div style="display:flex;gap:18px;flex-wrap:wrap;">${w.links.map(linkHtml).join("")}</div>
+          </div>
+        </div>`).join("");
+  return `<!-- WHY -->
+      <section>
+      <h2 id="why" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;">Why pay here.</h2>
+      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">Seven things that are different about paying here. Every claim links to the surface that proves it: what the server does, measured on the server, on the open protocols anyone can build on, x402 and MPP.</p>
+      <div style="border-bottom:1px solid var(--hairline);margin-bottom:44px;">${points}
+      </div>
+      </section>
 `;
-  const linkHtml = (href, label) =>
-    `<a href="${esc(href)}" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">${esc(label)} →</a>`;
-  const pointsHtml = WHY_POINTS.map((w) => `
-<section id="${w.id}" style="max-width:1180px;margin:0 auto;padding:44px 30px 0;">
-  <div class="why-2col" style="display:grid;grid-template-columns:220px 1fr;gap:30px;padding-bottom:44px;border-bottom:1px solid var(--hairline);">
-    <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);">${esc(w.kicker)}</div>
-    <div>
-      <h2 style="font-weight:700;font-size:var(--fs-2xl);line-height:1.08;letter-spacing:-.02em;margin:0 0 14px;color:var(--ink);">${esc(w.h)}</h2>
-      <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">${esc(w.p)}</p>
-      <div style="display:flex;gap:18px;flex-wrap:wrap;">${w.links.map(([href, label]) => linkHtml(href, label)).join("")}</div>
-    </div>
-  </div>
-</section>`).join("");
-
-  const body = `
-<header style="border-bottom:1px solid var(--hairline);">
-  <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">
-    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;">
-      <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">why pay here</span>
-    </nav>
-    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 22px;color:var(--ink);max-width:900px;">Seven things that are different about paying here.</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Every claim on this page links to the surface that proves it: what the server does, measured on the server, on the open protocols anyone can build on, x402 and MPP.</p>
-  </div>
-</header>
-${pointsHtml}
-<section style="max-width:1180px;margin:0 auto;padding:56px 30px 56px;">
-  <div style="background:var(--panel);border:1px solid var(--hairline);padding:44px 40px;">
-    <h2 style="font-weight:700;font-size:var(--fs-2xl);line-height:1.05;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Start with one call.</h2>
-    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 24px;max-width:600px;">Add the hosted MCP connector, pay per call in USDC from a wallet, or buy a finished report by card. Selling into it is open too: the tollbooth charges agents per request on your own API over both protocols.</p>
-    <div style="display:flex;gap:11px;flex-wrap:wrap;">
-      <a class="btn btn-primary" href="/docs#add">Add to your agent →</a>
-      <a href="/reports" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">GET A REPORT</a>
-      <a href="/sell" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">SELL YOUR API</a>
-    </div>
-  </div>
-</section>
-${ledgerFooterCompact()}`;
-
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/why", extraCss, jsonLd: [breadcrumbLd, listLd, articleLd], body });
 }

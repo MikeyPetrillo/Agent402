@@ -1,5 +1,5 @@
 // Machine Ledger — Docs landing page (/docs)
-// Quickstart, payment flow, three ways in, free tier, reference endpoints -
+// Quickstart, why pay here (#why; /why redirects to it), payment flow, three ways in, free tier, reference endpoints -
 // rendered inside the SAME sidebar+content shell every /docs/:slug wiki page
 // uses (src/docs.js), so the docs surface reads as one site with persistent
 // navigation instead of two unrelated layouts a click apart. Before this,
@@ -14,6 +14,7 @@ import { RAILS_PAREN } from "./rails.js";
 import { toolList } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 import { decideConfig } from "./decide/config.js";
+import { whySectionHtml, whyJsonLd, WHY_SECTION_CSS } from "./why.js";
 
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 
@@ -25,7 +26,7 @@ export function ledgerDocsPage(baseUrl, catalog) {
   const title = "Docs - Agent402 x402 + MCP server";
   const description = `Add ${fmtNum(totalCount)} x402 tools, most of them deterministic code, plus an OpenAI-compatible /v1 gateway to your agent in about a minute. No signup, no API key - start free with proof-of-work, settle ${RAILS_PAREN} when you scale.`;
 
-  const jsonLd = {
+  const articleLd = {
     "@context": "https://schema.org",
     "@type": "TechArticle",
     name: "Agent402.Tools Documentation",
@@ -37,9 +38,12 @@ export function ledgerDocsPage(baseUrl, catalog) {
       url: baseUrl,
     },
   };
+  // The "Why pay here" points live in this page's #why section (/why
+  // redirects here), so their ItemList rides along with the article.
+  const jsonLd = [articleLd, whyJsonLd(baseUrl)];
 
   const extraCss = `${DOCS_LAYOUT_CSS}
-  #quickstart, #how, #add, #free, #gateway, #endpoints { scroll-margin-top: 110px; }`;
+  #quickstart, #how, #add, #free, #gateway, #endpoints { scroll-margin-top: 110px; }${WHY_SECTION_CSS}`;
 
   const main = `
       <section>
@@ -59,6 +63,7 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
       <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:0 0 44px;">// an autonomous buyer discovers the catalog, gets quoted over HTTP 402, settles, and uses the result - zero humans.</p>
       </section>
 
+      ${whySectionHtml()}
       <!-- HOW -->
       <section>
       <h2 id="how" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 18px;">How payment works.</h2>

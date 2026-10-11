@@ -332,6 +332,9 @@ a { color: inherit; }
 .mlnav-g { position: relative; }
 .mlnav-g > .mlnav-dd { display: none; position: absolute; top: 100%; left: -18px; padding-top: 13px; z-index: 60; }
 .mlnav-g:hover > .mlnav-dd, .mlnav-g:focus-within > .mlnav-dd { display: block; }
+.mlnav-g--end > .mlnav-dd { left: auto; right: -18px; }
+.mlnav-cols { display: grid; grid-template-columns: 1fr 1fr; }
+.mlnav-cols > span + span { border-left: 1px solid var(--hairline); }
 .mlnav-row { display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink); }
 .mlnav-row--sep { border-bottom: 1px solid var(--hairline); }
 .mlnav-label { display:block;padding:10px 16px 8px;font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--faint);border-bottom:1px solid var(--hairline); }
@@ -539,8 +542,10 @@ const NAV_ZONES = [
   ],
   [
     { href: "/sell", label: "Sell", panel: "sell" },
-    { href: "/docs", label: "Docs", panel: "docs" },
-    { href: "/why", label: "Why", panel: "why" },
+    // Docs carries the "why pay here" points (/docs#why) and the concept
+    // pages; there is no separate Why entry. Last item, so its panel opens
+    // right-aligned.
+    { href: "/docs", label: "Docs", panel: "docs", align: "end" },
   ],
 ];
 
@@ -659,40 +664,37 @@ function peoplePanelNav() {
             </span>`;
 }
 
-// Docs dropdown (2026-09-09): the build pages. blog, changelog, quickstart
-// and guides had their only chrome link in the homepage's retired
-// seven-column footer and went unlinked for a day.
+// Docs dropdown: two columns. Left, the build pages (blog, changelog,
+// quickstart and guides have their chrome link here). Right, why pay here
+// (the #why section of /docs, seven points each with its proof) and the
+// concept pages: what x402, MPP and agentic finance are.
 function docsPanelNav() {
   return `<span class="mlnav-dd">
-              <span style="display:block;width:300px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
+              <span style="display:block;width:560px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
+                <span class="mlnav-cols">
+                <span style="display:block;">
                 <span class="mlnav-label">BUILD ON AGENT402</span>
                 <a href="/docs" class="mlnav-row"><span style="font-weight:700;">docs</span><span class="mlnav-faint">API, MCP, SDKs</span></a>
-                <a href="/quickstart" class="mlnav-row"><span style="font-weight:700;">quickstart</span><span class="mlnav-faint">first paid call in a minute</span></a>
+                <a href="/quickstart" class="mlnav-row"><span style="font-weight:700;">quickstart</span><span class="mlnav-faint">first paid call</span></a>
                 <a href="/guides" class="mlnav-row"><span style="font-weight:700;">guides</span><span class="mlnav-faint">hosts, router, selling</span></a>
-                <a href="/integrations" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">integrations</span><span class="mlnav-faint">frameworks and adapters</span></a>
-                <a href="/x402-test" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">test your client</span><span class="mlnav-faint">why a payment was refused</span></a>
+                <a href="/integrations" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">integrations</span><span class="mlnav-faint">frameworks</span></a>
+                <a href="/x402-test" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">test your client</span><span class="mlnav-faint">refusal diagnostics</span></a>
                 <a href="/blog" class="mlnav-row"><span style="font-weight:700;">blog</span><span class="mlnav-faint"></span></a>
                 <a href="/changelog" class="mlnav-row"><span style="font-weight:700;">changelog</span><span class="mlnav-faint">what shipped</span></a>
-                <a href="/docs" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">read the docs</span><span style="opacity:.7;">→</span></a>
-              </span>
-            </span>`;
-}
-
-// Why dropdown (2026-09-09, the operator: the concept pages belong here, not
-// under Docs): why pay here, then what x402, MPP and agentic finance are.
-function whyPanelNav() {
-  return `<span class="mlnav-dd">
-              <span style="display:block;width:300px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
+                </span>
+                <span style="display:block;">
                 <span class="mlnav-label">WHY PAY HERE</span>
-                <a href="/why" class="mlnav-row"><span style="font-weight:700;">seven things</span><span class="mlnav-faint">each with its proof</span></a>
-                <a href="/proof" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">receipts</span><span class="mlnav-faint">metered calls against their quotes</span></a>
+                <a href="/docs#why" class="mlnav-row"><span style="font-weight:700;">seven things</span><span class="mlnav-faint">each with its proof</span></a>
+                <a href="/proof" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">receipts</span><span class="mlnav-faint">calls vs quotes</span></a>
                 <span class="mlnav-label">WHAT THIS IS</span>
-                <a href="/101" class="mlnav-row"><span style="font-weight:700;">x402 &amp; MPP 101</span><span class="mlnav-faint">the walkthrough</span></a>
-                <a href="/what-is-x402" class="mlnav-row"><span style="font-weight:700;">what is x402</span><span class="mlnav-faint">the HTTP 402 protocol</span></a>
-                <a href="/what-is-mpp" class="mlnav-row"><span style="font-weight:700;">what is MPP</span><span class="mlnav-faint">the Payment auth scheme</span></a>
+                <a href="/101" class="mlnav-row"><span style="font-weight:700;">x402 &amp; MPP 101</span><span class="mlnav-faint">walkthrough</span></a>
+                <a href="/what-is-x402" class="mlnav-row"><span style="font-weight:700;">what is x402</span><span class="mlnav-faint">HTTP 402</span></a>
+                <a href="/what-is-mpp" class="mlnav-row"><span style="font-weight:700;">what is MPP</span><span class="mlnav-faint">Payment auth</span></a>
                 <a href="/agentic-finance" class="mlnav-row"><span style="font-weight:700;">agentic finance</span><span class="mlnav-faint">the category</span></a>
                 <a href="/glossary" class="mlnav-row"><span style="font-weight:700;">glossary</span><span class="mlnav-faint">the terms</span></a>
-                <a href="/why" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">why pay here</span><span style="opacity:.7;">→</span></a>
+                </span>
+                </span>
+                <a href="/docs" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">read the docs</span><span style="opacity:.7;">→</span></a>
               </span>
             </span>`;
 }
@@ -725,7 +727,7 @@ function sellPanelHtml() {
             </span>`;
 }
 
-const PANEL_HTML = { marketplace: marketPanelNav, people: () => peoplePanelNav(), sell: sellPanelHtml, tools: () => ourToolsPanelNav(), docs: () => docsPanelNav(), why: () => whyPanelNav() };
+const PANEL_HTML = { marketplace: marketPanelNav, people: () => peoplePanelNav(), sell: sellPanelHtml, tools: () => ourToolsPanelNav(), docs: () => docsPanelNav() };
 
 function directLinkHtml(l, activePath) {
   const active = l.href === activePath;
@@ -738,7 +740,7 @@ const MARKET_GLYPH = `<svg class="ml-nav-glyph" width="13" height="13" viewBox="
 function groupTriggerHtml(item, active, panelHtml) {
   const glyph = item.icon === "market" ? `${MARKET_GLYPH} ` : "";
   const title = item.title ? ` title="${esc(item.title)}" aria-label="${esc(item.title)}"` : "";
-  return `<span class="mlnav-g" style="display:inline-flex;">
+  return `<span class="mlnav-g${item.align === "end" ? " mlnav-g--end" : ""}" style="display:inline-flex;">
         <a class="ml-nav-link${active ? " ml-nav-link-on" : ""}${item.icon ? " ml-nav-link-market" : ""}" href="${item.href}"${title}>${glyph}${item.label} <span style="font-size:var(--fs-2xs);">▾</span></a>
         ${panelHtml}
       </span>`;
@@ -802,9 +804,10 @@ function mobileMenuHtml(chainInfo, activePath) {
     </div>
     <div class="ml-mm-h">More</div>
     <div class="ml-mm-group">
-      ${mmLink("/why", "why pay here", activePath === "/why")}
       ${mmLink("/markets", "markets · crypto data", activePath === "/markets")}
       ${mmLink("/docs", "docs", activePath === "/docs")}
+      ${mmLink("/docs#why", "why pay here · seven things, each with its proof", false)}
+      ${mmLink("/proof", "receipts", activePath === "/proof")}
       ${mmLink("/101", "x402 & MPP 101 · walkthrough", activePath === "/101")}
       ${mmLink("/what-is-x402", "what is x402 / MPP", activePath === "/what-is-x402")}
       ${mmLink("/agentic-finance", "agentic finance", activePath === "/agentic-finance")}
@@ -841,8 +844,7 @@ function nav(activePath) {
     // inside the marketplace panel either.
     marketplace: new Set(["/marketplace", "/mpp-marketplace", "/leaderboard", "/revenue", "/marketplace/tools", ...chainInfo.chains.map((c) => c.href)]),
     people: new Set(["/reports", "/monitors", "/credits"]),
-    docs: new Set(["/docs", "/quickstart", "/guides", "/integrations", "/blog", "/changelog"]),
-    why: new Set(["/why", "/proof", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
+    docs: new Set(["/docs", "/quickstart", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
     sell: new Set(["/sell", "/tollbooth", "/tollbooth/cloud", "/contribute"]),
     tools: new Set(["/tools", "/skills", "/playground", "/pricing"]),
   };
@@ -914,11 +916,11 @@ export function ledgerFooterCompact() {
   <div style="max-width:1180px;margin:0 auto;padding:26px 30px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
       <a href="/" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);">${brandMark(20, "f")}<span style="font-weight:600;font-size:var(--fs-md);font-family:var(--font-body);letter-spacing:-.01em;">Agent402</span></a>
-      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/reports" style="color:var(--muted);text-decoration:none;">reports</a><a href="/monitors" style="color:var(--muted);text-decoration:none;">monitors</a><a href="/tools" style="color:var(--muted);text-decoration:none;">catalog</a>${DECIDE_LIVE ? `<a href="/decide" style="color:var(--muted);text-decoration:none;">decide</a>` : ""}<a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/marketplace" style="color:var(--muted);text-decoration:none;">marketplace</a><a href="/revenue" style="color:var(--muted);text-decoration:none;">transactions</a><a href="/sell" style="color:var(--muted);text-decoration:none;">sell</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a><a href="/why" style="color:var(--muted);text-decoration:none;">why</a><a href="/company" style="color:var(--muted);text-decoration:none;">company</a></span>
+      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/reports" style="color:var(--muted);text-decoration:none;">reports</a><a href="/monitors" style="color:var(--muted);text-decoration:none;">monitors</a><a href="/tools" style="color:var(--muted);text-decoration:none;">catalog</a>${DECIDE_LIVE ? `<a href="/decide" style="color:var(--muted);text-decoration:none;">decide</a>` : ""}<a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/marketplace" style="color:var(--muted);text-decoration:none;">marketplace</a><a href="/revenue" style="color:var(--muted);text-decoration:none;">transactions</a><a href="/sell" style="color:var(--muted);text-decoration:none;">sell</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--hairline);">
-      <span>© 2026 Havok Holdings LLC · <a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:underline;">mike@agent402.tools</a></span>
-      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/status" style="color:var(--muted);text-decoration:none;">status</a><a href="/security" style="color:var(--muted);text-decoration:none;">security</a><a href="/transparency" style="color:var(--muted);text-decoration:none;">transparency</a><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="/company#contact" style="color:var(--muted);text-decoration:none;">contact</a><a href="${REPO_URL}" rel="noopener" aria-label="GitHub" title="GitHub" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${GITHUB_ICON_SVG}</a><a href="https://x.com/Agent402Tools" rel="noopener" aria-label="X" title="X" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${X_ICON_SVG}</a></span>
+      <span>© 2026 <a href="https://havok.holdings" rel="noopener" style="color:var(--muted);text-decoration:underline;">Havok Holdings LLC</a> · <a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:underline;">mike@agent402.tools</a></span>
+      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/status" style="color:var(--muted);text-decoration:none;">status</a><a href="/security" style="color:var(--muted);text-decoration:none;">security</a><a href="/transparency" style="color:var(--muted);text-decoration:none;">transparency</a><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="${REPO_URL}" rel="noopener" aria-label="GitHub" title="GitHub" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${GITHUB_ICON_SVG}</a><a href="https://x.com/Agent402Tools" rel="noopener" aria-label="X" title="X" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${X_ICON_SVG}</a></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:10px;">
       <span style="letter-spacing:.1em;text-transform:uppercase;">for agents</span>

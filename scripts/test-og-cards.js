@@ -16,13 +16,13 @@ const fail = (m) => { console.error("FAIL:", m); try { proc?.kill("SIGKILL"); } 
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
 
 // ---- pure: the path -> section rule -------------------------------------
-const cases = [["/why", "why"], ["/docs", "docs"], ["/tools", "tools"], ["/tools/attest", null], ["/guides/agent-hosts", "guides"],
+const cases = [["/why", null], ["/docs", "docs"], ["/tools", "tools"], ["/tools/attest", null], ["/guides/agent-hosts", "guides"],
   ["/reports/sample/dossier", "reports"], ["/reports/insider/NVDA", "reports"], ["/base", "chain-base"], ["/robinhood", "chain-robinhood"],
   ["/skills/crypto-dossier", "skills"], ["/company", null], ["/", null], ["https://agent402.tools/markets?x=1", "markets"], ["/monitors/thanks", "monitors"]];
 for (const [p, want] of cases) ok(ogSectionFor(p) === want, `ogSectionFor(${p}) = ${want}`);
 { // CodeQL #192: a trailing-slash regex on caller-shaped input backtracks polynomially; the strip is linear and bounded now.
-  const t0 = Date.now(); const r = ogSectionFor("/why" + "/".repeat(200000)); const ms = Date.now() - t0;
-  ok(r === "why" && ms < 200, `200k trailing slashes resolve in ${ms} ms (linear, bounded)`);
+  const t0 = Date.now(); const r = ogSectionFor("/docs" + "/".repeat(200000)); const ms = Date.now() - t0;
+  ok(r === "docs" && ms < 200, `200k trailing slashes resolve in ${ms} ms (linear, bounded)`);
 }
 const ids = ogSectionIds();
 ok(ids.length >= 30 && new Set(ids).size === ids.length, `${ids.length} distinct section ids`);
@@ -54,7 +54,8 @@ let up = false;
 for (let i = 0; i < 120 && !up; i++) { await new Promise((r) => setTimeout(r, 500)); try { up = (await fetch(`${BASE}/health`)).ok; } catch {} }
 if (!up) fail("server did not boot");
 const og = async (p) => (/property="og:image" content="([^"]+)"/.exec(await (await fetch(BASE + p)).text()) || [])[1] || "";
-ok(/\/og\/why\.png\?v=/.test(await og("/why")), "/why serves /og/why.png as its og:image");
+ok(/\/og\/docs\.png\?v=/.test(await og("/docs")), "/docs serves /og/docs.png as its og:image");
+ok(!ids.includes("why"), "no section card for /why (it redirects to /docs#why)");
 ok(/\/og\/chain-base\.png/.test(await og("/base")), "/base serves the chain card");
 ok(/\/og\/reports\.png/.test(await og("/reports/sample/dossier")), "a sample report page serves the reports card");
 ok(/\/tools\/attest\/card\.png/.test(await og("/tools/attest")), "a tool page keeps its own card (explicit ogImage wins)");
@@ -64,7 +65,7 @@ const svgRes = await fetch(`${BASE}/og/markets.svg`);
 ok(svgRes.status === 200 && /svg\+xml/.test(svgRes.headers.get("content-type")), "/og/markets.svg answers 200 image/svg+xml");
 const missing = await fetch(`${BASE}/og/nope.png`);
 ok(missing.status === 404, "an unknown section id is a 404, not a card");
-const png = await fetch(`${BASE}/og/why.png`, { redirect: "manual" });
-ok(png.status === 200 || png.status === 302, `/og/why.png renders (${png.status}: png when Chromium is present, svg redirect otherwise)`);
+const png = await fetch(`${BASE}/og/docs.png`, { redirect: "manual" });
+ok(png.status === 200 || png.status === 302, `/og/docs.png renders (${png.status}: png when Chromium is present, svg redirect otherwise)`);
 proc.kill("SIGKILL");
 console.log(`\n${pass} passed`);

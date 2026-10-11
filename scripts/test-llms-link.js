@@ -34,7 +34,7 @@ try {
   ok(up, "server booted");
   // One page from each kind of shell: ledger shell, hand-written heads, the
   // legacy chrome, a tool page, and a 404.
-  for (const p of ["/", "/tools", "/tools/hash", "/revenue", "/sell", "/why", "/crawler", "/what-is-x402", "/no-such-page"]) {
+  for (const p of ["/", "/tools", "/tools/hash", "/revenue", "/sell", "/docs", "/crawler", "/what-is-x402", "/no-such-page"]) {
     const r = await fetch(`${B}${p}`);
     const html = await r.text();
     ok(html.split(LLMS_LINK_TAG).length === 2, `${p} carries the /llms.txt link tag exactly once`);

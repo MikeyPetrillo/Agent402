@@ -2051,7 +2051,7 @@ export const SKILL_PACKS = [
     useCase:
       "An SEO agent or content reviewer needs to evaluate a page: extract the clean text and then run keyword analysis to assess topic focus and density. Chain mode ensures keywords runs on the extracted text, not raw HTML.",
     promptArgs: [
-      { name: "url", description: "URL of the page to grade", required: true, substitute: "https://agent402.tools/why" },
+      { name: "url", description: "URL of the page to grade", required: true, substitute: "https://agent402.tools/docs" },
     ],
     toolSlugs: ["extract", "keywords", "readability-score"],
     workflow: [
@@ -2060,7 +2060,7 @@ export const SKILL_PACKS = [
       "Call readability-score on the extracted text - Flesch reading ease and grade level put a number on how accessible the writing is, the other half of a content grade beyond topic focus.",
     ],
     claudePrompt:
-      "Grade the content quality of https://agent402.tools/why using Agent402's content-grade skill pack: (1) extract the readable content, (2) run keyword analysis on the extracted text, (3) score readability with readability-score. Report the top keywords, density, reading-ease/grade level, and whether the content is well-focused.",
+      "Grade the content quality of https://agent402.tools/docs using Agent402's content-grade skill pack: (1) extract the readable content, (2) run keyword analysis on the extracted text, (3) score readability with readability-score. Report the top keywords, density, reading-ease/grade level, and whether the content is well-focused.",
   },
 
 

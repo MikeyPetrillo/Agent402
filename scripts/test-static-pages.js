@@ -19,6 +19,8 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { WHY_POINTS } from "../src/why.js";
+import { esc } from "../src/ledger-chrome.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 3089;
@@ -49,7 +51,7 @@ const PAGES = [
   { path: "/revenue",     titleSubstr: "Transactions" },
   { path: "/what-is-mpp", titleSubstr: "MPP" },
   { path: "/agentic-finance", titleSubstr: "Agentic Finance" },
-  { path: "/why",          titleSubstr: "Why pay here" },
+  { path: "/docs",         titleSubstr: "Docs" },
   { path: "/x402-test",    titleSubstr: "Test your x402 client" },
   { path: "/digest",      titleSubstr: "Weekly spend digest" },
   { path: "/markets",     titleSubstr: "market data" },
@@ -203,6 +205,42 @@ try {
     ok(sells.length === 0, `credits are off and no page or card offers to sell them${sells.length ? ` - ${sells.join(" | ")}` : ""}`);
   } else {
     console.log("skip - this boot sells credits (CREDITS_SALES on); the off-state copy check needs it off");
+  }
+}
+
+// --- "Why pay here" lives in /docs (#why); /why is a redirect to it ----------
+{
+  const res = await fetch(`${BASE}/why`, { redirect: "manual" });
+  ok(res.status === 301, `/why → 301 (got ${res.status})`);
+  ok(res.headers.get("location") === "/docs#why", `/why Location is /docs#why (got ${res.headers.get("location")})`);
+  const docs = await (await fetch(`${BASE}/docs`)).text();
+  const m = docs.match(/<h2 id="why"[\s\S]*?<\/section>/);
+  ok(m != null, "/docs renders the #why section");
+  const why = m?.[0] || "";
+  ok(WHY_POINTS.length === 7, `seven why points (got ${WHY_POINTS.length})`);
+  for (const w of WHY_POINTS) {
+    ok(why.includes(`id="why-${w.id}"`) && why.includes(`<h3>${esc(w.h)}</h3>`), `/docs#why carries the ${w.id} claim`);
+    for (const [href] of w.links) ok(why.includes(`href="${esc(href)}"`), `/docs#why ${w.id} links its proof ${href}`);
+  }
+  ok(docs.indexOf('id="why"') < docs.indexOf('id="how"'), "the #why section sits above how payment works");
+  for (const sm of ["/sitemap.xml", "/sitemap-pages.xml"]) {
+    const xml = await (await fetch(`${BASE}${sm}`)).text();
+    ok(!/\/why<\/loc>/.test(xml), `${sm} does not list /why`);
+  }
+}
+
+// --- nav and footer: no /why or /company link; the entity links out ---------
+{
+  for (const p of ["/", "/pricing", "/docs", "/company"]) {
+    const html = await (await fetch(`${BASE}${p}`)).text();
+    const navHtml = (html.match(/<nav style="border-bottom[\s\S]*?<\/nav>/) || [""])[0];
+    const footHtml = (html.match(/<footer[\s\S]*?<\/footer>/) || [""])[0];
+    ok(navHtml.length > 1000 && footHtml.length > 500, `${p} renders the site nav and footer`);
+    const chrome = navHtml + footHtml;
+    ok(!/href="\/why["#]/.test(chrome), `${p} nav/footer carries no /why link`);
+    ok(!/href="\/company["#]/.test(chrome), `${p} nav/footer carries no /company link`);
+    ok(chrome.includes('href="/docs#why"'), `${p} nav reaches why pay here at /docs#why`);
+    ok(/© \d{4} <a href="https:\/\/havok\.holdings" rel="noopener"[^>]*>Havok Holdings LLC<\/a>/.test(footHtml), `${p} footer links the copyright entity to https://havok.holdings`);
   }
 }
 

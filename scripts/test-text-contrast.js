@@ -19,7 +19,7 @@
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-text-contrast.js
 import { chromium } from "playwright";
 const BASE = process.env.TARGET_URL || "http://127.0.0.1:3000";
-const PAGES = (process.env.CONTRAST_PAGES || "/,/sell,/status,/reports,/monitors,/why,/pricing,/credits,/docs,/marketplace").split(",").map((p) => p.trim()).filter(Boolean);
+const PAGES = (process.env.CONTRAST_PAGES || "/,/sell,/status,/reports,/monitors,/pricing,/credits,/docs,/marketplace").split(",").map((p) => p.trim()).filter(Boolean);
 const THEMES = ["light", "dark"];
 const WIDTHS = [390, 1280];
 const MIN_NORMAL = 4.5, MIN_LARGE = 3;

@@ -289,7 +289,6 @@ import { quickstartPage } from "./quickstart.js";
 import { whatIsX402Page } from "./what-is-x402.js";
 import { whatIsMppPage } from "./what-is-mpp.js";
 import { agenticFinancePage } from "./agentic-finance.js";
-import { whyPage } from "./why.js";
 import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
 import { crawlerPage } from "./crawler-page.js";
@@ -3357,9 +3356,11 @@ app.get("/what-is-mpp", (_req, res) => htmlCache(res, 300, 900).send(whatIsMppPa
 // positions under; DefinedTerm + Article + FAQPage structured data.
 app.get("/agentic-finance", (_req, res) => htmlCache(res, 300, 900).send(agenticFinancePage(BASE_URL)));
 app.get("/aifi", (_req, res) => res.redirect(301, "/agentic-finance"));
-// /why - the seven first-party differences, every claim linked to its proof surface
-// (src/why.js); llms.txt, the MCP instructions and the package READMEs point here.
-app.get("/why", (_req, res) => htmlCache(res, 300, 900).send(whyPage(BASE_URL)));
+// /why - the seven first-party differences now live in the #why section of
+// /docs (src/why.js renders it). Older links and published package READMEs
+// still name /why, so it answers a permanent redirect to the section. The
+// fragment is literal: a browser applies it after following the redirect.
+app.get("/why", (_req, res) => res.redirect(301, "/docs#why"));
 // The conformance front door. The classifier that answers a failing client has
 // shipped since August; this is the page that tells anyone it exists.
 app.get("/x402-test", (_req, res) => htmlCache(res, 300, 900).send(x402TestPage(BASE_URL)));

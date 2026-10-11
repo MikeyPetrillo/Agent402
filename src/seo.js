@@ -199,7 +199,6 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
     { loc: `${baseUrl}/agentic-finance`, priority: "0.9" },
-    { loc: `${baseUrl}/why`, priority: "0.8" },
     { loc: `${baseUrl}/x402-test`, priority: "0.7" },
     { loc: `${baseUrl}/markets`, priority: "0.8" },
     ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
@@ -282,7 +281,6 @@ export function sitemapPages(baseUrl, catalog) {
     { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
     { loc: `${baseUrl}/agentic-finance`, priority: "0.9" },
-    { loc: `${baseUrl}/why`, priority: "0.8" },
     { loc: `${baseUrl}/x402-test`, priority: "0.7" },
     { loc: `${baseUrl}/markets`, priority: "0.8" },
     ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
@@ -459,7 +457,7 @@ Base URL: ${baseUrl}
 
 **Open source and two-sided.** Agent402 is the open-source, self-hostable applied layer of Agentic Finance (agents paying and getting paid on their own) for x402 and MPP (+ MCP server): 500+ pay-per-call tools for agents to buy (live web search + cited answers, browser rendering, PDFs, OCR, images, live financial / crypto / macro data, SEC EDGAR, wallet-keyed memory, a metered model gateway, finished reports), a neutral cross-seller index and on-chain leaderboard for the whole x402 ecosystem, and \`agent402-tollbooth\` for API sellers to charge AI crawlers per request. Maintainer: Havok Holdings LLC. Read every line and run it yourself: ${REPO_URL}
 
-**Why pay here (seven first-party differences, each proven on a live surface - full page: /why).** ${whyPointsPlain().map((line, i) => `(${i + 1}) ${line}`).join(" ")} Metered usage pricing: \`POST /v1/metered/chat/completions\` quotes each request from its body; finished reports and monitors: /reports and /monitors; sourcing from other sellers: \`POST /api/route/execute\`; proof: /status and /revenue.
+**Why pay here (seven first-party differences, each proven on a live surface - full section: /docs#why).** ${whyPointsPlain().map((line, i) => `(${i + 1}) ${line}`).join(" ")} Metered usage pricing: \`POST /v1/metered/chat/completions\` quotes each request from its body; finished reports and monitors: /reports and /monitors; sourcing from other sellers: \`POST /api/route/execute\`; proof: /status and /revenue.
 
 **This is machine-to-machine commerce, and you can verify it.** Run the full loop with no human and no funds - \`node scripts/demo-payment.js\` discovers the catalog, gets quoted over HTTP 402, pays with compute, and uses the result. Every stablecoin call settles on-chain on the rail the buyer chose, to the payTo its 402 named (on Base that is agent402.base.eth, verifiable on Basescan); live economy stats are at ${baseUrl}/api/stats and a machine-readable reliability report (each claim with a verification URL) at ${baseUrl}/api/reliability.
 

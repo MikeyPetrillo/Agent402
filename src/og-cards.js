@@ -2,7 +2,7 @@
 // card's own layout (obsidian ground, two-line display headline, one sentence,
 // a terminal panel with three mono lines, a badge column on the right).
 //
-// Why (2026-09-14): every section page (/why, /docs, /marketplace, /reports,
+// Why (2026-09-14): every section page (/docs, /marketplace, /reports,
 // /markets, /sell, /tollbooth, /proof, ...) served the SAME /card.png as its
 // og:image, so every link preview on X, Slack and Discord looked identical -
 // twelve posts in a day, twelve copies of the same picture - while only the
@@ -29,7 +29,7 @@ const CHAIN_KEYS = RAILS.map((r) => ({ key: r.name.toLowerCase().replace(/ chain
 
 /** Exact path -> section id. Prefix rules live in ogSectionFor. */
 const EXACT = {
-  "/why": "why", "/docs": "docs", "/tools": "tools", "/marketplace": "marketplace", "/mpp-marketplace": "mpp-marketplace",
+  "/docs": "docs", "/tools": "tools", "/marketplace": "marketplace", "/mpp-marketplace": "mpp-marketplace",
   "/markets": "markets", "/decide": "decide", "/reports": "reports", "/monitors": "monitors", "/proof": "proof", "/leaderboard": "leaderboard",
   "/sell": "sell", "/tollbooth": "tollbooth", "/skills": "skills", "/x402-test": "x402-test", "/digest": "digest",
   "/security": "security", "/revenue": "revenue", "/transparency": "transparency", "/status": "status", "/credits": "credits",
@@ -79,8 +79,6 @@ function sectionCopy(id, ctx) {
     badge: ["x402 · MPP · card", `${rails} rails · USDC · USDG`],
   };
   const C = {
-    why: { h1: "Seven claims,", h2: "each with its proof.", sub: "What is different here, and the surface that shows it.",
-      lines: [["$ curl agent402.tools/why", "faint"], ["usage priced under a quoted ceiling", "muted"], ["a failed call is not charged, and the receipt proves it", "accent"]], badge: ["x402 · MPP · card", "receipts on every answer"] },
     docs: { h1: "Every route,", h2: "one document.", sub: "OpenAPI, prices, the 402 you will get and the receipt you will hold.",
       lines: [["$ curl agent402.tools/openapi.json", "faint"], [`${n} operations, typed 200s, one price each`, "muted"], ["x402 · MPP · credits key on the same routes", "accent"]], badge: ["OpenAPI 3.1", `${rails} rails`] },
     tools: { h1: `${n} tools,`, h2: "priced in cents.", sub: "Search the catalog, read the price, pay per call. No account.",
