@@ -49,7 +49,8 @@ export const LINKEDIN_SIZES = {
   ],
 };
 export const LINKEDIN_LIMITS = { headlineChars: 100, postChars: 3000, hashtagsMax: 5, imageMaxBytes: 3 * 1024 * 1024, coverOptimal: "1920x1080", coverMax: "7680x4320", formats: "JPG, PNG, static GIF" };
-const WORDS = { short: "~600", standard: "~1,000", long: "~1,500" };
+export const LINKEDIN_WORDS = { short: "~600", standard: "~1,000", long: "~1,500" };
+const WORDS = LINKEDIN_WORDS;
 const SYNTH_TIMEOUT_MS = 150_000;
 const IMAGE_TIMEOUT_MS = 60_000;
 const MAX_TOPIC = 600, MAX_ANGLE = 400, MAX_SHORT = 200;

@@ -1,11 +1,9 @@
 #!/usr/bin/env node
 // A report synthesis that stops for length is retried once inside the budget
 // and, failing that, trimmed to a complete block and marked. Offline.
-import { DOMAIN_AUDIT_TIERS } from "../src/tools/domain-audit-kit.js";
-import { RECALL_TIERS } from "../src/tools/recall-report-kit.js";
-import { FILING_TIERS } from "../src/tools/filing-watch-kit.js";
-import { TOKEN_BRIEF_TIERS } from "../src/tools/token-brief-kit.js";
-import { TICKER_PACK_TIERS } from "../src/tools/ticker-pack-kit.js";
+import { readFileSync, readdirSync } from "node:fs";
+import { REPORT_TIERS } from "../src/report-tiers.js";
+import { LINKEDIN_WORDS } from "../src/tools/linkedin-article-kit.js";
 import { stoppedForLength, trimToCompleteBlock, completeSynthesis, proseOf, SHORTENED_NOTE, lengthRetryNote } from "../src/report-synthesis.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -40,20 +38,47 @@ ok(trimToCompleteBlock("only a partial line with no break") === "only a partial 
   ok(r.sd.choices[0].message.content === "first draft cut" && r.cutShort === true, "an empty retry keeps the first draft");
   ok(/shorter/.test(lengthRetryNote(null)) && !/undefined|null/.test(lengthRetryNote(null)), "without a word budget the note still asks for shorter");
 }
-// Budget headroom: these tiers' first synthesis stopped for length at about 3
-// output tokens per target word (tables, recall numbers, figures), and the
-// domain audit and recall report stopped again on the retry, so a sold report
-// shipped shortened. Each cap now carries at least 3.5 tokens per target word.
-for (const [slug, t] of Object.entries({ ...DOMAIN_AUDIT_TIERS, ...RECALL_TIERS, ...FILING_TIERS, ...TOKEN_BRIEF_TIERS, ...TICKER_PACK_TIERS })) {
-  const words = Number(String(t.words).replace(/[^0-9]/g, ""));
-  ok(words > 0 && t.synthMaxTokens / words >= 3.5, `${slug}: synthesis cap ${t.synthMaxTokens} carries >= 3.5 tokens per target word (${t.words})`);
+// Budget headroom: report syntheses stopped for length at about 3 output
+// tokens per target word (tables, recall numbers, figures), stopped again on
+// the retry, and a sold report shipped shortened. Every tier in the registry
+// of priced reports (src/report-tiers.js, so a new report kit is covered the
+// moment it is priced) carries at least 3.5 tokens per target word. The
+// LinkedIn article takes a length option, so its longest target is the one
+// checked.
+const wordsOf = (w) => Number(String(w ?? "").replace(/[^0-9]/g, ""));
+const tierWords = (slug, t) => (t.words ? wordsOf(t.words) : slug === "linkedin-article" ? Math.max(...Object.values(LINKEDIN_WORDS).map(wordsOf)) : 0);
+const reportSlugs = Object.keys(REPORT_TIERS);
+ok(reportSlugs.length >= 18, `the report-tier registry lists every priced report (${reportSlugs.length})`);
+for (const [slug, t] of Object.entries(REPORT_TIERS)) {
+  const words = tierWords(slug, t);
+  ok(Number.isInteger(t.synthMaxTokens) && words > 0 && t.synthMaxTokens / words >= 3.5,
+    `${slug}: synthesis cap ${t.synthMaxTokens} carries >= 3.5 tokens per target word (${words} words, ${(t.synthMaxTokens / words).toFixed(2)})`);
 }
 // ...and the synthesis call sends that cap: a call site that lowers it ships the
-// shortened report the floor above exists to prevent.
-for (const kit of ["domain-audit-kit", "recall-report-kit", "filing-watch-kit", "token-brief-kit", "ticker-pack-kit"]) {
-  const src = (await import("node:fs")).readFileSync(new URL(`../src/tools/${kit}.js`, import.meta.url), "utf8");
-  const caps = [...src.matchAll(/max_tokens: ([^,}]+)/g)].map((m) => m[1].trim());
-  ok(caps.length > 0 && caps.every((c) => c === "t.synthMaxTokens"), `${kit}: every synthesis call sends max_tokens: t.synthMaxTokens (${caps.join(" | ")})`);
+// shortened report the floor above exists to prevent. The kits are the ones the
+// registry imports, plus any kit that uses the shared synthesis helper, so a
+// report kit cannot sit outside the check. In each, every max_tokens is either
+// t.synthMaxTokens or a literal on a grounded-search or planning call (a
+// non-synthesis model named in the kit).
+const SRC = new URL("../src/", import.meta.url);
+const registryKits = [...readFileSync(new URL("report-tiers.js", SRC), "utf8").matchAll(/from "\.\/tools\/([a-z0-9-]+)\.js"/g)].map((m) => m[1]);
+const helperKits = readdirSync(new URL("tools/", SRC)).filter((f) => f.endsWith(".js") && /report-synthesis\.js|synthMaxTokens/.test(readFileSync(new URL(`tools/${f}`, SRC), "utf8"))).map((f) => f.replace(/\.js$/, ""));
+ok(registryKits.length >= 11 && helperKits.every((k) => registryKits.includes(k)), `every kit with a synthesis cap is in the report-tier registry (${helperKits.filter((k) => !registryKits.includes(k)).join(", ") || "all"})`);
+const NON_SYNTH = new Set(["GROUND", "M.ground", "M.plan"]);
+for (const kit of registryKits) {
+  const src = readFileSync(new URL(`tools/${kit}.js`, SRC), "utf8");
+  const sites = [...src.matchAll(/max_tokens: ([^,}\n]+)/g)].map((m) => {
+    const before = src.slice(Math.max(0, m.index - 1500), m.index);
+    const models = [...before.matchAll(/model: ([A-Za-z0-9_.]+)/g)];
+    return { cap: m[1].trim(), model: models.length ? models[models.length - 1][1] : "?" };
+  });
+  const synth = sites.filter((x) => !NON_SYNTH.has(x.model));
+  const other = sites.filter((x) => NON_SYNTH.has(x.model));
+  ok(synth.length > 0 && synth.every((x) => x.cap === "t.synthMaxTokens"),
+    `${kit}: every synthesis call sends max_tokens: t.synthMaxTokens (${synth.map((x) => `${x.model}=${x.cap}`).join(" | ")})`);
+  ok(other.every((x) => /^\d[\d_]*$/.test(x.cap)), `${kit}: search and planning calls carry a fixed literal cap (${other.map((x) => `${x.model}=${x.cap}`).join(" | ") || "none"})`);
+  const helpers = [...src.matchAll(/(?:const GROUND = |\b(?:ground|plan): )"([^"]+)"/g)].map((m) => m[1]);
+  ok(helpers.every((id) => !/^anthropic\//.test(id)), `${kit}: the search and planning models are not the synthesis model (${helpers.join(", ") || "none"})`);
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

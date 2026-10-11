@@ -108,9 +108,11 @@ const SYNTH = "anthropic/claude-opus-5";
 const GROUND = "google/gemini-3.6-flash"; // grounded web search + read. gemini-3.6-flash since 2026-09-23 (2.5-flash expires upstream 2026-10-20); it reasons by default, so the search call passes reasoning:low - measured: default spent 460 of 600 tokens thinking, low returned the full cited answer at the same cost.
 export const TOKEN_RISK_MODELS = [SYNTH, GROUND];
 
+// synthMaxTokens carries at least 3.5 output tokens per target word
+// (scripts/test-report-synthesis.js); a cap near 3 cuts the report short.
 export const TOKEN_RISK_TIERS = {
-  "token-risk": { price: "$0.60", maxUpstreamUsd: 0.35, scan: false, web: 0, synthMaxTokens: 3500, words: "~1,200" },
-  "token-risk-pro": { price: "$0.85", maxUpstreamUsd: 0.5, scan: true, web: 1, synthMaxTokens: 5000, words: "~1,900" },
+  "token-risk": { price: "$0.60", maxUpstreamUsd: 0.35, scan: false, web: 0, synthMaxTokens: 4800, words: "~1,200" },
+  "token-risk-pro": { price: "$0.85", maxUpstreamUsd: 0.5, scan: true, web: 1, synthMaxTokens: 7600, words: "~1,900" },
 };
 
 const ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
