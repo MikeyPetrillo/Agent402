@@ -8,6 +8,7 @@
 // per-call feed. The internal row is labelled as ours in the copy.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { standingBand } from "./standing.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
 
 import { REPO_URL } from "./repo-link.js";
 const EXPLORER = {
@@ -67,7 +68,7 @@ function rowHtml(label, side, note) {
 
 export function proofPage(baseUrl, feed, standing = null) {
   const canonical = `${baseUrl}/proof`;
-  const title = "Receipts: settled under the quoted ceiling";
+  const title = "Receipts: never above the quoted ceiling";
   const description = "The metered model route quotes a ceiling before payment and settles what the call actually used. This page shows the latest settlement next to its quote, plus the aggregate; our own canary settlement carries its on-chain transaction.";
   const ext = feed?.external || { count: 0, latest: null };
   const int = feed?.internal || { count: 0, latest: null };
@@ -77,14 +78,14 @@ export function proofPage(baseUrl, feed, standing = null) {
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;">
       <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/#why" style="color:var(--muted);text-decoration:none;">why pay here</a> / <span style="color:var(--ink);">receipts</span>
     </nav>
-    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 20px;color:var(--ink);max-width:900px;">Settled under the ceiling you saw first.</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:820px;margin:0;">Every call to the metered route (<code>POST /v1/metered/chat/completions</code>) is quoted from its own body before payment. A buyer whose client speaks the <code>upto</code> scheme, or who pays by card or credits, settles what the call actually used, never more than the quote. The ledger records both numbers per settlement. Our own canary row links its settle transaction on-chain; an outside buyer's transaction is not listed, because a hash names its payer. Machine-readable: <a href="/api/proof" style="color:var(--ink);">/api/proof</a>.</p>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 20px;color:var(--ink);max-width:900px;">Never above the ceiling you saw first.</h1>
+    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:820px;margin:0;">Every call to the metered route (<code>POST /v1/metered/chat/completions</code>) is quoted from its own body before payment. A buyer whose client speaks the <code>upto</code> scheme (pay for what the call used, up to the quote)${creditsSalesEnabled() ? ", or who pays by card or prepaid credits," : ", or who pays by card,"} settles what the call actually used, never more than the quote; an <code>exact</code> payment settles the quote itself. The ledger records both numbers per settlement. Our own canary row links its settle transaction on-chain; an outside buyer's transaction is not listed, because a hash names its payer. Machine-readable: <a href="/api/proof" style="color:var(--ink);">/api/proof</a>.</p>
   </div>
 </header>
-${standingBand(standing || {})}
+${standingBand({ ...(standing || {}), eyebrow: "THE MARKET THESE RECEIPTS SIT IN" })}
 <section style="max-width:1180px;margin:0 auto;padding:40px 30px 56px;display:grid;gap:18px;">
   ${rowHtml("LATEST EXTERNAL SETTLEMENT (a buyer that is not us)", ext, ext.latest ? "" : "The metered route is new; this row fills in with the first outside buyer's settlement.")}
-  ${rowHtml("LATEST INTERNAL SETTLEMENT (our own daily canary, paying with our own wallet)", int, "Internal by construction: the CI canary buys this route every day from our burner wallet to prove the settle-actual path, and the ledger files it as ours, never as revenue.")}
+  ${rowHtml("LATEST INTERNAL SETTLEMENT (our own daily canary, paying with our own wallet)", int, "Internal by construction: our own test wallet buys this route every day to prove the settle-actual path, and the ledger files it as ours, never as revenue.")}
   <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:6px 0 0;">Nothing here identifies a buyer. The rest of the proof lives on <a href="/status" style="color:var(--ink);">/status</a> (uptime observed from outside production), <a href="/revenue" style="color:var(--ink);">/revenue</a> (transactions by rail and wire) and the <a href="${REPO_URL}" style="color:var(--ink);">source</a>.</p>
 </section>
 ${ledgerFooterCompact()}`;

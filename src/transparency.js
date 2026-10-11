@@ -87,15 +87,15 @@ export function transparencyPage(baseUrl, traffic = null) {
 <div class="tp-eyebrow">$ GET /transparency</div>
 <h1 class="tp-h1">Disclosures</h1>
 <p style="font-size:var(--fs-base);color:var(--muted);">What the company publishes about itself, in one place: uptime from two outside observers at <a href="/status">/status</a>, every settled transaction by rail at <a href="/revenue">/revenue</a>, metered receipts against their quotes at <a href="/proof">/proof</a>, and how the service is secured at <a href="/security">/security</a>. The material disclosures below are kept verbatim, with on-chain receipts.</p>
-<p class="tp-updated">Agent402 (agent402.tools) · last updated 2026-07-29.</p>
+<p class="tp-updated">Agent402 (agent402.tools) · last updated 2026-10-11.</p>
 </section>
 
 <section>
 <div class="tp-body">
 <p>Agent402.Tools is an <a href="${REPO_URL}" rel="noopener">open-source</a> x402 + MCP
 tool server. When something material happens around the project, on-chain or off, it gets documented
-here, with receipts a reader can verify independently. Nothing on this page asks for trust; every factual
-claim links to an immutable on-chain record.</p>
+here, with receipts a reader can verify independently. Every claim in the token disclosure below links to an
+immutable on-chain record, and the revenue figures link to the pages and JSON that publish them.</p>
 
 ${traffic ? `<h2>GitHub adoption</h2>
 <p>The code is AGPL and anyone may clone it without forking - and they do. From GitHub's traffic API
@@ -184,11 +184,11 @@ and these are the receipts:</p>
 <p>The <a href="/revenue">transactions page</a> shows two kinds of number and keeps them apart on purpose.</p>
 <ul>
   <li><strong>Throughput</strong> is every settled transaction through our pay rails, our own included. We run
-  our own money through the same gates buyers use, continuously: a daily paid canary on every rail, about 200
-  Tempo MPP settlements a day, and weekly full-catalog sweeps. Those are real on-chain transactions, which is the
+  our own money through the same gates buyers use, continuously: a daily paid canary on every rail, Tempo MPP
+  settlements through the day, and weekly full-catalog sweeps. Those are real on-chain transactions, which is the
   point, but they are ours, so they prove the plumbing and never count as earnings.</li>
   <li><strong>Revenue</strong> is external only. A payment counts as external when it comes from a wallet that is
-  not ours (canary, test and funding wallets are excluded) and is per-call sized, at most ${MAX_CALL_USD};
+  not ours (canary, test and funding wallets are excluded) and is per-call sized, at most $${MAX_CALL_USD};
   anything bigger is funding or a test, not a buy. The chart's "Internal" filter shows the excluded traffic
   explicitly rather than hiding it.</li>
   <li><strong>MPP</strong> settlements on Base and Celo are the same on-chain USDC transfer as x402 (the shim
@@ -198,12 +198,13 @@ and these are the receipts:</p>
   <li><strong>Self-funded (SOR)</strong> revenue is settled to the dedicated spending wallet that buys from outside
   sellers and upstream data for resale. It is real revenue from others and the chart can split it out
   by receiving wallet.</li>
-  <li><strong>x402scan</strong> indexes our settlements independently. Their totals count all traffic to our
-  wallets, our own canary and test buys included, and their seller row groups the spending wallet with the
-  treasury, so part of what appears there as demand is our own self-funding loop. Both figures are correct;
-  the external-only series on /revenue is the one that answers "did someone else pay for this".</li>
-  <li>Rails are read best effort from public RPCs with a 60-second cache: a flaky RPC marks that rail
-  unreachable without hiding the others, and wallet balances are float, not shown.</li>
+  <li><strong>Public x402 explorers</strong> index our settlements independently. Their totals count all traffic
+  to our wallets, our own canary and test buys included, and a seller row there can group the spending wallet
+  with the treasury, so part of what appears there as demand is our own self-funding loop. Both figures are
+  correct; the external-only series on /revenue is the one that answers "did someone else pay for this".</li>
+  <li>Rails are read best effort from public RPCs and cached for an hour: a flaky RPC marks that rail
+  unreachable without hiding the others. Wallet balances are float: <a href="/api/revenue">/api/revenue</a>
+  publishes them, and they are never counted as revenue.</li>
 </ul>
 
 <h2>Questions</h2>

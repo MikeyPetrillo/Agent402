@@ -201,7 +201,7 @@ const tmp = (p) => { const d = mkdtempSync(join(tmpdir(), "a402-scope-")); dirs.
 // ---------------------------------------------------------------------------
 {
   const src = await readFile(new URL("../src/revenue-live.js", import.meta.url), "utf8");
-  const hero = src.slice(src.indexOf("distinct agent"), src.indexOf("distinct agent") + 400);
+  const hero = src.slice(src.indexOf("distinct outside wallet"), src.indexOf("distinct outside wallet") + 400);
   ok(/scope\?\.since/.test(hero), "/revenue's wallet-count caption reads scope.since rather than a typed date");
   ok(/paid us on-chain/.test(hero), "/revenue says the wallet count is on-chain, not simply 'have paid us'");
   ok(/floor, not a lifetime total/.test(src), "/revenue says in words what the wallet count cannot see");

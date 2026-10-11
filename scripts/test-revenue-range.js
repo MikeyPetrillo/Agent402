@@ -383,6 +383,14 @@ else {
     assert.ok(Array.isArray(tr.body.days));
   });
 }
+{
+  const { revenueSeriesFirstDay } = await import("../src/revenue-range.js");
+  await check("a series with no rows yet still clamps to its own start", async () => {
+    assert.equal(revenueSeriesFirstDay({ days: [], buyers: [], daysScope: { seriesStart: "2026-06-15" } }), "2026-06-15");
+    assert.equal(revenueSeriesFirstDay({ days: [{ day: "2026-07-01" }], daysScope: { seriesStart: "2026-06-15" } }), "2026-07-01");
+    assert.equal(revenueSeriesFirstDay({ days: [], daysScope: { seriesStart: "bad" } }), null);
+  });
+}
 stop();
 console.log(`\ntest-revenue-range: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
