@@ -55,7 +55,7 @@ for (let i = 0; i < 120 && !up; i++) { await new Promise((r) => setTimeout(r, 50
 if (!up) fail("server did not boot");
 const og = async (p) => (/property="og:image" content="([^"]+)"/.exec(await (await fetch(BASE + p)).text()) || [])[1] || "";
 ok(/\/og\/docs\.png\?v=/.test(await og("/docs")), "/docs serves /og/docs.png as its og:image");
-ok(!ids.includes("why"), "no section card for /why (it redirects to /docs#why)");
+ok(!ids.includes("why"), "no section card for /why (it redirects to /#why)");
 ok(/\/og\/chain-base\.png/.test(await og("/base")), "/base serves the chain card");
 ok(/\/og\/reports\.png/.test(await og("/reports/sample/dossier")), "a sample report page serves the reports card");
 ok(/\/tools\/attest\/card\.png/.test(await og("/tools/attest")), "a tool page keeps its own card (explicit ogImage wins)");

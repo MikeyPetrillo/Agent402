@@ -1,5 +1,5 @@
 // Machine Ledger — Docs landing page (/docs)
-// Quickstart, why pay here (#why; /why and /compare redirect to it), payment flow, three ways in, free tier,
+// Quickstart, a #why pointer to the home page (/why redirects to /#why), payment flow, three ways in, free tier,
 // examples (#examples; /use-cases redirects to it), badges (#badges; /badges redirects to it), reference endpoints -
 // rendered inside the SAME sidebar+content shell every /docs/:slug wiki page
 // uses (src/docs.js), so the docs surface reads as one site with persistent
@@ -15,7 +15,7 @@ import { RAILS_PAREN } from "./rails.js";
 import { toolList } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 import { decideConfig } from "./decide/config.js";
-import { whySectionHtml, whyJsonLd, WHY_SECTION_CSS } from "./why.js";
+import { whyDocsStubHtml } from "./why.js";
 import { examplesSectionHtml, examplesJsonLd, EXAMPLES_SECTION_CSS } from "./use-cases.js";
 import { badgesSectionHtml, BADGES_SECTION_CSS } from "./badges.js";
 
@@ -41,17 +41,17 @@ export function ledgerDocsPage(baseUrl, catalog) {
       url: baseUrl,
     },
   };
-  // The "Why pay here" points live in this page's #why section (/why
-  // redirects here), so their ItemList rides along with the article.
-  const jsonLd = [articleLd, whyJsonLd(baseUrl), examplesJsonLd(baseUrl)];
+  // The "Why pay here" points live on the home page (/#why); this page keeps
+  // an id="why" pointer so old /docs#why links still land on something.
+  const jsonLd = [articleLd, examplesJsonLd(baseUrl)];
 
   const extraCss = `${DOCS_LAYOUT_CSS}
-  #quickstart, #how, #add, #free, #gateway, #endpoints { scroll-margin-top: 110px; }${WHY_SECTION_CSS}${EXAMPLES_SECTION_CSS}${BADGES_SECTION_CSS}`;
+  #quickstart, #why, #how, #add, #free, #gateway, #endpoints { scroll-margin-top: 110px; }${EXAMPLES_SECTION_CSS}${BADGES_SECTION_CSS}`;
 
   const main = `
       <section>
       <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Quickstart.</h1>
-      <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 30px;">Add ${fmtNum(totalCount)} tools - plus an open cross-seller Index, Smart Order Router, and an OpenAI-compatible /v1 gateway - to your agent in about a minute. No signup, no API key - start free with proof-of-work, settle ${RAILS_PAREN} when you scale.</p>
+      <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 30px;">Add ${fmtNum(totalCount)} tools - plus an open cross-seller Index, Smart Order Router, and an OpenAI-compatible /v1 gateway - to your agent in about a minute. No signup, no API key - start free with proof-of-work, settle ${RAILS_PAREN} when you scale.</p>
 
       <div id="quickstart" style="border:1px solid var(--hairline);background:var(--panel);margin-bottom:14px;">
         <div style="display:flex;align-items:center;gap:7px;padding:11px 15px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);">terminal</div>
@@ -66,8 +66,7 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
       <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:0 0 44px;">// an autonomous buyer discovers the catalog, gets quoted over HTTP 402, settles, and uses the result - zero humans.</p>
       </section>
 
-      ${whySectionHtml()}
-      <!-- HOW -->
+      ${whyDocsStubHtml()}      <!-- HOW -->
       <section>
       <h2 id="how" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 18px;">How payment works.</h2>
       <div style="border:1px solid var(--hairline);background:var(--card);margin-bottom:44px;">
@@ -116,14 +115,14 @@ const out = await a.call("hash", { text: "hello", algo: "sha256" });</pre></div>
       <!-- FREE -->
       <section>
       <h2 id="free" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 14px;">Free tier - proof-of-work.</h2>
-      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">The ${fmtNum(freeCount)} pure-CPU tools (of ${fmtNum(totalCount)} in the catalog) work with no wallet. Instead of paying USDC, your machine solves a short sha256 puzzle - a fraction of a second of CPU - and the call goes through. Nothing here consumes AI tokens.</p>
+      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 18px;">The ${fmtNum(freeCount)} pure-CPU tools (of ${fmtNum(totalCount)} in the catalog) work with no wallet. Instead of paying USDC, your machine solves a short sha256 puzzle - a fraction of a second of CPU - and the call goes through. Nothing here consumes AI tokens.</p>
       <div style="border:1px solid var(--hairline);background:var(--card);padding:16px 20px;font-family:var(--font-mono);font-size:var(--fs-sm);margin-bottom:44px;"><span style="color:var(--ok);font-weight:700;">GET</span> <span style="color:var(--ink);">/api/pow</span>  <span style="color:var(--faint);">&rarr; returns a challenge; solve and resubmit. Free, rate-limited.</span></div>
       </section>
 
       <!-- GATEWAY -->
       <section>
       <h2 id="gateway" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 14px;">/v1 - OpenAI-compatible LLM gateway.</h2>
-      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">Point any OpenAI SDK at <code>base_url https://agent402.tools/v1</code> and pay per call in USDC over x402 - no API key, no signup, same wallet-is-the-identity model as every other tool. Chat has flat quality tiers ($0.003 nano to $0.50 premium) plus a $0.01 auto tier that routes on your prompt with no model required; embeddings are $0.002 with a default-on cache; image generation is $0.08 per image. A flat-tier answer carries <code>agent402_metered</code> whenever the same body would have been materially cheaper on the metered route, with the two figures and the endpoint to point at.</p>
+      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 18px;">Point any OpenAI SDK at <code>base_url https://agent402.tools/v1</code> and pay per call in USDC over x402 - no API key, no signup, same wallet-is-the-identity model as every other tool. Chat has flat quality tiers ($0.003 nano to $0.50 premium) plus a $0.01 auto tier that routes on your prompt with no model required; embeddings are $0.002 with a default-on cache; image generation is $0.08 per image. A flat-tier answer carries <code>agent402_metered</code> whenever the same body would have been materially cheaper on the metered route, with the two figures and the endpoint to point at.</p>
       <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:var(--fs-sm);margin-bottom:44px;">
         <div style="display:grid;grid-template-columns:60px 1fr auto;gap:14px;padding:12px 18px;border-bottom:1px solid var(--hairline);"><span style="color:var(--accent);font-weight:700;">POST</span><span>/v1/metered/chat/completions</span><span style="color:var(--faint);">from $0.001 &middot; quoted per request from its body, settles what the call used under that quote</span></div>
         <div style="display:grid;grid-template-columns:60px 1fr auto;gap:14px;padding:12px 18px;border-bottom:1px solid var(--hairline);"><span style="color:var(--accent);font-weight:700;">POST</span><span>/v1/metered/messages</span><span style="color:var(--faint);">from $0.001 &middot; the same quote-then-settle-actual pricing on the Anthropic Messages wire</span></div>
@@ -139,9 +138,9 @@ const out = await a.call("hash", { text: "hello", algo: "sha256" });</pre></div>
       ${catalog["POST /api/decide"] ? (() => { const c = decideConfig(); return `<!-- DECIDE -->
       <section>
       <h2 id="decide" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 14px;">Decide - a plan for any job.</h2>
-      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 12px;">Describe a job and get a call-ready plan over this catalog and indexed x402/MPP sellers with a recent live 402. Each step names its tool, endpoint, price and fallbacks, with params that validate against the tool's input schema. Needs no indexed tool covers come back as gaps.</p>
-      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 12px;">Every candidate is scored by one formula with the same weights: fit, observed reliability, price, schema quality and a freshness pass mark, with no term for who sells the tool. An outside tool is eligible when a live 402 was seen in the last ${Math.round(c.liveWithinHours / 24)} days and its input schema is known. Every tool in a plan carries <code>firstParty</code>, so you always see whose tool it is.</p>
-      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">The decide fee comes back as a credit, valid ${c.credit.ttlHours} hours, toward running that plan with <code>/api/decide/execute</code>. First-party steps run at list price; third-party steps are bought from the seller and resold at the seller's price plus a ${c.routingFeePct}% markup. Spend stops at your budget, and any unspent amount returns as credit until the decision's window closes.</p>
+      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 12px;">Describe a job and get a call-ready plan over this catalog and indexed x402/MPP sellers with a recent live 402. Each step names its tool, endpoint, price and fallbacks, with params that validate against the tool's input schema. Needs no indexed tool covers come back as gaps.</p>
+      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 12px;">Every candidate is scored by one formula with the same weights: fit, observed reliability, price, schema quality and a freshness pass mark, with no term for who sells the tool. An outside tool is eligible when a live 402 was seen in the last ${Math.round(c.liveWithinHours / 24)} days and its input schema is known. Every tool in a plan carries <code>firstParty</code>, so you always see whose tool it is.</p>
+      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 18px;">The decide fee comes back as a credit, valid ${c.credit.ttlHours} hours, toward running that plan with <code>/api/decide/execute</code>. First-party steps run at list price; third-party steps are bought from the seller and resold at the seller's price plus a ${c.routingFeePct}% markup. Spend stops at your budget, and any unspent amount returns as credit until the decision's window closes.</p>
       <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:var(--fs-sm);margin-bottom:44px;">
         <div style="display:grid;grid-template-columns:60px 1fr auto;gap:14px;padding:12px 18px;border-bottom:1px solid var(--hairline);"><span style="color:var(--accent);font-weight:700;">POST</span><span>/api/decide</span><span style="color:var(--faint);">quick $${c.prices.quick} &middot; plan $${c.prices.plan} &middot; full $${c.prices.full}</span></div>
         <div style="display:grid;grid-template-columns:60px 1fr auto;gap:14px;padding:12px 18px;border-bottom:1px solid var(--hairline);"><span style="color:var(--accent);font-weight:700;">POST</span><span>/api/decide/execute</span><span style="color:var(--faint);">plan budget less credit</span></div>

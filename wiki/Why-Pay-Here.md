@@ -2,7 +2,7 @@
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-Seven things that are different about paying here. Every claim links to the surface that proves it: what the server does, measured on the server, on the open protocols anyone can build on, x402 and MPP. The live version is https://agent402.tools/docs#why, and the seven points below are copied from it (`src/why.js`).
+Seven things that are different about paying here. Every claim links to the surface that proves it: what the server does, measured on the server, on the open protocols anyone can build on, x402 and MPP. The live version is https://agent402.tools/#why, and the seven points below are copied from it (`src/why.js`).
 
 ## 01 / Price - Pay for what the model used, with the ceiling quoted first.
 

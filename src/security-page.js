@@ -36,7 +36,7 @@ const SECTIONS = [
     p: [
       `Every tool that fetches a caller-supplied URL goes through a DNS-pinned SSRF guard that refuses private, link-local and metadata addresses and re-validates on redirects; the headless browser runs in a separate secretless worker behind the same egress guard. The free tier is a signed, single-use, slug-scoped proof-of-work token. Settlement runs after the handler, so on x402 an error is not charged, and a settled receipt that arrives on a failed response is ledgered as a debt with an on-chain proof step before any refund leaves. Per-IP and shared rate limits fail closed; a wallet blocklist is enforced before settlement; every response carries a strict content security policy, HSTS and no inline scripts.`,
     ],
-    links: [["/docs#why", "Why pay here"], ["/proof", "Receipts"]],
+    links: [["/#why", "Why pay here"], ["/proof", "Receipts"]],
   },
   {
     h: "Controls on the code",

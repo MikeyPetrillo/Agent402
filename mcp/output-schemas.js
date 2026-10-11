@@ -522,7 +522,7 @@ export function mcpInitializeInstructions(baseUrl, { decide = false } = {}) {
     `Install (npm + wallet, pays for web.search, web.answer and the rest): ${install.claudeCodeNpm}`,
     `No wallet yet (hosted, proof-of-work tools only): ${install.claudeCodeHosted}`,
     `Cursor mcp.json: { "mcpServers": { "agent402": { "url": "${hosted}" } } }`,
-    `Why pay here (usage priced under a quoted ceiling, a failed call is not charged and the receipt proves it, keyed retries never pay twice, one key for tools + models + reports, no wallet needed for the proof-of-work tools or a report by card, proof at /status and /revenue): ${baseUrl}/docs#why`,
+    `Why pay here (usage priced under a quoted ceiling, a failed call is not charged and the receipt proves it, keyed retries never pay twice, one key for tools + models + reports, no wallet needed for the proof-of-work tools or a report by card, proof at /status and /revenue): ${baseUrl}/#why`,
     `Docs: ${baseUrl}/llms.txt · ${baseUrl}/api/find?q=… · status ${baseUrl}/status`,
   ].join("\n");
 }

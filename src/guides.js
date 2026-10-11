@@ -1563,7 +1563,7 @@ tier (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini generateContent)
 images, speech and transcription, 500+ tools, finished reports
 and monitors, and a router that buys from other sellers and resells the
 result, proven sellers first. Why pay here, with the proof links:
-[agent402.tools/docs#why](https://agent402.tools/docs#why).
+[agent402.tools/#why](https://agent402.tools/#why).
 `,
   },
   {
@@ -1713,8 +1713,8 @@ receipt shape:
   the result from the best-matching external seller for a task, proven sellers
   first, and sells it to you.
 
-Why pay here, in one page with the proof links:
-[agent402.tools/docs#why](https://agent402.tools/docs#why). The short version: usage is
+Why pay here, in one section with the proof links:
+[agent402.tools/#why](https://agent402.tools/#why). The short version: usage is
 priced under a ceiling you see before you pay, a failed call is not charged and the
 receipt proves it, a keyed retry never pays twice, and uptime and transactions are published from
 outside production.

@@ -1,7 +1,7 @@
 // /proof - receipts for the metered tier: the settled amount next to the
 // quoted ceiling (our own canary row with its settle transaction), so "you pay for what the model
 // used, under a price you saw first" is a fact anyone can check on-chain
-// rather than a sentence on /docs#why.
+// rather than a sentence on /#why.
 //
 // Privacy posture, same as /api/revenue/mpp: aggregates plus ONE latest
 // external row and ONE latest internal (daily canary) row. No payer, no
@@ -75,7 +75,7 @@ export function proofPage(baseUrl, feed, standing = null) {
 <header style="border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;">
-      <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/docs#why" style="color:var(--muted);text-decoration:none;">why pay here</a> / <span style="color:var(--ink);">receipts</span>
+      <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/#why" style="color:var(--muted);text-decoration:none;">why pay here</a> / <span style="color:var(--ink);">receipts</span>
     </nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 20px;color:var(--ink);max-width:900px;">Settled under the ceiling you saw first.</h1>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:820px;margin:0;">Every call to the metered route (<code>POST /v1/metered/chat/completions</code>) is quoted from its own body before payment. A buyer whose client speaks the <code>upto</code> scheme, or who pays by card or credits, settles what the call actually used, never more than the quote. The ledger records both numbers per settlement. Our own canary row links its settle transaction on-chain; an outside buyer's transaction is not listed, because a hash names its payer. Machine-readable: <a href="/api/proof" style="color:var(--ink);">/api/proof</a>.</p>
@@ -90,7 +90,7 @@ ${standingBand(standing || {})}
 ${ledgerFooterCompact()}`;
   return ledgerShell({ title, description, canonical, baseUrl, activePath: "/proof", body, robots: undefined, jsonLd: [{ "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
-    { "@type": "ListItem", position: 2, name: "Why pay here", item: `${baseUrl}/docs#why` },
+    { "@type": "ListItem", position: 2, name: "Why pay here", item: `${baseUrl}/#why` },
     { "@type": "ListItem", position: 3, name: "Receipts", item: canonical },
   ] }] });
 }

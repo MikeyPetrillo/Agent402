@@ -119,7 +119,7 @@ params, an unreachable catalog and no match are typed failures sent nowhere.
 
 Every paid call carries an `Idempotency-Key`, so a retried call replays the
 paid answer instead of paying twice. What the same key buys beyond tools:
-https://agent402.tools/docs#why. Other hosts: https://agent402.tools/guides/agent-hosts.
+https://agent402.tools/#why. Other hosts: https://agent402.tools/guides/agent-hosts.
 
 ## License
 

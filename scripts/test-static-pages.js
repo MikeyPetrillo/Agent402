@@ -42,7 +42,7 @@ const PAGES = [
   { path: "/terms",       titleSubstr: "Terms" },
   { path: "/leaderboard", titleSubstr: "Leaderboard" },
   { path: "/marketplace", titleSubstr: "marketplace" },
-  { path: "/tools",       titleSubstr: "Catalog" },
+  { path: "/tools",       titleSubstr: "Agent402 Tools" },
   { path: "/skills",      titleSubstr: "skill" },
   { path: "/robinhood",   titleSubstr: "Robinhood" },
   { path: "/celo",        titleSubstr: "Celo" },
@@ -203,47 +203,80 @@ try {
   }
 }
 
-// --- "Why pay here" lives in /docs (#why); /why is a redirect to it ----------
+// --- "Why pay here" lives on the home page (#why); /why redirects there -----
 {
   const res = await fetch(`${BASE}/why`, { redirect: "manual" });
   ok(res.status === 301, `/why → 301 (got ${res.status})`);
-  ok(res.headers.get("location") === "/docs#why", `/why Location is /docs#why (got ${res.headers.get("location")})`);
-  const docs = await (await fetch(`${BASE}/docs`)).text();
-  const m = docs.match(/<h2 id="why"[\s\S]*?<\/section>/);
-  ok(m != null, "/docs renders the #why section");
+  ok(res.headers.get("location") === "/#why", `/why Location is /#why (got ${res.headers.get("location")})`);
+  const home = await (await fetch(`${BASE}/`)).text();
+  const m = home.match(/<section id="why"[\s\S]*?<\/section>/);
+  ok(m != null, "the home page renders the #why section");
   const why = m?.[0] || "";
   ok(WHY_POINTS.length === 7, `seven why points (got ${WHY_POINTS.length})`);
   for (const w of WHY_POINTS) {
-    ok(why.includes(`id="why-${w.id}"`) && why.includes(`<h3>${esc(w.h)}</h3>`), `/docs#why carries the ${w.id} claim`);
-    for (const [href] of w.links) ok(why.includes(`href="${esc(href)}"`), `/docs#why ${w.id} links its proof ${href}`);
+    ok(why.includes(`id="why-${w.id}"`) && why.includes(`<h3>${esc(w.h)}</h3>`), `/#why carries the ${w.id} claim`);
+    ok(typeof w.s === "string" && w.s.length > 20 && why.includes(esc(w.s)) && why.includes(esc(w.p)), `/#why ${w.id} shows its one-line claim and keeps the full text`);
+    for (const [href] of w.links) ok(why.includes(`href="${esc(href)}"`), `/#why ${w.id} links its proof ${href}`);
   }
-  ok(docs.indexOf('id="why"') < docs.indexOf('id="how"'), "the #why section sits above how payment works");
+  ok(why.includes('id="why-compare"') && why.includes('class="why-cmp"'), "/#why carries the side-by-side table");
+  for (const c of WHY_COMPARE.cols) ok(why.includes(`<th scope="col">${esc(c)}</th>`), `/#why table has the "${c}" column`);
+  for (const [label, ...cells] of WHY_COMPARE.rows) ok(why.includes(`<th scope="row">${esc(label)}</th>`) && cells.every((c) => why.includes(esc(c))), `/#why table has the "${label}" row`);
+  ok(/"@id":"[^"]*\/#why"/.test(home), "the seven points' ItemList is anchored on the home page");
+  // /docs keeps a pointer for old /docs#why links, not a copy of the points.
+  const docs = await (await fetch(`${BASE}/docs`)).text();
+  const stub = (docs.match(/<p id="why"[\s\S]*?<\/p>/) || [""])[0];
+  ok(stub.includes('href="/#why"'), "/docs keeps an id=\"why\" stub that links /#why");
+  ok(!WHY_POINTS.some((w) => docs.includes(`id="why-${w.id}"`)), "/docs no longer repeats the seven points");
+  ok(docs.indexOf('id="why"') < docs.indexOf('id="how"'), "the #why stub sits above how payment works");
   for (const sm of ["/sitemap.xml", "/sitemap-pages.xml"]) {
     const xml = await (await fetch(`${BASE}${sm}`)).text();
     ok(!/\/why<\/loc>/.test(xml), `${sm} does not list /why`);
   }
 }
 
-// --- nav and footer: no /why or /company link; the entity links out ---------
+// --- home: no stats strip under the two doors --------------------------------
 {
-  for (const p of ["/", "/pricing", "/docs", "/company"]) {
+  const home = await (await fetch(`${BASE}/`)).text();
+  ok(!/class="hm-proof"/.test(home), "the home page has no full-width stats strip");
+  ok(!/settlement rails · x402 \+ MPP|deducted from sellers · open source|priced tools · \d+ are skill packs/.test(home), "none of the strip's labels remain");
+  ok(/\d+ rails live/.test(home), "control: the hero still states the live rail count");
+  // The hero is the agent story: no report button, no card, one primary pill.
+  const hero = (home.match(/<header[\s\S]*?<\/header>/) || [""])[0];
+  ok(hero.includes('href="/docs#add"') && /btn-primary" href="\/docs#add">Add to your agent</.test(hero), "hero primary is Add to your agent");
+  ok(/btn-secondary" href="\/tools">Browse tools</.test(hero), "hero secondary is Browse tools");
+  ok(!/Buy a report|by card|agentic finance/i.test(hero.replace(/<div class="hm-obsidian[\s\S]*$/, "")), "hero copy carries no report, card or agentic-finance line");
+}
+
+// --- nav and footer: no /why, no For people, Tools named consistently --------
+{
+  for (const p of ["/", "/pricing", "/docs", "/company", "/reports"]) {
     const html = await (await fetch(`${BASE}${p}`)).text();
     const navHtml = (html.match(/<nav style="border-bottom[\s\S]*?<\/nav>/) || [""])[0];
     const footHtml = (html.match(/<footer[\s\S]*?<\/footer>/) || [""])[0];
     ok(navHtml.length > 1000 && footHtml.length > 500, `${p} renders the site nav and footer`);
     const chrome = navHtml + footHtml;
     ok(!/href="\/why["#]/.test(chrome), `${p} nav/footer carries no /why link`);
+    ok(!/href="\/(docs)?#why"/.test(navHtml), `${p} nav carries no why pay here link`);
+    ok(!/why pay here|WHY PAY HERE/i.test(navHtml), `${p} nav has no Why entry`);
+    ok(!/For people|FOR PEOPLE/.test(navHtml), `${p} nav has no "For people" item`);
+    ok(/<a class="ml-nav-link[^"]*" href="\/tools">Tools /.test(navHtml), `${p} nav names /tools "Tools"`);
+    ok(/href="\/tools" style="color:var\(--muted\);text-decoration:none;">tools<\/a>/.test(footHtml), `${p} footer names /tools "tools"`);
+    ok(!/>catalog</.test(chrome), `${p} nav/footer never label /tools "catalog"`);
     ok(!/href="\/company["#]/.test(chrome), `${p} nav/footer carries no /company link`);
-    ok(chrome.includes('href="/docs#why"'), `${p} nav reaches why pay here at /docs#why`);
     ok(/© \d{4} <a href="https:\/\/havok\.holdings" rel="noopener"[^>]*>Havok Holdings LLC<\/a>/.test(footHtml), `${p} footer links the copyright entity to https://havok.holdings`);
+    // Reports stay one click away: the CTA everywhere but /reports itself, and the footer.
+    if (p !== "/reports") ok(/class="ml-nav-cta" href="\/reports"/.test(navHtml), `${p} nav keeps the Get a report button`);
+    ok(footHtml.includes('href="/reports"') && footHtml.includes('href="/monitors"'), `${p} footer links reports and monitors`);
   }
+  const reports = await (await fetch(`${BASE}/reports`)).text();
+  ok(/class="mon-offer"[\s\S]*?href="\/monitors"/.test(reports), "/reports offers monitors near the top");
 }
 
 // --- the footer's "more" row is gone; its pages moved or retired -----------
 // /faq stays (linked from the home FAQ, listed in the sitemap); /compare,
 // /use-cases and /badges became sections of /docs; /community, /shop and the
 // weekly digest page redirect. The agent row still links SKILL.md and webhooks.
-const MOVED = { "/compare": "/docs#why", "/use-cases": "/docs#examples", "/badges": "/docs#badges", "/community": "/integrations", "/shop": "/tools", "/digest": "/docs" };
+const MOVED = { "/compare": "/#why-compare", "/use-cases": "/docs#examples", "/badges": "/docs#badges", "/community": "/integrations", "/shop": "/tools", "/digest": "/docs" };
 {
   for (const p of ["/", "/pricing", "/docs"]) {
     const html = await (await fetch(`${BASE}${p}`)).text();
@@ -271,11 +304,6 @@ const MOVED = { "/compare": "/docs#why", "/use-cases": "/docs#examples", "/badge
 // --- /docs carries the folded sections ----------------------------------------
 {
   const docs = await (await fetch(`${BASE}/docs`)).text();
-  const why = (docs.match(/<h2 id="why"[\s\S]*?<\/section>/) || [""])[0];
-  ok(why.includes('id="why-compare"') && why.includes('class="why-cmp"'), "/docs#why carries the side-by-side table");
-  for (const c of WHY_COMPARE.cols) ok(why.includes(`<th scope="col">${esc(c)}</th>`), `/docs#why table has the "${c}" column`);
-  for (const [label, ...cells] of WHY_COMPARE.rows) ok(why.includes(`<th scope="row">${esc(label)}</th>`) && cells.every((c) => why.includes(esc(c))), `/docs#why table has the "${label}" row`);
-
   // Examples: every cost line is the one the live catalog computes.
   const ex = (docs.match(/<h2 id="examples"[\s\S]*?<\/section>/) || [""])[0];
   ok(ex.length > 0, "/docs renders the #examples section");

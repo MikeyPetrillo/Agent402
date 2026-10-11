@@ -219,7 +219,7 @@ const catalog = {
   const self = ledgerHomePage("http://127.0.0.1:3000", catalog, {}, {}, []);
   ok(!/<iframe id="hm-live"/.test(self) && /id="hm-live-link" href="https:\/\/live\.agent402\.tools"/.test(self), "on any other origin it links instead of framing (the embed refuses other framers)");
   ok(/id="hm-live-n"[\s\S]*id="hm-live-usd"[\s\S]*id="hm-live-buyers"[\s\S]*id="hm-live-pm"/.test(html), "the live panel carries its four hourly figures");
-  ok(/every x402 and MPP payment we see on chain/.test(html), "the panel says it shows every seller's payments, not only ours");
+  ok(/every x402 and MPP payment(<span class="hm-live-tail">)? we see on chain/.test(html), "the panel says it shows every seller's payments, not only ours");
   const srv = (await import("node:fs")).readFileSync(new URL("../src/security-headers.js", import.meta.url), "utf8");
   ok(/frame-src 'self' https:\/\/live\.agent402\.tools;/.test(srv), "site CSP frames only itself and the live view");
 }

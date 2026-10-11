@@ -3304,11 +3304,11 @@ app.get("/what-is-mpp", (_req, res) => htmlCache(res, 300, 900).send(whatIsMppPa
 // positions under; DefinedTerm + Article + FAQPage structured data.
 app.get("/agentic-finance", (_req, res) => htmlCache(res, 300, 900).send(agenticFinancePage(BASE_URL)));
 app.get("/aifi", (_req, res) => res.redirect(301, "/agentic-finance"));
-// /why - the seven first-party differences now live in the #why section of
-// /docs (src/why.js renders it). Older links and published package READMEs
+// /why - the seven first-party differences live in the #why section of the
+// home page (src/why.js renders it). Older links and published package READMEs
 // still name /why, so it answers a permanent redirect to the section. The
 // fragment is literal: a browser applies it after following the redirect.
-app.get("/why", (_req, res) => res.redirect(301, "/docs#why"));
+app.get("/why", (_req, res) => res.redirect(301, "/#why"));
 // The conformance front door. The classifier that answers a failing client has
 // shipped since August; this is the page that tells anyone it exists.
 app.get("/x402-test", (_req, res) => htmlCache(res, 300, 900).send(x402TestPage(BASE_URL)));
@@ -4334,9 +4334,9 @@ app.get("/blog", (_req, res) => htmlCache(res, 300, 900).send(blogIndex(BASE_URL
 // exact tool count the evergreen rule forbids on served pages); keep the URL.
 app.get("/blog/1000-tools-milestone", (_req, res) => res.redirect(301, "/blog/catalog-milestone"));
 app.get("/blog/:slug", (req, res) => { const html = blogPost(BASE_URL, req.params.slug); if (!html) return notFoundPage(res, { what: "Post", href: "/blog", label: "All posts" }); htmlCache(res, 300, 900).send(html); });
-// /compare folded into the "Why pay here" section of /docs; /community's
+// /compare folded into the side-by-side table of the home #why section; /community's
 // adapters, packages and sample reports live on /integrations and /reports.
-app.get("/compare", (_req, res) => res.redirect(301, "/docs#why"));
+app.get("/compare", (_req, res) => res.redirect(301, "/#why-compare"));
 app.get("/community", (_req, res) => res.redirect(301, "/integrations"));
 app.get("/contribute", (_req, res) => htmlCache(res, 300, 900).send(contributePage(BASE_URL)));
 app.get("/workflows", (_req, res) => htmlCache(res, 300, 900).send(workflowsPage(BASE_URL, CATALOG)));

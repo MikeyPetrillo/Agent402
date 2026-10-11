@@ -115,7 +115,7 @@ MCP or HTTP, wallet-keyed memory, finished reports (dossiers, insider flow, 13F,
 domain audits, token risk, deep research) and monitors, plus routing that buys
 from external sellers and resells the result.
 
-Why pay here, with every claim linked to its proof: https://agent402.tools/docs#why.
+Why pay here, with every claim linked to its proof: https://agent402.tools/#why.
 Usage is priced under a ceiling quoted before you pay, a failed call is not
 charged and the receipt proves it, a keyed retry on a credits key is not
 debited twice, and uptime and transactions are published from outside

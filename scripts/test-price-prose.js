@@ -67,33 +67,34 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   const home = ledgerHomePage("https://agent402.tools", {}, {}, null, []);
   ok(typeof home === "string" && home.length > 1000, "the homepage rendered for inspection");
 
-  const chips = [...home.matchAll(/class="hm-chip"[^>]*>([^<]{1,60})</g)].map((m) => m[1]);
-  ok(chips.length > 0, `the homepage has ${chips.length} product chips - if this hits zero the check below is vacuous`);
+  // The "for people" door lists each product as a row: label, then its price.
+  const rows = [...home.matchAll(/class="hm-prow" data-product="([^"]+)"[^>]*><span>([^<]{1,60})<\/span><span[^>]*>([^<]{1,20})<\/span>/g)].map((m) => ({ product: m[1], label: m[2], price: m[3] }));
+  ok(rows.length > 0, `the homepage has ${rows.length} product price rows - if this hits zero the check below is vacuous`);
 
-  const quoted = chips.flatMap((c) => [...c.matchAll(/\$(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]).toFixed(2)));
-  ok(quoted.length > 0, `those chips quote ${quoted.length} price(s)`);
+  const quoted = rows.flatMap((r) => [...r.price.matchAll(/\$(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]).toFixed(2)));
+  ok(quoted.length > 0, `those rows quote ${quoted.length} price(s)`);
   const bogus = quoted.filter((q) => !real.has(q));
   ok(bogus.length === 0,
-    `every price on a homepage chip is a real product price${bogus.length ? ` (not real: ${[...new Set(bogus)].join(", ")})` : ""}`);
+    `every price on a homepage product row is a real product price${bogus.length ? ` (not real: ${[...new Set(bogus)].join(", ")})` : ""}`);
 
   // THE ABOVE IS NOT ENOUGH ON ITS OWN, and finding that out is the point.
   // Restoring the original bug - "Monitor $3/mo" against a $5 monitor - PASSED
   // it, because $3 is a real price for other products. "This number appears
-  // somewhere in the price tables" is a much weaker claim than "this chip
-  // states the price of the thing it links to". So each chip is matched to its
+  // somewhere in the price tables" is a much weaker claim than "this row
+  // states the price of the thing it links to". So each row is matched to its
   // own product.
-  const expect = (label, cents) => {
+  const expect = (product, cents) => {
     const want = Number(cents) % 100 === 0 ? `$${Number(cents) / 100}` : `$${(Number(cents) / 100).toFixed(2)}`;
-    const chip = chips.find((c) => c.trim().startsWith(label));
-    ok(chip, `a homepage chip for "${label}" exists`);
-    ok(chip && chip.includes(want),
-      `the "${label}" chip states ${want}, the price of the product it links to (chip reads "${(chip || "").trim()}")`);
+    const row = rows.find((r) => r.product === product);
+    ok(row, `a homepage price row for "${product}" exists`);
+    ok(row && (row.price === want || row.price === `${want}/mo`),
+      `the "${product}" row states ${want}, the price of the product it links to (row reads "${row ? `${row.label} ${row.price}` : ""}")`);
   };
-  expect("Dossier", HUMAN_PRODUCTS["dossier"].price);
-  expect("Fund 13F", HUMAN_PRODUCTS["fund-report"].price);
-  expect("Domain audit", HUMAN_PRODUCTS["domain-audit"].price);
-  expect("Deep research", HUMAN_PRODUCTS["research"].price);
-  expect("Monitor", Math.min(...Object.values(MONITOR_PRODUCTS).map((m) => m.price)));
+  expect("dossier", HUMAN_PRODUCTS["dossier"].price);
+  expect("fund-report", HUMAN_PRODUCTS["fund-report"].price);
+  expect("domain-audit", HUMAN_PRODUCTS["domain-audit"].price);
+  expect("research", HUMAN_PRODUCTS["research"].price);
+  expect("monitor", Math.min(...Object.values(MONITOR_PRODUCTS).map((m) => m.price)));
 }
 
 // The llms.txt reports paragraph is derived from the catalog + product tables.
