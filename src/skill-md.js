@@ -12,7 +12,7 @@
 // prose claim is the evergreen "500+". No secrets, no strategy - this is a
 // public instruction sheet an agent will read verbatim.
 import { REPO_URL } from "./repo-link.js";
-import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
+import { isComputePayable, POW_DIFFICULTY, powCostPhrase } from "./pow.js";
 import { RAILS } from "./rails.js";
 // (isComputePayable + POW_DIFFICULTY both live in pow.js - same import seo.js uses)
 
@@ -79,7 +79,7 @@ Pick ONE payment mode. Ask the user which before spending money.
 
 | Mode | What you need | Covers |
 |------|---------------|--------|
-| Proof-of-work (free) | Nothing. A few ms of CPU per call. | ${powCount} pure-compute tools |
+| Proof-of-work (free) | Nothing. CPU per call: ${powCostPhrase()}. | ${powCount} pure-compute tools |
 | x402 (USDC) | ${x402Need} | every tool on EVM; identity-bound and long-running routes take EVM only |
 | MPP (USDC / Tempo) | An EVM private key with USDC on Base/Celo, or USDC.e/PathUSD on Tempo | every tool on Base/Celo; Tempo is not offered on identity-bound or long-running routes |
 
@@ -160,7 +160,9 @@ const a = new Agent402({ fetch: wrapFetchWithPayment(fetch, client) });
 \`\`\`
 
 **Option C - plain HTTP (no packages).** See "Use Services" below; every tool
-is one \`POST\` with a JSON body. Pay the 402 with an x402 or MPP client of
+is one HTTP call: the method and input shape are in \`/api/find\` and
+\`/api/pricing\` (most are \`POST\` with a JSON body, some are \`GET\` with a
+query string). Pay the 402 with an x402 or MPP client of
 your choice, or solve proof-of-work by hand.
 
 ### Setup Rules
@@ -174,17 +176,19 @@ your choice, or solve proof-of-work by hand.
 
 ## After Setup
 
-Verify with one unpaid call (nothing is charged):
+Verify with one unpaid call:
 
 \`\`\`bash
 curl -s -X POST ${baseUrl}/api/hash -H 'content-type: application/json' -d '{"text":"hello","algo":"sha256"}'
 \`\`\`
 
-You get HTTP 402 with a \`PAYMENT-REQUIRED\` header (x402 accepts) and a
+You get HTTP 402 (nothing is charged) with a \`PAYMENT-REQUIRED\` header (x402 accepts) and a
 \`WWW-Authenticate: Payment\` header (MPP challenges). Your client pays and
 retries; the retried call returns the JSON result with a \`PAYMENT-RESPONSE\`
 (x402) or \`Payment-Receipt\` (MPP) header. With the SDK or MCP server this is
-invisible - you just see the result.
+invisible - you just see the result. The free path for the same tool is the
+proof-of-work request under "Request Templates" below: an \`X-Pow-Solution\`
+header instead of a payment.
 
 ## Use Services
 

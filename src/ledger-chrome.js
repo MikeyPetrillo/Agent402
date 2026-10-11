@@ -670,7 +670,7 @@ function marketPanelNav(chainInfo) {
                 <a href="/marketplace" class="mlnav-row"><span style="font-weight:700;">x402 marketplace</span><span class="mlnav-faint">every indexed seller</span></a>
                 <a href="/mpp-marketplace" class="mlnav-row"><span style="font-weight:700;">MPP marketplace</span><span class="mlnav-faint">verified sellers</span></a>
                 <a href="/leaderboard" class="mlnav-row"><span style="font-weight:700;">leaderboard</span><span class="mlnav-faint">settled on-chain</span></a>
-                <a href="/revenue" class="mlnav-row"><span style="font-weight:700;">transactions</span><span class="mlnav-faint">our rails, every settle</span></a>
+                <a href="/revenue" class="mlnav-row"><span style="font-weight:700;">transactions</span><span class="mlnav-faint">every settlement on our rails</span></a>
                 <a href="/marketplace/tools" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">every tool indexed</span><span class="mlnav-faint">ours + third-party</span></a>
                 <span class="mlnav-label">BY CHAIN</span>
                 ${rows}
@@ -717,7 +717,7 @@ function ourToolsPanelNav() {
               <span style="display:block;width:280px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
                 <span class="mlnav-label">OUR 500+ TOOLS</span>
                 <a href="/tools" class="mlnav-row"><span style="font-weight:700;">all tools</span><span class="mlnav-faint">browse by category</span></a>
-                <a href="/skills" class="mlnav-row"><span style="font-weight:700;">skill packs</span><span class="mlnav-faint">one payment, N tools</span></a>
+                <a href="/skills" class="mlnav-row"><span style="font-weight:700;">skill packs</span><span class="mlnav-faint">one payment, several tools</span></a>
                 <a href="/tools/category/crypto" class="mlnav-row"><span style="font-weight:700;">crypto, DeFi &amp; Solana</span><span class="mlnav-faint">perps · yields · token risk</span></a>
                 <a href="/tools/category/llm" class="mlnav-row"><span style="font-weight:700;">LLM gateway</span><span class="mlnav-faint">chat · messages · metered · images</span></a>
                 <a href="/tools/category/ai" class="mlnav-row"><span style="font-weight:700;">speech &amp; transcription</span><span class="mlnav-faint">text-to-speech · audio to text</span></a>
@@ -734,7 +734,7 @@ function sellPanelHtml() {
                 <span class="mlnav-label">FOR API SELLERS - GET PAID PER CALL</span>
                 <a href="/sell" class="mlnav-row"><span style="font-weight:700;">list your API</span><span class="mlnav-faint">free · health-ranked</span></a>
                 <a href="/tollbooth" class="mlnav-row"><span style="font-weight:700;">tollbooth</span><span class="mlnav-faint">pay-per-crawl</span></a>
-                <a href="/contribute" class="mlnav-row"><span style="font-weight:700;">contribute a tool</span><span class="mlnav-faint">AGPL · ~15 lines</span></a>
+                <a href="/contribute" class="mlnav-row"><span style="font-weight:700;">contribute a tool</span><span class="mlnav-faint">add a tool to the open catalog</span></a>
                 <a href="/sell" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">start selling →</span><span style="color:var(--on-panel-dim);">/sell</span></a>
               </span>
             </span>`;

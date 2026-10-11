@@ -56,7 +56,7 @@ export const MONITOR_PRODUCTS = {
   "research-monitor": {
     label: "Research question watch", price: 500, kind: "research", slug: "research",
     inputField: "query", inputLabel: "your research question",
-    blurb: "Your question researched again every week from live sources: a fresh, fully cited deep-research report in your inbox, so you see what changed since last time. The same report sold at /reports, run on a schedule.",
+    blurb: "Your question researched again about once a week from live sources, within the monthly report cap: a fresh, fully cited deep-research report in your inbox, so you see what changed since last time. The same report sold at /reports, run on a schedule.",
   },
   "ipo-monitor": {
     label: "IPO pipeline watch", price: 500, kind: "ipo", slug: "ipo-report",

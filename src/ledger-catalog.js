@@ -5,7 +5,7 @@
 
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { toolList, CATEGORIES } from "./pages.js";
-import { isComputePayable } from "./pow.js";
+import { isComputePayable, powCostPhrase } from "./pow.js";
 import { RAILS_SHORT } from "./rails.js";
 
 import { ORG_SAME_AS } from "./repo-link.js";
@@ -23,6 +23,13 @@ export function ledgerCatalogPage(baseUrl, catalog, skillPacks) {
   const tools = toolList(catalog);
   const count = tools.length;
   const freeCount = tools.filter(isComputePayable).length;
+  // The cheapest price the catalog charges, read from the catalog (the stat
+  // strip and the paid-tools copy must not carry a typed floor).
+  const floorUsd = (() => {
+    const nums = tools.map((t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, ""))).filter((n) => Number.isFinite(n) && n > 0);
+    return nums.length ? Math.min(...nums) : 0;
+  })();
+  const floorLabel = floorUsd ? String(floorUsd) : "-";
   const packCount = Array.isArray(skillPacks) ? skillPacks.length : 42;
 
   // ---- category data, with a REAL per-category "pays with" derivation ----
@@ -88,7 +95,7 @@ table{border-collapse:collapse;width:100%}
       <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">our tools</span>
     </nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1;margin:0 0 12px;color:var(--ink);">Our tools</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0;max-width:76ch;">${fmtNum(count)} tools an agent can call and pay for per request. Around ${fmtNum(freeCount)} of them run free on proof-of-work. These are <em style="color:var(--ink);font-style:normal;font-weight:500;">our own</em> tools; for every tool in the index, ours and other sellers', see <a href="/marketplace/tools" style="color:var(--ink);border-bottom:1px solid var(--accent);text-decoration:none;">all indexed tools</a>.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0;max-width:76ch;">${fmtNum(count)} tools an agent can call and pay for per request. ${fmtNum(freeCount)} of them run free on proof-of-work. These are <em style="color:var(--ink);font-style:normal;font-weight:500;">our own</em> tools; for every tool in the index, ours and other sellers', see <a href="/marketplace/tools" style="color:var(--ink);border-bottom:1px solid var(--accent);text-decoration:none;">all indexed tools</a>.</p>
 
     <div class="cat-search-wrap" style="display:flex;gap:0;background:var(--card);max-width:760px;margin:22px 0 0;">
       <label for="cat-search" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);">Search tools</label>
@@ -101,7 +108,7 @@ table{border-collapse:collapse;width:100%}
     <div style="display:flex;flex-wrap:wrap;margin-top:30px;border-top:1px dashed var(--dash);">
       <div style="flex:1 1 140px;padding:16px 20px 16px 0;margin-right:20px;border-right:1px dashed var(--dash);"><div style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-xl);line-height:1;font-variant-numeric:tabular-nums;">${fmtNum(count)}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-top:6px;white-space:nowrap;">tools</div></div>
       <div style="flex:1 1 140px;padding:16px 20px 16px 0;margin-right:20px;border-right:1px dashed var(--dash);"><div style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-xl);line-height:1;font-variant-numeric:tabular-nums;color:var(--ok);">${fmtNum(freeCount)}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-top:6px;white-space:nowrap;">free · proof-of-work</div></div>
-      <div style="flex:1 1 140px;padding:16px 20px 16px 0;margin-right:20px;border-right:1px dashed var(--dash);"><div style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-xl);line-height:1;font-variant-numeric:tabular-nums;"><span style="color:var(--accent);">$</span>0.001</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-top:6px;white-space:nowrap;">floor price</div></div>
+      <div style="flex:1 1 140px;padding:16px 20px 16px 0;margin-right:20px;border-right:1px dashed var(--dash);"><div style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-xl);line-height:1;font-variant-numeric:tabular-nums;"><span style="color:var(--accent);">$</span>${esc(floorLabel)}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-top:6px;white-space:nowrap;">floor price</div></div>
       <div style="flex:1 1 140px;padding:16px 20px 16px 0;margin-right:20px;border-right:1px dashed var(--dash);"><div style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-xl);line-height:1;font-variant-numeric:tabular-nums;">${catData.length}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-top:6px;white-space:nowrap;">categories</div></div>
       <div style="flex:1 1 140px;padding:16px 0;"><div style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-xl);line-height:1;font-variant-numeric:tabular-nums;">0</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-top:6px;white-space:nowrap;">api keys needed</div></div>
     </div>
@@ -134,7 +141,7 @@ table{border-collapse:collapse;width:100%}
     <div style="padding:28px;border-right:1px solid var(--hairline);background:var(--footer-bg);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ok);margin-bottom:14px;">FREE TIER</div>
       <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Pay with CPU, not USDC</h2>
-      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Every pure-CPU tool is payable in compute. Your machine solves a single-use sha256 puzzle - about 85,000 hashes, a tenth of a second - and the call goes through. No wallet, no funding, no signup.</p>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Every pure-CPU tool is payable in compute. Your machine solves a single-use sha256 puzzle - ${esc(powCostPhrase())} - and the call goes through. No wallet, no funding, no signup.</p>
       <pre style="margin:0 0 16px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># the MCP connector solves it for you
 </span>claude mcp add --transport http \
   agent402 https://agent402.tools/mcp</pre>
@@ -145,8 +152,7 @@ table{border-collapse:collapse;width:100%}
       <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Quoted before you're charged</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Anything that costs us money to run - live search, browser rendering, inference, stored memory - is priced per call and states its price in the 402 challenge. A failed x402 call is not charged, and there is no key to leak.</p>
       <pre style="margin:0 0 16px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># price, asset and rail, before paying
-</span>curl -i https://agent402.tools/api/search \
-  -d '{"q":"x402 adoption"}'</pre>
+</span>curl -i "https://agent402.tools/api/search?q=x402+adoption"</pre>
       <a href="/pricing" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">the full price list →</a>
     </div>
   </div>
@@ -156,7 +162,7 @@ table{border-collapse:collapse;width:100%}
   <div style="background:var(--panel);border:1px solid var(--hairline);padding:46px 40px;position:relative;overflow:hidden;">
     <div style="position:relative;">
       <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Don't browse. Just ask.</h2>
-      <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:64ch;">Paste the MCP URL and describe the job. The connector picks the tool, solves the proof-of-work or signs the payment, and hands back the result.</p>
+      <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:64ch;">Paste the MCP URL and describe the job: the hosted connector picks the tool, solves the proof-of-work for the free tools and hands back the result. Install agent402-mcp with a wallet key and it signs the payment for every other tool too.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
         <a class="btn btn-primary on-panel" href="/docs#add">Add to your agent →</a>
         <a class="btn btn-secondary on-panel" href="/playground">Try the playground</a>

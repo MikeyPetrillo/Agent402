@@ -10,7 +10,7 @@ import { MAX_FULL_PER_SUB_30D, MIN_FULL_GAP_MS } from "./monitor-scheduler.js";
 // The per-subscription report cap, read from the scheduler that enforces it.
 // The blurbs promise a fresh report on change; past this many in 30 days, or a
 // second change inside the gap, the scheduler sends an alert email instead.
-const CAP_NOTE = `Each monitor delivers up to ${MAX_FULL_PER_SUB_30D} full reports in any 30 days, the first one included. A change past that arrives as an alert email naming what changed, without a new report, and so does a domain or token change within ${Math.round(MIN_FULL_GAP_MS / 3_600_000)} hours of the last report.`;
+const CAP_NOTE = `Each monitor delivers up to ${MAX_FULL_PER_SUB_30D} full reports in any 30 days, the first one included. A change past that arrives as an alert email naming what changed, without a new report, and so does a domain or token change within ${Math.round(MIN_FULL_GAP_MS / 3_600_000)} hours of the last report. The research monitor sends no alerts: past the cap it waits until the oldest report ages out of the 30 days.`;
 
 // `prefill` = {product, target} from the query string (see the /monitors route).
 // It ONLY fills the form in: the deep link a delivered report or a delivery
@@ -53,7 +53,7 @@ ${ledgerFooterCompact()}
 <script src="/js/monitors.js"></script>`;
   return ledgerShell({
     title: "Agent402 Monitors: domain, 13F, recall, insider, IPO watch",
-    description: `$${monthlyLo}${monthlyLo === monthlyHi ? "" : ` to $${monthlyHi}`} a month monitors: domain security, SEC filings, Solana token safety, fund 13F, FDA recall, insider flow, IPO pipeline. Re-run on their own, emailed on change, card via Stripe, cancel anytime.`,
+    description: `$${monthlyLo}${monthlyLo === monthlyHi ? "" : ` to $${monthlyHi}`} a month monitors: ${Object.values(MONITOR_PRODUCTS).map((p) => p.label.replace(/ (watch|monitor)$/i, "")).join(", ")}. Re-run on their own, emailed on change, card via Stripe, cancel anytime.`,
     canonical: `${baseUrl}/monitors`, baseUrl, activePath: "/monitors", extraCss: REPORTS_CSS, body,
     // A prefilled variant is the same page with a form filled in: keep one
     // canonical URL and keep the variants out of the index.

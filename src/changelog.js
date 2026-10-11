@@ -166,7 +166,7 @@ const ENTRIES = [
       "Algorand was the same shape and worse: its candidates AND its proof both came from one facilitator catalog, so a seller we crawled ourselves was not even a candidate. Candidates now come from our index and proof from the chain (inbound USDC-ASA transfers to the payTo the seller advertises, self-transfers excluded), and a crawl-only route enters unproven so the router's floor still refuses it. Solana and Tempo already read their own chains, so all four chains we can spend on now prove settlement from the chain",
       "Two seller-facing fixes, both found by sellers: the index detail view echoes a seller's own description and tags, so the surface you check after editing your OpenAPI can actually confirm the edit landed; and re-registering an origin re-reads its documents instead of only re-pricing, clearing that origin's crawl backoff and our cached validators first",
       "An A2A AgentCard of our own at /.well-known/agent-card.json and /.well-known/agent.json, judged by the same validator we sell as a tool. It declares HTTP+JSON rather than the spec's default JSONRPC, because that default implies a JSON-RPC endpoint we do not run, and its capability flags are false rather than aspirational",
-      "An ERC-8004 identity: agent 94639 on Base, owned by the wallet our 402s name as payTo, pointing at /.well-known/agent-registration.json. The file carries every way to reach us with x402Support declared, and no supportedTrust, because without it the standard is discovery only and discovery is all we are claiming",
+      `An ERC-8004 identity: agent ${ERC8004_AGENT_ID} on Base, owned by the wallet our 402s name as payTo, pointing at /.well-known/agent-registration.json. The file carries every way to reach us with x402Support declared, and no supportedTrust, because without it the standard is discovery only and discovery is all we are claiming`,
       "/revenue takes a Monthly bucket beside Daily and Weekly. Dollars and transaction counts fold client-side; buyers do not, because a distinct count is not additive - a buyer paying on the 3rd and the 20th is one monthly buyer - so the month's union is computed server-side like the weekly one",
     ],
   },
@@ -505,3 +505,4 @@ ${ledgerFooterCompact()}`;
 
   return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd, extraCss, body });
 }
+import { ERC8004_AGENT_ID } from "./tools/a2a-card.js";

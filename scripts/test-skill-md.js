@@ -57,5 +57,14 @@ const missing = referenced.filter((p) => !satisfied(p));
 void path;
 ok(missing.length === 0, `every /api and /v1 path named in SKILL.md is a registered route (missing: ${JSON.stringify(missing)})`);
 
+
+// --- claims read from their sources -----------------------------------------
+{
+  const { powCostPhrase } = await import("../src/pow.js");
+  ok(!/every tool\s+is one `POST`/.test(md) && /is one HTTP call/.test(md), "Option C does not claim every tool is a POST");
+  ok(md.includes(powCostPhrase()) && !/A few ms of CPU/.test(md), "the proof-of-work cost is the shared phrase");
+  ok(/Verify with one unpaid call/.test(md) && !/Verify with one free call/.test(md), "the call that answers 402 is not called free");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

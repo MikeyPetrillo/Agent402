@@ -1,4 +1,5 @@
 import { whyPointsPlain } from "./why.js";
+import { erc8004AgentId, ERC8004_IDENTITY_REGISTRY } from "./tools/a2a-card.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
 import { guideSlugs } from "./guides.js";
@@ -21,9 +22,7 @@ import { listPublicReports } from "./human-checkout.js";
 
 import { REPO_URL } from "./repo-link.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
-import { ERC8004_IDENTITY_REGISTRY } from "./tools/a2a-card.js";
 // The registration id the registration file publishes (same setting), or null.
-const erc8004AgentId = () => { const id = String(process.env.ERC8004_AGENT_ID || "").trim(); return /^[1-9][0-9]*$/.test(id) ? id : null; };
 /** The llms.txt "finished reports" paragraph, DERIVED from the live catalog
  *  (route + price per slug) and the product tables (card + monitor prices),
  *  so it cannot quote a ladder that has since moved: a hand-written copy sat a
@@ -501,7 +500,7 @@ We state it this way deliberately: the honest guarantee is "settlement ordering 
 - [/api/mpp-leaderboard](${baseUrl}/api/mpp-leaderboard): on-chain ranking of MPP sellers by inbound USDC.e transfers on Tempo to their live recipient (window, distinct payers, volume; \`routable\` = the router will pay them)
 - [/.well-known/x402](${baseUrl}/.well-known/x402): one-fetch service manifest (identity, payment options, capability map, MCP, trust signals)
 - [/.well-known/agent-card.json](${baseUrl}/.well-known/agent-card.json): our A2A AgentCard (also at /.well-known/agent.json) - name, skills, transport. It declares HTTP+JSON rather than the spec's default JSONRPC because that is what we actually serve
-- [/.well-known/agent-registration.json](${baseUrl}/.well-known/agent-registration.json): our ERC-8004 registration file. ${erc8004AgentId() ? `The identity is agent ${erc8004AgentId()} in the registry at ${ERC8004_IDENTITY_REGISTRY.chain}:${ERC8004_IDENTITY_REGISTRY.address}, owned by the wallet our 402s name as payTo, and the` : "The"} file lists every way to reach us with x402Support declared
+- [/.well-known/agent-registration.json](${baseUrl}/.well-known/agent-registration.json): our ERC-8004 registration file. ${erc8004AgentId(baseUrl) ? `The identity is agent ${erc8004AgentId(baseUrl)} in the registry at ${ERC8004_IDENTITY_REGISTRY.chain}:${ERC8004_IDENTITY_REGISTRY.address}, owned by the wallet our 402s name as payTo, and the` : "The"} file lists every way to reach us with x402Support declared
 - [/api/reliability](${baseUrl}/api/reliability): structured reliability / SLA report with a verification URL per claim
 - [/api/pricing](${baseUrl}/api/pricing): machine-readable catalog (every endpoint, price, category, docs URL)
 - [/openapi.json](${baseUrl}/openapi.json): full OpenAPI 3.1 spec with input / output schemas for every tool

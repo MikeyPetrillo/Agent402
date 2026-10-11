@@ -5,7 +5,28 @@ import { CREDIT_PACKS } from "./credits.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPORTS_CSS } from "./human-reports-page.js";
 
-export function creditsPage(baseUrl, salesEnabled = false) {
+// The how-it-works example is one real catalog route: its method, path, body
+// and the balance after one call are read from the catalog entry, so the
+// snippet cannot show a debit the route does not charge.
+export function creditsExample(catalog = {}, slug = "whois", startUsd = 20) {
+  const hit = Object.entries(catalog || {}).find(([, d]) => d?.slug === slug);
+  if (!hit) return null;
+  const [key, d] = hit;
+  const [method, path] = String(d.route || key).split(" ");
+  const price = Number(String(d.price ?? "").replace(/[^0-9.]/g, ""));
+  if (!path || !Number.isFinite(price) || price <= 0) return null;
+  const input = d.discovery?.input || {};
+  const after = (Math.round((startUsd - price) * 1e6) / 1e6).toFixed(3);
+  return { method, path, price, input, after };
+}
+
+export function creditsPage(baseUrl, salesEnabled = false, catalog = {}) {
+  const ex = creditsExample(catalog);
+  const exCall = ex
+    ? (ex.method === "GET"
+      ? `curl -H "Authorization: Bearer a402_…" "${baseUrl}${ex.path}?${new URLSearchParams(ex.input)}"`
+      : `curl -X ${ex.method} -H "Authorization: Bearer a402_…" -H "content-type: application/json" \\\n  -d '${JSON.stringify(ex.input)}' ${baseUrl}${ex.path}`)
+    : "";
   // Sales are off by default (see the gate in server.js): selling a prepaid
   // balance means holding someone's money against future redemption. When off,
   // the page must not advertise a purchase it will refuse - a buy button that
@@ -32,7 +53,9 @@ export function creditsPage(baseUrl, salesEnabled = false) {
   <section class="hero">
     <div class="eyebrow">Prepaid credits · ${salesEnabled ? "every tool · no wallet" : "for existing keys"}</div>
     <h1>${salesEnabled ? "One card, <em>every tool.</em>" : "Prepaid credits, <em>for keys already issued.</em>"}</h1>
-    <p class="lede">${salesEnabled ? "Buy credits once, get a key, and" : "A prepaid key"} spend${salesEnabled ? "" : "s"} it across the pay-per-call tools and reports - per request, at list price, debited only when a call succeeds. Wallet-scoped routes (memory, usage) need a wallet and refuse a key. <b>No account, no subscription, no wallet.</b> The card-native twin of paying per call in USDC - and no signature per call either, which is the part that matters once an agent is making thousands of them: paying exact over x402 signs an authorization and waits for a settlement every single request, where this is one header.</p>
+    <p class="lede">${salesEnabled
+      ? "Buy credits once, get a key, and spend it across the pay-per-call tools and reports - per request, at list price, debited only when a call succeeds. Wallet-scoped routes (memory, usage) need a wallet and refuse a key. <b>No account, no subscription, no wallet.</b> The card-native twin of paying per call in USDC - and no signature per call either, which is the part that matters once an agent is making thousands of them: paying exact over x402 signs an authorization and waits for a settlement every single request, where this is one header."
+      : "This page is for holders of a key already issued. Send the key as a Bearer token on a paid route: it is debited per request at list price, only when the call succeeds. Wallet-scoped routes (memory, usage) need a wallet and refuse a key."}</p>
     <div class="trust"><span><span class="dot"></span> Debited only on a successful call</span><span><span class="dot"></span> Never expires</span>${salesEnabled ? '<span><span class="dot"></span> Secured by Stripe</span>' : ""}</div>
   </section>
   <section>
@@ -43,9 +66,9 @@ export function creditsPage(baseUrl, salesEnabled = false) {
     <div class="hm-obsidian" style="border-radius:var(--radius);background:var(--obsidian-bg);border:1px solid var(--obsidian-border);color:var(--on-panel);padding:26px 28px;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--on-panel-dim);margin-bottom:12px;">How it works</div>
       <pre style="margin:0;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.8;color:var(--on-panel-soft);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># any paid tool, any language - just the header</span>
-curl -H "Authorization: Bearer a402_…" ${esc(baseUrl)}/api/whois?domain=example.com
-<span style="color:var(--accent-lit);">HTTP/2 200</span>  X-Credits-Balance: 19.999
-
+${ex ? `${esc(exCall)}
+<span style="color:var(--accent-lit);">HTTP/2 200</span>  X-Credits-Balance: ${esc(ex.after)}   <span style="color:var(--on-panel-faint);"># 20.000 before, less one $${esc(String(ex.price))} call</span>
+` : ""}
 <span style="color:var(--on-panel-faint);"># a report, the same way</span>
 curl -X POST -H "Authorization: Bearer a402_…" -H "content-type: application/json" \\
   -d '{"ticker":"AAPL"}' ${esc(baseUrl)}/v1/dossier

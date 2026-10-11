@@ -69,5 +69,15 @@ setDecideLive(false);
   ok(/"endpoint": "\/api\/asset-transfers"/.test(h) && !/alchemy\/asset-transfers/.test(h), "the example names the asset-transfers route the catalog serves");
   ok(/"priceUsd": 0\.002/.test(h) && /"priceUsd": 0\.003/.test(h) && /"estimatedCostUsd": 0\.005/.test(h), "the example's prices and total come from the catalog");
 }
+
+// A run through Agent402 names the chains the execute route's 402 offers.
+{
+  const cat = { "POST /api/decide/execute": { slug: "decide-execute", price: "$0.001", onlyNetworks: ["eip155:8453"] } };
+  const h = decidePage("https://agent402.tools", cat);
+  ok(/A run through Agent402 is paid on Base\./.test(h), "the page says a run through Agent402 is paid on Base, read from onlyNetworks");
+  ok(/flat price per tier instead, which covers the seller&#39;s price|flat price per tier instead, which covers the seller's price/.test(h), "route-and-execute is described as one flat tier price covering the seller");
+  ok(!/A run through Agent402 is paid on/.test(decidePage("https://agent402.tools", {})), "no execute route in the catalog: no chain claim");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

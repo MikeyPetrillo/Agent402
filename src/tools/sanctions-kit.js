@@ -131,7 +131,7 @@ export const SANCTIONS_TOOLS = [
     route: "GET /api/sanctions/name",
     name: "Sanctions screening - name",
     slug: "sanctions-name",
-    category: "research",
+    category: "chain",
     price: "$0.005",
     description: "Screen a person or company name against the OFAC SDN list. Returns exact and substring matches with the SDN entry id and type, so every hit can be checked against the published list itself. Matching is exact, substring, or all-tokens (every word of your query appears as a whole word in the entry, in any order - so 'Vladimir Putin' finds 'PUTIN, Vladimir Vladimirovich'). Never a fuzzy similarity score, because a confident near-miss on a common surname is a liability rather than an answer; each hit says which of the three it was. A miss is 'not on the lists checked, as of this date', never a clearance.",
     tags: ["sanctions", "ofac", "compliance", "screening", "kyc", "aml"],

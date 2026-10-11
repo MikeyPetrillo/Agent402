@@ -380,7 +380,7 @@ import { GOV_TOOLS } from "./tools/gov-kit.js";
 import { GEO_TOOLS } from "./tools/geo-kit.js";
 import { OCR_TOOLS } from "./tools/ocr-kit.js";
 import { AGENT_TOOLS } from "./tools/agent-kit.js";
-import { SAMPLE_AGENT_CARD, A2A_WELL_KNOWN_PATHS, buildOurAgentCard, buildAgentRegistration } from "./tools/a2a-card.js";
+import { SAMPLE_AGENT_CARD, A2A_WELL_KNOWN_PATHS, buildOurAgentCard, buildAgentRegistration, erc8004AgentId } from "./tools/a2a-card.js";
 import { upstreamBuyerStatus } from "./upstream-buyer-status.js";
 import { CAPTCHA_TOOLS } from "./tools/captcha-kit.js";
 import { SQL_GUARD_TOOLS } from "./tools/sql-guard-kit.js";
@@ -3254,7 +3254,9 @@ app.get("/samples/a2a-agent-card.json", (_req, res) => {
 app.get("/.well-known/agent-registration.json", (_req, res) => {
   res.set("Cache-Control", "public, max-age=900").json(buildAgentRegistration({
     baseUrl: BASE_URL,
-    agentId: process.env.ERC8004_AGENT_ID,
+    // The same reader /company and llms.txt use: the setting, else the
+    // hosted origin's id; a self-hosted copy publishes none unless it sets its own.
+    agentId: erc8004AgentId(BASE_URL) ?? undefined,
     toolCount: Object.keys(CATALOG || {}).length,
   }));
 });
@@ -3805,7 +3807,7 @@ app.get("/reports/dossier/:ticker", (req, res, next) => { _programmaticEntity(re
 // host that never sets the variable sells none). Redemption is deliberately
 // untouched: existing keys keep spending their balance, so nobody's balance is
 // stranded by this switch.
-app.get("/credits", (_req, res) => res.set("Cache-Control", "public, max-age=120").type("html").send(creditsPage(BASE_URL, creditsSalesEnabled())));
+app.get("/credits", (_req, res) => res.set("Cache-Control", "public, max-age=120").type("html").send(creditsPage(BASE_URL, creditsSalesEnabled(), CATALOG)));
 app.get("/credits/thanks", (req, res) => res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(creditsThanksPage(String(req.query.session || ""), BASE_URL)));
 if (_credits) {
   app.post("/api/credits/checkout", async (req, res) => {

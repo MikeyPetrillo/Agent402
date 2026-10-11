@@ -15,6 +15,7 @@ import { STRIPE_MIN_USD } from "./mpp-stripe.js";
 import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
 
 import { REPO_URL } from "./repo-link.js";
+import { ERC8004_AGENT_ID } from "./tools/a2a-card.js";
 export const WHY_POINTS = [
   {
     id: "actual",
@@ -29,11 +30,11 @@ export const WHY_POINTS = [
   {
     id: "never-charged",
     kicker: "02 / FAILURE",
-    t: "A failed call is not charged.",
-    h: "A failed call is not charged, and the response proves it.",
+    t: "A failed x402 call is not charged.",
+    h: "A failed x402 call is not charged, and the response shows it.",
     s: "Settlement runs after the answer and an error cancels it; a keyed retry replays the paid answer instead of paying twice.",
     p: "Settlement runs after the handler answers and an error status cancels it, so a response with no payment receipt, or a receipt marked success:false, moved no money. A retry that carries the same idempotency key and the same payment credential replays the paid answer instead of paying again. The one residual case, a settled receipt on an error response, is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently. A Tempo push payment is sent before the call runs, so a call that then fails is recorded as a refund owed the same way. Anyone holding the settlement transaction can check it for free at /api/refunds/lookup and see our refund transaction once it is sent.",
-    links: [["/status", "outside uptime"], ["/guides/x402-and-mpp", "how it settles"]],
+    links: [["/x402-test", "check a payment"], ["/guides/x402-and-mpp", "how it settles"]],
     more: [],
   },
   {
@@ -49,8 +50,8 @@ export const WHY_POINTS = [
   {
     id: "no-wallet",
     kicker: "04 / NO WALLET",
-    t: "No wallet required.",
-    h: "No wallet required.",
+    t: "Some calls need no wallet.",
+    h: "Some calls need no wallet.",
     s: "Proof-of-work pays for the pure-CPU tools, and cards pay over MPP and at report checkout.",
     p: `Proof-of-work pays for the pure-CPU tools, cards over MPP pay any route priced at $${STRIPE_MIN_USD.toFixed(2)} or more, and card checkout sells the finished reports, beside USDC or USDG on ${RAILS.length} chains and native MPP on Tempo. An agent with a wallet never needs an account.`,
     links: [["/pricing", "ways to pay"], ["/reports", "card checkout"]],
@@ -82,7 +83,7 @@ export const WHY_POINTS = [
     t: "Everything is checkable.",
     h: "Everything is checkable.",
     s: "Outside uptime probes, a daily real-money canary, published transactions, open source and an on-chain operator identity.",
-    p: "Uptime is observed by two probes outside production, a real-money canary buys through every on-chain rail daily, transactions are published by rail and by wire, and the whole server is open source and self-hostable. The deterministic tools are pure code with no model in their path - parsers, hashes, math, a real browser - and the ones that DO run a model are named rather than blended in: the /v1 gateway tiers, the report products, the image, speech, transcription, embedding and AI-answer tools, the Decide planner, and the judgment model that can pick among the router's shortlisted candidates. Every 402 also carries the SHAPE of the answer before you pay: the accept declares an outputSchema, so an agent can check what came back against what was promised instead of taking a status code on trust. The operator is identified on-chain too: Agent402 is agent 94639 in the ERC-8004 Identity Registry on Base, and /.well-known/agent-registration.json is the record that registration points at, beside an A2A agent card at /.well-known/agent-card.json. So an agent can resolve who serves this catalog from the chain rather than from this page.",
+    p: `Uptime is observed by two probes outside production, a real-money canary buys through every on-chain rail daily, transactions are published by rail and by wire, and the whole server is open source and self-hostable. The deterministic tools are pure code with no model in their path - parsers, hashes, math, a real browser - and the ones that DO run a model are named rather than blended in: the /v1 gateway tiers, the report products, the image, speech, transcription, embedding and AI-answer tools, the Decide planner, and the judgment model that can pick among the router's shortlisted candidates. Every 402 also carries the SHAPE of the answer before you pay: its first accept declares an outputSchema (one copy, beside the discovery extension), so an agent can check what came back against what was promised instead of taking a status code on trust. The operator is identified on-chain too: Agent402 is agent ${ERC8004_AGENT_ID} in the ERC-8004 Identity Registry on Base, and /.well-known/agent-registration.json is the record that registration points at, beside an A2A agent card at /.well-known/agent-card.json. So an agent can resolve who serves this catalog from the chain rather than from this page.`,
     links: [["/proof", "receipts"], ["/status", "status"]],
     more: [["/revenue", "transactions"], ["/.well-known/agent-registration.json", "on-chain identity"], [REPO_URL, "source"]],
   },
@@ -175,7 +176,7 @@ export function whySectionHtml() {
       </div>
     </div>`).join("");
   return `<section id="why" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
-  <div class="hm-kicker">$ GET /proof</div>
+  <div class="hm-kicker">$ GET /#why</div>
   <h2 class="hm-h2" style="margin:0 0 12px;">Why pay here.</h2>
   <p class="hm-lede" style="margin:0 0 26px;">Seven claims, each linked to the surface that proves it.</p>
   <div class="why-list">${points}

@@ -7,6 +7,7 @@
 // decide tools are in the catalog (the route 404s otherwise).
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 import { decideConfig } from "./decide/config.js";
+import { x402RailsFor } from "./rails.js";
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const usd = (n) => `$${Number(n).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}`;
@@ -46,6 +47,11 @@ export function decidePage(baseUrl, catalog) {
   const curl = `curl -X POST ${baseUrl}/api/decide \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify({ task: DECIDE_EXAMPLE_TASK, depth: "plan" })}'`;
   const example = JSON.stringify(exampleResponse(catalog), null, 2);
   const liveDays = Math.round(c.liveWithinHours / 24);
+  // Where a run through Agent402 can be paid, read from the execute route's
+  // own offer (it names the chains its spending wallet can fund).
+  const execDef = Object.values(catalog || {}).find((d) => d?.slug === "decide-execute");
+  const execRailNames = execDef ? x402RailsFor(execDef).map((r) => r.name) : [];
+  const execPaidOn = execRailNames.length ? ` A run through Agent402 is paid on ${execRailNames.length === 1 ? execRailNames[0] : `${execRailNames.slice(0, -1).join(", ")} or ${execRailNames.at(-1)}`}.` : "";
 
   const faqs = [
     { q: "What does a decision return?", a: `A plan: each step names its tool, endpoint, price, input params that validate against that tool's schema, and fallbacks. Plus a cost and latency estimate, a confidence score, and any needs no indexed tool covers (gaps). Depth "full" adds a compiled prompt an agent can run as is.` },
@@ -54,7 +60,7 @@ export function decidePage(baseUrl, catalog) {
     { q: "Can a step use what an earlier step returned?", a: "Yes. When a later step needs a value an earlier step produces (the address an ENS lookup resolved, say), the plan writes {{step N}} for it and lists that step in dependsOn. Run through POST /api/decide/execute, Agent402 fills it in from the earlier step's answer: a field with the parameter's name, or the one address or IP it returned. A value it cannot name without guessing skips that step, and nothing is paid for it." },
     { q: "Can execute run a free plan sketch?", a: "Yes. /api/find and /api/route answer a multi-step task with a free sketch: one tool per step, chosen by keyword, no model. Send its execute body (the step slugs and your inputs for step 1) to POST /api/decide/execute and Agent402 runs the steps in order at list price; each later step takes its one required input from the step before. A paid decision adds judged fit, fallbacks, filled params and the credit." },
     { q: "How does the credit work?", a: `The decision fee comes back as a credit worth ${c.credit.percentOfFee}% of it, valid ${c.credit.ttlHours} hours, toward running that plan with POST /api/decide/execute. Unspent budget from a run returns as credit until the same window closes.` },
-    { q: "What does running a plan cost?", a: `Our tools at list price. Outside tools at the seller's price plus a ${c.routingFeePct}% markup: we buy the result from the seller and sell it to you. Spend stops at your budget, fallbacks run in order, and a run where no step succeeds is not charged.` },
+    { q: "What does running a plan cost?", a: `Our tools at list price. Outside tools at the seller's price plus a ${c.routingFeePct}% markup: we buy the result from the seller and sell it to you.${execPaidOn} Spend stops at your budget, fallbacks run in order, and a run where no step succeeds is not charged. The separate route-and-execute call (/api/route/execute) charges one flat price per tier instead, which covers the seller's price up to that tier's limit. On either path the buyer pays; the seller is paid its own price and is never charged.` },
   ];
   const faqLd = { "@type": "FAQPage", mainEntity: faqs.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
@@ -102,7 +108,7 @@ export function decidePage(baseUrl, catalog) {
       <div>
         <div class="dc-num">Agent402 Decide</div>
         <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);">Describe the job. Get the plan.</h1>
-        <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 18px;">One paid call returns a call-ready plan over this catalog and outside x402 sellers with a recently verified 402: which tools, in what order, with fallbacks and params that validate. Run it yourself, or have Agent402 run it and the fee comes back as credit.</p>
+        <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 18px;">One paid call returns a call-ready plan over this catalog and outside x402 sellers with a recently verified 402: which tools, in what order, with fallbacks and params that validate. Run it yourself, or have Agent402 run it and the fee comes back as credit.${esc(execPaidOn)}</p>
         <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 22px;">${usd(p.quick)} to ${usd(p.full)} per decision, paid per request in USDC over <a href="/what-is-x402" style="color:var(--ink);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);">MPP</a>. No account.</p>
         <div style="display:flex;gap:11px;flex-wrap:wrap;">
           <a class="btn btn-primary" href="#connect">Add to your agent →</a>
