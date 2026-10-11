@@ -103,12 +103,15 @@ for (const p of Object.values(PENDING)) {
 ok(fixtures.size >= 3, `the scan found ${fixtures.size} fixture files named by examples`);
 
 // No published example (input or answer) prints one of this server's own
-// operating wallets: an example is copied into buyers' code and docs. The
-// list is the revenue classifier's own-wallet default (src/revenue-live.js).
+// operating wallets (canary, spending, test buyers): an example is copied into
+// buyers' code and docs. The list is the revenue classifier's own-wallet
+// default (src/revenue-live.js), less the settlement address the home page
+// already publishes for anyone to verify payments against.
 {
   const live = readFileSync(join(ROOT, "src", "revenue-live.js"), "utf8");
-  const own = new Set(((/process\.env\.OUR_WALLETS \|\| "([^"]+)"/.exec(live) || [])[1] || "").toLowerCase().split(",").map((x) => x.trim()).filter(Boolean));
-  ok(own.size >= 2, `read ${own.size} own operating wallets from revenue-live.js`);
+  const published = new Set([...(await (await fetch(`${TARGET}/`)).text()).matchAll(/0x[0-9a-fA-F]{40}/g)].map((m) => m[0].toLowerCase()));
+  const own = new Set(((/process\.env\.OUR_WALLETS \|\| "([^"]+)"/.exec(live) || [])[1] || "").toLowerCase().split(",").map((x) => x.trim()).filter((x) => x && !published.has(x)));
+  ok(own.size >= 2, `read ${own.size} own operating wallets from revenue-live.js (${published.size} published on the home page left out)`);
   const hits = [];
   for (const [path, ops] of Object.entries(spec.paths || {})) {
     for (const [method, op] of Object.entries(ops)) {
