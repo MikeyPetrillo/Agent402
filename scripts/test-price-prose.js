@@ -17,6 +17,7 @@ import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
 import { priceUsdFor } from "../src/report-tiers.js";
 import { humanReportsPage } from "../src/human-reports-page.js";
 import { monitorsPage } from "../src/monitors-page.js";
+import { stripScripts, stripTags } from "./lib/html-text.js";
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
@@ -207,7 +208,7 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
     const { MONITOR_PRODUCTS: MP } = await import("../src/stripe-subscriptions.js");
     const short = (n) => { const s3 = n.toFixed(3); return Number(s3.endsWith("0") ? n.toFixed(2) : s3); };
     const allowed = new Set([0, ...Object.values(odd).map((t) => short(Number(t.price.slice(1)))), ...Object.values(MP).map((m) => m.price / 100)]);
-    const body = pricing.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<[^>]+>/g, " ");
+    const body = stripTags(stripScripts(pricing, ""));
     const typed = [...body.matchAll(/\$(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1])).filter((n) => !allowed.has(n));
     ok(typed.length === 0, `every dollar figure on /pricing derives from the catalog or the monitor table${typed.length ? ` (typed: ${[...new Set(typed)].join(", ")})` : ""}`);
   }

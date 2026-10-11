@@ -41,6 +41,7 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { chromium } from "playwright";
 import { getFreePort } from "./lib/free-port.js";
+import { stripTags } from "./lib/html-text.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WIDTHS = (process.env.WRAP_WIDTHS || "1440,400").split(",").map(Number);
@@ -353,7 +354,7 @@ async function pageList() {
       let h1 = 0, code = 0;
       try {
         const html = await (await fetch(`${BASE}${p}`)).text();
-        const m = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i); if (m) h1 = m[1].replace(/<[^>]+>/g, "").trim().length;
+        const m = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i); if (m) h1 = stripTags(m[1], "").trim().length;
         for (const c of html.matchAll(/<code[^>]*>([^<]{1,200})<\/code>/gi)) code = Math.max(code, ...c[1].split(/\s+/).map((w) => w.length));
       } catch {}
       return { p, h1, code };

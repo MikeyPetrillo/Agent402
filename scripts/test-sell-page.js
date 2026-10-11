@@ -9,6 +9,7 @@ import { X402_TOOLS } from "../src/tools/x402-kit.js";
 import { buildSellerPayabilityTool } from "../src/tools/seller-payability-kit.js";
 import { routingProofSentence } from "../src/routing-proof.js";
 import { ROUTE_ORDER } from "../src/route-order.js";
+import { decodeEntities, stripScripts, stripTags } from "./lib/html-text.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -17,7 +18,7 @@ const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } el
 // reads this page quotes, so every price on the page is the catalog's.
 const CATALOG = Object.fromEntries([...X402_TOOLS, buildSellerPayabilityTool({})].map((d) => [d.route, d]));
 const html = sellPage("https://agent402.tools", CATALOG);
-const text = html.replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ");
+const text = decodeEntities(stripTags(html)).replace(/\s+/g, " ");
 
 // --- hero ---------------------------------------------------------------
 ok(html.includes("Agents are buying") && html.includes(">paid<") && html.includes("for it."), "hero H1 renders");
@@ -42,7 +43,7 @@ for (const slug of ["bestsellers", "demand-radar", "seller-payability", "x402-au
   const src = rf(new URL("../src/sell.js", import.meta.url), "utf8");
   ok(!/\$0\.0\d+|\$0\.10\b|half a cent/.test(src), "src/sell.js types no tool price: every price is read from the catalog");
   const bare = sellPage("https://agent402.tools");
-  ok(!/\$0\.00[1-9]|\$0\.10\b/.test(bare.replace(/<script[^]*?<\/script>/g, "")), "rendered without a catalog, the page quotes no tool price rather than a stale one");
+  ok(!/\$0\.00[1-9]|\$0\.10\b/.test(stripScripts(bare, "")), "rendered without a catalog, the page quotes no tool price rather than a stale one");
 }
 ok(html.includes("/tools/demand-radar"), "demand-radar upsell links out");
 // The one thing this page must never do: pair a tool slug with a purchase
@@ -78,7 +79,7 @@ ok(text.includes("/api/index?seller=<your host>"), "the per-seller dispatch verd
 {
   const meta = (html.match(/<div class="ml-meta"[^>]*>((?:<span>[^<]*<\/span>)+)<\/div>\s*<p[^>]*>Four places/) || [])[1] || "";
   const spans = [...meta.matchAll(/<span>([^<]*)<\/span>/g)].map((m) => m[1]);
-  ok(spans.slice(0, ROUTE_ORDER.length).join("|") === ROUTE_ORDER.map((o) => o.short).join("|"), `the router meta row is ROUTE_ORDER, in order (${spans.join(" > ")})`);
+  ok(spans.slice(0, ROUTE_ORDER.length).join("|") === ROUTE_ORDER.map((o) => o.short).join("|"), `the router meta row is ROUTE_ORDER, in order (${ROUTE_ORDER.map((o) => o.short).join(" > ")})`);
 }
 ok(text.includes("Settled Base USDC volume shows up on the public on-chain leaderboard"), "the leaderboard claim is scoped to Base USDC (src/leaderboard.js)");
 ok(!/Gas is sponsored by the facilitator on EVM chains/.test(text) && text.includes("x402 exact scheme on EVM chains"), "the gas claim is scoped to the x402 exact scheme");

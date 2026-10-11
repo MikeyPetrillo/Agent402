@@ -28,6 +28,7 @@ import { wrapFetchWithPayment } from "@x402/fetch";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { tollboothLandingPage } from "../src/tollbooth-landing.js";
 import { integrationBySlug } from "../src/integration-pages.js";
+import { decodeEntities, stripInlineTags, stripTags } from "./lib/html-text.js";
 
 let pass = 0;
 const servers = [];
@@ -43,7 +44,7 @@ const html = tollboothLandingPage("https://agent402.tools");
 // The page's own content (the shared nav, footer and site JSON-LD name every rail).
 const own = html.slice(html.indexOf('<div class="tb-wrap">'), html.indexOf("<script src=\"/js/tollbooth-snippet.js\">"));
 ok(own.length > 1000, "found the page's own content block");
-const text = own.replace(/<\/?(code|a|b|i|em|strong|span)\b[^>]*>/g, "").replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+const text = decodeEntities(stripTags(stripInlineTags(own))).replace(/\s+/g, " ");
 
 ok(/if \(mode === "all"\) return true;/.test(pkg) && /if \(mode === "strict"\) return !looksHuman\(req\);/.test(pkg),
   "the package still defines all = every client, strict = anything not a real browser");
@@ -76,10 +77,10 @@ function renderSnippet(mode, wallet = "0x000000000000000000000000000000000000dEa
   };
   const document = { getElementById: (id) => els[id] || null, querySelectorAll: () => [] };
   vm.runInNewContext(snippetJs, { document, navigator: {}, setTimeout });
-  return els.snip.innerHTML.replace(/<[^>]+>/g, "").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  return decodeEntities(stripTags(els.snip.innerHTML, ""));
 }
 const modes = [...html.matchAll(/<option value="([a-z]+)"/g)].map((m) => m[1]);
-ok(modes.join(",") === "observe,bots,strict,all", `the page offers observe, bots, strict, all (got ${modes.join(",")})`);
+ok(modes.join(",") === "observe,bots,strict,all", `the page offers observe, bots, strict, all, in that order (${modes.length} option(s) found)`);
 
 // ---- 3. stub facilitator ----------------------------------------------------
 const settles = [];

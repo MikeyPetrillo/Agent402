@@ -25,6 +25,7 @@ import { BADGE_STYLES } from "../src/badges.js";
 import { esc } from "../src/ledger-chrome.js";
 import { REPO_SLUG } from "../src/repo-link.js";
 import { vendorHits, loadVendorData } from "./lib/vendor-names.js";
+import { stripScripts, stripTags } from "./lib/html-text.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 3089;
@@ -182,10 +183,7 @@ try {
 // GitHub", "open source"); the owner/name path appears only inside an href.
 // Machine surfaces (llms.txt, openapi, JSON-LD) are not HTML text and stay URLs.
 {
-  const visibleText = (html) => String(html)
-    .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
+  const visibleText = (html) => stripTags(stripScripts(html))
     .replace(/&quot;/g, '"').replace(/&#47;|&#x2f;/gi, "/");
   const reEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const slugRe = new RegExp(reEsc(REPO_SLUG), "i");
@@ -288,7 +286,7 @@ try {
 {
   const pricing = await (await fetch(`${BASE}/api/pricing`)).json();
   const bySlug = new Map((pricing.endpoints || []).map((e) => [e.slug, e]));
-  const strip = (h) => String(h).replace(/<(script|style)[\s\S]*?<\/\1>/g, "").replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\s+/g, " ");
+  const strip = (h) => stripTags(stripScripts(h, "")).replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\s+/g, " ");
   // /credits: a key holder's notice while sales are off, and an example whose
   // debit is the route's catalog price.
   const credits = strip(await (await fetch(`${BASE}/credits`)).text());

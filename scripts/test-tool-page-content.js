@@ -18,9 +18,10 @@ import { getFreePort } from "./lib/free-port.js";
 import { toolPage, toolTitle, toolMetaDescription, relatedTools, powSnippetRequest, displayPrice, categoryPage } from "../src/pages.js";
 import { mppOffersFor, mppRailsPhrase } from "../src/mpp-offers.js";
 import { creditsSalesEnabled } from "../src/credits-sales.js";
+import { stripScripts, stripTags as stripTagsWith } from "./lib/html-text.js";
 // Remove every tag, repeating until none remain (one pass can leave a tag
 // formed by the text it removed).
-function stripTags(s) { let prev; do { prev = s; s = s.replace(/<[^>]*>/g, ""); } while (s !== prev); return s; }
+const stripTags = (s) => stripTagsWith(s, "");
 
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -58,7 +59,7 @@ for (const computePayable of [true, false]) {
 {
   const odd = { ...hostile, slug: "odd-price", price: "$0.0137" };
   for (const computePayable of [true, false]) for (const mpp of [true, false]) {
-    const text = toolPage("https://example.test", odd, [], { computePayable, powDifficulty: 16, mpp }).replace(/<script[\s\S]*?<\/script>/g, "").replace(/<[^>]+>/g, " ");
+    const text = stripTagsWith(stripScripts(toolPage("https://example.test", odd, [], { computePayable, powDifficulty: 16, mpp }), ""));
     const figures = [...text.matchAll(/\$(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]));
     ok(figures.length > 0 && figures.every((n) => n === 0.0137), `tool page (pow=${computePayable}, mpp=${mpp}) quotes only the catalog price (found ${[...new Set(figures)].join(", ")})`);
   }
