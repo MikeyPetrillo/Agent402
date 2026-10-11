@@ -559,7 +559,7 @@ export const DEFI_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Screen DeFi yield pools (lending, LP, staking, vaults) across every chain from DefiLlama's free Yields dataset: filter by chain, project, token symbol, stablecoin-only, minimum TVL and minimum/maximum APY; sort by apy or tvl; limit up to 100. Each row carries pool id, project, chain, symbol, TVL, total/base/reward APY, 1d/7d/30d APY change, 30d mean APY, IL risk, exposure (single/multi), reward tokens and DefiLlama's outlier flag. The ~11MB upstream document is fetched once per 5 minutes and served from an in-process cache, so answers are bounded and fast. Keyless public data.",
+      "Screen DeFi yield pools (lending, LP, staking, vaults) across every chain from DefiLlama's Yields dataset: filter by chain, project, token symbol, stablecoin-only, minimum TVL and minimum/maximum APY; sort by apy or tvl; limit up to 100. Each row carries pool id, project, chain, symbol, TVL, total/base/reward APY, 1d/7d/30d APY change, 30d mean APY, IL risk, exposure (single/multi), reward tokens and DefiLlama's outlier flag. The ~11MB upstream document is fetched once per 5 minutes and served from an in-process cache, so answers are bounded and fast. Keyless public data.",
     tags: ["crypto", "defi", "yield", "apy", "tvl", "pools", "defillama", "screener", "stablecoin"],
     discovery: {
       bodyType: "json",
@@ -704,7 +704,7 @@ export const DEFI_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "DeFi protocols ranked by current TVL from DefiLlama's free protocol list: filter by category (Lending, Dexs, Liquid Staking, CDP, Yield...), chain (ranks by that chain's TVL), or a name search; limit up to 100. Rows carry global rank, name, slug, category, chains, TVL, 1h/1d/7d TVL change, market cap and mcap/TVL. CEX rows are excluded unless category is CEX or includeCex is true. The ~8.6MB upstream document is cached 5 minutes in-process. Keyless public data.",
+      "DeFi protocols ranked by current TVL from DefiLlama's protocol list: filter by category (Lending, Dexs, Liquid Staking, CDP, Yield...), chain (ranks by that chain's TVL), or a name search; limit up to 100. Rows carry global rank, name, slug, category, chains, TVL, 1h/1d/7d TVL change, market cap and mcap/TVL. CEX rows are excluded unless category is CEX or includeCex is true. The ~8.6MB upstream document is cached 5 minutes in-process. Keyless public data.",
     tags: ["crypto", "defi", "tvl", "protocols", "ranking", "defillama", "lending", "dex"],
     discovery: {
       bodyType: "json",
@@ -844,7 +844,7 @@ export const DEFI_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Blockchains ranked by DeFi TVL from DefiLlama's free chain list: name, TVL in USD, share of total DeFi TVL, native token symbol, EVM chain id and CoinGecko id; optional name search and minimum TVL; limit up to 100 (default 25). Totals carry the all-chain TVL and chain count. Keyless public data.",
+      "Blockchains ranked by DeFi TVL from DefiLlama's chain list: name, TVL in USD, share of total DeFi TVL, native token symbol, EVM chain id and CoinGecko id; optional name search and minimum TVL; limit up to 100 (default 25). Totals carry the all-chain TVL and chain count. Keyless public data.",
     tags: ["crypto", "defi", "tvl", "chains", "ranking", "defillama", "l1", "l2"],
     discovery: {
       bodyType: "json",
@@ -899,7 +899,7 @@ export const DEFI_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Daily TVL history for one chain (Ethereum, Base, Solana, Arbitrum...) or for all of DeFi (chain \"all\") from DefiLlama's free historical chain TVL endpoint: most recent `days` points (default 90, max 3650) as date + TVL in USD, with a summary (latest, first, min, max, mean, change over the window). Unknown chains answer 422. Keyless public data.",
+      "Daily TVL history for one chain (Ethereum, Base, Solana, Arbitrum...) or for all of DeFi (chain \"all\") from DefiLlama's historical chain TVL endpoint: most recent `days` points (default 90, max 3650) as date + TVL in USD, with a summary (latest, first, min, max, mean, change over the window). Unknown chains answer 422. Keyless public data.",
     tags: ["crypto", "defi", "tvl", "history", "chain", "defillama", "timeseries"],
     discovery: {
       bodyType: "json",
@@ -962,7 +962,7 @@ export const DEFI_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Stablecoins ranked by circulating supply from DefiLlama's free stablecoin dataset: name, symbol, peg currency and type (USD, EUR, JPY, VAR...), peg mechanism (fiat-backed, crypto-backed, algorithmic), current price and USD peg deviation, circulating supply in peg units and USD, 1d/7d/30d supply change, and per-chain circulation (top chains + count). Filter by peg currency, mechanism, chain (then ranked by supply on that chain) or a name/symbol search; limit up to 100. Totals carry matched circulating USD. Keyless public data.",
+      "Stablecoins ranked by circulating supply from DefiLlama's stablecoin dataset: name, symbol, peg currency and type (USD, EUR, JPY, VAR...), peg mechanism (fiat-backed, crypto-backed, algorithmic), current price and USD peg deviation, circulating supply in peg units and USD, 1d/7d/30d supply change, and per-chain circulation (top chains + count). Filter by peg currency, mechanism, chain (then ranked by supply on that chain) or a name/symbol search; limit up to 100. Totals carry matched circulating USD. Keyless public data.",
     tags: ["crypto", "stablecoin", "supply", "circulating", "usdt", "usdc", "defillama", "peg"],
     discovery: {
       bodyType: "json",
@@ -1044,7 +1044,7 @@ export const DEFI_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Daily total stablecoin circulating supply (in USD) over time from DefiLlama's free stablecoin charts, for all chains or one chain (Ethereum, Tron, Solana, Base...): most recent `days` points (default 90, max 3650) for a peg currency (USD default; EUR, JPY, ... or all pegs summed), with a summary (latest, first, min, max, mean, change over the window). Unknown chains answer 422. Keyless public data.",
+      "Daily total stablecoin circulating supply (in USD) over time from DefiLlama's stablecoin charts, for all chains or one chain (Ethereum, Tron, Solana, Base...): most recent `days` points (default 90, max 3650) for a peg currency (USD default; EUR, JPY, ... or all pegs summed), with a summary (latest, first, min, max, mean, change over the window). Unknown chains answer 422. Keyless public data.",
     tags: ["crypto", "stablecoin", "supply", "history", "defillama", "timeseries", "usd"],
     discovery: {
       bodyType: "json",
@@ -1115,7 +1115,7 @@ export const DEFI_TOOLS = [
     name: "DeFi protocol fees and revenue",
     price: "$0.002",
     description:
-      "Protocols ranked by fees paid by users (or by protocol revenue with metric \"revenue\") over the last 24h from DefiLlama's free fees overview: per-protocol 24h/7d/30d/1y/all-time totals with 1d/7d/30d change, category and chains; optional chain scope, category filter and name search; chain-level rows (network gas fees) via type \"chain\"; sector totals. limit up to 100. Keyless public data.",
+      "Protocols ranked by fees paid by users (or by protocol revenue with metric \"revenue\") over the last 24h from DefiLlama's fees overview: per-protocol 24h/7d/30d/1y/all-time totals with 1d/7d/30d change, category and chains; optional chain scope, category filter and name search; chain-level rows (network gas fees) via type \"chain\"; sector totals. limit up to 100. Keyless public data.",
     tags: ["crypto", "defi", "fees", "revenue", "protocols", "ranking", "defillama"],
     sourceName: "defillama-fees",
     metrics: ["fees", "revenue"],
@@ -1140,7 +1140,7 @@ export const DEFI_TOOLS = [
     name: "DEX volume by protocol",
     price: "$0.001",
     description:
-      "Decentralized exchanges ranked by 24h spot trading volume from DefiLlama's free DEX overview: per-DEX 24h/7d/30d/1y/all-time volume with 1d/7d/30d change, category and chains; optional chain scope (Ethereum, Base, Solana, Arbitrum...), category filter and name search; sector totals and the list of chains with DEX volume. limit up to 100. Keyless public data.",
+      "Decentralized exchanges ranked by 24h spot trading volume from DefiLlama's DEX overview: per-DEX 24h/7d/30d/1y/all-time volume with 1d/7d/30d change, category and chains; optional chain scope (Ethereum, Base, Solana, Arbitrum...), category filter and name search; sector totals and the list of chains with DEX volume. limit up to 100. Keyless public data.",
     tags: ["crypto", "defi", "dex", "volume", "trading", "ranking", "defillama", "uniswap"],
     sourceName: "defillama-dexs",
     metrics: null,

@@ -77,8 +77,8 @@ export function playgroundPage(baseUrl, catalog) {
   .pg-btn.run{background:var(--panel);color:var(--on-panel)}
   .pg-btn.run:hover{opacity:.85}
   .pg-btn.run:disabled{opacity:.5;cursor:not-allowed}
-  .pg-btn.disabled-info{background:var(--card);border:1px solid var(--hairline);color:var(--faint);cursor:default}
-  .pg-btn.disabled-info a{color:var(--accent);margin-left:6px}
+  .pg-paid{margin:16px 0 0;font-size:var(--fs-base);line-height:1.55;color:var(--muted)}
+  .pg-paid a{color:var(--accent);white-space:nowrap}
   .pg-status{margin-top:10px;font-size:var(--fs-md);color:var(--faint);font-family:var(--font-mono)}
   .pg-status .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--faint);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
   @keyframes spin{to{transform:rotate(360deg)}}

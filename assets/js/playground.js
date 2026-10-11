@@ -25,6 +25,9 @@
       return an<bn?-1:1;
     });
     tools.forEach(function(t){toolMap[t.slug]=t});
+    /* The picker lists the free-tier tools only: those are the ones this page
+       can run. A deep link to a paid tool still shows its form and price. */
+    tools=tools.filter(function(t){return t.computePayable});
     renderSelect(tools);
     var want=null;
     try{
@@ -175,15 +178,16 @@
       btn.addEventListener('click',function(){runTool(t)});
       info.appendChild(btn);
     }else{
-      var dbtn=document.createElement('button');
-      dbtn.className='pg-btn disabled-info';
-      dbtn.disabled=true;
-      dbtn.textContent='Requires USDC wallet ';
+      /* A paid tool cannot run here: say so in text, with the setup link as
+         its own link (never inside a disabled button). */
+      var paid=document.createElement('p');
+      paid.className='pg-paid';
+      paid.textContent='This tool is paid per call'+(t.price?' ('+t.price+')':'')+' and runs from an agent with a wallet, not in this page. ';
       var lnk=document.createElement('a');
       lnk.href='/integrations';
-      lnk.textContent='Setup →';
-      dbtn.appendChild(lnk);
-      info.appendChild(dbtn);
+      lnk.textContent='Set up a wallet →';
+      paid.appendChild(lnk);
+      info.appendChild(paid);
     }
 
     var statusDiv=document.createElement('div');

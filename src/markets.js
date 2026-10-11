@@ -78,10 +78,18 @@ export function marketsPage(baseUrl, catalog) {
 .mk-pre{background:var(--panel);color:var(--on-panel);border:1px solid var(--hairline);padding:18px 20px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.6;overflow-x:auto;margin:0;white-space:pre}
 `;
 
+  // A card shows the description's first sentence; a long one is cut at a
+  // word boundary and marked with an ellipsis, never mid-word.
+  const cardBlurb = (d) => {
+    const first = String(d || "").split(/(?<=\.)\s/)[0];
+    if (first.length <= 180) return first;
+    const cut = first.slice(0, 179);
+    return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), 120)).replace(/[\s,;:(-]+$/, "")}…`;
+  };
   const cardsHtml = (g) => g.slugs.map((s) => bySlug.get(s)).filter(Boolean).map((t) => `
       <a class="mk-card" href="/tools/${esc(t.slug)}">
         <div class="mk-name"><span>${esc(t.slug)}</span><span class="mk-price">${esc(t.price)}</span></div>
-        <p>${esc(String(t.description || "").split(/(?<=\.)\s/)[0].slice(0, 180))}</p>
+        <p>${esc(cardBlurb(t.description))}</p>
       </a>`).join("");
   const groupsHtml = GROUPS.map((g) => `
 <section id="${g.id}" style="max-width:1180px;margin:0 auto;padding:40px 30px 0;">
@@ -104,7 +112,6 @@ export function marketsPage(baseUrl, catalog) {
         <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 18px;">${esc(hero?.name || "Market pulse")} returns breadth, volume, open interest, funding extremes, the day's gainers and losers and BTC and ETH at a glance - one request, ${esc(hero?.price || "")}, no API key. ${tools.length - 1} more calls below cover perps, options, DeFi and stablecoins at ${esc(fmtUsd(lo))} to ${esc(fmtUsd(hi))} each.</p>
         <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 22px;">Pay per request in USDC over <a href="/what-is-x402" style="color:var(--ink);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);">MPP</a> from any wallet. The first call answers 402 with the price; the paid retry returns the data. A call that fails is not charged on x402.</p>
         <div style="display:flex;gap:11px;flex-wrap:wrap;">
-          <a class="btn btn-secondary" href="/playground?slug=${esc(MARKETS_HERO_SLUG)}">Try it in the playground →</a>
           <a class="btn btn-secondary" href="/tools/${esc(MARKETS_HERO_SLUG)}">Docs + sample output</a>
         </div>
       </div>
