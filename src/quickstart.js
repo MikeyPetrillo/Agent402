@@ -313,6 +313,10 @@ console.log(found.results, answer.answer, answer.citations);</code></pre>
 </div>
 </section>
 
+<section>
+<p class="qs-alt">New to paying per call? The <a href="/docs/Getting-Started">getting started guide</a> walks the whole loop, and the <a href="/faq">FAQ</a> covers payment, refunds and data.</p>
+</section>
+
 </div>
 ${ledgerFooterCompact()}
 

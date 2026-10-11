@@ -53,7 +53,7 @@ const visibleFaqArticles = (html.match(/<article style="padding:26px 0/g) || [])
 ok(visibleFaqArticles === 9, `visible FAQ prose also carries exactly 9 questions, matching the schema 1:1 (got ${visibleFaqArticles})`);
 
 // --- comparison table --------------------------------------------------------
-ok(html.includes(">MPP</th>") && html.includes("X-PAYMENT header"), "x402 vs MPP comparison table renders");
+ok(html.includes(">MPP</th>") && html.includes("PAYMENT-SIGNATURE header carrying"), "x402 vs MPP comparison table renders, naming the x402 v2 header");
 
 // --- copy hygiene -----------------------------------------------------------
 ok(!html.includes("—"), "no em dashes anywhere in the page copy");

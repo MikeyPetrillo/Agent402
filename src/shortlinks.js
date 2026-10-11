@@ -17,7 +17,7 @@ export const SHORTLINKS = Object.freeze({
   "/roo": "/guides/agent-hosts#roo-code",
   "/codex": "/guides/agent-hosts#openai-codex-cli",
   "/gemini": "/guides/agent-hosts#gemini-cli",
-  "/muse": "/guides/agent-hosts#muse-code",
+  "/muse": "/guides/agent-hosts",
   "/continue": "/guides/agent-hosts#continue",
   "/eliza": "/guides/agent-hosts#elizaos",
   "/elizaos": "/guides/agent-hosts#elizaos",
