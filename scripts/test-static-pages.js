@@ -24,6 +24,7 @@ import { USE_CASES, useCaseCost } from "../src/use-cases.js";
 import { BADGE_STYLES } from "../src/badges.js";
 import { esc } from "../src/ledger-chrome.js";
 import { REPO_SLUG } from "../src/repo-link.js";
+import { vendorHits, loadVendorData } from "./lib/vendor-names.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 3089;
@@ -206,6 +207,19 @@ try {
   }
   ok(scanned >= PAGES.length, `the repo-path check read every HTML page (${scanned})`);
   ok(shown.length === 0, `no served HTML page prints the repository path as text${shown.length ? ` - ${shown.slice(0, 8).join(" | ")}` : ""}`);
+}
+
+// --- the served catalog names no upstream vendor outside an attribution -----
+// test-no-third-party-names.js reads the kits offline; this reads what the
+// server actually publishes, which also covers tools built in server.js.
+{
+  const { vendors, allow } = loadVendorData();
+  const pricing = await (await fetch(`${BASE}/api/pricing`)).json();
+  const rows = Array.isArray(pricing?.endpoints) ? pricing.endpoints : [];
+  const named = [];
+  for (const t of rows) for (const field of ["name", "description"]) if (vendorHits(t.slug, field, t[field], vendors, allow).length) named.push(`${t.slug} ${field}`);
+  ok(rows.length >= 400, `the vendor check read the served catalog (${rows.length} tools)`);
+  ok(named.length === 0, `no served tool name or description names an upstream vendor outside a required attribution${named.length ? ` - ${named.slice(0, 10).join(" | ")}` : ""}`);
 }
 
 // --- no page sells credits while credits are off ----------------------------
