@@ -475,7 +475,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   .tp-pre { background:var(--panel); color:var(--on-panel); font-family:var(--font-mono); font-size:var(--fs-sm); line-height:1.6; padding:18px 20px; overflow-x:auto; border:none; white-space:pre; }
   .tp-grid { display:grid; gap:14px; margin:20px 0; }
   @media (min-width:640px){ .tp-grid { grid-template-columns:repeat(3,1fr); } }
-  .tp-card { background:var(--card); border:1px solid var(--hairline); padding:18px 20px; display:flex; flex-direction:column; gap:8px; }
+  .tp-card { background:var(--card); border:1px solid var(--hairline); padding:18px 20px; display:flex; flex-direction:column; gap:8px; min-width:0; overflow-wrap:anywhere; }
   .tp-free { display:inline-block; background:var(--ok); color:var(--paper); font-weight:700; font-size:var(--fs-2xs); letter-spacing:.02em; padding:2px 8px; font-family:var(--font-mono); vertical-align:middle; }
   .tp-facts { color:var(--muted); font-size:var(--fs-base); line-height:1.65; max-width:820px; padding-left:20px; }
   .tp-facts li { margin-bottom:6px; }
@@ -597,7 +597,7 @@ export function categoryPage(baseUrl, catalog, catKey) {
   };
   const cards = tools.map((t) => {
     const desc = t.description.length > 120 ? t.description.slice(0, 120) + "\u2026" : t.description;
-    return `<div style="background:var(--card);border:1px solid var(--hairline);padding:18px 20px;display:flex;flex-direction:column;gap:8px;">
+    return `<div style="background:var(--card);border:1px solid var(--hairline);padding:18px 20px;display:flex;flex-direction:column;gap:8px;min-width:0;overflow-wrap:anywhere;">
   <h3 style="font-size:var(--fs-base);margin:0;"><a href="/tools/${e(t.slug)}" style="text-decoration:none;color:var(--ink);">${e(t.name)}</a></h3>
   <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">${ledgerPriceLine(t)} · <code style="background:transparent;color:var(--faint);font-size:var(--fs-xs);">${t.method} ${e(t.path)}</code></div>
   <p style="color:var(--muted);font-size:var(--fs-sm);margin:0;line-height:1.5;flex:1;">${e(desc)}</p>
