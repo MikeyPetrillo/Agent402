@@ -19,16 +19,18 @@ import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { mppFlagshipRows } from "./mpp-flagship.js";
 import { PRICED_BY_MODEL_NOTE } from "./tools/llm-gateway-kit.js";
 import { PARAM_ALIASES } from "./input-aliases.js";
+import { UNIT_CATEGORIES } from "./tools/convert-gen.js";
+import { toolJudgeEnabled } from "./tool-judge.js";
 
 export const CATEGORIES = {
   web: { label: "Web & documents", blurb: "Read the live web: browser rendering, screenshots, article extraction, PDFs, metadata." },
   memory: { label: "Agent memory & coordination", blurb: "The stateful layer a stateless agent can't build for itself: durable wallet-keyed KV with TTL, atomic counters/locks, shared namespaces other agents can reach (grants), a tamper-evident audit log, and similarity recall. The payment is the identity - no signup." },
   network: { label: "Network & domains", blurb: "DNS, TLS certificates, WHOIS/RDAP, uptime checks, robots.txt and sitemaps." },
   data: { label: "Live public data", blurb: "Keyless real-time government and market data: dataset search across data.gov, NWS weather alerts, USGS earthquakes, currency rates, barcode product lookup." },
-  payments: { label: "Payments & x402", blurb: "Non-custodial x402 tooling: decode HTTP 402 quotes, verify on-chain USDC settlements, read balances, tx status and gas across Base, Polygon, Arbitrum, Optimism, Ethereum, and Robinhood Chain, and build EIP-3009 transfer authorizations. The agent signs with its own key - these tools never touch funds." },
+  payments: { label: "Payments & x402", blurb: "Non-custodial x402 tooling: decode HTTP 402 quotes, verify on-chain USDC settlements, read balances, tx status and gas across the EVM chains each tool lists, and build EIP-3009 transfer authorizations. The agent signs with its own key - these tools never touch funds." },
   conversion: { label: "Data conversion", blurb: "JSON ⇄ CSV/YAML/XML, markdown ⇄ HTML, diffs and queries - formats agents juggle constantly." },
   text: { label: "Text processing", blurb: "Slugs, case conversion, diffs, regex, keywords, token estimates, edit distance, readability, PII redaction." },
-  math: { label: "Math & finance", blurb: "Safe expression calculator, statistics, unit conversion across 13 categories (length, mass, temperature, …) via POST /api/unit-convert, percentage/number formatting, CIDR subnets, compound interest and loan math." },
+  math: { label: "Math & finance", blurb: `Safe expression calculator, statistics, unit conversion across ${Object.keys(UNIT_CATEGORIES).length} categories (${Object.keys(UNIT_CATEGORIES).slice(0, 3).join(", ")}, …) via POST /api/unit-convert, percentage/number formatting, CIDR subnets, compound interest and loan math.` },
   encoding: { label: "Encoding & crypto", blurb: "Hashes, HMAC signatures, base64/hex, JWT decoding, TOTP codes." },
   identifiers: { label: "Generators & IDs", blurb: "UUIDs, ULIDs, passwords, secure randomness, QR codes." },
   time: { label: "Time & scheduling", blurb: "Timezone-aware clocks, epoch conversion, cron parsing, durations." },
@@ -48,7 +50,7 @@ export const CATEGORIES = {
   "skill-pack": { label: "Skill packs", blurb: "Multi-tool workflows that run server-side in one request: one payment, one settlement, and a single response with a partial-success envelope if a step fails. Cheaper to integrate than orchestrating the steps yourself." },
   "date-time": { label: "Calendar & date math", blurb: "ISO weeks, leap years, day-of-year, epoch conversion, and movable-feast dates - the calendar edge cases that are easy to get subtly wrong." },
   research: { label: "Market & demand research", blurb: "Analyzed reads over this catalog's own demand and the open x402 ecosystem: what agents ask for, what sells, and company research." },
-  agent: { label: "Routing & delegation", blurb: "The Smart Order Router: describe a task and it resolves the best-matching tool and runs it in one call, from this catalog or bought from an external x402 seller and resold to you. Three tiers by underlying price." },
+  agent: { label: "Routing & delegation", blurb: "The Smart Order Router: describe a task and it resolves the best-matching tool and runs it in one call, from this catalog or bought from an external x402 seller and resold to you, in tiers by underlying price." },
   api: { label: "API primitives", blurb: "Building blocks for services that front an agent: CAPTCHA generation and verification." },
   x402: { label: "x402 seller intelligence", blurb: "Evidence about other x402 sellers, at three depths: the router's own gate field by field (crawl health, advertised chains, observed settlement counts), the assembled record for one origin (price provenance, advertised wallets against the wallets actually paid, settlement evidence per source, the dispatch verdict per chain), and a live payability check that buys one real call and reports every leg." },
 };
@@ -99,11 +101,28 @@ const TOOL_TITLE_MAX = 60;
 
 /** The price as a buyer meets it: a flat "$0.001" or, for a route that quotes
  *  each request from its body, the floor it starts at. */
-function priceWords(tool) {
+/** A catalog price as USD, e.g. "$0.010" -> 0.01. */
+export function priceUsdOf(tool) {
+  return Number(String(tool?.price ?? "").replace(/[^0-9.]/g, "")) || 0;
+}
+
+/** One display form for a catalog price: at least two decimals, no trailing
+ *  zeros past them ("$3.3" -> "$3.30", "$0.010" -> "$0.01", "$0.001" kept). */
+export function displayPrice(price) {
+  const raw = String(price ?? "");
+  const m = raw.match(/^\$(\d+)(?:\.(\d+))?$/);
+  if (!m) return raw;
+  let frac = (m[2] || "").replace(/0+$/, "");
+  if (frac.length < 2) frac = frac.padEnd(2, "0");
+  return `$${m[1]}.${frac}`;
+}
+
+export function priceWords(tool) {
+  const p = displayPrice(tool.price);
   if (tool.quoteRange && Number.isFinite(tool.quoteRange.maxUsd) && tool.quoteRange.maxUsd > tool.quoteRange.minUsd) {
-    return { short: `from ${tool.price}`, long: `quoted per request from ${tool.price}` };
+    return { short: `from ${p}`, long: `quoted per request from ${p}` };
   }
-  return { short: tool.price, long: `${tool.price} per call` };
+  return { short: p, long: `${p} per call` };
 }
 
 /** Name for a title: parentheticals dropped first, then cut at a word. */
@@ -285,6 +304,8 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const hasOnly = Array.isArray(tool.onlyNetworks) && tool.onlyNetworks.length > 0;
   const evmOne = hasOnly ? railsOrFor(tool) : "USDC on an EVM chain";
   const isPack = tool.category === "skill-pack";
+  // The paid-call snippet caps each payment at this tool's own highest price.
+  const spendCap = displayPrice(`$${tool.quoteRange && Number.isFinite(tool.quoteRange.maxUsd) ? tool.quoteRange.maxUsd : priceUsdOf(tool)}`);
   const packSlug = isPack ? tool.slug.replace(/^skill-/, "") : null;
 
   const jsonLd = [
@@ -319,7 +340,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const payHow = computePayable
     ? `pay ${pw.long} over x402${orMpp}, or call it free by solving a proof-of-work challenge`
     : evmOnly
-      ? `pay ${pw.long} over x402 with ${evmOne}${tool.identityBound ? " (the paying wallet is the identity)" : ""}`
+      ? `pay ${pw.long} over x402 with ${evmOne}${tool.identityBound ? " (the paying wallet is the identity)" : tool.longRunning ? orMpp : ""}`
       : `pay ${pw.long} over x402${orMpp} (there is no free tier)`;
   const reqPhrase = required.length
     ? `${required.length === 1 ? "the required field" : "the required fields"} ${codeList(required)}`
@@ -376,11 +397,17 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   facts.push(`A paid call that ends in any status of 400 or above is not charged over ${listWords(notCharged)}: settlement is cancelled when the tool fails.${tempoHere ? " The exception is a Tempo push credential, a transfer the buyer sent before the call: it settles before the tool runs, so if the tool then fails the payment is recorded as a refund owed to the paying wallet." : ""}`);
   if (computePayable) facts.push(`Free tier: no outbound network call leaves the server for this tool, so proof-of-work (${e(String(powDifficulty))} leading zero bits of sha256) pays for it.`);
   else facts.push(`Wallet-only: this tool ${tool.modelBacked ? "runs a model, so it has no proof-of-work tier" : WALLET_ONLY_POLICY_REASON.has(tool.slug) ? `${e(WALLET_ONLY_POLICY_REASON.get(tool.slug))}, so it is metered with money and has no proof-of-work tier` : "reaches the network or stored state, so it has no proof-of-work tier"}.${tool.identityBound ? "" : (creditsSalesEnabled() ? " A prepaid card-credits key (<code>Authorization: Bearer a402_...</code>) also pays it." : " A prepaid card-credits key issued earlier (<code>Authorization: Bearer a402_...</code>) also pays it.")}`);
-  if (tool.modelBacked) facts.push(`Model-backed: the answer is generated by a model, so the same input can produce different wording.`);
+  if (tool.modelBacked) facts.push(`Model-backed: the answer is generated by a model, so the same input can produce a different result.`);
   if (tool.identityBound) facts.push(`Identity-bound: results are keyed to the wallet that signed the payment, so only EVM x402 payments are accepted; credits keys and Tempo are refused.`);
-  else if (tool.longRunning) facts.push(`Long-running: payment settles after the work finishes, so only EVM exact payments are offered.`);
+  else if (tool.longRunning) {
+    // Read from the offers this route's 402 carries (mppOffersFor), so the
+    // sentence names exactly what a buyer can pay with here.
+    const lrMpp = mpp ? mppRailsPhrase(mppOffersFor({ priceUsd: priceUsdOf(tool), identityBound: false, longRunning: true })) : "";
+    facts.push(`Long-running: payment settles after the work finishes, so x402 is offered on EVM chains only${lrMpp ? ` and MPP on ${e(lrMpp)}` : ""}; Tempo is not offered.`);
+  }
+  if (tool.judgedChoice && toolJudgeEnabled()) facts.push(`A judgment model picks among the shortlisted tools; the chosen tool runs unchanged, so the answer itself is the tool's own.`);
   if (tool.runSeconds) facts.push(`Takes up to ${e(String(tool.runSeconds))} seconds. Keep the connection open that long, or send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link at once, then collect the answer from <code>GET /api/jobs/{id}</code>; payment still settles only when the answer is ready.`);
-  if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(tool.price)} and $${e(String(tool.quoteRange.maxUsd))}.`);
+  if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(displayPrice(tool.price))} and $${e(String(tool.quoteRange.maxUsd))}.`);
   if (typeof tool.tierQuote === "function") facts.push(e(PRICED_BY_MODEL_NOTE));
   if (cacheTtl) facts.push(`Cached: an identical request within ${e(fmtTtl(cacheTtl))} is answered from cache with <code>X-Cache: hit</code>.`);
   // The method alias (server.js) runs only when no catalog route of the other
@@ -399,7 +426,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const mcpArgs = JSON.stringify({ slug: tool.slug, params: input }, null, 2);
   const mcpNote = computePayable
     ? `On the hosted connector at <code>${e(baseUrl)}/mcp</code>, <code>catalog.call</code> runs ${e(tool.slug)} free (rate-limited, no wallet).`
-    : `The hosted connector at <code>${e(baseUrl)}/mcp</code> needs a payment for ${e(tool.slug)}; the stdio package pays it from a wallet or from <code>AGENT402_CREDITS_KEY</code>${tool.identityBound ? " (wallet only for this tool)" : ""}.`;
+    : `The hosted connector at <code>${e(baseUrl)}/mcp</code> needs a payment for ${e(tool.slug)}; the stdio package pays it from a wallet${tool.identityBound ? "" : creditsSalesEnabled() ? " or from <code>AGENT402_CREDITS_KEY</code>" : " or from an <code>AGENT402_CREDITS_KEY</code> issued earlier"}.`;
 
   const aliases = (Array.isArray(tool.aliases) ? tool.aliases : []).filter((a) => a && a !== tool.slug);
   const tagsLine = (tool.tags || []).length ? (tool.tags || []).slice(0, 8).map((t) => `<code>${e(t)}</code>`).join(" ") : "";
@@ -449,7 +476,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   .tp-pre { background:var(--panel); color:var(--on-panel); font-family:var(--font-mono); font-size:var(--fs-sm); line-height:1.6; padding:18px 20px; overflow-x:auto; border:none; white-space:pre; }
   .tp-grid { display:grid; gap:14px; margin:20px 0; }
   @media (min-width:640px){ .tp-grid { grid-template-columns:repeat(3,1fr); } }
-  .tp-card { background:var(--card); border:1px solid var(--hairline); padding:18px 20px; display:flex; flex-direction:column; gap:8px; }
+  .tp-card { background:var(--card); border:1px solid var(--hairline); padding:18px 20px; display:flex; flex-direction:column; gap:8px; min-width:0; overflow-wrap:anywhere; }
   .tp-free { display:inline-block; background:var(--ok); color:var(--paper); font-weight:700; font-size:var(--fs-2xs); letter-spacing:.02em; padding:2px 8px; font-family:var(--font-mono); vertical-align:middle; }
   .tp-facts { color:var(--muted); font-size:var(--fs-base); line-height:1.65; max-width:820px; padding-left:20px; }
   .tp-facts li { margin-bottom:6px; }
@@ -464,7 +491,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   <h1 class="tp-h1" title="${e(tool.name)}">${e(tool.name)}</h1>
   <div class="tp-badge">${
     computePayable
-      ? `<span><span class="tp-free">FREE</span> <span style="color:var(--on-panel-dim);">with proof-of-work</span></span><span style="color:var(--on-panel-muted);">or ${e(tool.price)} in USDC</span>`
+      ? `<span><span class="tp-free">FREE</span> <span style="color:var(--on-panel-dim);">with proof-of-work</span></span><span style="color:var(--on-panel-muted);">or ${e(pw.short)} in USDC</span>`
       : `<span style="color:var(--on-panel);">${e(pw.long)}</span><span style="color:var(--on-panel-dim);">USDC via x402</span>`
   }<span><code style="color:${methodColor};background:transparent;font-size:var(--fs-sm);">${e(tool.method)}</code> <code style="color:var(--on-panel-muted);background:transparent;font-size:var(--fs-sm);">${e(tool.path)}</code></span>${
     cacheTtl ? `<span style="color:var(--on-panel-dim);" title="Server caches identical responses for ${e(fmtTtl(cacheTtl))}.">Cached ${e(fmtTtl(cacheTtl))}</span>` : ""
@@ -501,7 +528,7 @@ import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { privateKeyToAccount } from "viem/accounts";
 
 const client = new x402Client();
-client.setSpendControls?.(false); // keep your own spending ceiling in code
+client.setSpendControls?.({ maxAmountPerPayment: "${spendCap}" }); // refuse any quote above this tool's price
 registerExactEvmScheme(client, { signer: privateKeyToAccount(KEY) });
 const payFetch = wrapFetchWithPayment(fetch, client);
 
@@ -542,9 +569,10 @@ ${ledgerFooterCompact()}`;
 
 // Price line for the new ledger card style
 function ledgerPriceLine(tool) {
+  const p = ledgerEsc(priceWords(tool).short);
   return isComputePayable(tool)
-    ? `<span style="background:var(--ok);color:var(--paper);font-weight:700;font-size:var(--fs-2xs);padding:1px 6px;font-family:var(--font-mono);">FREE</span> w/ compute · or ${tool.price}`
-    : `${tool.price}`;
+    ? `<span style="background:var(--ok);color:var(--paper);font-weight:700;font-size:var(--fs-2xs);padding:1px 6px;font-family:var(--font-mono);">FREE</span> w/ compute · or ${p}`
+    : p;
 }
 
 /** Category landing page — /tools/:category shows all tools in one category. */
@@ -556,8 +584,9 @@ export function categoryPage(baseUrl, catalog, catKey) {
   if (!tools.length) return null;
   const freeCount = tools.filter(isComputePayable).length;
   const canonical = `${baseUrl}/tools/category/${catKey}`;
-  const title = `${cat.label} - ${tools.length} tools | Agent402`;
-  const description = `${cat.blurb} ${tools.length} tools, ${freeCount} free via proof-of-work.`;
+  const nTools = `${tools.length} ${tools.length === 1 ? "tool" : "tools"}`;
+  const title = `${cat.label} - ${nTools} | Agent402`;
+  const description = `${cat.blurb} ${nTools}, ${freeCount} free via proof-of-work.`;
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "ItemList",
@@ -569,7 +598,7 @@ export function categoryPage(baseUrl, catalog, catKey) {
   };
   const cards = tools.map((t) => {
     const desc = t.description.length > 120 ? t.description.slice(0, 120) + "\u2026" : t.description;
-    return `<div style="background:var(--card);border:1px solid var(--hairline);padding:18px 20px;display:flex;flex-direction:column;gap:8px;">
+    return `<div style="background:var(--card);border:1px solid var(--hairline);padding:18px 20px;display:flex;flex-direction:column;gap:8px;min-width:0;overflow-wrap:anywhere;">
   <h3 style="font-size:var(--fs-base);margin:0;"><a href="/tools/${e(t.slug)}" style="text-decoration:none;color:var(--ink);">${e(t.name)}</a></h3>
   <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">${ledgerPriceLine(t)} · <code style="background:transparent;color:var(--faint);font-size:var(--fs-xs);">${t.method} ${e(t.path)}</code></div>
   <p style="color:var(--muted);font-size:var(--fs-sm);margin:0;line-height:1.5;flex:1;">${e(desc)}</p>
@@ -586,7 +615,7 @@ export function categoryPage(baseUrl, catalog, catKey) {
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:18px;"><a href="/" style="color:var(--accent);text-decoration:none;">Agent402</a> / <a href="/tools" style="color:var(--accent);text-decoration:none;">tools</a> / ${e(cat.label)}</div>
   <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin-bottom:10px;">${e(cat.label)}</h1>
   <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.6;max-width:720px;">${e(cat.blurb)}</p>
-  <div style="background:var(--card);border:1px solid var(--hairline);padding:16px 20px;margin:18px 0;font-size:var(--fs-base);"><b style="color:var(--accent);">${tools.length} tools</b> in this category${freeCount ? ` - <b style="color:var(--accent);">${freeCount} free</b> via proof-of-work` : ""}. <a href="/tools" style="color:var(--accent);">\u2190 All tools</a></div>
+  <div style="background:var(--card);border:1px solid var(--hairline);padding:16px 20px;margin:18px 0;font-size:var(--fs-base);"><b style="color:var(--accent);">${nTools}</b> in this category${freeCount ? ` - <b style="color:var(--accent);">${freeCount} free</b> via proof-of-work` : ""}. <a href="/tools" style="color:var(--accent);">\u2190 All tools</a></div>
   <div class="cp-grid">${cards}</div>
 </div>
 ${ledgerFooterCompact()}`;

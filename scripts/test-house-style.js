@@ -38,6 +38,10 @@ ok(r.report === "# why: answer\n\ntext - more" && r.echo.q === "why", "withHouse
 const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 ok(/for \(const def of ALL_KIT\) if \(Object\.hasOwn\(REPORT_TIERS, def\.slug\)[^\n]*withHouseStyle\(def\.handler\)/.test(src), "server.js wraps every REPORT_TIERS handler with withHouseStyle");
 ok(Object.keys(REPORT_TIERS).length >= 15, `REPORT_TIERS lists the report products (${Object.keys(REPORT_TIERS).length})`);
+// A compound joined by an unspaced en dash keeps its hyphen unspaced; a
+// spaced dash between clauses still becomes " - ".
+ok(houseStyleText("a Santa Clara, California–based company") === "a Santa Clara, California-based company", "an en dash inside a compound becomes a plain hyphen");
+ok(houseStyleText("revenue rose – sharply") === "revenue rose - sharply", "a spaced en dash in prose stays a spaced hyphen");
 // Every served sample obeys the rule as loaded.
 const { SAMPLES } = await import("../src/sample-reports.js");
 for (const s of Object.values(SAMPLES || {})) ok(!/[—–]/.test(String(s.report || "")) && !/[—–]/.test(String(s.title || "")), `sample ${s.product} carries no em or en dash`);

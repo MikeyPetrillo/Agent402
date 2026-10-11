@@ -358,5 +358,10 @@ for (const [status, expect, label] of [[500, 502, "upstream 500"], [503, 502, "u
   ok(a.mint === "revoked" && a.freeze === "unknown", "authorityBucket keeps unknown distinct from revoked");
 }
 
+{
+  const { readablePrice, readablePct } = await import("../src/tools/token-brief-kit.js");
+  ok(readablePrice(0.22232734531630582) === "0.222327" && readablePrice(0.0000123456789) === "0.0000123457" && readablePrice(142.5) === "142.5", "token prices are written with six significant digits, no float tail");
+  ok(readablePct(-3.2117) === "-3.21%" && readablePct(null) === "unknown", "24h change is written with two decimals");
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

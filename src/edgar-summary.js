@@ -55,10 +55,14 @@ export const stateName = (code) => STATES[String(code || "").toUpperCase()] || "
 // revenue net of interest expense; older filers used Revenues or SalesRevenueNet,
 // and some stopped using one tag years ago). Tried in order; the first whose
 // newest annual value is recent wins, otherwise the freshest one read.
+// The total-revenue tag leads: for an insurer or a conglomerate,
+// RevenueFromContractWithCustomer leaves out premiums earned and investment
+// income (Berkshire Hathaway's is about two thirds of its total revenues), so
+// it is read only when the filer reports no current total.
 export const REVENUE_TAGS = Object.freeze([
-  "RevenueFromContractWithCustomerExcludingAssessedTax",
   "Revenues",
   "RevenuesNetOfInterestExpense",
+  "RevenueFromContractWithCustomerExcludingAssessedTax",
   "SalesRevenueNet",
 ]);
 const FRESH_MS = 550 * DAY_MS;
@@ -134,6 +138,18 @@ const FORM_LABELS = {
 export const isOfferingNoise = (form) => /^(424B\d*|FWP)$/.test(String(form || "").toUpperCase());
 // Forms a reader of a company profile looks for first, in this order.
 const KEY_FORMS = ["10-K", "10-Q", "8-K", "4", "DEF 14A", "20-F", "6-K", "40-F"];
+
+/** A form number as a reader names it: "4" -> "Form 4", "10-K" kept. */
+export const formName = (form) => (/^\d+(\/A)?$/.test(String(form || "")) ? `Form ${form}` : String(form || ""));
+
+/** A filing's document title, or what the form is when EDGAR's title is only
+ *  the form number or "PRIMARY DOCUMENT". */
+export function documentLabel(form, description) {
+  const d = String(description || "").trim();
+  if (d && d.toUpperCase() !== String(form || "").toUpperCase() && !/^primary document$/i.test(d)) return d;
+  const l = formLabel(form, 1);
+  return l.charAt(0).toUpperCase() + l.slice(1);
+}
 
 export const formLabel = (form, n) => { const l = FORM_LABELS[form]; return l ? (n === 1 ? l[0] : l[1]) : `Form ${form} ${n === 1 ? "filing" : "filings"}`; };
 
@@ -242,29 +258,39 @@ export function insiderSummary(rows) {
   for (const r of rs) { const k = r.insider || "?"; const p = people.get(k) || { insider: k, role: r.role, lines: 0, sold: 0, bought: 0 };
     p.lines++; if (r.code === "S") p.sold += (Number(r.shares) || 0) * (Number(r.price) || 0); if (r.code === "P") p.bought += (Number(r.shares) || 0) * (Number(r.price) || 0); people.set(k, p); }
   const ranked = [...people.values()].sort((a, b) => (b.sold + b.bought) - (a.sold + a.bought) || b.lines - a.lines);
-  return { sells: agg("S"), buys: agg("P"), insiders: people.size, top: ranked[0] || null };
+  // Insiders with an open-market line (P or S), as distinct from every filer.
+  const traders = new Set(rs.filter((r) => r.code === "P" || r.code === "S").map((r) => r.insider || "?")).size;
+  return { sells: agg("S"), buys: agg("P"), insiders: people.size, traders, top: ranked[0] || null };
 }
 
-export function insiderNarrative(name, ticker, data, s) {
+/** maxFilings: how many filings the paid report reads (INSIDER_TIERS), so the
+ *  closing sentence never promises more than the report reads. */
+export function insiderNarrative(name, ticker, data, s, { maxFilings = Infinity } = {}) {
   if (!data || !s || !(data.rows || []).length) return [];
   const out = [];
   const flows = [];
   if (s.sells.lines) flows.push(`${plural(s.sells.lines, "open-market sale")} of ${s.sells.shares.toLocaleString("en-US")} shares worth about ${fmtMoney(s.sells.value)}`);
   if (s.buys.lines) flows.push(`${plural(s.buys.lines, "open-market purchase")} of ${s.buys.shares.toLocaleString("en-US")} shares worth about ${fmtMoney(s.buys.value)}`);
-  out.push(`Across the ${plural(data.filingsRead, "filing")} read here, ${plural(s.insiders, "insider")} at ${name} (${ticker}) reported ${flows.length ? listJoin(flows) : "no open-market buys or sales, only awards, exercises, tax withholding or other non-market transactions"}.`);
+  const traders = s.traders ?? s.insiders;
+  out.push(flows.length
+    ? `Across the ${plural(data.filingsRead, "filing")} read here, ${plural(s.insiders, "insider")} at ${name} (${ticker}) filed; ${traders === s.insiders ? (s.insiders === 1 ? "that insider" : "between them they") : `${plural(traders, "of them", "of them")} traded on the open market and`} reported ${listJoin(flows)}.`
+    : `Across the ${plural(data.filingsRead, "filing")} read here, ${plural(s.insiders, "insider")} at ${name} (${ticker}) filed and none reported an open-market buy or sale, only awards, exercises, tax withholding or other non-market transactions.`);
   if (s.top && (s.top.sold || s.top.bought)) {
     out.push(`The largest by value was ${s.top.insider}${s.top.role ? ` (${s.top.role})` : ""}, with ${s.top.sold ? `about ${fmtMoney(s.top.sold)} sold` : ""}${s.top.sold && s.top.bought ? " and " : ""}${s.top.bought ? `about ${fmtMoney(s.top.bought)} bought` : ""} on the open market.`);
   }
-  if (data.filingsInWindow > data.filingsRead) out.push(`${plural(data.filingsInWindow, "Form 4 filing")} were made against ${name} in the ${data.windowDays} days to ${longDate(data.endDate)}; the paid report reads all of them.`);
+  if (data.filingsInWindow > data.filingsRead) out.push(`${plural(data.filingsInWindow, "Form 4 filing")} were made against ${name} in the ${data.windowDays} days to ${longDate(data.endDate)}; ${data.filingsInWindow <= maxFilings ? "the paid report reads all of them" : `the paid report reads the newest ${maxFilings.toLocaleString("en-US")}`}.`);
   return out;
 }
 
 /** Concentration of the positions a fund page shows, against the whole filing. */
+/** "Renaissance Technologies'" / "Vanguard's": the possessive of a name. */
+export const possessive = (name) => (/s$/i.test(String(name).trim()) ? `${String(name).trim()}'` : `${String(name).trim()}'s`);
+
 export function fundNarrative(name, data) {
   if (!data?.holdingsAvailable || !(data.holdings || []).length) return [];
   const h = data.holdings;
   const topW = h.reduce((s, x) => s + (Number(x.weight) || 0), 0);
-  const out = [`${name}'s largest reported position at ${longDate(data.reportDate)} was ${h[0].issuer} at ${(h[0].weight * 100).toFixed(1)}% of the ${fmtMoney(data.totalValueUsd)} it reported${h[1] ? `, followed by ${h[1].issuer} (${(h[1].weight * 100).toFixed(1)}%)` : ""}.`];
+  const out = [`${possessive(name)} largest reported position at ${longDate(data.reportDate)} was ${h[0].issuer} at ${(h[0].weight * 100).toFixed(1)}% of the ${fmtMoney(data.totalValueUsd)} it reported${h[1] ? `, followed by ${h[1].issuer} (${(h[1].weight * 100).toFixed(1)}%)` : ""}.`];
   if (data.totalHoldings > h.length) out.push(`The ${plural(h.length, "largest position")} shown make up ${(topW * 100).toFixed(1)}% of reported value across ${plural(data.totalHoldings, "position")}, so the rest of the portfolio holds ${((1 - topW) * 100).toFixed(1)}%.`);
   return out;
 }

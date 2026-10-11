@@ -132,7 +132,7 @@ export function humanReportsPage(baseUrl) {
     <div class="eyebrow eyebrow-tags"><span>Cited reports</span><span>one price per report</span><span>price on every button</span></div>
     <h1>A finished report, <em>not a chat answer.</em></h1>
     <p class="lede">Deep research on any question, due diligence on any public company, a 13F breakdown of any fund, a graded audit of any domain. Built from live data, research and filing reports cited to their sources, delivered in ${REPORT_TURNAROUND}. <b>Nothing to sign up for, nothing recurring.</b> Pay by card at checkout and the report is yours. Agents skip the card and pay per call over x402 or MPP.</p>
-    <div class="trust"><span><span class="dot"></span> Built from live data</span><span><span class="dot"></span> Auto-refunded if a report fails</span><span><span class="dot"></span> Secured by Stripe</span><span><span class="dot"></span> PDF and data tables</span></div>
+    <div class="trust"><span><span class="dot"></span> Built from live data</span><span><span class="dot"></span> Auto-refunded if a report fails</span><span><span class="dot"></span> Secure card checkout</span><span><span class="dot"></span> PDF and data tables</span></div>
     <div class="mon-offer"><p><b>Need it again when something changes?</b> A monitor watches one target and re-runs the report when the facts move. ${esc(monitorPriceLabel())}, cancel anytime.</p><a class="btn btn-secondary btn-sm" href="/monitors">See monitors →</a></div>
     <div class="samples-strip" style="margin-top:18px;padding:14px 16px;border:1px solid var(--hairline);background:var(--card);">
     <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;">read a real one first</div>
@@ -171,7 +171,7 @@ export function humanReportsPage(baseUrl) {
         <div class="gets"><b>What you get:</b> the newest 10-K, 10-Q or 8-K read for you: what changed, what the numbers say, what the notes disclose, cited to the document.</div>
         <div class="err" id="err-filing"></div>
         ${buyBtn("filing", "filing-report", "Get the report")}
-        <div class="note" style="margin-top:10px;"><a href="/tools/filing-report" style="color:var(--muted);">Sample output + API docs &rarr;</a></div>
+        <div class="note" style="margin-top:10px;">${sampleLink("filing-report")}<a href="/tools/filing-report" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
       <div class="pcard receipt" data-kind="ticker">
         <div class="k">Ticker pack</div>
@@ -181,7 +181,7 @@ export function humanReportsPage(baseUrl) {
         <div class="gets"><b>What you get:</b> the dossier, the insider-flow report and the 5%+ holders (Schedule 13D/13G) in one bundle.</div>
         <div class="err" id="err-ticker"></div>
         ${buyBtn("ticker", "ticker-pack", "Get the pack")}
-        <div class="note" style="margin-top:10px;"><a href="/tools/ticker-pack" style="color:var(--muted);">Sample output + API docs &rarr;</a></div>
+        <div class="note" style="margin-top:10px;">${sampleLink("ticker-pack")}<a href="/tools/ticker-pack" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
       <div class="pcard receipt" data-kind="token">
         <div class="k">Token due diligence</div>
@@ -191,7 +191,7 @@ export function humanReportsPage(baseUrl) {
         <div class="gets"><b>What you get:</b> a graded safety read: authorities, liquidity, holder concentration, trading flow and every named risk flag, cited on-chain.</div>
         <div class="err" id="err-token"></div>
         ${buyBtn("token", "token-brief", "Get the brief")}
-        <div class="note" style="margin-top:10px;"><a href="/tools/token-brief" style="color:var(--muted);">Sample output + API docs &rarr;</a></div>
+        <div class="note" style="margin-top:10px;">${sampleLink("token-brief")}<a href="/tools/token-brief" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
       <div class="pcard receipt" data-kind="fund">
         <div class="k">Fund tracker</div>
@@ -254,7 +254,7 @@ export function humanReportsPage(baseUrl) {
         <div class="note" style="margin-top:10px;">${sampleLink("domain-audit")}<a href="/tools/domain-audit" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
     </div>
-    <p class="note">One-time charge · card or Link · no subscription, no auto-renew · agents buy the same reports over x402 / MPP in USDC · want it re-run on change? <a href="/monitors" style="color:var(--ink);">Monitors</a></p>
+    <p class="note">One-time charge · card · no subscription, no auto-renew · agents buy the same reports over x402 / MPP in USDC · want it re-run on change? <a href="/monitors" style="color:var(--ink);">Monitors</a></p>
     <p class="note">Free SEC filing pages, no card needed: <a href="/reports/insider" style="color:var(--ink);">insider filings by ticker</a> · <a href="/reports/fund" style="color:var(--ink);">13F holdings by fund</a> · <a href="/reports/dossier" style="color:var(--ink);">company profiles by ticker</a></p>
   </section>
 </div>

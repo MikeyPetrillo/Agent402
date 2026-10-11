@@ -325,7 +325,7 @@ const OUT_EXAMPLE = {
 export const RESEARCH_DEEP_TOOLS = [
   {
     route: "POST /v1/research", name: "Deep research report (grounded, cited)", slug: "research", category: "llm", price: RESEARCH_TIERS["research"].price,
-    description: "Hand over a whole research question and get one cited report back. The gateway plans sub-questions, runs multiple live web searches, reranks the sources by relevance, and synthesizes a ~1,500-word report with inline [n] citations and a source list - one payment, one outcome. Priced per report, not per call. Payable in USDC (x402/MPP) or by card (Stripe, >= $0.50 minimum - this clears it). Not cached (the web moves).",
+    description: "Hand over a whole research question and get one cited report back. The gateway plans sub-questions, runs multiple live web searches, reranks the sources by relevance, and synthesizes a ~1,500-word report with inline [n] citations and a source list - one payment, one outcome: one call returns one finished report. Payable in USDC (x402/MPP) or by card over MPP (card charges start at $0.50; this clears it). Not cached (the web moves).",
     tags: ["llm", "research", "web-search", "grounded", "citations", "deep-research", "agent", "premium"],
     discovery: { bodyType: "json", input: EXAMPLE, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeResearchHandler("research"),

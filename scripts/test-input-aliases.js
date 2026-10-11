@@ -298,5 +298,33 @@ ok(applyInputAliases({ domain: "x" }, { discovery: {} }).length === 0, "a tool w
   }
 }
 
+// A synonym is only safe when it names the same KIND of value. Every tool that
+// requires `image` reads base64 bytes, so a URL-shaped synonym would pass a
+// link to a field that cannot fetch one (and the tool page would advertise it).
+{
+  const { IMAGE_TOOLS } = await import("../src/tools/image-kit.js");
+  const { BARCODE_TOOLS } = await import("../src/tools/barcode-kit.js");
+  const URLISH = /url|uri|src|href|link/i;
+  let checked = 0;
+  for (const t of [...IMAGE_TOOLS, ...BARCODE_TOOLS]) {
+    const s = t.discovery?.inputSchema || {};
+    for (const name of s.required || []) {
+      const d = String(s.properties?.[name]?.description || "");
+      if (!/base64/i.test(d)) continue;
+      checked++;
+      const bad = (PARAM_ALIASES[name] || []).filter((a) => URLISH.test(a));
+      ok(bad.length === 0, `${t.slug}.${name} reads base64, so no URL-shaped synonym is accepted (found ${bad.join(", ") || "none"})`);
+    }
+  }
+  ok(checked >= 4, `the base64 image fields were found and checked (${checked})`);
+  const img = def(["image"], ["image", "width"]);
+  const sent = { imageUrl: "https://example.com/a.png" };
+  applyInputAliases(sent, img);
+  ok(sent.image === undefined, "an imageUrl is not copied into a base64 image field");
+  const sent2 = { file: "iVBORw0KGgo=" };
+  applyInputAliases(sent2, img);
+  ok(sent2.image === "iVBORw0KGgo=", "file still fills a missing base64 image field");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
