@@ -18,6 +18,8 @@ const isObj = (v) => typeof v === "object" && v !== null && !isArr(v);
 
 /** The well-known paths an A2A server publishes its card at, in resolution
  *  order (v0.3 canonical path first, the older agent.json second). */
+import { RAILS } from "../rails.js";
+
 export const A2A_WELL_KNOWN_PATHS = ["/.well-known/agent-card.json", "/.well-known/agent.json"];
 
 /**
@@ -40,6 +42,12 @@ export const A2A_WELL_KNOWN_PATHS = ["/.well-known/agent-card.json", "/.well-kno
  * what we are claiming; a trust model we have not implemented is not.
  */
 export const ERC8004_IDENTITY_REGISTRY = { chain: "eip155:8453", address: "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432" };
+/** Our agent id in that registry: the one place it is written. The pages that
+ *  name it and the registration file read it from here. */
+export const ERC8004_AGENT_ID = "94639";
+
+// "stablecoins (USDC, or USDG on Robinhood Chain)", read from RAILS.
+const SETTLE_ASSETS = `stablecoins (USDC${RAILS.filter((r) => r.asset !== "USDC").map((r) => `, or ${r.asset} on ${r.name}`).join("")})`;
 
 export function buildAgentRegistration({ baseUrl, agentId, toolCount } = {}) {
   const base = String(baseUrl || "https://agent402.tools").replace(/\/+$/, "");
@@ -53,8 +61,8 @@ export function buildAgentRegistration({ baseUrl, agentId, toolCount } = {}) {
     type: "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
     name: "Agent402",
     description:
-      `Pay-per-call web tools for autonomous agents: ${catalog} settled in USDC over x402 or MPP, ` +
-      "free via proof of work, or prepaid by card. No account and no API key.",
+      `Pay-per-call web tools for autonomous agents: ${catalog} settled in ${SETTLE_ASSETS} over x402 or MPP, ` +
+      "free via proof of work for the pure-CPU tools, and finished reports by card. No account and no API key.",
     image: `${base}/logo.png`,
     // { name, endpoint }, the spec's field names. The first cut used
     // { type, url }, which parses to zero usable services.
@@ -103,8 +111,8 @@ export function buildOurAgentCard({ baseUrl, version, toolCount } = {}) {
     protocolVersion: "0.3.0",
     name: "Agent402",
     description:
-      `Pay-per-call web tools for autonomous agents: ${catalog} settled in USDC over x402 or MPP, ` +
-      "free via proof of work, or prepaid by card. No account and no API key. The same catalog is " +
+      `Pay-per-call web tools for autonomous agents: ${catalog} settled in ${SETTLE_ASSETS} over x402 or MPP, ` +
+      "free via proof of work for the pure-CPU tools, and finished reports by card. No account and no API key. The same catalog is " +
       `callable over MCP at ${base}/mcp and documented at ${base}/openapi.json.`,
     url: `${base}/api`,
     preferredTransport: "HTTP+JSON",

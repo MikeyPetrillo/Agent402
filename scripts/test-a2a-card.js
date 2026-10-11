@@ -102,5 +102,21 @@ ok(A2A_WELL_KNOWN_PATHS[0] === "/.well-known/agent-card.json" && A2A_WELL_KNOWN_
   ok(live.registrations[0].agentRegistry === `${ERC8004_IDENTITY_REGISTRY.chain}:${ERC8004_IDENTITY_REGISTRY.address}`, "with the CAIP-scoped registry it was minted in");
 }
 
+
+// The descriptions offer what is sold today, and the agent id is one constant.
+{
+  const { ERC8004_AGENT_ID } = await import("../src/tools/a2a-card.js");
+  const reg = buildAgentRegistration({ baseUrl: "https://agent402.tools", toolCount: 3 });
+  const card = buildOurAgentCard({ baseUrl: "https://agent402.tools", toolCount: 3 });
+  for (const [n, d] of [["registration", reg.description], ["agent card", card.description]]) {
+    ok(!/prepaid by card/.test(d), `the ${n} does not offer prepaid card credits`);
+    ok(/USDG on Robinhood Chain/.test(d), `the ${n} names the non-USDC settlement asset from RAILS`);
+  }
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const srcDir = new URL("../src/", import.meta.url);
+  const typed = readdirSync(srcDir).filter((f) => f.endsWith(".js") && readFileSync(new URL(f, srcDir), "utf8").includes(ERC8004_AGENT_ID));
+  ok(typed.length === 0, `the agent id is typed only in a2a-card.js (also in: ${typed.join(", ") || "none"})`);
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

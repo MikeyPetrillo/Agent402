@@ -1,4 +1,5 @@
 import { whyPointsPlain } from "./why.js";
+import { ERC8004_AGENT_ID } from "./tools/a2a-card.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
 import { guideSlugs } from "./guides.js";
@@ -492,7 +493,7 @@ We state it this way deliberately: the honest guarantee is "settlement ordering 
 - [/api/mpp-leaderboard](${baseUrl}/api/mpp-leaderboard): on-chain ranking of MPP sellers by inbound USDC.e transfers on Tempo to their live recipient (window, distinct payers, volume; \`routable\` = the router will pay them)
 - [/.well-known/x402](${baseUrl}/.well-known/x402): one-fetch service manifest (identity, payment options, capability map, MCP, trust signals)
 - [/.well-known/agent-card.json](${baseUrl}/.well-known/agent-card.json): our A2A AgentCard (also at /.well-known/agent.json) - name, skills, transport. It declares HTTP+JSON rather than the spec's default JSONRPC because that is what we actually serve
-- [/.well-known/agent-registration.json](${baseUrl}/.well-known/agent-registration.json): our ERC-8004 registration file. The identity is agent 94639 in the registry at eip155:8453:0x8004A169FB4a3325136EB29fA0ceB6D2e539a432, owned by the wallet our 402s name as payTo, and the file lists every way to reach us with x402Support declared
+- [/.well-known/agent-registration.json](${baseUrl}/.well-known/agent-registration.json): our ERC-8004 registration file. The identity is agent ${ERC8004_AGENT_ID} in the registry at eip155:8453:0x8004A169FB4a3325136EB29fA0ceB6D2e539a432, owned by the wallet our 402s name as payTo, and the file lists every way to reach us with x402Support declared
 - [/api/reliability](${baseUrl}/api/reliability): structured reliability / SLA report with a verification URL per claim
 - [/api/pricing](${baseUrl}/api/pricing): machine-readable catalog (every endpoint, price, category, docs URL)
 - [/openapi.json](${baseUrl}/openapi.json): full OpenAPI 3.1 spec with input / output schemas for every tool

@@ -379,7 +379,7 @@ import { GOV_TOOLS } from "./tools/gov-kit.js";
 import { GEO_TOOLS } from "./tools/geo-kit.js";
 import { OCR_TOOLS } from "./tools/ocr-kit.js";
 import { AGENT_TOOLS } from "./tools/agent-kit.js";
-import { SAMPLE_AGENT_CARD, A2A_WELL_KNOWN_PATHS, buildOurAgentCard, buildAgentRegistration } from "./tools/a2a-card.js";
+import { SAMPLE_AGENT_CARD, A2A_WELL_KNOWN_PATHS, buildOurAgentCard, buildAgentRegistration, ERC8004_AGENT_ID } from "./tools/a2a-card.js";
 import { upstreamBuyerStatus } from "./upstream-buyer-status.js";
 import { CAPTCHA_TOOLS } from "./tools/captcha-kit.js";
 import { SQL_GUARD_TOOLS } from "./tools/sql-guard-kit.js";
@@ -3253,7 +3253,9 @@ app.get("/samples/a2a-agent-card.json", (_req, res) => {
 app.get("/.well-known/agent-registration.json", (_req, res) => {
   res.set("Cache-Control", "public, max-age=900").json(buildAgentRegistration({
     baseUrl: BASE_URL,
-    agentId: process.env.ERC8004_AGENT_ID,
+    // The hosted origin's id is the constant the pages also read; a
+    // self-hosted copy publishes none unless it sets its own.
+    agentId: process.env.ERC8004_AGENT_ID ?? (/^https:\/\/(www\.)?agent402\.tools\/?$/i.test(BASE_URL) ? ERC8004_AGENT_ID : undefined),
     toolCount: Object.keys(CATALOG || {}).length,
   }));
 });
