@@ -69,7 +69,7 @@ export function securityPage(baseUrl) {
 </header>
 ${SECTIONS.map((s) => `
 <section style="max-width:1180px;margin:0 auto;padding:40px 30px 0;">
-  <div style="display:grid;grid-template-columns:220px 1fr;gap:30px;padding-bottom:36px;border-bottom:1px solid var(--hairline);" class="sec-2col">
+  <div style="display:grid;grid-template-columns:260px 1fr;gap:30px;padding-bottom:36px;border-bottom:1px solid var(--hairline);" class="sec-2col">
     <h2 style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);font-weight:700;margin:4px 0 0;">${esc(s.h)}</h2>
     <div>
       ${s.p.map((p) => `<p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 14px;">${p}</p>`).join("")}

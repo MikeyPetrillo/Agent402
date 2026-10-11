@@ -73,6 +73,8 @@ export function marketsPage(baseUrl, catalog) {
 .mk-card{display:block;background:var(--card);border:1px solid var(--hairline);padding:16px 18px;text-decoration:none;color:var(--ink)}
 .mk-card:hover{border-color:var(--accent)}
 .mk-card .mk-name{font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;margin:0 0 6px;display:flex;justify-content:space-between;gap:10px}
+.mk-card .mk-name>span:first-child{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mk-card .mk-name .mk-price{flex-shrink:0}
 .mk-card .mk-price{color:var(--accent);font-weight:700;white-space:nowrap}
 .mk-card p{font-size:var(--fs-md);line-height:1.5;color:var(--muted);margin:0}
 .mk-hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:34px;align-items:start}

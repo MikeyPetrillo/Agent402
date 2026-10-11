@@ -342,6 +342,8 @@ body { overflow-wrap: break-word; }
 /* Breadcrumbs: each link stays whole; on a phone the current page's name (the
    h1 right below repeats it) drops out, so the trail never wraps mid-label. */
 .ml-crumb a { white-space: nowrap; }
+/* The current page's name is one line: a title longer than the row ends in an ellipsis. */
+.ml-crumb-cur { display: inline-block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
 @media (max-width: 640px) { .ml-crumb-cur { display: none; } }
 /* The legal pages' date line is a sentence, set in the body face so it wraps as prose. */
 .pv-updated, .tm-updated { font-family: var(--font-body) !important; }

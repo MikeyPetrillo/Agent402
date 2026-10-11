@@ -2643,6 +2643,8 @@ const SKILLS_CSS = `
 .sk-flagship-tools > span { white-space:nowrap; }
 .sk-flagship-tools > span + span::before { content:"·"; padding:0 6px; }
 .sk-flagship-cta { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--accent); }
+/* Equal columns on wide screens, so how many chips share a row does not hang on font metrics. */
+@media (min-width:641px){ .sk-rest-grid { display:grid !important; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); } .sk-rest-grid .sk-rest-chip { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } }
 .sk-rest-chip { display:inline-block; border:1px solid var(--hairline); padding:7px 11px; font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--muted); text-decoration:none; }
 .sk-rest-chip:hover { border-color:var(--accent); color:var(--ink); }
 .sk-scroll { overflow-x:auto; }
@@ -2814,7 +2816,7 @@ export function skillsIndex(baseUrl) {
   <div class="sk-cardgrid">${flagshipCardsHtml}</div>
   <div style="border:1px solid var(--hairline);border-top:none;background:var(--footer-bg);padding:22px 24px;">
     <div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--on-panel-faint);margin:0 0 14px;"><span>${rest.length} more</span><span>every pack links to its own sequence</span></div>
-    <div style="display:flex;flex-wrap:wrap;gap:8px;">${restChipsHtml}</div>
+    <div class="sk-rest-grid" style="display:flex;flex-wrap:wrap;gap:8px;">${restChipsHtml}</div>
   </div>
 </section>
 

@@ -1006,7 +1006,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   <span style="color:var(--on-panel-faint);">"asset"</span>: "&lt;${esc(C.asset)} token ${C.caip2.startsWith("algorand:") ? "ASA id" : C.caip2.startsWith("solana:") ? "mint" : "contract address"}&gt;",
   <span style="color:var(--on-panel-faint);">"payTo"</span>: "&lt;your wallet&gt;"
 }</pre>
-      <p style="margin:0;padding:0 18px 14px;font-family:var(--font-mono);font-size:var(--fs-2xs);line-height:1.6;color:var(--on-panel-faint);">amount is in the token's smallest unit (6 decimals: 1000 = $0.001); asset is the token's on-chain id. For a live accept on this chain: <span style="color:var(--on-panel);">curl -i ${esc(baseUrl)}/api/hash?text=hi</span></p>
+      <p style="margin:0;padding:0 18px 14px;font-family:var(--font-mono);font-size:var(--fs-2xs);line-height:1.6;color:var(--on-panel-faint);">amount is in the token's smallest unit (6 decimals: 1000 = $0.001); asset is the token's on-chain id. For a live accept on this chain: <code style="font:inherit;color:var(--on-panel);background:none;padding:0;">curl -i ${esc(baseUrl)}/api/hash?text=hi</code></p>
     </div>
   </div>`;
 

@@ -99,7 +99,7 @@ export const EXAMPLES_SECTION_CSS = `
   .ml-docs-main .ex-card p { font-size:var(--fs-md);line-height:1.55;color:var(--muted);margin:0 0 10px; }
   .ml-docs-main .ex-card p:last-child { margin-bottom:0; }
   .ex-label { color:var(--ink);font-weight:600; }
-  .ex-price { color:var(--accent);font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:600;font-variant-numeric:tabular-nums; }
+  .ex-price { color:var(--accent);font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap; }
   .ex-parts { display:flex;flex-wrap:wrap;gap:2px 0;margin-top:2px;color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-xs);font-variant-numeric:tabular-nums; }
   .ex-parts > span { white-space:nowrap; }
   .ex-parts > span + span::before { content:"+";padding:0 8px; }
