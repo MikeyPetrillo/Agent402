@@ -237,12 +237,41 @@ try {
   }
 }
 
+// --- page claims read from their sources -------------------------------------
+{
+  const pricing = await (await fetch(`${BASE}/api/pricing`)).json();
+  const bySlug = new Map((pricing.endpoints || []).map((e) => [e.slug, e]));
+  const strip = (h) => String(h).replace(/<(script|style)[\s\S]*?<\/\1>/g, "").replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\s+/g, " ");
+  // /credits: a key holder's notice while sales are off, and an example whose
+  // debit is the route's catalog price.
+  const credits = strip(await (await fetch(`${BASE}/credits`)).text());
+  if (/not on sale/i.test(credits)) ok(!/No account, no subscription, no wallet|card-native twin/.test(credits), "/credits with sales off carries no sales lede");
+  const whois = bySlug.get("whois");
+  if (whois) {
+    const want = (20 - Number(whois.price.replace(/[^0-9.]/g, ""))).toFixed(3);
+    ok(credits.includes(`curl -X ${whois.method}`) && credits.includes(whois.path) && credits.includes(`X-Credits-Balance: ${want}`), `/credits example uses ${whois.method} ${whois.path} and debits its catalog price (balance ${want})`);
+  }
+  // /markets: card blurbs end on a whole word, and the hero offers no
+  // playground run for a tool the playground cannot run.
+  const marketsHtml = await (await fetch(`${BASE}/markets`)).text();
+  const blurbs = [...marketsHtml.matchAll(/<a class="mk-card"[\s\S]*?<p>([\s\S]*?)<\/p>/g)].map((m) => m[1].trim());
+  ok(blurbs.length > 5 && blurbs.every((b) => /[.…!?)]$/.test(b)), `/markets card blurbs end on a sentence or an ellipsis (${blurbs.filter((b) => !/[.…!?)]$/.test(b)).slice(0, 2).join(" | ")})`);
+  const heroSlug = (marketsHtml.match(/href="\/tools\/([a-z0-9-]+)">Docs \+ sample output/) || [])[1];
+  if (heroSlug && bySlug.get(heroSlug) && !bySlug.get(heroSlug).computePayable) ok(!marketsHtml.includes(`/playground?slug=${heroSlug}`), "/markets does not send a paid hero tool to the playground");
+  // /monitors: the cap note names the research monitor's own behavior.
+  ok(/research monitor sends no alerts/.test(strip(await (await fetch(`${BASE}/monitors`)).text())), "/monitors says the research monitor waits past the cap");
+  // /playground: the picker lists free tools; a paid tool's setup link is
+  // never inside a disabled button.
+  const pg = await (await fetch(`${BASE}/js/playground.js`)).text();
+  ok(/tools=tools\.filter\(function\(t\)\{return t\.computePayable\}\)/.test(pg) && !/dbtn\.disabled=true/.test(pg), "/playground lists free tools and puts the setup link outside any disabled button");
+}
+
 // --- home: no stats strip under the two doors --------------------------------
 {
   const home = await (await fetch(`${BASE}/`)).text();
   ok(!/class="hm-proof"/.test(home), "the home page has no full-width stats strip");
   ok(!/settlement rails · x402 \+ MPP|deducted from sellers · open source|priced tools · \d+ are skill packs/.test(home), "none of the strip's labels remain");
-  ok(/\d+ rails live/.test(home), "control: the hero still states the live rail count");
+  ok(/\d+ chains( \+ Tempo)? live/.test(home), "control: the hero still states the live chain count");
   // The hero is the agent story: no report button, no card, one primary pill.
   const hero = (home.match(/<header[\s\S]*?<\/header>/) || [""])[0];
   ok(hero.includes('href="/docs#add"') && /btn-primary" href="\/docs#add">Add to your agent</.test(hero), "hero primary is Add to your agent");

@@ -3806,7 +3806,7 @@ app.get("/reports/dossier/:ticker", (req, res, next) => { _programmaticEntity(re
 // host that never sets the variable sells none). Redemption is deliberately
 // untouched: existing keys keep spending their balance, so nobody's balance is
 // stranded by this switch.
-app.get("/credits", (_req, res) => res.set("Cache-Control", "public, max-age=120").type("html").send(creditsPage(BASE_URL, creditsSalesEnabled())));
+app.get("/credits", (_req, res) => res.set("Cache-Control", "public, max-age=120").type("html").send(creditsPage(BASE_URL, creditsSalesEnabled(), CATALOG)));
 app.get("/credits/thanks", (req, res) => res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(creditsThanksPage(String(req.query.session || ""), BASE_URL)));
 if (_credits) {
   app.post("/api/credits/checkout", async (req, res) => {
