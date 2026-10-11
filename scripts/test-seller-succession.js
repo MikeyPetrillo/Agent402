@@ -37,6 +37,7 @@
 //     not when the guard should be relaxed.
 //   - It only ever moves the date BACKWARD, so no claim can make an origin
 //     look newer, or younger, than it is.
+import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
 import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";

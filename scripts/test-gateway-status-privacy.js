@@ -15,6 +15,7 @@
 //
 // The operator still sees everything - the figures are needed to act - and an
 // operator-authed read is never cached.
+import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
 
