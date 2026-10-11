@@ -1370,6 +1370,9 @@ jobs:
           t node scripts/test-store-boot-blip-pg.js
           t node scripts/test-store-retry-recovery-pg.js
           t node scripts/test-json-document-outage-pg.js
+          # An import that timed out is a failed load (retried), never an empty store.
+          t node scripts/test-json-document-import-fail-pg.js
+          t node scripts/test-store-import-fail-pg.js
           t node scripts/test-store-ddl-race-pg.js
           t node scripts/test-store-write-retry-pg.js
           t node scripts/test-stats-ack-loss-pg.js

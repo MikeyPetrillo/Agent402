@@ -29,6 +29,7 @@ import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
 // Each store is one JSON document: on the volume, or in the state database
 // when one is configured (imported from the file once).
 const docs = new Map();
@@ -6146,6 +6147,11 @@ async function importIndexCacheFile() {
  *  Resolves to the number of sellers loaded; a database error ends the warm
  *  start with what was loaded (the crawl re-decides the rest). */
 export async function warmStartIndexFromStateDb() {
+  try { return await warmStartIndexOnce(); } catch { return warmStartLastCount; }
+}
+let warmStartLastCount = 0;
+/** One warm start that THROWS on a database error (after logging what it folded). */
+async function warmStartIndexOnce() {
   warmStartInProgress = true;
   const t0 = performance.now();
   let n = 0, pages = 0, maxTurnMs = 0;
@@ -6168,12 +6174,32 @@ export async function warmStartIndexFromStateDb() {
       await new Promise((r) => setImmediate(r));
     }
   } catch (e) {
+    warmStartLastCount = n;
     console.warn(`[x402-index] state database warm-start stopped after ${n} seller(s): ${String(e?.message || e).slice(0, 120)}`);
+    throw e;
   } finally {
     warmStartInProgress = false;
   }
+  warmStartLastCount = n;
   console.log(`[x402-index] warm-started ${n} sellers from the state database in ${Math.round(performance.now() - t0)}ms (${pages} page(s), longest turn ${Math.round(maxTurnMs)}ms)`);
   return n;
+}
+/**
+ * The boot's warm start from the state database, retried until it lands
+ * (src/store-retry.js): a failed import or page read is a failed load, never
+ * "start with what was loaded", because a warm-started origin is also the
+ * crawler's seed and one never folded is not crawled again. A retry folds
+ * only origins the cache does not hold yet, so a live entry is never
+ * clobbered. Until it lands the index is listed among the unloaded stores.
+ * `onSettled` runs after the first attempt and again when a retry lands.
+ */
+let warmLoader = null;
+export function startStateDbWarmStart({ onSettled = null } = {}) {
+  if (warmLoader) return warmLoader;
+  warmLoader = retryingLoad("[x402-index] warm start", warmStartIndexOnce, { log: (m) => console.warn(m), onLoaded: () => { try { onSettled?.(); } catch { /* never throws */ } } });
+  trackStoreReady(warmLoader.eventually, "x402-index warm start");
+  warmLoader.ready().catch(() => { try { onSettled?.(); } catch { /* never throws */ } });
+  return warmLoader;
 }
 
 export function persistIndexCache(file = INDEX_CACHE_FILE) {
@@ -6299,7 +6325,7 @@ export function startCrawler(opts = {}) {
     // The rows are the cache; the files are only the one-time import source
     // (and the write-through a rollback reads), so the file loaders do not
     // run after this: an origin only a file still holds is not in the index.
-    trackStoreReady(warmStartIndexFromStateDb()).catch(() => {}).finally(scheduleRouteIndexWarm);
+    startStateDbWarmStart({ onSettled: scheduleRouteIndexWarm });
   } else {
     loadPersistedIndexCacheAsync().then((n) => {
       if (n) return;

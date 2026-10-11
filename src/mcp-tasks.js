@@ -65,6 +65,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, unlinkSync, readdirSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { stateDbEnabled, stateDbSchema, stateQuery, records, leases, importOnce, trackStoreReady } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
 
 export const TASKS_EXTENSION = "io.modelcontextprotocol/tasks";
 export const CLIENT_CAPABILITIES_META = "io.modelcontextprotocol/clientCapabilities";
@@ -502,9 +503,15 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
       if (renewed) return true;
       try { return await leases.acquire(LEASE, { owner: bootId, ttlMs: LEASE_TTL_MS }); } catch { return false; }
     }
+    // The one-time import of the directory is retried until it lands (a
+    // failed import is a failed load, never "nothing to import"): the store
+    // is listed as unloaded meanwhile, and the boot goes on with the rows the
+    // table already holds (the import is insert-if-absent, so it can land later).
+    const importer = retryingLoad(`[${label}] import from ${basename(root)}`, () => importOnce(collection, { source: root, run: importDirectory }), { log });
+    trackStoreReady(importer.eventually, `${label} import (${collection})`);
     async function boot() {
-      try { await importOnce(collection, { source: root, run: importDirectory }); }
-      catch (e) { log(`[${label}] import from ${root} failed: ${String(e?.message || e).slice(0, 120)}`); }
+      try { await importer.ready(); }
+      catch (e) { log(`[${label}] import from ${root} failed: ${String(e?.message || e).slice(0, 120)}; retrying in the background`); }
       // A failed boot acquire is retried shortly in the background (never
       // holding up the boot), then by the renew timer.
       let held = false;
