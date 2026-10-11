@@ -110,10 +110,10 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # level first (see the Security-Model wiki page) — dropping it here blindly
 # 503s every browser tool. Non-root already removes the "escape == root" impact.
 #
-# NOTE (full isolation is a follow-up): the browser and media parsers still
-# share this container with the payment/DB/operator env. True A402-01/02/06
-# isolation is a separate browser/media worker service with no secrets — see
-# the design doc. This PR does not implement it.
+# NOTE (isolation): with RENDER_WORKER_URL + RENDER_WORKER_TOKEN set, the
+# browser and media handlers run in the separate secretless worker service
+# (worker/, Dockerfile.worker; src/worker-client.js), and RENDER_WORKER_REQUIRED
+# makes boot fail without it. Unset, they run in this container (self-host default).
 ENTRYPOINT ["docker-entrypoint.sh"]
 EXPOSE 3000
 # start.js dispatches: WORKER_MODE=true → the secretless worker, else the API.
