@@ -1,11 +1,13 @@
-# Reports, Monitors and Credits
+# Reports and Monitors
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-Beside the 500+ per-call tools, Agent402 sells **outcome-priced report products** (one payment, one finished report), **monthly monitors** that re-run a report when something changes, and accepts **prepaid card credits** keys already issued, which let a buyer without a wallet spend on the priced catalog (new credits are not on sale at the moment). The same report endpoint serves two front doors:
+Beside the 500+ per-call tools, Agent402 sells **outcome-priced report products** (one payment, one finished report) and **monthly monitors** that re-run a report when something changes. The same report endpoint serves two front doors:
 
-- **Agents** call the `/v1/...` route directly and pay on the 402 - USDC over x402 or MPP, or a prepaid credits key.
-- **People** buy the same report by card at [`/reports`](https://agent402.tools/reports), subscribe to a monitor at [`/monitors`](https://agent402.tools/monitors), or (while credits are on sale) load credits at [`/credits`](https://agent402.tools/credits).
+- **Agents** call the `/v1/...` route directly and pay on the 402 - USDC over x402 or MPP.
+- **People** buy the same report by card at [`/reports`](https://agent402.tools/reports) or subscribe to a monitor at [`/monitors`](https://agent402.tools/monitors).
+
+A prepaid credits key issued earlier keeps working on the agent routes (see "Credits keys issued earlier" below).
 
 All of it is optional and env-gated on a self-hosted instance (see [[Self-Hosting]]); without the Stripe keys the `/v1` report routes still sell over x402 / MPP, and the card pages simply are not mounted.
 
@@ -38,11 +40,10 @@ Each report is a `POST` with a JSON body; the price is the whole outcome, not a 
 Every report route is wallet-only (no proof-of-work tier) and is listed in [`/api/pricing`](https://agent402.tools/api/pricing), `/openapi.json` and on its own `/tools/{slug}` page with a sample output. They are not cached: each call is a fresh run.
 
 ```bash
-# Any x402 or MPP client pays the 402 the same way it pays a $0.001 tool;
-# a prepaid credits key pays it with one header.
-curl -X POST https://agent402.tools/v1/domain-audit \
+# Unpaid, this answers the 402 quote; any x402 or MPP client pays it the same
+# way it pays a $0.001 tool, then retries the same request.
+curl -i -X POST https://agent402.tools/v1/domain-audit \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer a402_…' \
   -d '{"domain":"example.com"}'
 ```
 
@@ -52,7 +53,7 @@ Over the MCP connector, `catalog.find` resolves a task like "audit example.com's
 
 [`/reports`](https://agent402.tools/reports) sells the same products by card through Stripe Checkout: pick a product, type the input (a question, a ticker, a fund, a domain, a recall term, an article topic), pay, and the report renders at a private link `/r/<session>` (also emailed when the instance has email configured). The card price is derived from the agent price: **$2** for the base tier (research, fund report, domain audit, token brief, recall report, insider report), **$3** for the pro tier (research pro, market brief, dossier, fund report deep, domain audit pro, filing report), **$4** for the max tier (research max, dossier max, LinkedIn article) and **$5** for the ticker pack.
 
-The card price includes payment processing. An agent paying per call over x402, MPP or prepaid credits pays the lower tool price in the table above for the same report. The token-risk and IPO reports are agent-facing routes and are not on the card page.
+The card price includes payment processing. An agent paying per call over x402 or MPP pays the lower tool price in the table above for the same report. The token-risk and IPO reports are agent-facing routes and are not on the card page.
 
 Guarantees enforced in code rather than promised in copy:
 
@@ -77,29 +78,26 @@ A monitor is a Stripe subscription that keeps one report fresh for one target. T
 
 Operational bounds: a target is validated at checkout (the domain must parse, the manager must resolve on EDGAR); paid re-runs are capped per subscription per 30 days (alerts keep coming); a failing run backs off (1h doubling to 24h) and never sends an email, and a target that keeps failing tells the subscriber once. Billing is Stripe's recurring invoice and the Customer Portal (the manage link in every monitor email) cancels or updates it; subscription status is re-read from Stripe before every paid run, so a canceled monitor stops being fulfilled.
 
-## Prepaid credits (`/credits`)
+## Credits keys issued earlier
 
-For buyers with a card and no wallet. Credits sales are switched on per instance (`CREDITS_SALES=on`); the [`/credits`](https://agent402.tools/credits) page says whether new credits are on sale, and a key already issued keeps working either way. While sales are open: load **$20, $50 or $100** at `/credits`, claim the key once on the thanks page (it is also emailed; a second claim returns `claimed`, never the key again), then spend it on **any priced catalog route**:
+New prepaid credits are not on sale (on a self-hosted instance, sales are switched on with `CREDITS_SALES=on`). A key (`a402_…`) issued earlier keeps working:
 
 ```bash
 curl -H 'Authorization: Bearer a402_…' 'https://agent402.tools/api/whois?domain=example.com'
-# 200 … X-Credits-Balance: 19.999   (list price held before the call, debited only on a final 200)
+# 200 … X-Credits-Balance: <what is left>   (list price held before the call, debited only on a final 200)
 ```
 
-- **Debited only on success.** The gate holds the list price before the handler runs and converts the hold to a debit only when the final response is `200`; any error or settlement failure releases it, and so does a client abort while the call holds a hang-up forgiveness ticket. Amounts are exact to the micro-dollar, so a $0.001 tool costs exactly $0.001.
-- **Credits never expire**, and `GET /api/credits/balance` (same header) returns the remaining balance. An insufficient or unknown key answers `402` with `{ reason, balanceUsd, topup }`.
+- **Debited only on success.** The gate holds the list price before the handler runs and converts the hold to a debit only when the final response is `200`; any error or settlement failure releases it, and so does a client abort while the call holds a hang-up forgiveness ticket. Amounts are exact to the micro-dollar.
+- **Balance:** `GET /api/credits/balance` (same header) returns what is left. An insufficient or unknown key answers `402` with `{ reason, balanceUsd }`.
 - **Identity-bound tools refuse credits.** The memory tools, `my-usage`, `receipts`, `attest` and `feedback` use the payer's signed wallet as identity; a credits key carries no verified wallet, so those routes answer `402` with `reason: "identity-bound"` and must be paid over an x402 rail.
-- Keys are stored hashed; a refund or dispute on the purchase disables the key.
-- **In the SDKs:** `agent402-mcp` 0.13.0 reads `AGENT402_CREDITS_KEY` and pays wallet-only tools through it; `agent402-client` 0.7.0 accepts `{ creditsKey }`. Both keep their per-call and budget caps in front of the key.
-
-Credits are the card-native equivalent of a wallet for the long tail; the report products above accept them too.
+- **In the SDKs:** `agent402-mcp` (0.13.0+) reads `AGENT402_CREDITS_KEY`; `agent402-client` (0.7.0+) accepts `{ creditsKey }`. Both keep their per-call and budget caps in front of the key.
 
 ## How this fits the rest
 
 | | Per-call tools | Report products | Monitors |
 |---|---|---|---|
 | Price | $0.001 and up per call | $0.60 to $2.00 per report over x402 / MPP ($0.05 for the IPO digest), or $2 to $5 by card | $5 per month per target |
-| Pay with | x402, MPP, proof-of-work (pure-CPU), credits | x402, MPP, credits, or card at `/reports` | card subscription at `/monitors` |
+| Pay with | x402, MPP, proof-of-work (pure-CPU), a credits key issued earlier | x402, MPP, a credits key issued earlier, or card at `/reports` | card subscription at `/monitors` |
 | Who | agents | agents and people | people (agents call the underlying report directly) |
 | Serving path | mostly deterministic code; the model-backed ones (LLM tiers, media, embeddings, `answer`) carry `modelBacked: true` in `/api/pricing` | deterministic evidence + grounded synthesis (IPO digest: deterministic only) | the same report kits on a schedule |
 

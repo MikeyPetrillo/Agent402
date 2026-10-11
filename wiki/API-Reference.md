@@ -22,23 +22,29 @@ Returns an **object**, not a bare array:
 {
   "query": "convert pdf to text",
   "count": 3,
+  "topMax": 25, "returned": 3, "matched": 144, "complete": false, "truncated": true,
   "results": [
-    { "slug": "pdf-to-markdown", "name": "…", "route": "…", "price": "$0.010",
-      "callExample": "…", "example": { }, "required": ["url"], "inputSchema": { },
-      "category": "web", "description": "…", "score": 42,
-      "computePayable": false, "docs": "https://agent402.tools/tools/pdf-to-markdown" }
+    { "slug": "pdf", "name": "PDF to text", "route": "POST /api/pdf", "price": "$0.01", "priceUsd": 0.01,
+      "callExample": { "method": "POST", "path": "/api/pdf", "body": { "url": "…" } },
+      "example": { "url": "…" }, "required": ["url"], "inputSchema": { },
+      "category": "web", "description": "…", "score": 64.9,
+      "computePayable": false, "docs": "https://agent402.tools/tools/pdf" }
   ],
-  "packs": []
+  "packs": [ { "slug": "pdf-pipeline", "title": "PDF processing pipeline", "route": "/api/skill/pdf-pipeline", "price": "…" } ],
+  "rarestTerm": "…", "rarestTermCovered": true
 }
 ```
 
-`results` holds the ranked tools; `count` is how many came back; `packs` holds any
+`results` holds the ranked tools; `count` and `returned` are how many came back,
+`matched` how many tools scored at all, and `complete` / `truncated` say whether
+this page is the whole answer (it is a capped page when `truncated` is true; raise
+`k` up to `topMax` for more). `packs` holds any
 matching [[Skill Pack|Skill-Packs]] for the same query, so a task-shaped question
 can point at a whole workflow instead of one tool.
 
 ### `POST /api/route`
 
-Cross-seller Smart Order Router. Ranks the tools that match a task across Agent402 and the x402 sellers it has indexed: candidates are shortlisted by how well they match the task, then ordered by crawl health, by distinct payers over the last 30 days and by price; each row's `why.tiebreaks` names the order applied. The response returns the top N and carries `matched` for how many scored.
+Cross-seller Smart Order Router. Ranks the tools that match a task across Agent402 and the x402 sellers it has indexed: candidates are shortlisted by how well they match the task, then ordered by crawl health, by distinct payers over the last 30 days, by price, by a discovery listing's curated flag and by slug length, shorter first; a judgment model can then pick one from that shortlist or decline them all. Each row's `why.tiebreaks` names the order applied. The response returns the top N and carries `matched` for how many scored.
 
 ```bash
 curl -X POST https://agent402.tools/api/route \
@@ -127,7 +133,7 @@ behavior and the honest scope of the check.
 
 ### Report products (`/v1`)
 
-Outcome-priced reports on the same 402: `POST /v1/research` ($0.60; `/pro` $0.85, `/max` $1.10, `/market-brief` $0.85), `POST /v1/dossier` ($0.85; `/max` $1.10), `POST /v1/ticker-pack` ($2.00), `POST /v1/fund` ($0.60; `/max` $0.85), `POST /v1/filing-report` ($0.85), `POST /v1/domain-audit` ($0.60; `/pro` $0.85), `POST /v1/recall-report` ($0.60), `POST /v1/insider-report` ($0.60), `POST /v1/token-brief` ($0.60), `POST /v1/token-risk` ($0.60; `/pro` $0.85), `POST /v1/linkedin-article` ($1.10), `POST /v1/ipo-report` ($0.05, deterministic). JSON bodies and inputs are on [[Reports, Monitors and Credits|Reports-and-Monitors]]; all are wallet-only (x402 / MPP / prepaid credits), never proof-of-work, never cached.
+Outcome-priced reports on the same 402: `POST /v1/research` ($0.60; `/pro` $0.85, `/max` $1.10, `/market-brief` $0.85), `POST /v1/dossier` ($0.85; `/max` $1.10), `POST /v1/ticker-pack` ($2.00), `POST /v1/fund` ($0.60; `/max` $0.85), `POST /v1/filing-report` ($0.85), `POST /v1/domain-audit` ($0.60; `/pro` $0.85), `POST /v1/recall-report` ($0.60), `POST /v1/insider-report` ($0.60), `POST /v1/token-brief` ($0.60), `POST /v1/token-risk` ($0.60; `/pro` $0.85), `POST /v1/linkedin-article` ($1.10), `POST /v1/ipo-report` ($0.05, deterministic). JSON bodies and inputs are on [[Reports and Monitors|Reports-and-Monitors]]; all are wallet-only (x402 / MPP / prepaid credits), never proof-of-work, never cached.
 
 ### Card front door and credits
 
@@ -179,7 +185,7 @@ See [[Paying with x402]] for full code examples in JavaScript and with Stripe's 
 
 ### Proof-of-work flow (free tier)
 
-1. `GET /api/pow/challenge?slug={tool}` -- receive `{ challenge, difficulty, token, expiresAt }`.
+1. `GET /api/pow/challenge?slug={tool}`: receive `{ challenge, difficulty, token, expiresAt }`.
 2. Find a `nonce` such that `sha256(challenge + ":" + nonce)` has at least `difficulty` leading zero bits.
 3. Retry the tool request with header `X-Pow-Solution: {token}:{nonce}`.
 
@@ -251,27 +257,28 @@ All errors return a JSON body with an `error` string field.
 
 | Code | Meaning |
 |---|---|
-| `400` | Bad request -- missing or invalid input parameters |
-| `402` | Payment required -- x402 quote in the `payment-required` header, mirrored as the same object in the JSON body (MPP challenges in `WWW-Authenticate: Payment`); for a prepaid credits key, a JSON body with `reason` (`insufficient`, `unknown`, `disabled`, `identity-bound`) and `topup` |
+| `400` | Bad request: missing or invalid input parameters |
+| `402` | Payment required: x402 quote in the `payment-required` header, mirrored as the same object in the JSON body (MPP challenges in `WWW-Authenticate: Payment`); for a prepaid credits key, a JSON body with `reason` (`insufficient`, `unknown`, `disabled`, `identity-bound`) and `topup` |
 | `404` | Tool not found |
-| `202` | Accepted -- a paid call sent with `Prefer: respond-async` to a slow route; collect the answer from the job link (see Async jobs). Nothing is charged until the answer is ready |
-| `409` | Conflict -- the request cannot be served as asked, and the body says how to fix it. Three cases: a keyed call whose first copy is still running (retry after `Retry-After`), an execution tier too small for the resolved tool (retry on the rung named in the error, or call the tool directly), and external routing on a chain with no spending wallet (the error names the chains that are supported) |
-| `413` | Payload too large -- for the memory tools, the namespace quota is full: either the per-namespace key count (`MEMORY_MAX_NS_KEYS`, default 10,000) or the total-value byte budget (`MEMORY_MAX_NS_BYTES`, default 32 MB). Delete keys or shrink values |
-| `422` | Unprocessable -- the payment itself is structurally unusable. On Algorand, a signed transaction whose validity window cannot outlive the tool is rejected *before* the handler runs, so a dead transaction is never started. Re-sign with a longer validity window |
-| `429` | Rate limited -- retry after the `Retry-After` header value |
+| `409` | Conflict: the request cannot be served as asked, and the body says how to fix it. Three cases: a keyed call whose first copy is still running (retry after `Retry-After`), an execution tier too small for the resolved tool (retry on the rung named in the error, or call the tool directly), and external routing on a chain with no spending wallet (the error names the chains that are supported) |
+| `413` | Payload too large: for the memory tools, the namespace quota is full: either the per-namespace key count (`MEMORY_MAX_NS_KEYS`, default 10,000) or the total-value byte budget (`MEMORY_MAX_NS_BYTES`, default 32 MB). Delete keys or shrink values |
+| `422` | Unprocessable: the payment itself is structurally unusable. On Algorand, a signed transaction whose validity window cannot outlive the tool is rejected *before* the handler runs, so a dead transaction is never started. Re-sign with a longer validity window |
+| `429` | Rate limited: retry after the `Retry-After` header value |
 | `500` | Internal server error |
-| `502` | Bad gateway -- upstream dependency failed. On the chat wires, a model provider that refuses the request itself (for example a model with no endpoint for the request's tools) answers `400` with the reason instead, once failover has tried the next model |
-| `503` | Service unavailable -- upstream temporarily unreachable, or an optional integration is unconfigured on this instance |
-| `504` | Gateway timeout -- upstream timed out |
+| `502` | Bad gateway: upstream dependency failed. On the chat wires, a model provider that refuses the request itself (for example a model with no endpoint for the request's tools) answers `400` with the reason instead, once failover has tried the next model |
+| `503` | Service unavailable: upstream temporarily unreachable, or an optional integration is unconfigured on this instance |
+| `504` | Gateway timeout: upstream timed out |
 
 Handlers throw errors with `.statusCode` set; the server maps these to the appropriate HTTP response.
 
-**Every code in the `4xx`/`5xx` rows above cancels settlement**, so none of them charge you. Only a `200` that then settles successfully is billed. See [[Architecture]] for the ordering.
+**On x402, every code in the `4xx`/`5xx` rows above cancels settlement**, so none of them charge you. Only a `200` that then settles successfully is billed. The exceptions: a Tempo push transfer over MPP is final when sent, so a call that then fails is recorded as owed and repaid on-chain through the refund ledger; and a few tools charge a `200` that carries a partial result by design and say so in their description (a code run that hits its time limit answers `200` with `timedOut: true`). See [[Architecture]] for the ordering.
+
+A paid call sent with `Prefer: respond-async` to a slow route answers `202 Accepted` with a job link instead of the result; nothing is charged until the answer is ready (see Async jobs).
 
 ## See also
 
-- [[Tool Catalog]] -- what the 500+ tools are and how agents discover them
-- [[Paying with x402]] -- USDC payment flow with code examples
-- [[Paying with Compute]] -- proof-of-work protocol and reference solver
-- [[MCP Connector]] -- hosted connector and the `agent402-mcp` npm server
-- [[Self-Hosting]] -- deploying on your own infrastructure
+- [[Tool Catalog]]: what the 500+ tools are and how agents discover them
+- [[Paying with x402]]: USDC payment flow with code examples
+- [[Paying with Compute]]: proof-of-work protocol and reference solver
+- [[MCP Connector]]: hosted connector and the `agent402-mcp` npm server
+- [[Self-Hosting]]: deploying on your own infrastructure

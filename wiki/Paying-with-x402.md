@@ -1,6 +1,6 @@
 # Paying with x402 (USDC)
 
-[x402](https://x402.org) is an open HTTP payment standard (the `402 Payment Required` status, finally used). Settlement infrastructure exists from **Coinbase** (the CDP facilitator settles Base for this service) and client tooling from **Stripe** (`purl`, below). x402 is one of the two wires underneath [[Agentic Finance]] - the other is [[MPP|Paying-with-MPP]], answered on the same 402.
+[x402](https://x402.org) is an open HTTP payment standard (the `402 Payment Required` status, finally used). Settlement runs through x402 facilitators that verify and settle each payment on its chain, and stock client tooling pays it (`purl`, below, is one). x402 is one of the two wires underneath [[Agentic Finance]] - the other is [[MPP|Paying-with-MPP]], answered on the same 402.
 
 ## The flow
 
@@ -83,7 +83,7 @@ instead - different mechanism, same price.
 
 ## The same 402 sells report products
 
-The outcome-priced report routes (`POST /v1/research`, `/v1/dossier`, `/v1/ticker-pack`, `/v1/fund`, `/v1/filing-report`, `/v1/domain-audit`, `/v1/recall-report`, `/v1/insider-report`, `/v1/token-brief`, `/v1/token-risk`, `/v1/linkedin-article`; $0.60 to $2.00, and $0.05 for the `/v1/ipo-report` digest) answer the same 402, so a client that pays a $0.001 tool pays a $0.85 dossier the same way. Every report route above except the `/v1/ipo-report` digest runs for minutes and settles after the report is written, so those routes offer only the EVM exact accepts. People without a wallet buy the same reports by card at [`/reports`](https://agent402.tools/reports) for $2 to $5, where the price includes payment processing. A prepaid credits key that was already issued (new credits are not on sale at the moment) pays by sending `Authorization: Bearer a402_…` instead of a payment header; the credits gate holds the list price and debits only on a final `200`. Details on [[Reports, Monitors and Credits|Reports-and-Monitors]].
+The outcome-priced report routes (`POST /v1/research`, `/v1/dossier`, `/v1/ticker-pack`, `/v1/fund`, `/v1/filing-report`, `/v1/domain-audit`, `/v1/recall-report`, `/v1/insider-report`, `/v1/token-brief`, `/v1/token-risk`, `/v1/linkedin-article`; $0.60 to $2.00, and $0.05 for the `/v1/ipo-report` digest) answer the same 402, so a client that pays a $0.001 tool pays a $0.85 dossier the same way. Every report route above except the `/v1/ipo-report` digest runs for minutes and settles after the report is written, so those routes offer only the EVM exact accepts. People without a wallet buy the same reports by card at [`/reports`](https://agent402.tools/reports) for $2 to $5, where the price includes payment processing. A prepaid credits key that was already issued (new credits are not on sale at the moment) pays by sending `Authorization: Bearer a402_…` instead of a payment header; the credits gate holds the list price and debits only on a final `200`. Details on [[Reports and Monitors|Reports-and-Monitors]].
 
 ## Command line: Stripe's `purl`
 
@@ -104,4 +104,4 @@ Client-side caps belong on the buyer:
 
 ## Verifying you weren't cheated
 
-Every settled call is an on-chain USDC transfer to **`agent402.base.eth`** (a Base name resolving to the public revenue wallet) - auditable by anyone at [Basescan](https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns). The service also publishes served-call counters at [`/api/stats`](https://agent402.tools/api/stats); the chain, not the counter, is the source of truth.
+Every settled Base call is an on-chain USDC transfer to **`agent402.base.eth`** (a Base name resolving to the public revenue wallet, which also receives on the other EVM chains) - auditable by anyone at [Basescan](https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns). The receiving address for every other rail (Solana, Stellar, Algorand, Tempo) is in [`/.well-known/x402`](https://agent402.tools/.well-known/x402), and settled transactions by rail are on [`/revenue`](https://agent402.tools/revenue). The service also publishes served-call counters at [`/api/stats`](https://agent402.tools/api/stats); the chain, not the counter, is the source of truth.

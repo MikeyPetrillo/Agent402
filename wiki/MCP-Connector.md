@@ -30,9 +30,9 @@ It exposes a **flagship-first** tools/list (~15 tools, each with titles + safety
 | `catalog.find` | Describe a task in plain language; returns the best-matching tool(s) **ready to call** - slug, price, input schema, an example, and the exact `catalog.call` invocation |
 | `catalog.search` | Browse the long catalog by description; returns slugs + input schemas (plus matching skill packs) |
 | `catalog.call` | Execute any catalog tool by slug. Pure-CPU tools run **free** here (rate-limited: 20/min, 120/hr per client); wallet-only tools are payable right here over MPP (below) or return paid-path instructions |
-| `decide.plan` | Describe a job; returns a call-ready plan over this catalog and outside x402 sellers: tools in order, fallbacks, validated params, chained steps. See [[Decide]] |
-| `decide.execute` | Runs a decision's plan within a budget; the decision fee comes back as credit |
-| `decide.feedback` | Free. Report whether one step of a plan worked |
+| `decide.plan` | (When Decide is enabled on the instance.) Describe a job; returns a call-ready plan over this catalog and outside x402 sellers: tools in order, fallbacks, validated params, chained steps. See [[Decide]] |
+| `decide.execute` | (When Decide is enabled.) Runs a decision's plan within a budget; the decision fee comes back as credit |
+| `decide.feedback` | (When Decide is enabled.) Free. Report whether one step of a plan worked |
 | `payment.info` | Free vs paid rails, wallet setup, spend caps, prepaid credits |
 | `server.describe` | Service description, install one-liners, free-vs-paid breakdown |
 | `demand.request` | Tell us a tool you needed that is missing (same intake as `POST /api/wish`) |
@@ -55,8 +55,8 @@ It exposes a **flagship-first** tools/list (~15 tools, each with titles + safety
 } } }
 ```
 
-- **With `AGENT_KEY`** (an EVM wallet holding USDC on Base, Polygon, or Arbitrum) **and/or `SOLANA_AGENT_KEY`** (a Solana wallet holding USDC on Solana): every tool works; each call settles via x402 invisibly under the MCP call. The underlying service also accepts USDC on Stellar and Algorand, and USDG on Robinhood Chain, but this npm server currently signs only EVM and Solana payments. Spend controls (`AGENT402_BUDGET`, `AGENT402_MAX_PER_CALL`) are enforced *before any payment is signed*.
-- **With `AGENT402_CREDITS_KEY`** (0.13.0+): a prepaid card-credits key already issued (`a402_…`) pays every wallet-only tool except the wallet-identity-bound ones, debited only on a successful call, inside the same spend controls. New credits are not on sale at the moment (see [`/credits`](https://agent402.tools/credits)); keys already issued keep working. See [[Reports, Monitors and Credits|Reports-and-Monitors]].
+- **With `AGENT_KEY`** (an EVM wallet: it pays on any EVM chain the 402 offers, Base first; pin one with `AGENT402_NETWORKS`, e.g. `robinhood` for USDG on Robinhood Chain) **and/or `SOLANA_AGENT_KEY`** (a Solana wallet holding USDC on Solana): every tool works; each call settles via x402 invisibly under the MCP call. The service also accepts USDC on Stellar and Algorand, which this npm server does not sign. Spend controls (`AGENT402_BUDGET`, `AGENT402_MAX_PER_CALL`) are enforced *before any payment is signed*.
+- **With `AGENT402_CREDITS_KEY`** (0.13.0+): a prepaid card-credits key already issued (`a402_…`) pays every wallet-only tool except the wallet-identity-bound ones, debited only on a successful call, inside the same spend controls. New credits are not on sale at the moment (see [`/credits`](https://agent402.tools/credits)); keys already issued keep working. See [[Reports and Monitors|Reports-and-Monitors]].
 - **Without a key:** the pure-CPU tools work free via proof-of-work; wallet-only tools explain what they'd cost and how to enable them.
 
 The same flagship set is first-class; the long tail is reachable via `catalog.search` + `catalog.call` to keep your context window small.
