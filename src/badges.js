@@ -62,8 +62,10 @@ function flatBadge() {
 </svg>`;
 }
 
+// Text on the near-black ground uses the panel ink and the lit accent (both
+// above 4.5:1 there; the page accent #0F5E43 is about 2.5:1 on it).
+// scripts/test-badge-contrast.js pins every text/ground pair in these SVGs.
 function poweredByBadge() {
-  const text = "Powered by Agent402";
   const w = 160;
   const h = 28;
   const r = 4;
@@ -71,7 +73,7 @@ function poweredByBadge() {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">
   <rect width="${w}" height="${h}" rx="${r}" fill="#0B0C0E"/>
   <rect x=".5" y=".5" width="${w - 1}" height="${h - 1}" rx="${r}" fill="none" stroke="#34A877" stroke-opacity=".4"/>
-  <text x="${w / 2}" y="18" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="12" fill="#0F5E43" text-rendering="geometricPrecision">${text}</text>
+  <text x="${w / 2}" y="18" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="12" fill="#C9CED3" text-rendering="geometricPrecision">Powered by <tspan fill="#9EF0B0">Agent402</tspan></text>
 </svg>`;
 }
 

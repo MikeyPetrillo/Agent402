@@ -2692,6 +2692,7 @@ jobs:
           t node scripts/test-algorand-page.js
           # Homepage tests (offline, fixture snapshot)
           t node scripts/test-home-page.js
+          t node scripts/test-badge-contrast.js
           t node scripts/test-ga-snippet.js
           t node scripts/test-chain-page-cache.js
           # Operator demand-board page tests (verdict rendering, no double-escape, robots disallow — offline)
