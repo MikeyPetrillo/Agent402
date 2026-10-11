@@ -33,6 +33,7 @@ import {
 } from "./revenue-live.js";
 import { usdcDeltaForOwner, payerFromMeta, isExternalPayment } from "../scripts/revenue-scan-solana.js";
 import { solanaHistoryRead } from "./solana-history-rpc.js";
+import { evmLogsRead } from "./evm-logs-rpc.js";
 import { externalTempoPayments } from "./sales-ledger.js";
 import { createBlockClock, rpcHeaderReader, dateFromAnchors } from "./block-clock.js";
 
@@ -475,18 +476,23 @@ export function nextChunkSpan(message, span) {
   return Math.max(MIN_CHUNK, Math.floor(span / 4));
 }
 
-async function getLogsAdaptive(c, wallet, from, to, onNarrow) {
+// One hour of a chain's blocks: how far behind the head a range may start and
+// still be read from a public lane first (src/evm-logs-rpc.js). The ledger's
+// tail is minutes; a backfill or a catch-up after downtime stays keyed-first.
+const publicDepthBlocks = (chain) => Math.ceil(3_600_000 / (BLOCK_MS[chain] || 2000));
+
+async function getLogsAdaptive(c, wallet, from, to, onNarrow, { chain = null, head = null } = {}) {
   let span = to - from + 1;
   for (let attempt = 0; attempt < 6; attempt++) {
     const hi = from + span - 1;
     try {
       const scannedTo = Math.min(hi, to);
-      const logs = await rpcCall(c.rpcs, "eth_getLogs", [{
+      const logs = await evmLogsRead({
         address: c.token,
         topics: [TRANSFER_TOPIC, null, pad(wallet)],
         fromBlock: "0x" + from.toString(16),
         toBlock: "0x" + scannedTo.toString(16),
-      }], 8000);
+      }, { caller: "revenue-ledger", chain, rpcs: c.rpcs, head, maxDepthBlocks: chain ? publicDepthBlocks(chain) : 0, timeoutMs: 8000 });
       // Return the range actually covered. A narrowed retry scans LESS than the
       // caller asked for, and advancing the cursor past what was scanned would
       // skip those blocks forever - silently, since nothing throws.
@@ -503,9 +509,15 @@ async function getLogsAdaptive(c, wallet, from, to, onNarrow) {
   throw new Error(`${c.label}: getLogs kept failing down to ${span}-block ranges`);
 }
 
-async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
+export async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
   const c = EVM[chain];
-  const head = parseInt(await rpcCall(c.rpcs, "eth_blockNumber", [], 6000), 16);
+  // The head comes from the configured list (keyed first), as before: a
+  // fallback read is answered by the same lane that named the head. The tail
+  // stops a few seconds of blocks short of it, so a public node that is a
+  // block or two behind can still answer it in full (src/evm-logs-rpc.js
+  // refuses a public answer past that node's own head); the next tick reads
+  // the rest.
+  const head = Math.max(0, parseInt(await rpcCall(c.rpcs, "eth_blockNumber", [], 6000), 16) - Math.ceil(10_000 / (BLOCK_MS[chain] || 2000)));
   const cur = await readCursor(chain, wallet);
   let next = cur?.next_block ?? await startBlockFor(chain, head);
   // Capped at 9,000 blocks like the other two scanners (revenue-scan.js and
@@ -518,7 +530,7 @@ async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
   let chunks = 0;
   while (next <= head && chunks < maxChunks) {
     const to = Math.min(next + chunkSize - 1, head);
-    const { logs, scannedTo } = await getLogsAdaptive(c, wallet, next, to, (smaller) => { chunkSize = smaller; });
+    const { logs, scannedTo } = await getLogsAdaptive(c, wallet, next, to, (smaller) => { chunkSize = smaller; }, { chain, head });
     // EXACT dates, so a row never depends on a block-rate estimate again.
     // Only blocks that actually CONTAIN a transfer are fetched, and transfers
     // are rare (a handful per chain per day), so this is a few extra calls a

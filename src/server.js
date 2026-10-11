@@ -44,6 +44,7 @@ import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, i
 import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
 import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
+import { evmLogsStatus } from "./evm-logs-rpc.js";
 import { compositeGuardBlocked, compositeGuardGlobalPaused, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
 import { gatewaySettleBreakerCheck } from "./gateway-settle-breaker.js";
 // Single-upstream-call routes that run long (40 s+): EVM exact only, like the
@@ -342,7 +343,7 @@ import { tempoDataKey } from "./tempo-transfers.js";
 import { verifyInboundPayment } from "./payment-verify.js";
 import { mppMarketPage } from "./mpp-market-page.js";
 import { indexToolsPage, INDEX_TOOLS_PAGE_SIZE } from "./index-tools-page.js";
-import { getLeaderboardSnapshot, getLeaderboardWalletEvidence, getLeaderboardCircularWallets, startLeaderboardRefresh, rankBy, CONCENTRATION, configureSellerFunding, sellerFundingStatus, setSellerFundingEnabled } from "./leaderboard.js";
+import { getLeaderboardSnapshot, getLeaderboardWalletEvidence, getLeaderboardCircularWallets, startLeaderboardRefresh, leaderboardLogCacheStatus, rankBy, CONCENTRATION, configureSellerFunding, sellerFundingStatus, setSellerFundingEnabled } from "./leaderboard.js";
 import { decideIndexExportHandler } from "./decide/index-export.js";
 import { buildDecideTools, decideEnabled, makeFeedbackHandler } from "./tools/decide-kit.js";
 import { openDecideLedger, singleWriterTopology } from "./decide/ledger.js";
@@ -534,7 +535,7 @@ import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, led
 import { ledgerHomePage } from "./ledger-home.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
-import { revenueSnapshot, withFreshRecent, publicRevenueSnapshot, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
+import { revenueSnapshot, withFreshRecent, publicRevenueSnapshot, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml, catalogPayableOn } from "./market-page.js";
@@ -3223,6 +3224,10 @@ app.get("/api/gateway-status", async (req, res) => {
     // Solana history reads (getTransaction by signature): which lane serves
     // them. One word publicly; per-lane counts for the operator.
     solanaHistory: (() => { try { return solanaHistoryStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // EVM log reads: which lane serves the revenue ledger's recent getLogs,
+    // how the Base board read its window, and the activity scans. One word
+    // publicly; per-caller counts for the operator.
+    evmLogs: (() => { try { return evmLogsStatus({ full, extra: full ? { leaderboardLogCache: leaderboardLogCacheStatus(), activityScan: evmActivityStatus() } : null }); } catch { return { status: "unknown" }; } })(),
     stellarFacilitator, databases, operatorAuth: operatorAuthStatus(full),
     // OFAC SDN list behind sanctions-wallet / sanctions-name and the router's
     // payout screen: one word publicly, counts and the last error for the operator.

@@ -47,6 +47,8 @@ ok(["sales", "refunds", "checkoutFinals", "subscriptions", "decide"].every((n) =
 // --- Solana history reads: one word publicly, per-lane counts for the operator ---
 ok(typeof pubBody?.solanaHistory?.status === "string" && Object.keys(pubBody.solanaHistory).join(",") === "status", `solanaHistory publishes its word only (${JSON.stringify(pubBody?.solanaHistory)})`);
 ok(opBody?.solanaHistory && typeof opBody.solanaHistory.lanes === "object" && "publicShare" in opBody.solanaHistory, "the operator view of solanaHistory carries the per-lane counts");
+ok(typeof pubBody?.evmLogs?.status === "string" && Object.keys(pubBody.evmLogs).join(",") === "status", `evmLogs publishes its word only (${JSON.stringify(pubBody?.evmLogs)})`);
+ok(opBody?.evmLogs && typeof opBody.evmLogs.callers === "object" && typeof opBody.evmLogs.leaderboardLogCache === "object" && typeof opBody.evmLogs.activityScan === "object", "the operator view of evmLogs carries the per-caller counts, the board's log cache and the activity scans");
 
 // --- the money fields, by name ---------------------------------------------
 const MONEY = /"(capUsd|spentUsd|budget|callsToday|fundedUsd|remainingUsd|spentSinceRestartUsd|refusedToday|lowBelowFraction)":\s*-?[0-9]/;
