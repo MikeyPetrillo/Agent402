@@ -185,7 +185,13 @@ export function renderSidebar(currentSlug) {
         const href = docHref(it.slug);
         parts.push(`<li><a class="ml-docs-side-a${active}" href="${href}">${esc(it.display)}</a></li>`);
       } else {
-        parts.push(`<li><a class="ml-docs-side-a" href="${esc(it.href)}" rel="noopener">${esc(it.display)} &#8599;</a></li>`);
+        // The wiki sidebar names this site by its absolute URL (it is also the
+        // GitHub wiki's sidebar); on this site those are ordinary local links,
+        // so they render relative, without the external-link arrow.
+        const local = /^https:\/\/agent402\.tools(\/|$)/.test(it.href) ? (it.href.replace(/^https:\/\/agent402\.tools/, "") || "/") : null;
+        parts.push(local
+          ? `<li><a class="ml-docs-side-a" href="${esc(local)}">${esc(it.display)}</a></li>`
+          : `<li><a class="ml-docs-side-a" href="${esc(it.href)}" rel="noopener">${esc(it.display)} &#8599;</a></li>`);
       }
     }
     parts.push("</ul>");
@@ -196,7 +202,7 @@ export function renderSidebar(currentSlug) {
   const apiActive = currentSlug === "__api__" ? " active" : "";
   parts.push(`<div class="ml-docs-side-h">Reference</div>
 <ul class="ml-docs-side-ul">
-  <li><a class="ml-docs-side-a${apiActive}" href="/docs/api">API Reference</a></li>
+  <li><a class="ml-docs-side-a${apiActive}" href="/docs/api">API reference (every route)</a></li>
   <li><a class="ml-docs-side-a" href="/openapi.json">OpenAPI JSON</a></li>
   <li><a class="ml-docs-side-a" href="/llms.txt">llms.txt</a></li>
   <li><a class="ml-docs-side-a" href="/api/pricing">Pricing</a></li>
@@ -370,6 +376,16 @@ export function docsPage(baseUrl, slug) {
   );
 }
 
+// One price format for the reference column: at least two decimals, three
+// below a cent ("$0.003", "$0.01", "$3.30"); the catalog's own strings mix
+// precisions ("$0.01" beside "$0.010", "$3.3").
+function apiPrice(p) {
+  if (p === 0) return "free";
+  const n = typeof p === "number" ? p : Number(String(p ?? "").replace(/[^0-9.]/g, ""));
+  if (p == null || p === "" || !Number.isFinite(n)) return "-";
+  return "$" + (n > 0 && n < 0.01 ? n.toFixed(3) : n.toFixed(2));
+}
+
 // API reference: flat catalog grouped by category. Built from the live tool
 // list rather than a frozen markdown page, so it stays in sync with whatever
 // the server actually exposes.
@@ -386,7 +402,7 @@ export function docsApi(baseUrl, catalog) {
     const rows = tools.map((t) => {
       const slug = esc(t.slug || t.route || "");
       const desc = esc((t.description || "").replace(/\s+/g, " ").trim().slice(0, 220));
-      const price = t.price === 0 ? "free" : (typeof t.price === "number" ? `$${t.price.toFixed(4)}` : esc(String(t.price ?? "-")));
+      const price = apiPrice(t.price);
       return `<div class="ml-docs-api-row"><div class="slug">${slug}</div><div class="desc">${desc}</div><div class="price">${esc(price)}</div></div>`;
     }).join("");
     return `<h2 class="ml-docs-api-cat">${esc(cat)} <span style="font-size:var(--fs-sm);font-weight:400;color:var(--faint);font-family:var(--font-mono);">&middot; ${tools.length}</span></h2>${rows}`;
@@ -394,7 +410,7 @@ export function docsApi(baseUrl, catalog) {
 
   const body = `<div class="ml-docs-crumbs"><a href="/docs">Docs</a> &rsaquo; API Reference</div>
 <h1>API Reference</h1>
-<p class="muted">Every tool the server exposes, grouped by category. The same list is available as machine-readable JSON at <a href="/openapi.json">/openapi.json</a> and <a href="/api/pricing">/api/pricing</a>, or as plain text at <a href="/llms.txt">/llms.txt</a>. Call any of them over HTTP, MCP, or the <a href="/docs/MCP-Connector">MCP connector</a>.</p>
+<p class="muted">Every tool the server exposes, grouped by category. The same list is available as machine-readable JSON at <a href="/openapi.json">/openapi.json</a> and <a href="/api/pricing">/api/pricing</a>, or as plain text at <a href="/llms.txt">/llms.txt</a>. Call any of them over HTTP, the hosted MCP connector (<code>/mcp</code>), or the <code>agent402-mcp</code> npm server (both on <a href="/docs/MCP-Connector">MCP connector</a>).</p>
 <p class="muted"><b>${catalog.length}</b> tools across <b>${cats.length}</b> categories.</p>
 ${sections}`;
   return shell(

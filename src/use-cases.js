@@ -9,7 +9,7 @@ import { esc } from "./ledger-chrome.js";
 export const USE_CASES = [
   {
     title: "Research 50 public companies overnight",
-    story: "An analyst's agent walks 50 tickers, pulling filings, reported financials and live quotes for each, and leaves 50 structured summaries ready for review in the morning.",
+    story: "An analyst's agent walks 50 tickers, pulling filings, reported financials, the latest close and price history for each, and leaves 50 structured summaries ready for review in the morning.",
     calls: [["edgar-filings", 50], ["edgar-company-facts", 50], ["stock-quote", 50], ["stock-history", 50]],
     per: "for 50 companies",
   },
@@ -27,7 +27,7 @@ export const USE_CASES = [
   },
   {
     title: "Watch competitor pricing daily",
-    story: "A pricing agent renders 20 JavaScript-heavy product pages every morning, extracts the price elements and logs changes to its wallet-keyed memory for trend analysis.",
+    story: "A pricing agent reads 40 product pages every morning (render for the 20 JavaScript-heavy ones, extract for the 20 static ones, both returning markdown it scans for prices) and logs changes to its wallet-keyed memory for trend analysis.",
     calls: [["render", 20], ["extract", 20], ["memory-write", 20]],
     per: "per day",
   },
@@ -39,14 +39,14 @@ export const USE_CASES = [
   },
   {
     title: "Answer customer questions with live web search",
-    story: "A support agent searches the live web for product documentation, gets a cited synthesis from the answer tool and includes the source URLs in its reply.",
+    story: "A support agent searches the live web for product documentation, gets a cited, model-written synthesis from the answer tool (model-backed) and includes the source URLs in its reply.",
     calls: [["search", 1], ["answer", 1]],
     per: "per question",
   },
   {
-    title: "Validate and geocode a 500-row address list",
-    story: "An ops agent lints a CSV of customer addresses, geocodes each row to lat/lng and checks the contact emails, with no maps API key.",
-    calls: [["csv-lint", 1], ["geocode", 500], ["email-validate", 500]],
+    title: "Validate an address list and geocode the new rows",
+    story: "An ops agent lints a CSV of 500 customer rows, checks the contact emails and geocodes the 20 new addresses to lat/lng at one call a second, the open geocoder's pace, with no maps API key.",
+    calls: [["csv-lint", 1], ["geocode", 20], ["email-validate", 500]],
     per: "for 500 rows",
   },
   {
