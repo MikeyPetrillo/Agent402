@@ -14,6 +14,7 @@
 // rather than crashing — useful for catching dead references in the test suite.
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc } from "./ledger-chrome.js";
 import { RAILS_SHORT } from "./rails.js";
+import { isComputePayable } from "./pow.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 
 import { ORG_SAME_AS } from "./repo-link.js";
@@ -215,7 +216,7 @@ export const SKILL_PACKS = [
     useCase:
       "Before a pentest, an acquisition diligence call, or a quarterly review - you want a fast read on what an attacker sees from the outside.",
     promptArgs: [
-      { name: "domain", description: "Target domain to audit (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
+      { name: "domain", description: "Target domain to audit (e.g. example.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "cert-transparency",
@@ -245,7 +246,7 @@ export const SKILL_PACKS = [
     useCase:
       "Marketing or transactional email is landing in spam, or you're rolling out a new sending domain and want to verify the auth posture before the first campaign.",
     promptArgs: [
-      { name: "domain", description: "Sending domain to diagnose (e.g. stripe.com)", required: true, substitute: "example.com" },
+      { name: "domain", description: "Sending domain to diagnose (e.g. example.com)", required: true, substitute: "example.com" },
     ],
     toolSlugs: [
       "spf-check",
@@ -411,7 +412,7 @@ export const SKILL_PACKS = [
     useCase:
       "Investigating a DNS-related outage, debugging propagation after a record change, or onboarding a new domain and checking the operator chain.",
     promptArgs: [
-      { name: "domain", description: "Domain to check (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
+      { name: "domain", description: "Domain to check (e.g. example.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "dns-lookup",
@@ -1558,7 +1559,7 @@ export const SKILL_PACKS = [
     useCase:
       "Evaluating a domain for acquisition, investigating a phishing site, auditing a competitor's infrastructure, or preparing a security review - one call gives you the complete external footprint.",
     promptArgs: [
-      { name: "domain", description: "Domain to investigate (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
+      { name: "domain", description: "Domain to investigate (e.g. example.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "whois",
@@ -1851,7 +1852,7 @@ export const SKILL_PACKS = [
     useCase:
       "Verifying a domain's TLS posture - cert validity, security headers, and who's authorized to issue certs.",
     promptArgs: [
-      { name: "domain", description: "Domain to audit (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
+      { name: "domain", description: "Domain to audit (e.g. example.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "tls-cert",
@@ -1875,7 +1876,7 @@ export const SKILL_PACKS = [
     useCase:
       "Diagnosing email authentication - can this domain be spoofed, and is its mail configuration complete.",
     promptArgs: [
-      { name: "domain", description: "Domain to check (e.g. stripe.com)", required: true, substitute: "stripe.com" },
+      { name: "domain", description: "Domain to check (e.g. example.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "spf-check",
@@ -1890,7 +1891,7 @@ export const SKILL_PACKS = [
       "Run the composite deliverability score for an overall grade.",
     ],
     claudePrompt:
-      "Check email security for stripe.com using Agent402's email-security skill pack. Get (1) SPF check, (2) DMARC policy, (3) DKIM probe, (4) deliverability score. Flag any missing or weak auth records.",
+      "Check email security for agent402.tools using Agent402's email-security skill pack. Get (1) SPF check, (2) DMARC policy, (3) DKIM probe, (4) deliverability score. Flag any missing or weak auth records.",
   },
 
   {
@@ -1901,7 +1902,7 @@ export const SKILL_PACKS = [
     useCase:
       "Evaluating a suspicious domain - checking registration age, hosting, web mentions, and security posture.",
     promptArgs: [
-      { name: "domain", description: "Domain to investigate (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
+      { name: "domain", description: "Domain to investigate (e.g. example.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "whois",
@@ -1927,7 +1928,7 @@ export const SKILL_PACKS = [
     useCase:
       "Competitive intelligence - fingerprint their infrastructure, hosting, frameworks, and page metadata.",
     promptArgs: [
-      { name: "url", description: "Competitor URL (e.g. https://stripe.com)", required: true, substitute: "https://agent402.tools" },
+      { name: "url", description: "Competitor URL (e.g. https://example.com)", required: true, substitute: "https://agent402.tools" },
     ],
     toolSlugs: [
       "tech-stack",
@@ -1953,7 +1954,7 @@ export const SKILL_PACKS = [
     useCase:
       "Comprehensive page review - content quality, metadata completeness, security headers, crawlability, and sitemap status.",
     promptArgs: [
-      { name: "url", description: "Page URL to audit (e.g. https://stripe.com)", required: true, substitute: "https://agent402.tools" },
+      { name: "url", description: "Page URL to audit (e.g. https://example.com)", required: true, substitute: "https://agent402.tools" },
     ],
     toolSlugs: [
       "extract",
@@ -2701,12 +2702,21 @@ const ILLUSTRATIVE_RUN = [
   ["7", "tech-stack", "nginx, Cloudflare, Next.js", true],
 ];
 
+/** How many packs run free over proof-of-work, read from the same allowlist
+ *  the gate enforces (isComputePayable: src/free-tier.js less WALLET_ONLY_SLUGS). */
+function freePackSentence() {
+  const n = SKILL_PACKS.filter((p) => isComputePayable({ slug: `skill-${p.slug}` })).length;
+  return n
+    ? `${n} of the ${SKILL_PACKS.length} packs are on the free tier and also run free over proof-of-work; each pack's page says whether it is one.`
+    : "Every pack is paid; none is on the proof-of-work free tier.";
+}
+
 const SKILLS_FAQS = [
   { q: "What is a skill pack?", a: "A multi-tool workflow that runs server-side in a single request. Instead of your agent calling seven tools in sequence - seven payments, seven round trips, seven things to handle when one fails - you make one call to POST /api/skill/{slug}, pay once, and get every step back in one response." },
   { q: "What happens if one step fails?", a: "You get a partial-success envelope rather than an error. Every step that succeeded returns its result, the failed step is marked with its reason, and the response is still usable. That is the real difference from orchestrating the sequence yourself, where a failure mid-chain leaves you holding partial state you have already paid for and have to reconcile." },
   { q: "How is a pack priced?", a: `Never more than its parts. A pack costs the sum of the tools it runs minus a 10% bundle discount, rounded up to the $0.001 settlement floor, so a pack of the cheapest tools can land at the sum itself - ${PACK_PRICE_RANGE.text} today, recomputed from the live catalog whenever a tool is repriced. One payment instead of several, and no orchestration code to write or maintain.` },
   { q: "Can I see which tools a pack will run before paying?", a: "Yes. Every pack publishes its tool sequence up front, on its own page and in /api/skill-packs.json. Packs are fixed sequences, not an agent improvising - the same inputs run the same steps in the same order every time." },
-  { q: "Which chains can I pay a pack on?", a: `The same rails as any other call: ${RAILS_SHORT}. Gas is sponsored on EVM chains, so you need only the stablecoin, or run free over proof-of-work where a pack is pure-CPU.` },
+  { q: "Which chains can I pay a pack on?", a: `The same rails as any other call: ${RAILS_SHORT}. Gas is sponsored on EVM chains, so you need only the stablecoin. ${freePackSentence()}` },
 ];
 
 export function skillsIndex(baseUrl) {
@@ -2726,7 +2736,7 @@ export function skillsIndex(baseUrl) {
     ["payments to sign", "7", "1", false],
     ["round trips", "7", "1", false],
     ["settlements to reconcile", "7", "1", false],
-    ["failure paths to handle", "7", "0", false],
+    ["responses to check", "7", "1", false],
     ["orchestration code", "yours", "none", true],
   ].map(([label, alone, packed, green]) =>
     `<tr style="border-bottom:1px solid var(--panel-rule);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 18px;color:var(--on-panel-faint);">${e(label)}</th><td style="padding:11px 18px;text-align:right;color:var(--on-panel-muted);">${e(alone)}</td><td style="padding:11px 18px;text-align:right;color:${green ? "var(--accent-lit)" : "var(--on-panel)"};font-weight:700;">${e(packed)}</td></tr>`
@@ -2756,7 +2766,7 @@ export function skillsIndex(baseUrl) {
       <div>
         <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 20px;color:var(--ink);">Seven tools.<br>One <span style="color:var(--accent);">payment</span>.</h1>
         <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 16px;">A real job is never one call. Auditing a domain takes seven tools; parsing a document takes seven more. Orchestrate that yourself and you are running seven payments, seven round trips and seven failure modes - and writing the code that holds it together.</p>
-        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount}+ packs, ${PACK_PRICE_RANGE.text}, none priced above the sum of its tools.</strong></p>
+        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount} packs, ${PACK_PRICE_RANGE.text}, none priced above the sum of its tools.</strong></p>
         <div style="display:flex;flex-wrap:wrap;gap:11px;">
           <a class="btn btn-secondary ml-cta" href="#packs">Browse the packs →</a>
           <a class="btn btn-secondary ml-cta" href="/api/skill-packs.json">skill-packs.json</a>
@@ -2852,7 +2862,7 @@ ${ledgerFooterCompact()}`;
 
   const canonical = `${baseUrl}/skills`;
   const title = "Skill packs - multi-tool agent workflows for one x402 payment";
-  const description = `${packCount}+ skill packs run a whole multi-tool job server-side for one payment: several tools, one settlement, one response. Partial-success envelope means a failed step never costs you the whole call. ${PACK_PRICE_RANGE.text} per pack, no signup.`;
+  const description = `${packCount} skill packs run a whole multi-tool job server-side for one payment: several tools, one settlement, one response. Partial-success envelope means a failed step never costs you the whole call. ${PACK_PRICE_RANGE.text} per pack, no signup.`;
 
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, sameAs: ORG_SAME_AS };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
@@ -2860,7 +2870,7 @@ ${ledgerFooterCompact()}`;
     { "@type": "ListItem", position: 2, name: "Our tools", item: `${baseUrl}/tools` },
     { "@type": "ListItem", position: 3, name: "Skill packs", item: canonical },
   ] };
-  const collectionLd = { "@type": "CollectionPage", "@id": `${canonical}#page`, name: "Agent402 skill packs", url: canonical, description: `${packCount}+ multi-tool workflows that run server-side in one request: one payment, one settlement, and a single response with a partial-success envelope if a step fails.`, isPartOf: { "@id": `${baseUrl}/#organization` }, mainEntity: { "@id": `${canonical}#packs` } };
+  const collectionLd = { "@type": "CollectionPage", "@id": `${canonical}#page`, name: "Agent402 skill packs", url: canonical, description: `${packCount} multi-tool workflows that run server-side in one request: one payment, one settlement, and a single response with a partial-success envelope if a step fails.`, isPartOf: { "@id": `${baseUrl}/#organization` }, mainEntity: { "@id": `${canonical}#packs` } };
   const appLd = { "@type": "SoftwareApplication", "@id": `${canonical}#app`, name: "Agent402 skill packs", applicationCategory: "DeveloperApplication", operatingSystem: "HTTP, MCP (streamable HTTP)", offers: { "@type": "AggregateOffer", offerCount: String(packCount), lowPrice: PACK_PRICE_RANGE.min.toFixed(3), highPrice: PACK_PRICE_RANGE.max.toFixed(3), priceCurrency: "USD", description: `One payment per pack run, on ${RAILS_SHORT}. No signup, no API key.` } };
   const itemListLd = { "@type": "ItemList", "@id": `${canonical}#packs`, name: "Featured skill packs", itemListElement: flagship.map((p, i) => ({ "@type": "ListItem", position: i + 1, name: p.slug, url: `${baseUrl}/skills/${p.slug}` })) };
   const faqLd = { "@type": "FAQPage", "@id": `${canonical}#faq`, mainEntity: SKILLS_FAQS.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
@@ -2921,7 +2931,7 @@ export function packClientSnippet(catalogSlug, args) {
   ].join("\n");
 }
 
-export function skillPackPage(baseUrl, slug, catalog) {
+export function skillPackPage(baseUrl, slug, catalog, { mpp = !!(process.env.MPP_SECRET_KEY || "").trim() } = {}) {
   const e = ledgerEsc;
   const pack = SKILL_PACKS.find((p) => p.slug === slug);
   if (!pack) return null;
@@ -2980,7 +2990,7 @@ ${packTool ? `
   </div>
   <div class="sk-buy-route">${e(packTool.route)}</div>
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);margin:8px 0 0;"><a href="/tools/skill-${e(pack.slug)}" style="color:var(--muted);">Sample output + API docs &rarr;</a></div>
-  <p class="sk-buy-note">${pack.toolSlugs.length} tools run server-side in one request. You pay once, settle once, and get a single response - no orchestration, no per-step payments, and a partial-success envelope if any step fails. USDC over x402 on any supported chain.</p>
+  <p class="sk-buy-note">${pack.toolSlugs.length} tools run server-side in one request. You pay once, settle once, and get a single response - no orchestration, no per-step payments, and a partial-success envelope if any step fails. ${isComputePayable(packTool) ? `Free with proof-of-work (no wallet), or ${e(packTool.price)} in USDC over x402${mpp ? " or MPP" : ""}.` : `Paid in USDC over x402${mpp ? " or MPP" : ""}; this pack has no proof-of-work tier.`}</p>
 </div>` : ""}
 
 <h2 style="font-weight:700;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">When to use this pack</h2>
