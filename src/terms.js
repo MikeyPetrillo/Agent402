@@ -133,8 +133,10 @@ stated on that route.</p>
 failure case costs nothing and needs no refund. Where a defect on our side means you were charged for
 something that did not deliver, we record the amount as owed and repay the wallet that paid, on the
 chain it paid on. Repayment is not instant: we review the amounts owed and send them in batches, and we
-check larger amounts by hand before they are sent. On the EVM chains, Stellar and Algorand a batch sends
-the repayment; on Tempo and Solana the amount stays recorded as owed until we send it by hand. An amount
+check larger amounts by hand before they are sent. Each batch is started and approved by hand, and it
+sends the repayment on every chain we accept payment on: the EVM chains, Tempo, Solana, Stellar and
+Algorand. Before a repayment is sent we confirm on that chain that your payment reached us; on Tempo and
+Solana we also confirm the repayment itself before recording it as paid. An amount
 owed because a connection closed is reviewed before it is repaid, and is not repaid when the call's effect
 outlives the response and was delivered (a memory write, or a purchase we made from another seller for
 you). A payment whose paying wallet cannot be identified from its own settlement cannot be repaid. None of

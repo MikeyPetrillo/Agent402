@@ -1,10 +1,16 @@
 // Unit tests for Memory v2 (coordination + provenance + recall).
 // Exercises the module directly with two simulated wallets — no HTTP, no payments.
 import { createHash } from "node:crypto";
-import {
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+// Its own SQLite file: the retention sweep below is global over the file.
+process.env.MEMORY_DB_FILE ||= join(mkdtempSync(join(tmpdir(), "mem-test-")), "agent402.db");
+const {
   memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas,
   grant, revoke, listGrants, getLog, remember, recall, forget,
-} from "../src/tools/memory.js";
+  sweepMemoryAudit, auditRetentionDays, AUDIT_RETENTION_DEFAULT_DAYS,
+} = await import("../src/tools/memory.js");
 
 const rnd = () => "0x" + createHash("sha256").update(Math.random() + "" + Date.now()).digest("hex").slice(0, 40);
 const A = rnd();
@@ -234,6 +240,80 @@ ok("EVM normalized to lowercase", normalizePayerAddress("0x" + "AB".repeat(20)) 
     memoryPut(N, "rt", v);
     ok(`${label} round-trips`, JSON.stringify(memoryGet(N, "rt").value) === JSON.stringify(v));
   }
+}
+
+// --- audit log retention (sweepMemoryAudit) ---
+{
+  const spin = (ms) => { const t = Date.now() + ms; while (Date.now() < t) { /* separate timestamps */ } };
+  // Verifies a chain that may start mid-way (its first prevHash is the anchor)
+  // and may hold redacted entries (their stored hash is the link).
+  const verify = (entries) => {
+    let prev = entries[0]?.prevHash ?? "";
+    for (const e of entries) {
+      if (e.prevHash !== prev) return false;
+      if (!e.redacted) {
+        const h = createHash("sha256").update(`${e.prevHash}|${e.seq}|${e.ts}|${e.actor}|${e.action}|${e.key ?? ""}|${e.data === null ? "" : JSON.stringify(e.data)}`).digest("hex");
+        if (h !== e.hash) return false;
+      }
+      prev = e.hash;
+    }
+    return true;
+  };
+  const R = rnd().toLowerCase(), G = rnd().toLowerCase();
+  memoryPut(R, "keep", { v: 1 });
+  memoryIncr(R, "ctr", 2, R);
+  grant(R, G, "readwrite");
+  memoryPut(R, "gone", { secret: "name" }, { actor: G });
+  memoryIncr(R, "gone-ctr", 7, R);
+  memoryDelete(R, "gone");
+  memoryCas(R, "gone-ctr", 7, undefined, { hasValue: false });
+  memoryPut(R, "again", "first");
+  memoryDelete(R, "again");
+  memoryPut(R, "again", "second");
+  memoryPut(R, "ttl", "x", { ttlSeconds: 1 });
+  const doc = await remember(R, "a note to forget", null);
+  forget(R, doc.id);
+  const before = getLog(R, R, 1000).entries;
+  const r1 = sweepMemoryAudit(Date.now() + 5000); // the TTL key has expired by then
+  const after = getLog(R, R, 1000).entries;
+  const byKey = (k) => after.filter((e) => e.key === k);
+  ok("retention: the sweep keeps every entry's place in the chain (none removed)", after.length === before.length && r1.redacted > 0);
+  ok("retention: entries naming a deleted key are redacted (put, incr, delete, cas-del)", byKey("gone").length === 0 && byKey("gone-ctr").length === 0 && after.filter((e) => e.redacted).length >= 4);
+  ok("retention: an expired key's entries are redacted", byKey("ttl").length === 0);
+  ok("retention: a deleted document's entries are redacted", byKey(doc.id).length === 0);
+  ok("retention: a key deleted and written again keeps only the entries after the delete", byKey("again").length === 1 && byKey("again")[0].action === "put" && after.filter((e) => e.redacted && e.action === "delete").length >= 2);
+  ok("retention: live keys and grants keep their entries", byKey("keep").length === 1 && byKey("ctr").length === 1 && byKey(G).length === 1);
+  const red = after.find((e) => e.redacted && e.actor === G);
+  ok("retention: a redacted entry keeps its actor (attribution is never rewritten), key and data cleared", red && red.key === null && red.data === null && red.action === "put");
+  ok("retention: the chain still verifies with redacted entries", verify(after));
+  const lg = getLog(R, R, 1);
+  ok(`retention: the log states its retention (${lg.retention?.days} days)`, lg.retention?.days === AUDIT_RETENTION_DEFAULT_DAYS && /redacted/.test(lg.retention.note));
+  // Age: removal is a prefix; the rest verifies from its anchor.
+  spin(5); memoryPut(R, "keep", { v: 2 }); spin(5); memoryPut(R, "keep", { v: 3 });
+  const all = getLog(R, R, 1000).entries;
+  const cut = all[all.length - 2];
+  const r2 = sweepMemoryAudit(cut.ts + 1 + AUDIT_RETENTION_DEFAULT_DAYS * 86400000);
+  const kept = getLog(R, R, 1000).entries;
+  ok(`retention: entries older than ${AUDIT_RETENTION_DEFAULT_DAYS} days are removed as a prefix (${r2.aged} aged)`, kept.length === 1 && kept[0].seq === all[all.length - 1].seq && r2.aged >= all.length - 1);
+  ok("retention: what is left verifies from its anchor", verify(kept) && kept[0].prevHash === cut.hash);
+  memoryPut(R, "keep", { v: 4 });
+  const cont = getLog(R, R, 1000).entries;
+  ok("retention: the chain continues after an age prune", cont.length === 2 && cont[1].seq === cont[0].seq + 1 && verify(cont));
+  // A namespace with nothing left loses its whole log; a new write starts a new chain.
+  const E = rnd().toLowerCase();
+  memoryPut(E, "only", 1); memoryDelete(E, "only");
+  sweepMemoryAudit();
+  ok("retention: an emptied namespace's log is removed", getLog(E, E, 100).entries.length === 0);
+  memoryPut(E, "fresh", 1);
+  const ne = getLog(E, E, 100).entries;
+  ok("retention: a later write starts a new chain at seq 1", ne.length === 1 && ne[0].seq === 1 && ne[0].prevHash === "" && verify(ne));
+  // A namespace that still holds a grant keeps its log.
+  const Q = rnd().toLowerCase();
+  grant(Q, G, "read"); memoryPut(Q, "k", 1); memoryDelete(Q, "k");
+  sweepMemoryAudit();
+  ok("retention: a namespace with a live grant keeps its (redacted) log", getLog(Q, Q, 100).entries.length === 3);
+  ok("retention: identity checks are unchanged (a stranger still cannot read the log)", (() => { try { getLog(R, rnd().toLowerCase(), 10); return false; } catch (e) { return e.statusCode === 403; } })());
+  ok("retention: MEMORY_AUDIT_RETENTION_DAYS sets the window; junk reads as the default", auditRetentionDays({ MEMORY_AUDIT_RETENTION_DAYS: "30" }) === 30 && auditRetentionDays({ MEMORY_AUDIT_RETENTION_DAYS: "0" }) === 90 && auditRetentionDays({ MEMORY_AUDIT_RETENTION_DAYS: "x" }) === 90 && auditRetentionDays({}) === 90);
 }
 
 const failed = checks.filter(([, c]) => !c);

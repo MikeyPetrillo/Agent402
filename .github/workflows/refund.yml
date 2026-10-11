@@ -19,8 +19,11 @@
 #   REFUND_EVM_KEY            || BURNER_KEY             (all eip155 rails)
 #   REFUND_STELLAR_SECRET     || STELLAR_BURNER_SECRET  (+ "agent402 refund" memo)
 #   REFUND_ALGORAND_MNEMONIC  || ALGORAND_BURNER_MNEMONIC (+ note)
-# NEVER the treasury. Solana is detection-only until the SVM spending wallet
-# lands; its rows stay owed and are listed on every run.
+#   REFUND_TEMPO_KEY          || BURNER_KEY             (Tempo, TIP-20 + memo, in the paid currency)
+#   REFUND_SOLANA_KEY         || SOLANA_BURNER_KEY      (Solana, SPL USDC + memo)
+# NEVER the treasury. Tempo and Solana refunds are also proven on chain
+# (the refund itself, to the payer) before a row is marked paid; a send that
+# cannot be proven stays 'sending' for a human and is never re-sent.
 name: Refund run
 on:
   workflow_dispatch:
@@ -105,6 +108,10 @@ jobs:
           REFUND_EVM_KEY: ${{ secrets.REFUND_EVM_KEY != '' && secrets.REFUND_EVM_KEY || secrets.BURNER_KEY }}
           REFUND_STELLAR_SECRET: ${{ secrets.REFUND_STELLAR_SECRET != '' && secrets.REFUND_STELLAR_SECRET || secrets.STELLAR_BURNER_SECRET }}
           REFUND_ALGORAND_MNEMONIC: ${{ secrets.REFUND_ALGORAND_MNEMONIC != '' && secrets.REFUND_ALGORAND_MNEMONIC || secrets.ALGORAND_BURNER_MNEMONIC }}
+          REFUND_TEMPO_KEY: ${{ secrets.REFUND_TEMPO_KEY != '' && secrets.REFUND_TEMPO_KEY || secrets.BURNER_KEY }}
+          REFUND_SOLANA_KEY: ${{ secrets.REFUND_SOLANA_KEY != '' && secrets.REFUND_SOLANA_KEY || secrets.SOLANA_BURNER_KEY }}
+          # The Solana RPC the canaries use (falls back to the public one).
+          SOLANA_RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
           # The router tiers settle to our spending wallets, not the treasury
           # (src/payments.js), so the pre-send proof must count those public
           # addresses as ours (ourPayToSet in scripts/refund-run.js). Repository

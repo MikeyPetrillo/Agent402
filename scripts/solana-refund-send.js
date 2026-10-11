@@ -1,7 +1,6 @@
-// One-time SPL USDC transfer on Solana, for refunds the refund runner cannot
-// pay. `senders.solana` is hardcoded false in scripts/refund-run.js (no SVM
-// spending wallet), so debts on that chain are recorded and held. This sends
-// one, deliberately, under the same discipline the runner uses.
+// One-time SPL USDC transfer on Solana, by hand. scripts/refund-run.js now
+// repays Solana debts in its batches (REFUND_SOLANA_KEY); this sends one,
+// deliberately, under the same discipline the runner uses.
 //
 // Dry by default: it prints what it would do and exits. --send is the only
 // thing that broadcasts.

@@ -6,8 +6,11 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPO_URL, repoUrl } from "./repo-link.js";
 import { DEFAULTS as TRAFFIC_DEFAULTS } from "./traffic-classifier.js";
 import { backupKeepDays } from "./backup.js";
-import { WISH_STALE_DAYS } from "./wish.js";
+import { WISH_STALE_DAYS, wishRetentionDays } from "./wish.js";
+import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
+import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
+const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
   const title = "Privacy - Agent402";
   const description = "Agent402's privacy policy: no accounts, no ad trackers, page analytics with a consent choice in Europe. What we process, why, how long we keep it, and how to have it erased.";
@@ -71,8 +74,9 @@ so every claim below is verifiable in code.</p>
     <li>a search on <code>/api/find</code> or the connector's <code>catalog.find</code> that finds no
     matching tool, and a request sent to <code>/api/wish</code>, is kept as text on our demand board
     together with a hash of your IP address combined with the day (never the address itself); an entry
-    leaves the public board after ${WISH_STALE_DAYS} days without a repeat, and the text stays in our records
-    until we clear them;</li>
+    leaves the board after ${WISH_STALE_DAYS} days without a repeat, and each request's text and hash are
+    deleted ${wishRetentionDays()} days after it was sent, leaving only its counts, kept under a keyed hash
+    of the text (never the text);</li>
     <li>for a decision bought on <code>/api/decide</code>, we keep the task you describe, the plan we
     returned, the paying wallet and any feedback you report on its steps, for 30 days;</li>
     <li>for a paid call, the sales ledger keeps the tool's name and a SHA-256 hash of the response we
@@ -138,8 +142,11 @@ so every claim below is verifiable in code.</p>
   <li><b>Memory tools.</b> Data written via <code>/api/memory</code> is stored on our server keyed to the
   paying wallet, readable only by that wallet (or wallets it explicitly grants), until the owner deletes
   it or its TTL expires. A tamper-evident audit log of accesses is kept for the namespace owner: each entry
-  records the key name and the action, and for counters and compare-and-set the values involved. The log
-  is kept after a key is deleted or expires, so the history stays verifiable.</li>
+  records the paying wallet, the key name and the action, and for counters and compare-and-set the values
+  involved. Each entry is deleted ${auditRetentionDays()} days after it is written. Within ${Math.round(AUDIT_SWEEP_MS / 60000)} minutes of a key
+  or document being deleted or expiring, the entries that name it lose the key name and values (the wallet,
+  action and time stay, so the log still verifies), and a namespace with no keys, documents or grants left
+  loses its whole log.</li>
   <li><b>Free email alerts.</b> If you enter an email on a free report page to be told when a company, fund, domain or product changes, we store that address, the subject you chose and the dates we checked and emailed, and we send you a confirmation link first: nothing is watched and nothing else is sent until you click it. Alert emails go out at most once a day, only when something changed, through the same transactional provider, and every one carries a one-click unsubscribe link that ends the alert and stops all email. We do not use the address for anything else and do not share it.</li>
 </ul>
 
@@ -181,9 +188,12 @@ expire with their window (one hour, or 24 hours for the free trial's daily allow
 persists until deleted by its owner or TTL expiry. Card-purchase records (session id, input, the
 finished report) are kept while the report link or subscription is live and for accounting afterwards.
 Free-alert records keep your email until you unsubscribe, when the address is
-removed; an unconfirmed signup is deleted after three days. Follow-up email records drop the address
-when you stop them; otherwise the address stays in the record after the last follow-up is sent, until
-you ask us to delete it. Decisions bought on <code>/api/decide</code> are deleted after 30 days. You can ask
+removed; an unconfirmed signup is deleted after three days. Follow-up email records delete the address
+as soon as the last follow-up is sent, when you stop them or buy again, or after ${MAX_SEND_FAILURES} failed deliveries
+in a row, and in any case ${DAYS(ADDRESS_MAX_AGE_MS)} days after the purchase; the rest of the record (the
+product and the subject you asked about) is deleted ${DAYS(RECORD_KEEP_MS)} days after the purchase. Memory audit-log
+entries are deleted ${auditRetentionDays()} days after they are written, and demand-board request text
+${wishRetentionDays()} days after it was sent. Decisions bought on <code>/api/decide</code> are deleted after 30 days. You can ask
 us at the address below to delete your email from our alert, follow-up and subscription
 records; the card processor's copy is deleted through Stripe. The sales ledger keeps wallet addresses and transaction ids, which are already public
 on-chain. Aggregate, non-personal counters (total calls served per tool) are kept for the public

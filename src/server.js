@@ -325,7 +325,7 @@ import { installEgressMeter, egressReport } from "./egress-meter.js";
 import { acpFeed, acpManifest } from "./acp.js";
 import { findTools, findRelatedSellers, markWeakMatches } from "./find.js";
 import { buildPlanSketch } from "./plan-sketch.js";
-import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE } from "./wish.js";
+import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE, startWishRotation } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
 import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { submissionSlotStatus } from "./x402-index.js";
@@ -1009,7 +1009,7 @@ const CATALOG = {
     category: "memory",
     price: "$0.001",
     description:
-      "Tamper-evident history of every change to a namespace - an append-only, hash-chained audit log the server attests to (provenance an agent can't forge for itself). ?owner=0x… reads a granted namespace.",
+      "Tamper-evident history of changes to a namespace - a hash-chained audit log the server attests to (provenance an agent can't forge for itself). Entries are kept for a bounded window (see retention in the answer), and an entry naming a key or document that was later deleted is redacted while still linking the chain. ?owner=0x… reads a granted namespace.",
     tags: ["memory", "audit", "provenance", "history", "verifiable"],
     discovery: {
       input: { limit: "50" },
@@ -2458,6 +2458,9 @@ const _followups = createFollowups({
   onEvent: ({ step, kind }) => { try { capturePostHogHumanFunnel({ step, kind }); } catch { /* telemetry never breaks the engine */ } },
 });
 if (process.env.FOLLOWUPS !== "off") _followups.start();
+// Demand-board retention (src/wish.js rotateWishes): request text older than
+// WISH_RETENTION_DAYS is deleted, its counts kept in the rollup.
+startWishRotation();
 // An email link whose row write could not land answers 503 (a mail client's
 // one-click POST retries it; the page asks the person to try again).
 function emailLinkUnavailable(res, html) {

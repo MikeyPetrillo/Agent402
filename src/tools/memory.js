@@ -26,7 +26,7 @@ import Database from "better-sqlite3";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { cleanPgText, stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, trackStoreReady, withSchemaLock } from "../state-db.js";
+import { cleanPgText, stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, trackStoreReady, withSchemaLock, leased } from "../state-db.js";
 import { retryingLoad } from "../store-retry.js";
 
 // Memory is the WORST case for a silent /data → /tmp fallback: agents pay
@@ -160,6 +160,46 @@ function logEntry(r) {
     data: r.data ? JSON.parse(r.data) : null,
     prevHash: r.prev_hash,
     hash: r.hash,
+    ...(r.key == null ? { redacted: true } : {}),
+  };
+}
+
+// --- audit log retention ----------------------------------------------------
+// The audit chain is bounded, on a timer in both backends (sweepAudit):
+//   1. age: entries older than auditRetentionDays() (MEMORY_AUDIT_RETENTION_DAYS,
+//      default 90) are removed. Removal is always a PREFIX of a namespace's
+//      chain (every entry at or before the newest old one), so what is left is
+//      still one contiguous chain; its first entry's prevHash is the anchor.
+//   2. deleted keys and documents: an entry naming a key (put, delete, incr,
+//      cas-set, cas-del) whose key no longer exists, or that precedes a delete
+//      of that key, and an entry naming a document (remember, forget) that no
+//      longer exists, is REDACTED: its key and data are cleared. Its seq, ts,
+//      actor, action, prev_hash and hash stay, so the next entry still links
+//      to it and every unredacted entry still recomputes; a redacted entry's
+//      own hash cannot be recomputed (its inputs are gone, by design).
+//   3. deleted namespaces: a namespace with no key, document or grant left has
+//      its whole chain removed; a later write starts a new chain at seq 1.
+// Actors (the paying wallets) are never rewritten: attribution stays as signed.
+import { AUDIT_RETENTION_DEFAULT_DAYS, auditRetentionDays, AUDIT_SWEEP_MS } from "../memory-retention.js";
+export { AUDIT_RETENTION_DEFAULT_DAYS, auditRetentionDays, AUDIT_SWEEP_MS };
+const KEY_ACTIONS = "('put','delete','incr','cas-set','cas-del')";
+const DOC_ACTIONS = "('remember','forget')";
+const RETENTION_NOTE = () =>
+  `Entries older than ${auditRetentionDays()} days are removed, so the first entry returned may start mid-chain: verify from its prevHash. ` +
+  "An entry with redacted:true (key and data null) named a key or document that was later deleted or expired: its hash still links the chain but cannot be recomputed. " +
+  "A namespace with no keys, documents or grants left has its log removed.";
+/** The three sweep statements over table names (shared by SQLite, its mirror, and Postgres). */
+function auditSweepSql({ log, kv, docs, grants }, ph = () => "?") {
+  return {
+    age: `DELETE FROM ${log} WHERE EXISTS (SELECT 1 FROM ${log} x WHERE x.ns = ${log}.ns AND x.seq >= ${log}.seq AND x.ts < ${ph(1)})`,
+    redact: `UPDATE ${log} SET key = NULL, data = NULL WHERE key IS NOT NULL AND (
+        (action IN ${KEY_ACTIONS} AND (
+          NOT EXISTS (SELECT 1 FROM ${kv} k WHERE k.ns = ${log}.ns AND k.k = ${log}.key)
+          OR EXISTS (SELECT 1 FROM ${log} d WHERE d.ns = ${log}.ns AND d.key = ${log}.key AND d.seq >= ${log}.seq AND d.action IN ('delete','cas-del'))))
+        OR (action IN ${DOC_ACTIONS} AND NOT EXISTS (SELECT 1 FROM ${docs} dc WHERE dc.ns = ${log}.ns AND dc.id = ${log}.key)))`,
+    dropEmpty: `DELETE FROM ${log} WHERE NOT EXISTS (SELECT 1 FROM ${kv} k WHERE k.ns = ${log}.ns)
+        AND NOT EXISTS (SELECT 1 FROM ${docs} dc WHERE dc.ns = ${log}.ns)
+        AND NOT EXISTS (SELECT 1 FROM ${grants} g WHERE g.owner = ${log}.ns)`,
   };
 }
 
@@ -318,6 +358,7 @@ const SQLITE_DDL = `
     data TEXT, prev_hash TEXT NOT NULL, hash TEXT NOT NULL,
     PRIMARY KEY (ns, seq)
   );
+  CREATE INDEX IF NOT EXISTS memlog_key ON memlog (ns, key) WHERE key IS NOT NULL;
   CREATE TABLE IF NOT EXISTS docs (
     ns TEXT NOT NULL, id TEXT NOT NULL, text TEXT NOT NULL,
     meta TEXT, vec TEXT NOT NULL, model TEXT, updated INTEGER NOT NULL,
@@ -396,6 +437,10 @@ function sqliteStatements(db) {
         "ON CONFLICT(ns, id) DO UPDATE SET text = excluded.text, meta = excluded.meta, vec = excluded.vec, model = excluded.model, updated = excluded.updated"
     ),
     docDel: db.prepare("DELETE FROM docs WHERE ns = ? AND id = ?"),
+    ...(() => {
+      const sql = auditSweepSql({ log: "memlog", kv: "kv", docs: "docs", grants: "grants" });
+      return { logPruneAge: db.prepare(sql.age), logRedact: db.prepare(sql.redact), logDropEmpty: db.prepare(sql.dropEmpty) };
+    })(),
   };
 }
 
@@ -415,7 +460,7 @@ function sqliteBackend() {
   }
 
   // --- statements -----------------------------------------------------------
-  const { kvPut, kvDel, kvPruneExpired, kvPruneAll, grantPut, grantDel, logIns, docPut, docDel } = sqliteStatements(db);
+  const { kvPut, kvDel, kvPruneExpired, kvPruneAll, grantPut, grantDel, logIns, docPut, docDel, logPruneAge, logRedact, logDropEmpty } = sqliteStatements(db);
   const kvGet = db.prepare("SELECT v, updated, exp FROM kv WHERE ns = ? AND k = ?");
   const kvList = db.prepare("SELECT k, updated, exp FROM kv WHERE ns = ? ORDER BY updated DESC LIMIT 1000");
   const kvCount = db.prepare("SELECT COUNT(*) AS n FROM kv WHERE ns = ?");
@@ -439,14 +484,22 @@ function sqliteBackend() {
   };
 
   // Expired rows in namespaces nobody reads anymore would otherwise live forever
-  // on the persistent volume — sweep globally on a timer (cheap: exp is indexed).
+  // on the persistent volume, so sweep globally on a timer (cheap: exp is indexed),
+  // then bound the audit log (see auditSweepSql).
+  const sweep = db.transaction((nowMs) => {
+    kvPruneAll.run(Math.floor(nowMs / 1000));
+    const aged = logPruneAge.run(nowMs - auditRetentionDays() * 86400000).changes;
+    const redacted = logRedact.run().changes;
+    const dropped = logDropEmpty.run().changes;
+    return { aged, redacted, dropped };
+  });
   setInterval(() => {
     try {
-      kvPruneAll.run(nowSec());
+      sweep(now());
     } catch {
       /* best-effort */
     }
-  }, 10 * 60 * 1000).unref();
+  }, AUDIT_SWEEP_MS).unref();
 
   const grantGet = db.prepare("SELECT mode, exp FROM grants WHERE owner = ? AND grantee = ?");
   const grantList = db.prepare("SELECT grantee, mode, created, exp FROM grants WHERE owner = ?");
@@ -484,7 +537,7 @@ function sqliteBackend() {
   function getLog(owner, actor, limit = 100) {
     requireAccess(owner, actor, "read");
     const rows = logRead.all(owner, logLimitOf(limit));
-    return { ns: owner, entries: rows.map(logEntry), verify: VERIFY_RULE, persistent: PERSISTENT };
+    return { ns: owner, entries: rows.map(logEntry), verify: VERIFY_RULE, retention: { days: auditRetentionDays(), note: RETENTION_NOTE() }, persistent: PERSISTENT };
   }
 
   // --- key/value with TTL ---------------------------------------------------
@@ -636,7 +689,7 @@ function sqliteBackend() {
     return { id, deleted, owner };
   }
 
-  return { ready: () => Promise.resolve(), mirrorStatus: () => "n/a", authorize, getLog, memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas, grant, revoke, listGrants, remember, recall, forget };
+  return { ready: () => Promise.resolve(), mirrorStatus: () => "n/a", sweepAudit: (nowMs = now()) => sweep(nowMs), authorize, getLog, memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas, grant, revoke, listGrants, remember, recall, forget };
 }
 
 // =========================================================================
@@ -673,6 +726,7 @@ function pgBackend() {
       data TEXT, prev_hash TEXT NOT NULL, hash TEXT NOT NULL,
       PRIMARY KEY (ns, seq)
     );
+    CREATE INDEX IF NOT EXISTS memory_memlog_key ON ${T("memory_memlog")} (ns, key) WHERE key IS NOT NULL;
     CREATE TABLE IF NOT EXISTS ${T("memory_docs")} (
       ns TEXT NOT NULL, id TEXT NOT NULL, text TEXT NOT NULL,
       meta TEXT, vec TEXT NOT NULL, model TEXT, updated BIGINT NOT NULL,
@@ -818,11 +872,27 @@ function pgBackend() {
   /** Tests only: the mirror state. */
   const mirrorStatus = () => (mirrorFailed ? "failed" : mirror ? "on" : existsSync(dirname(DB_FILE)) ? "idle" : "off");
 
-  // Expired rows in namespaces nobody reads anymore: sweep on a timer, as the file backend does.
-  setInterval(() => {
-    const t = nowSec();
-    ready().then(() => stateQuery(`DELETE FROM ${T("memory_kv")} WHERE exp IS NOT NULL AND exp < $1`, [t])).then(() => mirrorApply([["kvPruneAll", t]])).catch(() => {});
-  }, 10 * 60 * 1000).unref();
+  // Expired rows in namespaces nobody reads anymore: sweep on a timer, as the
+  // file backend does, then bound the audit log (see auditSweepSql). One
+  // transaction; the same statements are replayed into the SQLite mirror so a
+  // roll-forward from the file never brings back a removed or redacted entry.
+  // Under a lease: one container sweeps at a time.
+  async function sweepAudit(nowMs = now()) {
+    await ready();
+    const t = Math.floor(nowMs / 1000), cutoff = nowMs - auditRetentionDays() * 86400000;
+    const sql = auditSweepSql({ log: T("memory_memlog"), kv: T("memory_kv"), docs: T("memory_docs"), grants: T("memory_grants") }, (i) => `$${i}`);
+    const out = await withStateTx(async (c) => {
+      await c.query(`DELETE FROM ${T("memory_kv")} WHERE exp IS NOT NULL AND exp < $1`, [t]);
+      const aged = (await c.query(sql.age, [cutoff])).rowCount;
+      const redacted = (await c.query(sql.redact)).rowCount;
+      const dropped = (await c.query(sql.dropEmpty)).rowCount;
+      return { aged, redacted, dropped };
+    });
+    mirrorApply([["kvPruneAll", t], ["logPruneAge", cutoff], ["logRedact"], ["logDropEmpty"]]);
+    return out;
+  }
+  const sweepLeased = leased("memory-audit-sweep", { ttlMs: 5 * 60 * 1000, log: (m) => console.error(`[memory] ${m}`) }, () => sweepAudit());
+  setInterval(() => { Promise.resolve().then(() => sweepLeased()).catch(() => {}); }, AUDIT_SWEEP_MS).unref();
 
   // Every write: one transaction, the owner's advisory lock first. `q` is the
   // transaction client's query (or stateQuery for a plain read); `q.mirror`
@@ -954,7 +1024,7 @@ function pgBackend() {
     return read(async (q) => {
       await requireAccess(q, owner, actor, "read");
       const r = await q(`SELECT seq, ts, actor, action, key, data, prev_hash, hash FROM ${T("memory_memlog")} WHERE ns = $1 ORDER BY seq ASC LIMIT $2`, [owner, logLimitOf(limit)]);
-      return { ns: owner, entries: r.rows.map((x) => logEntry({ ...x, seq: num(x.seq), ts: num(x.ts) })), verify: VERIFY_RULE, persistent: PERSISTENT };
+      return { ns: owner, entries: r.rows.map((x) => logEntry({ ...x, seq: num(x.seq), ts: num(x.ts) })), verify: VERIFY_RULE, retention: { days: auditRetentionDays(), note: RETENTION_NOTE() }, persistent: PERSISTENT };
     });
   }
 
@@ -1125,7 +1195,7 @@ function pgBackend() {
     });
   }
 
-  return { ready, mirrorStatus, authorize, getLog, memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas, grant, revoke, listGrants, remember, recall, forget };
+  return { ready, mirrorStatus, sweepAudit, authorize, getLog, memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas, grant, revoke, listGrants, remember, recall, forget };
 }
 
 const impl = USE_PG ? pgBackend() : sqliteBackend();
@@ -1137,6 +1207,11 @@ const impl = USE_PG ? pgBackend() : sqliteBackend();
 
 /** Resolves when the backend is ready (tables created, the SQLite file imported); immediate on SQLite. */
 export function memoryReady() { return impl.ready(); }
+
+/** Run the expiry and audit-log retention sweep now (the timer runs it every
+ *  AUDIT_SWEEP_MS). Returns { aged, redacted, dropped } (a promise of it on
+ *  Postgres). `nowMs` is for tests. */
+export function sweepMemoryAudit(nowMs) { return impl.sweepAudit(nowMs); }
 
 /** Tests only: "on" | "idle" | "failed" | "off" for the Postgres backend's SQLite mirror, "n/a" on SQLite. */
 export function __memoryMirrorStatus() { return impl.mirrorStatus(); }

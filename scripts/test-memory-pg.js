@@ -348,6 +348,35 @@ try {
     ok(fileLog === pgLog, `the file's whole memlog for A equals the database's (${log.entries.length} rows, both processes)`);
     ok(fileKeys === pgKeys && fileDocs === pgDocs && fileGrants === pgGrants, `kv, docs and grants in the file match the database (${pgKeys.split(",").length} keys, ${pgDocs} docs, ${pgGrants.split(",").filter(Boolean).length} grants)`);
   }
+
+  // ---- audit log retention on Postgres, mirrored into the file ---------------
+  {
+    const D = "0x" + "d4".repeat(20), G = "0x" + "e5".repeat(20), Z = "0x" + "f6".repeat(20);
+    await m.memoryPut(D, "keep", 1);
+    await m.grant(D, G, "readwrite");
+    await m.memoryPut(D, "gone", { secret: "name" }, { actor: G });
+    await m.memoryIncr(D, "gone", 0, D).catch(() => {});
+    await m.memoryDelete(D, "gone");
+    await m.memoryPut(Z, "only", 1); await m.memoryDelete(Z, "only");
+    const before = (await m.getLog(D, D, 1000)).entries;
+    const r = await m.sweepMemoryAudit();
+    const after = (await m.getLog(D, D, 1000)).entries;
+    const verify = (es) => { let prev = es[0]?.prevHash ?? ""; for (const e of es) { if (e.prevHash !== prev) return false; if (!e.redacted && createHash("sha256").update(`${e.prevHash}|${e.seq}|${e.ts}|${e.actor}|${e.action}|${e.key ?? ""}|${e.data === null ? "" : JSON.stringify(e.data)}`).digest("hex") !== e.hash) return false; prev = e.hash; } return true; };
+    ok(r.redacted >= 2 && after.length === before.length && !after.some((e) => e.key === "gone") && after.filter((e) => e.redacted).length >= 2, `retention (db): a deleted key's entries are redacted in place (${r.redacted} redacted)`);
+    ok(after.find((e) => e.redacted && e.action === "put")?.actor === G && verify(after), "retention (db): the redacted entry keeps its actor and the chain verifies");
+    ok((await m.getLog(Z, Z, 100)).entries.length === 0 && r.dropped >= 2, "retention (db): an emptied namespace's log is removed");
+    const all = (await m.getLog(D, D, 1000)).entries;
+    const r2 = await m.sweepMemoryAudit(all[all.length - 2].ts + 1 + m.auditRetentionDays() * 86400000);
+    const kept = (await m.getLog(D, D, 1000)).entries;
+    ok(r2.aged >= all.length - 1 && kept.length === 1 && kept[0].prevHash === all[all.length - 2].hash, "retention (db): age removal is a prefix and the rest is anchored");
+    const f = new Database(DB_FILE, { readonly: true });
+    const fileD = f.prepare("SELECT seq, hash, key FROM memlog WHERE ns = ? ORDER BY seq").all(D).map((x) => `${x.seq}:${x.hash}:${x.key}`).join(",");
+    const fileZ = f.prepare("SELECT COUNT(*) AS n FROM memlog WHERE ns = ?").get(Z).n;
+    f.close();
+    ok(fileD === kept.map((e) => `${e.seq}:${e.hash}:${e.key}`).join(",") && fileZ === 0, "retention (db): the SQLite mirror applies the same sweep (a roll-forward cannot bring an entry back)");
+    const named = await sdb.stateQuery(`SELECT COUNT(*)::int AS n FROM ${T("memory_memlog")} WHERE key IS NOT NULL AND ns = $1 AND key = 'gone'`, [D]);
+    ok(named.rows[0].n === 0, "retention (db): no row in the table still names the deleted key");
+  }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();

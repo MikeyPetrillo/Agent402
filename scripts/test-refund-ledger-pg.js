@@ -291,6 +291,18 @@ try {
   // ---- the test seam empties both -------------------------------------------
   await rl.__resetRefunds();
   ok(rl.listRefunds({ status: "all" }).length === 0 && (await pgRows()).length === 0, "__resetRefunds empties the table and the mirror");
+  // A void mark (refund_marks) blocks the claim even while the row still reads
+  // owed: the moment between voidOwedOnClaim's mark and its row update, or a
+  // row another container has not voided yet.
+  {
+    ok((await rl.recordRefundOwed({ slug: "hash", network: "tempo", payer: "0x" + "ab".repeat(20), priceUsd: 0.01, tx: "0xmarkedvoid", httpStatus: 400, wire: "mpp-tempo" })) === true, "setup: an owed Tempo push debt");
+    const vid = Number(rl.refundByEvidence("0xmarkedvoid").id);
+    await sdb.stateQuery(`INSERT INTO ${T.replace(/\.refunds$/, ".refund_marks")} (evidence, state, at) VALUES ($1, 'void', $2) ON CONFLICT (evidence) DO UPDATE SET state = 'void'`, ["0xmarkedvoid", Date.now()]);
+    ok((await pgRows("id = $1", [vid]))[0].status === "owed", "setup: the row still reads owed under a void mark");
+    ok((await rl.claimRefundForSend(vid, "refund-run")) === false, "a row whose evidence is marked void cannot be claimed for sending");
+    ok((await pgRows("id = $1", [vid]))[0].status === "owed", "and the claim changed nothing");
+    ok((await rl.recordRefundOwed({ slug: "hash", network: "tempo", payer: "0x" + "cd".repeat(20), priceUsd: 0.01, tx: "0xunmarked", httpStatus: 400, wire: "mpp-tempo" })) === true && (await rl.claimRefundForSend(Number(rl.refundByEvidence("0xunmarked").id), "refund-run")) === true, "control: an owed row with no void mark is claimed");
+  }
 } finally {
   await sdb.__dropStateSchema();
   await sdb.closeStateDb();

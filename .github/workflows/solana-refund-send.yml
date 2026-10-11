@@ -1,8 +1,8 @@
 name: Solana refund send (one-time)
 
-# Sends an SPL USDC refund on Solana, which scripts/refund-run.js cannot do:
-# senders.solana is hardcoded false there (no SVM spending wallet), so debts on
-# that chain are recorded and HELD. This pays one deliberately.
+# Sends one SPL USDC refund on Solana by hand. The refund run
+# (scripts/refund-run.js, refund.yml) now repays Solana debts itself; this
+# stays for a single deliberate send, such as a row a human has released.
 #
 # Uses the CI canary burner, the same wallet that already pays on Solana daily.
 # Dispatch-only and DRY by default: `send: true` is the only thing that

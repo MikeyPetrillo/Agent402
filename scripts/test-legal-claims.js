@@ -66,14 +66,32 @@ ok(/payerBalanceBucket/.test(posthog) && /coarse balance bucket/.test(privacy), 
   ok(/MPP settlement on Base, Celo or Tempo/.test(terms), "/terms names the same MPP chains");
 }
 
-// Refunds: the chains a batch sends on are the senders refund-run.js has.
+// Refunds: the chains a batch sends on are the senders refund-run.js has,
+// and they cover every chain we accept payment on.
 {
   const run = src("scripts/refund-run.js");
   const senders = [...run.matchAll(/^\s{4}(\w+): !!\(process\.env\.REFUND_[A-Z_]+ \|\| ""\)\.trim\(\),$/gm)].map((m) => m[1]).sort();
-  ok(JSON.stringify(senders) === JSON.stringify(["algorand", "evm", "stellar"]), `refund-run.js has senders for ${senders.join(", ")}`);
-  ok(!/"eip155:4217"/.test(run), "control: Tempo has no refund RPC entry, so its rows hold");
-  ok(/On the EVM chains, Stellar and Algorand a batch sends the repayment; on Tempo and Solana the amount stays recorded as owed until we send it by hand/.test(terms),
-    "/terms names which chains a refund batch sends on and which are sent by hand");
+  ok(JSON.stringify(senders) === JSON.stringify(["algorand", "evm", "solana", "stellar", "tempo"]), `refund-run.js has senders for ${senders.join(", ")}`);
+  const rr = await import("./refund-run.js");
+  const { CHAIN_PAGES } = await import("../src/market-page.js");
+  const accepted = [...Object.values(CHAIN_PAGES).map((c) => c.caip2), rr.TEMPO_NETWORK];
+  const uncovered = accepted.filter((n) => {
+    const fam = rr.familyOf(rr.normalizeNetwork(n));
+    return !senders.includes(fam) || (fam === "evm" && !rr.EVM_RPCS[n]);
+  });
+  ok(accepted.length > 10 && !uncovered.length, `every chain we accept (${accepted.length}, Tempo included) has a refund sender, and every EVM one an RPC (uncovered: ${uncovered.join(", ") || "none"})`);
+  ok(rr.familyOf(rr.normalizeNetwork("tempo")) === "tempo", "control: a Tempo debt (booked as \"tempo\") plans on the Tempo sender");
+  ok(/Each batch is started and approved by hand, and it sends the repayment on every chain we accept payment on: the EVM chains, Tempo, Solana, Stellar and Algorand/.test(terms),
+    "/terms says a batch repays on every chain we accept, and that each batch is started and approved by hand");
+  ok(!/sent by hand|send it by hand|stays recorded as owed until/.test(terms), "/terms no longer says Tempo or Solana are repaid by hand");
+  // "Started and approved by hand": the workflow is dispatch-only, dry by
+  // default, and behind an environment that requires an approval.
+  const wf = src(".github/workflows/refund.yml");
+  ok(/^on:\n  workflow_dispatch:/m.test(wf) && !/^\s+(push|schedule|pull_request):/m.test(wf), "refund.yml runs only when dispatched by hand");
+  ok(/environment: refund-approval/.test(wf) && /live:[\s\S]{0,120}default: false/.test(wf), "refund.yml waits for an approval and is a dry run unless live is chosen");
+  // "We confirm your payment reached us; on Tempo and Solana also the repayment."
+  ok(/const proof = await verifyInbound\(row\);/.test(run) && run.indexOf("const proof = await verifyInbound(row);") < run.indexOf("const claimed = await claim(row.id);"), "control: every send proves the inbound payment before its claim");
+  ok(JSON.stringify(rr.OUTBOUND_PROOF_FAMILIES) === JSON.stringify(["tempo", "solana"]) && /on Tempo and Solana we also confirm the repayment itself before recording it as paid/.test(terms), "/terms names the chains whose repayment is proven before it is marked paid");
   ok(!/an amount under \$0\.05 may be held/.test(terms), "/terms does not promise a dust floor the runner does not have");
   ok(/REFUND_MIN_USD, "0"/.test(run), "control: the runner's dust floor defaults to off");
 }
@@ -93,8 +111,44 @@ ok(/payerBalanceBucket/.test(posthog) && /coarse balance bucket/.test(privacy), 
   ok(cap > 0 && privacy.includes(`the most recent ${cap} reports we generated`), `/privacy states the ${cap}-report monitor cap`);
 }
 
-// Follow-ups: the page does not claim a deletion the code does not run.
-ok(/stays in the record after the last follow-up is sent/.test(privacy), "/privacy says a follow-up address is kept unless stopped or deleted on request");
+// Follow-ups: the address goes when the sequence ends; the page states the
+// numbers the module runs, and a real sequence is driven to show it.
+{
+  const fu = await import("../src/followups.js");
+  const d = (ms) => Math.round(ms / 86_400_000);
+  ok(privacy.includes(`Follow-up email records delete the address as soon as the last follow-up is sent, when you stop them or buy again, or after ${fu.MAX_SEND_FAILURES} failed deliveries in a row, and in any case ${d(fu.ADDRESS_MAX_AGE_MS)} days after the purchase`), `/privacy states when a follow-up address is deleted (${fu.MAX_SEND_FAILURES} failures, ${d(fu.ADDRESS_MAX_AGE_MS)} days)`);
+  ok(privacy.includes(`is deleted ${d(fu.RECORD_KEEP_MS)} days after the purchase`), `/privacy states the ${d(fu.RECORD_KEEP_MS)}-day record removal`);
+  ok(!/stays in the record after the last follow-up is sent/.test(privacy), "/privacy no longer says the address outlives the last follow-up");
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  let clock = 1_900_000_000_000;
+  const f = fu.createFollowups({ storePath: join(mkdtempSync(join(tmpdir(), "legal-fu-")), "f.json"), sendEmail: async () => true, secret: "s", now: () => clock, log: () => {}, monitorFor: () => ({ product: "m", label: "M", priceUsd: "$1" }) });
+  f.enqueue({ sessionId: "cs_legal", email: "legal@example.com", product: "p", kind: "k", label: "L", input: "x" });
+  clock += fu.STEP_DELAYS_MS.monitor + 1000; await f.tick();
+  const mid = f._store().seqs.cs_legal.email;
+  clock += fu.STEP_DELAYS_MS.another; await f.tick();
+  ok(mid === "legal@example.com" && f._store().seqs.cs_legal.email === null, "control: the module deletes the address in the step that sends the last follow-up");
+}
+
+// Memory audit log: the page states the retention the sweep runs.
+{
+  const mr = await import("../src/memory-retention.js");
+  const mem = src("src/tools/memory.js");
+  ok(privacy.includes(`Each entry is deleted ${mr.auditRetentionDays()} days after it is written. Within ${Math.round(mr.AUDIT_SWEEP_MS / 60000)} minutes of a key or document being deleted or expiring, the entries that name it lose the key name and values`), `/privacy states the ${mr.auditRetentionDays()}-day audit retention and the ${Math.round(mr.AUDIT_SWEEP_MS / 60000)}-minute redaction`);
+  ok(/a namespace with no keys, documents or grants left loses its whole log/.test(privacy), "/privacy states that an emptied namespace loses its log");
+  ok(!/The log is kept after a key is deleted or expires/.test(privacy), "/privacy no longer says the log outlives a deleted key");
+  ok(/logPruneAge\.run\(nowMs - auditRetentionDays\(\) \* 86400000\)/.test(mem) && /setInterval\(\(\) => \{\n\s+try \{\n\s+sweep\(now\(\)\);/.test(mem) && /setInterval\(\(\) => \{ Promise\.resolve\(\)\.then\(\(\) => sweepLeased\(\)\)/.test(mem), "control: both memory backends run the sweep on a timer with that retention");
+  ok(/AUDIT_SWEEP_MS\)\.unref\(\);/.test(mem), "control: the sweep interval is AUDIT_SWEEP_MS");
+}
+
+// Demand board: request text is deleted after the retention window.
+{
+  const { wishRetentionDays } = await import("../src/wish.js");
+  ok(privacy.includes(`each request's text and hash are deleted ${wishRetentionDays()} days after it was sent`), `/privacy states the ${wishRetentionDays()}-day demand-board text retention`);
+  ok(!/the text stays in our records until we clear them/.test(privacy), "/privacy no longer says the text is kept until cleared");
+  ok(/^startWishRotation\(\);$/m.test(src("src/server.js")), "control: the server starts the rotation that deletes it");
+}
 
 // Free trial: named on /terms where /privacy refers to it.
 ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy both name the ?trial=1 free trial");
