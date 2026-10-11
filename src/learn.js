@@ -5,6 +5,9 @@
 // replaced with a placeholder); the live 402 lists one accepts entry per
 // accepted chain. Each entry's `summary` is reused verbatim by /llms-full.txt.
 import { creditsSalesEnabled } from "./credits-sales.js";
+// Copy that names a prepaid key as a way in reads the switch that sells it:
+// while sales are off, a key is something a buyer already holds.
+const PREPAID = creditsSalesEnabled() ? "a prepaid key" : "a prepaid key bought earlier";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -81,15 +84,24 @@ const res = await mppFetch("https://agent402.tools/api/hash", {
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ text: "hello world" }),
 });
-console.log(res.headers.get("payment-receipt"));   // signed receipt on success`;
+console.log(res.headers.get("payment-receipt"));   // the receipt, naming the settlement transaction`;
 
 const CLIENT_CAPS = `import { Agent402 } from "agent402-client";
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
 
-// Free pure-CPU tools pay with proof-of-work; paid tools use the fetch you pass.
+const client = new x402Client();
+client.setSpendControls?.(false);   // the caps below bound spend instead
+registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const payFetch = wrapFetchWithPayment(fetch, client);
+
+// Free pure-CPU tools pay with proof-of-work; paid tools use the fetch you pass,
+// and the caps are checked before anything is signed.
 const agent = new Agent402({ fetch: payFetch, maxPerCallUsd: 0.05, dailyLimitUsd: 2 });
 
-const [tool] = await agent.find("extract the main text of a web page");
-const page = await agent.call(tool.slug, { url: "https://example.com" });`;
+const page = await agent.call("extract", { url: "https://example.com" });`;
 
 const MCP_ASK = `// tools/call on https://agent402.tools/mcp for a wallet-only tool, no credential yet
 {
@@ -214,11 +226,11 @@ export const LEARN = [
     alt: ["agentic payments", "machine payments", "AI agent payments"],
     glossary: "agentic-payments",
     title: "Agent payments: how AI agents pay for APIs",
-    description: "How an AI agent pays for a tool or an API on its own: read a price from a 402, pay from its own wallet or a prepaid key, keep a receipt, and stay inside spend limits set before anything is signed.",
-    summary: "Agent payments are how software agents buy tools and data on their own: the agent reads a price from an HTTP 402, pays per request from its own wallet (x402 or MPP) or a prepaid key, receives a receipt, and stays inside spend limits its operator set in advance.",
+    description: `How an AI agent pays for a tool or an API on its own: read a price from a 402, pay from its own wallet or ${PREPAID}, keep a receipt, and stay inside spend limits set before anything is signed.`,
+    summary: `Agent payments are how software agents buy tools and data on their own: the agent reads a price from an HTTP 402, pays per request from its own wallet (x402 or MPP) or ${PREPAID}, receives a receipt, and stays inside spend limits its operator set in advance.`,
     sections: [
       ["Why accounts do not work for agents", [
-        P(`Most paid APIs assume a person: someone signs up, verifies an email, enters a card and copies an API key into a config file. An agent working through a task cannot do any of that, and giving it a long-lived key to every service it might need is both impractical and risky. What an agent can hold is a wallet with a small balance, or a prepaid key its operator bought for it.`),
+        P(`Most paid APIs assume a person: someone signs up, verifies an email, enters a card and copies an API key into a config file. An agent working through a task cannot do any of that, and giving it a long-lived key to every service it might need is both impractical and risky. What an agent can hold is a wallet with a small balance${creditsSalesEnabled() ? ", or a prepaid key its operator bought for it" : ""}.`),
         P(`Agent payments replace the account with the payment. The price is stated in the response, the agent pays for that one request, and the payer address on the settled payment is the only identity involved.`),
       ]],
       ["The pieces", [
@@ -250,7 +262,7 @@ export const LEARN = [
       ["The price comes first", [
         P(`Every priced route answers an unpaid request with a 402 carrying its price, so a caller always knows the cost before paying. Catalogs list the same prices ahead of time: /api/pricing and /openapi.json on this server, and ${C("/api/find")} returns the price with each match.`),
         { code: PRICING_ENTRY },
-        P(`Some routes price a request by its size rather than a flat fee. The metered model routes quote each request from its body, and a buyer paying through a prepaid key or a Permit2 allowance settles at actual usage under that quote.`),
+        P(`Some routes price a request by its size rather than a flat fee. The metered model routes quote each request from its body, and a buyer paying through a Permit2 allowance (or ${PREPAID}) settles at actual usage under that quote.`),
       ]],
       ["What is charged, and what is not", [
         `<ul><li>A successful answer is charged once, and carries a receipt.</li><li>A failed call (an error, a timeout, an upstream outage) is not charged, because settlement runs after the tool and only on success.</li><li>A retry with the same ${C("Idempotency-Key")} and the same credential replays the first answer instead of paying again.</li><li>Reading the 402 quote is free.</li></ul>`,
@@ -268,20 +280,20 @@ export const LEARN = [
     glossary: "mcp",
     title: "MCP payments: how an MCP client pays for a tool call",
     description: "How paid tools work over the Model Context Protocol: a local MCP server that pays underneath with a wallet or credits key, or a hosted connector that asks for payment in the tool result and accepts an MPP credential on the retry.",
-    summary: "MCP payments let an assistant pay for a tool call made over the Model Context Protocol, either through a local MCP server that signs payments underneath (wallet or prepaid key) or through a hosted connector that returns MPP challenges in the tool result and accepts a credential in _meta on the retry.",
+    summary: `MCP payments let an assistant pay for a tool call made over the Model Context Protocol, either through a local MCP server that signs payments underneath (a wallet, or ${PREPAID}) or through a hosted connector that returns MPP challenges in the tool result and accepts a credential in _meta on the retry.`,
     sections: [
       ["Two places payment can happen", [
         P(`The Model Context Protocol lets an assistant discover and call tools. It does not itself say how a tool gets paid for, so there are two practical patterns, and this server supports both.`),
         `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment challenges attached, and a client that speaks MPP pays and repeats the call.</li></ol>`,
       ]],
       ["The local server", [
-        P(`Configure one of three things: ${C("AGENT_KEY")} (an EVM key holding USDC, signing x402 payments), ${C("AGENT402_CREDITS_KEY")} (a prepaid card-credits key, sent as a Bearer token and debited only on success), or nothing, in which case the pure-CPU tools pay with proof-of-work. ${C("AGENT402_MAX_PER_CALL")} and ${C("AGENT402_BUDGET")} are checked before any payment is signed.`),
+        P(`Configure one of three things: ${C("AGENT_KEY")} (an EVM key holding USDC, signing x402 payments), ${C("AGENT402_CREDITS_KEY")} (${creditsSalesEnabled() ? "a prepaid card-credits key" : "a prepaid card-credits key bought earlier"}, sent as a Bearer token and debited only on success), or nothing, in which case the pure-CPU tools pay with proof-of-work. ${C("AGENT402_MAX_PER_CALL")} and ${C("AGENT402_BUDGET")} are checked before any payment is signed.`),
         { code: `{
   "mcpServers": {
     "agent402": {
       "command": "npx",
       "args": ["-y", "agent402-mcp"],
-      "env": { "AGENT402_CREDITS_KEY": "a402_YOUR_KEY", "AGENT402_MAX_PER_CALL": "0.05" }
+      "env": { "AGENT_KEY": "0xYOUR_FUNDED_KEY", "AGENT402_MAX_PER_CALL": "0.05" }
     }
   }
 }` },
