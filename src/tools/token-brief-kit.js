@@ -33,7 +33,7 @@
 // probeDomain / probeRecalls.
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
-import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase } from "./solana-intel-kit.js";
+import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase, JUPITER_ATTRIBUTION } from "./solana-intel-kit.js";
 import { markUntrusted } from "./provenance.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 
@@ -507,12 +507,15 @@ export const TOKEN_BRIEF_TOOLS = [
     slug: "token-brief",
     category: "llm",
     price: TOKEN_BRIEF_TIERS["token-brief"].price,
-    description: "Hand over a Solana SPL mint address and get one cited due-diligence brief: what the token is, whether the mint and freeze authorities are still live, how deep and how locked the liquidity is (pools, lockers, unlock dates, DEX pairs, 24h volume and buy/sell balance), who holds it (top holders with pool and locker accounts told apart from wallets, concentration with and without pools), and every named risk flag the public feeds carry, plus what this data cannot see. Holders, pairs, pools and risks appendix included. Evidence from RugCheck, DexScreener and Jupiter, never a verdict and not investment advice. USDC (x402/MPP) or card (Stripe). Not cached.",
-    tags: ["solana", "token", "due-diligence", "brief", "rugcheck", "holders", "liquidity", "memecoin", "spl", "report", "agentic-finance", "x402", "mpp"],
+    description: "Hand over a Solana SPL mint address and get one cited due-diligence brief: what the token is, whether the mint and freeze authorities are still live, how deep and how locked the liquidity is (pools, lockers, unlock dates, DEX pairs, 24h volume and buy/sell balance), who holds it (top holders with pool and locker accounts told apart from wallets, concentration with and without pools), and every named risk flag the public feeds carry, plus what this data cannot see. Holders, pairs, pools and risks appendix included. Evidence from public token-risk, DEX-pair and aggregator feeds, never a verdict and not investment advice. USDC (x402/MPP) or card (Stripe). Not cached.",
+    tags: ["solana", "token", "due-diligence", "brief", "holders", "liquidity", "memecoin", "spl", "report", "agentic-finance", "x402", "mpp"],
     discovery: { bodyType: "json", input: { mint: MINTS.JUP }, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeTokenBriefHandler("token-brief"),
   },
 ];
+// The brief reads Jupiter, whose license requires the attribution (see
+// JUPITER_ATTRIBUTION in solana-intel-kit.js).
+for (const t of TOKEN_BRIEF_TOOLS) t.description = `${t.description} ${JUPITER_ATTRIBUTION}`;
 
 // Exported for the offline test (pure helpers, no network).
 export const __test = { BASE58_RE, lpLockedBucket, concentrationBucket, authorityBucket, normMint };

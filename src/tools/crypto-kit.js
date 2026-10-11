@@ -17,7 +17,7 @@
 // use the same assertPublicUrl + native fetch pattern as finance-kit for
 // consistency and to keep the per-host UA option open.
 import { assertPublicUrl } from "./fetch-guard.js";
-import { cgTokenRefusal, cgRefusalMessage, isCoinGeckoHost } from "./coingecko-rate.js";
+import { cgTokenRefusal, cgRefusalMessage, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
 import { redactSecrets } from "./redact.js";
 
 function bad(message, statusCode = 400) {
@@ -212,7 +212,7 @@ export const CRYPTO_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "Live crypto prices for one or many coins in any vs_currency (usd, eur, btc, eth, etc). Returns last price, 24h change %, 24h volume, and market cap per coin. The simplest crypto price read - for ranked market-cap tables use crypto-market, for candles use crypto-history. Accepts ticker symbols (BTC, ETH, SOL) for the top ~50 by market cap, or canonical CoinGecko ids (e.g. \"render-token\") for any of the ~15k tracked coins. Batched: up to 25 coins per call. Backed by CoinGecko's API (this server's Demo key when configured, else the shared keyless rate).",
+      "Live crypto prices for one or many coins in any vs_currency (usd, eur, btc, eth, etc). Returns last price, 24h change %, 24h volume, and market cap per coin. The simplest crypto price read - for ranked market-cap tables use crypto-market, for candles use crypto-history. Accepts ticker symbols (BTC, ETH, SOL) for the top ~50 by market cap, or canonical coin ids (e.g. \"render-token\") for any of the ~15k tracked coins. Batched: up to 25 coins per call.",
     tags: ["crypto", "price", "market-data", "bitcoin", "ethereum", "defi", "cryptocurrency", "btc", "eth", "spot"],
     discovery: {
       input: { coins: "BTC,ETH,SOL", currency: "usd" },
@@ -272,7 +272,7 @@ export const CRYPTO_TOOLS = [
     category: "data",
     price: "$0.015",
     description:
-      "Top N coins by market capitalization with full market snapshot per coin: rank, price, 24h change, 7d change, 24h volume, market cap, circulating supply, and all-time high. Default 10, max 100 per call. Backed by CoinGecko's public API.",
+      "Top N coins by market capitalization with full market snapshot per coin: rank, price, 24h change, 7d change, 24h volume, market cap, circulating supply, and all-time high. Default 10, max 100 per call.",
     tags: ["crypto", "market", "ranking", "marketcap", "top-coins"],
     discovery: {
       input: { limit: 10, currency: "usd" },
@@ -325,7 +325,7 @@ export const CRYPTO_TOOLS = [
     category: "data",
     price: "$0.015",
     description:
-      "Historical price, market cap, and volume time series for a coin. Granularity is automatic per CoinGecko: <=1 day = 5-min bars, 2-90 days = hourly, >90 days = daily. Days: 1, 7, 14, 30, 90, 180, 365, or \"max\". Returns aligned arrays of {time, price, marketCap, volume}.",
+      "Historical price, market cap, and volume time series for a coin. Granularity is automatic: <=1 day = 5-min bars, 2-90 days = hourly, >90 days = daily. Days: 1, 7, 14, 30, 90, 180, 365, or \"max\". Returns aligned arrays of {time, price, marketCap, volume}.",
     tags: ["crypto", "history", "chart", "backtest", "timeseries"],
     discovery: {
       input: { coin: "BTC", days: "7", currency: "usd" },
@@ -382,7 +382,7 @@ export const CRYPTO_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "Trending coins on CoinGecko in the last 24 hours, ranked by user search activity on the site (currently ~15 results). Includes coin id, symbol, market cap rank, current price (BTC-denominated), and score. Useful signal for detecting narrative shifts before they hit price charts.",
+      "Trending coins in the last 24 hours, ranked by user search activity on the market-data site (currently ~15 results). Includes coin id, symbol, market cap rank, current price (BTC-denominated), and score. Useful signal for detecting narrative shifts before they hit price charts.",
     tags: ["crypto", "trending", "discovery", "sentiment"],
     discovery: {
       input: {},
@@ -422,7 +422,7 @@ export const CRYPTO_TOOLS = [
     category: "data",
     price: "$0.008",
     description:
-      "Global crypto market snapshot: total market cap, total 24h volume, BTC dominance, ETH dominance, active coin count, active exchange count, and 24h market-cap change %. Returned in a chosen vs_currency (default usd). Backed by CoinGecko /global.",
+      "Global crypto market snapshot: total market cap, total 24h volume, BTC dominance, ETH dominance, active coin count, active exchange count, and 24h market-cap change %. Returned in a chosen vs_currency (default usd).",
     tags: ["crypto", "global", "market", "dominance", "macro"],
     discovery: {
       input: { currency: "usd" },
@@ -476,7 +476,7 @@ export const CRYPTO_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "L2 order-book snapshot for a spot pair: best bid/ask, mid price, spread (absolute + %), and the top N aggregated price levels per side (default 25, max 100). Pairs use BASE-QUOTE format (BTC-USD, ETH-USD, SOL-USDC). Backed by Coinbase Exchange's public market-data API - keyless; coverage is Coinbase-listed markets.",
+      "L2 order-book snapshot for a spot pair: best bid/ask, mid price, spread (absolute + %), and the top N aggregated price levels per side (default 25, max 100). Pairs use BASE-QUOTE format (BTC-USD, ETH-USD, SOL-USDC). Read from a U.S. spot exchange's public market-data API - keyless; coverage is that exchange's listed markets.",
     tags: ["crypto", "orderbook", "depth", "spread", "trading", "market-data"],
     discovery: {
       input: { pair: "BTC-USD" },
@@ -564,13 +564,13 @@ export const CRYPTO_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Live $1-peg deviation for the top USD stablecoins (USDT, USDC, USDS, DAI, USDe, PYUSD, USDD, TUSD, FDUSD by default, or pass your own list): current price, deviation in basis points, 24h high/low, worst 24h deviation, market cap, and an on-peg / stressed / depegged status. Backed by CoinGecko's public API.",
+      "Live $1-peg deviation for the top USD stablecoins (USDT, USDC, USDS, DAI, USDe, PYUSD, USDD, TUSD, FDUSD by default, or pass your own list): current price, deviation in basis points, 24h high/low, worst 24h deviation, market cap, and an on-peg / stressed / depegged status.",
     tags: ["crypto", "stablecoin", "peg", "usdt", "usdc", "risk", "monitoring"],
     discovery: {
       input: {},
       inputSchema: {
         properties: {
-          coins: { type: "string", description: "Optional comma-separated symbols or CoinGecko ids to check instead of the default top-stablecoin set (e.g. \"USDT,USDC\"). Max 15." },
+          coins: { type: "string", description: "Optional comma-separated symbols or coin ids to check instead of the default top-stablecoin set (e.g. \"USDT,USDC\"). Max 15." },
         },
       },
       output: {
@@ -625,3 +625,6 @@ export const CRYPTO_TOOLS = [
     },
   },
 ];
+// The CoinGecko-backed tools carry the attribution its terms require (see
+// COINGECKO_ATTRIBUTION in coingecko-rate.js); crypto-orderbook reads an exchange.
+for (const t of CRYPTO_TOOLS) if (t.slug !== "crypto-orderbook") t.description = `${t.description} ${COINGECKO_ATTRIBUTION}`;

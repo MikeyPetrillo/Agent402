@@ -65,6 +65,13 @@ function tempUnitOf(raw) {
   const e = new Error('"units" must be celsius or fahrenheit'); e.statusCode = 400; throw e;
 }
 
+// Attribution the Open-Meteo licence requires next to its data (CC BY 4.0,
+// https://open-meteo.com/en/licence: "Weather data by Open-Meteo.com", linked).
+// Every weather tool's description ends with it, and each answer's `source`
+// names the API and the licence; the vendor-name check in
+// scripts/test-no-third-party-names.js allows it in the descriptions only.
+export const OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com (CC BY 4.0).";
+
 export const WEATHER_TOOLS = [
   {
     route: "GET /api/weather-current",
@@ -73,8 +80,8 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      "Current weather conditions for any location on Earth: temperature, feels-like, humidity, wind speed/direction/gusts, precipitation, cloud cover, pressure, and human-readable condition. Open-Meteo, no key, global. ?lat=48.86&lon=2.35.",
-    tags: ["weather", "current", "temperature", "wind", "global", "open-meteo"],
+      `Current weather conditions for any location on Earth: temperature, feels-like, humidity, wind speed/direction/gusts, precipitation, cloud cover, pressure, and human-readable condition. No key, global. ?lat=48.86&lon=2.35. ${OPEN_METEO_ATTRIBUTION}`,
+    tags: ["weather", "current", "temperature", "wind", "global"],
     discovery: {
       input: { lat: 48.8566, lon: 2.3522 },
       inputSchema: {
@@ -145,8 +152,8 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      "7-day daily weather forecast for any location: high/low temp, precipitation sum and probability, max wind, UV index, sunrise/sunset. Open-Meteo, no key, global. ?lat=35.68&lon=139.69.",
-    tags: ["weather", "forecast", "daily", "global", "open-meteo"],
+      `7-day daily weather forecast for any location: high/low temp, precipitation sum and probability, max wind, UV index, sunrise/sunset. No key, global. ?lat=35.68&lon=139.69. ${OPEN_METEO_ATTRIBUTION}`,
+    tags: ["weather", "forecast", "daily", "global"],
     discovery: {
       input: { lat: 35.6762, lon: 139.6503 },
       inputSchema: {
@@ -215,8 +222,8 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      "48-hour hourly weather forecast for any location: temperature, precipitation probability and amount, wind, cloud cover, humidity. Open-Meteo, no key, global. ?lat=-33.87&lon=151.21.",
-    tags: ["weather", "forecast", "hourly", "global", "open-meteo"],
+      `48-hour hourly weather forecast for any location: temperature, precipitation probability and amount, wind, cloud cover, humidity. No key, global. ?lat=-33.87&lon=151.21. ${OPEN_METEO_ATTRIBUTION}`,
+    tags: ["weather", "forecast", "hourly", "global"],
     discovery: {
       input: { lat: -33.8688, lon: 151.2093 },
       inputSchema: {
@@ -282,8 +289,8 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      "Historical daily weather for any location and date range (up to 1 year): high/low temp, precipitation, wind, conditions. Open-Meteo archive, no key, global. Data from 1940 to 5 days ago. ?lat=51.51&lon=-0.13&start=2025-06-01&end=2025-06-07.",
-    tags: ["weather", "historical", "archive", "climate", "global", "open-meteo"],
+      `Historical daily weather for any location and date range (up to 1 year): high/low temp, precipitation, wind, conditions. Historical archive, no key, global. Data from 1940 to 5 days ago. ?lat=51.51&lon=-0.13&start=2025-06-01&end=2025-06-07. ${OPEN_METEO_ATTRIBUTION}`,
+    tags: ["weather", "historical", "archive", "climate", "global"],
     discovery: {
       input: { lat: 51.5074, lon: -0.1278, start: "2025-06-01", end: "2025-06-07" },
       inputSchema: {
@@ -355,8 +362,8 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      "Current air quality index and pollutant concentrations for any location: US AQI, PM2.5, PM10, ozone, NO2, SO2, CO. Open-Meteo air quality API, no key, global. ?lat=28.61&lon=77.23.",
-    tags: ["weather", "air-quality", "aqi", "pollution", "pm25", "global", "open-meteo"],
+      `Current air quality index and pollutant concentrations for any location: US AQI, PM2.5, PM10, ozone, NO2, SO2, CO. Air quality API, no key, global. ?lat=28.61&lon=77.23. ${OPEN_METEO_ATTRIBUTION}`,
+    tags: ["weather", "air-quality", "aqi", "pollution", "pm25", "global"],
     discovery: {
       input: { lat: 28.6139, lon: 77.2090 },
       inputSchema: {
