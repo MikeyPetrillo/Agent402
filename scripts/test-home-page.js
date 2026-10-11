@@ -37,35 +37,22 @@ const catalog = {
 
   ok(html.includes("40,233"), "live counter seeds from the real server-rendered viaUSDC value");
   ok(html.includes("918,422") && html.includes("calls to the free tools (proof-of-work, no payment)"), "free-tier (PoW) count renders");
-  ok(html.includes("30,112") && html.includes(">Base<"), "per-rail settlement grid shows real per-network counts");
-  ok(html.includes("214") && html.includes(">Robinhood Chain<") && html.includes(">calls · USDG<"), "Robinhood Chain renders with its real count and USDG asset, not USDC");
-  ok(html.includes(">·<"), "a rail with zero recorded settlements renders as a dash placeholder, never a fabricated 0");
-  ok(html.includes("69") && html.includes("settled over the MPP wire"), "MPP wire count renders");
-  // The router share is GONE, not corrected. Even stated accurately it
-  // publishes what fraction of our traffic we monetize, answering a question
-  // no seller asked. The architectural claim underneath needs no number, and a
-  // reader can verify it from any 402 on the site, which names the seller's
-  // own payTo. Pinned as an absence because the tempting fix is to put a
-  // "reassuring" small number back.
-  ok(!/\b41\b/.test(html.slice(html.indexOf("No listing fee"), html.indexOf("everything for sellers"))), "no router call count in the seller section");
-  // The sentence this replaced compared viaRouter to viaUSDC and then said
-  // "every other paid call went buyer wallet to seller wallet". viaUSDC is OUR
-  // OWN paid tool calls: those other calls are buyers paying US, settling to
-  // our treasury, and we are the seller on them. So the clause described the
-  // money going somewhere it did not and wrote off the primary business in the
-  // same breath. Pinned in both directions because a percentage next to a
-  // neutrality claim is the tempting shape to reach for again.
-  // Scoped to the router sentence: "N of M paid calls" is a CORRECT shape
-  // elsewhere on this page (the per-rail attribution line compares two figures
-  // that are both our own paid calls). It is only wrong when M is our own
-  // volume and the subject is the router.
-  const routerP = html.slice(html.indexOf("No listing fee and no commission"), html.indexOf("everything for sellers"));
-  ok(routerP.length > 80, "control: the router paragraph was located");
-  ok(!/of [\d,]+ paid calls/.test(routerP), "the router count is NOT divided by our own paid call volume");
-  ok(!/%/.test(routerP), "no share-of-our-volume percentage in the router disclosure");
+  // The per-rail tile grid and its footer line left the home page: the tiles
+  // left empty cells, and the MPP-wire figure read as a mismatch against the
+  // Tempo tile because nothing said MPP also settles off Tempo. Per-rail
+  // figures live on /revenue. Pinned as absences.
+  ok(!html.includes("Settled on every rail") && !html.includes("per-rail tag") && !html.includes("settled over the MPP wire"), "no per-rail tile grid or tag-count line on the home page");
+  // The "What a seller gets" table and its paragraph repeated the section's own
+  // meta line and /sell, and carried a hand-typed router-chain row. Gone; one
+  // link to /sell stays under the two seller cards.
+  const sellSec = html.slice(html.indexOf('id="sell"'), html.indexOf("</section>", html.indexOf('id="sell"')));
+  ok(sellSec.length > 200, "control: the seller section was located");
+  ok(!/What a seller gets|Cross-chain buyers|No listing fee and no commission/.test(sellSec), "no seller-terms table or paragraph beside it");
+  ok(/href="\/sell"[^>]*>everything for sellers → \/sell</.test(sellSec), "one everything-for-sellers link to /sell stays");
+  ok(!/\b41\b/.test(sellSec), "no router call count in the seller section");
+  ok(!/of [\d,]+ paid calls/.test(sellSec) && !/%/.test(sellSec), "no share-of-our-volume figure in the seller section");
   ok(!html.includes("went buyer wallet to seller wallet"), "the claim that every other paid call bypassed us is gone");
-  ok(/no commission/i.test(html) && /nothing is deducted/i.test(html), "the neutrality claim a seller is asking about is still made, plainly");
-  ok(/names your payTo and not ours/i.test(html), "and it is made in a form the reader can check against a live 402, not asserted");
+  ok(/nothing deducted/i.test(sellSec) && /buyer wallet → your wallet/i.test(sellSec), "the neutrality claim a seller is asking about is still made, plainly");
   ok(html.includes("Seller-One.example") && html.includes("seller-two.example"), "external leaderboard rows render");
   {
     // The five-column mono table is ~520px wide; at a 375px viewport the card's
@@ -92,10 +79,7 @@ const catalog = {
   ok(html.includes("Settlement count loading"), "the empty state says what is missing, in words a visitor can read");
   ok(!/>0</.test(html.slice(html.indexOf('id="hm-counter"'), html.indexOf('id="hm-counter"') + 400)), "counter does not render a fabricated 0 with no data");
   ok(html.includes("unavailable"), "leaderboard section states unavailable rather than rendering an empty table silently");
-  // Scoped to the seller section for the same reason as above: "N of M paid
-  // calls" is correct on the per-rail attribution line, where both figures
-  // really are ours.
-  const sellerSeg = html.slice(html.indexOf("No listing fee"), html.indexOf("everything for sellers"));
+  const sellerSeg = html.slice(html.indexOf('id="sell"'), html.indexOf("</section>", html.indexOf('id="sell"')));
   ok(sellerSeg.length > 80, "control: the seller section was located in the empty state too");
   ok(!/came through the router|paid calls|%/.test(sellerSeg), "no router-share disclosure to degrade: the figure is not published at all");
 }
@@ -196,11 +180,7 @@ const catalog = {
   ok(!RAILS.some((r) => /tempo/i.test(r.name)), "Tempo stays out of RAILS itself");
 
   const html = ledgerHomePage(BASE_URL, catalog, stats, { leaderboard: [] }, []);
-  ok(html.includes("321") && html.includes(">Tempo<"), "the per-rail grid renders the Tempo row");
-  ok(html.includes(`All ${RAILS.length + 1} rails (${RAILS.length} x402 chains plus Tempo over MPP) carry real settled traffic`),
-    "the rail count in the prose includes Tempo");
   ok(html.includes(`${RAILS.length + 1} rails live`), "the hero rail count includes Tempo");
-  ok(html.includes("821") && html.includes("paid calls carry a per-rail tag"), "the attributed total counts Tempo's tagged calls");
 
   const { readFile } = await import("node:fs/promises");
   const srv = await readFile(new URL("../src/server.js", import.meta.url), "utf8");

@@ -106,7 +106,7 @@ document.addEventListener('DOMContentLoaded',function(){try{var btns=document.qu
    off the last line; a block still ends on two short words or a sliver of a
    line. This binds the last few words of each text block with no-break
    spaces so its last line holds at least 3 words and about a third of the
-   block's measure (never more than 60% of it, so a narrow cell never
+   block's measure (never more than 70% of it, so a narrow cell never
    overflows). Text only: tags, code, buttons and attributes are untouched,
    and with no script the page simply wraps as before.
    scripts/test-wrap-quality.js measures the result in Chromium. */
@@ -125,12 +125,16 @@ document.addEventListener('DOMContentLoaded',function(){try{
     var first=s.search(/[^ \t\n\r\f]/);if(first<0)return;var last=s.replace(/[ \t\n\r\f]+$/,'').length-1;
     var runs=[],m;WS.lastIndex=0;while((m=WS.exec(s))){if(m.index>first&&m.index<last)runs.push({a:m.index,b:m.index+m[0].length});}
     if(runs.length<2)return;
-    var lo=p.line*0.33,hi=p.line*0.6,k=0;
+    var lo=p.line*0.33,hi=p.line*0.7,k=0;
     for(var j=1;j<=runs.length;j++){var r=runs[runs.length-j];var chunk=last-r.b+1;var words=j;if(chunk>hi)break;k=j-1;if(words>=3&&chunk>=lo){break;}if(j===runs.length)k=j-1;}
     if(k<1)return;
     var segAt=function(x){for(var q=map.length-1;q>=0;q--)if(map[q].start<=x)return map[q];return null;};
     var edits=[];
-    for(var t=1;t<=k;t++){var r2=runs[runs.length-t];var ok=true;for(var x=r2.a;x<r2.b;x++){var g=segAt(x);if(!g||!g.node){ok=false;break;}}if(!ok)continue;for(var y=r2.b-1;y>=r2.a;y--){var g2=segAt(y);edits.push({node:g2.node,off:y-g2.start,nb:y===r2.a});}}
-    edits.forEach(function(e){var d=e.node.data;e.node.data=d.slice(0,e.off)+(e.nb?' ':'')+d.slice(e.off+1);});
+    for(var t=1;t<=k;t++){var r2=runs[runs.length-t];var ok=true;for(var x=r2.a;x<r2.b;x++){var g=segAt(x);if(!g||!g.node){ok=false;break;}}if(!ok)continue;for(var y=r2.b-1;y>=r2.a;y--){var g2=segAt(y);edits.push({node:g2.node,off:y-g2.start,op:y===r2.a?'nb':'del'});}}
+    /* A hyphen inside the bound tail is still a break point ("proof-of-" / "work"): a word joiner after it holds the word together. */
+    var from=k<runs.length?runs[runs.length-k-1].b:first;
+    for(var z=from;z<last;z++){if(s.charAt(z)==='-'){var g3=segAt(z);if(g3&&g3.node)edits.push({node:g3.node,off:z-g3.start,op:'wj'});}}
+    edits.sort(function(a,b){return b.off-a.off;});
+    edits.forEach(function(e){var d=e.node.data;if(e.op==='wj'){e.node.data=d.slice(0,e.off+1)+'\u2060'+d.slice(e.off+1);}else{e.node.data=d.slice(0,e.off)+(e.op==='nb'?'\u00A0':'')+d.slice(e.off+1);}});
   });
 }catch(e){}});

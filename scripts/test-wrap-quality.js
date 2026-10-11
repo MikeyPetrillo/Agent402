@@ -4,7 +4,8 @@
 // are read back with Range.getClientRects(), and three shapes fail:
 //
 //  rag     a block of 2+ lines whose last line is shorter than 30% of its
-//          widest line, or holds fewer than 3 words (p, li, h1-h4, figcaption,
+//          widest line, or holds fewer than 3 words (a 2-word tail is allowed
+//          only on a block of 5 words or fewer) (p, li, h1-h4, figcaption,
 //          td, th, dd, dt, label, blockquote, and any class naming lede/intro/meta)
 //  split   a label that must sit on one line renders on 2+: small mono text,
 //          uppercase letter-spaced labels, .ml-meta tags, chips, buttons, nav
@@ -103,7 +104,8 @@ function audit({ exclude, width, ragFrac, ragWords }) {
             const r = document.createRange(); r.setStart(c, m.index); r.setEnd(c, m.index + m[0].length);
             const rects = [...r.getClientRects()].filter((x) => x.width > 0 && x.height > 0);
             // A word broken across lines (at a hyphen) reads as a word on each line it touches.
-            for (const x of rects) boxes.push({ top: x.top, bottom: x.bottom, left: x.left, right: x.right, words: 1 });
+            // A token broken mid-word with no hyphen (a URL, a hash) leaves continuation fragments.
+            rects.forEach((x, i) => boxes.push({ top: x.top, bottom: x.bottom, left: x.left, right: x.right, words: 1, frag: i > 0 && m[0].length > 24 }));
           }
         } else if (c.nodeType === 1) {
           const s = getComputedStyle(c);
@@ -124,11 +126,11 @@ function audit({ exclude, width, ragFrac, ragWords }) {
     for (const b of sorted) {
       const mid = (b.top + b.bottom) / 2;
       const ln = lines.find((l) => mid >= l.top && mid <= l.bottom);
-      if (ln) { ln.left = Math.min(ln.left, b.left); ln.right = Math.max(ln.right, b.right); ln.words += b.words; ln.top = Math.min(ln.top, b.top); ln.bottom = Math.max(ln.bottom, b.bottom); }
-      else lines.push({ top: b.top, bottom: b.bottom, left: b.left, right: b.right, words: b.words });
+      if (ln) { ln.left = Math.min(ln.left, b.left); ln.right = Math.max(ln.right, b.right); ln.words += b.words; ln.top = Math.min(ln.top, b.top); ln.bottom = Math.max(ln.bottom, b.bottom); ln.frag = ln.frag && !!b.frag; }
+      else lines.push({ top: b.top, bottom: b.bottom, left: b.left, right: b.right, words: b.words, frag: !!b.frag });
     }
     lines.sort((a, b) => a.top - b.top);
-    return lines.map((l) => ({ w: Math.round(l.right - l.left), words: l.words }));
+    return lines.map((l) => ({ w: Math.round(l.right - l.left), words: l.words, frag: l.frag }));
   };
   const snippet = (el) => el.textContent.replace(/\s+/g, " ").trim().slice(0, 90);
   const out = [];
@@ -143,8 +145,18 @@ function audit({ exclude, width, ragFrac, ragWords }) {
     const widest = Math.max(...lines.map((l) => l.w));
     const last = lines[lines.length - 1];
     const short = last.w < ragFrac * widest;
-    const few = last.words < ragWords;
-    if (short || few) {
+    // Under 3 words on the last line is a rag, with one carve-out: a block of
+    // 5 words or fewer that splits 2 + 2 or 3 + 2 is a balanced short heading,
+    // not a tail. One word alone on a last line always fails.
+    const total = lines.reduce((n, l) => n + l.words, 0);
+    const few = last.words < ragWords && !(last.words === 2 && total <= 5);
+    // A last line holding 60%+ of the widest line has the mass of a line, not a
+    // tail (a long URL or figure alone on it); and a line that is only the
+    // continuation of one token broken mid-word (a URL or hash longer than the
+    // column) is a literal, not wording.
+    const massive = last.w >= 0.6 * widest;
+    if (last.frag) continue;
+    if (short || (few && !massive)) {
       seen.add(el);
       out.push({ rule: short ? (few ? "rag: last line short and under 3 words" : "rag: last line under 30% of widest") : "rag: last line under 3 words", path: pathOf(el), text: snippet(el), lines: lines.map((l) => `${l.w}px/${l.words}w`).join(" ") });
     }
@@ -153,7 +165,8 @@ function audit({ exclude, width, ragFrac, ragWords }) {
   // 2. Split labels.
   const isLabel = (el, s) => {
     if (el.matches("button, .btn, [class*='chip'], [class*='pill'], [class*='badge'], [class*='kicker'], [class*='eyebrow'], .ml-meta > span, .ml-items > *, nav a, header a, [role='tab']")) return true;
-    if (el.matches("a") && el.parentElement && el.parentElement.children.length >= 2 && [...el.parentElement.children].every((c) => c.matches("a, span"))) return true;
+    // A link in a row of links (the parent holds links and separators, no wording of its own).
+    if (el.matches("a") && el.parentElement && el.parentElement.children.length >= 2 && [...el.parentElement.children].every((c) => c.matches("a, span")) && [...el.parentElement.childNodes].every((n) => n.nodeType !== 3 || /^[\s·|/•,→-]*$/.test(n.nodeValue))) return true;
     const fs = parseFloat(s.fontSize);
     const txt = el.textContent.trim();
     if (/mono/i.test(s.fontFamily) && fs <= 13 && txt.length <= 80) return true;

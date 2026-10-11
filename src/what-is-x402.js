@@ -99,7 +99,6 @@ export function whatIsX402Page(baseUrl, { stats, leaderboardSnapshot } = {}) {
     "x402 is an open protocol that finally uses HTTP 402 Payment Required, letting software pay per request in USDC. MPP is the IETF-track version of the same handshake. How both work, which chains settle them, and who is actually using them today.";
 
   const rails = railsByVolume(stats);
-  const mppWire = fmtNum(stats?.toolCallsServed?.viaMPPWire);
   const board = adoptionRows(leaderboardSnapshot);
   const boardSellers = Number.isFinite(leaderboardSnapshot?.totalSellers) ? fmtNum(leaderboardSnapshot.totalSellers) : null;
   const windowLabel = leaderboardSnapshot?.windowLabel || "7d";
@@ -242,7 +241,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
       <tbody>${railsRowsHtml}</tbody>
     </table>
   </div>
-  <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:16px 0 0;">live from GET /api/stats · ${esc(mppWire)} of these settled over the MPP wire rather than x402</p>
+  <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:16px 0 0;">live from GET /api/stats · calls served for a stablecoin payment on each x402 chain, over either wire · the split by wire, and Tempo, are on <a href="/revenue" style="color:var(--muted);">/revenue</a></p>
 </section>
 
 <section id="who" style="background:var(--panel);margin-top:64px;border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline);">

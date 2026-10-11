@@ -172,9 +172,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
   const liveEmbed = /^https:\/\/(www\.)?agent402\.tools\/?$/i.test(String(baseUrl || ""));
   const heroLabel = heroFromChain ? "on-chain settlements · all rails · ours included" : "calls served for a stablecoin payment";
   const viaPow = Number(served.viaProofOfWork) || 0;
-  const mppWire = Number(served.viaMPPWire) || 0;
   const rails = railsByVolume(stats);
-  const attributed = rails.reduce((sum, r) => sum + r.n, 0);
   const board = externalLeaderboardRows(leaderboardSnapshot);
 
   const canonical = baseUrl + "/";
@@ -241,10 +239,6 @@ ${WHY_SECTION_CSS}
   const tempoChipHtml = tempoEnabled()
     ? `<a href="/what-is-mpp" title="Tempo native MPP settlement" class="hm-chip"><span style="font-weight:700;color:var(--ink);">Tempo</span><span style="color:var(--faint);">native MPP</span></a>`
     : "";
-
-  const railRowsHtml = rails.map((r) =>
-    `<a href="${esc(r.href)}" title="${esc(r.title)}" style="display:flex;flex-direction:column;gap:9px;padding:15px 16px;text-decoration:none;color:var(--on-panel-soft);border-right:1px solid var(--panel-rule);border-bottom:1px solid var(--panel-rule);"><span style="display:flex;align-items:center;gap:9px;">${chainMark(r.slug, 19)}<span style="font-weight:500;font-size:var(--fs-base);color:var(--on-panel);">${esc(r.name)}</span></span><span style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-family:var(--font-mono);"><span style="font-weight:500;font-size:var(--fs-lg);color:var(--on-panel);font-variant-numeric:tabular-nums;">${esc(r.calls)}</span><span style="font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--on-panel-faint);">calls · ${esc(r.asset)}</span></span></a>`
-  ).join("");
 
   const leaderboardRowsHtml = board.length
     ? board.map((r) => `<tr style="border-bottom:1px solid var(--panel-rule);color:var(--on-panel);"><td style="padding:11px 18px;color:var(--on-panel-faint);">${esc(r.rank)}</td><td style="padding:11px 18px;">${esc(r.name)}</td><td style="padding:11px 18px;text-align:right;color:var(--on-panel-soft);">${esc(r.usd)}</td><td style="padding:11px 18px;text-align:right;color:var(--on-panel-muted);">${esc(r.calls)}</td><td style="padding:11px 18px;text-align:right;color:var(--on-panel-muted);">${esc(r.buyers)}</td></tr>`).join("")
@@ -433,23 +427,7 @@ curl -X POST /api/hash \\
     </div>
   </div>
 
-  <div class="hm-2col" style="align-items:start;">
-    <table style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;background:var(--card);width:100%;border-collapse:separate;border-spacing:0;">
-      <caption style="text-align:left;font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);padding:0 0 10px;">What a seller gets</caption>
-      <tbody>
-        <tr><th scope="row" style="text-align:left;font-weight:500;padding:12px 18px;color:var(--ink);border-bottom:1px solid var(--hairline);">Listing fee</th><td style="padding:12px 18px;text-align:right;color:var(--accent);white-space:nowrap;border-bottom:1px solid var(--hairline);">$0</td></tr>
-        <tr><th scope="row" style="text-align:left;font-weight:500;padding:12px 18px;color:var(--ink);border-bottom:1px solid var(--hairline);">Commission</th><td style="padding:12px 18px;text-align:right;color:var(--accent);white-space:nowrap;border-bottom:1px solid var(--hairline);">0%</td></tr>
-        <tr><th scope="row" style="text-align:left;font-weight:500;padding:12px 18px;color:var(--ink);border-bottom:1px solid var(--hairline);">Routing</th><td style="padding:12px 18px;text-align:right;color:var(--muted);white-space:nowrap;border-bottom:1px solid var(--hairline);">health-aware</td></tr>
-        <tr><th scope="row" style="text-align:left;font-weight:500;padding:12px 18px;color:var(--ink);border-bottom:1px solid var(--hairline);">Discovery</th><td style="padding:12px 18px;text-align:right;color:var(--muted);white-space:nowrap;border-bottom:1px solid var(--hairline);">4 surfaces</td></tr>
-        <tr><th scope="row" style="text-align:left;font-weight:500;padding:12px 18px;color:var(--ink);border-bottom:1px solid var(--hairline);">How Agent402 earns</th><td style="padding:12px 18px;text-align:right;color:var(--muted);white-space:nowrap;border-bottom:1px solid var(--hairline);">buyer-side</td></tr>
-        <tr><th scope="row" style="text-align:left;font-weight:500;padding:12px 18px;color:var(--ink);">Cross-chain buyers</th><td style="padding:12px 18px;text-align:right;color:var(--muted);white-space:nowrap;">Base · Algorand</td></tr>
-      </tbody>
-    </table>
-    <div style="padding-top:26px;">
-      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">No listing fee and no commission. A buyer pays your wallet directly from your own 402, which names your payTo and not ours, so nothing is deducted and nothing routes through us unless a buyer asks our router to buy from you and resell the result.</p>
-      <div style="margin-top:16px;font-family:var(--font-mono);font-size:var(--fs-sm);"><a href="/sell" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">everything for sellers → /sell</a></div>
-    </div>
-  </div>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);"><a href="/sell" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;white-space:nowrap;">everything for sellers → /sell</a></div>
 </section>
 
 <section style="max-width:1180px;margin:64px auto 0;padding:0 30px;">
@@ -477,17 +455,6 @@ curl -X POST /api/hash \\
       <div style="padding:11px 18px;border-top:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-faint);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;"><span>Agent402 excluded · hourly snapshot</span><a href="/leaderboard" style="color:var(--accent-lit);text-decoration:none;">full leaderboard →</a></div>
     </div>
 
-    <div style="margin-top:30px;border-top:1px solid var(--panel-rule-2);padding-top:24px;">
-      <h3 style="font-weight:600;font-size:var(--fs-xl);margin:0;color:var(--on-panel);letter-spacing:-.02em;">Settled on every rail, not just Base.</h3>
-      ${sectionMeta(["calls settled per rail", "live from /api/stats"], "margin:10px 0 16px;color:var(--on-panel-faint);")}
-      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-muted);max-width:76ch;margin:0 0 20px;font-weight:300;">All ${rails.length} rails${rails.length > RAILS.length ? ` (${RAILS.length} x402 chains plus Tempo over MPP)` : ""} carry real settled traffic, not just the headline one. Buyers pay on the chain they already hold stablecoins on, gas is sponsored on EVM, and the router pays external sellers on that same chain.</p>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:0;border:1px solid var(--panel-rule-2);border-radius:var(--radius);overflow:hidden;">${railRowsHtml}</div>
-      <div class="ml-items" style="gap:8px 26px;margin-top:16px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel-faint);">
-        <span><strong style="color:var(--on-panel);font-weight:500;">${fmtNum(attributed)}</strong> of ${fmtNum(viaUsdc)} paid calls carry a per-rail tag</span>
-        <span><strong style="color:var(--accent-lit);font-weight:500;">${fmtNum(mppWire)}</strong> settled over the MPP wire</span>
-        <a href="/what-is-x402" style="color:var(--accent-lit);text-decoration:none;">how the dual stack works →</a>
-      </div>
-    </div>
   </div>
 </section>
 
