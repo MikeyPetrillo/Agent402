@@ -49,7 +49,7 @@ const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   env: {
     ...process.env, FREE_MODE: "true", PORT: String(PORT),
     X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off",
-    MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", WALLET_DIGEST: "off",
+    MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
   },
   stdio: "ignore",
 });

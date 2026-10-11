@@ -77,8 +77,8 @@ const TARGET = (process.env.TARGET_URL || "").replace(/\/$/, "");
 if (TARGET) {
   const PAGES = ["/", "/101", "/agentic-finance", "/base", "/solana", "/company", "/faq", "/glossary", "/integrations", "/leaderboard",
     "/marketplace", "/marketplace/tools", "/markets", "/monitors", "/mpp-marketplace", "/pricing", "/proof", "/reports", "/revenue",
-    "/security", "/sell", "/shop", "/skills", "/status", "/tollbooth", "/tools", "/what-is-mpp", "/what-is-x402",
-    "/docs", "/guides", "/guides/agent-hosts", "/blog", "/credits", "/digest", "/community", "/changelog", "/quickstart", "/playground"];
+    "/security", "/sell", "/skills", "/status", "/tollbooth", "/tools", "/what-is-mpp", "/what-is-x402",
+    "/docs", "/guides", "/guides/agent-hosts", "/blog", "/credits", "/changelog", "/quickstart", "/playground"];
   for (const p of PAGES) {
     let html;
     try { const r = await fetch(TARGET + p, { redirect: "follow" }); if (r.status !== 200) { ok(false, `${p}: HTTP ${r.status}`); continue; } html = await r.text(); }

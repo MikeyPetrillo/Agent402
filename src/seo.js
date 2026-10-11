@@ -159,7 +159,6 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/monitors`, priority: "0.8" },
     // A closed product takes no crawl slot: listed only while packs are on sale.
     ...(creditsSalesEnabled() ? [{ loc: `${baseUrl}/credits`, priority: "0.8" }] : []),
-    { loc: `${baseUrl}/shop`, priority: "0.9" },
     // Every x402 marketplace page (one per CHAIN_PAGES entry) - new chain
     // page = new sitemap entry, zero edits here.
     ...Object.keys(CHAIN_PAGES).map((key) => ({ loc: `${baseUrl}/${key}`, priority: "0.8" })),
@@ -193,7 +192,6 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/integrations`, priority: "0.8" },
     { loc: `${baseUrl}/pricing`, priority: "0.8" },
     { loc: `${baseUrl}/changelog`, priority: "0.7" },
-    { loc: `${baseUrl}/use-cases`, priority: "0.8" },
     { loc: `${baseUrl}/quickstart`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
@@ -201,7 +199,6 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/x402-test`, priority: "0.7" },
     { loc: `${baseUrl}/markets`, priority: "0.8" },
     ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
-    { loc: `${baseUrl}/digest`, priority: "0.6" },
     { loc: `${baseUrl}/security`, priority: "0.7" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
     { loc: `${baseUrl}/company`, priority: "0.7" },
@@ -212,12 +209,9 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/101`, priority: "0.9" },
     { loc: `${baseUrl}/revenue`, priority: "0.6" },
     { loc: `${baseUrl}/blog`, priority: "0.8" },
-    { loc: `${baseUrl}/compare`, priority: "0.8" },
-    { loc: `${baseUrl}/community`, priority: "0.7" },
     { loc: `${baseUrl}/contribute`, priority: "0.7" },
     { loc: `${baseUrl}/workflows`, priority: "0.8" },
     { loc: `${baseUrl}/status`, priority: "0.7" },
-    { loc: `${baseUrl}/badges`, priority: "0.5" },
     { loc: `${baseUrl}/sdk-playground`, priority: "0.7" },
     { loc: `${baseUrl}/docs/api/explorer`, priority: "0.8" },
     { loc: `${baseUrl}/docs/adapters`, priority: "0.8" },
@@ -275,7 +269,6 @@ export function sitemapPages(baseUrl, catalog) {
     { loc: `${baseUrl}/monitors`, priority: "0.8" },
     // A closed product takes no crawl slot: listed only while packs are on sale.
     ...(creditsSalesEnabled() ? [{ loc: `${baseUrl}/credits`, priority: "0.8" }] : []),
-    { loc: `${baseUrl}/shop`, priority: "0.9" },
     { loc: `${baseUrl}/quickstart`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
@@ -283,7 +276,6 @@ export function sitemapPages(baseUrl, catalog) {
     { loc: `${baseUrl}/x402-test`, priority: "0.7" },
     { loc: `${baseUrl}/markets`, priority: "0.8" },
     ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
-    { loc: `${baseUrl}/digest`, priority: "0.6" },
     { loc: `${baseUrl}/security`, priority: "0.7" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
     { loc: `${baseUrl}/company`, priority: "0.7" },
@@ -291,7 +283,6 @@ export function sitemapPages(baseUrl, catalog) {
     { loc: `${baseUrl}/101`, priority: "0.9" },
     { loc: `${baseUrl}/pricing`, priority: "0.8" },
     { loc: `${baseUrl}/integrations`, priority: "0.8" },
-    { loc: `${baseUrl}/use-cases`, priority: "0.8" },
     { loc: `${baseUrl}/faq`, priority: "0.8" },
     // Unified marketplace surface (the old /index and /marketplaces 301 here).
     { loc: `${baseUrl}/marketplace`, priority: "0.9" },
@@ -311,12 +302,9 @@ export function sitemapPages(baseUrl, catalog) {
     { loc: `${baseUrl}/playground`, priority: "0.8" },
     { loc: `${baseUrl}/sdk-playground`, priority: "0.7" },
     { loc: `${baseUrl}/blog`, priority: "0.8" },
-    { loc: `${baseUrl}/compare`, priority: "0.8" },
-    { loc: `${baseUrl}/community`, priority: "0.7" },
     { loc: `${baseUrl}/contribute`, priority: "0.7" },
     { loc: `${baseUrl}/workflows`, priority: "0.8" },
     { loc: `${baseUrl}/status`, priority: "0.7" },
-    { loc: `${baseUrl}/badges`, priority: "0.5" },
     { loc: `${baseUrl}/docs/api/explorer`, priority: "0.8" },
     { loc: `${baseUrl}/docs/adapters`, priority: "0.8" },
     { loc: `${baseUrl}/docs/webhooks`, priority: "0.7" },
@@ -545,7 +533,6 @@ ${toolSections}
 - [Tool docs](${baseUrl}/tools): human-readable documentation per tool
 - [Security](${baseUrl}/security): disclosure policy with safe harbor, what data is held, key handling, controls in the serving path and on the code
 - [Company](${baseUrl}/company): Havok Holdings LLC, what it sells, where the proof is, role mailboxes
-- [Weekly digest](${baseUrl}/digest): one email a week with what a wallet or credits key spent here (calls, dollars, tools, chains); double opt-in, signed unsubscribe
 - [Markets](${baseUrl}/markets): the keyless crypto market-data calls (market pulse, perps, options, DeFi, stablecoins, news, indicators) with one curl to copy
 - [Prepaid credits](${baseUrl}/credits): not on sale; a key already issued pays any paid tool except the wallet-scoped ones with the header "Authorization: Bearer a402_..." (debited per call on success; balance at GET /api/credits/balance)
 - [Agentic Finance](${baseUrl}/agentic-finance): what the category is and where Agent402 sits in it

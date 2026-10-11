@@ -74,31 +74,6 @@ try {
     ok(alerts.filter((a) => a.lastNotifiedAt).length === 1, `free-alerts: only the alert that was emailed carries its notification (${alerts.map((a) => a.lastNotifiedAt ? 1 : 0).join(",")})`);
   }
 
-  // ---- wallet digest: after the claim, before the digest -----------------------------
-  {
-    const { createWalletDigest } = await import("../src/wallet-digest.js");
-    let clock = realNow();
-    let armed = false, sends = 0;
-    const usage = () => ({ totals: { calls: 3, paidUsd: 0.03 }, bySlug: [{ slug: "hash", calls: 3, usd: 0.03 }], byNetwork: {} });
-    const wd = createWalletDigest({
-      storePath: join(DIR, "wd", "wallet-digest.json"), secret, now: () => clock, usage, verifySignature: async () => true, log: quiet,
-      sendEmail: async () => { if (armed) { sends++; loseLease(); } return true; },
-    });
-    await wd.ready();
-    const key = (id, p) => createHmac("sha256", secret).update(`digest:${p}:${id}`).digest("base64url").slice(0, 32);
-    const idOf = (l) => new URL(l).searchParams.get("id");
-    const links = ["k1", "k2", "k3"].map((k) => wd.preEnrolCredits({ keyId: k, email: `${k}@example.com` }));
-    await wd.flush();
-    for (const l of links) ok((await wd.confirmAsync(idOf(l), key(idOf(l), "confirm"))).ok, "wallet-digest: confirmed");
-    await wd.flush();
-    armed = true;
-    let r;
-    try { r = await wd.tick(); } finally { restore(); }
-    ok(sends === 1 && r?.lost === true, `wallet-digest: after the lease is lost no further digest goes (${sends} sent, ${JSON.stringify(r)})`);
-    const subs = Object.values((await sdb.documents.get("wallet-digest.json")).body.subs);
-    ok(subs.filter((x) => x.lastSentAt).length === 1, `wallet-digest: only the digest that went has its clock advanced (${subs.map((x) => x.lastSentAt ? 1 : 0).join(",")})`);
-  }
-
   // ---- monitor scheduler: before each paid run ---------------------------------
   {
     const { createMonitorScheduler } = await import("../src/monitor-scheduler.js");

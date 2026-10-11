@@ -23,7 +23,7 @@ ok(withLlmsLinkTag("<p>fragment</p>") === "<p>fragment</p>", "a fragment with no
 const PORT = await getFreePort();
 const B = `http://127.0.0.1:${PORT}`;
 proc = spawn("node", ["src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", WALLET_DIGEST: "off", X402_SYNC_ON_START: "false" },
+  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", X402_SYNC_ON_START: "false" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 proc.stdout.on("data", (d) => log.push(...String(d).split("\n").filter(Boolean)));

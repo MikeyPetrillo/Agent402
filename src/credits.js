@@ -81,7 +81,7 @@ export const microToUsd = (m) => Math.round(Number(m) / 100) / 10000; // 4 dp
  * @param {()=>number} [deps.now]
  * @param {(s:string)=>void} [deps.log]
  */
-export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now = () => Date.now(), log = console.log, digestLinkFor = null }) {
+export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now = () => Date.now(), log = console.log }) {
   const dir = storeDir || DEFAULT_DIR();
   try { mkdirSync(dir, { recursive: true }); } catch { /* writes fail loudly below */ }
   const SESSIONS = join(dir, "_sessions.json"); // sessionId -> key hash (claim-once)
@@ -335,16 +335,10 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
       again[sessionId] = hash; writeJsonAtomic(SESSIONS, again);
     }
     try { onLoad?.({ sessionId, pack: packKey, priceUsd: p.cents / 100, keyId, paymentIntent }); } catch { /* accounting never breaks minting */ }
-    // Weekly spend digest (src/wallet-digest.js): the claim email carries a
-    // signed confirm link for THIS key; the click is the consent.
-    let digestUrl = null;
-    try { digestUrl = typeof digestLinkFor === "function" && email ? digestLinkFor({ keyId, email }) : null; } catch { digestUrl = null; }
-    const digestText = digestUrl ? `\n\nWant one email a week with what this key spent (calls, dollars, tools, balance)? Confirm here: ${digestUrl}` : "";
-    const digestHtml = digestUrl ? `<p style="margin-top:18px;font-size:14px;color:#626970">Want one email a week with what this key spent (calls, dollars, tools, balance)? <a href="${digestUrl}">Confirm the weekly digest</a>. Nothing is sent for a quiet week.</p>` : ""; // design-tokens: literal (email body)
     if (email) {
       sendEmail({ to: email, subject: "Your Agent402 credits key",
-        text: `Your prepaid credits are ready: $${(p.cents / 100).toFixed(2)} loaded.\n\nYour key (keep it secret, it is shown only here and on the thanks page):\n\n${key}\n\nUse it on any paid tool:\ncurl -H "Authorization: Bearer ${key}" ${baseUrl}/api/whois?domain=example.com\n\nBalance: GET ${baseUrl}/api/credits/balance with the same header.\nTop up: ${baseUrl}/credits${digestText}\n\nAgent402`,
-        html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;color:#111315"><h2 style="font-weight:700">Your Agent402 credits key</h2><p>$${(p.cents / 100).toFixed(2)} loaded. Keep the key secret - it is shown only here and on the thanks page.</p><pre style="background:#0c0d0f;color:#e9eaec;padding:14px 16px;border-radius:4px;font-size:13px;overflow:auto">${key}</pre><p>Use it on any paid tool:</p><pre style="background:#f3f4f5;padding:12px 14px;border-radius:4px;font-size:13px;overflow:auto">curl -H "Authorization: Bearer ${key}" ${baseUrl}/api/whois?domain=example.com</pre><p style="color:#626970;font-size:13px">Balance: <code>GET ${baseUrl}/api/credits/balance</code> with the same header · Top up at <a href="${baseUrl}/credits">${baseUrl}/credits</a></p>${digestHtml}</div>` }).catch(() => {}); // design-tokens: literal (email body)
+        text: `Your prepaid credits are ready: $${(p.cents / 100).toFixed(2)} loaded.\n\nYour key (keep it secret, it is shown only here and on the thanks page):\n\n${key}\n\nUse it on any paid tool:\ncurl -H "Authorization: Bearer ${key}" ${baseUrl}/api/whois?domain=example.com\n\nBalance: GET ${baseUrl}/api/credits/balance with the same header.\nTop up: ${baseUrl}/credits\n\nAgent402`,
+        html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;color:#111315"><h2 style="font-weight:700">Your Agent402 credits key</h2><p>$${(p.cents / 100).toFixed(2)} loaded. Keep the key secret - it is shown only here and on the thanks page.</p><pre style="background:#0c0d0f;color:#e9eaec;padding:14px 16px;border-radius:4px;font-size:13px;overflow:auto">${key}</pre><p>Use it on any paid tool:</p><pre style="background:#f3f4f5;padding:12px 14px;border-radius:4px;font-size:13px;overflow:auto">curl -H "Authorization: Bearer ${key}" ${baseUrl}/api/whois?domain=example.com</pre><p style="color:#626970;font-size:13px">Balance: <code>GET ${baseUrl}/api/credits/balance</code> with the same header · Top up at <a href="${baseUrl}/credits">${baseUrl}/credits</a></p></div>` }).catch(() => {}); // design-tokens: literal (email body)
     }
     log(`[credits] minted key ${keyId} ($${(p.cents / 100).toFixed(2)}) for session ${sessionId}`);
     return { status: "minted", key, keyId, balanceUsd: microToUsd(loadedMicro) };
@@ -650,13 +644,13 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     };
   }
 
-  /** A presented key -> its id (null for an unknown key). Used by the digest signup: presenting the key is the proof. */
+  /** A presented key -> its id (null for an unknown key): presenting the key is the proof. */
   function keyIdOf(keyString) {
     if (typeof keyString !== "string" || !KEY_RE.test(keyString)) return answer(null);
     const rec = readRec(hashKey(keyString));
     return usePg ? rec.then((r) => (r ? r.keyId : null)) : rec ? rec.keyId : null;
   }
-  /** USD balance for a key id (the digest never holds the key itself). */
+  /** USD balance for a key id (the caller never needs the key itself). */
   function balanceById(keyId) {
     const pick = (xs) => { const hit = xs.find((x) => x.rec && x.rec.keyId === keyId); return hit ? microToUsd(hit.rec.balanceMicro) : null; };
     return usePg ? allKeys().then(pick) : pick(allKeys());

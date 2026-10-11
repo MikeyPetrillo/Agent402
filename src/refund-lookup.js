@@ -116,7 +116,7 @@ export function refundLookup(input, { byEvidence = refundByEvidence } = {}) {
   return publicRefundView(keys[0], row);
 }
 
-/** A caller's own refunds, for identity-bound surfaces (my-usage, digest).
+/** A caller's own refunds, for identity-bound surfaces (my-usage).
  *  The settlement tx is included here: the caller proved the wallet. */
 export function ownRefundsView(rows) {
   const list = (Array.isArray(rows) ? rows : []).map((r) => ({

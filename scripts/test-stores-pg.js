@@ -48,21 +48,6 @@ try {
     await fa2.ready();
     ok(Object.keys(fa2._store().alerts).length === 2, "free-alerts: a fresh instance sees both records from the row");
   }
-  // ---- wallet digest ---------------------------------------------------------
-  {
-    const { createWalletDigest } = await import("../src/wallet-digest.js");
-    const file = join(D1, "wallet-digest.json");
-    writeFileSync(file, JSON.stringify({ subs: { dg_aaaaaaaa: { id: "dg_aaaaaaaa", email: "a@x.test", kind: "credits", status: "active", createdAt: 1 } } }));
-    const wd = createWalletDigest({ storePath: file, sendEmail, secret: "s", usage: () => ({}), verifySignature: async () => true, log: quiet });
-    await wd.ready();
-    ok(wd._store().subs.dg_aaaaaaaa?.status === "active", "wallet-digest: imported");
-    const link = wd.preEnrolCredits({ keyId: "k1", email: "d@x.test" });
-    ok(typeof link === "string" && Object.keys(wd._store().subs).length === 2, "wallet-digest: a pre-enrol writes a pending record");
-    await wd.flush();
-    const wd2 = createWalletDigest({ storePath: join(D2, "wallet-digest.json"), sendEmail, secret: "s", usage: () => ({}), verifySignature: async () => true, log: quiet });
-    await wd2.ready();
-    ok(Object.keys(wd2._store().subs).length === 2, "wallet-digest: a fresh instance sees both records from the row");
-  }
   // ---- shared payTo listing ---------------------------------------------------
   {
     const { createSharedPayToStore } = await import("../src/shared-paytos.js");

@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { chromium } from "playwright";
 
 const BASE = process.env.TARGET_URL || "http://127.0.0.1:3000";
-const PAGES = ["/", "/reports", "/monitors", "/digest", "/company", "/markets", "/marketplace", "/what-is-mpp", "/tools", "/api", "/sell", "/privacy", "/terms"];
+const PAGES = ["/", "/reports", "/monitors", "/company", "/markets", "/marketplace", "/what-is-mpp", "/tools", "/api", "/sell", "/privacy", "/terms"];
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 

@@ -12,7 +12,7 @@
 //   3. A representative sampling of tools appears as /tools/<slug> — we don't
 //      walk all ~1199 (just confirm the loop runs end-to-end and several
 //      categories appear).
-//   4. Core surfaces (/, /tools, /shop, /skills, /leaderboard) appear so a
+//   4. Core surfaces (/, /tools, /skills, /leaderboard) appear so a
 //      regression that drops the "static pages" section also surfaces here.
 //
 //   node scripts/test-sitemap-coverage.js

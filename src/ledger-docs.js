@@ -1,5 +1,6 @@
 // Machine Ledger — Docs landing page (/docs)
-// Quickstart, why pay here (#why; /why redirects to it), payment flow, three ways in, free tier, reference endpoints -
+// Quickstart, why pay here (#why; /why and /compare redirect to it), payment flow, three ways in, free tier,
+// examples (#examples; /use-cases redirects to it), badges (#badges; /badges redirects to it), reference endpoints -
 // rendered inside the SAME sidebar+content shell every /docs/:slug wiki page
 // uses (src/docs.js), so the docs surface reads as one site with persistent
 // navigation instead of two unrelated layouts a click apart. Before this,
@@ -15,6 +16,8 @@ import { toolList } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 import { decideConfig } from "./decide/config.js";
 import { whySectionHtml, whyJsonLd, WHY_SECTION_CSS } from "./why.js";
+import { examplesSectionHtml, examplesJsonLd, EXAMPLES_SECTION_CSS } from "./use-cases.js";
+import { badgesSectionHtml, BADGES_SECTION_CSS } from "./badges.js";
 
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 
@@ -40,10 +43,10 @@ export function ledgerDocsPage(baseUrl, catalog) {
   };
   // The "Why pay here" points live in this page's #why section (/why
   // redirects here), so their ItemList rides along with the article.
-  const jsonLd = [articleLd, whyJsonLd(baseUrl)];
+  const jsonLd = [articleLd, whyJsonLd(baseUrl), examplesJsonLd(baseUrl)];
 
   const extraCss = `${DOCS_LAYOUT_CSS}
-  #quickstart, #how, #add, #free, #gateway, #endpoints { scroll-margin-top: 110px; }${WHY_SECTION_CSS}`;
+  #quickstart, #how, #add, #free, #gateway, #endpoints { scroll-margin-top: 110px; }${WHY_SECTION_CSS}${EXAMPLES_SECTION_CSS}${BADGES_SECTION_CSS}`;
 
   const main = `
       <section>
@@ -146,7 +149,9 @@ const out = await a.call("hash", { text: "hello", algo: "sha256" });</pre></div>
       </div>
       </section>
 
-`; })() : ""}      <!-- ENDPOINTS -->
+`; })() : ""}      ${examplesSectionHtml(catalog)}
+      ${badgesSectionHtml(baseUrl)}
+      <!-- ENDPOINTS -->
       <section>
       <h2 id="endpoints" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 18px;">Reference endpoints.</h2>
       <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:var(--fs-sm);">
@@ -165,7 +170,8 @@ const out = await a.call("hash", { text: "hello", algo: "sha256" });</pre></div>
   </div>
 
   ${ledgerFooterCompact()}
-  ${DOCS_SEARCH_SCRIPT}`;
+  ${DOCS_SEARCH_SCRIPT}
+  <script src="/js/copy-buttons.js"></script>`;
 
   return ledgerShell({
     title,

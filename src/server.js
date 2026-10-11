@@ -292,9 +292,7 @@ import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
 import { sampleJson, sampleMeta } from "./sample-reports.js";
 import { createFreeAlerts, alertFormHtml, ALERT_KIND_FOR_REPORT_KIND } from "./free-alerts.js";
-import { createWalletDigest } from "./wallet-digest.js";
-import { refundLookup, ownRefundsView } from "./refund-lookup.js";
-import { digestPage } from "./digest-page.js";
+import { refundLookup } from "./refund-lookup.js";
 import { createFollowups } from "./followups.js";
 import { createTweetQueue, tweetQueueOptionsFromEnv } from "./tweet-queue.js";
 import { monitorForKind as fuMonitorForKind } from "./report-upgrade.js";
@@ -513,18 +511,14 @@ import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
-import { shopPage } from "./shop.js";
 import { changelogPage, changelogRss } from "./changelog.js";
-import { useCasesPage } from "./use-cases.js";
 import { playgroundPage } from "./playground.js";
 import { apiExplorerPage } from "./api-explorer.js";
 import { sdkPlaygroundPage } from "./sdk-playground.js";
 import { blogIndex, blogPost } from "./blog.js";
-import { comparePage } from "./compare.js";
-import { communityPage } from "./community.js";
 import { contributePage } from "./contribute.js";
 import { workflowsPage } from "./workflows.js";
-import { badgesPage, badgeSvg } from "./badges.js";
+import { badgeSvg } from "./badges.js";
 import { adapterDocsIndex, adapterDocPage } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
 import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore } from "./ledger-chrome.js";
@@ -553,7 +547,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
+import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -701,7 +695,7 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundsForPayer, refundLedgerFlush } from "./refund-ledger.js";
+import { recordRefundOwed, refundByEvidence, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
@@ -2452,27 +2446,6 @@ const _freeAlerts = createFreeAlerts({
   onEvent: ({ step, kind }) => { try { capturePostHogHumanFunnel({ step, kind }); } catch { /* telemetry never breaks the engine */ } },
 });
 if (process.env.FREE_ALERTS !== "off") _freeAlerts.start();
-// Weekly spend digest (src/wallet-digest.js): the one place the site asks a
-// buyer for an inbox. Keyed to the identity they already pay with (an EVM
-// wallet proved by signature, or a credits key), double opt-in, signed
-// unsubscribe, nothing sent for a quiet week. Same secret rule as the alerts.
-// Created BEFORE the credits engine so a new key's claim email can carry its
-// own signed confirm link; the credits accessors are read lazily.
-const _walletDigest = createWalletDigest({
-  secret: (process.env.FREE_ALERTS_SECRET || process.env.POW_SECRET || process.env.MPP_SECRET_KEY || "").trim(),
-  baseUrl: BASE_URL,
-  sendEmail: faSendEmail,
-  usage: (payer, opts) => payerUsage(payer, opts),
-  refunds: (payer) => ownRefundsView(refundsForPayer(payer, { limit: 50 })).rows,
-  creditsBalance: (keyId) => (_credits && typeof _credits.balanceById === "function" ? _credits.balanceById(keyId) : null),
-  creditsKeyId: (key) => (_credits && typeof _credits.keyIdOf === "function" ? _credits.keyIdOf(key) : null),
-  verifySignature: async ({ address, message, signature }) => {
-    const { verifyMessage } = await import("viem");
-    return verifyMessage({ address, message, signature });
-  },
-  onEvent: ({ step, kind }) => { try { capturePostHogHumanFunnel({ step, kind }); } catch { /* telemetry never breaks the engine */ } },
-});
-if (process.env.WALLET_DIGEST !== "off") _walletDigest.start();
 // Post-purchase follow-ups (src/followups.js): two emails at most per card
 // purchase, stoppable, plus the immediate failure notice. Same secret rule.
 const _followups = createFollowups({
@@ -2549,44 +2522,21 @@ app.get("/alerts/unsubscribe", async (req, res) => {
 });
 // One-click unsubscribe (RFC 8058): mail clients POST the List-Unsubscribe URL.
 app.post("/alerts/unsubscribe", async (req, res) => { const r = await _freeAlerts.unsubscribeAsync(String(req.query.id || ""), String(req.query.k || "")); if (r.reason === "unavailable") return emailLinkUnavailable(res, false); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
-// ---- weekly digest routes (src/wallet-digest.js) ----
-app.get("/digest", (_req, res) => htmlCache(res, 300, 900).send(digestPage(BASE_URL)));
-app.post("/api/digest", express.json({ limit: "8kb" }), async (req, res) => {
-  if (alertsSignupLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many signups from this address. Try again in a few minutes." });
-  const b = req.body || {};
-  if (typeof b.website === "string" && b.website) return res.json({ ok: true, status: "pending" }); // honeypot
-  const emailKey = createHash("sha256").update(String(b.email || "").trim().toLowerCase()).digest("hex").slice(0, 32);
-  if (alertsEmailLimiter.check(`e:${emailKey}`).limited) return res.json({ ok: true, status: "pending" });
-  try { res.json(await _walletDigest.signup({ email: b.email, wallet: b.wallet, message: b.message, signature: b.signature, creditsKey: b.creditsKey, source: b.source })); }
-  catch (e) {
-    if (e?.buyerSafe && e.statusCode) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-    console.warn("[wallet-digest] signup failed:", String(e?.message || e).slice(0, 160));
-    res.status(500).json({ error: "Could not subscribe. Please try again." });
-  }
-});
-app.get("/digest/confirm", async (req, res) => {
-  const r = await _walletDigest.confirmAsync(String(req.query.id || ""), String(req.query.k || ""));
+// ---- the retired weekly spend digest ----
+// The digest has ended: nothing sends, nothing new is stored, and the page
+// redirects to the docs. A confirm or unsubscribe link in an old email still
+// opens a plain notice (no action needed), and a signup POST answers 410.
+const DIGEST_ENDED_HTML = `<p>The weekly spend digest has ended. No more digests will be sent, and there is nothing you need to do.</p><p>Your usage history is still available any time from <a href="/tools/my-usage">my-usage</a>.</p>`;
+const digestEnded = (_req, res) => {
   res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
-  if (r.reason === "unavailable") return emailLinkUnavailable(res, true);
-  if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The confirmation link is invalid or the digest was unsubscribed. <a href="/digest">Subscribe again</a>.</p>`));
-  res.send(alertPage("Digest confirmed", `<p>Your first digest arrives within the hour, then one a week. Nothing is sent for a quiet week. <a href="/tools/my-usage">See the full history now</a>.</p>`));
-});
-app.get("/digest/unsubscribe", async (req, res) => {
-  const r = await _walletDigest.unsubscribeAsync(String(req.query.id || ""), String(req.query.k || ""));
-  res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
-  if (r.reason === "unavailable") return emailLinkUnavailable(res, true);
-  if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The unsubscribe link is invalid. <a href="/company#contact">Contact us</a> and we will remove you by hand.</p>`));
-  res.send(alertPage("Unsubscribed", `<p>No more digests. Your address has been removed. <a href="/digest">Subscribe again</a> any time.</p>`));
-});
-app.post("/digest/unsubscribe", async (req, res) => { const r = await _walletDigest.unsubscribeAsync(String(req.query.id || ""), String(req.query.k || "")); if (r.reason === "unavailable") return emailLinkUnavailable(res, false); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
-app.get("/__operator/digest.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-  res.set("Cache-Control", "no-store").json(_walletDigest.stats());
-});
-app.post("/__operator/digest/run", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-  res.set("Cache-Control", "no-store").json(await _walletDigest.tick({ force: req.query.force === "1" }));
-});
+  res.send(alertPage("The weekly digest has ended", DIGEST_ENDED_HTML));
+};
+app.get("/digest", (_req, res) => res.redirect(301, "/docs"));
+app.post("/api/digest", (_req, res) => res.status(410).json({ error: "The weekly spend digest has ended; signups are closed." }));
+app.get("/digest/confirm", digestEnded);
+app.get("/digest/unsubscribe", digestEnded);
+// One-click unsubscribe (RFC 8058) from an old email: nothing is subscribed.
+app.post("/digest/unsubscribe", (_req, res) => res.set("Cache-Control", "no-store").json({ ok: true }));
 app.get("/__operator/alerts.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json(_freeAlerts.stats());
@@ -2652,7 +2602,6 @@ try {
     // the money once - when it is spent (rail "credits" below).
     onLoad: ({ pack, priceUsd, keyId, paymentIntent }) => recordSale({ slug: `credits:${pack}`, priceUsd, rail: "card-prepaid", network: "stripe", payer: keyId, tx: paymentIntent, wire: "stripe-checkout" }),
     onDebit: ({ slug, priceUsd, keyId }) => recordSale({ slug, priceUsd, rail: "credits", network: "stripe", payer: keyId, tx: null, wire: "credits" }),
-    digestLinkFor: ({ keyId, email }) => _walletDigest.preEnrolCredits({ keyId, email }),
   }) : null;
 } catch (e) { console.warn("[credits] init failed:", String(e?.message || e).slice(0, 200)); _credits = null; }
 // Manage/cancel bearer for monitor subscribers: a keyed token over the report
@@ -4324,7 +4273,8 @@ app.get("/x402-economy", (_req, res) => {
   res.redirect(301, "/marketplace#economy");
 });
 app.get("/changelog", (_req, res) => htmlCache(res, 300, 900).send(changelogPage(BASE_URL)));
-app.get("/use-cases", (_req, res) => htmlCache(res, 300, 900).send(useCasesPage(BASE_URL, CATALOG)));
+// The use cases page became the Examples section of /docs (same live prices).
+app.get("/use-cases", (_req, res) => res.redirect(301, "/docs#examples"));
 app.get("/playground", (_req, res) => htmlCache(res, 300, 900).send(playgroundPage(BASE_URL, CATALOG)));
 app.get("/sdk-playground", (_req, res) => htmlCache(res, 300, 900).send(sdkPlaygroundPage(BASE_URL)));
 // Capitalised wiki URLs whose page the site serves at a lowercase route: 301
@@ -4341,8 +4291,10 @@ app.get("/blog", (_req, res) => htmlCache(res, 300, 900).send(blogIndex(BASE_URL
 // exact tool count the evergreen rule forbids on served pages); keep the URL.
 app.get("/blog/1000-tools-milestone", (_req, res) => res.redirect(301, "/blog/catalog-milestone"));
 app.get("/blog/:slug", (req, res) => { const html = blogPost(BASE_URL, req.params.slug); if (!html) return notFoundPage(res, { what: "Post", href: "/blog", label: "All posts" }); htmlCache(res, 300, 900).send(html); });
-app.get("/compare", (_req, res) => htmlCache(res, 300, 900).send(comparePage(BASE_URL)));
-app.get("/community", (_req, res) => htmlCache(res, 300, 900).send(communityPage(BASE_URL)));
+// /compare folded into the "Why pay here" section of /docs; /community's
+// adapters, packages and sample reports live on /integrations and /reports.
+app.get("/compare", (_req, res) => res.redirect(301, "/docs#why"));
+app.get("/community", (_req, res) => res.redirect(301, "/integrations"));
 app.get("/contribute", (_req, res) => htmlCache(res, 300, 900).send(contributePage(BASE_URL)));
 app.get("/workflows", (_req, res) => htmlCache(res, 300, 900).send(workflowsPage(BASE_URL, CATALOG)));
 // /uptime was a second, static "System Status" page carrying a hardcoded
@@ -4353,7 +4305,9 @@ app.get("/workflows", (_req, res) => htmlCache(res, 300, 900).send(workflowsPage
 // /status with links to the actual probe runs. Permanent redirect: one surface,
 // one truth, and the SEO history follows.
 app.get("/uptime", (_req, res) => res.redirect(301, "/status"));
-app.get("/badges", (_req, res) => htmlCache(res, 300, 900).send(badgesPage(BASE_URL)));
+// The badges page is the Badges section of /docs; the SVG images below stay,
+// because READMEs elsewhere embed them.
+app.get("/badges", (_req, res) => res.redirect(301, "/docs#badges"));
 app.get("/badges/:style.svg", (req, res) => { const svg = badgeSvg(req.params.style); if (!svg) return res.status(404).json({ error: "unknown badge style" }); res.setHeader("Cache-Control", "public, max-age=3600").type("image/svg+xml").send(svg); });
 app.get("/docs/adapters", (_req, res) => htmlCache(res, 300, 900).send(adapterDocsIndex(BASE_URL)));
 app.get("/docs/webhooks", (_req, res) => htmlCache(res, 300, 900).send(webhooksPage(BASE_URL)));
@@ -7674,7 +7628,8 @@ app.get("/openapi.json", (req, res) => {
   res.type("application/json").send(OPENAPI_JSON);
 });
 app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(ledgerCatalogPage(BASE_URL, CATALOG, SKILL_PACKS)));
-app.get("/shop", (_req, res) => htmlCache(res, 300, 900).send(shopPage(BASE_URL, CATALOG)));
+// The task-indexed shop page retired into the catalog; /api/find answers a task.
+app.get("/shop", (_req, res) => res.redirect(301, "/tools"));
 // The standalone economy dashboard folded into the marketplace's "The economy,
 // over time" section (its 24h totals/concentration/network-split summary moved
 // there; the top-10 list duplicated /leaderboard and was dropped). Redirect

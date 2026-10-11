@@ -17,7 +17,7 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 - **Developer experience:** [Quickstart](https://agent402.tools/quickstart) · [Playground](https://agent402.tools/playground) · [SDK REPL](https://agent402.tools/sdk-playground) · [API Explorer](https://agent402.tools/docs/api/explorer) · [Adapter Docs](https://agent402.tools/docs/adapters) · [Workflows](https://agent402.tools/workflows)
 - **Live stats (hosted instance):** [`/api/stats`](https://agent402.tools/api/stats) · [`/status`](https://agent402.tools/status) (measured availability)
 - **Performance surfaces:** [`/api/cache-stats`](https://agent402.tools/api/cache-stats) (Redis hit-rate counters) · [`/api/cacheable`](https://agent402.tools/api/cacheable) (which routes cache + TTL) · [`/api/analytics`](https://agent402.tools/api/analytics) (24h tool-call timeseries)
-- **Community:** [Blog](https://agent402.tools/blog) · [Community](https://agent402.tools/community) · [Contribute](https://agent402.tools/contribute) · [Changelog](https://agent402.tools/changelog) · [Badges](https://agent402.tools/badges)
+- **Community:** [Blog](https://agent402.tools/blog) · [Integrations](https://agent402.tools/integrations) · [Contribute](https://agent402.tools/contribute) · [Changelog](https://agent402.tools/changelog) · [Badges](https://agent402.tools/docs#badges)
 
 ## Start here
 

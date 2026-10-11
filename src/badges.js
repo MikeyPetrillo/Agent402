@@ -1,4 +1,8 @@
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { esc } from "./ledger-chrome.js";
+
+// README badges: the SVG images at /badges/<style>.svg (embedded by READMEs
+// elsewhere, so the routes stay) and the Badges section of /docs (#badges;
+// /badges answers a 301 to it).
 
 /* ------------------------------------------------------------------ */
 /*  Badge SVG generator                                                */
@@ -74,105 +78,50 @@ function poweredByBadge() {
 // design-tokens: literal-end
 
 /* ------------------------------------------------------------------ */
-/*  Badges page HTML                                                   */
+/*  Badges section of /docs                                            */
 /* ------------------------------------------------------------------ */
 
-const BADGE_STYLES = [
-  { style: "default", label: "Default", description: "Shields.io-style badge with tool count" },
-  { style: "flat",    label: "Flat",    description: "Flat version without gradient" },
-  { style: "powered-by", label: "Powered By", description: "Wider badge for project footers" },
+export const BADGE_STYLES = [
+  { style: "default", label: "Default", description: "Shields-style badge with the tool count" },
+  { style: "flat",    label: "Flat",    description: "Flat version without the gradient" },
+  { style: "powered-by", label: "Powered by", description: "Wider badge for project footers" },
 ];
 
-export function badgesPage(baseUrl) {
-  const canonical = `${baseUrl}/badges`;
-  const title = "Badges & Embeds - Agent402";
-  const description =
-    "Grab embed badges for your README or website to show you're powered by Agent402. Markdown and HTML snippets with copy buttons.";
+/** CSS for the #badges section (appended to the docs page's extraCss). */
+export const BADGES_SECTION_CSS = `
+  #badges { scroll-margin-top: 110px; }
+  .bdg-row { display:grid;grid-template-columns:200px minmax(0,1fr);gap:18px;align-items:start;padding:16px 20px;border-bottom:1px solid var(--hairline); }
+  .bdg-row:last-child { border-bottom:none; }
+  @media (max-width:740px){ .bdg-row { grid-template-columns:minmax(0,1fr);gap:10px; } }
+  .ml-docs-main .bdg-row h3 { font-family:var(--font-body);font-weight:600;font-size:var(--fs-md);margin:0 0 4px;color:var(--ink); }
+  .ml-docs-main .bdg-row p { font-size:var(--fs-sm);line-height:1.5;color:var(--muted);margin:0 0 10px; }
+  .bdg-label { display:block;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin:0 0 4px; }
+  .bdg-code-wrap { position:relative;margin:0 0 10px; }
+  .bdg-code-wrap:last-child { margin-bottom:0; }
+  .bdg-code-wrap pre { background:var(--panel);border:1px solid var(--panel-rule);padding:12px 70px 12px 12px;margin:0;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.55;color:var(--on-panel);white-space:pre-wrap;word-break:break-all; }
+  .bdg-code-wrap .bdg-copy { position:absolute;top:8px;right:8px;background:var(--panel);border:1px solid var(--panel-rule-2);border-radius:var(--radius);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-2xs);padding:4px 10px;cursor:pointer; }
+  .bdg-code-wrap .bdg-copy.copied { color:var(--accent-lit);border-color:var(--accent-lit); }`;
 
-  const badgeSections = BADGE_STYLES.map((b) => {
+/** The Badges section of /docs: each style's preview and its Markdown and
+ * HTML embed. The copy buttons are wired by /js/copy-buttons.js. */
+export function badgesSectionHtml(baseUrl) {
+  const rows = BADGE_STYLES.map((b) => {
     const svgUrl = `${baseUrl}/badges/${b.style}.svg`;
-    const siteUrl = baseUrl;
-    const mdSnippet = `[![Agent402](${svgUrl})](${siteUrl})`;
-    const htmlSnippet = `<a href="${siteUrl}"><img src="${svgUrl}" alt="Agent402"></a>`;
-
+    const md = `[![Agent402](${svgUrl})](${baseUrl})`;
+    const html = `<a href="${baseUrl}"><img src="${svgUrl}" alt="Agent402"></a>`;
+    const snippet = (label, code) => `<span class="bdg-label">${label}</span><div class="bdg-code-wrap"><pre><code>${esc(code)}</code></pre><button class="bdg-copy" type="button" aria-label="Copy the ${label} snippet">Copy</button></div>`;
     return `
-<div class="bdg-section">
-  <h3>${esc(b.label)}</h3>
-  <p class="bdg-desc">${esc(b.description)}</p>
-
-  <div class="bdg-preview">
-    <img src="/badges/${esc(b.style)}.svg" alt="${esc(b.label)} badge">
-  </div>
-
-  <span class="bdg-label">Markdown</span>
-  <div class="bdg-code-wrap">
-    <pre><code>${esc(mdSnippet)}</code></pre>
-    <button class="bdg-copy" aria-label="Copy">Copy</button>
-  </div>
-
-  <span class="bdg-label">HTML</span>
-  <div class="bdg-code-wrap">
-    <pre><code>${esc(htmlSnippet)}</code></pre>
-    <button class="bdg-copy" aria-label="Copy">Copy</button>
-  </div>
-</div>`;
-  }).join("\n");
-
-  const extraCss = `
-.bdg-wrap{max-width:860px;margin:0 auto;padding:56px 30px}
-.bdg-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
-.bdg-title{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 10px}
-.bdg-subtitle{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px}
-
-.bdg-section{background:var(--card);border:1px solid var(--hairline);padding:24px;margin-bottom:20px}
-.bdg-section h3{font-family:var(--font-body);font-weight:600;font-size:var(--fs-lg);margin:0 0 4px;color:var(--ink)}
-.bdg-desc{color:var(--muted);font-size:var(--fs-md);line-height:1.55;margin:0 0 16px}
-
-.bdg-preview{background:var(--paper);border:1px solid var(--hairline);padding:20px;text-align:center;margin-bottom:20px}
-.bdg-preview img{display:inline-block;vertical-align:middle}
-
-.bdg-label{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:8px}
-
-.bdg-code-wrap{position:relative;margin-bottom:16px}
-.bdg-code-wrap pre{background:var(--panel);border:1px solid var(--hairline);padding:16px;overflow-x:auto;margin:0;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;color:var(--on-panel);white-space:pre-wrap;word-break:break-all}
-.bdg-code-wrap .bdg-copy{position:absolute;top:8px;right:8px;background:var(--panel);border:1.5px solid var(--paper);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-2xs);padding:4px 10px;cursor:pointer;transition:all .15s}
-.bdg-code-wrap .bdg-copy:hover{background:var(--paper);color:var(--ink)}
-.bdg-code-wrap .bdg-copy.copied{color:var(--accent);border-color:var(--accent)}
-
-.bdg-note{background:var(--card);border:1px solid var(--hairline);padding:24px;margin-top:32px}
-.bdg-note h3{font-family:var(--font-body);font-weight:600;font-size:var(--fs-lg);margin:0 0 6px;color:var(--ink)}
-.bdg-note p{color:var(--muted);font-size:var(--fs-md);line-height:1.55;margin:0}
-.bdg-note code{font-family:var(--font-mono);background:var(--panel);color:var(--on-panel);padding:2px 7px;font-size:var(--fs-sm);border:1px solid var(--hairline)}
-
-@media(max-width:600px){
-  .bdg-title{font-size:var(--fs-3xl) !important}
-}
+        <div class="bdg-row">
+          <div><h3>${esc(b.label)}</h3><p>${esc(b.description)}</p><img src="/badges/${esc(b.style)}.svg" alt="${esc(b.label)} badge" loading="lazy"></div>
+          <div>${snippet("Markdown", md)}${snippet("HTML", html)}</div>
+        </div>`;
+  }).join("");
+  return `<!-- BADGES -->
+      <section>
+      <h2 id="badges" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;">Badges.</h2>
+      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">Show that a project runs on Agent402: paste a snippet into a README, docs page or site. Each image is served from <code>${esc(baseUrl)}/badges/{style}.svg</code>, so an embed always shows the current badge.</p>
+      <div style="border:1px solid var(--hairline);background:var(--card);margin-bottom:44px;">${rows}
+      </div>
+      </section>
 `;
-
-  const body = `
-<div class="bdg-wrap">
-
-<section>
-<div class="bdg-eyebrow">$ GET /badges</div>
-<h1 class="bdg-title">Badges & Embeds</h1>
-<p class="bdg-subtitle">Add an Agent402 badge to your README, docs, or website. Copy the snippet and paste.</p>
-</section>
-
-<section>
-${badgeSections}
-</section>
-
-<section>
-<div class="bdg-note">
-  <h3>Custom badge</h3>
-  <p>The tools count in each badge updates automatically to reflect the current catalog size. Point the <code>src</code> at <code>${esc(baseUrl)}/badges/{style}.svg</code> and it will always show the latest count.</p>
-</div>
-</section>
-
-</div>
-${ledgerFooterCompact()}
-
-<script src="/js/copy-buttons.js"></script>`;
-
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/badges", extraCss, body });
 }

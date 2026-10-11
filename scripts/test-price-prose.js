@@ -163,15 +163,15 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
      "the old literal cannot come back while a dearer tool exists");
 }
 
-// --- body prices on /, /pricing and /use-cases come from the catalog --------
+// --- body prices on /, /pricing and /docs#examples come from the catalog ----
 // The homepage typed "POST /v1/dossier $0.55" against an $0.85 route, /pricing
 // typed render at $0.02 against $0.01 and payments "from $0.002" against $0.001,
-// and every cost line on /use-cases had drifted. Rendered here against a catalog
+// and every cost line on the old /use-cases page (now /docs#examples) had drifted. Rendered here against a catalog
 // of deliberately odd prices: a typed figure cannot match them by coincidence.
 {
   const { ledgerHomePage } = await import("../src/ledger-home.js");
   const { ledgerPricingPage } = await import("../src/ledger-pricing.js");
-  const { useCasesPage, useCaseCost } = await import("../src/use-cases.js");
+  const { examplesSectionHtml, useCaseCost } = await import("../src/use-cases.js");
   const odd = {
     "POST /v1/dossier": { slug: "dossier", price: "$9.97", category: "research" },
     "POST /api/route/execute": { slug: "route-execute", price: "$0.077", category: "agent" },
@@ -193,11 +193,14 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   ok(pricing.includes("from $0.033"), "the /pricing browser row is the cheaper of render and screenshot, from the catalog");
   ok(pricing.includes("$0.055") && pricing.includes("$0.006") && pricing.includes("$0.009"), "...and extract, payments and memory read from the catalog");
   ok(!/>\$0\.02</.test(pricing) && !/from \$0\.002</.test(pricing), "no typed row figure survives");
-  const uc = useCasesPage("https://agent402.tools", odd);
+  const uc = examplesSectionHtml(odd);
   const expected = useCaseCost({ calls: [["render", 20], ["extract", 20], ["memory-write", 20]], per: "per day" }, odd);
   ok(expected && expected.startsWith("$1.94 per day"), `the use-case cost is summed from catalog prices (${expected})`);
-  ok(uc.includes(expected.slice(0, 14)), "and the page renders that computed cost");
-  ok(!/~\$/.test(uc), "no typed approximate cost line is left on /use-cases");
+  ok(uc.includes(`${expected.slice(0, 13)}</span>`) && uc.includes(expected.slice(14)), "and the docs Examples section renders that computed cost");
+  ok(!/~\$/.test(uc), "no typed approximate cost line is left in /docs#examples");
+  const { ledgerDocsPage } = await import("../src/ledger-docs.js");
+  const docs = ledgerDocsPage("https://agent402.tools", odd);
+  ok(docs.includes('id="examples"') && docs.includes(`${expected.slice(0, 13)}</span>`), "/docs passes its own catalog to the Examples section");
 }
 
 // --- payment.info's OTHER price field ---------------------------------------

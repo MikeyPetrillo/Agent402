@@ -1,11 +1,12 @@
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { esc } from "./ledger-chrome.js";
 
+// The Examples section of /docs (#examples; /use-cases answers a 301 to it).
 // Example tasks, each with the calls it makes. The COST is computed from the
 // live catalog at render time: every typed cost line on this page had drifted
 // from the prices the paywall charges, one claimed a set of network tools was
 // free over proof-of-work, and the stories were written as past events.
 // `calls` = [slug, count]; `per` names the unit the total is for.
-const USE_CASES = [
+export const USE_CASES = [
   {
     title: "Research 50 public companies overnight",
     story: "An analyst's agent walks 50 tickers, pulling filings, reported financials and live quotes for each, and leaves 50 structured summaries ready for review in the morning.",
@@ -75,71 +76,60 @@ export function useCaseCost(uc, catalog) {
   return `${fmtUsd(total)} ${uc.per} (${parts.join(" + ")})`;
 }
 
-export function useCasesPage(baseUrl, catalog = {}) {
-  const canonical = `${baseUrl}/use-cases`;
-  const pageTitle = "Use Cases - what agents build with Agent402";
-  const pageDesc = "Concrete examples of autonomous agents using Agent402: company research, security audits, PDF processing, live web search, macro dashboards, and more.";
-
-  const jsonLd = {
+/** JSON-LD for the #examples section: the tasks as an ItemList on /docs. */
+export function examplesJsonLd(baseUrl) {
+  const at = `${baseUrl}/docs`;
+  return {
     "@context": "https://schema.org",
     "@type": "ItemList",
-    name: pageTitle,
-    description: pageDesc,
-    url: canonical,
+    "@id": `${at}#examples`,
+    name: "Examples: tasks an agent runs with Agent402, priced from the live catalog",
     numberOfItems: USE_CASES.length,
-    itemListElement: USE_CASES.map((uc, i) => ({
-      "@type": "ListItem",
-      position: i + 1,
-      name: uc.title,
-      description: uc.story,
-    })),
+    itemListElement: USE_CASES.map((uc, i) => ({ "@type": "ListItem", position: i + 1, name: uc.title, description: uc.story })),
   };
+}
 
+/** CSS for the #examples section (appended to the docs page's extraCss). */
+export const EXAMPLES_SECTION_CSS = `
+  #examples { scroll-margin-top: 110px; }
+  .ex-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:0 0 44px; }
+  @media (max-width:740px){ .ex-grid { grid-template-columns:minmax(0,1fr); } }
+  .ex-card { background:var(--card);border:1px solid var(--hairline);padding:18px 20px; }
+  .ml-docs-main .ex-card h3 { font-family:var(--font-body);font-weight:600;font-size:var(--fs-lg);line-height:1.3;margin:0 0 8px;color:var(--ink); }
+  .ml-docs-main .ex-card p { font-size:var(--fs-md);line-height:1.55;color:var(--muted);margin:0 0 10px; }
+  .ml-docs-main .ex-card p:last-child { margin-bottom:0; }
+  .ex-label { color:var(--ink);font-weight:600; }
+  .ex-price { color:var(--accent);font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:600;font-variant-numeric:tabular-nums; }
+  .ex-parts { color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-xs);font-variant-numeric:tabular-nums; }
+  .ex-tool { color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-sm); }`;
+
+// "$0.42 per day (20 x render at $0.01 + ...)": the total in the accent, the
+// breakdown quieter beside it.
+function costHtml(cost) {
+  const i = cost.indexOf(" (");
+  return i < 0 ? `<span class="ex-price">${esc(cost)}</span>` : `<span class="ex-price">${esc(cost.slice(0, i))}</span> <span class="ex-parts">${esc(cost.slice(i + 1))}</span>`;
+}
+
+/** The Examples section of /docs: each task, the tools it calls and its cost
+ * at today's list prices, computed from the catalog it is given. */
+export function examplesSectionHtml(catalog = {}) {
   const cards = USE_CASES.map((uc) => {
     const cost = useCaseCost(uc, catalog);
-    const toolLinks = uc.calls.map(([slug]) => slug)
-      .map((slug) => `<a href="/tools/${esc(slug)}" class="uc-tool-link">${esc(slug)}</a>`)
-      .join(", ");
+    const tools = uc.calls.map(([slug]) => `<a href="/tools/${esc(slug)}" class="ex-tool">${esc(slug)}</a>`).join(", ");
     return `
-      <div class="uc-card">
-        <h3>${esc(uc.title)}</h3>
-        <p class="uc-story">${esc(uc.story)}</p>
-        <p class="uc-tools"><span class="uc-label">Tools used:</span> ${toolLinks}</p>
-        ${cost ? `<p class="uc-cost"><span class="uc-label">Cost at list price:</span> <span class="uc-price">${esc(cost)}</span></p>` : ""}
-      </div>`;
-  }).join("\n");
-
-  const extraCss = `
-.uc-wrap{max-width:960px;margin:0 auto;padding:56px 30px}
-.uc-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
-.uc-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px}
-.uc-intro{max-width:760px;font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px}
-.uc-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;margin-bottom:48px}
-@media(max-width:740px){.uc-grid{grid-template-columns:1fr}.uc-h1{font-size:var(--fs-3xl) !important}}
-.uc-card{background:var(--card);border:1px solid var(--hairline);padding:24px 26px}
-.uc-card h3{margin:0 0 10px;font-family:var(--font-body);font-weight:600;font-size:var(--fs-lg);color:var(--ink)}
-.uc-story{color:var(--muted);font-size:var(--fs-md);line-height:1.55;margin:0 0 16px}
-.uc-tools,.uc-cost{font-size:var(--fs-md);margin:6px 0;color:var(--muted)}
-.uc-label{color:var(--ink);font-weight:600}
-.uc-price{color:var(--accent);font-family:var(--font-mono);font-weight:700}
-.uc-tool-link{color:var(--accent);text-decoration:none;font-family:var(--font-mono);font-size:var(--fs-sm)}
-.uc-tool-link:hover{text-decoration:underline}
-.uc-cta{text-align:center;margin:32px 0 48px}
-.uc-cta a{color:var(--accent);font-family:var(--font-mono);font-weight:700;text-decoration:none;font-size:var(--fs-base)}
-.uc-cta a:hover{text-decoration:underline}
+        <div class="ex-card">
+          <h3>${esc(uc.title)}</h3>
+          <p>${esc(uc.story)}</p>
+          <p><span class="ex-label">Tools:</span> ${tools}</p>
+          ${cost ? `<p><span class="ex-label">Cost at list price:</span> ${costHtml(cost)}</p>` : ""}
+        </div>`;
+  }).join("");
+  return `<!-- EXAMPLES -->
+      <section>
+      <h2 id="examples" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;">Examples.</h2>
+      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">Tasks an agent can run here, from overnight research to daily monitoring. Each one names the calls it makes and what they cost at today's per-call prices, read from the live catalog.</p>
+      <div class="ex-grid">${cards}
+      </div>
+      </section>
 `;
-
-  const body = `
-<div class="uc-wrap">
-<div class="uc-eyebrow">$ GET /use-cases</div>
-<h1 class="uc-h1">Use Cases</h1>
-<p class="uc-intro">Example tasks an agent can run with Agent402, from overnight research to daily monitoring. Each one names the calls it makes and what they cost at today's per-call prices.</p>
-<div class="uc-grid">
-${cards}
-</div>
-<div class="uc-cta"><a href="/quickstart">Ready to build? Start with the quickstart guide &rarr;</a></div>
-</div>
-${ledgerFooterCompact()}`;
-
-  return ledgerShell({ title: pageTitle, description: pageDesc, canonical, baseUrl, activePath: "/use-cases", jsonLd, extraCss, body });
 }

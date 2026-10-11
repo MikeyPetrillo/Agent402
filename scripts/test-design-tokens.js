@@ -48,7 +48,6 @@ const LITERAL_FILES = {
   "src/email.js": "transactional email HTML: mail clients strip <style> and custom properties",
   "src/followups.js": "follow-up email HTML",
   "src/free-alerts.js": "alert email HTML",
-  "src/wallet-digest.js": "weekly digest email HTML",
 };
 
 // ---- palette and scale, read from the token file ------------------------------
