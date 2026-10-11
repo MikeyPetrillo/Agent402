@@ -3857,6 +3857,11 @@ jobs:
       # Rendered text contrast: every visible text vs its real backdrop, both themes, 390 + 1280 px (Chromium; a dark-surface token on a light surface is invisible in light mode, /sell 2026-09-10)
       - name: Text contrast (rendered, WCAG AA, both themes)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-text-contrast.js
+      # Wrap quality, measured: line boxes read back in Chromium at 1440 and 400 px; a
+      # last line under 30% or under 3 words, a label split over two lines, a link
+      # row ending on one stray link, or text past the viewport fails (DESIGN.md "Wrap").
+      - name: Wrap quality (rendered line boxes, 1440 + 400 px)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-wrap-quality.js
 
   test-sweeps2:
     # The second half of test-sweeps (2026-08-25, split by the seconds each item

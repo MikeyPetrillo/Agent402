@@ -48,8 +48,9 @@ for (const slug of FLAGSHIP) {
   const pack = SKILL_PACKS.find((p) => p.slug === slug);
   ok(pack, `flagship pack "${slug}" exists in SKILL_PACKS`);
   if (!pack) continue;
-  const seq = pack.toolSlugs.join(" · ");
-  ok(html.includes(seq), `"${slug}" renders its REAL tool sequence verbatim: ${seq}`);
+  // One <span> per tool, in order (the separators are drawn by CSS so the list wraps between tools).
+  const seq = pack.toolSlugs.map((t) => `<span>${t}</span>`).join("");
+  ok(html.includes(seq), `"${slug}" renders its REAL tool sequence verbatim: ${pack.toolSlugs.join(" · ")}`);
 }
 
 // forecasting-bake-off specifically: the design handoff's own copy dropped

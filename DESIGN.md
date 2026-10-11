@@ -161,18 +161,26 @@ rules below.
   primary button alone, 50% for dots. The guard rejects any other radius.
 
 ## Wrap
-- Headings get `text-wrap: balance`, running text `text-wrap: pretty` (both global in
-  `ledger-chrome.js`).
-- **Prose takes its section's width up to a reading measure**: `max-width: 76ch`
-  (`.ml-measure`), 64ch inside a CTA panel. No narrow pixel caps beside empty space.
-- **Section meta goes under its heading**, never floated right of it: `sectionMeta([...])`
-  or `.ml-meta`, whose tags each stay on one line and wrap between tags.
-- **A short label never breaks inside itself**: chips, stat labels, link labels and buttons
-  are `white-space: nowrap`; shorten the words when they do not fit. A row of links or tags
-  is `.ml-items`, so it wraps as whole items.
+Measured, not eyeballed: `scripts/test-wrap-quality.js` lays out the public pages in Chromium
+at 1440 and 400 px, reads each block's line boxes and fails on any of these.
+- **No rag**: a block of 2+ lines ends on a line of at least 30% of its widest line and at
+  least 3 words (a heading of 5 words or fewer may split 2 + 2 or 3 + 2). Widow control in
+  `assets/js/site-chrome.js` binds each block's last words to about a third of its measure;
+  if a block still rags, the copy or the measure is wrong, so shorten the words or widen
+  the column. Text rendered after load calls `window.a402BindWidows(root)`.
+- **A label never breaks inside itself**: small mono text, uppercase letter-spaced labels,
+  chips, buttons, kickers, stat labels and each link of a link row stay on one line. A run
+  of tags is `.ml-meta` (or `sectionMeta([...])`): one `<span>` per tag, wrapping between
+  tags. Shorten a label that does not fit; never shrink it below the type scale or clip it.
+- **No stray item**: a row of links or chips does not end on one item under a row of 3+.
+  Long rows become a two-column list or a sideways strip at phone width.
+- **Nothing past the viewport**: a whole label wider than its column is a finding too.
+- Prose takes its section's width up to a reading measure: `max-width: 76ch`
+  (`.ml-measure`), 64ch inside a CTA panel. Section meta goes under its heading.
 - **Side-by-side cards read as a pair**: the same parts in the same order (kicker, heading,
   one short paragraph, `.ml-ticks` list, code, action row pinned to the bottom with
-  `margin-top: auto`). Split a long paragraph into a sentence plus a list, never a wall.
+  `margin-top: auto`). A section of claims is a row list (heading left, one sentence and at
+  most two links right, the rest behind an expander), not a grid of squeezed cards.
 - A list section (FAQ) sits in the 1180px container, left-aligned, its rows capped at 900px.
 
 ## Signature: the receipt edge
