@@ -10,15 +10,27 @@
 //
 // Append-only NDJSON on the volume. One line per SIGNED payment, written
 // whether or not delivery then succeeded, because the money left the wallet
-// either way.
+// either way. Each line carries a random `ref`, so the line is unique on its
+// own and a retried write adds it once.
+//
+// With the state database on, the stream is the record and the line goes
+// through a money journal first (createDeadLetter, journal "outbound"): the
+// entry is written ahead of the insert and removed once the stream holds the
+// line. With LEDGER_JOURNAL_REDIS=on the journal lives in Redis (it outlives
+// the container), otherwise on local disk beside the file, and a replay on a
+// timer lands whatever an insert did not. The insert is keyed on the line's
+// content (logLines.appendOnce), so the write, the replay and the boot
+// reconcile of the file add it once between them.
 //
 // Never written here: the credential, the signature, any private key, any
 // request header. Recorded: when, chain, destination, amount, what asked for
 // it, and how it ended.
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { logLines, stateDbEnabled, trackStoreReady, reconcileLogFile, markStoreFailed, markStoreLoaded } from "./state-db.js";
+import { appendFileSync, mkdirSync, existsSync } from "node:fs";
+import { dirname, basename, join } from "node:path";
+import { randomBytes } from "node:crypto";
+import { logLines, stateDbEnabled, stateDbSchema, trackStoreReady, reconcileLogFile, markStoreFailed, markStoreLoaded } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
+import { createDeadLetter, isRowError, everyMs } from "./ledger-mirror.js";
 
 export const OUTBOUND_STREAM = "outbound-spend";
 
@@ -29,9 +41,62 @@ const DISABLED = /^(0|false|off|no)$/i.test((process.env.OUTBOUND_LEDGER ?? "").
 // A reconcile that fails is retried with a backoff and the store reads
 // unloaded until one lands (it is never reported loaded on a failure).
 const STORE_NAME = "outbound-ledger reconcile";
+const REPLAY_MS = Number(process.env.OUTBOUND_JOURNAL_REPLAY_MS) || 5_000;
+// The money journal for lines the stream does not hold yet (database mode only).
+let journal = null;
 if (stateDbEnabled() && !DISABLED) {
   const load = retryingLoad(STORE_NAME, () => reconcileLogFile(OUTBOUND_STREAM, FILE), { onLoaded: () => markStoreLoaded(STORE_NAME) });
   trackStoreReady(load.ready().catch(() => { markStoreFailed(STORE_NAME); }), STORE_NAME);
+  // Beside the file while its directory (the volume) exists, else in /tmp as
+  // the other journals fall back: a journal never creates /data itself.
+  const journalFile = `${existsSync(dirname(FILE)) ? FILE : join("/tmp", basename(FILE))}.pending.ndjson`;
+  journal = createDeadLetter({ file: journalFile, name: "outbound", journalKey: `${stateDbSchema()}:outbound` });
+  load.ready().then(() => replayOutboundJournal()).catch(() => {});
+  everyMs(() => (journal.size() ? replayOutboundJournal() : null), REPLAY_MS);
+}
+
+/** Insert one journaled line, then drop its entry; on a failure the entry is left for the replay. Never rejects. */
+async function landLine(rec, id) {
+  try {
+    // The write-ahead entry is in Redis (or on local disk) before the insert it guards.
+    if (id != null) await journal.durable?.(id);
+    await logLines.appendOnce(OUTBOUND_STREAM, rec);
+    if (id != null) await journal.remove(id);
+  } catch (e) {
+    warnOnce(`write failed (${e?.code || e?.message}) - kept in the journal for replay; the payment itself is unaffected`);
+    if (id != null) journal.release(id);
+    else if (journal.add("outbound", rec) == null) console.error("[outbound-ledger] an outbound payment record could not be written to Postgres or the journal");
+  }
+}
+
+// One replay at a time; a caller arriving during one shares it.
+let replaying = null;
+/**
+ * Land every journaled line the stream lacks (claimed: one drainer across
+ * containers; an entry is removed only once the stream holds its line).
+ * Resolves how many entries it removed as landed.
+ */
+export function replayOutboundJournal() {
+  if (!journal) return Promise.resolve(0);
+  if (!replaying) {
+    replaying = (async () => {
+      let landed = 0;
+      try {
+        landed = await journal.drain(async (e) => {
+          const rec = e.payload;
+          if (!rec || typeof rec !== "object") return "drop";
+          try { await logLines.appendOnce(OUTBOUND_STREAM, rec); return "landed"; }
+          catch (err) {
+            if (isRowError(err)) { console.error(`[outbound-ledger] a journaled outbound record was refused (${String(err?.message || err).slice(0, 120)})`); return "drop"; }
+            throw err;
+          }
+        });
+      } catch { /* the database is still away: the next tick retries */ }
+      if (landed) console.log(`[outbound-ledger] landed ${landed} journaled record(s)`);
+      return landed;
+    })().finally(() => { replaying = null; });
+  }
+  return replaying;
 }
 
 let warnedAt = 0;
@@ -74,11 +139,13 @@ export function recordOutbound({ chain, payTo, amountAtomic, asset, usd, slug, o
       origin: hostOf(origin) || origin || null,
       result: result || "unknown",
       tx: tx || null,
+      ref: randomBytes(9).toString("hex"),
     }) + "\n";
-    if (stateDbEnabled()) {
-      // One row per payment in the state database; a failed insert is warned
-      // about like a failed append and never reaches the payment path.
-      logLines.append(OUTBOUND_STREAM, JSON.parse(line)).catch((e) => warnOnce(`write failed (${e?.code || e?.message}) - the payment itself is unaffected`));
+    if (journal) {
+      // One row per payment in the state database, journaled first (see the
+      // note at the top); never awaited by, and never thrown into, the payment path.
+      const rec = JSON.parse(line);
+      landLine(rec, journal.add("outbound", rec, { pending: true }));
       // Write-through to the volume while it exists, so the nightly backup
       // keeps the record of money paid out; best effort, never the verdict.
       try { appendFileSync(FILE, line); } catch { /* no volume */ }
