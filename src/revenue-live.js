@@ -1029,7 +1029,17 @@ export function mergeScanEntries(fresh = [], prior = [], cutoff = 0) {
   return out;
 }
 
-export async function evmActivity(chainKey, wallet, { days = 30, maxPages = SCAN_MAX_PAGES, budgetMs = SCAN_BUDGET_MS, prior = null } = {}) {
+/** Pages a refresh may spend continuing a truncated scan's far end
+ *  (EVM_ACTIVITY_FAR_PAGES). A wallet too busy to cover the window in one
+ *  scan covers it over several refreshes instead of re-reading it from the
+ *  top every time. */
+const FAR_PAGES_PER_REFRESH = Math.max(1, Number(process.env.EVM_ACTIVITY_FAR_PAGES) || 5);
+
+// Per-process counters for the operator view of /api/gateway-status.
+const activityCounters = { scans: 0, cold: 0, resumed: 0, farContinued: 0, calls: 0, truncated: 0, failed: 0 };
+export function evmActivityStatus() { return { ...activityCounters }; }
+
+export async function evmActivity(chainKey, wallet, { days = 30, maxPages = SCAN_MAX_PAGES, budgetMs = SCAN_BUDGET_MS, prior = null, farPages = FAR_PAGES_PER_REFRESH } = {}) {
   const c = EVM[chainKey];
   const out = { rail: c?.label || chainKey, wallet: wallet || null, days, buckets: [], totals: { tx: 0, usd: 0, buyers: 0, internalTx: 0, internalUsd: 0 }, truncated: false, error: null };
   if (!c) { out.error = "unsupported chain"; return out; }
@@ -1037,64 +1047,116 @@ export async function evmActivity(chainKey, wallet, { days = 30, maxPages = SCAN
   if (!process.env.ALCHEMY_API_KEY) { out.error = "activity source unavailable (no ALCHEMY_API_KEY)"; return out; }
   const alchemyUrl = c.rpcs[0]; // prepended first in EVM config above when the key is set
   const cutoff = Date.now() - days * 86_400_000;
-  const entries = [];
   let rpcCalls = 0;
-  try {
-    let pageKey;
-    const until = scanDeadline(budgetMs);
-    let more = false; // a cursor is still pending, i.e. we stopped early
+  activityCounters.scans++;
+  const until = scanDeadline(budgetMs);
 
-    // RESUME. This scan used to re-walk the window from block 0 on every
-    // refresh, so a busy wallet re-paid for thirty days of history every ten
-    // minutes. A prior scan that COVERED the window (never truncated) and is
-    // itself still inside it lets this one start at the last block it saw and
-    // read only what is new - normally one page. A truncated prior is NOT
-    // resumable: it never held the far end of the window, and resuming would
-    // freeze that gap in place forever.
-    const resumable = !!(prior && !prior.truncated && Number.isFinite(prior.newestBlock)
-      && Array.isArray(prior.entries) && Number.isFinite(prior.at) && prior.at >= cutoff);
-    const startBlock = resumable ? Math.max(0, prior.newestBlock - RESUME_OVERLAP_BLOCKS) : 0;
-    out.resumed = resumable;
-
-    for (let page = 0; page < maxPages; page++) {
+  // One newest-first walk of [fromBlock, toBlock]. Stops at the window's
+  // cutoff (`reachedEnd`), at a block below `stopBelow` (caught up with what
+  // a prior scan holds), when the source runs out (`reachedEnd`), or at the
+  // page / clock bound with a cursor still pending (`more`).
+  const walk = async ({ fromBlock = 0, toBlock = null, stopBelow = null, pages }) => {
+    const rows = [];
+    let pageKey, more = false, reachedEnd = false;
+    for (let page = 0; page < pages; page++) {
       const params = {
-        fromBlock: "0x" + startBlock.toString(16), toBlock: "latest", toAddress: wallet, contractAddresses: [c.token],
+        fromBlock: "0x" + fromBlock.toString(16), toBlock: toBlock == null ? "latest" : "0x" + toBlock.toString(16), toAddress: wallet, contractAddresses: [c.token],
         category: ["erc20"], withMetadata: true, excludeZeroValue: true, maxCount: "0x3e8", order: "desc",
         ...(pageKey ? { pageKey } : {}),
       };
       const res = await rpcCall([alchemyUrl], "alchemy_getAssetTransfers", [params], 8000);
-      rpcCalls++;
+      rpcCalls++; activityCounters.calls++;
       const transfers = res?.transfers || [];
       // Cleared every iteration so that ANY exit path is honest: `more` means
       // "we stopped with a cursor still pending", and only the line that sets it
-      // just before the deadline check can claim that. Carrying the flag across
-      // iterations marked a walk that ran cleanly to the window edge as truncated.
+      // just before the deadline check can claim that.
       more = false;
-      if (!transfers.length) { pageKey = null; break; }
-      let pastWindow = false;
+      if (!transfers.length) { reachedEnd = true; break; }
+      let stop = false;
       for (const t of transfers) {
         const entry = parseEvmTransfer(t);
         if (!entry) continue;
         const ts = Date.parse(entry.when || "");
-        if (Number.isFinite(ts) && ts < cutoff) { pastWindow = true; break; }
-        // A resumed scan walks newest-first and only needs what sits above its
-        // cursor; reaching the overlap means it has caught up and can stop.
-        if (resumable && Number.isFinite(entry.block) && entry.block < startBlock) { pastWindow = true; break; }
+        if (Number.isFinite(ts) && ts < cutoff) { stop = true; reachedEnd = true; break; }
+        if (stopBelow != null && Number.isFinite(entry.block) && entry.block < stopBelow) { stop = true; break; }
         entry.internal = entry.from != null && OUR_EVM_WALLETS.has(entry.from);
-        entries.push(entry);
+        rows.push(entry);
       }
-      if (pastWindow) { pageKey = null; break; }
+      if (stop) break;
       pageKey = res?.pageKey || null;
-      if (!pageKey) break;
+      if (!pageKey) { reachedEnd = true; break; }
       more = true;
       if (Date.now() >= until) break;
     }
-    out.truncated = more;
+    return { rows, more, reachedEnd };
+  };
+  const oldestOf = (rows) => rows.reduce((m, e) => (Number.isFinite(e.block) && e.block < m ? e.block : m), Infinity);
+
+  // RESUME. A prior scan still inside the window lets this one read only the
+  // blocks after the newest one it saw (normally one page). A prior that was
+  // TRUNCATED also covers a contiguous stretch from its newest block down to
+  // `farBlock`; this scan then continues the far end below that block, a
+  // bounded number of pages per refresh, until the window is covered. The
+  // result stays `truncated` until the far end reaches the window's start,
+  // so a partial count is never presented as complete.
+  const priorOk = !!(prior && Number.isFinite(prior.newestBlock)
+    && Array.isArray(prior.entries) && Number.isFinite(prior.at) && prior.at >= cutoff
+    && (!prior.truncated || (Number.isFinite(prior.farBlock) && !prior.capped)));
+  out.resumed = priorOk;
+  let merged, farBlock = null, covered, capped = false;
+  try {
+    if (!priorOk) {
+      activityCounters.cold++;
+      const w = await walk({ pages: maxPages });
+      merged = w.rows;
+      covered = !w.more;
+      if (!covered) farBlock = oldestOf(merged);
+    } else {
+      activityCounters.resumed++;
+      const startBlock = Math.max(0, prior.newestBlock - RESUME_OVERLAP_BLOCKS);
+      const head = await walk({ fromBlock: startBlock, stopBelow: startBlock, pages: maxPages });
+      if (head.more) {
+        // The head itself did not catch up with the prior's newest block, so
+        // the two do not join: this scan stands alone, as a cold one would.
+        merged = head.rows;
+        covered = false;
+        farBlock = oldestOf(merged);
+      } else {
+        merged = mergeScanEntries(head.rows, prior.entries, cutoff);
+        covered = !prior.truncated;
+        if (!covered) {
+          farBlock = prior.farBlock;
+          // The far end, from the oldest block the prior holds downward. That
+          // block is read again (a page can end inside it); uids remove the
+          // overlap. A failure here keeps what was read and stays truncated.
+          if (Date.now() < until && farPages > 0) {
+            activityCounters.farContinued++;
+            try {
+              const far = await walk({ fromBlock: 0, toBlock: prior.farBlock, pages: Math.min(farPages, maxPages) });
+              merged = mergeScanEntries(merged, far.rows, cutoff);
+              if (far.reachedEnd && !far.more) { covered = true; farBlock = null; }
+              else if (far.rows.length) farBlock = Math.min(farBlock, oldestOf(far.rows));
+            } catch { /* stays truncated; the next refresh continues from the same block */ }
+          }
+        }
+      }
+    }
   } catch (e) {
+    activityCounters.failed++;
     out.error = pubErr(e, 120);
     return out;
   }
-  const merged = out.resumed ? mergeScanEntries(entries, prior.entries, cutoff) : entries;
+  // A wallet whose window holds more rows than a resume may keep is held at
+  // the newest rows and stays truncated for good (no far-end continuation that
+  // could never converge).
+  if (merged.length > SCAN_STATE_MAX_ENTRIES) {
+    merged = merged.slice(0, SCAN_STATE_MAX_ENTRIES);
+    capped = true;
+    if (covered) { covered = false; }
+    farBlock = oldestOf(merged);
+  }
+  out.truncated = !covered;
+  if (out.truncated) activityCounters.truncated++;
   const bucketed = bucketStellarActivity(merged, { days });
   out.buckets = bucketed.buckets;
   out.totals = bucketed.totals;
@@ -1104,9 +1166,11 @@ export async function evmActivity(chainKey, wallet, { days = 30, maxPages = SCAN
   // on a busy wallet and is nobody's business but the scanner's.
   Object.defineProperty(out, "__scanState", {
     enumerable: false, value: {
-      entries: merged.slice(0, SCAN_STATE_MAX_ENTRIES),
-      newestBlock: merged.reduce((m, e) => (Number.isFinite(e.block) && e.block > m ? e.block : m), -1),
+      entries: merged,
+      newestBlock: merged.reduce((m, e) => (Number.isFinite(e.block) && e.block > m ? e.block : m), prior && priorOk ? prior.newestBlock : -1),
       truncated: !!out.truncated,
+      farBlock: out.truncated && Number.isFinite(farBlock) ? farBlock : null,
+      capped,
       at: Date.now(),
     },
   });
