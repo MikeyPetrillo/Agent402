@@ -327,6 +327,9 @@ h1, h2, h3 { text-wrap: balance; }
    reading measure instead of a narrow pixel cap beside empty space; a short
    label, chip or link never breaks inside itself; a row of links or tags wraps
    as whole items; section meta sits under its heading, never floated right. */
+/* A token longer than its line (an address, a hash) breaks rather than running off the page; break-word leaves a
+   table column's minimum alone, so names in cells stay whole. */
+body { overflow-wrap: break-word; }
 .ml-measure { max-width: 76ch; }
 .ml-nowrap { white-space: nowrap; }
 .ml-items { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; }
@@ -334,6 +337,10 @@ h1, h2, h3 { text-wrap: balance; }
 .ml-meta { display: flex; flex-wrap: wrap; gap: 4px 0; margin: 10px 0 0; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--faint); }
 .ml-meta > span { white-space: nowrap; }
 .ml-meta > span + span::before { content: "·"; padding: 0 10px; }
+/* Breadcrumbs: each link stays whole; on a phone the current page's name (the
+   h1 right below repeats it) drops out, so the trail never wraps mid-label. */
+.ml-crumb a { white-space: nowrap; }
+@media (max-width: 640px) { .ml-crumb-cur { display: none; } }
 /* The legal pages' date line is a sentence, set in the body face so it wraps as prose. */
 .pv-updated, .tm-updated { font-family: var(--font-body) !important; }
 /* Footer link rows: wrap as whole links; on a phone, a two-column list so no row ends on one stray link. */
@@ -418,7 +425,13 @@ a { color: inherit; }
      an unwrappable host in a 1fr column sets a min-content floor above 375px.
      .mlr-host stays on one line and ends in an ellipsis instead (market-page.js
      ROSTER_CSS); its title carries the whole host. */
-  .lb-name, .lb-addr, .mlr-name, .lb-addr a, pre, code { overflow-wrap: anywhere !important; word-break: break-word !important; }
+  .lb-name, .lb-addr, .mlr-name, .lb-addr a, pre, pre code { overflow-wrap: anywhere !important; word-break: break-word !important; }
+  /* Inline code keeps whole words: it breaks at the <wbr> points site-chrome.js
+     adds after its punctuation (and between camelCase words), and only a run
+     with no break point at all (a hash, an address) splits where it must.
+     "anywhere" here would shrink a table column's minimum to one letter and
+     split parameter names mid-word. */
+  :not(pre) > code, :not(pre) > kbd, :not(pre) > samp { overflow-wrap: break-word !important; word-break: normal !important; }
   /* pre code blocks: wrap long unbreakable tokens (URLs, hashes, one-line
      commands) so they never widen a column past the phone viewport. */
   pre { white-space: pre-wrap !important; }
