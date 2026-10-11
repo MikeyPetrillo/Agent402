@@ -33,7 +33,7 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPORTS_CSS } from "./human-reports-page.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
-import { INSIDER_TIERS, INSIDER_DEFAULT_DAYS } from "./tools/insider-flow-kit.js";
+import { INSIDER_TIERS, INSIDER_DEFAULT_DAYS, INSIDER_MAX_DAYS } from "./tools/insider-flow-kit.js";
 import { FUND_TIERS } from "./tools/fund-report-kit.js";
 import { DOSSIER_TIERS } from "./tools/dossier-kit.js";
 import { probeInsiderFilings, parseForm4 } from "./tools/insider-flow-kit.js";
@@ -41,7 +41,7 @@ import { resolveCompany, resolveManager, edgarGetJson, fetchXmlText, findInforma
 import { SEED_TICKERS, SEED_MANAGERS, seededManager, isSeededTicker } from "./programmatic-seeds.js";
 import { alertFormHtml } from "./free-alerts.js";
 import { fitTitle } from "./seo-meta.js";
-import { keyFinancials, filingActivity, dossierNarrative, insiderSummary, insiderNarrative, fundNarrative, fmtMoney, formLabel, stateName, isOfferingNoise } from "./edgar-summary.js";
+import { keyFinancials, filingActivity, dossierNarrative, insiderSummary, insiderNarrative, fundNarrative, fmtMoney, formLabel, formName, documentLabel, stateName, isOfferingNoise } from "./edgar-summary.js";
 
 // --- validation -------------------------------------------------------------
 // Shape first, upstream second. Anything that fails here costs one regex.
@@ -531,7 +531,7 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
     ? `<div class="pg-table-wrap"><table class="pg-table">
 <thead><tr><th>Date</th><th>Insider</th><th>Role</th><th>Transaction</th><th>Code</th><th>Shares</th><th>Price</th><th>Owned after</th></tr></thead>
 <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.date || "")}</td><td class="who">${esc(r.insider || "")}</td><td>${esc(r.role || "")}</td><td>${esc(r.kind || "")}</td><td class="num">${esc(r.code || "")}</td><td class="num">${esc(fmtInt(r.shares))}</td><td class="num">${esc(fmtPrice(r.price))}</td><td class="num">${esc(r.ownedAfter == null ? "" : fmtInt(r.ownedAfter))}</td></tr>`).join("")}</tbody></table></div>`
-    : `<div class="pg-empty">${degraded || !data ? "SEC EDGAR could not be read for this company just now. The filings themselves are unaffected: try again shortly, or buy the full report, which reads them at request time." : data.partial ? `Form 4 filings exist for ${esc(name)} in this window, but their transaction detail could not be read just now. The paid report reads every filing at request time.` : `No Form 4 transactions were filed against ${esc(name)} in the last ${data.windowDays} days. The paid report can look back up to 365 days.`}</div>`;
+    : `<div class="pg-empty">${degraded || !data ? "SEC EDGAR could not be read for this company just now. The filings themselves are unaffected: try again shortly, or buy the full report, which reads them at request time." : data.partial ? `Form 4 filings exist for ${esc(name)} in this window, but their transaction detail could not be read just now. The paid report reads the newest ${INSIDER_TIERS["insider-report"].maxFilings} filings at request time.` : `No Form 4 transactions were filed against ${esc(name)} in the last ${data.windowDays} days. An agent calling the report can widen the window to ${INSIDER_MAX_DAYS} days with <code>days</code>; a card purchase reads the last ${INSIDER_DEFAULT_DAYS}.`}</div>`;
   const body = `
 <section class="hero">
   <div class="eyebrow">SEC Form 4 · insider transactions · free</div>
@@ -541,7 +541,7 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
 </section>
 <section>
   ${table}
-  ${(() => { const paras = insiderNarrative(name, ticker, data, insiderSummary(rows)); return paras.length ? `<div class="pg-glance"><h2>What the filings show</h2>${paras.map((p) => `<p>${esc(p)}</p>`).join("")}</div>` : ""; })()}
+  ${(() => { const paras = insiderNarrative(name, ticker, data, insiderSummary(rows), { maxFilings: INSIDER_TIERS["insider-report"].maxFilings }); return paras.length ? `<div class="pg-glance"><h2>What the filings show</h2>${paras.map((p) => `<p>${esc(p)}</p>`).join("")}</div>` : ""; })()}
   ${rows.length ? `<div class="pg-meta">Transaction codes: P is an open-market purchase, S an open-market sale, A a grant or award, M an option exercise, F shares surrendered for tax. ${buys} open-market buy${buys === 1 ? "" : "s"} and ${sells} open-market sale${sells === 1 ? "" : "s"} in the rows above.</div>` : ""}
   ${buySection({ family, alertKind: "insider", input: ticker, headline: `The Form 4 flow against ${name}, parsed and explained`, blurb: `The free view above is the newest few filings. The paid report reads the newest Form 4 filings of the last ${INSIDER_DEFAULT_DAYS} days (up to ${INSIDER_TIERS["insider-report"].maxFilings}), separates open-market buys and sales from awards, exercises and tax withholding, totals the flow per insider, flags 10b5-1 plans where the filing notes them, and hands you a cited write-up plus a downloadable transactions table.` })}
   ${crossLinks([
@@ -632,10 +632,10 @@ function dossierFinancials(data) {
 function dossierActivity(data) {
   const a = data?.activity;
   if (!a?.recent?.length) return "";
-  const forms = (a.byForm || []).filter(({ form }) => !isOfferingNoise(form)).slice(0, 8).map(({ form, n }) => `<div class="pg-fact"><div class="l">${esc(form)}</div><div class="v">${esc(String(n))}</div></div>`).join("");
+  const forms = (a.byForm || []).filter(({ form }) => !isOfferingNoise(form)).slice(0, 8).map(({ form, n }) => `<div class="pg-fact"><div class="l">${esc(formName(form))}</div><div class="v">${esc(String(n))}</div></div>`).join("");
   const items = (a.eightKItems || []).length ? `<p class="pg-meta">8-K items in the last 12 months: ${(a.eightKItems || []).map(({ item, label, n }) => `${esc(label)} (Item ${esc(item)}, ${esc(String(n))})`).join(" · ")}.</p>` : "";
   return `<h2>Filing activity</h2>${a.total ? `<p class="pg-meta">${esc(a.total.toLocaleString("en-US"))} filings since ${esc(a.since)}${a.offeringNoise ? `, ${esc(a.offeringNoise.toLocaleString("en-US"))} of them prospectus supplements and free writing prospectuses (not listed below)` : ""}. By form:</p><div class="pg-facts">${forms}</div>` : ""}${items}
-<div class="pg-table-wrap"><table class="pg-table"><thead><tr><th>Filed</th><th>Form</th><th>Document</th><th>Period</th></tr></thead><tbody>${a.recent.map((r) => `<tr><td class="num">${esc(r.filingDate || "")}</td><td class="num">${esc(r.form)}</td><td>${r.url ? `<a href="${esc(r.url)}" rel="nofollow">${esc(r.description || formLabel(r.form, 1))}</a>` : esc(r.description || formLabel(r.form, 1))}</td><td class="num">${esc(r.reportDate || "")}</td></tr>`).join("")}</tbody></table></div>`;
+<div class="pg-table-wrap"><table class="pg-table"><thead><tr><th>Filed</th><th>Form</th><th>Document</th><th>Period</th></tr></thead><tbody>${a.recent.map((r) => `<tr><td class="num">${esc(r.filingDate || "")}</td><td class="num">${esc(r.form)}</td><td>${r.url ? `<a href="${esc(r.url)}" rel="nofollow">${esc(documentLabel(r.form, r.description))}</a>` : esc(documentLabel(r.form, r.description))}</td><td class="num">${esc(r.reportDate || "")}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 export function dossierPage({ ticker, data, baseUrl, degraded = false }) {
@@ -675,7 +675,7 @@ export function dossierPage({ ticker, data, baseUrl, degraded = false }) {
   ${dossierFinancials(data)}
   ${table}
   ${dossierActivity(data)}
-  ${buySection({ family, alertKind: "filing", input: ticker, headline: `The full due-diligence dossier on ${name}`, blurb: `The free view above is identity and filing dates. The paid dossier reads the filings: business and segments, financial trend, insider and institutional activity, litigation and risk-factor themes, recent news, and the red flags, every claim cited and delivered with a data appendix.` })}
+  ${buySection({ family, alertKind: "filing", input: ticker, headline: `The full due-diligence dossier on ${name}`, blurb: `The free view above is the filing record: identity, annual results and the last year of filings. The paid dossier reads the filings: business and segments, financial trend, insider and institutional activity, litigation and risk-factor themes, recent news, and the red flags, every claim cited and delivered with a data appendix.` })}
   ${crossLinks([
     { href: `/reports/insider/${ticker}`, label: `${ticker} insider filings` },
     { href: "/reports/dossier", label: "All company profiles" },
@@ -702,6 +702,8 @@ const HUBS = {
     h1: "Insider buying and selling", em: "by ticker",
     lede: "Every page below shows the latest SEC Form 4 filings against that company with the transactions parsed: insider name, role, transaction code, shares and price. Free, straight from EDGAR.",
     eyebrow: "SEC Form 4 · free filing pages",
+    buy: () => `The paid report reads the newest ${INSIDER_TIERS["insider-report"].maxFilings} Form 4 filings in your window, separates open-market trades from awards and tax withholding, cites each claim, and gives you the transactions as a table. Card or USDC, no account.`,
+    offList: "Pages for tickers outside this list resolve too if the ticker exists on EDGAR.",
   },
   fund: {
     title: "13F holdings by fund: what institutional managers own",
@@ -709,6 +711,8 @@ const HUBS = {
     h1: "13F holdings", em: "by fund",
     lede: "Every page below shows a manager's most recent SEC Form 13F-HR: the period it covers, how many positions it reports, and the largest holdings by reported value. Free, straight from EDGAR.",
     eyebrow: "SEC Form 13F-HR · free filing pages",
+    buy: () => "The paid report compares the manager's two most recent 13F filings: what it bought, added, trimmed and exited, every claim cited, with the holdings as a table. Card or USDC, no account.",
+    offList: "",
   },
   dossier: {
     title: "Company profiles by ticker: SEC EDGAR filing identity",
@@ -716,6 +720,8 @@ const HUBS = {
     h1: "Company profiles", em: "by ticker",
     lede: "Every page below shows a company on SEC EDGAR: its last three years of revenue, net income and assets from its 10-K data, what it filed in the last twelve months and why, its industry and where it lists. Free.",
     eyebrow: "SEC EDGAR · free company profiles",
+    buy: () => "The paid dossier reads the company's filings and cites every claim: business, financial trend, insider and institutional activity, risk themes and red flags, with a data appendix. Card or USDC, no account.",
+    offList: "Pages for tickers outside this list resolve too if the ticker exists on EDGAR.",
   },
 };
 
@@ -737,12 +743,12 @@ export function hubPage({ kind, baseUrl }) {
   <div class="pg-grid">${items.map((i) => `<a href="${esc(i.href)}">${esc(i.label)}<span>${esc(i.sub)}</span></a>`).join("")}</div>
   <div class="pg-buy" style="margin-top:30px;">
     <h2>Want the whole thing, not the teaser?</h2>
-    <p>The paid report reads every filing in your window, explains what it means, cites each claim, and gives you the data as a table. Card or USDC, no account.</p>
+    <p>${esc(h.buy())}</p>
     <a class="btn btn-primary" href="/reports">Buy a report, $${esc(cardUsd(family.product))} →</a>
     <div class="pg-agent">agents: ${esc(family.route)} with ${esc(family.agentBody(kind === "fund" ? "Berkshire Hathaway" : "AAPL"))} over x402 or MPP, ${esc(family.agentPrice())}</div>
   </div>
   ${crossLinks([...others, { href: "/reports", label: "All reports" }, { href: "/monitors", label: "Standing monitors" }])}
-  <p class="pg-note">${esc(DISCLAIMER)} Pages for companies and managers outside this list resolve too if the ticker or manager exists on EDGAR.</p>
+  <p class="pg-note">${esc(DISCLAIMER)}${h.offList ? ` ${esc(h.offList)}` : ""}</p>
 </section>`;
   return shell({
     title: h.title, description: h.description, canonical, baseUrl, body,
