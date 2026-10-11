@@ -80,7 +80,7 @@ import { esc } from "./ledger-chrome.js";
 // homepage would become a clickable link if the legacy indexPage renderer is
 // ever re-enabled. Only http(s) becomes a link; anything else renders inert.
 const safeHref = (u) => (/^https?:\/\//i.test(String(u || "")) ? esc(u) : "#");
-import { safeFetch, USER_AGENT as CRAWLER_UA } from "./tools/fetch-guard.js";
+import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { readTextCapped } from "./capped-body.js";
 import { parseRobots, robotsAllows } from "./tools/kit.js";
 import { partialFields, clampFields } from "./partial-answer.js";
@@ -4209,7 +4209,6 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
   if (!rotated.length) return tools;
   if (!ignoreBudget) liveQuoteBudget -= rotated.length;
 
-  const { assertPublicUrl, ssrfDispatcher } = await import("./tools/fetch-guard.js");
   const dropped = new Set();
   // Past the caller's deadline (a registration answering in bounded time) no
   // new probe starts; a probe in flight finishes on its own limit. The routes
@@ -4236,14 +4235,10 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       try {
         // Crawled URLs are external data and could DNS-rebind between crawl and
         // now: validate then pin, exactly as probePaywall does.
-        await assertPublicUrl(target);
-        const res = await fetch(target, {
+        const res = await probePublicUrl(target, {
           method,
-          headers: { Accept: "application/json", "User-Agent": CRAWLER_UA, ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
+          headers: { Accept: "application/json", ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
           ...(method === "POST" ? { body: reqBody } : {}),
-          dispatcher: ssrfDispatcher,
-          redirect: "manual",
-          signal: AbortSignal.timeout(8000),
         });
         // A GET that returns 200 has ANSWERED: the route is not paywalled, and
         // there is nothing a POST can add. Following it with an unpaid POST is
@@ -4363,8 +4358,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
         // are relative to its prefix, which URL resolution against the key drops.
         const target = sellerRouteUrl(originUrl, tool.route);
         if (!target) throw new Error("route outside the seller");
-        await assertPublicUrl(target);
-        const r = await fetch(target, { method: "GET", headers: { Accept: "application/json", "User-Agent": CRAWLER_UA }, dispatcher: ssrfDispatcher, redirect: "manual", signal: AbortSignal.timeout(8000) });
+        const r = await probePublicUrl(target, { method: "GET", headers: { Accept: "application/json" } });
         statusByMethod.GET = r.status;
         await r.body?.cancel?.().catch?.(() => {});
       } catch { statusByMethod.GET = 0; }
@@ -4518,17 +4512,12 @@ async function probePaywall(tools) {
   const target = sellerRouteUrl(pick.seller, pick.route);
   if (!target) return null;
   try {
-    const { assertPublicUrl, ssrfDispatcher } = await import("./tools/fetch-guard.js");
     // Same guard as the router's live probe: crawled URLs are external data and
     // could DNS-rebind between crawl and now, so validate then pin.
-    await assertPublicUrl(target);
-    const res = await fetch(target, {
+    const res = await probePublicUrl(target, {
       method,
-      headers: { Accept: "application/json", "User-Agent": CRAWLER_UA, ...(method !== "GET" ? { "Content-Type": "application/json" } : {}) },
+      headers: { Accept: "application/json", ...(method !== "GET" ? { "Content-Type": "application/json" } : {}) },
       ...(method !== "GET" ? { body: "{}" } : {}),
-      dispatcher: ssrfDispatcher,
-      redirect: "manual",
-      signal: AbortSignal.timeout(8000),
     });
     // 402 is the ONLY healthy answer for an unpaid call to a paid route. A 200
     // means the route is not actually paywalled; a 5xx means it is broken.

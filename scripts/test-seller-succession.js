@@ -202,7 +202,7 @@ const NEW = `https://api.seller-${TAG}.com`;
     ok(/export async function safeFetch[\s\S]{0,200}await assertPublicUrl\(rawUrl\)/.test(guard),
        "...and safeFetch itself asserts the URL is public before it fetches, so the guarantee is one hop away and statically visible");
     ok(/dispatcher: ssrfDispatcher/.test(guard), "and pins the connection to the validated IP, re-validating every redirect hop");
-    ok(/^import \{ safeFetch \} from "\.\/tools\/fetch-guard\.js";/m.test(src),
+    ok(/^import \{ safeFetch(?:, \w+)* \} from "\.\/tools\/fetch-guard\.js";/m.test(src),
        "the import is STATIC at the top of the file - a dynamic import is what defeated the analyzer on the second attempt");
   }
 

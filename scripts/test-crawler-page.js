@@ -33,11 +33,17 @@ const idxSrc = readFileSync(new URL("../src/x402-index.js", import.meta.url), "u
 const mppSrc = readFileSync(new URL("../src/mpp-index.js", import.meta.url), "utf8");
 ok(CRAWLER_UA === USER_AGENT && text.includes(USER_AGENT), "the page quotes the User-Agent safeFetch sends (src/tools/fetch-guard.js)");
 ok(new RegExp(`const ROBOTS_UA = "${ROBOTS_TOKEN}";`).test(idxSrc) && text.includes(`product token ${ROBOTS_TOKEN}`), `robots.txt rules are matched on the token the page names (${ROBOTS_TOKEN})`);
+// Every unpaid 402 probe goes through probePublicUrl (src/tools/fetch-guard.js),
+// which sets the crawler User-Agent; neither index makes a raw fetch to a seller.
+const guardSrc = readFileSync(new URL("../src/tools/fetch-guard.js", import.meta.url), "utf8");
+const probeFn = guardSrc.slice(guardSrc.indexOf("export async function probePublicUrl"), guardSrc.indexOf("export async function retryTransient"));
+ok(/headers: \{ "User-Agent": USER_AGENT, \.\.\.headers \}/.test(probeFn), "probePublicUrl sends the crawler User-Agent on every probe");
 for (const [name, src] of [["x402-index.js", idxSrc], ["mpp-index.js", mppSrc]]) {
-  const calls = [...src.matchAll(/await fetch\((target|url), \{([^]*?)\}\);?/g)];
-  ok(calls.length > 0 && calls.every((m) => /"User-Agent": CRAWLER_UA/.test(m[2])), `${name}: every raw 402 probe (${calls.length}) sends the crawler User-Agent, so "on every request" holds`);
+  const raw = [...src.matchAll(/await fetch\((target|url), \{/g)].length;
+  const probes = [...src.matchAll(/await probePublicUrl\(/g)].length;
+  ok(raw === 0 && probes > 0, `${name}: every 402 probe (${probes}) goes through probePublicUrl and none is a raw fetch (${raw}), so "on every request" holds`);
+  ok(/^import \{ safeFetch, probePublicUrl \} from "\.\/tools\/fetch-guard\.js";/m.test(src), `${name} imports the probe statically from fetch-guard.js`);
 }
-ok(/import \{ safeFetch, USER_AGENT as CRAWLER_UA \} from "\.\/tools\/fetch-guard\.js"/.test(idxSrc), "x402-index.js reads the same User-Agent constant");
 ok(text.includes(`re-reads an origin ${crawlIntervalLabel()}`), "the re-crawl cadence is derived (crawl-cadence.js)");
 ok(!/That is all|2026-09-21|same effect|honours robots\.txt, including for the discovery paths/.test(text), "no stale or overstated claims (complete-list, dated history, robots-as-removal)");
 

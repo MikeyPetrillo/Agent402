@@ -277,6 +277,27 @@ export async function assertPublicUrl(rawUrl) {
   return url;
 }
 
+/**
+ * One unpaid probe of a crawled seller URL, answered as the raw Response: its
+ * status and headers are the reading, so nothing is thrown for a 401/402 and
+ * no redirect is followed. The URL is external data and is only ever fetched
+ * through this guard: assertPublicUrl refuses a non-public target before the
+ * request, ssrfDispatcher re-checks the resolved address at connect (a DNS
+ * answer that changed since the check), and redirect: "manual" keeps the
+ * request on the validated host. Sends the crawler User-Agent.
+ */
+export async function probePublicUrl(rawUrl, { method = "GET", headers = {}, body, timeoutMs = 8000 } = {}) {
+  await assertPublicUrl(rawUrl);
+  return fetch(rawUrl, {
+    method,
+    headers: { "User-Agent": USER_AGENT, ...headers },
+    ...(body !== undefined ? { body } : {}),
+    dispatcher: ssrfDispatcher,
+    redirect: "manual",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
+
 // Retry a thunk on TRANSIENT upstream failures only — 504 (timeout/network),
 // 502/503 (gateway). A 4xx (e.g. safeFetch's 422 for a caller-attributable
 // upstream error) is deterministic: the request itself is wrong, so retrying
