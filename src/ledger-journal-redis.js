@@ -140,14 +140,18 @@ export function createRedisJournal({ key, redis = () => clientOf(), owner = `${h
   const KEYS = ["items", "seq", "lease", "owner", "pend", "drain", "n"].map((k) => `${p}:${k}`);
   let downUntil = 0;
   const op = (promise) => new Promise((resolve, reject) => {
+    // Not unref'd: a command in flight keeps the process alive until it
+    // answers or times out (the client itself is unref'd, see letExit).
     const t = setTimeout(() => reject(new Error("redis journal: command timed out")), OP_MS());
-    t.unref?.();
     Promise.resolve(promise).then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
   });
   async function run(script, args) {
     let c = null;
     try { c = letExit(await redis()); } catch { c = null; }
-    if (!c) { downUntil = Date.now() + DOWN_MS(); throw new Error("redis journal: not reachable"); }
+    // No client (not configured, connecting, or the shared client's own
+    // cooldown): this call fails at once; only a command that failed opens
+    // the down window.
+    if (!c) throw new Error("redis journal: not reachable");
     try { return await op(c.eval(script, { keys: KEYS, arguments: args.map(String) })); }
     catch (e) { downUntil = Date.now() + DOWN_MS(); throw e; }
   }
