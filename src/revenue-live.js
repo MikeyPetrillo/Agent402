@@ -1811,7 +1811,7 @@ export function revenueChartSection(range = null) {
       <span class="rvz-seg" id="rvzMetric"><button data-v="usd" class="on">Revenue $</button><button data-v="tx">Transactions</button><button data-v="buyers">Buyers</button></span>
     </div>
     <details class="rvz-adv" style="margin:0 0 12px;">
-      <summary>more filters: scope, wire, tier, funding</summary>
+      <summary>filters: scope, wire, tier</summary>
       <div class="rvz-controls" style="margin-top:10px">
         <span class="rvz-seg" id="rvzScope"><button data-v="ext" class="on">External</button><button data-v="int">Internal (canary)</button><button data-v="both">Both</button></span>
         <span class="rvz-seg" id="rvzWire"><button data-v="all" class="on">All wires</button><button data-v="x402">x402</button><button data-v="mpp">MPP</button></span>

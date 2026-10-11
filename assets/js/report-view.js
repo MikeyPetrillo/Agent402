@@ -224,7 +224,7 @@
       '<div class="rpt-head">' +
         '<div class="rpt-brand"><span class="n">agent402</span><span class="s">Report</span></div>' +
         '<h1 class="rpt-title">' + esc(s.title || "Report") + "</h1>" +
-        '<div class="rpt-meta">' + esc(productLabel(s.kind)) + (s.at ? " · " + esc(fmtDate(s.at)) : "") + "</div>" +
+        '<div class="rpt-meta"><span>' + esc(productLabel(s.kind)) + "</span>" + (s.at ? "<span>" + esc(fmtDate(s.at)) + "</span>" : "") + "</div>" +
       "</div>";
 
     // Action bar (never printed).

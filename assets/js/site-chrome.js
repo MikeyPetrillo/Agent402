@@ -106,7 +106,7 @@ document.addEventListener('DOMContentLoaded',function(){try{var btns=document.qu
    off the last line; a block still ends on two short words or a sliver of a
    line. This binds the last few words of each text block with no-break
    spaces so its last line holds at least 3 words and about a third of the
-   block's measure (never more than 70% of it, so a narrow cell never
+   block's measure (never more than 75% of it, so a narrow cell never
    overflows). Text only: tags, code, buttons and attributes are untouched,
    and with no script the page simply wraps as before.
    scripts/test-wrap-quality.js measures the result in Chromium. */
@@ -128,16 +128,16 @@ window.a402BindWidows=function(root){try{
     var runs=[],m;WS.lastIndex=0;while((m=WS.exec(s))){if(m.index>first&&m.index<last){var g0=segAt(m.index);if(g0&&g0.node)runs.push({a:m.index,b:m.index+m[0].length});}}
     if(runs.length<2)return;
     /* A short block (5 words or fewer, a heading) may bind up to 85% of a line: one word over two beats two over one. */
-    var lo=p.line*0.33,hi=p.line*(runs.length<=4?0.85:0.7),k=0;
+    var lo=p.line*0.33,hi=p.line*(runs.length<=4?0.85:0.75),k=0;
     for(var j=1;j<=runs.length;j++){var r=runs[runs.length-j];var chunk=last-r.b+1;var words=j;if(chunk>hi)break;k=j-1;if(words>=3&&chunk>=lo){break;}if(j===runs.length)k=j-1;}
+    /* Short inline code inside the bound tail stays whole too. */
+    var from=k<runs.length?runs[runs.length-k-1].b:first;
+    map.forEach(function(g){if(g.el&&/^(CODE|KBD|SAMP)$/.test(g.el.tagName)&&g.start>=from&&g.len<=28)g.el.style.whiteSpace='nowrap';});
     if(k<1)return;
     var edits=[];
     for(var t=1;t<=k;t++){var r2=runs[runs.length-t];var ok=true;for(var x=r2.a;x<r2.b;x++){var g=segAt(x);if(!g||!g.node){ok=false;break;}}if(!ok)continue;for(var y=r2.b-1;y>=r2.a;y--){var g2=segAt(y);edits.push({node:g2.node,off:y-g2.start,op:y===r2.a?'nb':'del'});}}
     /* A hyphen inside the bound tail is still a break point ("proof-of-" / "work"): a word joiner after it holds the word together. */
-    var from=k<runs.length?runs[runs.length-k-1].b:first;
     for(var z=from;z<last;z++){if(s.charAt(z)==='-'){var g3=segAt(z);if(g3&&g3.node)edits.push({node:g3.node,off:z-g3.start,op:'wj'});}}
-    /* Short inline code inside the bound tail stays whole too. */
-    map.forEach(function(g){if(g.el&&/^(CODE|KBD|SAMP)$/.test(g.el.tagName)&&g.start>=from&&g.len<=28)g.el.style.whiteSpace='nowrap';});
     edits.sort(function(a,b){return b.off-a.off;});
     edits.forEach(function(e){var d=e.node.data;if(e.op==='wj'){e.node.data=d.slice(0,e.off+1)+'\u2060'+d.slice(e.off+1);}else{e.node.data=d.slice(0,e.off)+(e.op==='nb'?'\u00A0':'')+d.slice(e.off+1);}});
   });

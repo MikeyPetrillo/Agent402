@@ -7,6 +7,9 @@
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { sampleLinkFor, SAMPLES } from "./sample-reports.js";
+// A long unbroken input (a token mint, a wallet) shows as head…tail in the
+// samples list, so it never breaks mid-string; the sample page shows it whole.
+const shortInput = (v) => (/^\S{25,}$/.test(String(v)) ? `${String(v).slice(0, 6)}…${String(v).slice(-4)}` : String(v));
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { monitorMapJson } from "./report-upgrade.js";
 import { priceUsdFor } from "./report-tiers.js";
@@ -72,7 +75,7 @@ export const REPORTS_CSS = `
   .rpt-brand{display:flex;align-items:baseline;gap:9px;font-family:var(--font-mono);margin-bottom:14px}
   .rpt-brand .n{font-weight:500;color:var(--ink);font-size:var(--fs-base)}.rpt-brand .s{font-size:var(--fs-2xs);letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
   .rpt-title{font-weight:500;font-size:var(--fs-3xl);letter-spacing:-.03em;line-height:1.08;margin:0;color:var(--ink);text-wrap:balance}
-  .rpt-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:10px}
+  .rpt-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:10px;display:flex;flex-wrap:wrap;row-gap:2px}.rpt-meta>span{white-space:nowrap}.rpt-meta>span+span::before{content:"·";padding:0 8px}
   .upsell{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:24px 26px;margin-top:24px;box-shadow:inset 0 1px 0 var(--card-inset)}
   .upsell .k{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
   .upsell h3{font-weight:600;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0;color:var(--ink)}
@@ -133,7 +136,7 @@ export function humanReportsPage(baseUrl) {
     <div class="mon-offer"><p><b>Need it again when something changes?</b> A monitor watches one target and re-runs the report when the facts move. ${esc(monitorPriceLabel())}, cancel anytime.</p><a class="btn btn-secondary btn-sm" href="/monitors">See monitors →</a></div>
     <div class="samples-strip" style="margin-top:18px;padding:14px 16px;border:1px solid var(--hairline);background:var(--card);">
     <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;">read a real one first</div>
-    <ul class="samples-list">${Object.values(SAMPLES).map((x) => `<li><a href="/reports/sample/${esc(x.product)}"><b>${esc(x.label)}:</b> ${esc(x.input)} →</a></li>`).join("")}</ul>
+    <ul class="samples-list">${Object.values(SAMPLES).map((x) => `<li><a href="/reports/sample/${esc(x.product)}"><b>${esc(x.label)}:</b> ${esc(shortInput(x.input))} →</a></li>`).join("")}</ul>
   </div>
 </section>
   <section>

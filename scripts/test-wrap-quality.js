@@ -41,8 +41,6 @@ const EXCLUDE = [
   ["pre, code, kbd, samp", "code is literal text; its breaks are not prose"],
   // Data tables scroll inside their own wrapper; a long cell at phone width is data, not copy.
   ["table td, table th", "400 only: a data table's cells wrap to the column, not to a measure", 400],
-  // Text that arrives from outside: seller names, crawled descriptions, buyer-written notes.
-  ["[data-ugc], .ugc", "text written by sellers or buyers, not copy we can edit"],
   // Form controls lay out their own text.
   ["input, textarea, select, option", "form controls lay out their own text"],
   // Screen-reader-only text has no visual line.
