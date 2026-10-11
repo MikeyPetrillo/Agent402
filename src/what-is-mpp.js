@@ -190,7 +190,7 @@ ${startHere}
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:16px;">SELL</div>
       <h3 style="font-weight:600;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">List your API, both wires included</h3>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Serve x402, register your origin, and MPP dual-stack support ships free alongside it. No signup, nothing deducted from your price.</p>
-      <a class="btn btn-primary btn-sm" href="/sell" style="align-self:flex-start;">List your API →</a>
+      <a class="btn btn-secondary btn-sm" href="/sell" style="align-self:flex-start;">List your API →</a>
     </div>
     <div style="padding:26px;background:var(--card);display:flex;flex-direction:column;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:16px;">BUY</div>

@@ -91,7 +91,7 @@ surfaces:
   milled: { bg: --milled-bg, border: --milled-border, note: "light brushed-metal card; dark theme gets a graphite version" }
   obsidian: { bg: --obsidian-bg, border: --obsidian-border, text: --on-panel*, note: "dark in both themes" }
 components:
-  button-primary: { class: "btn btn-primary", bg: --btn-bg, fg: --btn-fg, radius: pill, shadow: --btn-shadow, font: "Geist 500 md", use: "the money action only: buy, subscribe, add to your agent, list your API" }
+  button-primary: { class: "btn btn-primary", bg: --btn-bg, fg: --btn-fg, radius: pill, shadow: --btn-shadow, font: "Geist 500 md", use: "the one main action of a view: buy, subscribe, add to your agent, list your API" }
   button-secondary: { class: "btn btn-secondary", bg: transparent, border: 1px --dash, fg: --ink, radius: 4px, font: "Geist 500 md", use: "everything else: docs, quickstart, playground, browse, submit a form" }
   button-on-panel: { class: "on-panel (on the wrapper or the button)", primary: "--accent-lit on --on-accent-lit", secondary: "--on-panel text, --panel-rule-2 border" }
   button-small: { class: btn-sm, font: "sm", padding: "9px 14px" }
@@ -123,9 +123,10 @@ rules below.
 - Two kinds only, both from the shared classes in `ledger-chrome.js`: `.btn.btn-primary`
   (pill, filled) and `.btn.btn-secondary` (4px, outlined, no color). No page styles its own
   button, and button labels are sentence case Geist, not uppercase mono.
-- **Primary is the money action**: buy, subscribe, add to your agent (pay per call), list
-  your API (get paid). One primary per view. Docs, quickstart, playground, browse and
-  navigation are secondary.
+- **Primary is the one main action of a view**: buy, subscribe, add to your agent (pay per
+  call), or list your API (get paid) in a band that exists to sign up sellers. One primary
+  per view. When a view offers a buyer path and a seller path side by side as equal choices,
+  both are secondary. Docs, quickstart, playground, browse and navigation are secondary.
 - On an obsidian panel add `.on-panel`: the primary turns `--accent-lit`, the secondary
   takes panel ink and rules.
 - **Status is semantic.** `--ok`, `--warn`, `--bad`, and `--dash` for "no data". Never use the

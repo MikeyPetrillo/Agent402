@@ -277,7 +277,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
 </span>curl -X POST https://agent402.tools/api/index/register \
   -H 'content-type: application/json' \
   -d '{"origin":"https://seller.example"}'</pre>
-      <a class="btn btn-primary btn-sm" href="/sell" style="align-self:flex-start;">List your API →</a>
+      <a class="btn btn-secondary btn-sm" href="/sell" style="align-self:flex-start;">List your API →</a>
     </div>
     <div style="padding:26px;background:var(--card);display:flex;flex-direction:column;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:16px;">BUY</div>
