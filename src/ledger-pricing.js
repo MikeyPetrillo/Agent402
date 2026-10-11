@@ -82,8 +82,6 @@ export function ledgerPricingPage(baseUrl, catalog) {
 @media (max-width: 900px) {
   .ml-pricing-plans { grid-template-columns: 1fr !important; }
   .ml-pricing-plans > div:first-child { border-right: none !important; border-bottom: 1px solid var(--hairline) !important; }
-  .ml-token-math { grid-template-columns: 1fr !important; }
-  .ml-token-math > div:last-child { border-left: none !important; border-top: 1px dashed var(--dash) !important; padding-left: 0 !important; padding-top: 24px !important; }
 }
 `;
 
@@ -162,46 +160,20 @@ export function ledgerPricingPage(baseUrl, catalog) {
     <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:12px;">full wire format: <a href="/docs#gateway" style="color:var(--faint);">/docs</a></div>
   </section>
 
-  <!-- TOKEN MATH NOTE -->
-  <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
-    <div class="ml-token-math" style="border:1px solid var(--hairline);background:var(--card);padding:28px 30px;display:grid;grid-template-columns:1fr 1fr;gap:30px;">
-      <div>
-        <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--accent);letter-spacing:.1em;margin-bottom:10px;">WHY IT'S CHEAP</div>
-        <h3 style="font-family:var(--font-body);font-weight:600;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 8px;">Beat the token math.</h3>
-        <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0;">Writing, testing and debugging a CSV parser or cron calculator mid-task burns thousands of tokens - easily 10\u2013100\u00d7 the price of a tested $0.001 call. Reimplementation is the expensive path.</p>
-      </div>
-      <div style="border-left:1px dashed var(--dash);padding-left:30px;display:flex;flex-direction:column;justify-content:center;font-family:var(--font-mono);font-size:var(--fs-md);">
-        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px;"><span style="color:var(--muted);">build it yourself</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><span style="font-weight:700;">~5,000 tokens</span></div>
-        <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">call the tested endpoint</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><span style="font-weight:700;color:var(--accent);">$0.001</span></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- The volume path. Every rail we sell is priced per call, and the per-call
-       COST a buyer actually feels at volume is not the price, it is the
-       signature: an x402 exact payment is one authorization signed and one
-       settlement waited on, per call. Both answers to that already shipped
-       (prepaid credits 2026-08-22, the upto meter 2026-08-26) and neither was
-       ever addressed to the buyer who needs it. This section is that copy. The
-       pack figures come from CREDIT_PACKS, the checkout's own table. -->
+  <!-- The volume path: an x402 exact payment is one authorization signed and
+       one settlement waited on per call; a one-time approval on the metered
+       gateway turns each quote into a ceiling instead. -->
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <div style="border:1px solid var(--hairline);background:var(--card);padding:28px 30px;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--accent);letter-spacing:.1em;margin-bottom:10px;">MAKING A LOT OF CALLS</div>
       <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 10px;">Stop signing every call.</h2>
       <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:720px;margin:0 0 22px;">Per-call pricing is the point, but a signature per call is not. Paying exact over x402 means one authorization signed and one settlement waited on for every request, which is fine for ten calls and the wrong shape for ten thousand. On the metered gateway an approval made once turns each quote into a ceiling, still per-request priced and still settled only on a 200.</p>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:30px;">
-        <div>
-          <div style="font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:700;margin-bottom:6px;">Already hold a prepaid credits key</div>
-          <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 10px;">New credit packs are not on sale. A key already issued keeps working: send <code>Authorization: Bearer a402_&hellip;</code> on any paid route except the wallet-scoped ones (memory, usage). The list price is held before the call and debited only when it returns 200; on the metered gateway you are debited what the call actually used, not the quote.</p>
-          <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);">GET /api/credits/balance</div>
-        </div>
-        <div style="border-left:1px dashed var(--dash);padding-left:30px;">
+      <div>
           <div style="font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:700;margin-bottom:6px;">Keep the wallet &middot; approve once</div>
           <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 10px;">A one-time Permit2 approval for USDC on Base turns every quote into a ceiling rather than a charge: the gateway settles the actual usage under it, per request, with no fixed tier to overpay into. Non-custodial on this rail, and the approval is yours to revoke.</p>
           <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);">npx agent402-openclaw permit2-approve</div>
           <p style="font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:8px 0 0;">The approval belongs to the wallet, so it applies to any client that pays from it, not only OpenClaw.</p>
         </div>
-      </div>
     </div>
   </section>
 
