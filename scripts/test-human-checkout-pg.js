@@ -87,6 +87,9 @@ try {
   ok(f1.status === "generating" && f2.status === "generating", "both instances answer generating to the buyer");
   const done = await settle(A, "cs_slow");
   await settle(B, "cs_slow");
+  // The row reads done as soon as it lands; the sale is booked just after, so
+  // wait for it on the same deadline before counting.
+  for (const until = Date.now() + 10_000; sales.length < 1 && Date.now() < until;) await wait(10);
   ok(done.status === "done" && genCalls === 1 && sales.length === 1, `two instances fulfilling one paid session at once generate it ONCE (generate calls: ${genCalls}, status: ${done.status}, sales: ${sales.length})`);
   ok((await row("cs_slow"))?.status === "done" && (await row("_inflight"))?.cs_slow === undefined, "the delivered record is the row and the in-flight index no longer lists it");
   ok(file("cs_slow")?.status === "done" && file("_inflight")?.cs_slow === undefined, "the record and the index are written through to the directory");
