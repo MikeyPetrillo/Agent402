@@ -92,7 +92,17 @@ const catalog = {
 {
   const html = ledgerHomePage(BASE_URL, catalog, {}, {}, []);
   ok(!/\b\d{1,3}(,\d{3})*\s*(purchases|sales|buyers bought|times bought)\b/i.test(html), "no purchase-count phrasing anywhere on the homepage");
-  ok(html.includes("Hashing &amp; encoding") || html.includes("Hashing & encoding"), "demand section shows lane-level categories, not per-tool rankings");
+  // The lanes are read from /api/stats topTools (call volume), mapped to
+  // their catalog categories; nothing is typed, and with no counts there is
+  // no ranking to show.
+  const { CATEGORIES } = await import("../src/pages.js");
+  const top = Object.values(catalog).find((d) => d?.slug && CATEGORIES[d.category]);
+  const ranked = ledgerHomePage(BASE_URL, catalog, { topTools: [{ slug: top.slug, n: 9 }] }, {}, []);
+  const label = CATEGORIES[top.category].label.replace(/&/g, "&amp;");
+  ok(ranked.includes(label), "demand section shows the category of the most-called tool, read from topTools");
+  ok(!ranked.includes(`>${top.slug}<`) && !new RegExp(`${top.slug}[^<]{0,20}\\b9\\b`).test(ranked), "...as a lane, never as a per-tool row with its count");
+  ok(/What agents call most\./.test(ranked) && !/spend most in/.test(ranked), "the heading names what the list measures (calls), not spend");
+  ok(html.includes("No calls counted on this server yet."), "with no counts the section says so instead of showing a typed ranking");
   ok(!/topPaidTools/.test(html), "no reference to the removed topPaidTools field");
   // The one WALLET_ONLY_SLUGS member guaranteed to exist must never appear
   // paired with a bare integer immediately after it (the slug+count shape).
@@ -149,7 +159,7 @@ const catalog = {
   const served = ledgerHomePage(BASE_URL, catalog, stats, { leaderboard: [] }, [], { settledOnChain: 0 });
 
   ok(chain.includes("46,007"), "control: with a chain figure the hero renders it");
-  ok(/on-chain settlements/.test(chain) && /ours included/i.test(chain),
+  ok(/on-chain settlements/.test(chain) && /including our own test purchases/i.test(chain),
     "the chain figure is labelled as settlements, and says it includes our own traffic");
   ok(!/on-chain settlements/.test(served), "the served-call fallback does NOT claim to be on-chain settlements");
   ok(served.includes("35,138") && /calls served<\/span><span>paid in stablecoin/.test(served),
@@ -180,7 +190,7 @@ const catalog = {
   ok(!RAILS.some((r) => /tempo/i.test(r.name)), "Tempo stays out of RAILS itself");
 
   const html = ledgerHomePage(BASE_URL, catalog, stats, { leaderboard: [] }, []);
-  ok(html.includes(`${RAILS.length + 1} rails live`), "the hero rail count includes Tempo");
+  ok(html.includes(`${RAILS.length} chains + Tempo live`), "the hero names the x402 chains plus Tempo, one noun for both counts");
 
   const { readFile } = await import("node:fs/promises");
   const srv = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
@@ -203,5 +213,28 @@ const catalog = {
   const srv = (await import("node:fs")).readFileSync(new URL("../src/security-headers.js", import.meta.url), "utf8");
   ok(/frame-src 'self' https:\/\/live\.agent402\.tools;/.test(srv), "site CSP frames only itself and the live view");
 }
+
+// --- claims read from their sources -----------------------------------------
+{
+  const { RAILS_SHORT, RAILS } = await import("../src/rails.js");
+  const { EXTERNAL_CHAIN_BY_NETWORK } = await import("../src/tools/route-execute.js");
+  const { CHAIN_ORDER } = await import("../src/chain-logos.js");
+  const html = ledgerHomePage(BASE_URL, catalog, {}, {}, []);
+  const text = html.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+  ok(text.includes(RAILS_SHORT) && !/USDC on \d+ chains/.test(text), "the agents card names the rails from RAILS_SHORT, not 'USDC on N chains'");
+  ok(!/\d+ rails live/.test(text) && new RegExp(`${RAILS.length} chains( \\+ Tempo)? live`).test(text), "the hero counts chains (plus Tempo), the noun every other surface uses");
+  ok(/whole x402 \+ MPP ecosystem/.test(text), "the live panel states its scope in a label that shows at every width");
+  const chains = [...new Set(Object.values(EXTERNAL_CHAIN_BY_NETWORK))].map((c) => c[0].toUpperCase() + c.slice(1)).join(", ");
+  ok(text.includes(`pays you on ${chains}`), "the seller card's router chains are read from the route-execute chain map");
+  ok(!/our own \d[\d,]* tools|all \d[\d,]* tools/.test(text), "marketing blocks say 500+, not the exact live count");
+  ok(CHAIN_ORDER.length === RAILS.length && CHAIN_ORDER.every(([k, n], i) => n === RAILS[i].name), "the chip row is RAILS, names and order");
+  ok(!/fifteen lines|~15 lines/.test(html), "no unverifiable size claim for contributing a tool");
+  ok(/href="\/tools\/v1-chat-metered"[^>]*><span>POST \/v1\/metered\/chat\/completions/.test(html), "the metered row links to the metered tier's page");
+  const { WHY_POINTS } = await import("../src/why.js");
+  const fail02 = WHY_POINTS.find((w) => w.id === "never-charged");
+  ok(/x402/.test(fail02.t) && !fail02.links.some(([h]) => h === "/status"), "the failure claim is scoped to x402 and links a payment check, not uptime");
+  ok(!/^No wallet required/.test(WHY_POINTS.find((w) => w.id === "no-wallet").t), "the no-wallet row is not an absolute");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
