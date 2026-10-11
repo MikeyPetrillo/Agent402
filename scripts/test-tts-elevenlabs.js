@@ -91,7 +91,7 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   const direct = await run("tts", { text: "hi", voice: "George" });
   ok(direct.voice === "george" && JSON.parse(calls[0].init.body).voice === "george", "an ElevenLabs voice can be named directly");
   const e = await throwsWith(() => run("tts", { text: "hi", voice: "kermit" }));
-  ok(e?.statusCode === 400 && /ElevenLabs voice/.test(e.message) && calls.length === 0, "an unknown voice is a 400 listing both sets, before any upstream call");
+  ok(e?.statusCode === 400 && /or a named voice: .*george/.test(e.message) && calls.length === 0, "an unknown voice is a 400 listing both sets, before any upstream call");
   const lite = await throwsWith(() => run("tts-lite", { text: "hi", voice: "george" }));
   ok(lite?.statusCode === 400, "ElevenLabs names are refused on tts-lite, which is not ElevenLabs");
   const long = await throwsWith(() => run("tts", { text: "x".repeat(2001) }));
