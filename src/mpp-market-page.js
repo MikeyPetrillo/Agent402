@@ -16,13 +16,15 @@ import { hostRowHtml } from "./host-entry.js";
 const safeHref = (u) => (/^https?:\/\//i.test(String(u || "")) ? esc(u) : "#");
 
 const CSS = `
-.mpr-row{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:start;padding:14px 16px;border:1px solid var(--hairline);background:var(--card)}
+.mpr-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:start;padding:14px 16px;border:1px solid var(--hairline);background:var(--card)}
 .mpr-name{font-weight:700;font-size:var(--fs-base);color:var(--ink);text-decoration:none}
 .mpr-host{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:2px}
 .mpr-desc{font-size:var(--fs-md);line-height:1.5;color:var(--muted);margin:8px 0}
 .mpr-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .mpr-tag{font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);border:1px solid var(--hairline);padding:2px 6px}
-.mpr-endpoint{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-soft);background:var(--panel);padding:6px 9px;margin-top:8px;display:inline-block}
+.mpr-endpoint{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-soft);background:var(--panel);padding:6px 9px;margin-top:8px;display:inline-flex;flex-wrap:wrap;column-gap:.9em;max-width:100%}
+.mpr-endpoint>span{white-space:nowrap;min-width:0}
+.mpr-ep-path{overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .mpr-verified{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ok);white-space:nowrap}
 .mpr-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);display:inline-block}
 .mkt-search-wrap{border:1px solid var(--hairline)}
@@ -35,7 +37,10 @@ const CSS = `
 .mlb-scroll td.num{font-family:var(--font-mono);text-align:right;white-space:nowrap}
 .mlb-scroll th.num{text-align:right}
 .mlb-addr{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);text-decoration:none}
-@media (max-width: 900px){.mpr-row{grid-template-columns:1fr}}
+/* The names line is its own paragraph (the address sits under it), so widow control binds its tail; each small label stays whole. */
+.mlb-who{margin:0}
+.mlb-tag{font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);white-space:nowrap}
+@media (max-width: 900px){.mpr-row{grid-template-columns:minmax(0,1fr)}}
 `;
 
 function agoLabel(ms) {
@@ -98,16 +103,16 @@ function leaderboardHtml(lb, host = null) {
   const trs = active.map((r) => {
     const all = r.sellers || [];
     const shown = all.slice(0, MAX_NAMES).map((x) => `<a href="${safeHref(x.url || x.origin)}" rel="noopener" style="color:var(--ink);text-decoration:none;font-weight:700;">${esc(x.name)}</a>`).join(", ");
-    const more = all.length > MAX_NAMES ? ` <span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);" title="${esc(all.slice(MAX_NAMES).map((x) => x.name).join(", "))}">+${all.length - MAX_NAMES} more on this recipient</span>` : "";
+    const more = all.length > MAX_NAMES ? ` <span class="mlb-tag" title="${esc(all.slice(MAX_NAMES).map((x) => x.name).join(", "))}">+${all.length - MAX_NAMES} more on this recipient</span>` : "";
     // One recipient credited under several names is a shared payment address
     // (a gateway that collects for many services), so it says so instead of
     // reading as if each named company is a seller on this row.
-    const sharedTag = all.length > 1 ? `<span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);">shared recipient &middot; ${all.length} services:</span> ` : "";
+    const sharedTag = all.length > 1 ? `<span class="mlb-tag">shared recipient &middot; ${all.length} services:</span> ` : "";
     const names = sharedTag + shown + more;
-    const who = r.self ? `<span style="font-weight:700;">Agent402</span> <span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);">(this server)</span>${names ? `, ${names}` : ""}` : (names || `<span style="color:var(--faint);">unnamed recipient</span>`);
+    const who = r.self ? `<span style="font-weight:700;">Agent402</span> <span class="mlb-tag">(this server)</span>${names ? `, ${names}` : ""}` : (names || `<span style="color:var(--faint);">unnamed recipient</span>`);
     return `<tr>
       <td class="num">${r.rank}</td>
-      <td>${who}<div><a class="mlb-addr" href="${explorer}${esc(r.recipient)}" rel="noopener">${esc(shortAddr(r.recipient))}</a></div></td>
+      <td><p class="mlb-who">${who}</p><div><a class="mlb-addr" href="${explorer}${esc(r.recipient)}" rel="noopener">${esc(shortAddr(r.recipient))}</a></div></td>
       <td class="num">${r.transfers.toLocaleString("en-US")}</td>
       <td class="num">${(r.d7?.transfers ?? 0).toLocaleString("en-US")}</td>
       <td class="num">${(r.d30?.transfers ?? 0).toLocaleString("en-US")}</td>
@@ -131,20 +136,45 @@ function leaderboardHtml(lb, host = null) {
   ${zero > 0 ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:10px;">${zero.toLocaleString("en-US")} more verified recipient${zero === 1 ? "" : "s"} with no inbound transfer observed (listed below, not ranked).</p>` : ""}`;
 }
 
+/** An endpoint label is two whole units: the method and path, then the price.
+ *  The price drops to its own line when both do not fit, and a path longer
+ *  than the row ends in an ellipsis with the full label in its title. */
+function endpointLabelHtml(endpoint) {
+  const path = `${String(endpoint.method || "GET").toUpperCase()} ${endpoint.path || ""}`;
+  const price = endpoint.payment?.amount
+    ? `$${(Number(endpoint.payment.amount) / Math.pow(10, Number(endpoint.payment.decimals ?? 6))).toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}`
+    : "";
+  return `<span class="mpr-endpoint" title="${esc(price ? `${path} ${price}` : path)}"><span class="mpr-ep-path">${esc(path)}</span>${price ? `<span class="mpr-ep-price">${esc(price)}</span>` : ""}</span>`;
+}
+
+/** A registry description is third-party text, stored cut at a fixed length
+ *  (possibly mid-word). A row shows it up to its last whole sentence within
+ *  `max` characters, or its last whole word with an ellipsis. */
+export function clipProse(text, max = 320) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  const head = t.slice(0, max + 1);
+  const ends = [...head.matchAll(/[.!?](?=\s)/g)].map((m) => m.index + 1);
+  const end = ends.length ? ends[ends.length - 1] : 0;
+  if (end >= max * 0.5) return t.slice(0, end);
+  const cut = head.lastIndexOf(" ");
+  return `${t.slice(0, cut > 0 ? cut : max).replace(/[\s,;:.\u2014-]+$/, "")}\u2026`;
+}
+
 function sellerRowHtml(s, lbByRecipient) {
   const endpoint = Array.isArray(s.endpoints) ? s.endpoints[0] : null;
   const rec = (s.offers || []).find((o) => o?.method === "tempo" && o.recipient && lbByRecipient?.has(o.recipient));
   const lbRow = rec ? lbByRecipient.get(rec.recipient) : null;
   const provenHtml = lbRow?.routable ? `<span class="mpr-proven" title="${esc(String(lbRow.transfers))} inbound USDC.e transfers on Tempo in the window">routable${lbRow.rank ? ` &middot; #${lbRow.rank}` : ""}</span>` : "";
   const endpointHtml = endpoint
-    ? `<span class="mpr-endpoint">${esc(String(endpoint.method || "GET").toUpperCase())} ${esc(endpoint.path || "")}${endpoint.payment?.amount ? ` &middot; $${(Number(endpoint.payment.amount) / Math.pow(10, Number(endpoint.payment.decimals ?? 6))).toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}` : ""}</span>`
+    ? endpointLabelHtml(endpoint)
     : "";
   // Categories and tags overlap in real registry data (e.g. a service tagged
   // BOTH category "blockchain" and tag "blockchain" - live-verified against
   // one registry service during development) - dedup or the row shows the same
   // word twice.
   const tags = [...new Set([...(s.categories || []), ...(s.tags || [])])].slice(0, 6);
-  const tagsHtml = tags.length ? `<div class="mpr-tags">${tags.map((t) => `<span class="mpr-tag">${esc(t)}</span>`).join("")}</div>` : "";
+  const tagsHtml = tags.length ? `<div class="mpr-tags ml-strip">${tags.map((t) => `<span class="mpr-tag">${esc(t)}</span>`).join("")}</div>` : "";
   const docsLinks = [
     s.docs?.homepage ? `<a href="${safeHref(s.docs.homepage)}" rel="noopener" style="color:var(--muted);">homepage</a>` : "",
     s.docs?.llmsTxt ? `<a href="${safeHref(s.docs.llmsTxt)}" rel="noopener" style="color:var(--muted);">llms.txt</a>` : "",
@@ -154,7 +184,7 @@ function sellerRowHtml(s, lbByRecipient) {
     <div>
       <a href="${safeHref(s.docs?.homepage || s.url || s.origin)}" rel="noopener" class="mpr-name"${s.docs?.homepage ? "" : ' title="API origin (no homepage declared)"'}>${esc(s.name)}</a>
       <div class="mpr-host">${esc(String(s.origin || "").replace(/^https?:\/\//, ""))}</div>
-      ${s.description ? `<p class="mpr-desc">${esc(s.description)}</p>` : ""}
+      ${s.description ? `<p class="mpr-desc">${esc(clipProse(s.description))}</p>` : ""}
       ${endpointHtml}
       ${tagsHtml}
       ${docsLinks ? `<div style="font-family:var(--font-mono);font-size:var(--fs-2xs);margin-top:8px;">${docsLinks}</div>` : ""}

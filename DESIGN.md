@@ -171,7 +171,8 @@ names first); `WRAP_ALL=1` runs all of them.
   least 3 words (a heading of 5 words or fewer may split 2 + 2 or 3 + 2; punctuation alone
   is not a word). Widow control in `assets/js/site-chrome.js` measures each block's tail
   and binds its last words to about a third of its measure (two words that fit stay
-  together; a short cell of a scrolling table stays whole); if a block still rags, the copy
+  together; a short cell of a scrolling table stays whole; a URL or code token too wide to
+  join a short tail joins it and breaks at its own seams); if a block still rags, the copy
   or the measure is wrong, so shorten the words or widen the column. Text rendered after
   load calls `window.a402BindWidows(root)`.
 - **Code keeps whole words**: a code name in prose or a table cell breaks only at its own
@@ -188,7 +189,8 @@ names first); `WRAP_ALL=1` runs all of them.
   of tags is `.ml-meta` (or `sectionMeta([...])`): one `<span>` per tag, wrapping between
   tags. Shorten a label that does not fit; never shrink it below the type scale or clip it.
 - **No stray item**: a row of links or chips does not end on one item under a row of 3+.
-  Long rows become a two-column list or a sideways strip at phone width.
+  Long rows become a two-column list or a sideways strip at phone width (`.ml-strip` on any
+  chip row; a grid column holding one is `minmax(0,1fr)` so the strip scrolls in place).
 - **Nothing past the viewport**: a whole label wider than its column is a finding too.
 - Prose takes its section's width up to a reading measure: `max-width: 76ch`
   (`.ml-measure`), 64ch inside a CTA panel. Section meta goes under its heading.

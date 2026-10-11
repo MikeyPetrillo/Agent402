@@ -337,6 +337,8 @@ body { overflow-wrap: break-word; }
 .ml-meta { display: flex; flex-wrap: wrap; gap: 4px 0; margin: 10px 0 0; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--faint); }
 .ml-meta > span { white-space: nowrap; }
 .ml-meta > span + span::before { content: "·"; padding: 0 10px; }
+/* A row of chips of any count: on a phone it is one strip that scrolls sideways, so it never ends on one stray chip (a grid column holding one is minmax(0,1fr), so the strip scrolls instead of widening it). */
+@media (max-width: 600px) { .ml-strip { flex-wrap: nowrap !important; overflow-x: auto; max-width: 100%; padding-bottom: 4px; } .ml-strip > * { flex: none; } }
 /* Breadcrumbs: each link stays whole; on a phone the current page's name (the
    h1 right below repeats it) drops out, so the trail never wraps mid-label. */
 .ml-crumb a { white-space: nowrap; }

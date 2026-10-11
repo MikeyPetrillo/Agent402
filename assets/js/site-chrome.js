@@ -155,7 +155,7 @@ var a402BindPass=function(root){try{
      Range, inline code by its boxes; a block child in the tail is never bound. */
   var tailW=function(map,x,last){var W=0;for(var q=0;q<map.length;q++){var g=map[q];var a=Math.max(x,g.start),b=Math.min(last+1,g.start+g.len);if(b<=a)continue;var rs;if(g.node){var r=document.createRange();r.setStart(g.node,a-g.start);r.setEnd(g.node,b-g.start);rs=r.getClientRects();}else if(g.el){rs=g.el.getClientRects();}else return Infinity;for(var u=0;u<rs.length;u++)W+=rs[u].width;}return W;};
   /* Reads first (every block's tail measured), writes after, so the page lays out once. */
-  for(var i=0;i<els.length;i++){var el=els[i];if(!el.closest('main,footer')||el.closest('pre,code,[data-wrap="off"]'))continue;var cs=getComputedStyle(el);if(!BLOCK.test(cs.display)||/pre|nowrap/.test(cs.whiteSpace))continue;var w=el.clientWidth-parseFloat(cs.paddingLeft||0)-parseFloat(cs.paddingRight||0);if(!(w>0))continue;
+  for(var i=0;i<els.length;i++){var el=els[i];if(el.a402Split||!el.closest('main,footer')||el.closest('pre,code,[data-wrap="off"]'))continue;var cs=getComputedStyle(el);if(!BLOCK.test(cs.display)||/pre|nowrap/.test(cs.whiteSpace))continue;var w=el.clientWidth-parseFloat(cs.paddingLeft||0)-parseFloat(cs.paddingRight||0);if(!(w>0))continue;
     var segs=collect(el);var s='',map=[];segs.forEach(function(g){map.push({node:g.node,el:g.el,w:g.w,start:s.length,len:g.text.length});s+=g.text;});
     var first=s.search(/[^ \t\n\r\f]/);if(first<0)continue;var last=s.replace(/[ \t\n\r\f]+$/,'').length-1;
     var segAt=(function(map){return function(x){for(var q=map.length-1;q>=0;q--)if(map[q].start<=x)return map[q];return null;};})(map);
@@ -166,7 +166,15 @@ var a402BindPass=function(root){try{
     /* The tail of j words, measured, for the last few runs. */
     var widths=[],wc=[],nw=0;for(var j=1;j<=Math.min(runs.length,24);j++){var rb=runs[runs.length-j].b,re2=j===1?last+1:runs[runs.length-j+1].a;widths.push(tailW(map,rb,last));/* an arrow or a lone dash is not a word; words a first pass already joined still count one by one */nw+=s.slice(rb,re2).split(/[\s\u00A0]+/).filter(function(t){return /[\p{L}\p{N}]/u.test(t);}).length;wc.push(nw);}
     var whole=(runs.length===1||cell)?tailW(map,first,last):0;
-    plans.push({el:el,w:w,s:s,map:map,first:first,last:last,segAt:segAt,runs:runs,widths:widths,wc:wc,whole:whole,cell:cell});}
+    /* A long token (60%+ of the measure) before the tail (a URL, a host name, inline code) too wide to join it: when the tail alone is short, the token joins it and breaks at its own seams, so its last piece rides on the last line ("protection." / "outlook.com, max_age: 86400."). */
+    var ext=(function(){var lo=w*0.33,hi=w*0.97,jb=0;for(var j=1;j<=widths.length;j++){if(widths[j-1]>hi){jb=j;break;}if(wc[j-1]>=3&&widths[j-1]>=lo)return null;}if(jb<2||cell||widths[jb-1]-widths[jb-2]<w*0.6)return null;
+      var R=runs.length,ta=runs[R-jb].b,te=runs[R-jb+1].a,seams=[],piece=-1;
+      for(var x=ta+1;x<te;x++){var g=segAt(x);if(g&&g.node&&segAt(x-1)===g&&/[_.\/:?&=,-]/.test(s.charAt(x-1))&&/[^\s_.\/:?&=,\-⁠ ]/.test(s.charAt(x)))seams.push(x);}
+      if(seams.length)piece=tailW(map,seams[seams.length-1],last);
+      /* Inline code already broken at its seams (a <wbr>) splits after its last one. */
+      for(var q=map.length-1;q>=0;q--){var gc=map[q];if(!gc.el||gc.start<ta||gc.start>=te||!/^(CODE|KBD|SAMP)$/.test(gc.el.tagName))continue;var wbs=gc.el.querySelectorAll('wbr');if(!wbs.length)break;if(seams.length&&seams[seams.length-1]>=gc.start+gc.len)break;var rr=document.createRange();rr.setStartAfter(wbs[wbs.length-1]);rr.setEnd(gc.el,gc.el.childNodes.length);var cw2=0,crs=rr.getClientRects();for(var u=0;u<crs.length;u++)cw2+=crs[u].width;piece=cw2+tailW(map,gc.start+gc.len,last);seams=[];break;}
+      if(piece<0||piece>hi)return null;return {j:jb,seams:seams,from:runs[R-jb+1].b};})();
+    plans.push({el:el,w:w,s:s,map:map,first:first,last:last,segAt:segAt,runs:runs,widths:widths,wc:wc,whole:whole,cell:cell,ext:ext});}
   plans.forEach(function(p){
     var s=p.s,map=p.map,first=p.first,last=p.last,segAt=p.segAt,runs=p.runs;
     /* Bind the fewest last words that make a tail of 3+ words and a third of the measure; never more than 97% of it, so the tail always fits a line. */
@@ -175,17 +183,20 @@ var a402BindPass=function(root){try{
     /* Two words (a short label or cell) stay together when both fit the line. */
     if(runs.length===1)k=p.whole<=hi?1:0;
     if(p.cell&&p.whole<=320){k=runs.length;hi=Infinity;}
+    if(p.ext)k=p.ext.j-1;
     /* Inline code inside the bound tail stays whole too, when it fits the bound line. */
-    var from=k<runs.length?runs[runs.length-k-1].b:first;
+    var from=p.ext?p.ext.from:k<runs.length?runs[runs.length-k-1].b:first;
     map.forEach(function(g){if(g.el&&/^(CODE|KBD|SAMP)$/.test(g.el.tagName)&&g.start>=from&&g.w<=hi){g.el.style.whiteSpace='nowrap';/* a <wbr> still breaks inside nowrap in Chromium */var wb=g.el.querySelectorAll('wbr');for(var q=0;q<wb.length;q++)wb[q].parentNode.removeChild(wb[q]);g.el.normalize();}});
     var edits=[];
     for(var t=1;t<=k;t++){var r2=runs[runs.length-t];var ok=true;for(var x=r2.a;x<r2.b;x++){var g=segAt(x);if(!g||!g.node){ok=false;break;}}if(!ok)continue;for(var y=r2.b-1;y>=r2.a;y--){var g2=segAt(y);edits.push({node:g2.node,off:y-g2.start,op:y===r2.a?'nb':'del'});}}
     /* A hyphen, slash, bar, dash, ellipsis or query mark inside the bound tail, or any seam inside one token ("image_url:{url"), is still a break point ("proof-of-" / "work"): a word joiner after it holds the word together (a spaced dash "result - zero" too: a break is allowed between a hyphen and a no-break space). */
     if(k<1&&!(p.widths.length&&p.widths[0]<=hi)&&!p.cell)return;
     for(var z=from;z<last;z++){var c0=s.charAt(z),c1=s.charAt(z+1);if(c1!=='\u2060'&&c0!=='\u2060'&&(/[-\/\u2026?&=+|\u2013\u2014]/.test(c0)||(/\S/.test(c0)&&/\S/.test(c1)&&!(/[\p{L}\p{N}]/u.test(c0)&&/[\p{L}\p{N}]/u.test(c1))))){var g3=segAt(z);if(g3&&g3.node)edits.push({node:g3.node,off:z-g3.start,op:'wj'});}}
+    /* A block whose long token was split is settled: the second pass would read the split token as one wide word. */
+    if(p.ext){p.el.a402Split=true;p.ext.seams.forEach(function(x){var g4=segAt(x);if(g4&&g4.node)edits.push({node:g4.node,off:x-g4.start,op:'wbr'});});}
     if(!edits.length)return;
     edits.sort(function(a,b){return b.off-a.off;});
-    edits.forEach(function(e){var d=e.node.data;if(e.op==='wj'){e.node.data=d.slice(0,e.off+1)+'\u2060'+d.slice(e.off+1);}else{e.node.data=d.slice(0,e.off)+(e.op==='nb'?'\u00A0':'')+d.slice(e.off+1);}});
+    edits.forEach(function(e){var d=e.node.data;if(e.op==='wbr'){var rest=e.node.splitText(e.off);rest.parentNode.insertBefore(document.createElement('wbr'),rest);return;}if(e.op==='wj'){e.node.data=d.slice(0,e.off+1)+'\u2060'+d.slice(e.off+1);}else{e.node.data=d.slice(0,e.off)+(e.op==='nb'?'\u00A0':'')+d.slice(e.off+1);}});
   });
 }catch(e){}};
 document.addEventListener('DOMContentLoaded',function(){window.a402BindWidows(document);});
