@@ -15,7 +15,8 @@ import { fitTitle } from "./seo-meta.js";
 import { GUIDE_INTEGRATIONS, integrationBySlug } from "./integration-pages.js";
 import { RAILS_OR, RAILS_AMP } from "./rails.js";
 import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE } from "./tools/llm-gateway-kit.js";
-import { routingProofSentence } from "./routing-proof.js";
+import { routingProofSentence, routerRankingSentence } from "./routing-proof.js";
+import { mppEvmDiscoveryRails } from "./mpp-shim.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 // Whether prepaid credits are sold now. Copy that tells a reader to buy a pack
 // is only true while they are; read once at module load, like the env it reads.
@@ -48,7 +49,12 @@ function resolveGuideTokens(text, catalog) {
       return "| Route | Price | Covers tools listed up to |\n| --- | --- | --- |\n" +
         rows.map((d) => `| \`${d.route}\` | ${fmtUsd(priceUsd(d.price))} | ${fmtUsd(d.underlyingMaxUsd)} |`).join("\n");
     })
-    .replace(/\{\{routingProof\}\}/g, () => routingProofSentence());
+    .replace(/\{\{routingProof\}\}/g, () => routingProofSentence())
+    .replace(/\{\{routerRanking\}\}/g, () => routerRankingSentence())
+    .replace(/\{\{mppEvmRails\}\}/g, () => {
+      const names = mppEvmDiscoveryRails().map((r) => r.name);
+      return names.length ? `(${names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0]} on this instance; [/.well-known/x402](/.well-known/x402) lists them)` : "(listed in [/.well-known/x402](/.well-known/x402) when MPP is on)";
+    });
 }
 // Derived at module load from the live tier table so the guide can never say a
 // price the gateway does not charge (the first version typed these).
@@ -130,9 +136,10 @@ purl "https://agent402.tools/api/dns?name=example.com&type=A"
 
 ## No wallet? Pay with CPU
 
-Most of the tools also accept **proof-of-work** - a sub-second sha256
-puzzle solved by the caller, no money involved (the exact free-tier count is
-always current at [/api/pricing](https://agent402.tools/api/pricing)):
+The pure-CPU tools also accept **proof-of-work** - a sub-second sha256
+puzzle solved by the caller, no money involved (each one is marked
+\`computePayable: true\` at [/api/pricing](https://agent402.tools/api/pricing),
+which always has the current list):
 
 \`\`\`js
 import { createHash } from "node:crypto";
@@ -189,8 +196,8 @@ POST /api/memory   {"key":"deploy-fix","value":{"cause":"build OOM","fix":"NODE_
 GET  /api/memory?key=deploy-fix
 \`\`\`
 
-Namespaces are isolated per wallet: only the wallet that wrote a key can read
-it. TTLs expire what shouldn't live forever; deletes are owner-only.
+Namespaces are isolated per wallet: only the owner wallet, or a wallet it
+grants access to (below), can read a key. TTLs expire what shouldn't live forever; deletes are owner-only.
 
 ## The unusual part: memory shared across owners
 
@@ -278,12 +285,13 @@ app.listen(3000);
 
 That example settles USDC on Base Sepolia (\`eip155:84532\`) through a public
 testnet facilitator. For mainnet, switch the network to \`eip155:8453\` and point
-\`HTTPFacilitatorClient\` at a facilitator that settles Base mainnet. Test the buyer side yourself with Stripe's
-[purl](https://github.com/stripe/purl): \`purl http://localhost:3000/api/summarize\`.
+\`HTTPFacilitatorClient\` at a facilitator that settles Base mainnet. Check the
+quote yourself: \`curl -i -X POST http://localhost:3000/api/summarize\` answers
+\`402\` with the accept, and any x402 client pays it.
 
 ## What we learned operating one (the honest part)
 
-[agent402.tools](https://agent402.tools) runs ~500+ paid endpoints this way -
+[agent402.tools](https://agent402.tools) runs 500+ tools this way -
 [fully open source](${REPO_URL}). The lessons:
 
 1. **x402 settles after your handler runs, and only on success.**
@@ -293,9 +301,9 @@ testnet facilitator. For mainnet, switch the network to \`eip155:8453\` and poin
    can't be served reliably (upstreams that block datacenter IPs, flaky APIs)
    should be removed, not monetized.
 2. **Discovery is half the product.** Publish a machine-readable catalog
-   (/api/pricing, OpenAPI, llms.txt) and register with the
-   [x402 Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar) - agents
-   browse it by pay-to address.
+   (/api/pricing, OpenAPI, llms.txt), and settle through a facilitator that
+   runs the x402 Bazaar discovery extension: a route is listed there after its
+   first settled payment.
 3. **Trust is provable, so prove it.** Your revenue wallet is public; link it.
    Run your test suite against your own documented examples in CI. Anonymous
    sellers are the default in this economy - a named maintainer and an
@@ -318,18 +326,19 @@ on-chain customer detector - is in
     title: "Let your agent pay anyone: the non-custodial x402 payments toolkit",
     seoTitle: "The non-custodial x402 payments toolkit",
     description:
-      "Discover a 402 quote, resolve an ENS recipient, check USDC balance and gas, build the EIP-3009 authorization your agent signs with its own key, and verify the settlement on-chain - across Base, Polygon, Arbitrum, Optimism, Ethereum, and Robinhood Chain. these tools never touch funds.",
+      "Discover a 402 quote, resolve an ENS recipient, check USDC balance and gas, build the EIP-3009 authorization your agent signs with its own key, and verify the settlement on-chain - across Base, Polygon, Arbitrum, Optimism and Ethereum. These tools never touch funds.",
     md: `
 An autonomous agent that can *pay* is far more useful than one that can't - but
 you don't want a middleman holding your money. Agent402's payments tools are
 **non-custodial**: they help an agent move its *own* USDC with its *own* key.
 These tools never hold, sign, or send funds - they decode quotes, read public
 chain state, and build the authorization *you* sign. (Two paths elsewhere on
-the service are not non-custodial and we say so: a prepaid credits balance is
+the service are not non-custodial and we say so: a prepaid credits balance${CREDITS_ON ? "" : " (credits are no longer sold; keys issued earlier keep working)"} is
 money held until it is spent, and a card report purchase is held by the payment
 processor until the report is delivered.) Everything below works on
-**Base, Polygon, Arbitrum, Optimism, Ethereum, and Robinhood Chain** (\`network\` param, default
-base), and needs no API key.
+**Base, Polygon, Arbitrum, Optimism and Ethereum** (\`network\` param, default
+base); \`tx-status\` and \`gas-estimate\` also read Robinhood Chain. None of it
+needs an API key.
 
 ## 1. What does this endpoint cost? - \`/api/x402-quote\`
 
@@ -401,7 +410,7 @@ These tools never touch your
 money: you keep your key, you sign, you send. That's the right architecture for
 agent payments, and it's the one Agent402 ships. The whole kit is
 [open source](${REPO_URL}) and priced per call in
-USDC (or proof-of-work on the free tools).
+USDC; these tools are wallet-only (no proof-of-work tier).
 `,
   },
   {
@@ -585,26 +594,27 @@ Two ways:
   agent's address.
 
 Verify with [\`wallet-balances\`](/tools/wallet-balances), then the same
-buyer code works against every seller in [the index](/index) - and every
-tool here. Budget guardrails: the
+buyer code works against any x402 v2 seller on Base in
+[the index](/marketplace) - and every tool here. Budget guardrails: the
 [agent402-mcp](https://www.npmjs.com/package/agent402-mcp) server adds
 pre-signature spend controls (per-call and per-session caps) on top.
 
 ## How we hold ourselves to this
 
-The exact flow above runs in our CI as a gated test: a **fresh keypair is
-generated inside the runner**, faucet-funded, and completes a real x402
-settlement against a paid-mode server - then the test scans every byte of
-its own output and the server's full log for the key material (all
-prefix/case forms) and **fails on any hit**. Keys in, addresses out,
-provably.
+The flow above runs in our CI in two legs. On every push, a **fresh keypair
+is generated inside the runner** and the test scans every byte of its own
+output for the key material (with and without the \`0x\` prefix) and **fails
+the build on any hit**. In the paid-test job the same fresh key is
+faucet-funded and completes a real x402 settlement against a paid-mode server
+on a testnet, and the scan covers the server's full log too. Keys in,
+addresses out.
 `,
   },
   {
     slug: "smart-order-router",
     title: "One payment, any proven seller: the x402 Smart Order Router",
     description:
-      "Describe a task, pay once, and the router resolves the best tool - from Agent402's own 500+ catalog or from any PROVEN external x402 seller in the open economy - buys the result from that seller on the chain you paid on and sells it to you with an on-chain receipt.",
+      "Describe a task, pay once, and the router resolves the best tool - from Agent402's own 500+ catalog or from an external x402 seller in the open economy, proven sellers first - buys the result from that seller on the chain you paid on and sells it to you with an on-chain receipt.",
     md: `
 The open x402 economy has a discovery problem and a trust problem. Hundreds of
 sellers advertise endpoints; some deliver, some 402 you and then 404 the paid
@@ -619,7 +629,7 @@ seller in the open index, **we buy the result from that seller with our own
 wallet and sell it to you**. Two on-chain settlements, one request, and the
 counterparty risk stays on our side of the fee.
 
-## The three tiers
+## The tiers
 
 {{routerTiers}}
 
@@ -643,9 +653,9 @@ the markup, stated, never hidden.
 Add \`"include":"external"\` and the router deliberately looks OUTSIDE its own
 catalog. Selection is deliberate, and it is intentionally boring:
 
-1. **Proven deliverers first.** Candidates are ranked on real settled volume -
-   on Base that means on-chain settlement counts from the public leaderboard;
-   on Algorand, verification counts witnessed by the GoPlausible facilitator.
+1. **Proven deliverers first.** {{routerRanking}} Settlement evidence decides
+   who is routable - on Base, on-chain settlement counts from the public
+   leaderboard; on Algorand, verification counts from the Algorand facilitator.
    {{routingProof}}
 2. **A live probe before commitment.** Even a proven seller's crawled route can
    drift, so the router confirms a live 402 challenge before any money moves.
@@ -708,7 +718,7 @@ Browse the live economy the router draws from at
 [x402](https://x402.org) reused HTTP 402 for a specific shape of payment: an
 unsigned request, an on-chain settle, a retry with proof attached. It is not
 the only proposal doing this. [MPP](https://paymentauth.org) - the Machine
-Payments Protocol, an IETF-track spec for a \`Payment\` HTTP auth scheme -
+Payments Protocol, an IETF Internet-Draft for a \`Payment\` HTTP auth scheme -
 solves the same problem with a different wire format: a \`WWW-Authenticate:
 Payment\` challenge instead of a PAYMENT-REQUIRED header, and an \`Authorization: Payment\`
 credential on retry instead of a custom header.
@@ -734,7 +744,7 @@ authority** - it still verifies, still settles, still decides pass or fail.
 What changes is the envelope around it:
 
 - A 402 also carries \`WWW-Authenticate: Payment\`, one HMAC-bound challenge
-  per EVM rail we offer. The x402 \`accepts\` entry for that rail rides inside
+  per EVM rail that MPP's evm method covers {{mppEvmRails}}. The x402 \`accepts\` entry for that rail rides inside
   the challenge's own metadata, verbatim - so the challenge needs nothing
   stored server-side to issue or check later. Same statelessness x402 already
   has, extended to a second header.
@@ -834,33 +844,32 @@ have to bridge, swap, or wait for a transfer just to pay for one API call.
 
 ## What's actually live, and who settles it
 
-Every rail below is a real, working \`payTo\` you can quote against right now
-- \`GET https://agent402.tools/api/pricing\` lists the live \`accepts\` for any
-tool, per network:
+Every rail below is a real, working \`payTo\` you can quote against right now.
+Each tool's \`402\` (or \`GET https://agent402.tools/api/x402-quote?url=...\`)
+lists its live \`accepts\` per network, and
+[\`/api/rails\`](https://agent402.tools/api/rails) lists the rails offered. Each
+rail settles through a facilitator that supports it, with a fallback where one
+exists:
 
-- **Base** - the primary rail, settled via Coinbase's CDP facilitator (also
-  where [x402 Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar)
-  discovery lives).
-- **Solana, Polygon, Arbitrum** - settled via Coinbase CDP first (it advertises
-  these networks too), with PayAI as the fallback.
-- **Avalanche, Sei** - settled via the PayAI facilitator.
-- **Optimism** - settled via Solvador, a fee-charging facilitator; the price
-  quoted on Optimism is bumped to cover that fee, so what you're quoted is
-  what actually clears.
-- **Monad, Celo** - each on its own dedicated facilitator.
-- **Stellar** - USDC via our own self-hosted Soroban facilitator (open source, in this repository; OpenZeppelin Channels as the settlement fallback);
-  settlement here is confirmed against the chain itself, not just trusted
-  from the facilitator's word, because Stellar's ~5-second ledger close can
-  outlast a synchronous HTTP request.
-- **Algorand** - USDC via a dedicated AVM facilitator (GoPlausible); every
-  payment carries a signed validity window sized to the tool it's paying
-  for, so a slow tool can never receive a payment that expires mid-call.
-- **Robinhood Chain** - the one non-USDC rail: USDG, via a keyless
-  facilitator.
+- **Base** - the primary rail, and where the x402 Bazaar discovery listing
+  lives.
+- **Solana, Polygon, Arbitrum, Avalanche, Sei, Monad, Celo** - USDC, each
+  through a facilitator that settles that network.
+- **Optimism** - USDC; its settlement carries a fee, so its quote carries a
+  small network premium, shown in the \`402\`. What you're quoted is what
+  actually clears.
+- **Stellar** - USDC via our own self-hosted Soroban facilitator (open source,
+  in this repository); settlement here is confirmed against the chain itself,
+  not just trusted from the facilitator's word, because Stellar's ~5-second
+  ledger close can outlast a synchronous HTTP request.
+- **Algorand** - USDC via a dedicated AVM facilitator; every payment carries a
+  signed validity window sized to the tool it's paying for, so a slow tool can
+  never receive a payment that expires mid-call.
+- **Robinhood Chain** - the one non-USDC rail: USDG.
 
-Every facilitator is health-checked at boot. One going down drops only its
-own rail from the offer - the other eleven, and the free proof-of-work tier,
-are unaffected.
+Every facilitator is health-checked at boot. A facilitator that fails its boot
+check drops only its own rail from the offer - the other rails, and the free
+proof-of-work tier, are unaffected.
 
 ## What doesn't change per chain
 
@@ -939,8 +948,8 @@ purl --dry-run "https://agent402.tools/api/dns?name=example.com&type=A"   # pars
 purl "https://agent402.tools/api/dns?name=example.com&type=A"             # pay and fetch
 \`\`\`
 
-We run purl against production in CI, so a purl that cannot parse our 402 is a
-failing build on our side, not a surprise on yours.
+We run purl against production from CI on demand (the purl interop job), so a
+purl that cannot parse our 402 shows up as a failed job on our side.
 
 ## CDP SDK in code (\`CdpX402Client\`)
 
@@ -1021,7 +1030,9 @@ it at your Coinbase Business address and every settled call lands there.
    every 402 you serve, so funds settle straight into the account.
 2. A **CDP API key** (id + secret) from the Coinbase Developer Platform. The
    tollbooth uses it to sign requests to Coinbase's x402 facilitator, which
-   verifies and settles each payment. On Base no fee is taken from the payment itself; Coinbase's facilitator is free for the first 1,000 settlements a month and $0.001 each after.
+   verifies and settles each payment. On Base no fee is taken from the payment
+   itself; the facilitator's own usage pricing is on Coinbase's developer
+   platform pages.
 
 ## 2. One command in front of anything
 
@@ -1043,7 +1054,8 @@ default mode known AI crawlers (matched by user agent) get a 402 quoting $0.005
 in USDC on Base, pay it, and are proxied through; the payment settles into the
 Coinbase Business account before the response is released, and browsers pass
 untouched. To charge every non-browser caller, stock x402 clients included, set
-\`TOLLBOOTH_MODE=all\` and whitelist your own clients with \`free()\`.
+\`TOLLBOOTH_MODE=strict\`. \`TOLLBOOTH_MODE=all\` charges every caller, browsers
+included; in code, a \`free()\` predicate exempts your own clients.
 
 ## 3. Or as Express middleware, with the price per route
 
@@ -1066,7 +1078,7 @@ const x402 = paymentMiddleware(
 );
 
 const app = express();
-app.use(createTollbooth({ x402 }));            // humans free, agents pay, MPP accepted too
+app.use(createTollbooth({ x402 }));            // known AI crawlers pay, MPP accepted too; mode: "strict" or "all" charges every agent
 app.get("/api/quote", (req, res) => res.json({ price: 42 }));
 app.listen(8080);
 \`\`\`
@@ -1109,7 +1121,7 @@ its normal schedule.
   },
   {
     slug: "agent-hosts",
-    title: "Use Agent402 from Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Muse Code, Continue, ElizaOS, AgentCore and any OpenAI SDK",
+    title: "Use Agent402 from Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, AgentCore and any OpenAI SDK",
     seoTitle: "Use Agent402 from Claude Code, Cursor and more",
     description:
       "Two doors into Agent402 from the agent host you already run: models through an OpenAI-compatible base URL (metered, from $" + TIERS["v1-chat-metered"].price + " a call, paid from a wallet over x402" + (CREDITS_ON ? " or with a prepaid credits key" : ", or with a credits key bought earlier") + "), and 500+ tools through MCP. Copy the block for your host.",
@@ -1117,10 +1129,10 @@ its normal schedule.
 Agent402 opens two doors to an agent host:
 
 - **Models**: an OpenAI-compatible gateway. Run the local wallet proxy
-  (\`npx agent402-openclaw proxy\`, below) and point any client that accepts a
+  (\`agent402-openclaw proxy\`, below) and point any client that accepts a
   base URL at \`http://127.0.0.1:8412/v1\`: it pays each call from your wallet
-  over x402. A client can also use \`https://agent402.tools/v1/metered\` directly
-  with ${CREDITS_ON ? "a credits key" : "a credits key issued earlier"} as the API key. Each request is quoted from its own
+  over x402. With ${CREDITS_ON ? "a credits key" : "a credits key you already hold"}, a client can instead use
+  \`https://agent402.tools/v1/metered\` directly with the key as its API key. Each request is quoted from its own
   body (input plus your \`max_tokens\`), from $${TIERS["v1-chat-metered"].price} a call.
   \`GET https://agent402.tools/v1/models\` lists every id with its price and
   input cap; \`auto\` (routed per prompt, flat
@@ -1128,13 +1140,16 @@ Agent402 opens two doors to an agent host:
 - **Tools**: the hosted MCP connector at \`https://agent402.tools/mcp\`
   (discovery and the free tier need no key at all), or the
   [\`agent402-mcp\`](https://www.npmjs.com/package/agent402-mcp) stdio server,
-  which pays wallet-only tools by card when \`AGENT402_CREDITS_KEY\` is set.
+  which pays wallet-only tools from a wallet when \`AGENT_KEY\` is set (an EVM
+  key holding USDC; \`SOLANA_AGENT_KEY\` pays on Solana).
 
-${CREDITS_ON ? `Get the key once: buy a pack by card at
+${CREDITS_ON ? `A prepaid credits key works too: buy a pack by card at
 [agent402.tools/credits](https://agent402.tools/credits); the key (\`a402_…\`)
-is shown once and emailed.` : `New credits keys are not on sale; a key (\`a402_…\`) bought earlier keeps
-working in every block below.`} \`GET /api/credits/balance\` (Bearer) reports what
-is left. Every route also answers a stock x402 \`402\`
+is shown once and emailed, and it goes in \`AGENT402_CREDITS_KEY\` in place of
+\`AGENT_KEY\` in every stdio block below.` : `Already hold a credits key (\`a402_…\`) from before? It keeps working: put it
+in \`AGENT402_CREDITS_KEY\` in place of \`AGENT_KEY\` in any stdio block below.`}
+\`GET /api/credits/balance\` (Bearer) reports what a credits key has left. Use a
+low-value wallet funded only with what you mean to spend. Every route also answers a stock x402 \`402\`
 (${RAILS_OR}) and an MPP challenge, so any x402 client pays per call with no key.
 
 ## Pay from a wallet (local proxy)
@@ -1144,11 +1159,15 @@ wallet you hold (the key never leaves the machine), and forwards to the
 gateway. Any OpenAI-compatible client then uses it as its base URL:
 
 \`\`\`bash
-npm i @x402/fetch @x402/evm viem
+npm i agent402-openclaw @x402/fetch @x402/evm viem   # in one folder
 export AGENT402_WALLET_KEY=0x...      # an EVM key holding USDC on Base
 export AGENT402_MAX_PER_CALL_USD=2    # per-call ceiling checked before signing
-npx agent402-openclaw proxy           # serves http://127.0.0.1:8412/v1
+npx agent402-openclaw proxy           # run from that folder; serves http://127.0.0.1:8412/v1
 \`\`\`
+
+Install the four packages together and run the proxy from the same folder: the
+wallet packages are optional peers, so a proxy started without them runs unpaid
+and logs that x402 payment is unavailable.
 
 Use model \`auto\` or any id from \`GET /v1/models\`. Run
 \`npx agent402-openclaw permit2-approve\` once to settle metered calls at actual
@@ -1164,10 +1183,10 @@ from your wallet:
 \`\`\`bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8412
 export ANTHROPIC_AUTH_TOKEN=unused    # the proxy pays; this value is ignored
-claude --model claude-sonnet-5
+claude --model anthropic/claude-sonnet-5.5
 \`\`\`
 
-${CREDITS_ON ? "Or" : "With a credits key issued earlier, you can instead"} point
+${CREDITS_ON ? "Or" : "With a credits key you already hold, you can instead"} point
 it at the metered tier with the credits key as the auth token (Bearer), keep
 your usual model names - dated ids like \`claude-haiku-4-5-20251001\` resolve
 to the live model:
@@ -1175,7 +1194,7 @@ to the live model:
 \`\`\`bash
 export ANTHROPIC_BASE_URL=https://agent402.tools/v1/metered
 export ANTHROPIC_AUTH_TOKEN=a402_...
-claude --model claude-sonnet-5
+claude --model anthropic/claude-sonnet-5.5
 \`\`\`
 
 Verified 2026-08-27 with claude-cli 2.1.250: a full turn (110 KB system
@@ -1193,10 +1212,10 @@ Tools over the hosted connector (free tier and discovery, no key):
 claude mcp add --transport http agent402 https://agent402.tools/mcp
 \`\`\`
 
-Paid tools by card, through the stdio server:
+Paid tools from a wallet, through the stdio server:
 
 \`\`\`bash
-claude mcp add agent402 -e AGENT402_CREDITS_KEY=a402_... -- npx -y agent402-mcp
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp
 \`\`\`
 
 Or in \`.mcp.json\` at the project root:
@@ -1207,7 +1226,7 @@ Or in \`.mcp.json\` at the project root:
     "agent402": {
       "command": "npx",
       "args": ["-y", "agent402-mcp"],
-      "env": { "AGENT402_CREDITS_KEY": "\${AGENT402_CREDITS_KEY}" }
+      "env": { "AGENT_KEY": "\${AGENT_KEY}" }
     }
   }
 }
@@ -1222,7 +1241,7 @@ project). Remote, no key:
 { "mcpServers": { "agent402": { "url": "https://agent402.tools/mcp" } } }
 \`\`\`
 
-Paid tools by card:
+Paid tools from a wallet:
 
 \`\`\`json
 {
@@ -1230,7 +1249,7 @@ Paid tools by card:
     "agent402": {
       "command": "npx",
       "args": ["-y", "agent402-mcp"],
-      "env": { "AGENT402_CREDITS_KEY": "a402_..." }
+      "env": { "AGENT_KEY": "0x..." }
     }
   }
 }
@@ -1244,8 +1263,8 @@ Paid tools by card:
 models:
   - name: Agent402 (metered)
     provider: openai
-    apiBase: https://agent402.tools/v1/metered
-    apiKey: a402_...
+    apiBase: http://127.0.0.1:8412/v1   # the local wallet proxy (above)
+    apiKey: unused                      # the proxy pays from your wallet
     model: openai/gpt-4o-mini
     roles:
       - chat
@@ -1255,29 +1274,47 @@ mcpServers:
     url: https://agent402.tools/mcp
 \`\`\`
 
-Any id from \`/v1/models\` works as \`model\`; the metered route takes up to
+Any id from \`/v1/models\` works as \`model\`. With a credits key you already
+hold, use \`apiBase: https://agent402.tools/v1/metered\` and the key as
+\`apiKey\` instead. The metered route takes up to
 ${TIERS["v1-chat-metered"].maxInputChars.toLocaleString("en-US")} characters of input per request.
 
 ## ElizaOS
 
 Tools: the [\`elizaos-plugin-agent402\`](https://www.npmjs.com/package/elizaos-plugin-agent402)
 plugin adds \`AGENT402_FIND\` / \`AGENT402_CALL\` / \`AGENT402_ABOUT\` actions
-(\`"plugins": ["elizaos-plugin-agent402"]\`, setting \`AGENT402_CREDITS_KEY\`).
-Models: the OpenAI plugin reads its base URL from the environment, so no code changes:
+(\`"plugins": ["elizaos-plugin-agent402"]\`, setting \`AGENT402_WALLET_KEY\` to an
+EVM key holding USDC, or \`AGENT402_CREDITS_KEY\` for a credits key you already hold).
+Models: the OpenAI plugin reads its base URL from the environment, so no code
+changes. With the local wallet proxy running (above):
 
 \`\`\`bash
-OPENAI_BASE_URL=https://agent402.tools/v1/metered
-OPENAI_API_KEY=a402_...
-OPENAI_LARGE_MODEL=anthropic/claude-sonnet-5
+OPENAI_BASE_URL=http://127.0.0.1:8412/v1
+OPENAI_API_KEY=unused
+OPENAI_LARGE_MODEL=anthropic/claude-sonnet-5.5
 OPENAI_MEDIUM_MODEL=openai/gpt-4o-mini
-# embeddings live at /v1/embeddings ($${EMBEDDINGS_PRICE} a call), off the metered path
-OPENAI_EMBEDDING_URL=https://agent402.tools/v1
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 \`\`\`
+
+The proxy serves chat. Embeddings live at \`/v1/embeddings\`
+($${EMBEDDINGS_PRICE} a call), which the proxy does not forward: with a credits
+key you already hold, set \`OPENAI_EMBEDDING_URL=https://agent402.tools/v1\` and
+\`OPENAI_EMBEDDING_MODEL=text-embedding-3-small\`, with the key as the API key.
 
 ## Any OpenAI SDK
 
-With the credits key exported as \`AGENT402_CREDITS_KEY\`:
+With the local wallet proxy running (above), point the SDK at it; the proxy
+pays each call from your wallet:
+
+\`\`\`python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:8412/v1", api_key="unused")
+r = client.chat.completions.create(model="openai/gpt-4o-mini",
+    messages=[{"role": "user", "content": "One sentence on x402."}], max_tokens=60)
+print(r.choices[0].message.content)
+\`\`\`
+
+With a credits key you already hold, exported as \`AGENT402_CREDITS_KEY\`, call
+the metered route directly:
 
 \`\`\`python
 import os
@@ -1309,9 +1346,11 @@ SDK and \`responses.create()\`: base URL \`https://agent402.tools/v1/metered\`
 
 ## Any Anthropic SDK (Messages wire)
 
-The same metered pricing on the Anthropic Messages wire, at
-\`https://agent402.tools/v1/metered\` (route \`/v1/metered/messages\`). Pass the
-credits key as the SDK's \`auth_token\` (sent as \`Authorization: Bearer\`, which
+The same metered pricing on the Anthropic Messages wire. From a wallet, point
+the SDK's base URL at the local proxy (\`http://127.0.0.1:8412\`, which answers
+\`POST /v1/messages\`) with any placeholder key. With a credits key you already
+hold, use \`https://agent402.tools/v1/metered\` (route \`/v1/metered/messages\`)
+and pass the key as the SDK's \`auth_token\` (sent as \`Authorization: Bearer\`, which
 the credits gate reads), not \`api_key\` (sent as \`x-api-key\`):
 
 \`\`\`python
@@ -1343,7 +1382,7 @@ open-api-schema --schema <path to openapi.json>\`), or aggregates the hosted
 connector as an MCP server target. Paid calls ride
 [AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments-concepts.html):
 the agent forwards our \`402\` payload, AgentCore signs it from its managed
-wallet, and the retry carries the proof in \`X-PAYMENT\`; every Agent402 route
+wallet, and the retry carries the signed payment header; every Agent402 route
 answers a stock x402 v2 challenge, so nothing on our side needs configuring.
 
 ## VS Code
@@ -1356,18 +1395,18 @@ Server\` in the palette writes either). Remote, free tier, no key:
 { "servers": { "agent402": { "type": "http", "url": "https://agent402.tools/mcp" } } }
 \`\`\`
 
-Paid tools by card, through the stdio server with a credits key held in a
+Paid tools from a wallet, through the stdio server with the key held in a
 prompted input (VS Code stores it, the file never carries it):
 
 \`\`\`json
 {
-  "inputs": [{ "type": "promptString", "id": "agent402-key", "description": "Agent402 credits key (a402_...)", "password": true }],
+  "inputs": [{ "type": "promptString", "id": "agent402-key", "description": "EVM private key holding USDC (0x...)", "password": true }],
   "servers": {
     "agent402": {
       "type": "stdio",
       "command": "npx",
       "args": ["-y", "agent402-mcp"],
-      "env": { "AGENT402_CREDITS_KEY": "\${input:agent402-key}" }
+      "env": { "AGENT_KEY": "\${input:agent402-key}" }
     }
   }
 }
@@ -1384,7 +1423,7 @@ whole catalog). Remote, free tier:
 { "mcpServers": { "agent402": { "serverUrl": "https://agent402.tools/mcp" } } }
 \`\`\`
 
-Paid tools by card, with the key read from the environment (\`\${env:VAR}\`
+Paid tools from a wallet, with the key read from the environment (\`\${env:VAR}\`
 interpolation is Windsurf's own):
 
 \`\`\`json
@@ -1393,7 +1432,7 @@ interpolation is Windsurf's own):
     "agent402": {
       "command": "npx",
       "args": ["-y", "agent402-mcp"],
-      "env": { "AGENT402_CREDITS_KEY": "\${env:AGENT402_CREDITS_KEY}" }
+      "env": { "AGENT_KEY": "\${env:AGENT_KEY}" }
     }
   }
 }
@@ -1412,7 +1451,7 @@ Servers (the CLI reads \`~/.cline/mcp.json\`). Remote, free tier:
 }
 \`\`\`
 
-Paid tools by card:
+Paid tools from a wallet:
 
 \`\`\`json
 {
@@ -1420,7 +1459,7 @@ Paid tools by card:
     "agent402": {
       "command": "npx",
       "args": ["-y", "agent402-mcp"],
-      "env": { "AGENT402_CREDITS_KEY": "a402_..." },
+      "env": { "AGENT_KEY": "0x..." },
       "disabled": false,
       "autoApprove": []
     }
@@ -1429,8 +1468,10 @@ Paid tools by card:
 \`\`\`
 
 Cline's own "OpenAI Compatible" provider also accepts a base URL, so the
-models door works too: base URL \`https://agent402.tools/v1/metered\`, the
-credits key as the API key, and a model id from \`/v1/models\`.
+models door works too: base URL \`http://127.0.0.1:8412/v1\` (the local wallet
+proxy, above) with any placeholder API key, and a model id from
+\`/v1/models\`. A credits key you already hold works with base URL
+\`https://agent402.tools/v1/metered\` and the key as the API key.
 
 ## Roo Code
 
@@ -1446,7 +1487,7 @@ free tier:
 }
 \`\`\`
 
-Paid tools by card:
+Paid tools from a wallet:
 
 \`\`\`json
 {
@@ -1454,7 +1495,7 @@ Paid tools by card:
     "agent402": {
       "command": "npx",
       "args": ["-y", "agent402-mcp"],
-      "env": { "AGENT402_CREDITS_KEY": "a402_..." },
+      "env": { "AGENT_KEY": "0x..." },
       "alwaysAllow": [],
       "disabled": false
     }
@@ -1470,16 +1511,17 @@ One command for the free tier:
 codex mcp add agent402 --url https://agent402.tools/mcp
 \`\`\`
 
-Or in \`~/.codex/config.toml\`, paid tools by card through the stdio server:
+Or in \`~/.codex/config.toml\`, paid tools from a wallet through the stdio server:
 
 \`\`\`toml
 [mcp_servers.agent402]
 command = "npx"
 args = ["-y", "agent402-mcp"]
-env = { AGENT402_CREDITS_KEY = "a402_..." }
+env = { AGENT_KEY = "0x..." }
 \`\`\`
 
-Codex as a model host: its \`model_providers\` speak the Responses wire, and
+Codex as a model host, with a credits key you already hold (the local proxy
+does not serve the Responses wire): its \`model_providers\` speak the Responses wire, and
 the metered tier serves it at \`/v1/metered/responses\` (quoted per request
 from the body, settled at actual usage for a credits key). In
 \`~/.codex/config.toml\`:
@@ -1509,7 +1551,7 @@ gemini mcp add --transport http agent402 https://agent402.tools/mcp
 \`\`\`
 
 Or in \`~/.gemini/settings.json\` (\`httpUrl\` is the Streamable HTTP key;
-\`url\` means SSE), paid tools by card through the stdio server:
+\`url\` means SSE), paid tools from a wallet through the stdio server:
 
 \`\`\`json
 {
@@ -1517,53 +1559,20 @@ Or in \`~/.gemini/settings.json\` (\`httpUrl\` is the Streamable HTTP key;
     "agent402": {
       "command": "npx",
       "args": ["-y", "agent402-mcp"],
-      "env": { "AGENT402_CREDITS_KEY": "a402_..." }
+      "env": { "AGENT_KEY": "0x..." }
     }
   }
 }
 \`\`\`
 
-## Muse Code
+## What the same wallet buys
 
-Meta's Muse Code CLI reads MCP servers from the \`mcp_servers\` block of
-\`~/.config/muse/settings.json\` (the file must carry \`"schema_version": 1\`).
-The hosted connector over Streamable HTTP for the free tier, and the stdio
-server for paid tools by card:
-
-\`\`\`json
-{
-  "schema_version": 1,
-  "mcp_servers": {
-    "agent402": {
-      "transport": "streamable_http",
-      "url": "https://agent402.tools/mcp",
-      "enabled": true,
-      "mode": "optional"
-    },
-    "agent402-paid": {
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "agent402-mcp"],
-      "env": { "AGENT402_CREDITS_KEY": "\${AGENT402_CREDITS_KEY}" },
-      "enabled": true,
-      "mode": "optional"
-    }
-  }
-}
-\`\`\`
-
-\`mode: "optional"\` lets a session start even if a server is unreachable.
-Muse Code has no custom model provider setting, so it uses Agent402 for tools,
-not as its model host.
-
-## What the same key buys
-
-The credits key that pays for chat pays for the rest: four wires on every
+The wallet (or credits key) that pays for chat pays for the rest: four wires on every
 tier (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini generateContent), embeddings, rerank,
 images, speech and transcription, 500+ tools, finished reports
 and monitors, and a router that buys from other sellers and resells the
 result, proven sellers first. Why pay here, with the proof links:
-[agent402.tools/why](https://agent402.tools/why).
+[agent402.tools/#why](https://agent402.tools/#why).
 `,
   },
   {
@@ -1678,11 +1687,17 @@ npx agent402-openclaw setup --write        # no key? it mints a wallet and print
 openclaw gateway restart
 \`\`\`
 
+OpenClaw 2026.10.1 and later reserve the verified-source badge for plugins in
+OpenClaw's own official inventory, so \`openclaw plugins doctor\` lists agent402
+as a source it "can't verify" (\`reason=provenance-invalid\`), as it does every
+community plugin. The plugin loads and serves as before: it registers a model
+provider and a service, and uses no feature OpenClaw keeps for trusted plugins.
+
 With no credits key and no \`AGENT402_WALLET_KEY\`, \`setup\` generates a wallet
 into \`~/.openclaw/agent402/wallet.key\` (0600, never printed) and tells you the
 address: send it USDC on Base and every call is paid from it over x402, from
 $${TIERS["v1-chat-metered"].price} a call. \`agent402-openclaw wallet\` shows the
-balance; \`--credits-key a402_...\` is the card path instead. Every forwarded
+balance; \`--credits-key a402_...\` uses a credits key you already hold instead. Every forwarded
 call carries an \`Idempotency-Key\`, so a retry replays the paid answer instead
 of paying twice. The plain config block above needs no plugin and
 stays the simplest path for a credits key.
@@ -1713,8 +1728,8 @@ receipt shape:
   the result from the best-matching external seller for a task, proven sellers
   first, and sells it to you.
 
-Why pay here, in one page with the proof links:
-[agent402.tools/why](https://agent402.tools/why). The short version: usage is
+Why pay here, in one section with the proof links:
+[agent402.tools/#why](https://agent402.tools/#why). The short version: usage is
 priced under a ceiling you see before you pay, a failed call is not charged and the
 receipt proves it, a keyed retry never pays twice, and uptime and transactions are published from
 outside production.
@@ -1724,26 +1739,27 @@ outside production.
 
 const GUIDE_INDEX_CSS = `
 .gi-wrap{max-width:1180px;margin:0 auto;padding:56px 30px;}
-.gi-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;}
-.gi-wrap h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;}
-.gi-desc{font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 40px;max-width:640px;}
+.gi-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;}
+.gi-wrap h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;}
+.gi-desc{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px;max-width:640px;}
 .gi-list{display:flex;flex-direction:column;gap:20px;}
 .gi-card{display:block;background:var(--card);border:1px solid var(--hairline);padding:24px 26px;text-decoration:none;transition:border-color .2s;}
 .gi-card:hover{border-color:var(--accent);}
-.gi-card h2{font-family:var(--font-body);font-weight:800;font-size:20px;line-height:1.15;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink);}
-.gi-card p{font-size:15px;line-height:1.55;color:var(--muted);margin:0;}
-@media(max-width:600px){.gi-wrap h1{font-size:40px;}}
+.gi-card h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-lg);line-height:1.15;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink);}
+.gi-card p{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0;}
+@media(max-width:600px){.gi-wrap h1{font-size:var(--fs-3xl);}}
 `;
 
 const GUIDE_PAGE_CSS = `
 .gp-wrap{max-width:760px;margin:0 auto;padding:56px 30px 48px;}
-.gp-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;}
-.gp-crumb{font-family:var(--font-mono);font-size:13px;color:var(--faint);margin-bottom:20px;}
+.gp-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;}
+.gp-crumb{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:20px;}
 .gp-crumb a{color:var(--accent);text-decoration:none;}
 .gp-crumb a:hover{text-decoration:underline;}
-.gp-wrap h1{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 28px;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis;}
-.gp-body{font-size:15px;line-height:1.55;color:var(--muted);}
-.gp-body h2{font-family:var(--font-body);font-weight:800;font-size:22px;line-height:1.1;letter-spacing:-.02em;color:var(--ink);margin:32px 0 12px;}
+.gp-wrap h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 28px;color:var(--ink);text-wrap:balance;}
+@media(max-width:640px){.gp-wrap h1{font-size:var(--fs-2xl);line-height:1.1;}}
+.gp-body{font-size:var(--fs-base);line-height:1.55;color:var(--muted);}
+.gp-body h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);line-height:1.1;letter-spacing:-.02em;color:var(--ink);margin:32px 0 12px;}
 .gp-body p{margin:0 0 16px;}
 .gp-body ul,.gp-body ol{margin:0 0 16px;padding-left:24px;}
 .gp-body li{margin-bottom:6px;}
@@ -1751,10 +1767,10 @@ const GUIDE_PAGE_CSS = `
 .gp-body em{font-style:italic;}
 .gp-body a{color:var(--accent);text-decoration:none;}
 .gp-body a:hover{text-decoration:underline;}
-.gp-body code{font-family:var(--font-mono);font-size:13px;background:var(--card);border:1px solid var(--hairline);padding:2px 6px;}
-.gp-body pre{background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:13px;line-height:1.55;padding:16px 20px;overflow-x:auto;margin:0 0 16px;border:1px solid var(--hairline);}
-.gp-body pre code{background:none;border:none;padding:0;color:inherit;font-size:13px;}
-.gp-back{display:inline-block;margin-top:28px;font-family:var(--font-mono);font-size:13px;color:var(--accent);text-decoration:none;font-weight:700;}
+.gp-body code{font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--card);border:1px solid var(--hairline);padding:2px 6px;}
+.gp-body pre{background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px 20px;overflow-x:auto;margin:0 0 16px;border:1px solid var(--hairline);}
+.gp-body pre code{background:none;border:none;padding:0;color:inherit;font-size:var(--fs-sm);}
+.gp-back{display:inline-block;margin-top:28px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;font-weight:700;}
 .gp-back:hover{text-decoration:underline;}
 `;
 
@@ -1816,7 +1832,7 @@ export function guidePage(baseUrl, slug, catalog = null) {
   };
 
   const body = `<div class="gp-wrap">
-  <div class="gp-crumb"><a href="/">Home</a> / <a href="/guides">Guides</a> / ${esc(g.title)}</div>
+  <div class="gp-crumb ml-crumb"><a href="/">Home</a> / <a href="/guides">Guides</a><span class="ml-crumb-cur"> / ${esc(g.title)}</span></div>
   <h1 title="${esc(g.title)}">${esc(g.title)}</h1>
   <div class="gp-body">
     ${marked.parse(g.md)}

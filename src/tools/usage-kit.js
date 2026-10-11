@@ -58,7 +58,7 @@ export const USAGE_TOOLS = [
       },
       output: {
         example: {
-          wallet: "0x902dcf34e53695bdea2ffb354b1a2e58bd598256",
+          wallet: "0xb0b0000000000000000000000000000000000b0b",
           days: 30,
           persistent: true,
           totals: { calls: 42, paidUsd: 1.234, firstAt: "2026-07-01T00:00:00.000Z", lastAt: "2026-07-09T00:00:00.000Z" },
@@ -109,7 +109,7 @@ export const USAGE_TOOLS = [
       },
       output: {
         example: {
-          wallet: "0x902dcf34e53695bdea2ffb354b1a2e58bd598256",
+          wallet: "0xb0b0000000000000000000000000000000000b0b",
           from: "2026-09-01T00:00:00.000Z",
           to: "2026-09-11T00:00:00.000Z",
           returned: 2,

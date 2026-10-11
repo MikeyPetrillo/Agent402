@@ -331,6 +331,19 @@ const pages = {
   hubDossier: hubPage({ kind: "dossier", baseUrl: BASE }),
 };
 
+// Each hub's buy copy states what that family's paid report reads, and only
+// the ticker hubs promise pages for tickers off the list (a manager page needs
+// a seeded manager).
+{
+  const { INSIDER_TIERS } = await import("../src/tools/insider-flow-kit.js");
+  const txt = (h) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+  ok(txt(pages.hubInsider).includes(`reads the newest ${INSIDER_TIERS["insider-report"].maxFilings} Form 4 filings in your window`), "insider hub: buy copy names the report's filing cap");
+  ok(/two most recent 13F filings/.test(txt(pages.hubFund)) && !/resolve too/.test(txt(pages.hubFund)), "fund hub: buy copy says it compares two 13Fs, and promises no off-list manager pages");
+  ok(/reads the company's filings and cites every claim/.test(txt(pages.hubDossier)) && !/in your window/.test(txt(pages.hubDossier)), "dossier hub: buy copy has no window");
+  ok(/tickers outside this list resolve too/.test(txt(pages.hubInsider)) && /tickers outside this list resolve too/.test(txt(pages.hubDossier)), "ticker hubs: off-list tickers resolve");
+  ok(!/managers outside this list/.test(Object.values(pages).join(" ")), "no page promises off-list manager pages");
+}
+
 const titles = new Set(), descs = new Set(), canons = new Set();
 for (const [name, html] of Object.entries(pages)) {
   const t = titleOf(html), d = descOf(html), c = canonOf(html);

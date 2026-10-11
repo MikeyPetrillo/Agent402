@@ -53,6 +53,7 @@ const ALLOWED = {
   "x402-index.js": { why: "registry discovery poll", bound: /DISCOVERY_INTERVAL_MS/ },
   "server.js": { why: "wallet activity scan", bound: /SQL_SCAN_DAILY_BUDGET/ },
   "decision-one.js": { why: "typed-judgment backend for the paid judge routes and the internal judges", bound: /DECISION_ONE_DAILY_MAX_BYTES/ },
+  "solana-history-rpc.js": { why: "Solana history reads for the leaderboard and ledger, called per new payment by those bounded loops; public nodes first, the keyed provider as fallback, answers cached by signature", bound: /SOLANA_HISTORY_CACHE/ },
   "verify-hint.js": { why: "payer balance read after a refused payment; public nodes first, the keyed provider last", bound: /MAX_BATCHES_INFLIGHT/ },
   // A file may NAME a metered host without ever calling it - upstream-budgets
   // declares the per-vendor daily call budgets and matches egress-meter rows by

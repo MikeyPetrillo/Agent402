@@ -130,6 +130,16 @@ async function photonSearch({ q, limit, countryCodes = null, bbox = null }) {
   return features.slice(0, limit).map(shapePhotonHit);
 }
 
+// Attribution OpenStreetMap data requires wherever it is served: the ODbL
+// notice (section 4.3, https://opendatacommons.org/licenses/odbl/1-0/), the
+// OSMF attribution guidelines ("Geocoders that use OSM data must credit
+// OpenStreetMap", https://osmfoundation.org/wiki/Licence/Attribution_Guidelines)
+// and the geocoder usage policy ("Clearly display attribution",
+// https://operations.osmfoundation.org/policies/nominatim/). Every geo tool's
+// description ends with it and each answer's `source` names the licence; the
+// vendor-name check in scripts/test-no-third-party-names.js allows it there.
+export const OSM_ATTRIBUTION = "Data © OpenStreetMap contributors, ODbL (openstreetmap.org/copyright).";
+
 export const GEO_TOOLS = [
   {
     route: "GET /api/geocode",
@@ -138,8 +148,8 @@ export const GEO_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "Resolve a free-form address or place name to coordinates: lat/lon, display name, bounding box, place type. OpenStreetMap/Nominatim, no key. ?q=1600+Pennsylvania+Ave+Washington+DC&limit=1.",
-    tags: ["geocoding", "address", "lat-lon", "openstreetmap", "nominatim", "maps"],
+      `Resolve a free-form address or place name to coordinates: lat/lon, display name, bounding box, place type. No key. ?q=1600+Pennsylvania+Ave+Washington+DC&limit=1. ${OSM_ATTRIBUTION}`,
+    tags: ["geocoding", "address", "lat-lon", "maps"],
     discovery: {
       input: { q: "1600 Pennsylvania Ave NW, Washington, DC", limit: 1 },
       inputSchema: {
@@ -200,8 +210,8 @@ export const GEO_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "Resolve a lat/lon to a structured postal address: road, house number, city, state, postcode, country (with ISO code). OpenStreetMap/Nominatim, no key. ?lat=38.8977&lon=-77.0365.",
-    tags: ["reverse-geocoding", "address", "lat-lon", "openstreetmap", "nominatim", "maps"],
+      `Resolve a lat/lon to a structured postal address: road, house number, city, state, postcode, country (with ISO code). No key. ?lat=38.8977&lon=-77.0365. ${OSM_ATTRIBUTION}`,
+    tags: ["reverse-geocoding", "address", "lat-lon", "maps"],
     discovery: {
       input: { lat: 38.8977, lon: -77.0365 },
       inputSchema: {
@@ -303,8 +313,8 @@ export const GEO_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "Search OpenStreetMap for places by keyword, optionally restricted to a bounding box or country. Returns ranked hits with coordinates and place type - e.g. coffee shops in a city, airports in a region. ?q=coffee&viewbox=-122.52,37.81,-122.35,37.70&bounded=1.",
-    tags: ["places", "poi", "search", "openstreetmap", "nominatim", "maps"],
+      `Search open map data for places by keyword, optionally restricted to a bounding box or country. Returns ranked hits with coordinates and place type - e.g. coffee shops in a city, airports in a region. ?q=coffee&viewbox=-122.52,37.81,-122.35,37.70&bounded=1. ${OSM_ATTRIBUTION}`,
+    tags: ["places", "poi", "search", "maps"],
     discovery: {
       input: { q: "Eiffel Tower", limit: 3 },
       inputSchema: {

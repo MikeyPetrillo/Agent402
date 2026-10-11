@@ -116,7 +116,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**nft-portfolio**](https://agent402.tools/skills/nft-portfolio) | $0.005 | NFT + wallet snapshot: NFT holdings, native balance, and ETH price for an address. |
 | [**wallet-audit**](https://agent402.tools/skills/wallet-audit) | $0.005 | Full wallet review: balance, recent transactions, and token metadata for an address. |
 | [**wallet-readiness**](https://agent402.tools/skills/wallet-readiness) | $0.008 | "Can this wallet pay right now?" USDC on Base + Solana, live Base gas, and an Onramp funding link. |
-| [**onchain-analyst**](https://agent402.tools/skills/onchain-analyst) | $0.021 | Ask Base anything in SQL - your query runs against Coinbase's indexed, decoded chain data. |
+| [**onchain-analyst**](https://agent402.tools/skills/onchain-analyst) | $0.021 | Ask Base anything in SQL - your query runs against indexed, decoded chain data. |
 | [**gas-optimizer**](https://agent402.tools/skills/gas-optimizer) | $0.007 | Find the cheapest gas: Base gas, Ethereum gas, Base fee estimate, and ETH price for USD conversion. |
 | [**tx-forensics**](https://agent402.tools/skills/tx-forensics) | $0.011 | Explain what an EVM transaction actually did: confirmation status, the raw transaction, decoded calldata with typed parameters, resolved function signature, and labeled counterparties. |
 | [**cheapest-rail**](https://agent402.tools/skills/cheapest-rail) | $0.009 | Where should an agent transact this minute? Live gas across L2s, a fee estimate, and ETH spot. |

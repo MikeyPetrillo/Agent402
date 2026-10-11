@@ -102,5 +102,38 @@ ok(A2A_WELL_KNOWN_PATHS[0] === "/.well-known/agent-card.json" && A2A_WELL_KNOWN_
   ok(live.registrations[0].agentRegistry === `${ERC8004_IDENTITY_REGISTRY.chain}:${ERC8004_IDENTITY_REGISTRY.address}`, "with the CAIP-scoped registry it was minted in");
 }
 
+
+// The descriptions offer what is sold today, and the agent id is one constant.
+{
+  const { ERC8004_AGENT_ID } = await import("../src/tools/a2a-card.js");
+  const reg = buildAgentRegistration({ baseUrl: "https://agent402.tools", toolCount: 3 });
+  const card = buildOurAgentCard({ baseUrl: "https://agent402.tools", toolCount: 3 });
+  for (const [n, d] of [["registration", reg.description], ["agent card", card.description]]) {
+    ok(!/prepaid by card/.test(d), `the ${n} does not offer prepaid card credits`);
+    ok(/USDG on Robinhood Chain/.test(d), `the ${n} names the non-USDC settlement asset from RAILS`);
+  }
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const srcDir = new URL("../src/", import.meta.url);
+  const typed = readdirSync(srcDir).filter((f) => f.endsWith(".js") && readFileSync(new URL(f, srcDir), "utf8").includes(ERC8004_AGENT_ID));
+  ok(typed.length === 0, `the agent id is typed only in a2a-card.js (also in: ${typed.join(", ") || "none"})`);
+}
+
+// One reader decides the published id for the registration file, /company and
+// llms.txt: the setting when valid, else the hosted origin's constant, else none.
+{
+  const { ERC8004_AGENT_ID, erc8004AgentId } = await import("../src/tools/a2a-card.js");
+  const { companyPage } = await import("../src/company.js");
+  const saved = process.env.ERC8004_AGENT_ID;
+  delete process.env.ERC8004_AGENT_ID;
+  ok(erc8004AgentId("https://agent402.tools") === ERC8004_AGENT_ID, "the hosted origin publishes the constant id");
+  ok(erc8004AgentId("http://127.0.0.1:3000") === null, "a self-hosted origin publishes no id by default");
+  ok(!/agent \d+<\/strong>/.test(companyPage("http://127.0.0.1:3000")) && companyPage("https://agent402.tools").includes(`agent ${ERC8004_AGENT_ID}</strong>`), "/company names the id only where the reader returns one");
+  process.env.ERC8004_AGENT_ID = "47";
+  ok(erc8004AgentId("http://127.0.0.1:3000") === "47" && erc8004AgentId("https://agent402.tools") === "47", "the setting wins on any origin");
+  process.env.ERC8004_AGENT_ID = "0x1";
+  ok(erc8004AgentId("https://agent402.tools") === null, "an invalid setting publishes no id rather than a guess");
+  if (saved === undefined) delete process.env.ERC8004_AGENT_ID; else process.env.ERC8004_AGENT_ID = saved;
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

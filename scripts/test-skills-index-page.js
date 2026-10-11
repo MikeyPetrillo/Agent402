@@ -14,7 +14,9 @@ const html = skillsIndex(BASE_URL);
 
 // --- real data rendering ------------------------------------------------------
 ok(html.includes("Seven tools.") && html.includes("One <span"), "hero H1 renders");
-ok(html.includes(`${SKILL_PACKS.length}+ packs, ${PACK_PRICE_RANGE.text}`) && html.includes("none priced above the sum of its tools"), "hero cites the real live pack count, the derived price range and the rule");
+ok(html.includes(`${SKILL_PACKS.length} packs, ${PACK_PRICE_RANGE.text}`) && html.includes("none priced above the sum of its tools"), "hero cites the real live pack count, the derived price range and the rule");
+ok(!/\d\+ (skill )?packs|\d\+ multi-tool/.test(html), "the pack count is exact (derived from SKILL_PACKS), never written as a floor");
+ok(/failure paths to handle<\/th><td[^>]*>7<\/td><td[^>]*>1 envelope</.test(html), "a pack still has one failure path to handle: its partial-success envelope");
 // The pricing claim must hold for EVERY pack. Rounding up to the $0.001 floor
 // puts many packs exactly AT the sum of their tools, so the copy may claim
 // "never above", never "below" (it said "below" while 34 of 84 sat at the sum).
@@ -48,8 +50,9 @@ for (const slug of FLAGSHIP) {
   const pack = SKILL_PACKS.find((p) => p.slug === slug);
   ok(pack, `flagship pack "${slug}" exists in SKILL_PACKS`);
   if (!pack) continue;
-  const seq = pack.toolSlugs.join(" · ");
-  ok(html.includes(seq), `"${slug}" renders its REAL tool sequence verbatim: ${seq}`);
+  // One <span> per tool, in order (the separators are drawn by CSS so the list wraps between tools).
+  const seq = pack.toolSlugs.map((t) => `<span>${t}</span>`).join("");
+  ok(html.includes(seq), `"${slug}" renders its REAL tool sequence verbatim: ${pack.toolSlugs.join(" · ")}`);
 }
 
 // forecasting-bake-off specifically: the design handoff's own copy dropped

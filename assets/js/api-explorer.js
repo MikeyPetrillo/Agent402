@@ -1,12 +1,12 @@
 (function(){
-  var wrapEl=document.querySelector('.ae-wrap');
-  var BASE=wrapEl?(wrapEl.getAttribute('data-base')||''):'';
+  // Same-origin, relative fetches: the page works on whatever host serves it.
   var list=document.getElementById('aeList');
   var search=document.getElementById('aeSearch');
   var countEl=document.getElementById('aeCount');
   var catsEl=document.getElementById('aeCats');
   var endpoints=[];
   var activeCategory='all';
+  var freeByPath={};   // path -> slug for the proof-of-work (free) tools
 
   function el(tag,cls,text){
     var e=document.createElement(tag);
@@ -15,19 +15,32 @@
     return e;
   }
 
-  fetch(BASE+'/openapi.json').then(function(r){return r.json()}).then(function(spec){
+  // computePayable lives in /api/pricing, not in the OpenAPI spec.
+  var pricing=fetch('/api/pricing').then(function(r){return r.json()}).then(function(pr){
+    (pr.endpoints||[]).forEach(function(e){if(e.computePayable)freeByPath[e.path]=e.slug;});
+  }).catch(function(){});
+  Promise.all([fetch('/openapi.json').then(function(r){if(!r.ok)throw new Error(r.status);return r.json()}),pricing]).then(function(res){
+    var spec=res[0];
     var paths=spec.paths||{};
     Object.keys(paths).sort().forEach(function(p){
       var methods=paths[p];
       ['get','post','put','delete','patch'].forEach(function(m){
         if(!methods[m])return;
         var op=methods[m];
-        endpoints.push({method:m.toUpperCase(),path:p,name:op.summary||op.operationId||'',desc:op.description||'',category:(op.tags&&op.tags[0])||'other',schema:op.requestBody&&op.requestBody.content&&op.requestBody.content['application/json']&&op.requestBody.content['application/json'].schema||null,params:op.parameters||[]});
+        // The spec's summary names one wire ("($0.001/call via x402)"); every
+        // paid route also takes MPP, so the price is shown on its own instead.
+        var name=String(op.summary||op.operationId||'').replace(/\s*\([^)]*via x402\)\s*$/,'');
+        endpoints.push({method:m.toUpperCase(),path:p,slug:op.operationId||'',price:op['x-price']||'',name:name,desc:op.description||'',category:(op.tags&&op.tags[0])||'other',schema:op.requestBody&&op.requestBody.content&&op.requestBody.content['application/json']&&op.requestBody.content['application/json'].schema||null,params:op.parameters||[]});
       });
     });
     renderCats();
     renderList();
-  }).catch(function(){list.textContent='Failed to load API spec.';});
+  }).catch(function(){
+    while(list.firstChild)list.removeChild(list.firstChild);
+    list.appendChild(document.createTextNode('Could not load the API spec here. Open '));
+    var a=el('a','','/openapi.json');a.href='/openapi.json';list.appendChild(a);
+    list.appendChild(document.createTextNode(' directly.'));
+  });
 
   function renderCats(){
     while(catsEl.firstChild)catsEl.removeChild(catsEl.firstChild);
@@ -64,7 +77,8 @@
       var head=el('div','ae-ep-head');
       head.appendChild(el('span','ae-method '+ep.method,ep.method));
       head.appendChild(el('span','ae-path',ep.path));
-      head.appendChild(el('span','ae-ep-name',ep.name));
+      var free=freeByPath[ep.path];
+      head.appendChild(el('span','ae-ep-name',ep.name+(ep.price?' \u00b7 '+ep.price+(free?' or free (proof-of-work)':' (x402 or MPP)'):'')));
       head.addEventListener('click',function(){div.classList.toggle('open');});
       div.appendChild(head);
 
@@ -74,7 +88,7 @@
         var sec=el('div','ae-section');
         sec.appendChild(el('div','ae-section-title','Description'));
         var p=el('p','',ep.desc);
-        p.style.cssText='font-size:.9rem;color:var(--muted);margin:0';
+        p.style.cssText='font-size:var(--fs-md);color:var(--muted);margin:0';
         sec.appendChild(p);
         body.appendChild(sec);
       }
@@ -113,15 +127,17 @@
       }
 
       var sec4=el('div','ae-section');
-      var tryBtn=el('a','ae-try-btn','Try in Playground →');
-      tryBtn.href='/playground';
+      // The playground runs the free (proof-of-work) tools; a paid tool links to
+      // its own page, which shows how to pay for it.
+      var tryBtn=el('a','btn btn-secondary btn-sm ae-try-btn',free?'Try it free in the playground →':'Tool page and how to pay →');
+      tryBtn.href=free?'/playground?slug='+encodeURIComponent(free):(ep.slug?'/tools/'+encodeURIComponent(ep.slug):'/tools');
       sec4.appendChild(tryBtn);
       body.appendChild(sec4);
 
       div.appendChild(body);
       list.appendChild(div);
     });
-    countEl.textContent=shown+' endpoint'+(shown===1?'':'s');
+    countEl.textContent=shown+' endpoint'+(shown===1?'':'s')+' in openapi.json';
   }
 
   search.addEventListener('input',renderList);

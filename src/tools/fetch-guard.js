@@ -8,8 +8,9 @@ const FETCH_TIMEOUT_MS = 15000;
 // Points at the page that explains the crawl and offers removal, not at the
 // code repo: an operator who finds this string in their logs wants to know
 // what we read and how to stop us, and a link to a source tree answers
-// neither. src/crawler-page.js is the page, and it states the same string.
-const USER_AGENT =
+// neither. src/crawler-page.js is the page, and it imports this string; the
+// index crawler's raw 402 probes (x402-index.js, mpp-index.js) send it too.
+export const USER_AGENT =
   "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools/crawler)";
 
 const SSRF_BLOCK_CODE = "ESSRFBLOCKED";
@@ -274,6 +275,27 @@ export async function assertPublicUrl(rawUrl) {
     }
   }
   return url;
+}
+
+/**
+ * One unpaid probe of a crawled seller URL, answered as the raw Response: its
+ * status and headers are the reading, so nothing is thrown for a 401/402 and
+ * no redirect is followed. The URL is external data and is only ever fetched
+ * through this guard: assertPublicUrl refuses a non-public target before the
+ * request, ssrfDispatcher re-checks the resolved address at connect (a DNS
+ * answer that changed since the check), and redirect: "manual" keeps the
+ * request on the validated host. Sends the crawler User-Agent.
+ */
+export async function probePublicUrl(rawUrl, { method = "GET", headers = {}, body, timeoutMs = 8000 } = {}) {
+  await assertPublicUrl(rawUrl);
+  return fetch(rawUrl, {
+    method,
+    headers: { "User-Agent": USER_AGENT, ...headers },
+    ...(body !== undefined ? { body } : {}),
+    dispatcher: ssrfDispatcher,
+    redirect: "manual",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
 }
 
 // Retry a thunk on TRANSIENT upstream failures only — 504 (timeout/network),

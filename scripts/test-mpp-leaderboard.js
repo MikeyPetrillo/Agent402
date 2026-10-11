@@ -233,7 +233,7 @@ const snap = {
   // The host card says ranked rows never include the host: our own recipient
   // is left out of the ranked table and the ranks renumber over what shows.
   ok(!/\(this server\)/.test(html) && !/explore\.tempo\.xyz\/address\/${SELF.toLowerCase()}/.test(html), "our own recipient is not a ranked row");
-  ok(/<td class="num">2<\/td>\s*<td><a[^>]*>Gw0/.test(html), "ranks renumber over the shown rows, leaving no gap where the host sat");
+  ok(/<td class="num">2<\/td>\s*<td><p class="mlb-who">(?:<span[^>]*>[^<]*<\/span> )?<a[^>]*>Gw0/.test(html), "ranks renumber over the shown rows, leaving no gap where the host sat");
   // The router's real rule, not the floor alone.
   const lbRule = { ...lb, provenMinPayers: 3, rows: [...lb.rows, { rank: 5, recipient: "0x" + "9".repeat(40), sellers: [{ name: "Few", origin: "https://few.example", url: "https://few.example" }], intents: ["charge"], self: false, transfers: 40, payers: 2, evidencePayers: 2, volumeUsdc: 1, proven: false, routable: false }, { rank: 6, recipient: "0x" + "8".repeat(40), sellers: [{ name: "Small", origin: "https://small.example", url: "https://small.example" }], intents: ["charge"], self: false, transfers: 7, payers: 4, evidencePayers: 4, volumeUsdc: 0.1, proven: false, routable: false }] };
   const ruled = mppMarketPage("https://x.test", snap, lbRule);

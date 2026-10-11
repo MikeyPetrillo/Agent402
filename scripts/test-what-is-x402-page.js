@@ -19,7 +19,9 @@ ok(html.includes("What are <span") && html.includes(">x402</span>"), "hero H1 re
 ok(html.includes("7,619") && html.includes(">Base<"), "rails table shows real per-network settled counts");
 ok(html.includes("114") && html.includes(">Robinhood Chain<") && html.includes(">USDG<"), "Robinhood Chain rendered with its real count and USDG asset, not USDC");
 ok(html.includes(">·<"), "a rail with zero recorded settlements renders as a dash placeholder, never a fabricated 0");
-ok(html.includes("69") && html.includes("settled over the MPP wire"), "MPP wire count renders");
+// The table lists x402 chains only; an MPP-wire total beside it read as "of
+// these" while it also counted Tempo, which the table does not list.
+ok(!html.includes("settled over the MPP wire") && html.includes("on each x402 chain, over either wire") && html.includes('href="/revenue"'), "the rail table says what it counts and sends the wire split to /revenue");
 
 // --- adoption table excludes Agent402's own row ----------------------------
 // Scoped to the #who section specifically - "Agent402.Tools" also appears
@@ -51,7 +53,7 @@ const visibleFaqArticles = (html.match(/<article style="padding:26px 0/g) || [])
 ok(visibleFaqArticles === 9, `visible FAQ prose also carries exactly 9 questions, matching the schema 1:1 (got ${visibleFaqArticles})`);
 
 // --- comparison table --------------------------------------------------------
-ok(html.includes(">MPP</th>") && html.includes("X-PAYMENT header"), "x402 vs MPP comparison table renders");
+ok(html.includes(">MPP</th>") && html.includes("PAYMENT-SIGNATURE header carrying"), "x402 vs MPP comparison table renders, naming the x402 v2 header");
 
 // --- copy hygiene -----------------------------------------------------------
 ok(!html.includes("—"), "no em dashes anywhere in the page copy");

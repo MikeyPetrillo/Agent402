@@ -114,7 +114,7 @@ export const COMPONENTS = [
   { key: "mcp", label: "MCP connector", blurb: "The hosted /mcp endpoint agents connect through.", staleAfterMs: QUARTER_HOURLY },
   { key: "paywall", label: "Paywall engaged", blurb: "Paid tools still answer 402 when unpaid, so nothing is given away by accident.", staleAfterMs: QUARTER_HOURLY },
   { key: "rails", label: "Payment rails", blurb: "The chains advertised in a live 402 challenge.", staleAfterMs: QUARTER_HOURLY },
-  { key: "settlement", label: "Settlement (paid canary)", blurb: "A daily purchase paying real USDC across every supported chain.", staleAfterMs: DAILY },
+  { key: "settlement", label: "Settlement (paid canary)", blurb: "A daily purchase paying real stablecoins across every supported chain (USDC, USDG on Robinhood Chain, USDC.e on Tempo).", staleAfterMs: DAILY },
 ];
 
 const WINDOWS = [
@@ -313,9 +313,11 @@ function liveSection(live, stats) {
   if (live.gateway) rows.push(["LLM gateway credit", bucket(live.gateway), esc(String(live.gateway)), "Bucketed upstream balance. The amount is never exposed."]);
   if (live.upstreamBuyer) rows.push(["Upstream buyer wallet, Base", bucket(live.upstreamBuyer), esc(live.upstreamBuyer), "Funds the router's purchases from outside sellers for resale."]);
   if (live.upstreamBuyerAvm) rows.push(["Upstream buyer wallet, Algorand", bucket(live.upstreamBuyerAvm), esc(live.upstreamBuyerAvm), "Funds Algorand-side external routing."]);
+  if (live.upstreamBuyerSvm) rows.push(["Upstream buyer wallet, Solana", bucket(live.upstreamBuyerSvm), esc(live.upstreamBuyerSvm), "Funds Solana-side external routing."]);
+  if (live.upstreamBuyerTempo) rows.push(["Upstream buyer wallet, Tempo", bucket(live.upstreamBuyerTempo), esc(live.upstreamBuyerTempo), "Funds the router's purchases from MPP sellers on Tempo."]);
   const last = stats?.recentCalls?.[0];
   if (last) {
-    rows.push(["Last call served", "ok", `${esc(last.slug)} · ${esc(agoStr(last.at))}`, `Paid with ${last.paidWith === "proof-of-work" ? "proof-of-work" : "USDC"}.`]);
+    rows.push(["Last call served", "ok", `${esc(agoStr(last.at))} · ${esc(last.slug)}`, `Paid with ${last.paidWith === "proof-of-work" ? "proof-of-work" : "USDC"}.`]);
   }
   if (!rows.length) return "";
   return `<h2 id="live">Live checks</h2>
@@ -366,61 +368,61 @@ ${incidents
 
 const CSS = `
 .st-wrap{max-width:1180px;margin:0 auto;padding:56px 30px}
-.st-h1{font-family:var(--font-body);font-weight:800;font-size:52px;line-height:.98;letter-spacing:-.03em;margin:0 0 10px}
-.st-sub{color:var(--muted);margin:0 0 26px;font-size:15px;line-height:1.55}
+.st-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.98;margin:0 0 10px}
+.st-sub{color:var(--muted);margin:0 0 26px;font-size:var(--fs-base);line-height:1.55}
 .st-sub a{color:var(--accent);text-decoration:none}
 .st-sub a:hover{text-decoration:underline}
-.hero{border:1px solid var(--hairline);border-radius:2px;padding:22px;margin:0 0 26px;background:var(--card);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.hero .hw{font-family:var(--font-body);font-weight:700;font-size:22px}
-.hero .hm{color:var(--muted);font-size:14px;width:100%;margin:0}
+.hero{border:1px solid var(--hairline);border-radius:var(--radius);padding:22px;margin:0 0 26px;background:var(--card);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.hero .hw{font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl)}
+.hero .hm{color:var(--muted);font-size:var(--fs-md);width:100%;margin:0}
 .dot{width:11px;height:11px;border-radius:50%;display:inline-block;flex:0 0 auto;background:var(--dash)}
-.dot.ok{background:var(--green)}
-.dot.warn{background:#C98A12}
-.dot.bad{background:var(--accent)}
+.dot.ok{background:var(--ok)}
+.dot.warn{background:var(--warn)}
+.dot.bad{background:var(--bad)}
 .dot.unk{background:var(--dash)}
 .wins{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 30px;padding:0;list-style:none}
-.wins li{border:1px solid var(--hairline);border-radius:2px;padding:10px 14px;background:var(--card);font-family:var(--font-mono);font-size:13px}
+.wins li{border:1px solid var(--hairline);border-radius:var(--radius);padding:10px 14px;background:var(--card);font-family:var(--font-mono);font-size:var(--fs-sm)}
 .wins b{font-family:var(--font-body)}
-.comp{border:1px solid var(--hairline);border-radius:2px;padding:16px 18px;margin:0 0 14px;background:var(--card)}
+.comp{border:1px solid var(--hairline);border-radius:var(--radius);padding:16px 18px;margin:0 0 14px;background:var(--card)}
 .comp-h{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
 .comp-n{font-weight:700}
-.comp-s{margin-left:auto;font-size:12px;font-family:var(--font-mono);color:var(--muted)}
-.comp-s.ok{color:var(--green)}
-.comp-s.bad{color:var(--accent)}
-.comp-b{margin:6px 0 12px;color:var(--muted);font-size:14px}
+.comp-s{margin-left:auto;font-size:var(--fs-xs);font-family:var(--font-mono);color:var(--muted)}
+.comp-s.ok{color:var(--ok)}
+.comp-s.bad{color:var(--bad)}
+.comp-b{margin:6px 0 12px;color:var(--muted);font-size:var(--fs-md)}
 .bars{display:flex;gap:2px;align-items:stretch;height:34px}
-.bars .b{flex:1 1 0;min-width:2px;border-radius:1px;background:var(--dash)}
-.bars .b.up{background:var(--green)}
-.bars .b.partial{background:#C98A12}
-.bars .b.down{background:var(--accent)}
+.bars .b{flex:1 1 0;min-width:2px;border-radius:0;background:var(--dash)}
+.bars .b.up{background:var(--ok)}
+.bars .b.partial{background:var(--warn)}
+.bars .b.down{background:var(--bad)}
 .bars .b.nodata{background:var(--hairline);opacity:.5}
-.bar-legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:-8px 0 18px}
-.bar-legend .b{display:inline-block;width:10px;height:14px;border-radius:1px;background:var(--dash);flex:none}
-.bar-legend .b.up{background:var(--green)}
-.bar-legend .b.partial{background:#C98A12}
-.bar-legend .b.down{background:var(--accent)}
+.bar-legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:-8px 0 18px}
+.bar-legend .b{display:inline-block;width:10px;height:14px;border-radius:0;background:var(--dash);flex:none}
+.bar-legend .b.up{background:var(--ok)}
+.bar-legend .b.partial{background:var(--warn)}
+.bar-legend .b.down{background:var(--bad)}
 .bar-legend .b.nodata{background:var(--hairline);opacity:.5}
 .inc-scroll{overflow-x:auto}
 .inc-scroll .inc{min-width:520px}
-.comp-f{display:flex;justify-content:space-between;gap:10px;margin-top:7px;font-size:12px;color:var(--faint);font-family:var(--font-mono)}
+.comp-f{display:flex;justify-content:space-between;gap:10px;margin-top:7px;font-size:var(--fs-xs);color:var(--faint);font-family:var(--font-mono)}
 .comp-f .up-n{color:var(--muted)}
 .comp-f em{font-style:normal;color:var(--faint)}
-.nomeasure{margin:0;font-size:13px;color:var(--faint);border-left:2px solid var(--dash);padding-left:10px}
+.nomeasure{margin:0;font-size:var(--fs-sm);color:var(--faint);border-left:2px solid var(--dash);padding-left:10px}
 .live{display:grid;gap:10px;margin:14px 0 30px}
-.lrow{display:grid;grid-template-columns:12px 1fr auto;gap:9px;align-items:center;border:1px solid var(--hairline);border-radius:2px;padding:12px 14px;background:var(--card)}
-.lrow .ln{font-weight:600;font-size:14px}
-.lrow .lv{font-family:var(--font-mono);font-size:13px;color:var(--muted)}
-.lrow .lb{grid-column:2/4;margin:2px 0 0;font-size:13px;color:var(--faint)}
-table.inc{width:100%;border-collapse:collapse;margin:12px 0 30px;font-size:14px}
+.lrow{display:grid;grid-template-columns:12px auto minmax(0,1fr);gap:9px;align-items:center;border:1px solid var(--hairline);border-radius:var(--radius);padding:12px 14px;background:var(--card)}
+.lrow .ln{font-weight:600;font-size:var(--fs-md)}
+.lrow .lv{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);min-width:0;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lrow .lb{grid-column:2/4;margin:2px 0 0;font-size:var(--fs-sm);color:var(--faint)}
+table.inc{width:100%;border-collapse:collapse;margin:12px 0 30px;font-size:var(--fs-md)}
 table.inc th,table.inc td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--hairline);vertical-align:top}
-table.inc th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint)}
-.mono{font-family:var(--font-mono);font-size:13px;white-space:nowrap}
+table.inc th{font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.06em;color:var(--faint)}
+.mono{font-family:var(--font-mono);font-size:var(--fs-sm);white-space:nowrap}
 .faint{color:var(--faint)}
-.lead{color:var(--muted);margin:0 0 14px;font-size:14px;line-height:1.6}
-.method{border:1px solid var(--hairline);border-radius:2px;padding:6px 22px 16px;background:var(--card);margin:0 0 26px}
-.method li{margin:9px 0;color:var(--muted);font-size:14px;line-height:1.6}
-h2{font-family:var(--font-body);font-weight:800;letter-spacing:-.02em;margin:34px 0 6px}
-.st-links{margin-top:26px;color:var(--faint);font-family:var(--font-mono);font-size:13px}
+.lead{color:var(--muted);margin:0 0 14px;font-size:var(--fs-md);line-height:1.6}
+.method{border:1px solid var(--hairline);border-radius:var(--radius);padding:6px 22px 16px;background:var(--card);margin:0 0 26px}
+.method li{margin:9px 0;color:var(--muted);font-size:var(--fs-md);line-height:1.6}
+h2{font-family:var(--font-body);font-weight:700;letter-spacing:-.02em;margin:34px 0 6px}
+.st-links{margin-top:26px;color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-sm)}
 .st-links a{color:var(--accent);text-decoration:none}
 .st-links a:hover{text-decoration:underline}
 /* The strip is one bar per day in a flex row, and at 90 days it pushed a
@@ -441,7 +443,7 @@ h2{font-family:var(--font-body);font-weight:800;letter-spacing:-.02em;margin:34p
    deliberately stay ABOVE a hairline - the strip exists so that a bad day
    is visible, and one that fits by collapsing to invisible lines passes
    an overflow check while failing the reader. */
-@media(max-width:640px){.st-h1{font-size:34px}.st-wrap{padding:36px 18px}.bars{height:26px;gap:1px}.bars .b{min-width:1.5px}.comp-s{margin-left:0;width:100%}
+@media(max-width:640px){.st-h1{font-size:var(--fs-3xl)}.st-wrap{padding:36px 18px}.bars{height:26px;gap:1px}.bars .b{min-width:1.5px}.comp-s{margin-left:0;width:100%}
 /* Incidents reflow to stacked cards on phones: no 520px min-width, no
    left-right scrolling - each row becomes a bordered card with per-cell
    labels (data-l), the timestamp wraps instead of forcing width. */
@@ -449,10 +451,10 @@ h2{font-family:var(--font-body);font-weight:800;letter-spacing:-.02em;margin:34p
 .inc-scroll .inc{min-width:0}
 table.inc thead{display:none}
 table.inc,table.inc tbody,table.inc tr,table.inc td{display:block;width:100%}
-table.inc tr{border:1px solid var(--hairline);border-radius:2px;background:var(--card);padding:8px 12px;margin:0 0 8px}
+table.inc tr{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:8px 12px;margin:0 0 8px}
 table.inc td{border:none;padding:2px 0;text-align:left;white-space:normal}
 table.inc td.mono{white-space:normal}
-table.inc td::before{content:attr(data-l) ": ";color:var(--faint);font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+table.inc td::before{content:attr(data-l) ": ";color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.05em}
 }
 `;
 
@@ -539,7 +541,7 @@ ${liveSection(snap.live, stats)}
 <div class="method">
 <ul>
 <li><b>The observers sit outside the service.</b> A Cloudflare cron probe checks production every 5 minutes and a GitHub Actions heartbeat checks it again; each records what it saw, and this page only stores and renders those observations.</li>
-<li><b>An outage appears as a gap.</b> When production is down the probe cannot report in either, so the record shows missing observations rather than a tidy row of failures. Gaps are never counted as uptime.</li>
+<li><b>An outage appears as a gap.</b> When production is down the probe cannot report in either, so the record shows missing observations rather than a tidy row of failures. Gaps are never counted as uptime or as downtime: each percentage is taken over the probes that reported.</li>
 <li><b>Percentages carry their denominator.</b> 100% of three probes is a weaker claim than 100% of three thousand, and the page shows which one you are reading.</li>
 <li><b>Stale means unknown, not healthy.</b> A component whose most recent observation has aged out is reported as not measured.</li>
 <li><b>One observer cannot clear another's failure.</b> The two observers walk different proof-of-work challenges on the paid call path, so a failure either one records stands until that same observer sees the path work again.</li>
@@ -548,12 +550,8 @@ ${liveSection(snap.live, stats)}
 </ul>
 </div>
 
-<div class="st-links">
-  <a href="/api/status">/api/status</a> ·
-  <a href="/api/stats">/api/stats</a> ·
-  <a href="/api/reliability">/api/reliability</a> ·
-  <a href="/health">/health</a>
-  ${onchain ? ` · <a href="${esc(onchain)}" rel="noopener">wallet on-chain</a>` : ""}
+<div class="st-links ml-meta">
+  <span><a href="/api/status">/api/status</a></span><span><a href="/api/stats">/api/stats</a></span><span><a href="/api/reliability">/api/reliability</a></span><span><a href="/health">/health</a></span>${onchain ? `<span><a href="${esc(onchain)}" rel="noopener">wallet on-chain</a></span>` : ""}
 </div>
 </section>
 

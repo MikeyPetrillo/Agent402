@@ -1,6 +1,6 @@
 // Token-gated /__operator/wishes dashboard — the full agent demand board,
 // including single-source and below-threshold clusters the public never sees
-// ranked. Same auth model and visual language as operator-leads.js:
+// ranked. Same auth model and visual language as operator.js:
 // AGENT402_OPERATOR_TOKEN via Authorization / X-Operator-Token header or the
 // /__operator/login session cookie (never a ?token= URL — audit A402-07).
 //
@@ -24,11 +24,11 @@ function verdict(c, threshold) {
   // it may not outrank "qualified": a lexical coincidence must never bury real
   // demand, which is exactly what the old "served" label did.
   const near = c.closestMatch ? ` - closest catalog match ${c.closestMatch.slug} (${c.closestMatch.score})` : "";
-  if (c.qualified) return { label: "qualified", color: "#3E9B6E", note: `opens an issue${near}` };
-  if (c.count < threshold) return { label: "below", color: "#8C8C8C", note: `needs ${threshold - c.count} more${near}` };
+  if (c.qualified) return { label: "qualified", color: "var(--ok)", note: `opens an issue${near}` };
+  if (c.count < threshold) return { label: "below", color: "var(--faint)", note: `needs ${threshold - c.count} more${near}` };
   const distinct = ["api", "mcp", "find-miss"].filter((s) => (c.sources?.[s] || 0) > 0).length;
-  if (distinct < 2) return { label: "single-source", color: "#c4a44e", note: `one surface, not corroborated${near}` };
-  return { label: "held", color: "#c4a44e", note: `not yet sustained${near}` };
+  if (distinct < 2) return { label: "single-source", color: "var(--warn)", note: `one surface, not corroborated${near}` };
+  return { label: "held", color: "var(--warn)", note: `not yet sustained${near}` };
 }
 
 // An intent judgment, shown as its own thing. Measured on sixteen live rows
@@ -38,9 +38,9 @@ function verdict(c, threshold) {
 function intentCell(c) {
   const i = c.intent;
   if (!i) return `<span class="ow-faint ow-small">-</span>`;
-  const color = i.kind === "advertisement" ? "#c4574e" : i.kind === "unclear" ? "#c4a44e" : "#8C8C8C";
+  const color = i.kind === "advertisement" ? "var(--bad)" : i.kind === "unclear" ? "var(--warn)" : "var(--faint)";
   const word = i.kind === "advertisement" ? "advert" : i.kind === "unclear" ? "unclear" : "wish";
-  return `<span class="ow-badge" style="color:${color};border-color:${color}55">${esc(word)}</span>`
+  return `<span class="ow-badge" style="color:${color};border-color:color-mix(in srgb,${color} 33%,transparent)">${esc(word)}</span>`
     + `<div class="ow-note">p=${esc(Number(i.p).toFixed(2))}</div>`;
 }
 
@@ -51,14 +51,14 @@ function rerankCell(c) {
   const r = c.rerank;
   if (!r) return `<span class="ow-faint ow-small">-</span>`;
   const style = {
-    "catalog-gap": ["#3E9B6E", "build"],
-    "index-miss": ["#c4574e", "alias"],
-    confirmed: ["#8C8C8C", "found"],
-    consider: ["#c4a44e", "maybe"],
-    unclear: ["#8C8C8C", "unclear"],
-  }[r.kind] || ["#8C8C8C", r.kind];
+    "catalog-gap": ["var(--ok)", "build"],
+    "index-miss": ["var(--bad)", "alias"],
+    confirmed: ["var(--faint)", "found"],
+    consider: ["var(--warn)", "maybe"],
+    unclear: ["var(--faint)", "unclear"],
+  }[r.kind] || ["var(--faint)", r.kind];
   const slug = r.slug && r.kind !== "confirmed" ? ` ${esc(r.slug)}` : "";
-  return `<span class="ow-badge" style="color:${style[0]};border-color:${style[0]}55">${esc(style[1])}</span>`
+  return `<span class="ow-badge" style="color:${style[0]};border-color:color-mix(in srgb,${style[0]} 33%,transparent)">${esc(style[1])}</span>`
     + `<div class="ow-note">${esc(Number(r.confidence).toFixed(2))}${slug}</div>`;
 }
 
@@ -72,8 +72,8 @@ export function operatorWishesPage(baseUrl, aggregate) {
     <div class="ow-stat"><div class="ow-k">Distinct clusters</div><div class="ow-v">${esc(distinctClusters)}</div></div>
     <div class="ow-stat"><div class="ow-k">Total wishes</div><div class="ow-v">${esc(totalWishes)}</div></div>
     <div class="ow-stat"><div class="ow-k">At threshold (${esc(threshold)})</div><div class="ow-v">${esc(atThreshold.length)}</div></div>
-    <div class="ow-stat"><div class="ow-k">Qualified</div><div class="ow-v" style="color:#3E9B6E">${esc(qualified.length)}</div></div>
-    <div class="ow-stat"><div class="ow-k">Held (spam/near-miss)</div><div class="ow-v" style="color:#c4a44e">${esc(held.length)}</div></div>
+    <div class="ow-stat"><div class="ow-k">Qualified</div><div class="ow-v" style="color:var(--ok)">${esc(qualified.length)}</div></div>
+    <div class="ow-stat"><div class="ow-k">Held (spam/near-miss)</div><div class="ow-v" style="color:var(--warn)">${esc(held.length)}</div></div>
   </div>`;
 
   const rows = (clusters || []).map((c) => {
@@ -82,7 +82,7 @@ export function operatorWishesPage(baseUrl, aggregate) {
     const src = `${s.api || 0}/${s.mcp || 0}/${s["find-miss"] || 0}`;
     return `<tr>
       <td class="ow-mono ow-num">${esc(c.count)}</td>
-      <td><span class="ow-badge" style="color:${v.color};border-color:${v.color}55">${esc(v.label)}</span><div class="ow-note">${esc(v.note)}</div></td>
+      <td><span class="ow-badge" style="color:${v.color};border-color:color-mix(in srgb,${v.color} 33%,transparent)">${esc(v.label)}</span><div class="ow-note">${esc(v.note)}</div></td>
       <td>${intentCell(c)}</td>
       <td>${rerankCell(c)}</td>
       <td class="ow-mono ow-faint" title="api / mcp / find-miss">${esc(src)}</td>
@@ -102,29 +102,29 @@ export function operatorWishesPage(baseUrl, aggregate) {
 
   const extraCss = `
 .ow-wrap{max-width:1180px;margin:0 auto;padding:56px 30px}
-.ow-h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 6px}
-.ow-sub{color:var(--muted);margin:0 0 22px;font-size:14px;line-height:1.55}
+.ow-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 6px}
+.ow-sub{color:var(--muted);margin:0 0 22px;font-size:var(--fs-md);line-height:1.55}
 .ow-sub a{color:var(--accent);text-decoration:none}
 .ow-sub a:hover{text-decoration:underline}
-.ow-sub code{font-family:var(--font-mono);font-size:12px;background:var(--surface);color:var(--on-dark);padding:2px 7px;border:1px solid var(--hairline)}
+.ow-sub code{font-family:var(--font-mono);font-size:var(--fs-xs);background:var(--panel);color:var(--on-panel);padding:2px 7px;border:1px solid var(--hairline)}
 .ow-grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin:0 0 22px}
-.ow-stat{background:var(--surface);border:1px solid var(--hairline);padding:12px 16px}
-.ow-stat .ow-k{color:var(--dk-muted);font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
-.ow-stat .ow-v{font-family:var(--font-mono);font-size:1.25rem;color:var(--on-dark);margin-top:2px}
-.ow-tbl-wrap{background:var(--surface);border:1px solid var(--hairline);overflow:hidden}
+.ow-stat{background:var(--panel);border:1px solid var(--hairline);padding:12px 16px}
+.ow-stat .ow-k{color:var(--on-panel-dim);font-family:var(--font-mono);font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.06em}
+.ow-stat .ow-v{font-family:var(--font-mono);font-size:var(--fs-lg);color:var(--on-panel);margin-top:2px}
+.ow-tbl-wrap{background:var(--panel);border:1px solid var(--hairline);overflow:hidden}
 table{width:100%;border-collapse:collapse}
-th{text-align:left;color:var(--dk-muted);font-weight:500;font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:10px 14px;border-bottom:1px solid var(--dark-border);background:var(--ink-panel)}
-td{padding:10px 14px;border-bottom:1px solid var(--dark-border);vertical-align:top;font-size:13px;color:var(--on-dark)}
+th{text-align:left;color:var(--on-panel-dim);font-weight:500;font-family:var(--font-mono);font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.04em;padding:10px 14px;border-bottom:1px solid var(--panel-rule);background:var(--ink-panel)}
+td{padding:10px 14px;border-bottom:1px solid var(--panel-rule);vertical-align:top;font-size:var(--fs-sm);color:var(--on-panel)}
 tr:last-child td{border-bottom:0}
 .ow-mono{font-family:var(--font-mono)}
 .ow-num{text-align:right;width:64px}
-.ow-small{font-size:12px}
-.ow-faint{color:var(--dk-muted)}
-.ow-badge{display:inline-block;border:1px solid var(--dark-border);padding:1px 10px;font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
-.ow-note{color:var(--dk-muted);font-size:11px;margin-top:3px}
+.ow-small{font-size:var(--fs-xs)}
+.ow-faint{color:var(--on-panel-dim)}
+.ow-badge{display:inline-block;border:1px solid var(--panel-rule);padding:1px 10px;font-family:var(--font-mono);font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.04em}
+.ow-note{color:var(--on-panel-dim);font-size:var(--fs-2xs);margin-top:3px}
 .ow-text{max-width:520px;word-break:break-word}
 .ow-empty{background:var(--card);border:1px solid var(--hairline);padding:30px;text-align:center;color:var(--faint)}
-@media(max-width:600px){.ow-h1{font-size:36px !important}}
+@media(max-width:600px){.ow-h1{font-size:var(--fs-3xl) !important}}
 `;
 
   // Auth is the /__operator session cookie (set at POST /__operator/login),

@@ -104,11 +104,30 @@ assert(
 const writers = (list.result?.tools ?? []).filter((t) => t.annotations?.readOnlyHint === false).map((t) => t.name).sort();
 // With the decide service configured, decide.execute (runs a paid plan) and
 // decide.feedback (records a verdict) write too.
-const expectedWriters = ["demand.request", "memory.write", ...(served.includes('"/api/decide"') ? ["decide.execute", "decide.feedback"] : [])].sort();
+// catalog.call writes too when this connector can take a payment (MPP): a paid
+// call can run any slug, memory writes and on-chain attests included.
+const mppHere = !!init.result?.capabilities?.experimental?.payment;
+const expectedWriters = ["demand.request", "memory.write", ...(mppHere ? ["catalog.call"] : []), ...(served.includes('"/api/decide"') ? ["decide.execute", "decide.feedback"] : [])].sort();
 assert(
   writers.join(",") === expectedWriters.join(","),
   `writers are ${expectedWriters.join(" + ")} (got ${writers.join(",") || "none"})`
 );
+{
+  const call = (list.result?.tools ?? []).find((t) => t.name === "catalog.call");
+  const ann = call?.annotations || {};
+  if (mppHere) {
+    assert(ann.readOnlyHint === false && ann.idempotentHint === false && ann.openWorldHint === true && ann.destructiveHint === true,
+      `catalog.call with MPP on is annotated as a paid, writing, open-world call (got ${JSON.stringify(ann)})`);
+  } else {
+    assert(ann.readOnlyHint === true && ann.openWorldHint === false,
+      `catalog.call without MPP runs only pure-CPU tools and says read-only, closed-world (got ${JSON.stringify(ann)})`);
+  }
+  // Without MPP no listed text may offer to take payment on this connector.
+  if (!mppHere) {
+    const texts = (list.result?.tools ?? []).map((t) => t.description).join(" ") + " " + init.result.instructions;
+    assert(!/payable (right )?here over MPP|pay it here over MPP|payable there over MPP/.test(texts), "without MPP, no tool description or instruction offers payment on this connector");
+  }
+}
 
 // Legacy free-utility aliases still route (not listed, but CallTool works).
 for (const alias of ["convert_base64", "base64_convert", "base64"]) {

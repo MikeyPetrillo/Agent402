@@ -86,7 +86,7 @@ function headers() {
 // charged; a cache hit never takes a token.
 // The bucket is SHARED with crypto-kit since 2026-09-03 (src/tools/coingecko-rate.js):
 // one Demo key, one minute budget, whichever kit spends it.
-import { cgTokenRefusal, cgRefusalMessage, resetCgRateLimit } from "./coingecko-rate.js";
+import { cgTokenRefusal, cgRefusalMessage, resetCgRateLimit, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
 export { resetCgRateLimit };
 
 async function cgGet(path, params, ttlMs) {
@@ -1024,7 +1024,7 @@ const RWA_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Every real-world asset with a tokenized onchain version that CoinGecko tracks: stocks, ETFs and commodities, with id, symbol, name and type. Filter by type or a name/symbol substring; ids feed rwa-markets and rwa-asset. Counts by type ride along. Cached in-process for 10 minutes.",
+      "Every real-world asset with a tokenized onchain version in the coin index: stocks, ETFs and commodities, with id, symbol, name and type. Filter by type or a name/symbol substring; ids feed rwa-markets and rwa-asset. Counts by type ride along. Cached in-process for 10 minutes.",
     tags: ["crypto", "rwa", "tokenized", "stocks", "etf", "commodities", "list"],
     discovery: {
       input: { type: "commodity" },
@@ -1207,5 +1207,8 @@ const RWA_TOOLS = [
   },
 ];
 CRYPTO_MARKETS_TOOLS.push(...RWA_TOOLS);
+// Every tool here reads CoinGecko, whose terms require the attribution (see
+// COINGECKO_ATTRIBUTION in coingecko-rate.js).
+for (const t of CRYPTO_MARKETS_TOOLS) t.description = `${t.description} ${COINGECKO_ATTRIBUTION}`;
 
 export const __test = { takeId, takeCurrency, takeInt, takeBool, takeIdList, takeContracts, takeTime, takeLookback, cgGet, TTL, MAX_ENTRIES, MAX_HISTORY_DAYS, takeRwaType, shapeRwaMarket };

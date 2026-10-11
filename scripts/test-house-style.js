@@ -11,6 +11,9 @@ ok(houseStyleText(`Revenue rose ${EM} margins fell`) === "Revenue rose - margins
 ok(houseStyleText(`2024${EN}2026`) === "2024-2026", "a numeric range keeps a plain hyphen");
 ok(houseStyleText(`NVIDIA CORP (NVDA) ${EM} Company Dossier`, { heading: true }) === "NVIDIA CORP (NVDA): Company Dossier", "a heading's dash becomes a colon");
 ok(houseStyleText("no dashes here") === "no dashes here", "untouched text returns as is");
+ok(houseStyleText(`Net flow was **${EN}$71.4M**.`) === "Net flow was **-$71.4M**.", "a dash used as a minus sign stays attached to its figure");
+ok(houseStyleText(`down (${EM}3.2%) on the day`) === "down (-3.2%) on the day", "a minus inside parentheses stays attached");
+ok(houseStyleText(`flat ${EN} 3 sales`) === "flat - 3 sales", "a spaced dash before a number is still prose");
 const md = `# BERKSHIRE ${EM} FUND REPORT\n\nBuys ${EM} sells ${EN} holds.\n\n## Risks ${EM} and gaps\n`;
 const out = houseStyleMarkdown(md);
 ok(!/[—–]/.test(out), "markdown carries no em or en dash after the pass");
@@ -38,6 +41,10 @@ ok(r.report === "# why: answer\n\ntext - more" && r.echo.q === "why", "withHouse
 const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 ok(/for \(const def of ALL_KIT\) if \(Object\.hasOwn\(REPORT_TIERS, def\.slug\)[^\n]*withHouseStyle\(def\.handler\)/.test(src), "server.js wraps every REPORT_TIERS handler with withHouseStyle");
 ok(Object.keys(REPORT_TIERS).length >= 15, `REPORT_TIERS lists the report products (${Object.keys(REPORT_TIERS).length})`);
+// A compound joined by an unspaced en dash keeps its hyphen unspaced; a
+// spaced dash between clauses still becomes " - ".
+ok(houseStyleText("a Santa Clara, California–based company") === "a Santa Clara, California-based company", "an en dash inside a compound becomes a plain hyphen");
+ok(houseStyleText("revenue rose – sharply") === "revenue rose - sharply", "a spaced en dash in prose stays a spaced hyphen");
 // Every served sample obeys the rule as loaded.
 const { SAMPLES } = await import("../src/sample-reports.js");
 for (const s of Object.values(SAMPLES || {})) ok(!/[—–]/.test(String(s.report || "")) && !/[—–]/.test(String(s.title || "")), `sample ${s.product} carries no em or en dash`);

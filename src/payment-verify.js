@@ -25,6 +25,11 @@ const SOLANA_RPCS = (process.env.REFUND_SOLANA_RPCS || "https://api.mainnet-beta
 const ALGORAND_INDEXERS = (process.env.REFUND_ALGORAND_INDEXERS || "https://mainnet-idx.4160.nodely.dev").split(",").map((x) => x.trim()).filter(Boolean);
 
 const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+// TIP-20 TransferWithMemo(address indexed from, address indexed to, uint256 amount, bytes32 indexed memo):
+// keccak256 of that signature, the same constant src/tempo-confirm.js derives.
+export const TIP20_TRANSFER_WITH_MEMO_TOPIC = "0x57bc7354aa85aed339e000bccffabbc529466af35f0772c8f8ee1145927de7f0";
+/** Tempo mainnet: an EVM chain id, but its own verifier (TIP-20 tokens, more than one accepted currency). */
+export const TEMPO_NETWORK = "eip155:4217";
 
 const fail = (reason) => ({ verified: false, reason });
 const pass = (detail) => ({ verified: true, ...detail });
@@ -107,6 +112,55 @@ async function verifyEvm({ tx, payer, payToSet, amountUsd, asset, rpcUrl, fetchI
   // recorded at list, so the buyer legitimately paid at least the expected sum.
   if (moved < expected) return fail(`transfer is short: moved ${moved} < expected ${expected} (atomic)`);
   return pass({ movedAtomic: moved.toString(), decimals, tx });
+}
+
+/**
+ * Tempo: the EVM proof, for TIP-20. A Tempo payment can be in any currency our
+ * challenges offer (`tokens`), and the token emits Transfer and, for a memo
+ * transfer, TransferWithMemo for the same movement, so each kind is summed on
+ * its own and the larger counts (never both). Returns the token that moved,
+ * so a refund goes back in the currency that was paid.
+ */
+async function verifyTempo({ tx, payer, payToSet, amountUsd, tokens, rpcUrl, fetchImpl, timeoutMs }) {
+  const ours = new Set([...payToSet].map((a) => String(a).toLowerCase()));
+  const allowed = new Set([...(tokens || [])].map((t) => String(t).toLowerCase()).filter((t) => /^0x[0-9a-f]{40}$/.test(t)));
+  if (!/^0x[0-9a-fA-F]{64}$/.test(String(tx || ""))) return fail("no usable transaction hash recorded");
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(payer || ""))) return fail("payer is not an EVM address");
+  if (![...ours].some((a) => /^0x[0-9a-f]{40}$/.test(a))) return fail("no Tempo payTo to check against");
+  if (!allowed.size) return fail("no Tempo currency to check against");
+  let receipt;
+  try { receipt = await rpc(rpcUrl, "eth_getTransactionReceipt", [tx], fetchImpl, timeoutMs); }
+  catch (e) { return fail(`could not read the transaction: ${e.message}`); }
+  if (!receipt) return fail("transaction not found on chain");
+  if (String(receipt.status) !== "0x1") return fail(`transaction did not succeed on chain (status ${receipt.status})`);
+  const from = String(payer).toLowerCase();
+  const moved = new Map(); // token -> { transfer, memo }
+  for (const log of receipt.logs || []) {
+    const token = String(log.address || "").toLowerCase();
+    if (!allowed.has(token)) continue;
+    const topics = log.topics || [];
+    const t0 = String(topics[0] || "").toLowerCase();
+    const kind = t0 === ERC20_TRANSFER_TOPIC ? "transfer" : t0 === TIP20_TRANSFER_WITH_MEMO_TOPIC ? "memo" : null;
+    if (!kind) continue;
+    if (addrFromTopic(topics[1]) !== from) continue;
+    if (!ours.has(addrFromTopic(topics[2]))) continue;
+    let v; try { v = BigInt(log.data); } catch { continue; }
+    const m = moved.get(token) || { transfer: 0n, memo: 0n };
+    m[kind] += v;
+    moved.set(token, m);
+  }
+  let token = null, best = 0n;
+  for (const [t, m] of moved) { const v = m.transfer > m.memo ? m.transfer : m.memo; if (v > best) { best = v; token = t; } }
+  if (!token) return fail("no transfer from this payer to our payTo in that transaction");
+  let decimalsHex;
+  try { decimalsHex = await rpc(rpcUrl, "eth_call", [{ to: token, data: "0x313ce567" }, "latest"], fetchImpl, timeoutMs); }
+  catch (e) { return fail(`could not read token decimals: ${e.message}`); }
+  const decimals = Number(BigInt(decimalsHex || "0x0"));
+  if (!Number.isFinite(decimals) || decimals > 36) return fail("token decimals unreadable");
+  const expected = BigInt(Math.round(Number(amountUsd) * 10 ** decimals));
+  if (expected <= 0n) return fail("expected amount is zero");
+  if (best < expected) return fail(`transfer is short: moved ${best} < expected ${expected} (atomic)`);
+  return pass({ movedAtomic: best.toString(), decimals, tx, token });
 }
 
 /**
@@ -222,6 +276,13 @@ export async function verifyInboundPayment({
     const payTo = accepts?.payTo || [...payToSet][0];
     if (!payToSet.size) return fail(`no live payTo for ${network} - cannot prove where the money went`);
     const n = String(network || "");
+
+    if (n === TEMPO_NETWORK) {
+      const rpcUrl = rpcFor(network);
+      if (!rpcUrl) return fail(`no RPC configured for ${network}`);
+      const tokens = Array.isArray(accepts?.assets) ? accepts.assets : accepts?.asset ? [accepts.asset] : [];
+      return await verifyTempo({ tx, payer, payToSet, amountUsd, tokens, rpcUrl, fetchImpl, timeoutMs });
+    }
 
     if (n.startsWith("eip155:")) {
       const rpcUrl = rpcFor(network);

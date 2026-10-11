@@ -130,9 +130,10 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
   ok(cc.includes("no-store") && cc.includes("private"), `operator response is no-store, private (got "${cc}")`);
   ok((opLogin.headers.get("vary") || "").toLowerCase().includes("cookie"), "operator response Vary includes Cookie");
 
-  // F10: the waitlist page never builds a GitHub issue URL with lead PII.
-  const wl = await (await fetch(`${base}/tollbooth/waitlist`)).text();
-  ok(!/issues\/new/.test(wl) && !/window\.open/.test(wl), "waitlist page has no GitHub issue-URL / window.open PII fallback");
+  // F10: the retired waitlist page serves no form at all (a 301 to /tollbooth),
+  // so no page can build a GitHub issue URL with lead PII.
+  const wlRes = await fetch(`${base}/tollbooth/waitlist`, { redirect: "manual" });
+  ok(wlRes.status === 301 && /\/tollbooth$/.test(wlRes.headers.get("location") || ""), `retired waitlist page redirects to /tollbooth (got ${wlRes.status})`);
 
   console.log(`\n${pass} passed, ${fail} failed`);
   done(fail ? 1 : 0);

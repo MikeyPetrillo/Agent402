@@ -178,6 +178,11 @@ const PG_DDL = () => `
   );
   CREATE INDEX IF NOT EXISTS refunds_status ON ${T("refunds")} (status);
   CREATE INDEX IF NOT EXISTS refunds_updated_at ON ${T("refunds")} (updated_at);
+  CREATE TABLE IF NOT EXISTS ${T("refund_marks")} (
+    evidence TEXT PRIMARY KEY,
+    state    TEXT NOT NULL,
+    at       BIGINT NOT NULL
+  );
 `;
 const mirrorUpsert = db.prepare(`
   INSERT OR REPLACE INTO refunds (id, evidence, slug, network, payer, priceUsd, httpStatus, synthetic, status, paidTx, note, createdAt, resolvedAt, wire, hangupReason, claimedAt)
@@ -228,9 +233,26 @@ const fileToPg = (r) => cleanRow({
 // timed out, killed) is replayed in the order it was written: a debt insert-
 // if-absent by evidence, a change as the same guarded UPDATE. See
 // createDeadLetter.
-const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: join(DATA_DIR, "agent402-refunds.dead-letter.ndjson"), name: "refunds" }) : null;
-const INSERT_OWED_SQL = () => `INSERT INTO ${T("refunds")} (evidence, slug, network, payer, price_usd, http_status, synthetic, created_at, wire, hangup_reason, note)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (evidence) DO NOTHING RETURNING *`;
+// With REDIS_URL set the entries live in Redis, shared by every container on
+// this database (src/ledger-journal-redis.js), and the file is the fallback.
+const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: join(DATA_DIR, "agent402-refunds.dead-letter.ndjson"), name: "refunds", journalKey: `${stateDbSchema()}:refunds` }) : null;
+// One mark per evidence (refund_marks), written by every debt insert and by
+// every void on claim, so the two serialize on its primary key across
+// containers: a debt inserts its mark "owed" (or, when a mark is already
+// there, waits for it and reads it) and lands its row only when the mark
+// reads "owed"; a void sets the mark "void" FIRST and then voids an owed row
+// as a second statement, which therefore sees any debt whose mark came
+// first. So a void for a debt that has not landed yet (it waits in another
+// container's dead-letter, or is in flight) is never undone when that debt's
+// insert-if-absent arrives later: it finds the mark "void" and books nothing.
+const INSERT_OWED_SQL = () => `WITH m AS (
+             INSERT INTO ${T("refund_marks")} (evidence, state, at) VALUES ($1, 'owed', $8)
+             ON CONFLICT (evidence) DO UPDATE SET at = ${T("refund_marks")}.at RETURNING state)
+           INSERT INTO ${T("refunds")} (evidence, slug, network, payer, price_usd, http_status, synthetic, created_at, wire, hangup_reason, note)
+           SELECT $1::text, $2::text, $3::text, $4::text, $5::double precision, $6::integer, $7::integer, $8::bigint, $9::text, $10::text, $11::text FROM m WHERE m.state = 'owed'
+           ON CONFLICT (evidence) DO NOTHING RETURNING *`;
+const VOID_MARK_SQL = () => `INSERT INTO ${T("refund_marks")} (evidence, state, at) VALUES ($1, 'void', $2)
+           ON CONFLICT (evidence) DO UPDATE SET state = 'void', at = EXCLUDED.at`;
 const owedParams = (row) => [row.evidence, row.slug, row.network, row.payer, row.priceUsd, row.httpStatus, row.synthetic, row.createdAt, row.wire, row.hangupReason, row.note];
 const NOTE_CASE = (p) => `CASE WHEN note IS NULL OR note = '' THEN ${p}::text ELSE note || '; ' || ${p}::text END`;
 /**
@@ -249,6 +271,11 @@ const OWED_CHANGES = {
   restate: () => `UPDATE ${T("refunds")} SET http_status = $3, note = ${NOTE_CASE("$4")}, updated_at = ${PG_NOW_MS}
          WHERE evidence = $1 AND status = 'owed' AND note = $2 RETURNING *`,
 };
+/** One owed-debt change: the void marks its evidence first (see INSERT_OWED_SQL), then each is one guarded UPDATE. */
+async function runOwedChange(op, params) {
+  if (op === "void") await stateQuery(VOID_MARK_SQL(), [params[0], Number(params[2]) || Date.now()]);
+  return stateQuery(OWED_CHANGES[op](), params);
+}
 let replaying = false;
 /**
  * Land every dead-lettered debt and change, oldest first (a change after the
@@ -260,18 +287,20 @@ async function replayDeadLetters() {
   replaying = true;
   let landed = 0;
   try {
-    for (const e of deadLetter.list()) {
+    // Claimed (one drainer per journal across containers, in the order
+    // written), each entry removed only once Postgres holds it.
+    landed = await deadLetter.drain(async (e) => {
       const v = e.payload;
       const isDebt = e.kind === "refund" && v?.evidence;
       const isChange = e.kind === "refund-change" && OWED_CHANGES[v?.op] && Array.isArray(v.params) && v.params[0];
-      if (!isDebt && !isChange) { deadLetter.remove(e.id); continue; }
+      if (!isDebt && !isChange) return "drop";
       let r;
-      try { r = await stateQuery(isDebt ? INSERT_OWED_SQL() : OWED_CHANGES[v.op](), isDebt ? owedParams(v) : v.params); writer.answered(); }
-      catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); continue; } writer.failed(err); throw err; }
-      if (r.rows[0]) { applyPgRow(r.rows[0]); writeThroughRow(r.rows[0]); landed++; }
-      else await refreshWhere("evidence = $1", [isDebt ? v.evidence : v.params[0]]).catch(() => {});
-      deadLetter.remove(e.id);
-    }
+      try { r = await (isDebt ? stateQuery(INSERT_OWED_SQL(), owedParams(v)) : runOwedChange(v.op, v.params)); writer.answered(); }
+      catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); return "keep"; } writer.failed(err); throw err; }
+      if (r.rows[0]) { applyPgRow(r.rows[0]); writeThroughRow(r.rows[0]); return "landed"; }
+      await refreshWhere("evidence = $1", [isDebt ? v.evidence : v.params[0]]).catch(() => {});
+      return "drop";
+    });
   } finally { replaying = false; }
   if (landed) console.log(`[refund-ledger] landed ${landed} debt(s) or change(s) that had waited in the local dead-letter`);
   return landed;
@@ -421,7 +450,7 @@ if (USE_PG) {
 // runs ahead of the debt it acts on. See createLedgerWriter.
 const writer = createLedgerWriter({
   enqueue, ready: () => readyP(), deadLetter, warnOnce, label: "refund-ledger",
-  before: async () => { if (deadLetter.list().length) await replayDeadLetters(); },
+  before: async () => { if (deadLetter.hasWaiting()) await replayDeadLetters(); },
 });
 /** One queued Postgres write: lands after every earlier write, never rejects (a failed write resolves false, logged once a minute). */
 function pgWrite(label, fn) {
@@ -430,7 +459,7 @@ function pgWrite(label, fn) {
 /** One change to an owed debt (OWED_CHANGES), dead-lettered while it is queued; resolves true when it changed the row. */
 function owedChange(label, op, params) {
   return writer.write(label, async () => {
-    const r = await stateQuery(OWED_CHANGES[op](), params);
+    const r = await runOwedChange(op, params);
     return applyOrRefresh(r, "evidence = $1", [params[0]]);
   }, { kind: "refund-change", payload: { op, params } });
 }
@@ -458,7 +487,7 @@ export async function refundLedgerRefresh() {
 export function refundDeadLetterCount() { return deadLetter ? deadLetter.size() : 0; }
 /** The dead-letter for the gateway-status word: entries waiting for the replay, all entries on disk, and when the oldest was written (null when none). */
 export function refundDeadLetterState() {
-  return deadLetter ? { waiting: deadLetter.list().length, total: deadLetter.size(), oldestAt: deadLetter.oldestAt() } : { waiting: 0, total: 0, oldestAt: null };
+  return deadLetter ? deadLetter.state() : { waiting: 0, total: 0, oldestAt: null };
 }
 
 /**
@@ -542,14 +571,19 @@ export function listRefunds({ status = "owed", limit = 200 } = {}) {
  *
  * Returns true only for the claimer that won the row. Database mode: a
  * Promise of it, decided by one `UPDATE ... WHERE status = 'owed' RETURNING`
- * in Postgres, so two containers can never both win.
+ * in Postgres, so two containers can never both win. A row whose evidence
+ * carries a void mark (refund_marks: a Tempo push transfer claimed for the
+ * request it paid, see voidOwedOnClaim) is never claimed, even in the moment
+ * between the mark and the row's own void.
  */
 export function claimRefundForSend(id, note = null) {
   if (USE_PG) {
     return pgWrite("claim", async () => {
       const r = await stateQuery(
         `UPDATE ${T("refunds")} SET status = 'sending', note = $2, resolved_at = NULL, claimed_at = $3, updated_at = ${PG_NOW_MS}
-         WHERE id = $1 AND status = 'owed' RETURNING *`,
+         WHERE id = $1 AND status = 'owed'
+           AND NOT EXISTS (SELECT 1 FROM ${T("refund_marks")} m WHERE m.evidence = ${T("refunds")}.evidence AND m.state = 'void')
+         RETURNING *`,
         [Number(id), note, Date.now()],
       );
       return applyOrRefresh(r, "id = $1", [Number(id)]);
@@ -629,7 +663,9 @@ export function refundByEvidence(evidence) {
  *  paid (a Tempo push transfer refused on input, then presented again and
  *  served): void it, so the buyer is never both served and refunded. Requires
  *  a note like every void; touches an OWED row only. Returns true when a row
- *  was voided (database mode: a Promise of it). */
+ *  was voided (database mode: a Promise of it). Database mode: the evidence
+ *  is marked void even when no row exists yet, so a debt for it that lands
+ *  later (from another container's dead-letter) books nothing. */
 export function voidOwedOnClaim(evidence, note) {
   if (typeof evidence !== "string" || !evidence.trim() || !note || typeof note !== "string" || !note.trim()) return refuse();
   if (USE_PG) {

@@ -7,8 +7,9 @@
 // only numbers that came from the input.
 import {
   annualSeries, keyFinancials, filingActivity, dossierNarrative, insiderSummary, insiderNarrative, fundNarrative,
-  fmtMoney, fiscalYearEndText, stateName, filingUrl, REVENUE_TAGS,
+  fmtMoney, fiscalYearEndText, stateName, filingUrl, REVENUE_TAGS, possessive, formName, documentLabel,
 } from "../src/edgar-summary.js";
+import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -69,6 +70,22 @@ ok(filingUrl("0000886982", "0000886982-26-000091", "gs-10k.htm") === "https://ww
   ok(old.stale === true, "figures older than about 18 months are flagged stale");
 }
 
+// --- keyFinancials on a captured filer: an insurer's total revenues, not its
+// contract revenue (scripts/fixtures/edgar-brk-revenue-concepts.json, captured
+// once from data.sec.gov; this test never fetches).
+{
+  const fx = JSON.parse(readFileSync(new URL("./fixtures/edgar-brk-revenue-concepts.json", import.meta.url), "utf8"));
+  const getJson = async (url) => {
+    const tag = url.split("/").pop().replace(".json", "");
+    if (!fx[tag]) throw Object.assign(new Error("404"), { statusCode: 422, upstreamStatus: 404 });
+    return fx[tag];
+  };
+  const f = await keyFinancials("0001067983", getJson, { now: Date.parse("2026-10-11T00:00:00Z") });
+  const total = annualSeries(fx.Revenues)[0], contract = annualSeries(fx.RevenueFromContractWithCustomerExcludingAssessedTax)[0];
+  ok(f.revenueTag === "Revenues", `Berkshire: the total-revenue tag is picked (${f.revenueTag})`);
+  ok(f.rows[0].end === total.end && f.rows[0].revenue === total.val && total.val > contract.val, `Berkshire: revenue is total revenues ${fmtMoney(f.rows[0].revenue)}, not contract revenue ${fmtMoney(contract.val)}`);
+}
+
 // --- filingActivity
 {
   const SUB = { filings: { recent: {
@@ -118,7 +135,19 @@ ok(filingUrl("0000886982", "0000886982-26-000091", "gs-10k.htm") === "https://ww
   const t = insiderNarrative("Example Corp", "EXMP", { rows, filingsRead: 3, filingsInWindow: 9, windowDays: 90, endDate: "2026-10-08" }, s).join(" ");
   ok(/2 open-market sales of 1,500 shares worth about \$76,000/.test(t) && /1 open-market purchase of 100 shares worth about \$4,900/.test(t) && /9 Form 4 filings were made/.test(t), "insider sentences carry the computed totals");
   ok(insiderNarrative("X", "X", { rows: [], filingsRead: 0 }, insiderSummary([])).length === 0, "no rows, no insider sentences");
+  // Filers and traders are counted apart: 3 insiders filed, 2 traded.
+  ok(s.traders === 2 && /3 insiders at Example Corp \(EXMP\) filed; 2 of them traded on the open market and reported/.test(t), "the sentence separates insiders who filed from those who traded");
+  const one = insiderSummary([{ insider: "A", code: "S", shares: 631, price: 10 }, { insider: "B", code: "F", shares: 5, price: 0 }, { insider: "C", code: "A", shares: 5, price: 0 }]);
+  ok(/3 insiders at Y \(Y\) filed; 1 of them traded on the open market and reported 1 open-market sale of 631 shares/.test(insiderNarrative("Y", "Y", { rows: [1], filingsRead: 3 }, one).join(" ")), "one seller among three filers reads as one of them");
+  // The closing sentence promises only what the paid report reads.
+  const many = insiderNarrative("Example Corp", "EXMP", { rows, filingsRead: 3, filingsInWindow: 140, windowDays: 90, endDate: "2026-10-08" }, s, { maxFilings: 100 }).join(" ");
+  ok(/the paid report reads the newest 100\./.test(many) && !/reads all of them/.test(many), "over the report's filing cap, the page says it reads the newest N");
+  const few = insiderNarrative("Example Corp", "EXMP", { rows, filingsRead: 3, filingsInWindow: 9, windowDays: 90, endDate: "2026-10-08" }, s, { maxFilings: 100 }).join(" ");
+  ok(/the paid report reads all of them\./.test(few), "within the cap, it reads all of them");
 }
+ok(possessive("Renaissance Technologies") === "Renaissance Technologies'" && possessive("Vanguard Group") === "Vanguard Group's", "possessive: a name ending in s takes an apostrophe only");
+ok(formName("4") === "Form 4" && formName("144") === "Form 144" && formName("10-K") === "10-K", "formName: a bare form number reads as Form N");
+ok(documentLabel("4", "4") === "Form 4 insider filing" && documentLabel("4", "PRIMARY DOCUMENT") === "Form 4 insider filing" && documentLabel("10-K", "Annual report 2025") === "Annual report 2025", "documentLabel: a title that is only the form number or PRIMARY DOCUMENT is replaced by what the form is");
 {
   const data = { holdingsAvailable: true, reportDate: "2026-06-30", totalValueUsd: 1000, totalHoldings: 5, holdings: [{ issuer: "ALPHA", weight: 0.5 }, { issuer: "BETA", weight: 0.3 }] };
   const t = fundNarrative("Example Capital", data).join(" ");

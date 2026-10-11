@@ -10,7 +10,7 @@
 // across a set of real user interactions on the pages known to gate
 // behavior behind a click (the playground's Run button, the SDK
 // playground's eval sandbox, docs sidebar search, market filter bar sort/
-// search, the homepage's live PoW demo, the tollbooth waitlist form,
+// search, the homepage's live PoW demo, the tollbooth configurator,
 // api-explorer's search/expand) — page-load-only coverage would miss a
 // violation that only fires once a user actually does something.
 //
@@ -245,16 +245,6 @@ const interactions = [
       if (search) await search.fill("hash");
       const head = await page.$(".ae-ep-head");
       if (head) await head.click();
-    },
-  },
-  {
-    path: "/tollbooth/waitlist",
-    async run(page) {
-      await page.waitForTimeout(300);
-      await page.fill("#f_name", "CSP Check");
-      await page.fill("#f_email", "csp-check@example.com");
-      await page.click("#wl_submit");
-      await page.waitForTimeout(1000);
     },
   },
 ];

@@ -68,62 +68,73 @@ export function marketsPage(baseUrl, catalog) {
 
   const extraCss = `
 .mk-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+/* A group whose count leaves one card alone on a row of three takes four across instead. */
+.mk-grid.mk-4{grid-template-columns:repeat(auto-fill,minmax(240px,1fr))}
 .mk-card{display:block;background:var(--card);border:1px solid var(--hairline);padding:16px 18px;text-decoration:none;color:var(--ink)}
 .mk-card:hover{border-color:var(--accent)}
-.mk-card .mk-name{font-family:var(--font-mono);font-size:13px;font-weight:700;margin:0 0 6px;display:flex;justify-content:space-between;gap:10px}
+.mk-card .mk-name{font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;margin:0 0 6px;display:flex;justify-content:space-between;gap:10px}
+.mk-card .mk-name>span:first-child{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mk-card .mk-name .mk-price{flex-shrink:0}
 .mk-card .mk-price{color:var(--accent);font-weight:700;white-space:nowrap}
-.mk-card p{font-size:13.5px;line-height:1.5;color:var(--muted);margin:0}
+.mk-card p{font-size:var(--fs-md);line-height:1.5;color:var(--muted);margin:0}
 .mk-hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:34px;align-items:start}
 @media (max-width:900px){.mk-hero{grid-template-columns:minmax(0,1fr)}}
-.mk-pre{background:var(--surface);color:var(--on-dark);border:1px solid var(--hairline);padding:18px 20px;font-family:var(--font-mono);font-size:13px;line-height:1.6;overflow-x:auto;margin:0;white-space:pre}
+.mk-pre{background:var(--panel);color:var(--on-panel);border:1px solid var(--hairline);padding:18px 20px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.6;overflow-x:auto;margin:0;white-space:pre}
 `;
 
+  // A card shows the description's first sentence; a long one is cut at a
+  // word boundary and marked with an ellipsis, never mid-word.
+  const cardBlurb = (d) => {
+    const first = String(d || "").split(/(?<=\.)\s/)[0];
+    if (first.length <= 180) return first;
+    const cut = first.slice(0, 179);
+    return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), 120)).replace(/[\s,;:(-]+$/, "")}…`;
+  };
   const cardsHtml = (g) => g.slugs.map((s) => bySlug.get(s)).filter(Boolean).map((t) => `
       <a class="mk-card" href="/tools/${esc(t.slug)}">
         <div class="mk-name"><span>${esc(t.slug)}</span><span class="mk-price">${esc(t.price)}</span></div>
-        <p>${esc(String(t.description || "").split(/(?<=\.)\s/)[0].slice(0, 180))}</p>
+        <p>${esc(cardBlurb(t.description))}</p>
       </a>`).join("");
   const groupsHtml = GROUPS.map((g) => `
 <section id="${g.id}" style="max-width:1180px;margin:0 auto;padding:40px 30px 0;">
   <div style="display:flex;align-items:baseline;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
-    <h2 style="font-weight:800;font-size:26px;line-height:1.1;letter-spacing:-.02em;margin:0;color:var(--ink);">${esc(g.h)}</h2>
-    <p style="font-size:15px;color:var(--muted);margin:0;">${esc(g.p)}</p>
+    <h2 style="font-weight:700;font-size:var(--fs-2xl);line-height:1.1;letter-spacing:-.02em;margin:0;color:var(--ink);">${esc(g.h)}</h2>
+    <p style="font-size:var(--fs-base);color:var(--muted);margin:0;">${esc(g.p)}</p>
   </div>
-  <div class="mk-grid">${cardsHtml(g)}</div>
+  <div class="mk-grid${g.slugs.filter((x) => bySlug.has(x)).length % 3 === 1 ? " mk-4" : ""}">${cardsHtml(g)}</div>
 </section>`).join("");
 
   const body = `
 <header style="border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">
-    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-bottom:22px;">
+    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;">
       <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">markets</span>
     </nav>
     <div class="mk-hero">
       <div>
-        <h1 style="font-weight:800;font-size:46px;line-height:.98;letter-spacing:-.035em;margin:0 0 18px;color:var(--ink);">The whole crypto market in one call.</h1>
-        <p style="font-size:18px;line-height:1.55;color:var(--muted);margin:0 0 18px;">${esc(hero?.name || "Market pulse")} returns breadth, volume, open interest, funding extremes, the day's gainers and losers and BTC and ETH at a glance - one request, ${esc(hero?.price || "")}, no API key. ${tools.length - 1} more calls below cover perps, options, DeFi and stablecoins at ${esc(fmtUsd(lo))} to ${esc(fmtUsd(hi))} each.</p>
-        <p style="font-size:14px;line-height:1.6;color:var(--muted);margin:0 0 22px;">Pay per request in USDC over <a href="/what-is-x402" style="color:var(--ink);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);">MPP</a> from any wallet. The first call answers 402 with the price; the paid retry returns the data. A call that fails is not charged on x402.</p>
+        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);">The whole crypto market in one call.</h1>
+        <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 18px;">${esc(hero?.name || "Market pulse")} returns breadth, volume, open interest, funding extremes, the day's gainers and losers and BTC and ETH at a glance - one request, ${esc(hero?.price || "")}, no API key. ${tools.length - 1} more calls below cover perps, options, DeFi and stablecoins at ${esc(fmtUsd(lo))} to ${esc(fmtUsd(hi))} each.</p>
+        <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 22px;">Pay per request in USDC over <a href="/what-is-x402" style="color:var(--ink);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);">MPP</a> from any wallet. The first call answers 402 with the price; the paid retry returns the data. A call that fails is not charged on x402.</p>
         <div style="display:flex;gap:11px;flex-wrap:wrap;">
-          <a href="/playground?slug=${esc(MARKETS_HERO_SLUG)}" style="background:var(--btn-bg);color:var(--btn-fg);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 22px;">TRY IT IN THE PLAYGROUND →</a>
-          <a href="/tools/${esc(MARKETS_HERO_SLUG)}" style="border:1.5px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:12px 22px;">DOCS + SAMPLE OUTPUT</a>
+          <a class="btn btn-secondary" href="/tools/${esc(MARKETS_HERO_SLUG)}">Docs + sample output</a>
         </div>
       </div>
       <div>
-        <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;">the call</div>
+        <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;">the call</div>
         <pre class="mk-pre">${esc(curl)}</pre>
-        <p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:10px 0 0;line-height:1.6;">Sources are public venue and aggregator feeds; a reading can come from a shared cache up to ${MAX_CACHE_MIN} minutes old. Every tool on this page answers its own documented example in CI before it can ship.</p>
+        <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:10px 0 0;line-height:1.6;">Sources are public venue and aggregator feeds; a reading can come from a shared cache up to ${MAX_CACHE_MIN} minutes old. Every tool on this page answers its own documented example in CI before it can ship.</p>
       </div>
     </div>
   </div>
 </header>
 ${groupsHtml}
 <section style="max-width:1180px;margin:0 auto;padding:48px 30px 56px;">
-  <div style="background:var(--surface);border:1px solid var(--hairline);padding:40px 40px;">
-    <h2 style="font-weight:800;font-size:30px;line-height:1.05;letter-spacing:-.025em;margin:0 0 12px;color:var(--on-dark);">Wire it into an agent.</h2>
-    <p style="font-size:16px;line-height:1.6;color:var(--dk-muted2);margin:0 0 22px;max-width:640px;">Add the hosted MCP connector and these calls appear as tools, or call the routes directly with the x402 client of your choice. Every route here is also discoverable at /api/find by task ("funding rates", "stablecoin supply").</p>
+  <div style="background:var(--panel);border:1px solid var(--hairline);padding:40px 40px;">
+    <h2 style="font-weight:700;font-size:var(--fs-2xl);line-height:1.05;letter-spacing:-.025em;margin:0 0 12px;color:var(--on-panel);">Wire it into an agent.</h2>
+    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 22px;max-width:640px;">Add the hosted MCP connector and these calls appear as tools, or call the routes directly with the x402 client of your choice. Every route here is also discoverable at /api/find by task ("funding rates", "stablecoin supply").</p>
     <div style="display:flex;gap:11px;flex-wrap:wrap;">
-      <a href="/docs#add" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:14px 24px;">ADD TO YOUR AGENT →</a>
-      <a href="/tools/category/crypto" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 24px;">EVERY CRYPTO TOOL</a>
+      <a class="btn btn-primary" href="/docs#add">Add to your agent →</a>
+      <a href="/tools/category/crypto" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">EVERY CRYPTO TOOL</a>
     </div>
   </div>
 </section>

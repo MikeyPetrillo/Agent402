@@ -6,7 +6,7 @@ Run Agent402 on your own infrastructure for full control over pricing, data, rat
 
 ## Why self-host
 
-- **Privacy.** URLs, inputs, and outputs never leave your network.
+- **Privacy.** Inputs and outputs stay on your infrastructure, except where a tool's job is to call out: URL fetches, and the upstream APIs whose keys you configure.
 - **No rate limits.** You control concurrency, burst policies, and who gets access.
 - **Custom pricing.** Set your own per-call prices or run everything free.
 - **Reliability.** No dependency on a third-party host; deploy where your agents already run.
@@ -15,7 +15,7 @@ Run Agent402 on your own infrastructure for full control over pricing, data, rat
 
 - **Node.js >= 22.22.2** (the `engines` field in `package.json`; the hosted instance runs Node 22)
 - **git**
-- **Optional:** Redis (response caching), Postgres (analytics/call tracking)
+- **Optional:** Redis (response caching), Postgres (the state database via `STATE_DATABASE_URL`, and analytics/call tracking)
 - **Optional:** Chromium + ffmpeg if you want browser/media tools (Chromium via `npx playwright install --with-deps chromium`, ffmpeg from your OS package manager; the project's own `Dockerfile` installs both)
 
 ## Quick start
@@ -37,7 +37,7 @@ The server starts on port 3000 by default (`PORT` env var overrides).
 FROM node:22-slim
 WORKDIR /app
 COPY package*.json ./
-RUN npm install --production
+RUN npm ci --omit=dev
 COPY . .
 ENV FREE_MODE=true
 ENV PORT=3000
@@ -88,6 +88,7 @@ Set these on your host. None are committed to the repo.
 | `OPENAI_API_KEY` | No | Enables the older `/api/llm*`, `/api/image-gen*`, `/api/tts*`, `/api/transcribe*` and `/api/embed*` proxies |
 | `E2B_API_KEY` | No | Enables the `/api/code-run*` sandbox tools |
 | `REDIS_URL` | No | Enables Redis response caching (see below) |
+| `STATE_DATABASE_URL` | No | Postgres connection string for the state database; unset keeps state in SQLite and files on `/data` |
 | `ANALYTICS_DATABASE_URL` | No | Postgres connection string for analytics; falls back to `DATABASE_URL` |
 | `GLAMA_MAINTAINER_EMAIL` | No | Email returned at `/.well-known/glama.json` |
 | `MPP_SECRET_KEY` | For MPP | HMAC secret binding MPP challenges; presence mounts the MPP dual-stack shim (`WWW-Authenticate: Payment` on every 402, `evm` method settled through your x402 facilitator). Unset = pure x402 |
@@ -108,31 +109,34 @@ Set these on your host. None are committed to the repo.
 
 ## Free mode vs paid mode
 
-- **`FREE_MODE=true`** -- every tool responds without payment. Good for development, internal deployments, or self-hosted agents that don't need metering. The PoW gate and x402 paywall are both disabled.
-- **Without `FREE_MODE`** -- the x402 paywall activates. Callers pay per request (USDC on Base by default; add Solana, Polygon, Arbitrum, Stellar, Algorand and the chains below with `PAYMENT_NETWORKS`, each with its own payTo / facilitator setting) or solve a proof-of-work challenge for pure-CPU tools. You need `WALLET_ADDRESS`, a facilitator (`CDP_API_KEY_ID` + `CDP_API_KEY_SECRET`, or `FACILITATOR_URL`), and `POW_SECRET` at minimum. To also accept **USDC on Monad** (EVM chain 143), add `monad` to `PAYMENT_NETWORKS` (settles via `MONAD_FACILITATOR_URL`, default the molandak-operated public facilitator). Avalanche (43114) and Sei (1329) are likewise opt-in via `PAYMENT_NETWORKS` (both settle via the PayAI facilitator; `PAYAI_API_KEY_ID` + `PAYAI_API_KEY_SECRET` authenticate with it). Optimism (10) is opt-in via `PAYMENT_NETWORKS` plus `SOLVADOR_KEY` (settles via the Solvador facilitator; `NETWORK_PRICE_PREMIUMS`, a CAIP-2 keyed CSV such as `eip155:10=<usd>`, adds a per-chain amount to that chain's quote if your facilitator charges per settlement). To also accept **USDC on Celo** (EVM chain 42220), add `celo` to `PAYMENT_NETWORKS` and set `CELO_FACILITATOR_KEY` (a self-service key minted at [x402.celo.org](https://x402.celo.org); the facilitator's `/settle` requires it). Settles via `CELO_FACILITATOR_URL`, default the Celo-operated `api.x402.celo.org`. To accept **USDG on Robinhood Chain**, add `robinhood` to `PAYMENT_NETWORKS` and set `ROBINHOOD_FACILITATOR_URL`.
+- **`FREE_MODE=true`**: every tool responds without payment. Good for development, internal deployments, or self-hosted agents that don't need metering. The PoW gate and x402 paywall are both disabled.
+- **Without `FREE_MODE`**: the x402 paywall activates. Callers pay per request (USDC on Base by default; add Solana, Polygon, Arbitrum, Stellar, Algorand and the chains below with `PAYMENT_NETWORKS`, each with its own payTo / facilitator setting) or solve a proof-of-work challenge for pure-CPU tools. You need `WALLET_ADDRESS`, a facilitator (`CDP_API_KEY_ID` + `CDP_API_KEY_SECRET`, or `FACILITATOR_URL`), and `POW_SECRET` at minimum. To also accept **USDC on Monad** (EVM chain 143), add `monad` to `PAYMENT_NETWORKS` (settles via `MONAD_FACILITATOR_URL`, default a public Monad facilitator). Avalanche (43114) and Sei (1329) are likewise opt-in via `PAYMENT_NETWORKS` (set `PAYAI_API_KEY_ID` + `PAYAI_API_KEY_SECRET`, the keys of the facilitator that settles them). Optimism (10) is opt-in via `PAYMENT_NETWORKS` plus `SOLVADOR_KEY` (the key of the facilitator that settles it; `NETWORK_PRICE_PREMIUMS`, a CAIP-2 keyed CSV such as `eip155:10=<usd>`, adds a per-chain amount to that chain's quote if your facilitator charges per settlement). To also accept **USDC on Celo** (EVM chain 42220), add `celo` to `PAYMENT_NETWORKS` and set `CELO_FACILITATOR_KEY` (a self-service key minted at [x402.celo.org](https://x402.celo.org); the facilitator's `/settle` requires it). Settles via `CELO_FACILITATOR_URL`, default the Celo-operated `api.x402.celo.org`. To accept **USDG on Robinhood Chain**, add `robinhood` to `PAYMENT_NETWORKS` and set `ROBINHOOD_FACILITATOR_URL`.
 
 **MPP on the same 402:** set `MPP_SECRET_KEY` and every paid route also answers `WWW-Authenticate: Payment` (the `evm` method settles through your existing facilitator); add `TEMPO_API_KEY` for native Tempo settlement. **Cards:** `STRIPE_SECRET_KEY` (+ `STRIPE_WEBHOOK_SECRET`) mounts the report checkout, monitors and prepaid credits; `STRIPE_PROFILE_ID` adds cards over MPP. **Email:** `EMAIL_FROM` plus `ZEPTOMAIL_TOKEN` or `RESEND_API_KEY`; without them the card pages still work and the report link is shown on the page.
 
-See [[Paying with x402]], [[Paying with MPP]], [[Paying with Compute]] and [[Reports, Monitors and Credits|Reports-and-Monitors]] for the buyer-side flows.
+See [[Paying with x402]], [[Paying with MPP]], [[Paying with Compute]] and [[Reports and Monitors|Reports-and-Monitors]] for the buyer-side flows.
 
 ## Optional infrastructure
 
 ### Redis (response caching)
 
-Set `REDIS_URL` to enable response caching for eligible routes. The server defines a `CACHEABLE_ROUTES` set internally -- deterministic, read-only tools whose output can be safely replayed. Cache is env-gated: no `REDIS_URL`, no caching, no behavior change.
+Set `REDIS_URL` to enable response caching for eligible routes. The server defines a `CACHEABLE_ROUTES` set internally: deterministic, read-only tools whose output can be safely replayed. Cache is env-gated: no `REDIS_URL`, no caching, no behavior change.
 
 ### Postgres (analytics)
 
-Set `ANALYTICS_DATABASE_URL` (or `DATABASE_URL`) to enable call-level analytics tracking. This records per-tool call counts, latency, and error rates. Also env-gated -- without the variable, analytics is a silent no-op.
+Set `ANALYTICS_DATABASE_URL` (or `DATABASE_URL`) to enable call-level analytics tracking. This records per-tool call counts, latency, and error rates. Also env-gated: without the variable, analytics is a silent no-op.
 
-### SQLite (built-in)
+### State database (Postgres) or SQLite (built-in)
 
-Stats, memory namespaces, and PoW replay protection use SQLite (better-sqlite3, WAL mode) stored in `/data`. This works out of the box with no configuration -- just ensure the `/data` directory is writable and persistent across deploys.
+Set `STATE_DATABASE_URL` to a Postgres connection string to keep the server's state (documents, records, logs, memory namespaces, PoW replay, and the leases every scheduled loop runs under) in a `state` schema (`STATE_DB_SCHEMA` renames it). This is what lets two containers overlap during a deploy, and it is how the hosted instance runs. The file stores are imported once on first boot with it set.
+
+
+Without `STATE_DATABASE_URL`, stats, memory namespaces, and PoW replay protection use SQLite (better-sqlite3, WAL mode) stored in `/data`, and the other stores are files there. This works out of the box with no configuration: just ensure the `/data` directory is writable and persistent across deploys.
 
 ## Health checks
 
-- **`GET /health`** -- returns `200` and a deliberately small public body: `{ ok, meta: { toolCount, build } }`. Process uptime and the operating-mode/feature flags are **operator-only** and appear only on the token-authenticated response. Use this path as your load-balancer or container health probe.
-- **CI heartbeat** -- the repo's `heartbeat.yml` workflow probes the hosted instance every 15 minutes and auto-opens a GitHub issue on failure. You can adapt the same workflow for your own deployment.
+- **`GET /health`**: returns `200` and a deliberately small public body: `{ ok, meta: { toolCount, build } }`. Process uptime and the operating-mode/feature flags are **operator-only** and appear only on the token-authenticated response. Use this path as your load-balancer or container health probe.
+- **CI heartbeat**: the repo's `heartbeat.yml` workflow probes the hosted instance every 15 minutes and auto-opens a GitHub issue on failure. You can adapt the same workflow for your own deployment.
 
 ## Verifying your deployment
 
@@ -144,7 +148,7 @@ TARGET_URL=http://localhost:3000 node scripts/test-all.js
 
 ## See also
 
-- [[Getting Started]] -- your first call in 60 seconds
-- [[Architecture]] -- how the server, paywall, and facilitators fit together
-- [[Security Model]] -- SSRF defense, PoW scoping, wallet-only tools
-- [[Operations]] -- CI pipeline, heartbeat watchdog, deploys
+- [[Getting Started]]: your first call in 60 seconds
+- [[Architecture]]: how the server, paywall, and facilitators fit together
+- [[Security Model]]: SSRF defense, PoW scoping, wallet-only tools
+- [[Operations]]: CI pipeline, heartbeat watchdog, deploys

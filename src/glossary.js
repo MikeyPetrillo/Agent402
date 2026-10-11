@@ -28,7 +28,7 @@ export const GLOSSARY = [
     def: "An open protocol, originally from Coinbase, that turns HTTP 402 Payment Required into a working payment flow: the server sends machine-readable payment requirements (price, asset, chain, recipient) in a PAYMENT-REQUIRED header, the client retries with a signed authorization in a PAYMENT-SIGNATURE (formerly X-PAYMENT) header, a facilitator verifies and settles it in USDC, and the response carries a PAYMENT-RESPONSE receipt.",
     see: [["/what-is-x402", "What is x402?"], ["/marketplace", "the x402 index"]] },
   { id: "mpp", name: "MPP (Machine Payments Protocol)", alt: ["Machine Payments Protocol", "Payment HTTP authentication scheme"],
-    def: "An open, IETF-track protocol that carries pay-per-request payments through HTTP's standard authentication headers: a 402 response challenges with WWW-Authenticate: Payment, the client pays with an Authorization: Payment credential, and the settled response returns a signed Payment-Receipt. Its evm method settles like x402 (EIP-3009 via a facilitator); its tempo method settles natively on Tempo.",
+    def: "An open protocol, published as an IETF Internet-Draft, that carries pay-per-request payments through HTTP's standard authentication headers: a 402 response challenges with WWW-Authenticate: Payment, the client pays with an Authorization: Payment credential, and the settled response returns a signed Payment-Receipt. Its evm method settles like x402 (EIP-3009 via a facilitator); its tempo method settles natively on Tempo.",
     see: [["/what-is-mpp", "What is MPP?"], ["/mpp-marketplace", "the MPP index"]] },
   { id: "http-402", name: "HTTP 402 Payment Required", alt: ["402"],
     def: "The HTTP status code reserved since 1997 for exactly this and left unused for decades: the server is saying the resource exists but costs money. Both x402 and MPP use it as the price quote; the payment rides on the retry. Agent402 answers 402 on every paid route and 200 once a payment settles.",
@@ -55,7 +55,7 @@ export const GLOSSARY = [
     def: "The agent's own key pair holding stablecoins. In agentic finance the payment IS the identity: there is no account to create, and the payer address on a settled payment is what a seller keys memory, usage history and quotas to. Keys never leave the client - the wallet signs an authorization and the facilitator broadcasts it.",
     see: [["/agentic-finance#faq", "do agents need crypto?"]] },
   { id: "rails", name: "Rails (stablecoin rails)", alt: ["payment rails", "chains"],
-    def: "The chains and stablecoins a payment can settle on. Agent402 accepts USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar and Algorand, USDG on Robinhood Chain, and PathUSD/USDC natively on Tempo - a buyer picks any rail listed in the 402 at the same list price (fee-charging rails carry the fee in the quote).",
+    def: "The chains and stablecoins a payment can settle on. Agent402 accepts USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar and Algorand, USDG on Robinhood Chain, and USDC.e and PathUSD natively on Tempo - a buyer picks any rail listed in the 402, at list price plus a small fee on a rail whose settlement charges one (shown in that rail's quote).",
     see: [["/revenue", "transactions by rail"], ["/pricing", "pricing"]] },
   { id: "dual-stack", name: "Dual-stack (x402 + MPP)", alt: ["dual-stack seller"],
     def: "A server that answers ONE 402 with both an x402 offer and an MPP challenge for the same resource at the same price, and accepts either credential on the retry. A stock x402 client and a stock mppx client both work unmodified against it. Every paid route on Agent402 is dual-stack, and the open-source tollbooth adds it to any site.",
@@ -71,13 +71,13 @@ export const GLOSSARY = [
     see: [["/marketplace", "x402 index"], ["/mpp-marketplace", "MPP index"], ["/leaderboard", "leaderboard"]] },
   { id: "tollbooth", name: "Tollbooth (pay-per-crawl)", alt: ["agent402-tollbooth"],
     def: "The open-source middleware or reverse proxy that puts a price on a site or API for AI agents while humans browse free: it answers 402 over both x402 and MPP, verifies the payment, and lets the request through. Non-custodial, no signup, adaptive proof-of-work for the free path, deploy templates for Cloudflare, Next.js and Docker.",
-    see: [["/sell", "sell into agentic finance"], ["/tollbooth/cloud", "hosted tollbooth"]] },
+    see: [["/sell", "sell into agentic finance"], ["/tollbooth", "install the tollbooth"]] },
   { id: "pay-per-call", name: "Pay-per-call (pay-per-request)", alt: ["per-call pricing", "micropayments"],
     def: "Pricing where every request carries its own payment - fractions of a cent to a few cents - instead of a subscription, a quota or an API key. It is what makes an agent's spend legible (one receipt per call) and what lets a seller earn from a single request by a stranger with no onboarding.",
     see: [["/pricing", "how Agent402 prices"], ["/tools", "500+ priced tools"]] },
   { id: "deterministic-tool", name: "Deterministic tool", alt: ["deterministic endpoint"],
     def: "A tool whose output is a pure function of its input: same request, same answer, every time, with no language model in the serving path. Determinism is what lets an agent cache, retry safely and verify a paid answer, and what lets a catalog be tested end to end (every Agent402 tool that CI can run without a third-party key answers its own documented example there; the metered tools that need one are left out of that sweep so CI never spends upstream).",
-    see: [["/tools", "the catalog"], ["/blog/why-we-built-agent402", "why deterministic"]] },
+    see: [["/tools", "our tools"], ["/blog/why-we-built-agent402", "why deterministic"]] },
   { id: "idempotency-key", name: "Idempotency key", alt: ["Idempotency-Key header", "paid retry"],
     def: "A caller-chosen header that lets a paid request be retried without paying twice: the seller stores the first settled answer under the key and replays it to an identical retry. Agent402 commits the cached body only after settlement succeeds, so an unsettled attempt is never replayed as if it were paid, and a copy sent while the first is still running gets 409 instead of running twice.",
     see: [["/docs", "developer docs"]] },
@@ -85,7 +85,7 @@ export const GLOSSARY = [
     def: "The open standard AI assistants use to discover and call tools. Agent402 exposes its catalog as a hosted MCP connector and an npm stdio server, so an assistant can find a tool, read its price and call it - paying over x402 or MPP, or with a proof-of-work solve on the free tier - without a human creating an account.",
     see: [["/docs#add", "add to Claude"], ["/blog/building-with-mcp", "building with MCP"]] },
   { id: "tempo", name: "Tempo", alt: ["tempo method", "Tempo chain"],
-    def: "The payments-focused chain that is MPP's native settlement method (chain id 4217, TIP-20 tokens such as PathUSD and USDC.e). Its tempo/charge credentials are validated and broadcast through Tempo's own relay rather than an EIP-3009 facilitator, so accepting a tempo/charge payment needs no signing key on the server. Agent402 accepts it, and holds Tempo keys for two other jobs: sponsoring gas on monitor subscriptions paid over MPP, and paying other Tempo sellers through the router.",
+    def: "The payments-focused chain that is MPP's native settlement method (chain id 4217, TIP-20 tokens such as PathUSD and USDC.e). Its tempo/charge credentials are validated and broadcast through Tempo's own relay rather than an EIP-3009 facilitator, so accepting a tempo/charge payment needs no signing key on the server. Agent402 accepts it.",
     see: [["/what-is-mpp#compare", "MPP settlement methods"], ["/mpp-marketplace", "sellers on the MPP wire"]] },
 ];
 
@@ -116,7 +116,7 @@ export function glossaryPage(baseUrl) {
   const pageLd = { "@type": "WebPage", "@id": `${canonical}#page`, url: canonical, name: title, description, isPartOf: { "@id": `${baseUrl}/#website` }, mainEntity: { "@id": `${canonical}#set` }, publisher: { "@id": `${baseUrl}/#organization` } };
 
   const extraCss = `
-.gl-index a{display:inline-block;padding:6px 11px;border:1px solid var(--hairline);text-decoration:none;color:var(--ink);font-size:13px;margin:0 6px 6px 0;}
+.gl-index a{display:inline-block;padding:6px 11px;border:1px solid var(--hairline);text-decoration:none;color:var(--ink);font-size:var(--fs-sm);margin:0 6px 6px 0;}
 .gl-index a:hover{border-color:var(--ink);}
 .gl-term:target{background:var(--card);outline:1.5px solid var(--accent);outline-offset:0;}
 .gl-term{scroll-margin-top:24px}
@@ -126,30 +126,30 @@ export function glossaryPage(baseUrl) {
   const indexHtml = GLOSSARY.map((t) => `<a href="#${esc(t.id)}">${esc(t.name)}</a>`).join("");
 
   const termsHtml = GLOSSARY.map((t) => {
-    const alt = t.alt?.length ? `<div style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:0 0 12px;">also: ${t.alt.map(esc).join(" · ")}</div>` : "";
+    const alt = t.alt?.length ? `<div class="ml-meta" style="font-size:var(--fs-xs);margin:0 0 12px;">${t.alt.map((a, i) => `<span>${i ? "" : "also: "}${esc(a)}</span>`).join("")}</div>` : "";
     const learn = LEARN_BY_GLOSSARY_ID[t.id] ? learnBySlug(LEARN_BY_GLOSSARY_ID[t.id]) : null;
     const seeList = [...(learn ? [[`/learn/${learn.slug}`, `${learn.term}, explained`]] : []), ...(t.see || [])];
-    const see = seeList.length ? `<div style="font-family:var(--font-mono);font-size:12.5px;margin-top:14px;">${seeList.map(([href, label]) => `<a href="${esc(href)}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);margin-right:16px;">${esc(label)} →</a>`).join("")}</div>` : "";
+    const see = seeList.length ? `<div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-sm);margin-top:14px;">${seeList.map(([href, label]) => `<a href="${esc(href)}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">${esc(label)}&nbsp;→</a>`).join("")}</div>` : "";
     return `<article id="${esc(t.id)}" class="gl-term gl-row" style="display:grid;grid-template-columns:300px 1fr;gap:28px;padding:26px 24px;border-bottom:1px solid var(--hairline);">
-      <div><h2 style="font-weight:800;font-size:21px;line-height:1.15;margin:0 0 8px;color:var(--ink);"><dfn style="font-style:normal;">${esc(t.name)}</dfn></h2>${alt}<a href="#${esc(t.id)}" style="font-family:var(--font-mono);font-size:11px;color:var(--faint);text-decoration:none;">#${esc(t.id)}</a></div>
-      <div><p style="font-size:16px;line-height:1.65;color:var(--muted);margin:0;">${esc(t.def)}</p>${see}</div>
+      <div><h2 style="font-weight:700;font-size:var(--fs-xl);line-height:1.15;margin:0 0 8px;color:var(--ink);"><dfn style="font-style:normal;">${esc(t.name)}</dfn></h2>${alt}<a href="#${esc(t.id)}" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);text-decoration:none;">#${esc(t.id)}</a></div>
+      <div><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">${esc(t.def)}</p>${see}</div>
     </article>`;
   }).join("");
 
   const body = `
 <header style="border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">
-    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-bottom:22px;">
+    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;">
       <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/agentic-finance" style="color:var(--muted);text-decoration:none;">agentic finance (aifi)</a> / <span style="color:var(--ink);">glossary</span>
     </nav>
     <div class="gl-2col" style="display:grid;grid-template-columns:1.1fr .9fr;gap:50px;align-items:start;">
       <div>
-        <h1 style="font-weight:800;font-size:52px;line-height:.96;letter-spacing:-.035em;margin:0 0 24px;color:var(--ink);">The <span style="color:var(--accent);">Agentic Finance</span> glossary</h1>
-        <p style="font-size:19px;line-height:1.5;color:var(--on-dark2);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">Every term the agentic-finance stack uses, defined once.</strong> From the HTTP status code that started it to the facilitators, receipts and routers built on top. Each entry links to the page that goes deep, and each has its own anchor so any page can point at a definition instead of restating it.</p>
-        <p style="font-size:16px;line-height:1.6;color:var(--muted);margin:0;">Start with <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">what Agentic Finance (AIFI) is</a>, then the two wires: <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">x402</a> and <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">MPP</a>. Longer explainers with real headers are in <a href="/learn" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Learn</a>.</p>
+        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 24px;color:var(--ink);">The <span style="color:var(--accent);">Agentic Finance</span> glossary</h1>
+        <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--on-panel-soft);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">Every term the agentic-finance stack uses, defined once.</strong> From the HTTP status code that started it to the facilitators, receipts and routers built on top. Each entry links to the page that goes deep, and each has its own anchor so any page can point at a definition instead of restating it.</p>
+        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">Start with <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">what Agentic Finance (AIFI) is</a>, then the two wires: <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">x402</a> and <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">MPP</a>. Longer explainers with real headers are in <a href="/learn" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Learn</a>.</p>
       </div>
       <div style="border:1px solid var(--hairline);background:var(--card);padding:16px 18px 12px;">
-        <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;color:var(--faint);margin-bottom:12px;">${GLOSSARY.length} TERMS</div>
+        <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--faint);margin-bottom:12px;">${GLOSSARY.length} TERMS</div>
         <div class="gl-index">${indexHtml}</div>
       </div>
     </div>
@@ -161,14 +161,13 @@ export function glossaryPage(baseUrl) {
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 56px;">
-  <div style="background:var(--surface);border:1px solid var(--hairline);padding:52px 44px;position:relative;overflow:hidden;">
-    <div style="position:absolute;right:26px;top:-36px;font-weight:900;font-size:220px;line-height:1;color:transparent;-webkit-text-stroke:2px #ffffff10;pointer-events:none;">402</div>
+  <div style="background:var(--panel);border:1px solid var(--hairline);padding:52px 44px;position:relative;overflow:hidden;">
     <div style="position:relative;">
-      <h2 style="font-weight:800;font-size:38px;line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--on-dark);">Now see it settle.</h2>
-      <p style="font-size:16.5px;line-height:1.6;color:var(--dk-muted2);margin:0 0 28px;max-width:560px;">Give your agent 500+ tools it can pay for over x402 or MPP, or put a price on your own API. Both are free to start.</p>
+      <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--on-panel);">Now see it settle.</h2>
+      <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 28px;max-width:560px;">Give your agent 500+ tools it can pay for over x402 or MPP, or put a price on your own API. Both are free to start.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a href="/docs#add" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:14px 24px;">ADD TO YOUR AGENT →</a>
-        <a href="/agentic-finance" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 24px;">WHAT IS AGENTIC FINANCE?</a>
+        <a class="btn btn-primary on-panel" href="/docs#add">Add to your agent →</a>
+        <a class="btn btn-secondary on-panel" href="/agentic-finance">What is agentic finance?</a>
       </div>
     </div>
   </div>

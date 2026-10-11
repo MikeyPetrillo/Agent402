@@ -7,7 +7,7 @@
 
 > **Looking for the OpenAI-compatible wire paths?** The [[LLM Gateway (OpenAI /v1)|LLM-Gateway]] serves standard `chat/completions`, `embeddings`, `rerank`, `images/generations`, `videos/generations` and `audio/speech` at `https://agent402.tools/v1` (plus the Anthropic Messages and OpenAI Responses wires) - flat chat tiers from $0.003 per call, a metered tier quoted per request, embeddings and rerank from $0.002, model-optional auto-routing, streaming, and response caching. Any OpenAI SDK adopts it by changing `base_url`. The `/api/llm*` tools below remain available as the simpler custom-JSON proxy.
 
-Three tiers of OpenAI inference, paywalled via x402. An agent sends a standard `chat/completions` request and pays per call with USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, or Algorand -- no OpenAI API key needed on the caller's side, no signup, no account. The operator's own `OPENAI_API_KEY` handles upstream auth; per-tier input and output caps bound what one call can ask for.
+Three tiers of OpenAI inference, paywalled via x402. An agent sends a standard `chat/completions` request and pays per call over x402 (USDC on Base and the other rails its 402 lists, or USDG on Robinhood Chain) or over MPP. No model API key is needed on the caller's side needed on the caller's side, no signup, no account. The operator's own `OPENAI_API_KEY` handles upstream auth; per-tier input and output caps bound what one call can ask for.
 
 ## Tiers
 
@@ -17,7 +17,7 @@ Three tiers of OpenAI inference, paywalled via x402. An agent sends a standard `
 | `POST /api/llm-pro` | $0.10 | `gpt-4o`, `gpt-4.1` | 16k chars | 2,048 tokens |
 | `POST /api/llm-premium` | $0.50 | `o3-mini`, `o3` (reasoning) | 32k chars | 2,048 tokens |
 
-All three tiers are **wallet-only** -- there is no proof-of-work free tier because every call burns real upstream inference credit. See [[Security Model]] for the wallet-only rationale.
+All three tiers are **wallet-only**: there is no proof-of-work free tier because every call burns real upstream inference credit. See [[Security Model]] for the wallet-only rationale.
 
 ## Request format
 
@@ -73,7 +73,7 @@ Every tier returns the same OpenAI-shaped envelope:
 
 ## Curl examples
 
-### Basic tier ($0.01 -- GPT-4o-mini)
+### Basic tier ($0.01: GPT-4o-mini)
 
 ```bash
 curl -X POST https://agent402.tools/api/llm \
@@ -85,7 +85,7 @@ curl -X POST https://agent402.tools/api/llm \
   }'
 ```
 
-### Pro tier ($0.10 -- GPT-4o / GPT-4.1)
+### Pro tier ($0.10: GPT-4o / GPT-4.1)
 
 ```bash
 curl -X POST https://agent402.tools/api/llm-pro \
@@ -97,7 +97,7 @@ curl -X POST https://agent402.tools/api/llm-pro \
   }'
 ```
 
-### Premium tier ($0.50 -- o3 / o3-mini reasoning)
+### Premium tier ($0.50: o3 / o3-mini reasoning)
 
 ```bash
 curl -X POST https://agent402.tools/api/llm-premium \
@@ -109,7 +109,7 @@ curl -X POST https://agent402.tools/api/llm-premium \
   }'
 ```
 
-All three return `402` without a valid x402 payment header -- the same flow as every other paid tool. See [[Paying with x402]] for how to sign and attach payment.
+All three return `402` without a valid x402 payment header: the same flow as every other paid tool. See [[Paying with x402]] for how to sign and attach payment.
 
 ## Per-tier caps
 
@@ -124,11 +124,11 @@ These caps are enforced server-side before the upstream call is made.
 
 ## Environment gating
 
-The kit reads `OPENAI_API_KEY` at call time, not at boot. If the key is missing or empty, calls return `503 Service Unavailable` and the rest of the server continues running normally. Self-hosters who don't want to offer LLM proxy simply omit the env var -- no code change needed.
+The kit reads `OPENAI_API_KEY` at call time, not at boot. If the key is missing or empty, calls return `503 Service Unavailable` and the rest of the server continues running normally. Self-hosters who don't want to offer LLM proxy simply omit the env var: no code change needed.
 
 ## See also
 
-- [[Paying with x402]] -- the USDC payment flow these endpoints require
-- [[Security Model]] -- why these tools are wallet-only (no PoW free tier)
-- [[API Reference|API-Reference]] -- full HTTP endpoint reference
-- [[Tool Catalog]] -- where these three tools sit in the 500+ tool catalog
+- [[Paying with x402]]: the USDC payment flow these endpoints require
+- [[Security Model]]: why these tools are wallet-only (no PoW free tier)
+- [[API Reference|API-Reference]]: full HTTP endpoint reference
+- [[Tool Catalog]]: where these three tools sit in the 500+ tool catalog

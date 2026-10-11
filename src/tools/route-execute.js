@@ -61,7 +61,7 @@ const EXEC_SLUGS = new Set(EXEC_TIERS.map((t) => t.slug));
  *  price to pay it. Used by /api/route to quote the buyer the exact tier. */
 export function routeExecuteHint(underlyingUsd) {
   const tier = EXEC_TIERS.find((t) => underlyingUsd <= t.underlyingMaxUsd);
-  return tier ? { tool: tier.slug, price: `$${tier.execPriceUsd}`, underlyingPriceUsd: underlyingUsd, routingFeeUsd: Number((tier.execPriceUsd - underlyingUsd).toFixed(6)) } : null;
+  return tier ? { tool: tier.slug, price: `$${tier.execPriceUsd.toFixed(2)}`, underlyingPriceUsd: underlyingUsd, routingFeeUsd: Number((tier.execPriceUsd - underlyingUsd).toFixed(6)) } : null;
 }
 
 // Optional recomputable call identity (issue #282): callRef = "sha256:" + hex
@@ -209,15 +209,18 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
     name: routeSuffix ? `Route and execute (${routeSuffix.slice(1)} tier)` : "Route and execute",
     slug: tier.slug,
     category: "agent",
-    price: `$${EXEC_PRICE_USD}`,
+    price: `$${EXEC_PRICE_USD.toFixed(2)}`,
     // Read by /guides/smart-order-router to render the tier table from the catalog.
     underlyingMaxUsd: UNDERLYING_MAX_USD,
     // Pays an outside seller from one of this server's own wallets inside the
     // handler, i.e. before the buyer's own payment settles. Read by
     // spendsBeforeSettlement (composite-spend-guard.js).
     spendsOwnWallet: true,
+    // Chooses among shortlisted tools with a judgment model (src/tool-judge.js)
+    // when one is configured; the tool page says so (src/pages.js).
+    judgedChoice: true,
     description:
-      `Describe a task (or name a slug) and the Smart Order Router resolves the best-matching tool and RUNS it in the same call - flat $${EXEC_PRICE_USD} covering any tool listed at $${UNDERLYING_MAX_USD} or less, from THIS host's catalog or any external seller in the open index - x402 sellers, or MPP sellers on Tempo (Agent402 buys the result over x402 or MPP and sells it to you). One payment, one request, result + receipt. /api/route quotes which tier a task needs; pricier tools return a self-correcting 409 with their direct route.`,
+      `Describe a task (or name a slug) and the Smart Order Router resolves the best-matching tool and RUNS it in the same call - flat $${EXEC_PRICE_USD.toFixed(2)} covering any tool listed at $${UNDERLYING_MAX_USD} or less, from THIS host's catalog or any external seller in the open index - x402 sellers, or MPP sellers on Tempo (Agent402 buys the result over x402 or MPP and sells it to you). One payment, one request, result + receipt. /api/route quotes which tier a task needs; pricier tools return a self-correcting 409 with their direct route.`,
     // Tags are the discoverability surface: a tag hit scores +3 in the ranker
     // (vs +1 for a description substring), and an audit on 2026-07-28 found
     // the natural phrasings agents actually use - "buy a tool from another
@@ -230,10 +233,13 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
       ...(routeSuffix ? [`${routeSuffix.slice(1)}-tier`] : [])],
     discovery: {
       bodyType: "json",
-      input: { slug: "hash", params: { text: "agent402", algo: "sha256" } },
+      // A wallet-only tool resolved from a task: the router's use. A pure-CPU
+      // tool such as hash runs free with proof-of-work, so it would teach the
+      // dearest way to run a free tool.
+      input: { task: "look up the DNS records of a domain", params: { name: "example.com", type: "A" } },
       inputSchema: {
         properties: {
-          task: { type: "string", description: "Plain-language task, e.g. \"sha256 hash of a string\" - resolved via the same ranker as /api/find. Provide task OR slug." },
+          task: { type: "string", description: "Plain-language task, e.g. \"look up the DNS records of a domain\" - resolved via the same ranker as /api/find. Provide task OR slug." },
           slug: { type: "string", description: "Exact tool slug to execute (skips ranking). Provide task OR slug." },
           params: { type: "object", description: "Input for the resolved tool, matching its inputSchema (default {})" },
           include: { type: "string", description: 'Where to route: default runs a tool from THIS host\'s catalog; "external" routes to the best-matching x402 seller in the OPEN index, buys the result from it and sells it to you (marked untrustedContent). Requires task (not slug).' },
@@ -242,8 +248,8 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
       },
       output: {
         example: {
-          receipt: { slug: "hash", route: "POST /api/hash", underlyingPriceUsd: 0.001, paidUsd: EXEC_PRICE_USD, routingFeeUsd: 0.009, seller: "internal", resolvedBy: "slug", ts: "2026-07-10T00:00:00.000Z", callRef: "sha256:…  (recomputable: sha256 of {\"nonce\":<payment authorization nonce>,\"slug\":…,\"ts\":…} - null on nonce-less calls)" },
-          result: { algo: "sha256", hex: "…", base64: "…" },
+          receipt: { slug: "dns", route: "GET /api/dns", underlyingPriceUsd: 0.001, paidUsd: EXEC_PRICE_USD, routingFeeUsd: 0.009, seller: "internal", resolvedBy: "task", ts: "2026-07-10T00:00:00.000Z", callRef: "sha256:…  (recomputable: sha256 of {\"nonce\":<payment authorization nonce>,\"slug\":…,\"ts\":…} - null on nonce-less calls)" },
+          result: { name: "example.com", type: "A", records: ["…"] },
         },
       },
     },

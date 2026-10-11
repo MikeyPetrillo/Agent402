@@ -58,6 +58,12 @@ Every access is recorded in a **tamper-evident audit log** the namespace owner c
 GET /api/memory/log?limit=100
 ```
 
+The log is bounded, and the answer's `retention` field says how:
+
+- Entries older than 90 days (`MEMORY_AUDIT_RETENTION_DAYS` on a self-hosted server) are removed. Removal is always the oldest part of the chain, so the first entry returned may start mid-chain: verify from its `prevHash`.
+- An entry that names a key or document that was later deleted or expired is **redacted** within ten minutes: its `key` and `data` read `null` and it carries `redacted: true`. Its `actor`, `action`, `seq`, `ts`, `prevHash` and `hash` stay, so the next entry still links to it; its own hash cannot be recomputed.
+- A namespace with no keys, documents or grants left has its log removed; a later write starts a new chain at `seq` 1.
+
 ## Semantic memory
 
 Store prose now, search it later. By default recall scores against a hashed term vector computed in-process (word and word-pair overlap, no embeddings API, no LLM); an operator who sets `EMBEDDINGS_URL` swaps in an OpenAI-compatible embeddings endpoint for true semantic similarity:
@@ -75,7 +81,7 @@ A namespace is bounded on two axes at once, and hitting **either** returns `413 
 | Limit | Env var | Default | Why |
 |---|---|---|---|
 | Keys per namespace | `MEMORY_MAX_NS_KEYS` | 10,000 | Bounds index growth for one wallet |
-| Total value bytes per namespace | `MEMORY_MAX_NS_BYTES` | 32 MB | The disk-fill guard for the shared `/data` volume: a key count alone does not bound size, since one key can hold a very large value |
+| Total value bytes per namespace | `MEMORY_MAX_NS_BYTES` | 32 MB | The storage-fill guard for the shared store: a key count alone does not bound size, since one key can hold a very large value |
 
 Individual items are capped too: 256 bytes of key and 64 KB of value.
 
@@ -83,7 +89,7 @@ Both quotas are read at call time, so an operator can change them without a rede
 
 ## Properties
 
-- **Durable:** stored in SQLite on a persistent volume - survives redeploys and restarts.
+- **Durable:** stored in the state database (Postgres on the hosted instance; SQLite on a persistent volume when self-hosted without one) - survives redeploys and restarts.
 - **Private by default:** wallet-scoped; grants are explicit, revocable, and logged.
 - **Cheap:** $0.001–$0.003 per call.
 - **Identity without accounts:** the x402 payment on each request proves control of the wallet; there is no signup surface to attack.

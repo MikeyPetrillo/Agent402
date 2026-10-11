@@ -9,6 +9,8 @@
 // this set are ignored, never silently "passing" something unchecked — same
 // honesty rule as agent-kit's JSON-Schema validator. Deterministic, no LLM.
 
+import { creditsSalesEnabled } from "../credits-sales.js";
+
 const KNOWN_TRANSPORTS = new Set(["JSONRPC", "GRPC", "HTTP+JSON"]);
 const CAPABILITY_FLAGS = ["streaming", "pushNotifications", "stateTransitionHistory"];
 
@@ -18,6 +20,8 @@ const isObj = (v) => typeof v === "object" && v !== null && !isArr(v);
 
 /** The well-known paths an A2A server publishes its card at, in resolution
  *  order (v0.3 canonical path first, the older agent.json second). */
+import { RAILS } from "../rails.js";
+
 export const A2A_WELL_KNOWN_PATHS = ["/.well-known/agent-card.json", "/.well-known/agent.json"];
 
 /**
@@ -39,7 +43,28 @@ export const A2A_WELL_KNOWN_PATHS = ["/.well-known/agent-card.json", "/.well-kno
  * that without it the standard is used for discovery only. Discovery is exactly
  * what we are claiming; a trust model we have not implemented is not.
  */
+// The ways to pay besides a wallet, read from the switch that sells prepaid
+// credits: while sales are off the description must not offer them.
+const payTail = () => (creditsSalesEnabled()
+  ? "free via proof of work for the pure-CPU tools, prepaid by card, and finished reports by card."
+  : "free via proof of work for the pure-CPU tools, and finished reports by card.");
 export const ERC8004_IDENTITY_REGISTRY = { chain: "eip155:8453", address: "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432" };
+/** Our agent id in that registry: the one place it is written. The pages that
+ *  name it and the registration file read it from here. */
+export const ERC8004_AGENT_ID = "94639";
+const HOSTED_ORIGIN = /^https:\/\/(www\.)?agent402\.tools\/?$/i;
+/** The agent id this deployment publishes: the ERC8004_AGENT_ID setting when it
+ *  holds a valid id, else the constant above on the hosted origin, else null (a
+ *  self-hosted copy has no registration until it sets its own). The registration
+ *  file, /company and llms.txt all read this, so they cannot disagree. */
+export function erc8004AgentId(baseUrl) {
+  const env = String(process.env.ERC8004_AGENT_ID || "").trim();
+  if (env) return /^[1-9][0-9]*$/.test(env) ? env : null;
+  return HOSTED_ORIGIN.test(String(baseUrl || "")) ? ERC8004_AGENT_ID : null;
+}
+
+// "stablecoins (USDC, or USDG on Robinhood Chain)", read from RAILS.
+const SETTLE_ASSETS = `stablecoins (USDC${RAILS.filter((r) => r.asset !== "USDC").map((r) => `, or ${r.asset} on ${r.name}`).join("")})`;
 
 export function buildAgentRegistration({ baseUrl, agentId, toolCount } = {}) {
   const base = String(baseUrl || "https://agent402.tools").replace(/\/+$/, "");
@@ -53,8 +78,8 @@ export function buildAgentRegistration({ baseUrl, agentId, toolCount } = {}) {
     type: "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
     name: "Agent402",
     description:
-      `Pay-per-call web tools for autonomous agents: ${catalog} settled in USDC over x402 or MPP, ` +
-      "free via proof of work, or prepaid by card. No account and no API key.",
+      `Pay-per-call web tools for autonomous agents: ${catalog} settled in ${SETTLE_ASSETS} over x402 or MPP, ` +
+      `${payTail()} No account and no API key.`,
     image: `${base}/logo.png`,
     // { name, endpoint }, the spec's field names. The first cut used
     // { type, url }, which parses to zero usable services.
@@ -103,8 +128,8 @@ export function buildOurAgentCard({ baseUrl, version, toolCount } = {}) {
     protocolVersion: "0.3.0",
     name: "Agent402",
     description:
-      `Pay-per-call web tools for autonomous agents: ${catalog} settled in USDC over x402 or MPP, ` +
-      "free via proof of work, or prepaid by card. No account and no API key. The same catalog is " +
+      `Pay-per-call web tools for autonomous agents: ${catalog} settled in ${SETTLE_ASSETS} over x402 or MPP, ` +
+      `${payTail()} No account and no API key. The same catalog is ` +
       `callable over MCP at ${base}/mcp and documented at ${base}/openapi.json.`,
     url: `${base}/api`,
     preferredTransport: "HTTP+JSON",

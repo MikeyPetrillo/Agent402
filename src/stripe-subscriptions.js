@@ -16,7 +16,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createJsonDocument } from "./json-document.js";
-import { trackStoreReady } from "./state-db.js";
+import { trackStoreReady, stateDbSchema } from "./state-db.js";
 import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 
 // The monitoring products. Each subscribes to a `target` (a domain, a fund,
@@ -56,7 +56,7 @@ export const MONITOR_PRODUCTS = {
   "research-monitor": {
     label: "Research question watch", price: 500, kind: "research", slug: "research",
     inputField: "query", inputLabel: "your research question",
-    blurb: "Your question researched again every week from live sources: a fresh, fully cited deep-research report in your inbox, so you see what changed since last time. The same report sold at /reports, run on a schedule.",
+    blurb: "Your question researched again about once a week from live sources, within the monthly report cap: a fresh, fully cited deep-research report in your inbox, so you see what changed since last time. The same report sold at /reports, run on a schedule.",
   },
   "ipo-monitor": {
     label: "IPO pipeline watch", price: 500, kind: "ipo", slug: "ipo-report",
@@ -184,7 +184,9 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
   // again loses none; the replay writes it only over an older copy of the
   // same subscription (by updatedAt), never over a newer one.
   const PG = doc.backend === "pg";
-  const pending = PG ? createDeadLetter({ file: `${path}.pending.ndjson`, name: "subscriptions" }) : null;
+  // With REDIS_URL set the journal lives in Redis (shared by every container
+  // on this database), the file beside the store is the fallback.
+  const pending = PG ? createDeadLetter({ file: `${path}.pending.ndjson`, name: "subscriptions", journalKey: `${stateDbSchema()}:subscriptions:${doc.name}` }) : null;
   const unsaved = new Set(); // subIds whose latest record has not landed
   // Resolves false only in database mode when the record did not reach the
   // database (it waits in the local journal); the webhook then answers 503
@@ -213,22 +215,21 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     replaying = true;
     let landed = 0;
     try {
-      for (const e of pending.list()) {
+      landed = await pending.drain(async (e) => {
         const { subId, rec } = e.payload || {};
-        if (!subId || !rec) { pending.remove(e.id); continue; }
+        if (!subId || !rec) return "drop";
         const mine = newer(rec, unsaved.has(subId) ? store.get(subId) : null);
         const r = await doc.update((b) => {
           const body = b && typeof b === "object" && !Array.isArray(b) ? b : {};
           body[subId] = newer(body[subId], mine);
           return body;
         }, { fallback: {} });
-        if (!r.ok) break; // the database is still away: the next tick retries
+        if (!r.ok) return "stop"; // the database is still away: the next tick retries
         const stored = r.body?.[subId];
         if (stored) store.set(subId, newer(store.get(subId), stored));
         if (stored === mine || String(stored?.updatedAt || "") >= String(mine.updatedAt || "")) unsaved.delete(subId);
-        pending.remove(e.id);
-        landed++;
-      }
+        return "landed";
+      });
     } finally { replaying = false; }
     if (landed) console.log(`[subscriptions] landed ${landed} record(s) kept on local disk`);
     return landed;

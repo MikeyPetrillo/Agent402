@@ -485,7 +485,7 @@ export function makeMessagesHandler(routeTier) {
 
 const EXAMPLE_IN = { model: "anthropic/claude-sonnet-5", max_tokens: 256, messages: [{ role: "user", content: "Summarize x402 in one sentence." }] };
 const EXAMPLE_OUT = { id: "msg_…", type: "message", role: "assistant", model: "anthropic/claude-sonnet-5", content: [{ type: "text", text: "x402 is an HTTP-native way for agents to pay per request with USDC." }], stop_reason: "end_turn", usage: { input_tokens: 14, output_tokens: 18 } };
-const TAGS = ["llm", "ai", "inference", "anthropic-compatible", "messages-api", "claude", "gateway", "openrouter"];
+const TAGS = ["llm", "ai", "inference", "anthropic-compatible", "messages-api", "claude", "gateway"];
 const INPUT_SCHEMA = {
   properties: {
     model: { type: "string", description: "Model id (OpenRouter naming, e.g. anthropic/claude-sonnet-5) - allowlisted per tier; omit (or \"auto\") on the auto tier" },

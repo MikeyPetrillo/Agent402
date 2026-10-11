@@ -621,10 +621,15 @@ for (const [name, over, detail] of failCases) {
     assert.match(a.body({ gateway: { refundsOwed: { status: "<b>x</b>" } } }), /refundsOwed\.status=aging\./);
   });
 
-  await acheck("ledger dead-letter: stuck pages, none and off clear, pending and unknown do neither", async () => {
-    const { judge } = await import("../workers/status-probe/src/index.js");
+  await acheck("ledger dead-letter: stuck and local page, none and off clear, pending and unknown do neither", async () => {
+    const { judge, ALARMS } = await import("../workers/status-probe/src/index.js");
     const T = "Ledger rows waiting on local disk (dead-letter stuck)";
     assert.equal(judge({ gateway: { ledgerDeadLetter: { status: "stuck" } } })[T], "bad");
+    assert.equal(judge({ gateway: { ledgerDeadLetter: { status: "local" } } })[T], "bad");
+    const a = ALARMS.find((x) => x.title === T);
+    assert.match(a.body({ gateway: { ledgerDeadLetter: { status: "local" } } }), /ledgerDeadLetter\.status=local\./);
+    // An unexpected word is never echoed.
+    assert.match(a.body({ gateway: { ledgerDeadLetter: { status: "<b>x</b>" } } }), /ledgerDeadLetter\.status=stuck\./);
     assert.equal(judge({ gateway: { ledgerDeadLetter: { status: "none" } } })[T], "good");
     assert.equal(judge({ gateway: { ledgerDeadLetter: { status: "off" } } })[T], "good");
     assert.equal(judge({ gateway: { ledgerDeadLetter: { status: "pending" } } })[T], "quiet");
@@ -632,7 +637,7 @@ for (const [name, over, detail] of failCases) {
     assert.equal(judge({ gateway: {} })[T], "quiet");
   });
 
-  await acheck("ledger dead-letter: the worker's and heartbeat.yml's issue bodies name all five journals and their log lines", async () => {
+  await acheck("ledger dead-letter: the worker's and heartbeat.yml's issue bodies name all six journals and their log lines", async () => {
     const { ALARMS } = await import("../workers/status-probe/src/index.js");
     const T = "Ledger rows waiting on local disk (dead-letter stuck)";
     const worker = ALARMS.find((x) => x.title === T).body({ gateway: { ledgerDeadLetter: { status: "stuck" } } });
@@ -640,9 +645,9 @@ for (const [name, over, detail] of failCases) {
     const step = yml.slice(yml.indexOf(`TITLE="${T}"`), yml.indexOf("gh issue close", yml.indexOf(`TITLE="${T}"`)));
     assert.ok(step.length > 0, "heartbeat.yml has the dead-letter step");
     for (const [name, text] of [["worker", worker], ["heartbeat.yml", step]]) {
-      assert.ok(text.includes("a sale, a refund debt, a card report's final record, a subscription record or a decide write"), `${name} names the five journals`);
+      assert.ok(text.includes("a sale, a refund debt, a card report's final record, a subscription record, a decide write or an outbound payment record"), `${name} names the six journals`);
       assert.ok(text.includes("Each journal's replay retries on a timer"), `${name} says each replay retries on a timer`);
-      for (const tag of ["[sales-ledger]", "[refund-ledger]", "[human-checkout]", "[subscriptions]", "[decide]"]) assert.ok(text.includes(tag), `${name} lists the ${tag} log lines`);
+      for (const tag of ["[sales-ledger]", "[refund-ledger]", "[human-checkout]", "[subscriptions]", "[decide]", "[outbound-ledger]"]) assert.ok(text.includes(tag), `${name} lists the ${tag} log lines`);
       assert.ok(text.includes("counts per journal"), `${name} says the operator view has the counts per journal`);
     }
   });

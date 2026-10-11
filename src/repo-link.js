@@ -1,7 +1,7 @@
 // ONE place the public source link is written.
 //
 // The footer, the Organization JSON-LD `sameAs` on six pages, /company,
-// /terms, /security, /why, the MCP connector's listing copy and the discovery
+// /terms, /security, /#why, the MCP connector's listing copy and the discovery
 // manifest all point at the repository. Every one of them spelled the URL out,
 // and the URL contains a PERSONAL GitHub handle.
 //

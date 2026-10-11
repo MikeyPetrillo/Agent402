@@ -669,8 +669,10 @@ jobs:
       # state database has not taken them (src/ledger-mirror.js): one word on
       # /api/gateway-status. "stuck" means an entry has waited past
       # LEDGER_DEAD_LETTER_STUCK_MINUTES; without the /data volume that disk
-      # dies with the container, so a redeploy would lose those rows. Two
-      # readings 30 s apart, like the state database check. "pending" (the
+      # dies with the container, so a redeploy would lose those rows. "local"
+      # means the journals live in Redis but an entry sits on the container's
+      # disk because Redis did not take it (same risk). Two readings 30 s
+      # apart, like the state database check. "pending" (the
       # replay is working through them), "none", "off" and "unknown" never page;
       # none and off close.
       - name: Ledger dead-letter check (alarm when money writes wait on local disk)
@@ -679,16 +681,16 @@ jobs:
         run: |
           read_dl() { curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.ledgerDeadLetter.status // "unknown"' 2>/dev/null || echo unknown; }
           WORD=$(read_dl)
-          if [ "$WORD" = "stuck" ]; then sleep 30; WORD=$(read_dl); fi
+          if [ "$WORD" = "stuck" ] || [ "$WORD" = "local" ]; then sleep 30; WORD=$(read_dl); fi
           echo "ledger dead-letter: $WORD"
           TITLE="Ledger rows waiting on local disk (dead-letter stuck)"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
-            stuck)
+            stuck|local)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports ledgerDeadLetter.status=stuck on two readings 30 s apart: a money write (a sale, a refund debt, a card report's final record, a subscription record or a decide write) has waited on the container's local disk for the state database longer than LEDGER_DEAD_LETTER_STUCK_MINUTES (default 20). Each journal's replay retries on a timer; while it cannot land them they exist only on that container, so do not redeploy or restart it until they land. Check stateDb on the same endpoint, the Postgres service on Railway, and the [sales-ledger] / [refund-ledger] / [human-checkout] / [subscriptions] / [decide] log lines (a row the database refuses is named there). The operator read of /api/gateway-status has the counts per journal. Auto-closes when the word is none." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports ledgerDeadLetter.status=$WORD on two readings 30 s apart. local: the journals live in Redis but a money write sits on the container's local disk because Redis did not take it (check the Redis service). stuck: a money write (a sale, a refund debt, a card report's final record, a subscription record, a decide write or an outbound payment record) has waited on the container's local disk for the state database longer than LEDGER_DEAD_LETTER_STUCK_MINUTES (default 20). Each journal's replay retries on a timer; while it cannot land them they exist only on that container, so do not redeploy or restart it until they land. Check stateDb on the same endpoint, the Postgres service on Railway, and the [sales-ledger] / [refund-ledger] / [human-checkout] / [subscriptions] / [decide] / [outbound-ledger] log lines (a row the database refuses is named there). The operator read of /api/gateway-status has the counts per journal. Auto-closes when the word is none." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still stuck at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
               fi
               ;;
             none|off)
@@ -793,7 +795,7 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $(date -u +%FT%TZ): $SUMMARY" >/dev/null 2>&1 || true
           fi
 
-      # Postgres reachability (leads + analytics). Both databases were DOWN from
+      # Postgres reachability (DATABASE_URL, reported as `leads`, + analytics). Both databases were DOWN from
       # 2026-07-02 to 2026-08-25 and nothing paged: the app degrades quietly when
       # they are gone, which is right for buyers and exactly why it went
       # unnoticed. "unconfigured"/"unknown" never page; only "unreachable" does.
@@ -828,7 +830,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
           if [ "$LEADS" = "unreachable" ] || [ "$ANALYTICS" = "unreachable" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A Postgres database is unreachable from production (leads=$LEADS, analytics=$ANALYTICS, per /api/gateway-status). The app keeps serving - tollbooth leads and the tool-call analytics simply stop being recorded - so this does not show as an outage anywhere else. Check the Postgres services in the Railway project (a stopped container looks exactly like this; the platform's own image updates restart them). The app boot log carries a [leads-db]/[analytics-db] probe line naming the failing family/port."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A Postgres database is unreachable from production (leads=$LEADS, analytics=$ANALYTICS, per /api/gateway-status). The app keeps serving - the tool-call analytics simply stop being recorded - so this does not show as an outage anywhere else. Check the Postgres services in the Railway project (a stopped container looks exactly like this; the platform's own image updates restart them). The app boot log carries a [leads-db]/[analytics-db] probe line naming the failing family/port."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still unreachable at $(date -u +%FT%TZ): leads=$LEADS analytics=$ANALYTICS."
             fi

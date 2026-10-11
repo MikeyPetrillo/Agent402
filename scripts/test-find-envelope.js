@@ -68,7 +68,7 @@ try {
   // on space to recover the method.
   ok(typeof row.route === "string" && /^(GET|POST|PUT|DELETE) \/api\//.test(row.route), `row.route is 'METHOD /api/...' (got ${row.route})`);
   // Price is a display string ($X.XX), not a number — the per-tool docs and
-  // /shop page render it verbatim.
+  // /tools pages render it verbatim.
   ok(typeof row.price === "string" && row.price.startsWith("$"), `row.price is a display string starting with $ (got ${row.price})`);
   // callExample is the structured "how to call me" hint.
   ok(typeof row.callExample === "object" && row.callExample != null, `row.callExample is an object`);

@@ -101,7 +101,7 @@ function withPostalFooter(html, text) {
   const line = esc.replace(/\s*\n\s*/g, ", ");
   return {
     html: typeof html === "string"
-      ? `${html}\n<p style="margin:18px 0 0;font-size:12px;color:#6b7280;">${line}</p>`
+      ? `${html}\n<p style="margin:18px 0 0;font-size:12px;color:#626970;">${line}</p>`
       : html,
     text: typeof text === "string" ? `${text}\n\n${String(addr).replace(/\s*\n\s*/g, ", ")}` : text,
   };
@@ -175,18 +175,18 @@ export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind
   // and price come from the monitor product table, never from copy here.
   const up = upgradeOffer(kind, subjectOf, baseUrl || originOf(reportUrl));
   const upHtml = up
-    ? `<p style="color:#35443c;border-top:1px solid #e3e7e4;padding-top:16px;margin-top:26px">Want this kept current? Our ${escapeHtml(up.label)} re-checks ${escapeHtml(hdr(up.target || "it"))} on a schedule and emails you a fresh report the moment it changes, ${escapeHtml(up.priceUsd)} a month, cancel any time. <a href="${escapeAttr(up.url)}" style="color:#15654a;font-weight:600">Start monitoring →</a></p>`
+    ? `<p style="color:#3A3F45;border-top:1px solid #D9DDE1;padding-top:16px;margin-top:26px">Want this kept current? Our ${escapeHtml(up.label)} re-checks ${escapeHtml(hdr(up.target || "it"))} on a schedule and emails you a fresh report the moment it changes, ${escapeHtml(up.priceUsd)} a month, cancel any time. <a href="${escapeAttr(up.url)}" style="color:#0F5E43;font-weight:600">Start monitoring →</a></p>`
     : "";
   const upText = up
     ? `\nWant this kept current? Our ${up.label} re-checks ${hdr(up.target || "it")} on a schedule and emails you a fresh report when it changes, ${up.priceUsd} a month, cancel any time:\n${up.url}\n`
     : "";
-  const html = `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:520px;margin:0 auto;color:#14201b">
-    <h2 style="font-weight:500;color:#14201b">Your ${escapeHtml(productLabel || "report")} is ready</h2>
-    <p style="color:#35443c">Your report${escapeHtml(on)} is finished and waiting for you. It's yours to keep: open it any time with the link below.</p>
-    <p style="margin:26px 0"><a href="${escapeAttr(reportUrl)}" style="background:#15654a;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;display:inline-block">Open your report →</a></p>
-    <p style="color:#8a948c;font-size:13px">Or paste this link into your browser:<br>${escapeHtml(reportUrl)}</p>
+  const html = `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:520px;margin:0 auto;color:#111315">
+    <h2 style="font-weight:500;color:#111315">Your ${escapeHtml(productLabel || "report")} is ready</h2>
+    <p style="color:#3A3F45">Your report${escapeHtml(on)} is finished and waiting for you. It's yours to keep: open it any time with the link below.</p>
+    <p style="margin:26px 0"><a href="${escapeAttr(reportUrl)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 22px;border-radius:999px;font-weight:600;display:inline-block">Open your report →</a></p>
+    <p style="color:#626970;font-size:13px">Or paste this link into your browser:<br>${escapeHtml(reportUrl)}</p>
     ${upHtml}
-    <p style="color:#8a948c;font-size:12px;margin-top:28px">Agent402 · cited reports · pay per report</p>
+    <p style="color:#626970;font-size:12px;margin-top:28px">Agent402 · cited reports · pay per report</p>
   </div>`;
   const text = `Your ${productLabel || "report"}${on} is ready.\n\nOpen it here (yours to keep): ${reportUrl}\n${upText}\nAgent402`;
   return { subject: subj, html, text };
@@ -231,18 +231,18 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
   // and how to stop it, in words, next to the manage link (which stays the
   // keyed one the caller passed - never widened here).
   const why = `You are getting this because you subscribed to the ${lbl} for ${t} on agent402.tools. It runs on its own until you cancel.`;
-  const whyHtml = `<p style="color:#8a948c;font-size:12px;margin-top:26px">${escapeHtml(why)}</p>`;
+  const whyHtml = `<p style="color:#626970;font-size:12px;margin-top:26px">${escapeHtml(why)}</p>`;
   const whyText = `${why}\n`;
   const list = (changes || []).slice(0, 12);
-  const changesHtml = list.length ? `<ul style="color:#35443c;padding-left:18px">${list.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ul>` : "";
+  const changesHtml = list.length ? `<ul style="color:#3A3F45;padding-left:18px">${list.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ul>` : "";
   const changesText = list.length ? `\n${list.map((c) => `- ${c}`).join("\n")}\n` : "";
-  const html = `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:520px;margin:0 auto;color:#14201b">
-    <h2 style="font-weight:500;color:#14201b">${escapeHtml(subj)}</h2>
-    <p style="color:#35443c">${escapeHtml(lead)}</p>${changesHtml}
-    <p style="margin:26px 0"><a href="${escapeAttr(reportUrl)}" style="background:#15654a;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;display:inline-block">Open the report →</a></p>
-    <p style="color:#8a948c;font-size:13px">Or paste this link into your browser:<br>${escapeHtml(reportUrl)}</p>
+  const html = `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:520px;margin:0 auto;color:#111315">
+    <h2 style="font-weight:500;color:#111315">${escapeHtml(subj)}</h2>
+    <p style="color:#3A3F45">${escapeHtml(lead)}</p>${changesHtml}
+    <p style="margin:26px 0"><a href="${escapeAttr(reportUrl)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 22px;border-radius:999px;font-weight:600;display:inline-block">Open the report →</a></p>
+    <p style="color:#626970;font-size:13px">Or paste this link into your browser:<br>${escapeHtml(reportUrl)}</p>
     ${whyHtml}
-    <p style="color:#8a948c;font-size:12px;margin-top:12px">Agent402 · ${escapeHtml(lbl)} · <a href="${escapeAttr(manageUrl || reportUrl)}" style="color:#8a948c">manage or cancel</a></p>
+    <p style="color:#626970;font-size:12px;margin-top:12px">Agent402 · ${escapeHtml(lbl)} · <a href="${escapeAttr(manageUrl || reportUrl)}" style="color:#626970">manage or cancel</a></p>
   </div>`;
   const text = `${subj}\n\n${lead}\n${changesText}\nOpen the report: ${reportUrl}\n\n${whyText}\nManage or cancel (change your card, or stop the emails): ${manageUrl || reportUrl}\n\nAgent402`;
   return { subject: subj, html, text };

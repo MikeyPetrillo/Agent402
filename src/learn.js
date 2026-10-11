@@ -5,6 +5,9 @@
 // replaced with a placeholder); the live 402 lists one accepts entry per
 // accepted chain. Each entry's `summary` is reused verbatim by /llms-full.txt.
 import { creditsSalesEnabled } from "./credits-sales.js";
+// Copy that names a prepaid key as a way in reads the switch that sells it:
+// while sales are off, a key is something a buyer already holds.
+const PREPAID = creditsSalesEnabled() ? "a prepaid key" : "a prepaid key bought earlier";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -81,15 +84,24 @@ const res = await mppFetch("https://agent402.tools/api/hash", {
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ text: "hello world" }),
 });
-console.log(res.headers.get("payment-receipt"));   // signed receipt on success`;
+console.log(res.headers.get("payment-receipt"));   // the receipt, naming the settlement transaction`;
 
 const CLIENT_CAPS = `import { Agent402 } from "agent402-client";
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
 
-// Free pure-CPU tools pay with proof-of-work; paid tools use the fetch you pass.
+const client = new x402Client();
+client.setSpendControls?.(false);   // the caps below bound spend instead
+registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const payFetch = wrapFetchWithPayment(fetch, client);
+
+// Free pure-CPU tools pay with proof-of-work; paid tools use the fetch you pass,
+// and the caps are checked before anything is signed.
 const agent = new Agent402({ fetch: payFetch, maxPerCallUsd: 0.05, dailyLimitUsd: 2 });
 
-const [tool] = await agent.find("extract the main text of a web page");
-const page = await agent.call(tool.slug, { url: "https://example.com" });`;
+const page = await agent.call("extract", { url: "https://example.com" });`;
 
 const MCP_ASK = `// tools/call on https://agent402.tools/mcp for a wallet-only tool, no credential yet
 {
@@ -214,11 +226,11 @@ export const LEARN = [
     alt: ["agentic payments", "machine payments", "AI agent payments"],
     glossary: "agentic-payments",
     title: "Agent payments: how AI agents pay for APIs",
-    description: "How an AI agent pays for a tool or an API on its own: read a price from a 402, pay from its own wallet or a prepaid key, keep a receipt, and stay inside spend limits set before anything is signed.",
-    summary: "Agent payments are how software agents buy tools and data on their own: the agent reads a price from an HTTP 402, pays per request from its own wallet (x402 or MPP) or a prepaid key, receives a receipt, and stays inside spend limits its operator set in advance.",
+    description: `How an AI agent pays for a tool or an API on its own: read a price from a 402, pay from its own wallet or ${PREPAID}, keep a receipt, and stay inside spend limits set before anything is signed.`,
+    summary: `Agent payments are how software agents buy tools and data on their own: the agent reads a price from an HTTP 402, pays per request from its own wallet (x402 or MPP) or ${PREPAID}, receives a receipt, and stays inside spend limits its operator set in advance.`,
     sections: [
       ["Why accounts do not work for agents", [
-        P(`Most paid APIs assume a person: someone signs up, verifies an email, enters a card and copies an API key into a config file. An agent working through a task cannot do any of that, and giving it a long-lived key to every service it might need is both impractical and risky. What an agent can hold is a wallet with a small balance, or a prepaid key its operator bought for it.`),
+        P(`Most paid APIs assume a person: someone signs up, verifies an email, enters a card and copies an API key into a config file. An agent working through a task cannot do any of that, and giving it a long-lived key to every service it might need is both impractical and risky. What an agent can hold is a wallet with a small balance${creditsSalesEnabled() ? ", or a prepaid key its operator bought for it" : ""}.`),
         P(`Agent payments replace the account with the payment. The price is stated in the response, the agent pays for that one request, and the payer address on the settled payment is the only identity involved.`),
       ]],
       ["The pieces", [
@@ -250,7 +262,7 @@ export const LEARN = [
       ["The price comes first", [
         P(`Every priced route answers an unpaid request with a 402 carrying its price, so a caller always knows the cost before paying. Catalogs list the same prices ahead of time: /api/pricing and /openapi.json on this server, and ${C("/api/find")} returns the price with each match.`),
         { code: PRICING_ENTRY },
-        P(`Some routes price a request by its size rather than a flat fee. The metered model routes quote each request from its body, and a buyer paying through a prepaid key or a Permit2 allowance settles at actual usage under that quote.`),
+        P(`Some routes price a request by its size rather than a flat fee. The metered model routes quote each request from its body, and a buyer paying through a Permit2 allowance (or ${PREPAID}) settles at actual usage under that quote.`),
       ]],
       ["What is charged, and what is not", [
         `<ul><li>A successful answer is charged once, and carries a receipt.</li><li>A failed call (an error, a timeout, an upstream outage) is not charged, because settlement runs after the tool and only on success.</li><li>A retry with the same ${C("Idempotency-Key")} and the same credential replays the first answer instead of paying again.</li><li>Reading the 402 quote is free.</li></ul>`,
@@ -259,7 +271,7 @@ export const LEARN = [
         P(`Signing and settling every request on chain is the right shape for occasional calls and the wrong one for thousands. ${creditsSalesEnabled() ? "Two options avoid it: a prepaid credits key (one card purchase, then a Bearer header on each call, debited per success) or, with a wallet on Base, a one-time Permit2 approval so metered calls settle at actual usage. Both keep the per-request price; only the settlement changes." : "With a wallet on Base, a one-time Permit2 approval lets metered calls settle at actual usage under the quoted ceiling; the per-request price stays the same, only the settlement changes. A prepaid credits key bought earlier also avoids per-call signing (new keys are not on sale)."}`),
       ]],
     ],
-    links: [["/pricing", "How this server prices"], ["/api/pricing", "Machine-readable prices"], ["/tools", "The catalog"], ["/integrations/client", "agent402-client"], ["/integrations/tollbooth", "Sell your own API per call"]],
+    links: [["/pricing", "How this server prices"], ["/api/pricing", "Machine-readable prices"], ["/tools", "Our tools"], ["/integrations/client", "agent402-client"], ["/integrations/tollbooth", "Sell your own API per call"]],
   },
   {
     slug: "mcp-payments",
@@ -268,20 +280,20 @@ export const LEARN = [
     glossary: "mcp",
     title: "MCP payments: how an MCP client pays for a tool call",
     description: "How paid tools work over the Model Context Protocol: a local MCP server that pays underneath with a wallet or credits key, or a hosted connector that asks for payment in the tool result and accepts an MPP credential on the retry.",
-    summary: "MCP payments let an assistant pay for a tool call made over the Model Context Protocol, either through a local MCP server that signs payments underneath (wallet or prepaid key) or through a hosted connector that returns MPP challenges in the tool result and accepts a credential in _meta on the retry.",
+    summary: `MCP payments let an assistant pay for a tool call made over the Model Context Protocol, either through a local MCP server that signs payments underneath (a wallet, or ${PREPAID}) or through a hosted connector that returns MPP challenges in the tool result and accepts a credential in _meta on the retry.`,
     sections: [
       ["Two places payment can happen", [
         P(`The Model Context Protocol lets an assistant discover and call tools. It does not itself say how a tool gets paid for, so there are two practical patterns, and this server supports both.`),
         `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment challenges attached, and a client that speaks MPP pays and repeats the call.</li></ol>`,
       ]],
       ["The local server", [
-        P(`Configure one of three things: ${C("AGENT_KEY")} (an EVM key holding USDC, signing x402 payments), ${C("AGENT402_CREDITS_KEY")} (a prepaid card-credits key, sent as a Bearer token and debited only on success), or nothing, in which case the pure-CPU tools pay with proof-of-work. ${C("AGENT402_MAX_PER_CALL")} and ${C("AGENT402_BUDGET")} are checked before any payment is signed.`),
+        P(`Configure one of three things: ${C("AGENT_KEY")} (an EVM key holding USDC, signing x402 payments), ${C("AGENT402_CREDITS_KEY")} (${creditsSalesEnabled() ? "a prepaid card-credits key" : "a prepaid card-credits key bought earlier"}, sent as a Bearer token and debited only on success), or nothing, in which case the pure-CPU tools pay with proof-of-work. ${C("AGENT402_MAX_PER_CALL")} and ${C("AGENT402_BUDGET")} are checked before any payment is signed.`),
         { code: `{
   "mcpServers": {
     "agent402": {
       "command": "npx",
       "args": ["-y", "agent402-mcp"],
-      "env": { "AGENT402_CREDITS_KEY": "a402_YOUR_KEY", "AGENT402_MAX_PER_CALL": "0.05" }
+      "env": { "AGENT_KEY": "0xYOUR_FUNDED_KEY", "AGENT402_MAX_PER_CALL": "0.05" }
     }
   }
 }` },
@@ -303,14 +315,14 @@ export const LEARN_BY_GLOSSARY_ID = Object.fromEntries(LEARN.map((l) => [l.gloss
 
 const LEARN_CSS = `
 .lp-body{max-width:780px}
-.lp-body p,.lp-body li{font-size:16.5px;line-height:1.7;color:var(--muted)}
+.lp-body p,.lp-body li{font-size:var(--fs-lg);line-height:1.7;color:var(--muted)}
 .lp-body p{margin:0 0 16px}
 .lp-body ul,.lp-body ol{padding-left:22px;margin:0 0 18px}
 .lp-body li{margin:0 0 8px}
-.lp-body h2{font-family:var(--font-body);font-weight:800;font-size:25px;letter-spacing:-.02em;margin:38px 0 14px;color:var(--ink)}
-.lp-body code{font-family:var(--font-mono);font-size:.88em;color:var(--ink)}
+.lp-body h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:38px 0 14px;color:var(--ink)}
+.lp-body code{font-family:var(--font-mono);font-size:var(--fs-code-inline);color:var(--ink)}
 .lp-body strong{color:var(--ink)}
-.lp-body pre{background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:.8rem;line-height:1.55;padding:16px;margin:0 0 18px;overflow-x:auto;white-space:pre}
+.lp-body pre{background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0 0 18px;overflow-x:auto;white-space:pre}
 .lp-body pre code{color:inherit;font-size:inherit}
 .lp-links a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent)}
 `;
@@ -358,14 +370,14 @@ export function learnPage(baseUrl, slug) {
   const others = LEARN.filter((x) => x.slug !== l.slug).map((x) => `<a href="/learn/${x.slug}">${esc(x.term)}</a>`).join(" &middot; ");
   const body = `
   <article style="max-width:1000px;margin:0 auto;padding:50px 30px 60px;">
-    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/learn" style="color:var(--muted);text-decoration:none;">learn</a> / <span style="color:var(--ink);">${esc(l.slug)}</span></nav>
-    <h1 style="font-family:var(--font-body);font-weight:800;font-size:46px;line-height:1.02;letter-spacing:-.03em;margin:0 0 18px;max-width:860px;">${esc(l.term)}</h1>
-    <p style="font-size:19px;line-height:1.55;color:var(--ink);margin:0 0 8px;max-width:780px;">${esc(l.summary)}</p>
+    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/learn" style="color:var(--muted);text-decoration:none;">learn</a> / <span style="color:var(--ink);">${esc(l.slug)}</span></nav>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 18px;max-width:860px;">${esc(l.term)}</h1>
+    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--ink);margin:0 0 8px;max-width:780px;">${esc(l.summary)}</p>
     <div class="lp-body">
 ${sections}
       <h2>Related</h2>
       <ul class="lp-links">${l.links.map(([href, label]) => `<li><a href="${esc(href)}">${esc(label)}</a></li>`).join("")}<li><a href="/glossary#${esc(l.glossary)}">Glossary entry</a></li></ul>
-      <p class="lp-links" style="font-size:14px;">More explainers: ${others}</p>
+      <p class="lp-links" style="font-size:var(--fs-md);">More explainers: ${others}</p>
     </div>
   </article>
   ${ledgerFooterCompact()}`;
@@ -391,14 +403,14 @@ export function learnIndex(baseUrl) {
     itemListElement: LEARN.map((l, i) => ({ "@type": "ListItem", position: i + 1, url: `${baseUrl}/learn/${l.slug}`, name: l.term })),
   };
   const cards = LEARN.map((l) => `<a href="/learn/${l.slug}" style="display:block;border:1px solid var(--hairline);background:var(--card);padding:20px 22px;text-decoration:none;color:var(--ink);">
-      <h2 style="font-family:var(--font-body);font-weight:800;font-size:21px;margin:0 0 8px;">${esc(l.term)}</h2>
-      <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0;">${esc(l.summary)}</p>
+      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);margin:0 0 8px;">${esc(l.term)}</h2>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">${esc(l.summary)}</p>
     </a>`).join("\n");
   const body = `
   <section style="max-width:1180px;margin:0 auto;padding:52px 30px 64px;">
-    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">learn</span></nav>
-    <h1 style="font-family:var(--font-body);font-weight:800;font-size:50px;line-height:1;letter-spacing:-.03em;margin:0 0 16px;">How agents pay for APIs</h1>
-    <p style="font-size:17px;line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 34px;">Six explainers, each with a working example. For one-paragraph definitions of every term, see the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>; to wire payments into a framework, see <a href="/integrations" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">integrations</a>.</p>
+    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">learn</span></nav>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1;margin:0 0 16px;">How agents pay for APIs</h1>
+    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 34px;">Six explainers, each with a working example. For one-paragraph definitions of every term, see the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>; to wire payments into a framework, see <a href="/integrations" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">integrations</a>.</p>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;">
 ${cards}
     </div>

@@ -136,17 +136,22 @@ export function terminalTicker(rows = []) {
  *  so the script never re-derives a figure the server already computed. */
 export function terminalRoster(rows = [], selectedHost = null, { measured = true } = {}) {
   if (!rows.length) return `<div class="t-empty">no sellers indexed on this rail yet</div>`;
-  const maxCalls = Math.max(...rows.map((r) => Number(r.calls) || 0), 1);
+  const maxCalls = Math.max(...rows.filter((r) => !r.local).map((r) => Number(r.calls) || 0), 1);
+  // The host row is pinned and labelled, never ranked: it carries no rank
+  // number, its on-chain figures are marked as including our own runs, and
+  // the ranks count the other sellers only.
+  let rank = 0;
   const body = rows.map((r, i) => {
     const sel = selectedHost && r.host === selectedHost;
-    const share = Math.round(((Number(r.calls) || 0) / maxCalls) * 100);
+    const share = r.local ? 0 : Math.round(((Number(r.calls) || 0) / maxCalls) * 100);
+    const n = r.local ? "host" : String(++rank).padStart(3, "0");
     return `<a class="t-row${sel ? " is-sel" : ""}" role="row" tabindex="${sel || (!selectedHost && i === 0) ? 0 : -1}"
        href="${esc(r.href || `?seller=${encodeURIComponent(r.host)}#detail`)}"
        data-t-row data-host="${esc(r.host)}" data-calls="${Number(r.calls) || 0}" data-usd="${Number(r.usd) || 0}"
        data-buyers="${Number(r.buyers) || 0}" data-tools="${Number(r.tools) || 0}" data-idx="${i}"
        ${sel ? 'aria-current="true"' : ""}>
-      <span class="t-c t-c-n" role="cell">${String(i + 1).padStart(3, "0")}</span>
-      <span class="t-c t-c-host" role="cell"><span class="t-dot${r.routable ? " is-on" : ""}" aria-hidden="true"></span>${esc(r.host)}</span>
+      <span class="t-c t-c-n" role="cell">${n}</span>
+      <span class="t-c t-c-host" role="cell"><span class="t-dot${r.routable ? " is-on" : ""}" aria-hidden="true"></span>${esc(r.host)}${r.local ? ` <span class="t-own" title="on-chain figures for our own wallet, our own canary and volume runs included">ours, own runs incl.</span>` : ""}</span>
       <span class="t-c t-c-num" role="cell">${measured ? num(r.calls) : "-"}</span>
       <span class="t-c t-c-num" role="cell">${measured ? esc(compactUsd(r.usd)) : "-"}</span>
       <span class="t-c t-c-num" role="cell">${measured ? num(r.buyers) : "-"}</span>
@@ -162,7 +167,7 @@ export function terminalRoster(rows = [], selectedHost = null, { measured = true
         <span class="t-c t-c-num" role="columnheader" data-t-sort="usd">VOLUME</span>
         <span class="t-c t-c-num" role="columnheader" data-t-sort="buyers">BUYERS</span>
         <span class="t-c t-c-num" role="columnheader" data-t-sort="tools">TOOLS</span>
-        <span class="t-c t-c-bar" role="columnheader"><span class="t-sr">Share of the busiest seller listed</span></span>
+        <span class="t-c t-c-bar" role="columnheader"><span class="t-sr">Calls as a share of the top seller's</span></span>
       </div>
       <div class="t-body" role="rowgroup" data-t-body>${body}</div>
     </div>`;
@@ -189,7 +194,7 @@ export function terminalStatusBar({ chainName, asset, sellerCount, totalSellers 
     `<span class="t-st-cell"><span class="t-label">SCOPE</span>${esc(scopeLabel || "")}</span>`,
     `<span class="t-st-cell t-${state.k}"><span class="t-st-led" aria-hidden="true"></span>${esc(state.t)}</span>`,
     scanned ? `<span class="t-st-cell"><span class="t-label">WINDOW</span>${esc(scanned)}</span>` : "",
-    `<span class="t-st-cell t-st-hint"><kbd>?</kbd> keys</span>`,
+    `<span class="t-st-cell t-st-hint"><kbd>?</kbd> keyboard shortcuts</span>`,
   ].filter(Boolean).join("");
   return `<div class="t-status" role="status" aria-live="polite" data-t-status>${cells}</div>`;
 }
@@ -240,8 +245,8 @@ export function terminalMetrics(activity, scopeLabel, noteText) {
 // script-src does not allow inline script, which is why the behaviour lives in
 // a real file under assets/js).
 export const TERMINAL_CSS = `
-.t-wrap{--t-row-h:26px;background:var(--t-bg);color:var(--t-ink);border:1px solid var(--t-rule);font-family:var(--font-mono);font-size:12px;line-height:1.35;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1,"zero" 1;}
-.t-label{font-size:10px;letter-spacing:.10em;color:var(--t-ink-faint);text-transform:uppercase;}
+.t-wrap{--t-row-h:26px;background:var(--t-bg);color:var(--t-ink);border:1px solid var(--t-rule);font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.35;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1,"zero" 1;}
+.t-label{font-size:var(--fs-2xs);letter-spacing:.10em;color:var(--t-ink-faint);text-transform:uppercase;}
 .t-dim{color:var(--t-ink-dim);}
 .t-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
 .t-up{color:var(--t-up);} .t-down{color:var(--t-down);} .t-flat,.t-na{color:var(--t-ink-dim);}
@@ -253,7 +258,7 @@ export const TERMINAL_CSS = `
 .t-ticker:hover .t-ticker-rail,.t-ticker:focus-within .t-ticker-rail{animation-play-state:paused;}
 .t-tick{display:inline-flex;align-items:baseline;gap:6px;padding:0 14px;border-right:1px solid var(--t-rule);}
 .t-tick b{font-weight:600;color:var(--t-ink);}
-.t-tick-v{color:var(--t-ink-dim);} .t-tick-d{font-size:11px;}
+.t-tick-v{color:var(--t-ink-dim);} .t-tick-d{font-size:var(--fs-2xs);}
 @keyframes t-scroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
 @media (prefers-reduced-motion: reduce){.t-ticker-rail{animation:none;}.t-ticker{overflow-x:auto;}}
 
@@ -268,11 +273,11 @@ export const TERMINAL_CSS = `
 .t-search{flex:1;min-width:0;background:var(--t-bg);border:1px solid var(--t-rule-2);color:var(--t-ink);font:inherit;padding:4px 7px;border-radius:0;}
 .t-search:focus{outline:2px solid var(--t-sel-edge);outline-offset:-1px;}
 .t-search::placeholder{color:var(--t-ink-faint);}
-.t-count{color:var(--t-ink-faint);font-size:11px;white-space:nowrap;}
+.t-count{color:var(--t-ink-faint);font-size:var(--fs-2xs);white-space:nowrap;}
 .t-table{display:flex;flex-direction:column;min-height:0;flex:1;}
 .t-head,.t-row{display:grid;grid-template-columns:34px minmax(0,1fr) 68px 72px 58px 46px 52px;align-items:center;gap:8px;padding:0 10px;}
 .t-head{height:24px;border-bottom:1px solid var(--t-rule-2);background:var(--t-panel-2);position:sticky;top:0;z-index:1;}
-.t-head .t-c{font-size:10px;letter-spacing:.09em;color:var(--t-ink-faint);text-transform:uppercase;}
+.t-head .t-c{font-size:var(--fs-2xs);letter-spacing:.09em;color:var(--t-ink-faint);text-transform:uppercase;}
 .t-head [data-t-sort]{cursor:pointer;user-select:none;}
 .t-head [data-t-sort]:hover,.t-head [data-t-sort].is-sorted{color:var(--t-cyan);}
 .t-body{overflow-y:auto;max-height:min(58vh,620px);scrollbar-width:thin;}
@@ -289,8 +294,9 @@ export const TERMINAL_CSS = `
 .t-row:focus-visible{outline:2px solid var(--t-sel-edge);outline-offset:-2px;}
 .t-row.is-sel{background:var(--t-sel);box-shadow:inset 2px 0 0 var(--t-sel-edge);}
 .t-c{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.t-c-n{color:var(--t-ink-faint);font-size:11px;}
+.t-c-n{color:var(--t-ink-faint);font-size:var(--fs-2xs);}
 .t-c-host{display:flex;align-items:center;gap:6px;min-width:0;}
+.t-own{color:var(--t-ink-faint);font-size:var(--fs-2xs);white-space:nowrap;}
 .t-c-num{text-align:right;}
 .t-dot{width:5px;height:5px;flex:0 0 5px;border-radius:50%;background:var(--t-rule-2);}
 .t-dot.is-on{background:var(--t-up);}
@@ -301,31 +307,31 @@ export const TERMINAL_CSS = `
 .t-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--t-rule);}
 .t-metric{background:var(--t-panel);padding:9px 10px 8px;min-width:0;}
 .t-metric-h{display:flex;align-items:baseline;justify-content:space-between;gap:6px;}
-.t-delta{font-size:11px;}
-.t-metric-v{font-size:22px;font-weight:600;letter-spacing:-.01em;color:var(--t-ink);margin:1px 0 3px;}
-.t-metric-n{font-size:10px;color:var(--t-ink-faint);margin-top:3px;}
+.t-delta{font-size:var(--fs-2xs);}
+.t-metric-v{font-size:var(--fs-xl);font-weight:600;letter-spacing:-.01em;color:var(--t-ink);margin:1px 0 3px;}
+.t-metric-n{font-size:var(--fs-2xs);color:var(--t-ink-faint);margin-top:3px;}
 .t-spark{display:block;width:100%;height:30px;color:inherit;}
 .t-spark-l{fill:none;stroke:currentColor;stroke-width:1.25;vector-effect:non-scaling-stroke;}
 .t-spark-a{fill:currentColor;opacity:.13;stroke:none;}
-.t-note{padding:7px 10px;font-size:10.5px;color:var(--t-ink-faint);border-top:1px solid var(--t-rule);}
-.t-empty{padding:16px 10px;color:var(--t-ink-dim);}
+.t-note{padding:7px 10px;font-size:var(--fs-2xs);color:var(--t-ink-faint);border-top:1px solid var(--t-rule);}
+.t-empty{padding:16px 10px;color:var(--t-ink-dim);font-family:var(--font-body);}
 
 /* Status bar */
 .t-status{display:flex;flex-wrap:wrap;align-items:center;gap:0;border-top:1px solid var(--t-rule);background:var(--t-panel-2);}
-.t-st-cell{display:flex;align-items:center;gap:6px;padding:6px 11px;border-right:1px solid var(--t-rule);font-size:11px;white-space:nowrap;}
+.t-st-cell{display:flex;align-items:center;gap:6px;padding:6px 11px;border-right:1px solid var(--t-rule);font-size:var(--fs-2xs);white-space:nowrap;}
 .t-st-cell .t-label{margin:0;}
 .t-st-hint{margin-left:auto;border-right:0;color:var(--t-ink-faint);}
 .t-st-led{width:6px;height:6px;border-radius:50%;background:currentColor;}
-.t-status kbd,.t-help kbd{font:inherit;font-size:10.5px;border:1px solid var(--t-rule-2);padding:0 4px;color:var(--t-ink-dim);}
+.t-status kbd,.t-help kbd{font:inherit;font-size:var(--fs-2xs);border:1px solid var(--t-rule-2);padding:0 4px;color:var(--t-ink-dim);}
 
 /* Help */
 .t-help[hidden]{display:none;}
 .t-help{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:20px;}
 .t-help-box{background:var(--t-panel);border:1px solid var(--t-rule-2);max-width:380px;width:100%;font-family:var(--font-mono);color:var(--t-ink);}
 .t-help-h{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid var(--t-rule);background:var(--t-panel-2);}
-.t-help-x{background:none;border:0;color:var(--t-ink-dim);font-size:17px;line-height:1;cursor:pointer;padding:0 3px;}
+.t-help-x{background:none;border:0;color:var(--t-ink-dim);font-size:var(--fs-lg);line-height:1;cursor:pointer;padding:0 3px;}
 .t-help dl{margin:0;padding:6px 10px 10px;}
-.t-help dl>div{display:flex;gap:10px;padding:3px 0;font-size:11.5px;}
+.t-help dl>div{display:flex;gap:10px;padding:3px 0;font-size:var(--fs-xs);}
 .t-help dt{margin:0;flex:0 0 78px;} .t-help dd{margin:0;color:var(--t-ink-dim);}
 
 @media (max-width: 860px){

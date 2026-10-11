@@ -915,7 +915,18 @@ jobs:
           E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: node openclaw/test-real-install.js
-      # The pinned host (2026.9.x) requires Node >= 24.16; the lane itself
+      # The same file against the PREVIOUS pin, so raising the pin never drops
+      # the host most installed users still run. Same key shadowing as above.
+      - name: OpenClaw provider plugin against the previous OpenClaw pin
+        env:
+          OPENCLAW_SPEC: openclaw@2026.9.3
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
+        run: node openclaw/test-real-install.js
+      # The pinned host (2026.9.x and later) requires Node >= 24.16; the lane itself
       # stays on 22 (prod's floor), so Node 24 is scoped to this one step and
       # the lane's version is restored right after.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1280,6 +1291,8 @@ jobs:
           t node scripts/test-crawl-kit.js
           # Memory v2 unit tests (grants, counters, audit chain, recall)
           t node scripts/test-memory.js
+          # The local embedding's token hash: unchanged for strings, string-coerced and bounded.
+          t node scripts/test-memory-fnv1a.js
           # Security regressions (proto-pollution, input-DoS, 500-hardening)
           t node scripts/test-security.js
 
@@ -1313,6 +1326,7 @@ jobs:
       - name: "State database (REAL postgres: documents/records/log lines/leases; every migrated store imports its file once and reads the row; loops skip under another holder's lease; idempotency answers and claims shared over REAL redis)"
         env:
           REDIS_URL: redis://127.0.0.1:6379
+          LEDGER_JOURNAL_REDIS: "on"
           STATE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
           STATE_DATABASE_URL_FOR_TEST: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
         run: |
@@ -1320,6 +1334,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           t node scripts/test-state-db.js
           t node scripts/test-stores-pg.js
+          # The boot step drops the retired tollbooth_leads table, logs only its count, never recreates it.
+          t node scripts/test-leads-purge-pg.js
           # Two containers on one schema: the email stores never undo or repeat each other.
           t node scripts/test-overlap-stores-pg.js
           # A signed email link for a record the other container made works here.
@@ -1349,6 +1365,13 @@ jobs:
           t node scripts/test-refund-ledger-pg.js
           t node scripts/test-sales-ledger-pg.js
           t node scripts/test-ledger-dead-letter-pg.js
+          # The journals in REAL redis: claimed once across containers, a lapsed lease recovered,
+          # local disk (and the "local" word) when redis is away; card finals keep one outcome.
+          t node scripts/test-ledger-journal-redis-pg.js
+          # One drainer at a time, and every claimed entry leased: each guard on its own.
+          t node scripts/test-ledger-journal-claim-redis.js
+          # A push debt replayed from another container's dead-letter never undoes that push's void.
+          t node scripts/test-tempo-push-void-crosscontainer-pg.js
           t node scripts/test-mcp-tasks-pg.js
           t node scripts/test-hangup-forgiveness-pg.js
           t node scripts/test-external-spend-guard-pg.js
@@ -1362,6 +1385,8 @@ jobs:
           t node scripts/test-human-checkout-pg.js
           # A report made is never refunded or regenerated over a database failure; a refund is recorded first.
           t node scripts/test-human-checkout-failures-pg.js
+          # Another container never takes over a claim whose owner still beats, nor refunds one marked generated.
+          t node scripts/test-human-checkout-crosscontainer-pg.js
           # A paid subscription recorded while the database is away survives a restart; reload shows another container's.
           t node scripts/test-stripe-subscriptions-pg.js
           t node scripts/test-wish-pg.js
@@ -1370,6 +1395,11 @@ jobs:
           t node scripts/test-store-boot-blip-pg.js
           t node scripts/test-store-retry-recovery-pg.js
           t node scripts/test-json-document-outage-pg.js
+          # An import that timed out is a failed load (retried), never an empty store.
+          t node scripts/test-json-document-import-fail-pg.js
+          t node scripts/test-store-import-fail-pg.js
+          # A first boot's imports share two slots: no connect timeouts, serving reads not starved.
+          t node scripts/test-state-db-import-congestion-pg.js
           t node scripts/test-store-ddl-race-pg.js
           t node scripts/test-store-write-retry-pg.js
           t node scripts/test-stats-ack-loss-pg.js
@@ -1706,6 +1736,8 @@ jobs:
           t node scripts/test-ledger-recent.js
           # /api/revenue publishes no payer address and no outside buyer's tx hash
           t node scripts/test-revenue-no-payers.js
+          # /api/revenue publishes no wallet balance; the operator view keeps them
+          t node scripts/test-revenue-no-balances.js
           # Html-kit tests (html-select, html-table, html-strip, html-links, html-meta)
           t node scripts/test-html-kit.js
           # Bazaar quality ingestion (30d calls/payers on index sellers + /api/find external rows + ranking tiebreak - offline)
@@ -1766,8 +1798,12 @@ jobs:
           # A cached repeat's "payment is not charged" copy names the Tempo transfer exception (offline)
           t node scripts/test-cache-repeat-copy.js
           t node scripts/test-legal-dates.js
+          # Legal, security and machine copy state what the code does (backups, refunds, CSP, MPP chains; offline)
+          t node scripts/test-legal-claims.js
           t node scripts/test-wire-count-copy.js
           t node scripts/test-pack-copy-retired.js
+          # Retired hosted tollbooth: no surface offers it; retired URLs 301, the intake 410s; the operator leads page is gone (boots a server)
+          t node scripts/test-tollbooth-cloud-retired.js
           t node scripts/test-sitemap-superset.js
           # Published SDK snippets never let the SDK send an environment credential to our host
           t node scripts/test-sdk-snippet-credentials.js
@@ -2219,7 +2255,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (17 scripts, one process each)
+      - name: Offline suites (20 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2227,6 +2263,8 @@ jobs:
           t node scripts/test-image-runtime-scripts.js
           # /api/pow/challenge envelope (free-tier gate — full shape + slug scoping + 404s)
           t node scripts/test-pow-challenge-envelope.js
+          # wiki/Why-Pay-Here.md is generated from WHY_POINTS (scripts/why-wiki.js) and must stay current
+          t node scripts/test-why-wiki.js
           # /api/pricing envelope contract (every scraper reads this — per-endpoint shape, slug uniqueness)
           t node scripts/test-pricing-envelope.js
           # /health envelope + .flags shape (boolean discipline locks the Yahoo-relay-flap class)
@@ -2378,6 +2416,8 @@ jobs:
           t node scripts/test-path-scoped-sellers.js
           # re-registration re-check: per-origin window + hourly route allowance
           t node scripts/test-register-recheck-cooldown.js
+          # A registration answers by its deadline (202 pending) and stops starting probes past it.
+          t node scripts/test-index-register-deadline.js
           # Settlement-derived proven-ness + discovery-gap honesty
           t node scripts/test-settlement-proof.js
           # "A venue with many payees is not one seller (multi-payTo index — offline)"
@@ -2386,6 +2426,8 @@ jobs:
           t node scripts/test-cert-transparency.js
           # Revenue chart free-tier lane (free calls never priced as revenue; jsdom — offline)
           t node scripts/test-revenue-chart.js
+          # Revenue date ranges (parser, ranged daily APIs with 400s, first-paint window, URL round trip; fixture ledger, port from the kernel, offline)
+          t node scripts/test-revenue-range.js
           # Prices quoted in PROSE match real prices (meta + og descriptions, which docs-truth cannot see - offline)
           t node scripts/test-price-prose.js
           # "Live 402 quote (a priceless row learns its price from the challenge; unpriceable never becomes $0; PUT/PATCH/DELETE never probed — offline)"
@@ -2457,6 +2499,16 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Tollbooth CLI settles x402 + MPP from env (real CLI process vs stub facilitator; mppx + @x402/fetch buys settle once each; misconfig fails closed)
           t node scripts/test-tollbooth-cli.js
+          # /tollbooth install snippet runs against the package for every mode (observe, bots, strict, all; PoW unlock, stock x402 buy vs stub facilitator)
+          t node scripts/test-tollbooth-landing.js
+          # /crawler claims vs the real crawl (robots exemptions, fallback documents, User-Agent on every probe - offline stub origins)
+          t node scripts/test-crawler-page.js
+          # /contribute: every script and file it names exists; free-tier allowlist, route recording and pack pricing rules match the code (offline)
+          t node scripts/test-contribute-page.js
+          # /integrations pages: installs carry every imported package, credits copy reads the sales switch, shape note and tool cards derived (offline)
+          t node scripts/test-integration-pages.js
+          # /workflows chains: no step after a markdown producer takes HTML or CSV; copy promises only what steps return (offline)
+          t node scripts/test-workflows-page.js
           # /SKILL.md agent-onboarding sheet (frontmatter, section order, every named route registered, house style - offline)
           t node scripts/test-skill-md.js
           # Manifest resources[] dedup (a tool registered under 2 HTTP methods lists its URL once, not twice)
@@ -2669,6 +2721,7 @@ jobs:
           t node scripts/test-algorand-page.js
           # Homepage tests (offline, fixture snapshot)
           t node scripts/test-home-page.js
+          t node scripts/test-badge-contrast.js
           t node scripts/test-ga-snippet.js
           t node scripts/test-chain-page-cache.js
           # Operator demand-board page tests (verdict rendering, no double-escape, robots disallow — offline)
@@ -2744,6 +2797,8 @@ jobs:
           t node scripts/test-payment-verify.js
           # Refund job proves a route-execute debt paid to a spending wallet (the real job, refund.yml's env, stub chains — offline)
           t node scripts/test-refund-run-self-funding.js
+          # Refund job on Tempo and Solana: dry run plans only, claim before send, one send per debt, outbound proof before paid, void never sent (stubs only, offline)
+          t node scripts/test-refund-run-chains.js
           # Payment-header precedence (attribution must follow the header the middleware SETTLES from — offline)
           t node scripts/test-payer-header-order.js
           # Refund monitor (stuck sends page, in-flight ones do not, and no address ever reaches a public issue — offline)
@@ -2852,7 +2907,7 @@ jobs:
           t node scripts/test-log-safe.js
           # Postgres TLS policy by route (F11 — verified cert on public hosts, relaxed only on the private railway.internal mesh — offline)
           t node scripts/test-db-ssl.js
-          # Bounded rate-limit maps + global waitlist ceiling (F21 — stale one-time-IP keys swept, distributed flood capped — offline)
+          # Bounded rate-limit maps + global window ceiling (F21 — stale one-time-IP keys swept, distributed flood capped — offline)
           t node scripts/test-rate-sweep.js
           # /data volume contract — stats + memory DBs fail loud in prod when missing
           t node scripts/test-stats-persistence.js
@@ -3175,6 +3230,8 @@ jobs:
           node scripts/test-date-time-kit.js
           node scripts/test-theme.js
           node scripts/test-faint-contrast.js
+          node scripts/test-design-tokens.js
+          node scripts/test-design-tokens.js --self-test
           node scripts/test-reveal-on-scroll.js
           node scripts/test-validation-kit.js
           node scripts/test-text-analysis-kit.js
@@ -3223,6 +3280,8 @@ jobs:
 
       - name: Docs truth (every documented route, slug and price matches the served catalog)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-docs-truth.js
+      - name: Wiki facts (ranges, ladders, tier caps and the router order match the code)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-wiki-facts.js
       - name: Skill-pack pricing rule (every pack = sum of its tools minus 10%, recomputed from the live catalog)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-pack-pricing-rule.js
 
@@ -3232,7 +3291,7 @@ jobs:
       - name: Chain page layout stability (no chain's page geometry shifts based on how long its name is)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-chain-page-layout-stability.js
 
-      - name: Title clamp coverage (tool/skill page titles never wrap unboundedly based on name length)
+      - name: Title coverage (tool, skill, doc and guide H1s wrap balanced, never clipped)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-title-clamp-coverage.js
 
       - name: Reveal-on-scroll coverage (shared, site-wide - not a per-page opt-in that only ever reached the homepage)
@@ -3831,6 +3890,17 @@ jobs:
       # Rendered text contrast: every visible text vs its real backdrop, both themes, 390 + 1280 px (Chromium; a dark-surface token on a light surface is invisible in light mode, /sell 2026-09-10)
       - name: Text contrast (rendered, WCAG AA, both themes)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-text-contrast.js
+      # Wrap quality, measured: line boxes read back in Chromium at 1440 and 400 px; a
+      # last line under 30% or under 3 words, a label split over two lines, a link
+      # row ending on one stray link, a code name split mid-word, or text past the
+      # viewport fails (DESIGN.md "Wrap"). Every hand-written page in the sitemap and
+      # every wiki page; each generated family is a fixed sample of 25 (WRAP_ALL=1
+      # runs all of them by hand). The script boots its own server with the index
+      # crawlers off: the shared server on :3000 crawls live sellers, and their names
+      # and counts change between runs, so the pages it measured were never the same
+      # twice. The templates are what this guards; seller data is not in the repo.
+      - name: Wrap quality (rendered line boxes, 1440 + 400 px, sitemap + wiki, families sampled)
+        run: node scripts/test-wrap-quality.js
 
   test-sweeps2:
     # The second half of test-sweeps (2026-08-25, split by the seconds each item
@@ -4064,9 +4134,6 @@ jobs:
       - name: Focus-visible on search/demo inputs (real browser check - inline style can silently defeat a stylesheet :focus rule)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-focus-visible.js
 
-      - name: /compare tables scroll independently on narrow viewports (real browser check - scrollWidth>clientWidth alone can't prove overflow-x is enabled)
-        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-compare-scroll.js
-
       - name: /status 90-day strip fits a phone (local server, builds its own strip)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-status-bars-mobile.js
 
@@ -4209,12 +4276,11 @@ jobs:
           t node scripts/test-free-alerts.js
           t node scripts/test-free-alert-probes.js
           t node scripts/test-email-status.js
-          t node scripts/test-wallet-digest.js
           # Alert routes end to end on a booted server: confirm / unsubscribe / stop pages render (the engine test could not see a 500 here)
           t node scripts/test-alerts-routes.js
           # Post-purchase follow-ups: two emails at most, stoppable, failure notice (offline)
           t node scripts/test-followups.js
-          # Erasure on request: erase-subject.js removes an address from every file store that holds one (alerts, follow-ups, weekly digest, subscriptions) (offline)
+          # Erasure on request: erase-subject.js removes an address from every file store that holds one (alerts, follow-ups, a leftover weekly digest file, subscriptions) (offline)
           t node scripts/test-erase-subject.js
           # Server-side tweet queue: one post per clock hour oldest first, recorded before it is sent (a killed child never re-sends), two processes post once, drops past the window, an in-doubt post retried once (a duplicate refusal records it posted), the alarm word on /api/gateway-status, kill switch, only the production server posts (FREE_MODE, no NODE_ENV=production or no volume stay read-only), no text or credential in logs or the operator read (stub X; boots three servers, one a control that posts to the stub)
           t node scripts/test-tweet-queue.js
@@ -4256,6 +4322,12 @@ jobs:
           t node scripts/test-drain-abort.js
           # Solana SPL leaderboard: batched credits scan, primed gate, payTo list, ranking, persistence (offline stub RPC)
           t node scripts/test-solana-leaderboard.js
+          # Solana history reads public RPC first: keyed lane on 429/timeout/null, identical board, throws when every lane is down, pacing, counters (offline stub RPCs)
+          t node scripts/test-solana-history-rpc.js
+          # Base board keeps its read log window: identical board to a full read across head advances, new/returning wallets, failed reads, restart, store mismatch, row cap, switch (offline stub RPC)
+          t node scripts/test-leaderboard-log-cache.js
+          # Recent EVM getLogs public-first: complete-answer guard (own head, filter match), fallback on error/range cap/behind head/timeout/429, skips, rollback, ledger rows identical (offline stub RPCs)
+          t node scripts/test-evm-logs-rpc.js
           # accepts[0].outputSchema on the 402: pure header rewrite + mount order (offline)
           t node scripts/test-accept-output-schema.js
           # OWN LANE on purpose. This single step ran 254s - 42% of the unit-a

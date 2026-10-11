@@ -36,13 +36,6 @@ try {
   await sdb.leases.release("free-alerts-tick", { owner: "other-container" });
   ok((await fa.tick()).skipped !== "leased", "free-alerts: runs once the lease is free");
 
-  const { createWalletDigest } = await import("../src/wallet-digest.js");
-  const wd = createWalletDigest({ storePath: join(DIR, "wallet-digest.json"), sendEmail: async () => true, secret: "s", usage: () => ({}), verifySignature: async () => true, log: quiet });
-  await wd.ready();
-  await sdb.leases.acquire("wallet-digest-tick", { owner: "other-container", ttlMs: 60_000 });
-  ok((await wd.tick()).skipped === "leased", "wallet-digest: skipped under another holder");
-  await sdb.leases.release("wallet-digest-tick", { owner: "other-container" });
-
   // Every loop the volume made single-writer names a lease (source check, so
   // a loop added later without one fails here).
   const expect = {
@@ -72,7 +65,7 @@ try {
       if (opens !== failOpenOk.has(name)) ok(false, `src/${f}: lease ${name} ${opens ? "fails open but is not an internal-only loop" : "is internal-only and should fail open"}`);
     }
   }
-  ok(sites >= 17, `every leased loop's fail-open choice matches its kind (${sites} call sites)`);
+  ok(sites >= 16, `every leased loop's fail-open choice matches its kind (${sites} call sites)`);
   ok(/leased\("followups-tick", \{ ttlMs: \d+, log: log \}/.test(readFileSync(new URL("../src/followups.js", import.meta.url), "utf8")), "followups (mail) keeps the safe default");
 
   // The helper itself without a database runs the function.

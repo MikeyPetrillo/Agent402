@@ -392,7 +392,9 @@ function openDatabaseLedger(path) {
   }
   // An NDJSON file beside the ledger file (on the volume while it exists),
   // never a table in the SQLite file the migration verifier compares.
-  const pending = createDeadLetter({ file: `${path}.pending.ndjson`, name: "decide" });
+  // With REDIS_URL set the journal lives in Redis (shared by every container
+  // on this database), the file is the fallback.
+  const pending = createDeadLetter({ file: `${path}.pending.ndjson`, name: "decide", journalKey: `${schema}:decide` });
   const through = (fn) => {
     if (!wt) return;
     try { fn(wt); }
@@ -810,16 +812,16 @@ function openDatabaseLedger(path) {
     let landed = 0;
     try {
       const now = Date.now();
-      for (const e of pending.list()) {
-        if (now - Number(e.at || 0) > PENDING_MAX_AGE_MS) { console.error(`[decide] ledger: a journaled ${e.kind} write aged out unapplied`); pending.remove(e.id); continue; }
+      landed = await pending.drain(async (e) => {
+        if (now - Number(e.at || 0) > PENDING_MAX_AGE_MS) { console.error(`[decide] ledger: a journaled ${e.kind} write aged out unapplied`); return "drop"; }
         let done;
         try { done = await applyPending(e.kind, e.payload || {}); }
         catch (err) {
-          if (isRowError(err)) { console.error(`[decide] ledger: a journaled ${e.kind} write was refused (${String(err?.message || err).slice(0, 120)})`); pending.remove(e.id); continue; }
+          if (isRowError(err)) { console.error(`[decide] ledger: a journaled ${e.kind} write was refused (${String(err?.message || err).slice(0, 120)})`); return "drop"; }
           throw err;
         }
-        if (done) { pending.remove(e.id); landed++; }
-      }
+        return done ? "landed" : "keep";
+      });
     } finally { replaying = false; }
     if (landed) log(`landed ${landed} journaled write(s)`);
     return landed;

@@ -1,7 +1,7 @@
 // Nightly offsite backup of /data and of the state database (every table,
 // one consistent snapshot, uploaded first) to an S3-compatible bucket (Railway
 // Buckets). The volume holds the money-adjacent state — refund ledger,
-// stats, status history, leads, buyer memory — with nothing but platform
+// stats, status history, buyer memory — with nothing but platform
 // snapshots behind it; this module puts a bounded, priced copy elsewhere.
 //
 // COST DISCIPLINE (the reason half this file exists):
@@ -60,6 +60,9 @@ const cfg = () => ({
   maxRunMb: clampInt(process.env.BACKUP_MAX_RUN_MB, 512, 16, 4096),
   maxTotalGb: clampInt(process.env.BACKUP_MAX_TOTAL_GB, 20, 1, 500),
 });
+/** Days a nightly backup is kept before retention deletes it (the legal and
+ *  security pages quote this, so the stated period is the one the code runs). */
+export const backupKeepDays = () => cfg().keepDays;
 function clampInt(v, dflt, lo, hi) {
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;

@@ -42,12 +42,12 @@ const PAGE = 1000;
 // Block numbers run DOWNWARD with the index, because the scan walks
 // newest-first: row 0 is the newest transfer and sits at the highest block.
 const blockOf = (i) => 1_000_000 - i;
-function evmPage(total, cursor, fromBlock = 0, extraNew = 0) {
+function evmPage(total, cursor, fromBlock = 0, extraNew = 0, toBlock = null) {
   // A NEGATIVE index is a transfer that landed after the prior scan: higher
   // block, own uid, newest-first so it leads the page. Appending at the far
   // end instead would be an OLDER transfer, which is not what "arrived since"
   // means and would let a resume that never advances still pass.
-  const first = -extraNew;
+  const first = toBlock == null ? -extraNew : Math.max(-extraNew, 1_000_000 - toBlock); // the source honours toBlock
   const start = cursor ? Number(cursor) : first;
   const transfers = [];
   for (let i = start; i < Math.min(start + PAGE, total); i++) {
@@ -82,7 +82,7 @@ function installStub({ total, delayMs = 0, extraNew = 0 }) {
 
     if (body?.method === "alchemy_getAssetTransfers") {
       const p = body.params[0];
-      return json({ jsonrpc: "2.0", id: 1, result: evmPage(total, p.pageKey, Number.parseInt(p.fromBlock, 16) || 0, extraNew) });
+      return json({ jsonrpc: "2.0", id: 1, result: evmPage(total, p.pageKey, Number.parseInt(p.fromBlock, 16) || 0, extraNew, p.toBlock && p.toBlock !== "latest" ? Number.parseInt(p.toBlock, 16) : null) });
     }
     if (u.includes("horizon")) {                                  // Stellar
       const m = /cursor=(\d+)/.exec(u);
@@ -236,15 +236,75 @@ const grown = await evmActivity("base", "0xwallet", { budgetMs: 60_000, prior: c
 ok(grown.totals.tx === cold.totals.tx + 200, `a resumed scan picks up the transfers that arrived since (${grown.totals.tx} = ${cold.totals.tx} + 200)`);
 ok(grown.resumed === true, "and it still resumed rather than silently rescanning to find them");
 
-// A TRUNCATED prior never held the far end of the window, so resuming from it
-// would freeze that gap in place forever. It must force a full rescan.
+// A TRUNCATED prior holds a contiguous stretch from its newest block down to
+// its far block. The next refresh reads only the blocks after the newest one
+// plus a bounded continuation of the far end, and stays truncated until the
+// far end reaches the window's start. (It used to rescan from block 0 on every
+// refresh, forever, for any wallet too busy to finish inside one budget.)
 installStub({ total: TOTAL, delayMs: 30 });
 const partial = await evmActivity("base", "0xwallet", { budgetMs: 120 });
 ok(partial.truncated === true, "control: that prior really is truncated");
-installStub({ total: TOTAL });
-const afterPartial = await evmActivity("base", "0xwallet", { budgetMs: 60_000, prior: partial.__scanState });
-ok(afterPartial.resumed === false, "a truncated prior is never resumed - the gap would never be filled");
-ok(afterPartial.totals.tx === TOTAL, `the forced rescan covers the whole window (${afterPartial.totals.tx})`);
+ok(Number.isFinite(partial.__scanState.farBlock), "a truncated scan records the far block it reached");
+{
+  const seenParams = [];
+  installStub({ total: TOTAL });
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { const b = init?.body ? JSON.parse(init.body) : null; if (b?.method === "alchemy_getAssetTransfers") seenParams.push(b.params[0]); return inner(url, init); };
+  let state = partial.__scanState;
+  const steps = [];
+  let r;
+  for (let i = 0; i < 20; i++) {
+    seenParams.length = 0;
+    r = await evmActivity("base", "0xwallet", { budgetMs: 60_000, prior: state, farPages: 2 });
+    steps.push({ tx: r.totals.tx, truncated: r.truncated, calls: seenParams.length, params: [...seenParams] });
+    ok(r.resumed === true, `refresh ${i + 1}: a truncated prior is resumed, not rescanned from block 0`);
+    ok(seenParams.every((p) => p.pageKey || Number.parseInt(p.fromBlock, 16) > 0 || (p.toBlock && p.toBlock !== "latest")), `refresh ${i + 1}: no call re-walks the window from block 0 to the head`);
+    ok(seenParams.length <= 2 + 2, `refresh ${i + 1}: the head (one page, plus the stub's trailing empty page) and at most two far-end pages (${seenParams.length})`);
+    if (i > 0) ok(r.totals.tx >= steps[i - 1].tx, `refresh ${i + 1}: the floor never falls (${r.totals.tx} >= ${steps[i - 1].tx})`);
+    if (r.truncated) ok(r.totals.tx < TOTAL, `refresh ${i + 1}: still truncated means the count is short of the window (${r.totals.tx})`);
+    state = r.__scanState;
+    if (!r.truncated) break;
+  }
+  ok(r.truncated === false, `the far end is covered after ${steps.length} refreshes and the flag clears`);
+  ok(steps.length > 2, `covering took several bounded refreshes (${steps.length}), not one full rescan`);
+  ok(r.totals.tx === TOTAL, `the covered window counts every transfer exactly once (${r.totals.tx} = ${TOTAL})`);
+  ok(r.totals.buyers === 37, `and every distinct buyer (${r.totals.buyers})`);
+  // Covered now: the next refresh resumes as a complete prior, one page.
+  seenParams.length = 0;
+  const after = await evmActivity("base", "0xwallet", { budgetMs: 60_000, prior: state });
+  ok(after.truncated === false && after.totals.tx === TOTAL && seenParams.length <= 2, `a covered prior resumes with about one page and the same count (${seenParams.length} call(s), ${after.totals.tx})`);
+  globalThis.fetch = inner;
+}
+{
+  // New transfers that land while the far end is being covered are counted
+  // once, and the far end still converges.
+  installStub({ total: TOTAL, delayMs: 30 });
+  const p0 = await evmActivity("base", "0xwallet", { budgetMs: 120 });
+  installStub({ total: TOTAL, extraNew: 150 });
+  let st = p0.__scanState, r;
+  for (let i = 0; i < 30; i++) { r = await evmActivity("base", "0xwallet", { budgetMs: 60_000, prior: st, farPages: 3 }); st = r.__scanState; if (!r.truncated) break; }
+  ok(r.truncated === false && r.totals.tx === TOTAL + 150, `new arrivals during the continuation are counted once (${r.totals.tx} = ${TOTAL} + 150)`);
+}
+{
+  // A far-end read that fails keeps what the head read and stays truncated;
+  // the next refresh continues from the same block.
+  installStub({ total: TOTAL, delayMs: 30 });
+  const p0 = await evmActivity("base", "0xwallet", { budgetMs: 120 });
+  installStub({ total: TOTAL });
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { const b = init?.body ? JSON.parse(init.body) : null; if (b?.method === "alchemy_getAssetTransfers" && b.params[0].toBlock !== "latest") throw new Error("far read failed"); return inner(url, init); };
+  const r = await evmActivity("base", "0xwallet", { budgetMs: 60_000, prior: p0.__scanState, farPages: 2 });
+  globalThis.fetch = inner;
+  ok(!r.error && r.truncated === true && r.totals.tx === p0.totals.tx, `a failed far-end read keeps the head and stays truncated (${r.totals.tx})`);
+  ok(r.__scanState.farBlock === p0.__scanState.farBlock, "and the far block is unchanged for the next refresh");
+}
+{
+  // A window that holds more rows than a resume may keep is held at the
+  // newest rows and stays truncated, even when the walk itself reached the end.
+  installStub({ total: 61_000 });
+  const r = await evmActivity("base", "0xwallet", { budgetMs: 120_000 });
+  ok(!r.error && r.totals.tx === 60_000 && r.truncated === true, `a window past the kept-row cap is held at the cap and flagged truncated (${r.totals.tx}, truncated=${r.truncated})`);
+}
 
 installStub({ total: 5000 });
 const stale = await evmActivity("base", "0xwallet", { budgetMs: 60_000, prior: { ...cold.__scanState, at: Date.now() - 400 * DAY } });

@@ -114,7 +114,7 @@ ok(typeof store.summaryLine("2026-09-22") === "string" && /total=13/.test(store.
 const port = await getFreePort();
 const base2 = `http://127.0.0.1:${port}`;
 const tdir = mkdtempSync(join(tmpdir(), "a402-traffic-boot-"));
-const proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, FREE_MODE: "true", PORT: String(port), BASE_URL: "http://agent402.test", AGENT402_OPERATOR_TOKEN: "test-operator-token", TRAFFIC_DIR: tdir, TRAFFIC_CRAWLER_PATHS: "6", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", WALLET_DIGEST: "off" }, stdio: ["ignore", "ignore", "inherit"] });
+const proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, FREE_MODE: "true", PORT: String(port), BASE_URL: "http://agent402.test", AGENT402_OPERATOR_TOKEN: "test-operator-token", TRAFFIC_DIR: tdir, TRAFFIC_CRAWLER_PATHS: "6", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" }, stdio: ["ignore", "ignore", "inherit"] });
 try {
   let up = false;
   for (let i = 0; i < 180 && !up; i++) { try { up = (await fetch(`${base2}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }

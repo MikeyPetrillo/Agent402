@@ -231,7 +231,14 @@ await p.close();
   const calls = { providers: [], services: [] };
   const api = { id: "agent402", name: "Agent402", config: {}, pluginConfig: { upstream, creditsKey: key, port: 0 }, logger: { info() {}, warn() {}, error() {} },
     registerProvider: (p) => calls.providers.push(p), registerService: (s) => calls.services.push(s), registerTool() {}, registerHook() {}, registerHttpRoute() {}, registerCommand() {}, resolvePath: (x) => x, on() {} };
-  plugin.register(api); plugin.register(api);
+  // OpenClaw 2026.10.1+ reserves its "trusted" verdict for plugins in its own
+  // official inventory, so every install of this plugin (npm, ClawHub or an
+  // archive) loads UNTRUSTED. That is fine only while the plugin touches no
+  // trust-gated host surface (hook agent turns, Gateway scope elevation): the
+  // api it reads must stay inside the members an untrusted plugin may use.
+  const touched = new Set();
+  const watched = new Proxy(api, { get: (t, k) => { if (typeof k === "string") touched.add(k); return t[k]; } });
+  plugin.register(watched); plugin.register(watched);
   ok(calls.providers.length === 2 && calls.services.length === 1, "register() is idempotent: provider each time, proxy service once");
   const prov = calls.providers[0];
   ok(prov.id === "agent402" && prov.models.api === "openai-completions" && /^http:\/\/127\.0\.0\.1:\d+\/v1$/.test(prov.models.baseUrl), "provider points OpenClaw at the loopback proxy, openai-completions API");
@@ -242,6 +249,9 @@ await p.close();
   const r = await fetch(`${live.baseUrl}/chat/completions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "auto", messages: [] }) });
   ok(r.status === 200, "OpenClaw-shaped call through the registered baseUrl succeeds");
   await calls.services[0].stop();
+  const UNTRUSTED_OK = new Set(["id", "name", "config", "pluginConfig", "logger", "registerProvider", "registerService", "resolvePath"]);
+  const gated = [...touched].filter((k) => !UNTRUSTED_OK.has(k));
+  ok(gated.length === 0, `register() and its service read only api members an untrusted plugin may use (${gated.length ? `also read: ${gated.join(", ")}` : [...touched].sort().join(", ")})`);
 }
 
 // ---- credits key resolution + CLI setup ------------------------------------

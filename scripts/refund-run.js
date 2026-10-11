@@ -36,13 +36,24 @@
 //   * a chain without an implemented sender or a configured key HOLDS its
 //     rows and says so. The debt stays on the ledger; nothing is written off.
 //   * marking paid requires the outbound tx hash, enforced server-side too.
+//   * a row is claimed (owed -> sending) before anything is broadcast, so a
+//     crash after the send leaves it in `sending`, which no later run claims:
+//     a rerun never sends it again. The server refuses the claim of a row
+//     that is void, or whose evidence carries a void mark (a Tempo push
+//     transfer claimed for the request it paid), so a voided debt is never sent.
+//   * Tempo and Solana repayments are also proven OUTBOUND before the row is
+//     marked paid: the same on-chain check (src/payment-verify.js) is run on
+//     the refund itself, from our sending wallet to the payer, for at least
+//     the amount. A send that cannot be proven yet stays `sending` for a
+//     human; it is never re-sent.
 //
 // Chain support: EVM rails (one key, REFUND_EVM_KEY), Stellar
 // (REFUND_STELLAR_SECRET, classic payment + "agent402 refund" memo), Algorand
-// (REFUND_ALGORAND_MNEMONIC, ASA transfer + note). Solana is detection-only
-// for now: a failed Solana txn moves no tokens (measured 2026-08-03), so
-// charged-but-failed there is rare; rows are held and listed until the SVM
-// sender lands with the planned Solana spending wallet.
+// (REFUND_ALGORAND_MNEMONIC, ASA transfer + note), Tempo (REFUND_TEMPO_KEY, a
+// TIP-20 transferWithMemo in the currency the buyer paid with, read from the
+// payment itself and limited to the currencies our live challenge offers) and
+// Solana (REFUND_SOLANA_KEY, an SPL USDC transfer + memo to the payer's
+// existing USDC account).
 
 import { createHash, createHmac } from "node:crypto";
 import { hasLastingEffect } from "../src/hangup-forgiveness.js";
@@ -100,7 +111,7 @@ const ONLY_CHAIN = (process.env.REFUND_ONLY_CHAIN || "").trim(); // optional CAI
 // Public RPCs for the EVM rails we can refund on. Overridable per chain via
 // REFUND_RPC_<id> (e.g. REFUND_RPC_8453). A chain with no RPC entry holds its
 // rows - refusing loudly beats broadcasting through a guessed endpoint.
-const EVM_RPCS = {
+export const EVM_RPCS = {
   "eip155:8453": "https://mainnet.base.org",
   // polygon-rpc.com was shut off 2026-07-31 (probe: "tenant disabled", 403) and
   // was the ONLY Polygon RPC here, so every Polygon refund held unpaid.
@@ -130,6 +141,9 @@ const CAIP2_BY_SHORT_NAME = {
   arbitrum: "eip155:42161", celo: "eip155:42220", avalanche: "eip155:43114",
   sei: "eip155:1329", monad: "eip155:143", robinhood: "eip155:4663",
   solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+  // MPP on Tempo books its debts under the short name (src/server.js,
+  // src/tempo-push-debts.js).
+  tempo: "eip155:4217",
   stellar: "stellar:pubnet",
   algorand: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
 };
@@ -143,8 +157,17 @@ export function normalizeNetwork(network) {
   return CAIP2_BY_SHORT_NAME[short] || CAIP2_BY_SHORT_NAME[n.toLowerCase()] || n;
 }
 
+export const TEMPO_NETWORK = "eip155:4217";
+export const SOLANA_NETWORK = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+const SOLANA_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const TEMPO_RPC = () => (process.env.REFUND_TEMPO_RPC || process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz").trim();
+const SOLANA_RPC = () => (process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com").trim();
+
 export function familyOf(network) {
   const n = String(network || "");
+  // Tempo is an EVM chain id, but its own family: TIP-20 tokens, fees paid in
+  // a stablecoin, its own sender. Never the generic EVM sender.
+  if (n === TEMPO_NETWORK) return "tempo";
   if (n.startsWith("eip155:")) return "evm";
   if (n.startsWith("solana:")) return "solana";
   if (n.startsWith("stellar:")) return "stellar";
@@ -252,13 +275,41 @@ export function planRefunds(rawRows, {
   return { send, held, totalUsd: Number(total.toFixed(6)) };
 }
 
+/**
+ * Our Tempo offer, read from the tempo challenges in a live 402's
+ * WWW-Authenticate header: the recipient (our Tempo payTo) and every currency
+ * offered. Null unless every tempo challenge names the same recipient on
+ * Tempo mainnet. The accepts-shaped entry the verifier and sender read.
+ */
+export async function parseTempoOffer(wwwAuthenticate) {
+  const header = String(wwwAuthenticate || "");
+  if (!/method="tempo"/.test(header)) return null;
+  const { Challenge } = await import("mppx");
+  const parts = header.split(/,\s*(?=Payment\s)/);
+  const tempo = [];
+  for (const part of parts) {
+    try { const c = Challenge.deserialize(part.trim()); if (c?.method === "tempo") tempo.push(c.request || {}); } catch { /* another scheme */ }
+  }
+  if (!tempo.length) return null;
+  const recipients = new Set(tempo.map((r) => String(r.recipient || "").toLowerCase()));
+  if (recipients.size !== 1) return null;
+  const payTo = tempo[0].recipient;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(payTo))) return null;
+  if (tempo.some((r) => r.methodDetails?.chainId != null && Number(r.methodDetails.chainId) !== 4217)) return null;
+  const assets = [...new Set(tempo.map((r) => String(r.currency || "")).filter((c) => /^0x[0-9a-fA-F]{40}$/.test(c)))];
+  if (!assets.length) return null;
+  return { network: TEMPO_NETWORK, payTo, asset: assets[0], assets };
+}
+
 /** Fetch our own live 402 and index the accepts by network - the asset source. */
 async function liveAcceptsByNetwork() {
+  let www = "";
   const accepts402 = async (path, body) => {
     const res = await fetch(`${TARGET}${path}`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
     if (res.status !== 402) throw new Error(`expected a 402 from ${TARGET}${path}, got ${res.status}`);
+    if (!www) www = res.headers.get("www-authenticate") || "";
     const hdr = res.headers.get("payment-required");
     if (!hdr) throw new Error("402 carried no payment-required header");
     return JSON.parse(Buffer.from(hdr, "base64").toString("utf8")).accepts || [];
@@ -272,6 +323,9 @@ async function liveAcceptsByNetwork() {
   try {
     for (const a of await accepts402("/api/solidity-scan", {})) if (!byNet[a.network]) byNet[a.network] = a;
   } catch { /* the sub-cent accepts above are the floor */ }
+  // Tempo is offered over MPP, not in the x402 accepts: its payTo and
+  // currencies come from the same 402's tempo challenges.
+  try { const t = await parseTempoOffer(www); if (t && !byNet[TEMPO_NETWORK]) byNet[TEMPO_NETWORK] = t; } catch { /* no Tempo offer: its rows hold unverified */ }
   return byNet;
 }
 
@@ -409,6 +463,232 @@ async function sendAlgorand(row) {
   return txid;
 }
 
+// ---- Tempo -------------------------------------------------------------------
+// The bytes32 memo a Tempo refund carries (TIP-20 transferWithMemo).
+export function tempoRefundMemo() {
+  const b = Buffer.alloc(32);
+  Buffer.from("agent402 refund", "utf8").copy(b);
+  return `0x${b.toString("hex")}`;
+}
+
+/** Reads before the claim: the token is the one the payment moved (proof.token,
+ *  one of our live Tempo currencies), the amount is the debt in its decimals,
+ *  and the sending wallet must hold it. A refusal here leaves the row owed. */
+async function prepareTempo(row, proof, accepts) {
+  const { createPublicClient, http, isAddress } = await import("viem");
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const { tempo } = await import("viem/tempo/chains");
+  const offered = new Set((accepts?.assets || []).map((a) => String(a).toLowerCase()));
+  const token = String(proof?.token || "");
+  if (!/^0x[0-9a-fA-F]{40}$/.test(token) || !offered.has(token.toLowerCase())) throw new Error("the paid Tempo token is not one our live challenge offers (nothing was claimed or sent)");
+  if (!isAddress(String(row.payer))) throw new Error(`payer is not an EVM address (${tag(row.payer)})`);
+  const decimals = Number(proof.decimals);
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) throw new Error("token decimals unreadable (nothing was claimed or sent)");
+  const amount = BigInt(Math.round(Number(row.priceUsd) * 10 ** decimals));
+  if (amount <= 0n) throw new Error("zero amount (nothing was claimed or sent)");
+  const key = process.env.REFUND_TEMPO_KEY.trim();
+  const account = privateKeyToAccount(key.startsWith("0x") ? key : `0x${key}`);
+  const pub = createPublicClient({ chain: tempo, transport: http(TEMPO_RPC()) });
+  const bal = await pub.readContract({ address: token, abi: [{ name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] }], functionName: "balanceOf", args: [account.address] });
+  if (bal < amount) throw new Error(`the Tempo refund wallet holds too little of the paid token (nothing was claimed or sent)`);
+  return { from: account.address, token, amount, asset: token, rpcUrl: TEMPO_RPC() };
+}
+
+async function sendTempo(row, prep) {
+  const { createWalletClient, http, encodeFunctionData } = await import("viem");
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const { tempo } = await import("viem/tempo/chains");
+  const { Abis } = await import("viem/tempo");
+  const { prepareTransactionRequest, signTransaction, sendRawTransaction } = await import("viem/actions");
+  const key = process.env.REFUND_TEMPO_KEY.trim();
+  const account = privateKeyToAccount(key.startsWith("0x") ? key : `0x${key}`);
+  const wallet = createWalletClient({ account, chain: tempo, transport: http(prep.rpcUrl) });
+  const data = encodeFunctionData({ abi: Abis.tip20, functionName: "transferWithMemo", args: [row.payer, prep.amount, tempoRefundMemo()] });
+  // Prepared, not hand-rolled (scripts/fund-tempo-fee-payer.js): Tempo
+  // transactions are type 0x76 with the fee paid in a stablecoin, here the
+  // same token the refund is sent in.
+  const prepared = await prepareTransactionRequest(wallet, { account, chainId: tempo.id, calls: [{ to: prep.token, data }], feeToken: prep.token });
+  const serialized = await signTransaction(wallet, prepared);
+  return sendRawTransaction(wallet, { serializedTransaction: serialized });
+}
+
+// ---- Solana ------------------------------------------------------------------
+// The same discipline as scripts/solana-refund-send.js: USDC only, the
+// destination must already hold a USDC account (a payer of USDC on Solana
+// has one), integer base units, our own signer on the memo.
+const SOLANA_MEMO_PROGRAM = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
+async function solanaRpc(method, params) {
+  const r = await fetch(SOLANA_RPC(), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(15_000) });
+  const j = await r.json();
+  if (j.error) throw new Error(`${method}: ${String(j.error.message || "error").slice(0, 120)}`);
+  return j.result;
+}
+async function solanaSigner() {
+  const kit = await import("@solana/kit");
+  const raw = process.env.REFUND_SOLANA_KEY.trim();
+  const bytes = raw.startsWith("[") ? Uint8Array.from(JSON.parse(raw)) : new Uint8Array(kit.getBase58Encoder().encode(raw));
+  return { kit, signer: await kit.createKeyPairSignerFromBytes(bytes) };
+}
+async function prepareSolana(row, proof, accepts) {
+  const mint = String(accepts?.asset || "");
+  if (mint !== SOLANA_USDC_MINT) throw new Error("our live Solana accept is not USDC (nothing was claimed or sent)");
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(row.payer))) throw new Error(`payer is not a Solana address (${tag(row.payer)})`);
+  const decimals = Number.isInteger(Number(proof?.decimals)) ? Number(proof.decimals) : 6;
+  const amount = BigInt(Math.round(Number(row.priceUsd) * 10 ** decimals));
+  if (amount <= 0n) throw new Error("zero amount (nothing was claimed or sent)");
+  const { signer } = await solanaSigner();
+  const from = String(signer.address);
+  const accountsOf = async (owner) => (await solanaRpc("getTokenAccountsByOwner", [owner, { mint }, { encoding: "jsonParsed" }])).value || [];
+  const [srcAccts, dstAccts] = await Promise.all([accountsOf(from), accountsOf(row.payer)]);
+  if (!srcAccts.length) throw new Error("the Solana refund wallet holds no USDC account (nothing was claimed or sent)");
+  if (!dstAccts.length) throw new Error(`the payer holds no USDC account (${tag(row.payer)}; nothing was claimed or sent)`);
+  if (BigInt(srcAccts[0].account.data.parsed.info.tokenAmount.amount) < amount) throw new Error("the Solana refund wallet holds too little USDC (nothing was claimed or sent)");
+  const lamports = await solanaRpc("getBalance", [from]);
+  if (Number(lamports?.value ?? lamports) < 1_000_000) throw new Error("the Solana refund wallet holds too little SOL for the fee (nothing was claimed or sent)");
+  return { from, asset: mint, amount, source: srcAccts[0].pubkey, destination: dstAccts[0].pubkey };
+}
+async function sendSolana(row, prep) {
+  const { kit, signer } = await solanaSigner();
+  const { getTransferInstruction } = await import("@solana-program/token");
+  const rpcClient = kit.createSolanaRpc(SOLANA_RPC());
+  const { value: blockhash } = await rpcClient.getLatestBlockhash({ commitment: "confirmed" }).send();
+  const instructions = [
+    getTransferInstruction({ source: kit.address(prep.source), destination: kit.address(prep.destination), authority: signer, amount: prep.amount }),
+    { programAddress: kit.address(SOLANA_MEMO_PROGRAM), accounts: [{ address: signer.address, role: kit.AccountRole.READONLY_SIGNER }], data: new TextEncoder().encode("agent402 refund") },
+  ];
+  const message = kit.pipe(
+    kit.createTransactionMessage({ version: 0 }),
+    (m) => kit.setTransactionMessageFeePayerSigner(signer, m),
+    (m) => kit.setTransactionMessageLifetimeUsingBlockhash(blockhash, m),
+    (m) => kit.appendTransactionMessageInstructions(instructions, m),
+  );
+  const signed = await kit.signTransactionMessageWithSigners(message);
+  const sig = kit.getSignatureFromTransaction(signed);
+  // Re-sending the same signed bytes is the same transaction: it cannot pay twice.
+  await solanaRpc("sendTransaction", [kit.getBase64EncodedWireTransaction(signed), { encoding: "base64", skipPreflight: false, preflightCommitment: "confirmed", maxRetries: 3 }]);
+  return String(sig);
+}
+
+// Families whose refund is proven on chain before the row is marked paid.
+export const OUTBOUND_PROOF_FAMILIES = Object.freeze(["tempo", "solana"]);
+
+/**
+ * Prove a sent refund on chain with the same check the inbound proof uses,
+ * reversed: from our sending wallet to the payer, at least the amount, in the
+ * token sent. Polled, because a transaction can be a block behind the answer.
+ */
+export async function proveRefundSent(row, tx, prep, { verify, attempts = 10, delayMs = 3000, pause = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  let last = { verified: false, reason: "not checked" };
+  for (let i = 0; i < attempts; i++) {
+    last = await verify({
+      network: row.network, payer: prep.from, amountUsd: row.priceUsd, tx, createdAt: Date.now(),
+      acceptsFor: () => ({ payTo: row.payer, asset: prep.asset, assets: [prep.asset] }),
+      payToSetFor: () => [row.payer],
+      rpcFor: () => prep.rpcUrl || null,
+    });
+    if (last.verified) return last;
+    if (i < attempts - 1) await pause(delayMs);
+  }
+  return last;
+}
+
+/**
+ * Pay each planned row: prove the inbound payment, read what the send needs
+ * (a refusal there leaves the row owed), CLAIM it, send, prove the send on
+ * chain where the family requires it, then mark it paid. Every step is
+ * injected so the order is tested with stubs; main() wires the real ones.
+ * Returns { ok, failed, unverified, stuck }.
+ */
+export async function executeRefunds(rows, {
+  verifyInbound, claim, send, markPaid,
+  prepare = async () => null,
+  prove = async () => ({ verified: false, reason: "no outbound verifier" }),
+  pause = (ms) => new Promise((r) => setTimeout(r, ms)),
+  log = console,
+} = {}) {
+  let ok = 0, failed = 0, unverified = 0, stuck = 0;
+  for (const row of rows || []) {
+    try {
+      // PROVE THE PAYMENT BEFORE REPAYING IT. The debt was recorded on the
+      // facilitator's success:true, which is unforgeable by a buyer but not
+      // guaranteed true - a facilitator can be wrong, and this week it was, in
+      // the opposite direction (Stellar reported failure for transfers that
+      // confirmed). So the same payer, our payTo, and at least the amount must
+      // be confirmed on-chain before anything leaves. Fails closed: an
+      // unverifiable row is HELD, still owed, never paid and never written off.
+      const proof = await verifyInbound(row);
+      if (!proof?.verified) {
+        await pause(1500);
+        log.warn(`HOLD  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}: UNVERIFIED - ${proof?.reason || "no proof"}`);
+        unverified++;
+        continue;
+      }
+      log.log(`      #${row.id} inbound payment confirmed on-chain`);
+      // Reads that can refuse (balances, the payer's token account) run
+      // before the claim, so a refusal leaves the row owed for the next run.
+      const prep = await prepare(row, proof);
+      // CLAIM BEFORE SENDING. Verification proves we were paid; it can never
+      // prove we have not already refunded, and it stays true forever. So the
+      // row is moved to `sending` first: a crash between broadcast and
+      // mark-paid leaves it stuck there for a human instead of being re-sent
+      // by the next run. Losing the claim race means another runner has it,
+      // or the row is no longer owed (paid, or void).
+      const claimed = await claim(row.id);
+      if (!claimed) {
+        log.warn(`HOLD  #${row.id}: could not claim (already sending, resolved or voided, or another run has it)`);
+        unverified++;
+        continue;
+      }
+      const tx = await send(row, proof, prep);
+      if (OUTBOUND_PROOF_FAMILIES.includes(familyOf(row.network))) {
+        const out = await prove(row, tx, prep, proof);
+        if (!out?.verified) {
+          log.error(`STUCK #${row.id}: sent, but the refund is not proven on chain yet (${out?.reason || "no proof"}) - the row stays 'sending', is never re-sent, and is resolved by hand from the sending wallet's history`);
+          stuck++;
+          continue;
+        }
+        log.log(`      #${row.id} refund confirmed on-chain`);
+      }
+      await markPaid(row.id, String(tx));
+      log.log(`PAID  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}  (tx in the ledger, not this log)`);
+      ok++;
+      await pause(1500);
+    } catch (e) {
+      // If the failure came after the claim, the row is now stuck in `sending`
+      // and will NOT be retried automatically - that is deliberate. Whether the
+      // money left is exactly what a human must check before releasing it.
+      log.error(`FAIL  #${row.id}: ${(e?.message || String(e)).slice(0, 160)}`);
+      log.error(`      -> if this row is now 'sending', check the chain before resolving it; it will not auto-retry`);
+      failed++;
+    }
+  }
+  return { ok, failed, unverified, stuck };
+}
+
+/**
+ * Plan, print, and (live only) execute. A dry run prints the plan and returns
+ * before any step that reads a chain or touches the ledger.
+ */
+export async function refundRun({ rows, totals = {}, live = false, planOptions = {}, deps = {}, log = console } = {}) {
+  log.log(`refund-run against ${TARGET} - ledger: ${JSON.stringify(totals)}`);
+  const plan = planRefunds(rows, planOptions);
+  // Each line names the response status the debt was recorded on, so a
+  // reviewer reading the dry run can tell a failed answer from a buyer who
+  // disconnected (499) before approving a live run.
+  const what = (r) => `${r.slug}${r.httpStatus ? `, http ${r.httpStatus}` : ""}${r.hangupReason ? `, ${r.hangupReason}` : ""}`;
+  for (const [reason, held] of Object.entries(plan.held)) {
+    log.log(`\nHELD (${reason}): ${held.length}`);
+    for (const r of held) log.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${tag(r.payer)} (${what(r)})`);
+  }
+  log.log(`\nTO SEND: ${plan.send.length} refund(s), $${plan.totalUsd} total`);
+  for (const r of plan.send) log.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${tag(r.payer)} (${what(r)})`);
+  if (!live) { log.log("\nDRY RUN - no money moved. Set REFUND_LIVE=true to execute."); return { plan, executed: false }; }
+  if (!plan.send.length) { log.log("nothing to send."); return { plan, executed: false }; }
+  const result = await executeRefunds(plan.send, { ...(await (typeof deps === "function" ? deps(plan) : deps)), log });
+  log.log(`\ndone: ${result.ok} paid, ${result.failed} failed, ${result.unverified} held unverified, ${result.stuck} sent and awaiting proof (all unpaid rows remain owed or sending)`);
+  return { plan, executed: true, result };
+}
+
 // A ledger write, retried only on 429. The server's limiter answers 429
 // before the handler touches the ledger, so a 429 means nothing was written
 // and resending is safe. Any other failure is returned as-is: a network error or a 5xx may
@@ -448,100 +728,69 @@ async function main() {
     evm: !!(process.env.REFUND_EVM_KEY || "").trim(),
     stellar: !!(process.env.REFUND_STELLAR_SECRET || "").trim(),
     algorand: !!(process.env.REFUND_ALGORAND_MNEMONIC || "").trim(),
-    solana: false, // detection-only until the SVM spending wallet lands
+    tempo: !!(process.env.REFUND_TEMPO_KEY || "").trim(),
+    solana: !!(process.env.REFUND_SOLANA_KEY || "").trim(),
   };
   const res = await fetch(`${TARGET}/__operator/refunds.json?status=owed`, {
     headers: { Authorization: `Bearer ${TOKEN}` },
   });
   if (!res.ok) { console.error(`refunds.json HTTP ${res.status}`); process.exit(2); }
   const { refunds, totals } = await res.json();
-  console.log(`refund-run against ${TARGET} - ledger: ${JSON.stringify(totals)}`);
 
-  const plan = planRefunds(refunds, {
-    onlyChain: ONLY_CHAIN,
-    maxPerPayerUsd: MAX_PER_PAYER,
-    minRefundUsd: MIN_REFUND,
-    includeSynthetic: /^(1|true|yes)$/i.test(process.env.REFUND_INCLUDE_SYNTHETIC || ""),
-    includeLastingHangups: /^(1|true|yes)$/i.test((process.env.REFUND_INCLUDE_LASTING_HANGUPS || "").trim()),
-    includeRepeatHangups: /^(1|true|yes)$/i.test((process.env.REFUND_INCLUDE_REPEAT_HANGUPS || "").trim()),
-    senders,
-  });
-  // Each line names the response status the debt was recorded on, so a
-  // reviewer reading the dry run can tell a failed answer from a buyer who
-  // disconnected (499) before approving a live run.
-  const what = (r) => `${r.slug}${r.httpStatus ? `, http ${r.httpStatus}` : ""}${r.hangupReason ? `, ${r.hangupReason}` : ""}`;
-  for (const [reason, rows] of Object.entries(plan.held)) {
-    console.log(`\nHELD (${reason}): ${rows.length}`);
-    for (const r of rows) console.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${tag(r.payer)} (${what(r)})`);
-  }
-  console.log(`\nTO SEND: ${plan.send.length} refund(s), $${plan.totalUsd} total`);
-  for (const r of plan.send) console.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${tag(r.payer)} (${what(r)})`);
-
-  if (!LIVE) { console.log("\nDRY RUN - no money moved. Set REFUND_LIVE=true to execute."); return; }
-  if (!plan.send.length) { console.log("nothing to send."); return; }
-
-  const accepts = await liveAcceptsByNetwork();
-  const payToSets = ourPayToSet(accepts);
-  const { verifyInboundPayment } = await import("../src/payment-verify.js");
-  const { confirmStellarTransfer } = await import("../src/stellar-confirm.js");
-  let ok = 0, failed = 0, unverified = 0;
-  for (const row of plan.send) {
-    try {
-      // PROVE THE PAYMENT BEFORE REPAYING IT. The debt was recorded on the
-      // facilitator's success:true, which is unforgeable by a buyer but not
-      // guaranteed true - a facilitator can be wrong, and this week it was, in
-      // the opposite direction (Stellar reported failure for transfers that
-      // confirmed). So the same payer, our payTo, and at least the amount must
-      // be confirmed on-chain before anything leaves. Fails closed: an
-      // unverifiable row is HELD, still owed, never paid and never written off.
-      const proof = await verifyInboundPayment({
+  // The real steps, built only for a live run with something to send.
+  const deps = async () => {
+    const accepts = await liveAcceptsByNetwork();
+    const payToSets = ourPayToSet(accepts);
+    const { verifyInboundPayment } = await import("../src/payment-verify.js");
+    const { confirmStellarTransfer } = await import("../src/stellar-confirm.js");
+    const rpcFor = (n) => (n === TEMPO_NETWORK ? TEMPO_RPC() : (process.env[`REFUND_RPC_${String(n).split(":")[1]}`] || EVM_RPCS[n] || "").trim() || null);
+    return {
+      verifyInbound: (row) => verifyInboundPayment({
         network: row.network, payer: row.payer, amountUsd: row.priceUsd,
         tx: row.evidence, createdAt: row.createdAt,
         acceptsFor: (n) => accepts[n],
         payToSetFor: (n) => payToSets.get(n) || [],
-        rpcFor: (n) => (process.env[`REFUND_RPC_${String(n).split(":")[1]}`] || EVM_RPCS[n] || "").trim() || null,
+        rpcFor,
         stellarConfirm: confirmStellarTransfer,
-      });
-      if (!proof.verified) {
-        await new Promise((r) => setTimeout(r, 1500));
-        console.warn(`HOLD  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}: UNVERIFIED - ${proof.reason}`);
-        unverified++;
-        continue;
-      }
-      console.log(`      #${row.id} inbound payment confirmed on-chain`);
-      // CLAIM BEFORE SENDING. Verification proves we were paid; it can never
-      // prove we have not already refunded, and it stays true forever. So the
-      // row is moved to `sending` first: a crash between broadcast and
-      // mark-paid leaves it stuck there for a human instead of being re-sent
-      // by the next run. Losing the claim race means another runner has it.
-      const claimed = await claimForSend(row.id);
-      if (!claimed) {
-        console.warn(`HOLD  #${row.id}: could not claim (already sending, resolved, or another run has it)`);
-        unverified++;
-        continue;
-      }
-      const family = familyOf(row.network);
-      const tx = family === "evm" ? await sendEvm(row, accepts[row.network])
-        : family === "stellar" ? await sendStellar(row)
-        : family === "algorand" ? await sendAlgorand(row)
-        : (() => { throw new Error(`no sender for ${family}`); })();
-      await markPaid(row.id, String(tx));
-      console.log(`PAID  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}  (tx in the ledger, not this log)`);
-      ok++;
-      await new Promise((r) => setTimeout(r, 1500));
-    } catch (e) {
-      // If the failure came after the claim, the row is now stuck in `sending`
-      // and will NOT be retried automatically - that is deliberate. Whether the
-      // money left is exactly what a human must check before releasing it.
-      console.error(`FAIL  #${row.id}: ${(e?.message || String(e)).slice(0, 160)}`);
-      console.error(`      -> if this row is now 'sending', check the chain before resolving it; it will not auto-retry`);
-      failed++;
-    }
-  }
-  console.log(`\ndone: ${ok} paid, ${failed} failed, ${unverified} held unverified (all unpaid rows remain owed)`);
+      }),
+      claim: claimForSend,
+      prepare: (row, proof) => {
+        const family = familyOf(row.network);
+        if (family === "tempo") return prepareTempo(row, proof, accepts[row.network]);
+        if (family === "solana") return prepareSolana(row, proof, accepts[row.network]);
+        return null;
+      },
+      send: (row, proof, prep) => {
+        const family = familyOf(row.network);
+        if (family === "evm") return sendEvm(row, accepts[row.network]);
+        if (family === "stellar") return sendStellar(row);
+        if (family === "algorand") return sendAlgorand(row);
+        if (family === "tempo") return sendTempo(row, prep);
+        if (family === "solana") return sendSolana(row, prep);
+        throw new Error(`no sender for ${family}`);
+      },
+      prove: (row, tx, prep) => proveRefundSent(row, tx, { ...prep, rpcUrl: prep?.rpcUrl || rpcFor(row.network) }, { verify: verifyInboundPayment }),
+      markPaid,
+    };
+  };
+
+  const out = await refundRun({
+    rows: refunds, totals, live: LIVE, deps,
+    planOptions: {
+      onlyChain: ONLY_CHAIN,
+      maxPerPayerUsd: MAX_PER_PAYER,
+      minRefundUsd: MIN_REFUND,
+      includeSynthetic: /^(1|true|yes)$/i.test(process.env.REFUND_INCLUDE_SYNTHETIC || ""),
+      includeLastingHangups: /^(1|true|yes)$/i.test((process.env.REFUND_INCLUDE_LASTING_HANGUPS || "").trim()),
+      includeRepeatHangups: /^(1|true|yes)$/i.test((process.env.REFUND_INCLUDE_REPEAT_HANGUPS || "").trim()),
+      senders,
+    },
+  });
+  if (!out.executed) return;
+  const { failed, unverified, stuck } = out.result;
   // A run where everything was HELD used to exit 0 and read as green. A whole
   // class being systematically unverifiable is exactly what that hides.
-  process.exit(failed || unverified ? 1 : 0);
+  process.exit(failed || unverified || stuck ? 1 : 0);
 }
 
 // Importing for tests must not run the CLI.

@@ -199,7 +199,7 @@ export function faucetGate(address, now = Date.now()) {
   return { ok: true, release };
 }
 
-const SHARED_TAGS = ["cdp", "coinbase", "wallet", "onboarding", "x402", "agent-wallet"];
+const SHARED_TAGS = ["wallet", "onboarding", "x402", "agent-wallet"];
 
 export const CDP_TOOLS = [
   {
@@ -209,7 +209,7 @@ export const CDP_TOOLS = [
     category: "wallet",
     price: "$0.002",
     description:
-      "All token balances for any address in one call, from Coinbase's indexed data API - ERC-20 + native on EVM, SPL on Solana; no per-token contract calls, no RPC wrangling. Networks: base, ethereum, base-sepolia, solana, solana-devnet. Symbols/decimals populated for whitelisted tokens (USDC always included).",
+      "All token balances for any address in one call, from an indexed chain-data API - ERC-20 + native on EVM, SPL on Solana; no per-token contract calls, no RPC wrangling. Networks: base, ethereum, base-sepolia, solana, solana-devnet. Symbols/decimals populated for whitelisted tokens (USDC always included).",
     tags: [...SHARED_TAGS, "balances", "erc-20", "spl", "base", "ethereum", "solana", "portfolio"],
     discovery: {
       input: { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base" },
@@ -259,7 +259,7 @@ export const CDP_TOOLS = [
     category: "wallet",
     price: "$0.001",
     description:
-      "Fund any address with testnet money via the Coinbase faucet - USDC (1) or ETH (0.0001) on Base Sepolia, USDC (1) or SOL on Solana devnet - everything an agent needs to rehearse the complete x402 payment loop safely before moving real money. A tenth of a cent buys a full testnet dollar. Limits: 2 drips per address per day; CDP enforces its own rolling caps on top.",
+      "Fund any address with testnet money from a testnet faucet - USDC (1) or ETH (0.0001) on Base Sepolia, USDC (1) or SOL on Solana devnet - everything an agent needs to rehearse the complete x402 payment loop safely before moving real money. A tenth of a cent buys a full testnet dollar. Limits: 2 drips per address per day; the faucet enforces its own rolling caps on top.",
     tags: [...SHARED_TAGS, "faucet", "testnet", "base-sepolia", "solana-devnet", "getting-started"],
     discovery: {
       bodyType: "json",
@@ -322,7 +322,7 @@ export const CDP_TOOLS = [
     category: "wallet",
     price: "$0.001",
     description:
-      "Generate a single-use Coinbase Onramp URL that lets a human fund any wallet with a card or Apple Pay - the fastest way to put real USDC into an agent's wallet. Returns the ready-to-open URL, and a fee-inclusive quote when Coinbase provides one. Networks: base, ethereum, polygon, arbitrum, optimism, solana.",
+      "Generate a single-use hosted onramp URL that lets a human fund any wallet with a card or Apple Pay - the fastest way to put real USDC into an agent's wallet. Returns the ready-to-open URL, and a fee-inclusive quote when the onramp provides one. Networks: base, ethereum, polygon, arbitrum, optimism, solana.",
     tags: [...SHARED_TAGS, "onramp", "fiat", "usdc", "fund-wallet", "apple-pay"],
     discovery: {
       bodyType: "json",
@@ -400,7 +400,7 @@ export const CDP_TOOLS = [
     category: "wallet",
     price: "$0.020",
     description:
-      "Run read-only SQL against Coinbase's indexed, DECODED blockchain data - base.events (decoded logs with parameters), base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions (builder codes), plus solana.instructions and hyperevm.events. ClickHouse-dialect SELECTs, server-side grammar validation, up to 50k rows / 30s / 12 joins. Ask Base anything - token flows, event analytics, gas studies - in one call, no indexer to run.",
+      "Run read-only SQL against indexed, DECODED blockchain data - base.events (decoded logs with parameters), base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions (builder codes), plus solana.instructions and hyperevm.events. ClickHouse-dialect SELECTs, server-side grammar validation, up to 50k rows / 30s / 12 joins. Ask Base anything - token flows, event analytics, gas studies - in one call, no indexer to run.",
     tags: [...SHARED_TAGS, "sql", "analytics", "onchain-data", "base", "events", "clickhouse", "data-science"],
     discovery: {
       bodyType: "json",

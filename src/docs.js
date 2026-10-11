@@ -88,7 +88,7 @@ function transformWikilinks(md) {
 //   ---                                       → end of sidebar (we stop here)
 // Anything else is ignored. Robust to extra whitespace and trailing prose
 // after `—`.
-function parseSidebar(raw) {
+export function parseSidebar(raw) {
   const sections = [];
   let current = null;
   const flush = () => { if (current) sections.push(current); current = null; };
@@ -134,9 +134,9 @@ function parseSidebar(raw) {
       // No trailing $ anchor: a markdown link can be followed by plain
       // parenthetical prose ("(managed)") that the em-dash strip above
       // doesn't catch, since it isn't separated by an em-dash. An anchored
-      // match silently dropped that whole bullet - found live via
-      // "[Try Tollbooth Cloud](url) (managed)" missing from the rendered
-      // sidebar entirely, not just its trailing text.
+      // match silently dropped that whole bullet - found live via a
+      // "[Link text](url) (note)" bullet missing from the rendered sidebar
+      // entirely, not just its trailing text.
       const md = main.match(/^\[([^\]]+)\]\(([^)]+)\)/);
       if (md) {
         current.items.push({ kind: "link", display: md[1].trim(), href: md[2].trim() });
@@ -185,7 +185,13 @@ export function renderSidebar(currentSlug) {
         const href = docHref(it.slug);
         parts.push(`<li><a class="ml-docs-side-a${active}" href="${href}">${esc(it.display)}</a></li>`);
       } else {
-        parts.push(`<li><a class="ml-docs-side-a" href="${esc(it.href)}" rel="noopener">${esc(it.display)} &#8599;</a></li>`);
+        // The wiki sidebar names this site by its absolute URL (it is also the
+        // GitHub wiki's sidebar); on this site those are ordinary local links,
+        // so they render relative, without the external-link arrow.
+        const local = /^https:\/\/agent402\.tools(\/|$)/.test(it.href) ? (it.href.replace(/^https:\/\/agent402\.tools/, "") || "/") : null;
+        parts.push(local
+          ? `<li><a class="ml-docs-side-a" href="${esc(local)}">${esc(it.display)}</a></li>`
+          : `<li><a class="ml-docs-side-a" href="${esc(it.href)}" rel="noopener">${esc(it.display)} &#8599;</a></li>`);
       }
     }
     parts.push("</ul>");
@@ -196,7 +202,7 @@ export function renderSidebar(currentSlug) {
   const apiActive = currentSlug === "__api__" ? " active" : "";
   parts.push(`<div class="ml-docs-side-h">Reference</div>
 <ul class="ml-docs-side-ul">
-  <li><a class="ml-docs-side-a${apiActive}" href="/docs/api">API Reference</a></li>
+  <li><a class="ml-docs-side-a${apiActive}" href="/docs/api">API reference (every route)</a></li>
   <li><a class="ml-docs-side-a" href="/openapi.json">OpenAPI JSON</a></li>
   <li><a class="ml-docs-side-a" href="/llms.txt">llms.txt</a></li>
   <li><a class="ml-docs-side-a" href="/api/pricing">Pricing</a></li>
@@ -240,58 +246,66 @@ export function docPrevNextHtml(slug) {
 // wiki page - before this they were two unrelated layouts, so clicking from
 // the landing page into any real doc page felt like leaving the site rather
 // than navigating within it.
-// The H1 clamp: wiki page titles (rendered from each doc's own markdown
-// heading) wrap up to 3 lines at narrow widths while others stay on 1
-// (measured live, 126px vs 42px), so a 2-line clamp bounds the height the way
-// /tools and /skills do. No title="" attribute: this H1 comes from marked's
-// rendering, not a template string, and the page's own <title> carries the
-// full text. A JS comment, not a CSS one: the CSS block is served to every
-// visitor.
+// The H1 wraps balanced, never clipped: a long wiki title takes two even
+// lines instead of an ellipsis, as on /tools, /skills and /guides. A JS
+// comment, not a CSS one: the CSS block is served to every visitor.
 export const DOCS_LAYOUT_CSS = `
   .ml-docs-layout { display:block; }
   .ml-docs-side { display:none; }
   .ml-docs-main { min-width:0; }
-  .ml-docs-main h1 { font-family:var(--font-body);font-weight:800;font-size:42px;line-height:1;letter-spacing:-.02em;margin:0 0 18px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis; }
-  .ml-docs-main h2 { font-size:1.2rem;margin-top:36px;color:var(--accent);font-weight:700; }
-  .ml-docs-main h3 { font-size:1.02rem;margin-top:26px;font-weight:700; }
+  .ml-docs-main h1 {font-family:var(--font-display);font-weight:400;letter-spacing:-.01em; font-size:var(--fs-4xl);line-height:1;margin:0 0 18px;text-wrap:balance; }
+  .ml-docs-main h2 { font-size:var(--fs-lg);margin-top:36px;color:var(--accent);font-weight:700; }
+  .ml-docs-main h3 { font-size:var(--fs-lg);margin-top:26px;font-weight:600; }
   .ml-docs-main p, .ml-docs-main li { color:var(--ink);line-height:1.7; }
   .ml-docs-main .muted { color:var(--muted); }
-  .ml-docs-main pre { background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);border:0;padding:14px 16px;overflow-x:auto;font-size:.85rem;line-height:1.55; }
+  .ml-docs-main pre { background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);border:0;padding:14px 16px;overflow-x:auto;font-size:var(--fs-md);line-height:1.55; }
   .ml-docs-main code { font-family:var(--font-mono); }
-  .ml-docs-main p > code, .ml-docs-main li > code, .ml-docs-main td > code, .ml-docs-main h3 > code { background:var(--card);border:1px solid var(--hairline);padding:1px 6px;font-size:.85em; }
-  .ml-docs-main table { border-collapse:collapse;width:100%;margin:18px 0;font-size:.92rem; }
+  .ml-docs-main p > code, .ml-docs-main li > code, .ml-docs-main td > code, .ml-docs-main h3 > code { background:var(--card);border:1px solid var(--hairline);padding:1px 6px;font-size:var(--fs-code-inline); }
+  /* A wide table scrolls inside its own wrapper; its code names keep whole words. */
+  .ml-docs-tw { overflow-x:auto;margin:18px 0; }
+  .ml-docs-related { text-wrap:balance; }
+  @media (max-width:640px){ .ml-docs-main h1 { font-size:var(--fs-3xl); line-height:1.05; } }
+  .ml-docs-main table { border-collapse:collapse;width:100%;margin:0;font-size:var(--fs-base); }
   .ml-docs-main th, .ml-docs-main td { border:1px solid var(--hairline);padding:8px 12px;text-align:left;vertical-align:top; }
-  .ml-docs-main th { background:var(--card);color:var(--accent);font-weight:600; }
+  /* A row's first cell (its name or label) is never squeezed under a short phrase, and a name there stays whole. */
+  .ml-docs-main td:first-child { min-width:8em; }
+  .ml-docs-main td:first-child > strong, .ml-docs-main td:first-child > a { white-space:nowrap; }
+  .ml-docs-main th { background:var(--card);color:var(--accent);font-weight:600;white-space:nowrap; }
   .ml-docs-main blockquote { border-left:3px solid var(--accent);margin:16px 0;padding:4px 16px;color:var(--muted);background:rgba(214,60,26,.04); }
   .ml-docs-main hr { border:0;border-top:1px solid var(--hairline);margin:32px 0; }
   .ml-docs-main a { color:var(--accent);text-decoration:none; }
   .ml-docs-main a:hover { text-decoration:underline; }
   .ml-docs-main img { max-width:100%; }
-  .ml-docs-crumbs { color:var(--faint);font-size:.85rem;margin-bottom:14px; }
+  .ml-docs-crumbs { color:var(--faint);font-size:var(--fs-md);margin-bottom:14px; }
   .ml-docs-crumbs a { color:var(--faint);text-decoration:none; }
   .ml-docs-crumbs a:hover { color:var(--accent); }
   .ml-docs-search { margin-bottom:14px; }
-  .ml-docs-search input { width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-size:.85rem;padding:8px 10px;outline:none; }
+  .ml-docs-search input { width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);padding:8px 10px;outline:none; }
   .ml-docs-search input:focus { border-color:var(--accent); }
-  .ml-docs-mobile-toggle { display:block;width:100%;box-sizing:border-box;margin-bottom:16px;padding:11px 14px;background:var(--card);border:1px solid var(--ink);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:13px;text-align:left;cursor:pointer; }
+  .ml-docs-mobile-toggle { display:block;width:100%;box-sizing:border-box;margin-bottom:16px;padding:11px 14px;background:var(--card);border:1px solid var(--ink);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);text-align:left;cursor:pointer; }
   .ml-docs-side.ml-docs-side-open { display:block !important; }
-  .ml-docs-side-h { font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:18px 0 6px; }
+  /* Reference rows: method, path, note. The note is prose in the body face, so it may wrap; at phone width it takes its own line under the path. */
+  .ml-ref-row { display:grid;grid-template-columns:60px minmax(0,auto) minmax(0,1fr);gap:4px 14px;padding:12px 18px; }
+  .ml-ref-row > span:nth-child(-n+2) { white-space:nowrap; }
+  .ml-ref-row > span:last-child { font-family:var(--font-body);font-size:var(--fs-md);text-align:right; }
+  @media (max-width:700px){ .ml-ref-row { grid-template-columns:60px minmax(0,1fr); } .ml-ref-row > span:last-child { grid-column:2 / -1;text-align:left; } }
+  .ml-docs-side-h { font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:18px 0 6px; }
   .ml-docs-side-ul { list-style:none;padding:0;margin:0 0 8px; }
   .ml-docs-side-ul li { margin:0; }
-  .ml-docs-side-a { display:block;padding:5px 10px;margin:1px 0;color:var(--ink);text-decoration:none;font-size:.92rem;line-height:1.35; }
+  .ml-docs-side-a { display:block;padding:5px 10px;margin:1px 0;color:var(--ink);text-decoration:none;font-size:var(--fs-base);line-height:1.35; }
   .ml-docs-side-a:hover { background:var(--card); }
   .ml-docs-side-a.active { background:var(--card);color:var(--accent);border-left:2px solid var(--accent);padding-left:8px;font-weight:600; }
   .ml-docs-side-hidden { display:none !important; }
-  .ml-docs-api-cat { font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.02em;margin:28px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--hairline);color:var(--ink); }
-  .ml-docs-api-row { display:grid;grid-template-columns:1.2fr 2fr .5fr;gap:14px;padding:8px 0;border-bottom:1px solid var(--hairline);font-size:.9rem; }
+  .ml-docs-api-cat { font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:28px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--hairline);color:var(--ink); }
+  .ml-docs-api-row { display:grid;grid-template-columns:1.2fr 2fr .5fr;gap:14px;padding:8px 0;border-bottom:1px solid var(--hairline);font-size:var(--fs-md); }
   .ml-docs-api-row .slug { font-family:var(--font-mono);color:var(--ink); }
   .ml-docs-api-row .desc { color:var(--muted); }
-  .ml-docs-api-row .price { color:var(--accent);text-align:right;font-family:var(--font-mono);font-size:.85rem;font-weight:700; }
+  .ml-docs-api-row .price { color:var(--accent);text-align:right;font-family:var(--font-mono);font-size:var(--fs-md);font-weight:700; }
   .ml-docs-pn { display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:48px;padding-top:24px;border-top:1px solid var(--hairline); }
   .ml-docs-pn-a { display:flex;flex-direction:column;gap:4px;padding:14px 16px;border:1px solid var(--hairline);background:var(--card);text-decoration:none; }
   .ml-docs-pn-a:hover { border-color:var(--accent);text-decoration:none; }
-  .ml-docs-pn-label { font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint); }
-  .ml-docs-pn-title { color:var(--ink);font-weight:700;font-size:.95rem; }
+  .ml-docs-pn-label { font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint); }
+  .ml-docs-pn-title { color:var(--ink);font-weight:700;font-size:var(--fs-base); }
   @media (min-width:900px) {
     .ml-docs-layout { display:grid;grid-template-columns:240px 1fr;gap:44px;align-items:start; }
     .ml-docs-side { display:block;position:sticky;top:92px;max-height:calc(100vh - 100px);overflow-y:auto;padding-right:8px; }
@@ -329,7 +343,11 @@ function shell(baseUrl, title, description, path, body, currentSlug) {
 }
 
 function renderMarkdown(md) {
-  return marked.parse(transformWikilinks(md));
+  return marked.parse(transformWikilinks(md))
+    .replace(/<table>/g, '<div class="ml-docs-tw"><table>')
+    .replace(/<\/table>/g, "</table></div>")
+    // A row of related-page links wraps balanced, so it never ends on one stray link.
+    .replace(/<p>(Related|See also):/g, '<p class="ml-docs-related">$1:');
 }
 
 /** Meta description from a page's first real prose paragraph: skips headings,
@@ -365,6 +383,16 @@ export function docsPage(baseUrl, slug) {
   );
 }
 
+// One price format for the reference column: at least two decimals, three
+// below a cent ("$0.003", "$0.01", "$3.30"); the catalog's own strings mix
+// precisions ("$0.01" beside "$0.010", "$3.3").
+function apiPrice(p) {
+  if (p === 0) return "free";
+  const n = typeof p === "number" ? p : Number(String(p ?? "").replace(/[^0-9.]/g, ""));
+  if (p == null || p === "" || !Number.isFinite(n)) return "-";
+  return "$" + (n > 0 && n < 0.01 ? n.toFixed(3) : n.toFixed(2));
+}
+
 // API reference: flat catalog grouped by category. Built from the live tool
 // list rather than a frozen markdown page, so it stays in sync with whatever
 // the server actually exposes.
@@ -381,15 +409,15 @@ export function docsApi(baseUrl, catalog) {
     const rows = tools.map((t) => {
       const slug = esc(t.slug || t.route || "");
       const desc = esc((t.description || "").replace(/\s+/g, " ").trim().slice(0, 220));
-      const price = t.price === 0 ? "free" : (typeof t.price === "number" ? `$${t.price.toFixed(4)}` : esc(String(t.price ?? "-")));
+      const price = apiPrice(t.price);
       return `<div class="ml-docs-api-row"><div class="slug">${slug}</div><div class="desc">${desc}</div><div class="price">${esc(price)}</div></div>`;
     }).join("");
-    return `<h2 class="ml-docs-api-cat">${esc(cat)} <span style="font-size:13px;font-weight:400;color:var(--faint);font-family:var(--font-mono);">&middot; ${tools.length}</span></h2>${rows}`;
+    return `<h2 class="ml-docs-api-cat">${esc(cat)} <span style="font-size:var(--fs-sm);font-weight:400;color:var(--faint);font-family:var(--font-mono);">&middot; ${tools.length}</span></h2>${rows}`;
   }).join("\n");
 
   const body = `<div class="ml-docs-crumbs"><a href="/docs">Docs</a> &rsaquo; API Reference</div>
 <h1>API Reference</h1>
-<p class="muted">Every tool the server exposes, grouped by category. The same list is available as machine-readable JSON at <a href="/openapi.json">/openapi.json</a> and <a href="/api/pricing">/api/pricing</a>, or as plain text at <a href="/llms.txt">/llms.txt</a>. Call any of them over HTTP, MCP, or the <a href="/docs/MCP-Connector">MCP connector</a>.</p>
+<p class="muted">Every tool the server exposes, grouped by category. The same list is available as machine-readable JSON at <a href="/openapi.json">/openapi.json</a> and <a href="/api/pricing">/api/pricing</a>, or as plain text at <a href="/llms.txt">/llms.txt</a>. Call any of them over HTTP, the hosted MCP connector (<code>/mcp</code>), or the <code>agent402-mcp</code> npm server (both on <a href="/docs/MCP-Connector">MCP connector</a>).</p>
 <p class="muted"><b>${catalog.length}</b> tools across <b>${cats.length}</b> categories.</p>
 ${sections}`;
   return shell(

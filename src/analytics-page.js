@@ -48,42 +48,42 @@ function sparkline(series, { width = 720, height = 80 } = {}) {
 
 const AN_EXTRA_CSS = `
 .an-wrap{max-width:1180px;margin:0 auto;padding:56px 30px}
-.an-h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 6px}
-.an-sub{color:var(--muted);margin:0 0 22px;font-size:15px;max-width:680px;line-height:1.55}
+.an-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 6px}
+.an-sub{color:var(--muted);margin:0 0 22px;font-size:var(--fs-base);max-width:680px;line-height:1.55}
 .an-sub b{color:var(--ink);font-weight:600}
 .an-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin:0 0 22px}
-.an-stat{background:var(--surface);border:1px solid var(--hairline);padding:18px}
-.an-stat .an-k{color:var(--dk-muted);font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
-.an-stat .an-v{font-family:var(--font-mono);font-size:1.65rem;color:var(--on-dark);margin-top:4px;word-break:break-word}
-.an-stat .an-s{color:var(--dk-muted);font-family:var(--font-mono);font-size:12px;margin-top:3px}
-.an-panel{background:var(--surface);border:1px solid var(--hairline);overflow:hidden;margin-bottom:18px}
-.an-ph{padding:14px 18px;border-bottom:1px solid var(--dark-border)}
-.an-ph h2{margin:0;font-size:1rem;color:var(--accent);font-family:var(--font-body);font-weight:700}
-.an-ph .an-pn{color:var(--dk-muted);font-family:var(--font-mono);font-size:12px;margin-top:2px}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;color:var(--dk-muted);font-weight:500;font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:10px 18px;border-bottom:1px solid var(--dark-border)}
+.an-stat{background:var(--panel);border:1px solid var(--hairline);padding:18px}
+.an-stat .an-k{color:var(--on-panel-dim);font-family:var(--font-mono);font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.06em}
+.an-stat .an-v{font-family:var(--font-mono);font-size:var(--fs-2xl);color:var(--on-panel);margin-top:4px;word-break:break-word}
+.an-stat .an-s{color:var(--on-panel-dim);font-family:var(--font-mono);font-size:var(--fs-xs);margin-top:3px}
+.an-panel{background:var(--panel);border:1px solid var(--hairline);overflow:hidden;margin-bottom:18px}
+.an-ph{padding:14px 18px;border-bottom:1px solid var(--panel-rule)}
+.an-ph h2{margin:0;font-size:var(--fs-lg);color:var(--accent);font-family:var(--font-body);font-weight:700}
+.an-ph .an-pn{color:var(--on-panel-dim);font-family:var(--font-mono);font-size:var(--fs-xs);margin-top:2px}
+table{width:100%;border-collapse:collapse;font-size:var(--fs-sm)}
+th{text-align:left;color:var(--on-panel-dim);font-weight:500;font-family:var(--font-mono);font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.04em;padding:10px 18px;border-bottom:1px solid var(--panel-rule)}
 th.num{text-align:right}
-td{padding:10px 18px;border-bottom:1px solid var(--dark-border);color:var(--on-dark);font-family:var(--font-mono);font-size:13px}
+td{padding:10px 18px;border-bottom:1px solid var(--panel-rule);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm)}
 td.num{text-align:right}
-td.an-muted{color:var(--dk-muted)}
-td.an-warn{color:#c4a44e}
-td.an-danger{color:#c0453a}
-.an-stat.an-warn{border-color:#7a4d10}
-.an-stat.an-warn .an-v{color:#c4a44e}
-.an-stat.an-danger{border-color:#7a1f1f}
-.an-stat.an-danger .an-v{color:#c0453a}
-td a{color:var(--on-dark);text-decoration:none;border-bottom:1px solid transparent}
+td.an-muted{color:var(--on-panel-dim)}
+td.an-warn{color:var(--on-panel-warn)}
+td.an-danger{color:var(--on-panel-bad)}
+.an-stat.an-warn{border-color:var(--on-panel-warn)}
+.an-stat.an-warn .an-v{color:var(--on-panel-warn)}
+.an-stat.an-danger{border-color:var(--on-panel-bad)}
+.an-stat.an-danger .an-v{color:var(--on-panel-bad)}
+td a{color:var(--on-panel);text-decoration:none;border-bottom:1px solid transparent}
 td a:hover{border-color:var(--accent)}
-code{font-family:var(--font-mono);font-size:12px;background:var(--surface);color:var(--on-dark);padding:2px 7px;border:1.5px solid var(--dark-border)}
-pre{background:var(--ink-panel);border:1px solid var(--dark-border);padding:14px 16px;overflow:auto;font-family:var(--font-mono);font-size:12px;color:var(--on-dark)}
-.an-foot{color:var(--faint);font-size:13px}
+code{font-family:var(--font-mono);font-size:var(--fs-xs);background:var(--panel);color:var(--on-panel);padding:2px 7px;border:1.5px solid var(--panel-rule)}
+pre{background:var(--ink-panel);border:1px solid var(--panel-rule);padding:14px 16px;overflow:auto;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel)}
+.an-foot{color:var(--faint);font-size:var(--fs-sm)}
 .an-foot a{color:var(--accent);text-decoration:none}
 .an-foot a:hover{text-decoration:underline}
 .an-winbar{display:flex;gap:8px;margin:0 0 18px;flex-wrap:wrap}
-.an-winbar a{padding:6px 12px;border:1px solid var(--hairline);font-family:var(--font-mono);color:var(--faint);text-decoration:none;font-size:13px}
+.an-winbar a{padding:6px 12px;border:1px solid var(--hairline);font-family:var(--font-mono);color:var(--faint);text-decoration:none;font-size:var(--fs-sm)}
 .an-winbar a.active{color:var(--accent);border-color:var(--accent)}
 .an-winbar a:hover{color:var(--ink)}
-@media(max-width:600px){.an-h1{font-size:36px !important}}
+@media(max-width:600px){.an-h1{font-size:var(--fs-3xl) !important}}
 `;
 
 export function analyticsPage(data, { baseUrl, toolHrefFor = null } = {}) {
@@ -204,8 +204,8 @@ export function analyticsPage(data, { baseUrl, toolHrefFor = null } = {}) {
   <div class="an-stat ${serverErrClass}" title="HTTP 5xx - the handler threw or its upstream failed. This is the rate that needs fixing.">
     <div class="an-k">Server errors (5xx)</div><div class="an-v">${esc(serverErrRate)}</div><div class="an-s">handler or upstream failure - actionable</div>
   </div>
-  <div class="an-stat"><div class="an-k">Latency p50 / p95</div><div class="an-v" style="font-size:1.05rem">${esc(fmtMs(totals.p50_latency_ms))} / ${esc(fmtMs(totals.p95_latency_ms))}</div><div class="an-s">avg ${esc(fmtMs(totals.avg_latency_ms))}</div></div>
-  <div class="an-stat"><div class="an-k">Peak hour</div><div class="an-v" style="font-size:1rem">${esc(fmtTs(peakHour?.ts))}</div><div class="an-s">${esc(fmtInt(peakHour?.calls || 0))} calls</div></div>
+  <div class="an-stat"><div class="an-k">Latency p50 / p95</div><div class="an-v" style="font-size:var(--fs-lg)">${esc(fmtMs(totals.p50_latency_ms))} / ${esc(fmtMs(totals.p95_latency_ms))}</div><div class="an-s">avg ${esc(fmtMs(totals.avg_latency_ms))}</div></div>
+  <div class="an-stat"><div class="an-k">Peak hour</div><div class="an-v" style="font-size:var(--fs-lg)">${esc(fmtTs(peakHour?.ts))}</div><div class="an-s">${esc(fmtInt(peakHour?.calls || 0))} calls</div></div>
 </div>
 
 <div class="an-panel">
@@ -257,10 +257,10 @@ function renderShell({ baseUrl, windowHuman, hours, includeSynthetic, syntheticH
     return `<a class="${h === hours ? "active" : ""}" href="/analytics?hours=${h}${winbarQs ? "&" + winbarQs : ""}">${h === 1 ? "1h" : h === 24 ? "24h" : h === 168 ? "7d" : "30d"}</a>`;
   }).join("")}
 </div>
-${(syntheticHidden > 0 || includeSynthetic) ? `<p class="an-foot" style="margin:6px 0 0;font-size:13px;">${includeSynthetic
+${(syntheticHidden > 0 || includeSynthetic) ? `<p class="an-foot" style="margin:6px 0 0;font-size:var(--fs-sm);">${includeSynthetic
     ? `Showing <b>all</b> calls (incl. synthetic test traffic). <a href="/analytics?hours=${hours}${includeProbes ? "&include_probes=1" : ""}">Hide synthetic</a>`
     : `<b>${esc(String(syntheticHidden))}</b> synthetic call${syntheticHidden === 1 ? "" : "s"} hidden (CI canary / heartbeat probe). <a href="/analytics?hours=${hours}&include_synthetic=1${includeProbes ? "&include_probes=1" : ""}">Show all</a>`}</p>` : ""}
-${(probesHidden > 0 || includeProbes) ? `<p class="an-foot" style="margin:6px 0 0;font-size:13px;">${includeProbes
+${(probesHidden > 0 || includeProbes) ? `<p class="an-foot" style="margin:6px 0 0;font-size:var(--fs-sm);">${includeProbes
     ? `Showing <b>probe</b> calls (empty-input scans). <a href="/analytics?hours=${hours}${includeSynthetic ? "&include_synthetic=1" : ""}">Hide probes</a>`
     : `<b>${esc(String(probesHidden))}</b> probe call${probesHidden === 1 ? "" : "s"} hidden (empty-input scans - not real errors). <a href="/analytics?hours=${hours}${includeSynthetic ? "&include_synthetic=1" : ""}&include_probes=1">Show all</a>`}</p>` : ""}
 </section>

@@ -136,7 +136,7 @@ export const DATA_TOOLS = [
   {
     route: "GET /api/fx-rate", name: "Currency exchange rate", slug: "fx-rate", category: "data", price: "$0.002",
     description:
-      "Live currency conversion using European Central Bank reference rates (via Frankfurter). Converts an amount between two currencies and returns the rate and date. ?from=USD&to=EUR&amount=100",
+      "Live currency conversion using European Central Bank reference rates. Converts an amount between two currencies and returns the rate and date. ?from=USD&to=EUR&amount=100",
     tags: ["currency", "forex", "fx", "exchange-rate", "convert", "ecb"],
     discovery: {
       input: { from: "USD", to: "EUR", amount: 100 },
@@ -252,8 +252,8 @@ export const DATA_TOOLS = [
   {
     route: "GET /api/public-holidays", name: "Public holidays", slug: "public-holidays", category: "time", price: "$0.001",
     description:
-      "Public holidays for a country and year via Nager.Date (keyless, 100+ countries): date, local name, English name, nationwide flag, and holiday types. Pairs with /api/business-days and /api/country-info. ?country=US&year=2026",
-    tags: ["holidays", "public-holidays", "calendar", "country", "time", "nager"],
+      "Public holidays for a country and year from an open public-holiday dataset (keyless, 100+ countries): date, local name, English name, nationwide flag, and holiday types. Pairs with /api/business-days and /api/country-info. ?country=US&year=2026",
+    tags: ["holidays", "public-holidays", "calendar", "country", "time"],
     discovery: {
       input: { country: "US", year: 2026 },
       inputSchema: {

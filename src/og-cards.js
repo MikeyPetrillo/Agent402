@@ -2,7 +2,7 @@
 // card's own layout (obsidian ground, two-line display headline, one sentence,
 // a terminal panel with three mono lines, a badge column on the right).
 //
-// Why (2026-09-14): every section page (/why, /docs, /marketplace, /reports,
+// Why (2026-09-14): every section page (/docs, /marketplace, /reports,
 // /markets, /sell, /tollbooth, /proof, ...) served the SAME /card.png as its
 // og:image, so every link preview on X, Slack and Discord looked identical -
 // twelve posts in a day, twelve copies of the same picture - while only the
@@ -29,9 +29,9 @@ const CHAIN_KEYS = RAILS.map((r) => ({ key: r.name.toLowerCase().replace(/ chain
 
 /** Exact path -> section id. Prefix rules live in ogSectionFor. */
 const EXACT = {
-  "/why": "why", "/docs": "docs", "/tools": "tools", "/marketplace": "marketplace", "/mpp-marketplace": "mpp-marketplace",
+  "/docs": "docs", "/tools": "tools", "/marketplace": "marketplace", "/mpp-marketplace": "mpp-marketplace",
   "/markets": "markets", "/decide": "decide", "/reports": "reports", "/monitors": "monitors", "/proof": "proof", "/leaderboard": "leaderboard",
-  "/sell": "sell", "/tollbooth": "tollbooth", "/skills": "skills", "/x402-test": "x402-test", "/digest": "digest",
+  "/sell": "sell", "/tollbooth": "tollbooth", "/skills": "skills", "/x402-test": "x402-test",
   "/security": "security", "/revenue": "revenue", "/transparency": "transparency", "/status": "status", "/credits": "credits",
   "/101": "learn", "/what-is-mpp": "learn", "/pricing": "docs", "/quickstart": "docs", "/integrations": "guides",
 };
@@ -79,8 +79,6 @@ function sectionCopy(id, ctx) {
     badge: ["x402 · MPP · card", `${rails} rails · USDC · USDG`],
   };
   const C = {
-    why: { h1: "Seven claims,", h2: "each with its proof.", sub: "What is different here, and the surface that shows it.",
-      lines: [["$ curl agent402.tools/why", "faint"], ["usage priced under a quoted ceiling", "muted"], ["a failed call is not charged, and the receipt proves it", "accent"]], badge: ["x402 · MPP · card", "receipts on every answer"] },
     docs: { h1: "Every route,", h2: "one document.", sub: "OpenAPI, prices, the 402 you will get and the receipt you will hold.",
       lines: [["$ curl agent402.tools/openapi.json", "faint"], [`${n} operations, typed 200s, one price each`, "muted"], ["x402 · MPP · credits key on the same routes", "accent"]], badge: ["OpenAPI 3.1", `${rails} rails`] },
     tools: { h1: `${n} tools,`, h2: "priced in cents.", sub: "Search the catalog, read the price, pay per call. No account.",
@@ -111,8 +109,6 @@ function sectionCopy(id, ctx) {
       lines: [["$ curl agent402.tools/x402-test", "faint"], ["HTTP/2 402  reason: under-price · retry: fund-wallet", "amber"], ["the reason table is built from the classifier the gate runs", "muted"]], badge: ["x402 · MPP", "conformance"] },
     guides: { h1: "Guides,", h2: "copy-paste ready.", sub: "Claude Code, Cursor, Codex, OpenClaw, AgentKit, tollbooths, wallets.",
       lines: [["$ claude mcp add --transport http agent402 https://agent402.tools/mcp", "faint"], ["ANTHROPIC_BASE_URL=https://agent402.tools/v1/metered", "muted"], ["x402 · MPP · credits key", "accent"]], badge: ["agents", "sellers"] },
-    digest: { h1: "One email a week,", h2: "what your wallet spent.", sub: "Calls, dollars, tools, chains. Prove the wallet, confirm by click.",
-      lines: [["$ curl agent402.tools/digest", "faint"], ["signed proof · double opt-in · x402 and MPP settlements alike", "muted"], ["unsubscribe drops the address", "accent"]], badge: ["x402 wallets", "credits keys"] },
     security: { h1: "What we hold,", h2: "and what we do not.", sub: "Non-custodial on every x402 and MPP rail; the two card paths named.",
       lines: [["security.txt · CodeQL · secret scanning on every push", "muted"], ["two business days to acknowledge a report", "faint"], ["safe harbor for researchers", "accent"]], badge: ["x402 · MPP", "disclosures"] },
     revenue: { h1: "Our own books,", h2: "published.", sub: "Outside settlements by chain and by day; buyers as a running union, never a sum.",

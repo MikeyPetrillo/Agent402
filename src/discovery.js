@@ -18,7 +18,7 @@
 import { toolList, CATEGORIES } from "./pages.js";
 import { SKILL_PACKS } from "./skills.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
-import { RAIL_CHAIN_NAMES, RAILS_NOTE } from "./rails.js";
+import { RAILS, railKey } from "./rails.js";
 import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
@@ -35,7 +35,9 @@ function priceRange(prices) {
   if (!nums.length) return null;
   const lo = Math.min(...nums);
   const hi = Math.max(...nums);
-  const fmt = (n) => `$${n.toFixed(3).replace(/0+$/, "").replace(/\.$/, ".0")}`;
+  // Cents at a cent or more ($3.30, $2.00, $0.50); a sub-cent price keeps its
+  // third decimal ($0.001, $0.005).
+  const fmt = (n) => (n >= 0.01 && Math.abs(n * 100 - Math.round(n * 100)) < 1e-9 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`);
   return lo === hi ? fmt(lo) : `${fmt(lo)}–${fmt(hi)}`;
 }
 
@@ -65,6 +67,17 @@ function capabilityMap(catalog, powSlugs) {
  */
 export function serviceManifest({ baseUrl, network, networks, wallet, walletName, payToByNetwork = null, catalog, toolCount, powSlugs, powDifficulty, prices }) {
   const powEligible = [...powSlugs];
+  // The chains this instance takes, from the networks it enabled at boot (not
+  // the full rail table): a self-host on one chain names one chain.
+  const enabled = new Set((networks || []).map((n) => String(n).toLowerCase()));
+  const rails = RAILS.filter((r) => enabled.has(railKey(r)));
+  const usdcRails = rails.filter((r) => r.asset === "USDC").map((r) => r.name);
+  const otherRails = rails.filter((r) => r.asset !== "USDC");
+  const railsNote = `x402 settlements use ${[usdcRails.length ? `USDC on ${usdcRails.join(", ")}` : "", ...otherRails.map((o) => `${o.asset}${o.asset === "USDG" ? " (Global Dollar)" : ""} on ${o.name}`)].filter(Boolean).join("; plus ")}.${rails.some((r) => r.chainId) ? " Gas is sponsored by the facilitator on EVM chains - callers need only the stablecoin." : ""}`;
+  // Prices named in prose are read from the price table, never typed.
+  const usdOf = (slug) => (prices && Number(prices[slug]) > 0 ? `$${Number(prices[slug]) < 0.01 ? Number(prices[slug]).toFixed(3) : Number(prices[slug]).toFixed(2)}` : null);
+  const chatFrom = usdOf("v1-chat-nano"), embedAt = usdOf("v1-embeddings");
+  const gatewayPrices = [chatFrom ? `flat-priced chat from ${chatFrom}/call` : "", embedAt ? `embeddings ${embedAt}` : ""].filter(Boolean).join(", ");
   return {
     spec: "agent402-service-manifest/1",
     // x402scan compatibility (Merit-Systems/x402scan docs/DISCOVERY.md): its
@@ -81,7 +94,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     about: `${REPO}#agent402-in-the-x402-ecosystem`,
     name: "Agent402.Tools",
     summary:
-      `Agent402.Tools - open-source, self-hostable, x402 + MPP (+ MCP server): 500+ pay-per-call tools for AI agents in one integration (the applied layer of Agentic Finance) - browser, search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, ${SKILL_PACKS.length} curated multi-tool skill packs callable as MCP prompts, wallet-keyed memory, and an OpenAI-compatible LLM gateway at /v1 (flat-priced chat from $0.003/call, embeddings $0.002 - no API key, the wallet is the account). Free via proof-of-work, or pay per call in USDC via x402 or over MPP (native Tempo, Base/Celo USDC, cards on routes of $0.50 or more).`,
+      `Agent402.Tools - open-source, self-hostable, x402 + MPP (+ MCP server): 500+ pay-per-call tools for AI agents in one integration (the applied layer of Agentic Finance) - browser, search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, ${SKILL_PACKS.length} curated multi-tool skill packs callable as MCP prompts, wallet-keyed memory, and an OpenAI-compatible LLM gateway at /v1 (${gatewayPrices ? `${gatewayPrices} - ` : ""}no API key, the wallet is the account). Free via proof-of-work, or pay per call in USDC via x402 or over MPP (native Tempo, Base/Celo USDC, cards on routes of $0.50 or more).`,
     // The MPP methods the 402 offers, in its order (src/mpp-offers.js - the
     // same source /openapi.json x-payment-info and /llms.txt read).
     mpp: mppMethodsSummary(),
@@ -101,12 +114,12 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     ...(process.env.BASE_BUILDER_CODE ? { builderCode: process.env.BASE_BUILDER_CODE } : {}),
     baseApp: "6a3dd86ca341d86b910769fb",
     ecosystem: {
-      chains: RAIL_CHAIN_NAMES,
+      chains: rails.map((r) => r.name),
       primaryChain: "Base",
       primaryChainId: 8453,
       currency: "USDC",
       protocol: "x402",
-      note: RAILS_NOTE,
+      note: railsNote,
       // The note above is catalog-wide; these routes take fewer chains, and an
       // agent should learn that here rather than from a refused payment.
       restrictedRoutes: "Identity-bound routes (the payer's signed EIP-3009 authorization is the identity) and long-running routes settle on EVM chains only; credits and Tempo are refused on the identity-bound ones. /api/pricing lists each restricted route's networks, and its 402 offers only those.",
@@ -118,7 +131,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       "Open-source and self-hostable - read every line, run it yourself (AGPL-3.0).",
       `One integration covers all 500+ tools - no per-service SDKs or signups.`,
       // Prices read from the product tables, never typed; credits are not on sale.
-      `People pay too: finished reports by card at /reports (${cardReportPriceRange(HUMAN_PRODUCTS).text} by card; an agent pays the tool price per call, ${agentReportPriceRange().text}) and monitors at /monitors (${reportLadderProse({ monitorProducts: MONITOR_PRODUCTS }).monthly} a month).`,
+      `People pay too: finished reports by card at /reports (${cardReportPriceRange(HUMAN_PRODUCTS).text} by card; an agent pays the tool price per call, ${agentReportPriceRange().text} for the model-backed reports) and monitors at /monitors (${reportLadderProse({ monitorProducts: MONITOR_PRODUCTS }).monthly} a month).`,
       "Two-sided: also ships agent402-tollbooth, an open pay-per-crawl gate for the demand side of x402.",
       "Utility tools run as code with no language model writing the answer, and every route publishes a full OpenAPI schema. The /v1 gateway (metered and flat tiers), the report products and the media tools are model-backed and say so.",
       "Free without a wallet via proof-of-work on the pure-CPU tools.",
@@ -177,8 +190,8 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
           "the source of a Tempo MPP credential (a did:pkh address): to classify the payer of a sale",
           "the payer named in the facilitator's settlement receipt: recorded with the sale when the payment itself names none we can verify",
         ],
-        retains: "each sale's payer address, settlement transaction, route and price, in the sales ledger; payer addresses are never published",
-        note: "Optional x402 token annotation fields (resource URL, description, reason) are not parsed, logged, or retained.",
+        retains: "each sale's payer address, settlement transaction, route and price, in the sales ledger; the ledger's payer list is not published, while pages that show individual on-chain payments show them as the chain records them (shortened payer addresses), see /terms",
+        note: "The optional x402 annotation fields description and reason are not read, logged or retained. On a refused payment the resource URL the payment names is recorded in failure telemetry.",
         policy: `${baseUrl}/privacy`,
       },
     },
@@ -207,7 +220,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     },
     mcp: {
       remoteConnector: `${baseUrl}/mcp`,
-      remoteNote: "Streamable HTTP, no auth - paste into Claude, Claude Code, Cursor, ChatGPT (Pro+), or VS Code (GitHub Copilot MCP) custom connectors. Pure-CPU tools run free (rate-limited).",
+      remoteNote: "Streamable HTTP, no auth - paste into any MCP host that accepts a custom remote connector. Pure-CPU tools run free (rate-limited).",
       package: "agent402-mcp",
       registry: `https://registry.modelcontextprotocol.io/v0/servers?search=${REPO_NAMESPACE}/agent402`,
     },
@@ -266,7 +279,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
         url: `${baseUrl}/api/route`,
         body: { query: "ocr image", top: 3, include: "external" },
       },
-      sources: ["self", "Coinbase CDP Bazaar"],
+      sources: ["self", "public x402 discovery registry"],
       // Read from the crawler's own timers; "crawl: 300" stood here while the
       // crawler ran every 1800 s.
       refreshSeconds: { discovery: DISCOVERY_INTERVAL_SECONDS, crawl: CRAWL_INTERVAL_SECONDS, leaderboard: 3600 },
@@ -296,15 +309,16 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       // schedule asks for 15 and is delivered far less often, so 15 was the
       // request, not the cadence.
       productionHeartbeatMinutes: 5,
-      productionHeartbeat: "a Cloudflare cron probes every 5 minutes; a GitHub schedule adds its own observations at irregular intervals; per-component observation counts are at /api/status",
+      productionHeartbeat: "an outside cron on separate infrastructure probes every 5 minutes; a second, scheduled observer adds its own observations at irregular intervals; per-component observation counts are at /api/status",
       // deterministic: true was false for the /v1 gateway tiers, every report
       // product, and the image, speech, transcription, embedding and
       // AI-answer tools. The string says which is which.
       deterministic: "most tools are pure deterministic code with no model in their path; the /v1 gateway tiers, the report products and the image, speech, transcription, embedding and AI-answer tools are model-backed and marked modelBacked in the catalog",
-      // Not a refund program: settlement runs after the handler and only
-      // completes for an under-400 response, so an error cancels payment in
-      // the middleware itself - there is nothing to claim back.
-      failedCallsNeverCharged: "structural",
+      // A sentence, not an absolute: on x402 settlement runs after the handler
+      // and only completes for an under-400 response, so an error cancels
+      // payment in the middleware itself. A Tempo push payment is final before
+      // the call, so its failure is booked as owed instead.
+      failedCalls: "not charged on x402: settlement runs after the handler and only for an under-400 response; a Tempo transfer sent before the call is final, and a failed call it paid for is recorded as a refund owed to that wallet",
       details: `${baseUrl}/api/reliability`,
     },
   };
@@ -367,13 +381,13 @@ export function reliabilityReport({ baseUrl, network, wallet, stats, observedSta
         // cadence as a schedule, not as a measurement. The two walk different
         // challenges, which is why /status judges paid-call per observer
         // (stateFromSources in src/status-store.js) and the claim says so.
-        claim: "Two independent observers outside production (a GitHub schedule and a Cloudflare cron on separate infrastructure) probe the live instance - health, catalog, MCP, the 402 paywall, rails and the proof-of-work paid path - and file a public issue on failure. The Cloudflare cron runs every 5 minutes and the GitHub schedule adds its own runs; the paid path is walked end to end by both observers, the GitHub schedule on the challenge a buyer is issued and the Cloudflare cron on a low-difficulty probe challenge every 5 minutes, and a failure either records stands until that same observer sees the path work again. Per-component uptime and observation counts are published at /api/status.",
+        claim: "Two independent observers outside production (a scheduled CI job and an outside cron, on separate infrastructure) probe the live instance - health, catalog, MCP, the 402 paywall, rails and the proof-of-work paid path - and file a public issue on failure. The outside cron runs every 5 minutes and the scheduled CI job adds its own runs; the paid path is walked end to end by both observers, the CI job on the challenge a buyer is issued and the outside cron on a low-difficulty probe challenge every 5 minutes, and a failure either records stands until that same observer sees the path work again. Per-component uptime and observation counts are published at /api/status.",
         verify: `${baseUrl}/health`,
         evidence: `${REPO}/issues?q=label%3Aheartbeat`,
       },
       {
-        claim: "A daily canary makes a real $0.001 USDC purchase against production to prove the paid path settles end-to-end.",
-        verify: `${baseUrl}/api/stats`,
+        claim: "A daily paid canary buys real calls through every on-chain payment rail against production to prove each paid path settles end to end.",
+        verify: `${baseUrl}/status`,
         evidence: wallet ? `${explorer}/address/${wallet}#tokentxns` : null,
       },
       {

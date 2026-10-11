@@ -1,10 +1,10 @@
 **[[Home]]**
 
-**Using it (for agents / buyers)**
+**For agents and buyers**
 - [[Getting Started]]
 - [[Agentic Finance]]
 - [[Why Pay Here|Why-Pay-Here]]
-- [[Reports, Monitors and Credits|Reports-and-Monitors]]
+- [[Reports and Monitors|Reports-and-Monitors]]
 - [[Paying with x402]]
 - [[Paying with MPP]]
 - [[Robinhood Chain (USDG)|Robinhood-Chain]]
@@ -31,7 +31,6 @@
 - [[Pay-per-crawl]] - what it is, install, modes
 - [[Pay-per-crawl Walkthrough]] - 5-min hands-on
 - [[Tollbooth for Agencies|Tollbooth-for-Agencies]] - many-site playbook
-- [Try Tollbooth Cloud](https://agent402.tools/tollbooth/cloud) (managed)
 
 **Website & Developer**
 - [Reports](https://agent402.tools/reports) · [Monitors](https://agent402.tools/monitors) - by card
@@ -48,7 +47,7 @@
 - [[Security Model]]
 - [[Operations]]
 - [[Self-Hosting]]
-- [[API Reference|API-Reference]]
+- [[API guide|API-Reference]]
 
 **[[FAQ]]**
 

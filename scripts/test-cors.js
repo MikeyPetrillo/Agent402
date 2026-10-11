@@ -18,7 +18,7 @@ for (const p of ["/api/hash", "/api/find", "/v1/chat/completions", "/.well-known
   ok(corsAllowsPath(p), `machine surface allowed: ${p}`);
 // HTML pages are read on our own origin; nothing cross-origin needs them, and
 // they render third-party seller text.
-for (const p of ["/", "/marketplace", "/reports", "/why", "/tools/hash"])
+for (const p of ["/", "/marketplace", "/reports", "/docs", "/tools/hash"])
   ok(!corsAllowsPath(p), `page surface NOT allowed: ${p}`);
 // `/mcp` is NOT ours: src/mcp-http.js sets its own complete CORS including
 // DELETE (session termination) and the Mcp-Session-Id expose header. Listing

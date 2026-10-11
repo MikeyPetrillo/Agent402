@@ -6,7 +6,10 @@
 // Import once: the first database load of a document that has no row yet reads
 // the file it used to live in, stores it, and records the import, so a deploy
 // that turns the database on carries every store across without an operator
-// step. The file is left in place until the volume goes.
+// step. The file is left in place until the volume goes. An import the
+// database could not take (a timed-out connection, a statement limit) is a
+// failed load, never "no file": the document is not loaded empty over a file
+// it never carried across (see the failed-load note below).
 //
 // Writes are awaited by callers that must know (an operator listing answers
 // 503 when its write failed) and fire-and-forget elsewhere, logged either way.
@@ -45,7 +48,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { documents, imports, onStateDbRecovered, setUnloadedStoresProbe, setUnsavedStoresProbe, stateDbEnabled, stateDbSchema, stateQuery } from "./state-db.js";
+import { documents, imports, onStateDbRecovered, setUnloadedStoresProbe, setUnsavedStoresProbe, stateDbEnabled, stateDbSchema, stateQuery, withImportSlot } from "./state-db.js";
 
 /** Returned by an update() mutator to leave the stored body unchanged. */
 export const SKIP_UPDATE = Symbol("json-document.skip-update");
@@ -331,20 +334,38 @@ export function createJsonDocument({ name = null, file = null, log = console.war
     }
   }
 
+  /**
+   * The one-time import. Resolves the imported body, or null when there is
+   * nothing to import (no file, importing off, or a file that does not parse,
+   * which is named on failLog). A database failure THROWS: the caller's read
+   * fails, so the document stays unloaded and is re-read in the background,
+   * instead of loading empty over a file that was never carried across.
+   */
   async function importOnce() {
     if (!importFromFile || !file || !existsSync(file)) return null;
-    try {
-      const { body, bytes } = readJsonFile(file);
-      // Put-if-absent: two containers booting at once cannot overwrite a row
-      // the other one already imported and advanced.
-      await documents.putIfAbsent(docName, body);
-      await imports.mark(docName, { source: file, bytes });
-      say(`imported ${bytes} bytes from ${file}`);
-      return body;
-    } catch (e) {
-      say(`import from ${file} failed: ${String(e?.message || e).slice(0, 120)}`);
-      return null;
+    let parsed;
+    try { parsed = readJsonFile(file); }
+    catch (e) {
+      if (e?.code === "ENOENT") return null; // removed between the check and the read
+      if (e instanceof SyntaxError) { alert(`file ${file} is unreadable (${String(e.message).slice(0, 120)}); not imported`); return null; }
+      throw e; // an I/O error is not "no file": the load fails and is retried
     }
+    const { body, bytes } = parsed;
+    try {
+      // One import at a time per slot (state-db's withImportSlot): a first
+      // boot importing every store at once never takes every pooled connection.
+      await withImportSlot(async () => {
+        // Put-if-absent: two containers booting at once cannot overwrite a row
+        // the other one already imported and advanced.
+        await documents.putIfAbsent(docName, body);
+        await imports.mark(docName, { source: file, bytes });
+      });
+    } catch (e) {
+      alert(`import from ${file} failed: ${String(e?.message || e).slice(0, 120)}; the document stays unloaded and is re-read`);
+      throw e;
+    }
+    say(`imported ${bytes} bytes from ${file}`);
+    return body;
   }
 
   api = {

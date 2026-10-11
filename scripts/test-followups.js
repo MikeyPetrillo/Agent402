@@ -7,7 +7,8 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFollowups, STEP_DELAYS_MS } from "../src/followups.js";
+import { readFileSync } from "node:fs";
+import { createFollowups, STEP_DELAYS_MS, ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "../src/followups.js";
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error(`FAIL: ${m}`); process.exit(1); } };
@@ -77,10 +78,69 @@ mailOk = true;
 
 // stats, persistence, disabled
 const st = fu.stats();
-ok(st.total === 5 && !JSON.stringify(st).includes("@"), "stats are counts only");
+ok(st.total === 4 && !fu._store().seqs.cs_1 && !JSON.stringify(st).includes("@"), "stats are counts only (cs_1, finished over 30 days ago, was removed)");
 const fu2 = createFollowups({ storePath: join(dir, "f.json"), sendEmail, monitorFor, samples, secret: "s3", now, log: () => {} });
-ok(fu2._store().seqs.cs_1?.sent.another, "the store survives a restart");
+ok(fu2._store().seqs.cs_2?.sent.another, "the store survives a restart");
 const off = createFollowups({ storePath: join(dir, "off.json"), sendEmail, secret: "", now, log: () => {} });
 ok(off.enqueue({ sessionId: "x", email: "a@b.co" }) === null && (await off.sendFailed({ email: "a@b.co", label: "x" })) === false, "no secret -> nothing enqueued, nothing sent (links would be forgeable)");
+
+// ---- address retention: deleted when the sequence ends ------------------------
+{
+  const d2 = mkdtempSync(join(tmpdir(), "followups-ret-"));
+  const file = join(d2, "f.json");
+  let c = 1_900_000_000_000; const n2 = () => c;
+  const sent2 = []; let okSend = true;
+  const f = createFollowups({ storePath: file, sendEmail: async (m) => { sent2.push(m); return okSend; }, monitorFor, samples, secret: "s3", now: n2, log: () => {} });
+  const onDisk = () => JSON.parse(readFileSync(file, "utf8"));
+  const flush = () => f.flush();
+  // a: both steps sent -> the address is gone from memory and from the file
+  f.enqueue({ sessionId: "ra_1", email: "keep@example.com", product: "domain-audit", kind: "domain", label: "Audit", input: "a.com" });
+  c += STEP_DELAYS_MS.monitor + 1000; await f.tick();
+  ok(f._store().seqs.ra_1.email === "keep@example.com", "retention: the address stays while a follow-up is still to be sent");
+  c += STEP_DELAYS_MS.another; await f.tick(); await flush();
+  ok(sent2.length === 2 && f._store().seqs.ra_1.email === null && !JSON.stringify(onDisk()).includes("keep@example.com"), "retention: the final follow-up deletes the stored address (memory and file)");
+  // b: no monitor for the kind -> the day-7 email is still the last; address gone after it
+  f.enqueue({ sessionId: "ra_2", email: "nomon@example.com", product: "research", kind: "research", label: "Research", input: "q" });
+  c += STEP_DELAYS_MS.another + 1000; await f.tick(); await f.tick(); await flush();
+  ok(f._store().seqs.ra_2.sent.monitor === "no-monitor" && f._store().seqs.ra_2.email === null && !JSON.stringify(onDisk()).includes("nomon@example.com"), "retention: a sequence with no monitor step deletes the address after its one email");
+  // c: stop link and repeat buyer delete the address at once
+  f.enqueue({ sessionId: "ra_3", email: "stop@example.com", product: "d", kind: "domain", label: "D", input: "s.com" });
+  c += STEP_DELAYS_MS.monitor + 1000;
+  await f.tick(); await flush();
+  const lk = sent2[sent2.length - 1].text.match(/stop\?id=([^&]+)&k=([A-Za-z0-9_-]+)/);
+  ok(lk && f.stop(decodeURIComponent(lk[1]), lk[2]).ok, "retention: setup, the signed stop link works");
+  await flush();
+  ok(f._store().seqs.ra_3.email === null && !JSON.stringify(onDisk()).includes("stop@example.com"), "retention: a stopped sequence keeps no address");
+  // d: a bouncing address: MAX_SEND_FAILURES failed deliveries end the sequence and delete it
+  okSend = false;
+  f.enqueue({ sessionId: "ra_4", email: "bounce@example.com", product: "d", kind: "domain", label: "D", input: "b.com" });
+  c += STEP_DELAYS_MS.monitor + 1000;
+  for (let i = 0; i < MAX_SEND_FAILURES - 1; i++) await f.tick();
+  ok(f._store().seqs.ra_4.email === "bounce@example.com" && !f._store().seqs.ra_4.stopped, `retention: ${MAX_SEND_FAILURES - 1} failed deliveries keep retrying`);
+  await f.tick(); await flush();
+  const r4 = f._store().seqs.ra_4;
+  ok(r4.stopped && r4.stoppedReason === "undeliverable" && r4.email === null && !JSON.stringify(onDisk()).includes("bounce@example.com"), `retention: the ${MAX_SEND_FAILURES}th failed delivery ends the sequence and deletes the address`);
+  const before4 = sent2.length; okSend = true; await f.tick();
+  ok(sent2.filter((m) => m.to === "bounce@example.com").length === MAX_SEND_FAILURES && sent2.length === before4, "retention: an undeliverable sequence is never tried again");
+  // e: a success resets the failure count
+  okSend = false;
+  f.enqueue({ sessionId: "ra_5", email: "flaky@example.com", product: "d", kind: "domain", label: "D", input: "f.com" });
+  c += STEP_DELAYS_MS.monitor + 1000;
+  for (let i = 0; i < MAX_SEND_FAILURES - 1; i++) await f.tick();
+  okSend = true; await f.tick();
+  ok(f._store().seqs.ra_5.failures === 0 && f._store().seqs.ra_5.email === "flaky@example.com", "retention: a delivered step resets the failure count");
+  // f: backstop: whatever state a sequence is in, its address is gone ADDRESS_MAX_AGE_MS after purchase
+  f.enqueue({ sessionId: "ra_6", email: "stuck@example.com", product: "d", kind: "domain", label: "D", input: "x.com" });
+  f._store().seqs.ra_6.sent = { monitor: "sending:1:stuck" }; // a claim whose send never confirmed
+  c += ADDRESS_MAX_AGE_MS - 1000; await f.tick();
+  ok(f._store().seqs.ra_6.email === "stuck@example.com", "retention: before the backstop the stuck sequence still holds its address");
+  c += 2000; await f.tick(); await flush();
+  const r6 = f._store().seqs.ra_6;
+  ok(r6.email === null && r6.stopped && r6.stoppedReason === "expired" && !JSON.stringify(onDisk()).includes("stuck@example.com"), "retention: ADDRESS_MAX_AGE_MS after purchase the address is deleted whatever the state");
+  // g: finished records leave the store RECORD_KEEP_MS after purchase
+  c += RECORD_KEEP_MS; await f.tick(); await flush();
+  ok(Object.keys(f._store().seqs).length === 0 && Object.keys(onDisk().seqs).length === 0, "retention: finished records are removed after RECORD_KEEP_MS");
+  ok(ADDRESS_MAX_AGE_MS > STEP_DELAYS_MS.another + 2 * DAY, "retention: the backstop leaves room for the last step to be sent");
+}
 
 console.log(`\nPASS - ${pass} checks (post-purchase follow-ups: two emails at most, stoppable, failure notice)`);

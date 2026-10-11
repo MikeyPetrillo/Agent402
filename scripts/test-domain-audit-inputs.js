@@ -4,7 +4,8 @@
 // for CAA/DNSSEC, advisory cross-origin headers, CSP quality, www/apex twin,
 // server-header severity, and JSON on the report link. Offline.
 import { readFileSync } from "node:fs";
-import { PROVIDER_DKIM_SELECTORS, providerForMx } from "../src/tools/network-kit.js";
+import { PROVIDER_DKIM_SELECTORS, providerForMx, NETWORK_TOOLS } from "../src/tools/network-kit.js";
+import { promises as dnsPromises } from "node:dns";
 import { analyzeSecurity, cspQuality } from "../src/tools/network-kit2.js";
 import { DNS_HOSTS, dnsHostFor, probeWwwPair, reportMailboxesFrom, dmarcFacts } from "../src/tools/domain-audit-kit.js";
 let pass = 0, fail = 0;
@@ -26,6 +27,14 @@ ok(dnsHostFor(["ada.ns.cloudflare.com"])?.dnssec === true, "Cloudflare: DNSSEC s
 ok(dnsHostFor(["ns-123.awsdns-45.org"])?.host === "Amazon Route 53", "Route 53 matched on the awsdns- infix");
 ok(/Name\.com/.test(dnsHostFor(["ns1kpv.name.com"])?.host) && dnsHostFor(["ns1kpv.name.com"])?.caa === null && /Railway/.test(dnsHostFor(["ns1kpv.name.com"])?.note), "name.com nameservers: CAA unknown with the Railway-registration note (the real havok.holdings host)");
 ok(dnsHostFor(["ns1.some-registrar.example"]) === null, "unrecognised nameservers -> null (report says: check your host)");
+{
+  const ns1 = dnsHostFor(["dns1.p08.nsone.net", "dns2.p08.nsone.net"]);
+  ok(/NS1/.test(ns1?.host) && ns1.dnssec === null && ns1.platformCerts === false, "nsone.net nameservers are not asserted to be Netlify: DNSSEC unknown, no platform certificates");
+  ok(dnsHostFor(["dns1.p01.dsp.netlify.com"])?.host === "Netlify", "netlify.com nameservers are Netlify");
+  const multi = dnsHostFor(["dns1.p08.nsone.net", "ns-1283.awsdns-32.org"]);
+  ok(/multi-provider/.test(multi?.host) && /NS1/.test(multi.host) && /Route 53/.test(multi.host), "a zone on two recognised providers is reported as multi-provider, naming both");
+  ok(multi.caa === true && multi.dnssec === null && multi.platformCerts === false && /published at each/.test(multi.note), "multi-provider: a capability holds only when every provider has it, and no platform issues the certificates");
+}
 ok(DNS_HOSTS.every((h) => ["boolean", "object"].includes(typeof h.caa) && h.ns.length), "every host row carries a caa verdict (true/false/null) and suffixes");
 
 // 3. Cross-origin headers are advisory, CSP quality is scored.
@@ -101,6 +110,26 @@ ok(/app\.get\("\/reports\/public\/:publicId", \(req, res, next\) => \{\s*if \(wa
   const g = dmarcFacts({ raw: "v=DMARC1; p=reject; sp=none; aspf=s; ruf=mailto:f@x.test; fo=1", policy: "reject", percent: 100, valid: true });
   ok(/tags present: p=reject sp=none aspf=s ruf=mailto:f@x.test fo=1/.test(g) && /defaults apply\): adkim \(default r\), ri \(default 86400\), pct \(default 100\)$/.test(g), "a record with explicit tags lists only the rest as defaults");
   ok(/record: "v=DMARC1; p=reject; sp=none; aspf=s; ruf=mailto:f@x.test; fo=1"/.test(g), "the raw record rides along verbatim");
+}
+
+// ---- DMARC facts through the caller path: the email-deliverability tool the
+// audit calls must hand over the record, or every tag reads as absent.
+{
+  const realResolve = dnsPromises.resolve;
+  const rec = "v=DMARC1; p=quarantine; sp=reject; pct=100; rua=mailto:dmarc@x.test; ruf=mailto:dmarc@x.test; fo=1";
+  dnsPromises.resolve = async (host, type) => {
+    if (type === "MX") return [{ exchange: "x-test.mail.protection.outlook.com", priority: 0 }];
+    if (type === "TXT" && host === "_dmarc.x.test") return [[rec]];
+    if (type === "TXT" && host === "x.test") return [["v=spf1 -all"]];
+    const e = new Error("queryTxt ENOTFOUND"); e.code = "ENOTFOUND"; throw e;
+  };
+  try {
+    const email = await NETWORK_TOOLS.find((t) => t.slug === "email-deliverability").handler({ domain: "x.test" });
+    ok(email.dmarc.raw === rec, "the email-deliverability tool returns the DMARC record it parsed");
+    const f = dmarcFacts(email.dmarc);
+    ok(/tags present: p=quarantine sp=reject pct=100 rua=mailto:dmarc@x.test ruf=mailto:dmarc@x.test fo=1/.test(f), "the audit's DMARC facts list the record's own tags on the real tool output");
+    ok(!/no ruf tag/.test(f) && !/sp \(not set/.test(f), "a published ruf and sp are never described as absent");
+  } finally { dnsPromises.resolve = realResolve; }
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

@@ -51,6 +51,9 @@ LLC: credit the entity, never a personal name.
   `docs/`: ecosystem-listing copy.
 
 ## Conventions
+- **UI work reads `DESIGN.md` first** (tokens, type scale, components, voice); page modules use
+  its `var(--token)` and `var(--fs-*)` values, never raw hex or literal sizes
+  (`scripts/test-design-tokens.js`).
 - A tool is `{ route, name, slug, category, price, description, tags, discovery:{inputSchema,
   input/example}, handler }`. `handler(input)` returns JSON or throws an `Error` with
   `.statusCode`.

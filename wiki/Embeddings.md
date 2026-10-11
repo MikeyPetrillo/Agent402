@@ -2,7 +2,7 @@
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-> **Looking for the OpenAI wire path?** `POST /v1/embeddings` ($0.002) speaks the standard OpenAI embeddings format - batch up to 64 inputs / 16k chars per request, `dimensions` and `encoding_format` pass through, and byte-identical repeats within 10 minutes are served **free** automatically (embeddings are deterministic; opt out with `cache: false`). See [[LLM Gateway (OpenAI /v1)|LLM-Gateway]]. The `/api/embed*` tools below remain available as the simpler custom-JSON shape.
+> **Looking for the OpenAI wire path?** `POST /v1/embeddings` ($0.002) speaks the standard OpenAI embeddings format - batch up to 64 inputs / 16k chars per request, `dimensions` and `encoding_format` pass through, and byte-identical repeats within 10 minutes are served **free** (except a Tempo transfer you send before the call, which is final when sent) automatically (embeddings are deterministic; opt out with `cache: false`). See [[LLM Gateway (OpenAI /v1)|LLM-Gateway]]. The `/api/embed*` tools below remain available as the simpler custom-JSON shape.
 
 Two tiers of text embedding generation, paywalled via x402. Send text, get back a vector for semantic search, RAG, clustering, or similarity. The operator's `OPENAI_API_KEY` handles upstream auth.
 

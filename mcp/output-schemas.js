@@ -496,7 +496,7 @@ export function mcpInstallHints(baseUrl) {
       },
     },
     npm: "npx -y agent402-mcp",
-    smithery: "Paste the hosted URL at https://smithery.ai/new (or: smithery mcp publish \"https://agent402.tools/mcp\" -n @MikeyPetrillo/agent402). Submission is external; Agent402 does not auto-publish.",
+    smithery: `Paste ${hosted} into the add-server form at https://smithery.ai/new. Submission is external; Agent402 does not auto-publish.`,
     maintainer: "Havok Holdings LLC",
   };
 }
@@ -506,7 +506,7 @@ export function mcpInstallHints(baseUrl) {
  * server.describe. Keep tool names listed-only (dotted Smithery form) (self-consistency) and lead
  * with search/answer as the front door.
  */
-export function mcpInitializeInstructions(baseUrl, { decide = false } = {}) {
+export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false } = {}) {
   const install = mcpInstallHints(baseUrl);
   const hosted = install.hostedUrl;
   return [
@@ -520,9 +520,11 @@ export function mcpInitializeInstructions(baseUrl, { decide = false } = {}) {
     "Orientation: call server.describe. Payment rails / wallet setup: call payment.info.",
     "Missing a tool: call demand.request. Ecosystem sellers: call sellers.list.",
     `Install (npm + wallet, pays for web.search, web.answer and the rest): ${install.claudeCodeNpm}`,
-    `No wallet yet (hosted, proof-of-work tools only): ${install.claudeCodeHosted}`,
+    // The hosted line says what that connector takes: with MPP on it, a wallet
+    // can pay the other tools there too.
+    `${mpp ? "Hosted (proof-of-work tools free; the rest payable there over MPP from a wallet)" : "No wallet yet (hosted, proof-of-work tools only)"}: ${install.claudeCodeHosted}`,
     `Cursor mcp.json: { "mcpServers": { "agent402": { "url": "${hosted}" } } }`,
-    `Why pay here (usage priced under a quoted ceiling, a failed call is not charged and the receipt proves it, keyed retries never pay twice, one key for tools + models + reports, no wallet needed for the proof-of-work tools or a report by card, proof at /status and /revenue): ${baseUrl}/why`,
+    `Why pay here (usage priced under a quoted ceiling, a failed call is not charged and the receipt proves it, keyed retries never pay twice, one key for tools + models + reports, no wallet needed for the proof-of-work tools or a report by card, proof at /status and /revenue): ${baseUrl}/#why`,
     `Docs: ${baseUrl}/llms.txt · ${baseUrl}/api/find?q=… · status ${baseUrl}/status`,
   ].join("\n");
 }

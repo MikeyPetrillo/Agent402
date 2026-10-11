@@ -113,10 +113,10 @@ const KNOWN_NON_CATALOG = new Set([
   "/api/reliability", "/api/status", "/api/status/probe", "/api/leaderboard", "/api/analytics",
   "/api/cacheable", "/api/cache-stats", "/api/pow", "/api/pow/challenge", "/api/skill-packs.json",
   "/api/index/register", "/api/x402-economy", "/api/gateway-status", "/api/selfcheck",
-  "/api/tollbooth/waitlist", "/api/wish", "/api/route/execute", "/api/skill-packs",
+  "/api/wish", "/api/route/execute", "/api/skill-packs",
   "/api/health", "/api/route/external-debug", "/api/market",
   "/api/mpp-index", "/api/mpp-leaderboard", "/api/mpp-index/register",
-  // Free refund-ledger lookup by settlement tx (app.get/post in server.js), quoted by /why.
+  // Free refund-ledger lookup by settlement tx (app.get/post in server.js), quoted by /docs#why.
   "/api/refunds/lookup",
   // Card front door (Stripe): served outside CATALOG, mounted with STRIPE_SECRET_KEY.
   "/api/buy", "/api/subscribe", "/api/credits/checkout", "/api/credits/claim", "/api/credits/balance",

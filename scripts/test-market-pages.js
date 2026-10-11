@@ -3,7 +3,7 @@
 // src/market-page.js already covers /stellar and /algorand (see
 // scripts/test-stellar-page.js / test-algorand-page.js); this file locks
 // down the CHAIN_PAGES entries added alongside them. No server, no network.
-import { marketSellers, marketSellersAll, marketPage, marketPanelHtml, CHAIN_PAGES, marketFilterBar } from "../src/market-page.js";
+import { marketSellers, marketSellersAll, marketPage, marketPanelHtml, CHAIN_PAGES, marketFilterBar, sellParagraphHtml, dispatchBadge, routerChainsProse, withPremium } from "../src/market-page.js";
 import { sitemapPages, sitemapXml, llmsTxt } from "../src/seo.js";
 import { serviceManifest } from "../src/discovery.js";
 import { readFileSync } from "node:fs";
@@ -81,7 +81,7 @@ for (const c of NEW_CHAINS) {
   const base = (sel, act) => marketPage("base", "https://agent402.tools", { snapshot, rail: null, activity: act, selectedSeller: sel, wallet: "0x1111111111111111111111111111111111111111" });
 
   ok(/EXT1\.EXAMPLE · PAST 30 DAYS/.test(base({ local: false, host: "ext1.example", name: "Ext One" }, activity)), "base: external selectedSeller re-scopes the Activity label to the seller host");
-  ok(base({ local: false, host: "ext1.example", name: "Ext One" }, activity).includes("this seller's advertised x402 payTo wallet"), "base: external scope note names the seller's payTo, not the host wallet");
+  ok(base({ local: false, host: "ext1.example", name: "Ext One" }, activity).includes("this one advertised x402 payTo wallet"), "base: external scope note names the seller's payTo, not the host wallet");
   ok(/THIS HOST · PAST 30 DAYS/.test(base({ local: true }, activity)), "base: local selection keeps the Activity label on THIS HOST");
   ok(base({ local: false, host: "ext1.example", name: "Ext One" }, null).includes("activity unavailable for this seller"), "base: external pick with no scannable activity shows the honest per-seller unavailable line");
   // marketSellers passes payToByNetwork through so the route can resolve a
@@ -99,7 +99,7 @@ for (const c of NEW_CHAINS) {
   // Scoped to the page's own rail manifest + 402 accept sample - the shared
   // site chrome (ledgerShell's sitewide JSON-LD) legitimately mentions USDC
   // for the other six rails, so a blanket absence check would be wrong.
-  ok(html.includes('"asset"</span>: "USDG"'), "robinhood: 402 accept sample carries USDG, not USDC");
+  ok(html.includes('"asset"</span>: "&lt;USDG token contract address&gt;"'), "robinhood: 402 accept sample names the USDG contract address, not a bare symbol");
   const manifestIdx = html.indexOf("RAIL MANIFEST");
   const manifestBlock = html.slice(manifestIdx, manifestIdx + 1200); // widened for the wires row (x402 + MPP)
   ok(manifestBlock.includes("USDG") && !manifestBlock.includes("USDC"), "robinhood: rail manifest asset row reads USDG, never USDC");
@@ -131,11 +131,11 @@ for (const c of NEW_CHAINS) {
 // Provenance / sell-side copy is genuinely per-chain, not copy-pasted.
 {
   const baseHtml = marketPage("base", "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, rail: null, activity: null });
-  ok(baseHtml.includes("Coinbase CDP"), "base: sell copy names the Coinbase CDP facilitator");
+  ok(baseHtml.includes("an x402 facilitator that supports Base verifies and settles") && !/Coinbase|CDP|PayAI|Solvador|GoPlausible|molandak|OpenZeppelin/.test(baseHtml.split("Sell on Base")[1] || ""), "base: sell copy is protocol-level and names no facilitator company");
   const solanaHtml = marketPage("solana", "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, rail: null, activity: null });
   ok(solanaHtml.includes("@x402/svm"), "solana: sell copy names the SVM scheme package");
   const robinhoodHtml = marketPage("robinhood", "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, rail: null, activity: null });
-  ok(robinhoodHtml.includes("ROBINHOOD_FACILITATOR_URL"), "robinhood: sell copy names the operator-supplied facilitator env");
+  ok(robinhoodHtml.includes("Global Dollar") && !robinhoodHtml.includes("ROBINHOOD_FACILITATOR_URL") && !robinhoodHtml.includes("operator-configured"), "robinhood: sell copy names the USDG domain and no host-only env var");
   ok(baseHtml !== solanaHtml && solanaHtml !== robinhoodHtml, "provenance/sell copy differs page to page, not templated identically");
 }
 
@@ -161,7 +161,7 @@ for (const c of NEW_CHAINS) {
   ok(cardView.includes("0xabc0000000000000000000000000000000000abc"), "base: seller card shows the payTo");
   // Card headline uses the leaderboard stat (42), NOT the narrower on-chain scan
   // (40) — so the list and the card always show the same number for a seller.
-  ok(/SETTLED CALLS[\s\S]{0,140}>42</.test(cardView), "base: seller card headline uses the leaderboard stat (42 calls), matching the roster");
+  ok(/SETTLED CALLS[\s\S]{0,400}>42</.test(cardView), "base: seller card headline uses the leaderboard stat (42 calls), matching the roster");
   ok(!/SETTLED CALLS[\s\S]{0,140}>40</.test(cardView), "base: seller card headline does NOT fall back to the scoped on-chain total (40) when a leaderboard row exists");
   ok(/rolling\s+7d\s+totals/i.test(cardView), "base: seller card labels its window (rolling 7d) so leaderboard-scoped totals read honestly");
 
@@ -177,7 +177,7 @@ for (const c of NEW_CHAINS) {
   const cappedActivity = { days: 30, truncated: true, buckets: [], totals: { tx: 40, usd: 3.2, buyers: 6 } };
   const sel2 = { local: false, host: "ext2.example", name: "Ext Two" };
   const fallbackCard = marketPanelHtml("base", { snapshot: snapshot2, activity: cappedActivity, selectedSeller: sel2, leaderboardSnap });
-  ok(/SETTLED CALLS[\s\S]{0,140}>40\+</.test(fallbackCard), "base: no-leaderboard seller falls back to the on-chain total, marked a floor (40+) when the scan is capped");
+  ok(/SETTLED CALLS[\s\S]{0,400}>40\+</.test(fallbackCard), "base: no-leaderboard seller falls back to the on-chain total, marked a floor (40+) when the scan is capped");
   ok(/scan capped/i.test(fallbackCard), "base: capped on-chain fallback surfaces the 'scan capped' floor caveat on the card");
 
   // Host view (no selection) → no card, just activity.
@@ -280,7 +280,7 @@ for (const c of NEW_CHAINS) {
   // 101 rows, and the note counts INDEPENDENT sellers (120 of the 121, since
   // one is the pinned host).
   ok((capped.match(/<div data-mfb-row/g) || []).length === 101, `all view: cap renders pinned local + top 100 ranked (got ${(capped.match(/<div data-mfb-row/g) || []).length})`);
-  ok(capped.includes("this host pinned · showing the top 100 of 120 independent sellers"), "all view: cap note discloses the pin + truncation honestly");
+  ok(capped.includes("<span>this host pinned</span><span>showing the top 100 of 120 independent sellers</span>"), "all view: cap note discloses the pin + truncation honestly");
   ok(capped.includes('href="/marketplace?all=1"'), "all view: cap note links the ?all=1 escape hatch");
   ok(/<div data-mfb-row data-local="1"/.test(capped), "all view: the local seller survives the cap (ranked or appended, never dropped)");
   ok(/SELLERS LISTED<\/div><div[^>]*>120</.test(capped), "all view: SELLERS LISTED card counts the full roster (120 independent sellers, host not counted), not the capped table");
@@ -314,7 +314,7 @@ for (const c of NEW_CHAINS) {
   const selfLb = { leaderboard: [{ name: "Agent402.Tools", homepage: "https://agent402.tools", wallet: OUR_WALLET, wallets: [OUR_WALLET], callsSettled: 9876, totalUsd: 42.5, uniqueBuyers: 55 }] };
   const selfHtml = marketPage(null, "https://agent402.tools", { snapshot: { sellers: [LOCAL8, EXT] }, leaderboardSnap: selfLb, wallet: OUR_WALLET });
   ok(/Base\s*<[^>]*>\s*\+7|Base<\/[^>]+>[^<]*\+7|Base[^<]*\+7/.test(selfHtml.replace(/\s+/g, " ")), "all view: THIS HOST's Chain cell shows its rails (Base +7), not a dash");
-  ok(/9,876\s*tx/.test(selfHtml.replace(/&middot;|·/g, " ")), "all view: THIS HOST's row carries its own leaderboard tx count");
+  ok(/9,876\s*tx on-chain, our own runs included/.test(selfHtml.replace(/&middot;|·/g, " ")), "all view: THIS HOST's row carries its own leaderboard tx count, labelled as including our own runs");
   // No wallet passed → honest silence (no invented number), never a crash.
   const noWallet = marketPage(null, "https://agent402.tools", { snapshot: { sellers: [LOCAL8, EXT] }, leaderboardSnap: selfLb });
   ok(!/9,876\s*tx/.test(noWallet), "all view: without a route wallet the local row shows no tx (honest omission)");
@@ -485,6 +485,7 @@ for (const c of NEW_CHAINS) {
   // +1 for the pinned local seller, which is never part of the capped count.
   ok(rowCount(capped) === ROW_CAP + 1, `roster caps at ${ROW_CAP} + pinned local row (got ${rowCount(capped)})`);
   ok(/showing the top 100 of 150 sellers/.test(capped), "cap note states the true total (150), not the capped count");
+  ok(/class="mlr-host" title="[^"]+">/.test(capped) && /\.mlr-host\{[^}]*white-space:nowrap[^}]*text-overflow:ellipsis/.test(capped), "a seller host stays on one line, ellipsized, with the whole host in its title");
   ok(/href="\/base\?all=1"/.test(capped), "cap note links to this chain's own ?all=1, not /marketplace");
   ok(/SELLERS LISTED[\s\S]{0,200}>150</.test(capped), "SELLERS LISTED stat stays the full honest count (150 independent sellers, host not counted), unaffected by the render cap");
 
@@ -546,12 +547,12 @@ for (const c of NEW_CHAINS) {
   ok(sol.payable === 1 && sol.total === 4, `solana: identity-bound, long-running and network-pinned tools are not payable there (got ${sol.payable}/${sol.total})`);
   ok(base.payable === 4 && poly.payable === 3, "EVM rails take identity-bound and long-running tools; a pinned tool only on its own network");
   const solPage = marketPage("solana", "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, payable: sol });
-  ok(/1 of the <a href="\/tools">4 tools in the catalog<\/a> take USDC on Solana/.test(solPage) && !/Every one of the/.test(solPage), "solana page states the derived payable count, never 'every tool'");
+  ok(/1 of <a href="\/tools">our 4 tools<\/a> take USDC on Solana/.test(solPage) && !/Every one of/.test(solPage), "solana page states the derived payable count, never 'every tool'");
   const polyPage = marketPage("polygon", "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, payable: poly });
-  ok(/3 of the <a href="\/tools">4 tools in the catalog<\/a> take USDC on Polygon \(1 tool is offered on Base only\)/.test(polyPage) && !/EVM rails only/.test(polyPage), "an EVM chain page names the real reason (a route offered on Base only), never 'EVM rails only'");
+  ok(/3 of <a href="\/tools">our 4 tools<\/a> take USDC on Polygon \(1 tool is offered on Base only\)/.test(polyPage) && !/EVM rails only/.test(polyPage), "an EVM chain page names the real reason (a route offered on Base only), never 'EVM rails only'");
   ok(/\(2 identity-bound or long-running tools settle on the EVM rails only; 1 tool is offered on Base only\)/.test(solPage), "solana page names both reasons with their counts");
   const unknown = marketPage("solana", "https://agent402.tools", { snapshot: { sellers: [LOCAL] } });
-  ok(!/Every one of the|500\+ tools in the catalog/.test(unknown), "without derived figures the page claims no count");
+  ok(!/Every one of|of <a href="\/tools">our/.test(unknown), "without derived figures the page claims no count");
 
   const rows = Array.from({ length: 3 }, (_, i) => ({ host: `h${i}.example`, calls: 5, usd: 1, buyers: 2, tools: 1, routable: true }));
   const capped = marketTerminalHtml({ chainName: "Base", rows, totalSellers: 1234 });
@@ -562,7 +563,7 @@ for (const c of NEW_CHAINS) {
 
   const html = marketPage("polygon", "https://agent402.tools", { snapshot: { sellers: [LOCAL] } });
   ok(!/hourly/i.test(html) && html.includes(crawlIntervalLabel()), "chain page: crawl cadence derived from the crawler's constant, never typed as hourly");
-  for (const k of Object.keys(CHAIN_PAGES)) ok(!/(gas|fees) sponsored/.test(CHAIN_PAGES[k].sellParagraphHtml), `${k}: sell copy describes no third-party fee policy`);
+  for (const k of Object.keys(CHAIN_PAGES)) ok(!/(gas|fees) sponsored/.test(sellParagraphHtml(CHAIN_PAGES[k])), `${k}: sell copy describes no third-party fee policy`);
   ok(/buyer gas/.test(html) && !/>gas</.test(html), "rail manifest scopes gas to the buyer");
   const all = marketPage(null, "https://agent402.tools", { snapshot: { sellers: [LOCAL] } });
   ok(!/drops out on its own/.test(all) && !/no removal on request/.test(all), "marketplace: no removal claim the operator removal path contradicts");
@@ -597,6 +598,49 @@ for (const c of NEW_CHAINS) {
   ok(allCard === marketOperatorCount(null, snapshot, lb), `all-chains SELLERS LISTED card (${allCard}) = marketOperatorCount(null)`);
   const srv = readFileSync(fileURLToPath(new URL("../src/server.js", import.meta.url)), "utf8");
   ok(/sellers: marketOperatorCount\(chainKey, snapshot, board\)/.test(srv), "nav dropdown reads marketOperatorCount for its per-chain seller count");
+}
+
+
+// --- chain-page claims derived from what decides them ------------------------
+{
+  const { marketTerminalHtml } = await import("../src/market-terminal.js");
+  // Facilitator companies are not named anywhere a chain page renders its own
+  // copy (manifest, canary line, sell paragraph), and the sell paragraph links
+  // /sell and states the real roster order.
+  for (const k of Object.keys(CHAIN_PAGES)) {
+    const html = marketPage(k, "https://agent402.tools", { snapshot: { sellers: [LOCAL] } });
+    const own = html.slice(html.indexOf("RAIL MANIFEST"), html.indexOf("machine-readable"));
+    ok(!/Coinbase|CDP|PayAI|Solvador|GoPlausible|molandak|OpenZeppelin|operator-configured/.test(own), `${k}: page copy names no facilitator company`);
+    ok(!/health-based/.test(html) && /ordered by settled calls, then crawl health/.test(html), `${k}: ordering stated as the roster sorts it`);
+    ok(/<a href="\/sell">\/sell<\/a>/.test(html), `${k}: /sell is a link`);
+    ok(!/all sellers appear on \/index/.test(html), `${k}: the listed note points at /marketplace, not the retired /index`);
+    ok(!/settle latency/.test(html), `${k}: no typed settle-latency figure`);
+  }
+  // The 402's per-chain premium is in every price the page quotes.
+  ok(withPremium(0.001, 0.001) === 0.002 && withPremium(3.3, 0) === 3.3, "withPremium adds micro-dollars exactly");
+  const tools = [{ slug: "a", price: 0.001, category: "x" }, { slug: "b", price: 3.3, category: "x" }];
+  const op = marketPage("optimism", "https://agent402.tools", { snapshot: { sellers: [{ ...LOCAL, tools }] }, premiumUsd: 0.001 });
+  ok(/from \$0\.002 to \$3\.301 a call/.test(op), "optimism: the price range carries the premium the 402 adds");
+  ok(/settlement premium is in the price/.test(op), "optimism: the manifest says the buyer pays a settlement premium");
+  const plain = marketPage("base", "https://agent402.tools", { snapshot: { sellers: [{ ...LOCAL, tools }] } });
+  ok(/from \$0\.001 to \$3\.30 a call/.test(plain) && !/premium/.test(plain.split("RAIL MANIFEST")[1] || ""), "base: no premium, no premium wording");
+  // Router claims match the chains the router spends on.
+  ok(routerChainsProse(["base", "algorand", "tempo", "solana"]) === "Base, Algorand, Tempo and Solana", "router chain prose lists the configured spend chains");
+  const all = marketPage(null, "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, routerChains: ["base", "solana"] });
+  ok(/can buy from outside sellers on Base and Solana, paying on the chain you paid us on/.test(all) && !/settles with them on their chain/.test(all), "marketplace: router sentence derived from its spend chains");
+  ok(/buys on Base and Solana/.test(all), "filter-bar legend names the router's spend chains");
+  // A dispatch badge on a chain the router cannot pay on names the chain it would pay on.
+  const seller = { routerDispatchEligible: true, routerDispatchReason: "eligible", routerDispatchByChain: { base: { eligible: true, reason: "eligible" } } };
+  ok(/>dispatch via Base</.test(dispatchBadge(seller, "polygon")), "polygon: an eligible seller reads 'dispatch via Base'");
+  ok(/>dispatch</.test(dispatchBadge(seller, "base")), "base: the badge reads Base's own verdict");
+  ok(/no dispatch &middot; settlement required/.test(dispatchBadge({ ...seller, routerDispatchByChain: { base: { eligible: false, reason: "settlement_required" } }, routerDispatchEligible: false, routerDispatchReason: "settlement_required" }, "base")), "base: an ineligible verdict names its reason");
+  // The host's terminal row is unranked and its on-chain figures are labelled.
+  const term = marketTerminalHtml({ chainName: "Base", rows: [{ host: "agent402.tools", local: true, calls: 9, usd: 1, buyers: 2, tools: 5, routable: true }, { host: "x.example", calls: 5, usd: 1, buyers: 2, tools: 1, routable: true }] });
+  ok(/role="cell">host</.test(term) && /role="cell">001<\/span>\s*<span class="t-c t-c-host" role="cell"><span class="t-dot is-on" aria-hidden="true"><\/span>x\.example/.test(term), "terminal: the host row carries no rank and the first other seller is 001");
+  ok(/ours, own runs incl\./.test(term), "terminal: the host row's figures are labelled as including our own runs");
+  // The economy strip says what it counts.
+  const econ = marketPage(null, "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, economySnap: { totals: { last7d: { settlements: 5, volumeUsd: 10, payers: 2, merchants: 1 }, last30d: { settlements: 9 } } } });
+  ok(/All gasless USDC transfers on Base/.test(econ) && /not x402 volume/.test(econ), "economy strip: labelled as all EIP-3009 transfers, not x402 volume");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

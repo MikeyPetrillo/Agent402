@@ -20,8 +20,11 @@ function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } c
 
 const SYNTH = "anthropic/claude-opus-5";
 export const RECALL_MODELS = [SYNTH];
+// synthMaxTokens carries headroom over the word target (recall numbers, NDCs
+// and quoted reasons run ~3 output tokens per word; a 3,200 cap stopped for
+// length on both the first call and the retry).
 export const RECALL_TIERS = {
-  "recall-report": { price: "$0.60", maxUpstreamUsd: 0.35, perFeed: 20, synthMaxTokens: 3200, words: "~1,100" },
+  "recall-report": { price: "$0.60", maxUpstreamUsd: 0.35, perFeed: 20, synthMaxTokens: 4800, words: "~1,100" },
 };
 const SYNTH_TIMEOUT_MS = 120_000;
 const PROBE_TIMEOUT_MS = 25_000;
@@ -101,6 +104,24 @@ export async function probeRecalls(query, { perFeed = 20, scope = "all" } = {}) 
 }
 
 const byKindCount = (items, kind) => items.filter((x) => x.kind === kind).length;
+
+/** The shown records grouped by identical FDA reason wording (case, spacing
+ *  and trailing punctuation folded), largest group first:
+ *  [{ reason, records, events }].
+ *  The model groups reasons by theme; these exact counts are what its group
+ *  totals are built from, so they add up to the records shown. */
+export function reasonGroups(items) {
+  const m = new Map();
+  for (const x of items || []) {
+    const text = String(x.reason || "").replace(/\s+/g, " ").trim().replace(/\s+([.;,])$/, "$1") || "(no reason given)";
+    const key = text.toLowerCase().replace(/[\s.;,]+$/, "");
+    const g = m.get(key) || { reason: text, records: 0, eventIds: new Set() };
+    g.records++;
+    if (x.eventId) g.eventIds.add(x.eventId);
+    m.set(key, g);
+  }
+  return [...m.values()].sort((a, b) => b.records - a.records).map((g) => ({ reason: g.reason, records: g.records, events: g.eventIds.size }));
+}
 const priceUsdOf = (t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, "")) || null;
 
 function makeRecallHandlerInner(tierSlug) {
@@ -132,6 +153,8 @@ function makeRecallHandlerInner(tierSlug) {
     const shown = Object.entries(pr.totals || {}).map(([k, total]) => `${k}: ${byKindCount(pr.items, k)} of ${total}`).join(", ");
     const feedStatus = Object.entries(pr.status).map(([k, v]) => `${k}: ${v}`).join("; ");
     const numbered = pr.sources.map((s, i) => ({ n: i + 1, ...s }));
+    const reasons = reasonGroups(pr.items);
+    const reasonLines = reasons.map((g) => `- "${g.reason}": ${g.records} record${g.records === 1 ? "" : "s"}, ${g.events} event${g.events === 1 ? "" : "s"}`).join("\n");
 
     // 3) SYNTHESIZE - grounding-strict.
     const synthPrompt = `You are a product-safety analyst writing an FDA RECALL REPORT on "${query}" that will be SOLD to a paying customer. Accuracy is paramount: every fact must come from the FDA RECORDS below; a fabricated recall, firm, date or reason fails the whole report.
@@ -143,11 +166,14 @@ function makeRecallHandlerInner(tierSlug) {
 4. This is NOT medical or legal advice. Where you suggest action, keep it to: check the named product/lot against the FDA record, contact the recalling firm or a pharmacist/physician, and monitor for updates. Never tell a reader to stop or start a medication.
 5. If the records are few or zero, SAY SO plainly and do not pad. Prioritize COMPLETING the report over length.
 6. THE RECORDS BELOW ARE THE NEWEST N PER FEED, NOT THE UNIVERSE: the TOTALS line says how many records each feed holds in total. When a feed's total exceeds the rows shown, say "the N most recent of TOTAL" and never present the shown set as complete or its oldest row as the earliest recall. A record is one product line; several records share one recall EVENT (event id) - count events when you say how many recalls there were. A gap in this material is never a finding about the product or the firm: if something is not in the records shown, say the records shown do not include it.
+7. COUNTS: every count you state comes from the TOTALS and REASONS blocks, never from your own tally. When you group reasons, build each group's count by adding the REASONS lines it contains; the groups must add up to the records shown. Say how many records and events each group holds. Write counts as facts about the records; never name the blocks of this prompt (TOTALS, REASONS) in the report.
+8. TERMINOLOGY: name an impurity, contaminant or defect with the FDA reason's own term. Never relabel it as a related class it does not name (an azido impurity is not a nitrosamine; a foreign substance is not contamination by a named agent).
 
 Write a clear, well-structured report of up to ${t.words} words with these sections where the material supports them: SNAPSHOT (how many records, by feed and by class, how many ongoing, the date range), WHAT IS RECALLED (products and firms, grouped sensibly), WHY (the reasons, grouped - contamination, labeling, impurity, defect, etc.), HOW WIDE (distribution patterns), STATUS & TIMELINE (ongoing vs terminated/completed, the most recent actions), and WHAT TO DO (per rule 4). Be specific; quote the FDA reason wording where useful.
 
 === QUERY ===\n"${query}" (scope: ${scope}). Feeds probed: ${feedStatus}.
 === TOTALS ===\nrecords shown: ${pr.items.length} of ${pr.totalAll} matching records in openFDA (${shown || "per-feed totals unavailable"}); distinct recall events among the shown records: ${pr.events}; by class (shown): ${JSON.stringify(byClass)}; ongoing (shown): ${ongoing}.
+=== REASONS (shown records, grouped by identical FDA wording; ${pr.items.length} records in all) ===\n${reasonLines || "(none)"}
 === FDA RECORDS (newest first per feed; ${pr.items.length} of ${pr.totalAll}) ===\n${lines || "(no records matched)"}`;
 
     let spent = 0;

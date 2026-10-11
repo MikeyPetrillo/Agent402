@@ -1,4 +1,5 @@
 import { whyPointsPlain } from "./why.js";
+import { erc8004AgentId, ERC8004_IDENTITY_REGISTRY } from "./tools/a2a-card.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
 import { guideSlugs } from "./guides.js";
@@ -16,12 +17,12 @@ import { mppFlagshipLlmsBlock } from "./mpp-flagship.js";
 import { seededProgrammaticPaths } from "./programmatic-seeds.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
-import { priceUsdFor } from "./report-tiers.js";
 import { samplePaths } from "./sample-reports.js";
 import { listPublicReports } from "./human-checkout.js";
 
 import { REPO_URL } from "./repo-link.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
+// The registration id the registration file publishes (same setting), or null.
 /** The llms.txt "finished reports" paragraph, DERIVED from the live catalog
  *  (route + price per slug) and the product tables (card + monitor prices),
  *  so it cannot quote a ladder that has since moved: a hand-written copy sat a
@@ -31,22 +32,26 @@ export function reportsParagraph(baseUrl, tools) {
   const bySlug = new Map((tools || []).map((t) => [t.slug, t]));
   const item = (slug) => { const t = bySlug.get(slug); return t ? `${t.route} (${t.price})` : null; };
   const list = (...slugs) => slugs.map(item).filter(Boolean).join(", ");
-  const groups = [
-    ["Deep research", list("research", "research-pro", "research-max")],
-    ["Company due-diligence dossier", list("dossier", "dossier-max")],
-    ["Ticker pack, three reports in one run", list("ticker-pack")],
-    ["Fund 13F report", list("fund-report", "fund-report-max")],
-    ["SEC filing report", list("filing-report")],
-    ["Domain security audit", list("domain-audit", "domain-audit-pro")],
-    ["FDA recall report", list("recall-report")],
-    ["Insider flow report", list("insider-report")],
-    ["Market / competitor brief", list("market-brief")],
-    ["Solana token brief", list("token-brief")],
-    ["Token risk", list("token-risk", "token-risk-pro")],
-    ["LinkedIn article, ready to publish", list("linkedin-article")],
-    ["IPO pipeline digest, deterministic", list("ipo-report")],
-  ].filter(([, v]) => v);
-  const agent = Object.values(HUMAN_PRODUCTS).map((p) => priceUsdFor(p.slug)).filter((n) => Number.isFinite(n));
+  const groupSlugs = [
+    ["Deep research", ["research", "research-pro", "research-max"]],
+    ["Company due-diligence dossier", ["dossier", "dossier-max"]],
+    ["Ticker pack, three reports in one run", ["ticker-pack"]],
+    ["Fund 13F report", ["fund-report", "fund-report-max"]],
+    ["SEC filing report", ["filing-report"]],
+    ["Domain security audit", ["domain-audit", "domain-audit-pro"]],
+    ["FDA recall report", ["recall-report"]],
+    ["Insider flow report", ["insider-report"]],
+    ["Market / competitor brief", ["market-brief"]],
+    ["Solana token brief", ["token-brief"]],
+    ["Token risk", ["token-risk", "token-risk-pro"]],
+    ["LinkedIn article, ready to publish", ["linkedin-article"]],
+    ["IPO pipeline digest, deterministic", ["ipo-report"]],
+  ];
+  const groups = groupSlugs.map(([k, slugs]) => [k, list(...slugs)]).filter(([, v]) => v);
+  // The agent range covers every product this paragraph lists (the card-sold
+  // reports and the deterministic IPO digest), so no listed price falls outside it.
+  const agent = groupSlugs.flatMap(([, slugs]) => slugs).map((slug) => bySlug.get(slug)).filter(Boolean)
+    .map((t) => Number(String(t.price).replace(/[^0-9.]/g, ""))).filter((n) => Number.isFinite(n) && n > 0);
   const card = Object.values(HUMAN_PRODUCTS).map((p) => p.price / 100);
   const monitor = Math.min(...Object.values(MONITOR_PRODUCTS).map((m) => m.price / 100));
   const usd = (n) => `$${n.toFixed(2)}`;
@@ -159,7 +164,6 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/monitors`, priority: "0.8" },
     // A closed product takes no crawl slot: listed only while packs are on sale.
     ...(creditsSalesEnabled() ? [{ loc: `${baseUrl}/credits`, priority: "0.8" }] : []),
-    { loc: `${baseUrl}/shop`, priority: "0.9" },
     // Every x402 marketplace page (one per CHAIN_PAGES entry) - new chain
     // page = new sitemap entry, zero edits here.
     ...Object.keys(CHAIN_PAGES).map((key) => ({ loc: `${baseUrl}/${key}`, priority: "0.8" })),
@@ -170,7 +174,8 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/SKILL.md`, priority: "0.8" },
     { loc: `${baseUrl}/openapi.json`, priority: "0.7" },
     { loc: `${baseUrl}/api/pricing`, priority: "0.7" },
-    { loc: `${baseUrl}/api/find`, priority: "0.7" },
+    // A worked query, not the bare endpoint: without ?q= it answers an empty list.
+    { loc: `${baseUrl}/api/find?q=search+the+web`, priority: "0.7" },
     { loc: `${baseUrl}/.well-known/x402`, priority: "0.7" },
     { loc: `${baseUrl}/api/reliability`, priority: "0.6" },
     { loc: `${baseUrl}/api/stats`, priority: "0.6" },
@@ -184,26 +189,22 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/marketplace/tools`, priority: "0.6" },
     { loc: `${baseUrl}/api/index`, priority: "0.6" },
     { loc: `${baseUrl}/sell`, priority: "0.8" },
-    { loc: `${baseUrl}/api/route`, priority: "0.7" },
+    { loc: `${baseUrl}/api/route?q=ocr+image`, priority: "0.7" },
     { loc: `${baseUrl}/leaderboard`, priority: "0.8" },
     { loc: `${baseUrl}/api/leaderboard`, priority: "0.7" },
     { loc: `${baseUrl}/api/cacheable`, priority: "0.6" },
     { loc: `${baseUrl}/api/cache-stats`, priority: "0.5" },
     { loc: `${baseUrl}/tollbooth`, priority: "0.7" },
-    { loc: `${baseUrl}/tollbooth/cloud`, priority: "0.7" },
     { loc: `${baseUrl}/integrations`, priority: "0.8" },
     { loc: `${baseUrl}/pricing`, priority: "0.8" },
     { loc: `${baseUrl}/changelog`, priority: "0.7" },
-    { loc: `${baseUrl}/use-cases`, priority: "0.8" },
     { loc: `${baseUrl}/quickstart`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
     { loc: `${baseUrl}/agentic-finance`, priority: "0.9" },
-    { loc: `${baseUrl}/why`, priority: "0.8" },
     { loc: `${baseUrl}/x402-test`, priority: "0.7" },
     { loc: `${baseUrl}/markets`, priority: "0.8" },
     ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
-    { loc: `${baseUrl}/digest`, priority: "0.6" },
     { loc: `${baseUrl}/security`, priority: "0.7" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
     { loc: `${baseUrl}/company`, priority: "0.7" },
@@ -214,12 +215,9 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/101`, priority: "0.9" },
     { loc: `${baseUrl}/revenue`, priority: "0.6" },
     { loc: `${baseUrl}/blog`, priority: "0.8" },
-    { loc: `${baseUrl}/compare`, priority: "0.8" },
-    { loc: `${baseUrl}/community`, priority: "0.7" },
     { loc: `${baseUrl}/contribute`, priority: "0.7" },
     { loc: `${baseUrl}/workflows`, priority: "0.8" },
     { loc: `${baseUrl}/status`, priority: "0.7" },
-    { loc: `${baseUrl}/badges`, priority: "0.5" },
     { loc: `${baseUrl}/sdk-playground`, priority: "0.7" },
     { loc: `${baseUrl}/docs/api/explorer`, priority: "0.8" },
     { loc: `${baseUrl}/docs/adapters`, priority: "0.8" },
@@ -277,16 +275,13 @@ export function sitemapPages(baseUrl, catalog) {
     { loc: `${baseUrl}/monitors`, priority: "0.8" },
     // A closed product takes no crawl slot: listed only while packs are on sale.
     ...(creditsSalesEnabled() ? [{ loc: `${baseUrl}/credits`, priority: "0.8" }] : []),
-    { loc: `${baseUrl}/shop`, priority: "0.9" },
     { loc: `${baseUrl}/quickstart`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
     { loc: `${baseUrl}/agentic-finance`, priority: "0.9" },
-    { loc: `${baseUrl}/why`, priority: "0.8" },
     { loc: `${baseUrl}/x402-test`, priority: "0.7" },
     { loc: `${baseUrl}/markets`, priority: "0.8" },
     ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
-    { loc: `${baseUrl}/digest`, priority: "0.6" },
     { loc: `${baseUrl}/security`, priority: "0.7" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
     { loc: `${baseUrl}/company`, priority: "0.7" },
@@ -294,7 +289,6 @@ export function sitemapPages(baseUrl, catalog) {
     { loc: `${baseUrl}/101`, priority: "0.9" },
     { loc: `${baseUrl}/pricing`, priority: "0.8" },
     { loc: `${baseUrl}/integrations`, priority: "0.8" },
-    { loc: `${baseUrl}/use-cases`, priority: "0.8" },
     { loc: `${baseUrl}/faq`, priority: "0.8" },
     // Unified marketplace surface (the old /index and /marketplaces 301 here).
     { loc: `${baseUrl}/marketplace`, priority: "0.9" },
@@ -311,16 +305,12 @@ export function sitemapPages(baseUrl, catalog) {
     { loc: `${baseUrl}/revenue`, priority: "0.6" },
     { loc: `${baseUrl}/changelog`, priority: "0.7" },
     { loc: `${baseUrl}/tollbooth`, priority: "0.7" },
-    { loc: `${baseUrl}/tollbooth/cloud`, priority: "0.7" },
     { loc: `${baseUrl}/playground`, priority: "0.8" },
     { loc: `${baseUrl}/sdk-playground`, priority: "0.7" },
     { loc: `${baseUrl}/blog`, priority: "0.8" },
-    { loc: `${baseUrl}/compare`, priority: "0.8" },
-    { loc: `${baseUrl}/community`, priority: "0.7" },
     { loc: `${baseUrl}/contribute`, priority: "0.7" },
     { loc: `${baseUrl}/workflows`, priority: "0.8" },
     { loc: `${baseUrl}/status`, priority: "0.7" },
-    { loc: `${baseUrl}/badges`, priority: "0.5" },
     { loc: `${baseUrl}/docs/api/explorer`, priority: "0.8" },
     { loc: `${baseUrl}/docs/adapters`, priority: "0.8" },
     { loc: `${baseUrl}/docs/webhooks`, priority: "0.7" },
@@ -448,18 +438,20 @@ export function llmsTxt(baseUrl, catalog) {
     .join("\n");
 
   const chainItems = Object.entries(CHAIN_PAGES)
-    .map(([key, c]) => `- [${c.chainName}](${baseUrl}/${key}): ${c.asset} via ${c.facilitatorLabel} (\`${c.caip2}\`)`)
+    // Chain, asset and CAIP-2 id only: which facilitator settles a chain is an
+    // operating detail, not something a buyer needs to pay.
+    .map(([key, c]) => `- [${c.chainName}](${baseUrl}/${key}): ${c.asset} (\`${c.caip2}\`)`)
     .join("\n");
 
   return `# Agent402.Tools
 
-> Pay-per-call web tools for AI agents, payable over **x402 or MPP** - the applied layer of Agentic Finance: agents that pay and get paid on their own (explainer: /agentic-finance). **First job: search the web and answer questions** (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`) - then the long catalog of 500+ tools via \`/api/find\`: deterministic utilities, a metered model gateway on the OpenAI and Anthropic wires (\`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment), and settle from your own wallet - USDC via x402, or MPP on Base/Celo (USDC) or Tempo (USDC.e or PathUSD, native)${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (Stripe Shared Payment Token over MPP stripe/charge - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity. Per-call prices from $0.001 (the metered gateway quotes each request from its body) - most tools $0.001–$0.02, with premium AI and media tiers higher and multi-tool packs ${PACK_PRICE_RANGE.text}; every price is in /api/pricing and quoted in the 402.
+> Pay-per-call web tools for AI agents, payable over **x402 or MPP** - the applied layer of Agentic Finance: agents that pay and get paid on their own (explainer: /agentic-finance). **First job: search the web and answer questions** (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`) - then the long catalog of 500+ tools via \`/api/find\`: deterministic utilities, a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages and Gemini; for example \`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment), and settle from your own wallet - USDC via x402, or MPP on Base/Celo (USDC) or Tempo (USDC.e or PathUSD, native)${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (a card payment token over MPP's \`stripe\` charge method - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity. Per-call prices from $0.001 (the metered gateway quotes each request from its body) - most tools $0.001–$0.02, with premium AI and media tiers higher and multi-tool packs ${PACK_PRICE_RANGE.text}; every price is in /api/pricing and quoted in the 402.
 
 Base URL: ${baseUrl}
 
 **Open source and two-sided.** Agent402 is the open-source, self-hostable applied layer of Agentic Finance (agents paying and getting paid on their own) for x402 and MPP (+ MCP server): 500+ pay-per-call tools for agents to buy (live web search + cited answers, browser rendering, PDFs, OCR, images, live financial / crypto / macro data, SEC EDGAR, wallet-keyed memory, a metered model gateway, finished reports), a neutral cross-seller index and on-chain leaderboard for the whole x402 ecosystem, and \`agent402-tollbooth\` for API sellers to charge AI crawlers per request. Maintainer: Havok Holdings LLC. Read every line and run it yourself: ${REPO_URL}
 
-**Why pay here (seven first-party differences, each proven on a live surface - full page: /why).** ${whyPointsPlain().map((line, i) => `(${i + 1}) ${line}`).join(" ")} Metered usage pricing: \`POST /v1/metered/chat/completions\` quotes each request from its body; finished reports and monitors: /reports and /monitors; sourcing from other sellers: \`POST /api/route/execute\`; proof: /status and /revenue.
+**Why pay here (seven first-party differences, each proven on a live surface - full section: /#why).** ${whyPointsPlain().map((line, i) => `(${i + 1}) ${line}`).join(" ")} Metered usage pricing: \`POST /v1/metered/chat/completions\` quotes each request from its body; finished reports and monitors: /reports and /monitors; sourcing from other sellers: \`POST /api/route/execute\`; proof: /status and /revenue.
 
 **This is machine-to-machine commerce, and you can verify it.** Run the full loop with no human and no funds - \`node scripts/demo-payment.js\` discovers the catalog, gets quoted over HTTP 402, pays with compute, and uses the result. Every stablecoin call settles on-chain on the rail the buyer chose, to the payTo its 402 named (on Base that is agent402.base.eth, verifiable on Basescan); live economy stats are at ${baseUrl}/api/stats and a machine-readable reliability report (each claim with a verification URL) at ${baseUrl}/api/reliability.
 
@@ -492,7 +484,7 @@ We state it this way deliberately: the honest guarantee is "settlement ordering 
 
 **MPP clients are first-class (dual-stack), and now a native second method too.** Every paid endpoint also speaks MPP (Machine Payments Protocol, the IETF-track \`Payment\` HTTP auth scheme): the same 402 carries \`WWW-Authenticate: Payment\` challenges, listed in this order: ${mppMethodsProse() || "none on this instance (MPP_SECRET_KEY / TEMPO_API_KEY unset)"}. \`/openapi.json\` publishes the same offers, in the same order, per route (\`x-payment-info.offers\`). A stock mppx client pays the first challenge it has a method for, so a wallet holding Tempo funds pays over Tempo; a client whose Tempo credential was just refused is shown the \`evm\` challenge first for a while. Settled responses return a signed \`Payment-Receipt\` header either way. An \`mppx\` client (\`Fetch.from\` with \`evm.charge\` or \`tempo.charge\`) works out of the box - same URL, same price, whichever method your client speaks. The hosted MCP connector at \`${baseUrl}/mcp\` pays the same way: a wallet-only tool answers with a readable tool result carrying the challenges in \`_meta["org.paymentauth/payment-required"]\` (a refused credential is JSON-RPC -32043), and an MCP client wrapped with mppx's \`McpClient.wrap()\` pays and retries on its own (receipt in \`_meta\`).${mppStartHereBlock ? `\n\n${mppStartHereBlock}` : ""}
 
-**How to read our 402 if you only speak one dialect.** The same response carries BOTH headers, always - \`WWW-Authenticate: Payment\` is additive, never a replacement for the real x402 \`PAYMENT-REQUIRED\` header (full \`accepts\` array, \`exact\` scheme, EIP-3009). A client that hard-fails on an unrecognized \`WWW-Authenticate\` scheme instead of also checking for \`PAYMENT-REQUIRED\` will bail with something like "no supported rail" on a 402 it could have paid - this has happened at least once (see issue #794). If your parser only understands one of the two dialects, check for the header it understands FIRST rather than trusting whichever header happens to be read first; do not treat an unrecognized \`WWW-Authenticate\` scheme as "this server has no payment option for me." The JSON body of every paywall 402 also carries the same PaymentRequired object as the \`PAYMENT-REQUIRED\` header (\`x402Version\`, \`accepts\`, \`resource\`, \`extensions\`), beside our own fields; the header is authoritative.
+**How to read our 402 if you only speak one dialect.** The same response carries BOTH headers, always - \`WWW-Authenticate: Payment\` is additive, never a replacement for the real x402 \`PAYMENT-REQUIRED\` header (full \`accepts\` array, \`exact\` scheme, EIP-3009). A client that hard-fails on an unrecognized \`WWW-Authenticate\` scheme instead of also checking for \`PAYMENT-REQUIRED\` will bail with something like "no supported rail" on a 402 it could have paid. If your parser only understands one of the two dialects, check for the header it understands FIRST rather than trusting whichever header happens to be read first; do not treat an unrecognized \`WWW-Authenticate\` scheme as "this server has no payment option for me." The JSON body of every paywall 402 also carries the same PaymentRequired object as the \`PAYMENT-REQUIRED\` header (\`x402Version\`, \`accepts\`, \`resource\`, \`extensions\`), beside our own fields; the header is authoritative.
 
 ## Key machine surfaces
 - [/SKILL.md](${baseUrl}/SKILL.md): agent-onboarding skill sheet - setup (MCP server / SDK / plain HTTP), discover, pay (x402, MPP or proof-of-work), read the 402, common issues. Start here if you are setting Agent402 up for the first time
@@ -503,12 +495,12 @@ We state it this way deliberately: the honest guarantee is "settlement ordering 
 - [/api/route](${baseUrl}/api/route): Smart Order Router - rank tools across every x402 seller crawled from public registries; \`include:"external"\` excludes Agent402 for neutral cross-seller discovery
 - [/api/route/execute](${baseUrl}/api/route/execute): the SOR that also PAYS. Send a task, and Agent402 resolves the best-matching tool, buys the result from the seller over x402 (any proven seller in the open index, not just ours), and sells it to you with a receipt - one payment, one request, one wallet. You never hold a wallet on their chain or sign up with them. \`{"task":"...","include":"external"}\`. Proportional tiers: ${execTierSentence} - an over-cap task gets a self-correcting 409 naming the tier that fits${catalog["POST /api/decide"] ? `\n- [/api/decide](${baseUrl}/api/decide): a paid decision. Describe a job; get a call-ready plan over this catalog and outside x402 sellers with a recently verified 402: steps, fallbacks, params that validate against each tool's schema, cost and latency estimates. Depth quick $${decidePrices().quick} / plan $${decidePrices().plan} / full $${decidePrices().full}. The ranking formula has no first-party term and every tool carries firstParty. The fee returns as a ${decideCreditHours()}-hour credit toward \`POST /api/decide/execute\`, which runs the plan when paid on Base or by credits or card (third-party steps at the seller's price plus a ${decideRoutingFeePct()}% markup). Report outcomes free at \`POST /api/decide/feedback\`.` : ""}
 - [/api/index](${baseUrl}/api/index): the seller index, PAGINATED - one page, 250 max, never the whole set. The response says so: complete false, a Link header with rel=next, and sellerCount for the total. For ONE origin use ?seller=<host>, which pages nothing and returns its full row with crawl history
-- [/api/leaderboard](${baseUrl}/api/leaderboard): public on-chain ranking of x402 sellers by Base USDC settled volume, served as the TOP N and never the whole board - 25 rows by default, 50 the ceiling, and \`totalSellers\` carries how many are ranked in all, so a seller you cannot see in the rows may simply rank below them. Only sellers that SETTLED inside \`windowServed\` rank at all (pipeline: Bazaar discovery → \`eth_getLogs\` on Base USDC → per-call ceiling filter, reported as \`maxCallUsd\` → aggregate by payTo; params \`?sort=usd|calls\`, \`?top=N\`, \`?include=external|all\`) - same data as the MCP tool \`sellers.list\` and the \`agent402-client\` SDK method \`topSellers()\`
+- [/api/leaderboard](${baseUrl}/api/leaderboard): public on-chain ranking of x402 sellers by Base USDC settled volume, served as the TOP N and never the whole board - 25 rows by default, 50 the ceiling, and \`totalSellers\` carries how many are ranked in all, so a seller you cannot see in the rows may simply rank below them. Only sellers that SETTLED inside \`windowServed\` rank at all (pipeline: public x402 discovery registry → \`eth_getLogs\` on Base USDC → per-call ceiling filter, reported as \`maxCallUsd\` → aggregate by payTo; params \`?sort=usd|calls\`, \`?top=N\`, \`?include=external|all\`) - same data as the MCP tool \`sellers.list\` and the \`agent402-client\` SDK method \`topSellers()\`
 - [/api/mpp-index](${baseUrl}/api/mpp-index): the MPP seller index (live-verified WWW-Authenticate: Payment sellers with the payment offers their real 402 makes: method, recipient, currency, chain)
 - [/api/mpp-leaderboard](${baseUrl}/api/mpp-leaderboard): on-chain ranking of MPP sellers by inbound USDC.e transfers on Tempo to their live recipient (window, distinct payers, volume; \`routable\` = the router will pay them)
 - [/.well-known/x402](${baseUrl}/.well-known/x402): one-fetch service manifest (identity, payment options, capability map, MCP, trust signals)
 - [/.well-known/agent-card.json](${baseUrl}/.well-known/agent-card.json): our A2A AgentCard (also at /.well-known/agent.json) - name, skills, transport. It declares HTTP+JSON rather than the spec's default JSONRPC because that is what we actually serve
-- [/.well-known/agent-registration.json](${baseUrl}/.well-known/agent-registration.json): our ERC-8004 registration file. The identity is agent 94639 in the registry at eip155:8453:0x8004A169FB4a3325136EB29fA0ceB6D2e539a432, owned by the wallet our 402s name as payTo, and the file lists every way to reach us with x402Support declared
+- [/.well-known/agent-registration.json](${baseUrl}/.well-known/agent-registration.json): our ERC-8004 registration file. ${erc8004AgentId(baseUrl) ? `The identity is agent ${erc8004AgentId(baseUrl)} in the registry at ${ERC8004_IDENTITY_REGISTRY.chain}:${ERC8004_IDENTITY_REGISTRY.address}, owned by the wallet our 402s name as payTo, and the` : "The"} file lists every way to reach us with x402Support declared
 - [/api/reliability](${baseUrl}/api/reliability): structured reliability / SLA report with a verification URL per claim
 - [/api/pricing](${baseUrl}/api/pricing): machine-readable catalog (every endpoint, price, category, docs URL)
 - [/openapi.json](${baseUrl}/openapi.json): full OpenAPI 3.1 spec with input / output schemas for every tool
@@ -549,7 +541,6 @@ ${toolSections}
 - [Tool docs](${baseUrl}/tools): human-readable documentation per tool
 - [Security](${baseUrl}/security): disclosure policy with safe harbor, what data is held, key handling, controls in the serving path and on the code
 - [Company](${baseUrl}/company): Havok Holdings LLC, what it sells, where the proof is, role mailboxes
-- [Weekly digest](${baseUrl}/digest): one email a week with what a wallet or credits key spent here (calls, dollars, tools, chains); double opt-in, signed unsubscribe
 - [Markets](${baseUrl}/markets): the keyless crypto market-data calls (market pulse, perps, options, DeFi, stablecoins, news, indicators) with one curl to copy
 - [Prepaid credits](${baseUrl}/credits): not on sale; a key already issued pays any paid tool except the wallet-scoped ones with the header "Authorization: Bearer a402_..." (debited per call on success; balance at GET /api/credits/balance)
 - [Agentic Finance](${baseUrl}/agentic-finance): what the category is and where Agent402 sits in it

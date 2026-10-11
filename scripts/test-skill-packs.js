@@ -139,6 +139,23 @@ try {
     }
   }
 
+  // The buy box's payment sentence matches the pack's proof-of-work
+  // eligibility as /api/pricing (and the gate) computes it, and the hub
+  // states the exact derived pack count without a "+".
+  const bySlug = new Map((pricing.endpoints || []).map((e) => [e.slug, e]));
+  for (const pack of SKILL_PACKS) {
+    const ep = bySlug.get(`skill-${pack.slug}`);
+    if (!ep) continue;
+    const html = await fetch(`${BASE}/skills/${pack.slug}`).then((r) => r.text());
+    const note = (html.match(/<p class="sk-buy-note">([\s\S]*?)<\/p>/) || [])[1] || "";
+    ok(ep.computePayable ? /Free with proof-of-work/.test(note) : /no proof-of-work tier/.test(note) && !/Free with/.test(note),
+      `${pack.slug}: buy box free-tier wording matches computePayable=${!!ep.computePayable}`);
+  }
+  const hub = await fetch(`${BASE}/skills`).then((r) => r.text());
+  ok(hub.includes(`${SKILL_PACKS.length} packs,`) && !/\d\+ (skill )?packs/.test(hub) && !/\d\+ multi-tool/.test(hub), "skills hub states the exact derived pack count");
+  const freePacks = SKILL_PACKS.filter((p) => bySlug.get(`skill-${p.slug}`)?.computePayable).length;
+  ok(hub.includes(`${freePacks} of the ${SKILL_PACKS.length} packs are on the free tier`), `skills FAQ free-pack count matches /api/pricing (${freePacks})`);
+
   console.log(`\n${pass} passed`);
   proc.kill("SIGKILL");
   process.exit(0);

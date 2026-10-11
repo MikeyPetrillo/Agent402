@@ -31,6 +31,8 @@
   }
   function inline(l) {
     l = l.replace(/\[(\d+)\]/g, '<span class="cite">[$1]</span>');
+    // A run of citations ("[5][6][7]") is one mark: a word joiner keeps it from splitting across lines.
+    l = l.replace(/<\/span><span class="cite">/g, '</span>\u2060<span class="cite">');
     l = l.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     // [label](https://…) before the bare-URL autolink, or the bare rule would
     // eat the URL out of the parentheses and leave the label stranded.
@@ -90,6 +92,19 @@
       filing: "SEC Filing Report", token: "Solana Token Due-Diligence Brief", ipo: "IPO Pipeline Digest", ticker: "Ticker Pack",
       research: "Deep Research Report", linkedin: "LinkedIn Article" }[kind] || "Deep Research Report";
   }
+  // The label of the product this report was sold as. A sample carries its own
+  // label; a product that shares a kind with another (market-brief runs the
+  // research kind) is named by its slug, so its page never reads as the other.
+  function reportLabel(s) {
+    if (s && s.label) return String(s.label);
+    var bySlug = { "market-brief": "Market / Competitor Brief" };
+    return (s && bySlug[s.slug]) || productLabel(s && s.kind);
+  }
+  // Lowercase a label for use mid-sentence, leaving acronyms (SEC, FDA) alone.
+  function midSentence(label) {
+    var t = String(label || "");
+    return /^[A-Z][a-z]/.test(t) ? t.charAt(0).toLowerCase() + t.slice(1) : t;
+  }
   function reasonLabel(r) {
     return { welcome: "first report", scheduled: "scheduled re-run", change: "change detected", "tls-expiring": "certificate expiring", filing: "new 13F filing", recall: "new recall activity", "safety-change": "token safety changed", "filing-new": "new SEC filing", digest: "weekly digest", problem: "we could not complete this run" }[r] || r;
   }
@@ -140,14 +155,16 @@
     var m = monitorFor(s.kind);
     var target = String(s.input == null ? "" : s.input).trim();
     if (!m || !target) return "";
-    var shown = target.length > 80 ? target.slice(0, 80) + "…" : target;
+    // A short subject (a ticker, a domain) reads inside the sentence; a whole
+    // question does not, so it is named as "this question" instead.
+    var subject = target.length <= 40 && !/\?\s*$/.test(target) && target.split(/\s+/).length <= 5 ? target : (s.kind === "research" ? "this question" : "this subject");
     return '<div class="upsell no-print" id="upsell" data-product="' + esc(m.product) + '" data-target="' + esc(target) + '">' +
       '<div class="k">Keep it current</div>' +
-      "<h3>Watch " + esc(shown) + " and get a fresh brief the moment it changes</h3>" +
+      "<h3>Watch " + esc(subject) + " and get a fresh brief the moment it changes</h3>" +
       "<p>" + esc(m.label) + ", " + esc(m.priceUsd) + " a month. We re-check it for you on a schedule and email you a new cited report when something moves. Cancel any time, no account needed.</p>" +
       '<div class="row">' +
         '<button class="btn btn-primary" id="up-go">Start monitoring, ' + esc(m.priceUsd) + " a month →</button>" +
-        '<a class="btn btn-ghost" href="/monitors?product=' + encodeURIComponent(m.product) + "&amp;target=" + encodeURIComponent(target) + '">See what is included</a>' +
+        '<a class="btn btn-secondary" href="/monitors?product=' + encodeURIComponent(m.product) + "&amp;target=" + encodeURIComponent(target) + '">See what is included</a>' +
       "</div>" +
       '<div class="err" id="up-err"></div>' +
     "</div>";
@@ -224,32 +241,37 @@
       '<div class="rpt-head">' +
         '<div class="rpt-brand"><span class="n">agent402</span><span class="s">Report</span></div>' +
         '<h1 class="rpt-title">' + esc(s.title || "Report") + "</h1>" +
-        '<div class="rpt-meta">' + esc(productLabel(s.kind)) + (s.at ? " · " + esc(fmtDate(s.at)) : "") + "</div>" +
+        '<div class="rpt-meta"><span>' + esc(reportLabel(s)) + "</span>" + (s.at ? "<span>" + esc(fmtDate(s.at)) + "</span>" : "") + "</div>" +
       "</div>";
 
     // Action bar (never printed).
     var dl = tables.map(function (t, i) {
-      return '<button class="btn btn-ghost dl-csv" data-i="' + i + '">Download ' + esc(t.label) + " (CSV)</button>";
+      // Two whole parts ("Download Insider flow:" and "Reported holdings (CSV)"):
+      // inline on a wide screen, stacked on a phone, never split mid-label.
+      var lab = String(t.label || ""), cut = lab.indexOf(": ");
+      var head = cut > 0 ? "Download " + lab.slice(0, cut + 1) : "Download", rest = (cut > 0 ? lab.slice(cut + 2) : lab) + " (CSV)";
+      return '<button class="btn btn-secondary dl-csv" data-i="' + i + '"><span>' + esc(head) + "</span> <span>" + esc(rest) + "</span></button>";
     }).join("");
     var included = [];
     if (sources.length) included.push(sources.length + " cited sources");
     if (images.length) included.push(images.reduce(function (n, im) { return n + (im.files ? im.files.length : 0); }, 0) + " image files");
-    tables.forEach(function (t) { included.push((t.rows ? t.rows.length : 0) + " " + esc(t.label.toLowerCase()) + " rows"); });
+    tables.forEach(function (t) { included.push((t.rows ? t.rows.length : 0) + " " + esc(midSentence(t.label)) + " rows"); });
     var actions =
       '<div class="report-actions no-print">' +
         '<button class="btn btn-primary" id="dl-pdf">Download PDF</button>' +
         dl +
-        '<button class="btn btn-ghost" id="dl-json">Download all data (JSON)</button>' +
-        '<a class="btn btn-ghost" id="copy-link" href="#">Copy link</a>' +
-        (s.sample !== true && s.publicView !== true && s.status === "done" ? '<button class="btn btn-ghost" id="mk-public">' + (s.public === true ? "Make private" : "Make public") + "</button>" : "") +
+        '<button class="btn btn-secondary" id="dl-json">Download all data (JSON)</button>' +
+        '<a class="btn btn-secondary" id="copy-link" href="#">Copy link</a>' +
+        (s.sample !== true && s.publicView !== true && s.status === "done" ? '<button class="btn btn-secondary" id="mk-public">' + (s.public === true ? "Make private" : "Make public") + "</button>" : "") +
       "</div>" +
       (s.sample !== true && s.publicView !== true && s.public === true && s.publicId ? '<div class="keep-hint no-print" id="public-note">Public at <a href="/reports/public/' + esc(s.publicId) + '">' + esc(location.origin + "/reports/public/" + s.publicId) + "</a>. Anyone with that link can read it and search engines may index it; make it private again any time.</div>" : "") +
       (s.sample === true || s.publicView === true
-        ? '<div class="keep-hint no-print">' + (s.publicView === true ? "A " + esc(productLabel(s.kind)).toLowerCase() + ' on "' + esc(s.input) + '" shared by its buyer' : "A real " + esc(productLabel(s.kind)).toLowerCase() + ' generated for "' + esc(s.input) + '"') + (s.at ? " on " + esc(fmtDate(s.at)) : "") + (included.length ? ". Includes " + included.join(" · ") : "") + ". Every report is generated fresh at request time from live sources.</div>" +
+        ? '<div class="keep-hint no-print">' + (s.publicView === true ? "A " + esc(midSentence(reportLabel(s))) + ' on "' + esc(s.input) + '" shared by its buyer' : "A real " + esc(midSentence(reportLabel(s))) + ' generated for "' + esc(s.input) + '"') + (s.at ? " on " + esc(fmtDate(s.at)) : "") + (included.length ? ". Includes " + included.join(" · ") : "") + ". Every report is generated fresh at request time from live sources.</div>" +
+          (s.cutShort === true ? '<div class="keep-hint no-print" id="cut-short-note">This sample\'s text stops mid-sentence: the writing step reached its length limit when this sample was generated.</div>' : "") +
           '<form class="sample-buy no-print" id="sample-buy" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 22px;">' +
             '<input id="sample-input" class="field" style="flex:1 1 240px;" placeholder="Your own ' + esc(inputNoun(s.kind)) + '" aria-label="Your own ' + esc(inputNoun(s.kind)) + '">' +
             '<button class="btn btn-primary" type="submit">Get this report, ' + "$" + esc(String(Math.round(s.priceUsd || 0))) + ' →</button>' +
-            '<span id="sample-err" style="color:var(--muted);font-size:13px;"></span>' +
+            '<span id="sample-err" style="color:var(--muted);font-size:var(--fs-sm);"></span>' +
           "</form>"
         : included.length ? '<div class="keep-hint no-print">Includes ' + included.join(" · ") + ". This page is yours to keep, bookmark it or use the link we emailed you.</div>"
                           : '<div class="keep-hint no-print">This page is yours to keep, bookmark it or use the link we emailed you.</div>');
@@ -269,11 +291,12 @@
       var first = im.files && im.files[0];
       var prev = first ? '<img src="data:' + esc(first.media_type || "image/jpeg") + ';base64,' + first.b64 + '" alt="' + esc(im.alt || "") + '" style="max-width:100%;height:auto;border:1px solid var(--hairline);">' : "";
       var files = (im.files || []).map(function (f, j) {
-        return '<button class="btn btn-ghost dl-img" data-i="' + i + '" data-j="' + j + '">' + esc(f.name) + " " + f.width + "x" + f.height + " (" + Math.round((f.bytes || 0) / 1024) + " KB)</button>";
+        return '<button class="btn btn-secondary dl-img" data-i="' + i + '" data-j="' + j + '">' + esc(f.name) + " " + f.width + "x" + f.height + " (" + Math.round((f.bytes || 0) / 1024) + " KB)</button>";
       }).join(" ");
       return '<div class="rpt-image"><div class="rpt-meta">' + esc(im.slot || "image") + (im.alt ? " · " + esc(im.alt) : "") + "</div>" + prev + '<div class="report-actions no-print">' + files + "</div></div>";
     }).join("") + "</div>" : "";
     app.innerHTML = actions + mon + '<div class="report" id="report-body">' + head + mdToHtml(withoutLeadingTitle(s.report, s.title)) + imgHtml + "</div>" + upgradeBlock(s);
+    if (window.a402BindWidows) window.a402BindWidows(app);
     var imgBtns = app.querySelectorAll(".dl-img");
     for (var k = 0; k < imgBtns.length; k++) {
       imgBtns[k].addEventListener("click", function (e) {

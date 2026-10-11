@@ -22,6 +22,7 @@
 // TLS follows src/db-ssl.js: relaxed on Railway's private mesh, verified and
 // fail-closed on any public host.
 import pg from "pg";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes, createHash } from "node:crypto";
 import { dbSsl } from "./db-ssl.js";
 
@@ -437,6 +438,23 @@ export const logLines = {
     const r = await stateQuery(`INSERT INTO ${T("log_lines")} (stream, body) VALUES ($1, $2::jsonb) RETURNING id`, [checkName(stream, "stream"), JSON.stringify(body ?? null)]);
     return Number(r.rows[0].id);
   },
+  /**
+   * Append a line whose body is unique on its own (it carries a random ref),
+   * keyed the way reconcileLogFile keys the same line restored from the file
+   * (content hash, first occurrence): a retried append, a journal replay and
+   * the boot reconcile add it once. Resolves true when this call added it,
+   * false when the stream already held it.
+   */
+  async appendOnce(stream, body) {
+    const clean = JSON.parse(cleanPgText(JSON.stringify(body ?? null)));
+    const r = await stateQuery(
+      `INSERT INTO ${T("log_lines")} (stream, body, line_key) VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (stream, line_key) WHERE line_key IS NOT NULL DO NOTHING`,
+      [checkName(stream, "stream"), JSON.stringify(clean), logLineKey(clean)],
+      { idempotent: true },
+    );
+    return r.rowCount > 0;
+  },
   /** Lines after `afterId`, oldest first. */
   async read(stream, { afterId = 0, limit = 1000 } = {}) {
     const r = await stateQuery(
@@ -476,6 +494,8 @@ const sortKeys = (v) => {
   return v;
 };
 const lineHash = (body) => createHash("sha256").update(JSON.stringify(sortKeys(body))).digest("hex").slice(0, 32);
+/** The key reconcileLogFile gives the first occurrence of a (cleaned) body; logLines.appendOnce uses the same. */
+export function logLineKey(body) { return `${lineHash(body)}:1`; }
 export async function reconcileLogFile(stream, file, { maxBytes = 64 * 1024 * 1024, log = console.log } = {}) {
   if (!file) return 0;
   let text;
@@ -897,6 +917,31 @@ export async function withStateTx(fn, { timeoutMs = 0 } = {}) {
   }
 }
 
+// ---- one-time imports share a few slots ----------------------------------------
+// A first boot with the database on imports every store's file at once, and a
+// large import holds its pooled connection for as long as it takes to send.
+// Unbounded, the imports took every connection and the reads queued behind
+// them (other stores' loads, the first buyer calls) timed out waiting for one.
+// Imports therefore run STATE_DB_IMPORT_CONCURRENCY (default 2) at a time,
+// which leaves the rest of the pool to serving. Waiting for a slot holds no
+// connection, so it is not bounded by the connect timeout. A slot holder that
+// starts another import (nested) runs it inside its own slot.
+const importSlotScope = new AsyncLocalStorage();
+let importSlotsBusy = 0;
+const importSlotWaiters = [];
+const importSlots = () => Math.max(1, Math.floor(Number(process.env.STATE_DB_IMPORT_CONCURRENCY) || 2));
+/** Run `fn` holding one of the import slots (see above). */
+export async function withImportSlot(fn) {
+  if (importSlotScope.getStore()) return fn();
+  if (importSlotsBusy >= importSlots()) await new Promise((r) => importSlotWaiters.push(r));
+  else importSlotsBusy++;
+  try { return await importSlotScope.run(true, fn); }
+  finally {
+    const next = importSlotWaiters.shift();
+    if (next) next(); else importSlotsBusy--;
+  }
+}
+
 /**
  * Run an import exactly once per name (the imports table remembers it):
  * `run()` is called when no mark exists and the mark is written after it
@@ -907,9 +952,11 @@ export async function withStateTx(fn, { timeoutMs = 0 } = {}) {
 export async function importOnce(name, { source = "", run }) {
   if (typeof run !== "function") throw new Error("importOnce needs run()");
   if (await imports.done(name)) return { imported: false };
-  const out = await run();
-  await imports.mark(name, { source, bytes: Number(out?.bytes) || 0 });
-  return { imported: true, ...(out && typeof out === "object" ? out : {}) };
+  return withImportSlot(async () => {
+    const out = await run();
+    await imports.mark(name, { source, bytes: Number(out?.bytes) || 0 });
+    return { imported: true, ...(out && typeof out === "object" ? out : {}) };
+  });
 }
 
 /**

@@ -316,6 +316,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   const packs = rankSkillPacks(q, {
     k: 2, baseUrl,
     toolPriceUsd: (slug) => priceIndex.get(String(slug).toLowerCase()) ?? null,
+    ...(powSlugs ? { toolFree: (slug) => powSlugs.has(slug) } : {}),
   });
   // DID WE ACTUALLY SERVE THE QUERY, or just score well on its common words?
   //

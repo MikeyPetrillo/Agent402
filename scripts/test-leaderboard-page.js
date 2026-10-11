@@ -82,7 +82,7 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
   const rowCount = (html.match(/class="lb-row/g) || []).length;
   ok(rowCount > 0 && rowCount <= 12, `ranked table renders a bounded top N, not all 300 sellers (got ${rowCount} rows)`);
   ok(html.includes("top 12 of 300 ranked rows") && !html.includes("of 2,212"), "the cap is disclosed against the rows actually ranked, not the origins scanned");
-  ok(!/sellers ranked, one wallet each/.test(html) && /sellers scanned, one wallet each/.test(html) && /rows ranked \(a row can fold several wallets\)/.test(html), "scanned origins and ranked rows are labelled as the two different counts they are");
+  ok(!/sellers ranked, one wallet each/.test(html) && /sellers scanned, one wallet each/.test(html) && /rows ranked, one per seller/.test(html), "scanned origins and ranked rows are labelled as the two different counts they are");
 }
 
 // --- structured data -----------------------------------------------------------
@@ -124,7 +124,7 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
   const html = ledgerLeaderboardPage(BASE_URL, snapshot, { stats, walletAddress: SELF_WALLET, host: HOSTF });
   ok(!without.includes("data-host-row") && html.includes("data-host-row"), "pinned host row renders only with host figures");
   ok(/data-host-ext-30d>109</.test(html) && /data-host-buyers-30d>7</.test(html) && /data-host-ext-all>3,945</.test(html), "disclosed panel carries external-only 30d settlements, 30d buyers and all-time settlements");
-  ok(html.includes("canary and volume runs are excluded"), "the exclusion note is stated");
+  ok(html.includes("canary and volume runs and free proof-of-work calls are left out"), "the exclusion note is stated");
   ok(/settlements from outside buyers, all time<\/th>/.test(html), "with no ledger start date the widest row reads all time");
   const dated = ledgerLeaderboardPage(BASE_URL, snapshot, { stats, walletAddress: SELF_WALLET, host: { ...HOSTF, externalAllTime: { ...HOSTF.externalAllTime, since: "2026-07-03" } } });
   ok(/settlements from outside buyers, since 2026-07-03<\/th>/.test(dated) && !/outside buyers, all time</.test(dated), "with a ledger start date the widest row is labelled since that date, never all time");

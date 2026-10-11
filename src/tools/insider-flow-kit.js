@@ -22,15 +22,20 @@ function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } c
 
 const SYNTH = "anthropic/claude-opus-5";
 export const INSIDER_MODELS = [SYNTH];
+// synthMaxTokens carries at least 3.5 output tokens per target word
+// (scripts/test-report-synthesis.js): transaction rows and figures run near 3,
+// so a lower cap stopped for length and paid for a retry.
 export const INSIDER_TIERS = {
   // maxFilings 100 = one EDGAR full-text page; the reads are XML only (no LLM
   // cost), and 40 read the newest 40 of META's 172 in a 365-day window while
   // the header labelled the whole year.
-  "insider-report": { price: "$0.60", maxUpstreamUsd: 0.35, maxFilings: 100, synthMaxTokens: 4500, words: "~1,500" },
+  "insider-report": { price: "$0.60", maxUpstreamUsd: 0.35, maxFilings: 100, synthMaxTokens: 5600, words: "~1,500" },
 };
 const SYNTH_TIMEOUT_MS = 120_000;
 // The lookback a call without "days" reads; the card storefront sends it too.
 export const INSIDER_DEFAULT_DAYS = 90;
+/** The widest window an agent can ask for with `days`. */
+export const INSIDER_MAX_DAYS = 365;
 const XML_CONCURRENCY = 4;
 const XML_TIMEOUT_MS = 20_000;
 
@@ -151,7 +156,7 @@ function makeInsiderHandlerInner(tierSlug) {
     const cikIn = input.cik != null ? String(input.cik).trim() : "";
     if (!ticker && !cikIn) throw bad('"ticker" (US stock ticker) or "cik" is required');
     if (ticker && !TICKER_RE.test(ticker)) throw bad(`"${ticker}" is not a valid US ticker`);
-    const days = clampInt(input.days, INSIDER_DEFAULT_DAYS, 7, 365);
+    const days = clampInt(input.days, INSIDER_DEFAULT_DAYS, 7, INSIDER_MAX_DAYS);
     const user = safeUser(req);
 
     // 1) FILINGS (cheap) -> 2) XML per filing (bounded concurrency).

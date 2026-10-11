@@ -45,4 +45,15 @@ ok(txLink("solana", "sig") === "https://solscan.io/tx/sig" && txLink("unknown", 
   const page = proofPage("https://agent402.tools", { external: { count: 1, settledUsd: 0.158387, quotedUsd: 0.66234, quotedCount: 1, latest: { settledUsd: 0.158387, quoteUsd: 0.66234, network: "base", at: "2026-10-02T10:00:00.000Z", atPrecision: "hour", txWithheld: true } }, internal: { count: 0, latest: null } });
   ok(!/\$0\.\d{5,}/.test(page.replace(/\$0\.00\d+/g, "")) && page.includes("$0.1584") && page.includes("$0.6623"), "the page prints no raw 5- or 6-decimal floats above a cent");
 }
+{
+  // Headline and intro say what the ledger shows: never above the quote; an
+  // exact payment settles the quote itself. Credits are offered only while
+  // they are on sale, and internal tooling is not named.
+  const page = proofPage("https://agent402.tools", { external: { count: 0, latest: null }, internal: { count: 0, latest: null } });
+  ok(/Never above the ceiling you saw first\./.test(page) && !/Settled under the ceiling/.test(page) && /never above the quoted ceiling/.test(page), "headline says never above the quote, not 'under' it");
+  ok(/pay for what the call used, up to the quote/.test(page) && /an <code>exact<\/code> payment settles the quote itself/.test(page), "upto is explained and exact is stated");
+  const { creditsSalesEnabled } = await import("../src/credits-sales.js");
+  ok(creditsSalesEnabled() ? /prepaid credits/.test(page) : !/credits/.test(page.split("</h1>")[1].split("</p>")[0]), "credits named as a payment path only while credit sales are on");
+  ok(!/\bCI canary\b|burner wallet/.test(page) && /our own test wallet buys this route every day/.test(page), "no internal tooling names on the page");
+}
 console.log(`\n${pass} passed`);

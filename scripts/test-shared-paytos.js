@@ -120,7 +120,7 @@ try {
         ...process.env, PORT: String(port), FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: TOKEN,
         LEADERBOARD_SNAPSHOT_FILE: lbFile, SOR_SHARED_PAYTOS_FILE: storeFile, SOR_MULTI_TENANT_PAYTOS: `${T},not-a-wallet`,
         X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
-        MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", WALLET_DIGEST: "off",
+        MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });

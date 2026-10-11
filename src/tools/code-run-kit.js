@@ -204,7 +204,7 @@ function makeHandler(tierSlug) {
   };
 }
 
-const SHARED_TAGS = ["code", "execution", "sandbox", "interpreter", "e2b", "python", "javascript"];
+const SHARED_TAGS = ["code", "execution", "sandbox", "interpreter", "python", "javascript"];
 
 export const CODE_RUN_TOOLS = [
   {

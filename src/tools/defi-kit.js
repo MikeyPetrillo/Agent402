@@ -492,7 +492,7 @@ function summarisePoints(points, valueKey) {
 // --- shared overview tool builder (fees + dex volume) -----------------------
 function overviewTool({ kind, slug, name, price, description, tags, sourceName, metrics, unit, example }) {
   const props = {
-    chain: { type: "string", description: "Optional chain scope as DefiLlama names it (Ethereum, Base, Solana, Arbitrum, BSC, OP Mainnet...). Case-insensitive; common aliases accepted. Omit for all chains." },
+    chain: { type: "string", description: "Optional chain scope as the source names it (Ethereum, Base, Solana, Arbitrum, BSC, OP Mainnet...). Case-insensitive; common aliases accepted. Omit for all chains." },
     category: { type: "string", description: "Optional category filter (Dexs, Lending, Derivatives, Liquid Staking, ...). Case-insensitive exact match." },
     search: { type: "string", description: "Optional name/slug substring filter (case-insensitive)." },
     type: { type: "string", description: 'Row type: "protocol" (default), "chain" (chain-level rows such as network gas fees), or "all".' },
@@ -559,14 +559,14 @@ export const DEFI_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Screen DeFi yield pools (lending, LP, staking, vaults) across every chain from DefiLlama's free Yields dataset: filter by chain, project, token symbol, stablecoin-only, minimum TVL and minimum/maximum APY; sort by apy or tvl; limit up to 100. Each row carries pool id, project, chain, symbol, TVL, total/base/reward APY, 1d/7d/30d APY change, 30d mean APY, IL risk, exposure (single/multi), reward tokens and DefiLlama's outlier flag. The ~11MB upstream document is fetched once per 5 minutes and served from an in-process cache, so answers are bounded and fast. Keyless public data.",
-    tags: ["crypto", "defi", "yield", "apy", "tvl", "pools", "defillama", "screener", "stablecoin"],
+      "Screen DeFi yield pools (lending, LP, staking, vaults) across every chain from an open DeFi analytics yields dataset: filter by chain, project, token symbol, stablecoin-only, minimum TVL and minimum/maximum APY; sort by apy or tvl; limit up to 100. Each row carries pool id, project, chain, symbol, TVL, total/base/reward APY, 1d/7d/30d APY change, 30d mean APY, IL risk, exposure (single/multi), reward tokens and the source's outlier flag. The ~11MB upstream document is fetched once per 5 minutes and served from an in-process cache, so answers are bounded and fast. Keyless public data.",
+    tags: ["crypto", "defi", "yield", "apy", "tvl", "pools", "screener", "stablecoin"],
     discovery: {
       bodyType: "json",
       input: { chain: "Base", stablecoinOnly: true, minTvlUsd: 1000000, sort: "apy", limit: 5 },
       inputSchema: {
         properties: {
-          chain: { type: "string", description: "Chain name as DefiLlama uses it (Ethereum, Base, Arbitrum, Solana, BSC, Optimism...). Case-insensitive, common aliases accepted. Omit for all chains." },
+          chain: { type: "string", description: "Chain name as the source lists it (Ethereum, Base, Arbitrum, Solana, BSC, Optimism...). Case-insensitive, common aliases accepted. Omit for all chains." },
           project: { type: "string", description: "Project slug substring (aave-v3, uniswap-v3, morpho, pendle, curve-dex...). Case-insensitive." },
           symbol: { type: "string", description: "Token symbol filter, e.g. USDC or WETH-USDC; matches any leg of the pool symbol (case-insensitive)." },
           stablecoinOnly: { type: "boolean", description: "true = only stablecoin pools." },
@@ -574,7 +574,7 @@ export const DEFI_TOOLS = [
           minApy: { type: "number", description: "Minimum total APY in percent." },
           maxApy: { type: "number", description: "Maximum total APY in percent (drops headline outliers)." },
           exposure: { type: "string", description: '"single" or "multi" asset exposure.' },
-          excludeOutliers: { type: "boolean", description: "Drop pools DefiLlama flags as APY outliers (default true)." },
+          excludeOutliers: { type: "boolean", description: "Drop pools the source flags as APY outliers (default true)." },
           sort: { type: "string", description: '"tvl" (default) or "apy", descending.' },
           limit: { type: "number", description: "Rows to return (default 20, max 100)." },
         },
@@ -645,14 +645,14 @@ export const DEFI_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Daily APY and TVL history for one DeFi yield pool (DefiLlama pool id from defi-yields): per-day total/base/reward APY and TVL, most recent `limit` days (default 90, max 3650), plus a summary (latest, min, max, mean APY and TVL change over the window). Unknown pool ids answer 422. Keyless public data.",
-    tags: ["crypto", "defi", "yield", "apy", "history", "tvl", "defillama", "timeseries"],
+      "Daily APY and TVL history for one DeFi yield pool (pool id from defi-yields): per-day total/base/reward APY and TVL, most recent `limit` days (default 90, max 3650), plus a summary (latest, min, max, mean APY and TVL change over the window). Unknown pool ids answer 422. Keyless public data.",
+    tags: ["crypto", "defi", "yield", "apy", "history", "tvl", "timeseries"],
     discovery: {
       bodyType: "json",
       input: { pool: "54e9b138-3146-4c1f-8dce-1cb948f5ef96", limit: 7 },
       inputSchema: {
         properties: {
-          pool: { type: "string", description: "DefiLlama pool id (UUID) as returned by defi-yields." },
+          pool: { type: "string", description: "Pool id (UUID) as returned by defi-yields." },
           limit: { type: "number", description: "Most recent days to return (default 90, max 3650)." },
         },
         required: ["pool"],
@@ -704,15 +704,15 @@ export const DEFI_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "DeFi protocols ranked by current TVL from DefiLlama's free protocol list: filter by category (Lending, Dexs, Liquid Staking, CDP, Yield...), chain (ranks by that chain's TVL), or a name search; limit up to 100. Rows carry global rank, name, slug, category, chains, TVL, 1h/1d/7d TVL change, market cap and mcap/TVL. CEX rows are excluded unless category is CEX or includeCex is true. The ~8.6MB upstream document is cached 5 minutes in-process. Keyless public data.",
-    tags: ["crypto", "defi", "tvl", "protocols", "ranking", "defillama", "lending", "dex"],
+      "DeFi protocols ranked by current TVL from an open DeFi analytics protocol list: filter by category (Lending, Dexs, Liquid Staking, CDP, Yield...), chain (ranks by that chain's TVL), or a name search; limit up to 100. Rows carry global rank, name, slug, category, chains, TVL, 1h/1d/7d TVL change, market cap and mcap/TVL. CEX rows are excluded unless category is CEX or includeCex is true. The ~8.6MB upstream document is cached 5 minutes in-process. Keyless public data.",
+    tags: ["crypto", "defi", "tvl", "protocols", "ranking", "lending", "dex"],
     discovery: {
       bodyType: "json",
       input: { category: "Lending", limit: 5 },
       inputSchema: {
         properties: {
           category: { type: "string", description: "Category filter (Lending, Dexs, Liquid Staking, Restaking, CDP, Yield, Derivatives, Bridge, RWA, CEX...). Case-insensitive exact match." },
-          chain: { type: "string", description: "Chain filter as DefiLlama names it (Ethereum, Base, Solana, Arbitrum...). Rows are then ranked by TVL on that chain." },
+          chain: { type: "string", description: "Chain filter as the source names it (Ethereum, Base, Solana, Arbitrum...). Rows are then ranked by TVL on that chain." },
           search: { type: "string", description: "Name/slug substring filter (case-insensitive)." },
           includeCex: { type: "boolean", description: "Include centralized-exchange reserve rows (default false)." },
           minTvlUsd: { type: "number", description: "Minimum TVL in USD." },
@@ -796,14 +796,14 @@ export const DEFI_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Profile of one DeFi protocol by DefiLlama slug (aave-v3, uniswap-v3, lido, morpho-v1...): TVL rank among all protocols, category, chains, current TVL by chain (borrowed/staking/pool2 reported separately, never summed into TVL), 1h/1d/7d TVL change, market cap and mcap/TVL, token symbol + address, website, X handle, audit count/links, listing date and parent protocol. Unknown slugs answer 422 with up to 5 name suggestions. Served from the cached protocol list (no per-protocol history fetch; use defi-tvl for a protocol's full TVL history). Keyless public data.",
-    tags: ["crypto", "defi", "protocol", "tvl", "mcap", "defillama", "profile"],
+      "Profile of one DeFi protocol by protocol slug (aave-v3, uniswap-v3, lido, morpho-v1...): TVL rank among all protocols, category, chains, current TVL by chain (borrowed/staking/pool2 reported separately, never summed into TVL), 1h/1d/7d TVL change, market cap and mcap/TVL, token symbol + address, website, X handle, audit count/links, listing date and parent protocol. Unknown slugs answer 422 with up to 5 name suggestions. Served from the cached protocol list (no per-protocol history fetch; use defi-tvl for a protocol's full TVL history). Keyless public data.",
+    tags: ["crypto", "defi", "protocol", "tvl", "mcap", "profile"],
     discovery: {
       bodyType: "json",
       input: { protocol: "aave-v3" },
       inputSchema: {
         properties: {
-          protocol: { type: "string", description: "DefiLlama protocol slug (lowercase, hyphenated), e.g. aave-v3, uniswap-v3, lido, morpho-v1." },
+          protocol: { type: "string", description: "Protocol slug (lowercase, hyphenated), e.g. aave-v3, uniswap-v3, lido, morpho-v1." },
         },
         required: ["protocol"],
       },
@@ -844,8 +844,8 @@ export const DEFI_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Blockchains ranked by DeFi TVL from DefiLlama's free chain list: name, TVL in USD, share of total DeFi TVL, native token symbol, EVM chain id and CoinGecko id; optional name search and minimum TVL; limit up to 100 (default 25). Totals carry the all-chain TVL and chain count. Keyless public data.",
-    tags: ["crypto", "defi", "tvl", "chains", "ranking", "defillama", "l1", "l2"],
+      "Blockchains ranked by DeFi TVL from an open DeFi analytics chain list: name, TVL in USD, share of total DeFi TVL, native token symbol, EVM chain id and market-data coin id; optional name search and minimum TVL; limit up to 100 (default 25). Totals carry the all-chain TVL and chain count. Keyless public data.",
+    tags: ["crypto", "defi", "tvl", "chains", "ranking", "l1", "l2"],
     discovery: {
       bodyType: "json",
       input: { limit: 5 },
@@ -899,14 +899,14 @@ export const DEFI_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Daily TVL history for one chain (Ethereum, Base, Solana, Arbitrum...) or for all of DeFi (chain \"all\") from DefiLlama's free historical chain TVL endpoint: most recent `days` points (default 90, max 3650) as date + TVL in USD, with a summary (latest, first, min, max, mean, change over the window). Unknown chains answer 422. Keyless public data.",
-    tags: ["crypto", "defi", "tvl", "history", "chain", "defillama", "timeseries"],
+      "Daily TVL history for one chain (Ethereum, Base, Solana, Arbitrum...) or for all of DeFi (chain \"all\") from an open DeFi analytics historical chain TVL series: most recent `days` points (default 90, max 3650) as date + TVL in USD, with a summary (latest, first, min, max, mean, change over the window). Unknown chains answer 422. Keyless public data.",
+    tags: ["crypto", "defi", "tvl", "history", "chain", "timeseries"],
     discovery: {
       bodyType: "json",
       input: { chain: "Base", days: 7 },
       inputSchema: {
         properties: {
-          chain: { type: "string", description: 'Chain name as DefiLlama spells it (Ethereum, Base, Solana, Arbitrum, Optimism, BSC...) or "all" for total DeFi TVL. Default "all".' },
+          chain: { type: "string", description: 'Chain name as the source spells it (Ethereum, Base, Solana, Arbitrum, Optimism, BSC...) or "all" for total DeFi TVL. Default "all".' },
           days: { type: "number", description: "Most recent days to return (default 90, max 3650)." },
         },
         required: [],
@@ -962,8 +962,8 @@ export const DEFI_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Stablecoins ranked by circulating supply from DefiLlama's free stablecoin dataset: name, symbol, peg currency and type (USD, EUR, JPY, VAR...), peg mechanism (fiat-backed, crypto-backed, algorithmic), current price and USD peg deviation, circulating supply in peg units and USD, 1d/7d/30d supply change, and per-chain circulation (top chains + count). Filter by peg currency, mechanism, chain (then ranked by supply on that chain) or a name/symbol search; limit up to 100. Totals carry matched circulating USD. Keyless public data.",
-    tags: ["crypto", "stablecoin", "supply", "circulating", "usdt", "usdc", "defillama", "peg"],
+      "Stablecoins ranked by circulating supply from an open DeFi analytics stablecoin dataset: name, symbol, peg currency and type (USD, EUR, JPY, VAR...), peg mechanism (fiat-backed, crypto-backed, algorithmic), current price and USD peg deviation, circulating supply in peg units and USD, 1d/7d/30d supply change, and per-chain circulation (top chains + count). Filter by peg currency, mechanism, chain (then ranked by supply on that chain) or a name/symbol search; limit up to 100. Totals carry matched circulating USD. Keyless public data.",
+    tags: ["crypto", "stablecoin", "supply", "circulating", "usdt", "usdc", "peg"],
     discovery: {
       bodyType: "json",
       input: { peg: "USD", limit: 5 },
@@ -971,7 +971,7 @@ export const DEFI_TOOLS = [
         properties: {
           peg: { type: "string", description: 'Peg currency filter: USD (default), EUR, JPY, GBP, CHF, VAR, ... or "all".' },
           mechanism: { type: "string", description: '"fiat-backed", "crypto-backed" or "algorithmic".' },
-          chain: { type: "string", description: "Chain filter as DefiLlama names it (Ethereum, Tron, Solana, Base, BSC, Arbitrum...). Rows are then ranked by circulation on that chain." },
+          chain: { type: "string", description: "Chain filter as the source names it (Ethereum, Tron, Solana, Base, BSC, Arbitrum...). Rows are then ranked by circulation on that chain." },
           search: { type: "string", description: "Name/symbol substring filter (case-insensitive)." },
           limit: { type: "number", description: "Rows to return (default 20, max 100)." },
         },
@@ -1044,14 +1044,14 @@ export const DEFI_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Daily total stablecoin circulating supply (in USD) over time from DefiLlama's free stablecoin charts, for all chains or one chain (Ethereum, Tron, Solana, Base...): most recent `days` points (default 90, max 3650) for a peg currency (USD default; EUR, JPY, ... or all pegs summed), with a summary (latest, first, min, max, mean, change over the window). Unknown chains answer 422. Keyless public data.",
-    tags: ["crypto", "stablecoin", "supply", "history", "defillama", "timeseries", "usd"],
+      "Daily total stablecoin circulating supply (in USD) over time from an open DeFi analytics stablecoin series, for all chains or one chain (Ethereum, Tron, Solana, Base...): most recent `days` points (default 90, max 3650) for a peg currency (USD default; EUR, JPY, ... or all pegs summed), with a summary (latest, first, min, max, mean, change over the window). Unknown chains answer 422. Keyless public data.",
+    tags: ["crypto", "stablecoin", "supply", "history", "timeseries", "usd"],
     discovery: {
       bodyType: "json",
       input: { chain: "all", days: 7 },
       inputSchema: {
         properties: {
-          chain: { type: "string", description: 'Chain name as DefiLlama spells it, or "all" (default).' },
+          chain: { type: "string", description: 'Chain name as the source spells it, or "all" (default).' },
           peg: { type: "string", description: 'Peg currency: USD (default), EUR, JPY, ... or "all" to sum every peg in USD.' },
           days: { type: "number", description: "Most recent days to return (default 90, max 3650)." },
         },
@@ -1115,8 +1115,8 @@ export const DEFI_TOOLS = [
     name: "DeFi protocol fees and revenue",
     price: "$0.002",
     description:
-      "Protocols ranked by fees paid by users (or by protocol revenue with metric \"revenue\") over the last 24h from DefiLlama's free fees overview: per-protocol 24h/7d/30d/1y/all-time totals with 1d/7d/30d change, category and chains; optional chain scope, category filter and name search; chain-level rows (network gas fees) via type \"chain\"; sector totals. limit up to 100. Keyless public data.",
-    tags: ["crypto", "defi", "fees", "revenue", "protocols", "ranking", "defillama"],
+      "Protocols ranked by fees paid by users (or by protocol revenue with metric \"revenue\") over the last 24h from an open DeFi analytics fees overview: per-protocol 24h/7d/30d/1y/all-time totals with 1d/7d/30d change, category and chains; optional chain scope, category filter and name search; chain-level rows (network gas fees) via type \"chain\"; sector totals. limit up to 100. Keyless public data.",
+    tags: ["crypto", "defi", "fees", "revenue", "protocols", "ranking"],
     sourceName: "defillama-fees",
     metrics: ["fees", "revenue"],
     unit: "USD",
@@ -1140,8 +1140,8 @@ export const DEFI_TOOLS = [
     name: "DEX volume by protocol",
     price: "$0.001",
     description:
-      "Decentralized exchanges ranked by 24h spot trading volume from DefiLlama's free DEX overview: per-DEX 24h/7d/30d/1y/all-time volume with 1d/7d/30d change, category and chains; optional chain scope (Ethereum, Base, Solana, Arbitrum...), category filter and name search; sector totals and the list of chains with DEX volume. limit up to 100. Keyless public data.",
-    tags: ["crypto", "defi", "dex", "volume", "trading", "ranking", "defillama", "uniswap"],
+      "Decentralized exchanges ranked by 24h spot trading volume from an open DeFi analytics DEX overview: per-DEX 24h/7d/30d/1y/all-time volume with 1d/7d/30d change, category and chains; optional chain scope (Ethereum, Base, Solana, Arbitrum...), category filter and name search; sector totals and the list of chains with DEX volume. limit up to 100. Keyless public data.",
+    tags: ["crypto", "defi", "dex", "volume", "trading", "ranking", "uniswap"],
     sourceName: "defillama-dexs",
     metrics: null,
     unit: "USD",

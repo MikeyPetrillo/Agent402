@@ -17,6 +17,7 @@ import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
 import { priceUsdFor } from "../src/report-tiers.js";
 import { humanReportsPage } from "../src/human-reports-page.js";
 import { monitorsPage } from "../src/monitors-page.js";
+import { stripScripts, stripTags } from "./lib/html-text.js";
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
@@ -67,33 +68,34 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   const home = ledgerHomePage("https://agent402.tools", {}, {}, null, []);
   ok(typeof home === "string" && home.length > 1000, "the homepage rendered for inspection");
 
-  const chips = [...home.matchAll(/class="hm-chip"[^>]*>([^<]{1,60})</g)].map((m) => m[1]);
-  ok(chips.length > 0, `the homepage has ${chips.length} product chips - if this hits zero the check below is vacuous`);
+  // The "for people" door lists each product as a row: label, then its price.
+  const rows = [...home.matchAll(/class="hm-prow" data-product="([^"]+)"[^>]*><span>([^<]{1,60})<\/span><span[^>]*>([^<]{1,20})<\/span>/g)].map((m) => ({ product: m[1], label: m[2], price: m[3] }));
+  ok(rows.length > 0, `the homepage has ${rows.length} product price rows - if this hits zero the check below is vacuous`);
 
-  const quoted = chips.flatMap((c) => [...c.matchAll(/\$(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]).toFixed(2)));
-  ok(quoted.length > 0, `those chips quote ${quoted.length} price(s)`);
+  const quoted = rows.flatMap((r) => [...r.price.matchAll(/\$(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]).toFixed(2)));
+  ok(quoted.length > 0, `those rows quote ${quoted.length} price(s)`);
   const bogus = quoted.filter((q) => !real.has(q));
   ok(bogus.length === 0,
-    `every price on a homepage chip is a real product price${bogus.length ? ` (not real: ${[...new Set(bogus)].join(", ")})` : ""}`);
+    `every price on a homepage product row is a real product price${bogus.length ? ` (not real: ${[...new Set(bogus)].join(", ")})` : ""}`);
 
   // THE ABOVE IS NOT ENOUGH ON ITS OWN, and finding that out is the point.
   // Restoring the original bug - "Monitor $3/mo" against a $5 monitor - PASSED
   // it, because $3 is a real price for other products. "This number appears
-  // somewhere in the price tables" is a much weaker claim than "this chip
-  // states the price of the thing it links to". So each chip is matched to its
+  // somewhere in the price tables" is a much weaker claim than "this row
+  // states the price of the thing it links to". So each row is matched to its
   // own product.
-  const expect = (label, cents) => {
+  const expect = (product, cents) => {
     const want = Number(cents) % 100 === 0 ? `$${Number(cents) / 100}` : `$${(Number(cents) / 100).toFixed(2)}`;
-    const chip = chips.find((c) => c.trim().startsWith(label));
-    ok(chip, `a homepage chip for "${label}" exists`);
-    ok(chip && chip.includes(want),
-      `the "${label}" chip states ${want}, the price of the product it links to (chip reads "${(chip || "").trim()}")`);
+    const row = rows.find((r) => r.product === product);
+    ok(row, `a homepage price row for "${product}" exists`);
+    ok(row && (row.price === want || row.price === `${want}/mo`),
+      `the "${product}" row states ${want}, the price of the product it links to (row reads "${row ? `${row.label} ${row.price}` : ""}")`);
   };
-  expect("Dossier", HUMAN_PRODUCTS["dossier"].price);
-  expect("Fund 13F", HUMAN_PRODUCTS["fund-report"].price);
-  expect("Domain audit", HUMAN_PRODUCTS["domain-audit"].price);
-  expect("Deep research", HUMAN_PRODUCTS["research"].price);
-  expect("Monitor", Math.min(...Object.values(MONITOR_PRODUCTS).map((m) => m.price)));
+  expect("dossier", HUMAN_PRODUCTS["dossier"].price);
+  expect("fund-report", HUMAN_PRODUCTS["fund-report"].price);
+  expect("domain-audit", HUMAN_PRODUCTS["domain-audit"].price);
+  expect("research", HUMAN_PRODUCTS["research"].price);
+  expect("monitor", Math.min(...Object.values(MONITOR_PRODUCTS).map((m) => m.price)));
 }
 
 // The llms.txt reports paragraph is derived from the catalog + product tables.
@@ -109,6 +111,13 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   ok(figures.length >= 20 && bad.length === 0, `llms.txt reports paragraph: ${figures.length} dollar figures, every one a real price${bad.length ? ` (stale: ${bad.join(", ")})` : ""}`);
   ok(para.includes(`POST /v1/research (${REPORT_TIERS["research"].price})`) && para.includes(`for $${(Math.min(...Object.values(HUMAN_PRODUCTS).map((p) => p.price)) / 100).toFixed(2)} to $`) && para.includes(`Monitors ($${(Math.min(...Object.values(MONITOR_PRODUCTS).map((m) => m.price)) / 100).toFixed(2)}/month`), "paragraph carries the agent route prices, the card range and the monitor price from the tables");
   ok(!para.includes("$0.35)") && !para.includes("$3/month"), "the two stale figures that shipped 2026-08-23..27 cannot come back");
+  // The stated agent range covers every product the paragraph lists (the IPO
+  // digest included), so no listed price sits outside it.
+  {
+    const m = para.match(/An agent pays the tool price per call, \$(\d+\.\d{2}) to \$(\d+\.\d{2})\./);
+    const listed = [...para.matchAll(/POST \/v1\/[a-z0-9-]+ \(\$(\d+\.\d{2})\)/g)].map((x) => Number(x[1]));
+    ok(m && listed.length > 0 && listed.every((n) => n >= Number(m[1]) && n <= Number(m[2])), `the agent price range (${m ? `$${m[1]} to $${m[2]}` : "missing"}) covers every listed report price`);
+  }
 }
 
 // --- the BODY of a page, and the MCP payload, not only its meta description --
@@ -163,15 +172,15 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
      "the old literal cannot come back while a dearer tool exists");
 }
 
-// --- body prices on /, /pricing and /use-cases come from the catalog --------
+// --- body prices on /, /pricing and /docs#examples come from the catalog ----
 // The homepage typed "POST /v1/dossier $0.55" against an $0.85 route, /pricing
 // typed render at $0.02 against $0.01 and payments "from $0.002" against $0.001,
-// and every cost line on /use-cases had drifted. Rendered here against a catalog
+// and every cost line on the old /use-cases page (now /docs#examples) had drifted. Rendered here against a catalog
 // of deliberately odd prices: a typed figure cannot match them by coincidence.
 {
   const { ledgerHomePage } = await import("../src/ledger-home.js");
   const { ledgerPricingPage } = await import("../src/ledger-pricing.js");
-  const { useCasesPage, useCaseCost } = await import("../src/use-cases.js");
+  const { examplesSectionHtml, useCaseCost } = await import("../src/use-cases.js");
   const odd = {
     "POST /v1/dossier": { slug: "dossier", price: "$9.97", category: "research" },
     "POST /api/route/execute": { slug: "route-execute", price: "$0.077", category: "agent" },
@@ -187,17 +196,31 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   const home = ledgerHomePage("https://agent402.tools", odd, {}, null, [], {});
   ok(/POST \/v1\/metered\/chat\/completions<\/span><span[^>]*>from \$0\.0013</.test(home), "the homepage gateway row states the catalog price");
   ok(/GET \/api\/answer<\/span><span[^>]*>\$0\.081</.test(home), "...and the answer row");
-  ok(/POST \/api\/route\/execute<\/span><span[^>]*>\$0\.077 \+ seller</.test(home), "...and the route-execute row");
+  ok(/POST \/api\/route\/execute<\/span><span[^>]*>from \$0\.077</.test(home), "...and the route-execute row (a flat tier price that covers the seller)");
   ok(home.includes("GET /api/bestsellers · $0.0071"), "...and the bestsellers kicker");
   const pricing = ledgerPricingPage("https://agent402.tools", odd);
   ok(pricing.includes("from $0.033"), "the /pricing browser row is the cheaper of render and screenshot, from the catalog");
   ok(pricing.includes("$0.055") && pricing.includes("$0.006") && pricing.includes("$0.009"), "...and extract, payments and memory read from the catalog");
   ok(!/>\$0\.02</.test(pricing) && !/from \$0\.002</.test(pricing), "no typed row figure survives");
-  const uc = useCasesPage("https://agent402.tools", odd);
+  {
+    // Every figure on /pricing is one this catalog (or the monitor table) can
+    // produce: against odd prices a typed row cannot pass by coincidence.
+    const { MONITOR_PRODUCTS: MP } = await import("../src/stripe-subscriptions.js");
+    const short = (n) => { const s3 = n.toFixed(3); return Number(s3.endsWith("0") ? n.toFixed(2) : s3); };
+    const allowed = new Set([0, ...Object.values(odd).map((t) => short(Number(t.price.slice(1)))), ...Object.values(MP).map((m) => m.price / 100)]);
+    const body = stripTags(stripScripts(pricing, ""));
+    const typed = [...body.matchAll(/\$(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1])).filter((n) => !allowed.has(n));
+    ok(typed.length === 0, `every dollar figure on /pricing derives from the catalog or the monitor table${typed.length ? ` (typed: ${[...new Set(typed)].join(", ")})` : ""}`);
+  }
+  const uc = examplesSectionHtml(odd);
   const expected = useCaseCost({ calls: [["render", 20], ["extract", 20], ["memory-write", 20]], per: "per day" }, odd);
   ok(expected && expected.startsWith("$1.94 per day"), `the use-case cost is summed from catalog prices (${expected})`);
-  ok(uc.includes(expected.slice(0, 14)), "and the page renders that computed cost");
-  ok(!/~\$/.test(uc), "no typed approximate cost line is left on /use-cases");
+  const terms = expected.slice(expected.indexOf(" (") + 2).replace(/\)\s*$/, "").split(" + ");
+  ok(uc.includes(`${expected.slice(0, 13)}</span>`) && terms.length === 3 && terms.every((t) => uc.includes(`<span>${t}</span>`)), "and the docs Examples section renders that computed cost, one breakdown term per item");
+  ok(!/~\$/.test(uc), "no typed approximate cost line is left in /docs#examples");
+  const { ledgerDocsPage } = await import("../src/ledger-docs.js");
+  const docs = ledgerDocsPage("https://agent402.tools", odd);
+  ok(docs.includes('id="examples"') && docs.includes(`${expected.slice(0, 13)}</span>`), "/docs passes its own catalog to the Examples section");
 }
 
 // --- payment.info's OTHER price field ---------------------------------------

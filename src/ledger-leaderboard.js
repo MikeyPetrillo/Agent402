@@ -17,7 +17,7 @@
 // escape hatches for the rest - matches the design's own top=12 live poll.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { standingBand } from "./standing.js";
-import { rankBy } from "./leaderboard.js";
+import { rankBy, DEFAULTS as LEADERBOARD_DEFAULTS } from "./leaderboard.js";
 import { hostRowHtml, HOST_EXCLUSION_NOTE, wideLabel } from "./host-entry.js";
 
 import { ORG_SAME_AS } from "./repo-link.js";
@@ -106,7 +106,7 @@ export function solanaSectionHtml(sol) {
     const organicRaw = calls ? (buyers / calls) * 100 : 0;
     const organic = calls ? (organicRaw < 0.01 ? "<0.01" : organicRaw.toFixed(2)) : "·";
     const partial = r.backfilling ? ` <span class="lb-addr" title="history still loading for this seller">· loading</span>` : "";
-    return `<div class="lb-row${i === 0 ? " first" : ""}"><span class="lb-rank">${String(i + 1).padStart(2, "0")}</span><span>${name} <span class="lb-addr">· ${esc(shortAddr(r.payTo))}</span>${partial}</span><span class="lb-usd">${esc(fmtUsd(total))}</span><span class="lb-num">${esc(fmtNum(calls))}</span><span class="lb-buyers">${esc(fmtNum(buyers))}</span><span class="lb-avg">${calls ? esc(`$${(total / calls).toFixed(4)}`) : "·"}</span><span class="lb-organic" style="color:${organicRaw >= 1 ? "var(--on-dark)" : "var(--dk-muted3)"};">${esc(organic)}</span></div>`;
+    return `<div class="lb-row${i === 0 ? " first" : ""}"><span class="lb-rank">${String(i + 1).padStart(2, "0")}</span><span>${name} <span class="lb-addr">· ${esc(shortAddr(r.payTo))}</span>${partial}</span><span class="lb-usd">${esc(fmtUsd(total))}</span><span class="lb-num">${esc(fmtNum(calls))}</span><span class="lb-buyers">${esc(fmtNum(buyers))}</span><span class="lb-avg">${calls ? esc(`$${(total / calls).toFixed(4)}`) : "·"}</span><span class="lb-organic" style="color:${organicRaw >= 1 ? "var(--on-panel)" : "var(--on-panel-faint)"};">${esc(organic)}</span></div>`;
   }).join("") : `<div class="lb-row"><span></span><span>No Solana seller has received a USDC transfer in this window yet, or the first scan is still running.</span></div>`;
   const win = typeof sol.window === "string" ? sol.window : "7d";
   const notes = [];
@@ -115,16 +115,14 @@ export function solanaSectionHtml(sol) {
   if (sol.stale) notes.push("stale");
   return `
   <section id="solana" style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
-    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:16px;">
-      <h2 class="lb-h2" style="font-weight:800;font-size:40px;line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Solana, ranked by USDC received.</h2>
-      <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--faint);">${esc(win)} window · USDC on Solana${notes.length ? ` · ${esc(notes.join(" · "))}` : ""}</span>
-    </div>
-    <p style="font-size:16px;line-height:1.6;color:var(--muted);max-width:760px;margin:0 0 26px;">Every inbound USDC transfer into each seller's Solana payTo, read from the chain. Unlike the Base table there is no price match and no per-call ceiling, so a transfer here may be a tool call or any other payment: these are transfers, not calls. A buyer is the wallet whose USDC paid, and transfers a seller sends itself are excluded.</p>
-    <div class="lb-scroll" style="border:1px solid var(--hairline);background:var(--surface);overflow-x:auto;">
-      <div class="lb-head" style="display:grid;grid-template-columns:36px 1fr 100px 80px 64px 78px 64px;gap:12px;padding:12px 18px;min-width:820px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dk-muted3);border-bottom:1.5px solid var(--dark-border2);"><span>#</span><span>seller · payTo</span><span style="text-align:right;">usdc received</span><span style="text-align:right;">transfers</span><span style="text-align:right;">buyers</span><span style="text-align:right;">avg transfer</span><span style="text-align:right;">organic</span></div>
+    <h2 class="lb-h2" style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Solana, ranked by USDC received.</h2>
+    <div class="ml-meta" style="margin:10px 0 16px;"><span>${esc(win)} window</span><span>USDC on Solana${notes.length ? `</span><span>${esc(notes.join("</span><span>"))}` : ""}</span></div>
+    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 26px;">Every inbound USDC transfer into each seller's Solana payTo, read from the chain. Unlike the Base table there is no price match and no per-call ceiling, so a transfer here may be a tool call or any other payment: these are transfers, not calls. A buyer is the wallet whose USDC paid, and transfers a seller sends itself are excluded.</p>
+    <div class="lb-scroll" style="border:1px solid var(--hairline);background:var(--panel);overflow-x:auto;">
+      <div class="lb-head" style="display:grid;grid-template-columns:36px 1fr 100px 80px 64px 78px 64px;gap:12px;padding:12px 18px;min-width:820px;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--on-panel-faint);border-bottom:1.5px solid var(--panel-rule-2);white-space:nowrap;"><span>#</span><span>seller · payTo</span><span style="text-align:right;">usdc received</span><span style="text-align:right;">transfers</span><span style="text-align:right;">buyers</span><span style="text-align:right;">avg transfer</span><span style="text-align:right;">organic</span></div>
       ${body}
     </div>
-    <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:14px;font-family:var(--font-mono);font-size:12px;color:var(--faint);">
+    <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:14px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">
       <span>organic = distinct buyers per 100 transfers.</span>
       <a href="/api/solana-leaderboard?window=${esc(win)}" style="color:var(--accent);text-decoration:none;">raw JSON →</a>
     </div>
@@ -172,27 +170,27 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
   const boardRows = rankedBoardSize(snapshot, walletAddress);
 
   const meta = [
-    ["rows ranked (a row can fold several wallets)", fmtNum(boardRows)],
+    ["rows ranked, one per seller", fmtNum(boardRows)],
     [sameCount ? "sellers scanned, one wallet each" : "sellers scanned", fmtNum(scannedSellers)],
     ...(sameCount ? [] : [["wallets queried", fmtNum(walletsQueried)]]),
     ["bazaar listings", fmtNum(snapshot?.bazaarTotal)],
     ["blocks scanned", fmtNum(snapshot?.scannedBlocks)],
     ["window", windowLabel],
-    ["unmatched-transfer ceiling", fmtUsd(snapshot?.maxCallUsd)],
+    ["unmatched-transfer ceiling", fmtUsd(snapshot?.maxCallUsd ?? LEADERBOARD_DEFAULTS.maxCallUsd)],
   ];
 
   const steps = [
-    "Discover sellers from the Coinbase CDP Bazaar plus our own crawl, refreshed hourly.",
+    "Discover sellers from the x402 Bazaar discovery listing plus our own crawl, refreshed hourly.",
     "Read each seller's advertised payTo addresses out of its x402 manifest.",
     "Pull settlement transfers to those addresses from Base event logs with eth_getLogs.",
-    `Count a transfer when it matches a price that seller publishes, up to a price-match ceiling (${fmtUsd(snapshot?.priceMatchMaxUsd)}). Anything matching none of their prices is held to a per-call ceiling (${fmtUsd(snapshot?.maxCallUsd)}), so treasury movements, gift cards and stablecoin conversions are not counted as tool calls.`,
+    `Count a transfer when it matches a price that seller publishes, up to a price-match ceiling (${fmtUsd(snapshot?.priceMatchMaxUsd ?? LEADERBOARD_DEFAULTS.priceMatchMaxUsd)}). Anything matching none of their prices is held to a per-call ceiling (${fmtUsd(snapshot?.maxCallUsd ?? LEADERBOARD_DEFAULTS.maxCallUsd)}), so treasury movements, gift cards and stablecoin conversions are not counted as tool calls.`,
     "Aggregate by payTo, group wallets belonging to one seller, and rank.",
   ];
 
   const faqs = [
     {
       q: "How is the x402 leaderboard calculated?",
-      a: "Sellers are discovered from the Coinbase CDP Bazaar plus Agent402's own crawl, their payTo addresses are read from their x402 manifests, and settlement transfers to those addresses are aggregated from Base event logs via eth_getLogs. A transfer counts when it matches a price that seller advertises, up to a price-match ceiling; a transfer matching none of their published prices is held to a lower per-call ceiling, so treasury movements, gift cards and stablecoin conversions do not inflate a seller. That ceiling used to be the whole rule, which made a seller priced just above it invisible here rather than ranked low. The snapshot refreshes hourly and the raw JSON is free at /api/leaderboard.",
+      a: "Sellers are discovered from the x402 Bazaar discovery listing plus Agent402's own crawl, their payTo addresses are read from their x402 manifests, and settlement transfers to those addresses are aggregated from Base event logs via eth_getLogs. A transfer counts when it matches a price that seller advertises, up to a price-match ceiling; a transfer matching none of their published prices is held to a lower per-call ceiling, so treasury movements, gift cards and stablecoin conversions do not inflate a seller. That ceiling used to be the whole rule, which made a seller priced just above it invisible here rather than ranked low. The snapshot refreshes hourly and the raw JSON is free at /api/leaderboard.",
     },
     {
       q: "Why is Agent402 excluded from its own leaderboard?",
@@ -211,22 +209,22 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
       const nameHtml = r.href
         ? `<a href="${esc(r.href)}" target="_blank" rel="noopener nofollow" class="lb-name">${esc(r.name)}</a>`
         : esc(r.name);
-      return `<div class="lb-row${r.rank === "01" ? " first" : ""}"><span class="lb-rank">${esc(r.rank)}</span><span>${nameHtml} <span class="lb-addr">· ${esc(shortAddr(r.wallet))}</span></span><span class="lb-usd">${esc(r.usd)}</span><span class="lb-num">${esc(r.calls)}</span><span class="lb-buyers">${esc(r.buyers)}</span><span class="lb-avg">${esc(r.avg)}</span><span class="lb-organic" style="color:${r.organicBright ? "var(--on-dark)" : "var(--dk-muted3)"};">${esc(r.organic)}</span></div>`;
+      return `<div class="lb-row${r.rank === "01" ? " first" : ""}"><span class="lb-rank">${esc(r.rank)}</span><span>${nameHtml} <span class="lb-addr">· ${esc(shortAddr(r.wallet))}</span></span><span class="lb-usd">${esc(r.usd)}</span><span class="lb-num">${esc(r.calls)}</span><span class="lb-buyers">${esc(r.buyers)}</span><span class="lb-avg">${esc(r.avg)}</span><span class="lb-organic" style="color:${r.organicBright ? "var(--on-panel)" : "var(--on-panel-faint)"};">${esc(r.organic)}</span></div>`;
     })
     .join("\n      ");
 
-  const warmingHtml = `<div style="padding:40px 20px;text-align:center;color:var(--dk-muted3);font-family:var(--font-mono);font-size:13px;">Warming up - first snapshot in progress. Refresh in a few seconds.</div>`;
+  const warmingHtml = `<div style="padding:40px 20px;text-align:center;color:var(--on-panel-faint);font-family:var(--font-mono);font-size:var(--fs-sm);">Warming up - first snapshot in progress. Refresh in a few seconds.</div>`;
 
   const metaRowsHtml = meta
-    .map(([label, value]) => `<tr style="border-bottom:1px solid var(--dark-border);"><th scope="row" style="text-align:left;font-weight:400;padding:10px 18px;color:var(--dk-muted3);">${esc(label)}</th><td style="padding:10px 18px;text-align:right;color:var(--on-dark);">${esc(value)}</td></tr>`)
+    .map(([label, value]) => `<tr style="border-bottom:1px solid var(--panel-rule);"><th scope="row" style="text-align:left;font-weight:400;padding:10px 18px;color:var(--on-panel-faint);">${esc(label)}</th><td style="padding:10px 18px;text-align:right;color:var(--on-panel);">${esc(value)}</td></tr>`)
     .join("");
 
   const stepsHtml = steps
-    .map((s, i) => `<div style="display:grid;grid-template-columns:26px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid var(--hairline);"><span style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">${String(i + 1).padStart(2, "0")}</span><span style="font-size:14px;line-height:1.55;color:var(--muted);">${esc(s)}</span></div>`)
+    .map((s, i) => `<div style="display:grid;grid-template-columns:26px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid var(--hairline);"><span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">${String(i + 1).padStart(2, "0")}</span><span style="font-size:var(--fs-md);line-height:1.55;color:var(--muted);">${esc(s)}</span></div>`)
     .join("");
 
   const faqHtml = faqs
-    .map((f) => `<article style="padding:24px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:18px;margin:0 0 10px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:15.5px;line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`)
+    .map((f) => `<article style="padding:24px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`)
     .join("");
 
   // --- Page body ---------------------------------------------------------------
@@ -234,24 +232,24 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
   const body = `
   <header style="border-bottom:1px solid var(--hairline);">
     <div style="max-width:1180px;margin:0 auto;padding:48px 30px 40px;">
-      <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-bottom:20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">leaderboard</span></nav>
+      <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">leaderboard</span></nav>
       <div class="lb-2col" style="display:grid;grid-template-columns:1.15fr .85fr;gap:50px;align-items:start;">
         <div>
-          <h1 class="lb-h1" style="font-weight:800;font-size:60px;line-height:.95;letter-spacing:-.035em;margin:0 0 22px;color:var(--ink);">Who is actually<br>settling <span style="color:var(--accent);">x402</span>?</h1>
-          <p style="font-size:18px;line-height:1.5;color:var(--muted);margin:0 0 18px;">The x402 sellers we can crawl, ranked by <strong style="color:var(--ink);font-weight:700;">real Base USDC settled on chain</strong> - not self-reported traffic, not a press release. Read from event logs, refreshed hourly, and free to query. The table below is the head of the board, and says how many rows of how many it is showing.</p>
-          <p style="font-size:15.5px;line-height:1.6;color:var(--faint);margin:0 0 24px;">Agent402 is excluded from this ranking by default. An index that puts itself first is not evidence of anything, so our own figure is published separately below.</p>
-          ${partialNote ? `<p style="font-size:13px;font-family:var(--font-mono);color:var(--accent);max-width:620px;margin:0 0 20px;">${esc(partialNote)}</p>` : ""}
+          <h1 class="lb-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.95;margin:0 0 22px;color:var(--ink);">Who is actually<br>settling <span style="color:var(--accent);">x402</span>?</h1>
+          <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 18px;">The x402 sellers we can crawl, ranked by <strong style="color:var(--ink);font-weight:700;">real Base USDC settled on chain</strong> - not self-reported traffic, not a press release. Read from event logs, refreshed hourly, and free to query. The table below is the head of the board, and says how many rows of how many it is showing.</p>
+          <p style="font-size:var(--fs-base);line-height:1.6;color:var(--faint);margin:0 0 24px;">Agent402 is excluded from this ranking by default. An index that puts itself first is not evidence of anything, so our own figure is published separately below.</p>
+          ${partialNote ? `<p style="font-size:var(--fs-sm);font-family:var(--font-mono);color:var(--accent);max-width:76ch;margin:0 0 20px;">${esc(partialNote)}</p>` : ""}
           <div style="display:flex;flex-wrap:wrap;gap:11px;">
-            <a class="ml-cta" href="/api/leaderboard?include=external" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:13.5px;text-decoration:none;padding:12px 18px;">GET /api/leaderboard</a>
-            <a class="ml-cta" href="/marketplace" style="background:transparent;border:1.5px solid var(--dash);color:var(--muted);font-family:var(--font-mono);font-weight:700;font-size:13.5px;text-decoration:none;padding:12px 18px;">Browse every seller</a>
+            <a class="btn btn-secondary ml-cta" href="/api/leaderboard?include=external">GET /api/leaderboard</a>
+            <a class="btn btn-secondary ml-cta" href="/marketplace">Browse every seller</a>
           </div>
         </div>
-        <div style="border:1px solid var(--hairline);background:var(--surface);">
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;color:var(--dk-muted);">
+        <div style="border:1px solid var(--hairline);background:var(--panel);">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);">
             <span>SNAPSHOT</span>
             <span style="display:inline-flex;align-items:center;gap:6px;color:var(--accent-lit);"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent-lit);display:inline-block;animation:ml-pulse 1.8s ease-in-out infinite;"></span>HOURLY</span>
           </div>
-          <table style="font-family:var(--font-mono);font-size:12.5px;"><tbody>${metaRowsHtml}</tbody></table>
+          <table style="font-family:var(--font-mono);font-size:var(--fs-sm);"><tbody>${metaRowsHtml}</tbody></table>
         </div>
       </div>
     </div>
@@ -259,16 +257,14 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
 ${standingBand(standing || {})}
 
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
-    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:16px;">
-      <h2 class="lb-h2" style="font-weight:800;font-size:40px;line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Ranked by USDC settled.</h2>
-      <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--faint);">${esc(windowLabel)} window · top ${rows.length} of ${fmtNum(boardRows)} ranked rows · include=external</span>
-    </div>
-    <p style="font-size:16px;line-height:1.6;color:var(--muted);max-width:760px;margin:0 0 26px;">Volume alone can be manufactured by paying yourself, so every row also carries distinct paying wallets and an organic ratio of buyers to calls. A thousand calls from two wallets reads very differently from a thousand from four hundred.</p>
-    <div class="lb-scroll" style="border:1px solid var(--hairline);background:var(--surface);overflow-x:auto;">
-      <div class="lb-head" style="display:grid;grid-template-columns:36px 1fr 100px 80px 64px 78px 64px;gap:12px;padding:12px 18px;min-width:820px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dk-muted3);border-bottom:1.5px solid var(--dark-border2);"><span>#</span><span>seller · payTo</span><span style="text-align:right;">usdc settled</span><span style="text-align:right;">calls</span><span style="text-align:right;">buyers</span><span style="text-align:right;">avg ticket</span><span style="text-align:right;">organic</span></div>
+    <h2 class="lb-h2" style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Ranked by USDC settled.</h2>
+    <div class="ml-meta" style="margin:10px 0 16px;"><span>${esc(windowLabel)} window</span><span>top ${rows.length} of ${fmtNum(boardRows)} ranked rows</span><span>include=external</span></div>
+    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 26px;">Volume alone can be manufactured by paying yourself, so every row also carries distinct paying wallets and an organic ratio of buyers to calls. A thousand calls from two wallets reads very differently from a thousand from four hundred.</p>
+    <div class="lb-scroll" style="border:1px solid var(--hairline);background:var(--panel);overflow-x:auto;">
+      <div class="lb-head" style="display:grid;grid-template-columns:36px 1fr 100px 80px 64px 78px 64px;gap:12px;padding:12px 18px;min-width:820px;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--on-panel-faint);border-bottom:1.5px solid var(--panel-rule-2);white-space:nowrap;"><span>#</span><span>seller · payTo</span><span style="text-align:right;">usdc settled</span><span style="text-align:right;">calls</span><span style="text-align:right;">buyers</span><span style="text-align:right;">avg ticket</span><span style="text-align:right;">organic</span></div>
       <div style="min-width:820px;">${hasData ? tableRows : warmingHtml}</div>
     </div>
-    <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:14px;font-family:var(--font-mono);font-size:12px;color:var(--faint);">
+    <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:14px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">
       <span>organic = distinct buyers per 100 calls. higher means demand is spread across more wallets.</span>
       <a href="/api/leaderboard?include=external" style="color:var(--accent);text-decoration:none;">raw JSON →</a>
     </div>
@@ -279,50 +275,49 @@ ${solanaSectionHtml(solana)}
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <div class="lb-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);">
       <div style="padding:28px;border-right:1px solid var(--hairline);background:var(--card);">
-        <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">OUR OWN ROW, DISCLOSED</div>
-        <h2 style="font-weight:800;font-size:24px;margin:0 0 14px;color:var(--ink);">Agent402, for comparison</h2>
-        <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;">We run the index, so we keep ourselves out of the ranking above. Here are our own figures instead, from our sales ledger: settlements and rails count outside buyers only, and the proof-of-work row counts free calls, excluding our own monitoring probes.</p>
-        <table style="font-family:var(--font-mono);font-size:13px;border:1px solid var(--hairline);"><tbody>
-          <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">free calls over proof-of-work</th><td style="padding:11px 14px;text-align:right;color:var(--ink);">${esc(selfPow)}</td></tr>
+        <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">OUR OWN ROW, DISCLOSED</div>
+        <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Agent402, for comparison</h2>
+        <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;">We run the index, so we keep ourselves out of the ranking above. Here are our own figures instead, from our sales ledger: settlements and rails count paid settlements from outside buyers only, and the proof-of-work row is a lifetime count of free calls, excluding our own monitoring probes.</p>
+        <table style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--hairline);"><tbody>
+          <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">free calls over proof-of-work, lifetime</th><td style="padding:11px 14px;text-align:right;color:var(--ink);">${esc(selfPow)}</td></tr>
           ${selfRails ? `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">rails with an outside settlement</th><td style="padding:11px 14px;text-align:right;color:var(--ink);" data-self-rails>${esc(selfRails)}</td></tr>` : ""}
           ${host ? `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">settlements from outside buyers, 30 days</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-ext-30d>${esc(fmtNum(host.external30d.settlements))}</td></tr>
           <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">distinct outside buyers, 30 days</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-buyers-30d>${esc(fmtNum(host.external30d.buyers))}</td></tr>
           <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">settlements from outside buyers, ${esc(wideLabel(host))}</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-ext-all>${esc(fmtNum(host.externalAllTime.settlements))}</td></tr>` : ""}
           ${selfMpp != null ? `<tr><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">outside settlements over the MPP wire</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-self-mpp>${esc(selfMpp)}</td></tr>` : ""}
         </tbody></table>
-        ${host ? `<p style="font-family:var(--font-mono);font-size:11.5px;line-height:1.6;color:var(--faint);margin:14px 0 0;">${esc(HOST_EXCLUSION_NOTE)}</p>` : ""}
+        ${host ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.6;color:var(--faint);margin:14px 0 0;">${esc(HOST_EXCLUSION_NOTE)}</p>` : ""}
 
       </div>
       <div style="padding:28px;background:var(--card);">
-        <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">METHOD</div>
-        <h2 style="font-weight:800;font-size:24px;margin:0 0 14px;color:var(--ink);">How the number is built</h2>
+        <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">METHOD</div>
+        <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">How the number is built</h2>
         <div style="display:flex;flex-direction:column;gap:0;">${stepsHtml}</div>
-        <p style="font-size:13.5px;line-height:1.6;color:var(--faint);margin:16px 0 0;">What the Base table cannot see: settlements on other chains (Solana is read separately above, as inbound transfers), payments to addresses a seller never advertised, and which specific tool was bought. Those are limits of on-chain data, not of the crawler.</p>
+        <p style="font-size:var(--fs-md);line-height:1.6;color:var(--faint);margin:16px 0 0;">What the Base table cannot see: settlements on other chains (Solana is read separately above, as inbound transfers), payments to addresses a seller never advertised, and which specific tool was bought. Those are limits of on-chain data, not of the crawler.</p>
         <!-- This table names outside businesses, so it states what it is not.
              A concentration figure next to a company invites an inference we
              have not made and cannot prove, and a row folded to the wrong
              operator is simply an error - both need saying here, where the
              numbers are, plus a route to get a row corrected. -->
-        <p style="font-size:13.5px;line-height:1.6;color:var(--faint);margin:12px 0 0;">What this is not: an assessment of any business or its operators. Every figure is an on-chain reading as of the snapshot above. A concentrated row is the ordinary shape for a seller with one large integration partner, a seller in its first weeks, or a seller whose buyers run many agents from one wallet, and we are <strong>not asserting that any flagged row is inauthentic</strong>.</p>
-        <p style="font-size:13.5px;line-height:1.6;color:var(--faint);margin:12px 0 0;">Corrections: readings go stale, and wallets can fold to the wrong operator. A seller who believes their row misreads them can write to <a href="mailto:mike@agent402.tools" style="color:var(--accent);">mike@agent402.tools</a> and we will re-scan and correct or withdraw it.</p>
+        <p style="font-size:var(--fs-md);line-height:1.6;color:var(--faint);margin:12px 0 0;">What this is not: an assessment of any business or its operators. Every figure is an on-chain reading as of the snapshot above. A concentrated row is the ordinary shape for a seller with one large integration partner, a seller in its first weeks, or a seller whose buyers run many agents from one wallet, and we are <strong>not asserting that any flagged row is inauthentic</strong>.</p>
+        <p style="font-size:var(--fs-md);line-height:1.6;color:var(--faint);margin:12px 0 0;">Corrections: readings go stale, and wallets can fold to the wrong operator. A seller who believes their row misreads them can write to <a href="mailto:mike@agent402.tools" style="color:var(--accent);">mike@agent402.tools</a> and we will re-scan and correct or withdraw it.</p>
       </div>
     </div>
   </section>
 
-  <section style="max-width:900px;margin:0 auto;padding:56px 30px 0;">
-    <h2 class="lb-h2" style="font-weight:800;font-size:36px;line-height:1.02;letter-spacing:-.025em;margin:0 0 26px;color:var(--ink);">Questions about this table.</h2>
-    <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">${faqHtml}</div>
+  <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
+    <h2 class="lb-h2" style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 26px;color:var(--ink);">Questions about this table.</h2>
+    <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);max-width:900px;">${faqHtml}</div>
   </section>
 
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 64px;">
-    <div style="background:var(--surface);border:1px solid var(--hairline);padding:48px 44px;position:relative;overflow:hidden;">
-      <div style="position:absolute;right:26px;top:-36px;font-weight:900;font-size:220px;line-height:1;color:transparent;-webkit-text-stroke:2px #ffffff10;pointer-events:none;">402</div>
+    <div style="background:var(--panel);border:1px solid var(--hairline);padding:48px 44px;position:relative;overflow:hidden;">
       <div style="position:relative;">
-        <h2 class="lb-h2" style="font-weight:800;font-size:38px;line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-dark);">Want a row here?</h2>
-        <p style="font-size:16.5px;line-height:1.6;color:var(--dk-muted2);margin:0 0 26px;max-width:540px;">Serve x402 challenges, register your origin, and the crawler picks you up on the next pass. Free, no signup, nothing deducted from your price.</p>
+        <h2 class="lb-h2" style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Want a row here?</h2>
+        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:64ch;">Serve x402 challenges, register your origin, and the crawler picks you up on the next pass. Free, no signup, nothing deducted from your price.</p>
         <div style="display:flex;gap:11px;flex-wrap:wrap;">
-          <a class="ml-cta" href="/sell" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:14px 24px;">List your API - free →</a>
-          <a class="ml-cta" href="/what-is-x402" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 24px;">WHAT IS x402?</a>
+          <a class="btn btn-primary on-panel ml-cta" href="/sell">List your API - free →</a>
+          <a class="btn btn-secondary on-panel ml-cta" href="/what-is-x402">What is x402?</a>
         </div>
       </div>
     </div>
@@ -333,14 +328,14 @@ ${solanaSectionHtml(solana)}
   const canonical = `${baseUrl}/leaderboard`;
   const title = "x402 seller leaderboard - ranked by real on-chain USDC settled";
   const description =
-    "The public on-chain ranking of x402 sellers by Base USDC settled volume: calls settled, total USD and unique buyers per seller. Hourly snapshot, built from the Coinbase CDP Bazaar and eth_getLogs. This page shows the head of the board; the free JSON carries the rest. Agent402 excluded from its own ranking.";
+    "The public on-chain ranking of x402 sellers by Base USDC settled volume: calls settled, total USD and unique buyers per seller. Hourly snapshot, built from the x402 Bazaar discovery listing and eth_getLogs. This page shows the head of the board; the free JSON carries the rest. Agent402 excluded from its own ranking.";
 
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Leaderboard", item: canonical },
   ] };
-  const datasetLd = { "@type": "Dataset", "@id": `${canonical}#dataset`, name: "x402 seller leaderboard - Base USDC settled volume", description: "Hourly on-chain snapshot ranking every indexed x402 seller by Base USDC settled volume: calls settled, total USD and unique buyers per seller. Pipeline: Coinbase CDP Bazaar discovery, eth_getLogs over recent blocks, a per-call USD ceiling to exclude non-payment transfers, then aggregation by payTo address. Agent402 is excluded from the default view.", creator: { "@id": `${baseUrl}/#organization` }, license: "https://www.gnu.org/licenses/agpl-3.0.html", isAccessibleForFree: true, temporalCoverage: "P7D", measurementTechnique: "On-chain event log aggregation by recipient address", variableMeasured: [
+  const datasetLd = { "@type": "Dataset", "@id": `${canonical}#dataset`, name: "x402 seller leaderboard - Base USDC settled volume", description: "Hourly on-chain snapshot ranking every indexed x402 seller by Base USDC settled volume: calls settled, total USD and unique buyers per seller. Pipeline: x402 Bazaar discovery, eth_getLogs over recent blocks, a per-call USD ceiling to exclude non-payment transfers, then aggregation by payTo address. Agent402 is excluded from the default view.", creator: { "@id": `${baseUrl}/#organization` }, license: "https://www.gnu.org/licenses/agpl-3.0.html", isAccessibleForFree: true, temporalCoverage: "P7D", measurementTechnique: "On-chain event log aggregation by recipient address", variableMeasured: [
     { "@type": "PropertyValue", name: "totalUsd", description: "USDC settled to the seller's payTo addresses in the window" },
     { "@type": "PropertyValue", name: "callsSettled", description: "Count of settlement transfers observed" },
     { "@type": "PropertyValue", name: "uniqueBuyers", description: "Distinct paying wallets" },
@@ -348,24 +343,24 @@ ${solanaSectionHtml(solana)}
   const faqLd = { "@type": "FAQPage", "@id": `${canonical}#faq`, mainEntity: faqs.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
 
   const extraCss = `
-.lb-row{display:grid;grid-template-columns:36px 1fr 100px 80px 64px 78px 64px;gap:12px;padding:13px 18px;color:var(--on-dark);border-bottom:1px solid var(--dark-border);min-width:820px}
+.lb-row{display:grid;grid-template-columns:36px 1fr 100px 80px 64px 78px 64px;gap:12px;padding:13px 18px;color:var(--on-panel);border-bottom:1px solid var(--panel-rule);min-width:820px}
 .lb-row:last-child{border-bottom:none}
 .lb-row.first{background:linear-gradient(90deg,color-mix(in srgb, var(--accent) 13%, transparent),transparent)}
-.lb-rank{color:var(--dk-muted3);font-weight:700}
+.lb-rank{color:var(--on-panel-faint);font-weight:700}
 .lb-row.first .lb-rank{color:var(--accent)}
-.lb-name{color:var(--on-dark);text-decoration:none;border-bottom:1px solid transparent}
-.lb-addr{color:var(--dk-muted3)}
+.lb-name{color:var(--on-panel);text-decoration:none;border-bottom:1px solid transparent}
+.lb-addr{color:var(--on-panel-faint)}
 .lb-usd{text-align:right;color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums}
 .lb-num{text-align:right;font-variant-numeric:tabular-nums}
-.lb-buyers{text-align:right;color:var(--dk-muted2);font-variant-numeric:tabular-nums}
-.lb-avg{text-align:right;color:var(--dk-muted3);font-variant-numeric:tabular-nums}
+.lb-buyers{text-align:right;color:var(--on-panel-muted);font-variant-numeric:tabular-nums}
+.lb-avg{text-align:right;color:var(--on-panel-faint);font-variant-numeric:tabular-nums}
 .lb-organic{text-align:right;font-variant-numeric:tabular-nums}
 @media (max-width: 900px) {
   .lb-2col { grid-template-columns: minmax(0,1fr) !important; }
 }
 @media (max-width: 600px) {
-  .lb-h1 { font-size: 40px !important; }
-  .lb-h2 { font-size: 29px !important; }
+  .lb-h1 { font-size: var(--fs-3xl) !important; }
+  .lb-h2 { font-size: var(--fs-2xl) !important; }
 }`;
 
   return ledgerShell({

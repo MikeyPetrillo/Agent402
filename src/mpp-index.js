@@ -31,7 +31,7 @@ import { trackStoreReady, leased } from "./state-db.js";
 const docs = new Map();
 const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
 import { timedSync } from "./boot-timing.js";
-import { safeFetch, assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
+import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins } from "./x402-index.js";
 
 export { validateOriginInput };
@@ -427,19 +427,16 @@ async function resolveProbeTarget(origin, svc) {
 }
 
 /** Make one unpaid request to `target` and confirm a genuine MPP challenge.
- *  Mirrors x402-index.js's probePaywall() exactly: raw fetch + assertPublicUrl
- *  + ssrfDispatcher, NOT safeFetch() - safeFetch() throws on the 401/402 this
+ *  Mirrors x402-index.js's probePaywall() exactly: probePublicUrl() (assertPublicUrl
+ *  + ssrfDispatcher, no redirect followed), NOT safeFetch() - safeFetch() throws on the 401/402 this
  *  probe is specifically trying to observe, and doesn't expose headers. */
 async function probeMppChallenge({ method, url }) {
   try {
-    await assertPublicUrl(url);
-    const res = await fetch(url, {
+    const res = await probePublicUrl(url, {
       method,
       headers: { Accept: "application/json", ...(method !== "GET" ? { "Content-Type": "application/json" } : {}) },
       ...(method !== "GET" ? { body: "{}" } : {}),
-      dispatcher: ssrfDispatcher,
-      redirect: "manual",
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      timeoutMs: PROBE_TIMEOUT_MS,
     });
     const challenge = res.headers.get("www-authenticate");
     const mpp = isMppChallenge(challenge);

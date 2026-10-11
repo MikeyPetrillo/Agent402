@@ -468,17 +468,18 @@ Auto-closes when the word is ok.`;
     // Money writes (sales, refund debts, checkout finals, subscription and
     // decide records) kept on the container's local disk because the
     // state database has not taken them (ledgerDeadLetter on
-    // /api/gateway-status, src/ledger-mirror.js). stuck pages; none and off
-    // clear; pending (the replay is working) and unknown do neither. Title
-    // matches heartbeat.yml's.
+    // /api/gateway-status, src/ledger-mirror.js). stuck and local (the
+    // journals live in Redis but an entry sits on the container's disk)
+    // page; none and off clear; pending (the replay is working) and unknown
+    // do neither. Title matches heartbeat.yml's.
     title: "Ledger rows waiting on local disk (dead-letter stuck)",
     verdict: ({ gateway: b }) => {
       const w = b.ledgerDeadLetter?.status;
-      if (w === "stuck") return "bad";
+      if (w === "stuck" || w === "local") return "bad";
       return w === "none" || w === "off" ? "good" : "quiet";
     },
-    body: () =>
-      `/api/gateway-status reports ledgerDeadLetter.status=stuck: a money write (a sale, a refund debt, a card report's final record, a subscription record or a decide write) has waited on the container's local disk for the state database longer than LEDGER_DEAD_LETTER_STUCK_MINUTES (default 20). Each journal's replay retries on a timer; while it cannot land them they exist only on that container, so do not redeploy or restart it until they land. Check stateDb on the same endpoint, the Postgres service on Railway, and the [sales-ledger] / [refund-ledger] / [human-checkout] / [subscriptions] / [decide] log lines (a row the database refuses is named there). The operator read of /api/gateway-status has the counts per journal. Auto-closes when the word is none.`,
+    body: ({ gateway: b } = {}) =>
+      `/api/gateway-status reports ledgerDeadLetter.status=${b?.ledgerDeadLetter?.status === "local" ? "local" : "stuck"}. local: the journals live in Redis but a money write sits on the container's local disk because Redis did not take it (check the Redis service). stuck: a money write (a sale, a refund debt, a card report's final record, a subscription record, a decide write or an outbound payment record) has waited on the container's local disk for the state database longer than LEDGER_DEAD_LETTER_STUCK_MINUTES (default 20). Each journal's replay retries on a timer; while it cannot land them they exist only on that container, so do not redeploy or restart it until they land. Check stateDb on the same endpoint, the Postgres service on Railway, and the [sales-ledger] / [refund-ledger] / [human-checkout] / [subscriptions] / [decide] / [outbound-ledger] log lines (a row the database refuses is named there). The operator read of /api/gateway-status has the counts per journal. Auto-closes when the word is none.`,
   },
   {
     // The nightly offsite backup (backup on /api/gateway-status,

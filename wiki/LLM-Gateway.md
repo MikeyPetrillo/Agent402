@@ -12,10 +12,14 @@ simplest is the local wallet proxy, which signs an x402 payment per call from a
 wallet you hold and forwards to the gateway:
 
 ```bash
-npm i @x402/fetch @x402/evm viem
+npm i agent402-openclaw @x402/fetch @x402/evm viem   # in one folder
 export AGENT402_WALLET_KEY=0x...   # an EVM key holding USDC on Base
-npx agent402-openclaw proxy        # serves http://127.0.0.1:8412/v1
+npx agent402-openclaw proxy        # run from that folder; serves http://127.0.0.1:8412/v1
 ```
+
+Install the four packages together and start the proxy from that folder: the
+wallet packages are optional peers, and a proxy that cannot load them starts
+unpaid (it logs that x402 payment is unavailable).
 
 ```python
 from openai import OpenAI
@@ -30,7 +34,7 @@ Or pay in-process from JavaScript by wrapping fetch with an x402 payer
 (`wrapFetchWithPayment` from `@x402/fetch`) and handing it to the SDK's `fetch`
 option; `agent402-client` does the same with spend caps built in.
 
-Ordering, because it decides who eats an upstream failure: the handler runs **first**, and `@x402/express` settles **afterwards**, and only for a response below `400`. A `502` from a provider therefore **cancels settlement** and you are not charged; the failover chains below exist so a provider outage becomes a retry rather than your `502`. A `200` is charged once settlement succeeds, and streaming starts only after that (see **Streaming** below). Upstream is OpenRouter for chat, images and speech, and OpenAI for embeddings; per-tier model allowlists and input/output caps bound what one call can ask for. `GET /v1/models` (free) lists every model with its tier, price, and caps.
+Ordering, because it decides who eats an upstream failure: the handler runs **first**, and `@x402/express` settles **afterwards**, and only for a response below `400`. A `502` from a provider therefore **cancels settlement** and you are not charged; the failover chains below exist so a provider outage becomes a retry rather than your `502`. A `200` is charged once settlement succeeds, and streaming starts only after that (see **Streaming** below). Calls are served by upstream model providers behind a failover chain; per-tier model allowlists and input/output caps bound what one call can ask for. `GET /v1/models` (free) lists every model with its tier, price, and caps.
 
 Because tiers are flat-priced while upstream bills per token, every request is also priced server-side before it goes upstream: input tokens are counted exactly (including tool schemas and images), and `max_tokens` is automatically tightened when an expensive model plus a large input would otherwise approach the tier price. Cheap and mid-priced models never hit this bound. A request whose input alone exceeds the budget returns a `400` explaining the fix (shrink the input, lower `n`, or pick a cheaper model). `n` is capped at 4.
 
@@ -40,20 +44,20 @@ Because tiers are flat-priced while upstream bills per token, every request is a
 
 | Endpoint | Price | Serves | Input cap | Output cap |
 |---|---|---|---|---|
-| `POST /v1/nano/chat/completions` | $0.003 | nano models (gpt-6-luna by default, gpt-5.6-luna, gpt-5-nano, gemini flash-lite, small llama/ministral/qwen, deepseek-chat, laguna) - priced for high-frequency agent loops | 12k chars | 768 tokens |
+| `POST /v1/nano/chat/completions` | $0.003 | nano models (gpt-6-luna by default, gpt-5.6-luna, gpt-5-nano, gemini flash-lite, mercury-2.5, small llama/ministral/qwen, deepseek-chat; `GET /v1/models` lists the live set) - priced for high-frequency agent loops | 12k chars | 768 tokens |
 | `POST /v1/auto/chat/completions` | $0.01 | **model optional** - deterministic eval-ranked routing (see below) | 16k chars | 1,024 tokens |
 | `POST /v1/chat/completions` | $0.02 | budget/mid models (gpt-4o-mini, gpt-4.1-mini, claude haiku, gemini flash-lite, deepseek, llama, mistral, qwen) | 32k chars | 2,048 tokens |
 | `POST /v1/pro/chat/completions` | $0.10 | mid-frontier (gpt-4o, gpt-4.1, gpt-6 sol, claude sonnet incl. sonnet-5, gemini pro and 3.x flash, grok) | 48k chars | 4,096 tokens |
-| `POST /v1/premium/chat/completions` | $0.50 | frontier (gpt-5 and gpt-6 astra, o3 and o4-mini, claude opus incl. opus-5.5, and claude fable 5.1) | 85k chars | 8,192 tokens |
+| `POST /v1/premium/chat/completions` | $0.50 | frontier (gpt-5 and gpt-6 astra, o3 and o4-mini, claude opus incl. opus-5.5, and claude fable 5.1) | 200k chars | 8,192 tokens |
 | `POST /v1/embeddings` | $0.002 | text-embedding-3-small (default), 3-large, ada-002 - batch up to 64 inputs | 16k chars | - |
 | `POST /v1/images/generations` | $0.08 | FLUX.2 Pro with GPT-5 Image Mini as the failover - one 1024x1024 PNG per call, inline base64 out | 4k-char prompt | 1 image |
-| `POST /v1/audio/speech` | $0.06 | a five-model failover chain on OpenRouter's audio API; raw mp3/pcm bytes out, the 11 OpenAI voice names plus each model's native voices | 2k-char input | - |
+| `POST /v1/audio/speech` | $0.06 | a five-model failover chain; raw mp3/pcm bytes out, the 11 OpenAI voice names plus each model's native voices | 2k-char input | - |
 
 Bare OpenAI-style names (`gpt-4o-mini`) are accepted and mapped; requesting a model that another flat tier serves is priced at that tier: the 402 quotes its price, the paid call is served under its caps and failover, and the answer says so in `agent402_tier`. All tiers are **wallet-only** - every call burns real upstream credit, so there is no proof-of-work free tier (see [[Security Model]]). The pro and premium chat tiers also accept three upstream server tools under a server-owned bound (`openrouter:web_search`, `openrouter:web_fetch`, `openrouter:datetime`, each with a hard use cap that `GET /v1/models` lists per tier); other server tools are refused by name.
 
 ## Metered tier - pay per request, quoted first
 
-`POST /v1/metered/chat/completions` (`v1-chat-metered`) serves every explicit model the flat chat tiers serve (the same allowlists; `GET /v1/models` names it beside each chat model as `meteredEndpoint`, with `meteredMaxInputChars` 200k and `meteredMaxTokens` 8,192), but the price is not flat: **the 402 quotes this exact request from its own body**. The quote is the request's worst case (input counted exactly, plus your `max_tokens`, at the model's list price) times a fixed markup, never below the $0.001 settlement floor, rounded up to a micro-dollar; a request whose quote would exceed $2 is refused with a `400` naming the cap (a `4xx` cancels settlement, so nothing is charged). Because the price is derived from the body actually served, a payment authorized for a small quote cannot ride a bigger request. Set `max_tokens` to what you need: it is what you pay for.
+`POST /v1/metered/chat/completions` (`v1-chat-metered`) serves every explicit model the flat chat tiers serve (the same allowlists; `GET /v1/models` names it beside each chat model as `meteredEndpoint`, with `meteredMaxInputChars` 200k and `meteredMaxTokens` 8,192), but the price is not flat: **the 402 quotes this exact request from its own body**. The quote is the request's worst case (input counted exactly, plus your `max_tokens`, at the model's list price, plus our fee), never below the $0.001 settlement floor, rounded up to a micro-dollar; a request whose quote would exceed $2 is refused with a `400` naming the cap (a `4xx` cancels settlement, so nothing is charged). Because the price is derived from the body actually served, a payment authorized for a small quote cannot ride a bigger request. Set `max_tokens` to what you need: it is what you pay for.
 
 Two ways to pay it:
 
@@ -81,13 +85,13 @@ The field is absent when metered would not be materially cheaper, on the metered
 
 ## Image generation
 
-`POST /v1/images/generations` speaks the OpenAI images wire - any OpenAI SDK's `images.generate()` works by changing `base_url`. Send `{"prompt": "..."}` (up to 4,000 chars) and get `{created, model, data: [{b64_json, media_type}]}` back - one image per call at a flat $0.08, `n` locked to 1, `response_format` is always inline `b64_json` (nothing is hosted). `zdr: true` works here too. Upstream is FLUX.2 Pro (GPT-5 Image Mini as the failover) on OpenRouter's Image API, each pinned to one provider with a per-image bound and a live price re-check.
+`POST /v1/images/generations` speaks the OpenAI images wire - any OpenAI SDK's `images.generate()` works by changing `base_url`. Send `{"prompt": "..."}` (up to 4,000 chars) and get `{created, model, data: [{b64_json, media_type}]}` back - one image per call at a flat $0.08, `n` locked to 1, `response_format` is always inline `b64_json` (nothing is hosted). `zdr: true` works here too. The model is FLUX.2 Pro (GPT-5 Image Mini as the failover), each pinned to one provider with a per-image bound and a live price re-check.
 
 ## Text-to-speech
 
 `POST /v1/audio/speech` speaks the OpenAI TTS wire, so any OpenAI SDK's `audio.speech.create()` works by changing `base_url`. Send `{"input": "...", "voice": "alloy"}` (up to 2,000 chars) and raw audio bytes come back, `mp3` by default and `pcm` on request, at a flat $0.06 per call. `zdr: true` works here too.
 
-There is no OpenAI TTS model on the upstream, so the tier serves a **five-model failover chain** over OpenRouter's audio API instead, walking to the next link on *any* upstream failure including an empty audio body. The 11 OpenAI voice names (`alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `onyx`, `nova`, `sage`, `shimmer`, `verse`) are accepted on every link and mapped to that model's closest native voice; each model's **native** voice ids (e.g. `en_paul_cheerful`) are also accepted directly and are listed per model on `GET /v1/models`. Pinning `model` moves that link to the front of the chain rather than disabling the rest.
+There is no OpenAI TTS model on the upstream, so the tier serves a **five-model failover chain** instead, walking to the next link on *any* upstream failure including an empty audio body. The 11 OpenAI voice names (`alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `onyx`, `nova`, `sage`, `shimmer`, `verse`) are accepted on every link and mapped to that model's closest native voice; each model's **native** voice ids (e.g. `en_paul_cheerful`) are also accepted directly and are listed per model on `GET /v1/models`. Pinning `model` moves that link to the front of the chain rather than disabling the rest.
 
 Two request fields differ from OpenAI's:
 
@@ -137,11 +141,11 @@ The paid canary buys from the gateway every day with real USDC: a nano completio
 
 ## Upstream service tiers
 
-Where the upstream offers it (Gemini 2.5/3.x families, gpt-5-nano, gpt-5.6-*, and the image model), the gateway asks for OpenRouter's **flex** service tier first (higher latency, lower availability) and retries the same model on the default tier if flex has no capacity, before moving to the next failover link. Buyers see the same price either way; the response's `service_tier` field says which tier served.
+Where the upstream offers it (the Gemini 3.x flash families, gpt-5-nano, gpt-5.6-* and gpt-6 luna/sol), the gateway asks for the upstream's **flex** service tier first (higher latency, lower availability) and retries the same model on the default tier if flex has no capacity, before moving to the next failover link. Buyers see the same price either way; the response's `service_tier` field says which tier served.
 
 ## Prompt caching
 
-Every chat call asks the upstream to cache the prompt prefix (OpenRouter's top-level `cache_control: {type:"ephemeral"}`, 5-minute TTL) and pins your turns to one provider (`session_id`), so a multi-turn agent conversation is served from the provider cache on repeated prefixes. Same flat price to you either way. Send `cache_control: false` to opt out. The budget tiers (nano, auto) additionally pick the cheapest provider under their price cap; pro and premium keep OpenRouter's default provider balancing.
+Every chat call asks the upstream to cache the prompt prefix (a top-level `cache_control: {type:"ephemeral"}`, 5-minute TTL) and pins your turns to one provider (`session_id`), so a multi-turn agent conversation is served from the provider cache on repeated prefixes. Same flat price to you either way. Send `cache_control: false` to opt out. The budget tiers (nano, auto) additionally pick the cheapest provider under their price cap; pro and premium keep the upstream's default provider balancing.
 
 ## Rerank
 
@@ -157,6 +161,6 @@ The same five tiers also speak the OpenAI Responses wire: `POST /v1/nano/respons
 
 ## Grounded answers (web search)
 
-`POST /v1/grounded/chat/completions` ($0.03) is the auto router plus a live Exa web search on every call (up to 5 results): the model answers from the results and the reply carries `url_citation` annotations. Omit `model` (or send `auto`) and the gateway picks the model by task type; the response adds `agent402_router`. `:online` model variants are refused on the other tiers (pro and premium accept the bounded `openrouter:web_search` server tool instead), and here search is part of the flat price. Never cached.
+`POST /v1/grounded/chat/completions` ($0.03) is the auto router plus a live web search on every call (up to 5 results): the model answers from the results and the reply carries `url_citation` annotations. Omit `model` (or send `auto`) and the gateway picks the model by task type; the response adds `agent402_router`. `:online` model variants are refused on the other tiers (pro and premium accept the bounded `openrouter:web_search` server tool instead), and here search is part of the flat price. Never cached.
 
 Other hosts (Claude Code, Cursor, Continue, ElizaOS, AgentCore, any OpenAI SDK): https://agent402.tools/guides/agent-hosts

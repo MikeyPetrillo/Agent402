@@ -22,13 +22,13 @@ function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } c
 const SYNTH = "anthropic/claude-opus-5"; // synthesis on both tiers (see research-deep eval)
 const GROUND = "google/gemini-3.6-flash"; // grounded web search + read. gemini-3.6-flash since 2026-09-23 (2.5-flash expires upstream 2026-10-20); it reasons by default, so the search call passes reasoning:low - measured: default spent 460 of 600 tokens thinking, low returned the full cited answer at the same cost.
 
-// synthMaxTokens carries headroom over the word target (measured ~2.3 output
-// tokens/word for dense cited markdown; a 6,000 cap truncated a "~2,500 word"
-// dossier at ~2,540 words). Caps held at a provider-safe 8,000; word targets are
-// what those budgets complete; the source list is appended in code (no budget).
+// synthMaxTokens carries headroom over the word target: at least 3.5 output
+// tokens per target word (scripts/test-report-synthesis.js), since a cap near 3
+// stopped for length and paid for a retry, and a 6,000 cap truncated a "~2,500
+// word" dossier at ~2,540 words. The source list is appended in code (no budget).
 export const DOSSIER_TIERS = {
-  "dossier": { price: "$0.85", maxUpstreamUsd: 0.5, filings: 3, insiderDays: 120, searches: 4, topWeb: 20, synthMaxTokens: 7000, words: "~2,400" },
-  "dossier-max": { price: "$1.10", maxUpstreamUsd: 0.65, filings: 6, insiderDays: 365, searches: 8, topWeb: 32, synthMaxTokens: 8000, words: "~2,800" },
+  "dossier": { price: "$0.85", maxUpstreamUsd: 0.5, filings: 3, insiderDays: 120, searches: 4, topWeb: 20, synthMaxTokens: 9600, words: "~2,400" },
+  "dossier-max": { price: "$1.10", maxUpstreamUsd: 0.65, filings: 6, insiderDays: 365, searches: 8, topWeb: 32, synthMaxTokens: 11200, words: "~2,800" },
 };
 // Models routed to - exported so the live-catalog guard checks them.
 export const DOSSIER_MODELS = [SYNTH, GROUND];
@@ -341,7 +341,8 @@ function makeDossierHandlerInner(tierSlug) {
       model: GROUND,
       reasoning: { effort: "low" },
       messages: [{ role: "user", content: `Search the web and answer with SPECIFIC, verifiable facts - figures, dates, named events, quotes - each with a citation. Do not state a number unless a source supports it. Question: ${q}` }],
-      max_tokens: 800,
+      // 800 cut every grounded answer mid-sentence (reasoning shares the budget).
+      max_tokens: 1400,
       plugins: [{ id: "web", engine: "exa", max_results: 5 }],
     });
     const webResults = await Promise.all(queries.map((q) => chat(searchBody(q), SEARCH_TIMEOUT_MS, user).then(

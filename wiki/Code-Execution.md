@@ -5,7 +5,7 @@
 > **Acceptable use.** Hosted-instance traffic is governed by the [Terms of Service](https://agent402.tools/terms), including its acceptable-use policy: no unlawful code, no attacks on third parties, no malware. Wallets used for violations are blocked before settlement.
 
 
-Two tiers of sandboxed code execution, paywalled via x402. An agent sends source code and gets back stdout, stderr, and the expression result -- all executed in an isolated cloud VM via [E2B](https://e2b.dev). No API key needed on the caller's side, no signup, no account. The operator's own `E2B_API_KEY` handles upstream auth; per-tier timeout and code-size caps bound compute cost.
+Two tiers of sandboxed code execution, paywalled via x402. An agent sends source code and gets back stdout, stderr, and the expression result: all executed in an isolated cloud VM via [E2B](https://e2b.dev). No API key needed on the caller's side, no signup, no account. The operator's own `E2B_API_KEY` handles upstream auth; per-tier timeout and code-size caps bound compute cost.
 
 ## Tiers
 
@@ -16,7 +16,7 @@ Two tiers of sandboxed code execution, paywalled via x402. An agent sends source
 
 Output (stdout, stderr, the result and any error text together) is capped at 256 KB on `code-run` and 1 MB on `code-run-pro`; a capped answer carries `"truncated": true`.
 
-Both tiers are **wallet-only** -- there is no proof-of-work free tier because every call spins up a real cloud VM. See [[Security Model]] for the wallet-only rationale.
+Both tiers are **wallet-only**: there is no proof-of-work free tier because every call spins up a real cloud VM. See [[Security Model]] for the wallet-only rationale.
 
 ## Request format
 
@@ -54,7 +54,11 @@ Both tiers return the same envelope:
 | `stdout` | Standard output from the execution |
 | `stderr` | Standard error from the execution |
 | `result` | The value of the last expression (if any) |
-| `error` | Error details if the code failed, or `null` |
+| `error` | Error details if the code raised an exception, or `null` |
+| `truncated` | Present and `true` when the output was cut at the tier's output cap |
+| `timedOut` | Present and `true` when the run hit the time limit; it comes with `timeLimitSeconds` and whatever the code printed before the limit |
+
+**What is charged.** The sandbox runs your code either way, so a run that answers `200` is charged: that includes code that raised an exception (the `error` field) and a run that hit the time limit (`timedOut: true`). A refusal before the run (a bad request, a sandbox that could not start, too many concurrent runs) answers an error status and is not charged.
 
 ### Error shape
 
@@ -72,7 +76,7 @@ When code raises an exception, the `error` field contains:
 
 ## Curl examples
 
-### Standard tier ($0.02 -- Python, 30s)
+### Standard tier ($0.02: Python, 30s)
 
 ```bash
 curl -X POST https://agent402.tools/api/code-run \
@@ -83,7 +87,7 @@ curl -X POST https://agent402.tools/api/code-run \
   }'
 ```
 
-### Standard tier -- JavaScript
+### Standard tier: JavaScript
 
 ```bash
 curl -X POST https://agent402.tools/api/code-run \
@@ -94,7 +98,7 @@ curl -X POST https://agent402.tools/api/code-run \
   }'
 ```
 
-### Pro tier ($0.05 -- longer computations, 60s)
+### Pro tier ($0.05: longer computations, 60s)
 
 ```bash
 curl -X POST https://agent402.tools/api/code-run-pro \
@@ -105,26 +109,26 @@ curl -X POST https://agent402.tools/api/code-run-pro \
   }'
 ```
 
-All endpoints return `402` without a valid x402 payment header -- the same flow as every other paid tool. See [[Paying with x402]] for how to sign and attach payment.
+All endpoints return `402` without a valid x402 payment header: the same flow as every other paid tool. See [[Paying with x402]] for how to sign and attach payment.
 
 ## Security model
 
 Each call runs in a **fully isolated E2B sandbox** (ephemeral cloud VM):
 
 - **No access** to the Agent402 server's filesystem, network, or secrets
-- **No state** persists between callers -- the VM is destroyed after each execution
-- **Timeout enforcement** prevents infinite loops from burning compute
+- **No state** persists between callers: the VM is destroyed after each execution
+- **A hard time limit** stops infinite loops; a run that reaches it returns `200` with `timedOut: true` and is charged
 - **Code size cap** prevents payload abuse
 - The `E2B_API_KEY` is read at call time and never exposed in responses or error messages
 
 ## Environment gating
 
-The kit lazy-loads the E2B SDK and reads `E2B_API_KEY` at call time, not at boot. If the key is missing or empty, calls return `503 Service Unavailable` and the rest of the server continues running normally. Self-hosters who don't want to offer code execution simply omit the env var -- no code change needed.
+The kit lazy-loads the E2B SDK and reads `E2B_API_KEY` at call time, not at boot. If the key is missing or empty, calls return `503 Service Unavailable` and the rest of the server continues running normally. Self-hosters who don't want to offer code execution simply omit the env var: no code change needed.
 
 ## See also
 
-- [[LLM Proxy Gateway|LLM-Proxy]] -- text inference proxy
-- [[Image Generation Gateway|Image-Gen]] -- image generation proxy
-- [[Paying with x402]] -- the USDC payment flow these endpoints require
-- [[Security Model]] -- why these tools are wallet-only (no PoW free tier)
-- [[Tool Catalog]] -- where these tools sit in the catalog
+- [[LLM Proxy Gateway|LLM-Proxy]]: text inference proxy
+- [[Image Generation Gateway|Image-Gen]]: image generation proxy
+- [[Paying with x402]]: the USDC payment flow these endpoints require
+- [[Security Model]]: why these tools are wallet-only (no PoW free tier)
+- [[Tool Catalog]]: where these tools sit in the catalog

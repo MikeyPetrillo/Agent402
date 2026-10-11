@@ -10,6 +10,7 @@ import {
   recordWish, getWishesAggregate, WISH_THRESHOLD,
   clusterQualifies, QUALIFY_MIN_SPAN_MS, QUALIFY_MIN_CALLERS, WISH_SERVED_MIN_SCORE, callerHash, annotateServed, annotateServedAsync,
   __testSetFilePath, __testSetLineCap, __testState, __testReset, WISH_STALE_DAYS,
+  rotateWishes, wishRetentionDays, WISH_RETENTION_DEFAULT_DAYS, clusterHash,
 } from "../src/wish.js";
 
 process.env.WISH_CALLER_SALT = "test-salt-never-prod";
@@ -401,6 +402,65 @@ for (const f of tmpFiles) {
   live = false;
   ok(JSON.stringify(asyncRows) === JSON.stringify(syncRows), "the async annotator writes exactly what the sync one does");
   ok(total > 100 && worst < 40, `the async annotator yields while it works (longest hold ${worst.toFixed(1)} ms over ${total.toFixed(0)} ms)`);
+}
+
+// --- retention: text older than WISH_RETENTION_DAYS is deleted, counts kept ---
+{
+  const file = freshFile("rotate");
+  const DAY = 86_400_000;
+  const now = Date.now();
+  const old = now - (WISH_RETENTION_DEFAULT_DAYS + 10) * DAY;
+  const L = (o) => JSON.stringify(o);
+  const lines = [];
+  // An old cluster that qualified (3 callers, two sources) and fired its threshold.
+  for (let i = 0; i < 5; i++) lines.push(L({ need: "Secret Old Need", context: "private context text", source: i % 2 ? "mcp" : "api", ts: old + i * DAY, caller: `c${i % 3}` }));
+  lines.push(L({ type: "threshold", key: "secret old need", ts: old + 4 * DAY }));
+  // A cluster with old AND new lines.
+  lines.push(L({ need: "split need", source: "api", ts: old, caller: "s1" }));
+  lines.push(L({ need: "split need", source: "find-miss", ts: now - DAY, caller: "s2" }));
+  // A legacy line with no time is treated as old.
+  lines.push(L({ need: "timeless need", source: "api" }));
+  // A recent one.
+  lines.push(L({ need: "fresh need", source: "mcp", ts: now - 2 * DAY, caller: "f1" }));
+  writeFileSync(file, lines.join("\n") + "\n");
+  __testSetFilePath(file);
+  const pubBefore = getWishesAggregate();
+  const detBefore = getWishesAggregate({ detailed: true, limit: 500 });
+  const r = await rotateWishes({ now });
+  const text = readFileSync(file, "utf8");
+  ok(r.removed === 8, `rotation removes the 8 lines older than ${WISH_RETENTION_DEFAULT_DAYS} days (removed ${r.removed})`);
+  ok(!/secret old need|private context text|timeless need/i.test(text) && !/"caller":"c[0-2]"/.test(text), "no rotated request text, context or caller fingerprint is left in the file");
+  ok(/"split need"/.test(text) && /"fresh need"/.test(text), "lines inside the window stay");
+  const roll = JSON.parse(text.split("\n")[0]);
+  ok(roll.type === "rollup" && Object.keys(roll.clusters).every((h) => /^[0-9a-f]{24}$/.test(h)) && roll.clusters[clusterHash("secret old need")]?.count === 5, "the rollup keeps counts under a keyed hash of the text, never the text");
+  const pubAfter = getWishesAggregate();
+  ok(JSON.stringify(pubAfter) === JSON.stringify(pubBefore), `the public beacon is unchanged by rotation (${JSON.stringify(pubAfter)})`);
+  const detAfter = getWishesAggregate({ detailed: true, limit: 500 });
+  ok(detAfter.distinctClusters === detBefore.distinctClusters && detAfter.totalWishes === detBefore.totalWishes, "the operator board's totals are unchanged");
+  // A legacy line with no time read as "now" on the board; once rotated it is
+  // counted as hidden instead of listed (the board shows less, never more).
+  const noTimeless = (cs) => JSON.stringify(cs.filter((c) => c.text !== "timeless need"));
+  ok(noTimeless(detAfter.clusters) === noTimeless(detBefore.clusters), "every other listed row reads the same (count, sources, callers, first seen) after rotation");
+  ok(detBefore.clusters.some((c) => c.text === "timeless need") && !detAfter.clusters.some((c) => c.text === "timeless need") && detAfter.staleHidden === detBefore.staleHidden + 1, "a line with no time is rotated, then counted as hidden rather than listed");
+  ok(!detAfter.clusters.some((c) => /secret old need/.test(c.text)), "a cluster whose every line rotated is never listed (it was already past the stale window)");
+  // Same text later: merges with its history.
+  recordWish({ need: "secret old need", source: "api", ip: "198.51.100.9" });
+  const merged = getWishesAggregate({ detailed: true, limit: 500 }).clusters.find((c) => c.text === "secret old need");
+  ok(merged && merged.count === 6 && merged.callers === 4 && merged.issueOpened === true, `a later wish with the same text continues the rolled-up count (${JSON.stringify(merged)})`);
+  ok(getWishesAggregate().distinctClusters === pubBefore.distinctClusters, "and does not count as a new cluster");
+  // Restart: the rollup is read back.
+  __testSetFilePath(file);
+  ok(getWishesAggregate().totalWishes === pubBefore.totalWishes + 1, "the rollup survives a restart");
+  // A second rotation with nothing old changes nothing.
+  const before2 = readFileSync(file, "utf8");
+  const r2 = await rotateWishes({ now });
+  ok(r2.removed === 0 && readFileSync(file, "utf8") === before2, "a rotation with nothing past the window leaves the file alone");
+  // A later rotation folds into the existing rollup (sums, never replaces).
+  const r3 = await rotateWishes({ now: now + (WISH_RETENTION_DEFAULT_DAYS + 5) * DAY });
+  const roll3 = JSON.parse(readFileSync(file, "utf8").split("\n")[0]);
+  ok(r3.removed === 3 && roll3.clusters[clusterHash("secret old need")].count === 6 && roll3.clusters[clusterHash("split need")].count === 2, `a later rotation adds to the rollup (${r3.removed} removed)`);
+  ok(getWishesAggregate().totalWishes === pubBefore.totalWishes + 1, "totals still hold after the second rotation");
+  ok(wishRetentionDays({ WISH_RETENTION_DAYS: "30" }) === 30 && wishRetentionDays({ WISH_RETENTION_DAYS: "-1" }) === 180 && wishRetentionDays({}) === 180, "WISH_RETENTION_DAYS sets the window; junk reads as the default");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

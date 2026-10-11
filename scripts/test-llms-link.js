@@ -23,7 +23,7 @@ ok(withLlmsLinkTag("<p>fragment</p>") === "<p>fragment</p>", "a fragment with no
 const PORT = await getFreePort();
 const B = `http://127.0.0.1:${PORT}`;
 proc = spawn("node", ["src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", WALLET_DIGEST: "off", X402_SYNC_ON_START: "false" },
+  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", X402_SYNC_ON_START: "false" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 proc.stdout.on("data", (d) => log.push(...String(d).split("\n").filter(Boolean)));
@@ -34,7 +34,7 @@ try {
   ok(up, "server booted");
   // One page from each kind of shell: ledger shell, hand-written heads, the
   // legacy chrome, a tool page, and a 404.
-  for (const p of ["/", "/tools", "/tools/hash", "/revenue", "/sell", "/why", "/crawler", "/what-is-x402", "/no-such-page"]) {
+  for (const p of ["/", "/tools", "/tools/hash", "/revenue", "/sell", "/docs", "/crawler", "/what-is-x402", "/no-such-page"]) {
     const r = await fetch(`${B}${p}`);
     const html = await r.text();
     ok(html.split(LLMS_LINK_TAG).length === 2, `${p} carries the /llms.txt link tag exactly once`);

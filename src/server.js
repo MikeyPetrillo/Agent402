@@ -28,7 +28,6 @@ import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse
 import express from "express";
 import compression from "compression";
 import { readFileSync } from "node:fs";
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { llmsLinkMiddleware } from "./llms-link.js";
 import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
@@ -44,6 +43,8 @@ import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./p
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort } from "./drain-abort.js";
 import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
+import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
+import { evmLogsStatus } from "./evm-logs-rpc.js";
 import { compositeGuardBlocked, compositeGuardGlobalPaused, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
 import { gatewaySettleBreakerCheck } from "./gateway-settle-breaker.js";
 // Single-upstream-call routes that run long (40 s+): EVM exact only, like the
@@ -267,11 +268,8 @@ import { paymentReplayKey, createReplayGuard } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
 import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
-import { tollboothCloudPage } from "./tollbooth-cloud.js";
-import { tollboothWaitlistPage } from "./tollbooth-waitlist.js";
-import { operatorLeadsPage } from "./operator-leads.js";
 import { operatorWishesPage } from "./operator-wishes.js";
-import { initLeadsDb, insertLead, listLeads, countLeads, leadsDbEnabled } from "./leads-db.js";
+import { initLeadsDb } from "./leads-db.js";
 import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
 import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redactAnalytics } from "./analytics-db.js";
 import { databasesStatus } from "./db-status.js";
@@ -288,16 +286,13 @@ import { quickstartPage } from "./quickstart.js";
 import { whatIsX402Page } from "./what-is-x402.js";
 import { whatIsMppPage } from "./what-is-mpp.js";
 import { agenticFinancePage } from "./agentic-finance.js";
-import { whyPage } from "./why.js";
 import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
-import { sampleJson, sampleMeta } from "./sample-reports.js";
+import { sampleJson, sampleMeta, midSentence } from "./sample-reports.js";
 import { createFreeAlerts, alertFormHtml, ALERT_KIND_FOR_REPORT_KIND } from "./free-alerts.js";
-import { createWalletDigest } from "./wallet-digest.js";
-import { refundLookup, ownRefundsView } from "./refund-lookup.js";
-import { digestPage } from "./digest-page.js";
+import { refundLookup } from "./refund-lookup.js";
 import { createFollowups } from "./followups.js";
 import { createTweetQueue, tweetQueueOptionsFromEnv } from "./tweet-queue.js";
 import { monitorForKind as fuMonitorForKind } from "./report-upgrade.js";
@@ -323,13 +318,14 @@ import { learnPage, learnIndex } from "./learn.js";
 import { skillMd } from "./skill-md.js";
 import { createMcpMppLoopback } from "./mcp-mpp.js";
 import { serviceManifest, reliabilityReport } from "./discovery.js";
+import { mppMethodsSummary } from "./mpp-offers.js";
 import { meteredSkip } from "./metered-slugs.js";
 import { runSelfCheck, createSelfCheckRoute } from "./selfcheck.js";
 import { installEgressMeter, egressReport } from "./egress-meter.js";
 import { acpFeed, acpManifest } from "./acp.js";
 import { findTools, findRelatedSellers, markWeakMatches } from "./find.js";
 import { buildPlanSketch } from "./plan-sketch.js";
-import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE } from "./wish.js";
+import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE, startWishRotation } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
 import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { submissionSlotStatus } from "./x402-index.js";
@@ -342,7 +338,7 @@ import { tempoDataKey } from "./tempo-transfers.js";
 import { verifyInboundPayment } from "./payment-verify.js";
 import { mppMarketPage } from "./mpp-market-page.js";
 import { indexToolsPage, INDEX_TOOLS_PAGE_SIZE } from "./index-tools-page.js";
-import { getLeaderboardSnapshot, getLeaderboardWalletEvidence, getLeaderboardCircularWallets, startLeaderboardRefresh, rankBy, CONCENTRATION, configureSellerFunding, sellerFundingStatus, setSellerFundingEnabled } from "./leaderboard.js";
+import { getLeaderboardSnapshot, getLeaderboardWalletEvidence, getLeaderboardCircularWallets, startLeaderboardRefresh, leaderboardLogCacheStatus, rankBy, CONCENTRATION, configureSellerFunding, sellerFundingStatus, setSellerFundingEnabled } from "./leaderboard.js";
 import { decideIndexExportHandler } from "./decide/index-export.js";
 import { buildDecideTools, decideEnabled, makeFeedbackHandler } from "./tools/decide-kit.js";
 import { openDecideLedger, singleWriterTopology } from "./decide/ledger.js";
@@ -384,7 +380,7 @@ import { GOV_TOOLS } from "./tools/gov-kit.js";
 import { GEO_TOOLS } from "./tools/geo-kit.js";
 import { OCR_TOOLS } from "./tools/ocr-kit.js";
 import { AGENT_TOOLS } from "./tools/agent-kit.js";
-import { SAMPLE_AGENT_CARD, A2A_WELL_KNOWN_PATHS, buildOurAgentCard, buildAgentRegistration } from "./tools/a2a-card.js";
+import { SAMPLE_AGENT_CARD, A2A_WELL_KNOWN_PATHS, buildOurAgentCard, buildAgentRegistration, erc8004AgentId } from "./tools/a2a-card.js";
 import { upstreamBuyerStatus } from "./upstream-buyer-status.js";
 import { CAPTCHA_TOOLS } from "./tools/captcha-kit.js";
 import { SQL_GUARD_TOOLS } from "./tools/sql-guard-kit.js";
@@ -516,38 +512,35 @@ import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
-import { shopPage } from "./shop.js";
 import { changelogPage, changelogRss } from "./changelog.js";
-import { useCasesPage } from "./use-cases.js";
 import { playgroundPage } from "./playground.js";
 import { apiExplorerPage } from "./api-explorer.js";
 import { sdkPlaygroundPage } from "./sdk-playground.js";
 import { blogIndex, blogPost } from "./blog.js";
-import { comparePage } from "./compare.js";
-import { communityPage } from "./community.js";
 import { contributePage } from "./contribute.js";
 import { workflowsPage } from "./workflows.js";
-import { badgesPage, badgeSvg } from "./badges.js";
+import { badgeSvg } from "./badges.js";
 import { adapterDocsIndex, adapterDocPage } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
 import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore } from "./ledger-chrome.js";
 import { ledgerHomePage } from "./ledger-home.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
-import { revenueSnapshot, withFreshRecent, publicRevenueSnapshot, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
+import { revenueSnapshot, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml, catalogPayableOn } from "./market-page.js";
 import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
-import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerBuyerRepeat7, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
+import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerBuyerRepeat7, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerConcentrationIn, buyerDayCounts, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
+import { parseRevenueRange, hasRangeQuery, inWindow, revenueSeriesFirstDay, rangedRevenueDaily, revenueWindowTotals, revenuePageRange, carryPartial } from "./revenue-range.js";
 import { upstreamCostsLoaded, upstreamCostsSummary, upstreamCostsGaps, upstreamCostsStatus } from "./upstream-costs.js";
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, economyHistoryFlush } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores } from "./state-db.js";
-import { ledgerDeadLetterStatus } from "./ledger-mirror.js";
+import { ledgerDeadLetterStatus, flushJournals } from "./ledger-mirror.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
@@ -556,11 +549,11 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
+import { recordSale, salesSummary, externalByNetwork, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
-import { hostFigures, hostIndexEntry, isSelfSellerQuery, railsWithOutsideSettlements } from "./host-entry.js";
+import { hostFigures, hostFiguresFromPayments, hostIndexEntry, isSelfSellerQuery, railsWithOutsideSettlements } from "./host-entry.js";
 import { standingCountsExcludingHost } from "./standing.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
@@ -649,7 +642,7 @@ import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL, l
 import { classifyWishes, wishClassifyEnabled } from "./wish-classify.js";
 import { rerankMisses, rerankEnabled } from "./discovery-rerank.js";
 import { JUDGE_TOOLS, judgeEnabled } from "./tools/judge-kit.js";
-import { sweepStaleTsMap, makeWindowCounter } from "./rate-sweep.js";
+import { sweepStaleTsMap } from "./rate-sweep.js";
 
 // Shared with the MCP free tier (src/mcp-http.js) — same policy, separate
 // per-IP bucket. PoW redemption on the direct HTTP path goes through here.
@@ -704,7 +697,7 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundsForPayer, refundLedgerFlush } from "./refund-ledger.js";
+import { recordRefundOwed, refundByEvidence, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
@@ -1016,7 +1009,7 @@ const CATALOG = {
     category: "memory",
     price: "$0.001",
     description:
-      "Tamper-evident history of every change to a namespace - an append-only, hash-chained audit log the server attests to (provenance an agent can't forge for itself). ?owner=0x… reads a granted namespace.",
+      "Tamper-evident history of changes to a namespace - a hash-chained audit log the server attests to (provenance an agent can't forge for itself). Entries are kept for a bounded window (see retention in the answer), and an entry naming a key or document that was later deleted is redacted while still linking the chain. ?owner=0x… reads a granted namespace.",
     tags: ["memory", "audit", "provenance", "history", "verifiable"],
     discovery: {
       input: { limit: "50" },
@@ -2455,27 +2448,6 @@ const _freeAlerts = createFreeAlerts({
   onEvent: ({ step, kind }) => { try { capturePostHogHumanFunnel({ step, kind }); } catch { /* telemetry never breaks the engine */ } },
 });
 if (process.env.FREE_ALERTS !== "off") _freeAlerts.start();
-// Weekly spend digest (src/wallet-digest.js): the one place the site asks a
-// buyer for an inbox. Keyed to the identity they already pay with (an EVM
-// wallet proved by signature, or a credits key), double opt-in, signed
-// unsubscribe, nothing sent for a quiet week. Same secret rule as the alerts.
-// Created BEFORE the credits engine so a new key's claim email can carry its
-// own signed confirm link; the credits accessors are read lazily.
-const _walletDigest = createWalletDigest({
-  secret: (process.env.FREE_ALERTS_SECRET || process.env.POW_SECRET || process.env.MPP_SECRET_KEY || "").trim(),
-  baseUrl: BASE_URL,
-  sendEmail: faSendEmail,
-  usage: (payer, opts) => payerUsage(payer, opts),
-  refunds: (payer) => ownRefundsView(refundsForPayer(payer, { limit: 50 })).rows,
-  creditsBalance: (keyId) => (_credits && typeof _credits.balanceById === "function" ? _credits.balanceById(keyId) : null),
-  creditsKeyId: (key) => (_credits && typeof _credits.keyIdOf === "function" ? _credits.keyIdOf(key) : null),
-  verifySignature: async ({ address, message, signature }) => {
-    const { verifyMessage } = await import("viem");
-    return verifyMessage({ address, message, signature });
-  },
-  onEvent: ({ step, kind }) => { try { capturePostHogHumanFunnel({ step, kind }); } catch { /* telemetry never breaks the engine */ } },
-});
-if (process.env.WALLET_DIGEST !== "off") _walletDigest.start();
 // Post-purchase follow-ups (src/followups.js): two emails at most per card
 // purchase, stoppable, plus the immediate failure notice. Same secret rule.
 const _followups = createFollowups({
@@ -2486,6 +2458,9 @@ const _followups = createFollowups({
   onEvent: ({ step, kind }) => { try { capturePostHogHumanFunnel({ step, kind }); } catch { /* telemetry never breaks the engine */ } },
 });
 if (process.env.FOLLOWUPS !== "off") _followups.start();
+// Demand-board retention (src/wish.js rotateWishes): request text older than
+// WISH_RETENTION_DAYS is deleted, its counts kept in the rollup.
+startWishRotation();
 // An email link whose row write could not land answers 503 (a mail client's
 // one-click POST retries it; the page asks the person to try again).
 function emailLinkUnavailable(res, html) {
@@ -2522,7 +2497,7 @@ const alertsSignupLimiter = createRateLimiter("alerts-signup", { perMin: 6, perH
 // A second bound keyed on the ADDRESS (hashed), so a distributed source cannot
 // flood one victim's inbox with confirmations by rotating IPs.
 const alertsEmailLimiter = createRateLimiter("alerts-email", { perMin: 2, perHour: 5 });
-const alertPage = (title, body) => ledgerShell({ title: `${title} - Agent402`, description: "Free email alerts from Agent402.", canonical: `${BASE_URL}/reports`, baseUrl: BASE_URL, activePath: "/reports", robots: "noindex, nofollow", body: `<div class="wrap" style="padding:40px 30px;max-width:640px;"><h1 style="font-size:26px;margin:0 0 12px;">${title}</h1>${body}</div>${ledgerFooterCompact()}` });
+const alertPage = (title, body) => ledgerShell({ title: `${title} - Agent402`, description: "Free email alerts from Agent402.", canonical: `${BASE_URL}/reports`, baseUrl: BASE_URL, activePath: "/reports", robots: "noindex, nofollow", body: `<div class="wrap" style="padding:40px 30px;max-width:640px;"><h1 style="font-size:var(--fs-2xl);margin:0 0 12px;">${title}</h1>${body}</div>${ledgerFooterCompact()}` });
 app.post("/api/alerts", express.json({ limit: "4kb" }), async (req, res) => {
   if (alertsSignupLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many signups from this address. Try again in a few minutes." });
   const b = req.body || {};
@@ -2552,44 +2527,21 @@ app.get("/alerts/unsubscribe", async (req, res) => {
 });
 // One-click unsubscribe (RFC 8058): mail clients POST the List-Unsubscribe URL.
 app.post("/alerts/unsubscribe", async (req, res) => { const r = await _freeAlerts.unsubscribeAsync(String(req.query.id || ""), String(req.query.k || "")); if (r.reason === "unavailable") return emailLinkUnavailable(res, false); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
-// ---- weekly digest routes (src/wallet-digest.js) ----
-app.get("/digest", (_req, res) => htmlCache(res, 300, 900).send(digestPage(BASE_URL)));
-app.post("/api/digest", express.json({ limit: "8kb" }), async (req, res) => {
-  if (alertsSignupLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many signups from this address. Try again in a few minutes." });
-  const b = req.body || {};
-  if (typeof b.website === "string" && b.website) return res.json({ ok: true, status: "pending" }); // honeypot
-  const emailKey = createHash("sha256").update(String(b.email || "").trim().toLowerCase()).digest("hex").slice(0, 32);
-  if (alertsEmailLimiter.check(`e:${emailKey}`).limited) return res.json({ ok: true, status: "pending" });
-  try { res.json(await _walletDigest.signup({ email: b.email, wallet: b.wallet, message: b.message, signature: b.signature, creditsKey: b.creditsKey, source: b.source })); }
-  catch (e) {
-    if (e?.buyerSafe && e.statusCode) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-    console.warn("[wallet-digest] signup failed:", String(e?.message || e).slice(0, 160));
-    res.status(500).json({ error: "Could not subscribe. Please try again." });
-  }
-});
-app.get("/digest/confirm", async (req, res) => {
-  const r = await _walletDigest.confirmAsync(String(req.query.id || ""), String(req.query.k || ""));
+// ---- the retired weekly spend digest ----
+// The digest has ended: nothing sends, nothing new is stored, and the page
+// redirects to the docs. A confirm or unsubscribe link in an old email still
+// opens a plain notice (no action needed), and a signup POST answers 410.
+const DIGEST_ENDED_HTML = `<p>The weekly spend digest has ended. No more digests will be sent, and there is nothing you need to do.</p><p>Your usage history is still available any time from <a href="/tools/my-usage">my-usage</a>.</p>`;
+const digestEnded = (_req, res) => {
   res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
-  if (r.reason === "unavailable") return emailLinkUnavailable(res, true);
-  if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The confirmation link is invalid or the digest was unsubscribed. <a href="/digest">Subscribe again</a>.</p>`));
-  res.send(alertPage("Digest confirmed", `<p>Your first digest arrives within the hour, then one a week. Nothing is sent for a quiet week. <a href="/tools/my-usage">See the full history now</a>.</p>`));
-});
-app.get("/digest/unsubscribe", async (req, res) => {
-  const r = await _walletDigest.unsubscribeAsync(String(req.query.id || ""), String(req.query.k || ""));
-  res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
-  if (r.reason === "unavailable") return emailLinkUnavailable(res, true);
-  if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The unsubscribe link is invalid. <a href="/company#contact">Contact us</a> and we will remove you by hand.</p>`));
-  res.send(alertPage("Unsubscribed", `<p>No more digests. Your address has been removed. <a href="/digest">Subscribe again</a> any time.</p>`));
-});
-app.post("/digest/unsubscribe", async (req, res) => { const r = await _walletDigest.unsubscribeAsync(String(req.query.id || ""), String(req.query.k || "")); if (r.reason === "unavailable") return emailLinkUnavailable(res, false); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
-app.get("/__operator/digest.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-  res.set("Cache-Control", "no-store").json(_walletDigest.stats());
-});
-app.post("/__operator/digest/run", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-  res.set("Cache-Control", "no-store").json(await _walletDigest.tick({ force: req.query.force === "1" }));
-});
+  res.send(alertPage("The weekly digest has ended", DIGEST_ENDED_HTML));
+};
+app.get("/digest", (_req, res) => res.redirect(301, "/docs"));
+app.post("/api/digest", (_req, res) => res.status(410).json({ error: "The weekly spend digest has ended; signups are closed." }));
+app.get("/digest/confirm", digestEnded);
+app.get("/digest/unsubscribe", digestEnded);
+// One-click unsubscribe (RFC 8058) from an old email: nothing is subscribed.
+app.post("/digest/unsubscribe", (_req, res) => res.set("Cache-Control", "no-store").json({ ok: true }));
 app.get("/__operator/alerts.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json(_freeAlerts.stats());
@@ -2655,7 +2607,6 @@ try {
     // the money once - when it is spent (rail "credits" below).
     onLoad: ({ pack, priceUsd, keyId, paymentIntent }) => recordSale({ slug: `credits:${pack}`, priceUsd, rail: "card-prepaid", network: "stripe", payer: keyId, tx: paymentIntent, wire: "stripe-checkout" }),
     onDebit: ({ slug, priceUsd, keyId }) => recordSale({ slug, priceUsd, rail: "credits", network: "stripe", payer: keyId, tx: null, wire: "credits" }),
-    digestLinkFor: ({ keyId, email }) => _walletDigest.preEnrolCredits({ keyId, email }),
   }) : null;
 } catch (e) { console.warn("[credits] init failed:", String(e?.message || e).slice(0, 200)); _credits = null; }
 // Manage/cancel bearer for monitor subscribers: a keyed token over the report
@@ -3032,12 +2983,12 @@ app.use(securityHeaders());
 // design system on seven routes (review 2026-08-28).
 function notFoundPage(res, { what = "Page", href = "/", label = "Home" } = {}) {
   const body = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
-      <div style="font-family:var(--font-mono);font-weight:500;font-size:72px;line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">404</div>
-      <h1 style="font-weight:500;font-size:26px;letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${escHtml(what)} not found</h1>
+      <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">404</div>
+      <h1 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${escHtml(what)} not found</h1>
       <p style="color:var(--muted);margin:0 0 28px;font-weight:300;">There is nothing at this address.</p>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-        <a href="${escHtml(href)}" style="display:inline-block;padding:11px 18px;background:var(--btn-bg);color:var(--btn-fg);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">${escHtml(label)}</a>
-        <a href="/" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Home</a>
+        <a class="btn btn-secondary" href="${escHtml(href)}">${escHtml(label)}</a>
+        <a class="btn btn-secondary" href="/">Home</a>
       </div>
     </div>${ledgerFooterCompact()}`;
   return res.status(404).type("html").send(ledgerShell({ title: `${what} not found - Agent402`, description: `${what} not found`, canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
@@ -3084,9 +3035,10 @@ app.get("/health", (req, res) => {
     return res.status(ok ? 200 : 503).json({ ok, meta });
   }
   const diagnostics = { uptime: Math.floor(process.uptime()), freeMode: FREE_MODE };
-  // Non-fatal flags — surface tollbooth-leads wiring so we can verify the
-  // Railway DATABASE_URL / AGENT402_OPERATOR_TOKEN env without poking either.
-  // These don't affect overall ok status; the tollbooth waitlist is optional.
+  // Non-fatal flags: surface the Railway DATABASE_URL / AGENT402_OPERATOR_TOKEN
+  // wiring without poking either. leadsDb is true once the boot step in
+  // src/leads-db.js has run (the retired tollbooth_leads table is gone).
+  // These don't affect overall ok status.
   const flags = {
     leadsDb: leadsDbReady,
     operatorToken: Boolean(OPERATOR_TOKEN),
@@ -3206,7 +3158,7 @@ app.get("/api/gateway-status", async (req, res) => {
   // (src/upstream-buyer-status.js) - same alarm pattern, same
   // numbers-never-leave rule.
   const [gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, upstreamBuyerSvm, subscriptionFeePayer, stellarFacilitator, databases] = await Promise.all([gatewayCreditsStatus(), upstreamBuyerStatus(), avmBuyerStatus(), tempoBuyerStatus(), svmBuyerStatus().catch(() => ({ status: "unknown", asset: "USDC", chain: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" })), subscriptionFeePayerStatus(), stellarFacilitatorStatus().catch(() => ({ status: "unknown", asset: "XLM", chain: "stellar:pubnet" })), databasesStatus().catch(() => null)]);
-  // `databases`: leads/analytics Postgres reachability, status words only
+  // `databases`: DATABASE_URL (`leads`) and analytics Postgres reachability, status words only
   // (src/db-status.js) - the heartbeat pages on "unreachable".
   // The operator sees the real figures; everyone else sees the verdict. The
   // heartbeat reads only `.status` fields, so bucketing costs it nothing.
@@ -3220,6 +3172,13 @@ app.get("/api/gateway-status", async (req, res) => {
     exaAllowance: full ? spend.exaAllowance : publicBucket(spend.exaAllowance),
     jevSpend: full ? spend.jevSpend : publicBucket(spend.jevSpend),
     upstreamBudgets: full ? budgets : publicBudgets(budgets),
+    // Solana history reads (getTransaction by signature): which lane serves
+    // them. One word publicly; per-lane counts for the operator.
+    solanaHistory: (() => { try { return solanaHistoryStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // EVM log reads: which lane serves the revenue ledger's recent getLogs,
+    // how the Base board read its window, and the activity scans. One word
+    // publicly; per-caller counts for the operator.
+    evmLogs: (() => { try { return evmLogsStatus({ full, extra: full ? { leaderboardLogCache: leaderboardLogCacheStatus(), activityScan: evmActivityStatus() } : null }); } catch { return { status: "unknown" }; } })(),
     stellarFacilitator, databases, operatorAuth: operatorAuthStatus(full),
     // OFAC SDN list behind sanctions-wallet / sanctions-name and the router's
     // payout screen: one word publicly, counts and the last error for the operator.
@@ -3298,7 +3257,9 @@ app.get("/samples/a2a-agent-card.json", (_req, res) => {
 app.get("/.well-known/agent-registration.json", (_req, res) => {
   res.set("Cache-Control", "public, max-age=900").json(buildAgentRegistration({
     baseUrl: BASE_URL,
-    agentId: process.env.ERC8004_AGENT_ID,
+    // The same reader /company and llms.txt use: the setting, else the
+    // hosted origin's id; a self-hosted copy publishes none unless it sets its own.
+    agentId: erc8004AgentId(BASE_URL) ?? undefined,
     toolCount: Object.keys(CATALOG || {}).length,
   }));
 });
@@ -3349,9 +3310,11 @@ app.get("/what-is-mpp", (_req, res) => htmlCache(res, 300, 900).send(whatIsMppPa
 // positions under; DefinedTerm + Article + FAQPage structured data.
 app.get("/agentic-finance", (_req, res) => htmlCache(res, 300, 900).send(agenticFinancePage(BASE_URL)));
 app.get("/aifi", (_req, res) => res.redirect(301, "/agentic-finance"));
-// /why - the seven first-party differences, every claim linked to its proof surface
-// (src/why.js); llms.txt, the MCP instructions and the package READMEs point here.
-app.get("/why", (_req, res) => htmlCache(res, 300, 900).send(whyPage(BASE_URL)));
+// /why - the seven first-party differences live in the #why section of the
+// home page (src/why.js renders it). Older links and published package READMEs
+// still name /why, so it answers a permanent redirect to the section. The
+// fragment is literal: a browser applies it after following the redirect.
+app.get("/why", (_req, res) => res.redirect(301, "/#why"));
 // The conformance front door. The classifier that answers a failing client has
 // shipped since August; this is the page that tells anyone it exists.
 app.get("/x402-test", (_req, res) => htmlCache(res, 300, 900).send(x402TestPage(BASE_URL)));
@@ -3395,7 +3358,7 @@ app.get("/reports/public/:publicId", (req, res, next) => {
   const canonical = `${BASE_URL}/reports/public/${r.publicId}`;
   const label = HUMAN_PRODUCTS[r.product]?.label || "report";
   const headline = reportHeadline(r, label);
-  const description = `A ${label.toLowerCase()} on "${r.input}" from Agent402, shared by its buyer: ${r.sources.length} cited sources, ${r.tables.length} data tables. Read it free, then get one for your own subject.`;
+  const description = `A ${midSentence(label)} on "${r.input}" from Agent402, shared by its buyer: ${r.sources.length} cited sources, ${r.tables.length} data tables. Read it free, then get one for your own subject.`;
   htmlCache(res, 300, 900).send(reportDeliveryPage(r.publicId, {
     api: "/api/reports/public/", baseUrl: BASE_URL, robots: "index, follow, max-image-preview:large", waitCopy: "Loading the report.", note: "",
     title: headline, description, canonical,
@@ -3519,21 +3482,22 @@ if (process.env.X402_SYNC_ON_START !== "false" && GATEWAY_TOOLS_ENABLED.some((t)
   setTimeout(() => { probeOxAlphaAvailability().catch(() => {}); }, 6_000).unref();
   setInterval(() => { probeOxAlphaAvailability().catch(() => {}); }, 60 * 60_000).unref();
 }
-app.get("/api/revenue", async (_req, res) => {
-  try {
-    // Recent rows are re-read from the ledger per request (withFreshRecent);
-    // only the balances ride the hourly background snapshot.
-    const snap = withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent, ledgerNewestOwn);
-    const ledger = memoSurface("revenue:allTime", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), sales: salesSummary() }));
-    res.set("Cache-Control", "public, max-age=30").json({ ...publicRevenueSnapshot(snap), ...ledger });
-  } catch (e) {
-    res.status(500).json({ error: "revenue snapshot failed", detail: String(e?.message || e).slice(0, 120) });
-  }
+// Recent rows are re-read from the ledger per request (withFreshRecent); only
+// the balances ride the hourly background snapshot. Wallet balances and their
+// combined total are operator-only: /api/revenue serializes through
+// publicRevenueSnapshot, /__operator/revenue.json carries the full reading.
+const revenueApi = revenueApiHandlers({
+  snapshot: async () => withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent, ledgerNewestOwn),
+  ledger: () => memoSurface("revenue:allTime", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), sales: salesSummary() })),
+  authed: (req) => operatorAuthed(req),
 });
+app.get("/api/revenue", revenueApi.publicHandler);
+app.get("/__operator/revenue.json", revenueApi.operatorHandler);
 // The /revenue series, built across event-loop turns: each figure is one
 // synchronous SQLite pass, and together they held the loop 0.6-1.2 s in one
 // turn (production stall profiler, 2026-09-25). The buyer figures share one
 // read of the payment history, passed to each as `events`.
+const REVENUE_DAY_COUNTS = Symbol("revenue-day-counts");
 async function buildRevenueDaily() {
   const turn = () => new Promise((r) => setImmediate(r));
   const w = revenueWallets();
@@ -3545,7 +3509,11 @@ async function buildRevenueDaily() {
   const concentration = ledgerBuyerConcentration(w, { events }); await turn();
   const retention = ledgerBuyerRetention(w, { events }); await turn();
   const repeat7 = ledgerBuyerRepeat7(w, { events }); await turn();
+  const dayCounts = buyerDayCounts(events);
   return {
+    // Per-day payer counts for a date-ranged concentration. A symbol key, so
+    // JSON never serializes it and the default response is unchanged.
+    [REVENUE_DAY_COUNTS]: dayCounts,
     asOf: new Date().toISOString(),
     days: daily.days,
     daysScope: daily.scope,
@@ -3569,10 +3537,27 @@ async function buildRevenueDaily() {
     repeat7,
   };
 }
+const firstDayOf = (rows) => revenueSeriesFirstDay({ days: rows });
+// The Tempo lane's body, shared by its own route and the ranged totals.
+const tempoDailyBody = () => memoSurface("revenue:tempo-daily", 60_000, () => ({
+  asOf: new Date().toISOString(),
+  recordingSince: tempoDailyRecordingSince(),
+  days: tempoDailyRevenue(),
+}));
+const rangeError = (res, error) => res.status(400).json({ error: "invalid range", detail: error, accepted: "range=7d|30d|90d|1y|all, or from=YYYY-MM-DD&to=YYYY-MM-DD (UTC days, inclusive), or days=N" });
 // Daily revenue series for the /revenue chart — external vs canary-sized
 // internal, per chain per day, straight from the settlement ledger.
-app.get("/api/revenue/daily", async (_req, res) => {
+// A range query (range, from/to or days) cuts every series to that window;
+// without one the response is the full series, unchanged.
+app.get("/api/revenue/daily", async (req, res) => {
   try {
+    if (hasRangeQuery(req.query)) {
+      const body = await memoSurfaceAsync("revenue:daily", 120_000, buildRevenueDaily);
+      const { window: w, error } = parseRevenueRange(req.query, { firstDay: revenueSeriesFirstDay(body) });
+      if (error) return rangeError(res, error);
+      const concentration = ledgerBuyerConcentrationIn(body[REVENUE_DAY_COUNTS], w);
+      return res.set("Cache-Control", "public, max-age=300").json(rangedRevenueDaily(body, w, { tempo: tempoDailyBody(), concentration }));
+    }
     // `withScope` because this is the one surface that PUBLISHES the series:
     // it drops undateable rows, internal transfers over maxCallUsd, and
     // everything before the chart epoch, and until 2026-09-22 said none of it -
@@ -3587,8 +3572,14 @@ app.get("/api/revenue/daily", async (_req, res) => {
 // Daily served-call counts by settlement method — the non-revenue companion to
 // /api/revenue/daily. Free (proof-of-work) calls never touch a chain, so they
 // are invisible to the settlement ledger; this is the only record of them.
-app.get("/api/calls/daily", (_req, res) => {
+app.get("/api/calls/daily", (req, res) => {
   try {
+    if (hasRangeQuery(req.query)) {
+      const days = getDailyCalls();
+      const { window: w, error } = parseRevenueRange(req.query, { firstDay: firstDayOf(days) });
+      if (error) return rangeError(res, error);
+      return res.set("Cache-Control", "public, max-age=300").json({ asOf: new Date().toISOString(), window: w, recordingSince: dailyCallsRecordingSince(), days: inWindow(days, w) });
+    }
     res.set("Cache-Control", "public, max-age=300").json({
       asOf: new Date().toISOString(),
       // Per-day recording began when the daily_calls table shipped. Days before
@@ -3621,13 +3612,15 @@ app.get("/api/revenue/decide", (_req, res) => {
     res.status(500).json({ error: "decide revenue failed", detail: String(e?.message || e).slice(0, 120) });
   }
 });
-app.get("/api/revenue/tempo-daily", (_req, res) => {
+app.get("/api/revenue/tempo-daily", (req, res) => {
   try {
-    res.set("Cache-Control", "public, max-age=60").json(memoSurface("revenue:tempo-daily", 60_000, () => ({
-      asOf: new Date().toISOString(),
-      recordingSince: tempoDailyRecordingSince(),
-      days: tempoDailyRevenue(),
-    })));
+    if (hasRangeQuery(req.query)) {
+      const body = tempoDailyBody();
+      const { window: w, error } = parseRevenueRange(req.query, { firstDay: firstDayOf(body.days) });
+      if (error) return rangeError(res, error);
+      return res.set("Cache-Control", "public, max-age=60").json(carryPartial(body, { asOf: body.asOf, window: w, recordingSince: body.recordingSince, days: inWindow(body.days, w) }));
+    }
+    res.set("Cache-Control", "public, max-age=60").json(tempoDailyBody());
   } catch (e) {
     res.status(500).json({ error: "tempo daily revenue failed", detail: String(e?.message || e).slice(0, 120) });
   }
@@ -3648,7 +3641,7 @@ app.get("/api/revenue/mpp", (req, res) => {
     res.status(500).json({ error: "mpp settlements failed", detail: String(e?.message || e).slice(0, 120) });
   }
 });
-app.get("/revenue", async (_req, res) => {
+app.get("/revenue", async (req, res) => {
   try {
     // Recent rows are re-read from the ledger per request (withFreshRecent);
     // only the balances ride the hourly background snapshot.
@@ -3659,10 +3652,22 @@ app.get("/revenue", async (_req, res) => {
     const ledger = memoSurface("revenue:page-ledger", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }), card: cardSales({ days: 30 }), decide: decideSales({ days: 30 }), agents: ledgerBuyerConcentration(revenueWallets()) }));
     // no-cache: the body changes on every request, so a browser-cached
     // copy showed the previous reading until a second refresh.
-    res.set("Cache-Control", "no-cache").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: standingFigures() }));
+    // The charts' date range, read from the URL so a view can be shared. The
+    // page renders the chosen window on first paint; the chart script reads
+    // it from the page. A range the parser refuses falls back to the default
+    // and says so, rather than failing the page.
+    let range = null;
+    try {
+      const daily = await memoSurfaceAsync("revenue:daily", 120_000, buildRevenueDaily);
+      const tempo = tempoDailyBody();
+      range = revenuePageRange(req.query, { firstDay: revenueSeriesFirstDay(daily), totalsFor: (w) => revenueWindowTotals(daily, tempo, w, ledgerBuyerConcentrationIn(daily[REVENUE_DAY_COUNTS], w)) });
+    } catch (e) {
+      console.warn(`[revenue] range figures unavailable: ${String(e?.message || e).slice(0, 120)}`);
+    }
+    res.set("Cache-Control", "no-cache").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: standingFigures(), range, hashPriceUsd: TOOL_PRICES.hash }));
   } catch (e) {
     if (e?.snapshotWarming) {
-      res.status(200).type("html").send('<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body style="font-family:system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 24px;color:#14201b"><h2 style="font-weight:500">Warming up…</h2><p style="color:#5d675f">The live on-chain transaction view is loading for the first time since a deploy. It refreshes here automatically in a few seconds.</p><p><a href="/" style="color:#15654a">Home</a></p></body>');
+      res.status(200).type("html").send('<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body style="font-family:system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 24px;color:#111315"><h2 style="font-weight:700">Warming up…</h2><p style="color:#626970">The live on-chain transaction view is loading for the first time since a deploy. It refreshes here automatically in a few seconds.</p><p><a href="/" style="color:#0F5E43">Home</a></p></body>'); // design-tokens: literal (standalone fallback page, no stylesheet)
     } else {
       res.status(500).type("html").send('<p>Revenue view temporarily unavailable. <a href="/">Home</a></p>');
     }
@@ -3805,7 +3810,7 @@ app.get("/reports/dossier/:ticker", (req, res, next) => { _programmaticEntity(re
 // host that never sets the variable sells none). Redemption is deliberately
 // untouched: existing keys keep spending their balance, so nobody's balance is
 // stranded by this switch.
-app.get("/credits", (_req, res) => res.set("Cache-Control", "public, max-age=120").type("html").send(creditsPage(BASE_URL, creditsSalesEnabled())));
+app.get("/credits", (_req, res) => res.set("Cache-Control", "public, max-age=120").type("html").send(creditsPage(BASE_URL, creditsSalesEnabled(), CATALOG)));
 app.get("/credits/thanks", (req, res) => res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(creditsThanksPage(String(req.query.session || ""), BASE_URL)));
 if (_credits) {
   app.post("/api/credits/checkout", async (req, res) => {
@@ -4317,7 +4322,8 @@ app.get("/x402-economy", (_req, res) => {
   res.redirect(301, "/marketplace#economy");
 });
 app.get("/changelog", (_req, res) => htmlCache(res, 300, 900).send(changelogPage(BASE_URL)));
-app.get("/use-cases", (_req, res) => htmlCache(res, 300, 900).send(useCasesPage(BASE_URL, CATALOG)));
+// The use cases page became the Examples section of /docs (same live prices).
+app.get("/use-cases", (_req, res) => res.redirect(301, "/docs#examples"));
 app.get("/playground", (_req, res) => htmlCache(res, 300, 900).send(playgroundPage(BASE_URL, CATALOG)));
 app.get("/sdk-playground", (_req, res) => htmlCache(res, 300, 900).send(sdkPlaygroundPage(BASE_URL)));
 // Capitalised wiki URLs whose page the site serves at a lowercase route: 301
@@ -4334,8 +4340,10 @@ app.get("/blog", (_req, res) => htmlCache(res, 300, 900).send(blogIndex(BASE_URL
 // exact tool count the evergreen rule forbids on served pages); keep the URL.
 app.get("/blog/1000-tools-milestone", (_req, res) => res.redirect(301, "/blog/catalog-milestone"));
 app.get("/blog/:slug", (req, res) => { const html = blogPost(BASE_URL, req.params.slug); if (!html) return notFoundPage(res, { what: "Post", href: "/blog", label: "All posts" }); htmlCache(res, 300, 900).send(html); });
-app.get("/compare", (_req, res) => htmlCache(res, 300, 900).send(comparePage(BASE_URL)));
-app.get("/community", (_req, res) => htmlCache(res, 300, 900).send(communityPage(BASE_URL)));
+// /compare folded into the side-by-side table of the home #why section; /community's
+// adapters, packages and sample reports live on /integrations and /reports.
+app.get("/compare", (_req, res) => res.redirect(301, "/#why-compare"));
+app.get("/community", (_req, res) => res.redirect(301, "/integrations"));
 app.get("/contribute", (_req, res) => htmlCache(res, 300, 900).send(contributePage(BASE_URL)));
 app.get("/workflows", (_req, res) => htmlCache(res, 300, 900).send(workflowsPage(BASE_URL, CATALOG)));
 // /uptime was a second, static "System Status" page carrying a hardcoded
@@ -4346,7 +4354,9 @@ app.get("/workflows", (_req, res) => htmlCache(res, 300, 900).send(workflowsPage
 // /status with links to the actual probe runs. Permanent redirect: one surface,
 // one truth, and the SEO history follows.
 app.get("/uptime", (_req, res) => res.redirect(301, "/status"));
-app.get("/badges", (_req, res) => htmlCache(res, 300, 900).send(badgesPage(BASE_URL)));
+// The badges page is the Badges section of /docs; the SVG images below stay,
+// because READMEs elsewhere embed them.
+app.get("/badges", (_req, res) => res.redirect(301, "/docs#badges"));
 app.get("/badges/:style.svg", (req, res) => { const svg = badgeSvg(req.params.style); if (!svg) return res.status(404).json({ error: "unknown badge style" }); res.setHeader("Cache-Control", "public, max-age=3600").type("image/svg+xml").send(svg); });
 app.get("/docs/adapters", (_req, res) => htmlCache(res, 300, 900).send(adapterDocsIndex(BASE_URL)));
 app.get("/docs/webhooks", (_req, res) => htmlCache(res, 300, 900).send(webhooksPage(BASE_URL)));
@@ -4366,10 +4376,10 @@ app.get("/sitemap-skills.xml", (_req, res) => { res.setHeader("Cache-Control", "
 // indexed read over one small local table.
 async function statusLive() {
   try {
-    const [gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo] = await Promise.all([
-      gatewayCreditsStatus(), upstreamBuyerStatus(), avmBuyerStatus(), tempoBuyerStatus(),
+    const [gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, upstreamBuyerSvm] = await Promise.all([
+      gatewayCreditsStatus(), upstreamBuyerStatus(), avmBuyerStatus(), tempoBuyerStatus(), svmBuyerStatus().catch(() => null),
     ]);
-    return { gateway: gateway?.status || null, upstreamBuyer: upstreamBuyer?.status || null, upstreamBuyerAvm: upstreamBuyerAvm?.status || null, upstreamBuyerTempo: upstreamBuyerTempo?.status || null };
+    return { gateway: gateway?.status || null, upstreamBuyer: upstreamBuyer?.status || null, upstreamBuyerAvm: upstreamBuyerAvm?.status || null, upstreamBuyerTempo: upstreamBuyerTempo?.status || null, upstreamBuyerSvm: upstreamBuyerSvm?.status || null };
   } catch { return {}; }
 }
 // One status snapshot per 30 s for /status, /api/status and /api/reliability
@@ -4416,86 +4426,14 @@ app.post("/api/status/probe", express.json({ limit: "256kb" }), (req, res) => {
   res.json({ ok: true, received: rows.length, written });
 });
 app.get("/tollbooth", (_req, res) => htmlCache(res, 300, 900).send(tollboothLandingPage(BASE_URL)));
-app.get("/tollbooth/cloud", (_req, res) => htmlCache(res, 300, 900).send(tollboothCloudPage(BASE_URL)));
-app.get("/tollbooth/waitlist", (req, res) => {
-  const plan = String(req.query.plan || "team").toLowerCase();
-  const kind = String(req.query.kind || "waitlist").toLowerCase();
-  htmlCache(res, 300, 900).send(tollboothWaitlistPage(BASE_URL, { plan, kind }));
-});
-
-// Tollbooth waitlist intake. Form on /tollbooth/waitlist POSTs JSON here; we
-// validate, light rate-limit by IP, drop honeypot hits, and persist into
-// Postgres (DATABASE_URL). If the DB isn't configured the endpoint returns
-// 503 and the form falls back to its GitHub pre-fill flow.
-const ALLOWED_PLANS = new Set(["solo", "team", "agency", "enterprise", "partner"]);
-const ALLOWED_KINDS = new Set(["waitlist", "enterprise", "partner"]);
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const waitlistHits = new Map(); // ip -> [timestamps]
-const WAITLIST_LIMIT = 5; // per IP per window
-const WAITLIST_WINDOW_MS = 60_000;
-// F21: an aggregate ceiling across ALL IPs — a distributed source (many
-// one-time IPs, each under the per-IP limit) must not mass-insert leads.
-const WAITLIST_GLOBAL_LIMIT = 60; // per WAITLIST_WINDOW_MS, across every IP
-const waitlistGlobal = makeWindowCounter(WAITLIST_WINDOW_MS, WAITLIST_GLOBAL_LIMIT);
-// F21: keep the per-IP map from growing without bound between the periodic
-// sweeps below when a burst of unique IPs arrives.
-const RL_MAP_MAX_KEYS = 5000;
-function waitlistRateOk(ip) {
-  const now = Date.now();
-  if (waitlistHits.size > RL_MAP_MAX_KEYS) sweepStaleTsMap(waitlistHits, WAITLIST_WINDOW_MS, now);
-  const arr = (waitlistHits.get(ip) || []).filter((t) => now - t < WAITLIST_WINDOW_MS);
-  if (arr.length >= WAITLIST_LIMIT) {
-    waitlistHits.set(ip, arr);
-    return false;
-  }
-  arr.push(now);
-  waitlistHits.set(ip, arr);
-  return true;
+// The hosted tollbooth pages are retired: both URLs move to the self-hosted
+// product page, and the intake answers 410 without reading, storing or sending
+// anything. The rows it stored are deleted at boot (src/leads-db.js).
+for (const retired of ["/tollbooth/cloud", "/tollbooth/waitlist"]) {
+  app.get(retired, (_req, res) => res.redirect(301, "/tollbooth"));
 }
-app.post("/api/tollbooth/waitlist", async (req, res) => {
-  if (!leadsDbEnabled()) {
-    return res.status(503).json({ ok: false, error: "leads-db-unavailable" });
-  }
-  // Use Express's req.ip (honors `trust proxy`, line 470) so the bucket keys
-  // on the real client IP. Reading X-Forwarded-For directly + splitting on
-  // commas would return the attacker-supplied left-most value, letting a
-  // single source mint unlimited fresh buckets and bypass the rate limit.
-  const ip = req.ip || "unknown";
-  if (!waitlistRateOk(ip)) {
-    return res.status(429).json({ ok: false, error: "rate-limited" });
-  }
-  // F21: aggregate ceiling — checked after the per-IP gate so a distributed
-  // flood of one-time IPs can't slip past the per-IP limit and mass-insert.
-  if (!waitlistGlobal.allow()) {
-    return res.status(429).json({ ok: false, error: "waitlist-busy" });
-  }
-  const b = req.body || {};
-  // Honeypot: real form leaves `website` empty; bots fill every field.
-  if (typeof b.website === "string" && b.website.length > 0) {
-    return res.json({ ok: true, id: 0 });
-  }
-  const name = typeof b.name === "string" ? b.name.trim() : "";
-  const email = typeof b.email === "string" ? b.email.trim() : "";
-  // Length caps BEFORE any regex: EMAIL_RE's adjacent quantifier groups
-  // backtrack in polynomial time, and email is only bounded by the 100kb body
-  // parser — so a ~100k-char crafted value could pin CPU (ReDoS). RFC 5321
-  // caps a real email at 320 chars; name is stored, not matched, but capped
-  // for hygiene. Short-circuits (||) so the regex never sees an oversized string.
-  if (!name || name.length > 200 || !email || email.length > 320 || !EMAIL_RE.test(email)) {
-    return res.status(400).json({ ok: false, error: "name+email required" });
-  }
-  const plan = ALLOWED_PLANS.has(String(b.plan || "").toLowerCase()) ? String(b.plan).toLowerCase() : "team";
-  const kind = ALLOWED_KINDS.has(String(b.kind || "").toLowerCase()) ? String(b.kind).toLowerCase() : "waitlist";
-  const r = await insertLead({
-    kind, plan, name, email,
-    org: typeof b.org === "string" ? b.org.trim() : "",
-    sites: typeof b.sites === "string" ? b.sites.trim() : "",
-    message: typeof b.message === "string" ? b.message.trim() : "",
-    ip,
-    ua: (req.get("user-agent") || "").toString(),
-  });
-  if (!r.ok) return res.status(500).json({ ok: false, error: "insert-failed" });
-  res.json({ ok: true, id: r.id });
+app.post("/api/tollbooth/waitlist", (_req, res) => {
+  res.status(410).json({ ok: false, error: "gone", message: "The tollbooth waitlist is closed. agent402-tollbooth is open source and self-hosted: see /tollbooth.", see: "/tollbooth" });
 });
 
 // Operator dashboard — full per-tool usage + recent calls feed, gated by
@@ -4539,7 +4477,7 @@ function readCookie(req, name) {
 // Until 2026-08-30 both observers (the GitHub heartbeat and the Cloudflare
 // Worker) carried AGENT402_OPERATOR_TOKEN just to POST /api/status/probe. That
 // token also reaches /__operator/refunds/update, /credits/disable,
-// /well-known (publishes a document at our own domain), /leads, /backup/run,
+// /well-known (publishes a document at our own domain), /backup/run,
 // /monitors/run, /alerts/run, /stats and /wishes - so a second platform was
 // holding a master key to use exactly one door.
 //
@@ -4721,7 +4659,7 @@ const operatorLoginLimiter = createRateLimiter("operator-login", { perMin: 5, pe
 // F20: operator pages carry lead PII, revenue figures, and session state.
 // Forbid any browser-history cache, shared proxy, or future CDN from retaining
 // them. Registered before the routes so it runs on every /__operator response
-// (login form, dashboard, stats, wishes, leads, logout).
+// (login form, dashboard, stats, wishes, logout).
 app.use("/__operator", (_req, res, next) => {
   res.set("Cache-Control", "no-store, private");
   res.set("Pragma", "no-cache");
@@ -5386,7 +5324,7 @@ app.post("/__operator/index/seed", express.json({ limit: "64kb" }), async (req, 
     for (let o = unique[i++]; o; o = unique[i++]) {
       try {
         const r = await registerOrigin(o);
-        rows.push({ origin: o, listed: !!r?.listed, ...(r?.error ? { error: String(r.error).slice(0, 200) } : {}) });
+        rows.push({ origin: o, listed: !!r?.listed, ...(r?.pending ? { pending: true } : {}), ...(r?.error ? { error: String(r.error).slice(0, 200) } : {}) });
       } catch (e) {
         rows.push({ origin: o, listed: false, error: String(e?.message || e).slice(0, 200) });
       }
@@ -5500,18 +5438,6 @@ app.get("/__operator/ledger-sync.json", async (req, res) => {
   };
   ledgerSyncCache = { at: Date.now(), value: payload };
   res.json({ ...payload, cached: false });
-});
-app.get("/__operator/leads", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).type("html").send("<p>Not found.</p>");
-  const list = await listLeads({ limit: 200 });
-  const stats = await countLeads();
-  res.type("html").send(operatorLeadsPage({
-    ok: list.ok,
-    rows: list.rows,
-    total: stats.total,
-    byPlan: stats.byPlan,
-    dbEnabled: leadsDbEnabled(),
-  }));
 });
 // Short aliases for the Smart Order Router guide. It is the most linkable
 // thing we have (one payment reaches every proven x402 seller) and both /router
@@ -6225,7 +6151,7 @@ function leaderboardSelfFigures() {
 function standingFigures() {
   try {
     // Host left out of both counts: the band says the host is in none of them.
-    return { ...standingCountsExcludingHost(getIndexSnapshot()), rails: settlementRailCount() };
+    return { ...standingCountsExcludingHost(getIndexSnapshot()), rails: settlementRailCount(), x402Rails: offeredChainCount() ?? RAILS.length, tempo: tempoEnabled() };
   } catch { return {}; }
 }
 
@@ -6356,7 +6282,7 @@ app.get("/stellar", async (req, res) => {
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
-    htmlCache(res, 120, 600).send(stellarPage(BASE_URL, { snapshot, rail, activity, selectedSeller, stellarWallet: selfWallet || undefined, host: hostEntryFigures("stellar"), payable: chainPayable("stellar") }));
+    htmlCache(res, 120, 600).send(stellarPage(BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, stellarWallet: selfWallet || undefined, host: hostEntryFigures("stellar"), payable: chainPayable("stellar"), ...chainPageExtras("stellar") }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -6450,7 +6376,7 @@ app.get("/algorand", async (req, res) => {
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
-    htmlCache(res, 120, 600).send(algorandPage(BASE_URL, { snapshot, rail, activity, selectedSeller, algorandWallet: selfWallet || undefined, host: hostEntryFigures("algorand"), payable: chainPayable("algorand") }));
+    htmlCache(res, 120, 600).send(algorandPage(BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, algorandWallet: selfWallet || undefined, host: hostEntryFigures("algorand"), payable: chainPayable("algorand"), ...chainPageExtras("algorand") }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -6647,7 +6573,7 @@ async function buildChainPage(chainKey, sellerQuery, all) {
     scanWallet ? getActivityForChain(chainKey, scanWallet, { maxWaitMs: PAGE_ACTIVITY_WAIT_MS }) : Promise.resolve(null),
   ]);
   const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
-  return marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey) });
+  return marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey), ...chainPageExtras(chainKey) });
 }
 // How many catalog tools a chain page can say take payment on that chain, by
 // the 402 builder's own rules (identity-bound and long-running tools are EVM
@@ -6808,7 +6734,7 @@ app.get("/marketplace", async (req, res) => {
   try { leaderboardSnap = getLeaderboardSnapshot(); } catch { /* directory still renders */ }
   let economySnap = null;
   try { economySnap = await x402EconomySnapshot(); } catch { /* strip omitted */ }
-  htmlCache(res, 120, 600).send(memoSurface(`market:all:${req.query.all === "1"}`, 60_000, () => marketPage(null, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), leaderboardSnap, economySnap, all: req.query.all === "1", wallet: WALLET_ADDRESS, host: hostEntryFigures() })));
+  htmlCache(res, 120, 600).send(memoSurface(`market:all:${req.query.all === "1"}`, 60_000, () => marketPage(null, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), leaderboardSnap, economySnap, all: req.query.all === "1", wallet: WALLET_ADDRESS, host: hostEntryFigures(), routerChains: spendChainsConfigured(), chainsOffered: offeredChainCount(), tempo: tempoEnabled() })));
 });
 // The host's own entry for the discovery surfaces: external-only ledger
 // figures, rendered outside every ranking and count (src/host-entry.js).
@@ -6821,6 +6747,19 @@ app.get("/marketplace", async (req, res) => {
 // window, never block a visitor on the ledger.
 const HOST_FIGURES_TTL_MS = Number(process.env.HOST_FIGURES_TTL_MS) || 60_000;
 const hostFiguresCache = new Map(); // chainKey|"" -> { at, value }
+// What a chain page needs beyond its snapshot: the settlement premium the 402
+// adds on that chain (the same NETWORK_PRICE_PREMIUMS map the accepts builder
+// reads) and the chains the router can spend on.
+// x402 chains the 402 offers right now (/api/rails "offered"); null when no
+// rail is configured (free mode), so the page falls back to its chain list.
+function offeredChainCount() {
+  const rails = railStatus();
+  return rails.length ? rails.filter((r) => r.offered).length : null;
+}
+function chainPageExtras(chainKey) {
+  const caip2 = CHAIN_PAGES[chainKey]?.caip2;
+  return { premiumUsd: caip2 ? (parseNetworkPremiums().get(caip2) || 0) / 1e6 : 0, routerChains: spendChainsConfigured() };
+}
 function hostEntryFigures(chainKey = null) {
   const key = chainKey || "";
   const hit = hostFiguresCache.get(key);
@@ -6832,11 +6771,21 @@ function hostEntryFigures(chainKey = null) {
   hostFiguresCache.set(key, { at: Date.now(), value });
   return value;
 }
+// The MPP page's host row: outside settlements on Tempo, MPP's native rail,
+// the rail its leaderboard ranks - not the all-rails x402 total.
+function mppHostFigures() {
+  const hit = hostFiguresCache.get("mpp:tempo");
+  if (hit && Date.now() - hit.at < HOST_FIGURES_TTL_MS) return hit.value;
+  let value = null;
+  try { value = hostFiguresFromPayments(externalTempoPayments(), { network: "tempo", networkLabel: "Tempo (MPP)", toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL }); } catch { value = hit ? hit.value : null; }
+  hostFiguresCache.set("mpp:tempo", { at: Date.now(), value });
+  return value;
+}
 // The MPP marketplace - independent directory, synchronous snapshot (no
 // on-chain join, unlike /marketplace above), same cache window.
 app.get("/mpp-marketplace", (_req, res) => {
   try {
-    htmlCache(res, 120, 600).send(mppMarketPage(BASE_URL, mppIndexSnapshot(), mppLeaderboardSnapshot(), { host: hostEntryFigures() }));
+    htmlCache(res, 120, 600).send(mppMarketPage(BASE_URL, mppIndexSnapshot(), mppLeaderboardSnapshot(), { host: mppHostFigures() }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -6877,7 +6826,7 @@ app.get("/api/mpp-leaderboard", (_req, res) => {
 // degrades to "temporarily unavailable" text rather than a half-rendered page.
 app.get("/sell", (_req, res) => {
   try {
-    htmlCache(res, 120, 600).send(sellPage(BASE_URL));
+    htmlCache(res, 120, 600).send(sellPage(BASE_URL, CATALOG));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -7032,6 +6981,9 @@ app.get("/api/index", (req, res) => {
 // body by the time this handler runs).
 const REG_WINDOW_MS = 3600_000;
 const regByIp = new Map(); // ip -> [timestamps]; global cap is regGlobal below
+// F21: keep the per-IP maps from growing without bound between the periodic
+// sweeps when a burst of unique IPs arrives.
+const RL_MAP_MAX_KEYS = 5000;
 let regGlobal = [];
 // The backstop, not the fairness rule: per-IP (5/hour) is what stops one actor,
 // and this exists only so the endpoint cannot become a fetch amplifier at
@@ -7040,13 +6992,12 @@ let regGlobal = [];
 // Env-overridable so it can be raised without a deploy.
 const REG_GLOBAL_MAX = Math.max(30, Number(process.env.INDEX_REGISTER_GLOBAL_MAX || 300));
 let regGlobalTripped = 0;
-// F21: evict stale keys from the one-time-IP rate maps so distributed input
-// can't grow them without bound (the per-IP prune only fires when the SAME IP
+// F21: evict stale keys from the one-time-IP rate map so distributed input
+// can't grow it without bound (the per-IP prune only fires when the SAME IP
 // returns). Mirrors the powChallengeHits / operatorSessions sweeps; the inline
-// size backstops above cover bursts between ticks.
+// size backstop covers bursts between ticks.
 setInterval(() => {
   const now = Date.now();
-  sweepStaleTsMap(waitlistHits, WAITLIST_WINDOW_MS, now);
   sweepStaleTsMap(regByIp, REG_WINDOW_MS, now);
 }, 60_000);
 app.post("/api/index/register", async (req, res) => {
@@ -7102,6 +7053,9 @@ app.post("/api/index/register", async (req, res) => {
     if (mi >= 0) mine.splice(mi, 1);
     return res.status(503).set("Retry-After", "30").json(result);
   }
+  // Verification outlasted the registration's deadline: answered now (202),
+  // and the listing completes in the background (registerOrigin).
+  if (result?.pending) return res.status(202).set("Retry-After", String(result.retryAfterSeconds || 60)).json(result);
   // A re-registration that landed inside both of the origin's windows fetched
   // nothing, so it gives back its slot in the GLOBAL budget: repeated calls
   // about one known origin must not use up the hour for new sellers. (The
@@ -7422,7 +7376,7 @@ const fontB64 = (f) => readFileSync(new URL(`../assets/fonts/${f}`, import.meta.
 // render-blocking third-party Google Fonts stylesheet (worth ~1.9s of mobile
 // render-block + a cross-origin request chain) and gives repeat visits a free
 // cache hit. Filenames are strictly validated — no path traversal.
-const FONT_FILE_RE = /^((archivo|spacemono)-(400|500|600|700|800|900)|(geist|geist-mono)-(300|400|500|600|700)-(latin|latin-ext))\.woff2$/;
+const FONT_FILE_RE = /^((archivo|spacemono)-(400|500|600|700|800|900)|(geist|geist-mono)-(300|400|500|600|700)-(latin|latin-ext)|instrument-serif-400-(latin|latin-ext))\.woff2$/;
 app.get("/fonts/:file", (req, res) => {
   const file = String(req.params.file || "");
   if (!FONT_FILE_RE.test(file)) return res.status(404).end();
@@ -7524,7 +7478,9 @@ const BRAND_FONT_STYLE = `<style>
 // obsidian + milled system of the 2026-08-22 redesign (dark ground, light
 // milled mark, phosphor accent for signal text only - never as a fill under
 // dark text).
+// design-tokens: off-start (rasterized logo, favicon and social-card SVG: no CSS engine)
 const BRAND = { paper: "#0B0C0E", card: "#141619", panel: "#141619", panel2: "#1C2024", ink: "#E9EAEC", muted: "#B3B9C0", faint: "#868D95", hairline: "#2C3136", accent: "#9EF0B0", amber: "#F0B35E", milledA: "#F6F7F8", milledB: "#C9CED3", mono: "'Geist Mono',Menlo,Consolas,monospace", display: "'Geist',system-ui,sans-serif" };
+// design-tokens: off-end
 const BRAND_DEFS = `<defs><linearGradient id="milled" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.milledA}"/><stop offset="1" stop-color="${BRAND.milledB}"/></linearGradient><linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.panel2}"/><stop offset="1" stop-color="${BRAND.paper}"/></linearGradient></defs>`;
 
 // Brand mark — the milled square: a light brushed-aluminum rounded square on
@@ -7744,7 +7700,8 @@ app.get("/openapi.json", (req, res) => {
   res.type("application/json").send(OPENAPI_JSON);
 });
 app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(ledgerCatalogPage(BASE_URL, CATALOG, SKILL_PACKS)));
-app.get("/shop", (_req, res) => htmlCache(res, 300, 900).send(shopPage(BASE_URL, CATALOG)));
+// The task-indexed shop page retired into the catalog; /api/find answers a task.
+app.get("/shop", (_req, res) => res.redirect(301, "/tools"));
 // The standalone economy dashboard folded into the marketplace's "The economy,
 // over time" section (its 24h totals/concentration/network-split summary moved
 // there; the top-10 list duplicated /leaderboard and was dropped). Redirect
@@ -8005,6 +7962,9 @@ app.get("/api/stats", (_req, res) => {
   const perf = getPerformance24h();
   if (perf) base.performance24h = perf;
   base.settledOnChain = settledOnChainCount();
+  // Every chain this instance takes and the MPP methods its 402 offers, not
+  // only the primary network (the same sources /api/pricing and the manifest read).
+  base.payment = { ...base.payment, networks: enabledNetworks(NETWORK), mpp: mppMethodsSummary() };
   res.json(base);
 });
 
@@ -9092,7 +9052,8 @@ app.use((req, res, next) => {
         const isHeartbeat = powAccepted && (verifyHeartbeatToken(req.header("x-heartbeat-token")) || ownTrue(req, "statusProbePow"));
         // "usdc" is the ELSE branch, so any free path that forgets to name
         // itself here is booked as a sale. A trial moves no money.
-        const method = isHeartbeat ? "heartbeat" : powAccepted ? "pow" : trialAccepted ? "trial" : req.creditsSettled ? "credits" : "usdc";
+        // FREE_MODE serves without any payment gate: booked as "free", never as a sale.
+        const method = isHeartbeat ? "heartbeat" : powAccepted ? "pow" : trialAccepted ? "trial" : req.creditsSettled ? "credits" : FREE_MODE ? "free" : "usdc";
         // Tempo settlements (src/mpp-tempo.js) never carry a PAYMENT-RESPONSE
         // header — @x402/express never runs on that path — so without this
         // flag they'd fall through networkFromPaymentResponse(null) and get
@@ -9964,13 +9925,13 @@ app.use((req, res) => {
     return res.status(404).json({ ok: false, error: "not-found" });
   }
   const body = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
-      <div style="font-family:var(--font-mono);font-weight:500;font-size:72px;line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">404</div>
-      <h1 style="font-weight:500;font-size:26px;letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">Page not found</h1>
+      <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">404</div>
+      <h1 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">Page not found</h1>
       <p style="color:var(--muted);margin:0 0 28px;font-weight:300;">The page you're looking for doesn't exist.</p>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-        <a href="/" style="display:inline-block;padding:11px 18px;background:var(--btn-bg);color:var(--btn-fg);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Home</a>
-        <a href="/tools" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Browse tools</a>
-        <a href="/api/find" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Find a tool</a>
+        <a class="btn btn-secondary" href="/">Home</a>
+        <a class="btn btn-secondary" href="/tools">Browse tools</a>
+        <a class="btn btn-secondary" href="/api/find">Find a tool</a>
       </div>
     </div>${ledgerFooterCompact()}`;
   res.status(404).type("html").send(ledgerShell({ title: "Page not found - Agent402", description: "Page not found", canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
@@ -10006,15 +9967,15 @@ app.use((err, req, res, _next) => {
     const t = is404 ? "Page not found" : `Error ${status}`;
     const m = is404 ? "The page you\u2019re looking for doesn\u2019t exist." : "Something went wrong. Try again in a moment.";
     const errBody = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
-      <div style="font-family:var(--font-mono);font-weight:500;font-size:72px;line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">${status}</div>
-      <h1 style="font-weight:500;font-size:26px;letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${t}</h1>
+      <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">${status}</div>
+      <h1 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${t}</h1>
       <p style="color:var(--muted);margin:0 0 28px;font-weight:300;">${m}</p>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-        <a href="/" style="display:inline-block;padding:11px 18px;background:var(--btn-bg);color:var(--btn-fg);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Home</a>
-        <a href="/tools" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Browse tools</a>
-        <a href="/api/find" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Find a tool</a>
+        <a class="btn btn-secondary" href="/">Home</a>
+        <a class="btn btn-secondary" href="/tools">Browse tools</a>
+        <a class="btn btn-secondary" href="/api/find">Find a tool</a>
       </div>
-      <div style="margin-top:30px;color:var(--faint);font-size:13.5px;font-family:var(--font-mono);">or try: <a href="/playground" style="color:var(--ink);">playground</a> · <a href="/docs" style="color:var(--ink);">docs</a> · <a href="/quickstart" style="color:var(--ink);">quickstart</a></div>
+      <div style="margin-top:30px;color:var(--faint);font-size:var(--fs-md);font-family:var(--font-mono);">or try: <a href="/playground" style="color:var(--ink);">playground</a> · <a href="/docs" style="color:var(--ink);">docs</a> · <a href="/quickstart" style="color:var(--ink);">quickstart</a></div>
     </div>${ledgerFooterCompact()}`;
     res.status(status).type("html").send(ledgerShell({ title: `${t} - Agent402`, description: t, canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", body: errBody }));
   }
@@ -10056,10 +10017,10 @@ if (WALLET_ADDRESS) revenueSnapshot(revenueWallets()).catch(() => { /* warm-up o
 // REVENUE_LEDGER=true, so test/CI boots never touch public RPCs.
 startRevenueLedger(revenueWallets());
 
-// Tollbooth leads — lazy Postgres init. No-op if DATABASE_URL is unset; in
-// that case /api/tollbooth/waitlist returns 503 and the form falls back to the
-// GitHub pre-fill flow. Status is surfaced via /health so we can verify the
-// Railway DATABASE_URL wiring without poking the live leads table.
+// DATABASE_URL Postgres: each boot drops the retired tollbooth_leads table if
+// it still exists (src/leads-db.js; a no-op once it is gone, and a no-op if
+// DATABASE_URL is unset). Status is surfaced via /health (flags.leadsDb) so
+// the Railway DATABASE_URL wiring stays verifiable.
 // Init RETRIES after the post-listen boot stall (src/db-init-retry.js): the
 // first attempt's handshake timer expires inside the stall on every boot.
 let leadsDbReady = false;
@@ -10129,7 +10090,10 @@ if (String(process.env.MPP_INDEX_CRAWL || "").toLowerCase() === "off") {
     // payTo the index knows, primed into the pay-time gate (src/solana-leaderboard.js).
     startSolanaLeaderboard({
       listPayTos: async () => (await import("./x402-index.js")).allSolanaPayToOrigins(),
-      rpc: (method, params) => import("./solana-buyer.js").then((m) => m.solanaRpc(method, params)),
+      // getTransaction (immutable, by signature) goes public RPC first with the
+      // keyed lane behind it (src/solana-history-rpc.js); the signature and
+      // token-account reads stay on the configured lane.
+      rpc: historyAwareRpc((method, params) => import("./solana-buyer.js").then((m) => m.solanaRpc(method, params))),
       creditFromTx: (meta, payTo) => solanaCreditFromTx(meta, payTo),
       prime: (payTo, count) => import("./solana-buyer.js").then((m) => m.primeSvmInboundCount(payTo, count)),
       windowHours: Number(process.env.SOR_SVM_WINDOW_HOURS) || 168,
@@ -10308,7 +10272,7 @@ let shuttingDown = false;
 // below reuses this with a non-zero code and a short deadline - same drain
 // machinery, different exit semantics.
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => flushJsonDocuments({ timeoutMs })]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => flushJsonDocuments({ timeoutMs })]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });

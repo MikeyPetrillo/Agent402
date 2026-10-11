@@ -25,8 +25,8 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   const slugs = FINANCE_TOOLS.map((t) => t.slug).sort();
   ok(JSON.stringify(slugs) === JSON.stringify(["stock-history", "stock-quote"]),
     `finance-kit serves only the licensed tools (got ${slugs.join(", ")})`);
-  ok(FINANCE_TOOLS.every((t) => /Databento/.test(t.description) && /venueVolume/.test(t.description)),
-    "each description names the source and the venue-partial volume");
+  ok(FINANCE_TOOLS.every((t) => /three U\.S\. exchange venues/.test(t.description) && /venueVolume/.test(t.description) && !/Databento|DBEQ/.test(t.description)),
+    "each description names the venue scope and the venue-partial volume, not the vendor");
   ok(!/yahoo/i.test(JSON.stringify(FINANCE_TOOLS)), "no surface of this kit still names the unlicensed provider");
   ok(FINANCE_TOOLS.every((t) => {
     const keys = Object.keys(t.discovery.output.example);

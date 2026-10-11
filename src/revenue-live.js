@@ -16,6 +16,7 @@ import { standingBand } from "./standing.js";
 import { join } from "node:path";
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 import { RAILS, RAILS_AMP } from "./rails.js";
+import { REVENUE_RANGE_PRESETS, REVENUE_RANGE_PRESET_LABELS, windowLabel } from "./revenue-range.js";
 // Pure, main-guarded helpers shared with the daily scanners — one
 // classification rule everywhere: a transfer is external revenue only if the
 // payer isn't one of OUR wallets (canary/test burners) AND the amount is a
@@ -222,18 +223,17 @@ export const EVM = {
 };
 // Fallback matters: the card's per-tx decodes and the all-time ledger's
 // backfill share these endpoints, and the public mainnet-beta RPC 429s under
-// that contention — without a second lane the card loses its amount/external
+// that contention - without a second lane the card loses its amount/external
 // tags whenever the ledger is paging. Same list + env override as
 // scripts/revenue-scan-solana.js.
-// Alchemy first when the key is set (same key as the EVM rails) — it serves
+// Alchemy first when the key is set (same key as the EVM rails) - it serves
 // Solana JSON-RPC from a datacenter-reachable endpoint, so the balance read
 // stops timing out against the rate-limited public RPCs. The publics stay as
-// fallbacks (rpcCall walks the list on error/timeout).
-export const SOLANA_RPCS = (process.env.SOLANA_RPCS || [
-  ...(process.env.ALCHEMY_API_KEY ? [`https://solana-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-  "https://api.mainnet-beta.solana.com",
-  "https://solana-rpc.publicnode.com",
-].join(",")).split(",").map((s) => s.trim()).filter(Boolean);
+// fallbacks (rpcCall walks the list on error/timeout). The list now lives in
+// src/solana-history-rpc.js, which also routes getTransaction (an immutable
+// read by signature) public-first with the keyed lane behind it.
+import { SOLANA_RPCS, solanaHistoryRead } from "./solana-history-rpc.js";
+export { SOLANA_RPCS };
 
 // Stellar/Algorand REST endpoints. Alchemy doesn't serve these chains, so each
 // keeps a public primary plus a second independent provider (both verified
@@ -507,7 +507,7 @@ async function evmRail(name, wallet) {
     out.recentSource = viaLedger ? "ledger" : "chain-scan";
     out.externalUsd = Number(recent.filter((t) => t.external).reduce((s, t) => s + t.usd, 0).toFixed(6));
     out.windowBlocks = c.span;
-    if (missed) out.scanNote = `transfer scan partial: ${missed}/${chunks} windows unavailable from public RPCs (balance is live)`;
+    if (missed) out.scanNote = `transfer scan partial: ${missed}/${chunks} windows unavailable from public RPCs (the rail is live)`;
   } catch (e) {
     out.error = pubErr(e, 120);
   }
@@ -533,7 +533,9 @@ export function newestOwnSettle(recent) {
  * The /api/revenue body. The per-transfer `recent` rows stay server-side: each
  * names the paying wallet (`from`), and even without that field its tx hash
  * resolves to the payer on chain, so publishing them would publish who pays
- * us. What leaves is per rail: our own wallet, its balance, the counts and
+ * us. Wallet balances stay server-side too: the balance fields and the
+ * combined `totalUsd` are operator-only (operatorRevenueBody). What leaves is
+ * per rail: our own wallet address, a reachability word, the counts and
  * totals, and `lastInbound`, which is only ever one of OUR settles (see
  * newestOwnSettle). Pure: never mutates the cached snapshot.
  */
@@ -541,15 +543,62 @@ export function publicRevenueSnapshot(snap) {
   if (!snap || !Array.isArray(snap.rails)) return snap;
   const rails = snap.rails.map((r) => {
     if (!r || typeof r !== "object") return r;
-    const { recent, ...rest } = r;
+    const { recent, balance, staleBalance, balanceAsOf, ...rest } = r;
     const li = rest.lastInbound;
     if (li && li.internal !== true) delete rest.lastInbound;
-    return rest;
+    return { ...rest, status: railStatus(r), ...(balanceAsOf ? { readAsOf: balanceAsOf } : {}) };
   });
+  const { totalUsd, ...pub } = snap;
   return {
-    ...snap,
+    ...pub,
     rails,
-    note: "Balances read live from public RPCs (best-effort per rail). totalUsd is the combined wallet balance (includes our own canary/test money); windowExternalUsd counts only classified external per-call payments in the recent scan windows. Per-payment rows are not published: a transaction hash resolves to its payer on chain. lastInbound is our own newest settle on each rail (canary or volume run), never an outside buyer's.",
+    note: "Rails read from public RPCs (best-effort per rail). Wallet balances are not published; each wallet address is public and its holdings can be read on chain. windowExternalUsd counts only classified external per-call payments in the recent scan windows. Per-payment rows are not published: a transaction hash resolves to its payer on chain. lastInbound is our own newest settle on each rail (canary or volume run), never an outside buyer's.",
+  };
+}
+
+/**
+ * A rail's reachability as one word: "live" (read this refresh), "cached"
+ * (carried forward from the last good read) or "unreachable" (never read).
+ * The /revenue table and the public JSON both say it this way, so neither
+ * needs the balance it is derived from.
+ */
+export function railStatus(r) {
+  if (!r || r.balance == null) return "unreachable";
+  return r.staleBalance ? "cached" : "live";
+}
+
+/** The operator view: the full snapshot, balances and totalUsd included. */
+export function operatorRevenueBody(snap, ledger = {}) {
+  return { ...snap, ...ledger, operatorView: true };
+}
+
+/** The public view: publicRevenueSnapshot plus the ledger totals. */
+export function publicRevenueBody(snap, ledger = {}) {
+  return { ...publicRevenueSnapshot(snap), ...ledger };
+}
+
+/**
+ * The two revenue JSON handlers. `snapshot()` resolves the rails snapshot,
+ * `ledger()` the ledger totals, `authed(req)` the operator check. The public
+ * one never carries a balance; the operator one answers 404 to anyone else,
+ * like every other /__operator surface.
+ */
+export function revenueApiHandlers({ snapshot, ledger, authed }) {
+  const fail = (res, e) => res.status(500).json({ error: "revenue snapshot failed", detail: String(e?.message || e).slice(0, 120) });
+  return {
+    publicHandler: async (_req, res) => {
+      try {
+        const body = publicRevenueBody(await snapshot(), ledger());
+        res.set("Cache-Control", "public, max-age=30").json(body);
+      } catch (e) { fail(res, e); }
+    },
+    operatorHandler: async (req, res) => {
+      if (!authed(req)) return res.status(404).json({ error: "Not found" });
+      res.set("Cache-Control", "no-store");
+      try {
+        res.json(operatorRevenueBody(await snapshot(), ledger()));
+      } catch (e) { fail(res, e); }
+    },
   };
 }
 
@@ -622,7 +671,7 @@ async function solanaRail(wallet) {
       };
       if (!s.err && Date.now() < deadline) {
         try {
-          const txn = await rpcCall(SOLANA_RPCS, "getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], 5000);
+          const txn = await solanaHistoryRead("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], { timeoutMs: 5000, keyedFirst: true });
           const usd = Number(usdcDeltaForOwner(txn?.meta, wallet).toFixed(6));
           if (usd > 0) {
             item.usd = usd;
@@ -1030,7 +1079,17 @@ export function mergeScanEntries(fresh = [], prior = [], cutoff = 0) {
   return out;
 }
 
-export async function evmActivity(chainKey, wallet, { days = 30, maxPages = SCAN_MAX_PAGES, budgetMs = SCAN_BUDGET_MS, prior = null } = {}) {
+/** Pages a refresh may spend continuing a truncated scan's far end
+ *  (EVM_ACTIVITY_FAR_PAGES). A wallet too busy to cover the window in one
+ *  scan covers it over several refreshes instead of re-reading it from the
+ *  top every time. */
+const FAR_PAGES_PER_REFRESH = Math.max(1, Number(process.env.EVM_ACTIVITY_FAR_PAGES) || 5);
+
+// Per-process counters for the operator view of /api/gateway-status.
+const activityCounters = { scans: 0, cold: 0, resumed: 0, farContinued: 0, calls: 0, truncated: 0, failed: 0 };
+export function evmActivityStatus() { return { ...activityCounters }; }
+
+export async function evmActivity(chainKey, wallet, { days = 30, maxPages = SCAN_MAX_PAGES, budgetMs = SCAN_BUDGET_MS, prior = null, farPages = FAR_PAGES_PER_REFRESH } = {}) {
   const c = EVM[chainKey];
   const out = { rail: c?.label || chainKey, wallet: wallet || null, days, buckets: [], totals: { tx: 0, usd: 0, buyers: 0, internalTx: 0, internalUsd: 0 }, truncated: false, error: null };
   if (!c) { out.error = "unsupported chain"; return out; }
@@ -1038,64 +1097,116 @@ export async function evmActivity(chainKey, wallet, { days = 30, maxPages = SCAN
   if (!process.env.ALCHEMY_API_KEY) { out.error = "activity source unavailable (no ALCHEMY_API_KEY)"; return out; }
   const alchemyUrl = c.rpcs[0]; // prepended first in EVM config above when the key is set
   const cutoff = Date.now() - days * 86_400_000;
-  const entries = [];
   let rpcCalls = 0;
-  try {
-    let pageKey;
-    const until = scanDeadline(budgetMs);
-    let more = false; // a cursor is still pending, i.e. we stopped early
+  activityCounters.scans++;
+  const until = scanDeadline(budgetMs);
 
-    // RESUME. This scan used to re-walk the window from block 0 on every
-    // refresh, so a busy wallet re-paid for thirty days of history every ten
-    // minutes. A prior scan that COVERED the window (never truncated) and is
-    // itself still inside it lets this one start at the last block it saw and
-    // read only what is new - normally one page. A truncated prior is NOT
-    // resumable: it never held the far end of the window, and resuming would
-    // freeze that gap in place forever.
-    const resumable = !!(prior && !prior.truncated && Number.isFinite(prior.newestBlock)
-      && Array.isArray(prior.entries) && Number.isFinite(prior.at) && prior.at >= cutoff);
-    const startBlock = resumable ? Math.max(0, prior.newestBlock - RESUME_OVERLAP_BLOCKS) : 0;
-    out.resumed = resumable;
-
-    for (let page = 0; page < maxPages; page++) {
+  // One newest-first walk of [fromBlock, toBlock]. Stops at the window's
+  // cutoff (`reachedEnd`), at a block below `stopBelow` (caught up with what
+  // a prior scan holds), when the source runs out (`reachedEnd`), or at the
+  // page / clock bound with a cursor still pending (`more`).
+  const walk = async ({ fromBlock = 0, toBlock = null, stopBelow = null, pages }) => {
+    const rows = [];
+    let pageKey, more = false, reachedEnd = false;
+    for (let page = 0; page < pages; page++) {
       const params = {
-        fromBlock: "0x" + startBlock.toString(16), toBlock: "latest", toAddress: wallet, contractAddresses: [c.token],
+        fromBlock: "0x" + fromBlock.toString(16), toBlock: toBlock == null ? "latest" : "0x" + toBlock.toString(16), toAddress: wallet, contractAddresses: [c.token],
         category: ["erc20"], withMetadata: true, excludeZeroValue: true, maxCount: "0x3e8", order: "desc",
         ...(pageKey ? { pageKey } : {}),
       };
       const res = await rpcCall([alchemyUrl], "alchemy_getAssetTransfers", [params], 8000);
-      rpcCalls++;
+      rpcCalls++; activityCounters.calls++;
       const transfers = res?.transfers || [];
       // Cleared every iteration so that ANY exit path is honest: `more` means
       // "we stopped with a cursor still pending", and only the line that sets it
-      // just before the deadline check can claim that. Carrying the flag across
-      // iterations marked a walk that ran cleanly to the window edge as truncated.
+      // just before the deadline check can claim that.
       more = false;
-      if (!transfers.length) { pageKey = null; break; }
-      let pastWindow = false;
+      if (!transfers.length) { reachedEnd = true; break; }
+      let stop = false;
       for (const t of transfers) {
         const entry = parseEvmTransfer(t);
         if (!entry) continue;
         const ts = Date.parse(entry.when || "");
-        if (Number.isFinite(ts) && ts < cutoff) { pastWindow = true; break; }
-        // A resumed scan walks newest-first and only needs what sits above its
-        // cursor; reaching the overlap means it has caught up and can stop.
-        if (resumable && Number.isFinite(entry.block) && entry.block < startBlock) { pastWindow = true; break; }
+        if (Number.isFinite(ts) && ts < cutoff) { stop = true; reachedEnd = true; break; }
+        if (stopBelow != null && Number.isFinite(entry.block) && entry.block < stopBelow) { stop = true; break; }
         entry.internal = entry.from != null && OUR_EVM_WALLETS.has(entry.from);
-        entries.push(entry);
+        rows.push(entry);
       }
-      if (pastWindow) { pageKey = null; break; }
+      if (stop) break;
       pageKey = res?.pageKey || null;
-      if (!pageKey) break;
+      if (!pageKey) { reachedEnd = true; break; }
       more = true;
       if (Date.now() >= until) break;
     }
-    out.truncated = more;
+    return { rows, more, reachedEnd };
+  };
+  const oldestOf = (rows) => rows.reduce((m, e) => (Number.isFinite(e.block) && e.block < m ? e.block : m), Infinity);
+
+  // RESUME. A prior scan still inside the window lets this one read only the
+  // blocks after the newest one it saw (normally one page). A prior that was
+  // TRUNCATED also covers a contiguous stretch from its newest block down to
+  // `farBlock`; this scan then continues the far end below that block, a
+  // bounded number of pages per refresh, until the window is covered. The
+  // result stays `truncated` until the far end reaches the window's start,
+  // so a partial count is never presented as complete.
+  const priorOk = !!(prior && Number.isFinite(prior.newestBlock)
+    && Array.isArray(prior.entries) && Number.isFinite(prior.at) && prior.at >= cutoff
+    && (!prior.truncated || (Number.isFinite(prior.farBlock) && !prior.capped)));
+  out.resumed = priorOk;
+  let merged, farBlock = null, covered, capped = false;
+  try {
+    if (!priorOk) {
+      activityCounters.cold++;
+      const w = await walk({ pages: maxPages });
+      merged = w.rows;
+      covered = !w.more;
+      if (!covered) farBlock = oldestOf(merged);
+    } else {
+      activityCounters.resumed++;
+      const startBlock = Math.max(0, prior.newestBlock - RESUME_OVERLAP_BLOCKS);
+      const head = await walk({ fromBlock: startBlock, stopBelow: startBlock, pages: maxPages });
+      if (head.more) {
+        // The head itself did not catch up with the prior's newest block, so
+        // the two do not join: this scan stands alone, as a cold one would.
+        merged = head.rows;
+        covered = false;
+        farBlock = oldestOf(merged);
+      } else {
+        merged = mergeScanEntries(head.rows, prior.entries, cutoff);
+        covered = !prior.truncated;
+        if (!covered) {
+          farBlock = prior.farBlock;
+          // The far end, from the oldest block the prior holds downward. That
+          // block is read again (a page can end inside it); uids remove the
+          // overlap. A failure here keeps what was read and stays truncated.
+          if (Date.now() < until && farPages > 0) {
+            activityCounters.farContinued++;
+            try {
+              const far = await walk({ fromBlock: 0, toBlock: prior.farBlock, pages: Math.min(farPages, maxPages) });
+              merged = mergeScanEntries(merged, far.rows, cutoff);
+              if (far.reachedEnd && !far.more) { covered = true; farBlock = null; }
+              else if (far.rows.length) farBlock = Math.min(farBlock, oldestOf(far.rows));
+            } catch { /* stays truncated; the next refresh continues from the same block */ }
+          }
+        }
+      }
+    }
   } catch (e) {
+    activityCounters.failed++;
     out.error = pubErr(e, 120);
     return out;
   }
-  const merged = out.resumed ? mergeScanEntries(entries, prior.entries, cutoff) : entries;
+  // A wallet whose window holds more rows than a resume may keep is held at
+  // the newest rows and stays truncated for good (no far-end continuation that
+  // could never converge).
+  if (merged.length > SCAN_STATE_MAX_ENTRIES) {
+    merged = merged.slice(0, SCAN_STATE_MAX_ENTRIES);
+    capped = true;
+    if (covered) { covered = false; }
+    farBlock = oldestOf(merged);
+  }
+  out.truncated = !covered;
+  if (out.truncated) activityCounters.truncated++;
   const bucketed = bucketStellarActivity(merged, { days });
   out.buckets = bucketed.buckets;
   out.totals = bucketed.totals;
@@ -1105,9 +1216,11 @@ export async function evmActivity(chainKey, wallet, { days = 30, maxPages = SCAN
   // on a busy wallet and is nobody's business but the scanner's.
   Object.defineProperty(out, "__scanState", {
     enumerable: false, value: {
-      entries: merged.slice(0, SCAN_STATE_MAX_ENTRIES),
-      newestBlock: merged.reduce((m, e) => (Number.isFinite(e.block) && e.block > m ? e.block : m), -1),
+      entries: merged,
+      newestBlock: merged.reduce((m, e) => (Number.isFinite(e.block) && e.block > m ? e.block : m), prior && priorOk ? prior.newestBlock : -1),
       truncated: !!out.truncated,
+      farBlock: out.truncated && Number.isFinite(farBlock) ? farBlock : null,
+      capped,
       at: Date.now(),
     },
   });
@@ -1218,7 +1331,7 @@ export async function solanaActivity(wallet, { days = 30, maxPages = SCAN_MAX_PA
         if (txBudget <= 0 || Date.now() >= until) { capped = true; break scan; }
         txBudget--;
         try {
-          const txn = await rpcCall(SOLANA_RPCS, "getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], 6000);
+          const txn = await solanaHistoryRead("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], { timeoutMs: 6000, keyedFirst: true });
           const entry = parseSolanaTransfer(txn, wallet);
           if (entry) {
             entry.internal = entry.from != null && OUR_SOLANA_WALLETS.has(entry.from);
@@ -1541,7 +1654,7 @@ const MPP_RAIL_META = {
   celo: { label: "Celo", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://celoscan.io/address/", tx: "https://celoscan.io/tx/" },
   tempo: { label: "Tempo", asset: "USDC.e / PathUSD", how: "native tempo/charge via Tempo's relay", explorer: "https://explore.tempo.xyz/address/", tx: "https://explore.tempo.xyz/tx/" },
   // Card payments over MPP settle in US dollars, not a stablecoin.
-  stripe: { label: "Card", asset: "USD", how: "card over MPP" },
+  stripe: { label: "Card (MPP wire)", asset: "USD", how: "a card credential on an MPP call; card checkout purchases are counted separately in the headline" },
 };
 const mppRailLabel = (n) => MPP_RAIL_META[n]?.label || netName(n) || n;
 
@@ -1614,10 +1727,10 @@ function mppRailsSection(mpp, { wallets = {} } = {}) {
   }).join("\n");
   return `
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:40px 0 6px;">
-      <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0;">MPP wire <span style="color:var(--muted);font-weight:400;">· by rail</span></h2>
-      <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><strong style="color:var(--ink);">${count.toLocaleString()}</strong> settlement${count === 1 ? "" : "s"} over <code>Authorization: Payment</code> · <a href="/api/revenue/mpp">/api/revenue/mpp</a></span>
+      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">MPP wire <span style="color:var(--muted);font-weight:400;">· by rail</span></h2>
+      <span class="ml-meta" style="margin:0;font-size:var(--fs-xs);color:var(--muted);"><span><strong style="color:var(--ink);">${count.toLocaleString()}</strong> settlement${count === 1 ? "" : "s"} over <code>Authorization: Payment</code></span><span><a href="/api/revenue/mpp">/api/revenue/mpp</a></span></span>
     </div>
-    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;">Payments whose credential arrived over the <strong>MPP</strong> wire. Throughput, ours included: most of it is our own daily volume exercising the rails; the external columns are money from others. On Base and Celo an MPP payment settles as ordinary USDC through x402, so its dollars are already in the x402 table above; Tempo and card payments settle off that ledger and are counted here.</p>
+    <p style="font-size:var(--fs-md);color:var(--muted);margin:0 0 12px;">Payments whose credential arrived over the <strong>MPP</strong> wire. Throughput, ours included: most of it is our own daily volume exercising the rails; the external columns are money from others. On Base and Celo an MPP payment settles as ordinary USDC through x402, so its dollars are already in the x402 table above; Tempo and card payments settle off that ledger and are counted here.</p>
     <div class="rv-tablewrap"><table class="rv-table">
       <thead><tr><th>Rail</th><th class="num">Settlements</th><th class="num">External</th><th class="num">External $</th><th>Last settled</th><th>Explorer</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -1644,10 +1757,10 @@ export function decideSection(d) {
   }).join("\n");
   return `
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:40px 0 6px;">
-      <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0;">Decide <span style="color:var(--muted);font-weight:400;">· plans and runs</span></h2>
-      <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><a href="/api/revenue/decide">/api/revenue/decide</a></span>
+      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">Decide <span style="color:var(--muted);font-weight:400;">· plans and runs</span></h2>
+      <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);"><a href="/api/revenue/decide">/api/revenue/decide</a></span>
     </div>
-    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;">Paid use of the planner and its execute route, on every rail. Settlements count ours too (canaries and tests); the external columns are other buyers. External $ is what they paid for the plan or the run, not the pass-through payments a run makes to outside sellers.</p>
+    <p style="font-size:var(--fs-md);color:var(--muted);margin:0 0 12px;">Paid use of the planner and its execute route, on every rail. Settlements count ours too (canaries and tests); the external columns are other buyers. External $ is what they paid for the plan or the run, not the pass-through payments a run makes to outside sellers.</p>
     <div class="rv-tablewrap"><table class="rv-table">
       <thead><tr><th>Route</th><th class="num">Settlements</th><th class="num">External</th><th class="num">External $</th><th class="num">External, ${Number(d.days || 30)}d</th><th class="num">Buyers, ${Number(d.days || 30)}d</th><th>Last outside buy</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -1664,40 +1777,90 @@ export function decideSection(d) {
 // Exported for scripts/test-revenue-chart.js — the free-tier lane has
 // invariants (never under Revenue $, never a chain colour) worth testing
 // without standing up a full revenue snapshot.
-export function revenueChartSection() {
+// The date-range control and the window's totals, rendered on the server so
+// the first paint already shows the chosen window. Presets and the custom
+// form are plain GET links and a GET form (they work with no script); the
+// chart script takes them over to switch without a reload. `range` is
+// { window, firstDay, today, notice, totals } from server.js; without it the
+// chart renders every day the series holds, as it always has.
+export function revenueRangeControl(range) {
+  const w = range?.window;
+  if (!w) return "";
+  const chips = Object.keys(REVENUE_RANGE_PRESETS).map((k) => {
+    const on = w.preset === k;
+    return `<a class="btn btn-secondary btn-sm rvr-chip" href="/revenue?range=${esc(k)}#rvz" data-range="${esc(k)}"${on ? ' aria-current="true"' : ""}>${esc(REVENUE_RANGE_PRESET_LABELS[k])}</a>`;
+  }).join("");
+  const t = range.totals;
+  const money = (n) => `$${Number(n || 0).toFixed(2)}`;
+  const totals = t ? `<p class="rvr-totals" id="rvzTotals" aria-live="polite"><span>In this range:</span><span><strong>${Number(t.externalPayments).toLocaleString("en-US")}</strong> external payment${t.externalPayments === 1 ? "" : "s"}</span><span><strong>${money(t.externalUsd)}</strong> revenue (x402 rails + Tempo MPP)</span><span><strong>${Number(t.settlements).toLocaleString("en-US")}</strong> settlement${t.settlements === 1 ? "" : "s"}, ours included</span><span><strong>${Number(t.buyers).toLocaleString("en-US")}</strong> distinct buyer${t.buyers === 1 ? "" : "s"}</span></p>` : "";
+  const min = range.firstDay ? ` min="${esc(range.firstDay)}"` : "";
+  const max = range.today ? ` max="${esc(range.today)}"` : "";
+  return `
+    <div class="rvr" id="rvzRange">
+      <div class="rvr-chips" role="group" aria-label="Date range">${chips}</div>
+      <form class="rvr-custom" id="rvzRangeForm" method="get" action="/revenue#rvz">
+        <label>From <input type="date" name="from" value="${esc(w.from)}"${min}${max} required></label>
+        <label>To <input type="date" name="to" value="${esc(w.to)}"${min}${max} required></label>
+        <button class="btn btn-secondary btn-sm" type="submit">Apply</button>
+      </form>
+    </div>
+    ${range.notice ? `<p class="rvr-note" id="rvzRangeNotice">That range could not be read (${esc(range.notice)}), so this shows the default.</p>` : ""}
+    <p class="rvr-window" id="rvzWindow">Showing <strong id="rvzWindowText" style="white-space:nowrap;">${esc(windowLabel(w))}</strong>. Cumulative lines start at zero on the first day shown; distinct buyers to date are all-time. The headline figures above and the tables below are all-time.</p>
+    ${totals}`;
+}
+
+export function revenueChartSection(range = null) {
+  const w = range?.window || null;
+  const rangeAttrs = w ? ` data-from="${esc(w.from)}" data-to="${esc(w.to)}" data-preset="${esc(w.preset || "")}" data-first="${esc(range.firstDay || "")}" data-today="${esc(range.today || "")}"` : "";
   return `
   <style>
+  /* design-tokens: off-start (categorical chart series, a data-viz palette pinned by test-theme.js) */
   .rvz{--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767;--sfree:#9aa0aa;--stempo:#0ea5b8;--snewbuyers:#199e70;--sretbuyers:#9085e9;--scumbuyers:#3987e5;--vsurf:var(--card)}
+  /* design-tokens: off-end */
   .rvz{border:1px solid var(--hairline);background:var(--card);padding:18px 20px;margin:0 0 26px}
   .rvz-controls{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
   .rvz-seg{display:inline-flex;border:1px solid var(--hairline)}
-  .rvz-seg button{background:transparent;border:none;border-right:1px solid var(--hairline);color:var(--muted);font-family:var(--font-mono);font-size:12px;padding:6px 12px;cursor:pointer}
+  .rvz-seg button{background:transparent;border:none;border-right:1px solid var(--hairline);color:var(--muted);font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 12px;cursor:pointer}
   .rvz-seg button:last-child{border-right:none}
-  .rvz-seg button.on{background:var(--surface);color:var(--on-dark);font-weight:700}
-  .rvz-legend{display:flex;gap:12px;flex-wrap:wrap;font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:10px 0 0}
+  .rvz-seg button.on{background:var(--panel);color:var(--on-panel);font-weight:700}
+  .rvz-legend{display:flex;gap:12px;flex-wrap:wrap;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:10px 0 0}
   .rvz-legend span{display:inline-flex;align-items:center;gap:5px}
   .rvz-legend i{width:10px;height:10px;display:inline-block}
-  .rvz-tip{position:absolute;pointer-events:none;background:var(--surface);color:var(--on-dark);border:1px solid var(--hairline);font-family:var(--font-mono);font-size:11.5px;line-height:1.6;padding:8px 11px;display:none;z-index:5;max-width:260px}
+  .rvz-tip{position:absolute;pointer-events:none;background:var(--panel);color:var(--on-panel);border:1px solid var(--hairline);font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.6;padding:8px 11px;display:none;z-index:5;max-width:260px}
   .rvz-wrap{position:relative}
-  .rvz-empty{font-family:var(--font-mono);font-size:12.5px;color:var(--muted);padding:30px 0;text-align:center}
-  .rvz details{margin-top:12px;font-size:12.5px}
+  .rvz-empty{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);padding:30px 0;text-align:center}
+  .rvz details{margin-top:12px;font-size:var(--fs-sm)}
   .rvz details.rvz-adv{margin-top:0}
   .rvz details summary{cursor:pointer;font-family:var(--font-mono);color:var(--muted)}
-  .rvz table{border-collapse:collapse;font-family:var(--font-mono);font-size:11.5px;margin-top:8px;width:100%}
+  .rvz table{border-collapse:collapse;font-family:var(--font-mono);font-size:var(--fs-xs);margin-top:8px;width:100%}
   .rvz th,.rvz td{border:1px solid var(--dash);padding:3px 8px;text-align:right}
-  .rvz th:first-child,.rvz td:first-child{text-align:left}
+  .rvz th:first-child,.rvz td:first-child{text-align:left}${w ? `
+  .rvr{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin:12px 0 10px}
+  .rvr-chips{display:flex;gap:8px;flex-wrap:wrap}
+  .rvr-chip{padding:6px 12px}
+  .rvr-chip[aria-current="true"]{border-color:var(--ink);box-shadow:inset 0 -2px 0 var(--accent);font-weight:600}
+  .rvr-chip:focus-visible,.rvr-custom input:focus-visible,.rvr-custom button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .rvr-custom{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0}
+  .rvr-custom label{display:inline-flex;gap:6px;align-items:center;font-size:var(--fs-sm);color:var(--muted)}
+  .rvr-custom input{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);background:var(--card);border:1px solid var(--dash);border-radius:var(--radius);padding:5px 8px;min-width:0}
+  .rvr-custom button{padding:6px 12px}
+  .rvr-window,.rvr-totals,.rvr-note{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 8px}
+  .rvr-totals{color:var(--ink);font-variant-numeric:tabular-nums;display:flex;flex-wrap:wrap;gap:4px 0}
+  .rvr-totals>span{white-space:nowrap}.rvr-totals>span+span:not(:nth-child(2))::before{content:"·";padding:0 8px;color:var(--muted)}.rvr-totals>span:first-child{margin-right:6px}
+  .rvr-note{color:var(--warn)}
+  @media (max-width:520px){.rvr-custom label{flex:1 1 130px}.rvr-custom input{flex:1 1 auto;width:100%}}` : ""}
   </style>
-  <div class="rvz" id="rvz">
+  <div class="rvz" id="rvz"${rangeAttrs}>
     <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;">
-      <span style="font-weight:800;font-size:17px;">Over time <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">· by chain · external only unless you widen it</span></span>
-      <a href="/api/revenue/daily" style="font-family:var(--font-mono);font-size:12px;">raw data →</a>
-    </div>
+      <span style="font-weight:800;font-size:var(--fs-lg);">Over time <span class="ml-meta" style="display:inline-flex;margin:0 0 0 8px;font-size:var(--fs-xs);color:var(--muted);font-weight:400;"><span>by chain</span><span>external only unless you widen it</span></span></span>
+      <a id="rvzRaw" href="/api/revenue/daily${w ? `?from=${esc(w.from)}&amp;to=${esc(w.to)}` : ""}" style="font-family:var(--font-mono);font-size:var(--fs-xs);">raw data →</a>
+    </div>${revenueRangeControl(range)}
     <div class="rvz-controls" style="margin-top:12px">
       <span class="rvz-seg" id="rvzMode"><button data-v="cum" class="on">Cumulative</button><button data-v="daily">Daily</button><button data-v="weekly">Weekly</button><button data-v="monthly">Monthly</button></span>
       <span class="rvz-seg" id="rvzMetric"><button data-v="usd" class="on">Revenue $</button><button data-v="tx">Transactions</button><button data-v="buyers">Buyers</button></span>
     </div>
     <details class="rvz-adv" style="margin:0 0 12px;">
-      <summary>more filters: ours vs external, wire, free tier, self-funded</summary>
+      <summary>filters: scope, wire, tier</summary>
       <div class="rvz-controls" style="margin-top:10px">
         <span class="rvz-seg" id="rvzScope"><button data-v="ext" class="on">External</button><button data-v="int">Internal (canary)</button><button data-v="both">Both</button></span>
         <span class="rvz-seg" id="rvzWire"><button data-v="all" class="on">All wires</button><button data-v="x402">x402</button><button data-v="mpp">MPP</button></span>
@@ -1705,11 +1868,11 @@ export function revenueChartSection() {
         <span class="rvz-seg" id="rvzSettle"><button data-v="all" class="on">All revenue</button><button data-v="sor">SOR (self-funded)</button><button data-v="direct">Direct</button></span>
       </div>
     </details>
-    <p id="rvzBuyersNote" style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:0 0 10px;display:none;"></p>
-    <p id="rvzFreeNote" style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:0 0 10px;display:none;"></p>
-    <p id="rvzScopeNote" style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:0 0 10px;display:none;"></p>
-    <p id="rvzWireNote" style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:0 0 10px;display:none;">MPP-wire settlements are identified by tx hash from the sales ledger, which began recording the wire on 2026-07-24 - earlier days read as x402 because the wire was not recorded, not because no MPP traffic existed. The teal Tempo lane is always MPP-wire (it's never x402-settleable) and drops out under the x402 filter.</p>
-    <p id="rvzSettleNote" style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:0 0 10px;display:none;">SOR = revenue settled on-chain to the dedicated spending wallet that pays external sellers (the route-execute tiers today) - the self-funding loop. Direct = everything settled to the treasury. The split is by receiving wallet, so revenue from before a tool joined the self-funding set reads as Direct - that is what the chain says, not a gap. The wire split is not tracked within this lane, so selecting it resets the wire filter.</p>
+    <p id="rvzBuyersNote" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 10px;display:none;"></p>
+    <p id="rvzFreeNote" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 10px;display:none;"></p>
+    <p id="rvzScopeNote" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 10px;display:none;"></p>
+    <p id="rvzWireNote" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 10px;display:none;">MPP-wire settlements are identified by tx hash from the sales ledger, which began recording the wire on 2026-07-24 - earlier days read as x402 because the wire was not recorded, not because no MPP traffic existed. The teal Tempo lane is always MPP-wire (it's never x402-settleable) and drops out under the x402 filter.</p>
+    <p id="rvzSettleNote" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 10px;display:none;">SOR = revenue settled on-chain to the dedicated spending wallet that pays external sellers (the route-execute tiers today) - the self-funding loop. Direct = everything settled to the treasury. The split is by receiving wallet, so revenue from before a tool joined the self-funding set reads as Direct - that is what the chain says, not a gap. The wire split is not tracked within this lane, so selecting it resets the wire filter.</p>
     <div class="rvz-wrap"><svg id="rvzSvg" viewBox="0 0 940 300" width="100%" role="img" aria-label="Stacked daily revenue by chain"></svg><div class="rvz-tip" id="rvzTip"></div></div>
     <div class="rvz-legend" id="rvzLegend"></div>
     <details><summary>view as table</summary><div id="rvzTable" style="overflow-x:auto"></div></details>
@@ -1729,15 +1892,17 @@ export function revenueChartSection() {
  *  has: someone who wants to call a tool, someone who wants to be paid, and
  *  someone who wants the finished work rather than the API.
  */
-export function revenueNextStep() {
+export function revenueNextStep(hashPriceUsd = null) {
+  const p = Number(hashPriceUsd);
+  const cost = Number.isFinite(p) && p > 0 ? `It costs $${String(p)} a call` : "It is priced in the 402 it answers";
   return `<div style="margin:36px 0 0;border:1px solid var(--hairline);background:var(--card);padding:22px 20px;">
-    <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0 0 6px;">Put a line on this table.</h2>
-    <p style="font-size:14px;line-height:1.6;color:var(--muted);margin:0 0 14px;">Every number above is a settlement through the same gate this command hits. It costs a tenth of a cent and needs no account: the 402 comes back with the price and the rails, your client signs, the call is served.</p>
-    <pre style="margin:0 0 16px;padding:12px 14px;overflow-x:auto;background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:12.5px;line-height:1.5;"><code>curl -i https://agent402.tools/api/hash?text=hello</code></pre>
+    <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0 0 6px;">Put a line on this table.</h2>
+    <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 14px;">Every number above is a settlement through the same gate this command hits. ${cost} and needs no account: the 402 comes back with the price and the rails, your client signs, the call is served.</p>
+    <pre style="margin:0 0 16px;padding:12px 14px;overflow-x:auto;background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.5;"><code>curl -i https://agent402.tools/api/hash?text=hello</code></pre>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
-      <a href="/markets" style="font-family:var(--font-mono);font-size:12.5px;border:1px solid var(--ink);padding:8px 12px;text-decoration:none;color:var(--btn-fg);background:var(--btn-bg);">Tools an agent can call &rarr;</a>
-      <a href="/sell" style="font-family:var(--font-mono);font-size:12.5px;border:1px solid var(--hairline);padding:8px 12px;text-decoration:none;color:var(--ink);">Get paid on these rails &rarr;</a>
-      <a href="/reports" style="font-family:var(--font-mono);font-size:12.5px;border:1px solid var(--hairline);padding:8px 12px;text-decoration:none;color:var(--ink);">Buy a finished report &rarr;</a>
+      <a href="/markets" style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--ink);padding:8px 12px;text-decoration:none;color:var(--btn-fg);background:var(--btn-bg);">Tools an agent can call &rarr;</a>
+      <a href="/sell" style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--hairline);padding:8px 12px;text-decoration:none;color:var(--ink);">Get paid on these rails &rarr;</a>
+      <a href="/reports" style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--hairline);padding:8px 12px;text-decoration:none;color:var(--ink);">Buy a finished report &rarr;</a>
     </div>
   </div>`;
 }
@@ -1762,8 +1927,9 @@ export function revenuePage(baseUrl, snap) {
     // A balance present (fresh or carried forward from the last good read)
     // means the chain is live and settling; only a rail never read is
     // unreachable. Carried-forward reads say "cached" so freshness is honest.
-    const hasBalance = r.balance != null;
-    const status = !hasBalance ? `<span style="color:var(--accent);">unreachable</span>` : r.staleBalance ? `<span style="color:var(--green);">live</span> <span style="color:var(--muted);">cached</span>` : `<span style="color:var(--green);">live</span>`;
+    const word = railStatus(r);
+    const hasBalance = word !== "unreachable";
+    const status = word === "unreachable" ? `<span style="color:var(--bad);">unreachable</span>` : word === "cached" ? `<span style="color:var(--ok);">live</span> <span style="color:var(--muted);">cached</span>` : `<span style="color:var(--ok);">live</span>`;
     // The newest settlement on the rail, whoever paid (owner's call 2026-10-04:
     // the column shows the latest payment through the rail, not only our own
     // canary). Read from the recent rows and our own newest settle. The link is
@@ -1778,7 +1944,7 @@ export function revenuePage(baseUrl, snap) {
       : `<span style="color:var(--muted);">${hasBalance ? "none read yet" : "-"}</span>`;
     return `<tr>
       <td><strong>${esc(r.rail)}</strong> <span style="color:var(--muted);">${esc(r.asset)}</span></td>
-      <td class="num">${c ? Number(c.inboundCount).toLocaleString() : "-"}${c && !c.caughtUp ? `<span style="display:block;font-size:10.5px;font-weight:400;color:var(--muted);">still syncing</span>` : ""}</td>
+      <td class="num">${c ? Number(c.inboundCount).toLocaleString() : "-"}${c && !c.caughtUp ? `<span style="display:block;font-size:var(--fs-2xs);font-weight:400;color:var(--muted);">still syncing</span>` : ""}</td>
       <td class="num">${c && c.externalCount ? Number(c.externalCount).toLocaleString() : "0"}</td>
       <td class="num">${c ? esc(usdCell(c.externalUsd)) : "$0"}</td>
       <td>${proof}</td>
@@ -1798,7 +1964,7 @@ export function revenuePage(baseUrl, snap) {
   // What this page is measuring, said once at the top. Derived from the same
   // snapshot the rest of the page renders, plus the index totals server.js
   // hands in - never typed, or the framing sentence goes stale first.
-  const standing = standingBand({ ...(snap.standing || {}), settled: railThroughput(snap).total });
+  const standing = standingBand({ ...(snap.standing || {}), settled: railThroughput(snap).total, eyebrow: "THE MARKET WE INDEX" });
   // External payments across the scanned on-chain rails PLUS Tempo MPP
   // settlements (Tempo is not a scanned chain; ledgerSummary folds it in from
   // the sales ledger). Falls back to the on-chain pair for an older snapshot.
@@ -1807,44 +1973,44 @@ export function revenuePage(baseUrl, snap) {
   const agents = Number(snap.agents?.buyers || 0);
   const big = (n, label, sub) => `
     <div style="min-width:0;">
-      <div style="font-family:var(--font-mono);font-size:40px;font-weight:700;color:var(--accent);line-height:1.05;">${n.toLocaleString()}</div>
-      <div style="font-size:14px;color:var(--ink);margin-top:6px;">${label}</div>
-      <div style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin-top:3px;">${sub}</div>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-3xl);font-weight:700;color:var(--accent);line-height:1.05;">${n.toLocaleString()}</div>
+      <div style="font-size:var(--fs-md);color:var(--ink);margin-top:6px;">${label}</div>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin-top:3px;">${sub}</div>
     </div>`;
   const hero = throughput ? `
     <div class="ml-2col" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;margin:22px 0 14px;max-width:720px;">
       ${big(throughput, "settled transactions, all-time", `x402 + MPP, ours included${at.syncing ? " · ledger still backfilling" : ""}`)}
-      ${agents ? big(agents, `distinct agent${agents === 1 ? "" : "s"} have paid us on-chain`, `unique outside wallets${snap.agents?.scope?.since ? `, since ${esc(snap.agents.scope.since)}` : ""}${snap.agents?.top5SharePct != null ? ` · top 5 = ${snap.agents.top5SharePct}% of their payments` : ""}`) : ""}
+      ${agents ? big(agents, `distinct outside wallet${agents === 1 ? " has" : "s have"} paid us on-chain`, `unique outside wallets${snap.agents?.scope?.since ? `, since ${esc(snap.agents.scope.since)}` : ""}${snap.agents?.top5SharePct != null ? ` · top 5 = ${snap.agents.top5SharePct}% of their payments` : ""}`) : ""}
     </div>
-    <p style="font-family:var(--font-mono);font-size:13px;color:var(--ink);margin:0 0 4px;"><strong>${extCount.toLocaleString()}</strong> external payment${extCount === 1 ? "" : "s"} · <strong>$${extUsd.toFixed(2)}</strong> revenue, settled on-chain (x402 rails + Tempo MPP)${snap.card?.allTimeCount ? ` · <strong>${Number(snap.card.allTimeCount).toLocaleString()}</strong> card purchase${snap.card.allTimeCount === 1 ? "" : "s"} ($${Number(snap.card.allTimeUsd).toFixed(2)}) <span style="color:var(--muted);font-weight:400;">by card, not on-chain</span>` : ""}</p>` : "";
+    <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);margin:0 0 4px;"><strong>${extCount.toLocaleString()}</strong> external payment${extCount === 1 ? "" : "s"} · <strong>$${extUsd.toFixed(2)}</strong> revenue, settled on-chain (x402 rails + Tempo MPP), all-time${snap.card?.allTimeCount ? ` · <strong>${Number(snap.card.allTimeCount).toLocaleString()}</strong> card checkout purchase${snap.card.allTimeCount === 1 ? "" : "s"} ($${Number(snap.card.allTimeUsd).toFixed(2)}) <span style="color:var(--muted);font-weight:400;">reports and monitors, by card, not on-chain</span>` : ""}</p>` : "";
 
   const body = `
   <div style="max-width:1100px;margin:0 auto;padding:56px 30px;">
     <section>
-    <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">$ GET /api/revenue</div>
-    <h1 style="font-family:var(--font-body);font-weight:800;font-size:44px;line-height:1.05;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink);">Transactions.</h1>
-    <p style="font-size:16px;line-height:1.6;color:var(--muted);max-width:60ch;margin:0;">
-      Every payment through our rails, on both wires (<strong>x402</strong> and <strong>MPP</strong>) plus card purchases, read from the chain. Revenue counts only money from others; throughput counts our own canary and volume runs too. <a href="/transparency#revenue-figures">How the two are told apart</a>.
+    <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/revenue</div>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.05;margin:0 0 8px;color:var(--ink);">Transactions.</h1>
+    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0;">
+      Every payment through our rails on both wires (<strong>x402</strong> and <strong>MPP</strong>), read from the chain, plus card checkout purchases from our card processor's records. Revenue counts only money from others; throughput counts our own canary and volume runs too. <a href="/transparency#revenue-figures">How the two are told apart</a>.
     </p>
     ${standing}
     ${hero}
-    <p style="font-size:12px;line-height:1.55;color:var(--muted);margin:2px 0 14px;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. Operating history for a payments service, stated for transparency: information only, not an offer, a solicitation, a recommendation or investment advice, and not a projection. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
-    <p style="font-family:var(--font-mono);font-size:12px;color:var(--muted);margin:0 0 28px;">balances as of ${esc(snap.asOf)}, refreshed hourly · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
+    <p style="font-size:var(--fs-xs);line-height:1.55;color:var(--muted);margin:2px 0 14px;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
+    <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">rails read as of ${esc(snap.asOf)}, refreshed hourly · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
     </section>
     <section>
-    ${revenueChartSection()}
+    ${revenueChartSection(snap.range)}
     </section>
     <section>
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:36px 0 6px;">
-      <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0;">x402 rails <span style="color:var(--muted);font-weight:400;">· by chain</span></h2>
-      <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><strong style="color:var(--ink);">${snap.rails.length}</strong> chains, ranked by transactions</span>
+      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">x402 rails <span style="color:var(--muted);font-weight:400;">· by chain</span></h2>
+      <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);"><strong style="color:var(--ink);">${snap.rails.length}</strong> chains, ranked by transactions</span>
     </div>
-    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;">Transactions count every settlement on the rail, ours included. External is money from others. Latest settle is the newest payment on the rail, from an outside buyer or from our own canary and volume runs (marked ours), linked to our wallet on that chain's explorer.</p>
+    <p style="font-size:var(--fs-md);color:var(--muted);margin:0 0 12px;">Transactions count every settlement on the rail, ours included. External is money from others. Latest settle is the newest payment on the rail, from an outside buyer or from our own canary and volume runs (marked ours), linked to our wallet on that chain's explorer.</p>
     <div class="rv-tablewrap"><table class="rv-table">
       <thead><tr><th>Rail</th><th class="num">Transactions</th><th class="num">External</th><th class="num">External $</th><th>Latest settle</th><th>Status</th><th>Wallet</th></tr></thead>
       <tbody>${railsSorted.map(railRow).join("\n")}</tbody>
     </table></div>
-    ${partialNotes ? `<p style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:8px 0 0;">${partialNotes} rail${partialNotes === 1 ? "" : "s"} read partially from public RPCs this refresh (balances are live; detail in <a href="/api/revenue">/api/revenue</a>).</p>` : ""}
+    ${partialNotes ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:8px 0 0;">${partialNotes} rail${partialNotes === 1 ? "" : "s"} read partially from public RPCs this refresh (the rail stays live; detail in <a href="/api/revenue">/api/revenue</a>).</p>` : ""}
     </section>
     <section>
     ${mppRailsSection(snap.mpp, { wallets: mppWallets(snap.rails) })}
@@ -1853,10 +2019,10 @@ export function revenuePage(baseUrl, snap) {
     ${decideSection(snap.decide)}
     </section>
     <section>
-    ${revenueNextStep()}
+    ${revenueNextStep(snap.hashPriceUsd)}
     </section>
     <section>
-    <p style="font-size:13.5px;color:var(--muted);margin-top:30px;">Check us independently: <a href="https://www.x402scan.com/server/07eb3020-932a-436d-a739-557b6e47101d" rel="noopener">x402scan indexes our settlements</a>. Their totals include our own traffic, so they read higher than the external figures here; <a href="/transparency#revenue-figures">why the two differ</a>.</p>
+    <p style="font-size:var(--fs-md);color:var(--muted);margin-top:30px;">Check us independently: <a href="https://www.x402scan.com/server/07eb3020-932a-436d-a739-557b6e47101d" rel="noopener">a public x402 explorer indexes our settlements</a>. Its totals include our own traffic, so they read higher than the external figures here; <a href="/transparency#revenue-figures">why the two differ</a>.</p>
     </section>
   </div>
   ${ledgerFooterCompact(baseUrl)}`;
@@ -1864,9 +2030,9 @@ export function revenuePage(baseUrl, snap) {
     title, description, canonical, baseUrl, activePath: "/revenue",
     jsonLd: { "@context": "https://schema.org", "@type": "WebPage", name: title, url: canonical, description },
     extraCss: `.rv-tablewrap{overflow-x:auto;border:1px solid var(--hairline);background:var(--card)}
-.rv-table{border-collapse:collapse;width:100%;min-width:640px;font-family:var(--font-mono);font-size:12.5px}
+.rv-table{border-collapse:collapse;width:100%;min-width:640px;font-family:var(--font-mono);font-size:var(--fs-sm)}
 .rv-table th,.rv-table td{padding:8px 12px;border-bottom:1px solid var(--dash);text-align:left;white-space:nowrap;vertical-align:baseline}
-.rv-table th{font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.rv-table th{font-size:var(--fs-2xs);font-weight:600;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
 .rv-table th.num,.rv-table td.num{text-align:right;font-variant-numeric:tabular-nums}
 .rv-table tbody tr:last-child td{border-bottom:none}`,
     body,

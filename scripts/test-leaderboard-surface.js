@@ -28,8 +28,10 @@ ok(robots.includes(`${BASE}/api/find?q={task}`), "robots.txt still advertises /a
 const sitemap = sitemapXml(BASE, CATALOG);
 ok(sitemap.includes(`<loc>${BASE}/api/leaderboard</loc>`), "sitemap.xml lists /api/leaderboard");
 ok(sitemap.includes(`<loc>${BASE}/leaderboard</loc>`), "sitemap.xml lists HTML /leaderboard");
-ok(sitemap.includes(`<loc>${BASE}/api/route</loc>`), "sitemap.xml still lists /api/route");
-ok(sitemap.includes(`<loc>${BASE}/api/find</loc>`), "sitemap.xml still lists /api/find");
+// A worked query, not the bare endpoint (which answers an empty list).
+ok(sitemap.includes(`<loc>${BASE}/api/route?q=`), "sitemap.xml still lists /api/route, with a query");
+ok(sitemap.includes(`<loc>${BASE}/api/find?q=`), "sitemap.xml still lists /api/find, with a query");
+ok(!sitemap.includes(`<loc>${BASE}/api/find</loc>`) && !sitemap.includes(`<loc>${BASE}/api/route</loc>`), "sitemap.xml lists no bare query endpoint");
 
 // ---- llms.txt ----
 const llms = llmsTxt(BASE, CATALOG);

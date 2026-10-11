@@ -36,36 +36,23 @@ const catalog = {
   const html = ledgerHomePage(BASE_URL, catalog, stats, leaderboardSnapshot, Array.from({ length: 42 }));
 
   ok(html.includes("40,233"), "live counter seeds from the real server-rendered viaUSDC value");
-  ok(html.includes("918,422") && html.includes("more served free over proof-of-work"), "free-tier (PoW) count renders");
-  ok(html.includes("30,112") && html.includes(">Base<"), "per-rail settlement grid shows real per-network counts");
-  ok(html.includes("214") && html.includes(">Robinhood Chain<") && html.includes(">calls · USDG<"), "Robinhood Chain renders with its real count and USDG asset, not USDC");
-  ok(html.includes(">·<"), "a rail with zero recorded settlements renders as a dash placeholder, never a fabricated 0");
-  ok(html.includes("69") && html.includes("settled over the MPP wire"), "MPP wire count renders");
-  // The router share is GONE, not corrected. Even stated accurately it
-  // publishes what fraction of our traffic we monetize, answering a question
-  // no seller asked. The architectural claim underneath needs no number, and a
-  // reader can verify it from any 402 on the site, which names the seller's
-  // own payTo. Pinned as an absence because the tempting fix is to put a
-  // "reassuring" small number back.
-  ok(!/\b41\b/.test(html.slice(html.indexOf("No listing fee"), html.indexOf("everything for sellers"))), "no router call count in the seller section");
-  // The sentence this replaced compared viaRouter to viaUSDC and then said
-  // "every other paid call went buyer wallet to seller wallet". viaUSDC is OUR
-  // OWN paid tool calls: those other calls are buyers paying US, settling to
-  // our treasury, and we are the seller on them. So the clause described the
-  // money going somewhere it did not and wrote off the primary business in the
-  // same breath. Pinned in both directions because a percentage next to a
-  // neutrality claim is the tempting shape to reach for again.
-  // Scoped to the router sentence: "N of M paid calls" is a CORRECT shape
-  // elsewhere on this page (the per-rail attribution line compares two figures
-  // that are both our own paid calls). It is only wrong when M is our own
-  // volume and the subject is the router.
-  const routerP = html.slice(html.indexOf("No listing fee and no commission"), html.indexOf("everything for sellers"));
-  ok(routerP.length > 80, "control: the router paragraph was located");
-  ok(!/of [\d,]+ paid calls/.test(routerP), "the router count is NOT divided by our own paid call volume");
-  ok(!/%/.test(routerP), "no share-of-our-volume percentage in the router disclosure");
+  ok(html.includes("918,422") && html.includes("calls to the free tools (proof-of-work, no payment)"), "free-tier (PoW) count renders");
+  // The per-rail tile grid and its footer line left the home page: the tiles
+  // left empty cells, and the MPP-wire figure read as a mismatch against the
+  // Tempo tile because nothing said MPP also settles off Tempo. Per-rail
+  // figures live on /revenue. Pinned as absences.
+  ok(!html.includes("Settled on every rail") && !html.includes("per-rail tag") && !html.includes("settled over the MPP wire"), "no per-rail tile grid or tag-count line on the home page");
+  // The "What a seller gets" table and its paragraph repeated the section's own
+  // meta line and /sell, and carried a hand-typed router-chain row. Gone; one
+  // link to /sell stays under the two seller cards.
+  const sellSec = html.slice(html.indexOf('id="sell"'), html.indexOf("</section>", html.indexOf('id="sell"')));
+  ok(sellSec.length > 200, "control: the seller section was located");
+  ok(!/What a seller gets|Cross-chain buyers|No listing fee and no commission/.test(sellSec), "no seller-terms table or paragraph beside it");
+  ok(/href="\/sell"[^>]*>everything for sellers → \/sell</.test(sellSec), "one everything-for-sellers link to /sell stays");
+  ok(!/\b41\b/.test(sellSec), "no router call count in the seller section");
+  ok(!/of [\d,]+ paid calls/.test(sellSec) && !/%/.test(sellSec), "no share-of-our-volume figure in the seller section");
   ok(!html.includes("went buyer wallet to seller wallet"), "the claim that every other paid call bypassed us is gone");
-  ok(/no commission/i.test(html) && /nothing is deducted/i.test(html), "the neutrality claim a seller is asking about is still made, plainly");
-  ok(/names your payTo and not ours/i.test(html), "and it is made in a form the reader can check against a live 402, not asserted");
+  ok(/nothing deducted/i.test(sellSec) && /buyer wallet → your wallet/i.test(sellSec), "the neutrality claim a seller is asking about is still made, plainly");
   ok(html.includes("Seller-One.example") && html.includes("seller-two.example"), "external leaderboard rows render");
   {
     // The five-column mono table is ~520px wide; at a 375px viewport the card's
@@ -92,10 +79,7 @@ const catalog = {
   ok(html.includes("Settlement count loading"), "the empty state says what is missing, in words a visitor can read");
   ok(!/>0</.test(html.slice(html.indexOf('id="hm-counter"'), html.indexOf('id="hm-counter"') + 400)), "counter does not render a fabricated 0 with no data");
   ok(html.includes("unavailable"), "leaderboard section states unavailable rather than rendering an empty table silently");
-  // Scoped to the seller section for the same reason as above: "N of M paid
-  // calls" is correct on the per-rail attribution line, where both figures
-  // really are ours.
-  const sellerSeg = html.slice(html.indexOf("No listing fee"), html.indexOf("everything for sellers"));
+  const sellerSeg = html.slice(html.indexOf('id="sell"'), html.indexOf("</section>", html.indexOf('id="sell"')));
   ok(sellerSeg.length > 80, "control: the seller section was located in the empty state too");
   ok(!/came through the router|paid calls|%/.test(sellerSeg), "no router-share disclosure to degrade: the figure is not published at all");
 }
@@ -108,7 +92,17 @@ const catalog = {
 {
   const html = ledgerHomePage(BASE_URL, catalog, {}, {}, []);
   ok(!/\b\d{1,3}(,\d{3})*\s*(purchases|sales|buyers bought|times bought)\b/i.test(html), "no purchase-count phrasing anywhere on the homepage");
-  ok(html.includes("Hashing &amp; encoding") || html.includes("Hashing & encoding"), "demand section shows lane-level categories, not per-tool rankings");
+  // The lanes are read from /api/stats topTools (call volume), mapped to
+  // their catalog categories; nothing is typed, and with no counts there is
+  // no ranking to show.
+  const { CATEGORIES } = await import("../src/pages.js");
+  const top = Object.values(catalog).find((d) => d?.slug && CATEGORIES[d.category]);
+  const ranked = ledgerHomePage(BASE_URL, catalog, { topTools: [{ slug: top.slug, n: 9 }] }, {}, []);
+  const label = CATEGORIES[top.category].label.replace(/&/g, "&amp;");
+  ok(ranked.includes(label), "demand section shows the category of the most-called tool, read from topTools");
+  ok(!ranked.includes(`>${top.slug}<`) && !new RegExp(`${top.slug}[^<]{0,20}\\b9\\b`).test(ranked), "...as a lane, never as a per-tool row with its count");
+  ok(/What agents call most\./.test(ranked) && !/spend most in/.test(ranked), "the heading names what the list measures (calls), not spend");
+  ok(html.includes("No calls counted on this server yet."), "with no counts the section says so instead of showing a typed ranking");
   ok(!/topPaidTools/.test(html), "no reference to the removed topPaidTools field");
   // The one WALLET_ONLY_SLUGS member guaranteed to exist must never appear
   // paired with a bare integer immediately after it (the slug+count shape).
@@ -165,10 +159,10 @@ const catalog = {
   const served = ledgerHomePage(BASE_URL, catalog, stats, { leaderboard: [] }, [], { settledOnChain: 0 });
 
   ok(chain.includes("46,007"), "control: with a chain figure the hero renders it");
-  ok(/on-chain settlements/.test(chain) && /ours included/i.test(chain),
+  ok(/on-chain settlements/.test(chain) && /including our own test purchases/i.test(chain),
     "the chain figure is labelled as settlements, and says it includes our own traffic");
   ok(!/on-chain settlements/.test(served), "the served-call fallback does NOT claim to be on-chain settlements");
-  ok(served.includes("35,138") && /calls served for a stablecoin payment/.test(served),
+  ok(served.includes("35,138") && /calls served<\/span><span>paid in stablecoin/.test(served),
     "the fallback renders viaUSDC and is labelled as calls served");
   // A transfer is not a call. Whichever value is in play, the word "calls" may
   // not sit on the chain-derived figure.
@@ -196,11 +190,7 @@ const catalog = {
   ok(!RAILS.some((r) => /tempo/i.test(r.name)), "Tempo stays out of RAILS itself");
 
   const html = ledgerHomePage(BASE_URL, catalog, stats, { leaderboard: [] }, []);
-  ok(html.includes("321") && html.includes(">Tempo<"), "the per-rail grid renders the Tempo row");
-  ok(html.includes(`All ${RAILS.length + 1} rails (${RAILS.length} x402 chains plus Tempo over MPP) carry real settled traffic`),
-    "the rail count in the prose includes Tempo");
-  ok(html.includes(`${RAILS.length + 1} rails live`), "the hero rail count includes Tempo");
-  ok(html.includes("821") && html.includes("paid calls carry a per-rail tag"), "the attributed total counts Tempo's tagged calls");
+  ok(html.includes(`${RAILS.length} chains + Tempo live`), "the hero names the x402 chains plus Tempo, one noun for both counts");
 
   const { readFile } = await import("node:fs/promises");
   const srv = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
@@ -219,9 +209,32 @@ const catalog = {
   const self = ledgerHomePage("http://127.0.0.1:3000", catalog, {}, {}, []);
   ok(!/<iframe id="hm-live"/.test(self) && /id="hm-live-link" href="https:\/\/live\.agent402\.tools"/.test(self), "on any other origin it links instead of framing (the embed refuses other framers)");
   ok(/id="hm-live-n"[\s\S]*id="hm-live-usd"[\s\S]*id="hm-live-buyers"[\s\S]*id="hm-live-pm"/.test(html), "the live panel carries its four hourly figures");
-  ok(/every x402 and MPP payment we see on chain/.test(html), "the panel says it shows every seller's payments, not only ours");
+  ok(/every x402 and MPP payment(<span class="hm-live-tail">)? we see on chain/.test(html), "the panel says it shows every seller's payments, not only ours");
   const srv = (await import("node:fs")).readFileSync(new URL("../src/security-headers.js", import.meta.url), "utf8");
   ok(/frame-src 'self' https:\/\/live\.agent402\.tools;/.test(srv), "site CSP frames only itself and the live view");
 }
+
+// --- claims read from their sources -----------------------------------------
+{
+  const { RAILS_SHORT, RAILS } = await import("../src/rails.js");
+  const { EXTERNAL_CHAIN_BY_NETWORK } = await import("../src/tools/route-execute.js");
+  const { CHAIN_ORDER } = await import("../src/chain-logos.js");
+  const html = ledgerHomePage(BASE_URL, catalog, {}, {}, []);
+  const text = html.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+  ok(text.includes(RAILS_SHORT) && !/USDC on \d+ chains/.test(text), "the agents card names the rails from RAILS_SHORT, not 'USDC on N chains'");
+  ok(!/\d+ rails live/.test(text) && new RegExp(`${RAILS.length} chains( \\+ Tempo)? live`).test(text), "the hero counts chains (plus Tempo), the noun every other surface uses");
+  ok(/whole x402 \+ MPP ecosystem/.test(text), "the live panel states its scope in a label that shows at every width");
+  const chains = [...new Set(Object.values(EXTERNAL_CHAIN_BY_NETWORK))].map((c) => c[0].toUpperCase() + c.slice(1)).join(", ");
+  ok(text.includes(`pays you on ${chains}`), "the seller card's router chains are read from the route-execute chain map");
+  ok(!/our own \d[\d,]* tools|all \d[\d,]* tools/.test(text), "marketing blocks say 500+, not the exact live count");
+  ok(CHAIN_ORDER.length === RAILS.length && CHAIN_ORDER.every(([k, n], i) => n === RAILS[i].name), "the chip row is RAILS, names and order");
+  ok(!/fifteen lines|~15 lines/.test(html), "no unverifiable size claim for contributing a tool");
+  ok(/href="\/tools\/v1-chat-metered"[^>]*><span>POST \/v1\/metered\/chat\/completions/.test(html), "the metered row links to the metered tier's page");
+  const { WHY_POINTS } = await import("../src/why.js");
+  const fail02 = WHY_POINTS.find((w) => w.id === "never-charged");
+  ok(/x402/.test(fail02.t) && !fail02.links.some(([h]) => h === "/status"), "the failure claim is scoped to x402 and links a payment check, not uptime");
+  ok(!/^No wallet required/.test(WHY_POINTS.find((w) => w.id === "no-wallet").t), "the no-wallet row is not an absolute");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

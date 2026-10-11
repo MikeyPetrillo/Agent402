@@ -33,7 +33,7 @@
 // probeDomain / probeRecalls.
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
-import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase } from "./solana-intel-kit.js";
+import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase, JUPITER_ATTRIBUTION } from "./solana-intel-kit.js";
 import { markUntrusted } from "./provenance.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 
@@ -55,7 +55,8 @@ export const TOKEN_BRIEF_TIERS = {
     // margin review can compare it against the price.
     price: "$0.60", maxUpstreamUsd: 0.35,
     holders: 15, pairs: 8, markets: 6, lockers: 6, risks: 20,
-    synthMaxTokens: 6000, words: "~2,000",
+    // Headroom over the word target: a ~1,800-word brief used 5,500 of 6,000.
+    synthMaxTokens: 7500, words: "~2,000",
   },
 };
 
@@ -85,6 +86,20 @@ async function settle(p, timeoutMs) {
     const data = timeoutMs ? await Promise.race([p, new Promise((_, r) => setTimeout(() => r(bad("timeout", 504)), timeoutMs))]) : await p;
     return { ok: true, data };
   } catch (e) { return { ok: false, error: e?.message || String(e) }; }
+}
+
+/** A token price for prose: six significant digits, no float tail
+ *  (0.22232734531630582 -> "0.222327"; 0.0000123456789 -> "0.0000123457"). */
+export function readablePrice(usd) {
+  const n = Number(usd);
+  if (!Number.isFinite(n)) return String(usd);
+  return String(Number(n.toPrecision(6)));
+}
+
+/** A percent change for prose, two decimals, or "unknown". */
+export function readablePct(pct) {
+  const n = Number(pct);
+  return pct == null || !Number.isFinite(n) ? "unknown" : `${Number(n.toFixed(2))}%`;
 }
 
 export function normMint(input, field = "mint") {
@@ -257,7 +272,7 @@ function makeTokenBriefHandlerInner(tierSlug) {
       `Holder count ${report?.totalHolders ?? jup?.holderCount ?? "unknown"}`,
       `Jupiter verified: ${jup ? String(jup.isVerified) : "unknown"}; organic score ${jup?.organicScore ?? "unknown"} (${jup?.organicScoreLabel || "no label"}); tags ${(jup?.tags || []).join(", ") || "none"}`,
       `Launchpad ${report?.launchpad ?? jup?.launchpad ?? "none reported"}; first detected ${report?.detectedAt || "unknown"}; first pool ${jup?.firstPool?.id || "unknown"} created ${jup?.firstPool?.createdAt || "unknown"}`,
-      `Price ${priceUsd == null ? "unknown" : `$${priceUsd}`}${priceRow?.blockId ? ` (Jupiter, block ${priceRow.blockId})` : ""}; 24h change ${priceRow?.priceChange24hPct ?? jup?.stats24h?.priceChangePct ?? "unknown"}%`,
+      `Price ${priceUsd == null ? "unknown" : `$${readablePrice(priceUsd)}`}${priceRow?.blockId ? ` (Jupiter, block ${priceRow.blockId})` : ""}; 24h change ${readablePct(priceRow?.priceChange24hPct ?? jup?.stats24h?.priceChangePct)}`,
       `Market cap ${jup?.marketCapUsd ?? "unknown"}; FDV ${jup?.fdvUsd ?? "unknown"}`,
       `Verification: Jupiter verified ${report?.verification ? String(report.verification.jupVerified) : (jup ? String(jup.isVerified) : "unknown")}, Jupiter strict list ${report?.verification ? String(report.verification.jupStrict) : "unknown"}`,
       `Links: website ${jup?.website || (pairRows.find((p) => p.websites?.length)?.websites?.[0]) || "none listed"}; twitter ${jup?.twitter || "none listed"}; socials on DexScreener ${[...new Set(pairRows.flatMap((p) => p.socials || []))].slice(0, 3).join(", ") || "none listed"}`,
@@ -493,12 +508,15 @@ export const TOKEN_BRIEF_TOOLS = [
     slug: "token-brief",
     category: "llm",
     price: TOKEN_BRIEF_TIERS["token-brief"].price,
-    description: "Hand over a Solana SPL mint address and get one cited due-diligence brief: what the token is, whether the mint and freeze authorities are still live, how deep and how locked the liquidity is (pools, lockers, unlock dates, DEX pairs, 24h volume and buy/sell balance), who holds it (top holders with pool and locker accounts told apart from wallets, concentration with and without pools), and every named risk flag the public feeds carry, plus what this data cannot see. Holders, pairs, pools and risks appendix included. Evidence from RugCheck, DexScreener and Jupiter, never a verdict and not investment advice. USDC (x402/MPP) or card (Stripe). Not cached.",
-    tags: ["solana", "token", "due-diligence", "brief", "rugcheck", "holders", "liquidity", "memecoin", "spl", "report", "agentic-finance", "x402", "mpp"],
+    description: "Hand over a Solana SPL mint address and get one cited due-diligence brief: what the token is, whether the mint and freeze authorities are still live, how deep and how locked the liquidity is (pools, lockers, unlock dates, DEX pairs, 24h volume and buy/sell balance), who holds it (top holders with pool and locker accounts told apart from wallets, concentration with and without pools), and every named risk flag the public feeds carry, plus what this data cannot see. Holders, pairs, pools and risks appendix included. Evidence from public token-risk, DEX-pair and aggregator feeds, never a verdict and not investment advice. USDC (x402/MPP) or card (Stripe). Not cached.",
+    tags: ["solana", "token", "due-diligence", "brief", "holders", "liquidity", "memecoin", "spl", "report", "agentic-finance", "x402", "mpp"],
     discovery: { bodyType: "json", input: { mint: MINTS.JUP }, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeTokenBriefHandler("token-brief"),
   },
 ];
+// The brief reads Jupiter, whose license requires the attribution (see
+// JUPITER_ATTRIBUTION in solana-intel-kit.js).
+for (const t of TOKEN_BRIEF_TOOLS) t.description = `${t.description} ${JUPITER_ATTRIBUTION}`;
 
 // Exported for the offline test (pure helpers, no network).
 export const __test = { BASE58_RE, lpLockedBucket, concentrationBucket, authorityBucket, normMint };

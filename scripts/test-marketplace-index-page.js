@@ -37,16 +37,16 @@ function chainCard(html, slug) {
   // Base: SellerA + SellerB advertise a Base network -> 2 sellers (the host is
   // in no seller count), 5+3+8=16 tools (the host's catalog included).
   const baseCard = chainCard(html, "base");
-  ok(baseCard && /<span[^>]*color:var\(--green\)[^>]*>2</.test(baseCard), "Base card shows the real seller count (2, host excluded), not a hardcoded design number");
+  ok(baseCard && /<span[^>]*color:var\(--ok\)[^>]*>2</.test(baseCard), "Base card shows the real seller count (2, host excluded), not a hardcoded design number");
   ok(baseCard && />16</.test(baseCard), "Base card shows the real summed tool count (16), computed from marketSellers/toolCount");
   // Solana: SellerB only -> 1 seller (the host qualifies on every chain but is
   // in no seller count).
   const solCard = chainCard(html, "solana");
-  ok(solCard && /<span[^>]*color:var\(--green\)[^>]*>1</.test(solCard), "Solana card shows the real seller count (1: SellerB; host excluded)");
+  ok(solCard && /<span[^>]*color:var\(--ok\)[^>]*>1</.test(solCard), "Solana card shows the real seller count (1: SellerB; host excluded)");
   // Celo: no external seller advertises it, so the real count is 0 (the host
   // is in no seller count), and the card still renders.
   const celoCard = chainCard(html, "celo");
-  ok(celoCard && /<span[^>]*color:var\(--green\)[^>]*>0</.test(celoCard), "a chain with no external sellers shows 0, still rendered, never omitted");
+  ok(celoCard && /<span[^>]*color:var\(--ok\)[^>]*>0</.test(celoCard), "a chain with no external sellers shows 0, still rendered, never omitted");
   ok((html.match(/href="\/[a-z]+" title="[^"]+ x402 marketplace"/g) || []).length === 12, "all 12 chain cards render, one per CHAIN_PAGES entry");
 }
 
@@ -90,7 +90,7 @@ function chainCard(html, slug) {
   const sellers = [LOCAL, { origin: "https://c.example", displayName: "C", homepage: "https://c.example", local: false, toolCount: 12, routable: true, networks: ["eip155:8453"], payToByNetwork: {} }];
   const html = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] } });
   ok(html.includes("TOOL LISTINGS"), "the new TOOL LISTINGS stat card renders");
-  ok(/TOOL LISTINGS<\/div><div[^>]*>12</.test(html) && /advertised by other sellers/.test(html), "TOOL LISTINGS sums other sellers' toolCount (12); the host's 8 sit on their own card, as the host card says NOT COUNTED");
+  ok(/TOOL LISTINGS<\/div><div[^>]*>12</.test(html) && />from other sellers</.test(html), "TOOL LISTINGS sums other sellers' toolCount (12); the host's 8 sit on their own card, as the host card says NOT COUNTED");
   ok(html.includes("SELLERS LISTED"), "the existing SELLERS LISTED card is preserved");
   ok(html.includes("CHAINS SUPPORTED"), "the existing CHAINS SUPPORTED card is preserved");
 }
@@ -98,8 +98,8 @@ function chainCard(html, slug) {
 // --- methodology + router sections --------------------------------------------
 {
   const html = marketPage(null, BASE_URL, { snapshot: { sellers: [LOCAL] }, leaderboardSnap: { leaderboard: [] } });
-  ok(html.includes("Or skip the browsing") && html.includes("POST /api/route"), "the router-skip section renders");
-  ok(html.includes("Discovery: the Coinbase CDP Bazaar"), "the methodology steps render");
+  ok(html.includes("Or skip the browsing") && html.includes("GET /api/route") && html.includes("/api/route?q=ocr+an+image"), "the router-skip section renders, its kicker and example naming one endpoint");
+  ok(html.includes("Discovery: the x402 Bazaar discovery listing"), "the methodology steps render");
 }
 
 // --- FAQ + structured data ------------------------------------------------------
@@ -148,7 +148,7 @@ function chainCard(html, slug) {
   const withHost = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] }, host: HOSTF });
   ok(!without.includes("data-host-card") && withHost.includes("data-host-card"), "host card renders only when host figures are supplied");
   ok(withHost.includes("NOT RANKED, NOT COUNTED") && withHost.includes(">109<") && withHost.includes(">250<"), "host card carries the external-only 30d and all-time figures");
-  ok(withHost.includes("canary and volume runs are excluded"), "host card states that our own runs are excluded");
+  ok(withHost.includes("canary and volume runs and free proof-of-work calls are left out"), "host card states that our own runs and free calls are excluded");
   const count = (h) => (h.match(/SELLERS LISTED<\/div><div[^>]*>([0-9,]+)/) || [])[1];
   ok(count(without) === count(withHost), `the SELLERS LISTED count is identical with and without the host card (${count(without)} vs ${count(withHost)})`);
   ok(withHost.indexOf("data-host-card") < withHost.indexOf('class="mfb"'), "host card sits above the roster filter bar and rows, not inside them");

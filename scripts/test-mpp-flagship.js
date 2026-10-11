@@ -61,7 +61,7 @@ async function boot() {
       // judge is listed only with its key; a placeholder lists it (nothing here calls it).
       TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY || "test-placeholder",
       X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", SOLANA_LEADERBOARD: "off", MONITOR_SCHEDULER: "off",
-      FREE_ALERTS: "off", FOLLOWUPS: "off", WALLET_DIGEST: "off",
+      FREE_ALERTS: "off", FOLLOWUPS: "off",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

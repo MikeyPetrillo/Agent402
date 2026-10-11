@@ -283,7 +283,7 @@ export const aboutAction = {
       const data = {
         name: "Agent402", baseUrl, tools: endpoints.length, freeTier: endpoints.filter((e) => e.computePayable).length,
         pay: "prepaid card credits (AGENT402_CREDITS_KEY) or USDC over x402 from a wallet (AGENT402_WALLET_KEY); free-tier tools pay with proof-of-work",
-        discover: `${baseUrl}/api/find?q=<task>`, docs: `${baseUrl}/llms.txt`, why: `${baseUrl}/why`,
+        discover: `${baseUrl}/api/find?q=<task>`, docs: `${baseUrl}/llms.txt`, why: `${baseUrl}/#why`,
       };
       return reply(callback, { success: true, text: `Agent402 serves ${data.tools} pay-per-call tools right now (${data.freeTier} on the free tier), paid by card credits or USDC over x402. Docs: ${data.docs}`, data });
     } catch (e) {

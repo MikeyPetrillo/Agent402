@@ -44,7 +44,7 @@ export const SQLITE_STORES = [
   { file: "agent402-stripe-shadow.db", env: () => ({}), tables: { shadow: "stripe_shadow" } },
   { file: "agent402-pow.db", env: (d) => ({ POW_DB_PATH: join(d, "agent402-pow.db") }), tables: { pow_used: "pow_used" } },
 ];
-export const DB_ONLY = ["stats_flushes"];
+export const DB_ONLY = ["stats_flushes", "refund_marks"];
 // collection -> directory on the volume, and how a file name maps to a record id.
 export const RECORD_DIRS = [
   { dir: "credits", collection: "credits", idOf: (f) => (f.startsWith("k_") && f.endsWith(".json") ? f.slice(0, -5) : f === "_sessions.json" ? "_sessions" : null), fileOf: (id) => `${id}.json` },

@@ -24,6 +24,7 @@
 // eth_getLogs calls (~30s-2min). We cache the snapshot in memory and refresh
 // hourly; the endpoint reads from cache so each request is sub-millisecond.
 
+import { existsSync } from "node:fs";
 import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
 import { timedSync } from "./boot-timing.js";
@@ -32,6 +33,7 @@ import { EVM, OUR_EVM_WALLETS } from "./revenue-live.js";
 import { redactSecrets } from "./tools/redact.js";
 import { FUNDING_DEFAULTS, posOf, endOfBlock, circularWalletsFrom, readSellerFunding, readPayerHistory, readFundingGaps, newFundingReadControl, fundingDayCalls, processSellerFunding, sellerFundingFigures, createFundingState, serializeFundingState, parseFundingState, pruneFundingState, fundingPairCount, fundingKnownCount, historyFromBlockFor, isScannableWallet } from "./seller-funding.js";
 import { NETWORKS } from "./payments.js";
+import { createLogWindowCache, createLogCacheStore, logCacheEnabled, decodeTransferLog, transferForFold } from "./leaderboard-log-cache.js";
 
 import { createBlockClock, rpcHeaderReader } from "./block-clock.js";
 // The board's window is a span of TIME (24h by default, 7d in production),
@@ -1138,8 +1140,7 @@ export async function runLeaderboard(overrides = {}) {
   for (let from = start; from <= latest; from += opts.chunkBlocks) {
     blockChunks.push([from, Math.min(from + opts.chunkBlocks - 1, latest)]);
   }
-  const callCount = walletChunks.length * blockChunks.length;
-  onProgress(`      ${blockChunks.length} block chunk(s) × ${walletChunks.length} wallet chunk(s) = ${callCount} eth_getLogs call(s)`);
+  onProgress(`      ${blockChunks.length} block chunk(s) × ${walletChunks.length} wallet chunk(s) = ${walletChunks.length * blockChunks.length} eth_getLogs call(s) for a full read`);
   // A wide (7d) window means many more chunks than the old 24h scan — any
   // single chunk's rpcCall throwing (after exhausting every RPC + retry pass)
   // must NOT take down the whole refresh, or a wide scan becomes strictly
@@ -1156,32 +1157,59 @@ export async function runLeaderboard(overrides = {}) {
   const byWallet = initWalletAccumulator(sellers);
   let transferCount = 0;
   let failedChunks = 0;
-  // The first block a failed chunk left unread, per wallet chunk: the
-  // seller-funding pass never works a wallet's pools past it.
-  const failedFromByChunk = new Map();
-  for (const [from, to] of blockChunks) {
-    for (const [chunkIdx, chunk] of walletChunks.entries()) {
-      try {
-        const part = await rpcCall(opts.rpcs, "eth_getLogs", [{
-          fromBlock: "0x" + from.toString(16),
-          toBlock: "0x" + to.toString(16),
-          address: chain.token,
-          topics: [TRANSFER, null, chunk],
-        }]);
-        if (Array.isArray(part) && part.length) {
-          const chunkTransfers = part.map((l) => ({
-            wallet: ("0x" + l.topics[2].slice(-40)).toLowerCase(),
-            payer: payerFromLog(l),
-            usd: Number(BigInt(l.data)) / 1e6,
-            pos: posOf(parseInt(l.blockNumber, 16), parseInt(l.logIndex, 16)),
-          }));
-          foldTransfers(byWallet, chunkTransfers, opts.maxCallUsd, OUR_EVM_WALLETS, opts.priceMatchMaxUsd);
-          transferCount += chunkTransfers.length;
+  let callCount = walletChunks.length * blockChunks.length;
+  // The first block a failed read left unread, per wallet: the seller-funding
+  // pass never works a wallet's pools past it.
+  const failedFromByWallet = new Map();
+  let logCacheScan = null;
+  if (opts.logCache) {
+    // Incremental (src/leaderboard-log-cache.js): the blocks after the
+    // cache's cursor for every wallet, the whole window for a wallet read for
+    // the first time, the rest folded from the rows already read.
+    const r = await opts.logCache.scan({
+      wallets, start, latest, chunkBlocks: opts.chunkBlocks, walletChunk: opts.walletChunk, pad,
+      readLogs: async (from, to, chunk) => {
+        const part = await rpcCall(opts.rpcs, "eth_getLogs", [{ fromBlock: "0x" + from.toString(16), toBlock: "0x" + to.toString(16), address: chain.token, topics: [TRANSFER, null, chunk] }]);
+        // A kept range must be a real answer: anything but an array is a failed read.
+        if (!Array.isArray(part)) throw new Error("eth_getLogs answered without a log list");
+        return part.map(decodeTransferLog);
+      },
+      onError: (from, to, e) => onProgress(`      chunk failed (blocks ${from}-${to}): ${redactSecrets(String(e?.message || e))}`),
+    });
+    callCount = r.calls;
+    failedChunks = r.failedCalls;
+    for (const [w, b] of r.failedFromByWallet) failedFromByWallet.set(w, b);
+    // Decoded rows are a few numbers each (not raw log objects), mapped one at
+    // a time as the fold reads them.
+    foldTransfers(byWallet, (function* () { for (const t of r.transfers) yield transferForFold(t); })(), opts.maxCallUsd, OUR_EVM_WALLETS, opts.priceMatchMaxUsd);
+    transferCount = r.transfers.length;
+    logCacheScan = { mode: r.mode, calls: r.calls, failedCalls: r.failedCalls, newWallets: r.newWallets };
+    onProgress(`      log cache: ${r.mode} scan, ${r.calls} eth_getLogs call(s) (a full read would be ${walletChunks.length * blockChunks.length})${r.newWallets ? `, ${r.newWallets} new wallet(s) read over the window` : ""}`);
+  } else {
+    for (const [from, to] of blockChunks) {
+      for (const [chunkIdx, chunk] of walletChunks.entries()) {
+        try {
+          const part = await rpcCall(opts.rpcs, "eth_getLogs", [{
+            fromBlock: "0x" + from.toString(16),
+            toBlock: "0x" + to.toString(16),
+            address: chain.token,
+            topics: [TRANSFER, null, chunk],
+          }]);
+          if (Array.isArray(part) && part.length) {
+            const chunkTransfers = part.map((l) => ({
+              wallet: ("0x" + l.topics[2].slice(-40)).toLowerCase(),
+              payer: payerFromLog(l),
+              usd: Number(BigInt(l.data)) / 1e6,
+              pos: posOf(parseInt(l.blockNumber, 16), parseInt(l.logIndex, 16)),
+            }));
+            foldTransfers(byWallet, chunkTransfers, opts.maxCallUsd, OUR_EVM_WALLETS, opts.priceMatchMaxUsd);
+            transferCount += chunkTransfers.length;
+          }
+        } catch (e) {
+          failedChunks += 1;
+          for (const w of wallets.slice(chunkIdx * opts.walletChunk, (chunkIdx + 1) * opts.walletChunk)) failedFromByWallet.set(String(w).toLowerCase(), Math.min(failedFromByWallet.get(String(w).toLowerCase()) ?? Infinity, from));
+          onProgress(`      chunk failed (blocks ${from}-${to}): ${redactSecrets(String(e?.message || e))}`);
         }
-      } catch (e) {
-        failedChunks += 1;
-        failedFromByChunk.set(chunkIdx, Math.min(failedFromByChunk.get(chunkIdx) ?? Infinity, from));
-        onProgress(`      chunk failed (blocks ${from}-${to}): ${redactSecrets(String(e?.message || e))}`);
       }
     }
   }
@@ -1204,9 +1232,8 @@ export async function runLeaderboard(overrides = {}) {
   if (fundingOn) {
     const nowMs = opts.now ?? Date.now();
     const state = opts.fundingState || createFundingState(chain.token);
-    const walletIndex = new Map(wallets.map((w, i) => [String(w).toLowerCase(), i]));
     const throughFor = (w) => {
-      const failedFrom = failedFromByChunk.get(Math.floor((walletIndex.get(w) ?? -1) / opts.walletChunk));
+      const failedFrom = failedFromByWallet.get(String(w).toLowerCase());
       return failedFrom === undefined ? Infinity : endOfBlock(failedFrom - 1);
     };
     try {
@@ -1333,6 +1360,8 @@ export async function runLeaderboard(overrides = {}) {
     // removed from every served copy by getLeaderboardSnapshot().
     walletEvidence: walletEvidenceOut,
     ...(fundingScan ? { routerFundingScan: fundingScan } : {}),
+    // Operator-only (removed from every served copy): how this scan read the window.
+    ...(logCacheScan ? { logCacheScan } : {}),
     // Honesty flags: a partial scan under-covers the window (missed ranges
     // mean some settlements aren't counted) — never render it as if it were
     // a complete scan. See ledger-leaderboard.js / x402-index.js for where
@@ -1613,6 +1642,21 @@ let refreshTimer = null;
 
 const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
+// The Base board's log window cache (src/leaderboard-log-cache.js): one per
+// process, loaded from the store on its first scan. LEADERBOARD_LOG_CACHE=off
+// (read at each scan) makes every scan a full read again.
+export const LEADERBOARD_LOG_CACHE_DIR = process.env.LEADERBOARD_LOG_CACHE_DIR || (existsSync("/data") ? "/data/leaderboard-logs" : null);
+let baseLogCache = null;
+function logCacheFor(chainKey, token) {
+  if (chainKey !== "base" || !logCacheEnabled()) return null;
+  if (!baseLogCache) baseLogCache = createLogWindowCache({ store: createLogCacheStore({ prefix: "leaderboard-logs-base", dir: LEADERBOARD_LOG_CACHE_DIR }), token });
+  return baseLogCache;
+}
+/** Operator view: how the Base board read its window (null before the first scan). */
+export function leaderboardLogCacheStatus() {
+  return baseLogCache ? { enabled: logCacheEnabled(), ...baseLogCache.stats(), lastScan: cached.snapshot?.logCacheScan || null } : { enabled: logCacheEnabled(), idle: true };
+}
+
 // Under a lease (see src/state-db.js): the old and the new container of a
 // deploy never scan at once, so the seller-funding cursors advance once.
 const refreshOnce = leased("leaderboard-refresh", { ttlMs: 30 * 60_000, failOpen: true }, refreshOnceUnleased);
@@ -1626,7 +1670,12 @@ async function refreshOnceUnleased(opts) {
     // so a wallet found circular keeps that verdict for the Bazaar's window.
     const base = !opts.chain || opts.chain === "base";
     const fundingState = base && sellerFundingEnabled() ? await loadSellerFundingState() : undefined;
-    const snap = await runLeaderboard({ ...opts, fundingState, fundingSkip: fundingConfig.skip, previousWalletEvidence: cached.snapshot?.walletEvidence || null });
+    const scanChain = chainScanConfig(opts.chain || "base");
+    const logCache = opts.logCache === undefined && scanChain ? logCacheFor(scanChain.key, scanChain.token) : (opts.logCache || null);
+    const snap = await runLeaderboard({ ...opts, logCache, fundingState, fundingSkip: fundingConfig.skip, previousWalletEvidence: cached.snapshot?.walletEvidence || null });
+    // Kept only after a scan that produced a board (a failed scan keeps the
+    // last stored copy as it is).
+    if (logCache) await logCache.persist().catch(() => false);
     if (snap?.routerFundingScan) {
       const f = snap.routerFundingScan;
       console.log(`[leaderboard] seller-funding read: ${f.calls ?? 0} call(s) over ${f.wallets ?? 0} wallet(s) (${f.historyCalls ?? 0} for ${f.historyPayers ?? 0} new payer(s)), ${f.walletsCaughtUp ?? 0} caught up${f.walletsBehind ? `, ${f.walletsBehind} behind` : ""}${f.historyWalletsFailed ? `, ${f.historyWalletsFailed} with history pending` : ""}${fundingReadNotes(f)}${f.error ? ` (failed: ${f.error})` : ""}`);
@@ -1710,7 +1759,7 @@ export function getLeaderboardSnapshot() {
     // walletEvidence is router input (getLeaderboardWalletEvidence below).
     // Every public path spreads this return value, so this is the one place it
     // has to be dropped.
-    const { walletEvidence: _routerOnly, routerFundingScan: _routerOnlyScan, ...served } = cached.snapshot;
+    const { walletEvidence: _routerOnly, routerFundingScan: _routerOnlyScan, logCacheScan: _operatorOnly, ...served } = cached.snapshot;
     return {
       ...served,
       cache: {
@@ -1848,6 +1897,7 @@ export function _resetLeaderboardCacheForTests() {
   cached = { snapshot: null, warming: false, lastError: null, lastTriedAt: null, refreshIntervalMs: null };
   fundingStateCache = null;
   fundingSwitch = null;
+  baseLogCache = null;
   configureSellerFunding({});
   stopLeaderboardRefresh();
 }

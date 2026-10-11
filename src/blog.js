@@ -1,5 +1,6 @@
 import { routingProofSentence } from "./routing-proof.js";
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, decideLive } from "./ledger-chrome.js";
+import { powCostPhrase } from "./pow.js";
 
 import { REPO_URL } from "./repo-link.js";
 export const BLOG_POSTS = [
@@ -112,9 +113,9 @@ export const BLOG_POSTS = [
   },
   {
     slug: "why-we-built-agent402",
-    date: "2026-06-15",
+    date: "2026-06-23",
     title: "Why we built Agent402",
-    excerpt: "Agents need deterministic tools they can trust. We built Agent402 to give them exactly that - no API keys, no rate-limit games, just x402 micropayments for every call.",
+    excerpt: "Agents need deterministic tools they can trust. We built Agent402 to give them exactly that - no API keys, no per-key quotas, just x402 micropayments for every call.",
     body: `<p><em>Correction (2026-10-02): this post described the catalog as it stood in June 2026. It now also sells model-backed products (the /v1 model gateway, the report products, media and answer tools), each marked <code>modelBacked</code> on <a href="/api/pricing">/api/pricing</a>; the determinism described below is true of the utility tools.</em></p>
 
 <p>Most tool APIs were designed for human developers: sign up, get an API key, read the docs, handle auth, manage quotas. That friction is invisible to a person, but it's a wall for an autonomous agent.</p>
@@ -133,9 +134,9 @@ export const BLOG_POSTS = [
 
 <ul>
   <li><strong>No signup.</strong> The agent sends a payment header with its request. Done.</li>
-  <li><strong>No rate limits.</strong> You pay per call. Want to make 10,000 calls? Pay for 10,000 calls.</li>
+  <li><strong>No per-key quotas.</strong> You pay per call, so there is no plan to outgrow. (Safety limits still apply, such as a cap on repeated failed settlements from one wallet.)</li>
   <li><strong>No vendor lock-in.</strong> x402 is an open protocol. Any server can accept it, any client can send it.</li>
-  <li><strong>Micropayments that actually work.</strong> USDC on Base (and Solana, Polygon, Arbitrum, Stellar - plus USDG on Robinhood Chain) settles in seconds for fractions of a cent in gas.</li>
+  <li><strong>Micropayments that actually work.</strong> A stablecoin payment on Base, or on any of the other chains listed at <a href="/api/rails">/api/rails</a>, settles in seconds for fractions of a cent in gas. <em>(Chain list updated 2026-10-11: it now points at the live rail list rather than naming chains, which were added after this post.)</em></li>
 </ul>
 
 <p>The result: an agent with a funded wallet can discover Agent402 tools via MCP, call them, and pay - all without a human ever creating an account.</p>
@@ -148,9 +149,9 @@ export const BLOG_POSTS = [
   },
   {
     slug: "proof-of-work-free-tier",
-    date: "2026-06-17",
+    date: "2026-06-23",
     title: "How the proof-of-work free tier works",
-    excerpt: "Every pure-CPU tool on Agent402 is free if you solve a small proof-of-work challenge. Here's how it works, why we built it, and what it means for agents.",
+    excerpt: "Most pure-CPU tools on Agent402 are free if you solve a small proof-of-work challenge. Here's how it works, why we built it, and what it means for agents.",
     body: `<p><em>Correction (2026-10-02): the catalog is 500+ tools, not over a thousand; free-tier tools are listed at their USDC price on <a href="/api/pricing">/api/pricing</a> with <code>computePayable: true</code>, not at $0.000; and <code>agent402-client</code> solves the challenge with <code>node:crypto</code>, not Web Crypto.</em></p>
 
 <p>Agent402 has 500+ tools, and many of them are pure CPU - no external API calls, no network I/O, just computation. Things like JSON formatting, hash generation, regex matching, unit conversion, and text analysis.</p>
@@ -160,9 +161,9 @@ export const BLOG_POSTS = [
 <h2>How it works</h2>
 
 <ol>
-  <li><strong>Request a challenge.</strong> The client sends a request without payment. The server responds with <code>402 Payment Required</code> and includes a PoW challenge in the response headers.</li>
-  <li><strong>Solve the challenge.</strong> The client finds a nonce that, when combined with the challenge, produces a hash with a required number of leading zero bits. This takes roughly 50-200ms on modern hardware.</li>
-  <li><strong>Submit the solution.</strong> The client re-sends the original request with the PoW solution in the headers. The server verifies the solution (instant) and serves the result.</li>
+  <li><strong>Request a challenge.</strong> The client sends a request without payment. The server responds with <code>402 Payment Required</code> and an <code>X-Pow-Challenge</code> header pointing at a challenge to fetch (<code>GET /api/pow/challenge?slug=&lt;tool&gt;</code>).</li>
+  <li><strong>Solve the challenge.</strong> The client finds a nonce that, when combined with the challenge, produces a hash with a required number of leading zero bits: ${powCostPhrase()}.</li>
+  <li><strong>Submit the solution.</strong> The client re-sends the original request with the solution in an <code>X-Pow-Solution: &lt;token&gt;:&lt;nonce&gt;</code> header. The server verifies the solution (instant) and serves the result.</li>
 </ol>
 
 <p>Each solution is <strong>single-use and slug-scoped</strong> - it can only be used once, and only for the specific tool it was issued for. This prevents replay attacks and solution-sharing across tools.</p>
@@ -174,7 +175,7 @@ export const BLOG_POSTS = [
 <ul>
   <li><strong>Abuse prevention.</strong> Solving a challenge has a real CPU cost, so bulk abuse is expensive even though the tools are "free."</li>
   <li><strong>No identity required.</strong> The caller doesn't need an account, email, or API key. Just compute the answer.</li>
-  <li><strong>Fair access.</strong> Every caller pays the same cost - a few milliseconds of CPU time - regardless of who they are.</li>
+  <li><strong>Fair access.</strong> Every caller pays the same cost, a small CPU spend, regardless of who they are.</li>
 </ul>
 
 <h2>Browser-side solving</h2>
@@ -183,11 +184,11 @@ export const BLOG_POSTS = [
 
 <h2>Which tools are free?</h2>
 
-<p>Any tool that runs purely on the server's CPU without making external network requests is PoW-eligible. Tools that call upstream APIs (web search, rendering, geocoding) require payment because they have a real marginal cost. Each PoW-eligible tool carries <code>computePayable: true</code> on <a href="/api/pricing">/api/pricing</a>, next to the USDC price a wallet pays for it.</p>`,
+<p>Most tools that run purely on the server's CPU, without making external network requests, are PoW-eligible; a few pure-CPU tools stay wallet-only by policy, and new tools start wallet-only until they are added to the free list. Tools that call upstream APIs (web search, rendering, geocoding) require payment because they have a real marginal cost. Each PoW-eligible tool carries <code>computePayable: true</code> on <a href="/api/pricing">/api/pricing</a>, next to the USDC price a wallet pays for it.</p>`,
   },
   {
     slug: "catalog-milestone",
-    date: "2026-06-20",
+    date: "2026-06-23",
     title: "500+ tools and counting",
     excerpt: "The Agent402 catalog passed the 500-tool mark - every one priced per call and callable with one HTTP request. What categories exist, how we got here, and what's coming next.",
     body: `<p><em>Correction (2026-10-02): this post called every tool deterministic. The utility tools are; the catalog also holds model-backed tools (the /v1 model gateway, report products, media and answer tools), each marked <code>modelBacked</code> on <a href="/api/pricing">/api/pricing</a>.</em></p>
@@ -198,41 +199,43 @@ export const BLOG_POSTS = [
 
 <h2>What categories exist</h2>
 
-<p>The catalog spans 30+ categories, grouped into "kits" - each kit is a focused collection of related tools:</p>
+<p><em>Updated 2026-10-11: the list below is rewritten to name only tools in the catalog today; several tools this post first listed have since been retired.</em></p>
+
+<p>The catalog spans 20+ categories, grouped into "kits" - each kit is a focused collection of related tools:</p>
 
 <ul>
-  <li><strong>Data processing:</strong> JSON, CSV, XML, YAML, TOML manipulation and validation</li>
-  <li><strong>Web tools:</strong> rendering, scraping, extraction, link checking, sitemap parsing</li>
-  <li><strong>Search:</strong> web search, news, images, suggestions, and cited answers (via Brave)</li>
-  <li><strong>Finance:</strong> stock quotes, history, company research, SEC filings, earnings data</li>
+  <li><strong>Data processing:</strong> JSON (format, validate, query, diff, merge, flatten), CSV, XML and YAML conversion and validation</li>
+  <li><strong>Web tools:</strong> rendering, extraction, link listing, sitemap parsing, screenshots</li>
+  <li><strong>Search:</strong> web search, news, images, suggestions, and cited answers (the answer tool is model-backed)</li>
+  <li><strong>Finance:</strong> stock quotes and history, SEC filings, XBRL company facts, insider trades</li>
   <li><strong>Crypto &amp; DeFi:</strong> token prices, TVL, wallet balances, ENS resolution, gas prices</li>
-  <li><strong>Government data:</strong> FRED economic indicators, Treasury rates, BLS statistics</li>
-  <li><strong>PDF processing:</strong> PDF to markdown, text extraction, metadata, page counting</li>
-  <li><strong>Media:</strong> image conversion, audio transcription metadata, video info</li>
-  <li><strong>Barcode &amp; QR:</strong> generation and reading for multiple barcode formats</li>
+  <li><strong>Government data:</strong> FRED economic series, Treasury rates and the yield curve, CPI and unemployment</li>
+  <li><strong>PDF processing:</strong> PDF to markdown, text extraction, page extraction, metadata</li>
+  <li><strong>Media:</strong> image conversion and resizing, OCR, audio transcription (model-backed)</li>
+  <li><strong>Barcode &amp; QR:</strong> QR generation, barcode decoding and product lookup</li>
   <li><strong>Security:</strong> DNS lookup, TLS certificate info, WHOIS, HTTP headers, SPF checks</li>
-  <li><strong>Encoding:</strong> base64, hex, URL encoding, punycode, NATO phonetic, Soundex</li>
-  <li><strong>Math &amp; stats:</strong> statistical summaries, correlation, regression, prime checks, GCD/LCM</li>
-  <li><strong>Hashing:</strong> SHA-256, MD5, HMAC, PBKDF2, scrypt, HKDF, checksums</li>
-  <li><strong>Text &amp; string:</strong> diff, similarity, word frequency, case conversion, word wrap</li>
-  <li><strong>Agent memory:</strong> wallet-keyed persistent storage (read, write, list, delete)</li>
+  <li><strong>Encoding:</strong> base64, hex, URL encoding, number base conversion</li>
+  <li><strong>Math &amp; stats:</strong> statistical summaries, correlation, linear regression, GCD/LCM</li>
+  <li><strong>Hashing:</strong> SHA-256, SHA-512, MD5, HMAC, checksums</li>
+  <li><strong>Text &amp; string:</strong> diff, Levenshtein distance, keyword extraction, case conversion, text stats</li>
+  <li><strong>Agent memory:</strong> wallet-keyed persistent storage (write, read, recall, forget, log, grants)</li>
 </ul>
 
 <h2>How we got here</h2>
 
 <p>We started with 50 tools in the first week. The approach was simple: pick a category, build 5-10 tools that cover the common tasks, write the CI test for each, and ship. Each kit follows the same pattern - a single file that exports an array of tool definitions with handlers.</p>
 
-<p>The constraint that kept quality high: <strong>every tool must answer its own example input correctly in CI</strong>. No exceptions. If a tool can't pass that bar, it doesn't ship.</p>
+<p>The constraint that kept quality high: <strong>every tool CI can run without spending upstream must answer its own example input correctly in CI</strong>. If a tool can't pass that bar, it doesn't ship. (The metered tools, which need third-party keys, are covered by input probes instead.)</p>
 
 <h2>What's coming next</h2>
 
 <p>We're continuing to expand the catalog based on what agents actually request (tracked via the <code>/api/find</code> endpoint). The most-searched-for capabilities that don't yet have tools get built first. Current priorities include more data transformation tools, additional financial data sources, and deeper government data coverage.</p>
 
-<p>The catalog is also now registered on the Coinbase CDP Bazaar, making Agent402 tools discoverable by any x402-compatible agent through the Bazaar's marketplace API.</p>`,
+<p>The catalog is also listed in the x402 Bazaar discovery listing, where any x402-compatible agent can find its tools.</p>`,
   },
   {
     slug: "building-with-mcp",
-    date: "2026-06-22",
+    date: "2026-06-23",
     title: "Building with MCP: Claude Code, hosted, and npm",
     excerpt: "Agent402 speaks MCP natively. Here's how to connect it to Claude Code, use the hosted endpoint, or run the npm package locally.",
     body: `<p>The <a href="https://modelcontextprotocol.io">Model Context Protocol</a> (MCP) is the emerging standard for how AI agents discover and call tools. Agent402 supports MCP in three ways: a hosted HTTP endpoint, an npm package for local use, and direct integration with Claude Code.</p>
@@ -250,25 +253,19 @@ export const BLOG_POSTS = [
   <li><strong>server.describe</strong> - get platform info and capabilities</li>
 </ul>
 
-<p>The hosted endpoint handles PoW challenges internally, so pure-CPU tools are effectively free through MCP. A wallet-only tool called on the connector answers with an MPP payment challenge (JSON-RPC error <code>-32042</code>); an MPP client pays it by sending the credential in the call's <code>_meta["org.paymentauth/credential"]</code>.</p>
+<p>The hosted endpoint handles PoW challenges internally, so pure-CPU tools are effectively free through MCP. A wallet-only tool called on the connector without payment answers with a readable tool result that carries the MPP challenges in <code>_meta["org.paymentauth/payment-required"]</code>; an MPP client pays it by retrying with the credential in the call's <code>_meta["org.paymentauth/credential"]</code>. <em>(Updated 2026-10-11 to the connector's current answer; see <a href="/learn/mcp-payments">MCP payments</a>.)</em></p>
 
 <h2>Claude Code setup</h2>
 
-<p>To add Agent402 to Claude Code, add this to your MCP configuration:</p>
+<p>To add the hosted connector to Claude Code, run:</p>
 
-<pre><code>{
-  "mcpServers": {
-    "agent402": {
-      "url": "https://agent402.tools/mcp"
-    }
-  }
-}</code></pre>
+<pre><code>claude mcp add --transport http agent402 https://agent402.tools/mcp</code></pre>
 
-<p>Once connected, Claude Code can search through all 500+ tools, find the right one for a task, and call it - all through the standard MCP protocol. The <code>catalog.search</code> and <code>catalog.find</code> tools help the agent discover relevant tools without needing to know the full catalog.</p>
+<p>Once connected, Claude Code can search all 500+ tools, find the right one for a task, and call the free proof-of-work ones directly. Paid tools need a client that can pay: run the npm package below with <code>AGENT_KEY</code> set to a funded EVM key. The <code>catalog.search</code> and <code>catalog.find</code> tools help the agent discover relevant tools without needing to know the full catalog.</p>
 
 <h2>npm package (local / stdio)</h2>
 
-<p>For local development or air-gapped environments, install the <code>agent402-mcp</code> npm package:</p>
+<p>To pay for tools from your own wallet, install the <code>agent402-mcp</code> npm package:</p>
 
 <pre><code>npm install -g agent402-mcp</code></pre>
 
@@ -278,12 +275,13 @@ export const BLOG_POSTS = [
   "mcpServers": {
     "agent402": {
       "command": "agent402-mcp",
-      "args": []
+      "args": [],
+      "env": { "AGENT_KEY": "0xYOUR_FUNDED_KEY" }
     }
   }
 }</code></pre>
 
-<p>The npm package bundles the same tool definitions and connects to the hosted API for execution. It works with any MCP client that supports stdio transport - Claude Code, Cline, Continue, and others.</p>
+<p>The npm package reads the live catalog from agent402.tools at startup and sends each call to the hosted API, signing the payment from your wallet underneath. It works with any MCP client that supports stdio transport - Claude Code, Cline, Continue, and others.</p>
 
 <h2>Framework adapters</h2>
 
@@ -327,18 +325,18 @@ export function blogIndex(baseUrl) {
 
   const extraCss = `
 .bl-wrap{max-width:1180px;margin:0 auto;padding:56px 30px;}
-.bl-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;}
-.bl-wrap h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;}
-.bl-desc{font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 40px;max-width:640px;}
+.bl-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;}
+.bl-wrap h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;}
+.bl-desc{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px;max-width:640px;}
 .blog-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;}
 @media(max-width:700px){.blog-grid{grid-template-columns:1fr;}}
 .blog-card{display:block;background:var(--card);border:1px solid var(--hairline);padding:24px 26px;text-decoration:none;transition:border-color .2s;}
 .blog-card:hover{border-color:var(--accent);}
-.blog-date{display:inline-block;font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:6px;}
-.blog-card h2{font-family:var(--font-body);font-weight:800;font-size:20px;line-height:1.15;letter-spacing:-.02em;margin:4px 0 12px;color:var(--ink);}
-.blog-excerpt{font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 14px;}
-.blog-read{font-family:var(--font-mono);font-size:13px;color:var(--accent);font-weight:700;}
-@media(max-width:600px){.bl-wrap h1{font-size:40px;}}
+.blog-date{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:6px;}
+.blog-card h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-lg);line-height:1.15;letter-spacing:-.02em;margin:4px 0 12px;color:var(--ink);}
+.blog-excerpt{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 14px;}
+.blog-read{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);font-weight:700;}
+@media(max-width:600px){.bl-wrap h1{font-size:var(--fs-3xl);}}
 `;
 
   const body = `<div class="bl-wrap">
@@ -378,33 +376,33 @@ export function blogPost(baseUrl, slug) {
 
   const extraCss = `
 .bp-wrap{max-width:760px;margin:0 auto;padding:56px 30px 48px;}
-.bp-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;}
-.bp-crumb{font-family:var(--font-mono);font-size:13px;color:var(--faint);margin-bottom:20px;}
+.bp-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;}
+.bp-crumb{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:20px;}
 .bp-crumb a{color:var(--accent);text-decoration:none;}
 .bp-crumb a:hover{text-decoration:underline;}
-.bp-date{display:inline-block;font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:6px;}
-.bp-wrap h1{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:4px 0 28px;color:var(--ink);}
-.post-body{font-size:15px;line-height:1.55;color:var(--muted);}
-.post-body h2{font-family:var(--font-body);font-weight:800;font-size:22px;line-height:1.1;letter-spacing:-.02em;color:var(--ink);margin:32px 0 12px;}
+.bp-date{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:6px;}
+.bp-wrap h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:4px 0 28px;color:var(--ink);}
+.post-body{font-size:var(--fs-base);line-height:1.55;color:var(--muted);}
+.post-body h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);line-height:1.1;letter-spacing:-.02em;color:var(--ink);margin:32px 0 12px;}
 .post-body p{margin:0 0 16px;}
 .post-body ul,.post-body ol{margin:0 0 16px;padding-left:24px;}
 .post-body li{margin-bottom:6px;}
 .post-body strong{color:var(--ink);}
-.post-body code{font-family:var(--font-mono);font-size:13px;background:var(--card);border:1px solid var(--hairline);padding:2px 6px;}
-.post-body pre{background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:13px;line-height:1.55;padding:16px 20px;overflow-x:auto;margin:0 0 16px;border:1px solid var(--hairline);}
-.post-body pre code{background:none;border:none;padding:0;color:inherit;font-size:13px;}
+.post-body code{font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--card);border:1px solid var(--hairline);padding:2px 6px;}
+.post-body pre{background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px 20px;overflow-x:auto;margin:0 0 16px;border:1px solid var(--hairline);}
+.post-body pre code{background:none;border:none;padding:0;color:inherit;font-size:var(--fs-sm);}
 .post-body a{color:var(--accent);text-decoration:none;}
 .post-body a:hover{text-decoration:underline;}
-.bp-back{display:inline-block;margin-top:28px;font-family:var(--font-mono);font-size:13px;color:var(--accent);text-decoration:none;font-weight:700;}
+.bp-back{display:inline-block;margin-top:28px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;font-weight:700;}
 .bp-back:hover{text-decoration:underline;}
 `;
 
   const body = `<div class="bp-wrap">
-  <div class="bp-crumb"><a href="/">Home</a> / <a href="/blog">Blog</a> / ${esc(post.title)}</div>
+  <div class="bp-crumb ml-crumb"><a href="/">Home</a> / <a href="/blog">Blog</a><span class="ml-crumb-cur"> / ${esc(post.title)}</span></div>
   <span class="bp-date">${esc(post.date)}</span>
   <h1>${esc(post.title)}</h1>
   <div class="post-body">
-    ${post.body}
+    ${decideLive() ? post.body : post.body.replaceAll('href="/decide"', 'href="/docs/Decide"')}
   </div>
   <a href="/blog" class="bp-back">Back to blog</a>
 </div>

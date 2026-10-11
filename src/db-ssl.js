@@ -1,6 +1,6 @@
 // Postgres TLS policy by connection route (audit F11).
 //
-// Agent402's databases (tollbooth leads, analytics) run on Railway. There are
+// Agent402's databases (DATABASE_URL, analytics) run on Railway. There are
 // two ways to reach a Railway Postgres:
 //
 //   * PRIVATE networking — `*.railway.internal`. The connection rides Railway's

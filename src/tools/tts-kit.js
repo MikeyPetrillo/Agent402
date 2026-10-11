@@ -105,7 +105,7 @@ function validateInput(input, tierSlug) {
   const voice = typeof input.voice === "string" ? input.voice.trim().toLowerCase() : "alloy";
   const elevenTier = TIERS[tierSlug].provider === "elevenlabs";
   if (!VOICES.has(voice) && !(elevenTier && ELEVENLABS_VOICES.has(voice))) {
-    const extra = elevenTier ? `, or an ElevenLabs voice: ${[...ELEVENLABS_VOICES].join(", ")}` : "";
+    const extra = elevenTier ? `, or a named voice: ${[...ELEVENLABS_VOICES].join(", ")}` : "";
     throw bad(`Unknown voice "${voice}". Supported: ${[...VOICES].join(", ")}${extra}`);
   }
 
@@ -440,7 +440,7 @@ export const TTS_TOOLS = [
     category: "ai",
     price: TTS_LITE_PRICE,
     description:
-      "Convert text to speech with Kokoro-82M, a fraction of the price of /api/tts. Returns base64-encoded mp3 or pcm. The same request shape and the same ten voice names as /api/tts, mapped to Kokoro's own voices; the voice is synthetic-sounding where the ElevenLabs tiers are not, which is the whole trade. Use this for high-volume narration, notifications and agent speech where the cost per call matters more than the timbre; use /api/tts or /api/tts-hd when it does not. No API key needed; pay per call via x402. Text capped at 800 chars.",
+      "Convert text to speech with Kokoro-82M, a fraction of the price of /api/tts. Returns base64-encoded mp3 or pcm. The same request shape and the same ten voice names as /api/tts, mapped to Kokoro's own voices; the voice is synthetic-sounding where the /api/tts and /api/tts-hd tiers are not, which is the whole trade. Use this for high-volume narration, notifications and agent speech where the cost per call matters more than the timbre; use /api/tts or /api/tts-hd when it does not. No API key needed; pay per call via x402. Text capped at 800 chars.",
     tags: [...SHARED_TAGS, "kokoro", "cheap", "lite"],
     discovery: {
       bodyType: "json",
@@ -473,15 +473,15 @@ export const TTS_TOOLS = [
     category: "ai",
     price: "$0.120",
     description:
-      `Convert text to speech with ElevenLabs Eleven v4 Turbo: returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). The ten OpenAI voice names each map to their own ElevenLabs voice, or name one of 21 ElevenLabs voices directly; the answer names the voice that spoke. 90+ languages on ElevenLabs. If ElevenLabs is busy, throttling or down, a backup speech model with fewer voices and languages serves the call and the answer's model field names it. No API key needed; pay per call over x402 or MPP. Text capped at 2000 chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at ${TTS_LITE_PRICE}.`,
-    tags: [...SHARED_TAGS, "elevenlabs", "eleven-v4-turbo"],
+      `Convert text to speech with the eleven-v4-turbo model: returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). The ten standard voice names each map to their own voice, or name one of 21 named voices directly; the answer names the voice that spoke. 90+ languages. If the primary speech model is busy, throttling or down, a backup speech model with fewer voices and languages serves the call and the answer's model field names it. No API key needed; pay per call over x402 or MPP. Text capped at 2000 chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at ${TTS_LITE_PRICE}.`,
+    tags: [...SHARED_TAGS, "eleven-v4-turbo"],
     discovery: {
       bodyType: "json",
       input: { text: "Hello from Agent402!", voice: "alloy", format: "mp3" },
       inputSchema: {
         properties: {
           text: { type: "string", description: "Text to convert to speech (max 2000 chars)" },
-          voice: { type: "string", description: "Voice: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer (default: alloy), each mapped to its own ElevenLabs voice, or an ElevenLabs voice by name (george, sarah, adam, alice, bella, bill, brian, callum, charlie, chris, daniel, eric, harry, jessica, laura, liam, lily, matilda, river, roger, will)" },
+          voice: { type: "string", description: "Voice: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer (default: alloy), each mapped to its own voice, or a named voice (george, sarah, adam, alice, bella, bill, brian, callum, charlie, chris, daniel, eric, harry, jessica, laura, liam, lily, matilda, river, roger, will)" },
           format: { type: "string", description: "Audio format: mp3, opus, aac, flac, wav, pcm (default: mp3)" },
         },
         required: ["text"],
@@ -506,15 +506,15 @@ export const TTS_TOOLS = [
     category: "ai",
     price: "$0.240",
     description:
-      "Convert text to speech with ElevenLabs Eleven v4, its most expressive model (inline audio tags such as [whispering] are read as delivery cues). Returns base64-encoded audio. Same interface, voices, formats and backups as /api/tts. No API key needed; pay per call via x402 or MPP. Text capped at 2000 chars. Model-backed.",
-    tags: [...SHARED_TAGS, "elevenlabs", "eleven-v4", "hd"],
+      "Convert text to speech with the eleven-v4 model, the most expressive speech tier (inline audio tags such as [whispering] are read as delivery cues). Returns base64-encoded audio. Same interface, voices, formats and backups as /api/tts. No API key needed; pay per call via x402 or MPP. Text capped at 2000 chars. Model-backed.",
+    tags: [...SHARED_TAGS, "eleven-v4", "hd"],
     discovery: {
       bodyType: "json",
       input: { text: "Hello from Agent402!", voice: "alloy", format: "mp3" },
       inputSchema: {
         properties: {
           text: { type: "string", description: "Text to convert to speech (max 2000 chars)" },
-          voice: { type: "string", description: "Voice: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer (default: alloy), each mapped to its own ElevenLabs voice, or an ElevenLabs voice by name (george, sarah, adam, alice, bella, bill, brian, callum, charlie, chris, daniel, eric, harry, jessica, laura, liam, lily, matilda, river, roger, will)" },
+          voice: { type: "string", description: "Voice: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer (default: alloy), each mapped to its own voice, or a named voice (george, sarah, adam, alice, bella, bill, brian, callum, charlie, chris, daniel, eric, harry, jessica, laura, liam, lily, matilda, river, roger, will)" },
           format: { type: "string", description: "Audio format: mp3, opus, aac, flac, wav, pcm (default: mp3)" },
         },
         required: ["text"],

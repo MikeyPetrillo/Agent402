@@ -436,8 +436,8 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "Safety headline for any Solana SPL token mint: RugCheck risk score (raw + 0-100 normalised), the named risks with level (danger/warn/info), LP locked percentage, and Jupiter's audit facts - mint authority and freeze authority revoked or live, top-holder share, dev mints, holder count, verified flag and organic score. Two keyless public sources read in parallel; one compact verdict for pre-trade screening of memecoins and new launches.",
-    tags: ["solana", "token", "safety", "rugcheck", "memecoin", "risk", "spl"],
+      "Safety headline for any Solana SPL token mint: a public token-risk score (raw + 0-100 normalised), the named risks with level (danger/warn/info), LP locked percentage, and the aggregator's audit facts - mint authority and freeze authority revoked or live, top-holder share, dev mints, holder count, verified flag and organic score. Two keyless public sources read in parallel; one compact verdict for pre-trade screening of memecoins and new launches.",
+    tags: ["solana", "token", "safety", "memecoin", "risk", "spl"],
     discovery: {
       bodyType: "json",
       input: { mint: MINTS.JUP },
@@ -510,8 +510,8 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.010",
     description:
-      "Full RugCheck report for a Solana token mint, trimmed to what an agent acts on: score and risks, mint/freeze authority state, metadata mutability and update authority, supply and decimals, creator and creator balance, top 20 holders with percent, owner, insider flag and pool/locker labels, concentration totals, the deepest markets (liquidity, LP locked %), lockers, total market liquidity, LP providers, holder count, rugged flag, insider-network count, launchpad and transfer-fee config. One request; blue-chip reports run to megabytes upstream and come back here in a few KB.",
-    tags: ["solana", "token", "rugcheck", "report", "holders", "liquidity", "risk", "spl"],
+      "Full public token-risk report for a Solana token mint, trimmed to what an agent acts on: score and risks, mint/freeze authority state, metadata mutability and update authority, supply and decimals, creator and creator balance, top 20 holders with percent, owner, insider flag and pool/locker labels, concentration totals, the deepest markets (liquidity, LP locked %), lockers, total market liquidity, LP providers, holder count, rugged flag, insider-network count, launchpad and transfer-fee config. One request; blue-chip reports run to megabytes upstream and come back here in a few KB.",
+    tags: ["solana", "token", "report", "holders", "liquidity", "risk", "spl"],
     discovery: {
       bodyType: "json",
       input: { mint: MINTS.JUP, marketLimit: 5, holderLimit: 10 },
@@ -602,7 +602,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "Top-holder concentration for a Solana token mint: the 20 largest holders with token account, owner wallet, balance, percent of supply, insider flag and a pool/locker label when the account is a known AMM vault or locker, plus top-1/5/10/20 share, top-10 share excluding labelled pool accounts, insider count, total holder count and supply. Use it to tell a whale-held launch from one whose largest holder is the liquidity pool. Read from RugCheck's public report (the public Solana RPC throttles getTokenLargestAccounts).",
+      "Top-holder concentration for a Solana token mint: the 20 largest holders with token account, owner wallet, balance, percent of supply, insider flag and a pool/locker label when the account is a known AMM vault or locker, plus top-1/5/10/20 share, top-10 share excluding labelled pool accounts, insider count, total holder count and supply. Use it to tell a whale-held launch from one whose largest holder is the liquidity pool. Read from a public token-risk report (the public Solana RPC throttles getTokenLargestAccounts).",
     tags: ["solana", "token", "holders", "whales", "concentration", "memecoin", "spl"],
     discovery: {
       bodyType: "json",
@@ -674,7 +674,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Every DEX pair trading a Solana token mint (Raydium, Orca, Meteora, Pump.fun AMM and the rest), sorted by liquidity: pair address, DEX, price in USD and in the quote token, liquidity, FDV and market cap, 5m/1h/6h/24h volume and price change, buy/sell transaction counts, pair age in hours, plus totals across pairs. One DexScreener request, keyless.",
+      "Every DEX pair trading a Solana token mint (Raydium, Orca, Meteora, Pump.fun AMM and the rest), sorted by liquidity: pair address, DEX, price in USD and in the quote token, liquidity, FDV and market cap, 5m/1h/6h/24h volume and price change, buy/sell transaction counts, pair age in hours, plus totals across pairs. One request to a public DEX pair index, keyless.",
     tags: ["solana", "dex", "pairs", "liquidity", "volume", "raydium", "memecoin", "spl"],
     discovery: {
       bodyType: "json",
@@ -720,7 +720,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Find Solana tokens and pairs by name, ticker or address across every DEX DexScreener indexes, filtered to Solana only, in DexScreener relevance order: base and quote token, mint addresses, DEX, price, liquidity, 24h volume and change, transaction counts, pair age and whether the token has a filled-in profile (ticker impostors usually do not). Resolve a ticker to a mint before calling sol-token-safety or sol-swap-quote. Keyless.",
+      "Find Solana tokens and pairs by name, ticker or address across every DEX a public pair index covers, filtered to Solana only, in the index's relevance order: base and quote token, mint addresses, DEX, price, liquidity, 24h volume and change, transaction counts, pair age and whether the token has a filled-in profile (ticker impostors usually do not). Resolve a ticker to a mint before calling sol-token-safety or sol-swap-quote. Keyless.",
     tags: ["solana", "search", "token", "ticker", "dex", "memecoin", "spl"],
     discovery: {
       bodyType: "json",
@@ -773,7 +773,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "What Solana tokens are being pushed right now: DexScreener's top boosted tokens (paid promotion, ranked by boost amount - a signal of marketing spend, not quality) and the latest token profiles (fresh listings with a filled-in profile), both filtered to Solana. Each row carries the mint, DexScreener URL, description snippet and links. Feed the mints into sol-token-safety to separate the promoted from the sound. Keyless; two small DexScreener reads in parallel.",
+      "What Solana tokens are being pushed right now: a public DEX pair index's top boosted tokens (paid promotion, ranked by boost amount - a signal of marketing spend, not quality) and the latest token profiles (fresh listings with a filled-in profile), both filtered to Solana. Each row carries the mint, the index's token page URL, description snippet and links. Feed the mints into sol-token-safety to separate the promoted from the sound. Keyless; two small reads in parallel.",
     tags: ["solana", "trending", "boosts", "new-tokens", "memecoin", "discovery", "spl"],
     discovery: {
       bodyType: "json",
@@ -835,13 +835,13 @@ export const SOLANA_INTEL_TOOLS = [
   // =========================================================================
   {
     route: "POST /api/sol-price",
-    name: "Solana token prices (Jupiter)",
+    name: "Solana token prices",
     slug: "sol-price",
     category: "crypto",
     price: "$0.001",
     description:
-      "USD price for up to 50 Solana token mints in one call from Jupiter's price API v3: price, 24h change, liquidity, decimals and the block the price was read at. Mints Jupiter does not price come back listed under missing rather than erroring the batch. Pass mint addresses, not tickers (resolve tickers with sol-token-search or sol-token-lookup). Keyless.",
-    tags: ["solana", "price", "jupiter", "token", "spl", "batch"],
+      "USD price for up to 50 Solana token mints in one call from a Solana DEX aggregator's price API: price, 24h change, liquidity, decimals and the block the price was read at. Mints the aggregator does not price come back listed under missing rather than erroring the batch. Pass mint addresses, not tickers (resolve tickers with sol-token-search or sol-token-lookup). Keyless.",
+    tags: ["solana", "price", "token", "spl", "batch"],
     discovery: {
       bodyType: "json",
       input: { mints: [MINTS.SOL, MINTS.JUP, MINTS.USDC] },
@@ -888,13 +888,13 @@ export const SOLANA_INTEL_TOOLS = [
   // =========================================================================
   {
     route: "POST /api/sol-swap-quote",
-    name: "Solana swap quote (Jupiter)",
+    name: "Solana swap quote",
     slug: "sol-swap-quote", aliases: ["solana-swap-quote-jupiter", "solana-swap-quote", "jupiter-quote"],
     category: "crypto",
     price: "$0.003",
     description:
-      "Executable swap quote on Solana from Jupiter's aggregator: input and output mint, amount in base units, slippage in bps - returns out amount, minimum out after slippage, price impact percent, the routed DEX labels in hop order with split percentages, the USD value of the swap and the context slot. A real multi-hop route across Solana DEX liquidity, so the number reflects depth, not a spot price. Quote only - nothing is signed or sent. Keyless.",
-    tags: ["solana", "swap", "quote", "jupiter", "dex", "price-impact", "spl"],
+      "Executable swap quote on Solana from a DEX aggregator: input and output mint, amount in base units, slippage in bps - returns out amount, minimum out after slippage, price impact percent, the routed DEX labels in hop order with split percentages, the USD value of the swap and the context slot. A real multi-hop route across Solana DEX liquidity, so the number reflects depth, not a spot price. Quote only - nothing is signed or sent. Keyless.",
+    tags: ["solana", "swap", "quote", "dex", "price-impact", "spl"],
     discovery: {
       bodyType: "json",
       input: { inputMint: MINTS.SOL, outputMint: MINTS.USDC, amount: "1000000000", slippageBps: 50 },
@@ -961,13 +961,13 @@ export const SOLANA_INTEL_TOOLS = [
   // =========================================================================
   {
     route: "POST /api/sol-token-lookup",
-    name: "Solana token lookup (Jupiter)",
+    name: "Solana token lookup",
     slug: "sol-token-lookup", aliases: ["solana-token-lookup-jupiter", "solana-token-lookup"],
     category: "crypto",
     price: "$0.002",
     description:
-      "Resolve a Solana token by mint, ticker or name through Jupiter's token index and get its profile in one read: name, symbol, decimals, price, market cap, FDV, liquidity, holder count, circulating and total supply, verified flag, organic score (Jupiter's wash-trade-resistant activity score), tags, launchpad, dev wallet, first pool and date, audit facts (mint and freeze authority disabled, top-holder share, dev mints) and 24h stats (price, holder and liquidity change, buy/sell volume, traders, net buyers). Up to 20 matches for a name search; a mint returns its exact match first. Keyless.",
-    tags: ["solana", "token", "lookup", "jupiter", "metadata", "ticker", "spl"],
+      "Resolve a Solana token by mint, ticker or name through a Solana DEX aggregator's token index and get its profile in one read: name, symbol, decimals, price, market cap, FDV, liquidity, holder count, circulating and total supply, verified flag, organic score (the aggregator's wash-trade-resistant activity score), tags, launchpad, dev wallet, first pool and date, audit facts (mint and freeze authority disabled, top-holder share, dev mints) and 24h stats (price, holder and liquidity change, buy/sell volume, traders, net buyers). Up to 20 matches for a name search; a mint returns its exact match first. Keyless.",
+    tags: ["solana", "token", "lookup", "metadata", "ticker", "spl"],
     discovery: {
       bodyType: "json",
       input: { query: MINTS.JUP, limit: 3 },
@@ -999,6 +999,14 @@ export const SOLANA_INTEL_TOOLS = [
     },
   },
 ];
+// Attribution the Jupiter API license requires on any product that serves its
+// data ("Powered by Jupiter", SDK & API License Agreement clause 8.4,
+// https://developers.jup.ag/docs/legal/sdk-api-license-agreement). The tools
+// that read Jupiter end their description with it; the vendor-name check in
+// scripts/test-no-third-party-names.js allows it there and nowhere else.
+export const JUPITER_ATTRIBUTION = "Powered by Jupiter.";
+const JUPITER_SLUGS = new Set(["sol-token-safety", "sol-price", "sol-swap-quote", "sol-token-lookup"]);
+for (const t of SOLANA_INTEL_TOOLS) if (JUPITER_SLUGS.has(t.slug)) t.description = `${t.description} ${JUPITER_ATTRIBUTION}`;
 
 // Exported for offline unit tests (pure shaping, no network).
 export const __test = { takeMint, takeLimit, shapeHolders, shapeMarkets, shapePair, shapeJupToken, authorityState, riskCounts, BASE58_RE };

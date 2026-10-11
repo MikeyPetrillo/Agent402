@@ -42,7 +42,13 @@ const opBody = await opRes.json();
 // --- the ledgers' local dead-letter: one word publicly, counts for the operator ---
 ok(pubBody?.ledgerDeadLetter?.status === "off" && Object.keys(pubBody.ledgerDeadLetter).join(",") === "status", `ledgerDeadLetter publishes its word only (${JSON.stringify(pubBody?.ledgerDeadLetter)}; off without a state database)`);
 ok(opBody?.ledgerDeadLetter?.status === "off" && typeof opBody?.ledgerDeadLetter?.sales?.onDisk === "number", "the operator view of ledgerDeadLetter carries the counts");
-ok(["sales", "refunds", "checkoutFinals", "subscriptions", "decide"].every((n) => typeof opBody?.ledgerDeadLetter?.[n]?.onDisk === "number"), `the operator view counts every local money journal (${Object.keys(opBody?.ledgerDeadLetter || {}).join(",")})`);
+ok(["sales", "refunds", "checkoutFinals", "subscriptions", "decide", "outbound"].every((n) => typeof opBody?.ledgerDeadLetter?.[n]?.onDisk === "number"), `the operator view counts every local money journal (${Object.keys(opBody?.ledgerDeadLetter || {}).join(",")})`);
+
+// --- Solana history reads: one word publicly, per-lane counts for the operator ---
+ok(typeof pubBody?.solanaHistory?.status === "string" && Object.keys(pubBody.solanaHistory).join(",") === "status", `solanaHistory publishes its word only (${JSON.stringify(pubBody?.solanaHistory)})`);
+ok(opBody?.solanaHistory && typeof opBody.solanaHistory.lanes === "object" && "publicShare" in opBody.solanaHistory, "the operator view of solanaHistory carries the per-lane counts");
+ok(typeof pubBody?.evmLogs?.status === "string" && Object.keys(pubBody.evmLogs).join(",") === "status", `evmLogs publishes its word only (${JSON.stringify(pubBody?.evmLogs)})`);
+ok(opBody?.evmLogs && typeof opBody.evmLogs.callers === "object" && typeof opBody.evmLogs.leaderboardLogCache === "object" && typeof opBody.evmLogs.activityScan === "object", "the operator view of evmLogs carries the per-caller counts, the board's log cache and the activity scans");
 
 // --- the money fields, by name ---------------------------------------------
 const MONEY = /"(capUsd|spentUsd|budget|callsToday|fundedUsd|remainingUsd|spentSinceRestartUsd|refusedToday|lowBelowFraction)":\s*-?[0-9]/;

@@ -4,10 +4,14 @@
 // and its reply is lost:
 //   - the delivered record whose write landed but whose reply was lost is
 //     never followed by a refund (the retry finds it already there);
-//   - a delivered record that cannot land is kept on local disk and served
-//     from memory, lands once the database is back, and a stale-claim
-//     takeover never generates the report a second time;
+//   - a delivered record that cannot land is kept on local disk, is NOT
+//     served (the buyer reads "generating": a record on one container's disk
+//     alone may yet be superseded by a takeover), lands once the database is
+//     back, is delivered once then (one sale), and a stale-claim takeover
+//     never generates the report a second time;
 //   - a failed report's refund is never issued before a record names it.
+// The journal here is the local-disk one (no REDIS_URL); the Redis journal's
+// cases are in test-ledger-journal-redis-pg.js.
 // Requires STATE_DATABASE_URL (CI fails without it).
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +21,7 @@ import { requireTestPg } from "./lib/test-pg.js";
 import { startPgRelay } from "./lib/pg-relay.js";
 
 requireTestPg({ label: "test-human-checkout-failures-pg" });
+delete process.env.REDIS_URL;
 const relay = await startPgRelay(process.env.STATE_DATABASE_URL);
 process.env.STATE_DATABASE_URL = relay.url;
 process.env.STATE_DB_CONNECT_TIMEOUT_MS = "1500";
@@ -70,7 +75,7 @@ try {
     const r = await row(id);
     ok(first?.status === "done" && r?.status === "done" && refunds.length === 0 && gens === 1 && sales.length === 1, `a delivered record whose reply was lost: poll ${first?.status}, row ${r?.status}, refunds ${refunds.length}, generations ${gens}, sales ${sales.length}`);
   }
-  // The database down right after generation: served from memory, kept on disk, lands after; no second generation.
+  // The database down right after generation: kept on disk, not served until it lands, delivered once after; no second generation.
   for (const tag of ["down", "downmail"]) {
     const id = sid(tag);
     gens = 0; refunds.length = 0; sales.length = 0;
@@ -79,15 +84,18 @@ try {
     const first = await settle(id);
     genHook = null;
     const onDisk = existsSync(join(DIR, "_pending-finals.ndjson")) && readFileSync(join(DIR, "_pending-finals.ndjson"), "utf8").includes(id);
-    ok(first?.status === "done" && onDisk && refunds.length === 0, `${tag}: the database away after generation: this container serves ${first?.status}, the record is on local disk (${onDisk}), refunds ${refunds.length}`);
+    ok(first?.status === "generating" && onDisk && refunds.length === 0 && sales.length === 0, `${tag}: the database away after generation: this container answers ${first?.status} (never a report from its disk alone), the record is on local disk (${onDisk}), refunds ${refunds.length}, sales ${sales.length}`);
     const dl = ledgerDeadLetterStatus({ full: true }), dlLater = ledgerDeadLetterStatus({ now: Date.now() + 60 * 60_000 });
     ok(dl.status === "pending" && dl.checkoutFinals?.onDisk >= 1 && dlLater.status === "stuck" && Object.keys(dlLater).join(",") === "status", `${tag}: the dead-letter word counts the kept final (${dl.status}, ${dl.checkoutFinals?.onDisk} on disk; an hour on ${dlLater.status})`);
     const polled = await hc.fulfill(id).catch(() => ({ status: "threw" }));
-    ok(polled?.status === "done", `${tag}: ...and a poll on it answers ${polled?.status} while the database is away`);
+    ok(polled?.status === "generating", `${tag}: ...and a poll on it answers ${polled?.status} while the database is away`);
     relay.heal();
     for (let i = 0; i < 40 && (await row(id))?.status !== "done"; i++) await wait(100);
     const r = await row(id);
     ok(r?.status === "done" && r.report, `${tag}: the record lands once the database is back (${r?.status})`);
+    for (let i = 0; i < 20 && !sales.length; i++) await wait(50);
+    const servedNow = await hc.fulfill(id);
+    ok(servedNow?.status === "done" && sales.length === 1, `${tag}: ...then the buyer is answered (${servedNow?.status}) and the sale is booked once, by the replay (${sales.length})`);
     ok(ledgerDeadLetterStatus({ full: true }).checkoutFinals?.onDisk === 0, `${tag}: ...and leaves the dead-letter count once it lands`);
     const inflight = (await row("_inflight")) || {};
     ok(!(id in inflight), `${tag}: ...and its claim leaves the in-flight index`);
@@ -95,7 +103,7 @@ try {
     const other = createHumanCheckout({ stripe, baseUrl: "https://example.test", storeDir: mkdtempSync(join(tmpdir(), "hc-fail-other-")), log: () => {}, generate: async () => { gens++; return { report: "# again" }; } });
     await other.ready();
     const again = await other.fulfill(id);
-    ok(again?.status === "done" && gens === 1 && refunds.length === 0, `${tag}: no second generation, no refund (generations ${gens}, refunds ${refunds.length}, sales ${sales.length})`);
+    ok(again?.status === "done" && gens === 1 && refunds.length === 0 && sales.length === 1, `${tag}: no second generation, no refund (generations ${gens}, refunds ${refunds.length}, sales ${sales.length})`);
   }
   // A failed report with the database away: no refund is issued until a record names it.
   {
@@ -106,7 +114,7 @@ try {
     await hc.fulfill(id);
     const first = await settle(id);
     genHook = null; failGen = false;
-    ok(refunds.length === 0 && first?.status === "error" && first.refundOwed === true, `a failed report with the database away: no refund before its record (${refunds.length}), the buyer reads ${first?.status} "${first?.error}"`);
+    ok(refunds.length === 0 && first?.status === "generating", `a failed report with the database away: no refund before its record (${refunds.length}), and the buyer reads ${first?.status} until it lands`);
     relay.heal();
     for (let i = 0; i < 40 && (await row(id))?.status !== "error"; i++) await wait(100);
     const owed = await row(id);

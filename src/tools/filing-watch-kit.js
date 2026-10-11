@@ -45,7 +45,7 @@ export const FILING_TIERS = {
   "filing-report": {
     price: "$0.85",
     // Worst case: input 3 docs x 36,000 chars + <=40 index rows + instructions
-    // (~122,000 chars ~= 35,000 tok), output 4,200 tok. The cap is set from
+    // (~122,000 chars ~= 35,000 tok), output 5,600 tok. The cap is set from
     // MEASURED synthesis spend rather than the margin clamp's pessimistic
     // legacy-opus row.
     maxUpstreamUsd: 0.50,
@@ -55,7 +55,9 @@ export const FILING_TIERS = {
     docMaxBytes: 800_000,  // per document, enforced while streaming
     docMaxChars: 36_000,   // per document, after tag stripping
     indexRows: 40,         // filings listed in the grounding block
-    synthMaxTokens: 4200,
+    // Headroom over the word target: a 4,200 cap stopped for length on the
+    // first call, so every report paid for a retry.
+    synthMaxTokens: 5600,
     words: "~1,400",
   },
 };
@@ -679,6 +681,8 @@ function makeFilingHandlerInner(tierSlug) {
 6. CITATIONS: the sources are numbered [1] to [${numbered.length}]. Each filing line and each document header carries its number. Cite [n] for every specific claim. A citation is ONLY a bracketed number. Do NOT write a "Sources" section - it is appended automatically.
 7. This is NOT investment advice and must not read as a recommendation. No price targets, no buy/sell/hold language, no valuation opinions. Close by stating that this is a summary of public SEC filings and is not investment advice.
 8. Prioritize COMPLETING the report over length. If the material is thin (only routine ownership forms, or nothing filed), say so plainly and keep it short.
+9. COUNTS: every count you state (filings, forms, documents read, forms parsed, filings not fetched) is the figure given in a block header below, never your own tally of a list. The documents read in full, the routine forms parsed and the filings not fetched add up to the filings found.
+10. TERMINOLOGY: Forms 3, 4 and 5 are Section 16 ownership reports; a Form 144 is a notice of proposed sale under Securities Act Rule 144, not a Section 16 report. Name each form for what it is.
 
 Write a well-structured report of up to ${t.words} words with these sections where the material supports them: SNAPSHOT (how many filings, which forms, the date range, and the single most consequential item), WHAT WAS FILED (each filing in the window, grouped by form, in plain language), WHAT THE DOCUMENTS SAY (the substance of the ${read.length} document${read.length === 1 ? "" : "s"} read in full - the event, the numbers as stated, the terms, the parties), WHAT CHANGED (per rule 5), and WHAT TO WATCH (concrete follow-ups a reader can verify in future filings - never a recommendation, per rule 7).
 
@@ -688,7 +692,7 @@ ${name} · CIK ${pr.cik}${symbol ? ` · ticker ${symbol}` : ""}${pr.exchanges?.l
 last ${days} days${forms.length ? `, forms limited to ${forms.join(", ")}` : ""}${exclude.length ? `, excluding ${exclude.join(", ")}` : ""}. Filings found: ${pr.filings.length}${counts ? ` (${counts})` : ""}. Filing dates span ${window}.
 === FILINGS INDEX (newest first) ===
 ${indexLines || "(no filings in the window)"}
-${routineBlock ? `=== ROUTINE FORMS PARSED (structured fields from the filing; may be summarized - name the insiders, codes, shares, prices) ===\n${routineBlock}\n` : ""}${unread.length ? `=== NOT READ ===\n${unread.join("\n")}\n` : ""}${notFetched.length ? `=== NOT FETCHED (index facts only - never summarize these) ===\n${notFetched.map((f) => `${f.filed} · ${f.form} · accession ${f.accession}`).join("\n")}\n` : ""}=== DOCUMENT TEXT (${read.length} document${read.length === 1 ? "" : "s"} read in full) ===
+${routineBlock ? `=== ROUTINE FORMS PARSED (${routineParsed.length} filing${routineParsed.length === 1 ? "" : "s"}; structured fields from the filing; may be summarized - name the insiders, codes, shares, prices) ===\n${routineBlock}\n` : ""}${unread.length ? `=== NOT READ ===\n${unread.join("\n")}\n` : ""}${notFetched.length ? `=== NOT FETCHED (${notFetched.length} filing${notFetched.length === 1 ? "" : "s"}; index facts only - never summarize these) ===\n${notFetched.map((f) => `${f.filed} · ${f.form} · accession ${f.accession}`).join("\n")}\n` : ""}=== DOCUMENT TEXT (${read.length} document${read.length === 1 ? "" : "s"} read in full) ===
 ${docBlocks || "(no primary document was read for this window)"}`;
 
     // 5) SYNTHESIZE.

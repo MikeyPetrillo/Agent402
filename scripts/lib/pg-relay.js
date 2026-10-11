@@ -3,7 +3,11 @@
 // and refuse new ones (an outage), heal() to let them through again.
 import { createServer, connect } from "node:net";
 
-export async function startPgRelay(url) {
+//
+// `bytesPerSec` throttles what each connection sends to the server (a slow or
+// congested link): a large statement holds its pooled connection for longer,
+// a small one is barely delayed.
+export async function startPgRelay(url, { bytesPerSec = 0 } = {}) {
   const target = new URL(url);
   let cut = false;
   const live = new Set();
@@ -11,7 +15,15 @@ export async function startPgRelay(url) {
     if (cut) { client.destroy(); return; }
     const up = connect({ host: target.hostname, port: Number(target.port || 5432) });
     live.add(client); live.add(up);
-    client.pipe(up); up.pipe(client);
+    if (bytesPerSec > 0) {
+      client.on("data", (chunk) => {
+        up.write(chunk);
+        client.pause();
+        const t = setTimeout(() => client.resume(), Math.ceil((chunk.length / bytesPerSec) * 1000));
+        t.unref?.();
+      });
+    } else client.pipe(up);
+    up.pipe(client);
     const drop = () => { client.destroy(); up.destroy(); live.delete(client); live.delete(up); };
     client.on("error", drop); up.on("error", drop); client.on("close", drop); up.on("close", drop);
   });

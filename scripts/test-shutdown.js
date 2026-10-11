@@ -105,12 +105,19 @@ async function testFatalFileModeDeadline() {
   const preload = join(dir, "throw-on-usr2.mjs");
   writeFileSync(preload, `process.on("SIGUSR2", () => { throw new Error("boom from the test"); });\n`);
   const port = 3900 + (process.pid % 500);
-  const env = { ...process.env, FREE_MODE: "true", PORT: String(port), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" };
+  // Both index crawlers off: their outbound reads and parses are background
+  // work on the event loop that has nothing to do with the drain being timed.
+  const env = { ...process.env, FREE_MODE: "true", PORT: String(port), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" };
   delete env.STATE_DATABASE_URL;
   const child = spawn(process.execPath, ["--import", preload, "src/server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
-  child.stdout.on("data", (d) => { out += d; });
-  child.stderr.on("data", (d) => { out += d; });
+  // The deadline runs from the moment the server starts draining (its log
+  // line), not from the kill: a signal waits for the event loop, and a busy
+  // loop at that instant delays the handler without changing the deadline.
+  let drainAt = 0;
+  const seen = (d) => { out += d; if (!drainAt && out.includes("uncaughtException received - closing listener")) drainAt = Date.now(); };
+  child.stdout.on("data", seen);
+  child.stderr.on("data", seen);
   const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
   let up = false;
   for (let i = 0; i < 120; i++) {
@@ -125,10 +132,13 @@ async function testFatalFileModeDeadline() {
   await wait(300);
   const t0 = Date.now();
   child.kill("SIGUSR2");
-  const code = await Promise.race([exited, wait(15_000).then(() => "timeout")]);
-  const elapsed = Date.now() - t0;
+  const code = await Promise.race([exited, wait(20_000).then(() => "timeout")]);
+  const exitAt = Date.now();
+  const handledMs = drainAt ? drainAt - t0 : -1;
+  const elapsed = drainAt ? exitAt - drainAt : -1;
   ok(code === 1, `uncaught exception in the server exits 1 (got ${code})`);
-  ok(elapsed >= 9_000 && elapsed < 12_000, `file mode: a held request keeps the fatal drain to its 10 s deadline, no early finish (${elapsed}ms)`);
+  ok(drainAt > 0, `the server logged the start of its fatal drain (handled ${handledMs}ms after the signal)`);
+  ok(elapsed >= 9_000 && elapsed < 12_000, `file mode: a held request keeps the fatal drain to its 10 s deadline, no early finish (${elapsed}ms from drain start; signal handled after ${handledMs}ms)${elapsed >= 12_000 || elapsed < 9_000 ? `\n  server log tail:\n${out.split("\n").slice(-12).join("\n")}` : ""}`);
   held.destroy();
   if (code === "timeout") child.kill("SIGKILL");
 }

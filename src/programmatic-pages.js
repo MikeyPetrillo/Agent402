@@ -33,7 +33,7 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPORTS_CSS } from "./human-reports-page.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
-import { INSIDER_TIERS, INSIDER_DEFAULT_DAYS } from "./tools/insider-flow-kit.js";
+import { INSIDER_TIERS, INSIDER_DEFAULT_DAYS, INSIDER_MAX_DAYS } from "./tools/insider-flow-kit.js";
 import { FUND_TIERS } from "./tools/fund-report-kit.js";
 import { DOSSIER_TIERS } from "./tools/dossier-kit.js";
 import { probeInsiderFilings, parseForm4 } from "./tools/insider-flow-kit.js";
@@ -41,7 +41,7 @@ import { resolveCompany, resolveManager, edgarGetJson, fetchXmlText, findInforma
 import { SEED_TICKERS, SEED_MANAGERS, seededManager, isSeededTicker } from "./programmatic-seeds.js";
 import { alertFormHtml } from "./free-alerts.js";
 import { fitTitle } from "./seo-meta.js";
-import { keyFinancials, filingActivity, dossierNarrative, insiderSummary, insiderNarrative, fundNarrative, fmtMoney, formLabel, stateName, isOfferingNoise } from "./edgar-summary.js";
+import { keyFinancials, filingActivity, dossierNarrative, insiderSummary, insiderNarrative, fundNarrative, fmtMoney, formLabel, formName, documentLabel, stateName, isOfferingNoise } from "./edgar-summary.js";
 
 // --- validation -------------------------------------------------------------
 // Shape first, upstream second. Anything that fails here costs one regex.
@@ -423,35 +423,38 @@ export const FAMILIES = {
 // --- shared page furniture --------------------------------------------------
 export const PROGRAMMATIC_CSS = `
 .pg-glance{margin:18px 0 22px;}
-.pg-glance h2{font-size:18px;margin:0 0 8px;}
+.pg-glance h2{font-size:var(--fs-lg);margin:0 0 8px;}
 .pg-glance p{margin:0 0 10px;line-height:1.6;}
-.pg-chg{color:var(--muted);font-size:12px;}
+.pg-chg{color:var(--muted);font-size:var(--fs-xs);}
 
-  .pg-meta{font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-top:12px;line-height:1.6}
-  .pg-table-wrap{overflow-x:auto;border:1px solid var(--hairline);border-radius:14px;background:var(--card);margin-top:18px}
-  .pg-table{border-collapse:collapse;width:100%;min-width:640px;font-size:14px}
-  .pg-table th{text-align:left;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:12px 14px;border-bottom:1px solid var(--hairline);white-space:nowrap}
+  .pg-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:12px;line-height:1.6}.pg-meta-tags{display:flex;flex-wrap:wrap;row-gap:2px}.pg-meta-tags>span{white-space:nowrap}.pg-meta-tags>span+span::before{content:"·";padding:0 8px}
+  .pg-table-wrap{overflow-x:auto;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);margin-top:18px}
+  .pg-table{border-collapse:collapse;width:100%;min-width:640px;font-size:var(--fs-md)}
+  .pg-table th{text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:12px 14px;border-bottom:1px solid var(--hairline);white-space:nowrap}
   .pg-table td{padding:11px 14px;border-bottom:1px solid var(--hairline);color:var(--muted);vertical-align:top}
   .pg-table tr:last-child td{border-bottom:0}
   .pg-table td.num{font-family:var(--font-mono);text-align:right;white-space:nowrap;color:var(--ink)}
-  .pg-table td.who{color:var(--ink)}
-  .pg-buy{border:1px solid var(--hairline);border-radius:18px;background:var(--card);padding:26px;margin-top:26px;box-shadow:inset 0 1px 0 var(--card-inset),0 1px 2px rgba(0,0,0,.08)}
-  .pg-buy h2{font-weight:500;font-size:22px;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink)}
-  .pg-buy p{color:var(--muted);font-size:15px;line-height:1.55;margin:0 0 16px;font-weight:300}
-  .pg-agent{font-family:var(--font-mono);font-size:12.5px;color:var(--muted);background:var(--chip-bg);border:1px solid var(--hairline);border-radius:12px;padding:12px 14px;margin-top:16px;line-height:1.7;overflow-x:auto}
+  .pg-table td.who{color:var(--ink)}.pg-who-name{display:block;white-space:nowrap}.pg-who-role{display:block;color:var(--muted);font-size:var(--fs-sm);margin-top:2px}.pg-table td.kind{white-space:nowrap}
+  .pg-buy{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:26px;margin-top:26px;box-shadow:inset 0 1px 0 var(--card-inset),0 1px 2px rgba(0,0,0,.08)}
+  .pg-buy h2{font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 8px;color:var(--ink)}
+  .pg-buy p{color:var(--muted);font-size:var(--fs-base);line-height:1.55;margin:0 0 16px;font-weight:300}
+  /* The headline carries a filer's name, often long capitals: on a phone it steps down a size and the panel's padding narrows, so the name's last words share a line. */
+  @media (max-width:600px){.pg-buy{padding:18px}.pg-buy h2{font-size:var(--fs-lg)}}
+  .pg-agent{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);background:var(--chip-bg);border:1px solid var(--hairline);border-radius:var(--radius);padding:12px 14px;margin-top:16px;line-height:1.7;overflow-x:auto;display:flex;flex-wrap:wrap;column-gap:.6em}
+  .pg-agent>span{white-space:nowrap}
   .pg-links{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}
-  .pg-links a{font-size:14px;color:var(--ink);text-decoration:none;border:1px solid var(--dash);border-radius:999px;padding:8px 14px}
+  .pg-links a{font-size:var(--fs-md);color:var(--ink);text-decoration:none;border:1px solid var(--dash);border-radius:var(--radius);padding:8px 14px}
   .pg-links a:hover{border-color:var(--ink)}
-  .pg-note{color:var(--faint);font-size:13px;line-height:1.6;margin-top:22px;font-weight:300}
-  .pg-empty{border:1px dashed var(--dash);border-radius:14px;padding:22px;color:var(--muted);margin-top:18px;font-weight:300}
+  .pg-note{color:var(--faint);font-size:var(--fs-sm);line-height:1.6;margin-top:22px;font-weight:300}
+  .pg-empty{border:1px dashed var(--dash);border-radius:var(--radius);padding:22px;color:var(--muted);margin-top:18px;font-weight:300}
   .pg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px;margin-top:20px}
-  .pg-grid a{display:block;border:1px solid var(--hairline);border-radius:12px;background:var(--card);padding:12px 14px;text-decoration:none;color:var(--ink);font-size:15px}
+  .pg-grid a{display:block;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:12px 14px;text-decoration:none;color:var(--ink);font-size:var(--fs-base)}
   .pg-grid a:hover{border-color:var(--ink)}
-  .pg-grid a span{display:block;font-family:var(--font-mono);font-size:11px;color:var(--faint);margin-top:3px}
+  .pg-grid a span{display:block;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:3px}
   .pg-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-top:20px}
-  .pg-fact{border:1px solid var(--hairline);border-radius:14px;background:var(--card);padding:14px 16px}
-  .pg-fact .l{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint)}
-  .pg-fact .v{font-size:17px;color:var(--ink);margin-top:5px;line-height:1.35}
+  .pg-fact{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:14px 16px}
+  .pg-fact .l{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint)}
+  .pg-fact .v{font-size:var(--fs-lg);color:var(--ink);margin-top:5px;line-height:1.35}
 `;
 
 const DISCLAIMER = "Generated from public SEC EDGAR filings. Filing data is shown as filed. This is information, not investment advice.";
@@ -468,7 +471,7 @@ function buySection({ family, input, headline, blurb, alertKind = null }) {
   <p>${esc(blurb)}</p>
   <button class="btn btn-primary" data-buy-product="${esc(family.product)}" data-buy-input="${esc(input)}">Get the full report, $${esc(price)} →</button>
   <div class="err" id="err-buy"></div>
-  <div class="pg-agent">agents: ${esc(family.route)} with ${esc(family.agentBody(input))} over x402 or MPP, ${esc(family.agentPrice())}</div>
+  <div class="pg-agent"><span>agents: ${esc(family.route)}</span> <span>with ${esc(family.agentBody(input))}</span> <span>over x402 or MPP, ${esc(family.agentPrice())}</span></div>
   <p class="note" style="margin-top:12px;"><a href="/tools/${esc(family.toolSlug)}" style="color:var(--muted);">Sample output and API docs</a> · <a href="/reports" style="color:var(--muted);">all reports</a></p>
 </div>`;
 }
@@ -506,6 +509,12 @@ function datasetLd(baseUrl, { name, description, canonical, modified }) {
   };
 }
 
+/** A meta line of whole items: each stays on one line, the row wraps between
+ *  them. Items are already-escaped HTML; falsy items are left out. */
+function metaTags(items) {
+  return `<div class="pg-meta pg-meta-tags">${items.filter(Boolean).map((x) => `<span>${x}</span>`).join("")}</div>`;
+}
+
 function shell({ title, description, canonical, baseUrl, body, jsonLd }) {
   return ledgerShell({
     title, description, canonical, baseUrl, activePath: "/reports",
@@ -529,19 +538,19 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
   const rows = data?.rows || [];
   const table = rows.length
     ? `<div class="pg-table-wrap"><table class="pg-table">
-<thead><tr><th>Date</th><th>Insider</th><th>Role</th><th>Transaction</th><th>Code</th><th>Shares</th><th>Price</th><th>Owned after</th></tr></thead>
-<tbody>${rows.map((r) => `<tr><td class="num">${esc(r.date || "")}</td><td class="who">${esc(r.insider || "")}</td><td>${esc(r.role || "")}</td><td>${esc(r.kind || "")}</td><td class="num">${esc(r.code || "")}</td><td class="num">${esc(fmtInt(r.shares))}</td><td class="num">${esc(fmtPrice(r.price))}</td><td class="num">${esc(r.ownedAfter == null ? "" : fmtInt(r.ownedAfter))}</td></tr>`).join("")}</tbody></table></div>`
-    : `<div class="pg-empty">${degraded || !data ? "SEC EDGAR could not be read for this company just now. The filings themselves are unaffected: try again shortly, or buy the full report, which reads them at request time." : data.partial ? `Form 4 filings exist for ${esc(name)} in this window, but their transaction detail could not be read just now. The paid report reads every filing at request time.` : `No Form 4 transactions were filed against ${esc(name)} in the last ${data.windowDays} days. The paid report can look back up to 365 days.`}</div>`;
+<thead><tr><th>Date</th><th>Insider and role</th><th>Transaction</th><th>Code</th><th>Shares</th><th>Price</th><th>Owned after</th></tr></thead>
+<tbody>${rows.map((r) => `<tr><td class="num">${esc(r.date || "")}</td><td class="who"><span class="pg-who-name">${esc(r.insider || "")}</span>${r.role ? `<span class="pg-who-role">${esc(r.role)}</span>` : ""}</td><td class="kind">${esc(r.kind || "")}</td><td class="num">${esc(r.code || "")}</td><td class="num">${esc(fmtInt(r.shares))}</td><td class="num">${esc(fmtPrice(r.price))}</td><td class="num">${esc(r.ownedAfter == null ? "" : fmtInt(r.ownedAfter))}</td></tr>`).join("")}</tbody></table></div>`
+    : `<div class="pg-empty">${degraded || !data ? "SEC EDGAR could not be read for this company just now. The filings themselves are unaffected: try again shortly, or buy the full report, which reads them at request time." : data.partial ? `Form 4 filings exist for ${esc(name)} in this window, but their transaction detail could not be read just now. The paid report reads the newest ${INSIDER_TIERS["insider-report"].maxFilings} filings at request time.` : `No Form 4 transactions were filed against ${esc(name)} in the last ${data.windowDays} days. An agent calling the report can widen the window to ${INSIDER_MAX_DAYS} days with <code>days</code>; a card purchase reads the last ${INSIDER_DEFAULT_DAYS}.`}</div>`;
   const body = `
 <section class="hero">
-  <div class="eyebrow">SEC Form 4 · insider transactions · free</div>
+  <div class="eyebrow eyebrow-tags"><span>SEC Form 4</span><span>insider transactions</span><span>free</span></div>
   <h1>${esc(name)} <em>insider buying and selling</em></h1>
   <p class="lede">${data ? `${esc(String(data.filingsInWindow))} Form 4 filings against ${esc(name)} (${esc(ticker)}) in the last ${esc(String(data.windowDays))} days. Below are the transactions from ${esc(String(data.filingsRead))} recent filings, one per insider where the window allows, as filed.` : `The latest SEC Form 4 filings against ${esc(ticker)}, as filed.`}</p>
-  <div class="pg-meta">${data ? `Window ${esc(data.startDate)} to ${esc(data.endDate)} · CIK ${esc(data.cik)}${data.latestFiledDate ? ` · newest filing ${esc(data.latestFiledDate)}` : ""} · ` : ""}source: SEC EDGAR full-text search and the Form 4 XML itself</div>
+  ${metaTags([data && `Window ${esc(data.startDate)} to ${esc(data.endDate)}`, data && `CIK ${esc(data.cik)}`, data?.latestFiledDate && `newest filing ${esc(data.latestFiledDate)}`, "source: SEC EDGAR, Form 4 XML"])}
 </section>
 <section>
   ${table}
-  ${(() => { const paras = insiderNarrative(name, ticker, data, insiderSummary(rows)); return paras.length ? `<div class="pg-glance"><h2>What the filings show</h2>${paras.map((p) => `<p>${esc(p)}</p>`).join("")}</div>` : ""; })()}
+  ${(() => { const paras = insiderNarrative(name, ticker, data, insiderSummary(rows), { maxFilings: INSIDER_TIERS["insider-report"].maxFilings }); return paras.length ? `<div class="pg-glance"><h2>What the filings show</h2>${paras.map((p) => `<p>${esc(p)}</p>`).join("")}</div>` : ""; })()}
   ${rows.length ? `<div class="pg-meta">Transaction codes: P is an open-market purchase, S an open-market sale, A a grant or award, M an option exercise, F shares surrendered for tax. ${buys} open-market buy${buys === 1 ? "" : "s"} and ${sells} open-market sale${sells === 1 ? "" : "s"} in the rows above.</div>` : ""}
   ${buySection({ family, alertKind: "insider", input: ticker, headline: `The Form 4 flow against ${name}, parsed and explained`, blurb: `The free view above is the newest few filings. The paid report reads the newest Form 4 filings of the last ${INSIDER_DEFAULT_DAYS} days (up to ${INSIDER_TIERS["insider-report"].maxFilings}), separates open-market buys and sales from awards, exercises and tax withholding, totals the flow per insider, flags 10b5-1 plans where the filing notes them, and hands you a cited write-up plus a downloadable transactions table.` })}
   ${crossLinks([
@@ -587,10 +596,10 @@ export function fundPage({ slug, data, baseUrl, degraded = false }) {
     : `<div class="pg-empty">${degraded || !data ? "SEC EDGAR could not be read for this manager just now. Try again shortly, or buy the full report, which reads the filing at request time." : esc(data.holdingsNote || "No holdings table was available for this filing.")}</div>`;
   const body = `
 <section class="hero">
-  <div class="eyebrow">SEC Form 13F-HR · institutional holdings · free</div>
+  <div class="eyebrow eyebrow-tags"><span>SEC Form 13F-HR</span><span>institutional holdings</span><span>free</span></div>
   <h1>${esc(name)} <em>13F holdings</em></h1>
   <p class="lede">${data ? `The latest 13F-HR filed by ${esc(name)} covers the period ending ${esc(data.reportDate || "")}${data.holdingsAvailable ? `, with ${esc(fmtInt(data.totalHoldings))} reported positions.` : "."} The largest positions by reported value are below, as filed.` : `The latest SEC 13F-HR portfolio filed by ${esc(name)}, as filed.`}</p>
-  <div class="pg-meta">${data ? `CIK ${esc(data.cik)} · accession ${esc(data.accession || "")} · <a href="${esc(data.filingUrl)}" rel="nofollow">view the filings on SEC EDGAR</a> · ` : ""}source: SEC EDGAR, Form 13F-HR information table</div>
+  ${metaTags([data && `CIK ${esc(data.cik)}`, data && `accession ${esc(data.accession || "")}`, data && `<a href="${esc(data.filingUrl)}" rel="nofollow">view the filings on SEC EDGAR</a>`, "source: SEC EDGAR, 13F-HR table"])}
 </section>
 <section>
   ${facts}
@@ -602,7 +611,7 @@ export function fundPage({ slug, data, baseUrl, degraded = false }) {
     { href: "/reports/fund", label: "All 13F fund pages" },
     { href: "/reports/insider", label: "Insider filings by ticker" },
     { href: "/reports", label: "All reports" },
-    { href: "/monitors", label: `Watch ${name} for new 13F filings` },
+    { href: "/monitors", label: "Watch this fund for new 13F filings" },
   ])}
   <p class="pg-note">${esc(DISCLAIMER)}</p>
 </section>`;
@@ -632,10 +641,10 @@ function dossierFinancials(data) {
 function dossierActivity(data) {
   const a = data?.activity;
   if (!a?.recent?.length) return "";
-  const forms = (a.byForm || []).filter(({ form }) => !isOfferingNoise(form)).slice(0, 8).map(({ form, n }) => `<div class="pg-fact"><div class="l">${esc(form)}</div><div class="v">${esc(String(n))}</div></div>`).join("");
+  const forms = (a.byForm || []).filter(({ form }) => !isOfferingNoise(form)).slice(0, 8).map(({ form, n }) => `<div class="pg-fact"><div class="l">${esc(formName(form))}</div><div class="v">${esc(String(n))}</div></div>`).join("");
   const items = (a.eightKItems || []).length ? `<p class="pg-meta">8-K items in the last 12 months: ${(a.eightKItems || []).map(({ item, label, n }) => `${esc(label)} (Item ${esc(item)}, ${esc(String(n))})`).join(" · ")}.</p>` : "";
   return `<h2>Filing activity</h2>${a.total ? `<p class="pg-meta">${esc(a.total.toLocaleString("en-US"))} filings since ${esc(a.since)}${a.offeringNoise ? `, ${esc(a.offeringNoise.toLocaleString("en-US"))} of them prospectus supplements and free writing prospectuses (not listed below)` : ""}. By form:</p><div class="pg-facts">${forms}</div>` : ""}${items}
-<div class="pg-table-wrap"><table class="pg-table"><thead><tr><th>Filed</th><th>Form</th><th>Document</th><th>Period</th></tr></thead><tbody>${a.recent.map((r) => `<tr><td class="num">${esc(r.filingDate || "")}</td><td class="num">${esc(r.form)}</td><td>${r.url ? `<a href="${esc(r.url)}" rel="nofollow">${esc(r.description || formLabel(r.form, 1))}</a>` : esc(r.description || formLabel(r.form, 1))}</td><td class="num">${esc(r.reportDate || "")}</td></tr>`).join("")}</tbody></table></div>`;
+<div class="pg-table-wrap"><table class="pg-table"><thead><tr><th>Filed</th><th>Form</th><th>Document</th><th>Period</th></tr></thead><tbody>${a.recent.map((r) => `<tr><td class="num">${esc(r.filingDate || "")}</td><td class="num">${esc(r.form)}</td><td>${r.url ? `<a href="${esc(r.url)}" rel="nofollow">${esc(documentLabel(r.form, r.description))}</a>` : esc(documentLabel(r.form, r.description))}</td><td class="num">${esc(r.reportDate || "")}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 export function dossierPage({ ticker, data, baseUrl, degraded = false }) {
@@ -664,10 +673,10 @@ export function dossierPage({ ticker, data, baseUrl, degraded = false }) {
     : `<div class="pg-empty">${degraded || !data ? "SEC EDGAR could not be read for this company just now. Try again shortly, or buy the full dossier, which reads the filings at request time." : "No 10-K, 10-Q or 8-K appears in this company's recent EDGAR index."}</div>`;
   const body = `
 <section class="hero">
-  <div class="eyebrow">SEC EDGAR · company profile · free</div>
+  <div class="eyebrow eyebrow-tags"><span>SEC EDGAR</span><span>company profile</span><span>free</span></div>
   <h1>${esc(name)} <em>due diligence</em></h1>
   <p class="lede">${data ? `Who ${esc(name)} (${esc(ticker)}) is on the public record: identity, annual results, what it filed in the last year and why, straight from SEC EDGAR.` : `Who ${esc(ticker)} is on the public record: identity, industry classification and the most recent periodic filings from SEC EDGAR.`}</p>
-  <div class="pg-meta">${data ? `${esc(String(data.filingsIndexed))} filings in EDGAR's recent index${data.form4Count ? `, ${esc(String(data.form4Count))} of them Form 4 insider filings` : ""} · <a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=${esc(data.cik)}&amp;type=10-K&amp;dateb=&amp;owner=include&amp;count=10" rel="nofollow">view the filings on SEC EDGAR</a> · ` : ""}source: SEC EDGAR submissions index and XBRL financial data</div>
+  ${metaTags([data && `${esc(String(data.filingsIndexed))} filings in EDGAR's recent index`, data?.form4Count && `${esc(String(data.form4Count))} of them Form 4 filings`, data && `<a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=${esc(data.cik)}&amp;type=10-K&amp;dateb=&amp;owner=include&amp;count=10" rel="nofollow">view the filings on SEC EDGAR</a>`, "source: SEC EDGAR, XBRL data"])}
 </section>
 <section>
   ${dossierAtAGlance(data)}
@@ -675,7 +684,7 @@ export function dossierPage({ ticker, data, baseUrl, degraded = false }) {
   ${dossierFinancials(data)}
   ${table}
   ${dossierActivity(data)}
-  ${buySection({ family, alertKind: "filing", input: ticker, headline: `The full due-diligence dossier on ${name}`, blurb: `The free view above is identity and filing dates. The paid dossier reads the filings: business and segments, financial trend, insider and institutional activity, litigation and risk-factor themes, recent news, and the red flags, every claim cited and delivered with a data appendix.` })}
+  ${buySection({ family, alertKind: "filing", input: ticker, headline: `The full due-diligence dossier on ${name}`, blurb: `The free view above is the filing record: identity, annual results and the last year of filings. The paid dossier reads the filings: business and segments, financial trend, insider and institutional activity, litigation and risk-factor themes, recent news, and the red flags, every claim cited and delivered with a data appendix.` })}
   ${crossLinks([
     { href: `/reports/insider/${ticker}`, label: `${ticker} insider filings` },
     { href: "/reports/dossier", label: "All company profiles" },
@@ -702,6 +711,8 @@ const HUBS = {
     h1: "Insider buying and selling", em: "by ticker",
     lede: "Every page below shows the latest SEC Form 4 filings against that company with the transactions parsed: insider name, role, transaction code, shares and price. Free, straight from EDGAR.",
     eyebrow: "SEC Form 4 · free filing pages",
+    buy: () => `The paid report reads the newest ${INSIDER_TIERS["insider-report"].maxFilings} Form 4 filings in your window, separates open-market trades from awards and tax withholding, cites each claim, and gives you the transactions as a table. Card or USDC, no account.`,
+    offList: "Pages for tickers outside this list resolve too if the ticker exists on EDGAR.",
   },
   fund: {
     title: "13F holdings by fund: what institutional managers own",
@@ -709,6 +720,8 @@ const HUBS = {
     h1: "13F holdings", em: "by fund",
     lede: "Every page below shows a manager's most recent SEC Form 13F-HR: the period it covers, how many positions it reports, and the largest holdings by reported value. Free, straight from EDGAR.",
     eyebrow: "SEC Form 13F-HR · free filing pages",
+    buy: () => "The paid report compares the manager's two most recent 13F filings: what it bought, added, trimmed and exited, every claim cited, with the holdings as a table. Card or USDC, no account.",
+    offList: "",
   },
   dossier: {
     title: "Company profiles by ticker: SEC EDGAR filing identity",
@@ -716,6 +729,8 @@ const HUBS = {
     h1: "Company profiles", em: "by ticker",
     lede: "Every page below shows a company on SEC EDGAR: its last three years of revenue, net income and assets from its 10-K data, what it filed in the last twelve months and why, its industry and where it lists. Free.",
     eyebrow: "SEC EDGAR · free company profiles",
+    buy: () => "The paid dossier reads the company's filings and cites every claim: business, financial trend, insider and institutional activity, risk themes and red flags, with a data appendix. Card or USDC, no account.",
+    offList: "Pages for tickers outside this list resolve too if the ticker exists on EDGAR.",
   },
 };
 
@@ -729,7 +744,7 @@ export function hubPage({ kind, baseUrl }) {
   const others = Object.keys(HUBS).filter((k) => k !== kind).map((k) => ({ href: `/reports/${k}`, label: HUBS[k].h1 }));
   const body = `
 <section class="hero">
-  <div class="eyebrow">${esc(h.eyebrow)}</div>
+  <div class="eyebrow eyebrow-tags">${h.eyebrow.split(" · ").map((t) => `<span>${esc(t)}</span>`).join("")}</div>
   <h1>${esc(h.h1)} <em>${esc(h.em)}</em></h1>
   <p class="lede">${esc(h.lede)}</p>
 </section>
@@ -737,12 +752,12 @@ export function hubPage({ kind, baseUrl }) {
   <div class="pg-grid">${items.map((i) => `<a href="${esc(i.href)}">${esc(i.label)}<span>${esc(i.sub)}</span></a>`).join("")}</div>
   <div class="pg-buy" style="margin-top:30px;">
     <h2>Want the whole thing, not the teaser?</h2>
-    <p>The paid report reads every filing in your window, explains what it means, cites each claim, and gives you the data as a table. Card or USDC, no account.</p>
+    <p>${esc(h.buy())}</p>
     <a class="btn btn-primary" href="/reports">Buy a report, $${esc(cardUsd(family.product))} →</a>
-    <div class="pg-agent">agents: ${esc(family.route)} with ${esc(family.agentBody(kind === "fund" ? "Berkshire Hathaway" : "AAPL"))} over x402 or MPP, ${esc(family.agentPrice())}</div>
+    <div class="pg-agent"><span>agents: ${esc(family.route)}</span> <span>with ${esc(family.agentBody(kind === "fund" ? "Berkshire Hathaway" : "AAPL"))}</span> <span>over x402 or MPP, ${esc(family.agentPrice())}</span></div>
   </div>
   ${crossLinks([...others, { href: "/reports", label: "All reports" }, { href: "/monitors", label: "Standing monitors" }])}
-  <p class="pg-note">${esc(DISCLAIMER)} Pages for companies and managers outside this list resolve too if the ticker or manager exists on EDGAR.</p>
+  <p class="pg-note">${esc(DISCLAIMER)}${h.offList ? ` ${esc(h.offList)}` : ""}</p>
 </section>`;
   return shell({
     title: h.title, description: h.description, canonical, baseUrl, body,

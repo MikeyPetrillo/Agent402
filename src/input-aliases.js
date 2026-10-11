@@ -93,7 +93,10 @@ export const PARAM_ALIASES = {
   payload: ["body", "data", "claims", "message"],
   secret: ["key", "password", "passphrase"],
   data: ["input", "body", "payload", "content"],
-  image: ["imageUrl", "image_url", "src", "file", "photo"],
+  // Every tool that requires `image` reads base64 bytes (or a data: URL), so
+  // only names a caller uses for the bytes themselves are synonyms: a URL-shaped
+  // name (imageUrl, src) would hand a link to a field that cannot fetch one.
+  image: ["file", "photo"],
   country: ["countryCode", "country_code", "cc", "iso", "nation"],
   principal: ["amount", "p", "balance", "loan"],
   years: ["term", "duration", "period", "nper"],

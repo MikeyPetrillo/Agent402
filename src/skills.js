@@ -12,9 +12,9 @@
 // descriptions, and routes stay accurate even as tools evolve. If a pack
 // references a tool that's been removed, the page surfaces a "missing" placeholder
 // rather than crashing — useful for catching dead references in the test suite.
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc } from "./ledger-chrome.js";
 import { RAILS_SHORT } from "./rails.js";
+import { isComputePayable } from "./pow.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 
 import { ORG_SAME_AS } from "./repo-link.js";
@@ -196,7 +196,7 @@ export const SKILL_PACKS = [
     useCase:
       "Evaluating a DeFi protocol or its token before allocating - you want the token price, its scale in the broader market, the protocol's total value locked (the real usage signal), and the latest news, without hopping between explorers and aggregators.",
     promptArgs: [
-      { name: "protocol", description: "DeFiLlama protocol slug (e.g. aave, uniswap)", required: true, substitute: "aave" },
+      { name: "protocol", description: "DeFi protocol slug (e.g. aave, uniswap)", required: true, substitute: "aave" },
     ],
     toolSlugs: ["crypto-price", "crypto-market", "defi-tvl", "search"],
     workflow: [
@@ -216,7 +216,7 @@ export const SKILL_PACKS = [
     useCase:
       "Before a pentest, an acquisition diligence call, or a quarterly review - you want a fast read on what an attacker sees from the outside.",
     promptArgs: [
-      { name: "domain", description: "Target domain to audit (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
+      { name: "domain", description: "Target domain to audit (e.g. example.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "cert-transparency",
@@ -246,7 +246,7 @@ export const SKILL_PACKS = [
     useCase:
       "Marketing or transactional email is landing in spam, or you're rolling out a new sending domain and want to verify the auth posture before the first campaign.",
     promptArgs: [
-      { name: "domain", description: "Sending domain to diagnose (e.g. stripe.com)", required: true, substitute: "example.com" },
+      { name: "domain", description: "Sending domain to diagnose (e.g. example.com)", required: true, substitute: "example.com" },
     ],
     toolSlugs: [
       "spf-check",
@@ -375,9 +375,9 @@ export const SKILL_PACKS = [
     slug: "macro-dashboard",
     title: "Macro dashboard refresh",
     tagline:
-      "The full macro + crypto dashboard in one call: 5 FRED series, 5 Treasury reads, yield-curve spread, crypto market/trending/global, and live gas - the 14-tool basket recurring buyers refresh every cycle, bundled below its a la carte price.",
+      "The full macro + crypto dashboard in one call: 5 FRED series, 5 Treasury reads, yield-curve spread, crypto market/trending/global, and live gas - a 14-tool macro + crypto basket, bundled below its a la carte price.",
     useCase:
-      "An agent keeping a live macro dashboard warm needs the same basket of reads every refresh cycle. Buying the 14 tools individually costs $0.143 per cycle; this bundle is $0.10 - one call, one payment, every series in one JSON envelope. Built from observed demand: a production agent repeatedly bought exactly this basket a la carte.",
+      "An agent keeping a live macro dashboard warm needs the same basket of reads every refresh cycle. Buying the 14 tools individually costs $0.143 per cycle; this bundle is $0.10 - one call, one payment, every series in one JSON envelope.",
     promptArgs: [],
     toolSlugs: [
       "fred-release-calendar",
@@ -412,7 +412,7 @@ export const SKILL_PACKS = [
     useCase:
       "Investigating a DNS-related outage, debugging propagation after a record change, or onboarding a new domain and checking the operator chain.",
     promptArgs: [
-      { name: "domain", description: "Domain to check (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
+      { name: "domain", description: "Domain to check (e.g. example.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "dns-lookup",
@@ -425,7 +425,7 @@ export const SKILL_PACKS = [
     workflow: [
       "Resolve A/AAAA/MX/TXT/NS/CAA records on the apex with dns-lookup to baseline what the authoritative answer should be.",
       "Run dns-propagation across Cloudflare/Google/Quad9/OpenDNS in parallel - divergent answers mean a stale cache somewhere or a botched TTL during a migration.",
-      "Look up the ASN and prefix that the apex resolves into with asn-info (Team Cymru DNS-based whois - no auth needed). Useful for spotting an unexpected hosting move.",
+      "Look up the ASN and prefix that the apex resolves into with asn-info (a public DNS-based IP-to-ASN lookup - no auth needed). Useful for spotting an unexpected hosting move.",
       "Pull whois for ownership, expiry, and registrar - catches the 'we forgot to renew' class of outage.",
       "Run http-check for status code, response time, and final URL after redirects - the fastest 'is it actually up' read.",
       "Spot-check robots.txt with robots-check to make sure a redeploy didn't accidentally Disallow: / the whole site.",
@@ -441,7 +441,7 @@ export const SKILL_PACKS = [
     useCase:
       "Building a one-pager on a token, prepping for a positioning decision, or monitoring a new listing - you want price, supply, sentiment, and headlines without leaving the agent loop.",
     promptArgs: [
-      { name: "coin", description: "Coin ticker or CoinGecko id (e.g. BTC, ETH, bitcoin)", required: true, substitute: "BTC" },
+      { name: "coin", description: "Coin ticker or coin id (e.g. BTC, ETH, bitcoin)", required: true, substitute: "BTC" },
     ],
     toolSlugs: [
       "crypto-price",
@@ -456,13 +456,13 @@ export const SKILL_PACKS = [
       "Get the live quote from crypto-price - last price, 24h change, 24h volume, and market cap.",
       "Pull the market overview from crypto-market - circulating supply, max supply, ATH, ATH date, and 7d/30d performance for the deep dive.",
       "Pull OHLC history from crypto-history to compute return, volatility, and max drawdown over a chosen window.",
-      "Check crypto-trending to see whether the coin is on CoinGecko's most-searched list - a fast read on retail attention.",
+      "Check crypto-trending to see whether the coin is on the market-data index's most-searched list - a fast read on retail attention.",
       "Pull crypto-global for total market cap, BTC dominance, and 24h volume - contextualizes the coin's move against the broader market.",
       "Pull the last week of search-news headlines for the coin - catalysts, partnerships, exploit reports.",
       "For the top 2–3 headlines, use extract to convert the article to clean markdown for the brief.",
     ],
     claudePrompt:
-      "Build a one-page research brief on BTC. Use Agent402 to pull: (1) live quote (price, 24h change, volume), (2) market overview (supply, ATH, 30d performance), (3) 90 days of OHLC history with return and max drawdown, (4) whether BTC is in CoinGecko's trending list, (5) Bitcoin dominance and total market cap context from crypto-global, (6) the last 7 days of news headlines via search-news, (7) clean markdown of the top 2–3 articles via extract. Output a clean markdown brief.",
+      "Build a one-page research brief on BTC. Use Agent402 to pull: (1) live quote (price, 24h change, volume), (2) market overview (supply, ATH, 30d performance), (3) 90 days of OHLC history with return and max drawdown, (4) whether BTC is in the trending list, (5) Bitcoin dominance and total market cap context from crypto-global, (6) the last 7 days of news headlines via search-news, (7) clean markdown of the top 2–3 articles via extract. Output a clean markdown brief.",
   },
   {
     slug: "content-extraction",
@@ -906,7 +906,7 @@ export const SKILL_PACKS = [
       "earthquakes",
     ],
     workflow: [
-      "Pin the location with geocode. Free-form input ('1600 Penn Ave', 'Joshua Tree', 'Eiffel Tower') resolves to lat/lon + display name + bounding box via OpenStreetMap/Nominatim. The bounding box matters: a query like 'New York' resolves to a city-sized box, whereas '1600 Penn Ave' resolves to a building-sized box. The box size tells you immediately whether the next steps will return city-wide or building-specific results.",
+      "Pin the location with geocode. Free-form input ('1600 Penn Ave', 'Joshua Tree', 'Eiffel Tower') resolves to lat/lon + display name + bounding box from open map data. The bounding box matters: a query like 'New York' resolves to a city-sized box, whereas '1600 Penn Ave' resolves to a building-sized box. The box size tells you immediately whether the next steps will return city-wide or building-specific results.",
       "Round-trip with reverse-geocode using the lat/lon from step 1. This is the verification step - if you got the wrong place (an obscure 'Springfield' in a different state, a homonym match in another country) the canonical postal address surfaced here won't match what the user expected, and the agent should stop and ask rather than confidently brief on the wrong location. It also returns the structured ISO country code, which gates whether the US-only steps (4 and 5) will work at all.",
       "Pull nearby POIs with place-search around the lat/lon. Useful pre-arrival categories: gas stations, coffee, ATM, hospital, hardware store, supplies. Each result includes distance + bearing, so the agent can render directional context ('coffee 200m N'). For pure tourism arrivals this surfaces sights; for emergency contexts this surfaces critical infrastructure (hospital, police, fire). For sales/customer-visit contexts, surface restaurants near the customer site for the post-meeting lunch suggestion.",
       "Layer current conditions with weather-forecast. US-only (api.weather.gov / NWS) - takes the lat/lon and returns a 7-day forecast in 12-hour blocks. If reverse-geocode in step 2 returned a non-US country code, skip this step and surface in the writeup. Pre-arrival you want the next 24-48h: temp range, precip probability, wind, hazards (ice/snow/heat). For multi-day deployments include the full 7-day window so the team can pack accordingly.",
@@ -982,7 +982,7 @@ export const SKILL_PACKS = [
     tagline:
       "Plan a multi-stop journey deterministically: geocode each stop, sum the pairwise haversine distances, estimate arrival times by adding driving hours per leg, count business days from today to each arrival, and pull the weather forecast at every US stop. Six tools - three pure-CPU (math + time), three egress (geocoding + weather) - covering the deterministic skeleton of every road-trip / sales-tour / delivery-route planning problem.",
     useCase:
-      "Trip planning bounces between three or four single-purpose apps: a maps tool for distance, a calendar for business-day windows, a weather site per stop, a spreadsheet to add it all up. Each handoff is a place to copy a wrong number. This pack does the whole skeleton - locate, measure, time-shift, weather-check - as a single round-trip of tool calls so the final itinerary is reproducible and the agent can re-run a single step (e.g. shift the start date by a day) without re-doing the rest. Weather is US-only via NWS; geocoding is global via OSM Nominatim.",
+      "Trip planning bounces between three or four single-purpose apps: a maps tool for distance, a calendar for business-day windows, a weather site per stop, a spreadsheet to add it all up. Each handoff is a place to copy a wrong number. This pack does the whole skeleton - locate, measure, time-shift, weather-check - as a single round-trip of tool calls so the final itinerary is reproducible and the agent can re-run a single step (e.g. shift the start date by a day) without re-doing the rest. Weather is US-only via NWS; geocoding is global from open map data.",
     toolSlugs: [
       "geocode",
       "geo-distance",
@@ -992,7 +992,7 @@ export const SKILL_PACKS = [
       "weather-forecast",
     ],
     workflow: [
-      "Resolve every stop to coordinates with geocode. One call per stop name: 'New York, NY' → {lat: 40.7128, lng: -74.006}. Use the OSM Nominatim backend (free, global). Watch for ambiguous names ('Portland' returns Maine before Oregon by default unless you pass a countryCodes filter or a more specific query) - surface the resolved display_name back to the user so they can confirm. This is one of two egress tools in the pack - it counts toward the wallet/paid budget; the other four pure-CPU steps run free via proof-of-work.",
+      "Resolve every stop to coordinates with geocode. One call per stop name: 'New York, NY' → {lat: 40.7128, lng: -74.006}. The geocoder is global and keyless. Watch for ambiguous names ('Portland' returns Maine before Oregon by default unless you pass a countryCodes filter or a more specific query) - surface the resolved display_name back to the user so they can confirm. This is one of two egress tools in the pack - it counts toward the wallet/paid budget; the other four pure-CPU steps run free via proof-of-work.",
       "Sum the pairwise great-circle distances with geo-distance. One call per consecutive pair of stops: (stop[0], stop[1]) → km/miles, (stop[1], stop[2]) → km/miles, etc. The haversine formula gives the as-the-crow-flies distance on a sphere; real driving distance is typically 1.2–1.4x this (winding roads, no straight-line bridges). The writeup should multiply by 1.3 as a reasonable driving-distance estimate and label it as such - don't pretend haversine is road distance. Total trip distance = sum of legs × ~1.3.",
       "Estimate arrival timestamps with add-time. Start from the user-supplied start ISO; for each leg, add (legDistanceKm / averageSpeedKph) + a buffer (lunch break, fuel, traffic). Conventional defaults: 80 km/h average highway speed, 30 min buffer per stop. This gives you a per-stop arrival ISO. The compounding here is important: a 30-min buffer per stop on a 6-stop trip is 3 hours of cumulative delay that a naive 'distance / speed' calc would miss. add-time also handles cross-day rollover so multi-day trips don't silently wrap timestamps.",
       "Count business days to each arrival with business-days. From today to the arrival date for each stop. Two purposes: (a) staffing - if a stop arrives on weekend day, the agent flags it for the user ('your Tuesday Chicago stop falls on Memorial Day Monday'); (b) deadline check - if the arrival is fewer business days away than tasks-to-complete-before-arrival, the agent surfaces the conflict. business-days respects weekends by default; passing the `holidays` array adds the US federal calendar.",
@@ -1100,9 +1100,9 @@ export const SKILL_PACKS = [
     slug: "search-and-cite",
     title: "Answer-a-question with sources",
     tagline:
-      "The 'research a question, return an answer with citations' workflow. Brave answer for the AI-synthesized take with citations, Brave web for the canonical SERP, Brave news for time-sensitive context, then a deterministic web-fetch + extract pass on the top citations to verify the answer hasn't hallucinated. Five tools, one cited paragraph, every claim traced back to a fetched URL.",
+      "The 'research a question, return an answer with citations' workflow. answer for the AI-synthesized take with citations, search for the canonical SERP, search-news for time-sensitive context, then a deterministic web-fetch + extract pass on the top citations to verify the answer hasn't hallucinated. Five tools, one cited paragraph, every claim traced back to a fetched URL.",
     useCase:
-      "Most agent research workflows have the same failure mode: an LLM answer with confident-sounding citations that don't actually contain the claim. This pack solves that by separating the *answer-generating* surface (Brave's answer endpoint) from the *evidence-fetching* surface (web-fetch + extract on the citations). The agent's final response cites only claims that survive both the search-answer hit AND a deterministic re-fetch of the cited page. Pairs with macro-context for time-sensitive 'is this still current' questions.",
+      "Most agent research workflows have the same failure mode: an LLM answer with confident-sounding citations that don't actually contain the claim. This pack solves that by separating the *answer-generating* surface (the answer tool) from the *evidence-fetching* surface (web-fetch + extract on the citations). The agent's final response cites only claims that survive both the search-answer hit AND a deterministic re-fetch of the cited page. Pairs with macro-context for time-sensitive 'is this still current' questions.",
     toolSlugs: [
       "answer",
       "search",
@@ -1111,14 +1111,14 @@ export const SKILL_PACKS = [
       "extract-entities",
     ],
     workflow: [
-      "Get the AI-synthesized answer with answer. Brave's answer endpoint returns a short prose paragraph synthesized from the top SERP results, plus a citations array (URL + title + snippet per source). This is the *starter* answer - never the final answer, because Brave's synthesis can still hallucinate connections between citations or misquote them. Treat the answer text as a hypothesis and the citations as the evidence to verify. Keep the maxTokens cap modest (≤ 250) so the synthesis stays close to the source material rather than wandering.",
-      "Pull the canonical SERP with search. Brave web search, top 10 organic results. This gives you (a) the search-engine consensus on which pages are authoritative for the query (so you can sanity-check Brave's answer didn't pick fringe sources), and (b) backup sources if the answer's citations turn out to be wrong or paywalled. Compare the SERP's top URLs against the answer's citation URLs - if they barely overlap, the answer is probably weighted toward an unusual angle and deserves extra skepticism.",
-      "Pull time-sensitive context with search-news. Brave news search on the same query. For evergreen questions ('what is a closure in JavaScript') this returns mostly noise and can be skipped; for time-sensitive questions ('is the IPO market open', 'did the Fed raise rates last week') the news pass is essential - the regular web search is heavily SEO-optimized and stale-friendly, while news is recency-biased. Always check the news result dates: if the most recent news result on a time-sensitive query is more than 30 days old, the answer might already be wrong even if it was correct when Brave indexed it.",
+      "Get the AI-synthesized answer with answer. The answer tool returns a short prose paragraph synthesized from the top SERP results, plus a citations array (URL + title + snippet per source). This is the *starter* answer - never the final answer, because the synthesis can still hallucinate connections between citations or misquote them. Treat the answer text as a hypothesis and the citations as the evidence to verify. Keep the maxTokens cap modest (≤ 250) so the synthesis stays close to the source material rather than wandering.",
+      "Pull the canonical SERP with search. Web search, top 10 organic results. This gives you (a) the search-engine consensus on which pages are authoritative for the query (so you can sanity-check that the answer didn't pick fringe sources), and (b) backup sources if the answer's citations turn out to be wrong or paywalled. Compare the SERP's top URLs against the answer's citation URLs - if they barely overlap, the answer is probably weighted toward an unusual angle and deserves extra skepticism.",
+      "Pull time-sensitive context with search-news. News search on the same query. For evergreen questions ('what is a closure in JavaScript') this returns mostly noise and can be skipped; for time-sensitive questions ('is the IPO market open', 'did the Fed raise rates last week') the news pass is essential - the regular web search is heavily SEO-optimized and stale-friendly, while news is recency-biased. Always check the news result dates: if the most recent news result on a time-sensitive query is more than 30 days old, the answer might already be wrong even if it was correct when the page was indexed.",
       "Re-fetch and clean the top 2-3 citation URLs with extract. This is the verification step that turns a citation from a URL into actual readable bytes - extract runs Readability over the page and returns clean markdown of the article body, stripping nav, footer, ads, comments. One call per citation. If extract returns empty (page is a SPA, paywalled, or anti-bot-blocked), that's signal: a citation that can't be re-extracted is effectively dead and any claim resting on it should be downgraded or dropped. Cap at 3 citations to bound budget - the marginal value of citation #4 is low.",
-      "Cross-reference named entities with extract-entities on each cleaned article body. Returns people, organizations, places, dates mentioned in the extracted text. The agent now grep-checks: every named entity in Brave's answer (step 1) should appear in at least one extracted article's entity list. If the answer claims 'according to Powell at the FOMC meeting' but neither 'Powell' nor 'FOMC' appears in any cited article's entities, the answer is hallucinating attribution. Final output: a paragraph where every sentence has at least one URL footnote pointing at content that was re-fetched, re-read, and entity-checked against the original claim.",
+      "Cross-reference named entities with extract-entities on each cleaned article body. Returns people, organizations, places, dates mentioned in the extracted text. The agent now grep-checks: every named entity in the answer (step 1) should appear in at least one extracted article's entity list. If the answer claims 'according to Powell at the FOMC meeting' but neither 'Powell' nor 'FOMC' appears in any cited article's entities, the answer is hallucinating attribution. Final output: a paragraph where every sentence has at least one URL footnote pointing at content that was re-fetched, re-read, and entity-checked against the original claim.",
     ],
     claudePrompt:
-      "Answer this research question with sources, using Agent402.\n\nQuestion: 'What is the Sahm Rule and has it triggered recently?'\nMax answer length: 250 tokens.\nAs-of: 2026-06-22.\n\n(1) answer with q='What is the Sahm Rule and has it triggered recently?', maxTokens=250. Return {answer: '<paragraph>', citations: [{url, title, snippet}, ...]}. Treat this answer as a *hypothesis*. (2) search with q='Sahm Rule recession indicator current', topN=10. Return {results: [{url, title, snippet}, ...]}. Compute overlap with step 1's citation URLs - if overlap < 30%, flag 'answer drew from non-canonical sources'. (3) search-news with q='Sahm Rule triggered', topN=5. Return {results: [{url, title, snippet, age}, ...]}. Critical for the 'triggered recently' half of the question: pick the freshest news result. If the freshest news result is > 30 days old, caveat the answer with 'most recent news coverage is from [date]'. (4) extract on the top 3 citation URLs from step 1. Return {extracted: [{url, ok, markdown|err}, ...]}. Drop any citation where ok=false or markdown is empty. (5) extract-entities on each successfully-extracted markdown body. Return {entities: [{url, people: [], orgs: [], places: [], dates: []}, ...]}. For each named entity in step-1 answer text, verify it appears in at least one citation's entity list. Drop any claim whose key entity isn't supported by any citation. Final return: {question, answer: '<rewritten paragraph where every sentence has a [url] footnote pointing to a citation whose markdown was re-extracted AND whose entities support the claim>', citations: [{url, title, verified: true|false}, ...], droppedClaims: [...], freshness: {newsLatestDate, isStale: true|false}, oneLineSummary: 'Sahm Rule is the 0.5pp 3M-vs-12M-low UE trigger; not currently triggered (0.33 as of May 26); cited 2 verifiable sources (FRED, Bloomberg), dropped 1 unsupported claim.'}. Five tools: answer + search + search-news are egress (Brave API); extract is egress (raw web + Readability); extract-entities is pure-CPU. Budget ~$0.08 paid.",
+      "Answer this research question with sources, using Agent402.\n\nQuestion: 'What is the Sahm Rule and has it triggered recently?'\nMax answer length: 250 tokens.\nAs-of: 2026-06-22.\n\n(1) answer with q='What is the Sahm Rule and has it triggered recently?', maxTokens=250. Return {answer: '<paragraph>', citations: [{url, title, snippet}, ...]}. Treat this answer as a *hypothesis*. (2) search with q='Sahm Rule recession indicator current', topN=10. Return {results: [{url, title, snippet}, ...]}. Compute overlap with step 1's citation URLs - if overlap < 30%, flag 'answer drew from non-canonical sources'. (3) search-news with q='Sahm Rule triggered', topN=5. Return {results: [{url, title, snippet, age}, ...]}. Critical for the 'triggered recently' half of the question: pick the freshest news result. If the freshest news result is > 30 days old, caveat the answer with 'most recent news coverage is from [date]'. (4) extract on the top 3 citation URLs from step 1. Return {extracted: [{url, ok, markdown|err}, ...]}. Drop any citation where ok=false or markdown is empty. (5) extract-entities on each successfully-extracted markdown body. Return {entities: [{url, people: [], orgs: [], places: [], dates: []}, ...]}. For each named entity in step-1 answer text, verify it appears in at least one citation's entity list. Drop any claim whose key entity isn't supported by any citation. Final return: {question, answer: '<rewritten paragraph where every sentence has a [url] footnote pointing to a citation whose markdown was re-extracted AND whose entities support the claim>', citations: [{url, title, verified: true|false}, ...], droppedClaims: [...], freshness: {newsLatestDate, isStale: true|false}, oneLineSummary: 'Sahm Rule is the 0.5pp 3M-vs-12M-low UE trigger; not currently triggered (0.33 as of May 26); cited 2 verifiable sources (FRED, Bloomberg), dropped 1 unsupported claim.'}. Five tools: answer + search + search-news are egress (web search API); extract is egress (raw web + Readability); extract-entities is pure-CPU. Budget ~$0.08 paid.",
     promptArgs: [
       {
         name: "question",
@@ -1331,7 +1331,7 @@ export const SKILL_PACKS = [
       "Call weather-air-quality with the same lat and lon for the current AQI reading: PM2.5, PM10, ozone, NO2, SO2, CO, and the US AQI category (Good/Moderate/Unhealthy/etc.). AQI category 'Unhealthy for Sensitive Groups' or worse should appear as a health advisory in the final briefing. Final payload: { location: {lat, lon}, current: {temperature, feelsLike, humidity, windSpeed, windDirection, condition}, forecast: [{date, high, low, precipProbability, precipSum, maxGust, condition}], airQuality: {aqi, category, pm25, pm10, ozone}, trend: 'warming'|'cooling'|'stable', warnings: [<string flags>] }.",
     ],
     claudePrompt:
-      "Generate a weather briefing for coordinates lat=48.8566, lon=2.3522 using Agent402.\n\n(1) weather-current with lat=48.8566, lon=2.3522 - returns {temperature, feelsLike, humidity, windSpeed, windDirection, condition, conditionCode}. Initialize warnings = []. If conditionCode >= 95 (thunderstorm), push 'Thunderstorm in progress'. If windSpeed > 60, push 'High winds (>{windSpeed} km/h)'.\n\n(2) weather-daily with lat=48.8566, lon=2.3522, days=7 - returns {days: [{date, high, low, precipProbability, precipSum, maxGust, condition}]}. For each day: if precipProbability > 70, push 'Rain likely on {date} ({precipProbability}%)'. If maxGust > 80, push 'Strong gusts on {date} ({maxGust} km/h)'. Compute trend: compare days[0].high vs days[6].high - diff > 3 = 'warming', diff < -3 = 'cooling', else 'stable'.\n\n(3) weather-air-quality with lat=48.8566, lon=2.3522 - returns {aqi, category, pm25, pm10, ozone, no2, so2, co}. If category is not 'Good' and not 'Moderate', push 'Air quality advisory: {category}'.\n\nFinal return: {location: {lat: 48.8566, lon: 2.3522}, current: <step 1>, forecast: <step 2 days>, airQuality: {aqi, category, pm25, pm10, ozone}, trend: <computed>, warnings}. Budget ~$0.005 paid; all 3 tools are wallet-only (external API calls to Open-Meteo).",
+      "Generate a weather briefing for coordinates lat=48.8566, lon=2.3522 using Agent402.\n\n(1) weather-current with lat=48.8566, lon=2.3522 - returns {temperature, feelsLike, humidity, windSpeed, windDirection, condition, conditionCode}. Initialize warnings = []. If conditionCode >= 95 (thunderstorm), push 'Thunderstorm in progress'. If windSpeed > 60, push 'High winds (>{windSpeed} km/h)'.\n\n(2) weather-daily with lat=48.8566, lon=2.3522, days=7 - returns {days: [{date, high, low, precipProbability, precipSum, maxGust, condition}]}. For each day: if precipProbability > 70, push 'Rain likely on {date} ({precipProbability}%)'. If maxGust > 80, push 'Strong gusts on {date} ({maxGust} km/h)'. Compute trend: compare days[0].high vs days[6].high - diff > 3 = 'warming', diff < -3 = 'cooling', else 'stable'.\n\n(3) weather-air-quality with lat=48.8566, lon=2.3522 - returns {aqi, category, pm25, pm10, ozone, no2, so2, co}. If category is not 'Good' and not 'Moderate', push 'Air quality advisory: {category}'.\n\nFinal return: {location: {lat: 48.8566, lon: 2.3522}, current: <step 1>, forecast: <step 2 days>, airQuality: {aqi, category, pm25, pm10, ozone}, trend: <computed>, warnings}. Budget ~$0.005 paid; all 3 tools are wallet-only (external weather API calls).",
     promptArgs: [
       {
         name: "lat",
@@ -1367,7 +1367,7 @@ export const SKILL_PACKS = [
       "Call stock-quote with symbol=<ticker> to get the equity's latest close: price, previousClose, changeAbs, changePct, dayHigh, dayLow and venueVolume. This is end-of-day, not an intraday print, and venueVolume counts three venues rather than the whole market - note the timestamp from step 1 so the caller knows which session it is.",
       "Call stock-history with symbol=<ticker> and days=250 to get a trailing-year price series (250 sessions is the maximum this endpoint serves). Extract the first and last data points to compute the year-over-year return: ((last - first) / first * 100). This is the equity's trailing-12-month performance.",
       "Call crypto-price with coins=<coin> and currency=usd to get the live crypto price: price, market_cap, 24h_volume, 24h_change. This is the 'right now' read for the crypto side.",
-      "Call crypto-history with coin=<coin>, days=365, and currency=usd to get the 1-year price series. Compute the year-over-year return the same way as step 3. Final payload: { timestamp: <step 1>, stock: { symbol, price, change, changePercent, yearReturn }, crypto: { coin, price, change24h, yearReturn }, comparison: { stockOutperforms: stockYearReturn > cryptoYearReturn, spreadPct: Math.abs(stockYearReturn - cryptoYearReturn) } }.",
+      "Call crypto-history with coin=<coin>, days=365, and currency=usd to get the 1-year price series. Compute the year-over-year return the same way as step 3, then return { timestamp: <step 1>, stock: { symbol, price, change, changePercent, yearReturn }, crypto: { coin, price, change24h, yearReturn }, comparison: { stockOutperforms: stockYearReturn > cryptoYearReturn, spreadPct: Math.abs(stockYearReturn - cryptoYearReturn) } } as the final payload.",
     ],
     claudePrompt:
       "Build a cross-asset price comparison for ticker=AAPL vs coin=bitcoin using Agent402.\n\n(1) date-format with datetime=new Date().toISOString() - returns {iso, date, dayOfWeek, unix}. Save as snapshot timestamp.\n\n(2) stock-quote with symbol=AAPL - returns {price, previousClose, changeAbs, changePct, dayHigh, dayLow, venueVolume}.\n\n(3) stock-history with symbol=AAPL, days=250 - returns {bars: [{day, close}]}. Compute stockYearReturn = ((bars[last].close - bars[0].close) / bars[0].close * 100).toFixed(2).\n\n(4) crypto-price with coins=bitcoin, currency='usd' - returns [{price, market_cap, change_24h}].\n\n(5) crypto-history with coin=bitcoin, days='365', currency='usd' - returns {prices: [[timestamp, price]]}. Compute cryptoYearReturn = ((prices[last][1] - prices[0][1]) / prices[0][1] * 100).toFixed(2).\n\nFinal return: {timestamp: {iso: <step 1 iso>, date: <step 1 date>, dayOfWeek: <step 1 dayOfWeek>}, stock: {symbol: 'AAPL', price: <step 2 price>, change: <step 2 change>, changePercent: <step 2 changePercent>, yearReturn: stockYearReturn}, crypto: {coin: 'bitcoin', price: <step 4 price>, change24h: <step 4 change_24h>, yearReturn: cryptoYearReturn}, comparison: {stockOutperforms: parseFloat(stockYearReturn) > parseFloat(cryptoYearReturn), spreadPct: Math.abs(parseFloat(stockYearReturn) - parseFloat(cryptoYearReturn)).toFixed(2)}}. Budget ~$0.005 paid; all 5 tools are wallet-only (external API calls).",
@@ -1380,7 +1380,7 @@ export const SKILL_PACKS = [
       },
       {
         name: "coin",
-        description: "Crypto coin ID from CoinGecko (e.g. bitcoin, ethereum, solana)",
+        description: "Crypto coin ID (e.g. bitcoin, ethereum, solana)",
         required: true,
         substitute: "bitcoin",
       },
@@ -1392,7 +1392,7 @@ export const SKILL_PACKS = [
     slug: "wallet-readiness",
     title: "Agent wallet readiness check",
     tagline:
-      "One call answers 'can this wallet pay right now?' - USDC balances on Base AND Solana, live Base gas, and a ready-to-share Coinbase Onramp funding link if it's running dry.",
+      "One call answers 'can this wallet pay right now?' - USDC balances on Base AND Solana, live Base gas, and a ready-to-share card onramp funding link if it's running dry.",
     useCase:
       "An agent (or the human operating it) is about to start a paid work session and needs to know the wallet is actually ready: does it hold USDC on the chains it pays on, what's gas doing, and - if the balance is low - where does a human top it up with a card? Checking each of those separately means three tools and a docs page; this pack returns the whole preflight in one envelope. Run it at session start, before a batch job, or on a schedule as a balance monitor.",
     toolSlugs: [
@@ -1404,7 +1404,7 @@ export const SKILL_PACKS = [
       "Call wallet-balances with {address, network: \"base\"} - returns every indexed ERC-20 + native balance. Find the USDC row (contract 0x833589fcd6edb6e08f4c7c32d4f71b54bda02913) and read its amount: this is the wallet's x402 spending power on Base.",
       "If the agent also pays on Solana, call wallet-balances again with {address: <the Solana address>, network: \"solana\"} - same envelope, SPL balances, USDC mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v. (x402 settlement is gasless via EIP-3009 / sponsored transactions, so USDC is the only balance that matters - no ETH or SOL required.)",
       "Call gas-snapshot with {network: \"base\"} for slow/standard/fast gas. The agent never pays gas on x402 buys, but gas context tells you whether any NON-x402 onchain action you're planning (a manual transfer, a contract call) is cheap right now.",
-      "If the USDC balance is below your working budget, call onramp-link with {address, network: \"base\", amount: \"<usd>\"} - it mints a single-use Coinbase Onramp URL a human can open to fund the wallet with a card or Apple Pay. Include the URL in your report; it expires unvisited, so minting it costs nothing but the call.",
+      "If the USDC balance is below your working budget, call onramp-link with {address, network: \"base\", amount: \"<usd>\"} - it mints a single-use hosted onramp URL a human can open to fund the wallet with a card or Apple Pay. Include the URL in your report; it expires unvisited, so minting it costs nothing but the call.",
       "Assemble the verdict: { ready: usdcBase >= budget, balances: { base, solana }, gas, fundingLink } - 'ready' should be computed against the session budget the caller stated, not a fixed threshold.",
     ],
     claudePrompt:
@@ -1429,7 +1429,7 @@ export const SKILL_PACKS = [
     slug: "onchain-analyst",
     title: "Onchain analyst (SQL over Base)",
     tagline:
-      "Ask Base anything in one paid call: your SQL runs against Coinbase's indexed, DECODED chain data (events with parsed parameters, transactions, blocks, user-ops) with the live schema alongside - no indexer, no RPC archaeology.",
+      "Ask Base anything in one paid call: your SQL runs against indexed, DECODED chain data (events with parsed parameters, transactions, blocks, user-ops) with the live schema alongside - no indexer, no RPC archaeology.",
     useCase:
       "You need an answer that lives on-chain - 'how many wallets touched this contract this week', 'what did this address settle today', 'top USDC recipients yesterday' - and writing an indexer or paging through explorer HTML is absurd for one question. This pack runs your read-only ClickHouse-dialect SQL against base.events / base.transactions / base.blocks and returns the schema document in the same envelope, so a follow-up query can be written without a second discovery call. This is the same data path that powers the economy-over-time section at /marketplace#economy.",
     toolSlugs: [
@@ -1559,7 +1559,7 @@ export const SKILL_PACKS = [
     useCase:
       "Evaluating a domain for acquisition, investigating a phishing site, auditing a competitor's infrastructure, or preparing a security review - one call gives you the complete external footprint.",
     promptArgs: [
-      { name: "domain", description: "Domain to investigate (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
+      { name: "domain", description: "Domain to investigate (e.g. example.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "whois",
@@ -1852,7 +1852,7 @@ export const SKILL_PACKS = [
     useCase:
       "Verifying a domain's TLS posture - cert validity, security headers, and who's authorized to issue certs.",
     promptArgs: [
-      { name: "domain", description: "Domain to audit (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
+      { name: "domain", description: "Domain to audit (e.g. example.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "tls-cert",
@@ -1876,7 +1876,7 @@ export const SKILL_PACKS = [
     useCase:
       "Diagnosing email authentication - can this domain be spoofed, and is its mail configuration complete.",
     promptArgs: [
-      { name: "domain", description: "Domain to check (e.g. stripe.com)", required: true, substitute: "stripe.com" },
+      { name: "domain", description: "Domain to check (e.g. example.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "spf-check",
@@ -1891,7 +1891,7 @@ export const SKILL_PACKS = [
       "Run the composite deliverability score for an overall grade.",
     ],
     claudePrompt:
-      "Check email security for stripe.com using Agent402's email-security skill pack. Get (1) SPF check, (2) DMARC policy, (3) DKIM probe, (4) deliverability score. Flag any missing or weak auth records.",
+      "Check email security for agent402.tools using Agent402's email-security skill pack. Get (1) SPF check, (2) DMARC policy, (3) DKIM probe, (4) deliverability score. Flag any missing or weak auth records.",
   },
 
   {
@@ -1902,7 +1902,7 @@ export const SKILL_PACKS = [
     useCase:
       "Evaluating a suspicious domain - checking registration age, hosting, web mentions, and security posture.",
     promptArgs: [
-      { name: "domain", description: "Domain to investigate (e.g. stripe.com)", required: true, substitute: "agent402.tools" },
+      { name: "domain", description: "Domain to investigate (e.g. example.com)", required: true, substitute: "agent402.tools" },
     ],
     toolSlugs: [
       "whois",
@@ -1928,7 +1928,7 @@ export const SKILL_PACKS = [
     useCase:
       "Competitive intelligence - fingerprint their infrastructure, hosting, frameworks, and page metadata.",
     promptArgs: [
-      { name: "url", description: "Competitor URL (e.g. https://stripe.com)", required: true, substitute: "https://agent402.tools" },
+      { name: "url", description: "Competitor URL (e.g. https://example.com)", required: true, substitute: "https://agent402.tools" },
     ],
     toolSlugs: [
       "tech-stack",
@@ -1954,7 +1954,7 @@ export const SKILL_PACKS = [
     useCase:
       "Comprehensive page review - content quality, metadata completeness, security headers, crawlability, and sitemap status.",
     promptArgs: [
-      { name: "url", description: "Page URL to audit (e.g. https://stripe.com)", required: true, substitute: "https://agent402.tools" },
+      { name: "url", description: "Page URL to audit (e.g. https://example.com)", required: true, substitute: "https://agent402.tools" },
     ],
     toolSlugs: [
       "extract",
@@ -2052,7 +2052,7 @@ export const SKILL_PACKS = [
     useCase:
       "An SEO agent or content reviewer needs to evaluate a page: extract the clean text and then run keyword analysis to assess topic focus and density. Chain mode ensures keywords runs on the extracted text, not raw HTML.",
     promptArgs: [
-      { name: "url", description: "URL of the page to grade", required: true, substitute: "https://agent402.tools/why" },
+      { name: "url", description: "URL of the page to grade", required: true, substitute: "https://agent402.tools/docs" },
     ],
     toolSlugs: ["extract", "keywords", "readability-score"],
     workflow: [
@@ -2061,7 +2061,7 @@ export const SKILL_PACKS = [
       "Call readability-score on the extracted text - Flesch reading ease and grade level put a number on how accessible the writing is, the other half of a content grade beyond topic focus.",
     ],
     claudePrompt:
-      "Grade the content quality of https://agent402.tools/why using Agent402's content-grade skill pack: (1) extract the readable content, (2) run keyword analysis on the extracted text, (3) score readability with readability-score. Report the top keywords, density, reading-ease/grade level, and whether the content is well-focused.",
+      "Grade the content quality of https://agent402.tools/docs using Agent402's content-grade skill pack: (1) extract the readable content, (2) run keyword analysis on the extracted text, (3) score readability with readability-score. Report the top keywords, density, reading-ease/grade level, and whether the content is well-focused.",
   },
 
 
@@ -2187,14 +2187,14 @@ export const SKILL_PACKS = [
     ],
     toolSlugs: ["contract-source", "solidity-scan", "selector-lookup", "address-label", "tx-simulate"],
     workflow: [
-      "Fetch the verified Solidity source and compiler metadata from Sourcify via contract-source - an unverified contract is itself a finding.",
+      "Fetch the verified Solidity source and compiler metadata from an open verified-contract repository via contract-source - an unverified contract is itself a finding.",
       "Run solidity-scan over the returned source for line-anchored heuristic findings: tx.origin auth, delegatecall, selfdestruct, unchecked calls, weak randomness, and more.",
       "Resolve the 4-byte selector of the calldata you plan to send with selector-lookup so you know exactly which function it hits.",
       "Check the address against the curated known-address dataset with address-label - is this the real token/router/bridge or an impostor?",
       "Dry-run the exact call with tx-simulate (eth_call + gas estimate, strictly read-only) to see whether it succeeds or reverts before anything is signed.",
     ],
     claudePrompt:
-      "Audit the contract 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 on base before interacting with it, using Agent402's contract-audit skill pack. (1) Fetch the verified source from Sourcify, (2) run the heuristic Solidity scan over it, (3) resolve the selector of the planned calldata 0x70a08231000000000000000000000000abf4fabd7c416fb67202e5f9002389fc75e2a9d0, (4) check the address against known labels, (5) simulate the call read-only. Report: verification status, scan findings by severity, what the calldata does, whether the address is a known contract, and the dry-run verdict.",
+      "Audit the contract 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 on base before interacting with it, using Agent402's contract-audit skill pack. (1) Fetch the verified source from the open verified-contract repository, (2) run the heuristic Solidity scan over it, (3) resolve the selector of the planned calldata 0x70a08231000000000000000000000000abf4fabd7c416fb67202e5f9002389fc75e2a9d0, (4) check the address against known labels, (5) simulate the call read-only. Report: verification status, scan findings by severity, what the calldata does, whether the address is a known contract, and the dry-run verdict.",
   },
   {
     slug: "tx-forensics",
@@ -2637,11 +2637,15 @@ const SKILLS_CSS = `
 @media (max-width:640px){ .sk-cardgrid { grid-template-columns:1fr; } }
 .sk-flagship { display:flex; flex-direction:column; gap:11px; padding:24px; background:var(--card); color:inherit; text-decoration:none; }
 .sk-flagship:hover .sk-flagship-slug { color:var(--accent); }
-.sk-flagship-slug { font-family:var(--font-mono); font-weight:700; font-size:16px; color:var(--ink); transition:color .15s; }
-.sk-flagship-body { font-size:14px; line-height:1.55; color:var(--muted); flex:1; }
-.sk-flagship-tools { font-family:var(--font-mono); font-size:11px; line-height:1.6; color:var(--faint); }
-.sk-flagship-cta { font-family:var(--font-mono); font-size:11.5px; color:var(--accent); }
-.sk-rest-chip { display:inline-block; border:1px solid var(--hairline); padding:7px 11px; font-family:var(--font-mono); font-size:12px; color:var(--muted); text-decoration:none; }
+.sk-flagship-slug { font-family:var(--font-mono); font-weight:700; font-size:var(--fs-lg); color:var(--ink); transition:color .15s; }
+.sk-flagship-body { font-size:var(--fs-md); line-height:1.55; color:var(--muted); flex:1; }
+.sk-flagship-tools { display:flex; flex-wrap:wrap; font-family:var(--font-mono); font-size:var(--fs-2xs); line-height:1.6; color:var(--faint); }
+.sk-flagship-tools > span { white-space:nowrap; }
+.sk-flagship-tools > span + span::before { content:"·"; padding:0 6px; }
+.sk-flagship-cta { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--accent); }
+/* Equal columns on wide screens, so how many chips share a row does not hang on font metrics. */
+@media (min-width:641px){ .sk-rest-grid { display:grid !important; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); } .sk-rest-grid .sk-rest-chip { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } }
+.sk-rest-chip { display:inline-block; border:1px solid var(--hairline); padding:7px 11px; font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--muted); text-decoration:none; }
 .sk-rest-chip:hover { border-color:var(--accent); color:var(--ink); }
 .sk-scroll { overflow-x:auto; }
 .sk-scroll table { min-width:640px; }
@@ -2651,21 +2655,23 @@ const SKILLS_CSS = `
 .sk-tl .name { font-weight:700; color:var(--ink); }
 .sk-tl .name a { color:var(--ink); text-decoration:none; }
 .sk-tl .name a:hover { color:var(--accent); }
+.sk-h1 { font-size:var(--fs-3xl); }
+@media (max-width:640px){ .sk-h1 { font-size:var(--fs-2xl); line-height:1.1 !important; } }
 .sk-buy { border:1px solid var(--hairline); background:var(--card); padding:18px 20px; margin:24px 0 0; max-width:720px; }
 .sk-buy-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
-.sk-buy-price { font-family:var(--font-mono); font-size:26px; font-weight:700; color:var(--accent); }
-.sk-buy-unit { color:var(--muted); font-size:14px; }
-.sk-buy-route { font-family:var(--font-mono); font-size:13px; color:var(--ink); margin-top:6px; }
-.sk-buy-note { color:var(--muted); font-size:14px; line-height:1.7; margin:10px 0 0; }
-.sk-tl .price { color:var(--accent); font-family:var(--font-mono); font-size:13px; }
-.sk-tl .route { color:var(--faint); font-family:var(--font-mono); font-size:12px; }
-.sk-tl .desc { display:block; margin-top:6px; color:var(--muted); font-size:14px; line-height:1.55; }
-.sk-tl .missing { color:var(--accent); font-style:italic; }
+.sk-buy-price { font-family:var(--font-mono); font-size:var(--fs-2xl); font-weight:700; color:var(--accent); }
+.sk-buy-unit { color:var(--muted); font-size:var(--fs-md); }
+.sk-buy-route { font-family:var(--font-mono); font-size:var(--fs-sm); color:var(--ink); margin-top:6px; }
+.sk-buy-note { color:var(--muted); font-size:var(--fs-md); line-height:1.7; margin:10px 0 0; }
+.sk-tl .price { color:var(--accent); font-family:var(--font-mono); font-size:var(--fs-sm); }
+.sk-tl .route { color:var(--faint); font-family:var(--font-mono); font-size:var(--fs-xs); }
+.sk-tl .desc { display:block; margin-top:6px; color:var(--muted); font-size:var(--fs-md); line-height:1.55; }
+.sk-tl .missing { color:var(--bad); font-style:italic; }
 .sk-wf { counter-reset:step; margin:18px 0; padding:0; list-style:none; }
-.sk-wf li { position:relative; padding:16px 18px 16px 56px; border-left:2px solid var(--hairline); margin-bottom:8px; color:var(--muted); font-size:15px; line-height:1.65; counter-increment:step; }
-.sk-wf li::before { content:counter(step); position:absolute; left:14px; top:16px; width:26px; height:26px; background:var(--surface); color:var(--accent); font-family:var(--font-mono); font-weight:700; font-size:13px; display:flex; align-items:center; justify-content:center; }
+.sk-wf li { position:relative; padding:16px 18px 16px 56px; border-left:2px solid var(--hairline); margin-bottom:8px; color:var(--muted); font-size:var(--fs-base); line-height:1.65; counter-increment:step; }
+.sk-wf li::before { content:counter(step); position:absolute; left:14px; top:16px; width:26px; height:26px; background:var(--panel); color:var(--accent); font-family:var(--font-mono); font-weight:700; font-size:var(--fs-sm); display:flex; align-items:center; justify-content:center; }
 .sk-prompt { position:relative; margin:14px 0; }
-.sk-prompt pre { background:var(--surface); color:var(--on-dark); font-family:var(--font-mono); padding:18px 20px; overflow-x:auto; font-size:13px; line-height:1.6; white-space:pre-wrap; border:none; }
+.sk-prompt pre { background:var(--panel); color:var(--on-panel); font-family:var(--font-mono); padding:18px 20px; overflow-x:auto; font-size:var(--fs-sm); line-height:1.6; white-space:pre-wrap; border:none; }
 `;
 
 const SKILLS_TABS = [
@@ -2700,12 +2706,21 @@ const ILLUSTRATIVE_RUN = [
   ["7", "tech-stack", "nginx, Cloudflare, Next.js", true],
 ];
 
+/** How many packs run free over proof-of-work, read from the same allowlist
+ *  the gate enforces (isComputePayable: src/free-tier.js less WALLET_ONLY_SLUGS). */
+function freePackSentence() {
+  const n = SKILL_PACKS.filter((p) => isComputePayable({ slug: `skill-${p.slug}` })).length;
+  return n
+    ? `${n} of the ${SKILL_PACKS.length} packs are on the free tier and also run free over proof-of-work; each pack's page says whether it is one.`
+    : "Every pack is paid; none is on the proof-of-work free tier.";
+}
+
 const SKILLS_FAQS = [
   { q: "What is a skill pack?", a: "A multi-tool workflow that runs server-side in a single request. Instead of your agent calling seven tools in sequence - seven payments, seven round trips, seven things to handle when one fails - you make one call to POST /api/skill/{slug}, pay once, and get every step back in one response." },
   { q: "What happens if one step fails?", a: "You get a partial-success envelope rather than an error. Every step that succeeded returns its result, the failed step is marked with its reason, and the response is still usable. That is the real difference from orchestrating the sequence yourself, where a failure mid-chain leaves you holding partial state you have already paid for and have to reconcile." },
   { q: "How is a pack priced?", a: `Never more than its parts. A pack costs the sum of the tools it runs minus a 10% bundle discount, rounded up to the $0.001 settlement floor, so a pack of the cheapest tools can land at the sum itself - ${PACK_PRICE_RANGE.text} today, recomputed from the live catalog whenever a tool is repriced. One payment instead of several, and no orchestration code to write or maintain.` },
   { q: "Can I see which tools a pack will run before paying?", a: "Yes. Every pack publishes its tool sequence up front, on its own page and in /api/skill-packs.json. Packs are fixed sequences, not an agent improvising - the same inputs run the same steps in the same order every time." },
-  { q: "Which chains can I pay a pack on?", a: `The same rails as any other call: ${RAILS_SHORT}. Gas is sponsored on EVM chains, so you need only the stablecoin, or run free over proof-of-work where a pack is pure-CPU.` },
+  { q: "Which chains can I pay a pack on?", a: `The same rails as any other call: ${RAILS_SHORT}. Gas is sponsored on EVM chains, so you need only the stablecoin. ${freePackSentence()}` },
 ];
 
 export function skillsIndex(baseUrl) {
@@ -2725,126 +2740,123 @@ export function skillsIndex(baseUrl) {
     ["payments to sign", "7", "1", false],
     ["round trips", "7", "1", false],
     ["settlements to reconcile", "7", "1", false],
-    ["failure paths to handle", "7", "0", false],
+    ["failure paths to handle", "7", "1 envelope", false],
     ["orchestration code", "yours", "none", true],
   ].map(([label, alone, packed, green]) =>
-    `<tr style="border-bottom:1px solid var(--dark-border);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 18px;color:var(--dk-muted3);">${e(label)}</th><td style="padding:11px 18px;text-align:right;color:var(--dk-muted2);">${e(alone)}</td><td style="padding:11px 18px;text-align:right;color:${green ? "var(--accent-lit)" : "var(--on-dark)"};font-weight:700;">${e(packed)}</td></tr>`
+    `<tr style="border-bottom:1px solid var(--panel-rule);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 18px;color:var(--on-panel-faint);">${e(label)}</th><td style="padding:11px 18px;text-align:right;color:var(--on-panel-muted);">${e(alone)}</td><td style="padding:11px 18px;text-align:right;color:${green ? "var(--accent-lit)" : "var(--on-panel)"};font-weight:700;">${e(packed)}</td></tr>`
   ).join("");
 
   const illustrativeRowsHtml = ILLUSTRATIVE_RUN.map(([n, tool, out, okStep]) =>
-    `<tr style="border-bottom:1px solid var(--hairline);"><td style="padding:12px 18px;font-family:var(--font-mono);font-size:12px;color:var(--faint);">${e(n)}</td><th scope="row" style="text-align:left;font-weight:700;padding:12px 18px;font-family:var(--font-mono);font-size:13px;color:var(--ink);white-space:nowrap;">${e(tool)}</th><td style="padding:12px 18px;color:var(--muted);font-size:13.5px;line-height:1.5;">${e(out)}</td><td style="padding:12px 18px;text-align:right;font-family:var(--font-mono);font-size:12px;white-space:nowrap;"><span style="color:${okStep ? "var(--accent-lit)" : "var(--accent)"};">${okStep ? "ok" : "failed"}</span></td></tr>`
+    `<tr style="border-bottom:1px solid var(--panel-rule);"><td style="padding:12px 18px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-faint);">${e(n)}</td><th scope="row" style="text-align:left;font-weight:700;padding:12px 18px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel);white-space:nowrap;">${e(tool)}</th><td style="padding:12px 18px;color:var(--on-panel-muted);font-size:var(--fs-md);line-height:1.5;">${e(out)}</td><td style="padding:12px 18px;text-align:right;font-family:var(--font-mono);font-size:var(--fs-xs);white-space:nowrap;"><span style="color:${okStep ? "var(--accent-lit)" : "var(--on-panel-bad)"};">${okStep ? "ok" : "failed"}</span></td></tr>`
   ).join("");
 
   const flagshipCardsHtml = flagship.map((p) =>
-    `<a class="sk-flagship" href="/skills/${e(p.slug)}"><span class="sk-flagship-slug">${e(p.slug)}</span><span class="sk-flagship-body">${e(p.tagline)}</span><span class="sk-flagship-tools">${e(p.toolSlugs.join(" · "))}</span><span class="sk-flagship-cta">${p.toolSlugs.length} tools · one payment →</span></a>`
+    `<a class="sk-flagship" href="/skills/${e(p.slug)}"><span class="sk-flagship-slug">${e(p.slug)}</span><span class="sk-flagship-body">${e(p.tagline)}</span><span class="sk-flagship-tools">${p.toolSlugs.map((t) => `<span>${e(t)}</span>`).join("")}</span><span class="sk-flagship-cta">${p.toolSlugs.length} tools · one payment →</span></a>`
   ).join("");
 
   const restChipsHtml = rest.map((p) => `<a class="sk-rest-chip" href="/skills/${e(p.slug)}">${e(p.slug)}</a>`).join("");
 
-  const faqHtml = SKILLS_FAQS.map((f) => `<article style="padding:22px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:17.5px;margin:0 0 10px;color:var(--ink);">${e(f.q)}</h3><p style="font-size:15.5px;line-height:1.65;color:var(--muted);margin:0;">${e(f.a)}</p></article>`).join("");
+  const faqHtml = SKILLS_FAQS.map((f) => `<article style="padding:22px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${e(f.q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${e(f.a)}</p></article>`).join("");
 
   const body = `
 <div style="border-bottom:1px solid var(--hairline);background:var(--footer-bg);">
-  <div style="max-width:1180px;margin:0 auto;padding:0 30px;display:flex;gap:0;overflow-x:auto;font-family:var(--font-mono);font-size:12.5px;">${tabsHtml}</div>
+  <div style="max-width:1180px;margin:0 auto;padding:0 30px;display:flex;gap:0;overflow-x:auto;font-family:var(--font-mono);font-size:var(--fs-sm);">${tabsHtml}</div>
 </div>
 
 <header style="border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:40px 30px 38px;">
-    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-bottom:20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/tools" style="color:var(--muted);text-decoration:none;">our tools</a> / <span style="color:var(--ink);">skill packs</span></nav>
+    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/tools" style="color:var(--muted);text-decoration:none;">our tools</a> / <span style="color:var(--ink);">skill packs</span></nav>
     <div class="sk-hero" style="grid-template-columns:1.05fr .95fr;gap:50px;align-items:start;">
       <div>
-        <h1 style="font-weight:800;font-size:56px;line-height:.96;letter-spacing:-.035em;margin:0 0 20px;color:var(--ink);">Seven tools.<br>One <span style="color:var(--accent);">payment</span>.</h1>
-        <p style="font-size:18px;line-height:1.55;color:var(--muted);margin:0 0 16px;">A real job is never one call. Auditing a domain takes seven tools; parsing a document takes seven more. Orchestrate that yourself and you are running seven payments, seven round trips and seven failure modes - and writing the code that holds it together.</p>
-        <p style="font-size:16px;line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount}+ packs, ${PACK_PRICE_RANGE.text}, none priced above the sum of its tools.</strong></p>
+        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 20px;color:var(--ink);">Seven tools.<br>One <span style="color:var(--accent);">payment</span>.</h1>
+        <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 16px;">A real job is never one call. Auditing a domain takes seven tools; parsing a document takes seven more. Orchestrate that yourself and you are running seven payments, seven round trips and seven failure modes - and writing the code that holds it together.</p>
+        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount} packs, ${PACK_PRICE_RANGE.text}, none priced above the sum of its tools.</strong></p>
         <div style="display:flex;flex-wrap:wrap;gap:11px;">
-          <a class="ml-cta" href="#packs" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:14px 22px;">Browse the packs →</a>
-          <a class="ml-cta" href="/api/skill-packs.json" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 22px;">skill-packs.json</a>
+          <a class="btn btn-secondary ml-cta" href="#packs">Browse the packs →</a>
+          <a class="btn btn-secondary ml-cta" href="/api/skill-packs.json">skill-packs.json</a>
         </div>
       </div>
-      <div style="border:1px solid var(--hairline);background:var(--surface);">
-        <div style="padding:12px 18px;border-bottom:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;color:var(--dk-muted);display:flex;justify-content:space-between;gap:12px;"><span>THE SAME JOB, TWO WAYS</span><span style="color:var(--dk-muted3);">security-audit</span></div>
-        <table style="font-family:var(--font-mono);font-size:12.5px;">
-          <thead><tr style="border-bottom:1px solid var(--dark-border);color:var(--dk-muted3);"><th scope="col" style="text-align:left;font-weight:400;padding:10px 18px;"></th><th scope="col" style="text-align:right;font-weight:400;padding:10px 18px;">you orchestrate</th><th scope="col" style="text-align:right;font-weight:700;padding:10px 18px;color:var(--accent);">one pack</th></tr></thead>
+      <div style="border:1px solid var(--hairline);background:var(--panel);">
+        <div style="padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);display:flex;justify-content:space-between;gap:12px;"><span>THE SAME JOB, TWO WAYS</span><span style="color:var(--on-panel-faint);">security-audit</span></div>
+        <table style="font-family:var(--font-mono);font-size:var(--fs-sm);">
+          <thead><tr style="border-bottom:1px solid var(--panel-rule);color:var(--on-panel-faint);"><th scope="col" style="text-align:left;font-weight:400;padding:10px 18px;"></th><th scope="col" style="text-align:right;font-weight:400;padding:10px 18px;">you orchestrate</th><th scope="col" style="text-align:right;font-weight:700;padding:10px 18px;color:var(--accent);">one pack</th></tr></thead>
           <tbody>${comparisonRowsHtml}</tbody>
         </table>
-        <div style="padding:12px 18px;border-top:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11px;color:var(--dk-muted3);">the pack still runs all seven tools - you just stop managing them</div>
+        <div style="padding:12px 18px;border-top:1px solid var(--panel-rule-2);font-size:var(--fs-sm);line-height:1.5;color:var(--on-panel-faint);">The pack still runs all seven tools; you just stop managing them.</div>
       </div>
     </div>
   </div>
 </header>
 
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
-  <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">$ POST /api/skill/security-audit</div>
-  <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
-    <h2 style="font-weight:800;font-size:40px;line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Partial success is a result, not an error.</h2>
-    <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--faint);">the part that matters</span>
-  </div>
-  <p style="font-size:16.5px;line-height:1.6;color:var(--muted);max-width:740px;margin:0 0 28px;">This is the real difference, and it only shows up when something goes wrong. Orchestrate seven calls yourself and a failure on step six leaves you holding five results you have already paid for, a broken chain, and the job of working out what to retry. A pack returns the whole ledger: what succeeded, what did not, and why - in one response you can act on.</p>
-  <div class="sk-scroll" style="border:1px solid var(--hairline);background:var(--surface);">
-    <table style="font-family:var(--font-body);font-size:14px;">
-      <caption style="text-align:left;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);padding:14px 18px;border-bottom:1px solid var(--dark-border);">One run · a step failed · the response is still usable</caption>
-      <thead><tr style="border-bottom:1.5px solid var(--dark-border2);font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dk-muted3);"><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;width:44px;">step</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">tool</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">outcome</th><th scope="col" style="text-align:right;font-weight:700;padding:12px 18px;">status</th></tr></thead>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ POST /api/skill/security-audit</div>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Partial success is a result, not an error.</h2>
+  <div class="ml-meta" style="margin:10px 0 14px;"><span>the part that matters</span></div>
+  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:740px;margin:0 0 28px;">This is the real difference, and it only shows up when something goes wrong. Orchestrate seven calls yourself and a failure on step six leaves you holding five results you have already paid for, a broken chain, and the job of working out what to retry. A pack returns the whole ledger: what succeeded, what did not, and why - in one response you can act on.</p>
+  <div class="sk-scroll" style="border:1px solid var(--hairline);background:var(--panel);">
+    <table style="font-family:var(--font-body);font-size:var(--fs-md);">
+      <caption style="text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);padding:14px 18px;border-bottom:1px solid var(--panel-rule);">One run · a step failed · the response is still usable</caption>
+      <thead><tr style="border-bottom:1.5px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);"><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;width:44px;">step</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">tool</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">outcome</th><th scope="col" style="text-align:right;font-weight:700;padding:12px 18px;">status</th></tr></thead>
       <tbody>
         ${illustrativeRowsHtml}
-        <tr style="background:var(--footer-bg);border-top:1.5px solid var(--dark-border2);"><td style="padding:16px 18px;"></td><th scope="row" style="text-align:left;font-weight:700;padding:16px 18px;color:var(--on-dark);font-family:var(--font-mono);font-size:13px;">charged</th><td style="padding:16px 18px;color:var(--dk-muted2);font-size:13.5px;line-height:1.5;">One settlement for the run. Six of seven steps returned data, and you have the reason for the seventh - no second payment to find out.</td><td style="padding:16px 18px;text-align:right;font-family:var(--font-mono);font-size:13px;color:var(--accent-lit);white-space:nowrap;">1 payment</td></tr>
+        <tr style="border-top:1.5px solid var(--panel-rule-2);"><td style="padding:16px 18px;"></td><th scope="row" style="text-align:left;font-weight:700;padding:16px 18px;color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);">charged</th><td style="padding:16px 18px;color:var(--on-panel-muted);font-size:var(--fs-md);line-height:1.5;">One settlement for the run. Six of seven steps returned data, and you have the reason for the seventh - no second payment to find out.</td><td style="padding:16px 18px;text-align:right;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent-lit);white-space:nowrap;">1 payment</td></tr>
       </tbody>
     </table>
   </div>
-  <p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:14px 0 0;">Illustrative run. Each pack's exact step list and response contract is on its own page and in <a href="/api/skill-packs.json" style="color:var(--muted);">/api/skill-packs.json</a>.</p>
+  <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:14px 0 0;">Illustrative run. Each pack's exact step list and response contract is on its own page and in <a href="/api/skill-packs.json" style="color:var(--muted);">/api/skill-packs.json</a>.</p>
 </section>
 
 <section id="packs" style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
-  <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">$ GET /api/skill-packs.json</div>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/skill-packs.json</div>
   <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
-    <h2 style="font-weight:800;font-size:40px;line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Every pack, and what it runs.</h2>
-    <a href="/api/skill-packs.json" style="font-family:var(--font-mono);font-size:12.5px;color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">the machine-readable list →</a>
+    <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Every pack, and what it runs.</h2>
+    <a href="/api/skill-packs.json" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">the machine-readable list →</a>
   </div>
-  <p style="font-size:16px;line-height:1.6;color:var(--muted);max-width:700px;margin:0 0 28px;">Every pack publishes its tool sequence before you pay. These are deterministic sequences, not an agent improvising - the same inputs run the same steps in the same order, every time. Six are set out in full below; the rest of the ${packCount} follow.</p>
+  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:700px;margin:0 0 28px;">Every pack publishes its tool sequence before you pay. These are deterministic sequences, not an agent improvising - the same inputs run the same steps in the same order, every time. Six are set out in full below; the rest of the ${packCount} follow.</p>
   <div class="sk-cardgrid">${flagshipCardsHtml}</div>
   <div style="border:1px solid var(--hairline);border-top:none;background:var(--footer-bg);padding:22px 24px;">
-    <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dk-muted3);margin-bottom:14px;">${rest.length} more · every pack links to its own sequence</div>
-    <div style="display:flex;flex-wrap:wrap;gap:8px;">${restChipsHtml}</div>
+    <div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--on-panel-faint);margin:0 0 14px;"><span>${rest.length} more</span><span>every pack links to its own sequence</span></div>
+    <div class="sk-rest-grid" style="display:flex;flex-wrap:wrap;gap:8px;">${restChipsHtml}</div>
   </div>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
   <div class="sk-2col" style="grid-template-columns:1fr 1fr;border:1px solid var(--hairline);">
     <div style="padding:28px;border-right:1px solid var(--hairline);background:var(--card);">
-      <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">IN CODE</div>
-      <h2 style="font-weight:800;font-size:24px;margin:0 0 14px;color:var(--ink);">One POST, over x402 or MPP</h2>
-      <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 16px;">The pack quotes its price in the 402 challenge, your client signs once, and the response carries every step. Nothing to install and no key to rotate.</p>
-      <pre style="margin:0;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:15px;font-family:var(--font-mono);font-size:11.5px;line-height:1.8;white-space:pre-wrap;word-break:break-word;">curl -X POST \\
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">IN CODE</div>
+      <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">One POST, over x402 or MPP</h2>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">The pack quotes its price in the 402 challenge, your client signs once, and the response carries every step. Nothing to install and no key to rotate.</p>
+      <pre style="margin:0;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:15px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.8;white-space:pre-wrap;word-break:break-word;">curl -X POST \\
   https://agent402.tools/api/skill/security-audit \\
   -H 'content-type: application/json' \\
   -d '{"domain":"example.com"}'</pre>
     </div>
     <div style="padding:28px;background:var(--card);">
-      <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">IN CLAUDE</div>
-      <h2 style="font-weight:800;font-size:24px;margin:0 0 14px;color:var(--ink);">One tool call, payment handled</h2>
-      <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 16px;">Through MCP a pack is a single tool the model can pick. Ask for the job in words - the connector chooses the pack, settles the payment, and returns the ledger.</p>
-      <pre style="margin:0 0 16px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:15px;font-family:var(--font-mono);font-size:11.5px;line-height:1.8;white-space:pre-wrap;word-break:break-word;">claude mcp add agent402 -s user -- npx -y agent402-mcp@latest
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">IN CLAUDE</div>
+      <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">One tool call, payment handled</h2>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Through MCP a pack is a single tool the model can pick. Ask for the job in words - the connector chooses the pack, settles the payment, and returns the ledger.</p>
+      <pre style="margin:0 0 16px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:15px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.8;white-space:pre-wrap;word-break:break-word;">claude mcp add agent402 -s user -- npx -y agent402-mcp@latest
 
-<span style="color:var(--dk-muted3);">"run a security audit on example.com"</span></pre>
-      <a href="/docs#add" style="font-family:var(--font-mono);font-size:12.5px;color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">connector setup →</a>
+<span style="color:var(--on-panel-faint);">"run a security audit on example.com"</span></pre>
+      <a href="/docs#add" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">connector setup →</a>
     </div>
   </div>
 </section>
 
 <section style="max-width:900px;margin:0 auto;padding:56px 30px 0;">
-  <h2 style="font-weight:800;font-size:34px;line-height:1.02;letter-spacing:-.025em;margin:0 0 24px;color:var(--ink);">About skill packs.</h2>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 24px;color:var(--ink);">About skill packs.</h2>
   <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">${faqHtml}</div>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:44px 30px 52px;">
-  <div style="background:var(--surface);border:1px solid var(--hairline);padding:46px 40px;position:relative;overflow:hidden;">
-    <div style="position:absolute;right:24px;top:-32px;font-weight:900;font-size:210px;line-height:1;color:transparent;-webkit-text-stroke:2px #ffffff10;pointer-events:none;">402</div>
+  <div style="background:var(--panel);border:1px solid var(--hairline);padding:46px 40px;position:relative;overflow:hidden;">
     <div style="position:relative;">
-      <h2 style="font-weight:800;font-size:36px;line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-dark);">Stop writing the glue.</h2>
-      <p style="font-size:16px;line-height:1.6;color:var(--dk-muted2);margin:0 0 26px;max-width:520px;">Describe the job and let the pack run the sequence. One payment, one response, and a result you can use even when a step fails.</p>
+      <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Stop writing the glue.</h2>
+      <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:520px;">Describe the job and let the pack run the sequence. One payment, one response, and a result you can use even when a step fails.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a class="ml-cta" href="/docs#add" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:14px 24px;">Add to your agent →</a>
-        <a class="ml-cta" href="#packs" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 24px;">Browse the packs</a>
-        <a class="ml-cta" href="/tools" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--dk-muted);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 24px;">SINGLE TOOLS</a>
+        <a class="btn btn-primary on-panel ml-cta" href="/docs#add">Add to your agent →</a>
+        <a class="btn btn-secondary on-panel ml-cta" href="#packs">Browse the packs</a>
+        <a class="btn btn-secondary on-panel ml-cta" href="/tools">Single tools</a>
       </div>
     </div>
   </div>
@@ -2854,7 +2866,7 @@ ${ledgerFooterCompact()}`;
 
   const canonical = `${baseUrl}/skills`;
   const title = "Skill packs - multi-tool agent workflows for one x402 payment";
-  const description = `${packCount}+ skill packs run a whole multi-tool job server-side for one payment: several tools, one settlement, one response. Partial-success envelope means a failed step never costs you the whole call. ${PACK_PRICE_RANGE.text} per pack, no signup.`;
+  const description = `${packCount} skill packs run a whole multi-tool job server-side for one payment: several tools, one settlement, one response. Partial-success envelope means a failed step never costs you the whole call. ${PACK_PRICE_RANGE.text} per pack, no signup.`;
 
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, sameAs: ORG_SAME_AS };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
@@ -2862,7 +2874,7 @@ ${ledgerFooterCompact()}`;
     { "@type": "ListItem", position: 2, name: "Our tools", item: `${baseUrl}/tools` },
     { "@type": "ListItem", position: 3, name: "Skill packs", item: canonical },
   ] };
-  const collectionLd = { "@type": "CollectionPage", "@id": `${canonical}#page`, name: "Agent402 skill packs", url: canonical, description: `${packCount}+ multi-tool workflows that run server-side in one request: one payment, one settlement, and a single response with a partial-success envelope if a step fails.`, isPartOf: { "@id": `${baseUrl}/#organization` }, mainEntity: { "@id": `${canonical}#packs` } };
+  const collectionLd = { "@type": "CollectionPage", "@id": `${canonical}#page`, name: "Agent402 skill packs", url: canonical, description: `${packCount} multi-tool workflows that run server-side in one request: one payment, one settlement, and a single response with a partial-success envelope if a step fails.`, isPartOf: { "@id": `${baseUrl}/#organization` }, mainEntity: { "@id": `${canonical}#packs` } };
   const appLd = { "@type": "SoftwareApplication", "@id": `${canonical}#app`, name: "Agent402 skill packs", applicationCategory: "DeveloperApplication", operatingSystem: "HTTP, MCP (streamable HTTP)", offers: { "@type": "AggregateOffer", offerCount: String(packCount), lowPrice: PACK_PRICE_RANGE.min.toFixed(3), highPrice: PACK_PRICE_RANGE.max.toFixed(3), priceCurrency: "USD", description: `One payment per pack run, on ${RAILS_SHORT}. No signup, no API key.` } };
   const itemListLd = { "@type": "ItemList", "@id": `${canonical}#packs`, name: "Featured skill packs", itemListElement: flagship.map((p, i) => ({ "@type": "ListItem", position: i + 1, name: p.slug, url: `${baseUrl}/skills/${p.slug}` })) };
   const faqLd = { "@type": "FAQPage", "@id": `${canonical}#faq`, mainEntity: SKILLS_FAQS.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
@@ -2923,7 +2935,7 @@ export function packClientSnippet(catalogSlug, args) {
   ].join("\n");
 }
 
-export function skillPackPage(baseUrl, slug, catalog) {
+export function skillPackPage(baseUrl, slug, catalog, { mpp = !!(process.env.MPP_SECRET_KEY || "").trim() } = {}) {
   const e = ledgerEsc;
   const pack = SKILL_PACKS.find((p) => p.slug === slug);
   if (!pack) return null;
@@ -2954,8 +2966,8 @@ export function skillPackPage(baseUrl, slug, catalog) {
   const packExample = packTool?.discovery?.output?.example;
   const exampleSteps = Array.isArray(packExample?.steps) ? packExample.steps : [];
   const returnsHtml = packExample && typeof packExample === "object"
-    ? `<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">What one call returns</h2>
-<p style="color:var(--muted);font-size:15px;line-height:1.7;">A JSON object with ${Object.keys(packExample).map((k) => `<code>${e(k)}</code>`).join(", ")}${exampleSteps.length ? `; <code>steps</code> holds one entry per tool (${exampleSteps.slice(0, 8).map((s) => e(s.tool || s.slug || s.name || "")).filter(Boolean).join(", ")}${exampleSteps.length > 8 ? ", ..." : ""}), each with its own result or error` : ""}. Full example on the <a href="/tools/skill-${e(pack.slug)}" style="color:var(--accent);">API page</a>.</p>`
+    ? `<h2 style="font-weight:700;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">What one call returns</h2>
+<p style="color:var(--muted);font-size:var(--fs-base);line-height:1.7;">A JSON object with ${Object.keys(packExample).map((k) => `<code>${e(k)}</code>`).join(", ")}${exampleSteps.length ? `; <code>steps</code> holds one entry per tool (${exampleSteps.slice(0, 8).map((s) => e(s.tool || s.slug || s.name || "")).filter(Boolean).join(", ")}${exampleSteps.length > 8 ? ", ..." : ""}), each with its own result or error` : ""}. Full example on the <a href="/tools/skill-${e(pack.slug)}" style="color:var(--accent);">API page</a>.</p>`
     : "";
 
   const jsonLd = {
@@ -2972,8 +2984,8 @@ export function skillPackPage(baseUrl, slug, catalog) {
   };
 
   const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
-<h1 style="font-family:var(--font-body);font-weight:800;font-size:38px;line-height:1;letter-spacing:-.02em;margin-bottom:10px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis;" title="${e(pack.title)}">${e(pack.title)}</h1>
-<p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;">${e(pack.tagline)}</p>
+<h1 class="sk-h1" style="font-family:var(--font-body);font-weight:800;line-height:1;letter-spacing:-.02em;margin-bottom:10px;text-wrap:balance;" title="${e(pack.title)}">${e(pack.title)}</h1>
+<p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.6;max-width:720px;">${e(pack.tagline)}</p>
 ${packTool ? `
 <div class="sk-buy">
   <div class="sk-buy-head">
@@ -2981,39 +2993,39 @@ ${packTool ? `
     <span class="sk-buy-unit">per call &middot; one payment for the whole workflow</span>
   </div>
   <div class="sk-buy-route">${e(packTool.route)}</div>
-  <div style="font-family:var(--font-mono);font-size:12.5px;margin:8px 0 0;"><a href="/tools/skill-${e(pack.slug)}" style="color:var(--muted);">Sample output + API docs &rarr;</a></div>
-  <p class="sk-buy-note">${pack.toolSlugs.length} tools run server-side in one request. You pay once, settle once, and get a single response - no orchestration, no per-step payments, and a partial-success envelope if any step fails. USDC over x402 on any supported chain.</p>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);margin:8px 0 0;"><a href="/tools/skill-${e(pack.slug)}" style="color:var(--muted);">Sample output + API docs &rarr;</a></div>
+  <p class="sk-buy-note">${pack.toolSlugs.length} tools run server-side in one request. You pay once, settle once, and get a single response - no orchestration, no per-step payments, and a partial-success envelope if any step fails. ${isComputePayable(packTool) ? `Free with proof-of-work (no wallet), or ${e(packTool.price)} in USDC over x402${mpp ? " or MPP" : ""}.` : `Paid in USDC over x402${mpp ? " or MPP" : ""}; this pack has no proof-of-work tier.`}</p>
 </div>` : ""}
 
-<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">When to use this pack</h2>
-<p style="color:var(--muted);font-size:15px;line-height:1.7;">${e(pack.useCase)}</p>
+<h2 style="font-weight:700;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">When to use this pack</h2>
+<p style="color:var(--muted);font-size:var(--fs-base);line-height:1.7;">${e(pack.useCase)}</p>
 
-<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Tools in this pack</h2>
-<p style="color:var(--muted);font-size:14.5px;line-height:1.7;margin:0 0 4px;">${packTool ? `All ${pack.toolSlugs.length} run inside the single ${e(packTool.price)} call above.` : `The ${pack.toolSlugs.length} tools this workflow composes.`} Each is also callable on its own if you only need one part.</p>
+<h2 style="font-weight:700;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Tools in this pack</h2>
+<p style="color:var(--muted);font-size:var(--fs-base);line-height:1.7;margin:0 0 4px;">${packTool ? `All ${pack.toolSlugs.length} run inside the single ${e(packTool.price)} call above.` : `The ${pack.toolSlugs.length} tools this workflow composes.`} Each is also callable on its own if you only need one part.</p>
 <ul class="sk-tl">${tools}</ul>
 
-${priceNote ? `<p style="color:var(--muted);font-size:14.5px;line-height:1.7;margin:14px 0 0;">${priceNote}</p>` : ""}
+${priceNote ? `<p style="color:var(--muted);font-size:var(--fs-base);line-height:1.7;margin:14px 0 0;">${priceNote}</p>` : ""}
 
-<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Workflow</h2>
+<h2 style="font-weight:700;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Workflow</h2>
 <ol class="sk-wf">${steps}</ol>
 
 ${argRows ? `
-<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Arguments</h2>
-<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;font-size:14px;"><tr><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Name</th><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Required</th><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Description</th><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Example</th></tr>${argRows}</table></div>` : ""}
+<h2 style="font-weight:700;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Arguments</h2>
+<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;font-size:var(--fs-md);"><tr><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Name</th><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Required</th><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Description</th><th style="border:1px solid var(--hairline);padding:10px 12px;text-align:left;background:var(--card);">Example</th></tr>${argRows}</table></div>` : ""}
 
 ${returnsHtml}
 
 ${packTool ? `
-<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Call it directly</h2>
-<p style="color:var(--muted);font-size:15px;line-height:1.7;">Any x402 client pays the 402 and gets the whole workflow back in one response. With the <code>agent402-client</code> SDK (<code>npm i agent402-client</code>, an ES module):</p>
-<pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:18px 20px;font-size:13px;line-height:1.6;border:none;margin-top:12px;overflow-x:auto;">${e(packClientSnippet(packTool.slug, Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute ?? "..."]))))}</pre>` : ""}
+<h2 style="font-weight:700;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Call it directly</h2>
+<p style="color:var(--muted);font-size:var(--fs-base);line-height:1.7;">Any x402 client pays the 402 and gets the whole workflow back in one response. With the <code>agent402-client</code> SDK (<code>npm i agent402-client</code>, an ES module):</p>
+<pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);padding:18px 20px;font-size:var(--fs-sm);line-height:1.6;border:none;margin-top:12px;overflow-x:auto;">${e(packClientSnippet(packTool.slug, Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute ?? "..."]))))}</pre>` : ""}
 
-<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Run it in Claude</h2>
-<pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:18px 20px;font-size:13px;line-height:1.6;border:none;margin-top:12px;">claude mcp add agent402 -s user -- npx -y agent402-mcp@latest</pre>
-<p style="color:var(--muted);font-size:15px;margin-top:12px;">Then paste this prompt into Claude:</p>
+<h2 style="font-weight:700;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Run it in Claude</h2>
+<pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);padding:18px 20px;font-size:var(--fs-sm);line-height:1.6;border:none;margin-top:12px;">claude mcp add agent402 -s user -- npx -y agent402-mcp@latest</pre>
+<p style="color:var(--muted);font-size:var(--fs-base);margin-top:12px;">Then paste this prompt into Claude:</p>
 <div class="sk-prompt"><pre>${e(pack.claudePrompt)}</pre></div>
 
-<p style="color:var(--faint);font-size:14px;margin-top:36px;"><a href="/skills" style="color:var(--accent);text-decoration:none;">\u2190 All skill packs</a></p>
+<p style="color:var(--faint);font-size:var(--fs-md);margin-top:36px;"><a href="/skills" style="color:var(--accent);text-decoration:none;">\u2190 All skill packs</a></p>
 </div>
 ${ledgerFooterCompact()}`;
 
@@ -3178,7 +3190,7 @@ const PACK_STOPWORDS = new Set([
 // staying quiet about that would be an upsell dressed as an answer, and an
 // agent that later does the arithmetic is precisely the buyer we would lose.
 // So we surface both numbers and let the caller choose.
-export function rankSkillPacks(query, { k = 2, baseUrl = "", minScore = 4, toolPriceUsd = null } = {}) {
+export function rankSkillPacks(query, { k = 2, baseUrl = "", minScore = 4, toolPriceUsd = null, toolFree = null } = {}) {
   const q = String(query || "").slice(0, 500);
   const rawTerms = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   const terms = rawTerms.filter((t) => t.length > 1 && !PACK_STOPWORDS.has(t)).slice(0, 32);
@@ -3252,9 +3264,18 @@ export function rankSkillPacks(query, { k = 2, baseUrl = "", minScore = 4, toolP
         (aLaCarte == null
           ? ` Calling the ${p.toolSlugs.length} tools individually also works and bills separately.`
           : ` The same ${p.toolSlugs.length} tools bought individually total $${aLaCarte.toFixed(3)}` +
-            (aLaCarte < price
-              ? ` — cheaper a la carte; the bundle buys one payment, one round trip and partial-success handling.`
-              : ` — the bundle is also the cheaper path.`)),
+            // Compared in whole tenths of a cent so float noise cannot turn an
+            // equal price into a "cheaper" claim.
+            (Math.round(aLaCarte * 1e4) < Math.round(price * 1e4)
+              ? ` - cheaper a la carte; the bundle buys one payment, one round trip and partial-success handling.`
+              : Math.round(aLaCarte * 1e4) === Math.round(price * 1e4)
+                ? ` - the same price; the bundle buys one payment, one round trip and partial-success handling.`
+                : ` - the bundle is also the cheaper path.`)) +
+        // When every step is a pure-CPU tool, each one also runs free with
+        // proof-of-work, so a walletless caller pays nothing step by step.
+        (typeof toolFree === "function" && (p.toolSlugs || []).length && p.toolSlugs.every((t) => toolFree(t))
+          ? " Every step is also free one at a time with proof-of-work."
+          : ""),
     };
   });
 }

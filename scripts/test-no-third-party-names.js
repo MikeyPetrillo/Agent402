@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// No third-party seller host or counterparty name in a tracked file.
+// No third-party seller host or counterparty name in a tracked file, and no
+// upstream vendor name in public tool text outside a required attribution.
 //
 // Public files carry technical mechanism only; a seller we investigated, a
 // counterparty we talked to or a competitor is never named, in copy, comments,
@@ -13,8 +14,9 @@
 // default seed list in src/x402-index.js (one seeded origin per line, with its
 // comment), and the paid canary's target origin.
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { vendorHits, compileAllow, loadVendorData } from "./lib/vendor-names.js";
 
 const ROOT = new URL("..", import.meta.url);
 const data = JSON.parse(readFileSync(new URL("./data/third-party-hashes.json", import.meta.url), "utf8"));
@@ -53,7 +55,7 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
   ok(data.hosts.length > 100 && data.names.length > 10, `the hash list is populated (${data.hosts.length} hosts, ${data.names.length} names)`);
 }
 
-const SKIP = /(^|\/)(package-lock\.json|third-party-hashes\.json)$|\.(png|jpe?g|gif|ico|woff2?|ttf|pdf|webp|svg|mp3|zip|gz)$/i;
+const SKIP = /(^|\/)(package-lock\.json|third-party-hashes\.json|vendor-name-hashes\.json)$|\.(png|jpe?g|gif|ico|woff2?|ttf|pdf|webp|svg|mp3|zip|gz)$/i;
 const files = execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" }).split("\n").filter((f) => f && !SKIP.test(f));
 const hits = [];
 for (const f of files) {
@@ -63,5 +65,48 @@ for (const f of files) {
   hits.push(...findHits(f, text));
 }
 ok(hits.length === 0, `no tracked file names a third-party seller or counterparty (${files.length} files scanned)${hits.length ? ":\n    " + hits.join("\n    ") : ""}`);
+// --- upstream vendor names in public tool text ------------------------------
+// Tool names, descriptions, tags and input descriptions, and every skill-pack
+// string, describe the data, not the vendor it is read from. The vendor list is
+// hashed (scripts/data/vendor-name-hashes.json, scripts/gen-vendor-hashes.js);
+// where a source's terms require attribution, the list names the slug::field
+// places that may carry it, and the tool's source has a comment citing the terms.
+const { data: vdata, vendors: VENDOR_SET, allow: VENDOR_ALLOW } = loadVendorData();
+{
+  const V = new Set([h("zzvendor")]), A = compileAllow({ [h("zzvendor")]: ["^zz-weather$::^description$"] });
+  ok(vendorHits("x", "description", "Prices from Zzvendor's feed", V, A).length === 1, "control: a vendor name in a description is caught");
+  ok(vendorHits("x", "tags", "zzvendor-data", V, A).length === 1, "control: a vendor name inside a hyphenated tag is caught");
+  ok(vendorHits("zz-weather", "description", "Data by Zzvendor (CC BY 4.0)", V, A).length === 0, "control: an attribution at an allowed place passes");
+  ok(vendorHits("zz-weather", "name", "Zzvendor weather", V, A).length === 1, "control: the same vendor at another field of that tool is caught");
+  ok(vdata.vendors.length >= 10, `the vendor hash list is populated (${vdata.vendors.length} vendors)`);
+}
+{
+  const VENDORS = VENDOR_SET, ALLOW = VENDOR_ALLOW;
+  const toolsDir = new URL("../src/tools/", import.meta.url);
+  const found = [];
+  const seen = new Set();
+  for (const f of readdirSync(toolsDir).filter((f) => f.endsWith(".js") && !/-worker\.js$/.test(f))) {
+    const mod = await import(new URL(f, toolsDir));
+    for (const v of Object.values(mod)) if (Array.isArray(v)) for (const t of v) {
+      if (!t || typeof t !== "object" || !t.slug || typeof t.description !== "string" || seen.has(t.slug)) continue;
+      seen.add(t.slug);
+      const fields = [["name", t.name], ["description", t.description], ["tags", (t.tags || []).join(" ")]];
+      for (const [k, d] of Object.entries(t.discovery?.inputSchema?.properties || {})) if (d?.description) fields.push([`input.${k}`, d.description]);
+      for (const [field, text] of fields) if (vendorHits(t.slug, field, text, VENDORS, ALLOW).length) found.push(`${f} ${t.slug} ${field}`);
+    }
+  }
+  const { SKILL_PACKS } = await import("../src/skills.js");
+  for (const pack of SKILL_PACKS) {
+    const walk = (o, path) => {
+      if (typeof o === "string") { if (vendorHits(pack.slug, path, o, VENDORS, ALLOW).length) found.push(`skills.js ${pack.slug} ${path}`); }
+      else if (Array.isArray(o)) o.forEach((x, i) => walk(x, `${path}[${i}]`));
+      else if (o && typeof o === "object") for (const [k, x] of Object.entries(o)) walk(x, path ? `${path}.${k}` : k);
+    };
+    walk(pack, "");
+  }
+  ok(seen.size >= 400 && SKILL_PACKS.length >= 10, `the vendor check read the catalog (${seen.size} tools, ${SKILL_PACKS.length} skill packs)`);
+  ok(found.length === 0, `no public tool or skill-pack text names an upstream vendor outside a required attribution${found.length ? ":\n    " + found.join("\n    ") : ""}`);
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

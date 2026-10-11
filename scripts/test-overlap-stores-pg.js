@@ -16,7 +16,6 @@ process.env.STATE_DATABASE_URL = relay.url;
 const sdb = await import("../src/state-db.js");
 const { createFollowups } = await import("../src/followups.js");
 const { createFreeAlerts } = await import("../src/free-alerts.js");
-const { createWalletDigest } = await import("../src/wallet-digest.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -68,6 +67,25 @@ try {
     const r2 = (await sdb.documents.get("followups.json")).body.seqs.cs_buyer_two;
     ok(typeof r2.sent.monitor === "number", "followups: the step is recorded as sent with its time");
     ok(!sent.some((x) => x.endsWith("one@example.com")), "followups: the stopped sequence is never emailed");
+    // Retention in database mode: the final follow-up deletes the address in
+    // the row, and a failing address is ended and deleted after MAX_SEND_FAILURES.
+    clock += 7 * DAY;
+    await A.tick(); await B.tick(); await A.flush(); await B.flush();
+    const rowAfter = (await sdb.documents.get("followups.json")).body.seqs;
+    ok(rowAfter.cs_buyer_two?.sent?.another && rowAfter.cs_buyer_two.email === null, "followups (db): the final follow-up deletes the address in the row");
+    ok(!JSON.stringify(rowAfter).includes("one@example.com") && !JSON.stringify(rowAfter).includes("two@example.com"), "followups (db): no ended sequence keeps an address in the row");
+    const { MAX_SEND_FAILURES, ADDRESS_MAX_AGE_MS } = await import("../src/followups.js");
+    const failing = createFollowups({ storePath: join(DIR, "f", "followups.json"), secret, now: () => clock, monitorFor: () => ({ product: "m", label: "Monitor", priceUsd: "$1" }), sendEmail: async () => false, log: quiet });
+    await failing.ready();
+    failing.enqueue({ sessionId: "cs_bounce", email: "bounce@example.com", product: "p", kind: "k", label: "L", input: "B" }); await failing.flush();
+    clock += 3 * DAY;
+    for (let i = 0; i < MAX_SEND_FAILURES; i++) await failing.tick();
+    await failing.flush();
+    const rb = (await sdb.documents.get("followups.json")).body.seqs.cs_bounce;
+    ok(rb?.stopped === true && rb.stoppedReason === "undeliverable" && rb.email === null, `followups (db): ${MAX_SEND_FAILURES} failed deliveries end the sequence and delete the address in the row`);
+    A.enqueue({ sessionId: "cs_old", email: "old@example.com", product: "p", kind: "k", label: "L", input: "O" }); await A.flush();
+    await B.refresh(); clock += ADDRESS_MAX_AGE_MS + 1000; await B.tick(); await B.flush();
+    ok(!JSON.stringify((await sdb.documents.get("followups.json")).body).includes("old@example.com"), "followups (db): an address another container wrote is gone from the row after ADDRESS_MAX_AGE_MS");
   }
 
   // ---- free alerts -------------------------------------------------------------
@@ -119,37 +137,6 @@ try {
     await F.flush();
     const after = (await sdb.documents.get("free-alerts.json")).body.alerts;
     ok(Object.keys(after).length === before + (threw ? 0 : 1) && after[yid] && after[xid], `free-alerts: a signup after a failed first load keeps every stored alert (${before} before, ${Object.keys(after).length} after)`);
-  }
-
-  // ---- wallet digest -----------------------------------------------------------
-  {
-    let clock = 1_000_000_000_000;
-    const sent = [];
-    const usage = () => ({ totals: { calls: 3, paidUsd: 0.03 }, bySlug: [{ slug: "hash", calls: 3, usd: 0.03 }], byNetwork: {} });
-    const mk = (tag) => createWalletDigest({ storePath: join(DIR, tag, "wallet-digest.json"), secret, now: () => clock, usage, verifySignature: async () => true, sendEmail: async (m) => { sent.push(`${tag}:${m.to}:${m.subject}`); return true; }, log: quiet });
-    const key = (id, p) => createHmac("sha256", secret).update(`digest:${p}:${id}`).digest("base64url").slice(0, 32);
-    const A = mk("a"); await A.ready();
-    const B = mk("b"); await B.ready();
-    const la = A.preEnrolCredits({ keyId: "k1", email: "p@example.com" }); await A.flush();
-    const lb = B.preEnrolCredits({ keyId: "k2", email: "q@example.com" }); await B.flush();
-    let row = (await sdb.documents.get("wallet-digest.json")).body.subs;
-    ok(Object.keys(row).length === 2, "wallet-digest: pre-enrolments on both containers both land");
-    const idOf = (l) => new URL(l).searchParams.get("id");
-    const pid = idOf(la), qid = idOf(lb);
-    await A.refresh();
-    ok(A.confirm(pid, key(pid, "confirm")).ok && A.confirm(qid, key(qid, "confirm")).ok, "wallet-digest: confirms on A");
-    await A.flush();
-    await B.refresh();
-    ok(B.unsubscribe(pid, key(pid, "unsubscribe")).ok, "wallet-digest: unsubscribe on B");
-    await B.flush();
-    A.preEnrolCredits({ keyId: "k3", email: "r@example.com" }); await A.flush();
-    row = (await sdb.documents.get("wallet-digest.json")).body.subs;
-    ok(row[pid].status === "unsubscribed" && row[pid].email === null && row[qid].status === "active", "wallet-digest: B's unsubscribe survives A's next write");
-    sent.length = 0;
-    await Promise.all([A.tick(), B.tick()]);
-    ok(sent.filter((x) => x.includes(":q@example.com:")).length === 1 && !sent.some((x) => x.includes(":p@example.com:")), `wallet-digest: two containers ticking at once send one digest, none to the unsubscribed address (${sent.length})`);
-    await A.tick(); await B.tick();
-    ok(sent.filter((x) => x.includes(":q@example.com:")).length === 1, "wallet-digest: the week is not sent again");
   }
   // ---- monitor scheduler -------------------------------------------------------
   {

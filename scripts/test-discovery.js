@@ -80,7 +80,21 @@ ok(encCat && encCat.computePayable === true, "encoding category is compute-payab
 ok(m.mcp.remoteConnector === `${BASE}/mcp`, "mcp connector url");
 ok(m.machineReadable.reliability === `${BASE}/api/reliability`, "links to reliability");
 ok(m.trust.onchainRevenueProof.includes("basescan.org") && m.trust.onchainRevenueProof.includes(WALLET), "onchain proof url");
-ok(m.trust.failedCallsNeverCharged === "structural", "manifest carries the structural no-charge-on-failure guarantee");
+ok(/not charged on x402/.test(m.trust.failedCalls || "") && /Tempo/.test(m.trust.failedCalls || "") && !("failedCallsNeverCharged" in m.trust),
+  "manifest states the failed-call rule as a sentence that names the Tempo exception, not as an absolute field");
+// The chain list and its note name only the networks this instance enabled.
+ok(JSON.stringify(m.ecosystem.chains) === JSON.stringify(["Base", "Polygon"]), `ecosystem.chains follows the enabled networks (got ${JSON.stringify(m.ecosystem.chains)})`);
+ok(/Base, Polygon/.test(m.ecosystem.note) && !/Solana|Stellar|Robinhood/.test(m.ecosystem.note), `ecosystem.note names only the enabled rails (got ${m.ecosystem.note})`);
+// Price ranges read as money: cents at a cent or more, a third decimal below.
+{
+  const big = serviceManifest({ baseUrl: BASE, network: "base", networks: ["base"], wallet: WALLET, walletName: null, catalog: CATALOG, toolCount: 3, powSlugs: POW, powDifficulty: 20, prices: { a: 0.001, b: 3.3 } });
+  ok(big.payment.x402.priceRange === "$0.001–$3.30", `price range shows cents ($0.001–$3.30, got ${big.payment.x402.priceRange})`);
+}
+// No payment facilitator, vendor or host-product names in the manifest's own prose.
+{
+  const prose = JSON.stringify({ d: m.discovery, t: m.trust, mcp: m.mcp });
+  for (const name of ["Coinbase", "CDP", "Cloudflare", "GitHub", "ChatGPT", "Copilot"]) ok(!prose.includes(name), `manifest prose does not name ${name}`);
+}
 
 // Sepolia + no-wallet edge cases must not throw or fabricate proof links.
 const mTest = serviceManifest({
@@ -113,6 +127,7 @@ ok(r.onchain.revenueProof.includes(WALLET), "reliability onchain proof");
 ok(Array.isArray(r.guarantees) && r.guarantees.length >= 5, "guarantees listed");
 ok(r.guarantees.every((g) => typeof g.claim === "string" && (g.verify || g.evidence)), "every guarantee has a claim + a verify/evidence link");
 ok(r.endpoints.manifest === `${BASE}/.well-known/x402`, "reliability points back to manifest");
+ok(!JSON.stringify(r.guarantees).match(/Cloudflare|GitHub schedule|\$0\.001 USDC purchase/), "reliability guarantees name no vendor and quote no stale canary price");
 JSON.parse(JSON.stringify(r));
 
 // No-wallet reliability must not fabricate a proof link.

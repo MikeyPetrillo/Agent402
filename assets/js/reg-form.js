@@ -42,12 +42,12 @@
       } else {
         detail = "";
       }
-      out.style.color = j.listed ? "var(--green)" : "var(--accent-lit)";
+      out.style.color = j.listed ? "var(--ok)" : "var(--warn)";
       out.textContent = j.listed
         ? ("Listed - " + name + (detail ? " (" + detail + ")" : "") + ". " + note)
         : ("Not listed: " + (j.error || "unknown error"));
     } catch (e) {
-      out.style.color = "var(--accent-lit)";
+      out.style.color = "var(--bad)";
       out.textContent = "submission failed - try again";
     } finally {
       btn.disabled = false;

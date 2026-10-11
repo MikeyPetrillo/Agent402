@@ -27,7 +27,7 @@ import { JSDOM } from "jsdom";
 import { ssrfDispatcher, safeFetch, assertPublicUrl, isSsrfBlock, retryTransient } from "./fetch-guard.js";
 
 import { REPO_URL } from "../repo-link.js";
-const USER_AGENT = "Mozilla/5.0 (compatible; Agent402/1.0; +${REPO_URL})";
+const USER_AGENT = `Mozilla/5.0 (compatible; Agent402/1.0; +${REPO_URL})`;
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });

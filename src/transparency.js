@@ -53,32 +53,32 @@ export function transparencyPage(baseUrl, traffic = null) {
 
   const extraCss = `
 .tp-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
-.tp-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:18px}
-.tp-h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px}
-.tp-updated{font-family:var(--font-mono);font-size:13px;color:var(--faint);margin:0 0 32px}
-.tp-body p,.tp-body li{font-size:15px;line-height:1.55;color:var(--muted)}
+.tp-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
+.tp-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px}
+.tp-updated{font-size:var(--fs-sm);color:var(--faint);margin:0 0 32px}
+.tp-body p,.tp-body li{font-size:var(--fs-base);line-height:1.55;color:var(--muted)}
 .tp-body p{margin:0 0 14px}
 .tp-body ul{margin:0 0 18px;padding:0 0 0 22px}
 .tp-body li{margin-bottom:8px}
-.tp-body h2{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:36px 0 14px;color:var(--ink)}
-.tp-body h3{font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:28px 0 10px;color:var(--ink)}
+.tp-body h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:36px 0 14px;color:var(--ink)}
+.tp-body h3{font-family:var(--font-body);font-weight:600;font-size:var(--fs-xl);letter-spacing:-.01em;margin:28px 0 10px;color:var(--ink)}
 .tp-body a{color:var(--accent);text-decoration:none}
 .tp-body a:hover{text-decoration:underline}
 .tp-body b,.tp-body strong{color:var(--ink);font-weight:600}
-.tp-body code{font-family:var(--font-mono);font-size:13px;background:var(--surface);color:var(--on-dark);padding:2px 7px;border:1px solid var(--hairline)}
-.tp-ca{font-family:var(--font-mono);font-size:14px;word-break:break-all;background:var(--surface);color:var(--on-dark);border:1px solid var(--hairline);padding:14px 16px;margin:0 0 8px}
-.tp-ca-label{font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin:18px 0 6px}
-.tp-receipts{width:100%;border-collapse:collapse;margin:14px 0 22px;font-family:var(--font-mono);font-size:12.5px}
-.tp-receipts th{text-align:left;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:600;padding:6px 10px 6px 0;border-bottom:1px solid var(--hairline)}
+.tp-body code{font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--panel);color:var(--on-panel);padding:2px 7px;border:1px solid var(--hairline)}
+.tp-ca{font-family:var(--font-mono);font-size:var(--fs-md);word-break:break-all;background:var(--panel);color:var(--on-panel);border:1px solid var(--hairline);padding:14px 16px;margin:0 0 8px}
+.tp-ca-label{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin:18px 0 6px}
+.tp-receipts{width:100%;border-collapse:collapse;margin:14px 0 22px;font-family:var(--font-mono);font-size:var(--fs-sm)}
+.tp-receipts th{text-align:left;font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:600;padding:6px 10px 6px 0;border-bottom:1px solid var(--hairline)}
 .tp-receipts td{padding:8px 10px 8px 0;border-bottom:1px solid var(--hairline);color:var(--muted);vertical-align:top}
 .tp-receipts td a{word-break:break-all}
 .tp-note{border:1px solid var(--hairline);background:var(--card);padding:16px 18px;margin:22px 0}
 .tp-note p{margin:0}
 .tp-fold{border:1.5px solid var(--hairline);background:var(--card);padding:14px 18px;margin:0 0 26px}
-.tp-fold summary{cursor:pointer;font-size:15px;color:var(--ink)}
+.tp-fold summary{cursor:pointer;font-size:var(--fs-base);color:var(--ink)}
 .tp-fold[open]{padding-bottom:20px}
-.tp-fold h3{font-size:19px !important;margin:22px 0 8px !important}
-@media(max-width:600px){.tp-h1{font-size:36px !important}}
+.tp-fold h3{font-size:var(--fs-lg) !important;margin:22px 0 8px !important}
+@media(max-width:600px){.tp-h1{font-size:var(--fs-3xl) !important}}
 `;
 
   const body = `
@@ -86,16 +86,16 @@ export function transparencyPage(baseUrl, traffic = null) {
 <section>
 <div class="tp-eyebrow">$ GET /transparency</div>
 <h1 class="tp-h1">Disclosures</h1>
-<p style="font-size:15px;color:var(--muted);">What the company publishes about itself, in one place: uptime from two outside observers at <a href="/status">/status</a>, every settled transaction by rail at <a href="/revenue">/revenue</a>, metered receipts against their quotes at <a href="/proof">/proof</a>, and how the service is secured at <a href="/security">/security</a>. The material disclosures below are kept verbatim, with on-chain receipts.</p>
-<p class="tp-updated">Agent402 (agent402.tools) · last updated 2026-07-29.</p>
+<p style="font-size:var(--fs-base);color:var(--muted);">What the company publishes about itself, in one place: uptime from two outside observers at <a href="/status">/status</a>, every settled transaction by rail at <a href="/revenue">/revenue</a>, metered receipts against their quotes at <a href="/proof">/proof</a>, and how the service is secured at <a href="/security">/security</a>. The material disclosures below are kept verbatim, with on-chain receipts.</p>
+<p class="tp-updated">Agent402 (agent402.tools) · last updated 2026-10-11.</p>
 </section>
 
 <section>
 <div class="tp-body">
 <p>Agent402.Tools is an <a href="${REPO_URL}" rel="noopener">open-source</a> x402 + MCP
 tool server. When something material happens around the project, on-chain or off, it gets documented
-here, with receipts a reader can verify independently. Nothing on this page asks for trust; every factual
-claim links to an immutable on-chain record.</p>
+here, with receipts a reader can verify independently. Every claim in the token disclosure below links to an
+immutable on-chain record, and the revenue figures link to the pages and JSON that publish them.</p>
 
 ${traffic ? `<h2>GitHub adoption</h2>
 <p>The code is AGPL and anyone may clone it without forking - and they do. From GitHub's traffic API
@@ -124,7 +124,7 @@ that it existed, or that this launch capability existed on Bankr at all, until 2
 
 <div class="tp-ca-label">Contract address (created by the community, not by the Agent402.Tools team)</div>
 <div class="tp-ca">${TOKEN_CA}</div>
-<p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:0 0 18px">Verify, don't trust:
+<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 18px">Verify, don't trust:
 <a href="${SCOUT}/token/${TOKEN_CA}" rel="noopener">token on Blockscout</a> ·
 <a href="${SCOUT}/tx/${CREATION_TX}" rel="noopener">creation transaction</a> ·
 launched by <a href="${SCOUT}/address/${LAUNCHER}" rel="noopener">${LAUNCHER.slice(0, 10)}…${LAUNCHER.slice(-4)}</a></p>
@@ -184,11 +184,11 @@ and these are the receipts:</p>
 <p>The <a href="/revenue">transactions page</a> shows two kinds of number and keeps them apart on purpose.</p>
 <ul>
   <li><strong>Throughput</strong> is every settled transaction through our pay rails, our own included. We run
-  our own money through the same gates buyers use, continuously: a daily paid canary on every rail, about 200
-  Tempo MPP settlements a day, and weekly full-catalog sweeps. Those are real on-chain transactions, which is the
+  our own money through the same gates buyers use, continuously: a daily paid canary on every rail, Tempo MPP
+  settlements through the day, and weekly full-catalog sweeps. Those are real on-chain transactions, which is the
   point, but they are ours, so they prove the plumbing and never count as earnings.</li>
   <li><strong>Revenue</strong> is external only. A payment counts as external when it comes from a wallet that is
-  not ours (canary, test and funding wallets are excluded) and is per-call sized, at most ${MAX_CALL_USD};
+  not ours (canary, test and funding wallets are excluded) and is per-call sized, at most $${MAX_CALL_USD};
   anything bigger is funding or a test, not a buy. The chart's "Internal" filter shows the excluded traffic
   explicitly rather than hiding it.</li>
   <li><strong>MPP</strong> settlements on Base and Celo are the same on-chain USDC transfer as x402 (the shim
@@ -198,12 +198,14 @@ and these are the receipts:</p>
   <li><strong>Self-funded (SOR)</strong> revenue is settled to the dedicated spending wallet that buys from outside
   sellers and upstream data for resale. It is real revenue from others and the chart can split it out
   by receiving wallet.</li>
-  <li><strong>x402scan</strong> indexes our settlements independently. Their totals count all traffic to our
-  wallets, our own canary and test buys included, and their seller row groups the spending wallet with the
-  treasury, so part of what appears there as demand is our own self-funding loop. Both figures are correct;
-  the external-only series on /revenue is the one that answers "did someone else pay for this".</li>
-  <li>Rails are read best effort from public RPCs with a 60-second cache: a flaky RPC marks that rail
-  unreachable without hiding the others, and wallet balances are float, not shown.</li>
+  <li><strong>Public x402 explorers</strong> index our settlements independently. Their totals count all traffic
+  to our wallets, our own canary and test buys included, and a seller row there can group the spending wallet
+  with the treasury, so part of what appears there as demand is our own self-funding loop. Both figures are
+  correct; the external-only series on /revenue is the one that answers "did someone else pay for this".</li>
+  <li>Rails are read best effort from public RPCs and cached for an hour: a flaky RPC marks that rail
+  unreachable without hiding the others. Wallet balances are float, never counted as revenue, and not
+  published: <a href="/api/revenue">/api/revenue</a> lists each receiving wallet's address, and anyone can read
+  its holdings on that chain's explorer.</li>
 </ul>
 
 <h2>Questions</h2>

@@ -32,6 +32,8 @@ import {
   getJsonAcross, ALGORAND_INDEXER_BASES,
 } from "./revenue-live.js";
 import { usdcDeltaForOwner, payerFromMeta, isExternalPayment } from "../scripts/revenue-scan-solana.js";
+import { solanaHistoryRead } from "./solana-history-rpc.js";
+import { evmLogsRead } from "./evm-logs-rpc.js";
 import { externalTempoPayments } from "./sales-ledger.js";
 import { createBlockClock, rpcHeaderReader, dateFromAnchors } from "./block-clock.js";
 
@@ -474,18 +476,23 @@ export function nextChunkSpan(message, span) {
   return Math.max(MIN_CHUNK, Math.floor(span / 4));
 }
 
-async function getLogsAdaptive(c, wallet, from, to, onNarrow) {
+// One hour of a chain's blocks: how far behind the head a range may start and
+// still be read from a public lane first (src/evm-logs-rpc.js). The ledger's
+// tail is minutes; a backfill or a catch-up after downtime stays keyed-first.
+const publicDepthBlocks = (chain) => Math.ceil(3_600_000 / (BLOCK_MS[chain] || 2000));
+
+async function getLogsAdaptive(c, wallet, from, to, onNarrow, { chain = null, head = null } = {}) {
   let span = to - from + 1;
   for (let attempt = 0; attempt < 6; attempt++) {
     const hi = from + span - 1;
     try {
       const scannedTo = Math.min(hi, to);
-      const logs = await rpcCall(c.rpcs, "eth_getLogs", [{
+      const logs = await evmLogsRead({
         address: c.token,
         topics: [TRANSFER_TOPIC, null, pad(wallet)],
         fromBlock: "0x" + from.toString(16),
         toBlock: "0x" + scannedTo.toString(16),
-      }], 8000);
+      }, { caller: "revenue-ledger", chain, rpcs: c.rpcs, head, maxDepthBlocks: chain ? publicDepthBlocks(chain) : 0, timeoutMs: 8000 });
       // Return the range actually covered. A narrowed retry scans LESS than the
       // caller asked for, and advancing the cursor past what was scanned would
       // skip those blocks forever - silently, since nothing throws.
@@ -502,9 +509,15 @@ async function getLogsAdaptive(c, wallet, from, to, onNarrow) {
   throw new Error(`${c.label}: getLogs kept failing down to ${span}-block ranges`);
 }
 
-async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
+export async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
   const c = EVM[chain];
-  const head = parseInt(await rpcCall(c.rpcs, "eth_blockNumber", [], 6000), 16);
+  // The head comes from the configured list (keyed first), as before: a
+  // fallback read is answered by the same lane that named the head. The tail
+  // stops a few seconds of blocks short of it, so a public node that is a
+  // block or two behind can still answer it in full (src/evm-logs-rpc.js
+  // refuses a public answer past that node's own head); the next tick reads
+  // the rest.
+  const head = Math.max(0, parseInt(await rpcCall(c.rpcs, "eth_blockNumber", [], 6000), 16) - Math.ceil(10_000 / (BLOCK_MS[chain] || 2000)));
   const cur = await readCursor(chain, wallet);
   let next = cur?.next_block ?? await startBlockFor(chain, head);
   // Capped at 9,000 blocks like the other two scanners (revenue-scan.js and
@@ -517,7 +530,7 @@ async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
   let chunks = 0;
   while (next <= head && chunks < maxChunks) {
     const to = Math.min(next + chunkSize - 1, head);
-    const { logs, scannedTo } = await getLogsAdaptive(c, wallet, next, to, (smaller) => { chunkSize = smaller; });
+    const { logs, scannedTo } = await getLogsAdaptive(c, wallet, next, to, (smaller) => { chunkSize = smaller; }, { chain, head });
     // EXACT dates, so a row never depends on a block-rate estimate again.
     // Only blocks that actually CONTAIN a transfer are fetched, and transfers
     // are rare (a handful per chain per day), so this is a few extra calls a
@@ -605,14 +618,17 @@ export async function syncSolana(wallet, { maxPages = 5 } = {}) {
     if (backfilled) newest = sigs[0].signature; // follow mode: advance the anchor
     for (const s of sigs) {
       if (s.err) continue;
-      // No try/catch here: rpcCall only throws when the RPC lane itself fails
+      // No try/catch here: the read only throws when the RPC lanes themselves fail
       // (429/timeout — a genuinely undecodable tx returns a null result, and
       // usdcDeltaForOwner(null) is just 0). Swallowing that error silently
       // dropped the settle from all-time forever, because the cursor advanced
       // past it and no full re-pass ever happens. Let it propagate instead:
       // putCursor never runs, the tick retries in 20s, and the PK dedupes the
       // replayed page.
-      const txn = await rpcCall(SOLANA_RPCS, "getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], 8000);
+      // Public RPC first, keyed lane behind it (src/solana-history-rpc.js);
+      // a public null falls through, so a pruned or unindexed answer never
+      // reads as "no transfer" here.
+      const txn = await solanaHistoryRead("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], { timeoutMs: 8000 });
       const usd = Number(usdcDeltaForOwner(txn?.meta, wallet).toFixed(6));
       if (usd > 0) {
         const payer = payerFromMeta(txn?.meta, wallet);
@@ -1480,7 +1496,11 @@ export function ledgerBuyerConcentration(wallets, { events } = {}) {
     counts.set(payer, (counts.get(payer) || 0) + 1);
     payments++;
   }
-  if (!payments) return { buyers: 0, payments: 0, topSharePct: null, top5SharePct: null, ...BUYER_SCOPE({ since: start }) };
+  return concentrationOf(counts, payments, start);
+}
+function concentrationOf(counts, payments, since, until = null) {
+  const window = until ? { until } : {};
+  if (!payments) return { buyers: 0, payments: 0, topSharePct: null, top5SharePct: null, ...window, ...BUYER_SCOPE({ since }) };
   const sorted = [...counts.values()].sort((a, b) => b - a);
   const pct = (n) => Math.round((n / payments) * 1000) / 10;
   return {
@@ -1488,10 +1508,41 @@ export function ledgerBuyerConcentration(wallets, { events } = {}) {
     payments,
     topSharePct: pct(sorted[0]),
     top5SharePct: pct(sorted.slice(0, 5).reduce((a, b) => a + b, 0)),
+    ...window,
     // The window and the exclusions, beside the number rather than in a
     // comment - see BUYER_SCOPE.
-    ...BUYER_SCOPE({ since: start }),
+    ...BUYER_SCOPE({ since }),
   };
+}
+
+/** Per-day payment counts per attributed payer, from one read of the
+ *  payment history: Map(day -> Map(payer -> payments)). Kept beside the
+ *  served series so a date-ranged concentration reads it instead of the
+ *  ledger. Unattributed payments are left out, as concentration leaves them. */
+export function buyerDayCounts(events) {
+  const out = new Map();
+  for (const { day, payer } of events || []) {
+    if (!payer) continue;
+    let m = out.get(day);
+    if (!m) { m = new Map(); out.set(day, m); }
+    m.set(payer, (m.get(payer) || 0) + 1);
+  }
+  return out;
+}
+
+/** Buyer concentration over [from, to] (UTC days, inclusive), never before
+ *  the chart epoch: the same figure ledgerBuyerConcentration serves, over a
+ *  chosen window. `since` and `until` say which window it is. */
+export function ledgerBuyerConcentrationIn(dayCounts, { from, to }) {
+  const start = process.env.REVENUE_DAILY_START || "2026-06-15";
+  const since = from && from > start ? from : start;
+  const counts = new Map();
+  let payments = 0;
+  for (const [day, m] of dayCounts || []) {
+    if (day < since || (to && day > to)) continue;
+    for (const [payer, n] of m) { counts.set(payer, (counts.get(payer) || 0) + n); payments += n; }
+  }
+  return concentrationOf(counts, payments, since, to || null);
 }
 
 /**

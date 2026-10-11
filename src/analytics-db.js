@@ -7,7 +7,7 @@
 //
 // Design notes:
 //   - ANALYTICS_DATABASE_URL takes precedence; falls back to DATABASE_URL so a
-//     single Postgres instance can hold both leads and analytics. If neither is
+//     single Postgres instance serves both. If neither is
 //     set, every function below is a no-op — the server boots and serves
 //     identically. The /analytics route surfaces `{ enabled: false }`.
 //   - Schema is created lazily (CREATE TABLE IF NOT EXISTS) — no migration step.

@@ -33,11 +33,11 @@ const M = {
 // synthMaxTokens carries GENEROUS headroom over the word target, because the
 // synthesis model is verbose and fills whatever budget it is given (measured:
 // a "~1,500 word" target produced ~1,750 words and truncated mid-sentence at a
-// 4,000 cap). Density is ~2.3 output tokens/word for this dense cited-markdown
-// format, so each budget = word_target x 2.3 x ~1.5 safety, and the prompt also
-// tells the model to finish over reaching length. Caps held at a provider-safe
-// 8,000 (Claude's standard max output); the source list is appended in code, so
-// none of this budget is spent retyping URLs.
+// 4,000 cap). Each budget carries at least 3.5 output tokens per target word
+// (scripts/test-report-synthesis.js): near 3 tokens/word the first synthesis
+// stopped for length and paid for a retry. The prompt also tells the model to
+// finish over reaching length; the source list is appended in code, so none of
+// this budget is spent retyping URLs.
 // ALL tiers synthesize with Opus (synthPrem). A 10-query evaluation (fair Opus judge +
 // deterministic grounding audit) showed Opus beats Sonnet on every dimension for
 // this task - citation quality, depth, would-pay, and zero fabricated numbers -
@@ -45,12 +45,12 @@ const M = {
 // product is top-quality too. Tiers differentiate by research breadth
 // (searches/sources/length), not model.
 export const RESEARCH_TIERS = {
-  "research": { price: "$0.60", maxUpstreamUsd: 0.35, subQ: 3, searches: 3, topK: 15, bodies: 5, synth: M.synthPrem, synthMaxTokens: 5000, words: "~1,500" },
-  "research-pro": { price: "$0.85", maxUpstreamUsd: 0.5, subQ: 6, searches: 8, topK: 30, bodies: 8, synth: M.synthPrem, synthMaxTokens: 7000, words: "~2,200" },
-  "research-max": { price: "$1.10", maxUpstreamUsd: 0.65, subQ: 12, searches: 12, topK: 40, bodies: 10, synth: M.synthPrem, synthMaxTokens: 8000, words: "~2,800" },
+  "research": { price: "$0.60", maxUpstreamUsd: 0.35, subQ: 3, searches: 3, topK: 15, bodies: 5, synth: M.synthPrem, synthMaxTokens: 6000, words: "~1,500" },
+  "research-pro": { price: "$0.85", maxUpstreamUsd: 0.5, subQ: 6, searches: 8, topK: 30, bodies: 8, synth: M.synthPrem, synthMaxTokens: 8800, words: "~2,200" },
+  "research-max": { price: "$1.10", maxUpstreamUsd: 0.65, subQ: 12, searches: 12, topK: 40, bodies: 10, synth: M.synthPrem, synthMaxTokens: 11200, words: "~2,800" },
   // Market / competitor brief: the research pipeline with a competitive-
   // intelligence PLAN frame and a fixed brief structure (thesis product #3).
-  "market-brief": { price: "$0.85", maxUpstreamUsd: 0.5, subQ: 6, searches: 8, topK: 30, bodies: 8, synth: M.synthPrem, synthMaxTokens: 7000, words: "~2,200",
+  "market-brief": { price: "$0.85", maxUpstreamUsd: 0.5, subQ: 6, searches: 8, topK: 30, bodies: 8, synth: M.synthPrem, synthMaxTokens: 8800, words: "~2,200",
     planFrame: "You are a competitive-intelligence analyst planning a MARKET / COMPETITOR BRIEF. Cover, across the sub-questions: how the market is defined and sized; the key players and what each offers; pricing and packaging; recent moves (funding, launches, M&A, partnerships, exits); how the players differentiate and what switching costs exist; risks, regulation and open questions.",
     synthFrame: "Structure the brief as: MARKET AT A GLANCE (definition, size/growth only where sourced), KEY PLAYERS (one short grounded paragraph or bullet per player: what it does, who it serves, pricing where sourced), RECENT MOVES, HOW THEY DIFFER (positioning, moat, switching costs), RISKS & OPEN QUESTIONS, BOTTOM LINE (2-4 sentences). Only include a player or a number the sources support." },
 };
@@ -325,7 +325,7 @@ const OUT_EXAMPLE = {
 export const RESEARCH_DEEP_TOOLS = [
   {
     route: "POST /v1/research", name: "Deep research report (grounded, cited)", slug: "research", category: "llm", price: RESEARCH_TIERS["research"].price,
-    description: "Hand over a whole research question and get one cited report back. The gateway plans sub-questions, runs multiple live web searches, reranks the sources by relevance, and synthesizes a ~1,500-word report with inline [n] citations and a source list - one payment, one outcome. Priced per report, not per call. Payable in USDC (x402/MPP) or by card (Stripe, >= $0.50 minimum - this clears it). Not cached (the web moves).",
+    description: "Hand over a whole research question and get one cited report back. The gateway plans sub-questions, runs multiple live web searches, reranks the sources by relevance, and synthesizes a ~1,500-word report with inline [n] citations and a source list - one payment, one outcome: one call returns one finished report. Payable in USDC (x402/MPP) or by card over MPP (card charges start at $0.50; this clears it). Not cached (the web moves).",
     tags: ["llm", "research", "web-search", "grounded", "citations", "deep-research", "agent", "premium"],
     discovery: { bodyType: "json", input: EXAMPLE, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeResearchHandler("research"),
