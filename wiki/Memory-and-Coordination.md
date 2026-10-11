@@ -58,6 +58,12 @@ Every access is recorded in a **tamper-evident audit log** the namespace owner c
 GET /api/memory/log?limit=100
 ```
 
+The log is bounded, and the answer's `retention` field says how:
+
+- Entries older than 90 days (`MEMORY_AUDIT_RETENTION_DAYS` on a self-hosted server) are removed. Removal is always the oldest part of the chain, so the first entry returned may start mid-chain: verify from its `prevHash`.
+- An entry that names a key or document that was later deleted or expired is **redacted** within ten minutes: its `key` and `data` read `null` and it carries `redacted: true`. Its `actor`, `action`, `seq`, `ts`, `prevHash` and `hash` stay, so the next entry still links to it; its own hash cannot be recomputed.
+- A namespace with no keys, documents or grants left has its log removed; a later write starts a new chain at `seq` 1.
+
 ## Semantic memory
 
 Store prose now, search it later. By default recall scores against a hashed term vector computed in-process (word and word-pair overlap, no embeddings API, no LLM); an operator who sets `EMBEDDINGS_URL` swaps in an OpenAI-compatible embeddings endpoint for true semantic similarity:

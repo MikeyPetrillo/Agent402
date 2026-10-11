@@ -1009,7 +1009,7 @@ const CATALOG = {
     category: "memory",
     price: "$0.001",
     description:
-      "Tamper-evident history of every change to a namespace - an append-only, hash-chained audit log the server attests to (provenance an agent can't forge for itself). ?owner=0x… reads a granted namespace.",
+      "Tamper-evident history of changes to a namespace - a hash-chained audit log the server attests to (provenance an agent can't forge for itself). Entries are kept for a bounded window (see retention in the answer), and an entry naming a key or document that was later deleted is redacted while still linking the chain. ?owner=0x… reads a granted namespace.",
     tags: ["memory", "audit", "provenance", "history", "verifiable"],
     discovery: {
       input: { limit: "50" },
