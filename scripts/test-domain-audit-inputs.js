@@ -27,6 +27,14 @@ ok(dnsHostFor(["ada.ns.cloudflare.com"])?.dnssec === true, "Cloudflare: DNSSEC s
 ok(dnsHostFor(["ns-123.awsdns-45.org"])?.host === "Amazon Route 53", "Route 53 matched on the awsdns- infix");
 ok(/Name\.com/.test(dnsHostFor(["ns1kpv.name.com"])?.host) && dnsHostFor(["ns1kpv.name.com"])?.caa === null && /Railway/.test(dnsHostFor(["ns1kpv.name.com"])?.note), "name.com nameservers: CAA unknown with the Railway-registration note (the real havok.holdings host)");
 ok(dnsHostFor(["ns1.some-registrar.example"]) === null, "unrecognised nameservers -> null (report says: check your host)");
+{
+  const ns1 = dnsHostFor(["dns1.p08.nsone.net", "dns2.p08.nsone.net"]);
+  ok(/NS1/.test(ns1?.host) && ns1.dnssec === null && ns1.platformCerts === false, "nsone.net nameservers are not asserted to be Netlify: DNSSEC unknown, no platform certificates");
+  ok(dnsHostFor(["dns1.p01.dsp.netlify.com"])?.host === "Netlify", "netlify.com nameservers are Netlify");
+  const multi = dnsHostFor(["dns1.p08.nsone.net", "ns-1283.awsdns-32.org"]);
+  ok(/multi-provider/.test(multi?.host) && /NS1/.test(multi.host) && /Route 53/.test(multi.host), "a zone on two recognised providers is reported as multi-provider, naming both");
+  ok(multi.caa === true && multi.dnssec === null && multi.platformCerts === false && /published at each/.test(multi.note), "multi-provider: a capability holds only when every provider has it, and no platform issues the certificates");
+}
 ok(DNS_HOSTS.every((h) => ["boolean", "object"].includes(typeof h.caa) && h.ns.length), "every host row carries a caa verdict (true/false/null) and suffixes");
 
 // 3. Cross-origin headers are advisory, CSP quality is scored.

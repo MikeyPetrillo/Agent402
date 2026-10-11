@@ -131,7 +131,11 @@ async function txtAt(name) {
 export const DNS_HOSTS = [
   { host: "Railway", ns: [".railway.app", ".railway.com"], caa: false, dnssec: false, platformCerts: true },
   { host: "Vercel", ns: [".vercel-dns.com"], caa: true, dnssec: false, platformCerts: true },
-  { host: "Netlify", ns: [".nsone.net", ".netlify.com"], caa: true, dnssec: false, platformCerts: true },
+  { host: "Netlify", ns: [".netlify.com"], caa: true, dnssec: false, platformCerts: true },
+  // nsone.net serves both NS1 Managed DNS customers (DNSSEC available, no
+  // platform certificates) and Netlify DNS zones (no DNSSEC): the suffix alone
+  // cannot tell them apart, so neither verdict is asserted.
+  { host: "NS1 (nsone.net, also used by Netlify DNS)", ns: [".nsone.net"], caa: true, dnssec: null, platformCerts: false, note: "nsone.net nameservers serve both NS1 Managed DNS, which offers DNSSEC, and Netlify DNS, which does not; check which panel manages this zone" },
   { host: "Cloudflare", ns: [".ns.cloudflare.com"], caa: true, dnssec: true, platformCerts: true },
   { host: "Amazon Route 53", ns: [".awsdns-"], caa: true, dnssec: true, platformCerts: false },
   { host: "Google Cloud DNS / Squarespace", ns: [".googledomains.com", ".google.com", ".squarespacedns.com"], caa: true, dnssec: true, platformCerts: false },
@@ -149,10 +153,24 @@ export const DNS_HOSTS = [
   // (and no DNSSEC). A domain managed at name.com directly can publish both.
   { host: "Name.com (Railway domain registrations use it)", ns: [".name.com"], caa: null, dnssec: null, platformCerts: false, note: "if this domain was bought through Railway, DNS is edited in Railway's panel, which offers no CAA record type and no DNSSEC; managed at name.com directly, both are available" },
 ];
+// A zone served by more than one recognised host (a multi-provider setup) is
+// reported as such: one provider's limits never stand for the whole zone, a
+// capability counts only when every provider offers it, and no single
+// platform is said to issue its certificates.
 export function dnsHostFor(nameservers) {
   const ns = (nameservers || []).map((h) => String(h || "").toLowerCase().replace(/\.$/, ""));
-  for (const h of DNS_HOSTS) if (ns.some((n) => h.ns.some((suf) => n.includes(suf)))) return h;
-  return null;
+  const hits = DNS_HOSTS.filter((h) => ns.some((n) => h.ns.some((suf) => n.includes(suf))));
+  if (hits.length <= 1) return hits[0] || null;
+  const all = (k) => (hits.every((h) => h[k] === true) ? true : hits.some((h) => h[k] === false) ? false : null);
+  const notes = hits.map((h) => h.note).filter(Boolean);
+  return {
+    host: `${hits.map((h) => h.host).join(" + ")} (multi-provider)`,
+    ns: hits.flatMap((h) => h.ns),
+    caa: all("caa"),
+    dnssec: all("dnssec"),
+    platformCerts: false,
+    note: [`the zone is served by ${hits.length} DNS providers; a record must be published at each of them`, ...notes].join("; "),
+  };
 }
 export async function probeDnsPosture(domain) {
   const nsR = await (async () => { try { const r = await Promise.race([dnsPromises.resolveNs(domain), new Promise((_, rj) => setTimeout(() => rj(new Error("DNS timeout")), DNS_TIMEOUT_MS))]); return { ok: true, records: r }; } catch (e) { return { ok: false, error: String(e?.code || e?.message || e) }; } })();
