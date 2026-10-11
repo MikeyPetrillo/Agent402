@@ -89,6 +89,8 @@ const looksLikeColor = (body) => {
   return /[a-fA-F]/.test(body) || /^(\d)\1+$/.test(body);
 };
 const FS_RE = /font-size\s*:\s*([^;"'`}]+)/g;
+const RADIUS_RE = /border(?:-[a-z]+)*-radius\s*:\s*([^;"'`}!]+)/g;
+const PRIMARY_CTX = /btn-primary|--btn-bg|ml-nav-cta|ml-mm-cta/;
 const FONT_SHORT_RE = /(?<![-\w])font\s*:\s*([^;"'`}]+)/g;
 
 function classify(rel, lines) {
@@ -129,6 +131,17 @@ export function scan(rel, src) {
       if (rule === "token") problems.push(`${rel}:${i + 1}: raw color ${hex} (use a var(--token) from DESIGN.md)`);
       else if (!PALETTE.has(norm(hex))) problems.push(`${rel}:${i + 1}: ${hex} is not a DESIGN.md palette value`);
     }
+    // Radius stance: surfaces and controls take var(--radius), the primary
+    // (money) button alone takes var(--radius-pill), 50% draws a dot. Literal
+    // regions may write the same values out: 0, 50%, 4px, 999px.
+    for (const m of line.matchAll(RADIUS_RE)) {
+      const v = m[1].trim();
+      if (rule === "token") {
+        const parts = v.split(/\s+/);
+        if (!parts.every((p) => /^(0|0px|50%|var\(--radius\)|var\(--radius-pill\))$/.test(p))) problems.push(`${rel}:${i + 1}: border radius "${v}" (use var(--radius), var(--radius-pill) or 50%)`);
+      } else if (!v.split(/\s+/).every((p) => /^(0|0px|50%|4px|999px)$/.test(p))) problems.push(`${rel}:${i + 1}: border radius "${v}" is off the DESIGN.md stance (0, 50%, 4px, 999px)`);
+    }
+    if (rule === "token" && line.includes("var(--radius-pill)") && !PRIMARY_CTX.test(line)) problems.push(`${rel}:${i + 1}: the pill radius belongs to the primary button only`);
     const sizes = [...line.matchAll(FS_RE)].map((m) => m[1]);
     for (const m of line.matchAll(FONT_SHORT_RE)) sizes.push(m[1]);
     for (const raw of sizes) {
@@ -141,7 +154,36 @@ export function scan(rel, src) {
       }
     }
   });
+  if (!EXEMPT_FILES[rel] && !LITERAL_FILES[rel] && rel !== TOKEN_FILE) problems.push(...scanHeadings(rel, stripComments(src)));
   return problems;
+}
+
+// Headings: one weight per level (h1 800, h2 700, h3 600), and the display
+// serif only on h1, where it is set at 400 (Instrument Serif ships one weight;
+// anything heavier is a synthesized fake bold). Read from inline <hN style>
+// and from CSS rules whose selector names the level (h1, .x-h1, .x h2).
+export const HEADING_WEIGHT = { h1: "800", h2: "700", h3: "600" };
+export function scanHeadings(rel, src) {
+  const out = [];
+  const lineOf = (idx) => src.slice(0, idx).split("\n").length;
+  const check = (level, decls, idx) => {
+    const w = (decls.match(/font-weight\s*:\s*(\d+)/) || [])[1];
+    const display = /var\(--font-display\)/.test(decls);
+    if (display && level !== "h1") out.push(`${rel}:${lineOf(idx)}: the display serif is for h1 only (found on ${level})`);
+    else if (display && w && w !== "400") out.push(`${rel}:${lineOf(idx)}: display h1 weight ${w} (the serif is set at 400)`);
+    else if (!display && w && w !== HEADING_WEIGHT[level]) out.push(`${rel}:${lineOf(idx)}: ${level} weight ${w} (DESIGN.md: ${HEADING_WEIGHT[level]})`);
+  };
+  for (const m of src.matchAll(/<(h[1-6])\b[^>]*?\sstyle="([^"]*)"/g)) if (HEADING_WEIGHT[m[1]] || /--font-display/.test(m[2])) check(m[1], m[2], m.index);
+  for (const m of src.matchAll(/([^{}\n`]*)\{([^{}]*)\}/g)) {
+    const sel = m[1].trim();
+    if (!/^[\s.#a-zA-Z0-9_,>:\-\[\]="*()+~]+$/.test(sel) || /\b(return|const|let|if|function)\b|=>/.test(sel) || !/font-/.test(m[2]) || /[=`]/.test(m[2])) continue;
+    const lv = sel.match(/(?:^|[\s,.>#-])(h[1-6])(?![\w])/);
+    if (lv && HEADING_WEIGHT[lv[1]]) check(lv[1], m[2], m.index);
+    else if (/var\(--font-display\)/.test(m[2])) out.push(`${rel}:${lineOf(m.index)}: the display serif is for h1 only (selector "${sel.slice(0, 40)}")`);
+  }
+  // A display face anywhere else (an inline style on a non-heading element).
+  for (const m of src.matchAll(/<(?!h[1-6]\b)([a-z0-9]+)\b[^>]*?\sstyle="[^"]*var\(--font-display\)/g)) out.push(`${rel}:${lineOf(m.index)}: the display serif is for h1 only (found on <${m[1]}>)`);
+  return out;
 }
 
 function pageModules() {
@@ -170,6 +212,15 @@ if (process.argv.includes("--self-test")) {
   ok(scan("src/x.js", `html: \`<p style="color:#0F5E43">\`, // design-tokens: literal`).length === 0, "a literal-pragma line takes palette values");
   ok(PALETTE.has("#0f5e43") && PALETTE.has("#34a877") && SCALE_PX.has(13), "palette and scale are read from the token file");
   ok(!PALETTE.has("#4ade80"), "the retired Tailwind green is not in the palette");
+  ok(scan("src/x.js", `.card{border-radius:12px}`).length === 1, "a literal radius is caught");
+  ok(scan("src/x.js", `.chip{border-radius:var(--radius-pill)}`).length === 1, "a pill outside the primary button is caught");
+  ok(scan("src/x.js", `.btn-primary{border-radius:var(--radius-pill)} .dot{border-radius:50%} .c{border-radius:var(--radius) var(--radius) 0 0}`).length === 0, "token radii, the primary pill and dots pass");
+  ok(scan("src/x.js", `<h2 style="font-family:var(--font-display);font-weight:400">`).length === 1, "the serif on an h2 is caught");
+  ok(scan("src/x.js", `<div style="font-family:var(--font-display)">`).length === 1, "the serif on a non-heading is caught");
+  ok(scan("src/x.js", `<h1 style="font-family:var(--font-display);font-weight:800">`).length === 1, "a fake-bold serif h1 is caught");
+  ok(scan("src/x.js", `<h1 style="font-family:var(--font-display);font-weight:400">`).length === 0, "a display h1 at 400 passes");
+  ok(scan("src/x.js", `.x-h2{font-weight:800;font-size:var(--fs-xl)}`).length === 1, "an off-level heading weight is caught");
+  ok(scan("src/x.js", `<h3 style="font-weight:600">`).length === 0, "the level weight passes");
 } else {
   const problems = [];
   for (const rel of pageModules()) problems.push(...scan(rel, readFileSync(new URL(rel, ROOT), "utf8")));

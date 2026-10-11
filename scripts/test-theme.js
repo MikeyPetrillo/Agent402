@@ -49,7 +49,7 @@ ok(/:root \{ color-scheme: light; \}/.test(LEDGER_CSS), "bare :root declares col
 ok(darkBlock.length > 0, "a :root[data-theme=\"dark\"] override block exists");
 ok(isDark(dtok("--paper")) && isLight(dtok("--ink")) && isDark(dtok("--card")), `dark override flips paper/ink/card (${dtok("--paper")} / ${dtok("--ink")} / ${dtok("--card")})`);
 ok(/:root\[data-theme="dark"\] \{ color-scheme: dark; \}/.test(LEDGER_CSS), "dark override sets color-scheme: dark");
-const rootNames = [...rootBlock.matchAll(/--([a-z0-9-]+):/g)].map((m) => m[1]).filter((n) => !/^(font|fs|radius)-/.test(n)); // type, scale and radius are theme-independent
+const rootNames = [...rootBlock.matchAll(/--([a-z0-9-]+):/g)].map((m) => m[1]).filter((n) => !/^(font|fs|radius)(-|$)/.test(n)); // type, scale and radius are theme-independent
 const darkNames = new Set([...darkBlock.matchAll(/--([a-z0-9-]+):/g)].map((m) => m[1]));
 const missing = rootNames.filter((n) => !darkNames.has(n));
 ok(missing.length === 0, `every default token has a dark counterpart${missing.length ? ` - MISSING: ${missing.map((n) => "--" + n).join(", ")}` : ""}`);

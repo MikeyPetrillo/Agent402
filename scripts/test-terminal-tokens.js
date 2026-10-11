@@ -42,7 +42,7 @@ ok(used.length >= 15, `the stylesheet is actually token-driven (${used.length} d
 
 // Typography, the type scale and radius are theme-independent by design and live only on the default
 // root - the same carve-out scripts/test-theme.js makes.
-const needsBothThemes = used.filter((v) => !/^--(font|fs|radius)-/.test(v) && !selfDeclared.has(v));
+const needsBothThemes = used.filter((v) => !/^--(font|fs|radius)(-|$)/.test(v) && !selfDeclared.has(v));
 const unresolved = needsBothThemes.filter((v) => !light.includes(`${v}:`) || !dark.includes(`${v}:`));
 ok(unresolved.length === 0, `every themed token the terminal uses is defined in BOTH themes${unresolved.length ? ` - MISSING: ${unresolved.join(", ")}` : ""}`);
 

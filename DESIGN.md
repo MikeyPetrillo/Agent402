@@ -39,7 +39,6 @@ colors:
     on-panel-bad:     "#FF8A7A"
     on-panel-warn:    "#E0A040"
     on-panel-violet:  "#A78BFA"
-    on-panel-mark:    "#ffffff10"   # the outlined 402 watermark stroke
   terminal:       # dense market surfaces (--t-*), AA at 11-12px, pinned by test-terminal-tokens.js
     t-bg:   { light: "#EEF2F6", dark: "#0A0E14" }
     t-ink:  { light: "#0E1721", dark: "#DCE4EE" }
@@ -52,7 +51,13 @@ typography:
   families:
     body: "'Geist', 'Geist Fallback', system-ui, sans-serif"          # --font-body
     mono: "'Geist Mono', 'Geist Mono Fallback', monospace"            # --font-mono
-  weights: [400, 500, 600, 700, 800]       # 900 only on the 402 watermark
+    display: "'Instrument Serif', 'Instrument Serif Fallback', Georgia, 'Times New Roman', serif"   # --font-display, h1 at --fs-4xl and up only
+  weights: [300, 400, 500, 600, 700, 800]  # Instrument Serif ships 400 only: never set it heavier
+  headings:                                # one weight per level, enforced by the guard
+    h1-display: { family: --font-display, weight: 400, tracking: "-0.01em", sizes: [4xl, 5xl, hero] }
+    h1: { family: --font-body, weight: 800, sizes: [2xl, 3xl] }
+    h2: { family: --font-body, weight: 700 }
+    h3: { family: --font-body, weight: 600 }
   scale:                                   # --fs-*; nothing between two steps
     2xs: 11px     # mono eyebrows, table heads, legal fine print
     xs: 12px      # mono meta, captions, code in dense tables
@@ -66,7 +71,6 @@ typography:
     4xl: 48px     # marketing h1
     5xl: 58px     # hero-scale h1 and big numbers
     hero: 72px    # home hero only; 404 code
-    mark: 220px   # decorative outlined watermark, never text to read
     code-inline: .88em   # inline code relative to its paragraph
   line-height: { tight: 0.98, heading: 1.02, body: 1.55, dense: 1.4 }
   tracking: { display: "-0.03em", heading: "-0.02em", eyebrow: "0.12em to 0.14em uppercase mono" }
@@ -75,12 +79,11 @@ spacing:          # px; the steps in use, in order of frequency
   page-gutter: 30px desktop, 16px phone
   section: 56px between sections
   container: 1180px
-radius:           # current stance, documented as-is (see proposals before changing it)
-  xs: 2px         # status cards, data panels
-  sm: 8px         # inputs, chips, menu buttons
-  md: 12px        # small cards
-  lg: 18px        # milled / obsidian feature cards
-  pill: 999px     # primary and secondary buttons, nav CTA, tabs
+radius:           # stance: square-ish surfaces, one expressive shape for the money action
+  radius: 4px     # --radius: every surface, card, panel, input, chip, tab, secondary button
+  pill: 999px     # --radius-pill: the primary button only
+  dot: 50%        # status dots, nothing else
+  none: 0         # tables, bars, the bottom of a receipt-edge surface
 elevation:
   signature: "0 18px 40px rgba(17,19,21,.10)"   # --shadow-lg (dark: rgba(0,0,0,.35)); one shadow, on feature cards only
   button: --btn-shadow
@@ -88,12 +91,14 @@ surfaces:
   milled: { bg: --milled-bg, border: --milled-border, note: "light brushed-metal card; dark theme gets a graphite version" }
   obsidian: { bg: --obsidian-bg, border: --obsidian-border, text: --on-panel*, note: "dark in both themes" }
 components:
-  button-primary: { bg: --btn-bg, fg: --btn-fg, radius: pill, shadow: --btn-shadow, size: sm-md, weight: 500 }
-  button-secondary: { bg: transparent, border: 1px --hairline, fg: --ink, radius: pill }
-  button-on-panel: { bg: --accent-lit, fg: --on-accent-lit, radius: pill }
-  card: { bg: --card, border: 1px --hairline, radius: xs or lg (feature), padding: 18-24px }
+  button-primary: { class: "btn btn-primary", bg: --btn-bg, fg: --btn-fg, radius: pill, shadow: --btn-shadow, font: "Geist 500 md", use: "the money action only: buy, subscribe, add to your agent, list your API" }
+  button-secondary: { class: "btn btn-secondary", bg: transparent, border: 1px --dash, fg: --ink, radius: 4px, font: "Geist 500 md", use: "everything else: docs, quickstart, playground, browse, submit a form" }
+  button-on-panel: { class: "on-panel (on the wrapper or the button)", primary: "--accent-lit on --on-accent-lit", secondary: "--on-panel text, --panel-rule-2 border" }
+  button-small: { class: btn-sm, font: "sm", padding: "9px 14px" }
+  card: { bg: --card, border: 1px --hairline, radius: 4px, padding: 18-24px }
+  receipt-edge: { class: receipt, what: "half-circle notches in --receipt-ground (default --paper) along the bottom edge plus a dashed tear line 13px above it; gradients only", where: "home live panel, report product cards on /reports, the pricing pair; nowhere else", needs: ">= 20px bottom padding" }
   table: { head: "2xs mono uppercase --faint", body: "md", rule: 1px --hairline, zebra: --card-zebra, numbers: tabular }
-  chip: { bg: --chip-bg, border: 1px --hairline, radius: pill, size: sm }
+  chip: { bg: --chip-bg, border: 1px --hairline, radius: 4px, size: sm }
   nav: { bg: --nav-bg (glass), link: "md --muted, active --ink with 1.5px underline", cta: button-primary, wrap: never }
   code-block: { bg: --panel, fg: --on-panel, comment: --on-panel-faint, string: --accent-lit, number: --on-panel-warn, keyword: --on-panel-violet, size: xs-sm mono }
   status-badge: { ok: --ok, degraded: --warn, failed: --bad, unknown: --dash; on a panel use --accent-lit / --on-panel-warn / --on-panel-bad }
@@ -104,7 +109,8 @@ components:
 This file is the contract for every page the server renders. The values above are the
 values in `src/ledger-chrome.js`; when one changes, change both in the same commit.
 `scripts/test-design-tokens.js` fails CI when a page module uses a raw hex color or a font
-size off the scale.
+size off the scale, and when a radius, a heading weight or the display serif leaves the
+rules below.
 
 ## Color
 - **One saturated accent.** `--accent` is the only brand color. It marks the primary path:
@@ -112,6 +118,16 @@ size off the scale.
   mean "failed", "warning" or "error"; those are `--bad` and `--warn`.
 - **Secondary actions carry no color.** A secondary button is ink on transparent with a
   hairline border. If two buttons sit together, at most one is filled.
+
+## Buttons
+- Two kinds only, both from the shared classes in `ledger-chrome.js`: `.btn.btn-primary`
+  (pill, filled) and `.btn.btn-secondary` (4px, outlined, no color). No page styles its own
+  button, and button labels are sentence case Geist, not uppercase mono.
+- **Primary is the money action**: buy, subscribe, add to your agent (pay per call), list
+  your API (get paid). One primary per view. Docs, quickstart, playground, browse and
+  navigation are secondary.
+- On an obsidian panel add `.on-panel`: the primary turns `--accent-lit`, the secondary
+  takes panel ink and rules.
 - **Status is semantic.** `--ok`, `--warn`, `--bad`, and `--dash` for "no data". Never use the
   accent green as a status color: users read it as "fine".
 - **Panels never borrow page tokens.** Inside an obsidian panel (`--panel`, `--obsidian-bg`)
@@ -122,20 +138,32 @@ size off the scale.
   never defines its own palette. `rgba()` overlays and `color-mix()` over a token are fine.
 
 ## Type
-- Two families only: Geist for language, Geist Mono for things that are literal.
+- Three families, each with one job: Geist for language, Geist Mono for things that are
+  literal, Instrument Serif (`--font-display`) for the largest headline on a page.
+- **The serif is for h1 at `--fs-4xl` and up only**, at weight 400 with -0.01em tracking.
+  Smaller h1s, every h2 and h3, and all UI stay Geist. The guard rejects the serif anywhere
+  but an h1.
 - **Mono means literal**: routes, commands, prices in tables, hashes, addresses, numbers in a
   ledger, eyebrows. Prose is never mono, even short notes under a table.
 - **Numbers are tabular**: any column or stat of figures uses
   `font-variant-numeric: tabular-nums` (Geist Mono is already fixed-width).
 - Use only `var(--fs-*)`. Body text is `--fs-base`; a lede is `--fs-lg`; inner-page h1 is
-  `--fs-3xl` to `--fs-5xl`. Headings use weight 700 or 800 with negative tracking; one weight
-  per heading level across the site.
+  `--fs-3xl` to `--fs-5xl`.
+- **One weight per heading level**: display h1 400 (serif), other h1 800, h2 700, h3 600.
+  The guard reads inline `<hN style>` and any CSS rule whose selector names the level.
 - Eyebrows: `--fs-2xs` mono, uppercase, 0.12em tracking, `--faint`.
 
 ## Layout
 - Container 1180px, 30px gutter (16px on phones). Sections 56px apart.
 - Nothing scrolls the page sideways at 390px; wide tables scroll inside their own wrapper.
-- Radius follows the stance in the front matter; do not introduce a new radius value.
+- Radius: `var(--radius)` (4px) on every surface and control, `var(--radius-pill)` on the
+  primary button alone, 50% for dots. The guard rejects any other radius.
+
+## Signature: the receipt edge
+- A paid call returns a receipt, so the surfaces that sell or prove one end in a perforated
+  tear-off: add `class="receipt"`. It is used on exactly three surfaces (the home live panel,
+  the report product cards, the pricing pair). Do not add it to tables, nav, or anything
+  repeated more than a dozen times on a page. It replaced the outlined "402" watermark.
 
 ## Voice (from CLAUDE.md)
 - First-party and affirmative; no competitor names; no em dashes.
@@ -148,7 +176,8 @@ size off the scale.
 
 ## Allowed literals (the guard's allowlist)
 - Email HTML (`src/email.js`, `followups.js`, `free-alerts.js`, `wallet-digest.js`, and lines
-  marked `design-tokens: literal`): inline styles with palette values and scale px only.
+  marked `design-tokens: literal`): inline styles with palette values, scale px, and radii of
+  0, 50%, 4px or 999px (the pill only on the money button).
 - Print CSS, the standalone fallback page in `server.js`, the public SVG badges: palette
   literals inside a `design-tokens: literal-start` region.
 - Rasterized SVG (`og-cards.js`, `aifi-card.js`, the brand mark, server.js `BRAND`) and the
