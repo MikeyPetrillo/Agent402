@@ -40,6 +40,7 @@
 // composite-guarded, not cached. 503 without OPENROUTER_API_KEY.
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
+import { stoppedForLength, trimToCompleteBlock } from "../report-synthesis.js";
 import { resolveCompany, eftsSearch, edgarGetJson, parse13fInformationTable, fetchXmlText } from "./edgar-kit.js";
 import { makeDossierHandler, DOSSIER_TIERS } from "./dossier-kit.js";
 import { makeInsiderHandler, INSIDER_TIERS, probeInsiderFilings } from "./insider-flow-kit.js";
@@ -116,6 +117,18 @@ async function chat(body, timeoutMs, user) {
 }
 const costOf = (d) => Number(d?.usage?.cost) || 0;
 const textOf = (d) => (d?.choices?.[0]?.message?.content || "").trim();
+/** "4 x8, 144 x3, 10-K x1": the per-form tally of a filing list, in order of first appearance. */
+export function formCounts(list) {
+  const m = new Map();
+  for (const f of list || []) m.set(f.form, (m.get(f.form) || 0) + 1);
+  return [...m].map(([form, n]) => `${form} x${n}`).join(", ");
+}
+/** Drop trailing lines that do not end cleanly (a bullet cut for length). */
+function trimCutLines(text) {
+  const lines = String(text || "").replace(/\s+$/, "").split("\n");
+  while (lines.length && !/[.!?:)"'`|\]]$/.test(lines[lines.length - 1].trim())) lines.pop();
+  return lines.join("\n").trim();
+}
 
 /** A leg's failure reason as the BUYER sees it: our own words plus, at most, a
  *  short markup-free excerpt. An upstream body is never relayed verbatim into
@@ -705,10 +718,10 @@ function makeTickerPackHandlerInner(tierSlug, depsIn) {
     const factLines = [
       `COMPANY: ${filings?.name || companyName} (ticker ${ticker}, SEC CIK ${cik})${filings?.sic ? `, SIC classification "${filings.sic}"` : ""}${filings?.exchanges?.length ? `, listed on ${filings.exchanges.join(", ")}` : ""}.`,
       filings?.filings?.length
-        ? `RECENT FILINGS (${filings.filings.length} most recent on EDGAR): ${filings.filings.slice(0, 12).map((f) => `${f.form} filed ${f.filed}${f.period ? ` for period ${f.period}` : ""}`).join("; ")}.`
+        ? `RECENT FILINGS (${filings.filings.length} most recent on EDGAR; counted by form: ${formCounts(filings.filings)}): ${filings.filings.map((f) => `${f.form} filed ${f.filed}${f.period ? ` for period ${f.period}` : ""}`).join("; ")}. Quote the counted-by-form figures; do not recount the list.`
         : `RECENT FILINGS: unavailable for this run${filingsP.ok ? "" : ` (${filingsP.error})`} - do not describe the company's filing history.`,
       dm
-        ? `DOSSIER LEG: produced. It read ${dm.filings_10k ?? 0} 10-K, ${dm.filings_10q ?? 0} 10-Q and ${dm.filings_8k ?? 0} 8-K filings, ${dm.insider_filings ?? 0} Form 4 filings, ${dm.web_angles ?? 0} grounded web angles, and cited ${dm.sources_cited ?? 0} sources.`
+        ? `DOSSIER LEG: produced. It read ${dm.filings_10k ?? 0} 10-K, ${dm.filings_10q ?? 0} 10-Q and ${dm.filings_8k ?? 0} 8-K filings, listed ${dm.insider_filings ?? 0} Form 4 filings as metadata (a capped listing, not a count of any window; the insider leg's counts are the measure), drew on ${dm.web_angles ?? 0} grounded web angles, and cited ${dm.sources_cited ?? 0} sources. The pack's Company section carries the dossier's full narrative on the business, financials and risks, which these facts do not repeat: do not describe products or financials yourself, and never say the pack or this material lacks a business description or send the reader elsewhere for one.`
         : `DOSSIER LEG: FAILED (${dossierR.error}). No company narrative is available - say the leg failed, and do not describe the business, financials or risks.`,
       im
         ? `INSIDER FLOW LEG (${im.start} to ${im.end}, ${im.window_days} days): produced. Form 4 filings in the window ${im.filings_in_window}, filings read ${im.filings_read}, transactions parsed ${im.transactions}. Open-market BUYS ${im.open_market_buys} totalling ${fmtUsd(im.buy_usd)} across ${im.distinct_buyers} distinct insiders. Open-market SELLS ${im.open_market_sells} totalling ${fmtUsd(im.sell_usd)} across ${im.distinct_sellers} distinct insiders. Net open-market flow ${fmtUsd(im.net_open_market_usd)}. Awards ${im.awards}, option exercises ${im.option_exercises}, tax-withholding dispositions ${im.tax_withholding}.`
@@ -753,6 +766,14 @@ ${factLines.join("\n")}`;
       const idx = text.indexOf("===NEXT===");
       if (idx >= 0) { execSummary = text.slice(0, idx).trim(); nextSteps = text.slice(idx + "===NEXT===".length).trim(); }
       else { execSummary = text.trim(); }
+      // A stop for length cuts the LAST part mid-sentence: drop the cut tail
+      // (a whole cut bullet, or the cut paragraph) and let the deterministic
+      // fallback below supply a part that never arrived.
+      if (stoppedForLength(packSynth.data)) {
+        if (idx >= 0) nextSteps = trimCutLines(nextSteps);
+        else execSummary = trimToCompleteBlock(execSummary);
+        if (!/[.!?:)"'`|\]]$/.test(execSummary)) execSummary = "";
+      }
     }
     // Deterministic fallbacks: the pack still ships if the connective pass is
     // unavailable, because both parts and the tables are already grounded.
@@ -918,4 +939,4 @@ export const TICKER_PACK_TOOLS = [
   },
 ];
 
-export const __test = { makeTickerPackHandler, defaultDeps, DISCLAIMER, PACK_SYNTH_MAX_UPSTREAM_USD };
+export const __test = { makeTickerPackHandler, defaultDeps, DISCLAIMER, PACK_SYNTH_MAX_UPSTREAM_USD, formCounts };

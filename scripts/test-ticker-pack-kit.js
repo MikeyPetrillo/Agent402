@@ -409,5 +409,35 @@ eq(out.meta.legs_produced, 3, "all three content legs produced on the happy path
   ok(o4.report.includes("## Executive summary"), "the pack still ships");
 }
 
+// ---------------------------------------------------------------------------
+// 12. The pack prompt hands over counts, not lists to count, and knows the
+//     dossier ships alongside it
+// ---------------------------------------------------------------------------
+{
+  const s5 = stubs();
+  await s5.handler({ ticker: "AAPL" });
+  const p = s5.prompts[0];
+  ok(p.includes("counted by form: 10-Q x1, 8-K x1"), "the prompt carries the per-form tally of the filing list");
+  ok(p.includes("10-Q filed 2026-08-01") && p.includes("8-K filed 2026-07-31"), "every listed filing reaches the prompt, not a slice of them");
+  ok(/never say the pack or this material lacks a business description/.test(p), "the prompt says the Company section carries the business narrative");
+  ok(/listed 8 Form 4 filings as metadata \(a capped listing/.test(p), "the dossier's Form 4 figure is labeled a capped listing, not a window count");
+  eq(__test.formCounts([{ form: "4" }, { form: "144" }, { form: "4" }]), "4 x2, 144 x1", "formCounts tallies in order of first appearance");
+}
+// ---------------------------------------------------------------------------
+// 13. A pack synthesis that stops for length never ships a cut sentence
+// ---------------------------------------------------------------------------
+{
+  const cut = { choices: [{ message: { content: "Apple Inc. is an electronic computers issuer.\n===NEXT===\n- Read the 10-Q filed 2026-08-01.\n- Re-run the insider window after the next" }, finish_reason: "length" }], usage: { cost: 0.04 } };
+  const s6 = stubs({ synthesize: async () => cut });
+  const o6 = await s6.handler({ ticker: "AAPL" });
+  ok(o6.report.includes("- Read the 10-Q filed 2026-08-01."), "the complete bullets before the cut are kept");
+  ok(!o6.report.includes("after the next\n") && !/after the next$/m.test(o6.report), "the bullet cut for length is dropped");
+  const cut2 = { choices: [{ message: { content: "Apple Inc. is an electronic computers issuer.\n\nThe insider window shows three sales across two insiders and" }, finish_reason: "length" }], usage: { cost: 0.04 } };
+  const s7 = stubs({ synthesize: async () => cut2 });
+  const o7 = await s7.handler({ ticker: "AAPL" });
+  ok(o7.report.includes("Apple Inc. is an electronic computers issuer.") && !o7.report.includes("two insiders and"), "a summary cut mid-paragraph keeps its complete paragraphs only");
+  ok(o7.report.includes("## What to check next") && /Re-run the insider leg/.test(o7.report), "the check-next list that never arrived comes from the deterministic fallback");
+}
+
 console.log(`\n[ticker-pack] ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

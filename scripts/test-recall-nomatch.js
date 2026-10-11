@@ -7,7 +7,7 @@
 // for any drug name absent from the food and device feeds (most of them).
 // Found 2026-08-27 generating the losartan sample. Offline: fetch is stubbed.
 import { GOV_TOOLS } from "../src/tools/gov-kit.js";
-import { probeRecalls } from "../src/tools/recall-report-kit.js";
+import { probeRecalls, reasonGroups, makeRecallHandler } from "../src/tools/recall-report-kit.js";
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error(`FAIL: ${m}`); process.exit(1); } };
@@ -45,4 +45,53 @@ try {
   ok(threw && threw.statusCode === 502 && /Could not read enough/.test(threw.message), "two feeds down (5xx) still refuses the report, uncharged (502)");
 } finally { globalThis.fetch = realFetch; }
 
-console.log(`\nPASS - ${pass} checks (openFDA no-match is an empty result, not an outage)`);
+// Reason groups: the model's WHY counts are built from exact per-wording
+// tallies, so its groups add up to the records shown, and it names an
+// impurity by the FDA's own term.
+{
+  const rows = [
+    ...Array.from({ length: 18 }, (_, i) => ({ reason: i % 2 ? "CGMP Deviations- AZIDO Impurity levels observed to be above acceptable limits." : "CGMP Deviations-  azido impurity levels observed to be above acceptable limits.", eventId: String(90000 + (i % 9)) })),
+    { reason: "Presence of foreign substance: plastic-like substance.", eventId: "94592" },
+    { reason: "Presence of Foreign Substance: Presence of a small piece of blue plastic embedded in the tablet.", eventId: "92584" },
+  ];
+  const g = reasonGroups(rows);
+  ok(g.length === 3, `identical wording (case and spacing folded) is one group (${g.length} groups)`);
+  ok(g[0].records === 18 && g[0].events === 9, "the largest group comes first with its record and event counts");
+  ok(g.reduce((a, x) => a + x.records, 0) === rows.length, "the groups add up to the records shown");
+}
+{
+  const firms = ["Firm A", "Firm B"];
+  const results = Array.from({ length: 20 }, (_, i) => ({
+    recalling_firm: firms[i % 2], classification: "Class II", status: i ? "Terminated" : "Ongoing",
+    reason_for_recall: i < 18 ? "CGMP Deviations- AZIDO Impurity levels observed to be above acceptable limits." : `Presence of foreign substance ${i}.`,
+    product_description: "Losartan Potassium Tablets", distribution_pattern: "Nationwide",
+    recall_initiation_date: `2022${String(1 + (i % 12)).padStart(2, "0")}10`, recall_number: `D-${1000 + i}-2022`, event_id: String(90000 + (i % 11)),
+  }));
+  const prompts = [];
+  const prevKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = "test-placeholder";
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    const body = (status, obj) => new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json" } });
+    if (u.includes("openrouter")) {
+      prompts.push(JSON.parse(init.body).messages[0].content);
+      return body(200, { choices: [{ message: { content: "## SNAPSHOT\n\nTwenty records." }, finish_reason: "stop" }], usage: { cost: 0 } });
+    }
+    if (u.includes("/drug/enforcement.json")) return body(200, { meta: { results: { total: 117 } }, results });
+    return body(404, { error: { code: "NOT_FOUND", message: "No matches found!" } });
+  };
+  try {
+    const out = await makeRecallHandler("recall-report")({ query: "losartan" });
+    ok(/^# FDA Recall Report: losartan/.test(out.report), "the handler ships a report on the stubbed feeds");
+    const p = prompts[0] || "";
+    ok(/=== REASONS \(shown records, grouped by identical FDA wording; 20 records in all\) ===/.test(p), "the prompt carries the REASONS tally for the records shown");
+    ok(p.includes('- "CGMP Deviations- AZIDO Impurity levels observed to be above acceptable limits.": 18 records, 11 events'), "each wording carries its exact record and event counts");
+    ok(/the groups must add up to the records shown/.test(p), "the prompt requires the WHY groups to add up");
+    ok(/an azido impurity is not a nitrosamine/.test(p), "the prompt forbids relabeling an impurity as a class the FDA wording does not name");
+  } finally {
+    globalThis.fetch = realFetch;
+    if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = prevKey;
+  }
+}
+
+console.log(`\nPASS - ${pass} checks (openFDA no-match is an empty result; recall reasons are tallied for the synthesis)`);
