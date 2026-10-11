@@ -15,7 +15,9 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
-import { toolPage, toolTitle, toolMetaDescription, relatedTools, powSnippetRequest } from "../src/pages.js";
+import { toolPage, toolTitle, toolMetaDescription, relatedTools, powSnippetRequest, displayPrice, categoryPage } from "../src/pages.js";
+import { mppOffersFor, mppRailsPhrase } from "../src/mpp-offers.js";
+import { creditsSalesEnabled } from "../src/credits-sales.js";
 // Remove every tag, repeating until none remain (one pass can leave a tag
 // formed by the text it removed).
 function stripTags(s) { let prev; do { prev = s; s = s.replace(/<[^>]*>/g, ""); } while (s !== prev); return s; }
@@ -100,9 +102,66 @@ ok(/\$0\.002\/call/.test(toolTitle({ name: "An extremely long name for a tool th
   const ag = factsOf(toolPage("https://example.test", { ...hostile, slug: "action-gate" }, []));
   ok(/pure computation/.test(ag) && !/reaches the network/.test(ag), "action-gate: wallet-only by policy, not by network");
 
+  // Long-running: the sentence names what the route's 402 offers (x402 on EVM
+  // chains, MPP's own offers for that route), never "only EVM exact".
+  {
+    const lr = { ...plain, slug: "lr", price: "$0.60", longRunning: true };
+    const f = factsOf(toolPage("https://example.test", lr, [], { mpp: true }));
+    const phrase = mppRailsPhrase(mppOffersFor({ priceUsd: 0.6, longRunning: true }));
+    ok(!/only EVM exact/.test(f) && /x402 is offered on EVM chains only/.test(f) && /Tempo is not offered/.test(f), "long-running: x402 on EVM chains, Tempo withheld");
+    ok(phrase ? f.includes(`MPP on ${phrase}`) : !/ and MPP on /.test(f), `long-running: the MPP clause is the route's own offers (${phrase || "none here"})`);
+    ok(!/MPP on/.test(factsOf(toolPage("https://example.test", lr, [], { mpp: false }))), "long-running: no MPP clause on a server without MPP");
+  }
+  // A judged route says a model picks the tool, only while the judge is on.
+  {
+    const j = { ...plain, slug: "judged", judgedChoice: true };
+    const saved = { t: process.env.TYPESAFE_API_KEY, o: process.env.OPENROUTER_API_KEY };
+    delete process.env.TYPESAFE_API_KEY; delete process.env.OPENROUTER_API_KEY;
+    const off = factsOf(toolPage("https://example.test", j, []));
+    process.env.TYPESAFE_API_KEY = "test";
+    const on = factsOf(toolPage("https://example.test", j, []));
+    if (saved.t === undefined) delete process.env.TYPESAFE_API_KEY; else process.env.TYPESAFE_API_KEY = saved.t;
+    if (saved.o !== undefined) process.env.OPENROUTER_API_KEY = saved.o;
+    ok(/judgment model picks among the shortlisted tools/.test(on), "judged route: the judgment model is named when the judge is configured");
+    ok(!/judgment model/.test(off), "judged route: no judgment sentence when no judge is configured");
+  }
+  ok(/a different result/.test(factsOf(toolPage("https://example.test", { ...plain, modelBacked: true }, []))) , "model-backed fact says result, not wording");
+  // The paid-call snippet keeps the SDK's spend controls on, capped at this
+  // tool's own highest price; the credits clause reads the sales switch.
+  {
+    const page = toolPage("https://example.test", plain, []);
+    ok(!/setSpendControls\?\.\(false\)/.test(page) && page.includes('maxAmountPerPayment: &quot;$0.001&quot;'), "paid snippet caps each payment at the tool price");
+    const ranged = toolPage("https://example.test", { ...plain, price: "$0.001", quoteRange: { minUsd: 0.001, maxUsd: 2 } }, []);
+    ok(ranged.includes('maxAmountPerPayment: &quot;$2.00&quot;'), "paid snippet caps a quoted route at its highest quote");
+    const note = decode(stripTags((page.match(/From an MCP client[\s\S]*?<p class="tp-sub">([\s\S]*?)<\/p>/) || [])[1] || ""));
+    ok(creditsSalesEnabled() ? /AGENT402_CREDITS_KEY/.test(note) : /AGENT402_CREDITS_KEY issued earlier/.test(note), "MCP note: the credits clause follows the sales switch");
+    const ib = decode(stripTags(toolPage("https://example.test", { ...plain, identityBound: true }, [])));
+    ok(!/from an AGENT402_CREDITS_KEY|or from AGENT402_CREDITS_KEY/.test(ib), "MCP note: no credits clause on an identity-bound tool");
+  }
+  ok(displayPrice("$3.3") === "$3.30" && displayPrice("$0.010") === "$0.01" && displayPrice("$0.001") === "$0.001" && displayPrice("$0.500") === "$0.50" && displayPrice("$2") === "$2.00", "displayPrice: one display form for catalog prices");
+  {
+    const one = categoryPage("https://example.test", { "GET /api/one": { name: "One", slug: "one", category: "chain", price: "$0.002", description: "d", tags: [] } }, "chain");
+    ok(/1 tool in this category/.test(stripTags(one)) && !/1 tools/.test(one), "a one-tool category says 1 tool");
+  }
+
   const r = powSnippetRequest("https://example.test", plain);
   ok(r.url === "https://example.test/api/plain?text=a+b&n=2", `GET PoW snippet carries the documented input (${r.url})`);
   ok(powSnippetRequest("https://example.test", hostile).url === "https://example.test/api/fake-html", "POST PoW snippet URL has no query string");
+}
+
+// The snippet's spend cap does what its comment says, in the SDK the snippet
+// imports: a quote at the cap is paid, one atomic unit above it is refused.
+{
+  const { x402Client } = await import("@x402/core/client");
+  const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const client = new x402Client();
+  client.setSpendControls?.({ maxAmountPerPayment: "$0.001" });
+  registerExactEvmScheme(client, { signer: privateKeyToAccount("0x" + "11".repeat(32)) });
+  const req = (amount) => ({ scheme: "exact", network: "eip155:8453", amount: String(amount), asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x" + "22".repeat(20), maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } });
+  const pay = async (a) => { try { return !!(await client.createPaymentPayload({ x402Version: 2, resource: { url: "https://example.test/a" }, accepts: [req(a)] })); } catch { return false; } };
+  ok(await pay(1000) === true, "spend cap: a quote at the tool price is signed");
+  ok(await pay(1001) === false, "spend cap: a quote above the tool price is refused");
 }
 
 // ---- 2 + 3. Booted: every catalog page. ----
