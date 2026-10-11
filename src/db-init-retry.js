@@ -8,7 +8,7 @@
 // happened to win the race. So: the first attempt is allowed to fail, and
 // the retries land after the stall. `delaysMs` is the schedule after each
 // failure; success stops it; exhaustion leaves the module's own on-demand
-// path (insertLead / recordToolCall backoff) as the last resort.
+// path (an on-demand ensureSchema / recordToolCall backoff) as the last resort.
 export function initWithRetry(label, init, { delaysMs = [20_000, 60_000, 300_000], onResult, log = console.log, schedule = setTimeout } = {}) {
   let attempt = 0;
   const run = async () => {

@@ -52,7 +52,7 @@ free.
 | Price | Price per request (e.g. `$0.002`) advertised in the 402. |
 | Network | `base` (mainnet, default) / `base-sepolia` / `polygon` / `arbitrum`. |
 | Verifier URL | Optional external verifier (a Worker) for PoW + x402 rails. |
-| Site ID | Tag used when this site reports stats to a multi-site dashboard (Cloud). Default: your domain. |
+| Site ID | A label for this site, kept with the plugin settings. The plugin does not send it anywhere yet (see Roadmap). Default: your domain. |
 
 ## Stats
 
@@ -101,11 +101,12 @@ public REST routes) **are** gated.
 
 ## Multi-site / agencies
 
-For multi-site rollups and white-label dashboards, see
+The plugin keeps its counts in this site's `wp_options` and does not
+push them anywhere yet. To roll up many sites today, run the
+`agent402-tollbooth` npm package (Express middleware, or
+`createEdgeTollbooth` in your own Worker) with `httpStatsSink` pointed at a
+collector you run; see
 [Tollbooth for Agencies](https://github.com/MikeyPetrillo/Agent402/wiki/Tollbooth-for-Agencies).
-The plugin already tags every stat with `site_id` (defaults to the
-site's domain), so an agency-side ingest endpoint can group across
-sites automatically.
 
 ## Privacy
 
@@ -116,7 +117,7 @@ exactly one JSON envelope per gated request goes to that Worker:
 
 ## Roadmap
 
-- 0.2 — Multi-site Cloud sink (HTTP push to a configured ingest URL).
+- 0.2 — HTTP stats push to an ingest URL you run, tagged with the Site ID.
 - 0.3 — Per-path overrides via a WP filter (charge a paywall page more
   than a homepage, e.g.).
 - 0.4 — WordPress.org submission (after the WP plugin team review). For

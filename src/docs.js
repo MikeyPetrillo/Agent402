@@ -88,7 +88,7 @@ function transformWikilinks(md) {
 //   ---                                       → end of sidebar (we stop here)
 // Anything else is ignored. Robust to extra whitespace and trailing prose
 // after `—`.
-function parseSidebar(raw) {
+export function parseSidebar(raw) {
   const sections = [];
   let current = null;
   const flush = () => { if (current) sections.push(current); current = null; };
@@ -134,9 +134,9 @@ function parseSidebar(raw) {
       // No trailing $ anchor: a markdown link can be followed by plain
       // parenthetical prose ("(managed)") that the em-dash strip above
       // doesn't catch, since it isn't separated by an em-dash. An anchored
-      // match silently dropped that whole bullet - found live via
-      // "[Try Tollbooth Cloud](url) (managed)" missing from the rendered
-      // sidebar entirely, not just its trailing text.
+      // match silently dropped that whole bullet - found live via a
+      // "[Link text](url) (note)" bullet missing from the rendered sidebar
+      // entirely, not just its trailing text.
       const md = main.match(/^\[([^\]]+)\]\(([^)]+)\)/);
       if (md) {
         current.items.push({ kind: "link", display: md[1].trim(), href: md[2].trim() });

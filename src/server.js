@@ -268,11 +268,9 @@ import { paymentReplayKey, createReplayGuard } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
 import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
-import { tollboothCloudPage } from "./tollbooth-cloud.js";
-import { tollboothWaitlistPage } from "./tollbooth-waitlist.js";
 import { operatorLeadsPage } from "./operator-leads.js";
 import { operatorWishesPage } from "./operator-wishes.js";
-import { initLeadsDb, insertLead, listLeads, countLeads, leadsDbEnabled } from "./leads-db.js";
+import { initLeadsDb, listLeads, countLeads, leadsDbEnabled } from "./leads-db.js";
 import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
 import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redactAnalytics } from "./analytics-db.js";
 import { databasesStatus } from "./db-status.js";
@@ -650,7 +648,7 @@ import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL, l
 import { classifyWishes, wishClassifyEnabled } from "./wish-classify.js";
 import { rerankMisses, rerankEnabled } from "./discovery-rerank.js";
 import { JUDGE_TOOLS, judgeEnabled } from "./tools/judge-kit.js";
-import { sweepStaleTsMap, makeWindowCounter } from "./rate-sweep.js";
+import { sweepStaleTsMap } from "./rate-sweep.js";
 
 // Shared with the MCP free tier (src/mcp-http.js) — same policy, separate
 // per-IP bucket. PoW redemption on the direct HTTP path goes through here.
@@ -3087,7 +3085,7 @@ app.get("/health", (req, res) => {
   const diagnostics = { uptime: Math.floor(process.uptime()), freeMode: FREE_MODE };
   // Non-fatal flags — surface tollbooth-leads wiring so we can verify the
   // Railway DATABASE_URL / AGENT402_OPERATOR_TOKEN env without poking either.
-  // These don't affect overall ok status; the tollbooth waitlist is optional.
+  // These don't affect overall ok status; the leads table is optional.
   const flags = {
     leadsDb: leadsDbReady,
     operatorToken: Boolean(OPERATOR_TOKEN),
@@ -4424,86 +4422,15 @@ app.post("/api/status/probe", express.json({ limit: "256kb" }), (req, res) => {
   res.json({ ok: true, received: rows.length, written });
 });
 app.get("/tollbooth", (_req, res) => htmlCache(res, 300, 900).send(tollboothLandingPage(BASE_URL)));
-app.get("/tollbooth/cloud", (_req, res) => htmlCache(res, 300, 900).send(tollboothCloudPage(BASE_URL)));
-app.get("/tollbooth/waitlist", (req, res) => {
-  const plan = String(req.query.plan || "team").toLowerCase();
-  const kind = String(req.query.kind || "waitlist").toLowerCase();
-  htmlCache(res, 300, 900).send(tollboothWaitlistPage(BASE_URL, { plan, kind }));
-});
-
-// Tollbooth waitlist intake. Form on /tollbooth/waitlist POSTs JSON here; we
-// validate, light rate-limit by IP, drop honeypot hits, and persist into
-// Postgres (DATABASE_URL). If the DB isn't configured the endpoint returns
-// 503 and the form falls back to its GitHub pre-fill flow.
-const ALLOWED_PLANS = new Set(["solo", "team", "agency", "enterprise", "partner"]);
-const ALLOWED_KINDS = new Set(["waitlist", "enterprise", "partner"]);
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const waitlistHits = new Map(); // ip -> [timestamps]
-const WAITLIST_LIMIT = 5; // per IP per window
-const WAITLIST_WINDOW_MS = 60_000;
-// F21: an aggregate ceiling across ALL IPs — a distributed source (many
-// one-time IPs, each under the per-IP limit) must not mass-insert leads.
-const WAITLIST_GLOBAL_LIMIT = 60; // per WAITLIST_WINDOW_MS, across every IP
-const waitlistGlobal = makeWindowCounter(WAITLIST_WINDOW_MS, WAITLIST_GLOBAL_LIMIT);
-// F21: keep the per-IP map from growing without bound between the periodic
-// sweeps below when a burst of unique IPs arrives.
-const RL_MAP_MAX_KEYS = 5000;
-function waitlistRateOk(ip) {
-  const now = Date.now();
-  if (waitlistHits.size > RL_MAP_MAX_KEYS) sweepStaleTsMap(waitlistHits, WAITLIST_WINDOW_MS, now);
-  const arr = (waitlistHits.get(ip) || []).filter((t) => now - t < WAITLIST_WINDOW_MS);
-  if (arr.length >= WAITLIST_LIMIT) {
-    waitlistHits.set(ip, arr);
-    return false;
-  }
-  arr.push(now);
-  waitlistHits.set(ip, arr);
-  return true;
+// The hosted tollbooth pages are retired: both URLs move to the self-hosted
+// product page, and the intake answers 410 without reading, storing or sending
+// anything. Leads stored before the intake closed stay readable on
+// /__operator/leads.
+for (const retired of ["/tollbooth/cloud", "/tollbooth/waitlist"]) {
+  app.get(retired, (_req, res) => res.redirect(301, "/tollbooth"));
 }
-app.post("/api/tollbooth/waitlist", async (req, res) => {
-  if (!leadsDbEnabled()) {
-    return res.status(503).json({ ok: false, error: "leads-db-unavailable" });
-  }
-  // Use Express's req.ip (honors `trust proxy`, line 470) so the bucket keys
-  // on the real client IP. Reading X-Forwarded-For directly + splitting on
-  // commas would return the attacker-supplied left-most value, letting a
-  // single source mint unlimited fresh buckets and bypass the rate limit.
-  const ip = req.ip || "unknown";
-  if (!waitlistRateOk(ip)) {
-    return res.status(429).json({ ok: false, error: "rate-limited" });
-  }
-  // F21: aggregate ceiling — checked after the per-IP gate so a distributed
-  // flood of one-time IPs can't slip past the per-IP limit and mass-insert.
-  if (!waitlistGlobal.allow()) {
-    return res.status(429).json({ ok: false, error: "waitlist-busy" });
-  }
-  const b = req.body || {};
-  // Honeypot: real form leaves `website` empty; bots fill every field.
-  if (typeof b.website === "string" && b.website.length > 0) {
-    return res.json({ ok: true, id: 0 });
-  }
-  const name = typeof b.name === "string" ? b.name.trim() : "";
-  const email = typeof b.email === "string" ? b.email.trim() : "";
-  // Length caps BEFORE any regex: EMAIL_RE's adjacent quantifier groups
-  // backtrack in polynomial time, and email is only bounded by the 100kb body
-  // parser — so a ~100k-char crafted value could pin CPU (ReDoS). RFC 5321
-  // caps a real email at 320 chars; name is stored, not matched, but capped
-  // for hygiene. Short-circuits (||) so the regex never sees an oversized string.
-  if (!name || name.length > 200 || !email || email.length > 320 || !EMAIL_RE.test(email)) {
-    return res.status(400).json({ ok: false, error: "name+email required" });
-  }
-  const plan = ALLOWED_PLANS.has(String(b.plan || "").toLowerCase()) ? String(b.plan).toLowerCase() : "team";
-  const kind = ALLOWED_KINDS.has(String(b.kind || "").toLowerCase()) ? String(b.kind).toLowerCase() : "waitlist";
-  const r = await insertLead({
-    kind, plan, name, email,
-    org: typeof b.org === "string" ? b.org.trim() : "",
-    sites: typeof b.sites === "string" ? b.sites.trim() : "",
-    message: typeof b.message === "string" ? b.message.trim() : "",
-    ip,
-    ua: (req.get("user-agent") || "").toString(),
-  });
-  if (!r.ok) return res.status(500).json({ ok: false, error: "insert-failed" });
-  res.json({ ok: true, id: r.id });
+app.post("/api/tollbooth/waitlist", (_req, res) => {
+  res.status(410).json({ ok: false, error: "gone", message: "The tollbooth waitlist is closed. agent402-tollbooth is open source and self-hosted: see /tollbooth.", see: "/tollbooth" });
 });
 
 // Operator dashboard — full per-tool usage + recent calls feed, gated by
@@ -5518,7 +5445,9 @@ app.get("/__operator/leads", async (req, res) => {
     rows: list.rows,
     total: stats.total,
     byPlan: stats.byPlan,
+    countsOk: stats.ok,
     dbEnabled: leadsDbEnabled(),
+    baseUrl: BASE_URL,
   }));
 });
 // Short aliases for the Smart Order Router guide. It is the most linkable
@@ -7040,6 +6969,9 @@ app.get("/api/index", (req, res) => {
 // body by the time this handler runs).
 const REG_WINDOW_MS = 3600_000;
 const regByIp = new Map(); // ip -> [timestamps]; global cap is regGlobal below
+// F21: keep the per-IP maps from growing without bound between the periodic
+// sweeps when a burst of unique IPs arrives.
+const RL_MAP_MAX_KEYS = 5000;
 let regGlobal = [];
 // The backstop, not the fairness rule: per-IP (5/hour) is what stops one actor,
 // and this exists only so the endpoint cannot become a fetch amplifier at
@@ -7048,13 +6980,12 @@ let regGlobal = [];
 // Env-overridable so it can be raised without a deploy.
 const REG_GLOBAL_MAX = Math.max(30, Number(process.env.INDEX_REGISTER_GLOBAL_MAX || 300));
 let regGlobalTripped = 0;
-// F21: evict stale keys from the one-time-IP rate maps so distributed input
-// can't grow them without bound (the per-IP prune only fires when the SAME IP
+// F21: evict stale keys from the one-time-IP rate map so distributed input
+// can't grow it without bound (the per-IP prune only fires when the SAME IP
 // returns). Mirrors the powChallengeHits / operatorSessions sweeps; the inline
-// size backstops above cover bursts between ticks.
+// size backstop covers bursts between ticks.
 setInterval(() => {
   const now = Date.now();
-  sweepStaleTsMap(waitlistHits, WAITLIST_WINDOW_MS, now);
   sweepStaleTsMap(regByIp, REG_WINDOW_MS, now);
 }, 60_000);
 app.post("/api/index/register", async (req, res) => {
@@ -10069,9 +10000,8 @@ if (WALLET_ADDRESS) revenueSnapshot(revenueWallets()).catch(() => { /* warm-up o
 // REVENUE_LEDGER=true, so test/CI boots never touch public RPCs.
 startRevenueLedger(revenueWallets());
 
-// Tollbooth leads — lazy Postgres init. No-op if DATABASE_URL is unset; in
-// that case /api/tollbooth/waitlist returns 503 and the form falls back to the
-// GitHub pre-fill flow. Status is surfaced via /health so we can verify the
+// Tollbooth leads — lazy Postgres init. No-op if DATABASE_URL is unset. The
+// intake is closed; the table stays readable on /__operator/leads. Status is surfaced via /health so we can verify the
 // Railway DATABASE_URL wiring without poking the live leads table.
 // Init RETRIES after the post-listen boot stall (src/db-init-retry.js): the
 // first attempt's handshake timer expires inside the stall on every boot.
