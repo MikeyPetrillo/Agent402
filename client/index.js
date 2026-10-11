@@ -43,8 +43,8 @@ export class Agent402 {
    * @param {number} [opts.maxPerCallUsd]    hard ceiling on a single paid call (USD); over → SpendingLimitError before paying
    * @param {number} [opts.dailyLimitUsd]    hard ceiling on rolling-24h paid spend (USD)
    * @param {number} [opts.maxPerHostUsd]    hard ceiling on rolling-24h paid spend to one seller host (USD)
-   * @param {string} [opts.creditsKey]       a prepaid card-credits key (a402_...) issued at agent402.tools/credits -
-   *                                         pays wallet-only tools by card when no payFetch is given
+   * @param {string} [opts.creditsKey]       a prepaid card-credits key (a402_...) already issued (new credits are
+   *                                         not on sale) - pays wallet-only tools when no payFetch is given
    * @param {number|null} [opts.maxResponseBytes=33554432]
    *        Hard ceiling on a response body, enforced BEFORE it is parsed. null disables it.
    * @param {{id:string, validate:function}} [opts.outputValidator]
@@ -387,7 +387,7 @@ export class Agent402 {
           const r = await send({ Authorization: `Bearer ${this.creditsKey}` });
           if (r.status === 402) {
             const body = await r.json().catch(() => ({}));
-            throw this._fail(slug, r, `call "${slug}" refused by credits: ${body.error || "payment required"}${body.balanceUsd != null ? ` (balance $${body.balanceUsd})` : ""} - top up at ${body.topup || `${this.baseUrl}/credits`}`);
+            throw this._fail(slug, r, `call "${slug}" refused by credits: ${body.error || "payment required"}${body.balanceUsd != null ? ` (balance $${body.balanceUsd})` : ""} ${body.topup ? ` - top up at ${body.topup}` : body.topupNote ? ` - ${body.topupNote}` : ""}`);
           }
           if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
           this._spendSettle(reservation);
@@ -397,7 +397,7 @@ export class Agent402 {
       }
       const r = await send(); // no wallet - succeeds only on a FREE_MODE instance
       if (r.ok) return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: false });
-      throw this._fail(slug, r, `call "${slug}" failed: HTTP ${r.status} - wallet-only tool; construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch) or { creditsKey } (prepaid card credits from ${this.baseUrl}/credits)`);
+      throw this._fail(slug, r, `call "${slug}" failed: HTTP ${r.status} - wallet-only tool; construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch) or { creditsKey } (a prepaid credits key already issued; new credits are not on sale)`);
     }
 
     // Free (compute-payable) tool: succeeds plainly on a FREE_MODE instance,

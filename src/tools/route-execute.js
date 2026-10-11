@@ -230,10 +230,13 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
       ...(routeSuffix ? [`${routeSuffix.slice(1)}-tier`] : [])],
     discovery: {
       bodyType: "json",
-      input: { slug: "hash", params: { text: "agent402", algo: "sha256" } },
+      // A wallet-only tool resolved from a task: the router's use. A pure-CPU
+      // tool such as hash runs free with proof-of-work, so it would teach the
+      // dearest way to run a free tool.
+      input: { task: "look up the DNS records of a domain", params: { name: "example.com", type: "A" } },
       inputSchema: {
         properties: {
-          task: { type: "string", description: "Plain-language task, e.g. \"sha256 hash of a string\" - resolved via the same ranker as /api/find. Provide task OR slug." },
+          task: { type: "string", description: "Plain-language task, e.g. \"look up the DNS records of a domain\" - resolved via the same ranker as /api/find. Provide task OR slug." },
           slug: { type: "string", description: "Exact tool slug to execute (skips ranking). Provide task OR slug." },
           params: { type: "object", description: "Input for the resolved tool, matching its inputSchema (default {})" },
           include: { type: "string", description: 'Where to route: default runs a tool from THIS host\'s catalog; "external" routes to the best-matching x402 seller in the OPEN index, buys the result from it and sells it to you (marked untrustedContent). Requires task (not slug).' },
@@ -242,8 +245,8 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
       },
       output: {
         example: {
-          receipt: { slug: "hash", route: "POST /api/hash", underlyingPriceUsd: 0.001, paidUsd: EXEC_PRICE_USD, routingFeeUsd: 0.009, seller: "internal", resolvedBy: "slug", ts: "2026-07-10T00:00:00.000Z", callRef: "sha256:…  (recomputable: sha256 of {\"nonce\":<payment authorization nonce>,\"slug\":…,\"ts\":…} - null on nonce-less calls)" },
-          result: { algo: "sha256", hex: "…", base64: "…" },
+          receipt: { slug: "dns", route: "GET /api/dns", underlyingPriceUsd: 0.001, paidUsd: EXEC_PRICE_USD, routingFeeUsd: 0.009, seller: "internal", resolvedBy: "task", ts: "2026-07-10T00:00:00.000Z", callRef: "sha256:…  (recomputable: sha256 of {\"nonce\":<payment authorization nonce>,\"slug\":…,\"ts\":…} - null on nonce-less calls)" },
+          result: { name: "example.com", type: "A", records: ["…"] },
         },
       },
     },

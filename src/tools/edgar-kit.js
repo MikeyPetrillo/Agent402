@@ -66,7 +66,9 @@ async function edgarGetJson(url) {
     const status = res.status;
     if (status === 404) throw Object.assign(bad("EDGAR returned 404 - unknown CIK, ticker, or tag/period combination", 422), { upstreamStatus: 404 });
     if (status >= 500) throw Object.assign(bad(`EDGAR upstream HTTP ${status} - try again later`, 502), { upstreamStatus: status });
-    throw Object.assign(bad(`EDGAR upstream HTTP ${status}: ${text.slice(0, 200)}`, 422), { upstreamStatus: status });
+    // Status and a short reason only: the upstream body is often an HTML
+    // block page, which is not ours to relay into an API error.
+    throw Object.assign(bad(`EDGAR upstream HTTP ${status}${status === 403 || status === 429 ? " - the source refused or rate-limited the request; try again later" : ""}`, 422), { upstreamStatus: status });
   }
   try {
     return JSON.parse(text);
