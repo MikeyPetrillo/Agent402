@@ -156,7 +156,7 @@ export function humanReportsPage(baseUrl) {
       <div class="pcard receipt" data-kind="dossier">
         <div class="k">Due-diligence dossier</div>
         <h3>Everything on a public company</h3>
-        <p>SEC filings, insider filings, financials and red flags - cited. Data a chatbot can't reach.</p>
+        <p>SEC filings, insider filings, financials and red flags, each one cited to the filing it came from.</p>
         <div class="field"><input id="in-dossier" type="text" aria-label="Everything on a public company" placeholder="A US ticker, e.g. AAPL" style="text-transform:uppercase"></div>
         <div class="gets"><b>What you get:</b> business, financials, filings, insider activity and red flags, every figure cited to the filing, plus the financial tables.</div>
         <div class="err" id="err-dossier"></div>
@@ -176,9 +176,9 @@ export function humanReportsPage(baseUrl) {
       <div class="pcard receipt" data-kind="ticker">
         <div class="k">Ticker pack</div>
         <h3>One ticker, the whole picture</h3>
-        <p>Company dossier, recent SEC filings, insider buying and selling, and which institutions hold it, in one cited report.</p>
+        <p>Company dossier, recent SEC filings, insider buying and selling, and its 5%+ holders from Schedule 13D/13G, in one cited report.</p>
         <div class="field"><input id="in-ticker" type="text" aria-label="One ticker, the whole picture" placeholder="A US ticker, e.g. AAPL" style="text-transform:uppercase"></div>
-        <div class="gets"><b>What you get:</b> the dossier, the insider-flow report and the 5%+ holders in one bundle.</div>
+        <div class="gets"><b>What you get:</b> the dossier, the insider-flow report and the 5%+ holders (Schedule 13D/13G) in one bundle.</div>
         <div class="err" id="err-ticker"></div>
         ${buyBtn("ticker", "ticker-pack", "Get the pack")}
         <div class="note" style="margin-top:10px;"><a href="/tools/ticker-pack" style="color:var(--muted);">Sample output + API docs &rarr;</a></div>
