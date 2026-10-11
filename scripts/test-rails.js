@@ -13,7 +13,7 @@
 //
 //   node scripts/test-rails.js                       # offline only
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-rails.js
-import { RAILS, RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT, RAIL_CHAIN_NAMES, RAILS_OS, RAILS_NOTE } from "../src/rails.js";
+import { RAILS, RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT, RAIL_CHAIN_NAMES, RAILS_OS, RAILS_NOTE, railKey } from "../src/rails.js";
 import { NETWORKS } from "../src/payments.js";
 import { railsCoveredByLiveView } from "../src/revenue-live.js";
 
@@ -76,7 +76,11 @@ if (TARGET) {
     for (const a of assets) ok(html.includes(a), `${p} mentions ${a}`);
   }
   const manifest = await (await fetch(`${TARGET}/.well-known/x402`)).json();
-  for (const r of RAILS) ok((manifest.ecosystem?.chains || []).includes(r.name), `manifest chains include ${r.name}`);
+  // ecosystem.chains names the rails this instance ENABLED (payment.x402.networks),
+  // so a self-host on one chain does not advertise twelve.
+  const enabled = new Set((manifest.payment?.x402?.networks || []).map((n) => String(n).toLowerCase()));
+  const expectChains = RAILS.filter((r) => enabled.has(railKey(r))).map((r) => r.name);
+  ok(expectChains.length > 0 && JSON.stringify(manifest.ecosystem?.chains || []) === JSON.stringify(expectChains), `manifest chains are the enabled rails (${expectChains.join(", ")})`);
 } else {
   console.log("(TARGET_URL unset — live-page checks skipped)");
 }
