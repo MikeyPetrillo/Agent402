@@ -392,6 +392,11 @@ try {
     // Healthy: the write lands at once and leaves nothing behind.
     const refs3 = record(10.7, 2);
     ok(await until(async () => (await eachOnce(refs3)) && obState().onDisk === 0) && await hlen("outbound") === 0, "with the database up a line lands at once and its entry is removed");
+    // Two identical payments in one tick (same everything, no tx): two lines, not one.
+    const twin = () => ob.recordOutbound({ chain: "base", payTo: "0x" + "c".repeat(40), amountAtomic: "1000", asset: "USDC", usd: 0.001, slug: "ob10-twin", origin: "https://seller.test/x", result: "undelivered", tx: null });
+    twin(); twin();
+    const twins = () => n(`SELECT count(*) AS n FROM ${schema}.log_lines WHERE stream = 'outbound-spend' AND body->>'slug' = 'ob10-twin'`);
+    ok(await until(async () => (await twins()) === 2) && await twins() === 2, "two identical payments in one tick are two lines (each has its own ref)");
   }
 
   // ---- 11. outbound, Redis down too: local disk, the word "local" --------------
