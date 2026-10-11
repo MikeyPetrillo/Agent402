@@ -288,7 +288,7 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
       ${formHtml}
       <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:18px 0 12px;">What we read from you</div>
       <table style="font-family:var(--font-mono);font-size:var(--fs-xs);border:1px solid var(--hairline);"><tbody>${whatWeReadHtml}</tbody></table>
-      <p style="font-size:var(--fs-sm);line-height:1.6;color:var(--faint);margin:16px 0 0;">Already listed and nobody is paying? <span style="font-family:var(--font-mono);color:var(--muted);white-space:nowrap;">POST /api/seller-payability</span> buys one call from your own endpoint with our wallet and reports every leg: the 402 decoded, whether a stock client's signature was accepted, the settlement receipt${price("seller-payability") ? `, for ${esc(price("seller-payability"))}` : ""}. Want the audit first? <span style="font-family:var(--font-mono);color:var(--muted);white-space:nowrap;">/api/x402-audit</span> grades any x402 endpoint's payment-security posture from the outside, without paying it${price("x402-audit") ? ` (${esc(price("x402-audit"))} a read)` : ""}. Run it on yourself before you list.</p>
+      <p style="font-size:var(--fs-sm);line-height:1.6;color:var(--faint);margin:16px 0 0;">Already listed and nobody is paying? <span style="font-family:var(--font-mono);color:var(--muted);white-space:nowrap;">POST /api/seller-payability</span> buys one call from your own endpoint with our wallet and reports every leg: the 402 decoded, whether a stock client's signature was accepted, the settlement receipt.${price("seller-payability") ? ` It costs ${esc(price("seller-payability"))}.` : ""} Want the audit first? <span style="font-family:var(--font-mono);color:var(--muted);white-space:nowrap;">/api/x402-audit</span> grades any x402 endpoint's payment-security posture from the outside, without paying it${price("x402-audit") ? ` (${esc(price("x402-audit"))} a read)` : ""}. Run it on yourself before you list.</p>
     </div>
   </div>
 </section>
@@ -297,7 +297,7 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ POST /api/route</div>
   <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">How buyers reach you.</h2>
   <div class="ml-meta" style="margin:10px 0 14px;">${ROUTE_ORDER.map((o) => `<span>${esc(o.short)}</span>`).join("")}<span>then judged fit</span></div>
-  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 28px;">Four places buyers find you. In the router, a buyer describes a task and gets a ranked list of matching tools from this catalog and the open index; a new seller with no probe history starts at full crawl health in that ranking. Being paid by the router is a separate gate: ${esc(routingProofSentence())}</p>
+  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 28px;">Four places buyers find you. In the router, a buyer describes a task and gets a ranked list of matching tools from this catalog and the open index; a new seller with no probe history starts at full crawl health in that ranking. Being paid by the router is a separate gate. ${esc(routingProofSentence())}</p>
   <div class="sl-scroll" style="border:1px solid var(--hairline);background:var(--card);">
     <table style="font-size:var(--fs-md);">
       <tbody>${surfacesHtml}
