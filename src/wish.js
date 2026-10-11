@@ -10,12 +10,12 @@
 // there's no production hard-stop here.
 import {
   existsSync, statSync, readFileSync, appendFileSync,
-  openSync, readSync, closeSync,
+  openSync, readSync, closeSync, writeFileSync, renameSync,
 } from "node:fs";
 import { join } from "node:path";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { logSafe } from "./log-safe.js";
-import { logLines, imports, stateDbEnabled, stateDbSchema, trackStoreReady, reconcileLogFile, withSchemaLock, withImportSlot } from "./state-db.js";
+import { logLines, imports, stateDbEnabled, stateDbSchema, trackStoreReady, reconcileLogFile, withSchemaLock, withImportSlot, withStateTx, stateQuery, leased } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
 
 const HAS_DATA_DIR = existsSync("/data");
@@ -57,6 +57,7 @@ let MAX_LINES = 50_000;
 let ipHits = new Map(); // ip -> timestamp[]
 let globalHits = [];
 let clusters = new Map(); // normalizedKey -> { count, firstSeen, lastSeen, sources, issueOpened }
+let rolled = new Map(); // clusterHash(normalizedKey) -> { count, firstSeen, lastSeen, sources, callerCount, issueOpened } (rotated lines, no text)
 let lineCount = 0;
 let capReached = false;
 
@@ -103,6 +104,25 @@ export const QUALIFY_MIN_CALLERS = 3;
 // aggregate is the view, and `staleHidden` says how many rows the view is
 // holding back so the omission is visible rather than a silent trim.
 export const WISH_STALE_DAYS = Number(process.env.WISH_STALE_DAYS) > 0 ? Number(process.env.WISH_STALE_DAYS) : 30;
+
+// RETENTION. The record is no longer kept forever: a line (request text, its
+// optional context, the caller fingerprint) older than wishRetentionDays()
+// (WISH_RETENTION_DAYS, default 180) is deleted by rotateWishes, from the
+// file and from the database stream alike. What it contributed to the
+// counts the board publishes (totalWishes, distinctClusters,
+// qualifiedClusters, and each live row's count, sources, callers and
+// first-seen) is folded into ONE rollup record keyed by a keyed hash of the
+// normalized text, never the text: a later wish with the same text merges
+// with its rolled-up history, so rotation changes no published number and
+// exposes nothing the board did not already show. Caller fingerprints are
+// day-scoped, so a rolled-up caller count and a live caller set never
+// overlap and their sum is exact.
+export const WISH_RETENTION_DEFAULT_DAYS = 180;
+export function wishRetentionDays(env = process.env) {
+  const n = Number(String(env.WISH_RETENTION_DAYS ?? "").trim());
+  return Number.isInteger(n) && n > 0 ? n : WISH_RETENTION_DEFAULT_DAYS;
+}
+export const WISH_ROTATE_EVERY_MS = 6 * 3_600_000;
 const CALLERS_PER_CLUSTER_CAP = 1000;
 
 // The served-overlay floor. FIND_WEAK_SCORE (3) is the threshold below which
@@ -128,6 +148,46 @@ export function callerHash(ip, ts = Date.now()) {
   if (!secret) return null;
   const day = new Date(ts).toISOString().slice(0, 10);
   return createHmac("sha256", secret).update(`${ip || "?"}|${day}`).digest("hex").slice(0, 12);
+}
+
+/** The key a rotated cluster is kept under: a keyed hash of its normalized
+ *  text (WISH_CALLER_SALT, else POW_SECRET; unkeyed sha256 without either).
+ *  Never the text. */
+export function clusterHash(key) {
+  const secret = (process.env.WISH_CALLER_SALT || process.env.POW_SECRET || "").trim();
+  const h = secret ? createHmac("sha256", secret).update(`cluster|${key}`) : createHash("sha256").update(`cluster|${key}`);
+  return h.digest("hex").slice(0, 24);
+}
+const hashOf = (key, c) => {
+  if (c && c.__h && c.__hk === key) return c.__h;
+  const h = clusterHash(key);
+  if (c) { Object.defineProperty(c, "__h", { value: h, writable: true, configurable: true }); Object.defineProperty(c, "__hk", { value: key, writable: true, configurable: true }); }
+  return h;
+};
+const callerCountOf = (c) => (c?.callers instanceof Set ? c.callers.size : Number(c?.callerCount) || 0);
+/** A live cluster with its rolled-up history added (or the live cluster unchanged). */
+function withRolled(key, c) {
+  const r = rolled.size ? rolled.get(hashOf(key, c)) : null;
+  if (!r) return c;
+  return {
+    count: c.count + r.count,
+    firstSeen: Math.min(c.firstSeen || Infinity, r.firstSeen || Infinity),
+    lastSeen: Math.max(c.lastSeen || 0, r.lastSeen || 0),
+    sources: Object.fromEntries(["api", "mcp", "find-miss"].map((s) => [s, (c.sources?.[s] || 0) + (r.sources?.[s] || 0)])),
+    callerCount: callerCountOf(c) + (Number(r.callerCount) || 0),
+    issueOpened: !!(c.issueOpened || r.issueOpened),
+  };
+}
+/** Every cluster the board counts: live ones (merged with their history) and rolled-up ones with no live line, as [textKey|null, cluster]. */
+function mergedClusters() {
+  const out = [];
+  const used = new Set();
+  for (const [key, c] of clusters) {
+    if (rolled.size) { const h = hashOf(key, c); if (rolled.has(h)) used.add(h); }
+    out.push([key, withRolled(key, c)]);
+  }
+  for (const [h, r] of rolled) if (!used.has(h)) out.push([null, r]);
+  return out;
 }
 
 // Does a cluster's shape clear the anti-spam bar described above? Exported so
@@ -359,6 +419,7 @@ function readTail(path, maxBytes) {
  */
 function rebuildFromFile() {
   clusters = new Map();
+  rolled = new Map();
   lineCount = 0;
   capReached = false;
   if (stateDbEnabled()) {
@@ -428,10 +489,25 @@ async function rebuildFromStateDb() {
   const total = await logLines.count(WISH_STREAM);
   rows.reverse();
   clusters = new Map();
-  applyLines(rows.map((r) => r.body));
+  rolled = new Map();
+  // The rollup row is read on its own, so it counts even past the tail window.
+  const ru = await stateQuery(`SELECT body FROM ${stateDbSchema()}.log_lines WHERE stream = $1 AND body->>'type' = 'rollup' ORDER BY id DESC LIMIT 1`, [WISH_STREAM]);
+  if (ru.rows[0]) loadRollup(ru.rows[0].body);
+  applyLines(rows.map((r) => r.body).filter((b) => b?.type !== "rollup"));
   applyLines(pendingAppends); // recorded here, not written yet
   lineCount = total + pendingAppends.length;
   capReached = lineCount >= MAX_LINES;
+}
+function loadRollup(rec) {
+  rolled = new Map();
+  for (const [h, r] of Object.entries(rec?.clusters || {})) {
+    if (!/^[0-9a-f]{24}$/.test(h) || !r || typeof r !== "object") continue;
+    rolled.set(h, {
+      count: Number(r.count) || 0, firstSeen: Number(r.firstSeen) || 0, lastSeen: Number(r.lastSeen) || 0,
+      sources: { api: Number(r.sources?.api) || 0, mcp: Number(r.sources?.mcp) || 0, "find-miss": Number(r.sources?.["find-miss"]) || 0 },
+      callerCount: Number(r.callerCount) || 0, issueOpened: !!r.issueOpened,
+    });
+  }
 }
 function applyLines(recs) {
   let skipped = 0;
@@ -439,6 +515,7 @@ function applyLines(recs) {
     // One unreadable line is skipped, never the board.
     try {
       if (!rec || typeof rec !== "object") { if (rec) skipped++; continue; }
+      if (rec.type === "rollup") { loadRollup(rec); continue; }
       if (rec.type === "threshold" && typeof rec.key === "string") {
         const c = clusters.get(rec.key);
         if (c) c.issueOpened = true;
@@ -566,7 +643,9 @@ export function recordWish({ need, context, source, ip } = {}) {
   const cluster = upsertCluster(key, src, now, caller);
   appendLine({ need: needTrimmed, context: contextTrimmed, source: src, ts: now, caller });
 
-  if (!exempt && !cluster.__overflow && cluster.count === WISH_THRESHOLD && !cluster.issueOpened) {
+  const history = !cluster.__overflow && rolled.size ? rolled.get(hashOf(key, cluster)) : null;
+  if (history?.issueOpened) cluster.issueOpened = true;
+  if (!exempt && !cluster.__overflow && cluster.count + (history?.count || 0) === WISH_THRESHOLD && !cluster.issueOpened) {
     cluster.issueOpened = true;
     console.warn(`[wish-threshold] cluster "${logSafe(key)}" hit ${WISH_THRESHOLD} signals`);
     appendLine({ type: "threshold", key, ts: now });
@@ -623,9 +702,10 @@ export function getWishesAggregate({ limit = 200, detailed = false } = {}) {
   // per-day dedupe on find-misses, and QUALIFY_MIN_CALLERS requiring distinct
   // callers. Those are what stopped the August farming, and they work with the
   // numbers in plain sight.
+  const merged = mergedClusters();
   const base = {
-    distinctClusters: clusters.size,
-    totalWishes: [...clusters.values()].reduce((s, c) => s + c.count, 0),
+    distinctClusters: merged.length,
+    totalWishes: merged.reduce((s, [, c]) => s + c.count, 0),
     threshold: WISH_THRESHOLD,
     qualifyMinSpanHours: QUALIFY_MIN_SPAN_MS / 3_600_000,
     qualifyMinCallers: QUALIFY_MIN_CALLERS,
@@ -633,10 +713,12 @@ export function getWishesAggregate({ limit = 200, detailed = false } = {}) {
   if (!detailed) {
     // Public beacon: aggregates only. Expose how many clusters are hot enough
     // to matter, never WHICH — no text, no per-cluster counts, no timestamps.
-    return { ...base, qualifiedClusters: [...clusters.values()].filter(clusterQualifies).length };
+    return { ...base, qualifiedClusters: merged.filter(([, c]) => clusterQualifies(c)).length };
   }
   const staleBefore = Date.now() - WISH_STALE_DAYS * 86_400_000;
-  const live = [...clusters.entries()].filter(([, c]) => (c.lastSeen || 0) >= staleBefore);
+  // Rolled-up clusters carry no text and are always older than the stale
+  // window, so they are counted (staleHidden) and never listed.
+  const live = merged.filter(([key, c]) => key !== null && (c.lastSeen || 0) >= staleBefore);
   const rows = live
     // Recency first, then weight. A cluster asked for today outranks one that
     // accumulated more hits a month ago: the board answers "what is being
@@ -650,7 +732,7 @@ export function getWishesAggregate({ limit = 200, detailed = false } = {}) {
       sources: { api: c.sources.api || 0, mcp: c.sources.mcp || 0, "find-miss": c.sources["find-miss"] || 0 },
       // Distinct day-scoped caller hashes seen (never addresses). Legacy
       // lines carry no caller, so old clusters read 0 until fresh signals.
-      callers: c.callers instanceof Set ? c.callers.size : 0,
+      callers: callerCountOf(c),
       firstSeen: new Date(c.firstSeen).toISOString(),
       lastSeen: new Date(c.lastSeen).toISOString(),
       issueOpened: !!c.issueOpened,
@@ -685,10 +767,122 @@ export function getWishesAggregate({ limit = 200, detailed = false } = {}) {
     attributable: attributableOf(rows),
     // Stated, so a quiet board reads as quiet rather than as a rendering bug.
     staleDays: WISH_STALE_DAYS,
-    staleHidden: clusters.size - live.length,
+    staleHidden: merged.length - live.length,
     liveClusters: live.length,
     clusters: rows,
   };
+}
+
+// --- rotation -----------------------------------------------------------------
+const minPositive = (...xs) => { const v = xs.map(Number).filter((x) => x > 0); return v.length ? Math.min(...v) : 0; };
+/** Fold `recs` (the lines to delete) into the rollup `base` (a plain object of hash -> entry). */
+function foldIntoRollup(base, recs) {
+  const out = { ...base };
+  const callersBy = new Map(); // hash -> Set of day-scoped callers among the folded lines
+  // Earlier rollups first (summed), so a line folded below adds to them.
+  for (const rec of recs) {
+    if (rec?.type !== "rollup") continue;
+    for (const [h, r] of Object.entries(rec.clusters || {})) {
+      if (!r || typeof r !== "object") continue;
+      const e = out[h];
+      out[h] = !e ? { ...r } : {
+        count: (e.count || 0) + (r.count || 0),
+        firstSeen: minPositive(e.firstSeen, r.firstSeen),
+        lastSeen: Math.max(e.lastSeen || 0, r.lastSeen || 0),
+        sources: Object.fromEntries(["api", "mcp", "find-miss"].map((k) => [k, (e.sources?.[k] || 0) + (r.sources?.[k] || 0)])),
+        callerCount: (e.callerCount || 0) + (r.callerCount || 0),
+        issueOpened: !!(e.issueOpened || r.issueOpened),
+      };
+    }
+  }
+  for (const rec of recs) {
+    if (!rec || typeof rec !== "object" || rec.type === "rollup") continue;
+    if (rec.type === "threshold" && typeof rec.key === "string") {
+      const h = clusterHash(normalize(rec.key));
+      out[h] = { ...(out[h] || { count: 0, firstSeen: 0, lastSeen: 0, sources: { api: 0, mcp: 0, "find-miss": 0 }, callerCount: 0 }), issueOpened: true };
+      continue;
+    }
+    if (typeof rec.need !== "string") continue;
+    const key = normalize(rec.need);
+    if (!key) continue;
+    const h = clusterHash(key);
+    const src = ["api", "mcp", "find-miss"].includes(rec.source) ? rec.source : "api";
+    const ts = Number(rec.ts) || 0;
+    const e = out[h] = { ...(out[h] || { count: 0, firstSeen: 0, lastSeen: 0, sources: { api: 0, mcp: 0, "find-miss": 0 }, callerCount: 0, issueOpened: false }) };
+    e.sources = { ...e.sources, [src]: (e.sources?.[src] || 0) + 1 };
+    e.count = (e.count || 0) + 1;
+    if (ts && (!e.firstSeen || ts < e.firstSeen)) e.firstSeen = ts;
+    if (ts > (e.lastSeen || 0)) e.lastSeen = ts;
+    if (typeof rec.caller === "string" && rec.caller) {
+      let set = callersBy.get(h); if (!set) callersBy.set(h, (set = new Set()));
+      set.add(rec.caller);
+    }
+  }
+  for (const [h, set] of callersBy) out[h].callerCount = (Number(out[h].callerCount) || 0) + set.size;
+  return out;
+}
+/** A line to delete: a request older than the cutoff (or with no readable time), or an earlier rollup. */
+const isOld = (rec, cutoff) => rec && typeof rec === "object" && (rec.type === "rollup" || !(Number(rec.ts) >= cutoff));
+const rollupRec = (clustersObj, at, cutoff) => ({ type: "rollup", ts: at, before: cutoff, clusters: clustersObj });
+/** Rewrite the file without its old lines, the rollup first. Synchronous: no append can interleave in this process. */
+function rotateFile(cutoff, at, rollupFrom) {
+  if (!existsSync(WISH_FILE)) return { removed: 0 };
+  const recs = [];
+  for (const line of readFileSync(WISH_FILE, "utf8").split("\n").filter(Boolean)) { try { recs.push(JSON.parse(line)); } catch { /* an unreadable line is dropped with the old ones */ recs.push(null); } }
+  const old = recs.filter((r) => r === null || isOld(r, cutoff));
+  if (!rollupFrom && !old.some((r) => r?.type !== "rollup")) return { removed: 0 };
+  const keep = recs.filter((r) => r !== null && !isOld(r, cutoff));
+  const folded = rollupFrom || foldIntoRollup({}, old);
+  const lines = [...(Object.keys(folded).length ? [rollupRec(folded, at, cutoff)] : []), ...keep].map((r) => JSON.stringify(r));
+  const tmp = `${WISH_FILE}.rotate-${process.pid}`;
+  writeFileSync(tmp, lines.length ? lines.join("\n") + "\n" : "");
+  renameSync(tmp, WISH_FILE);
+  return { removed: old.filter((r) => r?.type !== "rollup").length, kept: keep.length, folded };
+}
+/**
+ * Delete every board line older than wishRetentionDays(), folding its counts
+ * into the rollup record (see RETENTION above). File mode rewrites the file;
+ * with the state database the stream's old rows and previous rollup are
+ * replaced in one transaction, and the write-through file is rewritten first
+ * (a file with fewer lines than the stream is never rolled forward, so a
+ * failed commit cannot bring a deleted line back). Rebuilds the board after.
+ * Returns { removed, kept }.
+ */
+export async function rotateWishes({ now = Date.now() } = {}) {
+  const cutoff = now - wishRetentionDays() * 86_400_000;
+  if (!stateDbEnabled()) {
+    const r = rotateFile(cutoff, now, null);
+    if (r.folded) rebuildFromFile();
+    return { removed: r.removed, kept: r.kept ?? lineCount };
+  }
+  await wishLoader?.ready();
+  const s = stateDbSchema();
+  const out = await withStateTx(async (c) => {
+    const q = await c.query(
+      `SELECT id, body FROM ${s}.log_lines WHERE stream = $1 AND (body->>'type' = 'rollup' OR jsonb_typeof(body->'ts') IS DISTINCT FROM 'number' OR (body->>'ts')::numeric < $2) ORDER BY id FOR UPDATE`,
+      [WISH_STREAM, cutoff],
+    );
+    const old = q.rows.map((r) => r.body);
+    const removed = old.filter((b) => b?.type !== "rollup").length;
+    if (!removed) return { removed: 0 };
+    const folded = foldIntoRollup({}, old);
+    try { rotateFile(cutoff, now, folded); } catch (e) { console.warn(`[wish] could not rewrite ${WISH_FILE} (the stream is rotated): ${String(e?.message || e).slice(0, 120)}`); }
+    await c.query(`DELETE FROM ${s}.log_lines WHERE id = ANY($1::bigint[])`, [q.rows.map((r) => r.id)]);
+    if (Object.keys(folded).length) await c.query(`INSERT INTO ${s}.log_lines (stream, body) VALUES ($1, $2::jsonb)`, [WISH_STREAM, JSON.stringify(rollupRec(folded, now, cutoff))]);
+    return { removed };
+  });
+  if (out.removed) await rebuildFromStateDb();
+  return { removed: out.removed, kept: lineCount };
+}
+let rotateTimer = null;
+/** Rotate on a timer (WISH_ROTATE_EVERY_MS, first run a few minutes after boot); under a lease with the database. */
+export function startWishRotation({ firstMs = 5 * 60_000, everyMs = WISH_ROTATE_EVERY_MS } = {}) {
+  if (rotateTimer) return false;
+  const tick = leased("wish-rotate", { ttlMs: 10 * 60_000, log: (m) => console.warn(`[wish] ${m}`) }, () => rotateWishes());
+  const run = () => tick().then((r) => { if (r?.removed) console.log(`[wish] rotated ${r.removed} line(s) older than ${wishRetentionDays()} days into the rollup`); }).catch((e) => console.warn(`[wish] rotation failed: ${String(e?.message || e).slice(0, 120)}`));
+  rotateTimer = setInterval(run, everyMs); rotateTimer.unref?.();
+  const f = setTimeout(run, firstMs); f.unref?.();
+  return true;
 }
 
 // --- test-only hooks (mirror the __testResetSubmitted style in x402-index.js) ---

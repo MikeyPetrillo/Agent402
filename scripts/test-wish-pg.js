@@ -9,7 +9,7 @@
 //      the rest of the board is rebuilt.
 // Requires STATE_DATABASE_URL (CI fails without it).
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, appendFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -97,6 +97,38 @@ try {
   const loaded = await w.wishStoreReady();
   const agg = w.getWishesAggregate({ detailed: true });
   ok(loaded && total() >= 3 && agg.clusters.some((c) => c.text === "valid after junk"), `rows that are not wish records are skipped, the rest is the board (total ${total()})`);
+
+  // ---- 4. retention on the stream ----------------------------------------------
+  {
+    const DAY = 86_400_000, now = Date.now();
+    const oldTs = now - (w.WISH_RETENTION_DEFAULT_DAYS + 20) * DAY;
+    const oldRows = Array.from({ length: 4 }, (_, i) => ({ need: "Ancient Private Need", context: "ancient context", source: "api", ts: oldTs + i, caller: `a${i}` }));
+    for (const body of oldRows) await sdb.stateQuery(`INSERT INTO ${schema}.log_lines (stream, body) VALUES ('wishes', $1::jsonb)`, [JSON.stringify(body)]);
+    // The write-through file holds the same old lines (it is rewritten too).
+    appendFileSync(FILE2, oldRows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    w.__testReset(); await w.wishStoreReady();
+    const pubBefore = JSON.stringify(w.getWishesAggregate());
+    const detBefore = w.getWishesAggregate({ detailed: true, limit: 500 });
+    const r = await w.rotateWishes({ now });
+    const bodies = (await sql(`SELECT body FROM ${schema}.log_lines WHERE stream = 'wishes' ORDER BY id`)).rows.map((x) => x.body);
+    const flat = JSON.stringify(bodies);
+    ok(r.removed >= 4 && !/ancient private need|ancient context/i.test(flat), `rotation deletes the old rows from the stream (${r.removed} removed)`);
+    ok(bodies.filter((b) => b?.type === "rollup").length === 1, "one rollup row replaces them");
+    ok(!/ancient/i.test(readFileSync(FILE2, "utf8")), "the write-through file is rewritten without them");
+    ok(JSON.stringify(w.getWishesAggregate()) === pubBefore, "the public beacon is unchanged");
+    const detAfter = w.getWishesAggregate({ detailed: true, limit: 500 });
+    ok(detAfter.totalWishes === detBefore.totalWishes && detAfter.distinctClusters === detBefore.distinctClusters, "the operator totals are unchanged");
+    // A rebuild (which also runs the file roll-forward) brings nothing back.
+    w.__testReset(); await w.wishStoreReady();
+    const again = JSON.stringify((await sql(`SELECT body FROM ${schema}.log_lines WHERE stream = 'wishes'`)).rows.map((x) => x.body));
+    ok(!/ancient/i.test(again) && JSON.stringify(w.getWishesAggregate()) === pubBefore, "a rebuild with the file roll-forward resurrects no rotated line and keeps the counts");
+    w.recordWish({ need: "ancient private need", source: "mcp", ip: "203.0.113.50" });
+    await w.wishFlush();
+    const back = w.getWishesAggregate({ detailed: true, limit: 500 }).clusters.find((c) => c.text === "ancient private need");
+    ok(back && back.count === 5, `a new wish with the same text merges with its rolled-up history (${back?.count})`);
+    const r2 = await w.rotateWishes({ now });
+    ok(r2.removed === 0, "a second rotation with nothing past the window changes nothing");
+  }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();
