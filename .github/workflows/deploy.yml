@@ -915,7 +915,18 @@ jobs:
           E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: node openclaw/test-real-install.js
-      # The pinned host (2026.9.x) requires Node >= 24.16; the lane itself
+      # The same file against the PREVIOUS pin, so raising the pin never drops
+      # the host most installed users still run. Same key shadowing as above.
+      - name: OpenClaw provider plugin against the previous OpenClaw pin
+        env:
+          OPENCLAW_SPEC: openclaw@2026.9.3
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
+        run: node openclaw/test-real-install.js
+      # The pinned host (2026.9.x and later) requires Node >= 24.16; the lane itself
       # stays on 22 (prod's floor), so Node 24 is scoped to this one step and
       # the lane's version is restored right after.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
