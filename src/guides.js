@@ -1687,6 +1687,12 @@ npx agent402-openclaw setup --write        # no key? it mints a wallet and print
 openclaw gateway restart
 \`\`\`
 
+OpenClaw 2026.10.1 and later reserve the verified-source badge for plugins in
+OpenClaw's own official inventory, so \`openclaw plugins doctor\` lists agent402
+as a source it "can't verify" (\`reason=provenance-invalid\`), as it does every
+community plugin. The plugin loads and serves as before: it registers a model
+provider and a service, and uses no feature OpenClaw keeps for trusted plugins.
+
 With no credits key and no \`AGENT402_WALLET_KEY\`, \`setup\` generates a wallet
 into \`~/.openclaw/agent402/wallet.key\` (0600, never printed) and tells you the
 address: send it USDC on Base and every call is paid from it over x402, from
