@@ -2484,6 +2484,8 @@ jobs:
           t node scripts/test-tollbooth-landing.js
           # /crawler claims vs the real crawl (robots exemptions, fallback documents, User-Agent on every probe - offline stub origins)
           t node scripts/test-crawler-page.js
+          # /contribute: every script and file it names exists; free-tier allowlist, route recording and pack pricing rules match the code (offline)
+          t node scripts/test-contribute-page.js
           # /SKILL.md agent-onboarding sheet (frontmatter, section order, every named route registered, house style - offline)
           t node scripts/test-skill-md.js
           # Manifest resources[] dedup (a tool registered under 2 HTTP methods lists its URL once, not twice)
