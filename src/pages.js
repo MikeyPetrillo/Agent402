@@ -351,6 +351,10 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const outPhrase = binaryTypes ? binaryPhrase : outKeys.length ? `a JSON object with ${codeList(outKeys, 5)}` : Array.isArray(example) ? "a JSON array" : "the result";
   const summary = `${e(firstSentence(tool.description))} Send <code>${e(tool.method)} ${e(tool.path)}</code> with ${reqPhrase} and ${e(payHow)}. It returns ${outPhrase}.`;
   const restOfDescription = String(tool.description).replace(/\s+/g, " ").trim().slice(firstSentence(tool.description).length).trim();
+  // A trailing query hint ("?q=inflation&rows=10") repeats the parameters table
+  // and the example request on this page, and as the paragraph's last token it
+  // would sit alone on its line; the page shows the prose before it.
+  const restShown = restOfDescription.replace(/(?:\s*Query params?:)?\s*\?[A-Za-z_][\w-]*=\S*(?:\s+\(optional\))?\.?$/, "").trim();
 
   // --- Parameters table from the input schema, plus accepted alternative names.
   const aliasFor = (name) => {
@@ -432,7 +436,8 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const tagsLine = (tool.tags || []).length ? (tool.tags || []).slice(0, 8).map((t) => `<code>${e(t)}</code>`).join(" ") : "";
 
   const relatedCards = related.map((t) => {
-    const desc = t.description.length > 120 ? t.description.slice(0, 120) + "…" : t.description;
+    // One short sentence per card: the full description's query syntax belongs on the tool's own page.
+    const desc = cutAtWord(firstSentence(t.description), 120);
     return `<div class="tp-card">
   <h3 style="font-size:var(--fs-base);margin:0;"><a href="/tools/${e(t.slug)}" style="text-decoration:none;color:var(--ink);">${e(t.name)}</a></h3>
   <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">${ledgerPriceLine(t)} · <code style="background:transparent;color:var(--faint);font-size:var(--fs-xs);">${e(t.method)} ${e(t.path)}</code></div>
@@ -450,18 +455,15 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
 
   const methodColor = tool.method === "GET" ? "var(--ok)" : "var(--accent)";
 
-  // The H1 clamp: tool names run from 3 chars ("hex") to 50+, and this H1's
-  // width shrinks continuously as the viewport narrows (single-column, no grid
-  // breakpoint to reserve a worst case against), so a fixed min-height would
-  // waste space at in-between widths or still miss the narrowest ones. A fixed
-  // 2-line box makes the height deterministic at every width; the few long
-  // names that truncate keep the full text in the title attribute and the
-  // page <title>. A JS comment, not a CSS one: the CSS block is served.
+  // The H1 wraps balanced: tool names run from 3 chars ("hex") to 50+, and a
+  // long name takes two even lines instead of an ellipsis, so the page's own
+  // title is always whole. A JS comment, not a CSS one: the CSS block is served.
   const TOOL_PAGE_CSS = `
   .tp-wrap { max-width:1180px; margin:0 auto; padding:56px 30px; }
   .tp-crumb { font-family:var(--font-mono); font-size:var(--fs-sm); color:var(--faint); margin-bottom:18px; }
   .tp-crumb a { color:var(--accent); text-decoration:none; }
-  .tp-h1 { font-family:var(--font-body); font-weight:800; font-size:var(--fs-3xl); line-height:1; letter-spacing:-.02em; margin-bottom:10px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; text-overflow:ellipsis; }
+  .tp-h1 { font-family:var(--font-body); font-weight:800; font-size:var(--fs-3xl); line-height:1; letter-spacing:-.02em; margin-bottom:10px; text-wrap:balance; }
+  @media (max-width:640px){ .tp-h1 { font-size:var(--fs-2xl); line-height:1.1; } }
   .tp-badge { display:inline-flex; flex-wrap:wrap; row-gap:4px; background:var(--panel); color:var(--on-panel); font-family:var(--font-mono); font-size:var(--fs-sm); padding:8px 16px; margin:8px 0 6px; }
   .tp-badge > span { white-space:nowrap; }
   .tp-badge > span + span::before { content:"·"; padding:0 8px; color:var(--on-panel-dim); }
@@ -476,7 +478,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   .tp-pre { background:var(--panel); color:var(--on-panel); font-family:var(--font-mono); font-size:var(--fs-sm); line-height:1.6; padding:18px 20px; overflow-x:auto; border:none; white-space:pre; }
   .tp-grid { display:grid; gap:14px; margin:20px 0; }
   @media (min-width:640px){ .tp-grid { grid-template-columns:repeat(3,1fr); } }
-  .tp-card { background:var(--card); border:1px solid var(--hairline); padding:18px 20px; display:flex; flex-direction:column; gap:8px; min-width:0; overflow-wrap:anywhere; }
+  .tp-card { background:var(--card); border:1px solid var(--hairline); padding:18px 20px; display:flex; flex-direction:column; gap:8px; min-width:0; overflow-wrap:break-word; }
   .tp-free { display:inline-block; background:var(--ok); color:var(--paper); font-weight:700; font-size:var(--fs-2xs); letter-spacing:.02em; padding:2px 8px; font-family:var(--font-mono); vertical-align:middle; }
   .tp-facts { color:var(--muted); font-size:var(--fs-base); line-height:1.65; max-width:820px; padding-left:20px; }
   .tp-facts li { margin-bottom:6px; }
@@ -487,7 +489,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   `;
 
   const body = `<div class="tp-wrap">
-  <nav class="tp-crumb" aria-label="Breadcrumb"><a href="/">Home</a> / <a href="/tools">Tools</a> / <a href="${e(catHref)}">${e(catLabel)}</a> / ${e(tool.name)}</nav>
+  <nav class="tp-crumb ml-crumb" aria-label="Breadcrumb"><a href="/">Home</a> / <a href="/tools">Tools</a> / <a href="${e(catHref)}">${e(catLabel)}</a><span class="ml-crumb-cur"> / ${e(tool.name)}</span></nav>
   <h1 class="tp-h1" title="${e(tool.name)}">${e(tool.name)}</h1>
   <div class="tp-badge">${
     computePayable
@@ -497,7 +499,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
     cacheTtl ? `<span style="color:var(--on-panel-dim);" title="Server caches identical responses for ${e(fmtTtl(cacheTtl))}.">Cached ${e(fmtTtl(cacheTtl))}</span>` : ""
   }</div>
   <p class="tp-lead">${summary}</p>
-  ${restOfDescription ? `<p class="tp-sub">${e(restOfDescription)}</p>` : ""}
+  ${restShown ? `<p class="tp-sub">${e(restShown)}</p>` : ""}
   <div class="tp-meta"><span>Category: <a href="${e(catHref)}" style="color:var(--accent);">${e(catLabel)}</a></span>${tagsLine ? `<span class="tp-tags"><span>Tags:</span> ${tagsLine}</span>` : ""}${aliases.length ? `<span class="tp-tags"><span>Also found as:</span> ${aliases.slice(0, 6).map((a) => `<code>${e(a)}</code>`).join(" ")}</span>` : ""}${isPack ? `<span><a href="/skills/${e(packSlug)}" style="color:var(--accent);">Pack overview</a></span>` : ""}</div>
   <p style="margin:16px 0 0;"><a class="btn btn-secondary btn-sm ml-cta" href="/playground?slug=${e(tool.slug)}" style="display:inline-block;">Try in playground →</a></p>
 
@@ -597,8 +599,8 @@ export function categoryPage(baseUrl, catalog, catKey) {
     itemListElement: tools.map((t, i) => ({ "@type": "ListItem", position: i + 1, name: t.name, url: `${baseUrl}/tools/${t.slug}` })),
   };
   const cards = tools.map((t) => {
-    const desc = t.description.length > 120 ? t.description.slice(0, 120) + "\u2026" : t.description;
-    return `<div style="background:var(--card);border:1px solid var(--hairline);padding:18px 20px;display:flex;flex-direction:column;gap:8px;min-width:0;overflow-wrap:anywhere;">
+    const desc = cutAtWord(firstSentence(t.description), 120);
+    return `<div style="background:var(--card);border:1px solid var(--hairline);padding:18px 20px;display:flex;flex-direction:column;gap:8px;min-width:0;overflow-wrap:break-word;">
   <h3 style="font-size:var(--fs-base);margin:0;"><a href="/tools/${e(t.slug)}" style="text-decoration:none;color:var(--ink);">${e(t.name)}</a></h3>
   <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">${ledgerPriceLine(t)} · <code style="background:transparent;color:var(--faint);font-size:var(--fs-xs);">${t.method} ${e(t.path)}</code></div>
   <p style="color:var(--muted);font-size:var(--fs-sm);margin:0;line-height:1.5;flex:1;">${e(desc)}</p>
@@ -612,7 +614,7 @@ export function categoryPage(baseUrl, catalog, catKey) {
   `;
 
   const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
-  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:18px;"><a href="/" style="color:var(--accent);text-decoration:none;">Agent402</a> / <a href="/tools" style="color:var(--accent);text-decoration:none;">tools</a> / ${e(cat.label)}</div>
+  <div class="ml-crumb" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:18px;"><a href="/" style="color:var(--accent);text-decoration:none;">Agent402</a> / <a href="/tools" style="color:var(--accent);text-decoration:none;">tools</a><span class="ml-crumb-cur"> / ${e(cat.label)}</span></div>
   <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin-bottom:10px;">${e(cat.label)}</h1>
   <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.6;max-width:720px;">${e(cat.blurb)}</p>
   <div style="background:var(--card);border:1px solid var(--hairline);padding:16px 20px;margin:18px 0;font-size:var(--fs-base);"><b style="color:var(--accent);">${nTools}</b> in this category${freeCount ? ` - <b style="color:var(--accent);">${freeCount} free</b> via proof-of-work` : ""}. <a href="/tools" style="color:var(--accent);">\u2190 All tools</a></div>

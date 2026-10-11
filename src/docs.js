@@ -246,18 +246,14 @@ export function docPrevNextHtml(slug) {
 // wiki page - before this they were two unrelated layouts, so clicking from
 // the landing page into any real doc page felt like leaving the site rather
 // than navigating within it.
-// The H1 clamp: wiki page titles (rendered from each doc's own markdown
-// heading) wrap up to 3 lines at narrow widths while others stay on 1
-// (measured live, 126px vs 42px), so a 2-line clamp bounds the height the way
-// /tools and /skills do. No title="" attribute: this H1 comes from marked's
-// rendering, not a template string, and the page's own <title> carries the
-// full text. A JS comment, not a CSS one: the CSS block is served to every
-// visitor.
+// The H1 wraps balanced, never clipped: a long wiki title takes two even
+// lines instead of an ellipsis, as on /tools, /skills and /guides. A JS
+// comment, not a CSS one: the CSS block is served to every visitor.
 export const DOCS_LAYOUT_CSS = `
   .ml-docs-layout { display:block; }
   .ml-docs-side { display:none; }
   .ml-docs-main { min-width:0; }
-  .ml-docs-main h1 {font-family:var(--font-display);font-weight:400;letter-spacing:-.01em; font-size:var(--fs-4xl);line-height:1;margin:0 0 18px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis; }
+  .ml-docs-main h1 {font-family:var(--font-display);font-weight:400;letter-spacing:-.01em; font-size:var(--fs-4xl);line-height:1;margin:0 0 18px;text-wrap:balance; }
   .ml-docs-main h2 { font-size:var(--fs-lg);margin-top:36px;color:var(--accent);font-weight:700; }
   .ml-docs-main h3 { font-size:var(--fs-lg);margin-top:26px;font-weight:600; }
   .ml-docs-main p, .ml-docs-main li { color:var(--ink);line-height:1.7; }
@@ -265,9 +261,16 @@ export const DOCS_LAYOUT_CSS = `
   .ml-docs-main pre { background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);border:0;padding:14px 16px;overflow-x:auto;font-size:var(--fs-md);line-height:1.55; }
   .ml-docs-main code { font-family:var(--font-mono); }
   .ml-docs-main p > code, .ml-docs-main li > code, .ml-docs-main td > code, .ml-docs-main h3 > code { background:var(--card);border:1px solid var(--hairline);padding:1px 6px;font-size:var(--fs-code-inline); }
-  .ml-docs-main table { border-collapse:collapse;width:100%;margin:18px 0;font-size:var(--fs-base); }
+  /* A wide table scrolls inside its own wrapper; its code names keep whole words. */
+  .ml-docs-tw { overflow-x:auto;margin:18px 0; }
+  .ml-docs-related { text-wrap:balance; }
+  @media (max-width:640px){ .ml-docs-main h1 { font-size:var(--fs-3xl); line-height:1.05; } }
+  .ml-docs-main table { border-collapse:collapse;width:100%;margin:0;font-size:var(--fs-base); }
   .ml-docs-main th, .ml-docs-main td { border:1px solid var(--hairline);padding:8px 12px;text-align:left;vertical-align:top; }
-  .ml-docs-main th { background:var(--card);color:var(--accent);font-weight:600; }
+  /* A row's first cell (its name or label) is never squeezed under a short phrase, and a name there stays whole. */
+  .ml-docs-main td:first-child { min-width:8em; }
+  .ml-docs-main td:first-child > strong, .ml-docs-main td:first-child > a { white-space:nowrap; }
+  .ml-docs-main th { background:var(--card);color:var(--accent);font-weight:600;white-space:nowrap; }
   .ml-docs-main blockquote { border-left:3px solid var(--accent);margin:16px 0;padding:4px 16px;color:var(--muted);background:rgba(214,60,26,.04); }
   .ml-docs-main hr { border:0;border-top:1px solid var(--hairline);margin:32px 0; }
   .ml-docs-main a { color:var(--accent);text-decoration:none; }
@@ -340,7 +343,11 @@ function shell(baseUrl, title, description, path, body, currentSlug) {
 }
 
 function renderMarkdown(md) {
-  return marked.parse(transformWikilinks(md));
+  return marked.parse(transformWikilinks(md))
+    .replace(/<table>/g, '<div class="ml-docs-tw"><table>')
+    .replace(/<\/table>/g, "</table></div>")
+    // A row of related-page links wraps balanced, so it never ends on one stray link.
+    .replace(/<p>(Related|See also):/g, '<p class="ml-docs-related">$1:');
 }
 
 /** Meta description from a page's first real prose paragraph: skips headings,

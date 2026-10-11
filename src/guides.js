@@ -1750,7 +1750,8 @@ const GUIDE_PAGE_CSS = `
 .gp-crumb{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:20px;}
 .gp-crumb a{color:var(--accent);text-decoration:none;}
 .gp-crumb a:hover{text-decoration:underline;}
-.gp-wrap h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 28px;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis;}
+.gp-wrap h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 28px;color:var(--ink);text-wrap:balance;}
+@media(max-width:640px){.gp-wrap h1{font-size:var(--fs-2xl);line-height:1.1;}}
 .gp-body{font-size:var(--fs-base);line-height:1.55;color:var(--muted);}
 .gp-body h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);line-height:1.1;letter-spacing:-.02em;color:var(--ink);margin:32px 0 12px;}
 .gp-body p{margin:0 0 16px;}
@@ -1825,7 +1826,7 @@ export function guidePage(baseUrl, slug, catalog = null) {
   };
 
   const body = `<div class="gp-wrap">
-  <div class="gp-crumb"><a href="/">Home</a> / <a href="/guides">Guides</a> / ${esc(g.title)}</div>
+  <div class="gp-crumb ml-crumb"><a href="/">Home</a> / <a href="/guides">Guides</a><span class="ml-crumb-cur"> / ${esc(g.title)}</span></div>
   <h1 title="${esc(g.title)}">${esc(g.title)}</h1>
   <div class="gp-body">
     ${marked.parse(g.md)}

@@ -398,7 +398,7 @@ export function blogPost(baseUrl, slug) {
 `;
 
   const body = `<div class="bp-wrap">
-  <div class="bp-crumb"><a href="/">Home</a> / <a href="/blog">Blog</a> / ${esc(post.title)}</div>
+  <div class="bp-crumb ml-crumb"><a href="/">Home</a> / <a href="/blog">Blog</a><span class="ml-crumb-cur"> / ${esc(post.title)}</span></div>
   <span class="bp-date">${esc(post.date)}</span>
   <h1>${esc(post.title)}</h1>
   <div class="post-body">
