@@ -799,7 +799,12 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
         if (inFlight.has(sessionId)) return { status: "generating" };
         let held = false;
         try { held = await claimRec(sessionId, { status: "generating", kind: p.kind, slug: p.slug, at: new Date(now()).toISOString(), claimedAt: now(), takeovers: takeover, pid: process.pid }, seenClaimedAt); } catch { held = false; }
-        if (!held) return { status: "generating" };
+        if (!held) {
+          // The row moved since it was read: answer with what it holds now.
+          let cur = null;
+          try { cur = await readRec(sessionId); } catch { /* answered below */ }
+          return cur && (cur.status === "done" || cur.status === "error") ? cur : { status: "generating" };
+        }
       }
       return refundAndRecord(sessionId, session, "We couldn't complete this report after a retry.");
     }
