@@ -6,6 +6,13 @@
 // observe → bots → strict progression with one knob each. No marketing, no
 // pricing tables, no "request a demo." The snippet on the page is the install.
 //
+// Every option, mode and route this page names is the package's own
+// (tollbooth/index.js), and scripts/test-tollbooth-landing.js runs the snippet
+// assets/js/tollbooth-snippet.js renders against the real package for every
+// mode: observe passes, bots charges a crawler, proof-of-work unlocks, and the
+// x402 middleware collects a stock client's payment. tollbooth/ is not in the
+// server image, so nothing here imports it; the test holds the two together.
+//
 // NOTE: The inline script uses innerHTML to render syntax-highlighted code
 // snippets from user-controlled config inputs (wallet, price, mode). All
 // interpolated values are HTML-escaped via the inline esc() function before
@@ -15,7 +22,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { repoUrl } from "./repo-link.js";
 export function tollboothLandingPage(baseUrl) {
   const title = "Tollbooth - charge AI bots that crawl your site (30-second install)";
-  const description = "agent402-tollbooth is the open-source monetization gateway: a self-hostable pay-per-crawl gate for any origin - no platform, no waitlist. Drop it in front of any Node site (Express, Next.js, Cloudflare Worker, Docker) and AI crawlers pay USDC on Base (or Solana, Polygon, Arbitrum, Stellar) - or burn CPU - to read your content. Humans browse free.";
+  const description = "agent402-tollbooth is an open-source, self-hostable pay-per-crawl gate. Put it in front of a site (Express, Next.js, Cloudflare Worker, Docker) and AI crawlers pay per request in USDC through your x402 facilitator, over MPP on the same 402, or by solving a proof-of-work. People browse free.";
   const canonical = `${baseUrl}/tollbooth`;
 
   const extraCss = `
@@ -65,7 +72,7 @@ export function tollboothLandingPage(baseUrl) {
   const body = `<div class="tb-wrap">
 
 <h1>Charge AI bots that crawl your site</h1>
-<p class="lede"><b>agent402-tollbooth</b> is the open-source monetization gateway - a self-hostable pay-per-crawl gate that is live today, no waitlist, and works in front of <em>any</em> origin, not just sites behind a platform proxy. Drop it in front of any Node site and AI crawlers pay USDC on Base (or Solana, Polygon, Arbitrum, Stellar) - or burn CPU - to read your content. Humans browse free, funds settle straight to your wallet with a 0% take. <a href="${repoUrl("wiki/Pay-per-crawl-Walkthrough")}" rel="noopener">30-min walkthrough →</a> <a href="/compare" rel="noopener">vs. platform gateways →</a></p>
+<p class="lede"><b>agent402-tollbooth</b> is an open-source, self-hostable pay-per-crawl gate. Put it in front of a Node site and AI crawlers pay per request to read your content: in USDC on Base or another EVM chain your x402 facilitator settles, over MPP on the same 402, or by solving a proof-of-work. People browse free, and payments settle straight to your wallet with nothing taken. <a href="${repoUrl("wiki/Pay-per-crawl-Walkthrough")}" rel="noopener">30-min walkthrough →</a></p>
 
 <h2>1 · Configure</h2>
 <div class="config">
@@ -77,33 +84,34 @@ export function tollboothLandingPage(baseUrl) {
   </label>
   <label><span class="k">Mode</span>
     <select id="mode">
-      <option value="observe" selected>observe - watch only</option>
-      <option value="bots">bots - charge AI crawlers</option>
-      <option value="all">all - charge everything non-human</option>
-      <option value="strict">strict - paywall everyone</option>
+      <option value="observe" selected>observe: true - count, never charge</option>
+      <option value="bots">bots - charge known AI crawlers</option>
+      <option value="strict">strict - charge anything not a browser</option>
+      <option value="all">all - charge every client</option>
     </select>
   </label>
 </div>
-<p class="note">Tip: leave it in <code>observe</code> mode for 24h. Your dashboard at <code>/__tollbooth</code> will show what's actually crawling you before you ever charge anyone.</p>
+<p class="note">Tip: start with <code>observe: true</code> for a day. A request the gate would charge passes with an <code>X-Tollbooth-Observed: would-charge</code> header and is counted in <code>gate.stats().wouldCharge</code>, so you see what is crawling you before you charge anyone.</p>
 
 <h2>2 · Install</h2>
-<div class="install"><button class="copy" data-target="cmd">copy</button><pre id="cmd"><span class="kw">npm</span> install agent402-tollbooth</pre></div>
+<div class="install"><button class="copy" data-target="cmd">copy</button><pre id="cmd"><span class="kw">npm</span> install agent402-tollbooth express @x402/express @x402/core @x402/evm</pre></div>
 
 <div class="install"><button class="copy" data-target="snip">copy</button><pre id="snip"></pre></div>
 
-<p class="note">That's it. Start your server normally. Add a <code>TOLLBOOTH_STATS_TOKEN</code> env var to view the dashboard at <code>/__tollbooth?token=&lt;your token&gt;</code>.</p>
+<p class="note">Set <code>X402_FACILITATOR_URL</code> to an x402 facilitator that settles USDC on Base, then start your server normally. The <code>x402</code> middleware is what collects USDC, and with it the same 402 also carries MPP challenges; without it the gate still answers crawlers with a 402 and lets through any that solve the proof-of-work, but no payment can be accepted. <code>gate.stats()</code> returns the counts: requests, charged, and paid by x402, MPP or proof-of-work.</p>
+<p class="note">The reverse proxy (<code>npx agent402-tollbooth</code>) and the Cloudflare Worker also serve a dashboard at <code>/__tollbooth</code> with JSON at <code>/__tollbooth/stats</code>. On the proxy, <code>TOLLBOOTH_ADMIN_TOKEN</code> gates both and is read from an <code>Authorization: Bearer</code> header; on the Worker, <code>TOLLBOOTH_STATS_TOKEN</code> gates the JSON the same way.</p>
 
 <h2>3 · Roll out safely</h2>
 <div class="phase">
-  <div class="step"><h3>Phase 1 · 24h</h3><div class="mode">mode: "observe"</div><p>Nothing is blocked. Dashboard shows you what's crawling and what you <i>would</i> charge.</p></div>
-  <div class="step"><h3>Phase 2 · ongoing</h3><div class="mode">mode: "bots"</div><p>Known AI crawlers (GPTBot, ClaudeBot, CCBot, Perplexity, …) get 402. Humans + Googlebot pass.</p></div>
-  <div class="step"><h3>Phase 3 · optional</h3><div class="mode">mode: "all" / "strict"</div><p>Catch unidentified bots too. Adaptive proof-of-work keeps the page reachable for legit edge cases.</p></div>
+  <div class="step"><h3>Phase 1 · 24h</h3><div class="mode">observe: true</div><p>Nothing is blocked. <code>gate.stats()</code> counts what you <i>would</i> charge.</p></div>
+  <div class="step"><h3>Phase 2 · ongoing</h3><div class="mode">mode: "bots"</div><p>Known AI crawler user-agents (the default list in <a href="${repoUrl("blob/main/tollbooth/bots.js")}" rel="noopener">bots.js</a>) get a 402. People pass.</p></div>
+  <div class="step"><h3>Phase 3 · optional</h3><div class="mode">mode: "strict" / "all"</div><p><code>strict</code> charges anything that is not a real browser; <code>all</code> charges every client, people included, except what your <code>free()</code> predicate allows. Proof-of-work keeps the page reachable without a wallet; <code>adaptive: true</code> raises its difficulty under load.</p></div>
 </div>
 
 <h2>Not running Express?</h2>
 <div class="deploy">
   <a href="${repoUrl("tree/main/tollbooth/deploy/cloudflare")}" rel="noopener"><span class="t">Cloudflare Worker</span><span class="s">One <code>wrangler deploy</code>. KV-backed.</span></a>
-  <a href="${repoUrl("tree/main/tollbooth/deploy/nextjs")}" rel="noopener"><span class="t">Next.js middleware</span><span class="s">One file in <code>middleware.ts</code>.</span></a>
+  <a href="${repoUrl("tree/main/tollbooth/deploy/nextjs")}" rel="noopener"><span class="t">Next.js middleware</span><span class="s">One file: <code>middleware.js</code>.</span></a>
   <a href="${repoUrl("tree/main/tollbooth/deploy/docker")}" rel="noopener"><span class="t">Docker reverse proxy</span><span class="s">Any backend, any language.</span></a>
   <a href="${repoUrl("tree/main/tollbooth/deploy/wordpress")}" rel="noopener"><span class="t">WordPress plugin <small style="color:var(--accent);">beta</small></span><span class="s">Drop-in PHP. Settings → Agent402 Tollbooth.</span></a>
 </div>
@@ -114,7 +122,7 @@ export function tollboothLandingPage(baseUrl) {
   <a href="${repoUrl("tree/main/tollbooth")}" rel="noopener">README + reference</a>
   <a href="${repoUrl("blob/main/tollbooth/demo.js")}" rel="noopener"><code>node demo.js</code></a>
   <a href="https://www.npmjs.com/package/agent402-tollbooth" rel="noopener">npm</a>
-  <a href="/guides/coinbase-business-get-paid-by-agents">Get paid into a Coinbase Business account</a>
+  <a href="/guides/coinbase-business-get-paid-by-agents">Get paid into an exchange business account</a>
 </div>
 
 <script src="/js/tollbooth-snippet.js"></script>
@@ -127,7 +135,7 @@ ${ledgerFooterCompact()}`;
     description,
     canonical,
     baseUrl,
-    activePath: "__none__",
+    activePath: "/sell",
     extraCss,
     body,
   });

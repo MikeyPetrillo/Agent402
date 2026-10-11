@@ -2480,6 +2480,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Tollbooth CLI settles x402 + MPP from env (real CLI process vs stub facilitator; mppx + @x402/fetch buys settle once each; misconfig fails closed)
           t node scripts/test-tollbooth-cli.js
+          # /tollbooth install snippet runs against the package for every mode (observe, bots, strict, all; PoW unlock, stock x402 buy vs stub facilitator)
+          t node scripts/test-tollbooth-landing.js
           # /SKILL.md agent-onboarding sheet (frontmatter, section order, every named route registered, house style - offline)
           t node scripts/test-skill-md.js
           # Manifest resources[] dedup (a tool registered under 2 HTTP methods lists its URL once, not twice)
