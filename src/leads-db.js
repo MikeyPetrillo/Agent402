@@ -1,18 +1,23 @@
-// Tollbooth leads: read-only access to the `tollbooth_leads` table on the
-// Postgres instance pointed to by DATABASE_URL.
+// The DATABASE_URL Postgres: reachability ping, and the one-time removal of
+// the retired tollbooth waitlist table.
 //
-// The intake that wrote this table is closed (POST /api/tollbooth/waitlist
-// answers 410 and writes nothing). Rows stored before it closed stay readable
-// on the operator page until they are removed by hand.
+// The tollbooth waitlist intake is closed (POST /api/tollbooth/waitlist
+// answers 410 and writes nothing), and the rows it stored are deleted: on
+// every boot with DATABASE_URL set, initLeadsDb drops `tollbooth_leads` if it
+// still exists and logs only how many rows it held. Nothing in this tree
+// creates that table, so once it is gone the boot step is a no-op.
 //
 // Design notes:
 //   - DATABASE_URL is the Railway convention (auto-injected by the Postgres
 //     plugin). If absent, every function below is a no-op that returns
 //     { ok: false, reason: "no-db" }. Lets the server boot anywhere without a DB.
-//   - Schema is created lazily on first use (idempotent CREATE IF NOT EXISTS),
-//     so no migration step is required during deploy.
-//   - Reads are gated to the operator token (see operator-leads.js +
-//     /__operator/leads in server.js). No public read surface.
+//   - Two containers booting together are safe: the drop runs in one
+//     transaction behind an ACCESS EXCLUSIVE lock, and a table another
+//     container dropped first reads as already removed.
+//   - A failure is logged and returned; src/db-init-retry.js retries it on
+//     its schedule, and the next boot tries again. It never throws into boot.
+//   - The pool stays for pingLeadsDb: /api/gateway-status `databases.leads`
+//     reports this database's reachability (analytics falls back to it).
 import pg from "pg";
 import { dbSsl } from "./db-ssl.js";
 import { probeDbHost } from "./db-probe.js";
@@ -20,8 +25,8 @@ import { probeDbHost } from "./db-probe.js";
 const { Pool } = pg;
 
 const DATABASE_URL = process.env.DATABASE_URL || "";
+const TABLE = "tollbooth_leads";
 let pool = null;
-let schemaReady = false;
 
 function getPool() {
   if (!DATABASE_URL) return null;
@@ -44,46 +49,50 @@ function getPool() {
   return pool;
 }
 
-async function ensureSchema() {
-  if (schemaReady) return true;
-  const p = getPool();
-  if (!p) return false;
-  await p.query(`
-    CREATE TABLE IF NOT EXISTS tollbooth_leads (
-      id          BIGSERIAL PRIMARY KEY,
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-      kind        TEXT NOT NULL,
-      plan        TEXT NOT NULL,
-      name        TEXT NOT NULL,
-      email       TEXT NOT NULL,
-      org         TEXT,
-      sites       TEXT,
-      message     TEXT,
-      ip          TEXT,
-      ua          TEXT
-    );
-    CREATE INDEX IF NOT EXISTS tollbooth_leads_created_at_idx
-      ON tollbooth_leads (created_at DESC);
-    CREATE INDEX IF NOT EXISTS tollbooth_leads_plan_idx
-      ON tollbooth_leads (plan);
-  `);
-  schemaReady = true;
-  return true;
-}
-
 export function leadsDbEnabled() {
   return !!DATABASE_URL;
 }
 
-export async function initLeadsDb() {
+// Drop the retired table if it exists. Resolves { ok, removed } where
+// `removed` is the row count it held (null when it was already gone). Only the
+// count is logged; no row is ever read.
+export async function purgeLeadsTable({ log = console.log } = {}) {
+  const p = getPool();
+  if (!p) return { ok: false, reason: "no-db" };
+  const client = await p.connect();
+  try {
+    await client.query("BEGIN");
+    const exists = await client.query("SELECT to_regclass($1) IS NOT NULL AS present", [TABLE]);
+    if (!exists.rows[0].present) { await client.query("ROLLBACK"); return { ok: true, removed: null }; }
+    let n;
+    try {
+      await client.query(`LOCK TABLE ${TABLE} IN ACCESS EXCLUSIVE MODE`);
+      n = (await client.query(`SELECT count(*)::int AS n FROM ${TABLE}`)).rows[0].n;
+    } catch (e) {
+      // Another container dropped it while this one waited for the lock.
+      if (e?.code === "42P01") { await client.query("ROLLBACK"); return { ok: true, removed: null }; }
+      throw e;
+    }
+    await client.query(`DROP TABLE IF EXISTS ${TABLE}`);
+    await client.query("COMMIT");
+    log(`[leads-db] removed ${TABLE} (${n} rows)`);
+    return { ok: true, removed: n };
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch { /* connection may be gone */ }
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+export async function initLeadsDb({ log = console.log } = {}) {
   if (!DATABASE_URL) return { ok: false, reason: "no-db" };
   try {
-    await ensureSchema();
-    return { ok: true };
+    return await purgeLeadsTable({ log });
   } catch (e) {
-    console.error("[leads-db] init failed:", e.message);
+    console.error("[leads-db] purge failed:", e?.code || e?.message || "error");
     probeDbHost("leads-db", DATABASE_URL).catch(() => {});
-    return { ok: false, reason: "init-failed" };
+    return { ok: false, reason: "purge-failed" };
   }
 }
 
@@ -97,37 +106,9 @@ export async function pingLeadsDb() {
   return true;
 }
 
-export async function listLeads({ limit = 200 } = {}) {
-  if (!DATABASE_URL) return { ok: false, reason: "no-db", rows: [] };
-  try {
-    await ensureSchema();
-    const p = getPool();
-    const r = await p.query(
-      `SELECT id, created_at, kind, plan, name, email, org, sites, message, ip, ua
-       FROM tollbooth_leads
-       ORDER BY created_at DESC
-       LIMIT $1`,
-      [Math.max(1, Math.min(1000, limit | 0))]
-    );
-    return { ok: true, rows: r.rows };
-  } catch (e) {
-    console.error("[leads-db] list failed:", e.message);
-    return { ok: false, reason: "list-failed", rows: [] };
-  }
-}
-
-export async function countLeads() {
-  if (!DATABASE_URL) return { ok: false, total: 0, byPlan: {} };
-  try {
-    await ensureSchema();
-    const p = getPool();
-    const total = await p.query("SELECT count(*)::int AS n FROM tollbooth_leads");
-    const byPlan = await p.query("SELECT plan, count(*)::int AS n FROM tollbooth_leads GROUP BY plan");
-    const map = {};
-    for (const r of byPlan.rows) map[r.plan] = r.n;
-    return { ok: true, total: total.rows[0].n, byPlan: map };
-  } catch (e) {
-    console.error("[leads-db] count failed:", e.message);
-    return { ok: false, total: 0, byPlan: {} };
-  }
+// For tests: close the pool so the process can exit.
+export async function closeLeadsDb() {
+  const p = pool;
+  pool = null;
+  if (p) await p.end();
 }

@@ -268,9 +268,8 @@ import { paymentReplayKey, createReplayGuard } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
 import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
-import { operatorLeadsPage } from "./operator-leads.js";
 import { operatorWishesPage } from "./operator-wishes.js";
-import { initLeadsDb, listLeads, countLeads, leadsDbEnabled } from "./leads-db.js";
+import { initLeadsDb } from "./leads-db.js";
 import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
 import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redactAnalytics } from "./analytics-db.js";
 import { databasesStatus } from "./db-status.js";
@@ -3082,9 +3081,10 @@ app.get("/health", (req, res) => {
     return res.status(ok ? 200 : 503).json({ ok, meta });
   }
   const diagnostics = { uptime: Math.floor(process.uptime()), freeMode: FREE_MODE };
-  // Non-fatal flags — surface tollbooth-leads wiring so we can verify the
-  // Railway DATABASE_URL / AGENT402_OPERATOR_TOKEN env without poking either.
-  // These don't affect overall ok status; the leads table is optional.
+  // Non-fatal flags: surface the Railway DATABASE_URL / AGENT402_OPERATOR_TOKEN
+  // wiring without poking either. leadsDb is true once the boot step in
+  // src/leads-db.js has run (the retired tollbooth_leads table is gone).
+  // These don't affect overall ok status.
   const flags = {
     leadsDb: leadsDbReady,
     operatorToken: Boolean(OPERATOR_TOKEN),
@@ -3204,7 +3204,7 @@ app.get("/api/gateway-status", async (req, res) => {
   // (src/upstream-buyer-status.js) - same alarm pattern, same
   // numbers-never-leave rule.
   const [gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, upstreamBuyerSvm, subscriptionFeePayer, stellarFacilitator, databases] = await Promise.all([gatewayCreditsStatus(), upstreamBuyerStatus(), avmBuyerStatus(), tempoBuyerStatus(), svmBuyerStatus().catch(() => ({ status: "unknown", asset: "USDC", chain: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" })), subscriptionFeePayerStatus(), stellarFacilitatorStatus().catch(() => ({ status: "unknown", asset: "XLM", chain: "stellar:pubnet" })), databasesStatus().catch(() => null)]);
-  // `databases`: leads/analytics Postgres reachability, status words only
+  // `databases`: DATABASE_URL (`leads`) and analytics Postgres reachability, status words only
   // (src/db-status.js) - the heartbeat pages on "unreachable".
   // The operator sees the real figures; everyone else sees the verdict. The
   // heartbeat reads only `.status` fields, so bucketing costs it nothing.
@@ -4425,8 +4425,7 @@ app.post("/api/status/probe", express.json({ limit: "256kb" }), (req, res) => {
 app.get("/tollbooth", (_req, res) => htmlCache(res, 300, 900).send(tollboothLandingPage(BASE_URL)));
 // The hosted tollbooth pages are retired: both URLs move to the self-hosted
 // product page, and the intake answers 410 without reading, storing or sending
-// anything. Leads stored before the intake closed stay readable on
-// /__operator/leads.
+// anything. The rows it stored are deleted at boot (src/leads-db.js).
 for (const retired of ["/tollbooth/cloud", "/tollbooth/waitlist"]) {
   app.get(retired, (_req, res) => res.redirect(301, "/tollbooth"));
 }
@@ -4475,7 +4474,7 @@ function readCookie(req, name) {
 // Until 2026-08-30 both observers (the GitHub heartbeat and the Cloudflare
 // Worker) carried AGENT402_OPERATOR_TOKEN just to POST /api/status/probe. That
 // token also reaches /__operator/refunds/update, /credits/disable,
-// /well-known (publishes a document at our own domain), /leads, /backup/run,
+// /well-known (publishes a document at our own domain), /backup/run,
 // /monitors/run, /alerts/run, /stats and /wishes - so a second platform was
 // holding a master key to use exactly one door.
 //
@@ -4657,7 +4656,7 @@ const operatorLoginLimiter = createRateLimiter("operator-login", { perMin: 5, pe
 // F20: operator pages carry lead PII, revenue figures, and session state.
 // Forbid any browser-history cache, shared proxy, or future CDN from retaining
 // them. Registered before the routes so it runs on every /__operator response
-// (login form, dashboard, stats, wishes, leads, logout).
+// (login form, dashboard, stats, wishes, logout).
 app.use("/__operator", (_req, res, next) => {
   res.set("Cache-Control", "no-store, private");
   res.set("Pragma", "no-cache");
@@ -5436,20 +5435,6 @@ app.get("/__operator/ledger-sync.json", async (req, res) => {
   };
   ledgerSyncCache = { at: Date.now(), value: payload };
   res.json({ ...payload, cached: false });
-});
-app.get("/__operator/leads", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).type("html").send("<p>Not found.</p>");
-  const list = await listLeads({ limit: 200 });
-  const stats = await countLeads();
-  res.type("html").send(operatorLeadsPage({
-    ok: list.ok,
-    rows: list.rows,
-    total: stats.total,
-    byPlan: stats.byPlan,
-    countsOk: stats.ok,
-    dbEnabled: leadsDbEnabled(),
-    baseUrl: BASE_URL,
-  }));
 });
 // Short aliases for the Smart Order Router guide. It is the most linkable
 // thing we have (one payment reaches every proven x402 seller) and both /router
@@ -10001,9 +9986,10 @@ if (WALLET_ADDRESS) revenueSnapshot(revenueWallets()).catch(() => { /* warm-up o
 // REVENUE_LEDGER=true, so test/CI boots never touch public RPCs.
 startRevenueLedger(revenueWallets());
 
-// Tollbooth leads — lazy Postgres init. No-op if DATABASE_URL is unset. The
-// intake is closed; the table stays readable on /__operator/leads. Status is surfaced via /health so we can verify the
-// Railway DATABASE_URL wiring without poking the live leads table.
+// DATABASE_URL Postgres: each boot drops the retired tollbooth_leads table if
+// it still exists (src/leads-db.js; a no-op once it is gone, and a no-op if
+// DATABASE_URL is unset). Status is surfaced via /health (flags.leadsDb) so
+// the Railway DATABASE_URL wiring stays verifiable.
 // Init RETRIES after the post-listen boot stall (src/db-init-retry.js): the
 // first attempt's handshake timer expires inside the stall on every boot.
 let leadsDbReady = false;

@@ -1,6 +1,6 @@
 // Token-gated /__operator/wishes dashboard — the full agent demand board,
 // including single-source and below-threshold clusters the public never sees
-// ranked. Same auth model and visual language as operator-leads.js:
+// ranked. Same auth model and visual language as operator.js:
 // AGENT402_OPERATOR_TOKEN via Authorization / X-Operator-Token header or the
 // /__operator/login session cookie (never a ?token= URL — audit A402-07).
 //

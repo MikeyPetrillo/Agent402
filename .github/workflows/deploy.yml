@@ -1323,6 +1323,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           t node scripts/test-state-db.js
           t node scripts/test-stores-pg.js
+          # The boot step drops the retired tollbooth_leads table, logs only its count, never recreates it.
+          t node scripts/test-leads-purge-pg.js
           # Two containers on one schema: the email stores never undo or repeat each other.
           t node scripts/test-overlap-stores-pg.js
           # A signed email link for a record the other container made works here.
@@ -1783,7 +1785,7 @@ jobs:
           t node scripts/test-legal-dates.js
           t node scripts/test-wire-count-copy.js
           t node scripts/test-pack-copy-retired.js
-          # Retired hosted tollbooth: no surface offers it; retired URLs 301, the intake 410s; operator leads page renders (boots a server)
+          # Retired hosted tollbooth: no surface offers it; retired URLs 301, the intake 410s; the operator leads page is gone (boots a server)
           t node scripts/test-tollbooth-cloud-retired.js
           t node scripts/test-sitemap-superset.js
           # Published SDK snippets never let the SDK send an environment credential to our host

@@ -3,7 +3,7 @@
 // Why this exists: both Postgres containers on the platform were down from
 // 2026-07-02 until a platform-side image redeploy restarted them on
 // 2026-08-25 - 54 days - and nothing paged. The app degrades gracefully
-// (leads/analytics simply go dark), which is right for buyers and exactly
+// (analytics simply goes dark), which is right for buyers and exactly
 // why nobody noticed. This is the alarm: `/api/gateway-status.databases`
 // carries one bucket per database and the heartbeat opens an issue on
 // "unreachable".

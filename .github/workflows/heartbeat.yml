@@ -795,7 +795,7 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $(date -u +%FT%TZ): $SUMMARY" >/dev/null 2>&1 || true
           fi
 
-      # Postgres reachability (leads + analytics). Both databases were DOWN from
+      # Postgres reachability (DATABASE_URL, reported as `leads`, + analytics). Both databases were DOWN from
       # 2026-07-02 to 2026-08-25 and nothing paged: the app degrades quietly when
       # they are gone, which is right for buyers and exactly why it went
       # unnoticed. "unconfigured"/"unknown" never page; only "unreachable" does.
@@ -830,7 +830,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
           if [ "$LEADS" = "unreachable" ] || [ "$ANALYTICS" = "unreachable" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A Postgres database is unreachable from production (leads=$LEADS, analytics=$ANALYTICS, per /api/gateway-status). The app keeps serving - tollbooth leads and the tool-call analytics simply stop being recorded - so this does not show as an outage anywhere else. Check the Postgres services in the Railway project (a stopped container looks exactly like this; the platform's own image updates restart them). The app boot log carries a [leads-db]/[analytics-db] probe line naming the failing family/port."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A Postgres database is unreachable from production (leads=$LEADS, analytics=$ANALYTICS, per /api/gateway-status). The app keeps serving - the tool-call analytics simply stop being recorded - so this does not show as an outage anywhere else. Check the Postgres services in the Railway project (a stopped container looks exactly like this; the platform's own image updates restart them). The app boot log carries a [leads-db]/[analytics-db] probe line naming the failing family/port."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still unreachable at $(date -u +%FT%TZ): leads=$LEADS analytics=$ANALYTICS."
             fi

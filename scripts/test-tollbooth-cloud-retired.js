@@ -4,12 +4,14 @@
 //   1. offline: no served-page source, README, wiki page or tollbooth/ doc
 //      offers it or links to its retired URLs (dated changelog history may
 //      name it in plain text, never as a link);
-//   2. offline: the operator leads page renders its totals with zero rows and
-//      with synthetic rows, and never needs a caller-supplied base URL;
+//   2. offline: the operator leads page and its reads are gone (no module, no
+//      link from the operator dashboard, no list/count/insert export);
 //   3. booted: GET /tollbooth/cloud and GET /tollbooth/waitlist answer 301 to
 //      /tollbooth, POST /api/tollbooth/waitlist answers 410 and stores
-//      nothing, /tollbooth and the sitemap carry no retired link, and an
-//      authed GET /__operator/leads answers 200.
+//      nothing, /tollbooth and the sitemap carry no retired link, and
+//      GET /__operator/leads answers 404 with or without the operator token.
+//   The boot step that drops the stored rows is tested against a real
+//   Postgres in scripts/test-leads-purge-pg.js.
 //
 //   node scripts/test-tollbooth-cloud-retired.js
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
@@ -17,7 +19,6 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
-import { operatorLeadsPage } from "../src/operator-leads.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -49,10 +50,10 @@ function walk(dir, out = []) {
 }
 const TEXT = /\.(?:js|mjs|cjs|md|txt|php|json|html|toml|ya?ml)$/;
 // Files that may still mention the retired surfaces, and why:
-//   server.js answers the retired URLs (301/410); leads-db.js and
-//   operator-leads.js read the stored rows and say the intake is closed;
+//   server.js answers the retired URLs (301/410); leads-db.js drops the
+//   table the intake wrote and says the intake is closed;
 //   changelog.js is dated history (checked separately below).
-const ALLOW = new Set(["src/server.js", "src/leads-db.js", "src/operator-leads.js", "src/changelog.js"]);
+const ALLOW = new Set(["src/server.js", "src/leads-db.js", "src/changelog.js"]);
 const files = [
   ...walk(join(ROOT, "src")),
   ...walk(join(ROOT, "wiki")),
@@ -83,22 +84,16 @@ for (const f of ["src/tollbooth-cloud.js", "src/tollbooth-waitlist.js", "assets/
   ok(!existsSync(join(ROOT, f)), `${f} is removed`);
 }
 
-// --- operator leads page: totals with zero rows and with synthetic rows ------
+// --- operator leads page and its reads are gone -----------------------------
 {
-  const empty = operatorLeadsPage({ ok: true, rows: [], total: 0, byPlan: {}, dbEnabled: true });
-  ok(/id="ol-totals"/.test(empty) && /Total leads<\/div><div class="ol-v">0</.test(empty), "zero rows: the totals render at the top with 0");
-  ok(/intake is closed/i.test(empty), "zero rows: the page says the intake is closed");
-  const rows = [
-    { created_at: "2026-01-02T03:04:05Z", plan: "team", kind: "waitlist", name: "Fixture One", email: "one@example.invalid", org: "", sites: "", message: "" },
-    { created_at: "2026-01-03T03:04:05Z", plan: "custom-x", kind: "partner", name: "Fixture Two", email: "two@example.invalid", org: "Org", sites: "a.example", message: "hi" },
-  ];
-  const full = operatorLeadsPage({ ok: true, rows, total: 2, byPlan: { team: 1, "custom-x": 1 }, dbEnabled: true, baseUrl: "https://example.invalid" });
-  ok(/Total leads<\/div><div class="ol-v">2</.test(full), "rows: the total reads 2");
-  ok(/>team<\/div><div class="ol-v">1</.test(full) && />custom-x<\/div><div class="ol-v">1</.test(full), "rows: per-plan counts render, including a plan outside the known list");
-  ok(full.indexOf('id="ol-totals"') < full.indexOf("<table"), "rows: the totals sit above the table");
-  ok(full.includes("https://example.invalid/__operator/leads"), "rows: the canonical uses the passed base URL");
-  const noDb = operatorLeadsPage({ ok: false, rows: [], total: 0, byPlan: {}, dbEnabled: false });
-  ok(/DATABASE_URL is not set/.test(noDb) && !/ol-totals/.test(noDb), "no database: a warning and no invented totals");
+  ok(!existsSync(join(ROOT, "src/operator-leads.js")), "src/operator-leads.js is removed");
+  const op = readFileSync(join(ROOT, "src/operator.js"), "utf8");
+  ok(!/__operator\/leads/.test(op), "the operator dashboard carries no leads link");
+  const srv = readFileSync(join(ROOT, "src/server.js"), "utf8");
+  ok(!/__operator\/leads/.test(srv) && !/operator-leads/.test(srv), "server.js mounts no /__operator/leads route");
+  const leads = readFileSync(join(ROOT, "src/leads-db.js"), "utf8");
+  ok(!/export (?:async )?function (?:insertLead|listLeads|countLeads)\b/.test(leads), "leads-db.js exports no insert, list or count");
+  ok(!/CREATE\s+TABLE/i.test(leads), "leads-db.js never creates the table");
 }
 
 // --- booted: the routes ------------------------------------------------------
@@ -142,11 +137,14 @@ try {
   ok(!OFFER.some(([re]) => re.test(llms)), "llms.txt offers none of it");
 
   const anon = await fetch(`${base}/__operator/leads`);
-  ok(anon.status === 404, `unauthenticated /__operator/leads stays hidden (got ${anon.status})`);
+  ok(anon.status === 404, `unauthenticated /__operator/leads answers 404 (got ${anon.status})`);
   const authed = await fetch(`${base}/__operator/leads`, { headers: { authorization: `Bearer ${TOKEN}` } });
   const ah = await authed.text();
-  ok(authed.status === 200 && /Tollbooth leads/.test(ah), `authed /__operator/leads answers 200 (got ${authed.status})`);
-  if (authed.status !== 200) console.error(childLog.slice(-3000));
+  ok(authed.status === 404 && !/Tollbooth leads/.test(ah), `authed /__operator/leads answers 404 like any unknown operator path (got ${authed.status})`);
+  // Control: the same token opens a live operator page, so the 404 is the route, not the auth.
+  const live = await fetch(`${base}/__operator/wishes`, { headers: { authorization: `Bearer ${TOKEN}` } });
+  ok(live.status === 200, `control: the token opens /__operator/wishes (got ${live.status})`);
+  if (authed.status !== 404 || live.status !== 200) console.error(childLog.slice(-3000));
 } catch (e) {
   ok(false, `booted checks threw: ${e.message}`);
 }

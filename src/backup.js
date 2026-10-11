@@ -1,7 +1,7 @@
 // Nightly offsite backup of /data and of the state database (every table,
 // one consistent snapshot, uploaded first) to an S3-compatible bucket (Railway
 // Buckets). The volume holds the money-adjacent state — refund ledger,
-// stats, status history, leads, buyer memory — with nothing but platform
+// stats, status history, buyer memory — with nothing but platform
 // snapshots behind it; this module puts a bounded, priced copy elsewhere.
 //
 // COST DISCIPLINE (the reason half this file exists):

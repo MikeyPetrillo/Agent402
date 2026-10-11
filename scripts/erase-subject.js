@@ -18,7 +18,6 @@
 //   monitor-runs.json         (no email)                  -> skipped
 //   human-checkout/<cs_*>.json (no email stored)          -> nothing to do
 //   credits/<k_*>.json         (no email stored)          -> nothing to do
-//   Postgres tollbooth_leads  email column                -> rows deleted (DATABASE_URL)
 import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -80,18 +79,6 @@ function readJson(path) { try { return JSON.parse(readFileSync(path, "utf8")); }
 }
 report.push("human-checkout/: stores no email (nothing to do)");
 report.push("credits/: stores no email (nothing to do)");
-
-// Postgres leads
-if (process.env.DATABASE_URL) {
-  try {
-    const { default: pg } = await import("pg");
-    const client = new pg.Client({ connectionString: process.env.DATABASE_URL, ssl: /railway\.internal|localhost/.test(process.env.DATABASE_URL) ? false : { rejectUnauthorized: true } });
-    await client.connect();
-    const r = dry ? await client.query("SELECT count(*)::int AS n FROM tollbooth_leads WHERE lower(email) = $1", [email]) : await client.query("DELETE FROM tollbooth_leads WHERE lower(email) = $1", [email]);
-    report.push(`tollbooth_leads: ${dry ? r.rows[0].n + " row(s) would be deleted" : r.rowCount + " row(s) deleted"}`);
-    await client.end();
-  } catch (e) { report.push(`tollbooth_leads: skipped (${String(e.message).slice(0, 80)})`); }
-} else report.push("tollbooth_leads: DATABASE_URL unset, skipped");
 
 console.log(`${dry ? "[dry run] " : ""}erase ${email} under ${ROOT}`);
 for (const line of report) console.log(" -", line);

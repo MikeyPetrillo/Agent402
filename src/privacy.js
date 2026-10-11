@@ -80,9 +80,9 @@ so every claim below is verifiable in code.</p>
   /64 prefix) in the counter's key, for one hour, or 24 hours for the per-client daily allowance. We also
   keep keyed hashes of addresses, never the addresses themselves: in daily traffic statistics (request
   classes, paths and User-Agent product names; each day is deleted after ${TRAFFIC_DEFAULTS.retentionDays} days), in the record that limits how often a dropped
-  connection is excused from payment (24 hours), and on the demand board and the waitlist (combined
-  with the day). The tollbooth waitlist form is closed; the name, email, organization and message it stored are
-  kept until deleted, and it never stored an IP address or browser string.</li>
+  connection is excused from payment (24 hours), and on the demand board (combined with the day).
+  The tollbooth waitlist form is closed, and every record it collected has been deleted from our
+  database; those records were never part of our offsite backups.</li>
   <li><b>AI gateway inputs.</b> Prompts and inputs sent to the <code>/v1</code> endpoints (chat,
   embeddings, images, speech) and other AI-proxy tools are <b>forwarded to the upstream model
   provider</b> (OpenAI, or the model operator serving the request via OpenRouter) to generate the
@@ -166,8 +166,8 @@ finished report) are kept while the report link or subscription is live and for 
 Free-alert and weekly-digest records keep your email until you unsubscribe, when the address is
 removed; an unconfirmed signup is deleted after three days. Follow-up email records drop the address
 when you stop them. Decisions bought on <code>/api/decide</code> are deleted after 30 days. You can ask
-us at the address below to delete your email from our alert, digest, follow-up, subscription and
-waitlist records; the card processor's copy is deleted through Stripe. The sales ledger keeps wallet addresses and transaction ids, which are already public
+us at the address below to delete your email from our alert, digest, follow-up and subscription
+records; the card processor's copy is deleted through Stripe. The sales ledger keeps wallet addresses and transaction ids, which are already public
 on-chain. Aggregate, non-personal counters (total calls served per tool) are kept for the public
 <a href="/api/stats">/api/stats</a> page.</p>
 
