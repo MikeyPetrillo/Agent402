@@ -108,7 +108,9 @@ ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy bo
   const lines = Object.entries(CHAIN_PAGES).map(([key, c]) => llms.split("\n").find((l) => l.startsWith(`- [${c.chainName}](https://agent402.tools/${key})`)) || "");
   ok(lines.every((l) => /^- \[[^\]]+\]\([^)]+\): [A-Z.]+ \(`[^`]+`\)$/.test(l)), `every llms.txt settlement line is chain: asset (CAIP-2) only (${lines.filter((l) => !/^- \[[^\]]+\]\([^)]+\): [A-Z.]+ \(`[^`]+`\)$/.test(l)).slice(0, 2).join(" | ") || "all clean"})`);
   const labels = [...new Set(Object.values(CHAIN_PAGES).map((c) => c.facilitatorLabel).filter(Boolean))];
-  ok(labels.length > 0 && labels.every((label) => !llms.includes(` via ${label}`)), "no facilitator label from the chain table reaches llms.txt");
+  // The chain table no longer carries a settler label at all; if one comes
+  // back, it still must not reach llms.txt.
+  ok(labels.every((label) => !llms.includes(` via ${label}`)) && !/^- \[[^\]]+\]\([^)]+\): .* via /m.test(llms.split("\n").filter((l) => lines.includes(l)).join("\n")), "no facilitator label from the chain table reaches llms.txt");
   ok(!/issue #\d+/.test(llms), "llms.txt cites no issue number");
 }
 

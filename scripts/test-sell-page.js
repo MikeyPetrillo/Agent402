@@ -67,7 +67,7 @@ ok(html.includes("src/route-order.js") && html.includes("src/ledger-leaderboard.
 ok((html.match(/We never/g) || []).length >= 4, "at least four explicit 'We never' commitments render");
 
 // --- rails ------------------------------------------------------------
-ok(html.includes(">Base<") && html.includes(">Robinhood<"), "rail marks render every chain including Robinhood");
+ok(html.includes(">Base<") && html.includes(">Robinhood Chain<"), "rail marks render every chain including Robinhood Chain");
 ok(html.includes(">USDG<"), "Robinhood's asset is labelled USDG, not USDC");
 
 // --- router promises match route-execute / dispatch-eligibility ----------

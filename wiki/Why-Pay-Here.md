@@ -11,11 +11,11 @@ On the metered gateway every 402 quotes this exact request from its own body. A 
 - The metered tier: https://agent402.tools/tools/v1-chat-metered
 - OpenClaw setup: https://agent402.tools/guides/openclaw-model-provider
 
-## 02 / Failure - A failed call is not charged, and the response proves it.
+## 02 / Failure - A failed x402 call is not charged, and the response shows it.
 
 Settlement runs after the handler answers and an error status cancels it, so a response with no payment receipt, or a receipt marked success:false, moved no money. A retry that carries the same idempotency key and the same payment credential replays the paid answer instead of paying again. The one residual case, a settled receipt on an error response, is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently. A Tempo push payment is sent before the call runs, so a call that then fails is recorded as a refund owed the same way. Anyone holding the settlement transaction can check it for free at /api/refunds/lookup and see our refund transaction once it is sent.
 
-- Outside uptime: https://agent402.tools/status
+- Check a payment: https://agent402.tools/x402-test
 - How it settles: https://agent402.tools/guides/x402-and-mpp
 
 ## 03 / One key - One key buys everything.
@@ -26,7 +26,7 @@ The same wallet pays for flat LLM tiers and a metered tier on four wires (OpenAI
 - Gateway models: https://agent402.tools/v1/models
 - Reports: https://agent402.tools/reports
 
-## 04 / No wallet - No wallet required.
+## 04 / No wallet - Some calls need no wallet.
 
 Proof-of-work pays for the pure-CPU tools, cards over MPP pay any route priced at $0.50 or more, and card checkout sells the finished reports, beside USDC or USDG on 12 chains and native MPP on Tempo. An agent with a wallet never needs an account.
 
