@@ -34,7 +34,7 @@ ok(pub.rails.every((r) => !("recent" in r)), "per-transfer rows are not publishe
 ok(!/"from"/.test(blob), "no `from` field anywhere in the body");
 ok(pub.rails[0].lastInbound?.tx === OWN_TX, "our own canary settle stays as the rail's proof row");
 ok(!("lastInbound" in pub.rails[1]), "an unmarked (pre-rule) lastInbound is dropped, not trusted");
-ok(pub.rails[0].balance === 12.5 && pub.rails[0].externalUsd === 0.002, "balances and totals stay");
+ok(!("balance" in pub.rails[0]) && pub.rails[0].externalUsd === 0.002 && pub.rails[0].status === "live", "counts and totals stay; the balance is replaced by a reachability word");
 ok(snap.rails[0].recent.length === 2 && snap.rails[1].lastInbound, "the cached snapshot is not mutated");
 
 ok(newestOwnSettle(snap.rails[0].recent)?.tx === OWN_TX, "newestOwnSettle skips an outside transfer for our own");
@@ -42,9 +42,11 @@ ok(newestOwnSettle([{ when: "x", tx: "t", external: true }]) === null, "newestOw
 
 // The handler publishes through the filter, and the snapshot keeps lastInbound own-only.
 const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-const at = server.indexOf('app.get("/api/revenue", ');
-const handler = server.slice(at, at + 900);
-ok(at > 0 && /publicRevenueSnapshot\(snap\)/.test(handler), "/api/revenue serializes through publicRevenueSnapshot");
+const at = server.indexOf('app.get("/api/revenue", revenueApi.publicHandler)');
+const live0 = readFileSync(new URL("../src/revenue-live.js", import.meta.url), "utf8");
+const pubHandler = live0.slice(live0.indexOf("publicHandler: async"), live0.indexOf("operatorHandler: async"));
+const pubBody = live0.slice(live0.indexOf("export function publicRevenueBody"), live0.indexOf("export function publicRevenueBody") + 200);
+ok(at > 0 && /publicRevenueBody\(/.test(pubHandler) && /publicRevenueSnapshot\(snap\)/.test(pubBody), "/api/revenue serializes through publicRevenueSnapshot");
 const live = readFileSync(new URL("../src/revenue-live.js", import.meta.url), "utf8");
 ok(/const seen = newestOwnSettle\(r\.recent\);/.test(live), "the snapshot's lastInbound is chosen from our own settles only");
 

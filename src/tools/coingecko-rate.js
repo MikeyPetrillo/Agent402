@@ -24,6 +24,14 @@ const utcDay = (now) => new Date(now).toISOString().slice(0, 10);
 
 /** Take one request's worth of budget. Returns null when taken, else the
  *  reason it was refused: "day" (daily ceiling spent) or "minute". */
+// Attribution the CoinGecko API terms require next to the data (API Terms of
+// Service clause 4.1.4, https://www.coingecko.com/en/api_terms, and the brand
+// attribution guide, https://brand.coingecko.com/resources/attribution-guide,
+// which lists "Data provided by CoinGecko" among the accepted forms). Every
+// CoinGecko-backed tool's description ends with it; the vendor-name check in
+// scripts/test-no-third-party-names.js allows it there and nowhere else.
+export const COINGECKO_ATTRIBUTION = "Data provided by CoinGecko.";
+
 export function cgTokenRefusal(now = Date.now()) {
   const d = utcDay(now);
   if (cgDay.day !== d) { cgDay.day = d; cgDay.used = 0; }

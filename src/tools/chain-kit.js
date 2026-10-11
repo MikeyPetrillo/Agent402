@@ -415,7 +415,7 @@ export const CHAIN_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "Return the current USD spot price for an ERC-20 token, identified by its contract address and network. Sourced from Alchemy's aggregated price feed. Use this for portfolio-value calculations or to denominate a balance in fiat without depending on a separate market-data API.",
+      "Return the current USD spot price for an ERC-20 token, identified by its contract address and network. Sourced from an aggregated market price feed. Use this for portfolio-value calculations or to denominate a balance in fiat without depending on a separate market-data API.",
     tags: ["crypto", "price", "token", "usd", "spot", "erc20"],
     discovery: {
       bodyType: "json",

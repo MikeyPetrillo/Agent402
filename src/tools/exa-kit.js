@@ -47,7 +47,7 @@ import { upstreamCosts } from "../upstream-costs.js";
 const EXA_API = "https://api.exa.ai";
 const TIMEOUT_MS = 30_000;
 const USER_AGENT = "agent402-exa/1";
-const SHARED_TAGS = ["web", "search", "exa"];
+const SHARED_TAGS = ["web", "search"];
 
 // Result/page caps. These are the COST lever, not a UX nicety: Exa's base
 // price covers 10 results, and every result past that bills a surcharge, so
@@ -340,12 +340,12 @@ const RESULT_EXAMPLE = {
 export const EXA_TOOLS = [
   {
     route: "POST /api/exa-search",
-    name: "Exa neural web search",
+    name: "Neural web search",
     slug: "exa-search",
     category: "web",
     price: "$0.012",
     description:
-      "Neural (embedding-based) web search over Exa's curated index, which finds pages by meaning rather than keyword overlap. Use it when a keyword engine returns the wrong thing: conceptual questions, 'pages like this one', or niche technical writing. Returns up to 10 results with title, URL, published date and author. Complements the Brave-backed web search rather than replacing it.",
+      "Neural (embedding-based) web search over a curated web index, which finds pages by meaning rather than keyword overlap. Use it when a keyword engine returns the wrong thing: conceptual questions, 'pages like this one', or niche technical writing. Returns up to 10 results with title, URL, published date and author. Complements the keyword web search rather than replacing it.",
     tags: [...SHARED_TAGS, "neural", "semantic"],
     discovery: {
       bodyType: "json",
@@ -355,7 +355,7 @@ export const EXA_TOOLS = [
           query: { type: "string", description: "What to search for, in natural language (max 1000 chars)." },
           numResults: { type: "number", description: `Results to return, 1 to ${MAX_RESULTS} (default ${MAX_RESULTS}).` },
           type: { type: "string", description: "auto (default), neural, keyword, fast, or instant (lowest latency, some depth traded for speed)." },
-          category: { type: "string", description: `Optional Exa category filter: ${EXA_CATEGORIES.join(", ")} ("research paper" is accepted as an alias of "publication"; Exa retired pdf, github and tweet on 2026-07-23 and they are refused with this list).` },
+          category: { type: "string", description: `Optional category filter: ${EXA_CATEGORIES.join(", ")} ("research paper" is accepted as an alias of "publication"; pdf, github and tweet were retired upstream on 2026-07-23 and are refused with this list).` },
           includeDomains: { type: "array", description: "Only return results from these domains." },
           excludeDomains: { type: "array", description: "Never return results from these domains." },
           startPublishedDate: { type: "string", description: "ISO date; only pages published on or after it." },
@@ -413,13 +413,13 @@ export const EXA_TOOLS = [
   },
   {
     route: "POST /api/exa-answer",
-    name: "Exa grounded answer",
+    name: "Grounded answer with citations",
     slug: "exa-answer",
     category: "web",
     modelBacked: true, // the answer text is generated: read by server.js's MODEL_BACKED_SLUGS
     price: "$0.010",
     description:
-      "Ask a question and get a written answer with the sources it was drawn from. Exa searches its index, reads the pages and composes the answer, returning the citation list (title, URL, published date) alongside it so every claim can be checked. Model-backed: the answer text is generated, the citations are retrieved.",
+      "Ask a question and get a written answer with the sources it was drawn from. The engine searches its index, reads the pages and composes the answer, returning the citation list (title, URL, published date) alongside it so every claim can be checked. Model-backed: the answer text is generated, the citations are retrieved.",
     tags: [...SHARED_TAGS, "answer", "citations"],
     discovery: {
       bodyType: "json",
@@ -462,12 +462,12 @@ export const EXA_TOOLS = [
   },
   {
     route: "POST /api/exa-contents",
-    name: "Exa page contents",
+    name: "Web page contents",
     slug: "exa-contents",
     category: "web",
     price: "$0.02",
     description:
-      "Retrieve the readable text of up to 10 web pages by URL, with optional query-focused highlights. Exa serves from its crawl cache when the page is fresh enough and live-crawls otherwise, so this answers for pages a plain fetch would be blocked from. Returns per-URL status so a page that could not be read is named rather than silently missing.",
+      "Retrieve the readable text of up to 10 web pages by URL, with optional query-focused highlights. Pages are served from a crawl cache when the page is fresh enough and live-crawls otherwise, so this answers for pages a plain fetch would be blocked from. Returns per-URL status so a page that could not be read is named rather than silently missing.",
     tags: [...SHARED_TAGS, "contents", "extract"],
     discovery: {
       bodyType: "json",

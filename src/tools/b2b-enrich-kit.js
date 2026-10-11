@@ -318,13 +318,13 @@ const EXAMPLE_AT = "2026-08-20T14:10:00.000Z";
 export const B2B_ENRICH_TOOLS = [
   {
     route: "POST /api/hunter-domain-search",
-    name: "Hunter domain email search",
+    name: "Domain email search",
     slug: "hunter-domain-search",
     category: "research",
     price: "$0.030",
     description:
-      "Find the public email addresses Hunter has indexed for a company domain: each address with type (personal/generic), confidence score, the person's name, position, seniority and department, plus the domain's email pattern and organization facts. Filter by type or department; page with offset.",
-    tags: ["b2b", "enrichment", "email", "hunter", "domain", "leads", "contacts"],
+      "Find the public email addresses indexed for a company domain in a B2B contact database: each address with type (personal/generic), confidence score, the person's name, position, seniority and department, plus the domain's email pattern and organization facts. Filter by type or department; page with offset.",
+    tags: ["b2b", "enrichment", "email", "domain", "leads", "contacts"],
     discovery: {
       bodyType: "json",
       input: { domain: "stripe.com", limit: 10 },
@@ -334,7 +334,7 @@ export const B2B_ENRICH_TOOLS = [
           limit: { type: "number", description: "Max addresses to return, 1-100 (default 10)." },
           offset: { type: "number", description: "Skip the first N addresses (paging), default 0." },
           type: { type: "string", description: "personal or generic (omit for both)." },
-          department: { type: "string", description: "Comma-separated Hunter departments: executive, it, finance, management, sales, legal, support, hr, marketing, communication, education, design, health, operations." },
+          department: { type: "string", description: "Comma-separated departments: executive, it, finance, management, sales, legal, support, hr, marketing, communication, education, design, health, operations." },
           seniority: { type: "string", description: "Comma-separated: junior, senior, executive." },
         },
         required: ["domain"],
@@ -393,13 +393,13 @@ export const B2B_ENRICH_TOOLS = [
 
   {
     route: "POST /api/hunter-email-finder",
-    name: "Hunter email finder",
+    name: "Work email finder",
     slug: "hunter-email-finder",
     category: "research",
     price: "$0.030",
     description:
-      "Find the most likely work email for a named person at a company domain via Hunter: the address, a 0-100 confidence score, the person's position and the verification status Hunter holds for it. Provide first_name + last_name (or full_name) and domain.",
-    tags: ["b2b", "enrichment", "email", "hunter", "finder", "contact"],
+      "Find the most likely work email for a named person at a company domain from a B2B contact database: the address, a 0-100 confidence score, the person's position and the verification status on record for it. Provide first_name + last_name (or full_name) and domain.",
+    tags: ["b2b", "enrichment", "email", "finder", "contact"],
     discovery: {
       bodyType: "json",
       input: { domain: "stripe.com", first_name: "Jane", last_name: "Doe" },
@@ -457,13 +457,13 @@ export const B2B_ENRICH_TOOLS = [
 
   {
     route: "POST /api/hunter-email-verify",
-    name: "Hunter email verifier",
+    name: "Email deliverability verifier",
     slug: "hunter-email-verify",
     category: "research",
     price: "$0.020",
     description:
-      "Verify whether an email address is deliverable via Hunter: result (deliverable/undeliverable/risky/unknown), status (valid/invalid/accept_all/webmail/disposable/unknown), a 0-100 score, and the individual checks (format, gibberish, disposable, webmail, MX records, SMTP server, SMTP check, accept-all, blocked).",
-    tags: ["b2b", "enrichment", "email", "hunter", "verify", "deliverability"],
+      "Verify whether an email address is deliverable: result (deliverable/undeliverable/risky/unknown), status (valid/invalid/accept_all/webmail/disposable/unknown), a 0-100 score, and the individual checks (format, gibberish, disposable, webmail, MX records, SMTP server, SMTP check, accept-all, blocked).",
+    tags: ["b2b", "enrichment", "email", "verify", "deliverability"],
     discovery: {
       bodyType: "json",
       input: { email: "support@stripe.com" },
@@ -516,13 +516,13 @@ export const B2B_ENRICH_TOOLS = [
 
   {
     route: "POST /api/hunter-company",
-    name: "Hunter company facts",
+    name: "Company facts by domain",
     slug: "hunter-company",
     category: "research",
     price: "$0.020",
     description:
-      "Company facts for a domain from Hunter's company database: name, legal name, description, founded year, industry classification, tags, headquarters location, employee count and range, estimated revenue, funding raised, ticker, LinkedIn and X handles, and the technologies detected on the site.",
-    tags: ["b2b", "enrichment", "company", "hunter", "firmographics"],
+      "Company facts for a domain from a B2B company database: name, legal name, description, founded year, industry classification, tags, headquarters location, employee count and range, estimated revenue, funding raised, ticker, LinkedIn and X handles, and the technologies detected on the site.",
+    tags: ["b2b", "enrichment", "company", "firmographics"],
     discovery: {
       bodyType: "json",
       input: { domain: "stripe.com" },
@@ -560,13 +560,13 @@ export const B2B_ENRICH_TOOLS = [
 
   {
     route: "POST /api/apollo-people-search",
-    name: "Apollo people search",
+    name: "B2B people search",
     slug: "apollo-people-search",
     category: "research",
     price: "$0.020",
     description:
-      "Search Apollo's people database by company domain(s), job title(s), seniority and location: returns matching people with name, title, headline, seniority, departments, location, LinkedIn URL, email status and their organization (name, domain, size). Up to 25 per page with total count and page count. Emails are not revealed here; use apollo-person-match for one person's email.",
-    tags: ["b2b", "enrichment", "people", "apollo", "prospecting", "leads", "titles"],
+      "Search a B2B people database by company domain(s), job title(s), seniority and location: returns matching people with name, title, headline, seniority, departments, location, LinkedIn URL, email status and their organization (name, domain, size). Up to 25 per page with total count and page count. Emails are not revealed here; use apollo-person-match for one person's email.",
+    tags: ["b2b", "enrichment", "people", "prospecting", "leads", "titles"],
     discovery: {
       bodyType: "json",
       input: { domains: ["stripe.com"], titles: ["engineering manager"], per_page: 5 },
@@ -574,7 +574,7 @@ export const B2B_ENRICH_TOOLS = [
         properties: {
           domains: { type: "array", items: { type: "string" }, description: "Company domains to search within (1-25)." },
           titles: { type: "array", items: { type: "string" }, description: "Job titles to match (0-25), e.g. [\"cto\", \"vp engineering\"]." },
-          seniorities: { type: "array", items: { type: "string" }, description: "Apollo seniorities: owner, founder, c_suite, partner, vp, head, director, manager, senior, entry, intern." },
+          seniorities: { type: "array", items: { type: "string" }, description: "Seniorities: owner, founder, c_suite, partner, vp, head, director, manager, senior, entry, intern." },
           locations: { type: "array", items: { type: "string" }, description: "Person locations, e.g. [\"california, us\"]." },
           keywords: { type: "string", description: "Free-text keywords (max 200 chars)." },
           page: { type: "number", description: "Page number, 1-500 (default 1)." },
@@ -637,13 +637,13 @@ export const B2B_ENRICH_TOOLS = [
 
   {
     route: "POST /api/apollo-org-enrich",
-    name: "Apollo organization enrichment",
+    name: "Organization enrichment",
     slug: "apollo-org-enrich",
     category: "research",
     price: "$0.020",
     description:
-      "Enrich a company by domain from Apollo: name, website, LinkedIn and X URLs, founded year, industry and keywords, short description, estimated employee count, headquarters city/state/country, annual revenue, total funding and latest round, ticker and exchange, detected technologies, and per-department headcount.",
-    tags: ["b2b", "enrichment", "company", "apollo", "firmographics", "funding"],
+      "Enrich a company by domain from a B2B company database: name, website, LinkedIn and X URLs, founded year, industry and keywords, short description, estimated employee count, headquarters city/state/country, annual revenue, total funding and latest round, ticker and exchange, detected technologies, and per-department headcount.",
+    tags: ["b2b", "enrichment", "company", "firmographics", "funding"],
     discovery: {
       bodyType: "json",
       input: { domain: "stripe.com" },
@@ -679,13 +679,13 @@ export const B2B_ENRICH_TOOLS = [
 
   {
     route: "POST /api/apollo-person-match",
-    name: "Apollo person match",
+    name: "B2B person match",
     slug: "apollo-person-match",
     category: "research",
     price: "$0.050",
     description:
-      "Match one person in Apollo by work email, or by first_name + last_name + company domain, and return their enriched profile: name, title, headline, seniority, departments, location, LinkedIn URL, work email with its verification status, and their organization (name, domain, industry, size). Personal emails and phone numbers are never requested.",
-    tags: ["b2b", "enrichment", "person", "apollo", "email", "contact", "match"],
+      "Match one person in a B2B people database by work email, or by first_name + last_name + company domain, and return their enriched profile: name, title, headline, seniority, departments, location, LinkedIn URL, work email with its verification status, and their organization (name, domain, industry, size). Personal emails and phone numbers are never requested.",
+    tags: ["b2b", "enrichment", "person", "email", "contact", "match"],
     discovery: {
       bodyType: "json",
       input: { first_name: "Jane", last_name: "Doe", domain: "stripe.com" },

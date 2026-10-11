@@ -58,7 +58,7 @@ export const FINANCE_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "End-of-day US equity quote: last close, day range, previous close and the change between them. US equities only; indices, FX and crypto are not covered (crypto-price serves those). Built from a three-venue consolidation (Databento DBEQ.BASIC), so the prices track the wider market but the volume counts those three venues only and is returned as venueVolume rather than as a total. No 52-week range and no intraday print: for a date range call stock-history. Each answer says whether its bars came from this session's cache (cached, fetchedAt).",
+      "End-of-day US equity quote: last close, day range, previous close and the change between them. US equities only; indices, FX and crypto are not covered (crypto-price serves those). Built from a consolidation of three U.S. exchange venues, so the prices track the wider market but the volume counts those three venues only and is returned as venueVolume rather than as a total. No 52-week range and no intraday print: for a date range call stock-history. Each answer says whether its bars came from this session's cache (cached, fetchedAt).",
     tags: ["finance", "stocks", "quote", "market-data", "price"],
     discovery: {
       input: { symbol: "AAPL" },
@@ -140,7 +140,7 @@ export const FINANCE_TOOLS = [
     category: "data",
     price: "$0.005",
     description:
-      "Daily OHLCV bars for a US equity: the last `days` sessions, 1 to 250, default 30. Daily only, no intraday. Built from a three-venue consolidation (Databento DBEQ.BASIC), so each bar's high and low are the extremes across those venues, open and close come from the venue that traded the most that session, and venueVolume sums those three venues rather than the consolidated tape. A flat ascending array ready for charting or backtests. Set indicators to also get technical analysis computed from the same bars: RSI(14), MACD(12,26,9), EMA 20/50/200, SMA 20/50, Bollinger(20,2) and ATR(14), with a plain summary (close vs EMA50, RSI zone, MACD cross). Indicators need enough sessions (EMA200 needs days >= 200) and are descriptive, not a trading recommendation.",
+      "Daily OHLCV bars for a US equity: the last `days` sessions, 1 to 250, default 30. Daily only, no intraday. Built from a consolidation of three U.S. exchange venues, so each bar's high and low are the extremes across those venues, open and close come from the venue that traded the most that session, and venueVolume sums those three venues rather than the consolidated tape. A flat ascending array ready for charting or backtests. Set indicators to also get technical analysis computed from the same bars: RSI(14), MACD(12,26,9), EMA 20/50/200, SMA 20/50, Bollinger(20,2) and ATR(14), with a plain summary (close vs EMA50, RSI zone, MACD cross). Indicators need enough sessions (EMA200 needs days >= 200) and are descriptive, not a trading recommendation.",
     tags: ["finance", "stocks", "history", "ohlcv", "technical-analysis"],
     discovery: {
       input: { symbol: "AAPL", days: 30 },

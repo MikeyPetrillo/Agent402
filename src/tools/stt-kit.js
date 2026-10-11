@@ -300,7 +300,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.030",
     description:
-      "Transcribe audio to text using OpenAI (gpt-transcribe). Provide a URL to an audio file (mp3, wav, m4a, etc.) and get back the transcript. Add diarize:true for speaker labels and word timestamps (ElevenLabs Scribe v2, same price). No API key needed; pay per call via x402. Max 4 minutes of audio, 25 MB file size; /api/transcribe-pro takes the same models to 10 minutes.",
+      "Transcribe audio to text with the gpt-transcribe model. Provide a URL to an audio file (mp3, wav, m4a, etc.) and get back the transcript. Add diarize:true for speaker labels and word timestamps (the scribe-v2 model, same price). No API key needed; pay per call via x402. Max 4 minutes of audio, 25 MB file size; /api/transcribe-pro takes the same models to 10 minutes.",
     tags: [...SHARED_TAGS, "gpt-transcribe"],
     discovery: {
       bodyType: "json",
@@ -309,7 +309,7 @@ export const STT_TOOLS = [
         properties: {
           url: { type: "string", description: "URL of the audio file to transcribe (mp3, wav, m4a, ogg, flac, webm)" },
           language: { type: "string", description: "Optional ISO-639-1 language code (e.g. 'en', 'es', 'fr') for better accuracy" },
-          diarize: { type: "boolean", description: "true: transcribe with ElevenLabs Scribe v2 and add speaker labels and word timestamps (`words`, `speakers`). Same price and cap. Default false" },
+          diarize: { type: "boolean", description: "true: transcribe with the scribe-v2 model and add speaker labels and word timestamps (`words`, `speakers`). Same price and cap. Default false" },
         },
         required: ["url"],
       },
@@ -332,7 +332,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.100",
     description:
-      "Transcribe audio to text using OpenAI (gpt-transcribe) - the same model as /api/transcribe with a longer cap. Provide a URL to an audio file and get back the transcript; add diarize:true for speaker labels and word timestamps (ElevenLabs Scribe v2). No API key needed; pay per call via x402. Max 10 minutes of audio, 25 MB file size.",
+      "Transcribe audio to text with the gpt-transcribe model - the same model as /api/transcribe with a longer cap. Provide a URL to an audio file and get back the transcript; add diarize:true for speaker labels and word timestamps (the scribe-v2 model). No API key needed; pay per call via x402. Max 10 minutes of audio, 25 MB file size.",
     tags: [...SHARED_TAGS, "gpt-transcribe", "pro"],
     discovery: {
       bodyType: "json",
@@ -341,7 +341,7 @@ export const STT_TOOLS = [
         properties: {
           url: { type: "string", description: "URL of the audio file to transcribe (mp3, wav, m4a, ogg, flac, webm)" },
           language: { type: "string", description: "Optional ISO-639-1 language code (e.g. 'en', 'es', 'fr') for better accuracy" },
-          diarize: { type: "boolean", description: "true: transcribe with ElevenLabs Scribe v2 and add speaker labels and word timestamps (`words`, `speakers`). Same price and cap. Default false" },
+          diarize: { type: "boolean", description: "true: transcribe with the scribe-v2 model and add speaker labels and word timestamps (`words`, `speakers`). Same price and cap. Default false" },
         },
         required: ["url"],
       },
@@ -369,7 +369,7 @@ export const STT_TOOLS = [
     discovery: {
       bodyType: "form-data",
       input: { file: "<audio bytes, multipart part named file>", language: "en" },
-      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels and word timestamps (ElevenLabs Scribe v2)" } } },
+      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels and word timestamps (the scribe-v2 model)" } } },
       output: { example: { text: "Example transcript.", duration: 3.2, model: "gpt-transcribe" } },
     },
     handler: makeMultipartHandler("transcribe"),
@@ -386,7 +386,7 @@ export const STT_TOOLS = [
     discovery: {
       bodyType: "form-data",
       input: { file: "<audio bytes, multipart part named file>" },
-      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels and word timestamps (ElevenLabs Scribe v2)" } } },
+      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels and word timestamps (the scribe-v2 model)" } } },
       output: { example: { text: "Example transcript.", duration: 420.5, model: "gpt-transcribe" } },
     },
     handler: makeMultipartHandler("transcribe-pro"),

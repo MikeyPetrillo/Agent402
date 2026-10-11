@@ -1321,8 +1321,8 @@ export const DERIVATIVES_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Onchain options protocols ranked by 24h notional volume from DefiLlama's options overview: per-protocol 24h, 7d and 30d volume with 1d/7d change and chains, plus sector totals and the list of chains with options volume. limit caps rows (default 25, max 100). Keyless public data.",
-    tags: ["crypto", "derivatives", "options", "volume", "defi", "defillama", "ranking"],
+      "Onchain options protocols ranked by 24h notional volume from an open DeFi analytics options overview: per-protocol 24h, 7d and 30d volume with 1d/7d change and chains, plus sector totals and the list of chains with options volume. limit caps rows (default 25, max 100). Keyless public data.",
+    tags: ["crypto", "derivatives", "options", "volume", "defi", "ranking"],
     discovery: {
       bodyType: "json",
       input: { limit: 10 },

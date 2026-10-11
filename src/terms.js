@@ -3,7 +3,7 @@
 // open-source, pay-per-call tool service.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
-import { REPO_URL, REPO_SLUG } from "./repo-link.js";
+import { REPO_URL } from "./repo-link.js";
 export function termsPage(baseUrl) {
   const title = "Terms of Service - Agent402";
   const description = "Agent402 terms of service: open-source, pay-per-call web tools. As-is, no warranty, on-chain settlement.";
@@ -217,7 +217,7 @@ survive any termination of your use.</p>
 
 <h2>Operator &amp; contact</h2>
 <p>Agent402.Tools is operated by <strong><a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a></strong>. Contact: <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>,
-<a href="${REPO_URL}" rel="noopener">github.com/${REPO_SLUG}</a>,
+<a href="${REPO_URL}" rel="noopener">the source repository on GitHub</a>,
 or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.</p>
 </div>
 </section>

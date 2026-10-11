@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
 const PINS = {
-  "src/terms.js": { date: "2026-10-11", sha: "fc532f9bcec651d9" },
+  "src/terms.js": { date: "2026-10-11", sha: "7158861d9a354b5c" },
   "src/privacy.js": { date: "2026-10-11", sha: "04febebf88f8d660" },
 };
 let pass = 0, fail = 0;

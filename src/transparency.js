@@ -203,8 +203,9 @@ and these are the receipts:</p>
   with the treasury, so part of what appears there as demand is our own self-funding loop. Both figures are
   correct; the external-only series on /revenue is the one that answers "did someone else pay for this".</li>
   <li>Rails are read best effort from public RPCs and cached for an hour: a flaky RPC marks that rail
-  unreachable without hiding the others. Wallet balances are float: <a href="/api/revenue">/api/revenue</a>
-  publishes them, and they are never counted as revenue.</li>
+  unreachable without hiding the others. Wallet balances are float, never counted as revenue, and not
+  published: <a href="/api/revenue">/api/revenue</a> lists each receiving wallet's address, and anyone can read
+  its holdings on that chain's explorer.</li>
 </ul>
 
 <h2>Questions</h2>

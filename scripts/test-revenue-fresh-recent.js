@@ -58,7 +58,10 @@ const route = (p) => src.slice(src.indexOf(`app.get("${p}", async`), src.indexOf
 ok(/withFreshRecent\(await revenueSnapshot\(revenueWallets\(\)\), ledgerRecent, ledgerNewestOwn\)/.test(route("/revenue")), "/revenue re-reads the recent rows and our newest settle");
 const revenueHandler = (() => { const i = src.indexOf('app.get("/revenue", async'); return src.slice(i, src.indexOf("\n});", i)); })();
 ok(/"Cache-Control", "no-cache"/.test(revenueHandler) && !/max-age/.test(revenueHandler), "/revenue tells the browser to revalidate, so one refresh shows the new reading");
-ok(/withFreshRecent\(await revenueSnapshot\(revenueWallets\(\)\), ledgerRecent, ledgerNewestOwn\)/.test(route("/api/revenue")), "/api/revenue re-reads the recent rows and our newest settle");
+{
+  const decl = src.slice(src.indexOf("const revenueApi = revenueApiHandlers("), src.indexOf("const revenueApi = revenueApiHandlers(") + 600);
+  ok(/snapshot: async \(\) => withFreshRecent\(await revenueSnapshot\(revenueWallets\(\)\), ledgerRecent, ledgerNewestOwn\)/.test(decl) && /app\.get\("\/api\/revenue", revenueApi\.publicHandler\)/.test(src), "/api/revenue re-reads the recent rows and our newest settle");
+}
 ok(/revenueSnapshot\(revenueWallets\(\)\)\.then\(\(snap\) => withFreshRecent\(snap, ledgerRecent, ledgerNewestOwn\)\)/.test(src), "the chain pages re-read their rail's recent rows and our newest settle");
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

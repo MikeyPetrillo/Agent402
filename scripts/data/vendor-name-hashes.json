@@ -1,0 +1,54 @@
+{
+ "_note": "sha256 (first 20 hex) of lowercased upstream vendor names that public tool text must not carry, plus the slug::field places where a vendor's terms require attribution. Hashed so this file does not itself name them. Regenerate with scripts/gen-vendor-hashes.js.",
+ "vendors": [
+  "02fabb74a0a08a6217c0",
+  "061a93d44fcb177d9a37",
+  "10085abca7df5535ac86",
+  "187d035394c577c58b34",
+  "1e9cc37678c0112d7a39",
+  "3032646694ad17bb3d63",
+  "354bbd11b6d00e419ec2",
+  "439ec330cf2bfc286932",
+  "4968d0cf3b24d26d1d37",
+  "598a25fab4b696e4db5d",
+  "5baf133faf32df5bd738",
+  "7f12118c95904e5e7a25",
+  "7f871cbf905f6e0cd598",
+  "817008f1de879de95b91",
+  "86333e263e2a4092b291",
+  "8d3aa1a6f227d714692a",
+  "8e4ce1c402a26e4fd731",
+  "91ae68a817b9bc2b9b13",
+  "924b68a85ca137100ecf",
+  "955d3d03f58c01c26cbe",
+  "a1bb216b2bbb7eb30b25",
+  "e853b4e183ed08708fa4",
+  "e9a63a4eb15738ae85cd",
+  "f65f1b661dc4029869cb",
+  "f80f21938e5248ec70b8"
+ ],
+ "attribution": {
+  "187d035394c577c58b34": [
+   "^(crypto-(price|market|history|trending|global)|stablecoin-peg|price-[a-z]+|coin-[a-z-]+|coins-list|global-defi|exchanges|exchange-tickers|exchange-rates|rwa-[a-z]+)$::^description$"
+  ],
+  "1e9cc37678c0112d7a39": [
+   "^(sol-token-safety|sol-price|sol-swap-quote|sol-token-lookup|token-brief)$::^description$"
+  ],
+  "7f871cbf905f6e0cd598": [
+   "^v1-::^input\\.(model|zdr|tools)$"
+  ],
+  "8d3aa1a6f227d714692a": [
+   "^apollo-people-search$::^description$"
+  ],
+  "91ae68a817b9bc2b9b13": [
+   "^(geocode|reverse-geocode|place-search)$::^description$"
+  ],
+  "955d3d03f58c01c26cbe": [
+   "^weather-(current|daily|hourly|history|air-quality)$::^description$"
+  ],
+  "f80f21938e5248ec70b8": [
+   "^eas-attestations$::^description$",
+   "^rwa-issuers?$::^(description|input\\.id)$"
+  ]
+ }
+}

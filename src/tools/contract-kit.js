@@ -528,13 +528,13 @@ export const CONTRACT_TOOLS = [
   // ===========================================================================
   {
     route: "POST /api/contract-source",
-    name: "Verified contract source (Sourcify)",
+    name: "Verified contract source",
     slug: "contract-source",
     category: "crypto",
     price: "$0.005",
     description:
-      "Fetch the verified Solidity source files and compiler metadata for a contract address from Sourcify's open verification repository. Covers 8 EVM mainnets (ethereum, base, polygon, arbitrum, optimism, bsc, gnosis, celo). Contracts that were never verified return a structured {verified:false} miss, not an error. Feed the returned source into /api/solidity-scan for a heuristic pattern check.",
-    tags: ["crypto", "contract", "smart-contract", "solidity", "source", "verified-source", "sourcify", "evm", "verification", "audit"],
+      "Fetch the verified Solidity source files and compiler metadata for a contract address from an open verified-contract repository. Covers 8 EVM mainnets (ethereum, base, polygon, arbitrum, optimism, bsc, gnosis, celo). Contracts that were never verified return a structured {verified:false} miss, not an error. Feed the returned source into /api/solidity-scan for a heuristic pattern check.",
+    tags: ["crypto", "contract", "smart-contract", "solidity", "source", "verified-source", "evm", "verification", "audit"],
     discovery: {
       bodyType: "json",
       input: { address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", network: "base" },
@@ -626,13 +626,13 @@ export const CONTRACT_TOOLS = [
   // ===========================================================================
   {
     route: "POST /api/contract-abi",
-    name: "Verified contract ABI (Sourcify)",
+    name: "Verified contract ABI",
     slug: "contract-abi",
     category: "crypto",
     price: "$0.003",
     description:
-      "Fetch the verified ABI for a contract address from Sourcify, plus a ready-to-use list of human-readable function signatures with their 4-byte selectors. Covers 8 EVM mainnets. Unverified contracts return a structured {verified:false} miss. Pair with /api/calldata-decode to decode transactions against this ABI.",
-    tags: ["crypto", "contract", "smart-contract", "abi", "sourcify", "evm", "selector"],
+      "Fetch the verified ABI for a contract address from an open verified-contract repository, plus a ready-to-use list of human-readable function signatures with their 4-byte selectors. Covers 8 EVM mainnets. Unverified contracts return a structured {verified:false} miss. Pair with /api/calldata-decode to decode transactions against this ABI.",
+    tags: ["crypto", "contract", "smart-contract", "abi", "evm", "selector"],
     discovery: {
       bodyType: "json",
       input: { address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", network: "base" },

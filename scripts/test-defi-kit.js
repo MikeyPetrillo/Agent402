@@ -175,7 +175,7 @@ const countCalls = (pred) => calls.filter(pred).length;
     const usd = Number(String(t.price).replace("$", ""));
     ok(usd >= 0.001 && usd <= 0.005, `${t.slug}: price ${t.price} within $0.001-$0.005 (free DefiLlama upstream; the floor is the settlement floor)`);
     ok(typeof t.handler === "function" && t.discovery?.bodyType === "json" && t.discovery.input && t.discovery.inputSchema?.properties && t.discovery.output?.example, `${t.slug}: discovery complete`);
-    ok(Array.isArray(t.tags) && t.tags.includes("defillama"), `${t.slug}: tagged defillama`);
+    ok(Array.isArray(t.tags) && t.tags.includes("crypto") && !t.tags.some((g) => /llama/.test(g)), `${t.slug}: tagged by topic, not by upstream`);
     ok(!/\u2014/.test(t.description + t.name), `${t.slug}: no em dash in copy`);
   }
 }

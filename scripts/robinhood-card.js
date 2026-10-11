@@ -79,7 +79,6 @@ function cardSvg(data) {
   const own = rail.lastInbound && rail.lastInbound.internal === true && rail.lastInbound.usd > 0 ? rail.lastInbound : null;
   const settles = own ? [{ usd: own.usd, when: own.when, external: false }] : [];
   const pc = data.allTime?.perChain?.["robinhood"];
-  const balance = rail.balance == null ? null : Number(rail.balance).toFixed(rail.balance >= 100 ? 2 : 3);
   // Our newest settle (and the outside count), mirroring the bestsellers
   // result rows. An empty rail renders the honest "warming" line instead.
   const settleRows = settles.slice(0, 3)
@@ -116,7 +115,7 @@ function cardSvg(data) {
   ${okRow(282, "sell", "serve /.well-known/x402", "listed free, no placement fee")}
   <rect x="96" y="312" width="1008" height="212" rx="12" fill="${B.inset}" stroke="${B.insetLine}" stroke-width="1"/>
   <text x="126" y="348" font-size="19" font-family=${mono}><tspan fill="${B.muted}">$ </tspan><tspan fill="${B.text}">curl agent402.tools/api/revenue</tspan></text>
-  <text x="126" y="376" font-size="19" font-family=${mono}><tspan fill="${B.text}">→ HTTP </tspan><tspan font-weight="700" fill="${B.green}">200</tspan><tspan fill="${B.text}"> · rail Robinhood Chain</tspan><tspan fill="${B.muted}">${balance == null ? "" : ` · merchant balance ${balance} USDG`}</tspan></text>
+  <text x="126" y="376" font-size="19" font-family=${mono}><tspan fill="${B.text}">→ HTTP </tspan><tspan font-weight="700" fill="${B.green}">200</tspan><tspan fill="${B.text}"> · rail Robinhood Chain</tspan></text>
   ${settleRows}${emptyRow}
   ${insetNote}
   <text x="96" y="572" font-size="20" font-family=${mono}><tspan fill="${B.muted}">an x402 marketplace on Robinhood Chain · </tspan><tspan font-weight="700" fill="${B.text}">agents buying from agents</tspan></text>

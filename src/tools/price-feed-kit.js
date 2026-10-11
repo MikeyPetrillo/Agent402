@@ -9,7 +9,7 @@
 // rate limit), never PoW-eligible. Covered by scripts/test-price-feed-kit.js.
 
 import { protocols as llamaProtocols } from "./defi-kit.js";
-import { cgTokenRefusal, cgRefusalMessage, isCoinGeckoHost } from "./coingecko-rate.js";
+import { cgTokenRefusal, cgRefusalMessage, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
 const TIMEOUT_MS = 10_000;
 
 function bad(message, statusCode = 400) {
@@ -99,20 +99,20 @@ export const PRICE_FEED_TOOLS = [
   // ===========================================================================
   {
     route: "POST /api/price-coingecko",
-    name: "CoinGecko spot price",
+    name: "Crypto spot price by coin id",
     slug: "price-coingecko",
     category: "crypto",
     price: "$0.001",
     description:
-      "Live spot price for up to 25 coins by CoinGecko id, one row per id in the order asked: prices[] of {id, price, change24h, lastUpdated}. Identify coins by their CoinGecko ID slug (bitcoin, ethereum, solana, usd-coin, ...), as an array or a comma-separated string; for ticker symbols (BTC, ETH) plus volume and market cap use crypto-price. Defaults to USD; pass vsCurrency to denominate in EUR, JPY, ETH, BTC, etc. change24h is filled only when include24hChange is true. An id CoinGecko does not know comes back with a null price and is listed in unknown.",
-    tags: ["crypto", "price", "coingecko", "spot", "market"],
+      "Live spot price for up to 25 coins by coin id, one row per id in the order asked: prices[] of {id, price, change24h, lastUpdated}. Identify coins by their coin ID slug (bitcoin, ethereum, solana, usd-coin, ...), as an array or a comma-separated string; for ticker symbols (BTC, ETH) plus volume and market cap use crypto-price. Defaults to USD; pass vsCurrency to denominate in EUR, JPY, ETH, BTC, etc. change24h is filled only when include24hChange is true. An unknown id comes back with a null price and is listed in unknown.",
+    tags: ["crypto", "price", "spot", "market"],
     discovery: {
       bodyType: "json",
       input: { ids: ["bitcoin", "ethereum"] },
       inputSchema: {
         properties: {
-          ids: { type: ["array", "string"], items: { type: "string" }, description: "CoinGecko coin IDs (e.g. bitcoin, ethereum, solana): an array, or one comma-separated string. 1-25 entries." },
-          vsCurrency: { type: "string", description: "Quote currency (default usd). Supports any CoinGecko vs_currencies value." },
+          ids: { type: ["array", "string"], items: { type: "string" }, description: "Coin IDs (e.g. bitcoin, ethereum, solana): an array, or one comma-separated string. 1-25 entries." },
+          vsCurrency: { type: "string", description: "Quote currency (default usd). Supports any vs_currencies value the coin index lists." },
           include24hChange: { type: "boolean", description: "Include 24h % change in the response (default false)." },
         },
         required: ["ids"],
@@ -180,14 +180,14 @@ export const PRICE_FEED_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "Look up the current Total Value Locked (TVL) for a DeFi protocol via DeFiLlama's public API. Identify the protocol by its DeFiLlama slug (uniswap, aave, lido, ethena, etc.). Returns the total TVL plus per-chain breakdown and 24h/7d/30d change where DeFiLlama exposes it.",
-    tags: ["crypto", "defi", "tvl", "defillama", "protocol"],
+      "Look up the current Total Value Locked (TVL) for a DeFi protocol from an open DeFi analytics API. Identify the protocol by its slug (uniswap, aave, lido, ethena, etc.). Returns the total TVL plus per-chain breakdown and 24h/7d/30d change where the source exposes it.",
+    tags: ["crypto", "defi", "tvl", "protocol"],
     discovery: {
       bodyType: "json",
       input: { protocol: "aave" },
       inputSchema: {
         properties: {
-          protocol: { type: "string", description: "DeFiLlama protocol slug (e.g. uniswap, aave, lido). Lowercase, hyphen-separated." },
+          protocol: { type: "string", description: "Protocol slug (e.g. uniswap, aave, lido). Lowercase, hyphen-separated." },
         },
         required: ["protocol"],
       },
@@ -279,3 +279,6 @@ export const PRICE_FEED_TOOLS = [
     },
   },
 ];
+// price-coingecko reads CoinGecko, whose terms require the attribution (see
+// COINGECKO_ATTRIBUTION in coingecko-rate.js).
+for (const t of PRICE_FEED_TOOLS) if (t.slug === "price-coingecko") t.description = `${t.description} ${COINGECKO_ATTRIBUTION}`;
