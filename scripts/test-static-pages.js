@@ -214,9 +214,12 @@ try {
   const why = m?.[0] || "";
   ok(WHY_POINTS.length === 7, `seven why points (got ${WHY_POINTS.length})`);
   for (const w of WHY_POINTS) {
-    ok(why.includes(`id="why-${w.id}"`) && why.includes(`<h3>${esc(w.h)}</h3>`), `/#why carries the ${w.id} claim`);
-    ok(typeof w.s === "string" && w.s.length > 20 && why.includes(esc(w.s)) && why.includes(esc(w.p)), `/#why ${w.id} shows its one-line claim and keeps the full text`);
-    for (const [href] of w.links) ok(why.includes(`href="${esc(href)}"`), `/#why ${w.id} links its proof ${href}`);
+    ok(why.includes(`id="why-${w.id}"`) && why.includes(`<h3>${esc(w.t)}</h3>`), `/#why carries the ${w.id} row heading`);
+    ok(typeof w.t === "string" && w.t.length <= 40, `/#why ${w.id} heading is short enough for one line (${w.t.length} chars)`);
+    ok(typeof w.s === "string" && w.s.length > 20 && w.s.length <= 130 && why.includes(esc(w.s)), `/#why ${w.id} shows its one-sentence claim`);
+    ok(why.includes(esc(w.h)) && why.includes(esc(w.p)), `/#why ${w.id} keeps the full claim behind how it works`);
+    ok(Array.isArray(w.links) && w.links.length >= 1 && w.links.length <= 2, `/#why ${w.id} shows one or two proof links on its row`);
+    for (const [href] of [...w.links, ...(w.more || [])]) ok(why.includes(`href="${esc(href)}"`), `/#why ${w.id} links its proof ${href}`);
   }
   ok(why.includes('id="why-compare"') && why.includes('class="why-cmp"'), "/#why carries the side-by-side table");
   for (const c of WHY_COMPARE.cols) ok(why.includes(`<th scope="col">${esc(c)}</th>`), `/#why table has the "${c}" column`);

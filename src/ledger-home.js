@@ -170,7 +170,8 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
   // on any other origin (a self-hosted copy, CI on 127.0.0.1) links to it
   // instead of rendering a frame the browser would refuse.
   const liveEmbed = /^https:\/\/(www\.)?agent402\.tools\/?$/i.test(String(baseUrl || ""));
-  const heroLabel = heroFromChain ? "on-chain settlements · all rails · ours included" : "calls served for a stablecoin payment";
+  // Tags, each kept on one line, wrapping between tags at phone width.
+  const heroLabel = (heroFromChain ? ["on-chain settlements", "all rails", "ours included"] : ["calls served", "paid in stablecoin"]).map((t) => `<span>${t}</span>`).join("");
   const viaPow = Number(served.viaProofOfWork) || 0;
   const rails = railsByVolume(stats);
   const board = externalLeaderboardRows(leaderboardSnapshot);
@@ -216,7 +217,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
 .hm-chip { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--muted); padding: 8px 12px; border: 1px solid var(--dash); border-radius: var(--radius); background: var(--chip-bg); text-decoration: none; }
 .hm-term { font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.8; color: var(--on-panel-soft); white-space: pre-wrap; word-break: break-word; margin: 0; }
 @media (max-width: 900px) { .hm-hero, .hm-2col, .hm-doors, .hm-decide { grid-template-columns: minmax(0,1fr) !important; } .hm-row { grid-template-columns: 1fr !important; gap: 6px; } .hm-h2 { font-size: var(--fs-2xl); } }
-@media (max-width: 600px) { .hm-live-stats { grid-template-columns: 1fr 1fr !important; } .hm-live-tail { display: none; } .hm-ptable a { flex-wrap: wrap; } .hm-ptable a > span:first-child { min-width: 0; overflow-wrap: anywhere; } .why-cmp td { min-width: 150px; } }
+@media (max-width: 600px) { .hm-live-stats { grid-template-columns: 1fr 1fr !important; } .hm-live-tail { display: none; } .hm-ptable a { flex-wrap: wrap; } .hm-ptable a > span { white-space: nowrap; } .why-cmp td { min-width: 150px; } }
 @media (max-width: 480px) { .hm-reg-row { flex-direction: column !important; } .hm-reg-row button { width: 100%; } }
 .hm-sellcard { padding: 26px; display: flex; flex-direction: column; }
 .hm-sellk { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--accent); margin-bottom: 14px; }
@@ -265,7 +266,7 @@ ${WHY_SECTION_CSS}
             <a class="btn btn-primary" href="/docs#add">Add to your agent</a>
             <a class="btn btn-secondary" href="/tools">Browse tools</a>
           </div>
-          <a href="/guides/agent-hosts" style="align-self:flex-start;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);text-decoration:none;border-bottom:1px solid var(--hairline);">Claude, Cursor, VS Code, Windsurf, Cline, Codex, Gemini CLI &rarr;</a>
+          <a href="/guides/agent-hosts" style="align-self:flex-start;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);text-decoration:none;border-bottom:1px solid var(--hairline);white-space:nowrap;">Claude, Cursor, Codex and more &rarr;</a>
         </div>
         <div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);gap:8px 18px;align-items:center;">
           <span style="display:inline-flex;align-items:center;gap:10px;"><span class="ml-dot"></span>${rails.length} rails live</span>
@@ -297,7 +298,7 @@ ${WHY_SECTION_CSS}
               <span style="width:8px;height:8px;border-radius:50%;background:var(--accent-lit);flex:none;animation:ml-pulse 1.6s ease-in-out infinite;"></span>
               <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--on-panel-soft);">Settlement count loading</span>
             </div>
-            <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:8px;">${heroLabel}</div>
+            <div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:8px;">${heroLabel}</div>
           </div>
           <div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-faint);gap:4px 16px;"><a href="https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns" style="color:var(--accent-lit);text-decoration:none;">verify settlements on Basescan ↗</a><span>+ <strong id="hm-freepow" style="color:var(--on-panel-soft);font-weight:500;">${fmtNum(viaPow)}</strong> calls to the free tools (proof-of-work, no payment)</span></div>
         </div>
@@ -356,9 +357,9 @@ ${whySectionHtml()}
       <input id="hm-demo-in" type="text" value="hello" placeholder="anything at all" style="width:100%;background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);padding:13px 14px;margin-bottom:14px;box-sizing:border-box;" / aria-label="anything at all">
       <button type="button" id="hm-demo-run" class="btn btn-secondary" style="width:100%;">Run it free →</button>
       <ol style="margin:20px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">
-        <li style="display:grid;grid-template-columns:22px 1fr;gap:12px;padding:13px 0;border-bottom:1px solid var(--hairline);"><span id="hm-step1-mark" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">·</span><span><span style="font-size:var(--fs-md);color:var(--ink);font-weight:500;">Request a challenge</span><br><span id="hm-step1" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">signed, single-use, scoped to one tool</span></span></li>
+        <li style="display:grid;grid-template-columns:22px 1fr;gap:12px;padding:13px 0;border-bottom:1px solid var(--hairline);"><span id="hm-step1-mark" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">·</span><span><span style="font-size:var(--fs-md);color:var(--ink);font-weight:500;">Request a challenge</span><br><span id="hm-step1" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">signed, single-use, one tool</span></span></li>
         <li style="display:grid;grid-template-columns:22px 1fr;gap:12px;padding:13px 0;border-bottom:1px solid var(--hairline);"><span id="hm-step2-mark" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">·</span><span><span style="font-size:var(--fs-md);color:var(--ink);font-weight:500;">Solve it in your browser</span><br><span id="hm-step2" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">~65k hashes at 16 bits</span></span></li>
-        <li style="display:grid;grid-template-columns:22px 1fr;gap:12px;padding:13px 0;"><span id="hm-step3-mark" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">·</span><span><span style="font-size:var(--fs-md);color:var(--ink);font-weight:500;">Call the tool, free</span><br><span id="hm-step3" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">hash the challenge, submit the token</span></span></li>
+        <li style="display:grid;grid-template-columns:22px 1fr;gap:12px;padding:13px 0;"><span id="hm-step3-mark" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">·</span><span><span style="font-size:var(--fs-md);color:var(--ink);font-weight:500;">Call the tool, free</span><br><span id="hm-step3" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">hash it, send the token</span></span></li>
       </ol>
     </div>
     <div style="background:var(--panel);color:var(--on-panel);display:flex;flex-direction:column;">
@@ -373,7 +374,7 @@ curl -X POST /api/hash \\
   -H 'content-type: application/json' \\
   -H 'X-Pow-Solution: &lt;token&gt;:&lt;nonce&gt;' \\
   -d '{"text":"hello","algo":"sha256"}'</pre>
-      <div id="hm-demo-receipt" style="padding:14px 20px;border-top:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent-lit);">no wallet needed · press Run to spend CPU instead</div>
+      <div id="hm-demo-receipt" style="padding:14px 20px;border-top:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent-lit);">no wallet needed · press Run</div>
     </div>
   </div>
   <div class="ml-items" style="margin-top:16px;gap:8px 20px;font-family:var(--font-mono);font-size:var(--fs-sm);">
@@ -432,14 +433,14 @@ curl -X POST /api/hash \\
 
 <section style="max-width:1180px;margin:64px auto 0;padding:0 30px;">
   <div class="hm-obsidian" style="padding:48px 40px;">
-    <div class="hm-kicker" style="color:var(--accent-lit);">$ GET /api/leaderboard?include=external</div>
+    <div class="hm-kicker" style="color:var(--accent-lit);">$ GET /api/leaderboard</div>
     <h2 class="hm-h2" style="color:var(--on-panel);">The open index for every seller.</h2>
     ${sectionMeta(["hourly on-chain snapshot", "Bazaar → eth_getLogs → aggregate by payTo"], "margin:10px 0 14px;color:var(--on-panel-faint);")}
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);max-width:76ch;margin:0 0 30px;font-weight:300;">The x402 sellers we can crawl, ranked by <strong style="color:var(--on-panel);font-weight:500;">real Base USDC settled volume</strong> - not self-reported traffic. The rows below are the head of the board; the full ranking is at <a href="/leaderboard" style="color:var(--on-panel);">/leaderboard</a>. <span style="font-family:var(--font-mono);font-size:var(--fs-md);color:var(--on-panel);">include=external</span> excludes us from our own ranking, because a neutral index has to be checkable.</p>
 
     <div style="border:1px solid var(--panel-rule-2);border-radius:var(--radius);overflow:hidden;background:rgba(255,255,255,.025);">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);">
-        <span style="font-size:var(--fs-2xs);color:var(--on-panel-muted);letter-spacing:.1em;">OTHER SELLERS · BY USDC SETTLED · 7d</span>
+        <span style="font-size:var(--fs-2xs);color:var(--on-panel-muted);letter-spacing:.1em;white-space:nowrap;">OTHER SELLERS · USDC · 7d</span>
         <span style="display:flex;align-items:center;gap:6px;font-size:var(--fs-2xs);color:var(--accent-lit);"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent-lit);display:inline-block;animation:ml-pulse 1.8s ease-in-out infinite;"></span>LIVE</span>
       </div>
       <!-- Five mono columns are ~520px wide; inside the card's overflow:hidden
@@ -452,7 +453,7 @@ curl -X POST /api/hash \\
         <tbody>${leaderboardRowsHtml}</tbody>
       </table>
       </div>
-      <div style="padding:11px 18px;border-top:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-faint);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;"><span>Agent402 excluded · hourly snapshot</span><a href="/leaderboard" style="color:var(--accent-lit);text-decoration:none;">full leaderboard →</a></div>
+      <div style="padding:11px 18px;border-top:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-faint);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;"><span style="white-space:nowrap;">Agent402 excluded · hourly</span><a href="/leaderboard" style="color:var(--accent-lit);text-decoration:none;white-space:nowrap;">full leaderboard →</a></div>
     </div>
 
   </div>
@@ -467,7 +468,7 @@ curl -X POST /api/hash \\
     ${demandLanesHtml}
     <a href="/tools/bestsellers" style="display:grid;grid-template-columns:28px 1fr auto;gap:14px;align-items:center;padding:16px 20px;text-decoration:none;background:var(--panel);color:var(--on-panel);">
       <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-faint);">·</span>
-      <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel-muted);">the full ranking, plus buyer-diversity, revenue and trend lenses</span>
+      <span style="font-size:var(--fs-md);line-height:1.5;color:var(--on-panel-muted);">The full ranking, plus buyer-diversity, revenue and trend lenses.</span>
       <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent-lit);white-space:nowrap;">${esc(slugPrice(tools, "bestsellers"))} →</span>
     </a>
   </div>
@@ -487,7 +488,7 @@ curl -X POST /api/hash \\
   <div class="hm-kicker">$ GET /faq</div>
   <h2 class="hm-h2" style="margin:0 0 28px;">Questions people and agents ask.</h2>
   <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);max-width:900px;">${faqHtml}</div>
-  <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);margin:20px 0 0;">More, including data handling and the OpenAI-compatible gateway: <a href="/faq" style="color:var(--accent);font-weight:500;">/faq</a></p>
+  <p style="font-size:var(--fs-base);color:var(--muted);margin:20px 0 0;">More, including data handling and the OpenAI-compatible gateway, on <a href="/faq" style="color:var(--accent);font-weight:500;font-family:var(--font-mono);">/faq</a>.</p>
   <style>section details > summary::-webkit-details-marker{display:none;} section details[open] .ml-faq-mark{transform:rotate(45deg);} .ml-faq-mark{transition:transform .15s ease;display:inline-block;}</style>
 </section>
 

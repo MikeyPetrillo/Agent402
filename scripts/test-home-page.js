@@ -152,7 +152,7 @@ const catalog = {
   ok(/on-chain settlements/.test(chain) && /ours included/i.test(chain),
     "the chain figure is labelled as settlements, and says it includes our own traffic");
   ok(!/on-chain settlements/.test(served), "the served-call fallback does NOT claim to be on-chain settlements");
-  ok(served.includes("35,138") && /calls served for a stablecoin payment/.test(served),
+  ok(served.includes("35,138") && /calls served<\/span><span>paid in stablecoin/.test(served),
     "the fallback renders viaUSDC and is labelled as calls served");
   // A transfer is not a call. Whichever value is in play, the word "calls" may
   // not sit on the chain-derived figure.
