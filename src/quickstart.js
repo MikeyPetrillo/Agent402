@@ -1,5 +1,4 @@
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
-import { RAILS_AMP } from "./rails.js";
 
 export function quickstartPage(baseUrl) {
   const canonical = `${baseUrl}/quickstart`;
@@ -41,12 +40,6 @@ export function quickstartPage(baseUrl) {
 .qs-next a{color:var(--accent);text-decoration:none}
 .qs-next a:hover{text-decoration:underline}
 
-/* bottom cards */
-.qs-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:48px}
-.qs-card{background:var(--card);border:1px solid var(--hairline);padding:24px;text-decoration:none;color:var(--ink);transition:border-color .15s,transform .15s}
-.qs-card:hover{border-color:var(--accent);transform:translateY(-2px)}
-.qs-card h3{margin:0 0 6px;font-family:var(--font-body);font-weight:600;font-size:var(--fs-lg)}
-.qs-card p{margin:0;color:var(--muted);font-size:var(--fs-md);line-height:1.55}
 
 @media(max-width:600px){
   .qs-title{font-size:var(--fs-3xl) !important}
@@ -61,7 +54,7 @@ export function quickstartPage(baseUrl) {
 <section>
 <div class="qs-eyebrow">$ GET /quickstart</div>
 <h1 class="qs-title">Your first Agent402 call in 60 seconds</h1>
-<p class="qs-subtitle">Pick your stack, copy the snippet, and you're live.</p>
+<p class="qs-subtitle">Pick your stack and copy the snippet. The free proof-of-work tools answer right away with no wallet; paid tools need a wallet key holding USDC.</p>
 </section>
 
 <section>
@@ -78,19 +71,25 @@ export function quickstartPage(baseUrl) {
 <!-- Panel: Claude / MCP -->
 <div class="qs-panel active" id="panel-mcp" role="tabpanel">
 <h2>Add to Claude Code</h2>
-<p class="qs-oneliner">One command and you're done - 500+ tools available instantly.</p>
+<p class="qs-oneliner">One command adds 500+ tools. The pure-CPU ones run free with proof-of-work; the rest pay per call from a wallet key.</p>
 
-<span class="qs-label">Install</span>
+<span class="qs-label">Install (free tools, no wallet)</span>
 <div class="qs-code-wrap">
 <pre><code>claude mcp add agent402 -s user -- npx -y agent402-mcp@latest</code></pre>
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
 
+<span class="qs-label">Or with a funded EVM key (every paid tool)</span>
+<div class="qs-code-wrap">
+<pre><code>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@latest</code></pre>
+<button class="qs-copy" aria-label="Copy">Copy</button>
+</div>
+
 <span class="qs-label">Then ask Claude</span>
 <div class="qs-code-wrap">
-<pre><code># "extract the tables from this PDF"
-# "geocode these 50 addresses"
-# "fetch Apple's latest 10-K"</code></pre>
+<pre><code># free:        "sha256 this string: hello world"
+# with a key:  "extract the text from this PDF"
+# with a key:  "fetch Apple's latest 10-K"</code></pre>
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
 
@@ -105,7 +104,7 @@ export function quickstartPage(baseUrl) {
 <ul>
   <li><a href="/tools">Browse all tools</a> to see what's available</li>
   <li><a href="/playground">Try the playground</a> for interactive testing</li>
-  <li><a href="/docs">Read the MCP docs</a> for advanced config</li>
+  <li><a href="/docs/MCP-Connector">Read the MCP docs</a> for advanced config</li>
 </ul>
 </div>
 </div>
@@ -123,7 +122,7 @@ curl -i "https://agent402.tools/api/answer?q=what+is+the+x402+payment+protocol"<
 </div>
 <p class="qs-alt">Each 402 carries the price and every way to pay it. A wallet client signs the payment and retries the same request: the Pay with USDC tab shows the same two calls paid from a wallet.</p>
 
-<p class="qs-alt"><strong>No wallet yet?</strong> The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run free with proof-of-work and no wallet:</p>
+<p class="qs-alt"><strong>No wallet yet?</strong> The pure-CPU tools (hash, uuid, base64, markdown-to-html, json-to-csv and more) run free with proof-of-work and no wallet:</p>
 <span class="qs-label">Pay with proof-of-work (free, no wallet)</span>
 <div class="qs-code-wrap">
 <pre><code># Grab a challenge: { "challenge", "difficulty", "token", ... }
@@ -180,7 +179,7 @@ console.log(found.results, answer.answer, answer.citations);</code></pre>
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
 
-<p class="qs-alt"><strong>No wallet yet?</strong> The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run free with proof-of-work and no wallet:</p>
+<p class="qs-alt"><strong>No wallet yet?</strong> The pure-CPU tools (hash, uuid, base64, markdown-to-html, json-to-csv and more) run free with proof-of-work and no wallet:</p>
 <div class="qs-code-wrap">
 <pre><code>const free = new Agent402();  // no fetch: proof-of-work
 
@@ -194,7 +193,7 @@ console.log(result);</code></pre>
 <ul>
   <li>Use <code>a.find("geocode")</code> to search tools programmatically</li>
   <li>Set <code>maxPerCallUsd</code> and <code>dailyLimitUsd</code> on <code>new Agent402()</code> to cap what the wallet spends</li>
-  <li>Enable <a href="/docs">idempotent retries</a> for production use</li>
+  <li>Enable <a href="/docs/webhooks#idempotent">idempotent retries</a> for production use</li>
 </ul>
 </div>
 </div>
@@ -206,10 +205,10 @@ console.log(result);</code></pre>
 
 <span class="qs-label">Run the local wallet proxy (pays each call from your wallet over x402)</span>
 <div class="qs-code-wrap">
-<pre><code>npm i @x402/fetch @x402/evm viem
+<pre><code>npm i agent402-openclaw @x402/fetch @x402/evm viem   # in one folder
 export AGENT402_WALLET_KEY=0x...      # an EVM key holding USDC on Base
 export AGENT402_MAX_PER_CALL_USD=2    # per-call ceiling checked before signing
-npx agent402-openclaw proxy           # serves http://127.0.0.1:8412/v1</code></pre>
+npx agent402-openclaw proxy           # run from that folder; serves http://127.0.0.1:8412/v1</code></pre>
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
 
@@ -252,7 +251,7 @@ const result = await execute(call.function.name, JSON.parse(call.function.argume
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
 
-<p class="qs-alt"><strong>No wallet yet?</strong> The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run free with proof-of-work and no wallet:</p>
+<p class="qs-alt"><strong>No wallet yet?</strong> The pure-CPU tools (hash, uuid, base64, markdown-to-html, json-to-csv and more) run free with proof-of-work and no wallet:</p>
 <div class="qs-code-wrap">
 <pre><code>// free tier: every compute-payable tool, paid with proof-of-work
 const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-html"] });</code></pre>
@@ -263,7 +262,7 @@ const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-ht
 <div class="qs-next-title">What to try next</div>
 <ul>
   <li>More wallet-only tools (extract, render, screenshot): add their slugs beside <code>freeOnly: false</code></li>
-  <li>Combine with the <a href="/docs">MCP connector</a> for Claude-native integration</li>
+  <li>Combine with the <a href="/docs/MCP-Connector">MCP connector</a> for Claude-native integration</li>
   <li>See the <a href="/playground">playground</a> for live examples</li>
 </ul>
 </div>
@@ -271,8 +270,8 @@ const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-ht
 
 <!-- Panel: Pay with USDC -->
 <div class="qs-panel" id="panel-usdc" role="tabpanel">
-<h2>Pay directly with ${RAILS_AMP.replaceAll("&", "&amp;")}</h2>
-<p class="qs-oneliner">Use the x402 protocol for on-chain payment - no API keys, no accounts.</p>
+<h2>Pay directly with USDC (x402)</h2>
+<p class="qs-oneliner">Use the x402 protocol for on-chain payment - no API keys, no accounts. This snippet pays on Base or any EVM rail the 402 offers; Solana, Stellar and Algorand need their own scheme (see <a href="/docs/Paying-with-x402">Paying with x402</a>).</p>
 
 <span class="qs-label">Install</span>
 <div class="qs-code-wrap">
@@ -311,24 +310,6 @@ console.log(found.results, answer.answer, answer.citations);</code></pre>
   <li>See <a href="/.well-known/x402">/.well-known/x402</a> for the machine-readable payment manifest</li>
 </ul>
 </div>
-</div>
-</section>
-
-<section>
-<h2 class="sr-section">What to try next</h2>
-<div class="qs-cards">
-  <a class="qs-card" href="/tools">
-    <h3>Browse 500+ tools</h3>
-    <p>Search, filter, and preview every tool in the catalog.</p>
-  </a>
-  <a class="qs-card" href="/playground">
-    <h3>Try it live</h3>
-    <p>Run any tool interactively in the browser playground.</p>
-  </a>
-  <a class="qs-card" href="/docs">
-    <h3>Read the docs</h3>
-    <p>API reference, authentication, pricing, and advanced usage.</p>
-  </a>
 </div>
 </section>
 
