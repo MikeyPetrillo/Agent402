@@ -136,17 +136,22 @@ export function terminalTicker(rows = []) {
  *  so the script never re-derives a figure the server already computed. */
 export function terminalRoster(rows = [], selectedHost = null, { measured = true } = {}) {
   if (!rows.length) return `<div class="t-empty">no sellers indexed on this rail yet</div>`;
-  const maxCalls = Math.max(...rows.map((r) => Number(r.calls) || 0), 1);
+  const maxCalls = Math.max(...rows.filter((r) => !r.local).map((r) => Number(r.calls) || 0), 1);
+  // The host row is pinned and labelled, never ranked: it carries no rank
+  // number, its on-chain figures are marked as including our own runs, and
+  // the ranks count the other sellers only.
+  let rank = 0;
   const body = rows.map((r, i) => {
     const sel = selectedHost && r.host === selectedHost;
-    const share = Math.round(((Number(r.calls) || 0) / maxCalls) * 100);
+    const share = r.local ? 0 : Math.round(((Number(r.calls) || 0) / maxCalls) * 100);
+    const n = r.local ? "host" : String(++rank).padStart(3, "0");
     return `<a class="t-row${sel ? " is-sel" : ""}" role="row" tabindex="${sel || (!selectedHost && i === 0) ? 0 : -1}"
        href="${esc(r.href || `?seller=${encodeURIComponent(r.host)}#detail`)}"
        data-t-row data-host="${esc(r.host)}" data-calls="${Number(r.calls) || 0}" data-usd="${Number(r.usd) || 0}"
        data-buyers="${Number(r.buyers) || 0}" data-tools="${Number(r.tools) || 0}" data-idx="${i}"
        ${sel ? 'aria-current="true"' : ""}>
-      <span class="t-c t-c-n" role="cell">${String(i + 1).padStart(3, "0")}</span>
-      <span class="t-c t-c-host" role="cell"><span class="t-dot${r.routable ? " is-on" : ""}" aria-hidden="true"></span>${esc(r.host)}</span>
+      <span class="t-c t-c-n" role="cell">${n}</span>
+      <span class="t-c t-c-host" role="cell"><span class="t-dot${r.routable ? " is-on" : ""}" aria-hidden="true"></span>${esc(r.host)}${r.local ? ` <span class="t-own" title="on-chain figures for our own wallet, our own canary and volume runs included">ours, own runs incl.</span>` : ""}</span>
       <span class="t-c t-c-num" role="cell">${measured ? num(r.calls) : "-"}</span>
       <span class="t-c t-c-num" role="cell">${measured ? esc(compactUsd(r.usd)) : "-"}</span>
       <span class="t-c t-c-num" role="cell">${measured ? num(r.buyers) : "-"}</span>
@@ -162,7 +167,7 @@ export function terminalRoster(rows = [], selectedHost = null, { measured = true
         <span class="t-c t-c-num" role="columnheader" data-t-sort="usd">VOLUME</span>
         <span class="t-c t-c-num" role="columnheader" data-t-sort="buyers">BUYERS</span>
         <span class="t-c t-c-num" role="columnheader" data-t-sort="tools">TOOLS</span>
-        <span class="t-c t-c-bar" role="columnheader"><span class="t-sr">Share of the busiest seller listed</span></span>
+        <span class="t-c t-c-bar" role="columnheader"><span class="t-sr">Calls as a share of the top seller's</span></span>
       </div>
       <div class="t-body" role="rowgroup" data-t-body>${body}</div>
     </div>`;
@@ -189,7 +194,7 @@ export function terminalStatusBar({ chainName, asset, sellerCount, totalSellers 
     `<span class="t-st-cell"><span class="t-label">SCOPE</span>${esc(scopeLabel || "")}</span>`,
     `<span class="t-st-cell t-${state.k}"><span class="t-st-led" aria-hidden="true"></span>${esc(state.t)}</span>`,
     scanned ? `<span class="t-st-cell"><span class="t-label">WINDOW</span>${esc(scanned)}</span>` : "",
-    `<span class="t-st-cell t-st-hint"><kbd>?</kbd> keys</span>`,
+    `<span class="t-st-cell t-st-hint"><kbd>?</kbd> keyboard shortcuts</span>`,
   ].filter(Boolean).join("");
   return `<div class="t-status" role="status" aria-live="polite" data-t-status>${cells}</div>`;
 }
@@ -291,6 +296,7 @@ export const TERMINAL_CSS = `
 .t-c{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .t-c-n{color:var(--t-ink-faint);font-size:var(--fs-2xs);}
 .t-c-host{display:flex;align-items:center;gap:6px;min-width:0;}
+.t-own{color:var(--t-ink-faint);font-size:var(--fs-2xs);white-space:nowrap;}
 .t-c-num{text-align:right;}
 .t-dot{width:5px;height:5px;flex:0 0 5px;border-radius:50%;background:var(--t-rule-2);}
 .t-dot.is-on{background:var(--t-up);}

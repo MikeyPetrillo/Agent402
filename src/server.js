@@ -548,11 +548,11 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
+import { recordSale, salesSummary, externalByNetwork, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
-import { hostFigures, hostIndexEntry, isSelfSellerQuery, railsWithOutsideSettlements } from "./host-entry.js";
+import { hostFigures, hostFiguresFromPayments, hostIndexEntry, isSelfSellerQuery, railsWithOutsideSettlements } from "./host-entry.js";
 import { standingCountsExcludingHost } from "./standing.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
@@ -3658,7 +3658,7 @@ app.get("/revenue", async (req, res) => {
     } catch (e) {
       console.warn(`[revenue] range figures unavailable: ${String(e?.message || e).slice(0, 120)}`);
     }
-    res.set("Cache-Control", "no-cache").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: standingFigures(), range }));
+    res.set("Cache-Control", "no-cache").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: standingFigures(), range, hashPriceUsd: TOOL_PRICES.hash }));
   } catch (e) {
     if (e?.snapshotWarming) {
       res.status(200).type("html").send('<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body style="font-family:system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 24px;color:#111315"><h2 style="font-weight:700">Warming up…</h2><p style="color:#626970">The live on-chain transaction view is loading for the first time since a deploy. It refreshes here automatically in a few seconds.</p><p><a href="/" style="color:#0F5E43">Home</a></p></body>'); // design-tokens: literal (standalone fallback page, no stylesheet)
@@ -4370,10 +4370,10 @@ app.get("/sitemap-skills.xml", (_req, res) => { res.setHeader("Cache-Control", "
 // indexed read over one small local table.
 async function statusLive() {
   try {
-    const [gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo] = await Promise.all([
-      gatewayCreditsStatus(), upstreamBuyerStatus(), avmBuyerStatus(), tempoBuyerStatus(),
+    const [gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, upstreamBuyerSvm] = await Promise.all([
+      gatewayCreditsStatus(), upstreamBuyerStatus(), avmBuyerStatus(), tempoBuyerStatus(), svmBuyerStatus().catch(() => null),
     ]);
-    return { gateway: gateway?.status || null, upstreamBuyer: upstreamBuyer?.status || null, upstreamBuyerAvm: upstreamBuyerAvm?.status || null, upstreamBuyerTempo: upstreamBuyerTempo?.status || null };
+    return { gateway: gateway?.status || null, upstreamBuyer: upstreamBuyer?.status || null, upstreamBuyerAvm: upstreamBuyerAvm?.status || null, upstreamBuyerTempo: upstreamBuyerTempo?.status || null, upstreamBuyerSvm: upstreamBuyerSvm?.status || null };
   } catch { return {}; }
 }
 // One status snapshot per 30 s for /status, /api/status and /api/reliability
@@ -6145,7 +6145,7 @@ function leaderboardSelfFigures() {
 function standingFigures() {
   try {
     // Host left out of both counts: the band says the host is in none of them.
-    return { ...standingCountsExcludingHost(getIndexSnapshot()), rails: settlementRailCount() };
+    return { ...standingCountsExcludingHost(getIndexSnapshot()), rails: settlementRailCount(), x402Rails: offeredChainCount() ?? RAILS.length, tempo: tempoEnabled() };
   } catch { return {}; }
 }
 
@@ -6276,7 +6276,7 @@ app.get("/stellar", async (req, res) => {
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
-    htmlCache(res, 120, 600).send(stellarPage(BASE_URL, { snapshot, rail, activity, selectedSeller, stellarWallet: selfWallet || undefined, host: hostEntryFigures("stellar"), payable: chainPayable("stellar") }));
+    htmlCache(res, 120, 600).send(stellarPage(BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, stellarWallet: selfWallet || undefined, host: hostEntryFigures("stellar"), payable: chainPayable("stellar"), ...chainPageExtras("stellar") }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -6370,7 +6370,7 @@ app.get("/algorand", async (req, res) => {
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
-    htmlCache(res, 120, 600).send(algorandPage(BASE_URL, { snapshot, rail, activity, selectedSeller, algorandWallet: selfWallet || undefined, host: hostEntryFigures("algorand"), payable: chainPayable("algorand") }));
+    htmlCache(res, 120, 600).send(algorandPage(BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, algorandWallet: selfWallet || undefined, host: hostEntryFigures("algorand"), payable: chainPayable("algorand"), ...chainPageExtras("algorand") }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -6567,7 +6567,7 @@ async function buildChainPage(chainKey, sellerQuery, all) {
     scanWallet ? getActivityForChain(chainKey, scanWallet, { maxWaitMs: PAGE_ACTIVITY_WAIT_MS }) : Promise.resolve(null),
   ]);
   const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
-  return marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey) });
+  return marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey), ...chainPageExtras(chainKey) });
 }
 // How many catalog tools a chain page can say take payment on that chain, by
 // the 402 builder's own rules (identity-bound and long-running tools are EVM
@@ -6728,7 +6728,7 @@ app.get("/marketplace", async (req, res) => {
   try { leaderboardSnap = getLeaderboardSnapshot(); } catch { /* directory still renders */ }
   let economySnap = null;
   try { economySnap = await x402EconomySnapshot(); } catch { /* strip omitted */ }
-  htmlCache(res, 120, 600).send(memoSurface(`market:all:${req.query.all === "1"}`, 60_000, () => marketPage(null, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), leaderboardSnap, economySnap, all: req.query.all === "1", wallet: WALLET_ADDRESS, host: hostEntryFigures() })));
+  htmlCache(res, 120, 600).send(memoSurface(`market:all:${req.query.all === "1"}`, 60_000, () => marketPage(null, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), leaderboardSnap, economySnap, all: req.query.all === "1", wallet: WALLET_ADDRESS, host: hostEntryFigures(), routerChains: spendChainsConfigured(), chainsOffered: offeredChainCount(), tempo: tempoEnabled() })));
 });
 // The host's own entry for the discovery surfaces: external-only ledger
 // figures, rendered outside every ranking and count (src/host-entry.js).
@@ -6741,6 +6741,19 @@ app.get("/marketplace", async (req, res) => {
 // window, never block a visitor on the ledger.
 const HOST_FIGURES_TTL_MS = Number(process.env.HOST_FIGURES_TTL_MS) || 60_000;
 const hostFiguresCache = new Map(); // chainKey|"" -> { at, value }
+// What a chain page needs beyond its snapshot: the settlement premium the 402
+// adds on that chain (the same NETWORK_PRICE_PREMIUMS map the accepts builder
+// reads) and the chains the router can spend on.
+// x402 chains the 402 offers right now (/api/rails "offered"); null when no
+// rail is configured (free mode), so the page falls back to its chain list.
+function offeredChainCount() {
+  const rails = railStatus();
+  return rails.length ? rails.filter((r) => r.offered).length : null;
+}
+function chainPageExtras(chainKey) {
+  const caip2 = CHAIN_PAGES[chainKey]?.caip2;
+  return { premiumUsd: caip2 ? (parseNetworkPremiums().get(caip2) || 0) / 1e6 : 0, routerChains: spendChainsConfigured() };
+}
 function hostEntryFigures(chainKey = null) {
   const key = chainKey || "";
   const hit = hostFiguresCache.get(key);
@@ -6752,11 +6765,21 @@ function hostEntryFigures(chainKey = null) {
   hostFiguresCache.set(key, { at: Date.now(), value });
   return value;
 }
+// The MPP page's host row: outside settlements on Tempo, MPP's native rail,
+// the rail its leaderboard ranks - not the all-rails x402 total.
+function mppHostFigures() {
+  const hit = hostFiguresCache.get("mpp:tempo");
+  if (hit && Date.now() - hit.at < HOST_FIGURES_TTL_MS) return hit.value;
+  let value = null;
+  try { value = hostFiguresFromPayments(externalTempoPayments(), { network: "tempo", networkLabel: "Tempo (MPP)", toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL }); } catch { value = hit ? hit.value : null; }
+  hostFiguresCache.set("mpp:tempo", { at: Date.now(), value });
+  return value;
+}
 // The MPP marketplace - independent directory, synchronous snapshot (no
 // on-chain join, unlike /marketplace above), same cache window.
 app.get("/mpp-marketplace", (_req, res) => {
   try {
-    htmlCache(res, 120, 600).send(mppMarketPage(BASE_URL, mppIndexSnapshot(), mppLeaderboardSnapshot(), { host: hostEntryFigures() }));
+    htmlCache(res, 120, 600).send(mppMarketPage(BASE_URL, mppIndexSnapshot(), mppLeaderboardSnapshot(), { host: mppHostFigures() }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }

@@ -10,6 +10,6 @@ import { marketSellers, marketTools, marketPage } from "./market-page.js";
 export const algorandSellers = (snapshot) => marketSellers("algorand", snapshot);
 export const algorandTools = (snapshot) => marketTools("algorand", snapshot);
 
-export function algorandPage(baseUrl, { snapshot, rail, activity, selectedSeller, algorandWallet, host = null, payable = null } = {}) {
-  return marketPage("algorand", baseUrl, { snapshot, rail, activity, selectedSeller, wallet: algorandWallet, host, payable });
+export function algorandPage(baseUrl, { snapshot, rail, activity, selectedSeller, algorandWallet, host = null, payable = null, ...extra } = {}) {
+  return marketPage("algorand", baseUrl, { ...extra, snapshot, rail, activity, selectedSeller, wallet: algorandWallet, host, payable });
 }

@@ -674,7 +674,7 @@ function marketPanelNav(chainInfo) {
                 <a href="/marketplace/tools" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">every tool indexed</span><span class="mlnav-faint">ours + third-party</span></a>
                 <span class="mlnav-label">BY CHAIN</span>
                 ${rows}
-                <a href="/guides/smart-order-router" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">buy from any seller with one call</span><span style="opacity:.7;">→</span></a>
+                <a href="/guides/smart-order-router" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">route a task to a proven seller</span><span style="opacity:.7;">→</span></a>
               </span>
             </span>`;
 }
