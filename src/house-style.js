@@ -9,10 +9,14 @@
 // prose gets a spaced hyphen, a bare range "2024–2026" a plain hyphen.
 const DASH = /[—–\u2212]/;
 const RANGE = /(\d)\s*[—–]\s*(\d)/g;
+// A dash written as a minus sign ("**–$71.4M**", "(–3.2%)"): no space after
+// it and a figure next. It stays attached as "-", or a spaced hyphen would
+// split the number and break the bold around it.
+const MINUS = /(^|[\s*_(\[])[—–](?=[$\d])/g;
 
 export function houseStyleText(s, { heading = false } = {}) {
   if (typeof s !== "string" || !DASH.test(s)) return s;
-  let out = s.replace(/\u2212/g, "-").replace(RANGE, "$1-$2");
+  let out = s.replace(/\u2212/g, "-").replace(RANGE, "$1-$2").replace(MINUS, "$1-");
   out = out.replace(/\s*[—–]+\s*/g, heading ? ": " : " - ");
   return out.replace(/ {2,}/g, " ");
 }

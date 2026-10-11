@@ -11,6 +11,9 @@ ok(houseStyleText(`Revenue rose ${EM} margins fell`) === "Revenue rose - margins
 ok(houseStyleText(`2024${EN}2026`) === "2024-2026", "a numeric range keeps a plain hyphen");
 ok(houseStyleText(`NVIDIA CORP (NVDA) ${EM} Company Dossier`, { heading: true }) === "NVIDIA CORP (NVDA): Company Dossier", "a heading's dash becomes a colon");
 ok(houseStyleText("no dashes here") === "no dashes here", "untouched text returns as is");
+ok(houseStyleText(`Net flow was **${EN}$71.4M**.`) === "Net flow was **-$71.4M**.", "a dash used as a minus sign stays attached to its figure");
+ok(houseStyleText(`down (${EM}3.2%) on the day`) === "down (-3.2%) on the day", "a minus inside parentheses stays attached");
+ok(houseStyleText(`flat ${EN} 3 sales`) === "flat - 3 sales", "a spaced dash before a number is still prose");
 const md = `# BERKSHIRE ${EM} FUND REPORT\n\nBuys ${EM} sells ${EN} holds.\n\n## Risks ${EM} and gaps\n`;
 const out = houseStyleMarkdown(md);
 ok(!/[—–]/.test(out), "markdown carries no em or en dash after the pass");
