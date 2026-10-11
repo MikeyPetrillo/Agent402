@@ -41,7 +41,7 @@ export const CATEGORIES = {
   // was short by ten keys covering 195 entries (37% of the catalog), which is
   // why seller-trust and the chain-read primitives were invisible to agents.
   crypto: { label: "Crypto & onchain data", blurb: "Keyless reads across chains: token prices and metadata, order books, stablecoin peg health, wallet balances and transaction history, NFT holdings and metadata, gas snapshots." },
-  chain: { label: "Address screening", blurb: "Onchain address checks: screen any blockchain address against every digital currency address on the OFAC SDN list, with the sanctioned entity named on a match." },
+  chain: { label: "Sanctions & address screening", blurb: "Sanctions checks: screen any blockchain address against every digital currency address on the OFAC SDN list, or a person or company name against the list's entries, with the sanctioned entity named on a match." },
   wallet: { label: "Wallet operations", blurb: "Multi-chain balance reads, testnet funding, onramp links, and SQL over onchain data. Non-custodial: the agent signs with its own key." },
   ai: { label: "AI & compute", blurb: "Inference, generation and sandboxed execution priced per call: chat tiers, image generation, text-to-speech, speech-to-text, and code execution in an isolated sandbox." },
   "skill-pack": { label: "Skill packs", blurb: "Multi-tool workflows that run server-side in one request: one payment, one settlement, and a single response with a partial-success envelope if a step fails. Cheaper to integrate than orchestrating the steps yourself." },
