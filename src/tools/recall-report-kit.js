@@ -105,15 +105,16 @@ export async function probeRecalls(query, { perFeed = 20, scope = "all" } = {}) 
 
 const byKindCount = (items, kind) => items.filter((x) => x.kind === kind).length;
 
-/** The shown records grouped by identical FDA reason wording (case and
- *  spacing folded), largest group first: [{ reason, records, events }].
+/** The shown records grouped by identical FDA reason wording (case, spacing
+ *  and trailing punctuation folded), largest group first:
+ *  [{ reason, records, events }].
  *  The model groups reasons by theme; these exact counts are what its group
  *  totals are built from, so they add up to the records shown. */
 export function reasonGroups(items) {
   const m = new Map();
   for (const x of items || []) {
-    const text = String(x.reason || "").replace(/\s+/g, " ").trim() || "(no reason given)";
-    const key = text.toLowerCase();
+    const text = String(x.reason || "").replace(/\s+/g, " ").trim().replace(/\s+([.;,])$/, "$1") || "(no reason given)";
+    const key = text.toLowerCase().replace(/[\s.;,]+$/, "");
     const g = m.get(key) || { reason: text, records: 0, eventIds: new Set() };
     g.records++;
     if (x.eventId) g.eventIds.add(x.eventId);
@@ -165,7 +166,7 @@ function makeRecallHandlerInner(tierSlug) {
 4. This is NOT medical or legal advice. Where you suggest action, keep it to: check the named product/lot against the FDA record, contact the recalling firm or a pharmacist/physician, and monitor for updates. Never tell a reader to stop or start a medication.
 5. If the records are few or zero, SAY SO plainly and do not pad. Prioritize COMPLETING the report over length.
 6. THE RECORDS BELOW ARE THE NEWEST N PER FEED, NOT THE UNIVERSE: the TOTALS line says how many records each feed holds in total. When a feed's total exceeds the rows shown, say "the N most recent of TOTAL" and never present the shown set as complete or its oldest row as the earliest recall. A record is one product line; several records share one recall EVENT (event id) - count events when you say how many recalls there were. A gap in this material is never a finding about the product or the firm: if something is not in the records shown, say the records shown do not include it.
-7. COUNTS: every count you state comes from the TOTALS and REASONS blocks, never from your own tally. When you group reasons, build each group's count by adding the REASONS lines it contains; the groups must add up to the records shown. Say how many records and events each group holds.
+7. COUNTS: every count you state comes from the TOTALS and REASONS blocks, never from your own tally. When you group reasons, build each group's count by adding the REASONS lines it contains; the groups must add up to the records shown. Say how many records and events each group holds. Write counts as facts about the records; never name the blocks of this prompt (TOTALS, REASONS) in the report.
 8. TERMINOLOGY: name an impurity, contaminant or defect with the FDA reason's own term. Never relabel it as a related class it does not name (an azido impurity is not a nitrosamine; a foreign substance is not contamination by a named agent).
 
 Write a clear, well-structured report of up to ${t.words} words with these sections where the material supports them: SNAPSHOT (how many records, by feed and by class, how many ongoing, the date range), WHAT IS RECALLED (products and firms, grouped sensibly), WHY (the reasons, grouped - contamination, labeling, impurity, defect, etc.), HOW WIDE (distribution patterns), STATUS & TIMELINE (ongoing vs terminated/completed, the most recent actions), and WHAT TO DO (per rule 4). Be specific; quote the FDA reason wording where useful.

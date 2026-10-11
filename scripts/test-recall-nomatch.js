@@ -50,7 +50,7 @@ try {
 // impurity by the FDA's own term.
 {
   const rows = [
-    ...Array.from({ length: 18 }, (_, i) => ({ reason: i % 2 ? "CGMP Deviations- AZIDO Impurity levels observed to be above acceptable limits." : "CGMP Deviations-  azido impurity levels observed to be above acceptable limits.", eventId: String(90000 + (i % 9)) })),
+    ...Array.from({ length: 18 }, (_, i) => ({ reason: ["CGMP Deviations- AZIDO Impurity levels observed to be above acceptable limits.", "CGMP Deviations-  azido impurity levels observed to be above acceptable limits", "CGMP Deviations- AZIDO Impurity levels observed to be above acceptable limits ."][i % 3], eventId: String(90000 + (i % 9)) })),
     { reason: "Presence of foreign substance: plastic-like substance.", eventId: "94592" },
     { reason: "Presence of Foreign Substance: Presence of a small piece of blue plastic embedded in the tablet.", eventId: "92584" },
   ];
@@ -87,6 +87,7 @@ try {
     ok(/=== REASONS \(shown records, grouped by identical FDA wording; 20 records in all\) ===/.test(p), "the prompt carries the REASONS tally for the records shown");
     ok(p.includes('- "CGMP Deviations- AZIDO Impurity levels observed to be above acceptable limits.": 18 records, 11 events'), "each wording carries its exact record and event counts");
     ok(/the groups must add up to the records shown/.test(p), "the prompt requires the WHY groups to add up");
+    ok(/never name the blocks of this prompt/.test(p), "the prompt keeps its own block names out of the report");
     ok(/an azido impurity is not a nitrosamine/.test(p), "the prompt forbids relabeling an impurity as a class the FDA wording does not name");
   } finally {
     globalThis.fetch = realFetch;
