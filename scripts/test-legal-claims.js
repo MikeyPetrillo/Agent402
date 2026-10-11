@@ -140,6 +140,8 @@ ok(/payerBalanceBucket/.test(posthog) && /coarse balance bucket/.test(privacy), 
   ok(!/The log is kept after a key is deleted or expires/.test(privacy), "/privacy no longer says the log outlives a deleted key");
   ok(/logPruneAge\.run\(nowMs - auditRetentionDays\(\) \* 86400000\)/.test(mem) && /setInterval\(\(\) => \{\n\s+try \{\n\s+sweep\(now\(\)\);/.test(mem) && /setInterval\(\(\) => \{ Promise\.resolve\(\)\.then\(\(\) => sweepLeased\(\)\)/.test(mem), "control: both memory backends run the sweep on a timer with that retention");
   ok(/AUDIT_SWEEP_MS\)\.unref\(\);/.test(mem), "control: the sweep interval is AUDIT_SWEEP_MS");
+  const auditDays = [...privacy.matchAll(/(\d+) days after (?:it is|they are) written/g)].map((m) => Number(m[1]));
+  ok(auditDays.length >= 1 && auditDays.every((d) => d === mr.auditRetentionDays()), `every audit-retention figure on /privacy is ${mr.auditRetentionDays()} days (found ${auditDays.join(", ")})`);
 }
 
 // Demand board: request text is deleted after the retention window.
@@ -148,6 +150,8 @@ ok(/payerBalanceBucket/.test(posthog) && /coarse balance bucket/.test(privacy), 
   ok(privacy.includes(`each request's text and hash are deleted ${wishRetentionDays()} days after it was sent`), `/privacy states the ${wishRetentionDays()}-day demand-board text retention`);
   ok(!/the text stays in our records until we clear them/.test(privacy), "/privacy no longer says the text is kept until cleared");
   ok(/^startWishRotation\(\);$/m.test(src("src/server.js")), "control: the server starts the rotation that deletes it");
+  const wishDays = [...privacy.matchAll(/(\d+) days after it was sent/g)].map((m) => Number(m[1]));
+  ok(wishDays.length >= 1 && wishDays.every((d) => d === wishRetentionDays()), `every demand-board retention figure on /privacy is ${wishRetentionDays()} days (found ${wishDays.join(", ")})`);
 }
 
 // Free trial: named on /terms where /privacy refers to it.

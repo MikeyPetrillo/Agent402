@@ -211,6 +211,7 @@ const planOptions = { senders: ALL_SENDERS, maxEachUsd: 0.25, maxTotalUsd: 2, ma
     [hex64("d")]: { status: "0x0", logs: both(USDCE, TEMPO_BUYER, PAYTO, 10_000) },
     [hex64("f")]: { status: "0x1", logs: both(USDCE, TEMPO_BUYER, "0x" + "22".repeat(20), 10_000) },
     [hex64("7")]: { status: "0x1", logs: both(PATHUSD, TEMPO_BUYER, PAYTO, 10_000) },
+    [hex64("6")]: { status: "0x1", logs: both(USDCE, "0x" + "33".repeat(20), PAYTO, 10_000) },
   };
   const server = http.createServer((req, res) => {
     let b = ""; req.on("data", (c) => { b += c; }); req.on("end", () => {
@@ -233,6 +234,7 @@ const planOptions = { senders: ALL_SENDERS, maxEachUsd: 0.25, maxTotalUsd: 2, ma
     ok(/no transfer/.test((await v(hex64("c"))).reason), "a token our challenge does not offer is refused");
     ok(/did not succeed/.test((await v(hex64("d"))).reason), "a reverted transaction is refused");
     ok(/no transfer/.test((await v(hex64("f"))).reason), "a payment to someone else is refused");
+    ok(/no transfer/.test((await v(hex64("6"))).reason), "a payment to us from another wallet is refused (it is not this payer's)");
     const path = await v(hex64("7"));
     ok(path.verified && path.token === PATHUSD, "a PathUSD payment verifies and names PathUSD (the refund goes back in it)");
     ok(/not found/.test((await v(hex64("8"))).reason), "a transaction the chain does not have is refused");
@@ -264,12 +266,41 @@ const planOptions = { senders: ALL_SENDERS, maxEachUsd: 0.25, maxTotalUsd: 2, ma
   const src = readFileSync(new URL("./refund-run.js", import.meta.url), "utf8");
   ok(/^\s{4}tempo: !!\(process\.env\.REFUND_TEMPO_KEY \|\| ""\)\.trim\(\),$/m.test(src) && /^\s{4}solana: !!\(process\.env\.REFUND_SOLANA_KEY \|\| ""\)\.trim\(\),$/m.test(src), "the job enables Tempo and Solana from REFUND_TEMPO_KEY and REFUND_SOLANA_KEY");
   ok(/const out = await refundRun\(\{/.test(src) && /claim: claimForSend,/.test(src) && /markPaid,\n/.test(src), "main runs the tested executor with the real claim and mark-paid");
+  ok(/prove: \(row, tx, prep\) => proveRefundSent\(row, tx, [^\n]*\{ verify: verifyInboundPayment \}\),/.test(src), "main proves a sent refund with the real on-chain verifier");
   const logLines = src.split("\n").filter((l) => /\b(console|log)\.(log|warn|error)\(/.test(l));
   ok(!logLines.some((l) => /\$\{(r|row)\.payer\}|\$\{(r|row)\.evidence\}|\$\{tx\}|\$\{sig\}|proof\.tx/.test(l)), "no log line prints a raw payer, evidence or tx");
   const wf = load(readFileSync(new URL("../.github/workflows/refund.yml", import.meta.url), "utf8"));
   const step = Object.values(wf.jobs).flatMap((j) => j.steps || []).find((s) => s.name === "Run refunds");
   ok(/secrets\.REFUND_TEMPO_KEY/.test(String(step?.env?.REFUND_TEMPO_KEY || "")) && /secrets\.REFUND_SOLANA_KEY/.test(String(step?.env?.REFUND_SOLANA_KEY || "")), "refund.yml passes REFUND_TEMPO_KEY and REFUND_SOLANA_KEY from secrets");
   ok(/default: false/.test(readFileSync(new URL("../.github/workflows/refund.yml", import.meta.url), "utf8")) && /REFUND_LIVE: \$\{\{ inputs\.live && 'true' \|\| 'false' \}\}/.test(readFileSync(new URL("../.github/workflows/refund.yml", import.meta.url), "utf8")), "the workflow is still a dry run unless live is set at dispatch");
+}
+
+// ---- the job itself: without REFUND_LIVE it reads the listing and nothing else -------------
+{
+  const { spawn } = await import("node:child_process");
+  const seen = [];
+  const stub = http.createServer((req, res) => {
+    seen.push(`${req.method} ${req.url.split("?")[0]}`);
+    if (req.method === "GET" && req.url.startsWith("/__operator/refunds.json")) {
+      res.setHeader("content-type", "application/json");
+      return res.end(JSON.stringify({ refunds: ROWS(), totals: { owed: 3 } }));
+    }
+    res.statusCode = 500; res.end("{}");
+  });
+  await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+  for (const live of [undefined, "false"]) {
+    seen.length = 0;
+    const env = { ...process.env, TARGET_URL: `http://127.0.0.1:${stub.address().port}`, AGENT402_OPERATOR_TOKEN: "t", REFUND_TEMPO_KEY: "0x" + "11".repeat(32), REFUND_SOLANA_KEY: "x", REFUND_EVM_KEY: "0x" + "22".repeat(32) };
+    if (live === undefined) delete env.REFUND_LIVE; else env.REFUND_LIVE = live;
+    const out = await new Promise((resolve) => {
+      const c = spawn(process.execPath, [new URL("./refund-run.js", import.meta.url).pathname], { env, stdio: ["ignore", "pipe", "pipe"] });
+      let s = ""; c.stdout.on("data", (d) => { s += d; }); c.stderr.on("data", (d) => { s += d; });
+      c.on("exit", (code) => resolve({ code, s }));
+    });
+    ok(out.code === 0 && /DRY RUN - no money moved/.test(out.s) && seen.join(",") === "GET /__operator/refunds.json",
+      `REFUND_LIVE=${live ?? "(unset)"}: the job is a dry run that reads only the listing (requests: ${seen.join(", ") || "none"}; exit ${out.code})`);
+  }
+  stub.close();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

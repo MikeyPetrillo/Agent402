@@ -379,6 +379,18 @@ try {
   PAGES = await pageList();
   const browser = await chromium.launch();
   try {
+    // Self-test: with the thresholds the sweep uses, the audit flags a block
+    // whose last line is one (wide) word and passes a one-line block.
+    {
+      const page = await browser.newPage({ viewport: { width: 600, height: 400 } });
+      await page.setContent(`<!doctype html><body style="margin:0;font:16px/1.4 monospace"><p style="width:300px">aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll qqqqqqqqqqqqq</p><p style="width:300px">one short line</p></body>`);
+      const found = await page.evaluate(audit, { exclude: EXCLUDE, width: 600, ragFrac: RAG_MIN_FRACTION, ragWords: RAG_MIN_WORDS });
+      await page.close();
+      const caught = found.some((f) => /^rag/.test(f.rule) && f.text.includes("qqqq"));
+      const clean = !found.some((f) => f.text.includes("one short line"));
+      console.log(`${caught && clean ? "ok" : "FAIL"} - self-test: a one-word last line is flagged (${caught}) and a one-line block is not (${clean})`);
+      if (!caught || !clean) failures++;
+    }
     for (const width of WIDTHS) {
       const ctx = await browser.newContext({ viewport: { width, height: width >= 900 ? 900 : 860 }, reducedMotion: "reduce", colorScheme: "light" });
       await ctx.addInitScript(() => { try { localStorage.setItem("a402-theme", "light"); } catch {} });

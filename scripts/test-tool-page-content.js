@@ -53,6 +53,16 @@ for (const computePayable of [true, false]) {
   ok(!/<h1>(Title|headings|Hi|HTML)/.test(html), `hostile def (pow=${computePayable}): example <h1> text is escaped`);
   ok(html.includes("&lt;h1&gt;Title&lt;/h1&gt;"), `hostile def (pow=${computePayable}): example rendered as escaped text`);
 }
+// A tool page quotes only its own catalog price: against an odd price a typed
+// figure cannot match by coincidence.
+{
+  const odd = { ...hostile, slug: "odd-price", price: "$0.0137" };
+  for (const computePayable of [true, false]) for (const mpp of [true, false]) {
+    const text = toolPage("https://example.test", odd, [], { computePayable, powDifficulty: 16, mpp }).replace(/<script[\s\S]*?<\/script>/g, "").replace(/<[^>]+>/g, " ");
+    const figures = [...text.matchAll(/\$(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]));
+    ok(figures.length > 0 && figures.every((n) => n === 0.0137), `tool page (pow=${computePayable}, mpp=${mpp}) quotes only the catalog price (found ${[...new Set(figures)].join(", ")})`);
+  }
+}
 ok(toolTitle({ name: "A very long tool name that goes on (with a parenthetical) and on and on", price: "$0.001" }).length <= 60, "toolTitle trims long names to 60");
 ok(toolTitle({ name: "Hash", price: "$0.001" }) === "Hash API - $0.001/call | Agent402", "toolTitle keeps the short form");
 ok(/\$0\.002\/call/.test(toolTitle({ name: "An extremely long name for a tool that will not fit anywhere at all", price: "$0.002" })), "toolTitle never drops the price");

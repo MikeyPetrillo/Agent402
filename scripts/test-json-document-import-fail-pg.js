@@ -10,7 +10,7 @@
 // document name in another session: the import's INSERT ... ON CONFLICT waits
 // on it until the statement limit, while the plain read sees no row.
 // Requires STATE_DATABASE_URL (CI fails without it).
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg from "pg";
@@ -97,6 +97,20 @@ try {
     const body = await doc.load({ empty: true });
     ok(body?.empty === true && doc.loadState === "ok", "a file that does not parse is not a database failure: the fallback loads");
     ok(lines.some((l) => /unreadable|not imported/.test(l)), `the unreadable file reaches failLog (${JSON.stringify(lines[0] || "")})`);
+  }
+
+  // ---- a file that cannot be read (an I/O error) is a failed load, not "no file" ----
+  {
+    const file = join(DIR, "ioerr.json");
+    mkdirSync(file); // existsSync is true, readFileSync throws EISDIR
+    const doc = createJsonDocument({ file, log: () => {}, failLog: () => {}, loadRetryDelaysMs: [20] });
+    const late = [];
+    await doc.load({ empty: true }, { onLoad: (b) => late.push(b) });
+    ok(doc.loadState !== "ok", `an import whose file read hits an I/O error is not loaded empty (${doc.loadState})`);
+    rmSync(file, { recursive: true, force: true });
+    writeFileSync(file, JSON.stringify({ carried: 1 }));
+    ok(await until(() => doc.loadState === "ok" && late.length === 1), "the background re-read imports the file once it reads");
+    ok(late[0]?.carried === 1, `onLoad gets the file's body (${JSON.stringify(late[0])})`);
   }
 } finally {
   try { await blocker.query("ROLLBACK"); } catch { /* not in a transaction */ }

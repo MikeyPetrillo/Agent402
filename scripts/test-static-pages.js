@@ -228,12 +228,12 @@ try {
 // prices and counts, none read whether the thing offered can be bought. The
 // booted server's own /credits page says which state it is in.
 {
-  const SELLS_CREDITS = /buy (?:a |credits )?(?:credits )?pack|buy credits by card|pack by card|top-up link|\$20, \$50 or \$100/i;
+  const SELLS_CREDITS = /buy (?:a |credits )?(?:credits )?pack|buy credits by card|pack by card|top-up link|\$20, \$50 or \$100|card-credits key works on any paid tool|one card purchase|prepaid key its operator bought|sold at \/credits/i;
   ok(SELLS_CREDITS.test("Get the key once: buy a pack by card at /credits") && SELLS_CREDITS.test("No wallet? Buy credits by card."), "control: the credits-sale pattern matches the copy that shipped");
   const creditsPage = await (await fetch(`${BASE}/credits`)).text().catch(() => "");
   if (/not on sale/i.test(creditsPage)) {
     const paths = new Set(PAGES.map((p) => p.path));
-    for (const sm of ["/sitemap-pages.xml", "/sitemap-guides.xml"]) {
+    for (const sm of ["/sitemap-pages.xml", "/sitemap-guides.xml", "/sitemap-learn.xml"]) {
       const xml = await (await fetch(`${BASE}${sm}`)).text().catch(() => "");
       for (const m of xml.matchAll(/<loc>https?:\/\/[^/<]+(\/[^<]*)<\/loc>/g)) paths.add(m[1]);
     }

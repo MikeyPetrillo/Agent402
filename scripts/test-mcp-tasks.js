@@ -141,6 +141,13 @@ ok(/^[0-9a-f]{48}$/.test(newTaskId()), "task ids are 24 random bytes of hex (the
 
 const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } });
 ok(init.result?.capabilities?.extensions?.[TASKS_EXTENSION] !== undefined, "the server advertises io.modelcontextprotocol/tasks in its capabilities");
+{
+  // This mount takes payment (MPP): catalog.call can run any paid slug, so it
+  // must not tell hosts it is read-only (hosts skip confirmation on that hint).
+  const ann = ((await rpc("tools/list", {})).result?.tools || []).find((t) => t.name === "catalog.call")?.annotations || {};
+  ok(ann.readOnlyHint === false && ann.destructiveHint === true && ann.idempotentHint === false && ann.openWorldHint === true,
+    `catalog.call on a payable connector is annotated as a paid, writing, open-world call (got ${JSON.stringify(ann)})`);
+}
 
 // ---------------------------------------------------------- 2. handle + poll
 

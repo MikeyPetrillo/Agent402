@@ -1368,6 +1368,8 @@ jobs:
           # The journals in REAL redis: claimed once across containers, a lapsed lease recovered,
           # local disk (and the "local" word) when redis is away; card finals keep one outcome.
           t node scripts/test-ledger-journal-redis-pg.js
+          # One drainer at a time, and every claimed entry leased: each guard on its own.
+          t node scripts/test-ledger-journal-claim-redis.js
           # A push debt replayed from another container's dead-letter never undoes that push's void.
           t node scripts/test-tempo-push-void-crosscontainer-pg.js
           t node scripts/test-mcp-tasks-pg.js

@@ -48,5 +48,12 @@ for (const [slug, t] of Object.entries({ ...DOMAIN_AUDIT_TIERS, ...RECALL_TIERS,
   const words = Number(String(t.words).replace(/[^0-9]/g, ""));
   ok(words > 0 && t.synthMaxTokens / words >= 3.5, `${slug}: synthesis cap ${t.synthMaxTokens} carries >= 3.5 tokens per target word (${t.words})`);
 }
+// ...and the synthesis call sends that cap: a call site that lowers it ships the
+// shortened report the floor above exists to prevent.
+for (const kit of ["domain-audit-kit", "recall-report-kit", "filing-watch-kit", "token-brief-kit", "ticker-pack-kit"]) {
+  const src = (await import("node:fs")).readFileSync(new URL(`../src/tools/${kit}.js`, import.meta.url), "utf8");
+  const caps = [...src.matchAll(/max_tokens: ([^,}]+)/g)].map((m) => m[1].trim());
+  ok(caps.length > 0 && caps.every((c) => c === "t.synthMaxTokens"), `${kit}: every synthesis call sends max_tokens: t.synthMaxTokens (${caps.join(" | ")})`);
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

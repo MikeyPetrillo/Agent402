@@ -298,6 +298,13 @@ ok(Number.isFinite(partial.__scanState.farBlock), "a truncated scan records the 
   ok(!r.error && r.truncated === true && r.totals.tx === p0.totals.tx, `a failed far-end read keeps the head and stays truncated (${r.totals.tx})`);
   ok(r.__scanState.farBlock === p0.__scanState.farBlock, "and the far block is unchanged for the next refresh");
 }
+{
+  // A window that holds more rows than a resume may keep is held at the
+  // newest rows and stays truncated, even when the walk itself reached the end.
+  installStub({ total: 61_000 });
+  const r = await evmActivity("base", "0xwallet", { budgetMs: 120_000 });
+  ok(!r.error && r.totals.tx === 60_000 && r.truncated === true, `a window past the kept-row cap is held at the cap and flagged truncated (${r.totals.tx}, truncated=${r.truncated})`);
+}
 
 installStub({ total: 5000 });
 const stale = await evmActivity("base", "0xwallet", { budgetMs: 60_000, prior: { ...cold.__scanState, at: Date.now() - 400 * DAY } });

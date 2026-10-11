@@ -150,6 +150,22 @@ for (const step of [300, 1, 0, 2_400, 7]) {
   ok(figures(healed.snap) === figures(ref.snap) && !healed.snap.partial, "the next scan re-reads from the held cursor: identical, no gap");
 }
 
+// A failed read on a COLD scan (no cursor yet): partial, nothing kept, no
+// cursor set, and the next scan reads the whole window again.
+{
+  const coldDir = mkdtempSync(join(tmpdir(), "lb-log-cache-cold-"));
+  const fresh = newCache(coldDir);
+  failWhen = (p) => parseInt(p.toBlock, 16) === HEAD && p.topics[2].length === 200;
+  const first = await cachedRead(fresh);
+  ok(first.snap.partial === true, "a cold scan with a failed read marks the board partial");
+  ok(fresh.stats().cursor === null && fresh.stats().rows === 0, `and sets no cursor and keeps nothing (cursor ${fresh.stats().cursor}, ${fresh.stats().rows} rows)`);
+  failWhen = null;
+  const healed = await cachedRead(fresh);
+  const ref = await fullRead();
+  ok(figures(healed.snap) === figures(ref.snap) && !healed.snap.partial, "the next scan reads the window again: identical, no gap");
+  rmSync(coldDir, { recursive: true, force: true });
+}
+
 // A failed backfill for a new wallet batch: that batch stays uncovered and is
 // read again; nothing it half-read is kept.
 {

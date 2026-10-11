@@ -201,6 +201,16 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   ok(pricing.includes("from $0.033"), "the /pricing browser row is the cheaper of render and screenshot, from the catalog");
   ok(pricing.includes("$0.055") && pricing.includes("$0.006") && pricing.includes("$0.009"), "...and extract, payments and memory read from the catalog");
   ok(!/>\$0\.02</.test(pricing) && !/from \$0\.002</.test(pricing), "no typed row figure survives");
+  {
+    // Every figure on /pricing is one this catalog (or the monitor table) can
+    // produce: against odd prices a typed row cannot pass by coincidence.
+    const { MONITOR_PRODUCTS: MP } = await import("../src/stripe-subscriptions.js");
+    const short = (n) => { const s3 = n.toFixed(3); return Number(s3.endsWith("0") ? n.toFixed(2) : s3); };
+    const allowed = new Set([0, ...Object.values(odd).map((t) => short(Number(t.price.slice(1)))), ...Object.values(MP).map((m) => m.price / 100)]);
+    const body = pricing.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<[^>]+>/g, " ");
+    const typed = [...body.matchAll(/\$(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1])).filter((n) => !allowed.has(n));
+    ok(typed.length === 0, `every dollar figure on /pricing derives from the catalog or the monitor table${typed.length ? ` (typed: ${[...new Set(typed)].join(", ")})` : ""}`);
+  }
   const uc = examplesSectionHtml(odd);
   const expected = useCaseCost({ calls: [["render", 20], ["extract", 20], ["memory-write", 20]], per: "per day" }, odd);
   ok(expected && expected.startsWith("$1.94 per day"), `the use-case cost is summed from catalog prices (${expected})`);
