@@ -110,31 +110,36 @@ document.addEventListener('DOMContentLoaded',function(){try{var btns=document.qu
    overflows). Text only: tags, code, buttons and attributes are untouched,
    and with no script the page simply wraps as before.
    scripts/test-wrap-quality.js measures the result in Chromium. */
-document.addEventListener('DOMContentLoaded',function(){try{
-  var SEL='main p,main li,main h1,main h2,main h3,main h4,main dd,main dt,main td,main th,main figcaption,main blockquote,main label,main [class*="lede"],main [class*="intro"],footer p';
+/* Exposed so a page that renders text after load (the report view) can bind it too. */
+window.a402BindWidows=function(root){try{
+  var SEL='p,li,h1,h2,h3,h4,dd,dt,td,th,figcaption,blockquote,label,[class*="lede"],[class*="intro"]';
   var OPAQUE=/^(CODE|PRE|KBD|SAMP|SCRIPT|STYLE|TEXTAREA|BUTTON|SELECT|svg|SVG|IMG|BR)$/;
   var INLINE=/^inline$|^contents$/;
   var BLOCK=/^(block|list-item|table-cell|flow-root)$/;
   var WS=/[ \t\n\r\f]+/g;
   var plans=[];
-  var collect=function(el){var segs=[];var walk=function(n){for(var c=n.firstChild;c;c=c.nextSibling){if(c.nodeType===3){segs.push({node:c,text:c.data});}else if(c.nodeType===1){if(OPAQUE.test(c.tagName)){segs.push({node:null,text:c.textContent||'x'});continue;}var d=getComputedStyle(c).display;if(d==='none')continue;if(INLINE.test(d)){walk(c);}else{segs.push({node:null,text:c.textContent||'x'});}}}};walk(el);return segs;};
-  var els=document.querySelectorAll(SEL);
-  for(var i=0;i<els.length;i++){var el=els[i];if(el.closest('pre,code,[data-wrap="off"]'))continue;var cs=getComputedStyle(el);if(!BLOCK.test(cs.display)||/pre|nowrap/.test(cs.whiteSpace))continue;var w=el.clientWidth-parseFloat(cs.paddingLeft||0)-parseFloat(cs.paddingRight||0);var fs=parseFloat(cs.fontSize);if(!(w>0&&fs>0))continue;var em=/mono/i.test(cs.fontFamily)?0.6:0.5;var ls=parseFloat(cs.letterSpacing)||0;plans.push({el:el,line:w/(fs*em+ls),segs:collect(el)});}
+  var collect=function(el){var segs=[];var walk=function(n){for(var c=n.firstChild;c;c=c.nextSibling){if(c.nodeType===3){segs.push({node:c,text:c.data});}else if(c.nodeType===1){if(OPAQUE.test(c.tagName)){segs.push({node:null,el:c,text:c.textContent||'x'});continue;}var d=getComputedStyle(c).display;if(d==='none')continue;if(INLINE.test(d)){walk(c);}else{segs.push({node:null,text:c.textContent||'x'});}}}};walk(el);return segs;};
+  var els=(root||document).querySelectorAll(SEL);
+  for(var i=0;i<els.length;i++){var el=els[i];if(!el.closest('main,footer')||el.closest('pre,code,[data-wrap="off"]'))continue;var cs=getComputedStyle(el);if(!BLOCK.test(cs.display)||/pre|nowrap/.test(cs.whiteSpace))continue;var w=el.clientWidth-parseFloat(cs.paddingLeft||0)-parseFloat(cs.paddingRight||0);var fs=parseFloat(cs.fontSize);if(!(w>0&&fs>0))continue;var em=/mono/i.test(cs.fontFamily)?0.6:0.5;var ls=parseFloat(cs.letterSpacing)||0;plans.push({el:el,line:w/(fs*em+ls),segs:collect(el)});}
   plans.forEach(function(p){
-    var s='',map=[];p.segs.forEach(function(g){map.push({node:g.node,start:s.length});s+=g.text;});
+    var s='',map=[];p.segs.forEach(function(g){map.push({node:g.node,el:g.el,start:s.length,len:g.text.length});s+=g.text;});
     var first=s.search(/[^ \t\n\r\f]/);if(first<0)return;var last=s.replace(/[ \t\n\r\f]+$/,'').length-1;
-    var runs=[],m;WS.lastIndex=0;while((m=WS.exec(s))){if(m.index>first&&m.index<last)runs.push({a:m.index,b:m.index+m[0].length});}
+    var segAt=function(x){for(var q=map.length-1;q>=0;q--)if(map[q].start<=x)return map[q];return null;};
+    var runs=[],m;WS.lastIndex=0;while((m=WS.exec(s))){if(m.index>first&&m.index<last){var g0=segAt(m.index);if(g0&&g0.node)runs.push({a:m.index,b:m.index+m[0].length});}}
     if(runs.length<2)return;
-    var lo=p.line*0.33,hi=p.line*0.7,k=0;
+    /* A short block (5 words or fewer, a heading) may bind up to 85% of a line: one word over two beats two over one. */
+    var lo=p.line*0.33,hi=p.line*(runs.length<=4?0.85:0.7),k=0;
     for(var j=1;j<=runs.length;j++){var r=runs[runs.length-j];var chunk=last-r.b+1;var words=j;if(chunk>hi)break;k=j-1;if(words>=3&&chunk>=lo){break;}if(j===runs.length)k=j-1;}
     if(k<1)return;
-    var segAt=function(x){for(var q=map.length-1;q>=0;q--)if(map[q].start<=x)return map[q];return null;};
     var edits=[];
     for(var t=1;t<=k;t++){var r2=runs[runs.length-t];var ok=true;for(var x=r2.a;x<r2.b;x++){var g=segAt(x);if(!g||!g.node){ok=false;break;}}if(!ok)continue;for(var y=r2.b-1;y>=r2.a;y--){var g2=segAt(y);edits.push({node:g2.node,off:y-g2.start,op:y===r2.a?'nb':'del'});}}
     /* A hyphen inside the bound tail is still a break point ("proof-of-" / "work"): a word joiner after it holds the word together. */
     var from=k<runs.length?runs[runs.length-k-1].b:first;
     for(var z=from;z<last;z++){if(s.charAt(z)==='-'){var g3=segAt(z);if(g3&&g3.node)edits.push({node:g3.node,off:z-g3.start,op:'wj'});}}
+    /* Short inline code inside the bound tail stays whole too. */
+    map.forEach(function(g){if(g.el&&/^(CODE|KBD|SAMP)$/.test(g.el.tagName)&&g.start>=from&&g.len<=28)g.el.style.whiteSpace='nowrap';});
     edits.sort(function(a,b){return b.off-a.off;});
     edits.forEach(function(e){var d=e.node.data;if(e.op==='wj'){e.node.data=d.slice(0,e.off+1)+'\u2060'+d.slice(e.off+1);}else{e.node.data=d.slice(0,e.off)+(e.op==='nb'?'\u00A0':'')+d.slice(e.off+1);}});
   });
-}catch(e){}});
+}catch(e){}};
+document.addEventListener('DOMContentLoaded',function(){window.a402BindWidows(document);});

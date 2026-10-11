@@ -2638,7 +2638,9 @@ const SKILLS_CSS = `
 .sk-flagship:hover .sk-flagship-slug { color:var(--accent); }
 .sk-flagship-slug { font-family:var(--font-mono); font-weight:700; font-size:var(--fs-lg); color:var(--ink); transition:color .15s; }
 .sk-flagship-body { font-size:var(--fs-md); line-height:1.55; color:var(--muted); flex:1; }
-.sk-flagship-tools { font-family:var(--font-mono); font-size:var(--fs-2xs); line-height:1.6; color:var(--faint); }
+.sk-flagship-tools { display:flex; flex-wrap:wrap; font-family:var(--font-mono); font-size:var(--fs-2xs); line-height:1.6; color:var(--faint); }
+.sk-flagship-tools > span { white-space:nowrap; }
+.sk-flagship-tools > span + span::before { content:"·"; padding:0 6px; }
 .sk-flagship-cta { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--accent); }
 .sk-rest-chip { display:inline-block; border:1px solid var(--hairline); padding:7px 11px; font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--muted); text-decoration:none; }
 .sk-rest-chip:hover { border-color:var(--accent); color:var(--ink); }
@@ -2735,7 +2737,7 @@ export function skillsIndex(baseUrl) {
   ).join("");
 
   const flagshipCardsHtml = flagship.map((p) =>
-    `<a class="sk-flagship" href="/skills/${e(p.slug)}"><span class="sk-flagship-slug">${e(p.slug)}</span><span class="sk-flagship-body">${e(p.tagline)}</span><span class="sk-flagship-tools">${e(p.toolSlugs.join(" · "))}</span><span class="sk-flagship-cta">${p.toolSlugs.length} tools · one payment →</span></a>`
+    `<a class="sk-flagship" href="/skills/${e(p.slug)}"><span class="sk-flagship-slug">${e(p.slug)}</span><span class="sk-flagship-body">${e(p.tagline)}</span><span class="sk-flagship-tools">${p.toolSlugs.map((t) => `<span>${e(t)}</span>`).join("")}</span><span class="sk-flagship-cta">${p.toolSlugs.length} tools · one payment →</span></a>`
   ).join("");
 
   const restChipsHtml = rest.map((p) => `<a class="sk-rest-chip" href="/skills/${e(p.slug)}">${e(p.slug)}</a>`).join("");
@@ -2766,7 +2768,7 @@ export function skillsIndex(baseUrl) {
           <thead><tr style="border-bottom:1px solid var(--panel-rule);color:var(--on-panel-faint);"><th scope="col" style="text-align:left;font-weight:400;padding:10px 18px;"></th><th scope="col" style="text-align:right;font-weight:400;padding:10px 18px;">you orchestrate</th><th scope="col" style="text-align:right;font-weight:700;padding:10px 18px;color:var(--accent);">one pack</th></tr></thead>
           <tbody>${comparisonRowsHtml}</tbody>
         </table>
-        <div style="padding:12px 18px;border-top:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-faint);">the pack still runs all seven tools - you just stop managing them</div>
+        <div style="padding:12px 18px;border-top:1px solid var(--panel-rule-2);font-size:var(--fs-sm);line-height:1.5;color:var(--on-panel-faint);">The pack still runs all seven tools; you just stop managing them.</div>
       </div>
     </div>
   </div>
@@ -2799,7 +2801,7 @@ export function skillsIndex(baseUrl) {
   <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:700px;margin:0 0 28px;">Every pack publishes its tool sequence before you pay. These are deterministic sequences, not an agent improvising - the same inputs run the same steps in the same order, every time. Six are set out in full below; the rest of the ${packCount} follow.</p>
   <div class="sk-cardgrid">${flagshipCardsHtml}</div>
   <div style="border:1px solid var(--hairline);border-top:none;background:var(--footer-bg);padding:22px 24px;">
-    <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--on-panel-faint);margin-bottom:14px;">${rest.length} more · every pack links to its own sequence</div>
+    <div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--on-panel-faint);margin:0 0 14px;"><span>${rest.length} more</span><span>every pack links to its own sequence</span></div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;">${restChipsHtml}</div>
   </div>
 </section>

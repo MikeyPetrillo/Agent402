@@ -434,7 +434,9 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   .tp-crumb { font-family:var(--font-mono); font-size:var(--fs-sm); color:var(--faint); margin-bottom:18px; }
   .tp-crumb a { color:var(--accent); text-decoration:none; }
   .tp-h1 { font-family:var(--font-body); font-weight:800; font-size:var(--fs-3xl); line-height:1; letter-spacing:-.02em; margin-bottom:10px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; text-overflow:ellipsis; }
-  .tp-badge { display:inline-block; background:var(--panel); color:var(--on-panel); font-family:var(--font-mono); font-size:var(--fs-sm); padding:8px 16px; margin:8px 0 6px; }
+  .tp-badge { display:inline-flex; flex-wrap:wrap; row-gap:4px; background:var(--panel); color:var(--on-panel); font-family:var(--font-mono); font-size:var(--fs-sm); padding:8px 16px; margin:8px 0 6px; }
+  .tp-badge > span { white-space:nowrap; }
+  .tp-badge > span + span::before { content:"·"; padding:0 8px; color:var(--on-panel-dim); }
   .tp-sub { color:var(--muted); font-size:var(--fs-lg); line-height:1.6; max-width:760px; }
   .tp-lead { color:var(--ink); font-size:var(--fs-lg); line-height:1.6; max-width:760px; margin:14px 0 6px; }
   .tp-sub code, .tp-lead code, .tp-facts code { background:var(--card); border:1px solid var(--hairline); font-family:var(--font-mono); padding:1px 5px; font-size:var(--fs-code-inline); }
@@ -450,7 +452,10 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   .tp-free { display:inline-block; background:var(--ok); color:var(--paper); font-weight:700; font-size:var(--fs-2xs); letter-spacing:.02em; padding:2px 8px; font-family:var(--font-mono); vertical-align:middle; }
   .tp-facts { color:var(--muted); font-size:var(--fs-base); line-height:1.65; max-width:820px; padding-left:20px; }
   .tp-facts li { margin-bottom:6px; }
-  .tp-meta { color:var(--faint); font-size:var(--fs-sm); font-family:var(--font-mono); margin-top:10px; }
+  .tp-meta { display:flex; flex-wrap:wrap; gap:6px 20px; color:var(--faint); font-size:var(--fs-sm); font-family:var(--font-mono); margin-top:10px; }
+  .tp-meta > span { white-space:nowrap; }
+  .tp-meta > .tp-tags { white-space:normal; display:flex; flex-wrap:wrap; gap:4px 8px; align-items:baseline; }
+  .tp-tags > * { white-space:nowrap; }
   `;
 
   const body = `<div class="tp-wrap">
@@ -458,14 +463,14 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   <h1 class="tp-h1" title="${e(tool.name)}">${e(tool.name)}</h1>
   <div class="tp-badge">${
     computePayable
-      ? `<span class="tp-free">FREE</span> <span style="color:var(--on-panel-dim);">with proof-of-work</span> · <span style="color:var(--on-panel-muted);">or ${e(tool.price)} in USDC</span>`
-      : `<span style="color:var(--on-panel);">${e(pw.long)}</span> · <span style="color:var(--on-panel-dim);">USDC via x402</span>`
-  } · <code style="color:${methodColor};background:transparent;font-size:var(--fs-sm);">${e(tool.method)}</code> <code style="color:var(--on-panel-muted);background:transparent;font-size:var(--fs-sm);">${e(tool.path)}</code>${
-    cacheTtl ? ` · <span style="color:var(--on-panel-dim);" title="Server caches identical responses for ${e(fmtTtl(cacheTtl))}.">Cached ${e(fmtTtl(cacheTtl))}</span>` : ""
+      ? `<span><span class="tp-free">FREE</span> <span style="color:var(--on-panel-dim);">with proof-of-work</span></span><span style="color:var(--on-panel-muted);">or ${e(tool.price)} in USDC</span>`
+      : `<span style="color:var(--on-panel);">${e(pw.long)}</span><span style="color:var(--on-panel-dim);">USDC via x402</span>`
+  }<span><code style="color:${methodColor};background:transparent;font-size:var(--fs-sm);">${e(tool.method)}</code> <code style="color:var(--on-panel-muted);background:transparent;font-size:var(--fs-sm);">${e(tool.path)}</code></span>${
+    cacheTtl ? `<span style="color:var(--on-panel-dim);" title="Server caches identical responses for ${e(fmtTtl(cacheTtl))}.">Cached ${e(fmtTtl(cacheTtl))}</span>` : ""
   }</div>
   <p class="tp-lead">${summary}</p>
   ${restOfDescription ? `<p class="tp-sub">${e(restOfDescription)}</p>` : ""}
-  <p class="tp-meta">Category: <a href="${e(catHref)}" style="color:var(--accent);">${e(catLabel)}</a>${tagsLine ? ` · Tags: ${tagsLine}` : ""}${aliases.length ? ` · Also found as: ${aliases.slice(0, 6).map((a) => `<code>${e(a)}</code>`).join(" ")}` : ""}${isPack ? ` · <a href="/skills/${e(packSlug)}" style="color:var(--accent);">Pack overview</a>` : ""}</p>
+  <div class="tp-meta"><span>Category: <a href="${e(catHref)}" style="color:var(--accent);">${e(catLabel)}</a></span>${tagsLine ? `<span class="tp-tags"><span>Tags:</span> ${tagsLine}</span>` : ""}${aliases.length ? `<span class="tp-tags"><span>Also found as:</span> ${aliases.slice(0, 6).map((a) => `<code>${e(a)}</code>`).join(" ")}</span>` : ""}${isPack ? `<span><a href="/skills/${e(packSlug)}" style="color:var(--accent);">Pack overview</a></span>` : ""}</div>
   <p style="margin:16px 0 0;"><a class="btn btn-secondary btn-sm ml-cta" href="/playground?slug=${e(tool.slug)}" style="display:inline-block;">Try in playground →</a></p>
 
   <h2 class="tp-h2">Parameters</h2>

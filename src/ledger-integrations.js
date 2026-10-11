@@ -70,7 +70,7 @@ import { agent402Tools } from "agent402-openai-tools";
     <div style="border:1px solid var(--hairline);background:var(--card);padding:32px 30px;display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap;">
       <div>
         <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);line-height:1;letter-spacing:-.02em;margin:0 0 6px;">Wire it into your framework.</h2>
-        <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);margin:0;">zero-dep &middot; non-custodial &middot; proof-of-work or USDC</p>
+        <p class="ml-meta" style="color:var(--muted);margin:0;"><span>zero-dep</span><span>non-custodial</span><span>proof-of-work or USDC</span></p>
       </div>
       <div style="display:flex;gap:11px;">
         <a class="btn btn-secondary" href="/docs">Quickstart &rarr;</a>

@@ -119,7 +119,7 @@ export function solanaSectionHtml(sol) {
     <div class="ml-meta" style="margin:10px 0 16px;"><span>${esc(win)} window</span><span>USDC on Solana${notes.length ? `</span><span>${esc(notes.join("</span><span>"))}` : ""}</span></div>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 26px;">Every inbound USDC transfer into each seller's Solana payTo, read from the chain. Unlike the Base table there is no price match and no per-call ceiling, so a transfer here may be a tool call or any other payment: these are transfers, not calls. A buyer is the wallet whose USDC paid, and transfers a seller sends itself are excluded.</p>
     <div class="lb-scroll" style="border:1px solid var(--hairline);background:var(--panel);overflow-x:auto;">
-      <div class="lb-head" style="display:grid;grid-template-columns:36px 1fr 100px 80px 64px 78px 64px;gap:12px;padding:12px 18px;min-width:820px;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--on-panel-faint);border-bottom:1.5px solid var(--panel-rule-2);"><span>#</span><span>seller · payTo</span><span style="text-align:right;">usdc received</span><span style="text-align:right;">transfers</span><span style="text-align:right;">buyers</span><span style="text-align:right;">avg transfer</span><span style="text-align:right;">organic</span></div>
+      <div class="lb-head" style="display:grid;grid-template-columns:36px 1fr 100px 80px 64px 78px 64px;gap:12px;padding:12px 18px;min-width:820px;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--on-panel-faint);border-bottom:1.5px solid var(--panel-rule-2);white-space:nowrap;"><span>#</span><span>seller · payTo</span><span style="text-align:right;">usdc received</span><span style="text-align:right;">transfers</span><span style="text-align:right;">buyers</span><span style="text-align:right;">avg transfer</span><span style="text-align:right;">organic</span></div>
       ${body}
     </div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:14px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">
@@ -170,7 +170,7 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
   const boardRows = rankedBoardSize(snapshot, walletAddress);
 
   const meta = [
-    ["rows ranked (a row can fold several wallets)", fmtNum(boardRows)],
+    ["rows ranked, one per seller", fmtNum(boardRows)],
     [sameCount ? "sellers scanned, one wallet each" : "sellers scanned", fmtNum(scannedSellers)],
     ...(sameCount ? [] : [["wallets queried", fmtNum(walletsQueried)]]),
     ["bazaar listings", fmtNum(snapshot?.bazaarTotal)],
@@ -261,7 +261,7 @@ ${standingBand(standing || {})}
     <div class="ml-meta" style="margin:10px 0 16px;"><span>${esc(windowLabel)} window</span><span>top ${rows.length} of ${fmtNum(boardRows)} ranked rows</span><span>include=external</span></div>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 26px;">Volume alone can be manufactured by paying yourself, so every row also carries distinct paying wallets and an organic ratio of buyers to calls. A thousand calls from two wallets reads very differently from a thousand from four hundred.</p>
     <div class="lb-scroll" style="border:1px solid var(--hairline);background:var(--panel);overflow-x:auto;">
-      <div class="lb-head" style="display:grid;grid-template-columns:36px 1fr 100px 80px 64px 78px 64px;gap:12px;padding:12px 18px;min-width:820px;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--on-panel-faint);border-bottom:1.5px solid var(--panel-rule-2);"><span>#</span><span>seller · payTo</span><span style="text-align:right;">usdc settled</span><span style="text-align:right;">calls</span><span style="text-align:right;">buyers</span><span style="text-align:right;">avg ticket</span><span style="text-align:right;">organic</span></div>
+      <div class="lb-head" style="display:grid;grid-template-columns:36px 1fr 100px 80px 64px 78px 64px;gap:12px;padding:12px 18px;min-width:820px;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--on-panel-faint);border-bottom:1.5px solid var(--panel-rule-2);white-space:nowrap;"><span>#</span><span>seller · payTo</span><span style="text-align:right;">usdc settled</span><span style="text-align:right;">calls</span><span style="text-align:right;">buyers</span><span style="text-align:right;">avg ticket</span><span style="text-align:right;">organic</span></div>
       <div style="min-width:820px;">${hasData ? tableRows : warmingHtml}</div>
     </div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:14px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">

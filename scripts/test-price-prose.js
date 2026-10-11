@@ -197,7 +197,8 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   const uc = examplesSectionHtml(odd);
   const expected = useCaseCost({ calls: [["render", 20], ["extract", 20], ["memory-write", 20]], per: "per day" }, odd);
   ok(expected && expected.startsWith("$1.94 per day"), `the use-case cost is summed from catalog prices (${expected})`);
-  ok(uc.includes(`${expected.slice(0, 13)}</span>`) && uc.includes(expected.slice(14)), "and the docs Examples section renders that computed cost");
+  const terms = expected.slice(expected.indexOf(" (") + 2).replace(/\)\s*$/, "").split(" + ");
+  ok(uc.includes(`${expected.slice(0, 13)}</span>`) && terms.length === 3 && terms.every((t) => uc.includes(`<span>${t}</span>`)), "and the docs Examples section renders that computed cost, one breakdown term per item");
   ok(!/~\$/.test(uc), "no typed approximate cost line is left in /docs#examples");
   const { ledgerDocsPage } = await import("../src/ledger-docs.js");
   const docs = ledgerDocsPage("https://agent402.tools", odd);

@@ -13,6 +13,7 @@
 //  lone    a row of links or chips (.ml-items, or any container whose children
 //          are all links/chips) whose last visual row holds one item while the
 //          row above holds 3+
+//  overflow the page scrolls sideways (a whole label wider than its column)
 //
 // Eyeballing a page missed these more than once; counting line boxes does not.
 // DESIGN.md "Wrap" states the rules this enforces.
@@ -213,6 +214,15 @@ function audit({ exclude, width, ragFrac, ragWords }) {
     if (rows.length >= 2 && rows[rows.length - 1].n === 1 && rows[rows.length - 2].n >= 3) {
       out.push({ rule: "lone: last row of a link/chip row holds one item", path: pathOf(el), text: snippet(el), lines: rows.map((r) => `${r.n} items`).join(" / ") });
     }
+  }
+  // 4. A label kept whole must not run past the viewport (the body clips
+  // sideways overflow, so this reads boxes, not scrollWidth). Content inside
+  // its own horizontal scroller is reachable and passes.
+  const scrolls = (el) => { for (let e = el.parentElement; e && e !== document.body; e = e.parentElement) { const x = getComputedStyle(e).overflowX; if (x === "auto" || x === "scroll") return true; } return false; };
+  for (const el of document.body.querySelectorAll("main *, footer *, header *")) {
+    if (el.children.length || !el.textContent.trim() || excluded(el)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.right > innerWidth + 1 && visible(el) && !scrolls(el)) { out.push({ rule: "overflow: text runs past the viewport", path: pathOf(el), text: snippet(el), lines: `${Math.round(r.right - innerWidth)}px past` }); }
   }
   return out;
 }

@@ -548,12 +548,8 @@ ${liveSection(snap.live, stats)}
 </ul>
 </div>
 
-<div class="st-links">
-  <a href="/api/status">/api/status</a> ·
-  <a href="/api/stats">/api/stats</a> ·
-  <a href="/api/reliability">/api/reliability</a> ·
-  <a href="/health">/health</a>
-  ${onchain ? ` · <a href="${esc(onchain)}" rel="noopener">wallet on-chain</a>` : ""}
+<div class="st-links ml-meta">
+  <span><a href="/api/status">/api/status</a></span><span><a href="/api/stats">/api/stats</a></span><span><a href="/api/reliability">/api/reliability</a></span><span><a href="/health">/health</a></span>${onchain ? `<span><a href="${esc(onchain)}" rel="noopener">wallet on-chain</a></span>` : ""}
 </div>
 </section>
 

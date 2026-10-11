@@ -321,7 +321,8 @@ const MOVED = { "/compare": "/#why-compare", "/use-cases": "/docs#examples", "/b
     if (cost) {
       priced++;
       const cut = cost.indexOf(" (");
-      ok(ex.includes(`<span class="ex-price">${esc(cost.slice(0, cut))}</span>`) && ex.includes(esc(cost.slice(cut + 1))), `/docs#examples "${uc.title}" cost is the live one (${cost})`);
+      const terms = cut < 0 ? [] : cost.slice(cut + 2).replace(/\)\s*$/, "").split(" + ");
+      ok(ex.includes(`<span class="ex-price">${esc(cut < 0 ? cost : cost.slice(0, cut))}</span>`) && terms.every((t) => ex.includes(`<span>${esc(t)}</span>`)), `/docs#examples "${uc.title}" cost is the live one (${cost})`);
     }
   }
   ok(priced >= USE_CASES.length - 1 && /Cost at list price:/.test(ex), `/docs#examples prices the examples from the catalog (${priced}/${USE_CASES.length})`);

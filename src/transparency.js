@@ -55,7 +55,7 @@ export function transparencyPage(baseUrl, traffic = null) {
 .tp-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
 .tp-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
 .tp-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px}
-.tp-updated{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:0 0 32px}
+.tp-updated{font-size:var(--fs-sm);color:var(--faint);margin:0 0 32px}
 .tp-body p,.tp-body li{font-size:var(--fs-base);line-height:1.55;color:var(--muted)}
 .tp-body p{margin:0 0 14px}
 .tp-body ul{margin:0 0 18px;padding:0 0 0 22px}

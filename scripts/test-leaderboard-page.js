@@ -82,7 +82,7 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
   const rowCount = (html.match(/class="lb-row/g) || []).length;
   ok(rowCount > 0 && rowCount <= 12, `ranked table renders a bounded top N, not all 300 sellers (got ${rowCount} rows)`);
   ok(html.includes("top 12 of 300 ranked rows") && !html.includes("of 2,212"), "the cap is disclosed against the rows actually ranked, not the origins scanned");
-  ok(!/sellers ranked, one wallet each/.test(html) && /sellers scanned, one wallet each/.test(html) && /rows ranked \(a row can fold several wallets\)/.test(html), "scanned origins and ranked rows are labelled as the two different counts they are");
+  ok(!/sellers ranked, one wallet each/.test(html) && /sellers scanned, one wallet each/.test(html) && /rows ranked, one per seller/.test(html), "scanned origins and ranked rows are labelled as the two different counts they are");
 }
 
 // --- structured data -----------------------------------------------------------

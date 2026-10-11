@@ -321,7 +321,7 @@ export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = nu
   <section>${methodSection}</section>
   <section>${faqSection}</section>
   <section>
-    <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:28px;">machine-readable: <a href="/api/mpp-index">/api/mpp-index</a> &middot; <a href="/api/mpp-leaderboard">/api/mpp-leaderboard</a> &middot; upstream registry <a href="https://mpp.dev/api/services">mpp.dev/api/services</a></p>
+    <p class="ml-meta" style="font-size:var(--fs-xs);margin-top:28px;"><span>machine-readable</span><span><a href="/api/mpp-index">/api/mpp-index</a></span><span><a href="/api/mpp-leaderboard">/api/mpp-leaderboard</a></span><span>upstream registry <a href="https://mpp.dev/api/services">mpp.dev/api/services</a></span></p>
   </section>
 </div>
 ${ledgerFooterCompact()}`;

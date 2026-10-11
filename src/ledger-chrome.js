@@ -334,6 +334,8 @@ h1, h2, h3 { text-wrap: balance; }
 .ml-meta { display: flex; flex-wrap: wrap; gap: 4px 0; margin: 10px 0 0; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--faint); }
 .ml-meta > span { white-space: nowrap; }
 .ml-meta > span + span::before { content: "·"; padding: 0 10px; }
+/* The legal pages' date line is a sentence, set in the body face so it wraps as prose. */
+.pv-updated, .tm-updated { font-family: var(--font-body) !important; }
 /* Footer link rows: wrap as whole links; on a phone, a two-column list so no row ends on one stray link. */
 .ml-foot-links { display: flex; gap: 6px 16px; flex-wrap: wrap; }
 .ml-foot-links > a { white-space: nowrap; }
@@ -490,6 +492,9 @@ a { color: inherit; }
    themes (white on #BF360C is 5.8:1; --ink/--on-panel flip light in dark mode and
    made the active tab a white blob with invisible text). */
 .mfb-tab.on{background:var(--accent);color:var(--on-accent);border-color:var(--accent);}
+.mfb-tab{white-space:nowrap;}
+/* A phone shows the chain tabs as one strip that scrolls sideways, not a wrapped block ending on one stray tab. */
+@media (max-width:600px){.mfb-tabs{flex-wrap:nowrap !important;overflow-x:auto;max-width:100%;padding-bottom:4px;}}
 .mfb-sel,.mfb-search{font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 10px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);color:var(--ink);}
 .mfb-search{flex:1;min-width:120px;}
 `;

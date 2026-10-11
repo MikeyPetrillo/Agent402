@@ -274,6 +274,7 @@
       return '<div class="rpt-image"><div class="rpt-meta">' + esc(im.slot || "image") + (im.alt ? " · " + esc(im.alt) : "") + "</div>" + prev + '<div class="report-actions no-print">' + files + "</div></div>";
     }).join("") + "</div>" : "";
     app.innerHTML = actions + mon + '<div class="report" id="report-body">' + head + mdToHtml(withoutLeadingTitle(s.report, s.title)) + imgHtml + "</div>" + upgradeBlock(s);
+    if (window.a402BindWidows) window.a402BindWidows(app);
     var imgBtns = app.querySelectorAll(".dl-img");
     for (var k = 0; k < imgBtns.length; k++) {
       imgBtns[k].addEventListener("click", function (e) {

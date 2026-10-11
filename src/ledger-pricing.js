@@ -126,7 +126,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
         <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-dim);letter-spacing:.08em;margin-bottom:12px;">PAID \u00b7 USDC OVER x402 OR MPP</div>
         <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px;">
           <span style="font-family:var(--font-body);font-weight:900;font-size:var(--fs-5xl);letter-spacing:-.03em;color:var(--on-panel);">$0.001</span>
-          <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel-dim);">/ call &amp; up</span>
+          <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel-dim);white-space:nowrap;">/ call &amp; up</span>
         </div>
         <p style="font-size:var(--fs-base);line-height:1.5;color:var(--on-panel-muted);margin:0 0 20px;">An x402 client signs USDC from the agent's own wallet and retries. Settles in seconds on Base or any of the other x402 chains.</p>
         <div style="display:flex;flex-direction:column;gap:10px;font-size:var(--fs-md);color:var(--on-panel);border-top:1px solid var(--panel-rule-2);padding-top:18px;">
@@ -146,7 +146,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
     <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:var(--fs-md);">
       ${receiptRows.map((r, i) => receiptRow(r[0], r[1], i === receiptRows.length - 1)).join("\n      ")}
     </div>
-    <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:12px;">live machine-readable prices: GET /api/pricing \u00b7 GET /openapi.json</div>
+    <div class="ml-meta" style="font-size:var(--fs-xs);margin-top:12px;"><span>live machine-readable prices</span><span>GET /api/pricing</span><span>GET /openapi.json</span></div>
   </section>
 
   <!-- LLM GATEWAY -->
@@ -171,7 +171,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
       <div>
           <div style="font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:700;margin-bottom:6px;">Keep the wallet &middot; approve once</div>
           <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 10px;">A one-time Permit2 approval for USDC on Base turns every quote into a ceiling rather than a charge: the gateway settles the actual usage under it, per request, with no fixed tier to overpay into. Non-custodial on this rail, and the approval is yours to revoke.</p>
-          <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);">npx agent402-openclaw permit2-approve</div>
+          <div style="overflow-x:auto;"><code style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);white-space:nowrap;background:transparent;">npx agent402-openclaw permit2-approve</code></div>
           <p style="font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:8px 0 0;">The approval belongs to the wallet, so it applies to any client that pays from it, not only OpenClaw.</p>
         </div>
     </div>
@@ -181,9 +181,9 @@ export function ledgerPricingPage(baseUrl, catalog) {
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 64px;">
     <div style="border:1px solid var(--hairline);background:var(--panel);padding:32px 30px;display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap;">
       <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);line-height:1;letter-spacing:-.02em;margin:0;color:var(--on-panel);">Start on the free tier. No wallet.</h2>
-      <div style="display:flex;gap:11px;">
+      <div style="display:flex;flex-wrap:wrap;gap:11px;">
         <a class="btn btn-secondary on-panel" href="/docs">Quickstart \u2192</a>
-        <a href="/tools" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:12px 20px;">Browse tools</a>
+        <a href="/tools" style="white-space:nowrap;background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:12px 20px;">Browse tools</a>
       </div>
     </div>
   </section>

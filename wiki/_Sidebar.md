@@ -1,6 +1,6 @@
 **[[Home]]**
 
-**Using it (for agents / buyers)**
+**For agents and buyers**
 - [[Getting Started]]
 - [[Agentic Finance]]
 - [[Why Pay Here|Why-Pay-Here]]

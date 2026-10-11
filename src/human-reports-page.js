@@ -24,6 +24,9 @@ export const REPORTS_CSS = `
   .wrap{max-width:940px;margin:0 auto;padding:0 26px}
   @media screen{#app[data-api]{min-height:100vh}}
   .eyebrow{font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+  .eyebrow-tags{display:flex;flex-wrap:wrap;row-gap:4px}.eyebrow-tags>span{white-space:nowrap}.eyebrow-tags>span+span::before{content:"·";padding:0 10px}
+  .samples-list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr));gap:8px 28px;font-size:var(--fs-md);line-height:1.45}
+  .samples-list a{color:var(--ink);text-decoration:none;overflow-wrap:anywhere}.samples-list a:hover{color:var(--accent)}.samples-list b{font-weight:600}
   .hero{padding:64px 0 20px}.hero h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:clamp(var(--fs-3xl),5vw,var(--fs-4xl));line-height:1.02;margin:14px 0 0;color:var(--ink);text-wrap:balance}.hero h1 em{font-style:normal;color:var(--faint)}
   .lede{font-size:var(--fs-lg);line-height:1.5;color:var(--muted);max-width:76ch;margin:16px 0 0;font-weight:300}.lede b{color:var(--ink);font-weight:500}
   .products{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:18px;margin-top:8px}
@@ -123,14 +126,14 @@ export function humanReportsPage(baseUrl) {
     Checkout canceled, nothing was charged. Pick a report below whenever you are ready. Every price is on its button.
   </div>
   <section class="hero">
-    <div class="eyebrow">Cited reports · one price per report · price on every button</div>
+    <div class="eyebrow eyebrow-tags"><span>Cited reports</span><span>one price per report</span><span>price on every button</span></div>
     <h1>A finished report, <em>not a chat answer.</em></h1>
     <p class="lede">Deep research on any question, due diligence on any public company, a 13F breakdown of any fund, a graded audit of any domain. Built from live data, research and filing reports cited to their sources, delivered in ${REPORT_TURNAROUND}. <b>Nothing to sign up for, nothing recurring.</b> Pay by card at checkout and the report is yours. Agents skip the card and pay per call over x402 or MPP.</p>
     <div class="trust"><span><span class="dot"></span> Built from live data</span><span><span class="dot"></span> Auto-refunded if a report fails</span><span><span class="dot"></span> Secured by Stripe</span><span><span class="dot"></span> PDF and data tables</span></div>
     <div class="mon-offer"><p><b>Need it again when something changes?</b> A monitor watches one target and re-runs the report when the facts move. ${esc(monitorPriceLabel())}, cancel anytime.</p><a class="btn btn-secondary btn-sm" href="/monitors">See monitors →</a></div>
     <div class="samples-strip" style="margin-top:18px;padding:14px 16px;border:1px solid var(--hairline);background:var(--card);">
     <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;">read a real one first</div>
-    <div style="display:flex;gap:8px 18px;flex-wrap:wrap;font-size:var(--fs-md);">${Object.values(SAMPLES).map((x) => `<a href="/reports/sample/${esc(x.product)}" style="color:var(--ink);">${esc(x.label)}: ${esc(x.input)} →</a>`).join("")}</div>
+    <ul class="samples-list">${Object.values(SAMPLES).map((x) => `<li><a href="/reports/sample/${esc(x.product)}"><b>${esc(x.label)}:</b> ${esc(x.input)} →</a></li>`).join("")}</ul>
   </div>
 </section>
   <section>

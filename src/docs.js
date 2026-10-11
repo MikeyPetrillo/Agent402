@@ -275,6 +275,11 @@ export const DOCS_LAYOUT_CSS = `
   .ml-docs-search input:focus { border-color:var(--accent); }
   .ml-docs-mobile-toggle { display:block;width:100%;box-sizing:border-box;margin-bottom:16px;padding:11px 14px;background:var(--card);border:1px solid var(--ink);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);text-align:left;cursor:pointer; }
   .ml-docs-side.ml-docs-side-open { display:block !important; }
+  /* Reference rows: method, path, note. The note is prose in the body face, so it may wrap; at phone width it takes its own line under the path. */
+  .ml-ref-row { display:grid;grid-template-columns:60px minmax(0,auto) minmax(0,1fr);gap:4px 14px;padding:12px 18px; }
+  .ml-ref-row > span:nth-child(-n+2) { white-space:nowrap; }
+  .ml-ref-row > span:last-child { font-family:var(--font-body);font-size:var(--fs-md);text-align:right; }
+  @media (max-width:700px){ .ml-ref-row { grid-template-columns:60px minmax(0,1fr); } .ml-ref-row > span:last-child { grid-column:2 / -1;text-align:left; } }
   .ml-docs-side-h { font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:18px 0 6px; }
   .ml-docs-side-ul { list-style:none;padding:0;margin:0 0 8px; }
   .ml-docs-side-ul li { margin:0; }

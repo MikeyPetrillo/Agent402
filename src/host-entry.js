@@ -103,7 +103,7 @@ export function hostCardHtml(f) {
   return `
   <div data-host-card style="border:1px solid var(--hairline);background:var(--card);padding:18px 20px;margin:0 0 22px;">
     <div style="display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:baseline;">
-      <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--accent);">THIS SITE &middot; HOST &middot; NOT RANKED, NOT COUNTED</div>
+      <div class="ml-meta" style="margin:0;font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--accent);"><span>THIS SITE</span><span>HOST</span><span>NOT RANKED, NOT COUNTED</span></div>
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">${f.networkLabel ? `outside buyers on ${esc(f.networkLabel)} only` : "outside buyers only"}</div>
     </div>
     <div style="display:flex;gap:26px;flex-wrap:wrap;margin:12px 0 10px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);">
@@ -129,7 +129,7 @@ export function hostRowHtml(f, { dark = false } = {}) {
   return `
   <div data-host-row style="border:1px solid var(--hairline);${dark ? "background:var(--panel);" : "background:var(--card);"}padding:14px 18px;margin-top:12px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:baseline;">
     <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:${ink};"><span style="font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--accent);margin-right:10px;">HOST &middot; NOT RANKED</span><strong>Agent402</strong> <span style="color:${faint};">(this site)</span></span>
-    <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:${ink};font-variant-numeric:tabular-nums;">${fmt(f.external30d.settlements)} settlements &middot; ${fmt(f.external30d.buyers)} buyers <span style="color:${faint};">(30 days, outside buyers only)</span> &middot; ${fmt(f.externalAllTime.settlements)} ${esc(wideLabel(f))}</span>
+    <span class="ml-meta" style="margin:0;font-size:var(--fs-sm);color:${ink};font-variant-numeric:tabular-nums;"><span>${fmt(f.external30d.settlements)} settlements</span><span>${fmt(f.external30d.buyers)} buyers <span style="color:${faint};">(30 days, outside buyers)</span></span><span>${fmt(f.externalAllTime.settlements)} ${esc(wideLabel(f))}</span></span>
     <span style="flex-basis:100%;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.5;color:${faint};">${esc(HOST_EXCLUSION_NOTE)}${f.externalAllTime.since ? ` ${esc(HOST_LEDGER_START_NOTE(f.externalAllTime.since))}` : ""}</span>
   </div>`;
 }

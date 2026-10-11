@@ -100,14 +100,18 @@ export const EXAMPLES_SECTION_CSS = `
   .ml-docs-main .ex-card p:last-child { margin-bottom:0; }
   .ex-label { color:var(--ink);font-weight:600; }
   .ex-price { color:var(--accent);font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:600;font-variant-numeric:tabular-nums; }
-  .ex-parts { color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-xs);font-variant-numeric:tabular-nums; }
-  .ex-tool { color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-sm); }`;
+  .ex-parts { display:flex;flex-wrap:wrap;gap:2px 0;margin-top:2px;color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-xs);font-variant-numeric:tabular-nums; }
+  .ex-parts > span { white-space:nowrap; }
+  .ex-parts > span + span::before { content:"+";padding:0 8px; }
+  .ex-tool { color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-sm);white-space:nowrap; }`;
 
 // "$0.42 per day (20 x render at $0.01 + ...)": the total in the accent, the
-// breakdown quieter beside it.
+// breakdown quieter under it, one term per item so a term never breaks inside.
 function costHtml(cost) {
   const i = cost.indexOf(" (");
-  return i < 0 ? `<span class="ex-price">${esc(cost)}</span>` : `<span class="ex-price">${esc(cost.slice(0, i))}</span> <span class="ex-parts">${esc(cost.slice(i + 1))}</span>`;
+  if (i < 0) return `<span class="ex-price">${esc(cost)}</span>`;
+  const terms = cost.slice(i + 2).replace(/\)\s*$/, "").split(" + ");
+  return `<span class="ex-price">${esc(cost.slice(0, i))}</span> <span class="ex-parts">${terms.map((t) => `<span>${esc(t)}</span>`).join("")}</span>`;
 }
 
 /** The Examples section of /docs: each task, the tools it calls and its cost

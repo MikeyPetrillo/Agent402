@@ -435,7 +435,7 @@ curl -X POST /api/hash \\
   <div class="hm-obsidian" style="padding:48px 40px;">
     <div class="hm-kicker" style="color:var(--accent-lit);">$ GET /api/leaderboard</div>
     <h2 class="hm-h2" style="color:var(--on-panel);">The open index for every seller.</h2>
-    ${sectionMeta(["hourly on-chain snapshot", "Bazaar → eth_getLogs → aggregate by payTo"], "margin:10px 0 14px;color:var(--on-panel-faint);")}
+    ${sectionMeta(["hourly on-chain snapshot", "Bazaar → eth_getLogs → by payTo"], "margin:10px 0 14px;color:var(--on-panel-faint);")}
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);max-width:76ch;margin:0 0 30px;font-weight:300;">The x402 sellers we can crawl, ranked by <strong style="color:var(--on-panel);font-weight:500;">real Base USDC settled volume</strong> - not self-reported traffic. The rows below are the head of the board; the full ranking is at <a href="/leaderboard" style="color:var(--on-panel);">/leaderboard</a>. <span style="font-family:var(--font-mono);font-size:var(--fs-md);color:var(--on-panel);">include=external</span> excludes us from our own ranking, because a neutral index has to be checkable.</p>
 
     <div style="border:1px solid var(--panel-rule-2);border-radius:var(--radius);overflow:hidden;background:rgba(255,255,255,.025);">

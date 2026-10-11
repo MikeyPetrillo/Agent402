@@ -356,9 +356,9 @@
     function num(n){return Number(n||0).toLocaleString("en-US")}
     function plural(n,w){return w+(n===1?"":"s")}
     function showTotals(t){var el=document.getElementById("rvzTotals");if(!el)return;
-      el.innerHTML="In this range: <strong>"+num(t.externalPayments)+"</strong> external "+plural(t.externalPayments,"payment")+
-        " \u00b7 <strong>$"+Number(t.externalUsd||0).toFixed(2)+"</strong> revenue (x402 rails + Tempo MPP) \u00b7 <strong>"+
-        num(t.settlements)+"</strong> "+plural(t.settlements,"settlement")+", ours included \u00b7 <strong>"+num(t.buyers)+"</strong> distinct "+plural(t.buyers,"buyer")+"."}
+      el.innerHTML="<span>In this range:</span><span><strong>"+num(t.externalPayments)+"</strong> external "+plural(t.externalPayments,"payment")+
+        "</span><span><strong>$"+Number(t.externalUsd||0).toFixed(2)+"</strong> revenue (x402 rails + Tempo MPP)</span><span><strong>"+
+        num(t.settlements)+"</strong> "+plural(t.settlements,"settlement")+", ours included</span><span><strong>"+num(t.buyers)+"</strong> distinct "+plural(t.buyers,"buyer")+"</span>"}
     var PRESETS={"7d":7,"30d":30,"90d":90,"1y":365,"all":0};
     function presetWin(p){var w=state.win,to=w.today,from=PRESETS[p]?addDays(to,-(PRESETS[p]-1)):(w.first||to);
       if(w.first&&from<w.first)from=w.first;return {from:from,to:to,preset:p,first:w.first,today:w.today}}

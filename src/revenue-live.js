@@ -1679,7 +1679,7 @@ function mppRailsSection(mpp, { wallets = {} } = {}) {
   return `
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:40px 0 6px;">
       <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">MPP wire <span style="color:var(--muted);font-weight:400;">· by rail</span></h2>
-      <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);"><strong style="color:var(--ink);">${count.toLocaleString()}</strong> settlement${count === 1 ? "" : "s"} over <code>Authorization: Payment</code> · <a href="/api/revenue/mpp">/api/revenue/mpp</a></span>
+      <span class="ml-meta" style="margin:0;font-size:var(--fs-xs);color:var(--muted);"><span><strong style="color:var(--ink);">${count.toLocaleString()}</strong> settlement${count === 1 ? "" : "s"} over <code>Authorization: Payment</code></span><span><a href="/api/revenue/mpp">/api/revenue/mpp</a></span></span>
     </div>
     <p style="font-size:var(--fs-md);color:var(--muted);margin:0 0 12px;">Payments whose credential arrived over the <strong>MPP</strong> wire. Throughput, ours included: most of it is our own daily volume exercising the rails; the external columns are money from others. On Base and Celo an MPP payment settles as ordinary USDC through x402, so its dollars are already in the x402 table above; Tempo and card payments settle off that ledger and are counted here.</p>
     <div class="rv-tablewrap"><table class="rv-table">
@@ -1743,7 +1743,7 @@ export function revenueRangeControl(range) {
   }).join("");
   const t = range.totals;
   const money = (n) => `$${Number(n || 0).toFixed(2)}`;
-  const totals = t ? `<p class="rvr-totals" id="rvzTotals" aria-live="polite">In this range: <strong>${Number(t.externalPayments).toLocaleString("en-US")}</strong> external payment${t.externalPayments === 1 ? "" : "s"} · <strong>${money(t.externalUsd)}</strong> revenue (x402 rails + Tempo MPP) · <strong>${Number(t.settlements).toLocaleString("en-US")}</strong> settlement${t.settlements === 1 ? "" : "s"}, ours included · <strong>${Number(t.buyers).toLocaleString("en-US")}</strong> distinct buyer${t.buyers === 1 ? "" : "s"}.</p>` : "";
+  const totals = t ? `<p class="rvr-totals" id="rvzTotals" aria-live="polite"><span>In this range:</span><span><strong>${Number(t.externalPayments).toLocaleString("en-US")}</strong> external payment${t.externalPayments === 1 ? "" : "s"}</span><span><strong>${money(t.externalUsd)}</strong> revenue (x402 rails + Tempo MPP)</span><span><strong>${Number(t.settlements).toLocaleString("en-US")}</strong> settlement${t.settlements === 1 ? "" : "s"}, ours included</span><span><strong>${Number(t.buyers).toLocaleString("en-US")}</strong> distinct buyer${t.buyers === 1 ? "" : "s"}</span></p>` : "";
   const min = range.firstDay ? ` min="${esc(range.firstDay)}"` : "";
   const max = range.today ? ` max="${esc(range.today)}"` : "";
   return `
@@ -1756,7 +1756,7 @@ export function revenueRangeControl(range) {
       </form>
     </div>
     ${range.notice ? `<p class="rvr-note" id="rvzRangeNotice">That range could not be read (${esc(range.notice)}), so this shows the default.</p>` : ""}
-    <p class="rvr-window" id="rvzWindow">Showing <strong id="rvzWindowText">${esc(windowLabel(w))}</strong>. Cumulative lines start at zero on the first day shown; distinct buyers to date are all-time. The headline figures above and the tables below are all-time.</p>
+    <p class="rvr-window" id="rvzWindow">Showing <strong id="rvzWindowText" style="white-space:nowrap;">${esc(windowLabel(w))}</strong>. Cumulative lines start at zero on the first day shown; distinct buyers to date are all-time. The headline figures above and the tables below are all-time.</p>
     ${totals}`;
 }
 
@@ -1796,13 +1796,14 @@ export function revenueChartSection(range = null) {
   .rvr-custom input{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);background:var(--card);border:1px solid var(--dash);border-radius:var(--radius);padding:5px 8px;min-width:0}
   .rvr-custom button{padding:6px 12px}
   .rvr-window,.rvr-totals,.rvr-note{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 8px}
-  .rvr-totals{color:var(--ink);font-variant-numeric:tabular-nums}
+  .rvr-totals{color:var(--ink);font-variant-numeric:tabular-nums;display:flex;flex-wrap:wrap;gap:4px 0}
+  .rvr-totals>span{white-space:nowrap}.rvr-totals>span+span:not(:nth-child(2))::before{content:"·";padding:0 8px;color:var(--muted)}.rvr-totals>span:first-child{margin-right:6px}
   .rvr-note{color:var(--warn)}
   @media (max-width:520px){.rvr-custom label{flex:1 1 130px}.rvr-custom input{flex:1 1 auto;width:100%}}` : ""}
   </style>
   <div class="rvz" id="rvz"${rangeAttrs}>
     <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;">
-      <span style="font-weight:800;font-size:var(--fs-lg);">Over time <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);">· by chain · external only unless you widen it</span></span>
+      <span style="font-weight:800;font-size:var(--fs-lg);">Over time <span class="ml-meta" style="display:inline-flex;margin:0 0 0 8px;font-size:var(--fs-xs);color:var(--muted);font-weight:400;"><span>by chain</span><span>external only unless you widen it</span></span></span>
       <a id="rvzRaw" href="/api/revenue/daily${w ? `?from=${esc(w.from)}&amp;to=${esc(w.to)}` : ""}" style="font-family:var(--font-mono);font-size:var(--fs-xs);">raw data →</a>
     </div>${revenueRangeControl(range)}
     <div class="rvz-controls" style="margin-top:12px">
@@ -1810,7 +1811,7 @@ export function revenueChartSection(range = null) {
       <span class="rvz-seg" id="rvzMetric"><button data-v="usd" class="on">Revenue $</button><button data-v="tx">Transactions</button><button data-v="buyers">Buyers</button></span>
     </div>
     <details class="rvz-adv" style="margin:0 0 12px;">
-      <summary>more filters: ours vs external, wire, free tier, self-funded</summary>
+      <summary>more filters: scope, wire, tier, funding</summary>
       <div class="rvz-controls" style="margin-top:10px">
         <span class="rvz-seg" id="rvzScope"><button data-v="ext" class="on">External</button><button data-v="int">Internal (canary)</button><button data-v="both">Both</button></span>
         <span class="rvz-seg" id="rvzWire"><button data-v="all" class="on">All wires</button><button data-v="x402">x402</button><button data-v="mpp">MPP</button></span>
