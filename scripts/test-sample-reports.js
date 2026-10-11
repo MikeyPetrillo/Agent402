@@ -10,7 +10,7 @@
 import { spawn } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { getFreePort } from "./lib/free-port.js";
-import { SAMPLES, SAMPLE_PRODUCTS, sampleLinkFor, samplePaths } from "../src/sample-reports.js";
+import { SAMPLES, SAMPLE_PRODUCTS, sampleLinkFor, samplePaths, endsMidSentence, midSentence } from "../src/sample-reports.js";
 import { HUMAN_PRODUCTS } from "../src/human-checkout.js";
 
 let pass = 0;
@@ -36,6 +36,19 @@ for (const product of SAMPLE_PRODUCTS) {
   const minSources = s.kind === "domain" ? 0 : s.kind === "recall" ? 3 : 5;
   ok(s.sources.length >= minSources, `${product}: cites at least ${minSources} sources (${s.sources.length})`);
 }
+// A fixture whose text stops mid-sentence is flagged, and the viewer says so
+// on the page, so a cut-short sample never passes as a finished report.
+ok(endsMidSentence("Done.\n\n## Sources\n1. x") === false && endsMidSentence("Ends here [3].") === false && endsMidSentence("*Not advice.*") === false, "endsMidSentence: a finished sentence (with citations or emphasis) is not flagged");
+ok(endsMidSentence("Enable DNSSEC signing\n\n## Sources\n1. x") === true && endsMidSentence("- Inventories and intangible assets, net") === true, "endsMidSentence: a body that stops mid-sentence is flagged");
+for (const product of SAMPLE_PRODUCTS) {
+  const raw = JSON.parse(readFileSync(`assets/samples/${product}.json`, "utf8"));
+  ok(!!SAMPLES[product].cutShort === endsMidSentence(raw.report), `${product}: cutShort flag (${!!SAMPLES[product].cutShort}) matches the fixture's last sentence`);
+}
+const viewer = readFileSync("assets/js/report-view.js", "utf8");
+ok(/s\.cutShort === true \? '<div class="keep-hint no-print" id="cut-short-note">/.test(viewer), "the viewer prints the cut-short note for a flagged sample");
+ok(midSentence("Deep research report") === "deep research report" && midSentence("SEC filing report") === "SEC filing report" && midSentence("FDA recall report") === "FDA recall report", "midSentence keeps acronyms and lowercases a plain first word");
+ok(!/\.label\.toLowerCase\(\)|productLabel\(s\.kind\)\)\.toLowerCase\(\)/.test(viewer), "the viewer never lowercases a whole label (SEC, FDA, 13F keep their case)");
+
 ok(sampleLinkFor("dossier") === "/reports/sample/dossier" && sampleLinkFor("research-pro") === null, "sampleLinkFor: a slug with a fixture links, one without does not");
 ok(samplePaths().every((p) => p.startsWith("/reports/sample/")), "sample paths live under /reports/sample/");
 
@@ -66,6 +79,10 @@ try {
   const reports = await (await fetch(`${B}/reports`)).text();
   const links = reports.match(/href="\/reports\/sample\/[a-z-]+"/g) || [];
   ok(links.length >= SAMPLE_PRODUCTS.length, `/reports links the samples (${links.length} links for ${SAMPLE_PRODUCTS.length} fixtures)`);
+  for (const p of SAMPLE_PRODUCTS) {
+    const n = reports.split(`href="/reports/sample/${p}"`).length - 1;
+    ok(n >= 2, `/reports links the ${p} sample from the strip and from its product card (${n} links)`);
+  }
   ok(!reports.includes('href="/reports/sample/domain-audit-pro"') && !reports.includes('href="/reports/sample/research-pro"'), "/reports does not link a sample that does not exist");
 
   const sm = await (await fetch(`${B}/sitemap-reports.xml`)).text();

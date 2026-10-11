@@ -90,6 +90,19 @@
       filing: "SEC Filing Report", token: "Solana Token Due-Diligence Brief", ipo: "IPO Pipeline Digest", ticker: "Ticker Pack",
       research: "Deep Research Report", linkedin: "LinkedIn Article" }[kind] || "Deep Research Report";
   }
+  // The label of the product this report was sold as. A sample carries its own
+  // label; a product that shares a kind with another (market-brief runs the
+  // research kind) is named by its slug, so its page never reads as the other.
+  function reportLabel(s) {
+    if (s && s.label) return String(s.label);
+    var bySlug = { "market-brief": "Market / Competitor Brief" };
+    return (s && bySlug[s.slug]) || productLabel(s && s.kind);
+  }
+  // Lowercase a label for use mid-sentence, leaving acronyms (SEC, FDA) alone.
+  function midSentence(label) {
+    var t = String(label || "");
+    return /^[A-Z][a-z]/.test(t) ? t.charAt(0).toLowerCase() + t.slice(1) : t;
+  }
   function reasonLabel(r) {
     return { welcome: "first report", scheduled: "scheduled re-run", change: "change detected", "tls-expiring": "certificate expiring", filing: "new 13F filing", recall: "new recall activity", "safety-change": "token safety changed", "filing-new": "new SEC filing", digest: "weekly digest", problem: "we could not complete this run" }[r] || r;
   }
@@ -140,10 +153,12 @@
     var m = monitorFor(s.kind);
     var target = String(s.input == null ? "" : s.input).trim();
     if (!m || !target) return "";
-    var shown = target.length > 80 ? target.slice(0, 80) + "…" : target;
+    // A short subject (a ticker, a domain) reads inside the sentence; a whole
+    // question does not, so it is named as "this question" instead.
+    var subject = target.length <= 40 && !/\?\s*$/.test(target) && target.split(/\s+/).length <= 5 ? target : (s.kind === "research" ? "this question" : "this subject");
     return '<div class="upsell no-print" id="upsell" data-product="' + esc(m.product) + '" data-target="' + esc(target) + '">' +
       '<div class="k">Keep it current</div>' +
-      "<h3>Watch " + esc(shown) + " and get a fresh brief the moment it changes</h3>" +
+      "<h3>Watch " + esc(subject) + " and get a fresh brief the moment it changes</h3>" +
       "<p>" + esc(m.label) + ", " + esc(m.priceUsd) + " a month. We re-check it for you on a schedule and email you a new cited report when something moves. Cancel any time, no account needed.</p>" +
       '<div class="row">' +
         '<button class="btn btn-primary" id="up-go">Start monitoring, ' + esc(m.priceUsd) + " a month →</button>" +
@@ -224,7 +239,7 @@
       '<div class="rpt-head">' +
         '<div class="rpt-brand"><span class="n">agent402</span><span class="s">Report</span></div>' +
         '<h1 class="rpt-title">' + esc(s.title || "Report") + "</h1>" +
-        '<div class="rpt-meta"><span>' + esc(productLabel(s.kind)) + "</span>" + (s.at ? "<span>" + esc(fmtDate(s.at)) + "</span>" : "") + "</div>" +
+        '<div class="rpt-meta"><span>' + esc(reportLabel(s)) + "</span>" + (s.at ? "<span>" + esc(fmtDate(s.at)) + "</span>" : "") + "</div>" +
       "</div>";
 
     // Action bar (never printed).
@@ -234,7 +249,7 @@
     var included = [];
     if (sources.length) included.push(sources.length + " cited sources");
     if (images.length) included.push(images.reduce(function (n, im) { return n + (im.files ? im.files.length : 0); }, 0) + " image files");
-    tables.forEach(function (t) { included.push((t.rows ? t.rows.length : 0) + " " + esc(t.label.toLowerCase()) + " rows"); });
+    tables.forEach(function (t) { included.push((t.rows ? t.rows.length : 0) + " " + esc(midSentence(t.label)) + " rows"); });
     var actions =
       '<div class="report-actions no-print">' +
         '<button class="btn btn-primary" id="dl-pdf">Download PDF</button>' +
@@ -245,7 +260,8 @@
       "</div>" +
       (s.sample !== true && s.publicView !== true && s.public === true && s.publicId ? '<div class="keep-hint no-print" id="public-note">Public at <a href="/reports/public/' + esc(s.publicId) + '">' + esc(location.origin + "/reports/public/" + s.publicId) + "</a>. Anyone with that link can read it and search engines may index it; make it private again any time.</div>" : "") +
       (s.sample === true || s.publicView === true
-        ? '<div class="keep-hint no-print">' + (s.publicView === true ? "A " + esc(productLabel(s.kind)).toLowerCase() + ' on "' + esc(s.input) + '" shared by its buyer' : "A real " + esc(productLabel(s.kind)).toLowerCase() + ' generated for "' + esc(s.input) + '"') + (s.at ? " on " + esc(fmtDate(s.at)) : "") + (included.length ? ". Includes " + included.join(" · ") : "") + ". Every report is generated fresh at request time from live sources.</div>" +
+        ? '<div class="keep-hint no-print">' + (s.publicView === true ? "A " + esc(midSentence(reportLabel(s))) + ' on "' + esc(s.input) + '" shared by its buyer' : "A real " + esc(midSentence(reportLabel(s))) + ' generated for "' + esc(s.input) + '"') + (s.at ? " on " + esc(fmtDate(s.at)) : "") + (included.length ? ". Includes " + included.join(" · ") : "") + ". Every report is generated fresh at request time from live sources.</div>" +
+          (s.cutShort === true ? '<div class="keep-hint no-print" id="cut-short-note">This sample\'s text stops mid-sentence: the writing step reached its length limit when this sample was generated.</div>' : "") +
           '<form class="sample-buy no-print" id="sample-buy" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 22px;">' +
             '<input id="sample-input" class="field" style="flex:1 1 240px;" placeholder="Your own ' + esc(inputNoun(s.kind)) + '" aria-label="Your own ' + esc(inputNoun(s.kind)) + '">' +
             '<button class="btn btn-primary" type="submit">Get this report, ' + "$" + esc(String(Math.round(s.priceUsd || 0))) + ' →</button>' +
