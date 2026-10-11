@@ -28,7 +28,7 @@ export const GLOSSARY = [
     def: "An open protocol, originally from Coinbase, that turns HTTP 402 Payment Required into a working payment flow: the server sends machine-readable payment requirements (price, asset, chain, recipient) in a PAYMENT-REQUIRED header, the client retries with a signed authorization in a PAYMENT-SIGNATURE (formerly X-PAYMENT) header, a facilitator verifies and settles it in USDC, and the response carries a PAYMENT-RESPONSE receipt.",
     see: [["/what-is-x402", "What is x402?"], ["/marketplace", "the x402 index"]] },
   { id: "mpp", name: "MPP (Machine Payments Protocol)", alt: ["Machine Payments Protocol", "Payment HTTP authentication scheme"],
-    def: "An open, IETF-track protocol that carries pay-per-request payments through HTTP's standard authentication headers: a 402 response challenges with WWW-Authenticate: Payment, the client pays with an Authorization: Payment credential, and the settled response returns a signed Payment-Receipt. Its evm method settles like x402 (EIP-3009 via a facilitator); its tempo method settles natively on Tempo.",
+    def: "An open protocol, published as an IETF Internet-Draft, that carries pay-per-request payments through HTTP's standard authentication headers: a 402 response challenges with WWW-Authenticate: Payment, the client pays with an Authorization: Payment credential, and the settled response returns a signed Payment-Receipt. Its evm method settles like x402 (EIP-3009 via a facilitator); its tempo method settles natively on Tempo.",
     see: [["/what-is-mpp", "What is MPP?"], ["/mpp-marketplace", "the MPP index"]] },
   { id: "http-402", name: "HTTP 402 Payment Required", alt: ["402"],
     def: "The HTTP status code reserved since 1997 for exactly this and left unused for decades: the server is saying the resource exists but costs money. Both x402 and MPP use it as the price quote; the payment rides on the retry. Agent402 answers 402 on every paid route and 200 once a payment settles.",
@@ -55,7 +55,7 @@ export const GLOSSARY = [
     def: "The agent's own key pair holding stablecoins. In agentic finance the payment IS the identity: there is no account to create, and the payer address on a settled payment is what a seller keys memory, usage history and quotas to. Keys never leave the client - the wallet signs an authorization and the facilitator broadcasts it.",
     see: [["/agentic-finance#faq", "do agents need crypto?"]] },
   { id: "rails", name: "Rails (stablecoin rails)", alt: ["payment rails", "chains"],
-    def: "The chains and stablecoins a payment can settle on. Agent402 accepts USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar and Algorand, USDG on Robinhood Chain, and PathUSD/USDC natively on Tempo - a buyer picks any rail listed in the 402 at the same list price (fee-charging rails carry the fee in the quote).",
+    def: "The chains and stablecoins a payment can settle on. Agent402 accepts USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar and Algorand, USDG on Robinhood Chain, and USDC.e and PathUSD natively on Tempo - a buyer picks any rail listed in the 402, at list price plus a small fee on a rail whose settlement charges one (shown in that rail's quote).",
     see: [["/revenue", "transactions by rail"], ["/pricing", "pricing"]] },
   { id: "dual-stack", name: "Dual-stack (x402 + MPP)", alt: ["dual-stack seller"],
     def: "A server that answers ONE 402 with both an x402 offer and an MPP challenge for the same resource at the same price, and accepts either credential on the retry. A stock x402 client and a stock mppx client both work unmodified against it. Every paid route on Agent402 is dual-stack, and the open-source tollbooth adds it to any site.",
@@ -85,7 +85,7 @@ export const GLOSSARY = [
     def: "The open standard AI assistants use to discover and call tools. Agent402 exposes its catalog as a hosted MCP connector and an npm stdio server, so an assistant can find a tool, read its price and call it - paying over x402 or MPP, or with a proof-of-work solve on the free tier - without a human creating an account.",
     see: [["/docs#add", "add to Claude"], ["/blog/building-with-mcp", "building with MCP"]] },
   { id: "tempo", name: "Tempo", alt: ["tempo method", "Tempo chain"],
-    def: "The payments-focused chain that is MPP's native settlement method (chain id 4217, TIP-20 tokens such as PathUSD and USDC.e). Its tempo/charge credentials are validated and broadcast through Tempo's own relay rather than an EIP-3009 facilitator, so accepting a tempo/charge payment needs no signing key on the server. Agent402 accepts it, and holds Tempo keys for two other jobs: sponsoring gas on monitor subscriptions paid over MPP, and paying other Tempo sellers through the router.",
+    def: "The payments-focused chain that is MPP's native settlement method (chain id 4217, TIP-20 tokens such as PathUSD and USDC.e). Its tempo/charge credentials are validated and broadcast through Tempo's own relay rather than an EIP-3009 facilitator, so accepting a tempo/charge payment needs no signing key on the server. Agent402 accepts it.",
     see: [["/what-is-mpp#compare", "MPP settlement methods"], ["/mpp-marketplace", "sellers on the MPP wire"]] },
 ];
 
