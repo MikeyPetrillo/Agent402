@@ -2770,6 +2770,8 @@ jobs:
           t node scripts/test-payment-verify.js
           # Refund job proves a route-execute debt paid to a spending wallet (the real job, refund.yml's env, stub chains — offline)
           t node scripts/test-refund-run-self-funding.js
+          # Refund job on Tempo and Solana: dry run plans only, claim before send, one send per debt, outbound proof before paid, void never sent (stubs only — offline)
+          t node scripts/test-refund-run-chains.js
           # Payment-header precedence (attribution must follow the header the middleware SETTLES from — offline)
           t node scripts/test-payer-header-order.js
           # Refund monitor (stuck sends page, in-flight ones do not, and no address ever reaches a public issue — offline)

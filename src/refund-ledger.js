@@ -571,14 +571,19 @@ export function listRefunds({ status = "owed", limit = 200 } = {}) {
  *
  * Returns true only for the claimer that won the row. Database mode: a
  * Promise of it, decided by one `UPDATE ... WHERE status = 'owed' RETURNING`
- * in Postgres, so two containers can never both win.
+ * in Postgres, so two containers can never both win. A row whose evidence
+ * carries a void mark (refund_marks: a Tempo push transfer claimed for the
+ * request it paid, see voidOwedOnClaim) is never claimed, even in the moment
+ * between the mark and the row's own void.
  */
 export function claimRefundForSend(id, note = null) {
   if (USE_PG) {
     return pgWrite("claim", async () => {
       const r = await stateQuery(
         `UPDATE ${T("refunds")} SET status = 'sending', note = $2, resolved_at = NULL, claimed_at = $3, updated_at = ${PG_NOW_MS}
-         WHERE id = $1 AND status = 'owed' RETURNING *`,
+         WHERE id = $1 AND status = 'owed'
+           AND NOT EXISTS (SELECT 1 FROM ${T("refund_marks")} m WHERE m.evidence = ${T("refunds")}.evidence AND m.state = 'void')
+         RETURNING *`,
         [Number(id), note, Date.now()],
       );
       return applyOrRefresh(r, "id = $1", [Number(id)]);
