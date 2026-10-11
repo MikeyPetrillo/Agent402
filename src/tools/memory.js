@@ -182,9 +182,15 @@ function checkGrantee(grantee) {
 
 // --- similarity recall (local embeddings; pluggable provider) -------------
 
-function fnv1a(str) {
+// The token hash. The input is made a string here and read up to
+// FNV_MAX_CHARS (far above any token of a value or query, which are capped
+// well below it), so the loop bound is never taken from the caller.
+const FNV_MAX_CHARS = 1 << 20;
+export function fnv1a(input) {
+  const str = String(input);
+  const n = Math.min(str.length, FNV_MAX_CHARS);
   let h = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) {
+  for (let i = 0; i < n; i++) {
     h ^= str.charCodeAt(i);
     h = Math.imul(h, 0x01000193);
   }

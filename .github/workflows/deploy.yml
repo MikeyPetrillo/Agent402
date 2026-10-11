@@ -1280,6 +1280,8 @@ jobs:
           t node scripts/test-crawl-kit.js
           # Memory v2 unit tests (grants, counters, audit chain, recall)
           t node scripts/test-memory.js
+          # The local embedding's token hash: unchanged for strings, string-coerced and bounded.
+          t node scripts/test-memory-fnv1a.js
           # Security regressions (proto-pollution, input-DoS, 500-hardening)
           t node scripts/test-security.js
 
