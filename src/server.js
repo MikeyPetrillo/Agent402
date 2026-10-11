@@ -6797,7 +6797,7 @@ app.get("/api/mpp-leaderboard", (_req, res) => {
 // degrades to "temporarily unavailable" text rather than a half-rendered page.
 app.get("/sell", (_req, res) => {
   try {
-    htmlCache(res, 120, 600).send(sellPage(BASE_URL));
+    htmlCache(res, 120, 600).send(sellPage(BASE_URL, CATALOG));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }

@@ -4,24 +4,46 @@
 // static "what it costs you" copy and a lane-level teaser for the paid
 // /api/bestsellers + /api/demand-radar reads).
 import { readFileSync } from "node:fs";
-import { sellPage } from "../src/sell.js";
+import { sellPage, catalogPriceOf } from "../src/sell.js";
+import { X402_TOOLS } from "../src/tools/x402-kit.js";
+import { buildSellerPayabilityTool } from "../src/tools/seller-payability-kit.js";
+import { routingProofSentence } from "../src/routing-proof.js";
+import { ROUTE_ORDER } from "../src/route-order.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
 
-const html = sellPage("https://agent402.tools");
+// The real tool definitions the server's CATALOG holds for the paid seller
+// reads this page quotes, so every price on the page is the catalog's.
+const CATALOG = Object.fromEntries([...X402_TOOLS, buildSellerPayabilityTool({})].map((d) => [d.route, d]));
+const html = sellPage("https://agent402.tools", CATALOG);
+const text = html.replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ");
 
 // --- hero ---------------------------------------------------------------
 ok(html.includes("Agents are buying") && html.includes(">paid<") && html.includes("for it."), "hero H1 renders");
 ok(html.includes("WHAT IT COSTS YOU"), "cost table header renders");
 ok(html.includes(">$0<") && html.includes(">0%<"), "cost table shows $0 listing fee and 0% deducted");
-ok(html.includes("buyer side only"), "cost table's how-we-earn row states the buyer-side model");
+ok(html.includes("cut of your sales") && html.includes("optional, paid"), "cost table says no cut of sales and that the seller tools are optional paid reads");
+ok(!/buyer side only|Buyer side, and only there/i.test(html), "no claim that we earn on the buyer side only (the seller reads on this page are paid)");
 
 // --- commercial sensitivity: lane-level demand only, no per-tool figures --
-ok(html.includes("Demand you can&#39;t get anywhere else") || html.includes("Demand you can't get anywhere else"), "demand section renders");
+ok(html.includes("Demand data from our own sales ledger"), "demand section renders");
+ok(!/anywhere else|nobody else/i.test(text), "no unprovable claims about what third parties hold");
+ok(!/spend most in|in order\./.test(text) && text.includes("in no particular order") && text.includes("unranked"), "the hand-written lane list does not claim a spend ranking it cannot derive");
 ok(html.includes("Hashing &amp; encoding") || html.includes("Hashing & encoding"), "lane names render");
 ok(html.includes("figures withheld"), "lane table discloses figures are withheld, not shown free");
-ok(html.includes("/tools/bestsellers") && html.includes("$0.005"), "bestsellers upsell links out with its real price");
+ok(html.includes("/tools/bestsellers"), "bestsellers upsell links out");
+for (const slug of ["bestsellers", "demand-radar", "seller-payability", "x402-audit"]) {
+  const p = catalogPriceOf(CATALOG, slug);
+  ok(p && text.includes(p), `${slug}'s catalog price (${p}) is the one the page quotes`);
+}
+{
+  const { readFileSync: rf } = await import("node:fs");
+  const src = rf(new URL("../src/sell.js", import.meta.url), "utf8");
+  ok(!/\$0\.0\d+|\$0\.10\b|half a cent/.test(src), "src/sell.js types no tool price: every price is read from the catalog");
+  const bare = sellPage("https://agent402.tools");
+  ok(!/\$0\.00[1-9]|\$0\.10\b/.test(bare.replace(/<script[^]*?<\/script>/g, "")), "rendered without a catalog, the page quotes no tool price rather than a stale one");
+}
 ok(html.includes("/tools/demand-radar"), "demand-radar upsell links out");
 // The one thing this page must never do: pair a tool slug with a purchase
 // count. Every catalog price on this page is a flat UPSELL price ($0.005),
@@ -41,12 +63,27 @@ ok(regFormJs.includes("out.textContent") && !regFormJs.includes("innerHTML"), "r
 
 // --- how-we-earn / commitments --------------------------------------------
 ok(html.includes("HOW WE MAKE MONEY") && html.includes("THE COMMITMENTS") || html.includes("The commitments"), "how-we-earn and commitments sections render");
-ok(html.includes("src/x402-index.js") && html.includes("github.com/MikeyPetrillo/Agent402"), "commitments link to the router source for verification");
+ok(html.includes("src/route-order.js") && html.includes("src/ledger-leaderboard.js") && html.includes("github.com/MikeyPetrillo/Agent402"), "commitments link to the ranking order and the leaderboard self-exclusion source");
 ok((html.match(/We never/g) || []).length >= 4, "at least four explicit 'We never' commitments render");
 
 // --- rails ------------------------------------------------------------
 ok(html.includes(">Base<") && html.includes(">Robinhood<"), "rail marks render every chain including Robinhood");
 ok(html.includes(">USDG<"), "Robinhood's asset is labelled USDG, not USDC");
+
+// --- router promises match route-execute / dispatch-eligibility ----------
+ok(!/same terms|does not care whose tool|routes matching buyer tasks to you|sends you work/i.test(text), "no claim that the router sends sellers work by default (it runs this catalog unless the buyer passes include:\"external\")");
+ok((text.match(/include: "external"/g) || []).length >= 2, "the external opt-in is named where the router is described");
+ok(text.split(routingProofSentence()).length - 1 >= 2, "routingProofSentence() (the router's payment gate) is quoted in step 04 and the router FAQ");
+ok(text.includes("/api/index?seller=<your host>"), "the per-seller dispatch verdict is linked");
+{
+  const meta = (html.match(/<div class="ml-meta"[^>]*>((?:<span>[^<]*<\/span>)+)<\/div>\s*<p[^>]*>Four places/) || [])[1] || "";
+  const spans = [...meta.matchAll(/<span>([^<]*)<\/span>/g)].map((m) => m[1]);
+  ok(spans.slice(0, ROUTE_ORDER.length).join("|") === ROUTE_ORDER.map((o) => o.short).join("|"), `the router meta row is ROUTE_ORDER, in order (${spans.join(" > ")})`);
+}
+ok(text.includes("Settled Base USDC volume shows up on the public on-chain leaderboard"), "the leaderboard claim is scoped to Base USDC (src/leaderboard.js)");
+ok(!/Gas is sponsored by the facilitator on EVM chains/.test(text) && text.includes("x402 exact scheme on EVM chains"), "the gas claim is scoped to the x402 exact scheme");
+ok(!/Coinbase/.test(text), "no third-party company name in the copy");
+ok(!/never off the roster|on the next pass/.test(text), "listing and registration timing say what the crawler does");
 
 // --- FAQ ----------------------------------------------------------------
 ok(html.includes("What does it cost to list?"), "seller FAQ renders");

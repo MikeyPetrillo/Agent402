@@ -9,15 +9,17 @@
 // neither can name an order the sort does not apply. A leaf module: no imports,
 // so the index and the prose can both depend on it.
 //
+// `short` is the one-word form a page's meta row renders (/sell).
+//
 // test-route-order.js pins this list against the comparator's own source, so a
 // step added to or moved in the sort without a change here fails CI.
 export const ROUTE_ORDER = Object.freeze([
-  { key: "score", label: "score", prose: "how well they match the task" },
-  { key: "health", label: "health", prose: "crawl health" },
-  { key: "bazaarPayers30d", label: "distinct payers, last 30 days (Bazaar)", prose: "distinct payers over the last 30 days" },
-  { key: "price", label: "cheapest known price", prose: "price" },
-  { key: "bazaarCurated", label: "curated (Bazaar)", prose: "a discovery listing's curated flag" },
-  { key: "slugLength", label: "shorter slug", prose: "slug length, shorter first" },
+  { key: "score", label: "score", short: "match", prose: "how well they match the task" },
+  { key: "health", label: "health", short: "health", prose: "crawl health" },
+  { key: "bazaarPayers30d", label: "distinct payers, last 30 days (Bazaar)", short: "payers", prose: "distinct payers over the last 30 days" },
+  { key: "price", label: "cheapest known price", short: "price", prose: "price" },
+  { key: "bazaarCurated", label: "curated (Bazaar)", short: "curated flag", prose: "a discovery listing's curated flag" },
+  { key: "slugLength", label: "shorter slug", short: "shorter slug", prose: "slug length, shorter first" },
 ]);
 
 /** "by A, by B and by C" over the tiebreak steps (everything after score). */

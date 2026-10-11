@@ -18,7 +18,8 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { RAILS, railKey, RAILS_AMP } from "./rails.js";
 import { crawlIntervalLabel } from "./crawl-cadence.js";
-import { routerRankingSentence } from "./routing-proof.js";
+import { routerRankingSentence, routingProofSentence } from "./routing-proof.js";
+import { ROUTE_ORDER } from "./route-order.js";
 import { EXTERNAL_CHAIN_BY_NETWORK } from "./tools/route-execute.js";
 
 // The chains the router can pay an outside seller on, read from route-execute's
@@ -35,17 +36,19 @@ const REPO = REPO_URL;
 
 const COSTS = [
   ["listing fee", "$0", "green"],
-  ["deducted from sellers", "0%", "green"],
+  ["cut of your sales", "0%", "green"],
   ["signup / account", "none", "ink"],
   ["review queue", "none", "ink"],
   ["who holds your funds", "you do", "ink"],
   ["you keep your paywall", "yes", "ink"],
-  ["how we earn", "buyer side only", "accent"],
+  ["seller tools", "optional, paid", "ink"],
 ];
 
 // Lane-level only. Per-tool slugs and purchase counts are the paid
 // /api/bestsellers product and are deliberately never rendered here — they
-// are not derivable from the chain.
+// are not derivable from the chain. The lanes are UNORDERED on purpose: an
+// order would be a ranking claim this static page cannot derive (call volume
+// and spend rank them differently), and the ranking is what the paid read sells.
 const LANES = [
   ["Hashing & encoding", "sha256/sha512 digests, HMAC, base64, JWT decoding: called dozens of times inside a single job."],
   ["Market & financial data", "Live quotes, historical series, Treasury yield curves, SEC company lookups."],
@@ -55,12 +58,14 @@ const LANES = [
   ["Crypto & onchain reads", "Token prices and metadata, balances, transaction history, gas."],
 ];
 
-const REGISTER_STEPS = [
+// Built per render: step 04 quotes routingProofSentence(), which reads the
+// unproven-tier ceilings from env.
+const registerSteps = () => [
   ["01", "Serve a 402", "Return HTTP 402 Payment Required with your price, asset, network and payTo address on the endpoints you want to charge for. Any x402 middleware does this."],
   ["02", "Register the origin", "One POST to /api/index/register. No account, no review queue, no waiting on us."],
   ["03", "Get crawled", `The crawler reads your manifest at once, records your tools and advertised chains, and re-probes it ${crawlIntervalLabel()}; health is scored from those probes. Probes are never paid calls.`],
-  ["04", "Get routed", "The Smart Order Router resolves a described task to a listing: shortlisted by how well it matches, then ordered by crawl health, distinct payers and price (the full order is in the seller questions below). An accurate description is how you win it."],
-  ["05", "Get paid", "Buyers pay your wallet directly in USDC. Your settled volume shows up on the public on-chain leaderboard."],
+  ["04", "Get ranked", `Your tools appear in Smart Order Router answers: shortlisted by how well they match a described task, then ordered by crawl health, distinct payers and price (the full order is in the seller questions below). An accurate description is how you win it. The router buys from an outside seller only when the buyer asks for one (include: "external"). ${routingProofSentence()} GET /api/index?seller=<your host> shows its verdict for you.`],
+  ["05", "Get paid", "Buyers pay your wallet directly, in the asset and on the chains your 402 names. Settled Base USDC volume shows up on the public on-chain leaderboard."],
 ];
 
 const WHAT_WE_READ = [
@@ -71,7 +76,7 @@ const WHAT_WE_READ = [
 ];
 
 const SURFACES = [
-  ["Smart Order Router", "A buyer describes a task in words; the router resolves it to a tool and runs it. It does not care whose tool it is, and it will buy from an external seller and resell the result to the buyer.", "/api/route"],
+  ["Smart Order Router", "A buyer describes a task in words and the router ranks matching tools from this catalog and the open index. By default it runs a tool from this catalog; a buyer who passes include: \"external\" has it buy the result from the best outside seller instead and resell it.", "/api/route"],
   ["Marketplace directory", "Every indexed seller with tool count, advertised networks, last crawl and rolling health - browsable by humans and machines.", "/marketplace"],
   ["Per-chain market pages", "One page per settlement rail, so a buyer on Solana or Algorand can find sellers who take their chain.", "/solana"],
   ["On-chain leaderboard", "Ranked by real Base USDC settled. Once you have volume, you get a public row - and the row carries buyer diversity, not just dollars.", "/leaderboard"],
@@ -81,17 +86,18 @@ const COMMITMENTS = [
   "We never take custody of your funds. Buyers pay your wallet, not ours.",
   "We never deduct a commission from your advertised price.",
   "We never require an account, a contract, or a call with sales.",
-  "We never rank you down for refusing the router - direct buyers are yours.",
+  "If you ask us not to buy from you, your ranking does not change. Direct buyers are yours.",
   "We publish how the ranking works, and exclude ourselves from our own leaderboard.",
 ];
 
-const FAQS = [
-  ["What does it cost to list?", "Nothing. Listing is free, there is no signup and no review queue, and no commission is deducted from your price. Buyers pay your wallet directly and Agent402 never holds seller funds. We earn on the buyer side only, on the spread when the router buys from a seller and resells the result to a buyer."],
-  ["How do agents find my API?", `Four surfaces: the marketplace directory, the per-chain market pages, the Smart Order Router which resolves a described task to a tool, and the public on-chain leaderboard once you have settled volume. ${routerRankingSentence()}`],
+// Prices come from the catalog the server passes in (priceNote), never typed.
+const faqs = (priceNote) => [
+  ["What does it cost to list?", "Nothing. Listing is free, there is no signup and no review queue, and no commission is deducted from your price. Buyers pay your wallet directly and Agent402 never holds seller funds. We never take a cut of your sales: we earn from buyers of our own tools and of the router (the spread when it buys from a seller and resells the result), and the seller tools on this page are optional paid reads."],
+  ["How do agents find my API?", `Four places: the marketplace directory, the per-chain market pages, the Smart Order Router which ranks tools for a described task, and the public on-chain leaderboard once you have settled Base USDC volume. ${routerRankingSentence()} The router runs a tool from this catalog unless the buyer asks for an outside seller (include: "external"). ${routingProofSentence()} GET /api/index?seller=<your host> returns the router's verdict for your origin and the reason.`],
   ["What if my site is not an API?", "Use agent402-tollbooth - the pay-per-crawl mechanism is explained above under \"Charge the crawlers instead\". It ships as an open MIT middleware for Express, Next.js, Cloudflare Workers, a reverse proxy or WordPress: drop it in front of any site, no rebuild required."],
   ["Which chains can I get paid on?", `Advertise whichever you support. Agent402 itself accepts ${RAILS.length} rails: ${RAILS_AMP}. ${ROUTER_CHAIN_SENTENCE}`],
-  ["How do I know what to charge, or what to build?", "Two paid intelligence tools, both half a cent a read. /api/bestsellers ranks what agents actually pay for across a 500+-tool catalog by distinct buyers, sales, revenue or buyer diversity, with a trend against the previous window. /api/demand-radar ranks what agents asked for and did not find. Neither can be reconstructed from on-chain data: settlements are public, but which tool was bought is not."],
-  ["What happens if my endpoint goes down?", `The probe that runs ${crawlIntervalLabel()} notices and your rolling health drops, so the router routes around you until you recover. Health is a rolling window rather than a single failure, and new sellers are not punished for having no history yet.`],
+  ["How do I know what to charge, or what to build?", `Two paid intelligence tools: /api/bestsellers${priceNote("bestsellers")} ranks what agents actually pay for across a 500+-tool catalog by distinct buyers, sales, revenue or buyer diversity, with a trend against the previous window. /api/demand-radar${priceNote("demand-radar")} ranks what agents asked for and did not find. Neither can be reconstructed from on-chain data: settlements are public, but which tool was bought is not.`],
+  ["What happens if my endpoint goes down?", `The probe that runs ${crawlIntervalLabel()} notices and your rolling health drops; you stay listed, and routing skips you until a probe succeeds again. Health is a rolling window rather than a single failure, and a new seller with no probe history yet starts at full health in the rankings.`],
 ];
 
 function costRow([label, value, tone]) {
@@ -110,13 +116,25 @@ const formHtml = `
       <input id="reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;font-family:var(--font-mono);font-size:var(--fs-sm);padding:9px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);">
       <button class="btn btn-primary btn-sm" id="reg-go">Submit</button>
     </div>
-    <div id="reg-out" role="status" aria-live="polite" style="font-size:var(--fs-sm);line-height:1.5;color:var(--muted);margin-top:8px;">Free, no account - we probe your origin's x402 surface and list you if it answers. An app served under a path on a shared host registers with that path (https://host/app/name); its documents are read from under it. Unreachable sellers drop out of routing (never off the roster) until they recover.</div>
-    <p style="font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:10px 0 0;">Speak MPP? Register your MPP server on the <a href="/mpp-marketplace#list-api" style="color:var(--muted);">MPP marketplace →</a> (one call, or <code>POST /api/mpp-index/register {"origin", "path"}</code>); dual-stack sellers our x402 crawl already sees answering MPP are picked up automatically.</p>
+    <div id="reg-out" role="status" aria-live="polite" style="font-size:var(--fs-sm);line-height:1.5;color:var(--muted);margin-top:8px;">Free, no account - we probe your origin's x402 surface and list you if it answers. An app served under a path on a shared host registers with that path (https://host/app/name); its documents are read from under it. An unreachable seller stays listed and is skipped by routing until it recovers.</div>
+    <p style="font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:10px 0 0;">Speak MPP? Register your MPP server on the <a href="/mpp-marketplace#list-api" style="color:var(--muted);">MPP marketplace →</a> (one call, or <code>POST /api/mpp-index/register {"origin", "path"}</code>); a seller whose x402 routes our crawl already sees answering MPP too is picked up automatically.</p>
   </div>
   <script src="/js/reg-form.js"></script>`;
 
-export function sellPage(baseUrl) {
+// The price string for a catalog slug, or null when the catalog does not carry it (a
+// render with no catalog, or a retired tool): the copy then omits the figure
+// rather than quoting a stale one.
+export function catalogPriceOf(catalog, slug) {
+  for (const d of Object.values(catalog || {})) if (d && d.slug === slug && typeof d.price === "string") return d.price;
+  return null;
+}
+
+export function sellPage(baseUrl, catalog = null) {
   const canonical = `${baseUrl}/sell`;
+  const price = (slug) => catalogPriceOf(catalog, slug);
+  const priceNote = (slug) => (price(slug) ? ` (${price(slug)} a read)` : "");
+  const REGISTER_STEPS = registerSteps();
+  const FAQS = faqs(priceNote);
   const title = "Sell your API to AI agents - get paid USDC per call with x402";
   const description =
     "List your API on the open x402 index and get paid in USDC per call, straight to your wallet. Free listing, no signup, nothing deducted from your price. Or tollbooth a site so AI crawlers pay per page. See what agents already pay for.";
@@ -126,7 +144,7 @@ export function sellPage(baseUrl) {
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Sell", item: canonical },
   ] };
-  const serviceLd = { "@type": "Service", "@id": `${canonical}#service`, name: "x402 seller listing and routing", provider: { "@id": `${baseUrl}/#organization` }, serviceType: "API monetization for AI agents", description: "Free listing on the open x402 index, with routing from the Smart Order Router and a public on-chain ranking. Buyers pay the seller's wallet directly; nothing is deducted from the seller's price.", areaServed: "Worldwide", offers: { "@type": "Offer", price: "0", priceCurrency: "USD", description: "Free listing, no signup, no commission deducted from seller revenue" } };
+  const serviceLd = { "@type": "Service", "@id": `${canonical}#service`, name: "x402 seller listing and routing", provider: { "@id": `${baseUrl}/#organization` }, serviceType: "API monetization for AI agents", description: "Free listing on the open x402 index, with ranking in the Smart Order Router and a public on-chain leaderboard for Base USDC settlement. Buyers pay the seller's wallet directly; nothing is deducted from the seller's price.", areaServed: "Worldwide", offers: { "@type": "Offer", price: "0", priceCurrency: "USD", description: "Free listing, no signup, no commission deducted from seller revenue" } };
   const howToLd = { "@type": "HowTo", "@id": `${canonical}#howto`, name: "How to sell your API to AI agents with x402", description: "List an x402-native API on the open index so AI agents can discover it and pay per call in USDC.", totalTime: "PT15M", estimatedCost: { "@type": "MonetaryAmount", currency: "USD", value: "0" }, step: REGISTER_STEPS.map(([n, t, b], i) => ({ "@type": "HowToStep", position: i + 1, name: t, text: b })) };
   const faqLd = { "@type": "FAQPage", "@id": `${canonical}#faq`, mainEntity: FAQS.map(([q, a]) => ({ "@type": "Question", name: q, acceptedAnswer: { "@type": "Answer", text: a } })) };
 
@@ -138,8 +156,8 @@ table{border-collapse:collapse;width:100%}
 `;
 
   const costsHtml = COSTS.map(costRow).join("");
-  const lanesHtml = LANES.map(([lane, body], i) =>
-    `<tr style="border-bottom:1px solid var(--hairline);"><td style="padding:13px 18px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">${String(i + 1).padStart(2, "0")}</td><th scope="row" style="text-align:left;font-weight:700;padding:13px 18px;color:var(--ink);font-size:var(--fs-base);">${esc(lane)}</th><td style="padding:13px 18px;color:var(--muted);font-size:var(--fs-md);line-height:1.5;">${esc(body)}</td></tr>`
+  const lanesHtml = LANES.map(([lane, body]) =>
+    `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:700;padding:13px 18px;color:var(--ink);font-size:var(--fs-base);">${esc(lane)}</th><td style="padding:13px 18px;color:var(--muted);font-size:var(--fs-md);line-height:1.5;">${esc(body)}</td></tr>`
   ).join("");
   const registerStepsHtml = REGISTER_STEPS.map(([n, t, b]) =>
     `<li style="display:grid;grid-template-columns:52px 1fr;gap:14px;padding:20px 22px;border-bottom:1px solid var(--hairline);"><span style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);color:var(--accent);">${esc(n)}</span><div><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 7px;color:var(--ink);">${esc(t)}</h3><p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0;">${esc(b)}</p></div></li>`
@@ -176,7 +194,7 @@ table{border-collapse:collapse;width:100%}
         <div style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:20px;">for api operators &amp; site owners</div>
         <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 22px;color:var(--ink);">Agents are buying.<br>Get <span style="color:var(--accent);">paid</span> for it.</h1>
         <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 16px;">An AI agent cannot sign up for your API. It has no email, no card, and no way to accept your terms. What it can do is <strong style="color:var(--ink);font-weight:700;">pay a fraction of a cent per call, unattended</strong>, from its own wallet.</p>
-        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0 0 30px;">Serve an x402 challenge, register your origin, and the index routes matching buyer tasks to you. Money moves buyer wallet to your wallet. We never hold it, and nothing is deducted from your price.</p>
+        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0 0 30px;">Serve an x402 challenge and register your origin: your tools join the open index, where agents and the Smart Order Router find them. Money moves buyer wallet to your wallet. We never hold it, and nothing is deducted from your price.</p>
         <div style="display:flex;flex-wrap:wrap;gap:11px;">
           <a class="btn btn-primary" href="#register">List an x402 API →</a>
           <a class="btn btn-secondary" href="/tollbooth">Tollbooth a site</a>
@@ -192,24 +210,24 @@ table{border-collapse:collapse;width:100%}
 </header>
 
 <section style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
-  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/bestsellers · $0.005 per read</div>
-  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Demand you can't get anywhere else.</h2>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/bestsellers${price("bestsellers") ? ` · ${esc(price("bestsellers"))} per read` : ""}</div>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Demand data from our own sales ledger.</h2>
   <div class="ml-meta" style="margin:10px 0 14px;"><span>lanes shown</span><span>figures are a paid read</span></div>
-  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 28px;">Settlements land on chain, but <em style="color:var(--ink);">which tool an agent bought</em> never does - so this ledger cannot be reconstructed from a block explorer by anyone, including us. It is the one dataset in the x402 ecosystem that only the seller who served the call can see. Here are the lanes agents spend most in, in order. The numbers behind them are a tool, not a marketing page.</p>
+  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 28px;">Settlements land on chain, but <em style="color:var(--ink);">which tool an agent bought</em> does not, so these figures come from the sales ledger of the server that served each call and cannot be rebuilt from a block explorer. Below are the lanes agents buy in on this catalog, in no particular order. The ranking and the numbers behind it are a tool, not a marketing page.</p>
   <div class="sl-scroll" style="border:1px solid var(--hairline);background:var(--card);">
     <table style="font-size:var(--fs-md);">
-      <caption style="text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);padding:14px 18px;border-bottom:1px solid var(--hairline);">Where the buying is · ranked, figures withheld</caption>
-      <thead><tr style="border-bottom:1px solid var(--hairline);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);"><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;width:40px;">#</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">lane</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">what agents buy in it</th></tr></thead>
+      <caption style="text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);padding:14px 18px;border-bottom:1px solid var(--hairline);">Where the buying is · unranked, figures withheld</caption>
+      <thead><tr style="border-bottom:1px solid var(--hairline);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);"><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">lane</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">what agents buy in it</th></tr></thead>
       <tbody>${lanesHtml}
-        <tr style="background:var(--footer-bg);"><th scope="row" style="text-align:left;font-weight:400;padding:16px 18px;color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-xs);white-space:nowrap;">the figures</th><td style="padding:16px 18px;color:var(--muted);font-size:var(--fs-md);line-height:1.5;">Per-tool purchase counts, distinct buyers, revenue and buyer-diversity - plus each tool's trend against the previous window, over any 1-90 day span.</td><td style="padding:16px 18px;text-align:right;"><a href="/tools/bestsellers" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;white-space:nowrap;">$0.005 →</a></td></tr>
+        <tr style="background:var(--footer-bg);"><th scope="row" style="text-align:left;font-weight:400;padding:16px 18px;color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-xs);white-space:nowrap;">the figures</th><td style="padding:16px 18px;color:var(--muted);font-size:var(--fs-md);line-height:1.5;">Per-tool purchase counts, distinct buyers, revenue and buyer-diversity - plus each tool's trend against the previous window, over any 1-90 day span.</td><td style="padding:16px 18px;text-align:right;"><a href="/tools/bestsellers" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;white-space:nowrap;">${esc(price("bestsellers") || "bestsellers")} →</a></td></tr>
       </tbody>
     </table>
   </div>
   <div class="sl-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);border-top:none;">
     <div style="padding:24px;border-right:1px solid var(--hairline);background:var(--footer-bg);">
       <h3 style="font-family:var(--font-mono);font-weight:600;font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 12px;">The unmet half</h3>
-      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 14px;">We also log what agents searched for and <strong style="color:var(--ink);">did not find</strong>. Those wish clusters are ranked at <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);">/api/demand-radar</span>, tagged by whether agents asked outright or simply failed to discover something that already exists - and flagged when a cluster is within two signals of the build threshold. It is the closest thing to a build list for an x402 seller, and nobody else is sitting on the data.</p>
-      <a href="/tools/demand-radar" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">demand radar → $0.005 per read</a>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 14px;">We also log what agents searched for and <strong style="color:var(--ink);">did not find</strong>. Those wish clusters are ranked at <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);">/api/demand-radar</span>, tagged by whether agents asked outright or simply failed to discover something that already exists - and flagged when a cluster is within two signals of the build threshold. It is the closest thing to a build list for an x402 seller, read from what agents asked this server for.</p>
+      <a href="/tools/demand-radar" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">demand radar →${price("demand-radar") ? ` ${esc(price("demand-radar"))} per read` : ""}</a>
     </div>
     <div style="padding:24px;background:var(--footer-bg);">
       <h3 style="font-family:var(--font-mono);font-weight:600;font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 12px;">What sells here</h3>
@@ -228,7 +246,7 @@ table{border-collapse:collapse;width:100%}
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 14px;">Return a 402 with your price, asset, network and payTo on the endpoints you want to charge for, then register the origin.</p>
       <ul class="ml-ticks">
         <li>The crawler reads your manifest at once, then re-probes it ${crawlIntervalLabel()}</li>
-        <li>The Smart Order Router sends you work, ranked against our own tools on the same terms</li>
+        <li>Your tools rank in Smart Order Router answers, and a buyer who asks it for an outside seller can be routed to you</li>
       </ul>
       <pre style="margin:0 0 18px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># what a buyer's agent sees
 </span>HTTP/1.1 402 Payment Required
@@ -250,7 +268,7 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
       </ul>
       <pre style="margin:0 0 18px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># express · next.js · cloudflare · proxy · wordpress
 </span>npm i agent402-tollbooth</pre>
-      <div class="ml-items" style="margin-top:auto;gap:10px 18px;align-items:center;"><a class="btn btn-secondary btn-sm" href="/tollbooth">Gate your crawlers →</a><a href="/guides/coinbase-business-get-paid-by-agents" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);text-decoration:none;">Coinbase Business account? →</a></div>
+      <div class="ml-items" style="margin-top:auto;gap:10px 18px;align-items:center;"><a class="btn btn-secondary btn-sm" href="/tollbooth">Gate your crawlers →</a><a href="/guides/coinbase-business-get-paid-by-agents" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);text-decoration:none;">Paid into an exchange business account? →</a></div>
     </div>
   </div>
 </section>
@@ -270,7 +288,7 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
       ${formHtml}
       <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:18px 0 12px;">What we read from you</div>
       <table style="font-family:var(--font-mono);font-size:var(--fs-xs);border:1px solid var(--hairline);"><tbody>${whatWeReadHtml}</tbody></table>
-      <p style="font-size:var(--fs-sm);line-height:1.6;color:var(--faint);margin:16px 0 0;">Already listed and nobody is paying? <span style="font-family:var(--font-mono);color:var(--muted);white-space:nowrap;">POST /api/seller-payability</span> buys one call from your own endpoint with our wallet and reports every leg: the 402 decoded, whether a stock client's signature was accepted, the settlement receipt. $0.10. Want the audit first? <span style="font-family:var(--font-mono);color:var(--muted);white-space:nowrap;">/api/x402-audit</span> grades any x402 endpoint's payment-security posture from the outside, without paying it. Run it on yourself before you list.</p>
+      <p style="font-size:var(--fs-sm);line-height:1.6;color:var(--faint);margin:16px 0 0;">Already listed and nobody is paying? <span style="font-family:var(--font-mono);color:var(--muted);white-space:nowrap;">POST /api/seller-payability</span> buys one call from your own endpoint with our wallet and reports every leg: the 402 decoded, whether a stock client's signature was accepted, the settlement receipt${price("seller-payability") ? `, for ${esc(price("seller-payability"))}` : ""}. Want the audit first? <span style="font-family:var(--font-mono);color:var(--muted);white-space:nowrap;">/api/x402-audit</span> grades any x402 endpoint's payment-security posture from the outside, without paying it${price("x402-audit") ? ` (${esc(price("x402-audit"))} a read)` : ""}. Run it on yourself before you list.</p>
     </div>
   </div>
 </section>
@@ -278,12 +296,12 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
 <section style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ POST /api/route</div>
   <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">How buyers reach you.</h2>
-  <div class="ml-meta" style="margin:10px 0 14px;"><span>match score → judged fit → price</span></div>
-  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 28px;">Four surfaces, and the router is the one that matters. A buyer describes a task, the router resolves it to a tool, and it does not care whose tool it is. New sellers get the benefit of the doubt on health rather than being buried until they have a track record.</p>
+  <div class="ml-meta" style="margin:10px 0 14px;">${ROUTE_ORDER.map((o) => `<span>${esc(o.short)}</span>`).join("")}<span>then judged fit</span></div>
+  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 28px;">Four places buyers find you. In the router, a buyer describes a task and gets a ranked list of matching tools from this catalog and the open index; a new seller with no probe history starts at full crawl health in that ranking. Being paid by the router is a separate gate: ${esc(routingProofSentence())}</p>
   <div class="sl-scroll" style="border:1px solid var(--hairline);background:var(--card);">
     <table style="font-size:var(--fs-md);">
       <tbody>${surfacesHtml}
-        <tr style="background:var(--footer-bg);"><th scope="row" style="text-align:left;font-weight:400;padding:16px 18px;color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-xs);">+ the rest</th><td style="padding:16px 18px;color:var(--muted);font-size:var(--fs-md);line-height:1.5;">Ranked by distinct buyers, sales, revenue or buyer-diversity - plus each tool's trend against the previous window, over any 1-90 day span.</td><td style="padding:16px 18px;text-align:right;"><a href="/tools/bestsellers" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;white-space:nowrap;">$0.005 →</a></td></tr>
+        <tr style="background:var(--footer-bg);"><th scope="row" style="text-align:left;font-weight:400;padding:16px 18px;color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-xs);">+ the rest</th><td style="padding:16px 18px;color:var(--muted);font-size:var(--fs-md);line-height:1.5;">Ranked by distinct buyers, sales, revenue or buyer-diversity - plus each tool's trend against the previous window, over any 1-90 day span.</td><td style="padding:16px 18px;text-align:right;"><a href="/tools/bestsellers" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;white-space:nowrap;">${esc(price("bestsellers") || "bestsellers")} →</a></td></tr>
       </tbody>
     </table>
   </div>
@@ -292,11 +310,11 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
 <section style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /.well-known/x402</div>
   <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--ink);">Get paid on the chains you accept.</h2>
-  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 28px;">Advertise every rail you support: each one is another set of buyers who can pay you directly. ${esc(ROUTER_CHAIN_SENTENCE)} Gas is sponsored by the facilitator on EVM chains, so neither side needs the native token.</p>
+  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 28px;">Advertise every rail you support: each one is another set of buyers who can pay you directly. ${esc(ROUTER_CHAIN_SENTENCE)} With the x402 exact scheme on EVM chains, the facilitator submits the transfer and pays its gas, so neither side needs the native token.</p>
   <div style="border:1px solid var(--hairline);background:var(--card);padding:26px;">
     <div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin:0 0 18px;"><span>x402 settlement rails</span><span>each opens that chain's market</span></div>
     <div style="display:flex;flex-wrap:wrap;align-items:center;gap:18px 26px;">${railsHtml}</div>
-    <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:20px;padding-top:16px;border-top:1px dashed var(--hairline);">gas sponsored by the facilitator on EVM chains - neither side needs the native token</div>
+    <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:20px;padding-top:16px;border-top:1px dashed var(--hairline);">x402 exact on EVM chains: the facilitator pays gas, neither side needs the native token</div>
   </div>
 </section>
 
@@ -304,16 +322,16 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
   <div class="sl-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);">
     <div style="padding:30px;border-right:1px solid var(--hairline);background:var(--footer-bg);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">HOW WE MAKE MONEY</div>
-      <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Buyer side, and only there</h2>
-      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 14px;">A buyer who discovers you and pays you directly costs you nothing and earns us nothing. That is most traffic, and it is the point.</p>
-      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 14px;">We earn when the <strong style="color:var(--ink);">router</strong> buys from you and resells the result to a buyer: the buyer pays us one flat price for the convenience of not integrating you, and we pay you your full advertised price. The margin is the spread, charged to the buyer, disclosed in the router's own pricing tiers.</p>
+      <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Never from your sales</h2>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 14px;">A buyer who discovers you and pays you directly costs you nothing and earns us nothing. We earn from buyers of our own 500+ tools, which sit in the same index as yours, and of the router.</p>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 14px;">We earn when the <strong style="color:var(--ink);">router</strong> buys from you and resells the result to a buyer: the buyer pays us one flat price for the convenience of not integrating you, and we pay you your full advertised price. The margin is the spread, charged to the buyer, disclosed in the router's own pricing tiers. The seller tools on this page (bestsellers, demand radar, the payability check and the audit) are optional paid reads.</p>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">We would rather write that down than let you find it out. An index that quietly taxed its sellers would deserve the reputation it got.</p>
     </div>
     <div style="padding:30px;background:var(--footer-bg);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">WHAT WE WON'T DO</div>
       <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 18px;color:var(--ink);">The commitments</h2>
       <table style="font-size:var(--fs-md);border:1px solid var(--hairline);"><tbody>${commitmentsHtml}</tbody></table>
-      <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:14px 0 0;">verify in <a href="${esc(REPO)}/blob/main/src/x402-index.js" rel="noopener" style="color:var(--muted);">src/x402-index.js →</a></p>
+      <p class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:14px 0 0;"><span>ranking: <a href="${esc(REPO)}/blob/main/src/route-order.js" rel="noopener" style="color:var(--muted);">src/route-order.js →</a></span><span>self-exclusion: <a href="${esc(REPO)}/blob/main/src/ledger-leaderboard.js" rel="noopener" style="color:var(--muted);">src/ledger-leaderboard.js →</a></span></p>
     </div>
   </div>
 </section>
@@ -327,7 +345,7 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
   <div style="background:var(--panel);border:1px solid var(--hairline);padding:52px 44px;position:relative;overflow:hidden;">
     <div style="position:relative;">
       <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">One curl and you're listed.</h2>
-      <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 28px;max-width:64ch;">No account, no review, nothing deducted. If the crawler can reach your 402, you are in the index on the next pass.</p>
+      <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 28px;max-width:64ch;">No account, no review, nothing deducted. Registering reads your origin at once: if the crawler can reach your 402, you are in the index as soon as that read completes.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
         <a class="btn btn-primary on-panel" href="#register">Register your origin →</a>
         <a class="btn btn-secondary on-panel" href="/tollbooth">Tollbooth a site</a>
