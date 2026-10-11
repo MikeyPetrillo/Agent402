@@ -51,6 +51,16 @@ if (process.argv[2] === "child") {
       return orig(text, values, cb);
     };
   }
+  if (process.env.XC_SLOW_REPLAY) {
+    // The boot replay of the journal is slow to land: B's first poll reads the stale claim before it does.
+    const pool = await sdb.stateDb();
+    const orig = pool.query.bind(pool);
+    pool.query = async (text, values, cb) => {
+      const sql = typeof text === "string" ? text : text?.text || "";
+      if (/'refundId' IS NULL/.test(sql)) await new Promise((r) => setTimeout(r, 400));
+      return orig(text, values, cb);
+    };
+  }
   let gens = 0; const refunds = [];
   const hc = createHumanCheckout({ stripe: stripeOf(refunds), baseUrl: "https://example.test", storeDir: process.env.XC_SAME_DIR || mkdtempSync(join(tmpdir(), "hc-xc-B-")), log: () => {}, generate: async () => { gens++; return { report: "# B" }; } });
   await hc.ready();
@@ -169,6 +179,14 @@ try {
     await ageClaim(id, { claimMs: 11 * 60_000, beatMs: 11 * 60_000, takeovers: 1 });
     const b = runB(id, { XC_SAME_DIR: A.dir });
     ok(b.gens === 0 && b.refunds === 0 && b.status === "done", `restart on the same disk: the journal lands before any takeover (B generations ${b.gens}, refunds ${b.refunds}, answers ${b.status})`);
+    relay.heal();
+  }
+  {
+    const id = `cs_xs_${randomBytes(3).toString("hex")}`;
+    await generateThenLoseDb(A, id);
+    await ageClaim(id, { claimMs: 11 * 60_000, beatMs: 11 * 60_000, takeovers: 0 });
+    const b = runB(id, { XC_SAME_DIR: A.dir, XC_SLOW_REPLAY: "1" });
+    ok(b.gens === 0 && b.refunds === 0 && b.status === "done", `restart on the same disk, slow boot replay: the poll waits for the journal before a takeover (B generations ${b.gens}, refunds ${b.refunds}, answers ${b.status})`);
     relay.heal();
   }
 } finally {

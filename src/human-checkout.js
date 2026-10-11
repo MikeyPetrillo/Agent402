@@ -509,10 +509,14 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       return false;
     }
   }
-  let replayingFinals = false;
-  async function replayFinals() {
-    if (!finalsDeadLetter || replayingFinals || !finalsDeadLetter.size()) return 0;
-    replayingFinals = true;
+  // One replay at a time; a caller arriving during one waits for it.
+  let replayingFinals = null;
+  function replayFinals() {
+    if (!finalsDeadLetter || !finalsDeadLetter.size()) return Promise.resolve(0);
+    if (!replayingFinals) replayingFinals = replayFinalsOnce().finally(() => { replayingFinals = null; });
+    return replayingFinals;
+  }
+  async function replayFinalsOnce() {
     let landed = 0;
     try {
       await readyP();
@@ -534,7 +538,6 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
         landed++;
       }
     } catch { /* the database is still away: the next tick retries */ }
-    finally { replayingFinals = false; }
     if (landed) log(`[human-checkout] landed ${landed} record(s) kept on local disk`);
     return landed;
   }
