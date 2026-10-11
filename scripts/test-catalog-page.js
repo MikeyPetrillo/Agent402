@@ -80,5 +80,17 @@ ok(html.includes('"@type":"BreadcrumbList"'), "BreadcrumbList JSON-LD present");
 // --- copy hygiene -----------------------------------------------------------
 ok(!html.includes("—"), "no em dashes anywhere in the page copy");
 
+
+// --- claims read from their sources -----------------------------------------
+{
+  const { powCostPhrase } = await import("../src/pow.js");
+  const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+  ok(text.includes(powCostPhrase()) && !/85,000|a tenth of a second/.test(text), "the free-tier cost is the shared proof-of-work phrase, not a typed hash count");
+  ok(/\$ ?0\.01\s*floor price/i.test(text) && !/\$ ?0\.001\s*floor price/i.test(text), "the floor price is the catalog's cheapest price");
+  ok(!/Around \d/.test(text), "an exact derived count is not hedged with 'Around'");
+  ok(!/connector picks the tool, solves the proof-of-work or signs the payment/.test(text) && /agent402-mcp with a wallet key/.test(text), "the hosted connector is not said to sign payments; the wallet path is named");
+  ok(!/curl -i https:\/\/agent402\.tools\/api\/search \\\s+-d/.test(html), "the 402 snippet calls the search route with GET, its catalog method");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
