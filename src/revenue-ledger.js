@@ -1480,7 +1480,11 @@ export function ledgerBuyerConcentration(wallets, { events } = {}) {
     counts.set(payer, (counts.get(payer) || 0) + 1);
     payments++;
   }
-  if (!payments) return { buyers: 0, payments: 0, topSharePct: null, top5SharePct: null, ...BUYER_SCOPE({ since: start }) };
+  return concentrationOf(counts, payments, start);
+}
+function concentrationOf(counts, payments, since, until = null) {
+  const window = until ? { until } : {};
+  if (!payments) return { buyers: 0, payments: 0, topSharePct: null, top5SharePct: null, ...window, ...BUYER_SCOPE({ since }) };
   const sorted = [...counts.values()].sort((a, b) => b - a);
   const pct = (n) => Math.round((n / payments) * 1000) / 10;
   return {
@@ -1488,10 +1492,41 @@ export function ledgerBuyerConcentration(wallets, { events } = {}) {
     payments,
     topSharePct: pct(sorted[0]),
     top5SharePct: pct(sorted.slice(0, 5).reduce((a, b) => a + b, 0)),
+    ...window,
     // The window and the exclusions, beside the number rather than in a
     // comment - see BUYER_SCOPE.
-    ...BUYER_SCOPE({ since: start }),
+    ...BUYER_SCOPE({ since }),
   };
+}
+
+/** Per-day payment counts per attributed payer, from one read of the
+ *  payment history: Map(day -> Map(payer -> payments)). Kept beside the
+ *  served series so a date-ranged concentration reads it instead of the
+ *  ledger. Unattributed payments are left out, as concentration leaves them. */
+export function buyerDayCounts(events) {
+  const out = new Map();
+  for (const { day, payer } of events || []) {
+    if (!payer) continue;
+    let m = out.get(day);
+    if (!m) { m = new Map(); out.set(day, m); }
+    m.set(payer, (m.get(payer) || 0) + 1);
+  }
+  return out;
+}
+
+/** Buyer concentration over [from, to] (UTC days, inclusive), never before
+ *  the chart epoch: the same figure ledgerBuyerConcentration serves, over a
+ *  chosen window. `since` and `until` say which window it is. */
+export function ledgerBuyerConcentrationIn(dayCounts, { from, to }) {
+  const start = process.env.REVENUE_DAILY_START || "2026-06-15";
+  const since = from && from > start ? from : start;
+  const counts = new Map();
+  let payments = 0;
+  for (const [day, m] of dayCounts || []) {
+    if (day < since || (to && day > to)) continue;
+    for (const [payer, n] of m) { counts.set(payer, (counts.get(payer) || 0) + n); payments += n; }
+  }
+  return concentrationOf(counts, payments, since, to || null);
 }
 
 /**

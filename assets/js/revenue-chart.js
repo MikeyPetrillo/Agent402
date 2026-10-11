@@ -13,7 +13,16 @@
       if(state.metric!=="buyers")return CHAIN_ORDER;
       return state.mode==="cum"?["cumbuyers"]:["newbuyers","retbuyers"];
     }
-    var state={mode:"cum",metric:"usd",scope:"ext",wire:"all",traffic:"paid",settle:"all",rows:[],free:[],freeSince:null,tempo:[],tempoSince:null,buyers:[],buyersWeekly:[],buyersMonthly:[],conc:null,ret:null};
+    var state={mode:"cum",metric:"usd",scope:"ext",wire:"all",traffic:"paid",settle:"all",rows:[],free:[],freeSince:null,tempo:[],tempoSince:null,buyers:[],buyersWeekly:[],buyersMonthly:[],buyersAtStart:0,conc:null,ret:null,win:null};
+    // The date window the server rendered (UTC days, inclusive). Absent, the
+    // chart draws every day the series holds, as it did before ranges.
+    (function(){var ds=document.getElementById("rvz").dataset;
+      if(ds.from&&ds.to)state.win={from:ds.from,to:ds.to,preset:ds.preset||"",first:ds.first||"",today:ds.today||ds.to}})();
+    var DAY=86400000;
+    function addDays(day,n){return new Date(Date.parse(day+"T00:00:00Z")+n*DAY).toISOString().slice(0,10)}
+    function spanDays(a,b){return Math.round((Date.parse(b+"T00:00:00Z")-Date.parse(a+"T00:00:00Z"))/DAY)+1}
+    function monthEnd(k){var d=new Date(k+"T00:00:00Z");return new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,0)).toISOString().slice(0,10)}
+    function inWin(day){return !state.win||(day>=state.win.from&&day<=state.win.to)}
     // Monday (UTC) of the ISO week holding a YYYY-MM-DD day. Weekly bars are
     // keyed on it; the label reads "week of <Monday>".
     function weekOf(day){var d=new Date(day+"T00:00:00Z");d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7));return d.toISOString().slice(0,10)}
@@ -50,17 +59,28 @@
         // and a buyer paying Monday and Wednesday is one buyer, not two.
         if(state.mode==="weekly"){
           return (state.buyersWeekly||[]).map(function(r){
-            return {day:r.week,week:true,partial:!!r.partial,slots:{newbuyers:r.newBuyers,retbuyers:r.returningBuyers}}})}
+            return {day:r.week,week:true,partial:!!r.partial,whole:!!r.extendsPastWindow,slots:{newbuyers:r.newBuyers,retbuyers:r.returningBuyers}}})}
         // Monthly buyers: the server's monthly union, for the same reason. A
         // buyer paying on the 3rd and the 20th is ONE monthly buyer; folding
         // the daily or weekly rows here would report two.
         if(state.mode==="monthly"){
           return (state.buyersMonthly||[]).map(function(r){
-            return {day:r.month,month:true,partial:!!r.partial,slots:{newbuyers:r.newBuyers,retbuyers:r.returningBuyers}}})}
+            return {day:r.month,month:true,partial:!!r.partial,whole:!!r.extendsPastWindow,slots:{newbuyers:r.newBuyers,retbuyers:r.returningBuyers}}})}
         // Cumulative uses the server's running UNION, never an accumulation of
         // the daily counts: summing distinct counts double counts every
         // returning buyer and would draw a rising line over a flat reality.
-        return (state.buyers||[]).map(function(r){
+        var brows=state.buyers||[];
+        if(state.win){
+          // Every day of the window; a day with no payment carries the
+          // all-time union forward (it cannot shrink) and draws no new or
+          // returning buyers.
+          var byD={};brows.forEach(function(r){byD[r.day]=r});
+          var carry=state.buyersAtStart||0;brows=[];
+          for(var bd=state.win.from;bd<=state.win.to;bd=addDays(bd,1)){var br=byD[bd];
+            if(br)carry=br.cumulative;
+            brows.push(br||{day:bd,newBuyers:0,returningBuyers:0,cumulative:carry})}
+        }
+        return brows.map(function(r){
           return state.mode==="cum"
             ? {day:r.day,slots:{cumbuyers:r.cumulative}}
             : {day:r.day,slots:{newbuyers:r.newBuyers,retbuyers:r.returningBuyers}};
@@ -91,7 +111,10 @@
       // this is defence in depth for any future caller that sets state directly.
       if(state.traffic!=="paid"&&state.metric==="tx"&&state.wire==="all"&&state.scope!=="int"){
         state.free.forEach(function(r){var d=dayOf(r.day);d.slots.free=(d.slots.free||0)+(r.pow||0)})}
-      var list=Object.keys(days).sort().map(function(k){return days[k]});
+      // A window fills every day it spans, so the axis is the range itself and
+      // a quiet day reads as a zero bar rather than vanishing from the axis.
+      if(state.win){for(var dd=state.win.from;dd<=state.win.to;dd=addDays(dd,1))dayOf(dd)}
+      var list=Object.keys(days).sort().filter(inWin).map(function(k){return days[k]});
       // Weekly: dollars and transaction counts are additive, so a week is the
       // plain sum of its days, per lane and per folded "Other" chain. (Buyers
       // are not additive and never reach this branch - see above.)
@@ -105,6 +128,10 @@
         for(var s in d.slots)m.slots[s]=(m.slots[s]||0)+d.slots[s];
         if(d.oth)for(var c in d.oth)m.oth[c]=(m.oth[c]||0)+d.oth[c]});
         list=Object.keys(mo).sort().map(function(k){return mo[k]})}
+      // A week or month cut by the window's edge sums only its days in range.
+      if(state.win&&(state.mode==="weekly"||state.mode==="monthly"))list.forEach(function(b){
+        var end=b.week?addDays(b.day,6):monthEnd(b.day);
+        if(b.day<state.win.from||end>state.win.to)b.clipped=true});
       if(state.mode==="cum"){var acc={},accO={};list.forEach(function(d){var O=ORDERS();for(var k=0;k<O.length;k++){var s=O[k];
         acc[s]=(acc[s]||0)+(d.slots[s]||0);d.slots[s]=acc[s]}
         if(d.oth){for(var c in d.oth)accO[c]=(accO[c]||0)+d.oth[c]}
@@ -126,8 +153,10 @@
         out.push('<line x1="'+L+'" y1="'+gy+'" x2="'+(W-R)+'" y2="'+gy+'" stroke="var(--dash)" stroke-width="1"/>');
         out.push('<text x="'+(L-6)+'" y="'+(gy+4)+'" text-anchor="end" font-size="10" fill="var(--faint)" font-family="var(--font-mono)">'+fmt(gv)+"</text>")}
       var step=Math.ceil(n/8);
+      // Month-day labels, unless the shown days cross a year.
+      var yrs=data[0].day.slice(0,4)!==data[n-1].day.slice(0,4);
       data.forEach(function(d,i){
-        if(i%step===0)out.push('<text x="'+(x(i)+bw/2)+'" y="'+(H-8)+'" text-anchor="middle" font-size="10" fill="var(--faint)" font-family="var(--font-mono)">'+d.day.slice(5)+"</text>");
+        if(i%step===0)out.push('<text x="'+(x(i)+bw/2)+'" y="'+(H-8)+'" text-anchor="middle" font-size="10" fill="var(--faint)" font-family="var(--font-mono)">'+(yrs?d.day:d.day.slice(5))+"</text>");
         var y0=T+ph;
         for(var k=0;k<ORD.length;k++){var s=ORD[k];var v=d.slots[s]||0;if(v<=0)continue;var h=(v/max)*ph;y0-=h;
           if(state.mode==="cum"){out.push('<rect x="'+x(i)+'" y="'+y0+'" width="'+bw+'" height="'+Math.max(h,0.5)+'" fill="'+css(s)+'" opacity="0.9"/>')}
@@ -140,7 +169,8 @@
           rows+='<div><i style="display:inline-block;width:8px;height:8px;background:'+css(s)+';margin-right:5px"></i>'+NAMES[s]+" "+fmt(v)+"</div>";
           if(s===8&&d.oth){Object.keys(d.oth).sort().forEach(function(c){if(d.oth[c]>0)
             rows+='<div style="padding-left:13px;color:var(--muted)">'+chainName(c)+" "+fmt(d.oth[c])+"</div>"})}}
-        tip.innerHTML="<b>"+(d.week?"week of "+d.day+(d.partial?" (in progress)":""):d.month?d.day.slice(0,7)+(d.partial?" (in progress)":""):d.day)+"</b>"+rows+"<div style='border-top:1px dashed var(--panel-rule-2);margin-top:3px'>total "+fmt(tot)+"</div>";
+        var edge=d.clipped?" (days in range only)":d.whole?" (whole "+(d.week?"week":"month")+", past the range edge)":"";
+        tip.innerHTML="<b>"+(d.week?"week of "+d.day+(d.partial?" (in progress)":""):d.month?d.day.slice(0,7)+(d.partial?" (in progress)":""):d.day)+edge+"</b>"+rows+"<div style='border-top:1px dashed var(--panel-rule-2);margin-top:3px'>total "+fmt(tot)+"</div>";
         var wr=document.querySelector(".rvz-wrap").getBoundingClientRect();
         tip.style.display="block";tip.style.left=Math.min(ev.clientX-wr.left+14,wr.width-270)+"px";tip.style.top=(ev.clientY-wr.top+10)+"px"};
       svg.onmouseleave=function(){tip.style.display="none"};
@@ -222,7 +252,7 @@
       if(t){
         var dir=t.pct<=-5?"down":t.pct>=5?"up":"flat";
         var arrow=dir==="down"?"↓":dir==="up"?"↑":"→";
-        trendTxt=" "+arrow+" Last 14 days averaged "+t.recent.toFixed(1)+" distinct buyers/day, "+
+        trendTxt=" "+arrow+" The last 14 days shown averaged "+t.recent.toFixed(1)+" distinct buyers/day, "+
           (dir==="flat"?"about the same as":dir+" "+Math.abs(t.pct).toFixed(0)+"% from")+
           " the 14 days before that ("+t.prior.toFixed(1)+"/day).";
       }
@@ -295,11 +325,16 @@
     // never touch the settlement ledger; Tempo never touches the on-chain
     // scan). A failure in either must not blank the revenue chart, so each
     // degrades to an empty lane rather than rejecting the whole set.
-    Promise.all([
-      fetch("/api/revenue/daily").then(function(r){return r.json()}),
-      fetch("/api/calls/daily").then(function(r){return r.json()}).catch(function(){return{days:[],recordingSince:null}}),
-      fetch("/api/revenue/tempo-daily").then(function(r){return r.json()}).catch(function(){return{days:[],recordingSince:null}})
+    function qs(){return state.win?"?from="+state.win.from+"&to="+state.win.to:""}
+    var loadSeq=0;
+    function load(){var seq=++loadSeq;
+    return Promise.all([
+      fetch("/api/revenue/daily"+qs()).then(function(r){return r.json()}),
+      fetch("/api/calls/daily"+qs()).then(function(r){return r.json()}).catch(function(){return{days:[],recordingSince:null}}),
+      fetch("/api/revenue/tempo-daily"+qs()).then(function(r){return r.json()}).catch(function(){return{days:[],recordingSince:null}})
     ]).then(function(res){
+      // A slower answer for an earlier range never overwrites a newer one.
+      if(seq!==loadSeq)return;
       state.rows=res[0].days||[];
       state.free=res[1].days||[];
       state.freeSince=res[1].recordingSince||null;
@@ -310,6 +345,51 @@
       state.buyersMonthly=res[0].buyersMonthly||[];
       state.conc=res[0].concentration||null;
       state.ret=res[0].retention||null;
-      render();
-    }).catch(function(){document.querySelector(".rvz-wrap").innerHTML='<div class="rvz-empty">series unavailable</div>'});
+      state.buyersAtStart=res[0].buyersCumulativeAtStart||0;
+      if(res[0].totals)showTotals(res[0].totals);
+      render();buyersNote();
+    }).catch(function(){if(seq!==loadSeq)return;document.querySelector(".rvz-wrap").innerHTML='<div class="rvz-empty">series unavailable</div>'});
+    }
+    // Range control: preset chips are links and the custom form is a GET form,
+    // so both work with no script. Here they switch the window in place and
+    // keep the URL in step, so the view can be shared and reloaded.
+    function num(n){return Number(n||0).toLocaleString("en-US")}
+    function plural(n,w){return w+(n===1?"":"s")}
+    function showTotals(t){var el=document.getElementById("rvzTotals");if(!el)return;
+      el.innerHTML="In this range: <strong>"+num(t.externalPayments)+"</strong> external "+plural(t.externalPayments,"payment")+
+        " \u00b7 <strong>$"+Number(t.externalUsd||0).toFixed(2)+"</strong> revenue (x402 rails + Tempo MPP) \u00b7 <strong>"+
+        num(t.settlements)+"</strong> "+plural(t.settlements,"settlement")+", ours included \u00b7 <strong>"+num(t.buyers)+"</strong> distinct "+plural(t.buyers,"buyer")+"."}
+    var PRESETS={"7d":7,"30d":30,"90d":90,"1y":365,"all":0};
+    function presetWin(p){var w=state.win,to=w.today,from=PRESETS[p]?addDays(to,-(PRESETS[p]-1)):(w.first||to);
+      if(w.first&&from<w.first)from=w.first;return {from:from,to:to,preset:p,first:w.first,today:w.today}}
+    function customWin(from,to){var w=state.win;
+      if(w.first&&from<w.first&&w.first<=to)from=w.first;if(to>w.today)to=w.today;
+      return {from:from,to:to,preset:"",first:w.first,today:w.today}}
+    function urlOf(w){return "/revenue"+(w.preset?"?range="+w.preset:"?from="+w.from+"&to="+w.to)}
+    function showWin(){var w=state.win;
+      [].slice.call(document.querySelectorAll(".rvr-chip")).forEach(function(a){
+        if(a.dataset.range===w.preset)a.setAttribute("aria-current","true");else a.removeAttribute("aria-current")});
+      var f=document.getElementById("rvzRangeForm");if(f){f.elements.from.value=w.from;f.elements.to.value=w.to}
+      var n=spanDays(w.from,w.to),lab=document.getElementById("rvzWindowText");
+      if(lab)lab.textContent=w.from+" to "+w.to+" ("+n+" day"+(n===1?"":"s")+", UTC)";
+      var raw=document.getElementById("rvzRaw");if(raw)raw.setAttribute("href","/api/revenue/daily"+qs());
+      var note=document.getElementById("rvzRangeNotice");if(note)note.style.display="none"}
+    function go(w,push){state.win=w;showWin();
+      if(push&&window.history&&history.pushState)history.pushState({rvzWin:w},"",urlOf(w)+"#rvz");
+      load()}
+    if(state.win){
+      [].slice.call(document.querySelectorAll(".rvr-chip")).forEach(function(a){
+        a.addEventListener("click",function(ev){if(ev.metaKey||ev.ctrlKey||ev.shiftKey||ev.altKey||ev.button)return;
+          ev.preventDefault();go(presetWin(a.dataset.range),true)})});
+      var form=document.getElementById("rvzRangeForm");
+      if(form)form.addEventListener("submit",function(ev){
+        var f=form.elements.from,t=form.elements.to;
+        t.setCustomValidity(f.value&&t.value&&f.value>t.value?"The end date must be on or after the start date.":"");
+        if(!form.checkValidity()){ev.preventDefault();form.reportValidity();return}
+        ev.preventDefault();go(customWin(f.value,t.value),true)});
+      if(form)form.elements.to.addEventListener("input",function(){form.elements.to.setCustomValidity("")});
+      if(window.history&&history.replaceState)history.replaceState({rvzWin:state.win},"");
+      window.addEventListener("popstate",function(ev){var w=ev.state&&ev.state.rvzWin;if(w)go(w,false)});
+    }
+    load();
   })();

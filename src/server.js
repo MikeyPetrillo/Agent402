@@ -539,7 +539,8 @@ import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml, catalogPayableOn } from "./market-page.js";
 import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
-import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerBuyerRepeat7, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
+import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerBuyerRepeat7, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerConcentrationIn, buyerDayCounts, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
+import { parseRevenueRange, hasRangeQuery, inWindow, revenueSeriesFirstDay, rangedRevenueDaily, revenueWindowTotals, revenuePageRange, carryPartial } from "./revenue-range.js";
 import { upstreamCostsLoaded, upstreamCostsSummary, upstreamCostsGaps, upstreamCostsStatus } from "./upstream-costs.js";
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, economyHistoryFlush } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
@@ -3533,6 +3534,7 @@ app.get("/api/revenue", async (_req, res) => {
 // synchronous SQLite pass, and together they held the loop 0.6-1.2 s in one
 // turn (production stall profiler, 2026-09-25). The buyer figures share one
 // read of the payment history, passed to each as `events`.
+const REVENUE_DAY_COUNTS = Symbol("revenue-day-counts");
 async function buildRevenueDaily() {
   const turn = () => new Promise((r) => setImmediate(r));
   const w = revenueWallets();
@@ -3544,7 +3546,11 @@ async function buildRevenueDaily() {
   const concentration = ledgerBuyerConcentration(w, { events }); await turn();
   const retention = ledgerBuyerRetention(w, { events }); await turn();
   const repeat7 = ledgerBuyerRepeat7(w, { events }); await turn();
+  const dayCounts = buyerDayCounts(events);
   return {
+    // Per-day payer counts for a date-ranged concentration. A symbol key, so
+    // JSON never serializes it and the default response is unchanged.
+    [REVENUE_DAY_COUNTS]: dayCounts,
     asOf: new Date().toISOString(),
     days: daily.days,
     daysScope: daily.scope,
@@ -3568,10 +3574,27 @@ async function buildRevenueDaily() {
     repeat7,
   };
 }
+const firstDayOf = (rows) => revenueSeriesFirstDay({ days: rows });
+// The Tempo lane's body, shared by its own route and the ranged totals.
+const tempoDailyBody = () => memoSurface("revenue:tempo-daily", 60_000, () => ({
+  asOf: new Date().toISOString(),
+  recordingSince: tempoDailyRecordingSince(),
+  days: tempoDailyRevenue(),
+}));
+const rangeError = (res, error) => res.status(400).json({ error: "invalid range", detail: error, accepted: "range=7d|30d|90d|1y|all, or from=YYYY-MM-DD&to=YYYY-MM-DD (UTC days, inclusive), or days=N" });
 // Daily revenue series for the /revenue chart — external vs canary-sized
 // internal, per chain per day, straight from the settlement ledger.
-app.get("/api/revenue/daily", async (_req, res) => {
+// A range query (range, from/to or days) cuts every series to that window;
+// without one the response is the full series, unchanged.
+app.get("/api/revenue/daily", async (req, res) => {
   try {
+    if (hasRangeQuery(req.query)) {
+      const body = await memoSurfaceAsync("revenue:daily", 120_000, buildRevenueDaily);
+      const { window: w, error } = parseRevenueRange(req.query, { firstDay: revenueSeriesFirstDay(body) });
+      if (error) return rangeError(res, error);
+      const concentration = ledgerBuyerConcentrationIn(body[REVENUE_DAY_COUNTS], w);
+      return res.set("Cache-Control", "public, max-age=300").json(rangedRevenueDaily(body, w, { tempo: tempoDailyBody(), concentration }));
+    }
     // `withScope` because this is the one surface that PUBLISHES the series:
     // it drops undateable rows, internal transfers over maxCallUsd, and
     // everything before the chart epoch, and until 2026-09-22 said none of it -
@@ -3586,8 +3609,14 @@ app.get("/api/revenue/daily", async (_req, res) => {
 // Daily served-call counts by settlement method — the non-revenue companion to
 // /api/revenue/daily. Free (proof-of-work) calls never touch a chain, so they
 // are invisible to the settlement ledger; this is the only record of them.
-app.get("/api/calls/daily", (_req, res) => {
+app.get("/api/calls/daily", (req, res) => {
   try {
+    if (hasRangeQuery(req.query)) {
+      const days = getDailyCalls();
+      const { window: w, error } = parseRevenueRange(req.query, { firstDay: firstDayOf(days) });
+      if (error) return rangeError(res, error);
+      return res.set("Cache-Control", "public, max-age=300").json({ asOf: new Date().toISOString(), window: w, recordingSince: dailyCallsRecordingSince(), days: inWindow(days, w) });
+    }
     res.set("Cache-Control", "public, max-age=300").json({
       asOf: new Date().toISOString(),
       // Per-day recording began when the daily_calls table shipped. Days before
@@ -3620,13 +3649,15 @@ app.get("/api/revenue/decide", (_req, res) => {
     res.status(500).json({ error: "decide revenue failed", detail: String(e?.message || e).slice(0, 120) });
   }
 });
-app.get("/api/revenue/tempo-daily", (_req, res) => {
+app.get("/api/revenue/tempo-daily", (req, res) => {
   try {
-    res.set("Cache-Control", "public, max-age=60").json(memoSurface("revenue:tempo-daily", 60_000, () => ({
-      asOf: new Date().toISOString(),
-      recordingSince: tempoDailyRecordingSince(),
-      days: tempoDailyRevenue(),
-    })));
+    if (hasRangeQuery(req.query)) {
+      const body = tempoDailyBody();
+      const { window: w, error } = parseRevenueRange(req.query, { firstDay: firstDayOf(body.days) });
+      if (error) return rangeError(res, error);
+      return res.set("Cache-Control", "public, max-age=60").json(carryPartial(body, { asOf: body.asOf, window: w, recordingSince: body.recordingSince, days: inWindow(body.days, w) }));
+    }
+    res.set("Cache-Control", "public, max-age=60").json(tempoDailyBody());
   } catch (e) {
     res.status(500).json({ error: "tempo daily revenue failed", detail: String(e?.message || e).slice(0, 120) });
   }
@@ -3647,7 +3678,7 @@ app.get("/api/revenue/mpp", (req, res) => {
     res.status(500).json({ error: "mpp settlements failed", detail: String(e?.message || e).slice(0, 120) });
   }
 });
-app.get("/revenue", async (_req, res) => {
+app.get("/revenue", async (req, res) => {
   try {
     // Recent rows are re-read from the ledger per request (withFreshRecent);
     // only the balances ride the hourly background snapshot.
@@ -3658,7 +3689,19 @@ app.get("/revenue", async (_req, res) => {
     const ledger = memoSurface("revenue:page-ledger", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }), card: cardSales({ days: 30 }), decide: decideSales({ days: 30 }), agents: ledgerBuyerConcentration(revenueWallets()) }));
     // no-cache: the body changes on every request, so a browser-cached
     // copy showed the previous reading until a second refresh.
-    res.set("Cache-Control", "no-cache").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: standingFigures() }));
+    // The charts' date range, read from the URL so a view can be shared. The
+    // page renders the chosen window on first paint; the chart script reads
+    // it from the page. A range the parser refuses falls back to the default
+    // and says so, rather than failing the page.
+    let range = null;
+    try {
+      const daily = await memoSurfaceAsync("revenue:daily", 120_000, buildRevenueDaily);
+      const tempo = tempoDailyBody();
+      range = revenuePageRange(req.query, { firstDay: revenueSeriesFirstDay(daily), totalsFor: (w) => revenueWindowTotals(daily, tempo, w, ledgerBuyerConcentrationIn(daily[REVENUE_DAY_COUNTS], w)) });
+    } catch (e) {
+      console.warn(`[revenue] range figures unavailable: ${String(e?.message || e).slice(0, 120)}`);
+    }
+    res.set("Cache-Control", "no-cache").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: standingFigures(), range }));
   } catch (e) {
     if (e?.snapshotWarming) {
       res.status(200).type("html").send('<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body style="font-family:system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 24px;color:#111315"><h2 style="font-weight:700">Warming up…</h2><p style="color:#626970">The live on-chain transaction view is loading for the first time since a deploy. It refreshes here automatically in a few seconds.</p><p><a href="/" style="color:#0F5E43">Home</a></p></body>'); // design-tokens: literal (standalone fallback page, no stylesheet)

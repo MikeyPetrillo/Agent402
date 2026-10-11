@@ -16,6 +16,7 @@ import { standingBand } from "./standing.js";
 import { join } from "node:path";
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 import { RAILS, RAILS_AMP } from "./rails.js";
+import { REVENUE_RANGE_PRESETS, REVENUE_RANGE_PRESET_LABELS, windowLabel } from "./revenue-range.js";
 // Pure, main-guarded helpers shared with the daily scanners — one
 // classification rule everywhere: a transfer is external revenue only if the
 // payer isn't one of OUR wallets (canary/test burners) AND the amount is a
@@ -1664,7 +1665,41 @@ export function decideSection(d) {
 // Exported for scripts/test-revenue-chart.js — the free-tier lane has
 // invariants (never under Revenue $, never a chain colour) worth testing
 // without standing up a full revenue snapshot.
-export function revenueChartSection() {
+// The date-range control and the window's totals, rendered on the server so
+// the first paint already shows the chosen window. Presets and the custom
+// form are plain GET links and a GET form (they work with no script); the
+// chart script takes them over to switch without a reload. `range` is
+// { window, firstDay, today, notice, totals } from server.js; without it the
+// chart renders every day the series holds, as it always has.
+export function revenueRangeControl(range) {
+  const w = range?.window;
+  if (!w) return "";
+  const chips = Object.keys(REVENUE_RANGE_PRESETS).map((k) => {
+    const on = w.preset === k;
+    return `<a class="btn btn-secondary btn-sm rvr-chip" href="/revenue?range=${esc(k)}#rvz" data-range="${esc(k)}"${on ? ' aria-current="true"' : ""}>${esc(REVENUE_RANGE_PRESET_LABELS[k])}</a>`;
+  }).join("");
+  const t = range.totals;
+  const money = (n) => `$${Number(n || 0).toFixed(2)}`;
+  const totals = t ? `<p class="rvr-totals" id="rvzTotals" aria-live="polite">In this range: <strong>${Number(t.externalPayments).toLocaleString("en-US")}</strong> external payment${t.externalPayments === 1 ? "" : "s"} · <strong>${money(t.externalUsd)}</strong> revenue (x402 rails + Tempo MPP) · <strong>${Number(t.settlements).toLocaleString("en-US")}</strong> settlement${t.settlements === 1 ? "" : "s"}, ours included · <strong>${Number(t.buyers).toLocaleString("en-US")}</strong> distinct buyer${t.buyers === 1 ? "" : "s"}.</p>` : "";
+  const min = range.firstDay ? ` min="${esc(range.firstDay)}"` : "";
+  const max = range.today ? ` max="${esc(range.today)}"` : "";
+  return `
+    <div class="rvr" id="rvzRange">
+      <div class="rvr-chips" role="group" aria-label="Date range">${chips}</div>
+      <form class="rvr-custom" id="rvzRangeForm" method="get" action="/revenue#rvz">
+        <label>From <input type="date" name="from" value="${esc(w.from)}"${min}${max} required></label>
+        <label>To <input type="date" name="to" value="${esc(w.to)}"${min}${max} required></label>
+        <button class="btn btn-secondary btn-sm" type="submit">Apply</button>
+      </form>
+    </div>
+    ${range.notice ? `<p class="rvr-note" id="rvzRangeNotice">That range could not be read (${esc(range.notice)}), so this shows the default.</p>` : ""}
+    <p class="rvr-window" id="rvzWindow">Showing <strong id="rvzWindowText">${esc(windowLabel(w))}</strong>. Cumulative lines start at zero on the first day shown; distinct buyers to date are all-time. The headline figures above and the tables below are all-time.</p>
+    ${totals}`;
+}
+
+export function revenueChartSection(range = null) {
+  const w = range?.window || null;
+  const rangeAttrs = w ? ` data-from="${esc(w.from)}" data-to="${esc(w.to)}" data-preset="${esc(w.preset || "")}" data-first="${esc(range.firstDay || "")}" data-today="${esc(range.today || "")}"` : "";
   return `
   <style>
   /* design-tokens: off-start (categorical chart series, a data-viz palette pinned by test-theme.js) */
@@ -1687,13 +1722,26 @@ export function revenueChartSection() {
   .rvz details summary{cursor:pointer;font-family:var(--font-mono);color:var(--muted)}
   .rvz table{border-collapse:collapse;font-family:var(--font-mono);font-size:var(--fs-xs);margin-top:8px;width:100%}
   .rvz th,.rvz td{border:1px solid var(--dash);padding:3px 8px;text-align:right}
-  .rvz th:first-child,.rvz td:first-child{text-align:left}
+  .rvz th:first-child,.rvz td:first-child{text-align:left}${w ? `
+  .rvr{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin:12px 0 10px}
+  .rvr-chips{display:flex;gap:8px;flex-wrap:wrap}
+  .rvr-chip{padding:6px 12px}
+  .rvr-chip[aria-current="true"]{border-color:var(--ink);box-shadow:inset 0 -2px 0 var(--accent);font-weight:600}
+  .rvr-chip:focus-visible,.rvr-custom input:focus-visible,.rvr-custom button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .rvr-custom{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0}
+  .rvr-custom label{display:inline-flex;gap:6px;align-items:center;font-size:var(--fs-sm);color:var(--muted)}
+  .rvr-custom input{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);background:var(--card);border:1px solid var(--dash);border-radius:var(--radius);padding:5px 8px;min-width:0}
+  .rvr-custom button{padding:6px 12px}
+  .rvr-window,.rvr-totals,.rvr-note{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 8px}
+  .rvr-totals{color:var(--ink);font-variant-numeric:tabular-nums}
+  .rvr-note{color:var(--warn)}
+  @media (max-width:520px){.rvr-custom label{flex:1 1 130px}.rvr-custom input{flex:1 1 auto;width:100%}}` : ""}
   </style>
-  <div class="rvz" id="rvz">
+  <div class="rvz" id="rvz"${rangeAttrs}>
     <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;">
       <span style="font-weight:800;font-size:var(--fs-lg);">Over time <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);">· by chain · external only unless you widen it</span></span>
-      <a href="/api/revenue/daily" style="font-family:var(--font-mono);font-size:var(--fs-xs);">raw data →</a>
-    </div>
+      <a id="rvzRaw" href="/api/revenue/daily${w ? `?from=${esc(w.from)}&amp;to=${esc(w.to)}` : ""}" style="font-family:var(--font-mono);font-size:var(--fs-xs);">raw data →</a>
+    </div>${revenueRangeControl(range)}
     <div class="rvz-controls" style="margin-top:12px">
       <span class="rvz-seg" id="rvzMode"><button data-v="cum" class="on">Cumulative</button><button data-v="daily">Daily</button><button data-v="weekly">Weekly</button><button data-v="monthly">Monthly</button></span>
       <span class="rvz-seg" id="rvzMetric"><button data-v="usd" class="on">Revenue $</button><button data-v="tx">Transactions</button><button data-v="buyers">Buyers</button></span>
@@ -1818,7 +1866,7 @@ export function revenuePage(baseUrl, snap) {
       ${big(throughput, "settled transactions, all-time", `x402 + MPP, ours included${at.syncing ? " · ledger still backfilling" : ""}`)}
       ${agents ? big(agents, `distinct agent${agents === 1 ? "" : "s"} have paid us on-chain`, `unique outside wallets${snap.agents?.scope?.since ? `, since ${esc(snap.agents.scope.since)}` : ""}${snap.agents?.top5SharePct != null ? ` · top 5 = ${snap.agents.top5SharePct}% of their payments` : ""}`) : ""}
     </div>
-    <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);margin:0 0 4px;"><strong>${extCount.toLocaleString()}</strong> external payment${extCount === 1 ? "" : "s"} · <strong>$${extUsd.toFixed(2)}</strong> revenue, settled on-chain (x402 rails + Tempo MPP)${snap.card?.allTimeCount ? ` · <strong>${Number(snap.card.allTimeCount).toLocaleString()}</strong> card purchase${snap.card.allTimeCount === 1 ? "" : "s"} ($${Number(snap.card.allTimeUsd).toFixed(2)}) <span style="color:var(--muted);font-weight:400;">by card, not on-chain</span>` : ""}</p>` : "";
+    <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);margin:0 0 4px;"><strong>${extCount.toLocaleString()}</strong> external payment${extCount === 1 ? "" : "s"} · <strong>$${extUsd.toFixed(2)}</strong> revenue, settled on-chain (x402 rails + Tempo MPP), all-time${snap.card?.allTimeCount ? ` · <strong>${Number(snap.card.allTimeCount).toLocaleString()}</strong> card purchase${snap.card.allTimeCount === 1 ? "" : "s"} ($${Number(snap.card.allTimeUsd).toFixed(2)}) <span style="color:var(--muted);font-weight:400;">by card, not on-chain</span>` : ""}</p>` : "";
 
   const body = `
   <div style="max-width:1100px;margin:0 auto;padding:56px 30px;">
@@ -1834,7 +1882,7 @@ export function revenuePage(baseUrl, snap) {
     <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">balances as of ${esc(snap.asOf)}, refreshed hourly · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
     </section>
     <section>
-    ${revenueChartSection()}
+    ${revenueChartSection(snap.range)}
     </section>
     <section>
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:36px 0 6px;">

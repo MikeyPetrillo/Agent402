@@ -2399,6 +2399,8 @@ jobs:
           t node scripts/test-cert-transparency.js
           # Revenue chart free-tier lane (free calls never priced as revenue; jsdom — offline)
           t node scripts/test-revenue-chart.js
+          # Revenue date ranges (parser, ranged daily APIs with 400s, first-paint window, URL round trip; fixture ledger, port from the kernel, offline)
+          t node scripts/test-revenue-range.js
           # Prices quoted in PROSE match real prices (meta + og descriptions, which docs-truth cannot see - offline)
           t node scripts/test-price-prose.js
           # "Live 402 quote (a priceless row learns its price from the challenge; unpriceable never becomes $0; PUT/PATCH/DELETE never probed — offline)"
