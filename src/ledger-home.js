@@ -305,7 +305,7 @@ ${WHY_SECTION_CSS}
             </div>
             <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:8px;">${heroLabel}</div>
           </div>
-          <div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-faint);gap:4px 16px;"><span>+ <strong id="hm-freepow" style="color:var(--on-panel-soft);font-weight:500;">${fmtNum(viaPow)}</strong> more served free over proof-of-work</span><a href="https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns" style="color:var(--accent-lit);text-decoration:none;">verify on Basescan ↗</a></div>
+          <div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-faint);gap:4px 16px;"><a href="https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns" style="color:var(--accent-lit);text-decoration:none;">verify settlements on Basescan ↗</a><span>+ <strong id="hm-freepow" style="color:var(--on-panel-soft);font-weight:500;">${fmtNum(viaPow)}</strong> calls to the free tools (proof-of-work, no payment)</span></div>
         </div>
       </div>
     </div>
@@ -353,9 +353,9 @@ ${whySectionHtml()}
 
 <section style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div class="hm-kicker">$ GET /api/pow/challenge?slug=hash</div>
-  <h2 class="hm-h2">Or pay with CPU instead.</h2>
-  ${sectionMeta(["no wallet", "no signup", "runs in this tab"], "margin:10px 0 14px;")}
-  <p class="hm-lede ml-measure" style="margin:0 0 26px;">The pure-CPU tools are payable in compute: the server issues a signed sha256 puzzle, your machine solves it (${esc(powCostPhrase())}), and the call is served free. Press the button: your browser fetches a real challenge from the live server, solves it here, and makes a real call.</p>
+  <h2 class="hm-h2">Some tools are free.</h2>
+  ${sectionMeta(["pure-CPU tools only", "no wallet", "runs in this tab"], "margin:10px 0 14px;")}
+  <p class="hm-lede ml-measure" style="margin:0 0 26px;">The pure-CPU tools (hashing, encoding, math, conversion and the like) need no payment: the server issues a signed sha256 puzzle, your machine solves it (${esc(powCostPhrase())}), and the call is served. Every other tool is paid per call from a wallet. Press the button: your browser fetches a real challenge from the live server, solves it here, and makes a real call.</p>
   <div class="hm-2col" style="gap:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--hairline);">
     <div style="padding:26px;background:var(--card);border-right:1px solid var(--hairline);">
       <label for="hm-demo-in" style="display:block;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:10px;">Text to hash</label>
