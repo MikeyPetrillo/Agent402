@@ -124,6 +124,15 @@ for (const mode of ["http429", "rpc429", "null", "hang", "error"]) {
 
 // ---- 3. a NULL for one existing transaction falls through ------------------
 {
+  // One read, no caller retry to hide behind: a rate-limited public lane
+  // hands that same read to the keyed lane.
+  for (const mode of ["http429", "rpc429"]) {
+    reset();
+    pub.mode = mode;
+    let tx = null, err = null;
+    try { tx = await H.solanaHistoryRead("getTransaction", ["sig2", TXARGS], opts); } catch (e) { err = e; }
+    ok(!err && tx?.meta && pub.txHits === 1 && keyed.txHits === 1, `a single read rate-limited by the public lane (${mode}) is served by the keyed lane in the same call${err ? ` (threw ${err.message})` : ""}`);
+  }
   reset();
   pub.nullFor.add("sig3");
   const tx = await H.solanaHistoryRead("getTransaction", ["sig3", TXARGS], opts);
