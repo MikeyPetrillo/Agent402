@@ -104,7 +104,9 @@ function servedCallWriter({ bumpCounter, bumpTool, bumpPaidTool, bumpHeartbeatTo
         : method === "heartbeat" ? "viaHeartbeat"
         : method === "credits" ? "viaCredits"
           : method === "trial" ? "viaTrial"
-            : "viaUSDC";
+            // A FREE_MODE self-host serves with no payment gate at all.
+            : method === "free" ? "viaFreeMode"
+              : "viaUSDC";
     bumpCounter.run(counterKey);
     bumpTool.run(slug);
     if (method === "usdc") bumpPaidTool.run(slug); // USDC purchases — what people actually BUY
@@ -136,7 +138,7 @@ function servedCallWriter({ bumpCounter, bumpTool, bumpPaidTool, bumpHeartbeatTo
     // totals are written together or not at all, so they cannot drift apart.
     bumpDaily.run(
       today(),
-      method === "pow" ? "pow" : method === "heartbeat" ? "heartbeat" : method === "trial" ? "trial" : "usdc"
+      method === "pow" ? "pow" : method === "heartbeat" ? "heartbeat" : method === "trial" ? "trial" : method === "free" ? "free" : "usdc"
     );
     setMetaIfAbsent.run("firstServed", String(Date.now()));
   };
@@ -907,6 +909,12 @@ export function dbHealthy() {
   }
 }
 
+// What the recent-calls feed says a call was paid with. Every non-sale class
+// is named, so a free path is never shown as a USDC purchase.
+function paidWithLabel(method) {
+  return method === "pow" ? "proof-of-work" : method === "heartbeat" ? "heartbeat" : method === "free" ? "free (no payment gate)" : method === "trial" ? "trial" : method === "credits" ? "credits" : "usdc";
+}
+
 export function getStats({ wallet, walletName, network, toolCount, baseUrl, prices }) {
   const num = (k) => S.counter(k);
   const priceOf = (slug) => (prices && Number(prices[slug])) || 0;
@@ -940,6 +948,7 @@ export function getStats({ wallet, walletName, network, toolCount, baseUrl, pric
       viaUSDCByNetworkNote: "viaUSDC is a lifetime counter; the per-network split begins when that counter shipped, so viaUSDCAttributed + viaUSDCBeforeNetworkCounter = viaUSDC",
       viaProofOfWork: num("viaProofOfWork"),
       viaTrial: num("viaTrial"), // one-per-tool-per-IP-per-hour wallet-free trials — free, never revenue
+      viaFreeMode: num("viaFreeMode"), // served by a FREE_MODE instance (no payment gate) — never revenue
       viaHeartbeat: num("viaHeartbeat"), // internal probe traffic (PoW path, agent402-heartbeat UA)
       // Subset of viaUSDC whose credential arrived over the MPP wire
       // (Authorization: Payment, translated by src/mpp-shim.js) instead of
@@ -1019,7 +1028,7 @@ export function getStats({ wallet, walletName, network, toolCount, baseUrl, pric
       "An estimate, not a ledger: lifetime USDC-purchase counts valued at TODAY's catalog price (tools are repriced, and a retired tool's purchases value at zero). Card, prepaid-credits and Tempo sales are not in it. Use /api/revenue for settled amounts.",
     recentCalls: S.recent(RECENT_SHOW).map((r) => ({
       slug: r.slug,
-      paidWith: r.method === "pow" ? "proof-of-work" : r.method === "heartbeat" ? "heartbeat" : "usdc",
+      paidWith: paidWithLabel(r.method),
       at: new Date(r.ts).toISOString(),
     })),
     // The newest RECENT_SHOW of RECENT_KEEP retained rows - a live feed, never
@@ -1189,7 +1198,7 @@ export function getOperatorBreakdown({ prices, walletOnlySet, limit = RECENT_KEE
     tools,
     recentCalls: S.recentAll(limit).map((r) => ({
       slug: r.slug,
-      paidWith: r.method === "pow" ? "proof-of-work" : r.method === "heartbeat" ? "heartbeat" : "usdc",
+      paidWith: paidWithLabel(r.method),
       at: new Date(r.ts).toISOString(),
     })),
     chargedFailures: S.chargedFailures(limit).map((r) => ({

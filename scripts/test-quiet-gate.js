@@ -29,7 +29,9 @@ const oursFeed = (from, step, now = NOW) => Array.from({ length: FEED_ROWS }, (_
 const statsSrc = readFileSync(join(here, "..", "src", "stats.js"), "utf8");
 const shown = statsSrc.match(/const RECENT_SHOW = (\d+);/);
 ok(shown && Number(shown[1]) === FEED_ROWS, `FEED_ROWS (${FEED_ROWS}) matches RECENT_SHOW in src/stats.js (${shown?.[1]})`);
-const labelLine = statsSrc.split("\n").find((l) => /^\s*paidWith: r\.method ===/.test(l)) || "";
+// The labels live in paidWithLabel(); every recentCalls row is mapped through it.
+const labelLine = statsSrc.split("\n").find((l) => /^\s*return method === "pow" \? "proof-of-work"/.test(l)) || "";
+ok(/paidWith: paidWithLabel\(r\.method\)/.test(statsSrc), "recentCalls labels come from paidWithLabel");
 const labels = [...labelLine.matchAll(/"([a-z-]+)"/g)].map((m) => m[1]).filter((s) => !["pow"].includes(s));
 ok(labels.includes("heartbeat") && labels.includes("proof-of-work") && labels.includes("usdc"),
   `recentCalls publishes the three labels the gate knows (${labels.join(", ")})`);

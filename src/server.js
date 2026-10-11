@@ -318,6 +318,7 @@ import { learnPage, learnIndex } from "./learn.js";
 import { skillMd } from "./skill-md.js";
 import { createMcpMppLoopback } from "./mcp-mpp.js";
 import { serviceManifest, reliabilityReport } from "./discovery.js";
+import { mppMethodsSummary } from "./mpp-offers.js";
 import { meteredSkip } from "./metered-slugs.js";
 import { runSelfCheck, createSelfCheckRoute } from "./selfcheck.js";
 import { installEgressMeter, egressReport } from "./egress-meter.js";
@@ -7933,6 +7934,9 @@ app.get("/api/stats", (_req, res) => {
   const perf = getPerformance24h();
   if (perf) base.performance24h = perf;
   base.settledOnChain = settledOnChainCount();
+  // Every chain this instance takes and the MPP methods its 402 offers, not
+  // only the primary network (the same sources /api/pricing and the manifest read).
+  base.payment = { ...base.payment, networks: enabledNetworks(NETWORK), mpp: mppMethodsSummary() };
   res.json(base);
 });
 
@@ -9020,7 +9024,8 @@ app.use((req, res, next) => {
         const isHeartbeat = powAccepted && (verifyHeartbeatToken(req.header("x-heartbeat-token")) || ownTrue(req, "statusProbePow"));
         // "usdc" is the ELSE branch, so any free path that forgets to name
         // itself here is booked as a sale. A trial moves no money.
-        const method = isHeartbeat ? "heartbeat" : powAccepted ? "pow" : trialAccepted ? "trial" : req.creditsSettled ? "credits" : "usdc";
+        // FREE_MODE serves without any payment gate: booked as "free", never as a sale.
+        const method = isHeartbeat ? "heartbeat" : powAccepted ? "pow" : trialAccepted ? "trial" : req.creditsSettled ? "credits" : FREE_MODE ? "free" : "usdc";
         // Tempo settlements (src/mpp-tempo.js) never carry a PAYMENT-RESPONSE
         // header — @x402/express never runs on that path — so without this
         // flag they'd fall through networkFromPaymentResponse(null) and get
