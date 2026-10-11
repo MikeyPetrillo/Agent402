@@ -507,7 +507,7 @@ async function evmRail(name, wallet) {
     out.recentSource = viaLedger ? "ledger" : "chain-scan";
     out.externalUsd = Number(recent.filter((t) => t.external).reduce((s, t) => s + t.usd, 0).toFixed(6));
     out.windowBlocks = c.span;
-    if (missed) out.scanNote = `transfer scan partial: ${missed}/${chunks} windows unavailable from public RPCs (balance is live)`;
+    if (missed) out.scanNote = `transfer scan partial: ${missed}/${chunks} windows unavailable from public RPCs (the rail is live)`;
   } catch (e) {
     out.error = pubErr(e, 120);
   }
@@ -533,7 +533,9 @@ export function newestOwnSettle(recent) {
  * The /api/revenue body. The per-transfer `recent` rows stay server-side: each
  * names the paying wallet (`from`), and even without that field its tx hash
  * resolves to the payer on chain, so publishing them would publish who pays
- * us. What leaves is per rail: our own wallet, its balance, the counts and
+ * us. Wallet balances stay server-side too: the balance fields and the
+ * combined `totalUsd` are operator-only (operatorRevenueBody). What leaves is
+ * per rail: our own wallet address, a reachability word, the counts and
  * totals, and `lastInbound`, which is only ever one of OUR settles (see
  * newestOwnSettle). Pure: never mutates the cached snapshot.
  */
@@ -541,15 +543,62 @@ export function publicRevenueSnapshot(snap) {
   if (!snap || !Array.isArray(snap.rails)) return snap;
   const rails = snap.rails.map((r) => {
     if (!r || typeof r !== "object") return r;
-    const { recent, ...rest } = r;
+    const { recent, balance, staleBalance, balanceAsOf, ...rest } = r;
     const li = rest.lastInbound;
     if (li && li.internal !== true) delete rest.lastInbound;
-    return rest;
+    return { ...rest, status: railStatus(r), ...(balanceAsOf ? { readAsOf: balanceAsOf } : {}) };
   });
+  const { totalUsd, ...pub } = snap;
   return {
-    ...snap,
+    ...pub,
     rails,
-    note: "Balances read live from public RPCs (best-effort per rail). totalUsd is the combined wallet balance (includes our own canary/test money); windowExternalUsd counts only classified external per-call payments in the recent scan windows. Per-payment rows are not published: a transaction hash resolves to its payer on chain. lastInbound is our own newest settle on each rail (canary or volume run), never an outside buyer's.",
+    note: "Rails read from public RPCs (best-effort per rail). Wallet balances are not published; each wallet address is public and its holdings can be read on chain. windowExternalUsd counts only classified external per-call payments in the recent scan windows. Per-payment rows are not published: a transaction hash resolves to its payer on chain. lastInbound is our own newest settle on each rail (canary or volume run), never an outside buyer's.",
+  };
+}
+
+/**
+ * A rail's reachability as one word: "live" (read this refresh), "cached"
+ * (carried forward from the last good read) or "unreachable" (never read).
+ * The /revenue table and the public JSON both say it this way, so neither
+ * needs the balance it is derived from.
+ */
+export function railStatus(r) {
+  if (!r || r.balance == null) return "unreachable";
+  return r.staleBalance ? "cached" : "live";
+}
+
+/** The operator view: the full snapshot, balances and totalUsd included. */
+export function operatorRevenueBody(snap, ledger = {}) {
+  return { ...snap, ...ledger, operatorView: true };
+}
+
+/** The public view: publicRevenueSnapshot plus the ledger totals. */
+export function publicRevenueBody(snap, ledger = {}) {
+  return { ...publicRevenueSnapshot(snap), ...ledger };
+}
+
+/**
+ * The two revenue JSON handlers. `snapshot()` resolves the rails snapshot,
+ * `ledger()` the ledger totals, `authed(req)` the operator check. The public
+ * one never carries a balance; the operator one answers 404 to anyone else,
+ * like every other /__operator surface.
+ */
+export function revenueApiHandlers({ snapshot, ledger, authed }) {
+  const fail = (res, e) => res.status(500).json({ error: "revenue snapshot failed", detail: String(e?.message || e).slice(0, 120) });
+  return {
+    publicHandler: async (_req, res) => {
+      try {
+        const body = publicRevenueBody(await snapshot(), ledger());
+        res.set("Cache-Control", "public, max-age=30").json(body);
+      } catch (e) { fail(res, e); }
+    },
+    operatorHandler: async (req, res) => {
+      if (!authed(req)) return res.status(404).json({ error: "Not found" });
+      res.set("Cache-Control", "no-store");
+      try {
+        res.json(operatorRevenueBody(await snapshot(), ledger()));
+      } catch (e) { fail(res, e); }
+    },
   };
 }
 
@@ -1878,8 +1927,9 @@ export function revenuePage(baseUrl, snap) {
     // A balance present (fresh or carried forward from the last good read)
     // means the chain is live and settling; only a rail never read is
     // unreachable. Carried-forward reads say "cached" so freshness is honest.
-    const hasBalance = r.balance != null;
-    const status = !hasBalance ? `<span style="color:var(--bad);">unreachable</span>` : r.staleBalance ? `<span style="color:var(--ok);">live</span> <span style="color:var(--muted);">cached</span>` : `<span style="color:var(--ok);">live</span>`;
+    const word = railStatus(r);
+    const hasBalance = word !== "unreachable";
+    const status = word === "unreachable" ? `<span style="color:var(--bad);">unreachable</span>` : word === "cached" ? `<span style="color:var(--ok);">live</span> <span style="color:var(--muted);">cached</span>` : `<span style="color:var(--ok);">live</span>`;
     // The newest settlement on the rail, whoever paid (owner's call 2026-10-04:
     // the column shows the latest payment through the rail, not only our own
     // canary). Read from the recent rows and our own newest settle. The link is
@@ -1945,7 +1995,7 @@ export function revenuePage(baseUrl, snap) {
     ${standing}
     ${hero}
     <p style="font-size:var(--fs-xs);line-height:1.55;color:var(--muted);margin:2px 0 14px;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
-    <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">balances as of ${esc(snap.asOf)}, refreshed hourly · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
+    <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">rails read as of ${esc(snap.asOf)}, refreshed hourly · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
     </section>
     <section>
     ${revenueChartSection(snap.range)}
@@ -1960,7 +2010,7 @@ export function revenuePage(baseUrl, snap) {
       <thead><tr><th>Rail</th><th class="num">Transactions</th><th class="num">External</th><th class="num">External $</th><th>Latest settle</th><th>Status</th><th>Wallet</th></tr></thead>
       <tbody>${railsSorted.map(railRow).join("\n")}</tbody>
     </table></div>
-    ${partialNotes ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:8px 0 0;">${partialNotes} rail${partialNotes === 1 ? "" : "s"} read partially from public RPCs this refresh (balances are live; detail in <a href="/api/revenue">/api/revenue</a>).</p>` : ""}
+    ${partialNotes ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:8px 0 0;">${partialNotes} rail${partialNotes === 1 ? "" : "s"} read partially from public RPCs this refresh (the rail stays live; detail in <a href="/api/revenue">/api/revenue</a>).</p>` : ""}
     </section>
     <section>
     ${mppRailsSection(snap.mpp, { wallets: mppWallets(snap.rails) })}

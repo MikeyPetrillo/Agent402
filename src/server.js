@@ -526,7 +526,7 @@ import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, led
 import { ledgerHomePage } from "./ledger-home.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
-import { revenueSnapshot, withFreshRecent, publicRevenueSnapshot, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
+import { revenueSnapshot, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml, catalogPayableOn } from "./market-page.js";
@@ -3479,17 +3479,17 @@ if (process.env.X402_SYNC_ON_START !== "false" && GATEWAY_TOOLS_ENABLED.some((t)
   setTimeout(() => { probeOxAlphaAvailability().catch(() => {}); }, 6_000).unref();
   setInterval(() => { probeOxAlphaAvailability().catch(() => {}); }, 60 * 60_000).unref();
 }
-app.get("/api/revenue", async (_req, res) => {
-  try {
-    // Recent rows are re-read from the ledger per request (withFreshRecent);
-    // only the balances ride the hourly background snapshot.
-    const snap = withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent, ledgerNewestOwn);
-    const ledger = memoSurface("revenue:allTime", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), sales: salesSummary() }));
-    res.set("Cache-Control", "public, max-age=30").json({ ...publicRevenueSnapshot(snap), ...ledger });
-  } catch (e) {
-    res.status(500).json({ error: "revenue snapshot failed", detail: String(e?.message || e).slice(0, 120) });
-  }
+// Recent rows are re-read from the ledger per request (withFreshRecent); only
+// the balances ride the hourly background snapshot. Wallet balances and their
+// combined total are operator-only: /api/revenue serializes through
+// publicRevenueSnapshot, /__operator/revenue.json carries the full reading.
+const revenueApi = revenueApiHandlers({
+  snapshot: async () => withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent, ledgerNewestOwn),
+  ledger: () => memoSurface("revenue:allTime", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), sales: salesSummary() })),
+  authed: (req) => operatorAuthed(req),
 });
+app.get("/api/revenue", revenueApi.publicHandler);
+app.get("/__operator/revenue.json", revenueApi.operatorHandler);
 // The /revenue series, built across event-loop turns: each figure is one
 // synchronous SQLite pass, and together they held the loop 0.6-1.2 s in one
 // turn (production stall profiler, 2026-09-25). The buyer figures share one
