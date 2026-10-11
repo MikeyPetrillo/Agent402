@@ -4277,6 +4277,10 @@ jobs:
           t node scripts/test-solana-leaderboard.js
           # Solana history reads public RPC first: keyed lane on 429/timeout/null, identical board, throws when every lane is down, pacing, counters (offline stub RPCs)
           t node scripts/test-solana-history-rpc.js
+          # Base board keeps its read log window: identical board to a full read across head advances, new/returning wallets, failed reads, restart, store mismatch, row cap, switch (offline stub RPC)
+          t node scripts/test-leaderboard-log-cache.js
+          # Recent EVM getLogs public-first: complete-answer guard (own head, filter match), fallback on error/range cap/behind head/timeout/429, skips, rollback, ledger rows identical (offline stub RPCs)
+          t node scripts/test-evm-logs-rpc.js
           # accepts[0].outputSchema on the 402: pure header rewrite + mount order (offline)
           t node scripts/test-accept-output-schema.js
           # OWN LANE on purpose. This single step ran 254s - 42% of the unit-a
