@@ -3,9 +3,9 @@
 // AGENT402_OPERATOR_TOKEN accepted via Authorization: Bearer / X-Operator-Token
 // header (preferred) or ?token= query (legacy, stripped from the URL on load).
 //
-// This is the source of truth view for incoming Tollbooth Cloud waitlist and
-// partner applications. The form on /tollbooth/waitlist POSTs to
-// /api/tollbooth/waitlist, which inserts here.
+// Read-only view of the leads stored before the tollbooth waitlist intake
+// closed. Nothing writes this table any more: POST /api/tollbooth/waitlist
+// answers 410 and stores nothing.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const fmtDate = (d) => {
@@ -28,18 +28,23 @@ const planBadge = (plan) => {
   return `<span class="ol-plan" style="color:${color}; border-color:color-mix(in srgb,${color} 33%,transparent);">${esc(plan)}</span>`;
 };
 
-export function operatorLeadsPage({ ok, rows, total, byPlan, dbEnabled }) {
+const KNOWN_PLANS = ["solo", "team", "agency", "enterprise", "partner"];
+
+export function operatorLeadsPage({ ok, rows, total, byPlan, dbEnabled, countsOk = ok, baseUrl = "" }) {
   const banner = !dbEnabled
-    ? `<div class="ol-warn">DATABASE_URL is not set on this instance. Submissions fall back to the GitHub pre-fill flow and are not stored here.</div>`
+    ? `<div class="ol-warn">DATABASE_URL is not set on this instance, so no stored leads can be read here.</div>`
     : !ok
       ? `<div class="ol-warn">Database is configured but the query failed. Check server logs for [leads-db].</div>`
       : "";
 
-  const summary = dbEnabled && ok
-    ? `<div class="ol-grid">
-        <div class="ol-stat"><div class="ol-k">Total leads</div><div class="ol-v">${esc(total)}</div></div>
-        ${["solo","team","agency","enterprise","partner"].map(p =>
-          `<div class="ol-stat"><div class="ol-k">${p}</div><div class="ol-v">${esc(byPlan?.[p] || 0)}</div></div>`
+  // Totals first: how many sign-ups exist, per plan, without opening anyone's
+  // details. Any plan value outside the known list still gets its own tile.
+  const plans = [...KNOWN_PLANS, ...Object.keys(byPlan || {}).filter((p) => !KNOWN_PLANS.includes(p)).sort()];
+  const summary = dbEnabled && countsOk
+    ? `<div class="ol-grid" id="ol-totals">
+        <div class="ol-stat"><div class="ol-k">Total leads</div><div class="ol-v">${esc(Number(total) || 0)}</div></div>
+        ${plans.map((p) =>
+          `<div class="ol-stat"><div class="ol-k">${esc(p)}</div><div class="ol-v">${esc(Number(byPlan?.[p]) || 0)}</div></div>`
         ).join("")}
       </div>`
     : "";
@@ -70,7 +75,7 @@ export function operatorLeadsPage({ ok, rows, total, byPlan, dbEnabled }) {
             </thead>
             <tbody>${tbody}</tbody>
           </table></div>`
-        : `<p class="ol-empty">No leads yet. The form on <a href="/tollbooth/waitlist">/tollbooth/waitlist</a> POSTs into this table.</p>`)
+        : `<p class="ol-empty">No stored leads. The intake is closed, so this table receives no new rows.</p>`)
     : "";
 
   const extraCss = `
@@ -109,7 +114,7 @@ tr:last-child td{border-bottom:0}
   const body = `
 <div class="ol-wrap">
   <h1 class="ol-h1">Tollbooth leads</h1>
-  <p class="ol-sub">Submissions from <a href="/tollbooth/waitlist">/tollbooth/waitlist</a>. <a href="/__operator">Back to operator</a> &middot; <form method="POST" action="/__operator/logout" style="display:inline;margin:0"><button type="submit" style="background:none;border:0;padding:0;color:var(--accent);font:inherit;cursor:pointer">Log out</button></form></p>
+  <p class="ol-sub">Intake closed: these rows were stored before the waitlist form was retired, and nothing new is added. <a href="/__operator">Back to operator</a> &middot; <form method="POST" action="/__operator/logout" style="display:inline;margin:0"><button type="submit" style="background:none;border:0;padding:0;color:var(--accent);font:inherit;cursor:pointer">Log out</button></form></p>
   ${banner}
   ${summary}
   ${table}
@@ -118,7 +123,7 @@ ${ledgerFooterCompact()}`;
 
   return ledgerShell({
     title: "Operator · Tollbooth leads - Agent402",
-    description: "Agent402 operator dashboard - Tollbooth Cloud waitlist and partner application leads.",
+    description: "Agent402 operator dashboard - stored tollbooth leads (intake closed).",
     canonical: `${baseUrl}/__operator/leads`,
     baseUrl,
     activePath: "__none__",

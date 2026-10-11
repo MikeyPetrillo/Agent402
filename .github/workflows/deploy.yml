@@ -1783,6 +1783,8 @@ jobs:
           t node scripts/test-legal-dates.js
           t node scripts/test-wire-count-copy.js
           t node scripts/test-pack-copy-retired.js
+          # Retired hosted tollbooth: no surface offers it; retired URLs 301, the intake 410s; operator leads page renders (boots a server)
+          t node scripts/test-tollbooth-cloud-retired.js
           t node scripts/test-sitemap-superset.js
           # Published SDK snippets never let the SDK send an environment credential to our host
           t node scripts/test-sdk-snippet-credentials.js
@@ -2869,7 +2871,7 @@ jobs:
           t node scripts/test-log-safe.js
           # Postgres TLS policy by route (F11 — verified cert on public hosts, relaxed only on the private railway.internal mesh — offline)
           t node scripts/test-db-ssl.js
-          # Bounded rate-limit maps + global waitlist ceiling (F21 — stale one-time-IP keys swept, distributed flood capped — offline)
+          # Bounded rate-limit maps + global window ceiling (F21 — stale one-time-IP keys swept, distributed flood capped — offline)
           t node scripts/test-rate-sweep.js
           # /data volume contract — stats + memory DBs fail loud in prod when missing
           t node scripts/test-stats-persistence.js

@@ -71,7 +71,7 @@ export const GLOSSARY = [
     see: [["/marketplace", "x402 index"], ["/mpp-marketplace", "MPP index"], ["/leaderboard", "leaderboard"]] },
   { id: "tollbooth", name: "Tollbooth (pay-per-crawl)", alt: ["agent402-tollbooth"],
     def: "The open-source middleware or reverse proxy that puts a price on a site or API for AI agents while humans browse free: it answers 402 over both x402 and MPP, verifies the payment, and lets the request through. Non-custodial, no signup, adaptive proof-of-work for the free path, deploy templates for Cloudflare, Next.js and Docker.",
-    see: [["/sell", "sell into agentic finance"], ["/tollbooth/cloud", "hosted tollbooth"]] },
+    see: [["/sell", "sell into agentic finance"], ["/tollbooth", "install the tollbooth"]] },
   { id: "pay-per-call", name: "Pay-per-call (pay-per-request)", alt: ["per-call pricing", "micropayments"],
     def: "Pricing where every request carries its own payment - fractions of a cent to a few cents - instead of a subscription, a quota or an API key. It is what makes an agent's spend legible (one receipt per call) and what lets a seller earn from a single request by a stranger with no onboarding.",
     see: [["/pricing", "how Agent402 prices"], ["/tools", "500+ priced tools"]] },

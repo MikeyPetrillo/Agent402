@@ -845,7 +845,7 @@ function nav(activePath) {
     marketplace: new Set(["/marketplace", "/mpp-marketplace", "/leaderboard", "/revenue", "/marketplace/tools", ...chainInfo.chains.map((c) => c.href)]),
     people: new Set(["/reports", "/monitors", "/credits"]),
     docs: new Set(["/docs", "/quickstart", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
-    sell: new Set(["/sell", "/tollbooth", "/tollbooth/cloud", "/contribute"]),
+    sell: new Set(["/sell", "/tollbooth", "/contribute"]),
     tools: new Set(["/tools", "/skills", "/playground", "/pricing"]),
   };
 

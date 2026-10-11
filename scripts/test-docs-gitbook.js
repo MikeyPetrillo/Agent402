@@ -12,7 +12,7 @@
 //   - Prev/next navigation is computed from real sidebar order, not
 //     hand-maintained, so it can't drift from the actual nav tree.
 //   - A markdown-link sidebar bullet with trailing parenthetical prose
-//     ("[Try Tollbooth Cloud](url) (managed)") used to be silently DROPPED
+//     ("[Link text](url) (note)") used to be silently DROPPED
 //     entirely by an overly-strict regex - found live while testing the
 //     search filter turned up a real, pre-existing missing nav item.
 //   - The sidebar search filter and the mobile toggle button are present
@@ -21,7 +21,7 @@
 //     stays in the repo's established no-browser-tests pattern).
 //
 //   node scripts/test-docs-gitbook.js
-import { docsPage, docNeighbors, renderSidebar, docsLayoutHtml, DOCS_SEARCH_SCRIPT, docsSlugs } from "../src/docs.js";
+import { docsPage, docNeighbors, renderSidebar, docsLayoutHtml, DOCS_SEARCH_SCRIPT, docsSlugs, parseSidebar } from "../src/docs.js";
 import { ledgerDocsPage } from "../src/ledger-docs.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -42,11 +42,18 @@ ok(slugs.length > 10, `real wiki pages loaded from wiki/ (${slugs.length} slugs)
 ok(slugs.includes("Getting-Started"), "a known real doc slug (Getting-Started) is present");
 
 // --- the real sidebar-parser bug: trailing parenthetical prose after a
-// markdown link must not drop the whole bullet --------------------------------
+// markdown link must not drop the whole bullet. A fixture, so the guard does
+// not depend on the live sidebar happening to carry such a bullet. ----------
 {
-  const html = renderSidebar("Home");
-  ok(html.includes("Try Tollbooth Cloud"), "a markdown-link bullet with trailing '(managed)' prose still renders (regression: used to be silently dropped)");
-  ok(html.includes('href="https://agent402.tools/tollbooth/cloud"'), "that bullet's real href survives the parse");
+  const secs = parseSidebar("**Website**\n- [Quickstart guide](https://agent402.tools/quickstart) (60 seconds)\n- [[Home]]\n");
+  const items = secs.flatMap((s) => s.items);
+  const link = items.find((it) => it.kind === "link");
+  ok(link && link.display === "Quickstart guide", "a markdown-link bullet with trailing '(60 seconds)' prose still parses (regression: used to be silently dropped)");
+  ok(link && link.href === "https://agent402.tools/quickstart", "that bullet's real href survives the parse");
+  ok(items.length === 2, "the bullet after it still parses too");
+  // Control: the anchored regex that caused the bug drops this exact bullet.
+  ok(!/^\[([^\]]+)\]\(([^)]+)\)$/.test("[Quickstart guide](https://agent402.tools/quickstart) (60 seconds)"), "control: an end-anchored match would have dropped it");
+  ok(renderSidebar("Home").includes("ml-docs-side-a"), "the real sidebar still renders links");
 }
 
 // --- /docs and /docs/:slug render inside the SAME shell -----------------------

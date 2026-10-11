@@ -56,9 +56,6 @@ export function tollboothLandingPage(baseUrl) {
   a:hover { text-decoration:underline; }
   .note { color:var(--muted); font-size:var(--fs-md); margin-top:8px; }
   code { font-family:var(--font-mono); font-size:var(--fs-code-inline); }
-  .cloud-cta { display:flex; gap:10px; align-items:center; justify-content:space-between; background:var(--card); border:1px solid var(--hairline); padding:10px 14px; margin:0 0 22px; font-size:var(--fs-md); color:var(--muted); }
-  .cloud-cta a { color:var(--accent); white-space:nowrap; }
-  @media (max-width:520px){ .cloud-cta { flex-direction:column; align-items:flex-start; } }
   `;
 
   /* The inline render() function uses .innerHTML to build syntax-highlighted
@@ -69,11 +66,6 @@ export function tollboothLandingPage(baseUrl) {
 
 <h1>Charge AI bots that crawl your site</h1>
 <p class="lede"><b>agent402-tollbooth</b> is the open-source monetization gateway - a self-hostable pay-per-crawl gate that is live today, no waitlist, and works in front of <em>any</em> origin, not just sites behind a platform proxy. Drop it in front of any Node site and AI crawlers pay USDC on Base (or Solana, Polygon, Arbitrum, Stellar) - or burn CPU - to read your content. Humans browse free, funds settle straight to your wallet with a 0% take. <a href="${repoUrl("wiki/Pay-per-crawl-Walkthrough")}" rel="noopener">30-min walkthrough →</a> <a href="/compare" rel="noopener">vs. platform gateways →</a></p>
-
-<div class="cloud-cta">
-  <span>Managing multiple sites or running an SEO agency? Multi-site rollup, alerts, white-label dashboard, 20% partner program.</span>
-  <a href="/tollbooth/cloud">Tollbooth Cloud →</a>
-</div>
 
 <h2>1 · Configure</h2>
 <div class="config">

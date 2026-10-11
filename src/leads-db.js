@@ -1,22 +1,18 @@
-import { createHash } from "node:crypto";
-// Tollbooth waitlist + partner leads — minimal Postgres-backed intake.
+// Tollbooth leads: read-only access to the `tollbooth_leads` table on the
+// Postgres instance pointed to by DATABASE_URL.
 //
-// Storage layer for /api/tollbooth/waitlist submissions. The form on
-// /tollbooth/waitlist captures structured intent (name, email, org, sites,
-// plan, message); this module persists each submission into a single
-// `tollbooth_leads` table on the Postgres instance pointed to by DATABASE_URL.
+// The intake that wrote this table is closed (POST /api/tollbooth/waitlist
+// answers 410 and writes nothing). Rows stored before it closed stay readable
+// on the operator page until they are removed by hand.
 //
 // Design notes:
 //   - DATABASE_URL is the Railway convention (auto-injected by the Postgres
 //     plugin). If absent, every function below is a no-op that returns
-//     { ok: false, reason: "no-db" } — the form falls back to the GitHub
-//     pre-fill flow it had before. Lets the server boot anywhere without a DB.
+//     { ok: false, reason: "no-db" }. Lets the server boot anywhere without a DB.
 //   - Schema is created lazily on first use (idempotent CREATE IF NOT EXISTS),
 //     so no migration step is required during deploy.
 //   - Reads are gated to the operator token (see operator-leads.js +
 //     /__operator/leads in server.js). No public read surface.
-//   - Inputs are length-capped before INSERT so a single bad request can't
-//     blow up disk. IP + UA are recorded for spam triage.
 import pg from "pg";
 import { dbSsl } from "./db-ssl.js";
 import { probeDbHost } from "./db-probe.js";
@@ -75,8 +71,6 @@ async function ensureSchema() {
   return true;
 }
 
-const cap = (s, n) => (typeof s === "string" ? s.slice(0, n) : "");
-
 export function leadsDbEnabled() {
   return !!DATABASE_URL;
 }
@@ -101,37 +95,6 @@ export async function pingLeadsDb() {
   if (!p) return null;
   await p.query("SELECT 1");
   return true;
-}
-
-export async function insertLead(lead) {
-  if (!DATABASE_URL) return { ok: false, reason: "no-db" };
-  try {
-    await ensureSchema();
-    const p = getPool();
-    const row = {
-      kind: cap(lead.kind || "waitlist", 32),
-      plan: cap(lead.plan || "team", 32),
-      name: cap(lead.name, 200),
-      email: cap(lead.email, 320),
-      org: cap(lead.org, 200),
-      sites: cap(lead.sites, 1000),
-      message: cap(lead.message, 4000),
-      // 2026-08-28: raw IP + browser string are not kept at rest (privacy inventory);
-      // a day-scoped hash of the IP keeps abuse triage without identifying anyone.
-      ip: lead.ip ? createHash("sha256").update(`${lead.ip}|${new Date().toISOString().slice(0, 10)}`).digest("hex").slice(0, 16) : null,
-      ua: null,
-    };
-    const r = await p.query(
-      `INSERT INTO tollbooth_leads (kind, plan, name, email, org, sites, message, ip, ua)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       RETURNING id, created_at`,
-      [row.kind, row.plan, row.name, row.email, row.org, row.sites, row.message, row.ip, row.ua]
-    );
-    return { ok: true, id: r.rows[0].id, createdAt: r.rows[0].created_at };
-  } catch (e) {
-    console.error("[leads-db] insert failed:", e.message);
-    return { ok: false, reason: "insert-failed" };
-  }
 }
 
 export async function listLeads({ limit = 200 } = {}) {

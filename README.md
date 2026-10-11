@@ -143,7 +143,7 @@ curl -s -X POST localhost:3000/api/hash -H 'content-type: application/json' \
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https%3A%2F%2Fgithub.com%2FMikeyPetrillo%2FAgent402)
 
-Boots straight from the repo's `railway.toml` + `Dockerfile`. Optional plugins are auto-detected via env: add **Redis** → `REDIS_URL` enables the upstream response cache (`X-Cache: hit|miss`), add **Postgres** → `DATABASE_URL` enables the public `/api/analytics` dashboard and the tollbooth waitlist. No env vars required to boot in free mode.
+Boots straight from the repo's `railway.toml` + `Dockerfile`. Optional plugins are auto-detected via env: add **Redis** → `REDIS_URL` enables the upstream response cache (`X-Cache: hit|miss`), add **Postgres** → `DATABASE_URL` enables the public `/api/analytics` dashboard. No env vars required to boot in free mode.
 
 ## Pay per call from a wallet
 
@@ -617,7 +617,6 @@ proof-of-work. The open, crypto-native answer to Cloudflare's closed
 pay-per-crawl: no CDN lock-in, no Stripe, no merchant-of-record, no signup.
 
 - **Product page · pricing · live install:** [agent402.tools/tollbooth](https://agent402.tools/tollbooth)
-- **Managed Tollbooth Cloud (Solo / Team / Agency / Enterprise):** [agent402.tools/tollbooth/cloud](https://agent402.tools/tollbooth/cloud) - join the waitlist
 - **Run it yourself (MIT, npm):** `npm i agent402-tollbooth` · [`tollbooth/`](tollbooth) · [tollbooth/README.md](tollbooth/README.md)
 
 Runs as Express middleware, a Next.js / Vercel Edge middleware, a Cloudflare

@@ -31,7 +31,6 @@
 - [[Pay-per-crawl]] - what it is, install, modes
 - [[Pay-per-crawl Walkthrough]] - 5-min hands-on
 - [[Tollbooth for Agencies|Tollbooth-for-Agencies]] - many-site playbook
-- [Try Tollbooth Cloud](https://agent402.tools/tollbooth/cloud) (managed)
 
 **Website & Developer**
 - [Reports](https://agent402.tools/reports) · [Monitors](https://agent402.tools/monitors) - by card

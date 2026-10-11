@@ -33,7 +33,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-09.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-11.</p>
 </section>
 
 <section>
@@ -49,7 +49,7 @@ features, ad personalization and Google signals are off. If your browser's time 
 cookie is off until you choose "Allow" in the strip at the bottom of the page, and Google only receives
 cookieless pings before that; your choice is kept in your browser. Pages whose address is itself a private
 link (a paid report, a receipt, a signed alert or manage link) do not load Google Analytics. Free email
-alerts, the weekly spend digest and the tollbooth waitlist are the forms that take an address, and each
+alerts and the weekly spend digest are the forms that take an address, and each
 says so where you enter it; a card purchase gives us the email you enter at checkout. Everything we
 keep, and for how long, is listed below. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
 so every claim below is verifiable in code.</p>
@@ -81,8 +81,8 @@ so every claim below is verifiable in code.</p>
   keep keyed hashes of addresses, never the addresses themselves: in daily traffic statistics (request
   classes, paths and User-Agent product names; each day is deleted after ${TRAFFIC_DEFAULTS.retentionDays} days), in the record that limits how often a dropped
   connection is excused from payment (24 hours), and on the demand board and the waitlist (combined
-  with the day). The tollbooth waitlist form stores the name, email, organisation and message you type;
-  it does not store your IP address or browser string.</li>
+  with the day). The tollbooth waitlist form is closed; the name, email, organization and message it stored are
+  kept until deleted, and it never stored an IP address or browser string.</li>
   <li><b>AI gateway inputs.</b> Prompts and inputs sent to the <code>/v1</code> endpoints (chat,
   embeddings, images, speech) and other AI-proxy tools are <b>forwarded to the upstream model
   provider</b> (OpenAI, or the model operator serving the request via OpenRouter) to generate the

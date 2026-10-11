@@ -306,8 +306,7 @@ class Agent402_Tollbooth {
           <h1>Agent402 Tollbooth</h1>
           <p>
             Pay-per-crawl for this site. Charge AI crawlers per request (USDC via x402, or a free CPU proof-of-work) while humans browse free.
-            <a href="https://agent402.tools/tollbooth" target="_blank" rel="noopener">Docs</a> ·
-            <a href="https://agent402.tools/tollbooth/cloud" target="_blank" rel="noopener">Cloud (multi-site dashboard)</a>
+            <a href="https://agent402.tools/tollbooth" target="_blank" rel="noopener">Docs</a>
           </p>
 
           <?php if (!empty($_GET['settings-updated'])): ?>
@@ -390,7 +389,7 @@ class Agent402_Tollbooth {
                 <th><label for="att-site-id">Site ID</label></th>
                 <td>
                   <input type="text" id="att-site-id" class="regular-text code" name="<?php echo esc_attr(self::OPT_KEY); ?>[site_id]" value="<?php echo esc_attr($opts['site_id']); ?>">
-                  <p class="description">Tag this site uses when reporting stats to a multi-site dashboard. Defaults to your domain.</p>
+                  <p class="description">A label for this site, kept with these settings. Not sent anywhere yet. Defaults to your domain.</p>
                 </td>
               </tr>
             </table>

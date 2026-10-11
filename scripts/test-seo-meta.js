@@ -77,14 +77,14 @@ const TARGET = (process.env.TARGET_URL || "").replace(/\/$/, "");
 if (TARGET) {
   const PAGES = ["/", "/101", "/agentic-finance", "/base", "/solana", "/company", "/faq", "/glossary", "/integrations", "/leaderboard",
     "/marketplace", "/marketplace/tools", "/markets", "/monitors", "/mpp-marketplace", "/pricing", "/proof", "/reports", "/revenue",
-    "/security", "/sell", "/shop", "/skills", "/status", "/tollbooth", "/tollbooth/cloud", "/tools", "/what-is-mpp", "/what-is-x402",
+    "/security", "/sell", "/shop", "/skills", "/status", "/tollbooth", "/tools", "/what-is-mpp", "/what-is-x402",
     "/docs", "/guides", "/guides/agent-hosts", "/blog", "/credits", "/digest", "/community", "/changelog", "/quickstart", "/playground"];
   for (const p of PAGES) {
     let html;
     try { const r = await fetch(TARGET + p, { redirect: "follow" }); if (r.status !== 200) { ok(false, `${p}: HTTP ${r.status}`); continue; } html = await r.text(); }
     catch (e) { ok(false, `${p}: ${e.message}`); continue; }
     // Measure the TEXT a search engine shows, not the escaped source: "&amp;"
-    // is one character on the page (tollbooth/cloud's title read 74 escaped, 70 real).
+    // is one character on the page (a title can read 74 escaped, 70 real).
     // One pass over the five entities (a chained replace decodes "&amp;lt;"
     // twice - CodeQL js/double-escaping - and this measures, so it must not).
     const ENT = { "&amp;": "&", "&quot;": '"', "&#39;": "'", "&lt;": "<", "&gt;": ">" };

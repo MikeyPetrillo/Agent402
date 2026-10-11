@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 
 const PINS = {
   "src/terms.js": { date: "2026-10-09", sha: "ab36cb1b7b8a8d9c" },
-  "src/privacy.js": { date: "2026-10-09", sha: "33a80c11f05b1f1c" },
+  "src/privacy.js": { date: "2026-10-11", sha: "8b11cd8abf285b4f" },
 };
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };
