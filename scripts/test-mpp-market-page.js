@@ -95,7 +95,7 @@ ok(!xssHtml.includes('href="javascript:'), "a non-http(s) seller-supplied URL ne
   const tf = hostFiguresFromPayments([{ ts: now - 40 * 86_400_000, payer: "0xA" }, { ts: now - 86_400_000, payer: "0xa" }, { ts: now - 3_600_000, payer: "0xB" }, { ts: now - 60_000, payer: null }], { network: "tempo", networkLabel: "Tempo (MPP)", now });
   ok(tf.external30d.settlements === 3 && tf.external30d.buyers === 2 && tf.externalAllTime.settlements === 4 && tf.externalAllTime.buyers === 2, "Tempo host figures: 30d and all-time counts, payers counted once, a null payer never a buyer");
   const tempoRow = mppMarketPage("https://agent402.tools", { verifiedSellers: 1, discoveredTotal: 1, sellers: [] }, lb, { host: tf });
-  ok(/outside buyers on Tempo \(MPP\)/.test(tempoRow), "MPP board: host row names the Tempo (MPP) scope");
+  ok(/outside buyers<\/span><span[^>]*>on Tempo \(MPP\)/.test(tempoRow), "MPP board: host row names the Tempo (MPP) scope");
   const srv = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/mppMarketPage\(BASE_URL, mppIndexSnapshot\(\), mppLeaderboardSnapshot\(\), \{ host: mppHostFigures\(\) \}\)/.test(srv) && /hostFiguresFromPayments\(externalTempoPayments\(\)/.test(srv), "/mpp-marketplace feeds the host row from external Tempo payments, not the all-rails total");
 }

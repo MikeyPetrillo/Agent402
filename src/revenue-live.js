@@ -1914,7 +1914,7 @@ export function revenuePage(baseUrl, snap) {
   // What this page is measuring, said once at the top. Derived from the same
   // snapshot the rest of the page renders, plus the index totals server.js
   // hands in - never typed, or the framing sentence goes stale first.
-  const standing = standingBand({ ...(snap.standing || {}), settled: railThroughput(snap).total, eyebrow: "THE MARKET THESE FIGURES SIT IN" });
+  const standing = standingBand({ ...(snap.standing || {}), settled: railThroughput(snap).total, eyebrow: "THE MARKET WE INDEX" });
   // External payments across the scanned on-chain rails PLUS Tempo MPP
   // settlements (Tempo is not a scanned chain; ledgerSummary folds it in from
   // the sales ledger). Falls back to the on-chain pair for an older snapshot.

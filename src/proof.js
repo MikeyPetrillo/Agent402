@@ -82,7 +82,7 @@ export function proofPage(baseUrl, feed, standing = null) {
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:820px;margin:0;">Every call to the metered route (<code>POST /v1/metered/chat/completions</code>) is quoted from its own body before payment. A buyer whose client speaks the <code>upto</code> scheme (pay for what the call used, up to the quote)${creditsSalesEnabled() ? ", or who pays by card or prepaid credits," : ", or who pays by card,"} settles what the call actually used, never more than the quote; an <code>exact</code> payment settles the quote itself. The ledger records both numbers per settlement. Our own canary row links its settle transaction on-chain; an outside buyer's transaction is not listed, because a hash names its payer. Machine-readable: <a href="/api/proof" style="color:var(--ink);">/api/proof</a>.</p>
   </div>
 </header>
-${standingBand({ ...(standing || {}), eyebrow: "THE MARKET THESE RECEIPTS SIT IN" })}
+${standingBand({ ...(standing || {}), eyebrow: "THE MARKET WE INDEX" })}
 <section style="max-width:1180px;margin:0 auto;padding:40px 30px 56px;display:grid;gap:18px;">
   ${rowHtml("LATEST EXTERNAL SETTLEMENT (a buyer that is not us)", ext, ext.latest ? "" : "The metered route is new; this row fills in with the first outside buyer's settlement.")}
   ${rowHtml("LATEST INTERNAL SETTLEMENT (our own daily canary, paying with our own wallet)", int, "Internal by construction: our own test wallet buys this route every day to prove the settle-actual path, and the ledger files it as ours, never as revenue.")}

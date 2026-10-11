@@ -47,7 +47,7 @@ ok(standingBand({ sellers: 50 }) !== "", "at the floor it speaks");
   ok(/12 x402 chains \+ Tempo \(MPP\)/.test(t) && !/13 payment rails/.test(t), "x402 chains and Tempo are counted apart");
   const t2 = text(standingBand({ sellers: 4153, x402Rails: 12, tempo: false }));
   ok(/12 x402 chains/.test(t2) && !/Tempo/.test(t2), "no Tempo when its relay is off");
-  ok(/WHAT THIS PAGE IS MEASURING/.test(standingBand({ sellers: 60 })) && /THE MARKET THESE FIGURES SIT IN/.test(standingBand({ sellers: 60, eyebrow: "THE MARKET THESE FIGURES SIT IN" })), "the eyebrow names what the band is on each page");
+  ok(/WHAT THIS PAGE IS MEASURING/.test(standingBand({ sellers: 60 })) && /THE MARKET WE INDEX/.test(standingBand({ sellers: 60, eyebrow: "THE MARKET WE INDEX" })), "the eyebrow names what the band is on each page");
 }
 
 // --- grammar, because a framing sentence with a plural bug reads careless ---

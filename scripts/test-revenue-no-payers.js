@@ -107,7 +107,7 @@ ok(/const seen = newestOwnSettle\(r\.recent\);/.test(live), "the snapshot's last
   ok(!/not an offer, a solicitation/.test(html), "no legal disclaimer register in the intro");
   ok(/read from the chain, plus card checkout purchases from our card processor/.test(html), "the intro does not claim card purchases are read from the chain");
   ok(!/>x402scan/i.test(html) && /a public x402 explorer indexes our settlements/.test(html), "no third-party index named in our copy");
-  ok(/THE MARKET THESE FIGURES SIT IN/.test(html) && /12 x402 chains \+ Tempo \(MPP\)/.test(html), "the standing band names its scope and counts chains and Tempo apart");
+  ok(/THE MARKET WE INDEX/.test(html) && /12 x402 chains \+ Tempo \(MPP\)/.test(html), "the standing band names its scope and counts chains and Tempo apart");
   const { transparencyPage } = await import("../src/transparency.js");
   const tp = transparencyPage("https://agent402.tools");
   ok(/at most \$0\.75|at most \$\d/.test(tp), "the per-call ceiling carries its currency sign");

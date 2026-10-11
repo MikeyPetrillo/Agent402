@@ -242,7 +242,7 @@ export const CHAIN_PAGES = {
     tickerLabel: "STELLAR · PUBNET",
     caip2: "stellar:pubnet",
     asset: "USDC",
-    settledBy: "our open-source facilitator, with a fallback",
+    settledBy: "our own, open source",
     explorerUrl: "stellar.expert",
     explorerWalletUrl: (wallet) => `https://stellar.expert/explorer/public/account/${wallet}`,
     networkParam: "stellar",
@@ -280,7 +280,7 @@ export const CHAIN_PAGES = {
     tickerLabel: "ROBINHOOD CHAIN · MAINNET",
     caip2: "eip155:4663",
     asset: "USDG",
-    settledBy: "a Robinhood Chain x402 facilitator",
+    settledBy: "an x402 facilitator",
     explorerUrl: "robinhoodchain.blockscout.com",
     explorerWalletUrl: (wallet) => `https://robinhoodchain.blockscout.com/address/${wallet}`,
     networkParam: "robinhood",
@@ -493,8 +493,9 @@ function canaryManifestStatus(rail) {
 // The SELLERS LISTED card's caption: the host is not counted (its own card
 // says so), and hosts merge into one seller only where the Base leaderboard
 // groups their wallets, so the figure is origins after that merge.
+// One tag per span, wrapping between tags (DESIGN.md: a run of tags is .ml-meta).
 function sellersListedNote(merged, origins) {
-  return `${Number(origins).toLocaleString("en-US")} origins indexed${merged ? "; origins paid into the same wallet count once" : ", one seller per origin"} &middot; host not counted`;
+  return `<span>${Number(origins).toLocaleString("en-US")} origins indexed</span><span>${merged ? "one per wallet" : "one per origin"}</span><span>host not counted</span>`;
 }
 
 // "N of the M tools in the catalog take USDC on X": derived from the same
@@ -823,7 +824,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
 
   const statsHtml = `
   <div class="ml-2col" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 0;">
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${sellerCount.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">${sellersListedNote(measured, sellers.filter((s) => !s.local).length)}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${sellerCount.toLocaleString("en-US")}</div><div class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin:2px 0 0;">${sellersListedNote(measured, sellers.filter((s) => !s.local).length)}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">TOOLS (THIS HOST)</div><div style="font-size:var(--fs-2xl);font-weight:800;">${tools.length.toLocaleString("en-US")}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">OUR LATEST SETTLE</div><div style="font-size:var(--fs-2xl);font-weight:800;">${latest && latest.usd != null ? usd(latest.usd) : "-"}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">our own canary or volume run</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">PRICE FLOOR</div><div style="font-size:var(--fs-2xl);font-weight:800;">${usdExact(low)}</div>${Number(premiumUsd) > 0 ? `<div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">premium included</div>` : ""}</div>
@@ -1268,9 +1269,9 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
 
   const statsHtml = `
   <div class="ml-2col ml-4col" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 0;">
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${marketOperatorCount(null, snapshot, leaderboardSnap).toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">${sellersListedNote(true, standingCounts.sellers)}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${marketOperatorCount(null, snapshot, leaderboardSnap).toLocaleString("en-US")}</div><div class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin:2px 0 0;">${sellersListedNote(true, standingCounts.sellers)}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">TOOL LISTINGS</div><div style="font-size:var(--fs-2xl);font-weight:800;">${totalToolListings.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">from other sellers</div></div>
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">CHAINS SUPPORTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${Number.isFinite(Number(chainsOffered)) && chainsOffered !== null ? Number(chainsOffered) : Object.keys(CHAIN_PAGES).length}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">x402 chains offered now${tempo ? " + Tempo (MPP)" : ""}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">CHAINS SUPPORTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${Number.isFinite(Number(chainsOffered)) && chainsOffered !== null ? Number(chainsOffered) : Object.keys(CHAIN_PAGES).length}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">x402${tempo ? " + Tempo" : ""}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">TOOLS (THIS HOST)</div><div style="font-size:var(--fs-2xl);font-weight:800;">${(sellers.find((s) => s.local)?.toolCount || 0).toLocaleString("en-US")}</div></div>
   </div>`;
 
