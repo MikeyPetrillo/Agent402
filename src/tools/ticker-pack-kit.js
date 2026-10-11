@@ -75,7 +75,8 @@ export const TICKER_PACK_TIERS = {
     holderFilings: 12,      // information tables scanned per run
     holderWindowDays: 150,  // covers the latest 13F deadline plus the prior one
     filingsShown: 24,
-    synthMaxTokens: 1800,
+    // The summary plus 5-8 bullets: a 1,800 cap stopped for length mid-list.
+    synthMaxTokens: 2800,
     words: "~600",
   },
 };

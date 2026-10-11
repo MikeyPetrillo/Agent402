@@ -20,8 +20,11 @@ function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } c
 
 const SYNTH = "anthropic/claude-opus-5";
 export const RECALL_MODELS = [SYNTH];
+// synthMaxTokens carries headroom over the word target (recall numbers, NDCs
+// and quoted reasons run ~3 output tokens per word; a 3,200 cap stopped for
+// length on both the first call and the retry).
 export const RECALL_TIERS = {
-  "recall-report": { price: "$0.60", maxUpstreamUsd: 0.35, perFeed: 20, synthMaxTokens: 3200, words: "~1,100" },
+  "recall-report": { price: "$0.60", maxUpstreamUsd: 0.35, perFeed: 20, synthMaxTokens: 4800, words: "~1,100" },
 };
 const SYNTH_TIMEOUT_MS = 120_000;
 const PROBE_TIMEOUT_MS = 25_000;

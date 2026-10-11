@@ -341,7 +341,8 @@ function makeDossierHandlerInner(tierSlug) {
       model: GROUND,
       reasoning: { effort: "low" },
       messages: [{ role: "user", content: `Search the web and answer with SPECIFIC, verifiable facts - figures, dates, named events, quotes - each with a citation. Do not state a number unless a source supports it. Question: ${q}` }],
-      max_tokens: 800,
+      // 800 cut every grounded answer mid-sentence (reasoning shares the budget).
+      max_tokens: 1400,
       plugins: [{ id: "web", engine: "exa", max_results: 5 }],
     });
     const webResults = await Promise.all(queries.map((q) => chat(searchBody(q), SEARCH_TIMEOUT_MS, user).then(

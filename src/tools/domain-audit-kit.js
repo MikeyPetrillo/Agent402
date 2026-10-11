@@ -23,9 +23,13 @@ function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } c
 const SYNTH = "anthropic/claude-opus-5";
 export const DOMAIN_AUDIT_MODELS = [SYNTH];
 
+// synthMaxTokens carries headroom over the word target: a cited, tabled audit
+// runs ~2.5-3 output tokens per word and the model writes past the target, so
+// a cap near 3 tokens/word stopped for length on the first call and again on
+// the retry, and shipped a shortened report.
 export const DOMAIN_AUDIT_TIERS = {
-  "domain-audit": { price: "$0.60", maxUpstreamUsd: 0.35, pro: false, synthMaxTokens: 3500, words: "~1,200" },
-  "domain-audit-pro": { price: "$0.85", maxUpstreamUsd: 0.5, pro: true, synthMaxTokens: 5000, words: "~1,900" },
+  "domain-audit": { price: "$0.60", maxUpstreamUsd: 0.35, pro: false, synthMaxTokens: 5000, words: "~1,200" },
+  "domain-audit-pro": { price: "$0.85", maxUpstreamUsd: 0.5, pro: true, synthMaxTokens: 7000, words: "~1,900" },
 };
 
 const SYNTH_TIMEOUT_MS = 120_000;

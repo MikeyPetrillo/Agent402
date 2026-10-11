@@ -45,7 +45,7 @@ export const FILING_TIERS = {
   "filing-report": {
     price: "$0.85",
     // Worst case: input 3 docs x 36,000 chars + <=40 index rows + instructions
-    // (~122,000 chars ~= 35,000 tok), output 4,200 tok. The cap is set from
+    // (~122,000 chars ~= 35,000 tok), output 5,600 tok. The cap is set from
     // MEASURED synthesis spend rather than the margin clamp's pessimistic
     // legacy-opus row.
     maxUpstreamUsd: 0.50,
@@ -55,7 +55,9 @@ export const FILING_TIERS = {
     docMaxBytes: 800_000,  // per document, enforced while streaming
     docMaxChars: 36_000,   // per document, after tag stripping
     indexRows: 40,         // filings listed in the grounding block
-    synthMaxTokens: 4200,
+    // Headroom over the word target: a 4,200 cap stopped for length on the
+    // first call, so every report paid for a retry.
+    synthMaxTokens: 5600,
     words: "~1,400",
   },
 };
