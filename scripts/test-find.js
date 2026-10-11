@@ -167,10 +167,28 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
         `${p.slug}: a dearer bundle SAYS it is dearer (pack $${usd(p.price)} vs $${p.aLaCarteUsd})`);
       ok(!/bundle is also the cheaper path/.test(p.oneCall),
         `${p.slug}: a dearer bundle never claims to be the cheaper path`);
+    } else if (Math.round(p.aLaCarteUsd * 1e4) === Math.round(usd(p.price) * 1e4)) {
+      ok(/the same price/.test(p.oneCall), `${p.slug}: an equal-priced bundle says "the same price"`);
     } else {
       ok(/bundle is also the cheaper path/.test(p.oneCall),
         `${p.slug}: a genuinely cheaper bundle is allowed to say so`);
     }
+  }
+
+  // An a la carte total EQUAL to the pack price is not "cheaper"; and a pack
+  // whose every step runs free with proof-of-work says so.
+  {
+    const target = packs[0];
+    const each = (PACK_PRICES[target.slug] ?? 0.05) / target.toolSlugs.length;
+    const eq = rankSkillPacks("audit the security of a domain", {
+      baseUrl: "https://agent402.tools",
+      toolPriceUsd: () => each,
+      toolFree: () => true,
+    }).find((p) => p.slug === target.slug);
+    ok(eq && /the same price/.test(eq.oneCall) && !/cheaper path/.test(eq.oneCall),
+      `${target.slug}: a bundle priced the same as its steps says "the same price", never "cheaper" (${eq?.oneCall})`);
+    ok(/free one at a time with proof-of-work/.test(eq.oneCall), `${target.slug}: an all-free-step pack names the free path`);
+    ok(!/\u2014/.test(eq.oneCall) && packs.every((p) => !/\u2014/.test(p.oneCall)), "pack copy carries no em dash");
   }
 
   // A partial price lookup must yield NO total rather than an understated one:

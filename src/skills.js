@@ -3176,7 +3176,7 @@ const PACK_STOPWORDS = new Set([
 // staying quiet about that would be an upsell dressed as an answer, and an
 // agent that later does the arithmetic is precisely the buyer we would lose.
 // So we surface both numbers and let the caller choose.
-export function rankSkillPacks(query, { k = 2, baseUrl = "", minScore = 4, toolPriceUsd = null } = {}) {
+export function rankSkillPacks(query, { k = 2, baseUrl = "", minScore = 4, toolPriceUsd = null, toolFree = null } = {}) {
   const q = String(query || "").slice(0, 500);
   const rawTerms = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   const terms = rawTerms.filter((t) => t.length > 1 && !PACK_STOPWORDS.has(t)).slice(0, 32);
@@ -3250,9 +3250,18 @@ export function rankSkillPacks(query, { k = 2, baseUrl = "", minScore = 4, toolP
         (aLaCarte == null
           ? ` Calling the ${p.toolSlugs.length} tools individually also works and bills separately.`
           : ` The same ${p.toolSlugs.length} tools bought individually total $${aLaCarte.toFixed(3)}` +
-            (aLaCarte < price
-              ? ` — cheaper a la carte; the bundle buys one payment, one round trip and partial-success handling.`
-              : ` — the bundle is also the cheaper path.`)),
+            // Compared in whole tenths of a cent so float noise cannot turn an
+            // equal price into a "cheaper" claim.
+            (Math.round(aLaCarte * 1e4) < Math.round(price * 1e4)
+              ? ` - cheaper a la carte; the bundle buys one payment, one round trip and partial-success handling.`
+              : Math.round(aLaCarte * 1e4) === Math.round(price * 1e4)
+                ? ` - the same price; the bundle buys one payment, one round trip and partial-success handling.`
+                : ` - the bundle is also the cheaper path.`)) +
+        // When every step is a pure-CPU tool, each one also runs free with
+        // proof-of-work, so a walletless caller pays nothing step by step.
+        (typeof toolFree === "function" && (p.toolSlugs || []).length && p.toolSlugs.every((t) => toolFree(t))
+          ? " Every step is also free one at a time with proof-of-work."
+          : ""),
     };
   });
 }
