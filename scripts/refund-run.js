@@ -111,7 +111,7 @@ const ONLY_CHAIN = (process.env.REFUND_ONLY_CHAIN || "").trim(); // optional CAI
 // Public RPCs for the EVM rails we can refund on. Overridable per chain via
 // REFUND_RPC_<id> (e.g. REFUND_RPC_8453). A chain with no RPC entry holds its
 // rows - refusing loudly beats broadcasting through a guessed endpoint.
-const EVM_RPCS = {
+export const EVM_RPCS = {
   "eip155:8453": "https://mainnet.base.org",
   // polygon-rpc.com was shut off 2026-07-31 (probe: "tenant disabled", 403) and
   // was the ONLY Polygon RPC here, so every Polygon refund held unpaid.

@@ -180,12 +180,8 @@ function logEntry(r) {
 //   3. deleted namespaces: a namespace with no key, document or grant left has
 //      its whole chain removed; a later write starts a new chain at seq 1.
 // Actors (the paying wallets) are never rewritten: attribution stays as signed.
-export const AUDIT_RETENTION_DEFAULT_DAYS = 90;
-export function auditRetentionDays(env = process.env) {
-  const n = Number(String(env.MEMORY_AUDIT_RETENTION_DAYS ?? "").trim());
-  return Number.isInteger(n) && n > 0 ? n : AUDIT_RETENTION_DEFAULT_DAYS;
-}
-export const AUDIT_SWEEP_MS = 10 * 60 * 1000;
+import { AUDIT_RETENTION_DEFAULT_DAYS, auditRetentionDays, AUDIT_SWEEP_MS } from "../memory-retention.js";
+export { AUDIT_RETENTION_DEFAULT_DAYS, auditRetentionDays, AUDIT_SWEEP_MS };
 const KEY_ACTIONS = "('put','delete','incr','cas-set','cas-del')";
 const DOC_ACTIONS = "('remember','forget')";
 const RETENTION_NOTE = () =>
@@ -488,7 +484,7 @@ function sqliteBackend() {
   };
 
   // Expired rows in namespaces nobody reads anymore would otherwise live forever
-  // on the persistent volume — sweep globally on a timer (cheap: exp is indexed),
+  // on the persistent volume, so sweep globally on a timer (cheap: exp is indexed),
   // then bound the audit log (see auditSweepSql).
   const sweep = db.transaction((nowMs) => {
     kvPruneAll.run(Math.floor(nowMs / 1000));

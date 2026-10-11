@@ -3,7 +3,9 @@
 // module is the write path + aggregate view for that signal: free text ->
 // normalized cluster -> (eventually) a real tool.
 //
-// Storage: append-only JSONL, one record per line. Same volume contract as
+// Storage: JSONL, one record per line, appended; lines older than
+// WISH_RETENTION_DAYS are rotated out into one rollup record (see
+// rotateWishes). Same volume contract as
 // stats.js/pow.js (persist to /data when mounted) but the fallback is
 // SILENT — losing wish history on a restart is an acceptable tradeoff for a
 // demand-signal feature, unlike payment counters or PoW replay state, so
@@ -100,9 +102,10 @@ export const QUALIFY_MIN_CALLERS = 3;
 // sweep seventeen days earlier with hit counts clustered at 57-61 - the board
 // looked busy and carried no signal.
 //
-// This HIDES, never deletes. The JSONL is the record and keeps every line; the
-// aggregate is the view, and `staleHidden` says how many rows the view is
-// holding back so the omission is visible rather than a silent trim.
+// This HIDES, it does not delete (deletion is the retention window below,
+// which keeps the counts); the aggregate is the view, and `staleHidden` says
+// how many rows the view is holding back so the omission is visible rather
+// than a silent trim.
 export const WISH_STALE_DAYS = Number(process.env.WISH_STALE_DAYS) > 0 ? Number(process.env.WISH_STALE_DAYS) : 30;
 
 // RETENTION. The record is no longer kept forever: a line (request text, its
