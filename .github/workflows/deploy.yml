@@ -1351,6 +1351,8 @@ jobs:
           t node scripts/test-refund-ledger-pg.js
           t node scripts/test-sales-ledger-pg.js
           t node scripts/test-ledger-dead-letter-pg.js
+          # A push debt replayed from another container's dead-letter never undoes that push's void.
+          t node scripts/test-tempo-push-void-crosscontainer-pg.js
           t node scripts/test-mcp-tasks-pg.js
           t node scripts/test-hangup-forgiveness-pg.js
           t node scripts/test-external-spend-guard-pg.js
@@ -1364,6 +1366,8 @@ jobs:
           t node scripts/test-human-checkout-pg.js
           # A report made is never refunded or regenerated over a database failure; a refund is recorded first.
           t node scripts/test-human-checkout-failures-pg.js
+          # Another container never takes over a claim whose owner still beats, nor refunds one marked generated.
+          t node scripts/test-human-checkout-crosscontainer-pg.js
           # A paid subscription recorded while the database is away survives a restart; reload shows another container's.
           t node scripts/test-stripe-subscriptions-pg.js
           t node scripts/test-wish-pg.js

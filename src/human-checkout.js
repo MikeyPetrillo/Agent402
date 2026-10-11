@@ -20,6 +20,13 @@
 //   regenerated - bounded to one takeover; a second abandonment refunds.
 //   Without this a buyer whose report was in flight at deploy time paid and
 //   polled "Generating..." forever (review finding, 2026-08-22).
+//   On the database the window runs from the claim's last HEARTBEAT, not from
+//   the claim: the owning container refreshes `beatAt` every HEARTBEAT_MS
+//   while its job runs and while it holds a final record that has not landed
+//   (marking that claim `generatedAt` once a report exists), so another
+//   container never takes over a claim whose owner is alive and reaching the
+//   database, and a claim marked generated is regenerated after an abandonment
+//   but never refunded on the strength of it.
 // Storage: ONE FILE PER SESSION under a directory (atomic tmp+rename), so a poll
 // never parses the whole store, a crash never corrupts every report, and two
 // processes never overwrite each other's records. Tiny side indexes track
@@ -192,6 +199,10 @@ export function humanCheckoutEnabled() {
 
 export const STALE_CLAIM_MS = 10 * 60_000;   // a claim older than this with no local job is abandoned
 const MAX_TAKEOVERS = 1;                      // one regeneration after an abandonment, then refund
+// The owner of a claim refreshes it this often (database mode); far inside STALE_CLAIM_MS.
+const HEARTBEAT_MS = Math.max(50, Number(process.env.HUMAN_CHECKOUT_HEARTBEAT_MS) || 60_000);
+/** When a claim last showed its owner alive: its heartbeat, else the claim itself. */
+const lastSignOf = (rec) => Math.max(Number(rec?.claimedAt) || Date.parse(rec?.at) || 0, Number(rec?.beatAt) || 0);
 const REFUND_RETRY_MS = 30_000;
 const MAX_REFUND_ATTEMPTS = 6;
 // Failure breaker (review 2026-09-03): every failed generation is refunded, and Stripe keeps its fee on a
@@ -262,15 +273,32 @@ const pgAppendFailure = async (key, at) => (await stateQuery(
 )).rows[0].body;
 // THE CLAIM. The record becomes this "generating" claim only when no record
 // exists, or the record is the stale "generating" claim the caller saw
-// (its claimedAt matches): a record another container finished, or claimed
-// since, is never overwritten. Resolves true when this call holds the claim.
-const pgClaim = async (id, claim, seenClaimedAt) => (await stateQuery(
+// (its claimedAt matches) and its owner has still shown no sign of life
+// since `staleBefore` (no heartbeat landed after the caller read it): a
+// record another container finished, claimed since, or is still beating,
+// is never overwritten. Resolves true when this call holds the claim.
+const pgClaim = async (id, claim, seenClaimedAt, staleBefore) => (await stateQuery(
   `INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb)
    ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
    WHERE ${RT()}.body ->> 'status' = 'generating' AND $4::numeric IS NOT NULL AND COALESCE((${RT()}.body ->> 'claimedAt')::numeric, 0) = $4::numeric
+     AND COALESCE((${RT()}.body ->> 'beatAt')::numeric, 0) <= $5::numeric
    RETURNING id`,
-  [COLL, id, JSON.stringify(claim), seenClaimedAt == null ? null : Number(seenClaimedAt)],
+  [COLL, id, JSON.stringify(claim), seenClaimedAt == null ? null : Number(seenClaimedAt), Number(staleBefore) || 0],
 )).rowCount === 1;
+// THE HEARTBEAT. Each claim this container still owns (the row is the
+// "generating" claim with the claimedAt it wrote) gets `beatAt`, and
+// `generatedAt` when its report exists but its final record has not landed.
+// Resolves the ids it refreshed.
+const pgBeat = async (owned, at) => (await stateQuery(
+  `UPDATE ${RT()} AS r SET body = r.body || jsonb_build_object('beatAt', $4::bigint)
+     || CASE WHEN o.generated THEN jsonb_build_object('generatedAt', COALESCE(r.body -> 'generatedAt', to_jsonb($4::bigint))) ELSE '{}'::jsonb END,
+     updated_at = now()
+   FROM unnest($2::text[], $3::numeric[], $5::boolean[]) AS o(id, claimed, generated)
+   WHERE r.collection = $1 AND r.id = o.id AND r.body ->> 'status' = 'generating'
+     AND COALESCE((r.body ->> 'claimedAt')::numeric, 0) = o.claimed
+   RETURNING r.id`,
+  [COLL, owned.map((o) => o.id), owned.map((o) => o.claimedAt), at, owned.map((o) => o.generated)],
+)).rows.map((r) => r.id);
 
 // The public index and its reports, mirrored for the synchronous readers
 // (served on every page load, with or without a Stripe engine).
@@ -407,7 +435,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     };
   // The claim (see pgClaim). On the files the write is the claim: one process.
   const claimRec = USE_PG
-    ? async (id, claim, seenClaimedAt) => { await readyP(); const held = await pgClaim(id, claim, seenClaimedAt); if (held) through(recPath(id), claim); return held; }
+    ? async (id, claim, seenClaimedAt) => { await readyP(); const held = await pgClaim(id, claim, seenClaimedAt, now() - STALE_CLAIM_MS); if (held) through(recPath(id), claim); return held; }
     : (id, claim) => { writeRec(id, claim); return true; };
   const readIndex = USE_PG ? async (p) => { await readyP(); return (await pgGet(indexId(p))) || {}; } : (p) => readJson(p) || {};
   const patchIndex = USE_PG
@@ -428,6 +456,25 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   const heldAnswers = new WeakSet(); // recordError answers whose record the row refused
   const finalsDeadLetter = USE_PG ? createDeadLetter({ file: join(dir, "_pending-finals.ndjson"), name: "checkoutFinals" }) : null;
   const FINALS_REPLAY_MS = Number(process.env.HUMAN_CHECKOUT_REPLAY_MS) || 5_000;
+  // Claims this container holds (sessionId -> claimedAt): beaten while the
+  // job runs or its final record waits here (see pgBeat). Dropped when the
+  // job ends with nothing waiting, or once the final record lands or is refused.
+  const owned = new Map();
+  const releaseOwned = (id) => { if (!inFlight.has(id) && !pendingFinals.has(id)) owned.delete(id); };
+  let beating = false;
+  async function beat() {
+    if (!owned.size || beating) return 0;
+    beating = true;
+    try {
+      const list = [...owned].map(([id, claimedAt]) => ({ id, claimedAt, generated: pendingFinals.get(id)?.status === "done" }));
+      const live = new Set(await pgBeat(list, now()));
+      // A claim no longer ours (finished or taken over) is not beaten again
+      // once nothing for it is running or waiting here.
+      for (const o of list) if (!live.has(o.id) && !inFlight.has(o.id) && !pendingFinals.has(o.id)) owned.delete(o.id);
+      return live.size;
+    } catch { return 0; /* the database is away: the next beat retries */ }
+    finally { beating = false; }
+  }
   async function afterFinal(id, rec) {
     try { await patchIndex(INFLIGHT, id, null); } catch { /* the boot sweep clears a finished claim */ }
     if (rec.status === "error") {
@@ -447,21 +494,29 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       await readyP();
       const wrote = await pgPutFinal(id, rec);
       pendingFinals.delete(id);
+      owned.delete(id);
       if (!wrote) return "held";
       through(recPath(id), rec);
       await afterFinal(id, rec);
       return true;
     } catch (e) {
       pendingFinals.set(id, rec);
+      // Say so on the claim at once if a short statement still lands (a
+      // final refused on its own): a report exists, never refund this claim.
+      beat().catch(() => {});
       const kept = finalsDeadLetter.add("final", { id, rec });
       log(`[human-checkout] the ${rec.status} record for ${id} did not land (${String(e?.message || e).slice(0, 120)}); kept ${kept ? "on local disk" : "in memory only"} for replay`);
       return false;
     }
   }
-  let replayingFinals = false;
-  async function replayFinals() {
-    if (!finalsDeadLetter || replayingFinals || !finalsDeadLetter.size()) return 0;
-    replayingFinals = true;
+  // One replay at a time; a caller arriving during one waits for it.
+  let replayingFinals = null;
+  function replayFinals() {
+    if (!finalsDeadLetter || !finalsDeadLetter.size()) return Promise.resolve(0);
+    if (!replayingFinals) replayingFinals = replayFinalsOnce().finally(() => { replayingFinals = null; });
+    return replayingFinals;
+  }
+  async function replayFinalsOnce() {
     let landed = 0;
     try {
       await readyP();
@@ -475,6 +530,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
         if (wrote) through(recPath(id), body);
         const held = pendingFinals.get(id);
         if (held && !(Date.parse(held.at || 0) > Date.parse(body.at || 0))) pendingFinals.delete(id);
+        releaseOwned(id);
         // A record the row refused (it holds a delivered report or a recorded
         // refund) is dropped without touching the issues index.
         if (wrote) await afterFinal(id, body);
@@ -482,13 +538,13 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
         landed++;
       }
     } catch { /* the database is still away: the next tick retries */ }
-    finally { replayingFinals = false; }
     if (landed) log(`[human-checkout] landed ${landed} record(s) kept on local disk`);
     return landed;
   }
   if (USE_PG) {
     readyP().then(() => replayFinals()).catch(() => {});
     everyMs(() => replayFinals(), FINALS_REPLAY_MS);
+    everyMs(() => beat(), HEARTBEAT_MS);
   }
 
   const negGet = (id) => { const n = negative.get(id); if (n && n.until > now()) return { status: n.status }; if (n) negative.delete(id); return null; };
@@ -618,6 +674,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
         // generation starts in the same turn as the claim, as it always did.
         const held = USE_PG ? await claimRec(sessionId, claim, seenClaimedAt) : claimRec(sessionId, claim, seenClaimedAt);
         if (!held) return { status: "generating", claimedElsewhere: true };
+        if (USE_PG) owned.set(sessionId, claim.claimedAt);
         if (USE_PG) await patchIndex(INFLIGHT, sessionId, now()); else patchIndex(INFLIGHT, sessionId, now());
         const failKey = failKeyOf(session);
         const failures = USE_PG ? await recentFailures(failKey) : recentFailures(failKey);
@@ -674,7 +731,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
           if (failEmail) { try { onFailed?.({ email: failEmail, product: p.slug, label: p.label, refunded: Boolean(refundId) }); } catch { /* never breaks the refund path */ } }
           return await recordError(sessionId, session, refundId, "We couldn't complete this report.");
         }
-      } finally { inFlight.delete(sessionId); }
+      } finally { inFlight.delete(sessionId); releaseOwned(sessionId); }
     })();
     // A claim or read that failed (the database away) ends the job; the next
     // poll tries again. Never an unhandled rejection.
@@ -691,20 +748,31 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     if (inFlight.has(sessionId)) return { status: "generating" };
     const kept = USE_PG ? pendingFinals.get(sessionId) : null;
     if (kept) return kept.status === "error" ? retryOwedRefund(sessionId, kept) : kept;
-    const disk = await readRec(sessionId);
+    let disk = await readRec(sessionId);
+    // A stale claim with records waiting in this store's own journal (a
+    // restart on the same disk): land them first, then decide on the row.
+    if (USE_PG && disk?.status === "generating" && now() - lastSignOf(disk) >= STALE_CLAIM_MS && finalsDeadLetter.size()) {
+      await replayFinals();
+      disk = await readRec(sessionId);
+    }
     if (disk && (disk.status === "done" || disk.status === "error")) {
       if (!USE_PG) writeRec(sessionId, disk); // warms the memory cache
       return disk.status === "error" ? retryOwedRefund(sessionId, disk) : disk;
     }
     let takeover = 0, seenClaimedAt = null;
+    let generatedElsewhere = false;
     if (disk && disk.status === "generating") {
-      const age = now() - (disk.claimedAt || Date.parse(disk.at) || 0);
+      // Silent since its last heartbeat (or since the claim, before the first one).
+      const age = now() - lastSignOf(disk);
       if (age < STALE_CLAIM_MS) return { status: "generating" };
       // Abandoned claim (restart mid-generation). One takeover regenerates;
-      // a second abandonment means something is wrong with this job: refund.
+      // a second abandonment means something is wrong with this job: refund,
+      // unless the claim says its report was made (its final record was lost
+      // with its container): that one is generated again, never refunded.
       takeover = (disk.takeovers || 0) + 1;
       seenClaimedAt = disk.claimedAt || 0;
-      log(`[human-checkout] abandoned claim ${sessionId} (${Math.round(age / 1000)}s old, takeover #${takeover})`);
+      generatedElsewhere = Number(disk.generatedAt) > 0;
+      log(`[human-checkout] abandoned claim ${sessionId} (${Math.round(age / 1000)}s silent, takeover #${takeover}${generatedElsewhere ? ", its report was made" : ""})`);
     }
 
     const neg = negGet(sessionId);
@@ -723,7 +791,21 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       // Paid for a report we cannot identify (our bug, not theirs): refund it.
       return refundAndRecord(sessionId, session, "This purchase is missing its report details.");
     }
-    if (takeover > MAX_TAKEOVERS) {
+    if (takeover > MAX_TAKEOVERS && !generatedElsewhere) {
+      // On the database the stale claim is taken first (the same guarded
+      // claim a regeneration takes), so a claim whose owner beat, or whose
+      // final record landed, since it was read is never refunded.
+      if (USE_PG) {
+        if (inFlight.has(sessionId)) return { status: "generating" };
+        let held = false;
+        try { held = await claimRec(sessionId, { status: "generating", kind: p.kind, slug: p.slug, at: new Date(now()).toISOString(), claimedAt: now(), takeovers: takeover, pid: process.pid }, seenClaimedAt); } catch { held = false; }
+        if (!held) {
+          // The row moved since it was read: answer with what it holds now.
+          let cur = null;
+          try { cur = await readRec(sessionId); } catch { /* answered below */ }
+          return cur && (cur.status === "done" || cur.status === "error") ? cur : { status: "generating" };
+        }
+      }
       return refundAndRecord(sessionId, session, "We couldn't complete this report after a retry.");
     }
     if (inFlight.has(sessionId)) return { status: "generating" };
@@ -744,7 +826,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       if (!rec || rec.status !== "generating") { await patchIndex(INFLIGHT, id, null); continue; }
       // Only claims older than the stale window are taken over; a fresh one may
       // belong to a process that is still running (another replica).
-      if (now() - (rec.claimedAt || 0) < STALE_CLAIM_MS) continue;
+      if (now() - lastSignOf(rec) < STALE_CLAIM_MS) continue;
       try { out.push({ id, result: (await fulfill(id)).status }); } catch (e) { out.push({ id, result: "error", error: String(e?.message || e).slice(0, 120) }); }
     }
     if (out.length) log(`[human-checkout] recovered ${out.length} abandoned claim(s): ${out.map((o) => `${o.id}=${o.result}`).join(", ")}`);
