@@ -11,6 +11,15 @@
 // more than these two follow-ups per purchase, never anything promotional
 // outside them. The store keeps the address (it has to send), the product,
 // the target and timestamps - operator surfaces report counts only.
+//
+// The address is kept only while a follow-up is still to be sent. It is
+// deleted (the record keeps no email) the moment the sequence ends: the
+// final follow-up is sent, the buyer stops it or buys again, delivery fails
+// MAX_SEND_FAILURES times in a row (an address that bounces), or, whatever
+// else happened, ADDRESS_MAX_AGE_MS after the purchase. No reply window is
+// kept: a reply reaches our mailbox with its own address, so the stored copy
+// is needed only to send. Finished records (no address) are deleted
+// RECORD_KEEP_MS after the purchase.
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -20,6 +29,31 @@ import { trackStoreReady, leased, leaseStillHeld } from "./state-db.js";
 const DAY = 24 * 60 * 60_000;
 export const STEP_DELAYS_MS = Object.freeze({ monitor: 2 * DAY, another: 7 * DAY });
 export const MAX_STORE = 20_000;
+/** Whatever state a sequence is in, its address is deleted this long after the purchase. */
+export const ADDRESS_MAX_AGE_MS = 14 * DAY;
+/** Failed deliveries of one sequence in a row that end it as undeliverable. */
+export const MAX_SEND_FAILURES = 5;
+/** A finished record (address already deleted) is removed this long after the purchase. */
+export const RECORD_KEEP_MS = 30 * DAY;
+const CLAIM_PREFIX = "sending:";
+/** Both steps resolved (sent, or skipped for want of a monitor), none mid-claim. */
+export function sequenceDone(r) {
+  const s = r?.sent || {};
+  const fin = (v) => v != null && v !== false && !(typeof v === "string" && v.startsWith(CLAIM_PREFIX));
+  return fin(s.monitor) && fin(s.another);
+}
+/** Delete the address of every sequence that has ended (see the header). Mutates; true when anything changed. */
+export function scrubAddresses(seqs, at) {
+  let changed = false;
+  for (const r of Object.values(seqs || {})) {
+    if (!r || !r.email) continue;
+    if (r.stopped || sequenceDone(r)) { r.email = null; changed = true; continue; }
+    if (at - Number(r.createdAt || 0) > ADDRESS_MAX_AGE_MS) {
+      r.stopped = true; r.stoppedReason = "expired"; r.stoppedAt = at; r.email = null; changed = true;
+    }
+  }
+  return changed;
+}
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const hdr = (s, n = 120) => String(s ?? "").replace(/[\r\n\t]/g, " ").slice(0, n);
 
@@ -153,9 +187,10 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
       // Database mode: start from the row as it is now (the other container
       // may have stopped, added or sent since this one last read it).
       if (!(await refresh())) return { skipped: "store-unreadable" };
+      await retain();
       let n = 0;
       for (const r of Object.values(store.seqs)) {
-        if (r.stopped || n >= limit) continue;
+        if (r.stopped || !r.email || n >= limit) continue;
         const age = now() - r.createdAt;
         if (!r.sent.monitor && age >= STEP_DELAYS_MS.monitor) {
           n++;
@@ -168,7 +203,7 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
             // running it now) hands the claim back and stops before the send.
             if (!leaseStillHeld("followups-tick")) { await release(r, "monitor", mine); out.lost = true; break; }
             const sent = await sendMonitorOffer(mine, mon);
-            if (sent) { await finish(r, "monitor", mine, now()); out.monitor++; emit("followup_monitor_sent", { kind: r.kind }); } else { await release(r, "monitor", mine); out.failed++; }
+            if (sent) { await finish(r, "monitor", mine, now()); out.monitor++; emit("followup_monitor_sent", { kind: r.kind }); } else { await release(r, "monitor", mine, true); out.failed++; }
           }
           continue; // one email per sequence per tick
         }
@@ -178,7 +213,7 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
           if (!mine) { out.skipped++; continue; }
           if (!leaseStillHeld("followups-tick")) { await release(r, "another", mine); out.lost = true; break; }
           const sent = await sendAnother(mine);
-          if (sent) { await finish(r, "another", mine, now()); out.another++; emit("followup_another_sent", { kind: r.kind }); } else { await release(r, "another", mine); out.failed++; }
+          if (sent) { await finish(r, "another", mine, now()); out.another++; emit("followup_another_sent", { kind: r.kind }); } else { await release(r, "another", mine, true); out.failed++; }
         }
       }
       if (!PG) persist();
@@ -202,19 +237,29 @@ export function createFollowups({ storePath = defaultStorePath(), sendEmail, mon
     const sent = { ...fresh.sent }; delete sent[step]; // the email reads the steps already sent, not this claim
     return { ...fresh, sent, _claim: mark };
   }
+  // A sent (or skipped) step that ends the sequence deletes the address in
+  // the same write, so no record outlives its last email with one.
+  const endIfDone = (x) => { if (sequenceDone(x)) x.email = null; };
+  // A failed delivery is counted on the record; MAX_SEND_FAILURES in a row
+  // (an address that bounces) ends the sequence and deletes the address.
+  const noteFailure = (x, at) => {
+    x.failures = (Number(x.failures) || 0) + 1;
+    if (x.failures >= MAX_SEND_FAILURES) { x.stopped = true; x.stoppedReason = "undeliverable"; x.stoppedAt = at; x.email = null; }
+  };
   async function finish(r, step, mine, value) {
-    if (!PG) { r.sent[step] = value; return true; }
-    const res = await write((seqs) => { const x = Object.hasOwn(seqs, r.id) ? seqs[r.id] : null; if (!x || x.sent?.[step] !== mine._claim) return SKIP_UPDATE; x.sent[step] = value; });
+    if (!PG) { r.sent[step] = value; r.failures = 0; endIfDone(r); return true; }
+    const res = await write((seqs) => { const x = Object.hasOwn(seqs, r.id) ? seqs[r.id] : null; if (!x || x.sent?.[step] !== mine._claim) return SKIP_UPDATE; x.sent[step] = value; x.failures = 0; endIfDone(x); });
     return res.ok;
   }
-  async function release(r, step, mine) {
-    if (!PG) return true;
-    const res = await write((seqs) => { const x = Object.hasOwn(seqs, r.id) ? seqs[r.id] : null; if (!x || x.sent?.[step] !== mine._claim) return SKIP_UPDATE; delete x.sent[step]; });
+  async function release(r, step, mine, failed = false) {
+    const at = now();
+    if (!PG) { if (failed) noteFailure(r, at); return true; }
+    const res = await write((seqs) => { const x = Object.hasOwn(seqs, r.id) ? seqs[r.id] : null; if (!x || x.sent?.[step] !== mine._claim) return SKIP_UPDATE; delete x.sent[step]; if (failed) noteFailure(x, at); });
     return res.ok;
   }
   async function settle(r, step, value) {
-    if (!PG) { r.sent[step] = value; return true; }
-    const res = await write((seqs) => { const x = Object.hasOwn(seqs, r.id) ? seqs[r.id] : null; if (!x || x.sent?.[step]) return SKIP_UPDATE; x.sent = { ...(x.sent || {}), [step]: value }; });
+    if (!PG) { r.sent[step] = value; endIfDone(r); return true; }
+    const res = await write((seqs) => { const x = Object.hasOwn(seqs, r.id) ? seqs[r.id] : null; if (!x || x.sent?.[step]) return SKIP_UPDATE; x.sent = { ...(x.sent || {}), [step]: value }; endIfDone(x); });
     return res.ok && res.changed;
   }
 
@@ -246,19 +291,28 @@ ${footer(r)}`);
   const footer = (r) => `<p style="color:#626970;font-size:12px;">You are getting this because you bought a report on agent402.tools. This is the ${r.sent.monitor ? "last" : "first of at most two"} follow-ups. <a href="${esc(stopLink(r.id))}" style="color:#626970;">Stop these emails</a>.</p>`;
   function shell(inner) { return `<div style="font-family:system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#111315;max-width:520px;"><div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#626970;margin-bottom:14px;">agent402 · reports</div>${inner}</div>`; }
 
-  /** Drop finished sequences older than 30 days so the store stays bounded. */
+  /** Drop finished sequences older than RECORD_KEEP_MS so the store stays bounded. */
   function prune() {
     const drop = (seqs) => {
       let changed = false;
       for (const [id, r] of Object.entries(seqs)) {
-        const done = r.stopped || (r.sent.monitor && r.sent.another);
-        if (done && now() - r.createdAt > 30 * DAY) { delete seqs[id]; changed = true; }
+        const done = r.stopped || sequenceDone(r);
+        if (done && !r.email && now() - r.createdAt > RECORD_KEEP_MS) { delete seqs[id]; changed = true; }
       }
       return changed;
     };
     const changed = drop(store.seqs);
     if (PG) { if (changed) void write((seqs) => (drop(seqs) ? undefined : SKIP_UPDATE)); }
     else if (changed) persist();
+  }
+
+  /** Retention pass (every tick): delete the address of every ended sequence,
+   *  then drop old finished records. Database mode: applied to the fresh row. */
+  async function retain() {
+    const at = now();
+    const step = (seqs) => { const a = scrubAddresses(seqs, at); let b = false; for (const [id, r] of Object.entries(seqs)) { if (r && !r.email && (r.stopped || sequenceDone(r)) && at - Number(r.createdAt || 0) > RECORD_KEEP_MS) { delete seqs[id]; b = true; } } return a || b; };
+    if (PG) { await write((seqs) => (step(seqs) ? undefined : SKIP_UPDATE)); return; }
+    if (step(store.seqs)) persist();
   }
 
   function stats() {
@@ -284,5 +338,5 @@ ${footer(r)}`);
   }
   function stopTimer() { if (timer) clearInterval(timer); timer = null; }
 
-  return { stopAsync, enqueue, markRepeat, stop, sendFailed, tick, prune, stats, start, stopTimer, enabled, ready: () => ready, flush: async () => { while (pending.size) await Promise.allSettled([...pending]); await doc.flush(); }, refresh, _claimStep: (id, step) => claim({ id }, step), _store: () => store };
+  return { stopAsync, enqueue, markRepeat, stop, sendFailed, tick, prune, retain, stats, start, stopTimer, enabled, ready: () => ready, flush: async () => { while (pending.size) await Promise.allSettled([...pending]); await doc.flush(); }, refresh, _claimStep: (id, step) => claim({ id }, step), _store: () => store };
 }
