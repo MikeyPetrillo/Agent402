@@ -151,5 +151,5 @@ volume runs; `include=all` returns it, flagged `self: true`.
 - [[x402-Index-and-Router]] - Smart Order Router that uses the same discovery walk
 - [[Architecture]] - where the leaderboard sits relative to the indexer
 - [`/.well-known/x402`](https://agent402.tools/.well-known/x402) - the service
-  manifest now advertises the leaderboard in both `machineReadable` and
-  `discovery` blocks (`refreshSeconds.leaderboard = 3600`)
+  manifest advertises the leaderboard (`refreshSeconds.leaderboard = 3600`) in
+  both its `machineReadable` and `discovery` blocks

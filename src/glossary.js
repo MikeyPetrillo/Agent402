@@ -126,10 +126,10 @@ export function glossaryPage(baseUrl) {
   const indexHtml = GLOSSARY.map((t) => `<a href="#${esc(t.id)}">${esc(t.name)}</a>`).join("");
 
   const termsHtml = GLOSSARY.map((t) => {
-    const alt = t.alt?.length ? `<div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 12px;">also: ${t.alt.map(esc).join(" · ")}</div>` : "";
+    const alt = t.alt?.length ? `<div class="ml-meta" style="font-size:var(--fs-xs);margin:0 0 12px;">${t.alt.map((a, i) => `<span>${i ? "" : "also: "}${esc(a)}</span>`).join("")}</div>` : "";
     const learn = LEARN_BY_GLOSSARY_ID[t.id] ? learnBySlug(LEARN_BY_GLOSSARY_ID[t.id]) : null;
     const seeList = [...(learn ? [[`/learn/${learn.slug}`, `${learn.term}, explained`]] : []), ...(t.see || [])];
-    const see = seeList.length ? `<div style="font-family:var(--font-mono);font-size:var(--fs-sm);margin-top:14px;">${seeList.map(([href, label]) => `<a href="${esc(href)}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);margin-right:16px;">${esc(label)} →</a>`).join("")}</div>` : "";
+    const see = seeList.length ? `<div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-sm);margin-top:14px;">${seeList.map(([href, label]) => `<a href="${esc(href)}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">${esc(label)}&nbsp;→</a>`).join("")}</div>` : "";
     return `<article id="${esc(t.id)}" class="gl-term gl-row" style="display:grid;grid-template-columns:300px 1fr;gap:28px;padding:26px 24px;border-bottom:1px solid var(--hairline);">
       <div><h2 style="font-weight:700;font-size:var(--fs-xl);line-height:1.15;margin:0 0 8px;color:var(--ink);"><dfn style="font-style:normal;">${esc(t.name)}</dfn></h2>${alt}<a href="#${esc(t.id)}" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);text-decoration:none;">#${esc(t.id)}</a></div>
       <div><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">${esc(t.def)}</p>${see}</div>

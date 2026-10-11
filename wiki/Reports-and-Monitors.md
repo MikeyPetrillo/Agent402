@@ -20,7 +20,7 @@ Each report is a `POST` with a JSON body; the price is the whole outcome, not a 
 | `POST /v1/research` | $0.60 | `{ query, focus?, recency?, format? }` | Deep research report: sub-questions planned, multiple live web searches, sources reranked, a ~1,500-word report with inline `[n]` citations and a source list |
 | `POST /v1/research/pro` | $0.85 | same | Deeper tier: more sub-questions and searches, wider source set, ~2,200 words |
 | `POST /v1/research/max` | $1.10 | same | Exhaustive tier, ~2,800 words |
-| `POST /v1/research/market-brief` | $0.85 | `{ query }` | Market / competitor brief on a category or company, same pipeline with a competitive-intelligence frame |
+| `POST /v1/research/market-brief` | $0.85 | `{ query }` | Market / competitor brief on a category or company, same pipeline with a competitor focus |
 | `POST /v1/dossier` | $0.85 | `{ ticker, focus?, format? }` | Company due-diligence dossier: SEC EDGAR filings (10-K / 10-Q / 8-K), Form 4 filing metadata, a live quote and grounded web research, ~2,400 words |
 | `POST /v1/dossier/max` | $1.10 | same | More filings, a full year of Form 4 activity, wider research, ~2,800 words with a full source table |
 | `POST /v1/ticker-pack` | $2.00 | `{ ticker }` | One ticker, three reports in one run: the dossier, the insider flow and the 13F holders behind it |

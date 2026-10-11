@@ -308,6 +308,13 @@ export const LEADERBOARD_CHAIN = "base";
 // by the server from the same configured set the router reads.
 const SPEND_CHAIN_NAMES = { base: "Base", solana: "Solana", algorand: "Algorand", tempo: "Tempo" };
 export const spendChainName = (c) => SPEND_CHAIN_NAMES[c] || CHAIN_PAGES[c]?.chainName || String(c);
+/** A seller name with a trailing parenthetical (an ENS name) sets the
+ * parenthetical on its own smaller line, so the name never splits mid-label. */
+function sellerNameHtml(name) {
+  const m = String(name || "").match(/^(.+?) \(([^()]+)\)$/);
+  return m ? `${esc(m[1])}<span style="display:block;font-weight:400;font-size:var(--fs-sm);color:var(--muted);">${esc(m[2])}</span>` : esc(name);
+}
+
 export function routerChainsProse(routerChains) {
   const list = (Array.isArray(routerChains) && routerChains.length ? routerChains : ["base"]).map(spendChainName);
   return list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list.at(-1)}` : list[0];
@@ -811,7 +818,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
         return `
     <div${rowData(s)} style="border:${isSelected(s) ? "2px solid var(--accent)" : "1px solid var(--hairline)"};background:var(--card);padding:16px 18px;display:flex;flex-direction:column;gap:6px;">
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;">
-        <a href="${safeHref(s.homepage)}" rel="noopener"${apiOriginTitle(s)} style="color:var(--ink);text-decoration:none;font-weight:700;font-size:var(--fs-base);">${esc(s.displayName)}</a>
+        <a href="${safeHref(s.homepage)}" rel="noopener"${apiOriginTitle(s)} style="color:var(--ink);text-decoration:none;font-weight:700;font-size:var(--fs-base);min-width:0;">${sellerNameHtml(s.displayName)}</a>
         ${s.local ? '<span class="mlr-badge">THIS HOST</span>' : ""}${s.mpp === true ? '<span class="mlr-mpp" title="Also reachable over the native MPP wire">MPP</span>' : ""}
       </div>
       <div class="mlr-host" title="${esc(hostOf(s.homepage))}">${esc(hostOf(s.homepage))}</div>
@@ -883,10 +890,10 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
         ${manifestRow("asset", esc(C.asset))}
         ${manifestRow("settled by", esc(C.settledBy))}
         ${manifestRow("buyer gas", Number(premiumUsd) > 0 ? `none, the buyer only signs (a ${esc(usd(premiumUsd))} settlement premium is in the price)` : "none, the buyer only signs")}
-        <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">explorer</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><a href="${esc(walletExplorerUrl)}" rel="noopener" style="font-weight:700;color:var(--accent);text-decoration:none;">${esc(C.explorerUrl)} →</a></div>
+        <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">explorer</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><a href="${esc(walletExplorerUrl)}" rel="noopener" style="font-weight:700;color:var(--accent);text-decoration:none;">${esc(C.explorerUrl)}&nbsp;→</a></div>
         <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">daily canary</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><span style="font-weight:700;color:${canary.color};">${esc(canary.text)}</span></div>
       </div>
-      <div style="margin-top:14px;padding-top:10px;border-top:1px dashed var(--dash);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);line-height:1.6;">agents: GET /api/route?q=&lt;task&gt;&amp;network=${esc(C.networkParam)}</div>
+      <div style="margin-top:14px;padding-top:10px;border-top:1px dashed var(--dash);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);line-height:1.6;">agents: <code>GET /api/route?q=&lt;task&gt;&amp;network=${esc(C.networkParam)}</code></div>
     </div>`;
 
   // Switcher strip — one row per chain page that actually exists today
@@ -1026,7 +1033,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   <section>
     <h2 style="font-size:var(--fs-xl);font-weight:700;margin:40px 0 10px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Buy tools with ${esc(C.asset)} on ${esc(C.chainName)}</h2>
     <p style="font-size:var(--fs-base);color:var(--muted);margin:0 0 10px;">${payableSentence(payable, C)}, from ${usdExact(low)} to ${usdExact(high)} a call${premiumNote}${groups.length ? `, across ${groups.map((g) => esc(g.label.toLowerCase())).slice(0, 6).join(", ")} and more` : ""}. The catalog page carries the category browser; this page is the chain's ledger.</p>
-    <p style="font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--card-zebra);padding:10px 14px;margin:0;">agents: GET ${esc(baseUrl)}/api/route?q=&lt;task&gt;&amp;network=${esc(C.networkParam)}</p>
+    <p style="font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--card-zebra);padding:10px 14px;margin:0;">agents: <code>GET ${esc(baseUrl)}/api/route?q=&lt;task&gt;&amp;network=${esc(C.networkParam)}</code></p>
   </section>
 
   <section>${sellSectionHtml}</section>

@@ -163,7 +163,8 @@ html{scroll-behavior:smooth}
 .s101-grid>div a{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent)}
 .s101-grid-3{grid-template-columns:1fr 1fr 1fr}
 .s101-tag{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;color:var(--accent);margin-bottom:8px}
-.s101-links a{font-family:var(--font-mono);font-size:var(--fs-md);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);margin-right:18px}
+.s101-links{display:flex;flex-wrap:wrap;gap:8px 18px}
+.s101-links a{font-family:var(--font-mono);font-size:var(--fs-md);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent)}
 .s101-demo{border:1px solid var(--hairline);background:var(--card)}
 .s101-step{padding:18px 22px;border-bottom:1px solid var(--hairline)}
 .s101-step-h{font-size:var(--fs-lg);line-height:1.5;color:var(--ink);margin-bottom:10px}

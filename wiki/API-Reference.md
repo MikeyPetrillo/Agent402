@@ -243,7 +243,7 @@ The call runs on the server with your payment and **settles only when the answer
 |---|---|---|
 | PoW tier | Natural (CPU cost per challenge) | 150+ pure-CPU tools only; difficulty 16 = ~65k hashes |
 | MCP connector (`/mcp`) | 20/min, 120/hr per IP | Free pure-CPU set via `catalog.call`; override with `AGENT402_MCP_MAX_PER_MIN/HOUR`. Wallet-only tools are payable in the call over MPP |
-| Card endpoints (`/api/buy`, `/api/subscribe`, `/api/credits/checkout`, session reads) | per-IP | Each makes an outbound Stripe call, so they are capped and unknown session ids are negatively cached |
+| Card endpoints: `/api/buy`, `/api/subscribe`, `/api/credits/checkout` and session reads | per-IP | Each makes an outbound Stripe call, so they are capped and unknown session ids are negatively cached |
 
 ## Error format
 

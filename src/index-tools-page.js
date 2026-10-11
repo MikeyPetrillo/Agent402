@@ -60,7 +60,7 @@ table.ix tr.is-ours td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 .ix-nodesc{color:var(--faint);font-size:var(--fs-sm);font-style:italic;margin-top:3px;display:block}
 .ix-seller a{color:var(--accent);text-decoration:none;font-family:var(--font-mono);font-size:var(--fs-sm);word-break:break-all}
 .ix-seller a:hover{text-decoration:underline}
-.ix-meth{font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint)}
+.ix-meth{font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);white-space:nowrap}
 .ix-price{font-family:var(--font-mono);font-size:var(--fs-sm);white-space:nowrap}
 .ix-pager{display:flex;gap:10px;align-items:center;justify-content:center;margin:26px 0 0;font-family:var(--font-mono);font-size:var(--fs-sm)}
 .ix-pager a{border:1px solid var(--hairline);color:var(--ink);text-decoration:none;padding:8px 16px}

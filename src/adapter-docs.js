@@ -33,7 +33,7 @@ const BASE = [
     worksWith: ["generateText", "streamText", "Any AI SDK provider"] },
   { slug: "langchain", name: "LangChain", tagline: "LangChain tool integration", shape: "meta",
     desc: "Four meta tools (find, route, call, about) as LangChain.js tool objects for LangChain agents and LangGraph nodes.",
-    worksWith: ["LangChain JS", "LangGraph", "createAgent", "Any LangChain chat model with tool calling"] },
+    worksWith: ["LangChain JS", "LangGraph", "createAgent", "Any tool-calling LangChain model"] },
   { slug: "llamaindex", name: "LlamaIndex", tagline: "LlamaIndex tool integration", shape: "per-slug",
     desc: "FunctionTool instances for LlamaIndex TS agents and workflows, built from the catalog's JSON Schema.",
     worksWith: ["LlamaIndex TS", "@llamaindex/workflow agent()", "FunctionTool"] },
@@ -147,12 +147,12 @@ export function adapterDocPage(baseUrl, slug) {
 
   const extraCss = `
   @media (max-width: 900px) {
-    .ml-adp-grid { grid-template-columns: 1fr !important; }
+    .ml-adp-grid { grid-template-columns: minmax(0,1fr) !important; }
     .ml-adp-toc  { position: static !important; }
   }`;
 
   const body = `
-  <div class="ml-adp-grid" style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;display:grid;grid-template-columns:200px 1fr;gap:44px;align-items:start;">
+  <div class="ml-adp-grid" style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;display:grid;grid-template-columns:200px minmax(0,1fr);gap:44px;align-items:start;">
 
     <!-- TOC -->
     <aside class="ml-adp-toc" style="position:sticky;top:92px;font-family:var(--font-mono);font-size:var(--fs-sm);">
@@ -207,14 +207,14 @@ export function adapterDocPage(baseUrl, slug) {
       <!-- Configuration -->
       ${adapter.config && adapter.config.length ? `<div id="config" style="margin-bottom:36px;">
         <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Configuration</h2>
-        <table style="width:100%;border-collapse:collapse;margin-bottom:14px;font-size:var(--fs-md);">
+        <div style="overflow-x:auto;margin-bottom:14px;"><table style="width:100%;border-collapse:collapse;font-size:var(--fs-md);">
           <thead>
             <tr><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--hairline);font-size:var(--fs-sm);text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Option</th><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--hairline);font-size:var(--fs-sm);text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Type</th><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--hairline);font-size:var(--fs-sm);text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Description</th></tr>
           </thead>
           <tbody>
 ${configRows}
           </tbody>
-        </table>
+        </table></div>
         <div style="position:relative;">
           <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${configExamples}</code></pre>
           <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--panel-rule);border:1px solid var(--panel-rule-2);color:var(--on-panel-dim);font-size:var(--fs-xs);padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>

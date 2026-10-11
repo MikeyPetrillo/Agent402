@@ -69,6 +69,8 @@ export const REPORTS_CSS = `
   .status{background:var(--card);border:1px solid var(--hairline);border-radius:var(--radius);padding:44px 34px;text-align:center;margin-top:24px}
   .status h2{font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink)}.status p{color:var(--muted);max-width:460px;margin:0 auto 8px;line-height:1.55}
   .report-actions{display:flex;gap:10px;align-items:center;margin:22px 0 4px;flex-wrap:wrap}
+  .dl-csv>span{white-space:nowrap}
+  @media (max-width:600px){.dl-csv{display:inline-flex;flex-direction:column;align-items:flex-start;text-align:left}.report{padding:22px 18px}.report ol,.report ul{padding-left:22px}}
   .keep-hint{color:var(--muted);font-size:var(--fs-sm);margin-top:8px;line-height:1.5}
   .keep-hint ul{margin:6px 0 0;padding-left:18px}
   .rpt-head{border-bottom:1px solid var(--ink);padding-bottom:18px;margin-bottom:26px}

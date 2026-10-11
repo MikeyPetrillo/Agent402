@@ -314,7 +314,7 @@ export const TERMINAL_CSS = `
 .t-spark-l{fill:none;stroke:currentColor;stroke-width:1.25;vector-effect:non-scaling-stroke;}
 .t-spark-a{fill:currentColor;opacity:.13;stroke:none;}
 .t-note{padding:7px 10px;font-size:var(--fs-2xs);color:var(--t-ink-faint);border-top:1px solid var(--t-rule);}
-.t-empty{padding:16px 10px;color:var(--t-ink-dim);}
+.t-empty{padding:16px 10px;color:var(--t-ink-dim);font-family:var(--font-body);}
 
 /* Status bar */
 .t-status{display:flex;flex-wrap:wrap;align-items:center;gap:0;border-top:1px solid var(--t-rule);background:var(--t-panel-2);}

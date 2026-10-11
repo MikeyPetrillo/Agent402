@@ -42,18 +42,23 @@ export function proofUsd(n) {
 const usd = proofUsd;
 const pct = (settled, quoted) => (quoted ? `${Math.round((settled / quoted) * 100)}%` : "n/a");
 
+// "NAME (who it is)": the name stays a one-line label, the parenthetical reads as a line of prose under it.
+function labelHtml(label) {
+  const m = String(label).match(/^([^(]+?) \((.+)\)$/);
+  return m ? `${esc(m[1])}<span style="display:block;font-family:var(--font-body);font-size:var(--fs-sm);color:var(--muted);margin-top:2px;">${esc(m[2])}</span>` : esc(label);
+}
 function rowHtml(label, side, note) {
   const l = side.latest;
   if (!l) {
     return `<div style="background:var(--card);border:1px solid var(--hairline);padding:22px 24px;">
-  <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:10px;">${esc(label)}</div>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:10px;">${labelHtml(label)}</div>
   <p style="margin:0;color:var(--muted);font-size:var(--fs-base);line-height:1.55;">No settlement recorded yet.${note ? ` ${esc(note)}` : ""}</p>
 </div>`;
   }
   const link = txLink(l.network, l.tx);
   const txCell = l.tx ? (link ? `<a href="${esc(link)}" rel="noopener" style="color:var(--ink);word-break:break-all;">${esc(l.tx)}</a>` : `<span style="word-break:break-all;">${esc(l.tx)}</span>`) : l.txWithheld ? `<span style="color:var(--muted);font-family:var(--font-body);">not published: a transaction hash names its payer on chain</span>` : "n/a";
   return `<div style="background:var(--card);border:1px solid var(--hairline);padding:22px 24px;">
-  <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:12px;">${esc(label)}</div>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:12px;">${labelHtml(label)}</div>
   <dl style="display:grid;grid-template-columns:150px 1fr;gap:8px 16px;margin:0;font-size:var(--fs-base);line-height:1.5;">
     <dt style="color:var(--muted);">quoted ceiling</dt><dd style="margin:0;color:var(--ink);font-family:var(--font-mono);">${esc(usd(l.quoteUsd))}</dd>
     <dt style="color:var(--muted);">settled</dt><dd style="margin:0;color:var(--ink);font-family:var(--font-mono);">${esc(usd(l.settledUsd))}${l.quoteUsd != null ? ` <span style="color:var(--muted);">(${esc(pct(l.settledUsd, l.quoteUsd))} of the ceiling)</span>` : ""}</dd>
