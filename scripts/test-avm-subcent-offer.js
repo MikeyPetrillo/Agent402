@@ -424,7 +424,7 @@ const base = (amount) => ({ scheme: "exact", network: "eip155:8453", asset: "0x8
         ALGORAND_UPSTREAM_BUYER_ADDRESS: "", MPP_SECRET_KEY: "", PAYMENT_SETTLE_FALLBACK: "", AVM_SUBCENT_GATE: "",
         AVM_SPONSORSHIP_REFRESH_MS: "250", AVM_SPONSORSHIP_REFUSAL_HOLD_MS: "2000", AGENT402_BASE_RPC: `http://127.0.0.1:${FAC}/rpc`,
         GATEWAY_SETTLE_BREAKER_MAX: "3", GATEWAY_SETTLE_BREAKER_WINDOW_MS: "600000",
-        X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", WALLET_DIGEST: "off", SOLANA_LEADERBOARD: "off",
+        X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", SOLANA_LEADERBOARD: "off",
         ...extraEnv,
       },
       stdio: ["ignore", "pipe", "pipe"],

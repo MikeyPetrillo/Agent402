@@ -16,7 +16,6 @@ process.env.STATE_DATABASE_URL = relay.url;
 const sdb = await import("../src/state-db.js");
 const { createFollowups } = await import("../src/followups.js");
 const { createFreeAlerts } = await import("../src/free-alerts.js");
-const { createWalletDigest } = await import("../src/wallet-digest.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -119,37 +118,6 @@ try {
     await F.flush();
     const after = (await sdb.documents.get("free-alerts.json")).body.alerts;
     ok(Object.keys(after).length === before + (threw ? 0 : 1) && after[yid] && after[xid], `free-alerts: a signup after a failed first load keeps every stored alert (${before} before, ${Object.keys(after).length} after)`);
-  }
-
-  // ---- wallet digest -----------------------------------------------------------
-  {
-    let clock = 1_000_000_000_000;
-    const sent = [];
-    const usage = () => ({ totals: { calls: 3, paidUsd: 0.03 }, bySlug: [{ slug: "hash", calls: 3, usd: 0.03 }], byNetwork: {} });
-    const mk = (tag) => createWalletDigest({ storePath: join(DIR, tag, "wallet-digest.json"), secret, now: () => clock, usage, verifySignature: async () => true, sendEmail: async (m) => { sent.push(`${tag}:${m.to}:${m.subject}`); return true; }, log: quiet });
-    const key = (id, p) => createHmac("sha256", secret).update(`digest:${p}:${id}`).digest("base64url").slice(0, 32);
-    const A = mk("a"); await A.ready();
-    const B = mk("b"); await B.ready();
-    const la = A.preEnrolCredits({ keyId: "k1", email: "p@example.com" }); await A.flush();
-    const lb = B.preEnrolCredits({ keyId: "k2", email: "q@example.com" }); await B.flush();
-    let row = (await sdb.documents.get("wallet-digest.json")).body.subs;
-    ok(Object.keys(row).length === 2, "wallet-digest: pre-enrolments on both containers both land");
-    const idOf = (l) => new URL(l).searchParams.get("id");
-    const pid = idOf(la), qid = idOf(lb);
-    await A.refresh();
-    ok(A.confirm(pid, key(pid, "confirm")).ok && A.confirm(qid, key(qid, "confirm")).ok, "wallet-digest: confirms on A");
-    await A.flush();
-    await B.refresh();
-    ok(B.unsubscribe(pid, key(pid, "unsubscribe")).ok, "wallet-digest: unsubscribe on B");
-    await B.flush();
-    A.preEnrolCredits({ keyId: "k3", email: "r@example.com" }); await A.flush();
-    row = (await sdb.documents.get("wallet-digest.json")).body.subs;
-    ok(row[pid].status === "unsubscribed" && row[pid].email === null && row[qid].status === "active", "wallet-digest: B's unsubscribe survives A's next write");
-    sent.length = 0;
-    await Promise.all([A.tick(), B.tick()]);
-    ok(sent.filter((x) => x.includes(":q@example.com:")).length === 1 && !sent.some((x) => x.includes(":p@example.com:")), `wallet-digest: two containers ticking at once send one digest, none to the unsubscribed address (${sent.length})`);
-    await A.tick(); await B.tick();
-    ok(sent.filter((x) => x.includes(":q@example.com:")).length === 1, "wallet-digest: the week is not sent again");
   }
   // ---- monitor scheduler -------------------------------------------------------
   {

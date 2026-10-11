@@ -63,6 +63,20 @@ export const WHY_POINTS = [
   },
 ];
 
+/** The other ways to give an agent tools, side by side (the old /compare
+ * page, folded in here; /compare answers a 301 to /docs#why). Category labels
+ * only: no product or vendor is named. */
+export const WHY_COMPARE = {
+  cols: ["Here", "Building it yourself", "Calling each provider directly"],
+  rows: [
+    ["Getting started", "One MCP add or one HTTP call", "Write, host and monitor each handler", "An account and an API key per provider"],
+    ["Paying", "Per call over x402 or MPP; proof-of-work for the pure-CPU tools", "Billing is yours to build", "A plan or a prepaid balance per provider"],
+    ["Finding a tool", "A searchable catalog and /api/find", "Only what you have built", "Each provider's own docs"],
+    ["Errors and retries", "One JSON error shape; a keyed retry replays the paid answer", "Yours to design", "A format per provider"],
+    ["Running it", "Hosted, or self-host the open-source server", "Yours to run", "Each provider's own uptime"],
+  ],
+};
+
 /** One-line-per-point plain text for agent surfaces (llms.txt, MCP instructions). */
 export function whyPointsPlain() {
   return WHY_POINTS.map((w) => `${w.h} ${w.p}`);
@@ -91,7 +105,24 @@ export const WHY_SECTION_CSS = `
   .ml-docs-main .why-pt h3 { font-family:var(--font-body);font-weight:600;font-size:var(--fs-xl);line-height:1.2;letter-spacing:-.01em;margin:0 0 8px;color:var(--ink); }
   .ml-docs-main .why-pt p { font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 12px; }
   .ml-docs-main .why-pt a.why-proof { font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px; }
-  @media (max-width:900px){ .why-pt { grid-template-columns:minmax(0,1fr);gap:6px; } }`;
+  @media (max-width:900px){ .why-pt { grid-template-columns:minmax(0,1fr);gap:6px; } }
+  #why-compare { scroll-margin-top: 110px; }
+  .why-cmp-wrap { overflow-x:auto;border:1px solid var(--hairline);background:var(--card);margin:0 0 44px; }
+  .ml-docs-main .why-cmp { width:100%;min-width:640px;border-collapse:collapse;margin:0;font-size:var(--fs-md); }
+  .ml-docs-main .why-cmp th, .ml-docs-main .why-cmp td { text-align:left;vertical-align:top;padding:12px 16px;border:0;border-bottom:1px solid var(--hairline);background:transparent; }
+  .ml-docs-main .why-cmp thead th { font-family:var(--font-mono);font-size:var(--fs-2xs);font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:var(--faint); }
+  .ml-docs-main .why-cmp tbody tr:nth-child(even) th, .ml-docs-main .why-cmp tbody tr:nth-child(even) td { background:var(--card-zebra); }
+  .ml-docs-main .why-cmp tbody tr:last-child th, .ml-docs-main .why-cmp tbody tr:last-child td { border-bottom:none; }
+  .ml-docs-main .why-cmp tbody th { font-weight:600;color:var(--ink); }
+  .ml-docs-main .why-cmp td { color:var(--muted); }
+  .ml-docs-main .why-cmp td.why-cmp-here { color:var(--ink); }`;
+
+/** The comparison table under the seven points, in its own scroll wrapper. */
+function whyCompareHtml() {
+  const head = `<tr><th scope="col">Task</th>${WHY_COMPARE.cols.map((c) => `<th scope="col">${esc(c)}</th>`).join("")}</tr>`;
+  const rows = WHY_COMPARE.rows.map(([label, ...cells]) => `<tr><th scope="row">${esc(label)}</th>${cells.map((c, i) => `<td${i === 0 ? ' class="why-cmp-here"' : ""}>${esc(c)}</td>`).join("")}</tr>`).join("");
+  return `<div class="why-cmp-wrap"><table class="why-cmp"><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+}
 
 /** The "Why pay here" section of /docs: all seven points with their proof
  * links, under the anchor #why. */
@@ -110,8 +141,10 @@ export function whySectionHtml() {
       <section>
       <h2 id="why" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;">Why pay here.</h2>
       <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">Seven things that are different about paying here. Every claim links to the surface that proves it: what the server does, measured on the server, on the open protocols anyone can build on, x402 and MPP.</p>
-      <div style="border-bottom:1px solid var(--hairline);margin-bottom:44px;">${points}
+      <div style="border-bottom:1px solid var(--hairline);margin-bottom:30px;">${points}
       </div>
+      <h3 id="why-compare" style="font-family:var(--font-body);font-weight:600;font-size:var(--fs-xl);line-height:1.2;letter-spacing:-.01em;margin:0 0 12px;color:var(--ink);">Side by side with the other ways in.</h3>
+      ${whyCompareHtml()}
       </section>
 `;
 }

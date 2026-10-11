@@ -894,9 +894,6 @@ function nav(activePath) {
 // Footer - compact single-row (sub-pages)
 // ---------------------------------------------------------------------------
 
-// Sitemap pages that no nav menu reaches; this row is their site-wide link.
-const FOOTER_MORE = [["/faq", "faq"], ["/compare", "compare"], ["/use-cases", "use cases"], ["/community", "community"], ["/digest", "weekly digest"], ["/shop", "shop"], ["/badges", "badges"]];
-
 export function ledgerFooterCompact() {
   // Three rows, deliberately. The previous compact footer carried 31 links in
   // one undifferentiated wall, which is the same failure as labelling eight
@@ -925,10 +922,6 @@ export function ledgerFooterCompact() {
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:10px;">
       <span style="letter-spacing:.1em;text-transform:uppercase;">for agents</span>
       <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/llms.txt" style="color:var(--muted);text-decoration:none;">llms.txt</a><a href="/openapi.json" style="color:var(--muted);text-decoration:none;">openapi.json</a><a href="/.well-known/x402" style="color:var(--muted);text-decoration:none;">.well-known/x402</a><a href="/api/pricing" style="color:var(--muted);text-decoration:none;">/api/pricing</a><a href="/api/stats" style="color:var(--muted);text-decoration:none;">/api/stats</a><a href="/api/status" style="color:var(--muted);text-decoration:none;">/api/status</a><a href="/x402-test" style="color:var(--muted);text-decoration:none;">test your client</a><a href="/crawler" style="color:var(--muted);text-decoration:none;">our crawler</a><a href="/SKILL.md" style="color:var(--muted);text-decoration:none;">SKILL.md</a><a href="/docs/webhooks" style="color:var(--muted);text-decoration:none;">webhooks</a></span>
-    </div>
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:10px;">
-      <span style="letter-spacing:.1em;text-transform:uppercase;">more</span>
-      <span style="display:flex;gap:16px;flex-wrap:wrap;">${FOOTER_MORE.map(([href, label]) => `<a href="${href}" style="color:var(--muted);text-decoration:none;">${label}</a>`).join("")}</span>
     </div>
   </div>
 </footer>`;

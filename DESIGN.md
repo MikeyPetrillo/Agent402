@@ -176,7 +176,7 @@ rules below.
 - Copy that offers something reads the switch that sells it.
 
 ## Allowed literals (the guard's allowlist)
-- Email HTML (`src/email.js`, `followups.js`, `free-alerts.js`, `wallet-digest.js`, and lines
+- Email HTML (`src/email.js`, `followups.js`, `free-alerts.js`, and lines
   marked `design-tokens: literal`): inline styles with palette values, scale px, and radii of
   0, 50%, 4px or 999px (the pill only on the money button).
 - Print CSS, the standalone fallback page in `server.js`, the public SVG badges: palette

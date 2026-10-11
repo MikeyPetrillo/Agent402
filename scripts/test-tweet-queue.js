@@ -602,7 +602,7 @@ function mk(items, { clock = T0 + MIN, script = [], raw = null, ...extra } = {})
     for (const k of Object.keys(env)) if (/^(TWEET_QUEUE|X_|TWITTER_)/.test(k) || k === "NODE_ENV" || k === "FREE_MODE") delete env[k];
     return {
       ...env, AGENT402_OPERATOR_TOKEN: TOKEN, X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off",
-      FREE_ALERTS: "off", FOLLOWUPS: "off", WALLET_DIGEST: "off", X402_SYNC_ON_START: "false",
+      FREE_ALERTS: "off", FOLLOWUPS: "off", X402_SYNC_ON_START: "false",
       TWEET_QUEUE: JSON.stringify(items), TWEET_QUEUE_FIRST_TICK_MS: "300",
       X_API_KEY: CREDS.consumerKey, X_API_SECRET: CREDS.consumerSecret, X_ACCESS_TOKEN: CREDS.accessToken, X_ACCESS_SECRET: CREDS.accessSecret,
     };

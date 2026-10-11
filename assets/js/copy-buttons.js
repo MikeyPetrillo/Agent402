@@ -1,6 +1,6 @@
 (function(){
   // Shared "copy code snippet" button handler for every page that has one:
-  // adapter docs (.ml-adp-copy), badges (.bdg-copy), contribute (.ct-copy),
+  // adapter docs (.ml-adp-copy), the /docs badges (.bdg-copy), contribute (.ct-copy),
   // quickstart (.qs-copy). All four copy their own <code> sibling's text and
   // give the same "Copied!" feedback - unified into one file (CSP hardening,
   // 2026-08-16) instead of four near-identical inline scripts. .ml-adp-copy

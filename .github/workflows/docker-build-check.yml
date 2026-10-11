@@ -48,7 +48,6 @@ jobs:
             -e X402_INDEX_CRAWL=off \
             -e MPP_INDEX_CRAWL=off \
             -e MONITOR_SCHEDULER=off \
-            -e WALLET_DIGEST=off \
             -e FREE_ALERTS=off \
             -e FOLLOWUPS=off \
             -e SOLANA_LEADERBOARD=off \

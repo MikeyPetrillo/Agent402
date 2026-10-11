@@ -4089,9 +4089,6 @@ jobs:
       - name: Focus-visible on search/demo inputs (real browser check - inline style can silently defeat a stylesheet :focus rule)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-focus-visible.js
 
-      - name: /compare tables scroll independently on narrow viewports (real browser check - scrollWidth>clientWidth alone can't prove overflow-x is enabled)
-        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-compare-scroll.js
-
       - name: /status 90-day strip fits a phone (local server, builds its own strip)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-status-bars-mobile.js
 
@@ -4234,12 +4231,11 @@ jobs:
           t node scripts/test-free-alerts.js
           t node scripts/test-free-alert-probes.js
           t node scripts/test-email-status.js
-          t node scripts/test-wallet-digest.js
           # Alert routes end to end on a booted server: confirm / unsubscribe / stop pages render (the engine test could not see a 500 here)
           t node scripts/test-alerts-routes.js
           # Post-purchase follow-ups: two emails at most, stoppable, failure notice (offline)
           t node scripts/test-followups.js
-          # Erasure on request: erase-subject.js removes an address from every file store that holds one (alerts, follow-ups, weekly digest, subscriptions) (offline)
+          # Erasure on request: erase-subject.js removes an address from every file store that holds one (alerts, follow-ups, a leftover weekly digest file, subscriptions) (offline)
           t node scripts/test-erase-subject.js
           # Server-side tweet queue: one post per clock hour oldest first, recorded before it is sent (a killed child never re-sends), two processes post once, drops past the window, an in-doubt post retried once (a duplicate refusal records it posted), the alarm word on /api/gateway-status, kill switch, only the production server posts (FREE_MODE, no NODE_ENV=production or no volume stay read-only), no text or credential in logs or the operator read (stub X; boots three servers, one a control that posts to the stub)
           t node scripts/test-tweet-queue.js

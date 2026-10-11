@@ -49,7 +49,7 @@ features, ad personalization and Google signals are off. If your browser's time 
 cookie is off until you choose "Allow" in the strip at the bottom of the page, and Google only receives
 cookieless pings before that; your choice is kept in your browser. Pages whose address is itself a private
 link (a paid report, a receipt, a signed alert or manage link) do not load Google Analytics. Free email
-alerts and the weekly spend digest are the forms that take an address, and each
+alerts are the form that takes an address, and it
 says so where you enter it; a card purchase gives us the email you enter at checkout. Everything we
 keep, and for how long, is listed below. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
 so every claim below is verifiable in code.</p>
@@ -123,7 +123,6 @@ so every claim below is verifiable in code.</p>
   <li><b>Memory tools.</b> Data written via <code>/api/memory</code> is stored on our server keyed to the
   paying wallet, readable only by that wallet (or wallets it explicitly grants), until the owner deletes
   it or its TTL expires. A tamper-evident audit log of accesses is kept for the namespace owner.</li>
-  <li><b>Weekly spend digest.</b> If you subscribe an email to a wallet (by signing a message with it) or to an existing credits key (by presenting it), we store that address, the wallet address or the key's id, and the dates we sent to it, and send a confirmation link first: no digest is sent until you click it, and an unconfirmed signup is deleted after three days. Each digest carries an unsubscribe link that removes the address. The key itself is never stored by the form.</li>
   <li><b>Free email alerts.</b> If you enter an email on a free report page to be told when a company, fund, domain or product changes, we store that address, the subject you chose and the dates we checked and emailed, and we send you a confirmation link first: nothing is watched and nothing else is sent until you click it. Alert emails go out at most once a day, only when something changed, through the same transactional provider, and every one carries a one-click unsubscribe link that ends the alert and stops all email. We do not use the address for anything else and do not share it.</li>
 </ul>
 
@@ -142,7 +141,7 @@ so every claim below is verifiable in code.</p>
   build the plan. When route-and-execute or a decision's execution buys from an outside seller to resell
   the result to you, that seller receives the request it needs to answer, sent and paid for by us.</li>
   <li>Card payments and subscriptions are processed by Stripe; transactional email (report links,
-  monitor and free alerts, the weekly digest) is sent through ZeptoMail, with Resend as a fallback. Report products read public sources named in each
+  monitor and free alerts) is sent through ZeptoMail, with Resend as a fallback. Report products read public sources named in each
   report (for example SEC EDGAR, openFDA, DNS and certificate-transparency logs, public blockchain
   explorers, and web search) and are synthesized by third-party AI models via OpenRouter, which receive
   the report's inputs and source material, not your email. When the optional Stripe ledger mirror is on,
@@ -163,10 +162,10 @@ exactly like the HTTP API.</p>
 expire with their window (one hour, or 24 hours for the free trial's daily allowance). Memory-tool data
 persists until deleted by its owner or TTL expiry. Card-purchase records (session id, input, the
 finished report) are kept while the report link or subscription is live and for accounting afterwards.
-Free-alert and weekly-digest records keep your email until you unsubscribe, when the address is
+Free-alert records keep your email until you unsubscribe, when the address is
 removed; an unconfirmed signup is deleted after three days. Follow-up email records drop the address
 when you stop them. Decisions bought on <code>/api/decide</code> are deleted after 30 days. You can ask
-us at the address below to delete your email from our alert, digest, follow-up and subscription
+us at the address below to delete your email from our alert, follow-up and subscription
 records; the card processor's copy is deleted through Stripe. The sales ledger keeps wallet addresses and transaction ids, which are already public
 on-chain. Aggregate, non-personal counters (total calls served per tool) are kept for the public
 <a href="/api/stats">/api/stats</a> page.</p>

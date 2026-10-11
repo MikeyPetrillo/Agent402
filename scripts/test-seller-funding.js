@@ -1532,7 +1532,7 @@ const SELF_FLAG = /USDC this seller's wallet had sent its payers|USDC that walle
         LEADERBOARD_SNAPSHOT_FILE: join(dir2, "lb.json"), LEADERBOARD_FUNDING_FILE: join(dir2, "funding.json"),
         SOR_SELF_FUNDING_CLEARED_FILE: join(dir2, "cleared.json"), SOR_SHARED_PAYTOS_FILE: join(dir2, "shared.json"), LEADERBOARD_FUNDING_SWITCH_FILE: join(dir2, "switch.json"),
         X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
-        MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", WALLET_DIGEST: "off",
+        MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });

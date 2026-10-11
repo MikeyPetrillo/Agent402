@@ -56,7 +56,7 @@ proc = spawn(process.execPath, ["src/server.js"], {
     MPP_SECRET_KEY: "test-price-by-model-secret", TEMPO_API_KEY: "test-tempo-key", TEMPO_RECIPIENT_ADDRESS: TREASURY,
     TEMPO_API_BASE_URL: `http://127.0.0.1:${FAC_PORT}/tempo`, STRIPE_SECRET_KEY: "", STRIPE_PROFILE_ID: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
-    WALLET_DIGEST: "off", SOLANA_LEADERBOARD: "off", LEADERBOARD_FIRST_REFRESH_DELAY_MS: "3600000",
+    SOLANA_LEADERBOARD: "off", LEADERBOARD_FIRST_REFRESH_DELAY_MS: "3600000",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
