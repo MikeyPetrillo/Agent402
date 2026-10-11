@@ -407,6 +407,8 @@ try {
     ok(!!sample && isDeepStrictEqual(Object.keys(sample), Object.keys(body)), `B5 the /x402-test sample has this body's keys, in order (${sample ? Object.keys(sample).join(",") : "unparsed"})`);
     ok(!!sample && ["reason", "hint", "retry", "x402Version"].every((k) => sample[k] === body[k]), `B5 the /x402-test sample's reason, hint and retry are this body's (${body.hint})`);
     console.log("   B5 body (the /x402-test sample):", JSON.stringify({ ...body, resource: "...", accepts: "...", extensions: "..." }));
+    // The tier count differs by wire (/api/pricing), so the page names no count.
+    ok(!/\b(one|two|three|four|five|six|seven|eight|\d+) model tiers\b/i.test(html) && html.includes("flat model tiers and a metered tier on four wires"), "the /x402-test page states the gateway tiers without a hand-typed count");
   }
 
   // B6 + B7 both facilitator verify-refusal shapes keep the verify hint
