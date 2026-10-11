@@ -9,6 +9,8 @@
 //   - A's debt and B's void race on the database (many hashes at once):
 //     none ends owed, whichever statement ran first;
 //   - control: A's debt lands first, then B voids: the row is void.
+// The dead-letter here is A's local disk (no REDIS_URL); with the journals in
+// Redis the same void tombstone holds (test-ledger-journal-redis-pg.js).
 // Requires STATE_DATABASE_URL (CI fails without it).
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +22,7 @@ import { requireTestPg } from "./lib/test-pg.js";
 import { startPgRelay } from "./lib/pg-relay.js";
 
 const SELF = fileURLToPath(import.meta.url);
+delete process.env.REDIS_URL; // A's journal is its local disk; B inherits this environment
 const debtsOf = (rl, createTempoPushDebts) => createTempoPushDebts({
   recordOwed: rl.recordRefundOwed, voidOnClaim: rl.voidOwedOnClaim, renoteOwed: rl.renoteOwedRefund,
   refundByEvidence: rl.refundByEvidence, promoteToHangup: rl.promoteOwedToHangup,

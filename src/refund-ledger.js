@@ -233,7 +233,9 @@ const fileToPg = (r) => cleanRow({
 // timed out, killed) is replayed in the order it was written: a debt insert-
 // if-absent by evidence, a change as the same guarded UPDATE. See
 // createDeadLetter.
-const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: join(DATA_DIR, "agent402-refunds.dead-letter.ndjson"), name: "refunds" }) : null;
+// With REDIS_URL set the entries live in Redis, shared by every container on
+// this database (src/ledger-journal-redis.js), and the file is the fallback.
+const deadLetter = USE_PG ? createDeadLetter({ db: fileDb, file: join(DATA_DIR, "agent402-refunds.dead-letter.ndjson"), name: "refunds", journalKey: `${stateDbSchema()}:refunds` }) : null;
 // One mark per evidence (refund_marks), written by every debt insert and by
 // every void on claim, so the two serialize on its primary key across
 // containers: a debt inserts its mark "owed" (or, when a mark is already
@@ -285,18 +287,20 @@ async function replayDeadLetters() {
   replaying = true;
   let landed = 0;
   try {
-    for (const e of deadLetter.list()) {
+    // Claimed (one drainer per journal across containers, in the order
+    // written), each entry removed only once Postgres holds it.
+    landed = await deadLetter.drain(async (e) => {
       const v = e.payload;
       const isDebt = e.kind === "refund" && v?.evidence;
       const isChange = e.kind === "refund-change" && OWED_CHANGES[v?.op] && Array.isArray(v.params) && v.params[0];
-      if (!isDebt && !isChange) { deadLetter.remove(e.id); continue; }
+      if (!isDebt && !isChange) return "drop";
       let r;
       try { r = await (isDebt ? stateQuery(INSERT_OWED_SQL(), owedParams(v)) : runOwedChange(v.op, v.params)); writer.answered(); }
-      catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); continue; } writer.failed(err); throw err; }
-      if (r.rows[0]) { applyPgRow(r.rows[0]); writeThroughRow(r.rows[0]); landed++; }
-      else await refreshWhere("evidence = $1", [isDebt ? v.evidence : v.params[0]]).catch(() => {});
-      deadLetter.remove(e.id);
-    }
+      catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); return "keep"; } writer.failed(err); throw err; }
+      if (r.rows[0]) { applyPgRow(r.rows[0]); writeThroughRow(r.rows[0]); return "landed"; }
+      await refreshWhere("evidence = $1", [isDebt ? v.evidence : v.params[0]]).catch(() => {});
+      return "drop";
+    });
   } finally { replaying = false; }
   if (landed) console.log(`[refund-ledger] landed ${landed} debt(s) or change(s) that had waited in the local dead-letter`);
   return landed;
@@ -446,7 +450,7 @@ if (USE_PG) {
 // runs ahead of the debt it acts on. See createLedgerWriter.
 const writer = createLedgerWriter({
   enqueue, ready: () => readyP(), deadLetter, warnOnce, label: "refund-ledger",
-  before: async () => { if (deadLetter.list().length) await replayDeadLetters(); },
+  before: async () => { if (deadLetter.hasWaiting()) await replayDeadLetters(); },
 });
 /** One queued Postgres write: lands after every earlier write, never rejects (a failed write resolves false, logged once a minute). */
 function pgWrite(label, fn) {
@@ -483,7 +487,7 @@ export async function refundLedgerRefresh() {
 export function refundDeadLetterCount() { return deadLetter ? deadLetter.size() : 0; }
 /** The dead-letter for the gateway-status word: entries waiting for the replay, all entries on disk, and when the oldest was written (null when none). */
 export function refundDeadLetterState() {
-  return deadLetter ? { waiting: deadLetter.list().length, total: deadLetter.size(), oldestAt: deadLetter.oldestAt() } : { waiting: 0, total: 0, oldestAt: null };
+  return deadLetter ? deadLetter.state() : { waiting: 0, total: 0, oldestAt: null };
 }
 
 /**

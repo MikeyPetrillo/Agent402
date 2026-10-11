@@ -1,17 +1,19 @@
 // Card subscriptions on a REAL Postgres behind a relay a test can cut:
-//   - a paid subscription recorded while the database is away is kept on
-//     local disk and lands later, so a restart before then loses nothing;
+//   - a paid subscription recorded while the database is away is kept in
+//     the journal (Redis with REDIS_URL set, else local disk) and lands
+//     later, so a restart before then loses nothing;
 //   - a replayed record never overwrites a newer copy of the subscription;
 //   - reload() shows one container a subscription another recorded since it
 //     loaded (the monitor scheduler calls it inside its lease);
 //   - a webhook's partial patch on a container that never loaded the
 //     subscription keeps the record's product and target.
 // Requires STATE_DATABASE_URL (CI fails without it).
-import { mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
 import { startPgRelay } from "./lib/pg-relay.js";
+import { journalHolds } from "./lib/journal-probe.js";
 
 requireTestPg({ label: "test-stripe-subscriptions-pg" });
 const relay = await startPgRelay(process.env.STATE_DATABASE_URL);
@@ -40,8 +42,8 @@ try {
   // A paid subscription recorded while the database is away survives a restart.
   relay.cut();
   const out = await A.recordFromSession("cs_down1");
-  const onDisk = existsSync(`${STORE}.pending.ndjson`) && readFileSync(`${STORE}.pending.ndjson`, "utf8").includes("sub_cs_down1");
-  ok(out.status === "active" && onDisk, `recorded with the database away: told ${out.status}, kept on local disk (${onDisk})`);
+  const onDisk = await journalHolds({ schema: sdb.stateDbSchema(), prefix: "subscriptions:", needle: "sub_cs_down1", file: `${STORE}.pending.ndjson` });
+  ok(out.status === "active" && onDisk, `recorded with the database away: told ${out.status}, kept in the journal (${onDisk})`);
   relay.heal();
   // A restart: a fresh instance on the same store path replays the record.
   const A2 = make();
@@ -88,7 +90,7 @@ try {
       booked.length = 0;
       relay.cut();
       const first = await send(ev);
-      const kept = existsSync(`${STORE}.pending.ndjson`) && readFileSync(`${STORE}.pending.ndjson`, "utf8").includes("sub_cs_three");
+      const kept = await journalHolds({ schema: sdb.stateDbSchema(), prefix: "subscriptions:", needle: "sub_cs_three", file: `${STORE}.pending.ndjson` });
       const dl = ledgerDeadLetterStatus({ full: true });
       ok(dl.status === "pending" && dl.subscriptions?.onDisk >= 1 && ledgerDeadLetterStatus({ now: Date.now() + 60 * 60_000 }).status === "stuck", `${ev.type}: the dead-letter word counts the journaled record (${dl.status}, ${dl.subscriptions?.onDisk} on disk)`);
       ok(first.code === 503 && kept && booked.length === 0, `${ev.type} with the database away: answers ${first.code} (5xx so Stripe retries), journal kept (${kept}), sales booked ${booked.length}`);

@@ -14,6 +14,7 @@ import Database from "better-sqlite3";
 import { existsSync, statSync, readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
+import { createRedisJournal, redisJournalConfigured, JOURNAL_LEASE_MS } from "./ledger-journal-redis.js";
 
 /** Server-clock milliseconds, the `updated_at` stamp every write sets. */
 export const PG_NOW_MS = "((extract(epoch from clock_timestamp()) * 1000)::bigint)";
@@ -157,14 +158,20 @@ const ident2 = (t) => String(t).split(".").map(ident).join(".");
 // directory); their states are summed, and two instances over the same file
 // count it once (the newest instance is kept).
 const journals = new Map(); // name -> Map(file -> dead letter)
-/** The state of every named journal: { name: { waiting, total, oldestAt } }. */
+/** The state of every named journal: { name: { waiting, total, oldestAt, local } } (`local`: entries on this container's disk while Redis holds the journal). */
 export function journalStates() {
   const out = {};
   for (const [name, set] of journals) {
-    const acc = { waiting: 0, total: 0, oldestAt: null };
+    const acc = { waiting: 0, total: 0, oldestAt: null, local: 0 };
+    const seen = new Set(); // shared journals: their Redis entries counted once per key
     for (const dl of set.values()) {
       const st = dl.state();
-      acc.waiting += st.waiting; acc.total += st.total;
+      let { waiting, total } = st;
+      if (dl.journalKey && st.shared) {
+        if (seen.has(dl.journalKey)) { waiting -= st.shared.waiting; total -= st.shared.total; }
+        seen.add(dl.journalKey);
+      }
+      acc.waiting += waiting; acc.total += total; acc.local += Number(st.local) || 0;
       if (st.oldestAt != null && (acc.oldestAt == null || st.oldestAt < acc.oldestAt)) acc.oldestAt = st.oldestAt;
     }
     out[name] = acc;
@@ -172,7 +179,7 @@ export function journalStates() {
   return out;
 }
 /** `name`: the journal's name on the dead-letter word (see journalStates). */
-export function createDeadLetter({ db = null, file = "", name = "" } = {}) {
+function createLocalDeadLetter({ db = null, file = "" } = {}) {
   let sqlite = null;
   if (db) {
     try {
@@ -271,7 +278,205 @@ export function createDeadLetter({ db = null, file = "", name = "" } = {}) {
       return { waiting: entries.filter((e) => !pending.has(key(e.id))).length, total: entries.length, oldestAt };
     },
   };
-  if (name) { if (!journals.has(name)) journals.set(name, new Map()); journals.get(name).set(String(db?.name || "") + "\u0000" + String(file || ""), dl); }
+  // The same surface as the shared journal (createDeadLetter), answered from disk.
+  Object.assign(dl, {
+    /** Entries for a replay to land (every local entry; one process owns its disk). */
+    claim: async () => dl.list(),
+    endClaim: async () => {},
+    hasWaiting: () => dl.list().length > 0,
+    entries: async () => all(),
+    durable: async (id) => (id == null ? null : "local"),
+    async addAsync(kind, payload, { pending: p = false, localPayload } = {}) {
+      const id = dl.add(kind, localPayload ?? payload, { pending: p });
+      return { id, where: id == null ? null : "local" };
+    },
+  });
+  return dl;
+}
+/**
+ * A money journal (see the note above createLocalDeadLetter). `name`: the
+ * journal's name on the dead-letter word. `journalKey`: its identity across
+ * containers (the state schema and the journal); with REDIS_URL set
+ * (src/ledger-journal-redis.js) the entries live in Redis under it, shared by
+ * every container on that database, and local disk (`db` / `file`) is the
+ * fallback for an entry Redis did not take. Without REDIS_URL, or without a
+ * key, the journal is the local one, exactly as before.
+ *
+ * The replay surface, the same in both modes: `drain(apply)` claims the
+ * entries (in Redis: atomically, one drainer per journal, each entry leased
+ * to it), runs `apply(entry)` on each in order, and removes an entry only
+ * after `apply` resolved "landed" or "drop" (its database write committed, or
+ * it can never land); "keep" leaves it, "stop" (or a throw) ends the pass.
+ * Entries it did not remove are freed for the next claim.
+ */
+export function createDeadLetter({ db = null, file = "", name = "", journalKey = "" } = {}) {
+  const local = createLocalDeadLetter({ db, file });
+  const dl = journalKey && redisJournalConfigured() ? createSharedDeadLetter(local, createRedisJournal({ key: journalKey })) : local;
+  dl.drain = (apply) => drainJournal(dl, apply);
+  if (name) { if (!journals.has(name)) journals.set(name, new Map()); journals.get(name).set(String(db?.name || "") + "\u0000" + String(file || "") + "\u0000" + String(journalKey || ""), dl); }
+  return dl;
+}
+/** See createDeadLetter. Resolves how many entries landed. */
+export async function drainJournal(dl, apply) {
+  const entries = await dl.claim();
+  let landed = 0;
+  try {
+    for (const e of entries) {
+      const r = await apply(e);
+      if (r === "stop") break;
+      if (r !== "landed" && r !== "drop") continue; // "keep"
+      // Removed only now: the entry's write has committed (or never can).
+      await dl.remove(e.id);
+      if (r === "landed") landed++;
+    }
+  } finally { await dl.endClaim(); }
+  return landed;
+}
+// Journal writes to Redis not answered yet, across every shared journal.
+const journalWrites = new Set();
+/** Resolves once every journal write this process started has landed in Redis or on local disk (shutdown). */
+export function flushJournals() { return Promise.allSettled([...journalWrites]).then(() => {}); }
+/** How often a shared journal renews what it holds and re-reads its counts. */
+const sharedTickMs = () => Math.max(50, Math.min(5_000, Math.floor(JOURNAL_LEASE_MS() / 3)));
+/**
+ * The Redis-backed journal (see createDeadLetter): an entry goes to Redis,
+ * else to `local`. Ids of entries on local disk read "L:<id>". The counts the
+ * dead-letter word reads are kept from the last read of Redis plus the
+ * changes this process made since.
+ */
+function createSharedDeadLetter(local, rj) {
+  const held = new Map(); // id -> { pending, settled, where (Promise), at, localId }
+  const claimed = new Set(); // Redis ids this process holds for a replay
+  let snap = { total: 0, pending: 0, oldestAt: null };
+  let opSeq = 0;
+  let deltas = []; // { seq, dt, dp, at } committed in Redis after the snapshot's read began
+  const delta = (dt, dp, at = null) => { deltas.push({ seq: ++opSeq, dt, dp, at }); };
+  let refreshing = null;
+  const refresh = () => {
+    if (refreshing) return refreshing;
+    const mark = opSeq;
+    refreshing = rj.state().then((s) => { snap = s; deltas = deltas.filter((d) => d.seq > mark); }, () => {}).finally(() => { refreshing = null; });
+    return refreshing;
+  };
+  const isLocal = (id) => typeof id === "string" && id.startsWith("L:");
+  const localIdOf = (id) => { const v = String(id).slice(2); return /^\d+$/.test(v) ? Number(v) : v; };
+  const tick = setInterval(() => {
+    const ids = [...claimed];
+    for (const [id, h] of held) if (h.pending && h.settled === "redis") ids.push(id);
+    rj.renew(ids).catch(() => {}).finally(() => { refresh(); });
+  }, sharedTickMs());
+  tick.unref?.();
+  refresh();
+  const dl = {
+    kind: "redis",
+    journalKey: rj.key,
+    add(kind, payload, { pending = false, localPayload } = {}) {
+      const at = Date.now();
+      const id = `${at.toString(36)}-${randomBytes(6).toString("hex")}`;
+      const h = { pending, settled: null, at, localId: null };
+      held.set(id, h);
+      h.where = (async () => {
+        if (!rj.down()) {
+          try { await rj.add({ id, kind: String(kind), payload, at }, { pending: h.pending }); delta(1, h.pending ? 1 : 0, at); return "redis"; }
+          catch { /* local disk below */ }
+        }
+        const lid = local.add(kind, localPayload ?? payload, { pending: h.pending });
+        if (lid == null) return null;
+        h.localId = lid;
+        return "local";
+      })().then((w) => {
+        journalWrites.delete(h.where);
+        h.settled = w;
+        if (w === null) { held.delete(id); console.error(`[ledger-journal] a ${kind} could not be kept in Redis or on local disk`); }
+        return w;
+      });
+      journalWrites.add(h.where);
+      return id;
+    },
+    /** Where the entry landed: "redis" (shared), "local" (this container's disk) or null. */
+    durable: (id) => (held.get(id)?.where ?? Promise.resolve(isLocal(id) ? "local" : null)),
+    async addAsync(kind, payload, opts = {}) {
+      const id = dl.add(kind, payload, opts);
+      const where = await dl.durable(id);
+      return { id: where ? (where === "local" ? `L:${held.get(id)?.localId}` : id) : null, where };
+    },
+    release(id) {
+      const h = held.get(id);
+      if (!h) return;
+      const was = h.pending;
+      h.pending = false;
+      h.where.then((w) => {
+        held.delete(id);
+        if (w === "local") local.release(h.localId);
+        else if (w === "redis" && was) return rj.release([id]).then(() => delta(0, -1));
+      }).catch(() => { /* the entry's lease lapses and the next claim takes it */ });
+    },
+    async remove(id) {
+      try {
+        if (isLocal(id)) { local.remove(localIdOf(id)); return; }
+        const h = held.get(id);
+        if (h) {
+          held.delete(id);
+          const w = await h.where;
+          if (w === "local") { local.remove(h.localId); return; }
+          if (w !== "redis") return;
+        }
+        claimed.delete(id);
+        await rj.remove([id]);
+        delta(-1, h?.pending ? -1 : 0);
+      } catch { /* left in the journal: the replay lands it again, insert-if-absent */ }
+    },
+    /** Entries on this container's disk (ids "L:<id>"), excluding writes still queued here. */
+    list: () => local.list().map((e) => ({ ...e, id: `L:${e.id}` })),
+    async claim() {
+      let shared = [];
+      try { shared = await rj.claim(); for (const e of shared) claimed.add(e.id); } catch { shared = []; }
+      const disk = dl.list();
+      if (!disk.length) return shared;
+      // Oldest first across both (each is in its own order already).
+      const out = [];
+      let i = 0, j = 0;
+      while (i < shared.length || j < disk.length) {
+        if (j >= disk.length || (i < shared.length && Number(shared[i].at) <= Number(disk[j].at))) out.push(shared[i++]);
+        else out.push(disk[j++]);
+      }
+      return out;
+    },
+    async endClaim() {
+      const ids = [...claimed];
+      claimed.clear();
+      try { await rj.release(ids, { unlock: true }); } catch { /* their leases lapse */ }
+      await refresh();
+    },
+    /** Every entry (Redis and this disk), without claiming any; `strict`: throws when Redis cannot be read. */
+    async entries({ strict = false } = {}) {
+      let shared = [];
+      try { shared = await rj.entries(); } catch (e) { if (strict) throw e; shared = []; }
+      return [...shared, ...(await local.entries()).map((e) => ({ ...e, id: `L:${e.id}` }))];
+    },
+    hasWaiting: () => dl.state().waiting > 0,
+    size: () => dl.state().total,
+    oldestAt: () => dl.state().oldestAt,
+    /** { waiting, total, oldestAt, local }: `local` counts entries on this container's disk that wait for the replay (not a write still queued here). */
+    state() {
+      const ls = local.state();
+      let dt = 0, dp = 0, oldest = snap.oldestAt;
+      for (const d of deltas) { dt += d.dt; dp += d.dp; if (d.at != null && (oldest == null || d.at < oldest)) oldest = d.at; }
+      let inflight = 0, inflightPending = 0;
+      for (const h of held.values()) {
+        if (h.settled !== null) continue;
+        inflight++; if (h.pending) inflightPending++;
+        if (oldest == null || h.at < oldest) oldest = h.at;
+      }
+      const rTotal = Math.max(0, snap.total + dt) + inflight;
+      const rPending = Math.min(rTotal, Math.max(0, snap.pending + dp) + inflightPending);
+      if (ls.oldestAt != null && (oldest == null || ls.oldestAt < oldest)) oldest = ls.oldestAt;
+      if (rTotal === 0 && ls.total === 0) oldest = null;
+      return { waiting: rTotal - rPending + ls.waiting, total: rTotal + ls.total, oldestAt: oldest, local: ls.waiting, shared: { waiting: rTotal - rPending, total: rTotal } };
+    },
+    /** Re-read the shared counts now (tests; the timer does this). */
+    refresh,
+  };
   return dl;
 }
 /**
@@ -317,6 +522,9 @@ export function createLedgerWriter({ enqueue, ready, deadLetter, warnOnce, befor
         // whose append failed is kept nowhere else, so it tries Postgres.
         if (ahead && id != null && writer.failFastActive()) { keep(); return onError; }
         try {
+          // A shared journal's write-ahead entry is in Redis (or on local
+          // disk) before the write it guards runs.
+          if (id != null) await deadLetter.durable?.(id);
           await ready();
           if (before) await before();
           const v = await fn();
@@ -344,24 +552,30 @@ export const DEAD_LETTER_STUCK_MINUTES = Number(process.env.LEDGER_DEAD_LETTER_S
  * kept only on this container's disk), "pending" when an entry waits for the
  * replay, "none" otherwise; "off" without a state database. An entry whose
  * write is still queued is not "pending" (every write passes through the
- * dead-letter), but it is "stuck" once it is old.
+ * dead-letter), but it is "stuck" once it is old. "local": the journals are
+ * kept in Redis (REDIS_URL) but an entry sits on this container's disk
+ * because Redis did not take it, so it dies with the container; it pages
+ * like "stuck" (after "stuck", before "pending").
  */
 export function deadLetterWord(states, { enabled = true, now = Date.now(), stuckMinutes = DEAD_LETTER_STUCK_MINUTES } = {}) {
   if (!enabled) return "off";
-  let waiting = 0, oldest = null;
+  let waiting = 0, oldest = null, onLocalDisk = 0;
   for (const s of states) {
     waiting += Number(s?.waiting) || 0;
+    onLocalDisk += Number(s?.local) || 0;
     if (s?.oldestAt != null && (oldest == null || s.oldestAt < oldest)) oldest = s.oldestAt;
   }
   if (oldest != null && now - oldest > stuckMinutes * 60_000) return "stuck";
+  if (onLocalDisk > 0) return "local";
   return waiting > 0 ? "pending" : "none";
 }
 /** The journals the dead-letter word always names (zeros when one is not open). */
 export const MONEY_JOURNALS = ["sales", "refunds", "checkoutFinals", "subscriptions", "decide"];
 /**
- * ledgerDeadLetter on /api/gateway-status: one word over every local money
+ * ledgerDeadLetter on /api/gateway-status: one word over every money
  * journal (see deadLetterWord); `full` (the operator) adds the counts per
- * journal. Never an id, an amount or a payload.
+ * journal (`onDisk`: every entry kept, in Redis or on disk; `onLocalDisk`:
+ * the ones on this container's disk). Never an id, an amount or a payload.
  */
 export function ledgerDeadLetterStatus({ full = false, enabled = true, now = Date.now(), stuckMinutes = DEAD_LETTER_STUCK_MINUTES } = {}) {
   const states = journalStates();
@@ -370,7 +584,7 @@ export function ledgerDeadLetterStatus({ full = false, enabled = true, now = Dat
   if (!full) return { status };
   const age = (s) => (s.oldestAt == null ? null : Math.floor((now - s.oldestAt) / 60_000));
   const out = { status, stuckMinutes };
-  for (const [n, s] of Object.entries(states)) out[n] = { waiting: s.waiting, onDisk: s.total, oldestMinutes: age(s) };
+  for (const [n, s] of Object.entries(states)) out[n] = { waiting: s.waiting, onDisk: s.total, onLocalDisk: Number(s.local) || 0, oldestMinutes: age(s) };
   return out;
 }
 /** A Postgres error about the row itself (bad data, a constraint), not the connection: retrying the same row cannot help. */

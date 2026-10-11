@@ -4,7 +4,9 @@
 // in the local dead-letter (the ledger file), and once the relay heals they
 // land exactly once, whether the replay comes from this process's refresh or
 // from a fresh boot reading the same file. The NDJSON fallback of the
-// dead-letter is checked on its own.
+// dead-letter is checked on its own. This suite is the local-disk journal
+// (REDIS_URL is unset here, children included); the Redis journal has its
+// own suite, test-ledger-journal-redis-pg.js.
 //
 //   STATE_DATABASE_URL=postgres://... node scripts/test-ledger-dead-letter-pg.js
 import { createServer, connect } from "node:net";
@@ -15,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { requireTestPg } from "./lib/test-pg.js";
+delete process.env.REDIS_URL;
 const { url, schema } = requireTestPg({ label: "test-ledger-dead-letter-pg" });
 
 let pass = 0, fail = 0;
@@ -103,7 +106,7 @@ try {
   // Another writer lands the same rows first (as if the original commit had gone through).
   await sdb.stateQuery(`INSERT INTO ${S}.refunds (evidence, slug, price_usd, created_at) VALUES ('0xdl-debt2', 'hash', 0.002, $1)`, [Date.now()]);
   // The landed sale is the queued one, value for value (a lost reply leaves exactly that row).
-  const queued = sl._salesDeadLetterEntries().find((e) => e.kind === "sale" && e.payload[6] === "0xdl-sale2")?.payload;
+  const queued = (await sl._salesDeadLetterEntries()).find((e) => e.kind === "sale" && e.payload[6] === "0xdl-sale2")?.payload;
   await sdb.stateQuery(`INSERT INTO ${S}.sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256, sale_uid)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`, queued);
   // ---- (4) and a fresh boot reading the same file is the one that replays --------
@@ -238,7 +241,7 @@ try {
     ok(await count(`SELECT count(*) AS n FROM ${S}.sales WHERE tx = '0xlegacy-entry'`) === 1 && sl.salesDeadLetterCount() === 0, "an entry queued before sale ids (eleven values) replays by the whole row, once");
     cutRelay();
     await sl.recordSale({ slug: "uid", priceUsd: 0.01, rail: "usdc", network: "base", payer: PAYER, tx: "0xuid-entry" });
-    ok(sl._salesDeadLetterEntries().some((e) => Array.isArray(e.payload) && e.payload.length === 12 && /^[0-9a-f-]{36}$/.test(e.payload[11])), "a new entry carries the sale's id as a twelfth value");
+    ok((await sl._salesDeadLetterEntries()).some((e) => Array.isArray(e.payload) && e.payload.length === 12 && /^[0-9a-f-]{36}$/.test(e.payload[11])), "a new entry carries the sale's id as a twelfth value");
     healRelay();
     await settle();
   }
@@ -304,8 +307,10 @@ try {
     ok(word({ enabled: false }) === "off", "without a state database: off");
     const hb = (await import("node:fs")).readFileSync(join(ROOT, ".github/workflows/heartbeat.yml"), "utf8");
     const step = hb.slice(hb.indexOf("- name: Ledger dead-letter check"), hb.indexOf("- name:", hb.indexOf("- name: Ledger dead-letter check") + 10));
-    ok(/\.ledgerDeadLetter\.status/.test(step) && /if \[ "\$WORD" = "stuck" \]; then sleep 30; WORD=\$\(read_dl\); fi/.test(step) && /stuck\)\s+if \[ -z "\$OPEN" \]; then\s+gh issue create/.test(step),
-      "the heartbeat reads ledgerDeadLetter.status, confirms stuck on a second reading and opens an issue");
+    ok(/\.ledgerDeadLetter\.status/.test(step) && /if \[ "\$WORD" = "stuck" \] \|\| \[ "\$WORD" = "local" \]; then sleep 30; WORD=\$\(read_dl\); fi/.test(step) && /stuck\|local\)\s+if \[ -z "\$OPEN" \]; then\s+gh issue create/.test(step),
+      "the heartbeat reads ledgerDeadLetter.status, confirms stuck or local on a second reading and opens an issue");
+    ok(deadLetterWord([{ waiting: 1, total: 1, oldestAt: Date.now(), local: 1 }]) === "local" && deadLetterWord([{ waiting: 1, total: 1, oldestAt: Date.now() - 21 * 60_000, local: 1 }]) === "stuck"
+      && deadLetterWord([{ waiting: 1, total: 1, oldestAt: Date.now(), local: 0 }]) === "pending", "an entry on local disk while the journals live in Redis: local (after stuck, before pending)");
   }
 
   // ---- (7) text Postgres cannot keep, through the dead-letter ---------------------
