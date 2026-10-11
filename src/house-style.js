@@ -6,13 +6,17 @@
 // (server.js wraps each REPORT_TIERS handler), so agents, card buyers,
 // monitors and the sample pages all read the same style. A heading's dash
 // becomes a colon ("NVIDIA CORP (NVDA): Company Due-Diligence Dossier"),
-// prose gets a spaced hyphen, a bare range "2024–2026" a plain hyphen.
+// prose gets a spaced hyphen, a bare range "2024–2026" and a compound
+// "California–based" a plain hyphen.
 const DASH = /[—–\u2212]/;
 const RANGE = /(\d)\s*[—–]\s*(\d)/g;
+// An unspaced en dash joining two words is a compound ("California–based"),
+// so it becomes a plain hyphen, not a spaced one.
+const COMPOUND = /(\p{L})–(\p{L})/gu;
 
 export function houseStyleText(s, { heading = false } = {}) {
   if (typeof s !== "string" || !DASH.test(s)) return s;
-  let out = s.replace(/\u2212/g, "-").replace(RANGE, "$1-$2");
+  let out = s.replace(/\u2212/g, "-").replace(RANGE, "$1-$2").replace(COMPOUND, "$1-$2");
   out = out.replace(/\s*[—–]+\s*/g, heading ? ": " : " - ");
   return out.replace(/ {2,}/g, " ");
 }
