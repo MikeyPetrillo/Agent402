@@ -259,6 +259,25 @@ function upstreamAnswersRunner(label) {
   return runnerProbeMemo.get(label);
 }
 
+// A KEYLESS UPSTREAM THAT REFUSES SHARED RUNNER ADDRESSES. Jupiter's keyless
+// endpoint answers GitHub-hosted runners with an intermittent 503 while it
+// serves production, and the sweep failed deploys on it. The tool says so in
+// its own words: "<Label> upstream error (HTTP 5xx)" as a 502, a shape only
+// the tool's upstream helper writes, naming the upstream and the status it
+// returned. For an upstream listed here, that answer is retried once after a
+// short delay and, if it comes back the same, reported with its evidence as
+// an upstream refusal instead of failing the lane. Anything else stays a
+// failure: our own 5xx (a 500, a 502 in any other words), a 4xx, and the
+// same shape from an upstream not on this list.
+export const SHARED_IP_LIMITED_UPSTREAMS = new Set(["Jupiter"]);
+export function upstreamRefusalOf(status, body) {
+  if (status !== 502) return null;
+  const m = /^(.+?) upstream error \(HTTP (5\d\d)\)$/.exec(String(body?.error || ""));
+  if (!m || !SHARED_IP_LIMITED_UPSTREAMS.has(m[1])) return null;
+  return { label: m[1], upstreamStatus: Number(m[2]) };
+}
+const UPSTREAM_REFUSAL_RETRY_MS = 3000;
+
 // A 5xx RELAYED FROM A THIRD PARTY, as opposed to one of ours. Deliberately
 // does not try to read intent from the message: a rate limit has its own lane
 // above, and everything else in this class is "their host did not answer".
@@ -330,6 +349,14 @@ async function callExample(path, method, op, slug) {
   // spending another ten minutes to confirm that helps nobody.
   let r = await attempt();
   let attempts = 1;
+  // A listed keyless upstream refusing this runner: one retry, then reported.
+  if (upstreamRefusalOf(r.status, r.body)) {
+    await sleep(UPSTREAM_REFUSAL_RETRY_MS);
+    r = await attempt();
+    attempts = 2;
+    retryStats.push({ slug, attempts, recovered: isStrictPass(r.status, r.body) });
+    return { ...r, attempts };
+  }
   if (!isStrictPass(r.status, r.body) && shouldRetry(r.status, r.body, r.threw, slug)) {
     await sleep(RETRY_BACKOFF_MS[0]);
     r = await attempt();
@@ -347,7 +374,7 @@ async function callExample(path, method, op, slug) {
     }
   }
   if (attempts > 1) retryStats.push({ slug, attempts, recovered: isStrictPass(r.status, r.body) });
-  return r;
+  return { ...r, attempts };
 }
 
 async function mapPool(items, n, fn) {
@@ -479,6 +506,22 @@ function runControls() {
     "control: a tool's RugCheck timeout is a runner-probe candidate");
   ok(runnerProbeLabel(504, { error: "data.gov upstream timed out" }) === null && runnerProbeLabel(502, { error: "RugCheck upstream timed out" }) === null,
     "control: only a listed upstream's 504 is a candidate (an unlisted host, or a 502, still fails)");
+  // Upstream refusals: only a listed keyless upstream, only the tool's own
+  // "<Label> upstream error (HTTP 5xx)" 502, is reported instead of failing.
+  ok(upstreamRefusalOf(502, { error: "Jupiter upstream error (HTTP 503)" })?.label === "Jupiter",
+    "control: a tool's own Jupiter 5xx (as its 502) is an upstream-refusal candidate");
+  ok(upstreamRefusalOf(502, { error: "Jupiter upstream error (HTTP 503)" })?.upstreamStatus === 503,
+    "control: the refusal carries the status the upstream returned, as evidence");
+  ok(upstreamRefusalOf(500, { error: "internal" }) === null && upstreamRefusalOf(502, { error: "internal" }) === null,
+    "control: our own 5xx (a 500, or a 502 in our words) is NOT a refusal and still fails");
+  ok(upstreamRefusalOf(500, { error: "Jupiter upstream error (HTTP 503)" }) === null,
+    "control: the shape only counts on the 502 the upstream helper answers with");
+  ok(upstreamRefusalOf(502, { error: "Jupiter upstream error (HTTP 404)" }) === null,
+    "control: an upstream 4xx is not a refusal");
+  ok(upstreamRefusalOf(502, { error: "DeFiLlama upstream error (HTTP 503)" }) === null && upstreamRefusalOf(502, { error: "Chain upstream error (HTTP 503)" }) === null,
+    "control: the same shape from an upstream not listed as shared-IP-limited still fails");
+  ok(upstreamRefusalOf(502, { error: "Jupiter upstream error (HTTP 503) and more" }) === null && upstreamRefusalOf(502, { error: "not Jupiter upstream error (HTTP 503)" }) === null,
+    "control: the whole message must be the tool's own shape, not a fragment of it");
   ok(isStrictFailure(503, { error: "capacity" }, null) === true,
     "control: HTTP 503 is a hard fail");
   ok(isStrictFailure(504, { error: "timeout" }, null) === true,
@@ -581,6 +624,7 @@ async function main() {
   let skippedCertTransparency = 0;
   let skippedClientTimeout = 0;
   let skippedRunnerUnreachable = 0;
+  const upstreamRefusals = [];
   const liveFails = [];
   // Documented-output-keys check on every strict pass. This used to live only
   // in test-all.js; now that the lenient sweep hands these routes over, the
@@ -672,6 +716,12 @@ async function main() {
       return;
     }
 
+    const refusal = upstreamRefusalOf(r.status, r.body);
+    if (refusal) {
+      upstreamRefusals.push(`${t.method.toUpperCase()} ${t.path} (${t.slug}): ${refusal.label} answered HTTP ${refusal.upstreamStatus} on ${r.attempts} attempt(s), ${UPSTREAM_REFUSAL_RETRY_MS} ms apart; tool said ${r.status} "${errText(r.body, r.threw).slice(0, 100)}"`);
+      return;
+    }
+
     const probeLabel = runnerProbeLabel(r.status, r.body);
     if (probeLabel && !(await upstreamAnswersRunner(probeLabel))) {
       skippedRunnerUnreachable++;
@@ -707,7 +757,12 @@ async function main() {
     console.log(`skip - ${skippedRunnerUnreachable} tool(s) soft-skipped: their upstream does not answer this runner directly (checked once per upstream)`);
   }
 
-  const softSkipped = skippedBrowser + skippedRateLimit + skippedMediaSource + skippedPriceFeed + skippedClientTimeout + skippedCertTransparency + skippedRunnerUnreachable;
+  if (upstreamRefusals.length) {
+    console.log(`skip - ${upstreamRefusals.length} tool(s) reported as upstream refusals: a keyless upstream listed in SHARED_IP_LIMITED_UPSTREAMS refused this runner twice (evidence below)`);
+    for (const line of upstreamRefusals) console.log(`  upstream refusal - ${line}`);
+  }
+
+  const softSkipped = skippedBrowser + skippedRateLimit + skippedMediaSource + skippedPriceFeed + skippedClientTimeout + skippedCertTransparency + skippedRunnerUnreachable + upstreamRefusals.length;
   const asserted = work.length - softSkipped;
   ok(liveFails.length === 0,
     liveFails.length

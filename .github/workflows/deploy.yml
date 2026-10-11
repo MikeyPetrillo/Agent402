@@ -1646,6 +1646,8 @@ jobs:
           t node scripts/test-x402-boot-init.js
           # The vendor's per-route bazaar check runs after boot in short slices, never as one boot-time loop.
           t node scripts/test-bazaar-route-check.js
+          # The strict sweep reports a listed keyless upstream's 5xx refusal; our own 5xx still fails.
+          t node scripts/test-sweep-upstream-refusal.js
           t node scripts/test-solana-kit-deps.js
           t node scripts/test-workflow-client-pins.js
 
