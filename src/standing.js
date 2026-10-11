@@ -58,7 +58,15 @@ export function standingCountsExcludingHost(snapshot) {
   };
 }
 
-export function standingBand({ sellers, listings, settled, rails } = {}) {
+/** "12 x402 chains + Tempo (MPP)" when the split is known, else "N payment rails". */
+export function railCountLabel({ rails, x402Rails, tempo } = {}) {
+  const x = Number(x402Rails);
+  if (Number.isFinite(x) && x > 0) return `${int(x)} x402 chain${x === 1 ? "" : "s"}${tempo ? " + Tempo (MPP)" : ""}`;
+  const r = Number(rails);
+  return r > 0 ? `${int(r)} payment rail${r === 1 ? "" : "s"}` : "";
+}
+
+export function standingBand({ sellers, listings, settled, rails, x402Rails, tempo, eyebrow = "WHAT THIS PAGE IS MEASURING" } = {}) {
   // A COLD OR HALF-LOADED INDEX MUST SAY NOTHING.
   //
   // The crawl cache warm-starts incrementally and is empty on a fresh boot, so
@@ -71,15 +79,16 @@ export function standingBand({ sellers, listings, settled, rails } = {}) {
   if (!(sellers >= MIN_SELLERS_TO_FRAME)) return "";
   const bits = [`${int(sellers)} seller origins indexed`];
   if (listings > 0) bits.push(`${int(listings)} tool listings`);
-  if (settled > 0) bits.push(`${int(settled)} settlement${settled === 1 ? "" : "s"} through these gates`);
-  if (rails > 0) bits.push(`${int(rails)} payment rail${rails === 1 ? "" : "s"}`);
+  if (settled > 0) bits.push(`${int(settled)} settlement${settled === 1 ? "" : "s"} through these gates, ours included`);
+  const railText = railCountLabel({ rails, x402Rails, tempo });
+  if (railText) bits.push(railText);
   return `
 <section style="max-width:1180px;margin:0 auto;padding:22px 30px 0;">
   <div style="border:1px solid var(--hairline);border-left:3px solid var(--accent);background:var(--card);padding:18px 22px;">
     <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;max-width:900px;">
-      <span style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--accent);display:block;margin-bottom:6px;">WHAT THIS PAGE IS MEASURING</span>
+      <span style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--accent);display:block;margin-bottom:6px;">${esc(eyebrow)}</span>
       ${esc(bits.join(" · "))}. We index this market, we are not trying to be it.
-      The leaderboard on this site ranks other sellers above this one and excludes the host from every count, because an index that ranks itself first proves nothing.
+      The leaderboard on this site ranks other sellers and leaves the host out of every count, because an index that ranks itself first proves nothing.
     </p>
   </div>
 </section>`;

@@ -12,6 +12,7 @@
 // counted in a seller total. Renderers take a figures object so the page
 // modules stay offline-testable; a null figures object renders nothing.
 import { esc } from "./ledger-chrome.js";
+import { isPaidRail } from "./paid-rails.js";
 
 const ALL_TIME_DAYS = 36_500;
 
@@ -37,6 +38,25 @@ const isoDay = (ms) => {
   return Number.isFinite(n) && n > 0 ? new Date(n).toISOString().slice(0, 10) : null;
 };
 
+// A SETTLEMENT IS A PAYMENT. The summary's totals.external.sales counts every
+// external row, and the ledger also records free calls (proof-of-work, trial)
+// at their list price so the free-tier funnel can be measured. Those calls
+// settle nowhere, so the "settlements" figure is the paying rails only, read
+// from the same per-rail split the summary already returns (the same
+// isPaidRail rule its revenue total and the buyer counts use).
+export function paidExternalSettlements(summary) {
+  const byRail = summary?.totals?.byRail;
+  if (byRail && typeof byRail === "object" && Object.keys(byRail).length) {
+    let n = 0;
+    for (const [k, v] of Object.entries(byRail)) {
+      const [side, rail] = String(k).split(":");
+      if (side === "external" && isPaidRail(rail)) n += Number(v) || 0;
+    }
+    return n;
+  }
+  return Number(summary?.totals?.external?.sales) || 0;
+}
+
 /** External-only figures from the sales ledger. `summaryFn` is injectable. */
 export function hostFigures({ summaryFn, byNetworkFn, network = null, networkLabel = null, toolCount = 0, baseUrl = "" } = {}) {
   if (typeof summaryFn !== "function") return null;
@@ -51,8 +71,8 @@ export function hostFigures({ summaryFn, byNetworkFn, network = null, networkLab
     // that covers "everything" - null when the ledger cannot say.
     recordedSince: isoDay(all?.recordingSince),
     network: null, networkLabel: null,
-    external30d: { settlements: n(d30?.totals?.external?.sales), buyers: n(d30?.distinctExternalBuyers), tools: n(d30?.distinctToolsSoldExternal), windowDays: 30 },
-    externalAllTime: { settlements: n(all?.totals?.external?.sales), buyers: n(all?.distinctExternalBuyers), tools: n(all?.distinctToolsSoldExternal), since: isoDay(all?.recordingSince) },
+    external30d: { settlements: paidExternalSettlements(d30), buyers: n(d30?.distinctExternalBuyers), tools: n(d30?.distinctToolsSoldExternal), windowDays: 30 },
+    externalAllTime: { settlements: paidExternalSettlements(all), buyers: n(all?.distinctExternalBuyers), tools: n(all?.distinctToolsSoldExternal), since: isoDay(all?.recordingSince) },
   };
   // Per-rail figures for a chain page: only settlements on THAT network
   // (the ledger's own external classification, collapsed to the rail key).
@@ -68,6 +88,35 @@ export function hostFigures({ summaryFn, byNetworkFn, network = null, networkLab
 }
 
 const fmt = (v) => Number(v || 0).toLocaleString("en-US");
+const plural = (v, one, many) => `${fmt(v)} ${Number(v) === 1 ? one : many}`;
+
+/**
+ * Host figures from a list of outside payments on ONE wire or rail
+ * ([{ ts, payer }], e.g. externalTempoPayments() for the MPP page), in the
+ * same shape hostFigures returns. A payer that is null counts toward
+ * settlements, never toward buyers. Pure; `now` is injectable.
+ */
+export function hostFiguresFromPayments(payments, { network = null, networkLabel = null, toolCount = 0, baseUrl = "", now = Date.now() } = {}) {
+  if (!Array.isArray(payments)) return null;
+  const since30 = now - 30 * 86_400_000;
+  let n30 = 0, first = null;
+  const b30 = new Set(), ball = new Set();
+  for (const p of payments) {
+    const ts = Number(p?.ts);
+    if (!Number.isFinite(ts)) continue;
+    if (first === null || ts < first) first = ts;
+    if (p.payer) ball.add(String(p.payer).toLowerCase());
+    if (ts >= since30) { n30++; if (p.payer) b30.add(String(p.payer).toLowerCase()); }
+  }
+  const since = isoDay(first);
+  return {
+    baseUrl, toolCount: Number(toolCount) || 0,
+    recordingSince: first ? new Date(first).toISOString() : null, recordedSince: since,
+    network, networkLabel,
+    external30d: { settlements: n30, buyers: b30.size, tools: null, windowDays: 30 },
+    externalAllTime: { settlements: payments.length, buyers: ball.size, tools: null, since },
+  };
+}
 
 /**
  * Which settlement rails carried at least one OUTSIDE settlement, from the
@@ -88,7 +137,7 @@ export function railsWithOutsideSettlements(byNetwork, rails, extra = []) {
   return { withOutside, offered: offered.length };
 }
 
-export const HOST_EXCLUSION_NOTE = "Our own canary and volume runs are excluded from these figures; the ranked rows measure other sellers on chain and never include the host.";
+export const HOST_EXCLUSION_NOTE = "These figures count paid settlements from outside buyers only: our own canary and volume runs and free proof-of-work calls are left out. The ranked rows measure other sellers on chain and never include the host.";
 
 /** How to label the widest figure: its real start when the ledger knows one,
  *  and only then the unqualified "all time". */
@@ -107,10 +156,10 @@ export function hostCardHtml(f) {
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">${f.networkLabel ? `outside buyers on ${esc(f.networkLabel)} only` : "outside buyers only"}</div>
     </div>
     <div style="display:flex;gap:26px;flex-wrap:wrap;margin:12px 0 10px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);">
-      <span><strong>${fmt(f.external30d.settlements)}</strong> <span style="color:var(--faint);">settlements, 30 days</span></span>
-      <span><strong>${fmt(f.external30d.buyers)}</strong> <span style="color:var(--faint);">distinct buyers, 30 days</span></span>
-      <span><strong>${fmt(f.externalAllTime.settlements)}</strong> <span style="color:var(--faint);">settlements, ${esc(wideLabel(f))}</span></span>
-      <span><strong>${fmt(f.externalAllTime.buyers)}</strong> <span style="color:var(--faint);">distinct buyers, ${esc(wideLabel(f))}</span></span>
+      <span><strong>${fmt(f.external30d.settlements)}</strong> <span style="color:var(--faint);">paid settlement${f.external30d.settlements === 1 ? "" : "s"}, 30 days</span></span>
+      <span><strong>${fmt(f.external30d.buyers)}</strong> <span style="color:var(--faint);">distinct buyer${f.external30d.buyers === 1 ? "" : "s"}, 30 days</span></span>
+      <span><strong>${fmt(f.externalAllTime.settlements)}</strong> <span style="color:var(--faint);">paid settlement${f.externalAllTime.settlements === 1 ? "" : "s"}, ${esc(wideLabel(f))}</span></span>
+      <span><strong>${fmt(f.externalAllTime.buyers)}</strong> <span style="color:var(--faint);">distinct buyer${f.externalAllTime.buyers === 1 ? "" : "s"}, ${esc(wideLabel(f))}</span></span>
     </div>
     <p style="font-size:var(--fs-sm);line-height:1.55;color:var(--muted);margin:0 0 10px;">Agent402 runs this index and sells 500+ tools, metered models and reports on the same rails. ${esc(HOST_EXCLUSION_NOTE)}${f.externalAllTime.since ? ` ${esc(HOST_LEDGER_START_NOTE(f.externalAllTime.since))}` : ""}</p>
     <div style="display:flex;gap:16px;flex-wrap:wrap;font-family:var(--font-mono);font-size:var(--fs-sm);">
@@ -129,7 +178,7 @@ export function hostRowHtml(f, { dark = false } = {}) {
   return `
   <div data-host-row style="border:1px solid var(--hairline);${dark ? "background:var(--panel);" : "background:var(--card);"}padding:14px 18px;margin-top:12px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:baseline;">
     <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:${ink};"><span style="font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--accent);margin-right:10px;">HOST &middot; NOT RANKED</span><strong>Agent402</strong> <span style="color:${faint};">(this site)</span></span>
-    <span class="ml-meta" style="margin:0;font-size:var(--fs-sm);color:${ink};font-variant-numeric:tabular-nums;"><span>${fmt(f.external30d.settlements)} settlements</span><span>${fmt(f.external30d.buyers)} buyers <span style="color:${faint};">(30 days, outside buyers)</span></span><span>${fmt(f.externalAllTime.settlements)} ${esc(wideLabel(f))}</span></span>
+    <span class="ml-meta" style="margin:0;font-size:var(--fs-sm);color:${ink};font-variant-numeric:tabular-nums;"><span>${plural(f.external30d.settlements, "paid settlement", "paid settlements")}</span><span>${plural(f.external30d.buyers, "buyer", "buyers")} <span style="color:${faint};">(30 days, outside buyers${f.networkLabel ? ` on ${esc(f.networkLabel)}` : ""})</span></span><span>${fmt(f.externalAllTime.settlements)} ${esc(wideLabel(f))}</span></span>
     <span style="flex-basis:100%;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.5;color:${faint};">${esc(HOST_EXCLUSION_NOTE)}${f.externalAllTime.since ? ` ${esc(HOST_LEDGER_START_NOTE(f.externalAllTime.since))}` : ""}</span>
   </div>`;
 }

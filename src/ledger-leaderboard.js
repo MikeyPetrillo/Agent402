@@ -17,7 +17,7 @@
 // escape hatches for the rest - matches the design's own top=12 live poll.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { standingBand } from "./standing.js";
-import { rankBy } from "./leaderboard.js";
+import { rankBy, DEFAULTS as LEADERBOARD_DEFAULTS } from "./leaderboard.js";
 import { hostRowHtml, HOST_EXCLUSION_NOTE, wideLabel } from "./host-entry.js";
 
 import { ORG_SAME_AS } from "./repo-link.js";
@@ -176,21 +176,21 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
     ["bazaar listings", fmtNum(snapshot?.bazaarTotal)],
     ["blocks scanned", fmtNum(snapshot?.scannedBlocks)],
     ["window", windowLabel],
-    ["unmatched-transfer ceiling", fmtUsd(snapshot?.maxCallUsd)],
+    ["unmatched-transfer ceiling", fmtUsd(snapshot?.maxCallUsd ?? LEADERBOARD_DEFAULTS.maxCallUsd)],
   ];
 
   const steps = [
-    "Discover sellers from the Coinbase CDP Bazaar plus our own crawl, refreshed hourly.",
+    "Discover sellers from the x402 Bazaar discovery listing plus our own crawl, refreshed hourly.",
     "Read each seller's advertised payTo addresses out of its x402 manifest.",
     "Pull settlement transfers to those addresses from Base event logs with eth_getLogs.",
-    `Count a transfer when it matches a price that seller publishes, up to a price-match ceiling (${fmtUsd(snapshot?.priceMatchMaxUsd)}). Anything matching none of their prices is held to a per-call ceiling (${fmtUsd(snapshot?.maxCallUsd)}), so treasury movements, gift cards and stablecoin conversions are not counted as tool calls.`,
+    `Count a transfer when it matches a price that seller publishes, up to a price-match ceiling (${fmtUsd(snapshot?.priceMatchMaxUsd ?? LEADERBOARD_DEFAULTS.priceMatchMaxUsd)}). Anything matching none of their prices is held to a per-call ceiling (${fmtUsd(snapshot?.maxCallUsd ?? LEADERBOARD_DEFAULTS.maxCallUsd)}), so treasury movements, gift cards and stablecoin conversions are not counted as tool calls.`,
     "Aggregate by payTo, group wallets belonging to one seller, and rank.",
   ];
 
   const faqs = [
     {
       q: "How is the x402 leaderboard calculated?",
-      a: "Sellers are discovered from the Coinbase CDP Bazaar plus Agent402's own crawl, their payTo addresses are read from their x402 manifests, and settlement transfers to those addresses are aggregated from Base event logs via eth_getLogs. A transfer counts when it matches a price that seller advertises, up to a price-match ceiling; a transfer matching none of their published prices is held to a lower per-call ceiling, so treasury movements, gift cards and stablecoin conversions do not inflate a seller. That ceiling used to be the whole rule, which made a seller priced just above it invisible here rather than ranked low. The snapshot refreshes hourly and the raw JSON is free at /api/leaderboard.",
+      a: "Sellers are discovered from the x402 Bazaar discovery listing plus Agent402's own crawl, their payTo addresses are read from their x402 manifests, and settlement transfers to those addresses are aggregated from Base event logs via eth_getLogs. A transfer counts when it matches a price that seller advertises, up to a price-match ceiling; a transfer matching none of their published prices is held to a lower per-call ceiling, so treasury movements, gift cards and stablecoin conversions do not inflate a seller. That ceiling used to be the whole rule, which made a seller priced just above it invisible here rather than ranked low. The snapshot refreshes hourly and the raw JSON is free at /api/leaderboard.",
     },
     {
       q: "Why is Agent402 excluded from its own leaderboard?",
@@ -277,13 +277,13 @@ ${solanaSectionHtml(solana)}
       <div style="padding:28px;border-right:1px solid var(--hairline);background:var(--card);">
         <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">OUR OWN ROW, DISCLOSED</div>
         <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Agent402, for comparison</h2>
-        <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;">We run the index, so we keep ourselves out of the ranking above. Here are our own figures instead, from our sales ledger: settlements and rails count outside buyers only, and the proof-of-work row counts free calls, excluding our own monitoring probes.</p>
+        <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;">We run the index, so we keep ourselves out of the ranking above. Here are our own figures instead, from our sales ledger: settlements and rails count paid settlements from outside buyers only, and the proof-of-work row is a lifetime count of free calls, excluding our own monitoring probes.</p>
         <table style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--hairline);"><tbody>
-          <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">free calls over proof-of-work</th><td style="padding:11px 14px;text-align:right;color:var(--ink);">${esc(selfPow)}</td></tr>
-          ${selfRails ? `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">rails with an outside settlement</th><td style="padding:11px 14px;text-align:right;color:var(--ink);" data-self-rails>${esc(selfRails)}</td></tr>` : ""}
-          ${host ? `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">settlements from outside buyers, 30 days</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-ext-30d>${esc(fmtNum(host.external30d.settlements))}</td></tr>
+          <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">free calls over proof-of-work, lifetime</th><td style="padding:11px 14px;text-align:right;color:var(--ink);">${esc(selfPow)}</td></tr>
+          ${selfRails ? `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">rails with an outside settlement in our sales ledger</th><td style="padding:11px 14px;text-align:right;color:var(--ink);" data-self-rails>${esc(selfRails)}</td></tr>` : ""}
+          ${host ? `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">paid settlements from outside buyers, 30 days</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-ext-30d>${esc(fmtNum(host.external30d.settlements))}</td></tr>
           <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">distinct outside buyers, 30 days</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-buyers-30d>${esc(fmtNum(host.external30d.buyers))}</td></tr>
-          <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">settlements from outside buyers, ${esc(wideLabel(host))}</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-ext-all>${esc(fmtNum(host.externalAllTime.settlements))}</td></tr>` : ""}
+          <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">paid settlements from outside buyers, ${esc(wideLabel(host))}</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-ext-all>${esc(fmtNum(host.externalAllTime.settlements))}</td></tr>` : ""}
           ${selfMpp != null ? `<tr><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">outside settlements over the MPP wire</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-self-mpp>${esc(selfMpp)}</td></tr>` : ""}
         </tbody></table>
         ${host ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.6;color:var(--faint);margin:14px 0 0;">${esc(HOST_EXCLUSION_NOTE)}</p>` : ""}
@@ -328,14 +328,14 @@ ${solanaSectionHtml(solana)}
   const canonical = `${baseUrl}/leaderboard`;
   const title = "x402 seller leaderboard - ranked by real on-chain USDC settled";
   const description =
-    "The public on-chain ranking of x402 sellers by Base USDC settled volume: calls settled, total USD and unique buyers per seller. Hourly snapshot, built from the Coinbase CDP Bazaar and eth_getLogs. This page shows the head of the board; the free JSON carries the rest. Agent402 excluded from its own ranking.";
+    "The public on-chain ranking of x402 sellers by Base USDC settled volume: calls settled, total USD and unique buyers per seller. Hourly snapshot, built from the x402 Bazaar discovery listing and eth_getLogs. This page shows the head of the board; the free JSON carries the rest. Agent402 excluded from its own ranking.";
 
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Leaderboard", item: canonical },
   ] };
-  const datasetLd = { "@type": "Dataset", "@id": `${canonical}#dataset`, name: "x402 seller leaderboard - Base USDC settled volume", description: "Hourly on-chain snapshot ranking every indexed x402 seller by Base USDC settled volume: calls settled, total USD and unique buyers per seller. Pipeline: Coinbase CDP Bazaar discovery, eth_getLogs over recent blocks, a per-call USD ceiling to exclude non-payment transfers, then aggregation by payTo address. Agent402 is excluded from the default view.", creator: { "@id": `${baseUrl}/#organization` }, license: "https://www.gnu.org/licenses/agpl-3.0.html", isAccessibleForFree: true, temporalCoverage: "P7D", measurementTechnique: "On-chain event log aggregation by recipient address", variableMeasured: [
+  const datasetLd = { "@type": "Dataset", "@id": `${canonical}#dataset`, name: "x402 seller leaderboard - Base USDC settled volume", description: "Hourly on-chain snapshot ranking every indexed x402 seller by Base USDC settled volume: calls settled, total USD and unique buyers per seller. Pipeline: x402 Bazaar discovery, eth_getLogs over recent blocks, a per-call USD ceiling to exclude non-payment transfers, then aggregation by payTo address. Agent402 is excluded from the default view.", creator: { "@id": `${baseUrl}/#organization` }, license: "https://www.gnu.org/licenses/agpl-3.0.html", isAccessibleForFree: true, temporalCoverage: "P7D", measurementTechnique: "On-chain event log aggregation by recipient address", variableMeasured: [
     { "@type": "PropertyValue", name: "totalUsd", description: "USDC settled to the seller's payTo addresses in the window" },
     { "@type": "PropertyValue", name: "callsSettled", description: "Count of settlement transfers observed" },
     { "@type": "PropertyValue", name: "uniqueBuyers", description: "Distinct paying wallets" },

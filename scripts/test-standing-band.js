@@ -36,8 +36,18 @@ ok(standingBand({ sellers: 50 }) !== "", "at the floor it speaks");
   ok(!/is ours/.test(t) && !/109\.42/.test(t),
      "the host's revenue is NOT restated in the band: it followed a list of counts as 'Of that, $N is ours', a dollar figure with no dollar total to be of (2026-09-14)");
   ok(/we index this market, we are not trying to be it/i.test(t), "and the frame is stated, not implied");
-  ok(/ranks other sellers above this one/.test(t),
-     "the leaderboard ranking a rival above us is cited AS the evidence of neutrality, which is the reason to trust the index at all");
+  ok(/ranks other sellers and leaves the host out of every count/.test(t) && !/above this one/.test(t),
+     "the leaderboard's neutrality is stated once, without a ranking claim that contradicts leaving the host out");
+  ok(/42,934 settlements through these gates, ours included/.test(t), "the throughput figure says it includes our own runs");
+}
+
+// --- the rail count names what it counts ------------------------------------
+{
+  const t = text(standingBand({ sellers: 4153, x402Rails: 12, tempo: true, rails: 13 }));
+  ok(/12 x402 chains \+ Tempo \(MPP\)/.test(t) && !/13 payment rails/.test(t), "x402 chains and Tempo are counted apart");
+  const t2 = text(standingBand({ sellers: 4153, x402Rails: 12, tempo: false }));
+  ok(/12 x402 chains/.test(t2) && !/Tempo/.test(t2), "no Tempo when its relay is off");
+  ok(/WHAT THIS PAGE IS MEASURING/.test(standingBand({ sellers: 60 })) && /THE MARKET THESE FIGURES SIT IN/.test(standingBand({ sellers: 60, eyebrow: "THE MARKET THESE FIGURES SIT IN" })), "the eyebrow names what the band is on each page");
 }
 
 // --- grammar, because a framing sentence with a plural bug reads careless ---
