@@ -12,7 +12,7 @@ import { repoUrl } from "./repo-link.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 // Prepaid credits are only presented as a way to pay while packs are sold.
 const CREDITS_ON = creditsSalesEnabled();
-const CREDITS_HELD = CREDITS_ON ? "a prepaid credits key" : "a credits key bought earlier";
+export const CREDITS_HELD = CREDITS_ON ? "a prepaid credits key" : "a credits key bought earlier";
 
 const X402_FETCH = `import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
@@ -256,7 +256,7 @@ const { tools } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "tex
     dir: "adapters/google-adk",
     docsSlug: "google-adk",
     what: "ADK `FunctionTool` instances for Gemini agents built on the Agent Development Kit. Both peers are optional: without `@google/adk` and `zod`, `agent402ToolSpecs()` gives the same four tools with no dependencies.",
-    install: "npm install agent402-google-adk @google/adk zod",
+    install: "npm install agent402-google-adk @google/adk zod @x402/fetch @x402/core @x402/evm viem",
     example: `import { agent402Tools } from "agent402-google-adk";
 import { LlmAgent } from "@google/adk";
 
@@ -382,7 +382,7 @@ await agent402ActionProvider({
     payment: [
       "x402 in USDC on Base, signed by the AgentKit wallet provider. The key never leaves the provider.",
       "`maxPerCallUsd` (default 1), `dailyLimitUsd` and `maxPerHostUsd` are measured against one client per wallet provider, so the daily ceiling holds across calls.",
-      "`creditsKey` (a prepaid `a402_...` key) pays wallet-only tools without a wallet.",
+      `\`creditsKey\`: ${CREDITS_HELD} (\`a402_...\`) pays wallet-only tools without a wallet.`,
     ],
     tools: ["crypto-price", "search", "answer", "hash", "route-execute"],
     guides: ["pay-with-coinbase-agentic-wallet", "create-agent-wallet"],
@@ -432,7 +432,7 @@ bun add @x402/fetch @x402/evm viem
   },
   {
     slug: "mcp",
-    meta: "agent402-mcp: an MCP server for Claude, Cursor and any MCP client, paying for tools with a wallet, a prepaid credits key or proof-of-work.",
+    meta: `agent402-mcp: an MCP server for Claude, Cursor and any MCP client, paying for tools with a wallet${CREDITS_ON ? ", a prepaid credits key" : ""} or proof-of-work.`,
     name: "MCP server",
     short: "MCP",
     pkg: "agent402-mcp",
@@ -445,15 +445,17 @@ bun add @x402/fetch @x402/evm viem
     "agent402": {
       "command": "npx",
       "args": ["-y", "agent402-mcp"],
-      "env": { "AGENT402_CREDITS_KEY": "a402_YOUR_KEY" }
+      "env": { "AGENT_KEY": "0xYOUR_EVM_PRIVATE_KEY" }
     }
   }
 }`,
-    walletExample: `# Claude Code, hosted connector (no install)
+    walletExample: `# Claude Code, hosted connector (no install; proof-of-work tools)
 claude mcp add --transport http agent402 https://agent402.tools/mcp
 
 # Claude Code, local server paying from a wallet
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp`,
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp
+
+# no AGENT_KEY: the local server still runs the pure-CPU tools by proof-of-work`,
     exposes: [
       "Flagship tools under dotted names: `web.search`, `web.answer`, `web.news`, `browser.render`, `market.quote`, `audio.transcribe`, `memory.read`, `memory.write`.",
       "`catalog.search` / `catalog.find` + `catalog.call` for the rest of the catalog, keeping the context window small.",
@@ -462,7 +464,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp`,
     ],
     payment: [
       "`AGENT_KEY` (EVM) or `SOLANA_AGENT_KEY`: the server signs an x402 payment on a chain the tool accepts and retries.",
-      "`AGENT402_CREDITS_KEY`: sends `Authorization: Bearer a402_...`; the list price is debited only on a 200.",
+      `\`AGENT402_CREDITS_KEY\`: ${CREDITS_HELD}, sent as \`Authorization: Bearer a402_...\`; the list price is debited only on a 200.`,
       "Neither: the pure-CPU tools pay with proof-of-work (about 0.2 s of CPU).",
       "`AGENT402_MAX_PER_CALL` and `AGENT402_BUDGET` are enforced before a payment is signed. The hosted /mcp connector is also payable over MPP from an mppx-wrapped MCP client.",
     ],
@@ -472,7 +474,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp`,
   },
   {
     slug: "client",
-    meta: "agent402-client: find a tool for a task and call it with payment handled, by proof-of-work, x402, MPP or prepaid credits, with spend caps.",
+    meta: `agent402-client: find a tool for a task and call it with payment handled, by proof-of-work, x402 or MPP${CREDITS_ON ? " or prepaid credits" : ""}, with spend caps.`,
     name: "Buyer SDK",
     short: "agent402-client",
     pkg: "agent402-client",
@@ -494,7 +496,8 @@ const matches = await a.find("extract the article from a url");
     noWalletExample: `const free = new Agent402();   // no fetch: pure-CPU tools pay with proof-of-work
 const out = await free.call("hash", { text: "hello world", algo: "sha256" });
 console.log(out.hex);`,
-    walletExample: `import { Fetch, evm, tempo } from "mppx/client";
+    walletExample: `// pay over MPP instead: npm install mppx
+import { Fetch, evm, tempo } from "mppx/client";
 import { privateKeyToAccount } from "viem/accounts";
 
 const account = privateKeyToAccount(process.env.AGENT_KEY);
@@ -525,14 +528,25 @@ const verdict = await a.call("sql-guard", { sql: "UPDATE users SET plan = 'pro' 
     pkg: "agent402-tollbooth",
     dir: "tollbooth",
     what: "The sell side: middleware or a reverse proxy that puts a per-request price on a site or API for AI crawlers and agents while human visitors browse free. One 402 carries an x402 offer and an MPP challenge, plus a proof-of-work path for a walletless agent. Non-custodial: payments go to your own wallet.",
-    install: "npm install agent402-tollbooth",
+    install: "npm install agent402-tollbooth express @x402/express @x402/core @x402/evm",
     example: `import express from "express";
 import { createTollbooth } from "agent402-tollbooth";
+import { paymentMiddleware } from "@x402/express";
+import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
+import { ExactEvmScheme } from "@x402/evm/exact/server";
+
+const payTo = "0xYourWallet";
+const price = "$0.002";
+// verifies and settles USDC on Base through the x402 facilitator you choose
+const x402 = paymentMiddleware(
+  { "/*": { accepts: [{ scheme: "exact", network: "eip155:8453", price, payTo }] } },
+  new x402ResourceServer(new HTTPFacilitatorClient({ url: process.env.X402_FACILITATOR_URL }))
+    .register("eip155:8453", new ExactEvmScheme()),
+);
 
 const app = express();
-
-// Humans pass through; known AI crawlers get 402 and must pay or solve a proof-of-work.
-app.use(createTollbooth({ price: "$0.002" }));
+// People pass through; known AI crawlers get a 402 and pay (x402 or MPP) or solve a proof-of-work.
+app.use(createTollbooth({ payTo, price, x402 }));
 
 app.get("/article", (_req, res) => res.send("...your content..."));
 app.listen(3000);`,
@@ -547,7 +561,7 @@ npx agent402-tollbooth   # testnet dry run; for mainnet, drop TOLLBOOTH_NETWORK 
       "`createTollbooth(config)`: Express-compatible middleware with charge modes, adaptive proof-of-work and a stats sink.",
       "`npx agent402-tollbooth`: a reverse proxy that needs no code change on the origin.",
       "An edge build on the Web Crypto and Fetch APIs, with deploy templates for Cloudflare Workers, Next.js and Docker.",
-      "A `/__tollbooth` dashboard and `gate.stats()` for what was served and paid.",
+      "`gate.stats()` in the middleware for what was served and paid; the reverse proxy and the Worker also serve a `/__tollbooth` dashboard.",
     ],
     payment: [
       "x402: USDC through a facilitator you choose, verified before the request is served and settled only on a successful response.",
@@ -555,6 +569,8 @@ npx agent402-tollbooth   # testnet dry run; for mainnet, drop TOLLBOOTH_NETWORK 
       "Proof-of-work: a sha256 puzzle, single-use and bound to the exact URL, so a crawler with no wallet can still get through.",
     ],
     tools: ["robots-check", "tls-cert", "http-headers", "x402-quote"],
+    // The seller's side of settlement, in place of the buyer-side footer line.
+    settleNote: "Your x402 middleware settles a payment only after your handler answers below 400, so a crawler is not charged for a failed request.",
     guides: ["sell-your-api-over-x402", "coinbase-business-get-paid-by-agents"],
     learn: ["http-402", "pay-per-call-api"],
   },
@@ -621,6 +637,17 @@ const inline = (s) => esc(s).replace(/`([^`]+)`/g, '<code style="font-family:var
 
 const guideTitle = (slug) => slug.replace(/-/g, " ");
 
+// "$0.010" and "$0.01" are the same price: show the shortest form with at least
+// two decimals, so cards on one page read alike. Anything that is not a plain
+// dollar figure is shown as the catalog has it.
+export function displayPrice(p) {
+  const m = /^\$(\d+(?:\.\d+)?)$/.exec(String(p ?? "").trim());
+  if (!m) return String(p ?? "");
+  const [whole, frac = ""] = m[1].split(".");
+  const trimmed = frac.replace(/0+$/, "");
+  return `$${whole}.${trimmed.length >= 2 ? trimmed : trimmed.padEnd(2, "0")}`;
+}
+
 function toolsFor(i, catalog) {
   const bySlug = new Map(Object.values(catalog || {}).filter((d) => d && d.slug).map((d) => [d.slug, d]));
   return (i.tools || []).map((s) => bySlug.get(s)).filter(Boolean);
@@ -663,8 +690,8 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
   };
 
   const toolCards = tools.map((t) => `<a href="/tools/${esc(t.slug)}" style="display:block;border:1px solid var(--hairline);background:var(--card);padding:14px 16px;text-decoration:none;color:var(--ink);">
-      <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;"><span style="font-weight:700;font-size:var(--fs-base);">${esc(t.name || t.slug)}</span><span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">${esc(t.price || "")}</span></div>
-      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:4px;">${esc(t.slug)}</div>
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;"><span style="font-weight:700;font-size:var(--fs-base);">${esc(t.name || t.slug)}</span><span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">${esc(displayPrice(t.price))}</span></div>
+      <div class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:4px;"><span>${esc(t.slug)}</span>${t.modelBacked ? "<span>model-backed</span>" : ""}</div>
     </a>`).join("\n");
 
   const learnLinks = (i.learn || ["x402", "mpp"]).filter((s) => LEARN_LABELS[s])
@@ -700,7 +727,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
       <h2 ${H2}>How payment works</h2>
       <ul style="padding-left:20px;margin:0 0 16px;">${i.payment.map((e) => `<li ${LI}>${inline(e)}</li>`).join("")}</ul>
       ${i.walletExample ? `<pre ${PRE}><code>${esc(i.walletExample)}</code></pre>` : ""}
-      <p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:14px 0 0;">A call that fails is not charged: settlement runs after the tool and only on a successful response. Background: ${learnLinks}.</p>
+      <p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:14px 0 0;">${esc(i.settleNote || "A call that fails is not charged: settlement runs after the tool and only on a successful response.")} Background: ${learnLinks}.</p>
     </section>
 
     ${tools.length ? `<section style="margin-bottom:34px;">

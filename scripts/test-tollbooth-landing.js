@@ -27,6 +27,7 @@ import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { tollboothLandingPage } from "../src/tollbooth-landing.js";
+import { integrationBySlug } from "../src/integration-pages.js";
 
 let pass = 0;
 const servers = [];
@@ -104,8 +105,7 @@ const resolved = {
   '"@x402/express"': spec("@x402/express"), '"@x402/core/server"': spec("@x402/core/server"), '"@x402/evm/exact/server"': spec("@x402/evm/exact/server"),
 };
 const dir = mkdtempSync(join(tmpdir(), "tollbooth-landing-"));
-async function boot(mode) {
-  const code = renderSnippet(mode);
+async function boot(mode, code = renderSnippet(mode)) {
   ok(code.includes("app.use(yourExistingRoutes);") && code.includes("app.listen(3000);"), `${mode}: the snippet has the two placeholders a reader replaces`);
   let runnable = code
     .replace("app.use(yourExistingRoutes);", 'app.get("/article", (_req, res) => res.send("the article"));')
@@ -163,6 +163,29 @@ const solve = (chal, diff) => { let n = 0; while (lz(createHash("sha256").update
   const { base } = await boot("all");
   const r = await fetch(`${base}/article`, { headers: BROWSER });
   ok(r.status === 402, "all: every client is charged, a browser included");
+}
+
+{
+  // /integrations/tollbooth shows its own Express example: run that one too.
+  const page = integrationBySlug("tollbooth");
+  const code = page.example.replace('app.get("/article", (_req, res) => res.send("...your content..."));', "app.use(yourExistingRoutes);");
+  ok(code !== page.example, "/integrations/tollbooth: the example's route line is the one this test swaps");
+  const deps = [...code.matchAll(/from "([^"]+)"/g)].map((m) => m[1].replace(/^(@[^/]+\/[^/]+|[^/@][^/]*).*$/, "$1"));
+  ok(deps.every((d) => page.install.split(/\s+/).includes(d) || d === "agent402-tollbooth"), `/integrations/tollbooth: the install line carries every package the example imports (${[...new Set(deps)].join(", ")})`);
+  // Name the gate so the test can read its stats; nothing else changes.
+  // and the wallet placeholder a reader replaces gets a real address.
+  const named = code.replace("app.use(createTollbooth({ payTo, price, x402 }));", "const gate = createTollbooth({ payTo, price, x402 });\napp.use(gate);")
+    .replace('const payTo = "0xYourWallet";', 'const payTo = "0x000000000000000000000000000000000000dEaD";');
+  ok(named !== code, "/integrations/tollbooth: the example mounts createTollbooth({ payTo, price, x402 })");
+  const { base, gate } = await boot("integration", named);
+  let r = await fetch(`${base}/article`, { headers: BOT });
+  ok(r.status === 402 && r.headers.get("payment-required") && /Payment /.test(r.headers.get("www-authenticate") || ""), "/integrations/tollbooth: a crawler gets a 402 with an x402 offer and an MPP challenge, as its lede says");
+  const before = settles.length;
+  const client = new x402Client();
+  registerExactEvmScheme(client, { signer: privateKeyToAccount(generatePrivateKey()) });
+  r = await wrapFetchWithPayment(fetch, client)(`${base}/article`, { headers: BOT });
+  ok(r.status === 200 && settles.length === before + 1, "/integrations/tollbooth: a stock x402 client pays and the payment settles once");
+  ok(gate.stats().x402Paid === 1, "/integrations/tollbooth: gate.stats() counts it");
 }
 
 for (const s of servers) await new Promise((r) => s.close(() => r()));
