@@ -37,16 +37,16 @@ function chainCard(html, slug) {
   // Base: SellerA + SellerB advertise a Base network -> 2 sellers (the host is
   // in no seller count), 5+3+8=16 tools (the host's catalog included).
   const baseCard = chainCard(html, "base");
-  ok(baseCard && /<span[^>]*color:var\(--green\)[^>]*>2</.test(baseCard), "Base card shows the real seller count (2, host excluded), not a hardcoded design number");
+  ok(baseCard && /<span[^>]*color:var\(--ok\)[^>]*>2</.test(baseCard), "Base card shows the real seller count (2, host excluded), not a hardcoded design number");
   ok(baseCard && />16</.test(baseCard), "Base card shows the real summed tool count (16), computed from marketSellers/toolCount");
   // Solana: SellerB only -> 1 seller (the host qualifies on every chain but is
   // in no seller count).
   const solCard = chainCard(html, "solana");
-  ok(solCard && /<span[^>]*color:var\(--green\)[^>]*>1</.test(solCard), "Solana card shows the real seller count (1: SellerB; host excluded)");
+  ok(solCard && /<span[^>]*color:var\(--ok\)[^>]*>1</.test(solCard), "Solana card shows the real seller count (1: SellerB; host excluded)");
   // Celo: no external seller advertises it, so the real count is 0 (the host
   // is in no seller count), and the card still renders.
   const celoCard = chainCard(html, "celo");
-  ok(celoCard && /<span[^>]*color:var\(--green\)[^>]*>0</.test(celoCard), "a chain with no external sellers shows 0, still rendered, never omitted");
+  ok(celoCard && /<span[^>]*color:var\(--ok\)[^>]*>0</.test(celoCard), "a chain with no external sellers shows 0, still rendered, never omitted");
   ok((html.match(/href="\/[a-z]+" title="[^"]+ x402 marketplace"/g) || []).length === 12, "all 12 chain cards render, one per CHAIN_PAGES entry");
 }
 

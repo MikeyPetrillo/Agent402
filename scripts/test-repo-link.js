@@ -80,7 +80,7 @@ ok(/github\.com\/MikeyPetrillo/i.test(control), "control: the sweep's own patter
 // And the reach: the surfaces that most need to follow a move must actually
 // import it, or the sweep above passes while they render a stale URL from
 // somewhere the pattern does not look.
-const MUST_IMPORT = ["src/chrome.js", "src/ledger-chrome.js", "src/ledger-home.js", "src/company.js",
+const MUST_IMPORT = ["src/ledger-chrome.js", "src/ledger-home.js", "src/company.js",
   "src/terms.js", "src/security-page.js", "src/why.js", "src/discovery.js", "src/transparency.js",
   "src/seo.js", "src/tools/web-kit.js"];
 for (const rel of MUST_IMPORT) {

@@ -3175,6 +3175,8 @@ jobs:
           node scripts/test-date-time-kit.js
           node scripts/test-theme.js
           node scripts/test-faint-contrast.js
+          node scripts/test-design-tokens.js
+          node scripts/test-design-tokens.js --self-test
           node scripts/test-reveal-on-scroll.js
           node scripts/test-validation-kit.js
           node scripts/test-text-analysis-kit.js
