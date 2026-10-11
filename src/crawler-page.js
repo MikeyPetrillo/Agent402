@@ -16,31 +16,50 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { ROUTER_UA } from "./x402-buyer.js";
 import { unpaidQuoteBudgetPerHour } from "./unpaid-quote-budget.js";
+import { USER_AGENT } from "./tools/fetch-guard.js";
+import { crawlIntervalLabel } from "./crawl-cadence.js";
 
-export const CRAWLER_UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools/crawler)";
+// The one string the crawler sends (src/tools/fetch-guard.js), so the page
+// cannot quote a User-Agent the crawler does not use.
+export const CRAWLER_UA = USER_AGENT;
+// The product token robots.txt rules are matched on (ROBOTS_UA in
+// src/x402-index.js; scripts/test-crawler-page.js pins the two together).
+export const ROBOTS_TOKEN = "Agent402";
 
+// What the crawler reads and how robots.txt applies to each read, written from
+// src/x402-index.js (probePath, robotsForbids, enrichLiveQuotes, probePaywall,
+// verifySuccessionMarkers) and src/mpp-index.js. scripts/test-crawler-page.js
+// drives the real crawl against a stub origin and checks this page's claims.
 const SECTIONS = [
   {
     h: "What the crawler reads",
     p: [
-      `Agent402 publishes an index of services that advertise machine payments over x402 or MPP. To build it we read the discovery documents a service publishes for exactly this purpose: <code>/.well-known/x402</code>, <code>/openapi.json</code>, <code>/llms.txt</code>, and the HTTP 402 challenge a paid route returns to an unpaid request.`,
-      `That is all. We do not log in, we do not submit forms, we do not read anything behind a paywall, and we do not pay to see more. A 402 challenge is a public advertisement of price and payment rails - answering one with no credential is the ordinary way to read it.`,
+      `Agent402 publishes an index of services that advertise machine payments over x402 or MPP. For each x402 origin in it, the crawler reads <code>/robots.txt</code>, the x402 manifest at <code>/.well-known/x402</code>, and <code>/openapi.json</code> to name and describe the routes. When an origin publishes no manifest, it also tries <code>/agents.json</code> and then <code>/llms.txt</code>, two other places a service may list its paid routes.`,
+      `It sends an unpaid request to paid routes the index lists, to read the price and payment networks in their 402 challenge. When one origin claims to have moved from another, it reads <code>/.well-known/agent402-succession</code> on both to confirm the claim. For the MPP index, it reads a registered server's <code>/openapi.json</code> and sends one unpaid request to a paid endpoint to confirm its <code>WWW-Authenticate: Payment</code> challenge.`,
+      `We do not log in, submit forms, or pay to see more. A 402 challenge is a public advertisement of price and payment rails, and asking for one with no credential is the ordinary way to read it.`,
     ],
   },
   {
     h: "How it behaves",
     p: [
-      `The crawler identifies itself on every request as <code>${esc(CRAWLER_UA)}</code>, so it can be recognised, rate-limited or blocked by name.`,
-      `It honours <code>robots.txt</code>, including for the discovery paths above. It re-reads an origin about every thirty minutes, backs off on errors, sends conditional requests so an unchanged document costs a single 304, and caps what it will read from any one response.`,
-      `If our crawler is causing you a problem, a <code>Disallow</code> for that User-Agent stops it and needs no message from us. Email works too.`,
+      `The crawler identifies itself on every request as <code>${esc(CRAWLER_UA)}</code>, so it can be recognised, rate-limited or blocked by name. robots.txt rules are matched on the product token <code>${esc(ROBOTS_TOKEN)}</code>.`,
+      `It honours <code>robots.txt</code>, with these exceptions. The x402 manifest at <code>/.well-known/x402</code> is read whatever robots.txt says: it is a protocol endpoint published to be fetched by payment clients. Once an origin publishes that manifest, <code>/openapi.json</code> is read under a rule written for every crawler (<code>User-agent: *</code>); a rule that names ${esc(ROBOTS_TOKEN)} still stops it. The unpaid request to a paid route, and the MPP index's two reads, are not robots-gated: they read the price a route quotes to every caller. <code>/agents.json</code> and <code>/llms.txt</code> always follow robots.txt, and a robots.txt we cannot fetch or parse does not block the crawl.`,
+      `It re-reads an origin ${esc(crawlIntervalLabel())}, backs off on errors, sends conditional requests so an unchanged document costs a single 304, and caps what it will read from any one response.`,
+      `If our crawler is causing you a problem, email us and we will stop it. A <code>Disallow</code> for ${esc(ROBOTS_TOKEN)} stops every read above except the manifest and the unpaid price check, and needs no message from us.`,
     ],
     links: [["/robots.txt", "Our own robots.txt"], ["mailto:mike@agent402.tools", "mike@agent402.tools"]],
+  },
+  {
+    h: "Tool fetches for callers",
+    p: [
+      `Some tools in our catalog fetch a URL that a caller names: reading an article, checking a page's headers or metadata. Most of those requests send the crawler User-Agent above; the browser-render and screenshot tools load the page in a headless browser with a standard browser User-Agent. Each is one request made for one caller, not a crawl, and is not robots-gated. The multi-page site-crawl tool does read robots.txt and follows the rules for the token <code>Agent402Bot</code>, which a rule naming ${esc(ROBOTS_TOKEN)} also matches.`,
+    ],
   },
   {
     h: "The other thing that visits you",
     p: [
       `A crawl and a purchase are different acts and this page is linked from both, so it should say so. When our router buys from a service to resell the result to a caller it sends a real HTTP 402 payment, which is not a crawl: it is a customer.`,
-      `Those requests identify themselves as <code>${esc(ROUTER_UA)}</code> and carry <code>X-Agent402-Via: router</code>. Either one separates a purchase from a probe in your logs. Until 2026-09-21 they carried neither and arrived as <code>node</code>, which we fixed when a seller pointed out they could not tell our traffic apart.`,
+      `Those requests identify themselves as <code>${esc(ROUTER_UA)}</code> and carry <code>X-Agent402-Via: router</code>. Either one separates a purchase from a probe in your logs.`,
       `<code>robots.txt</code> does not govern these. A purchase is a request for a service you advertised a price for, and declining one is a matter for your own endpoint, not for a crawl directive. If you would rather we did not buy from you at all, say so and we will stop.`,
     ],
   },
@@ -48,7 +67,7 @@ const SECTIONS = [
     h: "Getting removed",
     p: [
       `Email <a href="mailto:mike@agent402.tools">mike@agent402.tools</a> from an address at the domain, or open an issue, and we will remove the origin from the index and stop crawling it. We do not require a reason and we do not argue about it.`,
-      `Blocking the User-Agent in <code>robots.txt</code> has the same effect and takes immediate effect on the next cycle without waiting for us.`,
+      `A robots.txt rule limits what the crawler reads from the next cycle on, but it does not remove a listing: the row stays with what we last read. To be removed, email us.`,
     ],
   },
   {

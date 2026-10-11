@@ -2482,6 +2482,8 @@ jobs:
           t node scripts/test-tollbooth-cli.js
           # /tollbooth install snippet runs against the package for every mode (observe, bots, strict, all; PoW unlock, stock x402 buy vs stub facilitator)
           t node scripts/test-tollbooth-landing.js
+          # /crawler claims vs the real crawl (robots exemptions, fallback documents, User-Agent on every probe - offline stub origins)
+          t node scripts/test-crawler-page.js
           # /SKILL.md agent-onboarding sheet (frontmatter, section order, every named route registered, house style - offline)
           t node scripts/test-skill-md.js
           # Manifest resources[] dedup (a tool registered under 2 HTTP methods lists its URL once, not twice)
