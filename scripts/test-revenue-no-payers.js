@@ -72,7 +72,7 @@ ok(/const seen = newestOwnSettle\(r\.recent\);/.test(live), "the snapshot's last
   const linked = revenuePage("https://agent402.tools", { asOf: "2026-10-02T00:00:00.000Z", rails: [{ rail: "Base", asset: "USDC", balance: 1, explorer: "https://basescan.org/address/0xabf4", recent: snap.rails[0].recent, lastInbound: snap.rails[0].lastInbound }], allTime: { perChain: {} } });
   ok(linked.includes('<a href="https://basescan.org/address/0xabf4" rel="noopener">$0.002</a>'), "the latest settle links to our wallet's explorer page");
   const mppSeg = html.slice(html.indexOf("MPP wire"), html.indexOf("MPP wire") + 4000);
-  ok(/Card<\/strong> <span[^>]*>USD</.test(mppSeg) && !/stripe<\/strong> <span[^>]*>USDC/i.test(mppSeg), "card settlements over MPP are labelled USD, not USDC");
+  ok(/Card \(MPP wire\)<\/strong> <span[^>]*>USD</.test(mppSeg) && !/stripe<\/strong> <span[^>]*>USDC/i.test(mppSeg), "card settlements over MPP are labelled USD, not USDC");
   ok(!/Blockscout kit/.test(html), "the SOR lane names no retired kit");
   // The MPP table's Explorer column links the rail's newest settlement on its
   // block explorer (owner decision 2026-10-09: the link has to show the
@@ -94,7 +94,35 @@ ok(/const seen = newestOwnSettle\(r\.recent\);/.test(live), "the snapshot's last
     allTime: { perChain: {}, allTimeInboundCount: 10, allTimeExternalCount: 4, allTimeExternalUsd: 0.5 },
     card: { allTimeCount: 2, allTimeUsd: 7 },
   });
-  ok(/2<\/strong> card purchases \(\$7\.00\)/.test(withCard), "the hero's card purchase total carries its dollar sign");
+  ok(/2<\/strong> card checkout purchases \(\$7\.00\)/.test(withCard), "the hero's card purchase total carries its dollar sign");
+}
+
+// --- page copy reads the figures and switches that decide it -----------------
+{
+  const { revenuePage } = await import("../src/revenue-live.js");
+  const snap = { asOf: "2026-10-02T00:00:00.000Z", rails: [{ rail: "Base", asset: "USDC", balance: 1, recent: [] }], allTime: { perChain: {}, allTimeInboundCount: 10, allTimeExternalCount: 4, allTimeExternalUsd: 0.5 }, agents: { buyers: 3 }, standing: { sellers: 4000, x402Rails: 12, tempo: true } };
+  const html = revenuePage("https://agent402.tools", { ...snap, hashPriceUsd: 0.004 });
+  ok(/It costs \$0\.004 a call/.test(html) && !/tenth of a cent/.test(html), "the 'put a line on this table' price is the hash tool's catalog price, not typed");
+  ok(/3<\/div>\s*<div[^>]*>distinct outside wallets have paid us on-chain/.test(html), "the hero counts wallets, not agents");
+  ok(!/not an offer, a solicitation/.test(html), "no legal disclaimer register in the intro");
+  ok(/read from the chain, plus card checkout purchases from our card processor/.test(html), "the intro does not claim card purchases are read from the chain");
+  ok(!/>x402scan/i.test(html) && /a public x402 explorer indexes our settlements/.test(html), "no third-party index named in our copy");
+  ok(/THE MARKET WE INDEX/.test(html) && /12 x402 chains \+ Tempo \(MPP\)/.test(html), "the standing band names its scope and counts chains and Tempo apart");
+  const { transparencyPage } = await import("../src/transparency.js");
+  const tp = transparencyPage("https://agent402.tools");
+  ok(/at most \$0\.75|at most \$\d/.test(tp), "the per-call ceiling carries its currency sign");
+  ok(/cached for an hour/.test(tp) && !/60-second cache/.test(tp) && !/not shown/.test(tp), "the cache and balance wording match what /api/revenue does");
+  ok(!/about 200 Tempo/.test(tp) && !/x402scan/i.test(tp.replace(/href="[^"]*"/g, "")), "no typed daily rate and no third-party index named");
+  ok(/last updated 2026-10-11/.test(tp) && /Every claim in the token disclosure below links to an/.test(tp), "the page date and the on-chain-record claim are scoped to what they cover");
+}
+{
+  const { statusPage, statusSnapshot } = await import("../src/status.js").catch(() => ({}));
+  const src = readFileSync(new URL("../src/status.js", import.meta.url), "utf8");
+  ok(/Upstream buyer wallet, Solana/.test(src) && /Upstream buyer wallet, Tempo/.test(src) && /live\.upstreamBuyerSvm/.test(src), "/status renders every router spending wallet (Base, Algorand, Solana, Tempo)");
+  ok(/real stablecoins across every supported chain \(USDC, USDG on Robinhood Chain, USDC\.e on Tempo\)/.test(src), "the canary blurb names the stablecoins it pays");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/upstreamBuyerSvm: upstreamBuyerSvm\?\.status \|\| null/.test(server), "statusLive reads the Solana buyer bucket");
+  void statusPage; void statusSnapshot;
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

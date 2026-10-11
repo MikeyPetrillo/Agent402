@@ -9,6 +9,6 @@ import { marketSellers, marketTools, marketPage } from "./market-page.js";
 export const stellarSellers = (snapshot) => marketSellers("stellar", snapshot);
 export const stellarTools = (snapshot) => marketTools("stellar", snapshot);
 
-export function stellarPage(baseUrl, { snapshot, rail, activity, selectedSeller, stellarWallet, host = null, payable = null } = {}) {
-  return marketPage("stellar", baseUrl, { snapshot, rail, activity, selectedSeller, wallet: stellarWallet, host, payable });
+export function stellarPage(baseUrl, { snapshot, rail, activity, selectedSeller, stellarWallet, host = null, payable = null, ...extra } = {}) {
+  return marketPage("stellar", baseUrl, { ...extra, snapshot, rail, activity, selectedSeller, wallet: stellarWallet, host, payable });
 }

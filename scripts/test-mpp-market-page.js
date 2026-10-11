@@ -88,7 +88,16 @@ ok(!xssHtml.includes('href="javascript:'), "a non-http(s) seller-supplied URL ne
   const html = mppMarketPage("https://agent402.tools", { verifiedSellers: 1, discoveredTotal: 1, sellers: [] }, lb, { host: HOSTF });
   ok(!without.includes("data-host-row") && html.includes("data-host-row"), "MPP board: host row renders only with host figures");
   ok(html.indexOf("data-host-row") > html.indexOf("</table>"), "MPP board: host row sits below the ranked table, not inside it");
-  ok(/HOST &middot; NOT RANKED/.test(html) && html.includes("109 settlements"), "MPP board: host row is labelled unranked and carries the external-only figure");
+  ok(/HOST &middot; NOT RANKED/.test(html) && html.includes("109 paid settlements"), "MPP board: host row is labelled unranked and carries the external-only figure");
+  // The row under the Tempo board carries Tempo figures and says so.
+  const { hostFiguresFromPayments } = await import("../src/host-entry.js");
+  const now = Date.parse("2026-10-11T00:00:00Z");
+  const tf = hostFiguresFromPayments([{ ts: now - 40 * 86_400_000, payer: "0xA" }, { ts: now - 86_400_000, payer: "0xa" }, { ts: now - 3_600_000, payer: "0xB" }, { ts: now - 60_000, payer: null }], { network: "tempo", networkLabel: "Tempo (MPP)", now });
+  ok(tf.external30d.settlements === 3 && tf.external30d.buyers === 2 && tf.externalAllTime.settlements === 4 && tf.externalAllTime.buyers === 2, "Tempo host figures: 30d and all-time counts, payers counted once, a null payer never a buyer");
+  const tempoRow = mppMarketPage("https://agent402.tools", { verifiedSellers: 1, discoveredTotal: 1, sellers: [] }, lb, { host: tf });
+  ok(/outside buyers<\/span><span[^>]*>on Tempo \(MPP\)/.test(tempoRow), "MPP board: host row names the Tempo (MPP) scope");
+  const srv = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/mppMarketPage\(BASE_URL, mppIndexSnapshot\(\), mppLeaderboardSnapshot\(\), \{ host: mppHostFigures\(\) \}\)/.test(srv) && /hostFiguresFromPayments\(externalTempoPayments\(\)/.test(srv), "/mpp-marketplace feeds the host row from external Tempo payments, not the all-rails total");
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

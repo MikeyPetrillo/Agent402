@@ -114,7 +114,7 @@ export const COMPONENTS = [
   { key: "mcp", label: "MCP connector", blurb: "The hosted /mcp endpoint agents connect through.", staleAfterMs: QUARTER_HOURLY },
   { key: "paywall", label: "Paywall engaged", blurb: "Paid tools still answer 402 when unpaid, so nothing is given away by accident.", staleAfterMs: QUARTER_HOURLY },
   { key: "rails", label: "Payment rails", blurb: "The chains advertised in a live 402 challenge.", staleAfterMs: QUARTER_HOURLY },
-  { key: "settlement", label: "Settlement (paid canary)", blurb: "A daily purchase paying real USDC across every supported chain.", staleAfterMs: DAILY },
+  { key: "settlement", label: "Settlement (paid canary)", blurb: "A daily purchase paying real stablecoins across every supported chain (USDC, USDG on Robinhood Chain, USDC.e on Tempo).", staleAfterMs: DAILY },
 ];
 
 const WINDOWS = [
@@ -313,6 +313,8 @@ function liveSection(live, stats) {
   if (live.gateway) rows.push(["LLM gateway credit", bucket(live.gateway), esc(String(live.gateway)), "Bucketed upstream balance. The amount is never exposed."]);
   if (live.upstreamBuyer) rows.push(["Upstream buyer wallet, Base", bucket(live.upstreamBuyer), esc(live.upstreamBuyer), "Funds the router's purchases from outside sellers for resale."]);
   if (live.upstreamBuyerAvm) rows.push(["Upstream buyer wallet, Algorand", bucket(live.upstreamBuyerAvm), esc(live.upstreamBuyerAvm), "Funds Algorand-side external routing."]);
+  if (live.upstreamBuyerSvm) rows.push(["Upstream buyer wallet, Solana", bucket(live.upstreamBuyerSvm), esc(live.upstreamBuyerSvm), "Funds Solana-side external routing."]);
+  if (live.upstreamBuyerTempo) rows.push(["Upstream buyer wallet, Tempo", bucket(live.upstreamBuyerTempo), esc(live.upstreamBuyerTempo), "Funds the router's purchases from MPP sellers on Tempo."]);
   const last = stats?.recentCalls?.[0];
   if (last) {
     rows.push(["Last call served", "ok", `${esc(last.slug)} · ${esc(agoStr(last.at))}`, `Paid with ${last.paidWith === "proof-of-work" ? "proof-of-work" : "USDC"}.`]);

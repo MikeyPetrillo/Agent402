@@ -98,8 +98,8 @@ function chainCard(html, slug) {
 // --- methodology + router sections --------------------------------------------
 {
   const html = marketPage(null, BASE_URL, { snapshot: { sellers: [LOCAL] }, leaderboardSnap: { leaderboard: [] } });
-  ok(html.includes("Or skip the browsing") && html.includes("POST /api/route"), "the router-skip section renders");
-  ok(html.includes("Discovery: the Coinbase CDP Bazaar"), "the methodology steps render");
+  ok(html.includes("Or skip the browsing") && html.includes("GET /api/route") && html.includes("/api/route?q=ocr+an+image"), "the router-skip section renders, its kicker and example naming one endpoint");
+  ok(html.includes("Discovery: the x402 Bazaar discovery listing"), "the methodology steps render");
 }
 
 // --- FAQ + structured data ------------------------------------------------------
@@ -148,7 +148,7 @@ function chainCard(html, slug) {
   const withHost = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] }, host: HOSTF });
   ok(!without.includes("data-host-card") && withHost.includes("data-host-card"), "host card renders only when host figures are supplied");
   ok(withHost.includes("NOT RANKED, NOT COUNTED") && withHost.includes(">109<") && withHost.includes(">250<"), "host card carries the external-only 30d and all-time figures");
-  ok(withHost.includes("canary and volume runs are excluded"), "host card states that our own runs are excluded");
+  ok(withHost.includes("canary and volume runs and free proof-of-work calls are left out"), "host card states that our own runs and free calls are excluded");
   const count = (h) => (h.match(/SELLERS LISTED<\/div><div[^>]*>([0-9,]+)/) || [])[1];
   ok(count(without) === count(withHost), `the SELLERS LISTED count is identical with and without the host card (${count(without)} vs ${count(withHost)})`);
   ok(withHost.indexOf("data-host-card") < withHost.indexOf('class="mfb"'), "host card sits above the roster filter bar and rows, not inside them");

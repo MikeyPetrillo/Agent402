@@ -1409,5 +1409,18 @@ const page = (results, extra = {}) =>
   check("/marketplace/tools says why its figure differs from the marketplace tool listings", /sum the tool count each indexed seller advertises, including sellers this list leaves out/.test(html));
 }
 
+// ── Links that open, chips that read as categories, no em dash ─────────────
+{
+  const { chipWorthy } = await import("../src/index-tools-page.js");
+  const html = indexToolsPage("https://agent402.tools",
+    { total: 2, matched: 2, offset: 0, limit: 100, described: 1, results: [tool({ route: "/agent/{agent_id}", url: "https://seller.test/agent/{agent_id}" }), tool({ described: false, description: "", priceUsd: null })] },
+    [{ category: "data", count: 9 }, { category: "s9", count: 8 }, { category: "Sc", count: 7 }, { category: "Actors", count: 6 }], {});
+  check("a third-party row links the seller's origin, never an endpoint with a {placeholder}", html.includes('href="https://seller.test/"') && !/href="[^"]*\{agent_id\}/.test(html));
+  check("letterless or two-character category codes get no chip", !/>s9 8</.test(html) && !/>Sc 7</.test(html) && />data 9</.test(html) && />Actors 6</.test(html));
+  check("chipWorthy keeps word-like categories only", chipWorthy("data") && chipWorthy("Actors") && !chipWorthy("s9") && !chipWorthy("Sc") && !chipWorthy(""));
+  check("an unpriced row reads '-', never an em dash", !html.includes("\u2014") && />-<\/td>/.test(html));
+  check("the OURS note speaks plainly (no CI or upstream jargon)", /tested against their own published example on every release/.test(html) && !/CI can run|at an upstream/.test(html));
+}
+
 console.log(`\ntest-index-tools-catalog: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

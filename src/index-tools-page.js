@@ -27,7 +27,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const PAGE_SIZE = 100;
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
-const fmtPrice = (p) => (typeof p === "number" && p > 0 ? `$${p < 0.01 ? p.toFixed(4).replace(/0+$/, "").replace(/\.$/, "") : p.toFixed(2)}` : "—");
+const fmtPrice = (p) => (typeof p === "number" && p > 0 ? `$${p < 0.01 ? p.toFixed(4).replace(/0+$/, "").replace(/\.$/, "") : p.toFixed(2)}` : "-");
 
 const CSS = `
 .ix-wrap{max-width:1180px;margin:0 auto;padding:52px 30px}
@@ -69,6 +69,19 @@ table.ix tr.is-ours td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 @media(max-width:720px){.ix-h1{font-size:var(--fs-2xl)}.ix-wrap{padding:34px 18px}table.ix th:nth-child(3),table.ix td:nth-child(3){display:none}}
 `;
 
+/** https origin of a third-party row (the endpoint's own origin as a fallback). */
+function sellerOriginHref(t) {
+  for (const u of [t.seller, t.url]) {
+    try { const o = new URL(String(u || "")); if (o.protocol === "https:") return `${o.origin}/`; } catch { /* next */ }
+  }
+  return "#";
+}
+
+// A category chip is seller-supplied text. Short or letterless codes ("s9",
+// "Sc") read as broken data, so only word-like categories get a chip; every
+// row still shows its own category, and the search box finds the rest.
+export const chipWorthy = (c) => /^[A-Za-z][A-Za-z0-9 &/_-]{2,}$/.test(String(c || "")) && /[aeiouy]/i.test(String(c));
+
 /** One row. Third-party text is seller-supplied and only ever escaped; our own
  *  rows are marked so the two can never be mistaken for each other. */
 function row(t) {
@@ -78,7 +91,9 @@ function row(t) {
     : `<span class="ix-badge third" title="Operated by a third party. Not tested by Agent402.">3rd party</span>`;
   const sellerCell = t.ours
     ? `<a href="/tools/${esc(t.slug || "")}">${esc(t.sellerName)}</a>`
-    : `<a href="${esc(t.url)}" rel="noopener nofollow ugc">${esc(t.sellerName)}</a>`;
+    // The seller's origin, never the endpoint URL: an endpoint is often a POST
+    // route or an unfilled {template}, which a browser cannot open.
+    : `<a href="${esc(sellerOriginHref(t))}" rel="noopener nofollow ugc">${esc(t.sellerName)}</a>`;
   return `<tr class="${t.ours ? "is-ours" : ""}">
   <td>
     ${badge}
@@ -115,7 +130,7 @@ export function indexToolsPage(baseUrl, data, categories, params = {}) {
     return `/marketplace/tools${str ? `?${str}` : ""}`;
   };
 
-  const chips = categories.slice(0, 18).map((c) =>
+  const chips = categories.filter((c) => chipWorthy(c.category) || c.category === category).slice(0, 18).map((c) =>
     `<a href="${esc(qs({ category: c.category === category ? "" : c.category, page: 1 }))}" class="${c.category === category ? "on" : ""}">${esc(c.category)} ${fmtNum(c.count)}</a>`).join("");
 
   const body = `<div class="ix-wrap">
@@ -125,7 +140,7 @@ export function indexToolsPage(baseUrl, data, categories, params = {}) {
 <div class="ix-note">
   <h2>What each badge means</h2>
   <ul>
-    <li><span class="ix-badge ours">OURS</span> <b>We build, host and stand behind these.</b> They are priced by us and covered by the paywall guarantees on <a href="/tools">our tools</a>. The ones CI can run without spending at an upstream answer their own documented example on every deploy; the metered ones (model tiers, search, reports) are outside that sweep. On the x402 and prepaid-credit paths, a call that answers an error is not charged. ${fmtNum(data.ours)} of the ${fmtNum(data.total)} rows here.</li>
+    <li><span class="ix-badge ours">OURS</span> <b>We build, host and stand behind these.</b> They are priced by us and covered by the paywall guarantees on <a href="/tools">our tools</a>. Most of our tools are tested against their own published example on every release; model-backed and search tools have their inputs checked separately. On the x402 and prepaid-credit paths, a call that answers an error is not charged. ${fmtNum(data.ours)} of the ${fmtNum(data.total)} rows here.</li>
     <li><span class="ix-badge third">3rd party</span> <b>Someone else's endpoint. We do not operate, host, or test it.</b> Everything below applies only to these rows:</li>
   </ul>
   <ul>
@@ -173,7 +188,7 @@ ${ledgerFooterCompact()}`;
 
   const canonical = `${baseUrl}/marketplace/tools${page > 1 || search || category ? qs().replace("/marketplace/tools", "") : ""}`;
   return ledgerShell({
-    title: `Every x402 tool indexed${category ? ` — ${category}` : ""}${page > 1 ? ` (page ${page})` : ""} - Agent402`,
+    title: `Every x402 tool indexed${category ? `: ${category}` : ""}${page > 1 ? ` (page ${page})` : ""} - Agent402`,
     description: `${fmtNum(data.total)} x402 endpoints in one searchable index: ${fmtNum(data.ours)} built and operated by Agent402, ${fmtNum(data.thirdParty)} run by third parties. Every row is labelled with who operates it. Third-party listings are not tested or endorsed by Agent402.`,
     canonical,
     baseUrl,

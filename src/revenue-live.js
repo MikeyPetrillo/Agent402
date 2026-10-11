@@ -1605,7 +1605,7 @@ const MPP_RAIL_META = {
   celo: { label: "Celo", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://celoscan.io/address/", tx: "https://celoscan.io/tx/" },
   tempo: { label: "Tempo", asset: "USDC.e / PathUSD", how: "native tempo/charge via Tempo's relay", explorer: "https://explore.tempo.xyz/address/", tx: "https://explore.tempo.xyz/tx/" },
   // Card payments over MPP settle in US dollars, not a stablecoin.
-  stripe: { label: "Card", asset: "USD", how: "card over MPP" },
+  stripe: { label: "Card (MPP wire)", asset: "USD", how: "a card credential on an MPP call; card checkout purchases are counted separately in the headline" },
 };
 const mppRailLabel = (n) => MPP_RAIL_META[n]?.label || netName(n) || n;
 
@@ -1843,10 +1843,12 @@ export function revenueChartSection(range = null) {
  *  has: someone who wants to call a tool, someone who wants to be paid, and
  *  someone who wants the finished work rather than the API.
  */
-export function revenueNextStep() {
+export function revenueNextStep(hashPriceUsd = null) {
+  const p = Number(hashPriceUsd);
+  const cost = Number.isFinite(p) && p > 0 ? `It costs $${String(p)} a call` : "It is priced in the 402 it answers";
   return `<div style="margin:36px 0 0;border:1px solid var(--hairline);background:var(--card);padding:22px 20px;">
     <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0 0 6px;">Put a line on this table.</h2>
-    <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 14px;">Every number above is a settlement through the same gate this command hits. It costs a tenth of a cent and needs no account: the 402 comes back with the price and the rails, your client signs, the call is served.</p>
+    <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 14px;">Every number above is a settlement through the same gate this command hits. ${cost} and needs no account: the 402 comes back with the price and the rails, your client signs, the call is served.</p>
     <pre style="margin:0 0 16px;padding:12px 14px;overflow-x:auto;background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.5;"><code>curl -i https://agent402.tools/api/hash?text=hello</code></pre>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
       <a href="/markets" style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--ink);padding:8px 12px;text-decoration:none;color:var(--btn-fg);background:var(--btn-bg);">Tools an agent can call &rarr;</a>
@@ -1912,7 +1914,7 @@ export function revenuePage(baseUrl, snap) {
   // What this page is measuring, said once at the top. Derived from the same
   // snapshot the rest of the page renders, plus the index totals server.js
   // hands in - never typed, or the framing sentence goes stale first.
-  const standing = standingBand({ ...(snap.standing || {}), settled: railThroughput(snap).total });
+  const standing = standingBand({ ...(snap.standing || {}), settled: railThroughput(snap).total, eyebrow: "THE MARKET WE INDEX" });
   // External payments across the scanned on-chain rails PLUS Tempo MPP
   // settlements (Tempo is not a scanned chain; ledgerSummary folds it in from
   // the sales ledger). Falls back to the on-chain pair for an older snapshot.
@@ -1928,9 +1930,9 @@ export function revenuePage(baseUrl, snap) {
   const hero = throughput ? `
     <div class="ml-2col" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;margin:22px 0 14px;max-width:720px;">
       ${big(throughput, "settled transactions, all-time", `x402 + MPP, ours included${at.syncing ? " · ledger still backfilling" : ""}`)}
-      ${agents ? big(agents, `distinct agent${agents === 1 ? "" : "s"} have paid us on-chain`, `unique outside wallets${snap.agents?.scope?.since ? `, since ${esc(snap.agents.scope.since)}` : ""}${snap.agents?.top5SharePct != null ? ` · top 5 = ${snap.agents.top5SharePct}% of their payments` : ""}`) : ""}
+      ${agents ? big(agents, `distinct outside wallet${agents === 1 ? " has" : "s have"} paid us on-chain`, `unique outside wallets${snap.agents?.scope?.since ? `, since ${esc(snap.agents.scope.since)}` : ""}${snap.agents?.top5SharePct != null ? ` · top 5 = ${snap.agents.top5SharePct}% of their payments` : ""}`) : ""}
     </div>
-    <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);margin:0 0 4px;"><strong>${extCount.toLocaleString()}</strong> external payment${extCount === 1 ? "" : "s"} · <strong>$${extUsd.toFixed(2)}</strong> revenue, settled on-chain (x402 rails + Tempo MPP), all-time${snap.card?.allTimeCount ? ` · <strong>${Number(snap.card.allTimeCount).toLocaleString()}</strong> card purchase${snap.card.allTimeCount === 1 ? "" : "s"} ($${Number(snap.card.allTimeUsd).toFixed(2)}) <span style="color:var(--muted);font-weight:400;">by card, not on-chain</span>` : ""}</p>` : "";
+    <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);margin:0 0 4px;"><strong>${extCount.toLocaleString()}</strong> external payment${extCount === 1 ? "" : "s"} · <strong>$${extUsd.toFixed(2)}</strong> revenue, settled on-chain (x402 rails + Tempo MPP), all-time${snap.card?.allTimeCount ? ` · <strong>${Number(snap.card.allTimeCount).toLocaleString()}</strong> card checkout purchase${snap.card.allTimeCount === 1 ? "" : "s"} ($${Number(snap.card.allTimeUsd).toFixed(2)}) <span style="color:var(--muted);font-weight:400;">reports and monitors, by card, not on-chain</span>` : ""}</p>` : "";
 
   const body = `
   <div style="max-width:1100px;margin:0 auto;padding:56px 30px;">
@@ -1938,11 +1940,11 @@ export function revenuePage(baseUrl, snap) {
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/revenue</div>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.05;margin:0 0 8px;color:var(--ink);">Transactions.</h1>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0;">
-      Every payment through our rails, on both wires (<strong>x402</strong> and <strong>MPP</strong>) plus card purchases, read from the chain. Revenue counts only money from others; throughput counts our own canary and volume runs too. <a href="/transparency#revenue-figures">How the two are told apart</a>.
+      Every payment through our rails on both wires (<strong>x402</strong> and <strong>MPP</strong>), read from the chain, plus card checkout purchases from our card processor's records. Revenue counts only money from others; throughput counts our own canary and volume runs too. <a href="/transparency#revenue-figures">How the two are told apart</a>.
     </p>
     ${standing}
     ${hero}
-    <p style="font-size:var(--fs-xs);line-height:1.55;color:var(--muted);margin:2px 0 14px;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. Operating history for a payments service, stated for transparency: information only, not an offer, a solicitation, a recommendation or investment advice, and not a projection. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
+    <p style="font-size:var(--fs-xs);line-height:1.55;color:var(--muted);margin:2px 0 14px;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
     <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">balances as of ${esc(snap.asOf)}, refreshed hourly · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
     </section>
     <section>
@@ -1967,10 +1969,10 @@ export function revenuePage(baseUrl, snap) {
     ${decideSection(snap.decide)}
     </section>
     <section>
-    ${revenueNextStep()}
+    ${revenueNextStep(snap.hashPriceUsd)}
     </section>
     <section>
-    <p style="font-size:var(--fs-md);color:var(--muted);margin-top:30px;">Check us independently: <a href="https://www.x402scan.com/server/07eb3020-932a-436d-a739-557b6e47101d" rel="noopener">x402scan indexes our settlements</a>. Their totals include our own traffic, so they read higher than the external figures here; <a href="/transparency#revenue-figures">why the two differ</a>.</p>
+    <p style="font-size:var(--fs-md);color:var(--muted);margin-top:30px;">Check us independently: <a href="https://www.x402scan.com/server/07eb3020-932a-436d-a739-557b6e47101d" rel="noopener">a public x402 explorer indexes our settlements</a>. Its totals include our own traffic, so they read higher than the external figures here; <a href="/transparency#revenue-figures">why the two differ</a>.</p>
     </section>
   </div>
   ${ledgerFooterCompact(baseUrl)}`;

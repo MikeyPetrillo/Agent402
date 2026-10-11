@@ -123,6 +123,10 @@ export function windowLabel(w) {
 export function revenueSeriesFirstDay(body) {
   let first = null;
   for (const r of [...(body?.days || []), ...(body?.buyers || [])]) if (r?.day && (!first || r.day < first)) first = r.day;
+  // No rows yet: the series still knows where it starts, so a window asked
+  // from before that day is clamped to it rather than labelled from 2020.
+  const start = body?.daysScope?.seriesStart;
+  if (!first && typeof start === "string" && isUtcDay(start)) return start;
   return first;
 }
 
