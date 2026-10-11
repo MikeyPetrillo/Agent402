@@ -1,3 +1,4 @@
+import { creditsSalesEnabled } from "../credits-sales.js";
 // A2A (Agent2Agent protocol) Agent Card validation — shared by the pure-CPU
 // a2a-card-validate tool (agent-kit) and the egress a2a-card-fetch tool
 // (network-kit). Built for an A2A demand cluster (#461): agents keep
@@ -54,7 +55,7 @@ export function buildAgentRegistration({ baseUrl, agentId, toolCount } = {}) {
     name: "Agent402",
     description:
       `Pay-per-call web tools for autonomous agents: ${catalog} settled in USDC over x402 or MPP, ` +
-      "free via proof of work, or prepaid by card. No account and no API key.",
+      `free via proof of work on the pure-CPU tools, ${creditsSalesEnabled() ? "or prepaid by card" : "and finished reports by card"}. No account and no API key.`,
     image: `${base}/logo.png`,
     // { name, endpoint }, the spec's field names. The first cut used
     // { type, url }, which parses to zero usable services.
@@ -104,7 +105,7 @@ export function buildOurAgentCard({ baseUrl, version, toolCount } = {}) {
     name: "Agent402",
     description:
       `Pay-per-call web tools for autonomous agents: ${catalog} settled in USDC over x402 or MPP, ` +
-      "free via proof of work, or prepaid by card. No account and no API key. The same catalog is " +
+      `free via proof of work on the pure-CPU tools, ${creditsSalesEnabled() ? "or prepaid by card" : "and finished reports by card"}. No account and no API key. The same catalog is ` +
       `callable over MCP at ${base}/mcp and documented at ${base}/openapi.json.`,
     url: `${base}/api`,
     preferredTransport: "HTTP+JSON",
