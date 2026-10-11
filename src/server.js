@@ -43,6 +43,7 @@ import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./p
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort } from "./drain-abort.js";
 import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
+import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
 import { compositeGuardBlocked, compositeGuardGlobalPaused, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
 import { gatewaySettleBreakerCheck } from "./gateway-settle-breaker.js";
 // Single-upstream-call routes that run long (40 s+): EVM exact only, like the
@@ -3219,6 +3220,9 @@ app.get("/api/gateway-status", async (req, res) => {
     exaAllowance: full ? spend.exaAllowance : publicBucket(spend.exaAllowance),
     jevSpend: full ? spend.jevSpend : publicBucket(spend.jevSpend),
     upstreamBudgets: full ? budgets : publicBudgets(budgets),
+    // Solana history reads (getTransaction by signature): which lane serves
+    // them. One word publicly; per-lane counts for the operator.
+    solanaHistory: (() => { try { return solanaHistoryStatus({ full }); } catch { return { status: "unknown" }; } })(),
     stellarFacilitator, databases, operatorAuth: operatorAuthStatus(full),
     // OFAC SDN list behind sanctions-wallet / sanctions-name and the router's
     // payout screen: one word publicly, counts and the last error for the operator.
@@ -10133,7 +10137,10 @@ if (String(process.env.MPP_INDEX_CRAWL || "").toLowerCase() === "off") {
     // payTo the index knows, primed into the pay-time gate (src/solana-leaderboard.js).
     startSolanaLeaderboard({
       listPayTos: async () => (await import("./x402-index.js")).allSolanaPayToOrigins(),
-      rpc: (method, params) => import("./solana-buyer.js").then((m) => m.solanaRpc(method, params)),
+      // getTransaction (immutable, by signature) goes public RPC first with the
+      // keyed lane behind it (src/solana-history-rpc.js); the signature and
+      // token-account reads stay on the configured lane.
+      rpc: historyAwareRpc((method, params) => import("./solana-buyer.js").then((m) => m.solanaRpc(method, params))),
       creditFromTx: (meta, payTo) => solanaCreditFromTx(meta, payTo),
       prime: (payTo, count) => import("./solana-buyer.js").then((m) => m.primeSvmInboundCount(payTo, count)),
       windowHours: Number(process.env.SOR_SVM_WINDOW_HOURS) || 168,

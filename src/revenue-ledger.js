@@ -32,6 +32,7 @@ import {
   getJsonAcross, ALGORAND_INDEXER_BASES,
 } from "./revenue-live.js";
 import { usdcDeltaForOwner, payerFromMeta, isExternalPayment } from "../scripts/revenue-scan-solana.js";
+import { solanaHistoryRead } from "./solana-history-rpc.js";
 import { externalTempoPayments } from "./sales-ledger.js";
 import { createBlockClock, rpcHeaderReader, dateFromAnchors } from "./block-clock.js";
 
@@ -605,14 +606,17 @@ export async function syncSolana(wallet, { maxPages = 5 } = {}) {
     if (backfilled) newest = sigs[0].signature; // follow mode: advance the anchor
     for (const s of sigs) {
       if (s.err) continue;
-      // No try/catch here: rpcCall only throws when the RPC lane itself fails
+      // No try/catch here: the read only throws when the RPC lanes themselves fail
       // (429/timeout — a genuinely undecodable tx returns a null result, and
       // usdcDeltaForOwner(null) is just 0). Swallowing that error silently
       // dropped the settle from all-time forever, because the cursor advanced
       // past it and no full re-pass ever happens. Let it propagate instead:
       // putCursor never runs, the tick retries in 20s, and the PK dedupes the
       // replayed page.
-      const txn = await rpcCall(SOLANA_RPCS, "getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], 8000);
+      // Public RPC first, keyed lane behind it (src/solana-history-rpc.js);
+      // a public null falls through, so a pruned or unindexed answer never
+      // reads as "no transfer" here.
+      const txn = await solanaHistoryRead("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], { timeoutMs: 8000 });
       const usd = Number(usdcDeltaForOwner(txn?.meta, wallet).toFixed(6));
       if (usd > 0) {
         const payer = payerFromMeta(txn?.meta, wallet);

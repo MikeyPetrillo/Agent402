@@ -222,18 +222,17 @@ export const EVM = {
 };
 // Fallback matters: the card's per-tx decodes and the all-time ledger's
 // backfill share these endpoints, and the public mainnet-beta RPC 429s under
-// that contention — without a second lane the card loses its amount/external
+// that contention - without a second lane the card loses its amount/external
 // tags whenever the ledger is paging. Same list + env override as
 // scripts/revenue-scan-solana.js.
-// Alchemy first when the key is set (same key as the EVM rails) — it serves
+// Alchemy first when the key is set (same key as the EVM rails) - it serves
 // Solana JSON-RPC from a datacenter-reachable endpoint, so the balance read
 // stops timing out against the rate-limited public RPCs. The publics stay as
-// fallbacks (rpcCall walks the list on error/timeout).
-export const SOLANA_RPCS = (process.env.SOLANA_RPCS || [
-  ...(process.env.ALCHEMY_API_KEY ? [`https://solana-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-  "https://api.mainnet-beta.solana.com",
-  "https://solana-rpc.publicnode.com",
-].join(",")).split(",").map((s) => s.trim()).filter(Boolean);
+// fallbacks (rpcCall walks the list on error/timeout). The list now lives in
+// src/solana-history-rpc.js, which also routes getTransaction (an immutable
+// read by signature) public-first with the keyed lane behind it.
+import { SOLANA_RPCS, solanaHistoryRead } from "./solana-history-rpc.js";
+export { SOLANA_RPCS };
 
 // Stellar/Algorand REST endpoints. Alchemy doesn't serve these chains, so each
 // keeps a public primary plus a second independent provider (both verified
@@ -622,7 +621,7 @@ async function solanaRail(wallet) {
       };
       if (!s.err && Date.now() < deadline) {
         try {
-          const txn = await rpcCall(SOLANA_RPCS, "getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], 5000);
+          const txn = await solanaHistoryRead("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], { timeoutMs: 5000, keyedFirst: true });
           const usd = Number(usdcDeltaForOwner(txn?.meta, wallet).toFixed(6));
           if (usd > 0) {
             item.usd = usd;
@@ -1218,7 +1217,7 @@ export async function solanaActivity(wallet, { days = 30, maxPages = SCAN_MAX_PA
         if (txBudget <= 0 || Date.now() >= until) { capped = true; break scan; }
         txBudget--;
         try {
-          const txn = await rpcCall(SOLANA_RPCS, "getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], 6000);
+          const txn = await solanaHistoryRead("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], { timeoutMs: 6000, keyedFirst: true });
           const entry = parseSolanaTransfer(txn, wallet);
           if (entry) {
             entry.internal = entry.from != null && OUR_SOLANA_WALLETS.has(entry.from);

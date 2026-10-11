@@ -44,6 +44,10 @@ ok(pubBody?.ledgerDeadLetter?.status === "off" && Object.keys(pubBody.ledgerDead
 ok(opBody?.ledgerDeadLetter?.status === "off" && typeof opBody?.ledgerDeadLetter?.sales?.onDisk === "number", "the operator view of ledgerDeadLetter carries the counts");
 ok(["sales", "refunds", "checkoutFinals", "subscriptions", "decide"].every((n) => typeof opBody?.ledgerDeadLetter?.[n]?.onDisk === "number"), `the operator view counts every local money journal (${Object.keys(opBody?.ledgerDeadLetter || {}).join(",")})`);
 
+// --- Solana history reads: one word publicly, per-lane counts for the operator ---
+ok(typeof pubBody?.solanaHistory?.status === "string" && Object.keys(pubBody.solanaHistory).join(",") === "status", `solanaHistory publishes its word only (${JSON.stringify(pubBody?.solanaHistory)})`);
+ok(opBody?.solanaHistory && typeof opBody.solanaHistory.lanes === "object" && "publicShare" in opBody.solanaHistory, "the operator view of solanaHistory carries the per-lane counts");
+
 // --- the money fields, by name ---------------------------------------------
 const MONEY = /"(capUsd|spentUsd|budget|callsToday|fundedUsd|remainingUsd|spentSinceRestartUsd|refusedToday|lowBelowFraction)":\s*-?[0-9]/;
 ok(!MONEY.test(JSON.stringify(pubBody)),
