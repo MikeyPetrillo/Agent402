@@ -99,7 +99,11 @@ function leaderboardHtml(lb, host = null) {
     const all = r.sellers || [];
     const shown = all.slice(0, MAX_NAMES).map((x) => `<a href="${safeHref(x.url || x.origin)}" rel="noopener" style="color:var(--ink);text-decoration:none;font-weight:700;">${esc(x.name)}</a>`).join(", ");
     const more = all.length > MAX_NAMES ? ` <span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);" title="${esc(all.slice(MAX_NAMES).map((x) => x.name).join(", "))}">+${all.length - MAX_NAMES} more on this recipient</span>` : "";
-    const names = shown + more;
+    // One recipient credited under several names is a shared payment address
+    // (a gateway that collects for many services), so it says so instead of
+    // reading as if each named company is a seller on this row.
+    const sharedTag = all.length > 1 ? `<span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);">shared recipient &middot; ${all.length} services:</span> ` : "";
+    const names = sharedTag + shown + more;
     const who = r.self ? `<span style="font-weight:700;">Agent402</span> <span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);">(this server)</span>${names ? `, ${names}` : ""}` : (names || `<span style="color:var(--faint);">unnamed recipient</span>`);
     return `<tr>
       <td class="num">${r.rank}</td>
@@ -148,7 +152,7 @@ function sellerRowHtml(s, lbByRecipient) {
   ].filter(Boolean).join(" &middot; ");
   return `<div class="mpr-row">
     <div>
-      <a href="${safeHref(s.url || s.origin)}" rel="noopener" class="mpr-name">${esc(s.name)}</a>
+      <a href="${safeHref(s.docs?.homepage || s.url || s.origin)}" rel="noopener" class="mpr-name"${s.docs?.homepage ? "" : ' title="API origin (no homepage declared)"'}>${esc(s.name)}</a>
       <div class="mpr-host">${esc(String(s.origin || "").replace(/^https?:\/\//, ""))}</div>
       ${s.description ? `<p class="mpr-desc">${esc(s.description)}</p>` : ""}
       ${endpointHtml}
@@ -221,7 +225,7 @@ export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = nu
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">VERIFIED SELLERS</div><div style="font-size:var(--fs-2xl);font-weight:800;">${verifiedCount.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">live-probed, not just registry-listed</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">ENDPOINTS LISTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${totalEndpoints.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">advertised across verified sellers</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">CATEGORIES</div><div style="font-size:var(--fs-2xl);font-weight:800;">${categories.length}</div></div>
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">DISCOVERED TOTAL</div><div style="font-size:var(--fs-2xl);font-weight:800;">${discoveredTotal.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">candidates found, verification pending or failed</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">DISCOVERED TOTAL</div><div style="font-size:var(--fs-2xl);font-weight:800;">${discoveredTotal.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">every origin discovery found, verified included${discoveredTotal > verifiedCount ? ` (${(discoveredTotal - verifiedCount).toLocaleString("en-US")} pending or failed)` : ""}</div></div>
   </div>`;
 
   const headerHtml = `
@@ -251,7 +255,7 @@ export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = nu
     <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">HOW THIS INDEX IS BUILT</div>
     <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Crawled and verified, not curated</h2>
     <div style="display:flex;flex-direction:column;">${[
-      "Discovery: the public mpp.dev services registry, MPPScan's origin list, and anyone who self-registers at POST /api/mpp-index/register.",
+      "Discovery: the public mpp.dev services registry, a public MPP explorer's origin list, and anyone who self-registers at POST /api/mpp-index/register.",
       "Every listed origin gets a real, unpaid request to one of its actual advertised endpoints (from the registry, the seller's own /openapi.json discovery document, or the submitter's hint) - a registry claim alone never counts.",
       "A listing counts as verified only when that request genuinely comes back with a WWW-Authenticate: Payment challenge.",
       `A crawl cycle re-probes every known origin ${mppCrawlIntervalLabel()}; a seller that stops answering drops out of the verified count on its own.`,
@@ -260,11 +264,11 @@ export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = nu
   </div>`;
 
   const MPP_FAQS = [
-    { q: "What is the MPP marketplace?", a: "A directory of services that accept payments over MPP (the IETF-track \"Payment\" HTTP auth scheme). Every listing here has been independently, live-verified - a real unpaid request confirming the seller's endpoint genuinely answers with a WWW-Authenticate: Payment challenge - not just copied from a registry's claim." },
+    { q: "What is the MPP marketplace?", a: "A directory of services that accept payments over MPP (the \"Payment\" HTTP authentication scheme). Every listing here has been independently, live-verified - a real unpaid request confirming the seller's endpoint genuinely answers with a WWW-Authenticate: Payment challenge - not just copied from a registry's claim." },
     { q: "How is this different from Agent402's x402 marketplace?", a: "Different protocol, different seller population, and a separate crawler entirely. An MPP seller isn't necessarily an x402 seller and vice versa; Agent402 itself supports both, as a buyer-facing wire translation on its own tools and as a neutral index for each ecosystem." },
-    { q: "How does a seller get listed?", a: "Three ways, all free and automatic: appear in the public mpp.dev registry or on MPPScan (both crawled), answer an MPP challenge on a 402 our x402 crawler already probes (dual-stack sellers are detected without any listing), or register directly - the form above, or POST /api/mpp-index/register with your origin and, optionally, the priced path your 402 lives on. There is no review queue: verification is a real unpaid probe, and a listing appears as soon as it comes back with WWW-Authenticate: Payment." },
+    { q: "How does a seller get listed?", a: "Three ways, all free and automatic: appear in the public mpp.dev registry or on a public MPP explorer's origin list (both crawled), answer an MPP challenge on a 402 our x402 crawler already probes (dual-stack sellers are detected without any listing), or register directly - the form above, or POST /api/mpp-index/register with your origin and, optionally, the priced path your 402 lives on. There is no review queue: verification is a real unpaid probe, and a listing appears as soon as it comes back with WWW-Authenticate: Payment." },
     { q: "How is the MPP leaderboard ranked?", a: "By what the chain shows, not by what anyone claims: for every verified seller we take the recipient address its live MPP challenge names, then count inbound USDC.e transfers to that address on Tempo over the most recent read window (24 hours from Tempo's own transfer index when it is available, otherwise about fifteen hours of blocks read from the RPC, its per-query cap), plus distinct payers and volume. It is a window, not lifetime, and an inbound transfer is a proxy for a settlement rather than proof of one - the same proxy Agent402's own router requires before it spends money with a seller, which is why rows that also clear its distinct-payer rule and offer tempo/charge are marked routable." },
-    { q: "Why do discovered and verified counts differ?", a: "Discovery finds candidate origins from the mpp.dev registry and MPPScan; verification is our own real probe of each one. A gap between the two is normal - a fresh discovery awaiting its first probe, or a listing that no longer answers - and is always shown, never hidden." },
+    { q: "Why do discovered and verified counts differ?", a: "Discovery finds candidate origins from the mpp.dev registry and a public MPP explorer; verification is our own real probe of each one. A gap between the two is normal - a fresh discovery awaiting its first probe, or a listing that no longer answers - and is always shown, never hidden." },
   ];
   const faqHtml = MPP_FAQS.map((f) => `<article style="padding:22px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`).join("");
   const faqSection = `
