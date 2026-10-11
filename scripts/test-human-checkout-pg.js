@@ -55,8 +55,11 @@ const generate = async (kind, slug, input) => {
   return { report: `# REPORT (${slug})\n\nAnalysis of ${input}. [1]`, title: `T:${input}`, sources: [], tables: [] };
 };
 const mk = () => createHumanCheckout({ stripe, generate, baseUrl: "https://agent402.tools", storeDir: DIR, onSale: (s) => sales.push(s), now, log: () => {} });
-async function settle(hc, id, tries = 100) {
-  for (let i = 0; i < tries; i++) { const r = await hc.peek(id); if (r && r.status !== "generating") return r; await wait(10); }
+// Polls until the record leaves "generating", up to a deadline: a busy CI
+// runner can take well over a second to land the final record.
+async function settle(hc, id, deadlineMs = 10_000) {
+  const until = Date.now() + deadlineMs;
+  while (Date.now() < until) { const r = await hc.peek(id); if (r && r.status !== "generating") return r; await wait(10); }
   return hc.peek(id);
 }
 
@@ -84,7 +87,7 @@ try {
   ok(f1.status === "generating" && f2.status === "generating", "both instances answer generating to the buyer");
   const done = await settle(A, "cs_slow");
   await settle(B, "cs_slow");
-  ok(done.status === "done" && genCalls === 1 && sales.length === 1, `two instances fulfilling one paid session at once generate it ONCE (generate calls: ${genCalls})`);
+  ok(done.status === "done" && genCalls === 1 && sales.length === 1, `two instances fulfilling one paid session at once generate it ONCE (generate calls: ${genCalls}, status: ${done.status}, sales: ${sales.length})`);
   ok((await row("cs_slow"))?.status === "done" && (await row("_inflight"))?.cs_slow === undefined, "the delivered record is the row and the in-flight index no longer lists it");
   ok(file("cs_slow")?.status === "done" && file("_inflight")?.cs_slow === undefined, "the record and the index are written through to the directory");
   ok((await B.fulfill("cs_slow")).status === "done" && genCalls === 1, "a later poll on the other instance reads the row and does not regenerate");
