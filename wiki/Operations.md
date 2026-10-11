@@ -2,7 +2,7 @@
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-Deploys and production probes run through GitHub Actions (`deploy.yml` and `heartbeat.yml` are the two described here; the repository carries others for canaries, refunds and listings); production is a single Railway service with a persistent volume.
+Deploys and production probes run through GitHub Actions (`deploy.yml` and `heartbeat.yml` are the two described here; the repository carries others for canaries, refunds and listings); production is a single Railway service with a Postgres state database (and a persistent volume).
 
 ## Deploy pipeline (`.github/workflows/deploy.yml`)
 
@@ -36,8 +36,8 @@ There's also a **charged-but-failed** counter: any non-200 response that carried
 
 ## Production
 
-- **Railway**, single service, Docker (Node 22 + Chromium + ffmpeg), persistent volume at `/data` (SQLite: stats, memory, PoW replay). Without the volume, counters and paid memory reset on every redeploy - so the volume is required.
+- **Railway**, single service, Docker (Node 22 + Chromium + ffmpeg). State (stats, memory, PoW replay, the card and monitor stores, scheduler leases) lives in the Postgres state database named by `STATE_DATABASE_URL`. Without it the server falls back to SQLite and files on a persistent volume at `/data`, and then the volume is required: without either, counters and paid memory reset on every redeploy.
 - **Graceful SIGTERM**: ordinary in-flight requests complete before exit; a report composite still running is cut off and answers 503, which is not charged on x402 (settlement runs after the handler and only on a response under 400).
 - Env that matters: `WALLET_ADDRESS`, `NETWORK`, `CDP_API_KEY_ID/SECRET` (facilitator), `BASE_URL`, `BRAVE_API_KEY` (search), `POW_SECRET` (durable PoW + heartbeat-token signer), `X402_INDEX_SEEDS` (extra origins for the Index, optional), `MPP_SECRET_KEY` (MPP shim), `TEMPO_API_KEY` (native Tempo), `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` (card reports, monitors, credits; `STRIPE_PROFILE_ID` adds cards over MPP), `EMAIL_FROM` + `ZEPTOMAIL_TOKEN` (report and monitor emails), `FREE_MODE` (never in production). Full table on [[Self-Hosting]].
-- **Recurring engine:** the monitor scheduler ticks every 10 minutes in-process (one replica holds a lock in `/data`); `MONITOR_SCHEDULER=off` disarms it.
+- **Recurring engine:** the monitor scheduler ticks every 10 minutes in-process (one process at a time holds its lock, a row in the state database or a field in the `/data` store); `MONITOR_SCHEDULER=off` disarms it.
 - **Payment wires in ops terms:** x402 settles through the facilitators, MPP `evm` through the same facilitators via the shim, MPP `tempo` through Tempo's relay, MPP `stripe` and the card pages through Stripe, prepaid credits against a local balance. Card sales and subscription invoices land in the same sales ledger as on-chain settlements (rail `card` / `credits`).

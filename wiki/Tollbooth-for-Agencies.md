@@ -123,8 +123,8 @@ client's wallet history:
 | **Node / Express** | `app.use(createTollbooth(...))` directly. ~5 min. |
 | **Next.js** | `middleware.js` template at `tollbooth/deploy/nextjs`. ~5 min. |
 | **Anything behind Cloudflare** | Cloudflare Worker template at `tollbooth/deploy/cloudflare`. ~10 min, KV-backed, no origin change. |
-| **WordPress** | The Agent402 Tollbooth plugin (beta - see `tollbooth/deploy/wordpress`). Upload, activate, paste your wallet, done. |
-| **Any other backend** | Run the package as a reverse proxy: `TOLLBOOTH_UPSTREAM=https://origin.example.com npx agent402-tollbooth`. Drop into a Docker compose. |
+| **WordPress** | The Agent402 Tollbooth plugin (beta - see `tollbooth/deploy/wordpress`). Upload, activate and observe; to take USDC or proof-of-work, deploy the companion Worker the plugin README describes. |
+| **Any other backend** | Run the package as a reverse proxy: `TOLLBOOTH_UPSTREAM=https://origin.example.com npx agent402-tollbooth`. To settle x402, install `agent402-tollbooth @x402/express @x402/core @x402/evm` together and run it from that folder. Drop into a Docker compose. |
 | **Static (Netlify / Vercel)** | Sit a Cloudflare Worker in front. The Worker template works unchanged. |
 
 The portability is the agency selling point: your install playbook is

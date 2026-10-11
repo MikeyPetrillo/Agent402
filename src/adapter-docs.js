@@ -23,8 +23,8 @@ const META_CONFIG = [
 
 const BASE = [
   { slug: "openai", name: "OpenAI", tagline: "OpenAI function calling integration", shape: "per-slug",
-    desc: "Tool definitions for OpenAI chat.completions, Assistants v2, and the Responses API: native function objects with JSON Schema parameters, plus an execute helper that runs and pays for a tool call.",
-    worksWith: ["OpenAI chat.completions", "OpenAI Assistants v2", "OpenAI Responses API"] },
+    desc: "Tool definitions for OpenAI chat.completions and the Responses API: native function objects with JSON Schema parameters, plus an execute helper that runs and pays for a tool call.",
+    worksWith: ["OpenAI chat.completions", "OpenAI Responses API"] },
   { slug: "anthropic", name: "Anthropic", tagline: "Anthropic tool use integration", shape: "per-slug",
     desc: "Tool definitions for the Anthropic Messages API (input_schema format), plus an execute helper that runs and pays for a tool_use block.",
     worksWith: ["Anthropic Messages API", "Any Claude model with tool use"] },
@@ -33,7 +33,7 @@ const BASE = [
     worksWith: ["generateText", "streamText", "Any AI SDK provider"] },
   { slug: "langchain", name: "LangChain", tagline: "LangChain tool integration", shape: "meta",
     desc: "Four meta tools (find, route, call, about) as LangChain.js tool objects for LangChain agents and LangGraph nodes.",
-    worksWith: ["LangChain JS", "LangGraph", "createReactAgent", "Any LangChain chat model with tool calling"] },
+    worksWith: ["LangChain JS", "LangGraph", "createAgent", "Any LangChain chat model with tool calling"] },
   { slug: "llamaindex", name: "LlamaIndex", tagline: "LlamaIndex tool integration", shape: "per-slug",
     desc: "FunctionTool instances for LlamaIndex TS agents and workflows, built from the catalog's JSON Schema.",
     worksWith: ["LlamaIndex TS", "@llamaindex/workflow agent()", "FunctionTool"] },
@@ -88,7 +88,7 @@ export function adapterDocsIndex(baseUrl) {
   <div style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;">
     <p style="font-size:var(--fs-md);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--faint);text-decoration:none;">Home</a> &rsaquo; <a href="/docs" style="color:var(--faint);text-decoration:none;">Docs</a> &rsaquo; Adapters</p>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Framework Adapters.</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 36px;">Plug Agent402 into your agent framework. Each adapter returns native tool objects and handles payment underneath.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 36px;">Plug Agent402 into your agent framework. Each adapter returns native tool objects: free tools pay with proof-of-work, and paid tools pay through the payment fetch you pass in. More integrations (Coinbase AgentKit, ElizaOS and the Python LangChain toolkit) are on <a href="/integrations" style="color:var(--ink);">/integrations</a>.</p>
 
     <div class="ml-ad-grid">
 ${cards}

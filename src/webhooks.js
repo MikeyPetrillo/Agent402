@@ -1,5 +1,6 @@
-// Webhook/callback documentation page — explains async patterns and
-// planned webhook support for long-running tool chains.
+// Webhook/callback documentation page: the async patterns that exist today
+// (async jobs, idempotent retries, chaining, wallet-keyed state) and the one
+// piece still planned (a callback POST to the buyer's own URL).
 
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 
@@ -7,7 +8,7 @@ import { REPO_URL } from "./repo-link.js";
 export function webhooksPage(baseUrl) {
   const canonical = `${baseUrl}/docs/webhooks`;
   const title = "Webhooks & Callbacks - Agent402 Docs";
-  const description = "How to handle async workflows with Agent402: polling, idempotent retries, and planned webhook support for long-running tool chains.";
+  const description = "How to handle async workflows with Agent402: async jobs with a job link to poll, idempotent retries, chaining, and planned callback delivery for long-running tool chains.";
 
   const extraCss = `
   @media (max-width: 900px) {
@@ -24,9 +25,10 @@ export function webhooksPage(baseUrl) {
       <div style="font-size:var(--fs-2xs);color:var(--accent);letter-spacing:.1em;margin-bottom:14px;">WEBHOOKS</div>
       <div style="display:flex;flex-direction:column;gap:11px;border-left:1px solid var(--hairline);padding-left:16px;">
         <a href="#patterns" style="color:var(--ink);text-decoration:none;font-weight:700;">async patterns</a>
+        <a href="#async-jobs" style="color:var(--muted);text-decoration:none;">async jobs</a>
         <a href="#idempotent" style="color:var(--muted);text-decoration:none;">idempotent retries</a>
         <a href="#chaining" style="color:var(--muted);text-decoration:none;">chaining</a>
-        <a href="#planned" style="color:var(--muted);text-decoration:none;">planned webhooks</a>
+        <a href="#planned" style="color:var(--muted);text-decoration:none;">planned callbacks</a>
         <a href="#related" style="color:var(--muted);text-decoration:none;">related</a>
       </div>
     </aside>
@@ -38,12 +40,16 @@ export function webhooksPage(baseUrl) {
       <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 36px;">How to handle async workflows, retries, and long-running tool chains with Agent402.</p>
 
       <h2 id="patterns" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Current async patterns</h2>
-      <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">All Agent402 tools return results synchronously in the HTTP response. For workflows that chain multiple tools, here are the patterns available today:</p>
+      <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">Most tools answer in the HTTP response itself. The slow paid routes (reports, media, plan execution) can also run as a job you collect later. The patterns available today:</p>
 
       <div class="ml-wh-cards">
         <div style="background:var(--card);border:1px solid var(--hairline);padding:20px 22px;">
+          <h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 8px;">Async jobs <span style="display:inline-block;background:var(--panel);color:var(--ok);font-size:var(--fs-xs);font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Available</span></h3>
+          <p style="color:var(--muted);font-size:var(--fs-md);line-height:1.6;margin:0;">Send <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">Prefer: respond-async</code> with a paid call to a slow route and get <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">202 Accepted</code> with a job link at once. Poll <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">GET /api/jobs/{id}</code> (free) until it is completed or failed. Payment settles only when the result is ready.</p>
+        </div>
+        <div style="background:var(--card);border:1px solid var(--hairline);padding:20px 22px;">
           <h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 8px;">Idempotent retries <span style="display:inline-block;background:var(--panel);color:var(--ok);font-size:var(--fs-xs);font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Available</span></h3>
-          <p style="color:var(--muted);font-size:var(--fs-md);line-height:1.6;margin:0;">Add an <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">Idempotency-Key</code> header to any request. If a network error occurs mid-flight, retry safely - the server returns the cached result without re-charging.</p>
+          <p style="color:var(--muted);font-size:var(--fs-md);line-height:1.6;margin:0;">Add an <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">Idempotency-Key</code> header to a paid or proof-of-work call. Resend the same request with the same key and the same payment header, and the server returns the stored answer without charging again. A retry while the first copy still runs gets <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">409</code> with <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">Retry-After</code>.</p>
         </div>
         <div style="background:var(--card);border:1px solid var(--hairline);padding:20px 22px;">
           <h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 8px;">Sequential chaining <span style="display:inline-block;background:var(--panel);color:var(--ok);font-size:var(--fs-xs);font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Available</span></h3>
@@ -55,21 +61,35 @@ export function webhooksPage(baseUrl) {
         </div>
       </div>
 
+      <h2 id="async-jobs" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Async jobs</h2>
+      <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">A report runs for minutes, longer than many HTTP clients wait. Add <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">Prefer: respond-async</code> to the paid call. The server answers <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">202 Accepted</code> with a <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">Location</code> header and a <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">statusUrl</code>, runs the call with your payment, and settles only on a successful result. A run that fails is not charged, and the job says so.</p>
+      <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0 0 14px;overflow-x:auto;"># the paid call, with your x402 payment header, asking for a job
+POST /v1/research
+Prefer: respond-async
+PAYMENT-SIGNATURE: &lt;signed payment&gt;
+
+# 202 Accepted, Location: /api/jobs/&lt;id&gt;; poll it (free) until status is completed or failed
+curl -s https://agent402.tools/api/jobs/&lt;id&gt;</pre>
+      <p style="color:var(--muted);line-height:1.7;margin:0 0 36px;">The job id is the only key to the result: keep it private. On the hosted MCP connector the same long calls run as MCP tasks.</p>
+
       <h2 id="idempotent" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Idempotent retries in practice</h2>
-      <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">Pass an <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">Idempotency-Key</code> header with any unique string. The server caches the result keyed to your request + credential combination:</p>
+      <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">Pass an <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">Idempotency-Key</code> header with any unique string. The server stores a successful answer keyed to the route, the key, the credential that paid and the body, so the replay must carry the same payment header (an x402 <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">PAYMENT-SIGNATURE</code>, a proof-of-work solution or a credits key). A fresh payment with the same key is a new call. This example uses a proof-of-work solution from <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">GET /api/pow/challenge?slug=hash</code>:</p>
 
       <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0 0 14px;overflow-x:auto;">curl -X POST https://agent402.tools/api/hash \\
   -H "Content-Type: application/json" \\
   -H "Idempotency-Key: my-unique-key-123" \\
+  -H "X-Pow-Solution: &lt;token&gt;:&lt;nonce&gt;" \\
   -d '{"text":"hello","algo":"sha256"}'
 
-# Retry the same request - returns cached result, no re-charge
-curl -X POST https://agent402.tools/api/hash \\
+# Retry with the same key, the same credential and the same body:
+# the stored answer comes back with X-Idempotent-Replay: true, nothing is spent again
+curl -i -X POST https://agent402.tools/api/hash \\
   -H "Content-Type: application/json" \\
   -H "Idempotency-Key: my-unique-key-123" \\
+  -H "X-Pow-Solution: &lt;token&gt;:&lt;nonce&gt;" \\
   -d '{"text":"hello","algo":"sha256"}'</pre>
 
-      <p style="color:var(--muted);line-height:1.7;margin:0 0 36px;">The cache key is <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">sha256(METHOD /path + key + credential)</code>, so different callers with the same idempotency key don't collide.</p>
+      <p style="color:var(--muted);line-height:1.7;margin:0 0 36px;">The cache key is <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">sha256(METHOD /path + key + credential + body hash)</code>, so different callers with the same idempotency key don't collide, and the same key with a different body is a different entry. <a href="https://www.npmjs.com/package/agent402-client" rel="noopener" style="color:var(--accent);">agent402-client</a> resends the same payment for you on a retry.</p>
 
       <h2 id="chaining" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Chaining with agent402-client</h2>
       <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0 0 36px;overflow-x:auto;">import { Agent402 } from "agent402-client";
@@ -86,18 +106,10 @@ const paid = new Agent402({ fetch: payFetch });
 const page = await paid.call("extract", { url: "https://example.com" });
 await paid.call("memory-write", { key: "example-title", value: page.title });</pre>
 
-      <h2 id="planned" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Planned: webhook callbacks <span style="display:inline-block;background:var(--card);border:1px solid var(--hairline);color:var(--accent);font-size:var(--fs-xs);font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Planned</span></h2>
-      <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">We're designing a webhook system for long-running chains. The planned flow:</p>
+      <h2 id="planned" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Planned: callback delivery <span style="display:inline-block;background:var(--card);border:1px solid var(--hairline);color:var(--accent);font-size:var(--fs-xs);font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Planned</span></h2>
+      <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">Async jobs are polled today. The planned addition is delivery to your own endpoint: name a callback URL on the call, and when the job finishes the server POSTs the result there with a signature you can verify. Polling <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">/api/jobs/{id}</code> stays the fallback.</p>
 
-      <div style="background:var(--card);border:1px solid var(--hairline);padding:20px 22px;margin-bottom:14px;">
-        <h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 8px;">How it will work</h3>
-        <p style="color:var(--muted);font-size:var(--fs-md);line-height:1.7;margin:0;">1. Submit a tool call with a <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">X-Callback-URL</code> header pointing to your endpoint.<br>
-        2. Agent402 returns <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">202 Accepted</code> with a job ID immediately.<br>
-        3. When the tool completes, Agent402 POSTs the result to your callback URL with an HMAC signature for verification.<br>
-        4. Poll <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:var(--fs-code-inline);">/api/jobs/:id</code> as a fallback if the callback fails.</p>
-      </div>
-
-      <p style="color:var(--muted);line-height:1.7;margin:0 0 36px;">Want to be notified when webhooks launch? Follow <a href="https://x.com/Agent402Tools" rel="noopener" style="color:var(--accent);">@Agent402Tools</a> or watch the <a href="${REPO_URL}" rel="noopener" style="color:var(--accent);">GitHub repo</a>.</p>
+      <p style="color:var(--muted);line-height:1.7;margin:0 0 36px;">To hear when callbacks ship, follow <a href="https://x.com/Agent402Tools" rel="noopener" style="color:var(--accent);">@Agent402Tools</a> or watch the <a href="${REPO_URL}" rel="noopener" style="color:var(--accent);">GitHub repo</a>.</p>
 
       <h2 id="related" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Related</h2>
       <p style="color:var(--muted);line-height:1.7;margin:0;">

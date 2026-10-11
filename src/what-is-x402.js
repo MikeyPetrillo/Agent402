@@ -13,11 +13,22 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { RAILS } from "./rails.js";
 import { CAIP2_NAMES } from "./stats.js";
+import { powCostPhrase } from "./pow.js";
 
 import { ORG_SAME_AS } from "./repo-link.js";
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 const fmtUsd = (n) =>
   `$${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+// The rail count is RAILS' own length, spelled out, so the prose cannot
+// outlive a rail being added or dropped.
+const NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen"];
+const RAIL_COUNT = NUM_WORDS[RAILS.length] || String(RAILS.length);
+const railList = () => {
+  const usdc = RAILS.filter((r) => r.asset === "USDC").map((r) => r.name);
+  const other = RAILS.filter((r) => r.asset !== "USDC").map((r) => `${r.asset} on ${r.name}`);
+  return `USDC on ${usdc.slice(0, -1).join(", ")} and ${usdc.at(-1)}${other.length ? `, plus ${other.join(" and ")}` : ""}`;
+};
 
 const STEPS = [
   ["01", "The agent asks for something", "A plain HTTP request, with no credentials attached. There is no account to authenticate against, so nothing to send."],
@@ -28,23 +39,23 @@ const STEPS = [
 
 const COMPARE = [
   ["Full name", "x402", "MPP, the Machine Payments Protocol"],
-  ["Origin", "Open standard published by Coinbase", "IETF-track specification (tempoxyz/mpp)"],
+  ["Origin", "Open standard published by Coinbase", "Tempo (paymentauth.org): the Payment HTTP authentication scheme, an IETF Internet-Draft"],
   ["Challenge", "402 with a PAYMENT-REQUIRED header (base64 JSON payment requirements)", "402 with a standard WWW-Authenticate: Payment header"],
-  ["Credential", "X-PAYMENT header carrying the signed authorization", "Authorization: Payment, the normal HTTP auth slot"],
+  ["Credential", "PAYMENT-SIGNATURE header carrying the signed authorization (X-PAYMENT in x402 v1)", "Authorization: Payment, the normal HTTP auth slot"],
   ["Receipt", "PAYMENT-RESPONSE response header", "Payment-Receipt response header"],
-  ["Settlement", "EIP-3009 stablecoin authorization, verified by a facilitator", "Identical: EIP-3009, same facilitator, same price"],
+  ["Settlement", "EIP-3009 stablecoin authorization, verified by a facilitator", "evm method: identical (EIP-3009, same facilitator); tempo method: settles natively on Tempo. Same price either way"],
   ["Client", "@x402/fetch and other x402 clients", "mppx and any HTTP client that speaks the Payment scheme"],
   ["On Agent402", "Served on every paid route", "Served on the same routes, no configuration either side"],
 ];
 
 const FAQS = [
-  ["What is x402?", "x402 is an open payment protocol that finally uses HTTP status code 402 Payment Required. A client asks for a resource, gets a price back, pays in a stablecoin, and the same request goes through. It lets a program buy one thing in one round trip with no subscription, no checkout page and no account."],
-  ["What is MPP, the Machine Payments Protocol?", "MPP is the IETF-track standard that gives HTTP a native Payment authorization scheme. The server answers 402 with a WWW-Authenticate: Payment challenge, the client retries with Authorization: Payment credentials, and the settled response returns a Payment-Receipt header. It is a second wire for the same idea as x402, with the same EIP-3009 USDC settlement underneath."],
-  ["What is the difference between x402 and MPP?", "They differ in wire format, not in economics. x402 carries payment requirements in a PAYMENT-REQUIRED header and the payment in a PAYMENT-SIGNATURE header; MPP uses standard HTTP authentication headers, WWW-Authenticate: Payment and Authorization: Payment, plus a Payment-Receipt on success. Both settle the same EIP-3009 USDC authorization through the same facilitator at the same price. A server can answer both on one route, which is what Agent402 does, so the buyer's client chooses."],
+  ["What is x402?", "x402 is an open payment protocol that finally uses HTTP status code 402 Payment Required. A client asks for a resource, gets a price back, pays in a stablecoin, and the same request goes through. It lets a program buy one thing with one extra request (the quote, then the paid retry), with no subscription, no checkout page and no account."],
+  ["What is MPP, the Machine Payments Protocol?", "MPP gives HTTP a native Payment authorization scheme, published as an IETF Internet-Draft. The server answers 402 with a WWW-Authenticate: Payment challenge, the client retries with Authorization: Payment credentials, and the settled response returns a Payment-Receipt header. It is a second wire for the same idea as x402: its evm method settles the same EIP-3009 USDC authorization, and its tempo method settles natively on Tempo."],
+  ["What is the difference between x402 and MPP?", "They differ in wire format, not in economics. x402 carries payment requirements in a PAYMENT-REQUIRED header and the payment in a PAYMENT-SIGNATURE header; MPP uses standard HTTP authentication headers, WWW-Authenticate: Payment and Authorization: Payment, plus a Payment-Receipt on success. The price is the same either way: MPP's evm method settles the same EIP-3009 USDC authorization through the same facilitator, and its tempo method settles natively on Tempo. A server can answer both on one route, which is what Agent402 does, so the buyer's client chooses."],
   ["What are agentic payments?", "Agentic payments are purchases made by software rather than people. An AI agent cannot sign up for twenty APIs, because it has no email, no credit card and no way to accept terms, but it can pay a fraction of a cent per call from its own wallet. The wallet is the identity, so there is nothing to register and no key to rotate."],
   ["Why was HTTP 402 unused for thirty years?", "HTTP reserved 402 Payment Required in 1997 as a placeholder for a digital cash system that never arrived. Card payments needed a redirect, a session and a human, none of which fit inside a single HTTP response. Stablecoins made a one-round-trip machine payment practical, so the status code finally has a payment system to describe."],
-  ["Do I need a wallet or crypto to call an x402 API?", "Not always. Some servers, including Agent402, offer a proof-of-work tier where your own machine solves a single-use sha256 puzzle instead of paying, costing about a second of CPU. A wallet is needed only for calls that cost the operator real money, and those quote their price in the 402 challenge before anything is charged."],
-  ["Which blockchains settle x402 payments?", "It depends on the server. Agent402 settles x402 on twelve chains: USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar and Algorand, plus USDG on Robinhood Chain. Gas is sponsored by the facilitator on EVM chains, so callers need only the stablecoin. Base carries the most volume and is the chain most public x402 indexes measure."],
+  ["Do I need a wallet or crypto to call an x402 API?", `Not always. Some servers, including Agent402, offer a proof-of-work tier where your own machine solves a single-use sha256 puzzle instead of paying, costing ${powCostPhrase()}. On Agent402 that covers the tools marked computePayable on /api/pricing; every other tool needs a wallet, and quotes its price in the 402 challenge before anything is charged.`],
+  ["Which blockchains settle x402 payments?", `It depends on the server. Agent402 settles x402 on ${RAIL_COUNT} chains: ${railList()}. Gas is sponsored by the facilitator on EVM chains, so callers need only the stablecoin. Base is the chain most public x402 indexes measure; the settlement table on this page shows where calls actually land.`],
   ["How do I sell an API over x402?", "Put an x402 paywall in front of your endpoint so unpaid requests answer 402 with your price and payment terms, then register the origin with a public index so buyers and routers can find you. See /sell for Agent402's own free, no-signup listing flow and how it prices routed calls."],
   ["Is an x402 payment refundable if the call fails?", "On a correctly implemented server the payment only completes alongside a successful response, so a failed call is not charged. Because settlement happens on a public chain, both sides can verify independently what was actually paid rather than relying on an invoice."],
 ];
@@ -96,7 +107,7 @@ export function whatIsX402Page(baseUrl, { stats, leaderboardSnapshot } = {}) {
   const canonical = `${baseUrl}/what-is-x402`;
   const title = "What is x402? What is MPP? A plain-English guide to agentic payments";
   const description =
-    "x402 is an open protocol that finally uses HTTP 402 Payment Required, letting software pay per request in USDC. MPP is the IETF-track version of the same handshake. How both work, which chains settle them, and who is actually using them today.";
+    "x402 is an open protocol that finally uses HTTP 402 Payment Required, letting software pay per request in USDC. MPP is a second protocol for the same handshake, in standard HTTP auth headers. How both work, which chains settle them, and who is actually using them today.";
 
   const rails = railsByVolume(stats);
   const board = adoptionRows(leaderboardSnapshot);
@@ -111,7 +122,7 @@ export function whatIsX402Page(baseUrl, { stats, leaderboardSnapshot } = {}) {
   const articleLd = { "@type": "TechArticle", "@id": `${canonical}#article`, headline: title, description, inLanguage: "en", publisher: { "@id": `${baseUrl}/#organization` }, author: { "@id": `${baseUrl}/#organization` }, mainEntityOfPage: canonical, about: [{ "@type": "Thing", name: "x402" }, { "@type": "Thing", name: "Machine Payments Protocol" }, { "@type": "Thing", name: "Agentic payments" }] };
   const termsLd = { "@type": "DefinedTermSet", "@id": `${canonical}#terms`, name: "Agentic payment terms", hasDefinedTerm: [
     { "@type": "DefinedTerm", name: "x402", description: "An open payment protocol built on the HTTP 402 Payment Required status code. A client requests a resource, receives a price and payment terms, signs a stablecoin authorization, and the same request completes." },
-    { "@type": "DefinedTerm", name: "MPP (Machine Payments Protocol)", description: "An IETF-track HTTP authorization scheme named Payment. The server answers 402 with a WWW-Authenticate: Payment challenge, the client sends Authorization: Payment credentials, and the settled response carries a Payment-Receipt header." },
+    { "@type": "DefinedTerm", name: "MPP (Machine Payments Protocol)", description: "An HTTP authorization scheme named Payment, published as an IETF Internet-Draft. The server answers 402 with a WWW-Authenticate: Payment challenge, the client sends Authorization: Payment credentials, and the settled response carries a Payment-Receipt header." },
     { "@type": "DefinedTerm", name: "Agentic payments", description: "Machine-to-machine purchases initiated by software rather than a person, paid from the agent's own wallet without signup, card or human approval." },
     { "@type": "DefinedTerm", name: "Facilitator", description: "A service that verifies and settles an x402 or MPP payment authorization on chain, and which can sponsor gas so the payer needs only the stablecoin." },
     { "@type": "DefinedTerm", name: "Proof of work tier", description: "A payment alternative in which a caller solves a single-use, slug-scoped sha256 puzzle instead of paying, spending CPU rather than money." },
@@ -160,7 +171,7 @@ table{border-collapse:collapse;width:100%}
     <div class="wx-2col" style="display:grid;grid-template-columns:1.1fr .9fr;gap:50px;align-items:start;">
       <div>
         <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);">What are <span style="color:var(--accent);">x402</span> and <span style="color:var(--accent);">MPP</span>?</h1>
-        <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--on-panel-soft);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">x402 is an open protocol that lets software pay for a single HTTP request in stablecoins.</strong> The server answers <span style="font-family:var(--font-mono);font-size:var(--fs-lg);">402 Payment Required</span> with a price, the client signs a payment, and the same request completes. <strong style="color:var(--ink);font-weight:700;">MPP, the Machine Payments Protocol, is the IETF-track version of that same handshake</strong>, carried in standard HTTP authentication headers.</p>
+        <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--on-panel-soft);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">x402 is an open protocol that lets software pay for a single HTTP request in stablecoins.</strong> The server answers <span style="font-family:var(--font-mono);font-size:var(--fs-lg);">402 Payment Required</span> with a price, the client signs a payment, and the same request completes. <strong style="color:var(--ink);font-weight:700;">MPP, the Machine Payments Protocol, is a second protocol for that same handshake</strong>, carried in standard HTTP authentication headers.</p>
         <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">No subscription, no checkout page, no account. That matters because an AI agent cannot open one: paying per call is the only purchase an autonomous program can actually make on its own. Both protocols are the wire underneath <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Agentic Finance</a>, agents that pay and get paid on their own; every term on this page is defined in the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>. New to all of it? Start with the <a href="/101" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">ten-minute 101</a>.</p>
       </div>
       <div style="border:1px solid var(--hairline);background:var(--panel);">
@@ -182,7 +193,7 @@ table{border-collapse:collapse;width:100%}
 <section id="how" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">02 / THE HANDSHAKE</div>
   <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">How a paid request actually works.</h2>
-  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 32px;">Four steps, one round trip from the caller's point of view. Nothing here requires a browser, a human, or an account.</p>
+  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 32px;">Four steps, two requests from the caller's point of view: the quote and the paid retry. Nothing here requires a browser, a human, or an account.</p>
   <div class="wx-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);">
     <div style="background:var(--card);border-right:1px solid var(--hairline);">${stepsHtml}</div>
     <div style="background:var(--panel);">
@@ -210,7 +221,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
 <section id="compare" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">03 / COMPARISON</div>
   <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">x402 vs MPP, side by side.</h2>
-  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 30px;">They differ in wire format, not in economics. Same signed authorization, same facilitator, same price, same guarantee. A server can answer both on one route, which is what Agent402 does, so the buyer's client decides which dialect to speak.</p>
+  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 30px;">They differ in wire format, not in economics: same price, same guarantee. MPP's evm method carries the same signed authorization to the same facilitator, and its tempo method settles natively on Tempo. A server can answer both on one route, which is what Agent402 does, so the buyer's client decides which dialect to speak.</p>
   <div class="wx-scroll">
     <table style="font-size:var(--fs-base);border:1px solid var(--hairline);background:var(--card);">
       <thead><tr style="border-bottom:1px solid var(--hairline);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);"><th scope="col" style="text-align:left;font-weight:700;padding:13px 18px;">&nbsp;</th><th scope="col" style="text-align:left;font-weight:700;padding:13px 18px;color:var(--accent);">x402</th><th scope="col" style="text-align:left;font-weight:700;padding:13px 18px;color:var(--accent);">MPP</th></tr></thead>
@@ -234,7 +245,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
 <section id="chains" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">05 / SETTLEMENT</div>
   <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">Which chains settle x402 payments?</h2>
-  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 30px;">The protocol is chain-agnostic; each server picks what it accepts. Agent402 settles x402 on twelve chains, so a buyer pays on whichever chain it already holds stablecoins on. Gas is sponsored by the facilitator on EVM chains, which means a caller needs only the stablecoin and no native gas token. Counts below are real settled calls per rail.</p>
+  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 30px;">The protocol is chain-agnostic; each server picks what it accepts. Agent402 settles x402 on ${RAIL_COUNT} chains, so a buyer pays on whichever chain it already holds stablecoins on. Gas is sponsored by the facilitator on EVM chains, which means a caller needs only the stablecoin and no native gas token. Counts below are real settled calls per rail.</p>
   <div class="wx-scroll">
     <table style="font-size:var(--fs-base);border:1px solid var(--hairline);background:var(--card);">
       <thead><tr style="border-bottom:1px solid var(--hairline);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);"><th scope="col" style="text-align:left;font-weight:700;padding:13px 18px;">chain</th><th scope="col" style="text-align:left;font-weight:700;padding:13px 18px;">asset</th><th scope="col" style="text-align:left;font-weight:700;padding:13px 18px;">caip-2</th><th scope="col" style="text-align:right;font-weight:700;padding:13px 18px;">calls settled</th></tr></thead>
@@ -248,7 +259,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
   <div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">06 / ADOPTION</div>
     <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--on-panel);">Who is actually settling x402 payments?</h2>
-    <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--on-panel-muted);max-width:820px;margin:0 0 30px;">Not a forecast: a ranking of real sellers by Base USDC settled volume, built by crawling public x402 sellers and reading the chain. Agent402 is excluded from this view, because a neutral index should be checkable against itself.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--on-panel-muted);max-width:820px;margin:0 0 30px;">Not a forecast: a ranking of real sellers by Base USDC settled volume, built by crawling public x402 sellers and reading the chain. Agent402's own row is left out, so the table is evidence from other sellers.</p>
     <div class="wx-scroll">
       <table style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1.5px solid var(--panel-rule-2);background:var(--card);">
         <thead><tr style="border-bottom:1px solid var(--panel-rule-2);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);"><th scope="col" style="text-align:left;font-weight:400;padding:12px 18px;width:40px;">#</th><th scope="col" style="text-align:left;font-weight:400;padding:12px 18px;">seller</th><th scope="col" style="text-align:right;font-weight:400;padding:12px 18px;">usdc settled</th><th scope="col" style="text-align:right;font-weight:400;padding:12px 18px;">calls</th><th scope="col" style="text-align:right;font-weight:400;padding:12px 18px;">buyers</th></tr></thead>
@@ -303,7 +314,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
       <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 28px;max-width:540px;">Agent402 is the applied layer for both protocols: an open index, a neutral router, and an on-chain ranking of the x402 sellers that settle. Free to list, free to browse.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
         <a class="btn btn-primary on-panel" href="/sell">List your API - free →</a>
-        <a class="btn btn-secondary on-panel" href="/">See the index</a>
+        <a class="btn btn-secondary on-panel" href="/marketplace">See the index</a>
       </div>
     </div>
   </div>

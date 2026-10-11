@@ -30,8 +30,13 @@ export function routingProofSentence() {
   const sol = unprovenAllowanceUsd();
   const base = baseUnprovenAllowanceUsd();
   const tiers = [];
-  if (base > 0) tiers.push(`${usd(base)} a call on Base`);
-  if (sol > 0) tiers.push(`${usd(sol)} a call on Solana`);
+  // One figure when both ceilings match ("$0.01 a call on Base and on Solana"),
+  // so the sentence does not read like a repeated typo.
+  if (base > 0 && sol > 0 && usd(base) === usd(sol)) tiers.push(`${usd(base)} a call on Base and on Solana`);
+  else {
+    if (base > 0) tiers.push(`${usd(base)} a call on Base`);
+    if (sol > 0) tiers.push(`${usd(sol)} a call on Solana`);
+  }
   if (!tiers.length) return "Sellers are routable on proven on-chain settlement.";
   return `Sellers are routable on proven on-chain settlement, with one exception: a seller with no settlement history yet is tried only after every proven candidate, capped at ${tiers.join(" and ")}, and flagged unproven on the receipt.`;
 }

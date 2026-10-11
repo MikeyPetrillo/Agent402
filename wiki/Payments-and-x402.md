@@ -43,9 +43,9 @@ Nothing here holds a balance on your behalf.
 
 ## Notes
 
-- Tools are **wallet-only** (paid per call in USDC via x402), so they are *not*
-  exposed on the free hosted MCP connector - the payments surface is the paid
-  HTTP / `agent402-mcp` path. See [[MCP Connector]].
+- Tools are **wallet-only** (no proof-of-work tier) everywhere. They are payable
+  on the hosted MCP connector over MPP, on the paid HTTP routes, and through
+  `agent402-mcp`. See [[MCP Connector]].
 - USDC addresses are the native deployments per chain. The EIP-712 domain is
   the token's own: name `USD Coin` on most chains and `USDC` on Celo, Monad and
   Sei, version `2`; `transfer-authorization` fills it in for the chosen network.

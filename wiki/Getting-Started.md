@@ -10,7 +10,7 @@ You can make your first call in under a minute, with no wallet and no money.
 curl https://agent402.tools/api/pricing      # every endpoint, price, category
 curl https://agent402.tools/openapi.json     # full OpenAPI 3.1 with schemas
 curl https://agent402.tools/llms.txt         # the agent-oriented overview
-curl https://agent402.tools/api/find?q=ocr   # resolve a task to the best tool
+curl 'https://agent402.tools/api/find?q=ocr' # resolve a task to the best tool
 curl -X POST https://agent402.tools/api/route -H 'content-type: application/json' \
      -d '{"query":"ocr image","top":5,"include":"external"}'   # cross-seller Smart Order Router
 curl 'https://agent402.tools/api/leaderboard?top=10'           # on-chain ranking by Base USDC volume
@@ -31,26 +31,26 @@ curl -i -X POST https://agent402.tools/api/hash \
 
 ## 3. Run the full loop, free (proof-of-work)
 
-The zero-dependency demo discovers the catalog, gets quoted, pays with ~0.2s of CPU, and uses the result:
+One file, no install for the free run: the demo discovers the catalog, gets quoted, pays with a fraction of a second of CPU, and uses the result:
 
 ```bash
 curl -s https://agent402.tools/demo.js -o demo.js && node demo.js
 ```
 
-To settle in real USDC instead, fund a wallet on Base and run `AGENT_KEY=0xYOUR_KEY node demo.js` (after `npm i @x402/core @x402/evm @x402/fetch viem`).
+To settle in real USDC instead, fund an EVM wallet on Base, run `npm i @x402/core @x402/evm @x402/fetch viem` in the same folder as `demo.js`, then `AGENT_KEY=0xYOUR_KEY node demo.js`.
 
 ## 4. Pick your integration
 
 | You are… | Use |
 |---|---|
 | A Claude user | Paste `https://agent402.tools/mcp` into Settings → Connectors - see [[MCP Connector]] |
-| A Cursor / ChatGPT / VS Code Copilot user | Paste the same URL into the MCP connector settings - see [[MCP Connector]] |
+| A Cursor, VS Code, Windsurf, Cline, Codex or Gemini CLI user | Each host's config block is in the [agent-hosts guide](https://agent402.tools/guides/agent-hosts) - see also [[MCP Connector]] |
 | An MCP-based agent | `npx -y agent402-mcp` with optional `AGENT_KEY` - see [[MCP Connector]] |
 | On OpenAI / Anthropic / Vercel AI SDK / LangChain / LlamaIndex | One of the framework adapter packages - see [[Adapters]] |
 | Calling over HTTP with a wallet | One x402-wrapped fetch - see [[Paying with x402]] |
 | Wallet-less / sandboxed | Proof-of-work on 150+ pure-CPU tools - see [[Paying with Compute]] |
-| Have a card, no wallet | Buy a finished report by card at [`/reports`](https://agent402.tools/reports). Prepaid credits are not on sale at the moment; a key already issued still pays any paid route except the wallet-identity-bound ones with `Authorization: Bearer a402_…`, and `agent402-mcp` and `agent402-client` take the same key - see [[Reports, Monitors and Credits|Reports-and-Monitors]] |
-| A person who wants one finished report | Buy it by card at [`/reports`](https://agent402.tools/reports), or a monthly monitor at [`/monitors`](https://agent402.tools/monitors) - see [[Reports, Monitors and Credits|Reports-and-Monitors]] |
+| Have a card, no wallet | Buy a finished report by card at [`/reports`](https://agent402.tools/reports). Prepaid credits are not on sale at the moment; a key already issued still pays any paid route except the wallet-identity-bound ones with `Authorization: Bearer a402_…`, and `agent402-mcp` and `agent402-client` take the same key - see [[Reports and Monitors|Reports-and-Monitors]] |
+| A person who wants one finished report | Buy it by card at [`/reports`](https://agent402.tools/reports), or a monthly monitor at [`/monitors`](https://agent402.tools/monitors) - see [[Reports and Monitors|Reports-and-Monitors]] |
 
 ## What things cost
 

@@ -2,6 +2,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-10-09",
+    title: "A third model behind every judgment",
+    items: [
+      "/v1/judge adds microsoft-decision-1 as a backend. The default order is now jev-latest, then microsoft-decision-1, then gpt-6-luna; name any one first with model. The answer names the model that served, and fallbackFrom when the first was unavailable.",
+    ],
+  },
+  {
     date: "2026-10-08",
     title: "Collect slow reports later, and richer free SEC pages",
     items: [
@@ -16,18 +23,18 @@ const ENTRIES = [
     date: "2026-10-08",
     title: "Decisions on the OpenAI wire, and two models behind every judgment",
     items: [
-      "/v1/judge falls back to OpenAI's Decisions API (gpt-6-luna) when Jev is unavailable. The answer shape is unchanged; it names the model that served, and fallbackFrom when the first was unavailable.",
-      "POST /v1/decisions speaks OpenAI's Decisions wire: point an OpenAI SDK here and decisions.create works unchanged, paid per call, answered by gpt-6-luna with Jev as the fallback.",
+      "/v1/judge falls back to gpt-6-luna on the OpenAI Decisions wire when jev-latest is unavailable (a third backend followed on 2026-10-09). The answer shape is unchanged; it names the model that served, and fallbackFrom when the first was unavailable.",
+      "POST /v1/decisions speaks OpenAI's Decisions wire: point an OpenAI SDK here and decisions.create works unchanged, paid per call, answered by gpt-6-luna with jev-latest as the fallback.",
       "The transcription examples use a new two-voice sample, so diarize:true shows two speakers, and the image, OCR, PDF and OpenAPI examples read this site's own sample files.",
     ],
   },
   {
     date: "2026-10-07",
-    title: "ElevenLabs voices and speaker labels",
+    title: "New voices and speaker labels",
     items: [
-      "/api/tts now speaks with ElevenLabs Eleven v4 Turbo and /api/tts-hd with Eleven v4: each of the ten voice names has its own voice, 21 ElevenLabs voices can be named directly, and all six formats (mp3, opus, aac, flac, wav, pcm) are served.",
-      "Transcription takes diarize:true for speaker labels and word timestamps from ElevenLabs Scribe v2, on /api/transcribe, /api/transcribe-pro and the OpenAI transcription wire, at the same price and cap.",
-      "/api/tts and /api/tts-hd are repriced for the ElevenLabs models; current prices are on /pricing and in every 402.",
+      "/api/tts and /api/tts-hd move to new speech models: each of the ten voice names has its own voice, 21 more voices can be named directly, and all six formats (mp3, opus, aac, flac, wav, pcm) are served.",
+      "Transcription takes diarize:true for speaker labels and word timestamps, on /api/transcribe, /api/transcribe-pro and the OpenAI transcription wire, at the same price and cap.",
+      "/api/tts and /api/tts-hd are repriced for the new models; current prices are on /pricing and in every 402.",
       "Most published examples now fetch from agent402.tools and its own sample files, so they work the same for every buyer; the rest follow as their sample files go live.",
     ],
   },
@@ -50,7 +57,7 @@ const ENTRIES = [
     date: "2026-09-30",
     title: "New Base sellers can be routed before they have settlement history",
     items: [
-      "The router pays Base sellers with settlement history above the floor. A seller below it is now tried too, under a $0.01 per-call ceiling, only after every proven seller for the task, only at the wallet its own live 402 names, and flagged unproven on the buyer's receipt. Solana has had the same tier since September.",
+      "The router pays Base sellers with settlement history above the floor. A seller below it is now tried too, under a $0.01 per-call ceiling, only after every proven seller for the task, only at the wallet its own live 402 names, and flagged unproven on the buyer's receipt. Solana has had the same tier since 2026-09-01.",
       "The index shows it: a Base verdict of settlement_required carries unprovenTier when the floor is the only thing in the way and the route's price is within the ceiling.",
       "When a seller's manifest cannot be read and the crawl falls back to its OpenAPI, agents.json or llms.txt, the seller record now names each file that gave nothing and why (fallbackErrors).",
       "/revenue: the MPP table shows outside dollars per rail. Base and Celo MPP payments settle as x402 USDC and are counted in the x402 table.",
@@ -89,7 +96,7 @@ const ENTRIES = [
       "Seller routes are judged one at a time: a route whose payment layer turns the router's payment away twice is set aside for a while, the seller's other routes stay routable, and a settled answer from the route brings it back. The seller dossier names a route that is set aside.",
       "Seller answers, 402 bodies and live-402 reads in the index decode the way Response.text() does, so JSON that opens with a byte-order mark parses.",
       "A Tempo pull credential names its sender by its signature: secp256k1, p256 and webAuthn, and access keys, including a new key authorized in the same transaction on its first use. Per-buyer bounds count that sender, and routes that pay another seller before settlement, or run long, accept a pull credential from a sender the signature or the chain proves.",
-      "/status: the paid call path is observed every 5 minutes by the Cloudflare probe as well as by the GitHub heartbeat, and a failure either observer records stands until that same observer sees the path work again. The page reads from indexes, so it builds as quickly with years of history as with a month.",
+      "/status: the paid call path is observed every 5 minutes by an outside probe as well as by the GitHub heartbeat, and a failure either observer records stands until that same observer sees the path work again. The page reads from indexes, so it builds as quickly with years of history as with a month.",
       "The hosted connector's paid cut-off and task-cancel messages say that a charge which reached no answer is recorded as owed in the refund ledger and repaid after review.",
     ],
   },
@@ -119,8 +126,8 @@ const ENTRIES = [
       "/v1/images/generations is served by FLUX.2 Pro, with GPT-5 Image Mini as the failover, ahead of Gemini 2.5 Flash Image's shutdown on 2026-10-02. The request and response are unchanged: one 1024x1024 PNG per call as inline base64.",
       "Fixed broken links on the FAQ and chain pages.",
       "Seller index: a route that is not in the seller's own manifest or OpenAPI must answer a live 402 at least every 7 days and leaves the listing when it answers 404 or 405 twice at least an hour apart; a 410 removes any route; re-registering re-checks every route. /api/index?seller= shows each route's declared, source and lastVerifiedAt.",
-      "Lower prices: web search, news search and render $0.01; fed-funds $0.005; gas-estimate, edgar-company-lookup, sol-price and polymarket-search $0.001. Skill packs that use them follow.",
-      "kalshi-markets and kalshi-event return yesBidSize and yesAskSize, the resting contracts at the best yes bid and ask. Kalshi retires its liquidity figure on 2026-10-01 and it already reads zero on markets with a live book, so liquidityUsd is now null with a note saying why wherever Kalshi does not publish one.",
+      "Lower prices on web search, news search, render, fed-funds, gas-estimate, edgar-company-lookup and sol-price (current prices on /pricing). Skill packs that use them follow.",
+      "kalshi-markets and kalshi-event return yesBidSize and yesAskSize, the resting contracts at the best yes bid and ask. The source retires its liquidity figure on 2026-10-01 and it already reads zero on markets with a live book, so liquidityUsd is now null with a note saying why wherever the source does not publish one.",
     ],
   },
   {
@@ -137,7 +144,7 @@ const ENTRIES = [
     date: "2026-09-21",
     title: "Typed judgments, a router that says who it is, and a leaderboard that reads the seller's own prices",
     items: [
-      "POST /v1/judge ($0.001): a typed judgment over supplied state - a choice from your named options with a probability for each, a position on levels you describe, or a yes/no as a probability. Model-backed, declared as such, input bounded by bytes so the worst case is knowable before the call.",
+      "POST /v1/judge: a typed judgment over supplied state - a choice from your named options with a probability for each, a position on levels you describe, or a yes/no as a probability. Model-backed, declared as such, input bounded by bytes so the worst case is knowable before the call.",
       "The router identifies itself on every paid call it makes to an outside seller: User-Agent Mozilla/5.0 (compatible; Agent402-Router/1.0; +https://agent402.tools/crawler) and X-Agent402-Via: router; /crawler documents both.",
       "A seller origin on a non-default port is accepted at x402 registration, MPP registration and MPP discovery, and the port is carried through every later fetch.",
       "Seller leaderboard: a transfer that matches a price the seller publishes counts as a settlement above the flat $0.75 ceiling, up to a $25 price-match ceiling; rows carry settlementsAbovePerCallCeiling and transfersSkippedOverCeiling, and GET /api/leaderboard accepts ?limit= as an alias of ?top=.",
@@ -150,52 +157,50 @@ const ENTRIES = [
     date: "2026-09-20",
     title: "Equities on a licensed feed, five tools and a pack retired, credits sales paused",
     items: [
-      "stock-quote and stock-history read Databento DBEQ.BASIC (three venues, consolidated per session): volume is reported as venueVolume, stock-history takes up to 250 sessions, and the 52-week high/low fields are gone. options-chain, premarket-quote, stock-dividends, earnings-calendar, dividend-calendar and the market-open skill pack are removed.",
+      "stock-quote and stock-history read a licensed feed (three US venues, consolidated per session): volume is reported as venueVolume, stock-history takes up to 250 sessions, and the 52-week high/low fields are gone. options-chain, premarket-quote, stock-dividends, earnings-calendar, dividend-calendar and the market-open skill pack are removed.",
       "Prepaid card credits are no longer sold; existing keys keep redeeming.",
       "Google's native generateContent wire on every gateway tier; POST /v1/audio/transcriptions (OpenAI transcription wire, multipart); service_tier \"priority\" on the pro and premium tiers.",
-      "New tools: perp-dexs, perp-dex-markets and perp-dex-limits (Hyperliquid HIP-3 dexs); kalshi-live-data and kalshi-weather-index; edgar-13f-datasets ($0.003) and edgar-13f-dataset-head ($0.005). sol-token-holders restored.",
+      "New tools: perp-dexs, perp-dex-markets and perp-dex-limits (Hyperliquid HIP-3 dexs); kalshi-live-data and kalshi-weather-index; edgar-13f-datasets and edgar-13f-dataset-head. sol-token-holders restored.",
       "CORS on the machine surfaces (/api/, /v1/, /mcp, /.well-known/, /openapi.json, /llms.txt) with the payment headers exposed; an under-funded buyer's 402 points at what its balance covers; input aliases for 20 more required parameter names.",
-      "An A2A AgentCard at /.well-known/agent-card.json and the ERC-8004 registration file at /.well-known/agent-registration.json.",
     ],
   },
   {
     date: "2026-09-18",
     title: "Settlement evidence read from the chain on every rail we pay on, an identity of our own, and a monthly view",
     items: [
-      "Settlement evidence no longer depends on a third party's registry. The Base scan seeds its wallet list from our OWN crawl as well as Coinbase's Bazaar: an origin we indexed ourselves, payTo read from its own live 402, could settle any volume on chain and stay settled:null, which the router reads as settlement_required forever. Reported by a seller whose payTo appears in none of the 15,636 Bazaar rows. It stays a seed and never evidence - the chain decides what settled, and the payTo binding that stops a seller inheriting another wallet's volume is untouched",
-      "Algorand was the same shape and worse: its candidates AND its proof both came from one facilitator catalog, so a seller we crawled ourselves was not even a candidate. Candidates now come from our index and proof from the chain (inbound USDC-ASA transfers to the payTo the seller advertises, self-transfers excluded), and a crawl-only route enters unproven so the router's floor still refuses it. Solana and Tempo already read their own chains, so all four chains we can spend on now prove settlement from the chain",
-      "Two seller-facing fixes, both found by sellers: the index detail view echoes a seller's own description and tags, so the surface you check after editing your OpenAPI can actually confirm the edit landed; and re-registering an origin re-reads its documents instead of only re-pricing, clearing that origin's crawl backoff and our cached validators first",
-      "An A2A AgentCard of our own at /.well-known/agent-card.json and /.well-known/agent.json, judged by the same validator we sell as a tool. It declares HTTP+JSON rather than the spec's default JSONRPC, because that default implies a JSON-RPC endpoint we do not run, and its capability flags are false rather than aspirational",
-      `An ERC-8004 identity: agent ${ERC8004_AGENT_ID} on Base, owned by the wallet our 402s name as payTo, pointing at /.well-known/agent-registration.json. The file carries every way to reach us with x402Support declared, and no supportedTrust, because without it the standard is discovery only and discovery is all we are claiming`,
-      "/revenue takes a Monthly bucket beside Daily and Weekly. Dollars and transaction counts fold client-side; buyers do not, because a distinct count is not additive - a buyer paying on the 3rd and the 20th is one monthly buyer - so the month's union is computed server-side like the weekly one",
+      "Base settlement evidence now seeds its wallet list from our own crawl as well as public discovery registries, so a seller we indexed ourselves is measured too. The crawl is a seed, never evidence: the chain still decides what settled, and each wallet's volume counts only for the origins it is paid at.",
+      "On Algorand, router candidates now come from our own index and proof from the chain (inbound USDC transfers to the payTo the seller advertises, self-transfers excluded). Every chain the router spends on now proves settlement from the chain.",
+      "For sellers: the index detail view shows your own description and tags, so you can confirm an OpenAPI edit landed, and re-registering an origin re-reads its documents.",
+      "An A2A AgentCard at /.well-known/agent-card.json and /.well-known/agent.json, checked by the same validator we sell as a tool; it declares HTTP+JSON, the transport this server runs.",
+      `An ERC-8004 identity: agent ${ERC8004_AGENT_ID} on Base, owned by the wallet our 402s name as payTo, pointing at /.well-known/agent-registration.json, which lists every way to reach us.`,
+      "/revenue adds a Monthly view beside Daily and Weekly, with distinct buyers counted once per month.",
     ],
   },
   {
     date: "2026-09-18",
-    title: "@x402 2.26 with our own boot handshake, Astra and Fable on premium, effort on the Messages wire, and a router that indexes",
+    title: "Astra and Fable on premium, effort on the Messages wire, and a faster router",
     items: [
-      "@x402/* 2.22.0 -> 2.26.0 on the server, the Stellar facilitator and agent402-mcp: the vendor client's spend controls (a $1 pegged-assets cap, default on since 2.23) are switched off on every client we build because our own bounds already hold the line (the buyer's maxAtomic re-check, the spend guard, the canary legs), and the facilitator handshake is driven by src/x402-boot-init.js so a facilitator that is dead at boot leaves paid routes answering 500 until a retry succeeds instead of exiting the process; every buyer workflow's client pin moved with it",
-      "@solana/kit 5.5.1 -> 8.3.0 (token 0.16.1, compute-budget 0.18.1) with overrides for @x402/svm's kit-5-peered program packages, pinned against svm's own import list",
-      "Premium tier admits openai/gpt-6-astra and anthropic/claude-fable-5.1 (1M context, reasoning mandatory); the live model guard reads every admitted model's endpoint list and fails on any tier default or OpenClaw primary pick that carries an expiration date upstream",
-      "Messages wire: top-level effort (low to max) on Claude 4.7+, validated against the model's own effort list; speed other than standard refused; Fable 5.1 refuses a forced tool_choice with the fix named; GPT-6 Astra refuses temperature and top_p instead of the upstream dropping them silently",
-      "transcribe moved off gpt-4o-mini-transcribe onto gpt-transcribe ahead of its 2027-02-26 shutdown, cap 5 -> 4 minutes; the two tiers now differ only in cap and price",
-      "Settle fallback: Solvador first on the networks it advertises, then PayAI, Solvador as the last resort elsewhere",
-      "/api/route answers from a candidate index instead of a full scan of the seller pool (ranking byte-identical to the full scan on a prod-sized golden); the crawler reads every OpenAPI payment-annotation dialect through one reader; Polymarket price history on the Data API; Exa categories validated against the current list (retired names refused, research paper -> publication)",
-      "agent402-mcp 0.13.2, agent402-openclaw 0.4.3 (gemini-2.5-flash left the preferred primaries: it carries an upstream expiration date), elizaos-plugin-agent402 0.2.3, agent402-agentkit 0.1.3; base image on Node 22.23.2 (the 2026-07-29 security release); every workflow runner pinned to ubuntu-24.04",
+      "Paid routes stay up when a facilitator is unreachable at startup: they answer an error until it comes back instead of the service stopping.",
+      "The premium tier admits openai/gpt-6-astra and anthropic/claude-fable-5.1 (1M context, reasoning mandatory).",
+      "Messages wire: top-level effort (low to max) on Claude 4.7+, checked against the model's own effort list; a setting a model cannot honor is refused with the fix named rather than dropped silently.",
+      "transcribe moves to a newer transcription model ahead of the old one's shutdown, with a 4-minute cap; the two tiers now differ only in cap and price.",
+      "Settlement falls back to a second facilitator when the first refuses before broadcasting.",
+      "/api/route answers from a candidate index instead of scanning every seller, with the same ranking, and the crawler reads every OpenAPI payment-annotation dialect.",
+      "agent402-mcp 0.13.2, agent402-openclaw 0.4.3, elizaos-plugin-agent402 0.2.3 and agent402-agentkit 0.1.3.",
     ],
   },
   {
     date: "2026-09-02",
-    title: "Typed 402s, tokenized assets, MPP on the edge, and two alarms that stopped lying",
+    title: "Typed 402s, tokenized assets and MPP on the edge",
     items: [
-      "Every 402 now carries the typed output schema as accepts[0].outputSchema (one copy, first accept) as well as in the bazaar extension; our own MPP shim and mppx's x402 codec both strip undeclared fields from the echoed accept, so the match seam restores the advertised schema onto a stripped echo - a stock x402 client, a native MPP buyer and an mppx x402 buyer all still settle",
-      "Five tokenized real-world-asset tools: rwa-list, rwa-markets, rwa-asset, rwa-issuers, rwa-issuer - 649 tokenized stocks, ETFs and commodities with onchain market data and the 33 issuers behind them ($0.003 to $0.006)",
-      "agent402-tollbooth 0.10.0: the edge build (Workers, Next.js edge, Deno, Bun) takes MPP through the same verifyX402 callback - a WWW-Authenticate: Payment challenge beside the x402 quote, HMAC- and resource-bound credentials translated to PAYMENT-SIGNATURE; the wire codec is a runtime-agnostic module shared with the Node build",
-      "/api/route rows: executeVia appears only on rows the router will pay now (executeViaCallableNow); non-eligible rows carry executeViaWhenEligible; every row and index seller carries routerDispatchEligible and routerDispatchReason, and a manifest-priced route is read live once and then weekly so the chains its 402 offers reach the row even when the seller's manifest lags",
-      "Tempo subscriptions: a renewal that fails on a slow RPC retries in minutes, not an hour, and a send that timed out is settled by reading the chain (the transfer's memo is bound to the subscription and period) before anything is signed again - never a second charge for a landed transfer",
-      "mppx 0.9.2; a refused MCP credential answers the spec's -32043 (unpaid stays -32042); gpt-4.1-nano and the openai/o4 prefix retired ahead of OpenAI's dates (gpt-5.6-luna is the nano default, gpt-5-nano stays, gpt-5.6-terra on premium); /v1/images/fast fails over to gpt-5-image-mini",
-      "Solana seller leaderboard scanned incrementally (one signatures read per payTo per cycle, cursor + dedupe), Base chain-truth on a refused payment (EIP-3009 nonce state), in-flight report composites cut off on SIGTERM so a deploy never spends and then discards, every skill pack runs every tool it advertises, feed-watch walks the newest feed items",
-      "Two alarms fixed at the source: the Postgres reachability check no longer confirms a failure against its own 60 s cache (a failed reading is re-pinged), and the daily paid canary now proves the Tempo subscription rail after a deploy; fast-uri 3.1.7 and qs 6.16.0 overrides clear four same-day CVEs and three Dependabot alerts",
+      "Every 402 now carries the answer's typed output schema on its first accept (accepts[0].outputSchema) as well as in the bazaar extension, and every kind of client still settles.",
+      "Five tokenized real-world-asset tools: rwa-list, rwa-markets, rwa-asset, rwa-issuers and rwa-issuer, covering tokenized stocks, ETFs and commodities with onchain market data and their issuers.",
+      "agent402-tollbooth 0.10.0: the edge build (Workers, Next.js edge, Deno, Bun) takes MPP too, with a WWW-Authenticate: Payment challenge beside the x402 quote.",
+      "/api/route rows say whether the router will pay that seller now (routerDispatchEligible, routerDispatchReason, executeViaCallableNow), and a route's chains come from its live 402 even when the seller's manifest lags.",
+      "Tempo subscriptions: a renewal that fails on a slow network retries in minutes, and a renewal whose send timed out is checked on the chain before anything is signed again, so a landed transfer is never charged twice.",
+      "A refused MCP credential answers the spec's -32043. gpt-4.1-nano and the openai/o4 models retire ahead of their upstream dates (gpt-5.6-luna is the nano default, gpt-5-nano stays, gpt-5.6-terra joins premium), and /v1/images/fast fails over to gpt-5-image-mini.",
+      "The Solana seller leaderboard updates incrementally, a deploy never spends on a report and then discards it, every skill pack runs every tool it advertises, and feed-watch reads the newest feed items.",
+      "The daily paid canary now proves the Tempo subscription rail after a deploy.",
     ],
   },
   {
@@ -204,10 +209,10 @@ const ENTRIES = [
     items: [
       "agent402-client 0.8.2: the User-Agent header now carries the package version and the test pins it to package.json so it cannot drift again (0.8.1 still sent 0.7.0). Contributed by epistemedeus (PR #985).",
       "agent402-client 0.8.1: route(task, { k, include, network }) ranks tools across the host's current x402/MPP index over the free /api/route, read-only and wallet-free, with executeVia tier hints for route-execute. Contributed by epistemedeus (PR #974).",
-      "/why: seven first-party differences, each linked to the surface that proves it; the same points in /llms.txt, the MCP instructions, the README and the OpenClaw guide",
+      "Why pay here: first-party differences, each linked to the surface that proves it (first at /why, now the #why section of the home page); the same points in /llms.txt, the MCP instructions, the README and the OpenClaw guide",
       "Metered gateway: credits and card buyers settle actual usage like upto buyers; agent402-openclaw 0.3.x pays upto when the wallet holds a Permit2 allowance (permit2-approve), proven daily by the canary's metered-upto leg; the quote is priced from the same object the handler serves",
-      "Stellar facilitator: second and third Soroban RPC on transport failures, OpenZeppelin as settle fallback",
-      "Report inputs: XBRL operating-to-net bridge and verbatim filing excerpts in the dossier, 13F amendments folded, Schedule 13G holders, derivative Form 4s, GoPlus and DexScreener in token risk, DNS posture and recursive SPF in domain audits, page bodies and a citation audit in research; LinkedIn article package with LinkedIn-sized images",
+      "Stellar facilitator: second and third Soroban RPC on transport failures, and a settle fallback",
+      "Report inputs: XBRL operating-to-net bridge and verbatim filing excerpts in the dossier, 13F amendments folded, Schedule 13G holders, derivative Form 4s, token-security and DEX market probes in token risk, DNS posture and recursive SPF in domain audits, page bodies and a citation audit in research; LinkedIn article package with LinkedIn-sized images",
       "Wiki accuracy pass across 19 pages, generated from the live catalog and product tables",
     ],
   },
@@ -248,15 +253,15 @@ const ENTRIES = [
     date: "2026-07-21",
     title: "Smart Order Router - external execution",
     items: [
-      "POST /api/route/execute ($0.01) can buy from external x402 sellers and resell the result: one payment in, result plus receipt out",
-      "Only sellers with verified on-chain settlement history are eligible - unproven or unhealthy sellers are never routed to",
+      "POST /api/route/execute can buy from external x402 sellers and resell the result: one payment in, result plus receipt out",
+      "Only sellers with verified on-chain settlement history are eligible at launch; unhealthy sellers are never routed to (an unproven tier under a small ceiling followed on 2026-09-01 for Solana and 2026-09-30 for Base)",
     ],
   },
   {
     date: "2026-07-20",
     title: "On-chain intelligence tools + Celo rail",
     items: [
-      "contract-inspect ($0.005) and address-profile ($0.005): verified contract source, ABI, and address token/transaction profiles across major EVM chains",
+      "contract-inspect and address-profile: verified contract source, ABI, and address token/transaction profiles across major EVM chains (both retired 2026-09-22 with named replacements)",
       "USDC on Celo joins the accepted settlement rails",
     ],
   },
@@ -273,7 +278,7 @@ const ENTRIES = [
     date: "2026-07-16",
     title: "Text-to-speech returns to the /v1 gateway",
     items: [
-      "/v1/audio/speech ($0.06): OpenAI TTS wire format, mp3/pcm output, 2k-character cap",
+      "/v1/audio/speech: OpenAI TTS wire format, mp3/pcm output, 2k-character cap",
       "Served by a five-model failover chain - a provider outage never becomes the buyer's error",
       "OpenAI voice names map automatically; native voice ids listed on /v1/models",
     ],
@@ -284,7 +289,7 @@ const ENTRIES = [
     items: [
       "Vision: send up to 2 image URLs to any LLM tier - screenshot analysis, chart reading, image Q&A",
       "Structured output: response_format with json_object or json_schema for schema-enforced JSON",
-      "Content moderation: /api/moderate ($0.002) - check text for harmful content across 13 categories",
+      "Content moderation: /api/moderate - check text for harmful content across 13 categories",
       "All guardrails enforced server-side: image count limits, schema size caps, data: URI blocking",
     ],
   },
@@ -292,10 +297,10 @@ const ENTRIES = [
     date: "2026-06-24",
     title: "Full AI suite - TTS, STT, embeddings via x402",
     items: [
-      "Text-to-speech: /api/tts ($0.05) and /api/tts-hd ($0.10) - 10 voices, 6 audio formats",
-      "Speech-to-text: /api/transcribe ($0.03) and /api/transcribe-pro ($0.10) - URL-based audio input",
-      "Embeddings: /api/embed ($0.005) and /api/embed-large ($0.01) - 1536 or 3072 dimensions for RAG and search",
-      "No API key needed - pay per call with USDC on Base, Solana, Polygon & Arbitrum",
+      "Text-to-speech: /api/tts and /api/tts-hd - 10 voices, 6 audio formats",
+      "Speech-to-text: /api/transcribe and /api/transcribe-pro - URL-based audio input",
+      "Embeddings: /api/embed and /api/embed-large - 1536 or 3072 dimensions for RAG and search",
+      "No API key needed - pay per call with USDC on Base, Solana, Polygon & Arbitrum (the rails at the time; the current list is /api/rails)",
       "Self-hosters: bring your own upstream key to run these for free",
     ],
   },
@@ -303,7 +308,7 @@ const ENTRIES = [
     date: "2026-06-24",
     title: "Code execution sandbox - Python/JS via x402",
     items: [
-      "Run Python or JavaScript in isolated cloud sandboxes: /api/code-run ($0.02) and /api/code-run-pro ($0.05)",
+      "Run Python or JavaScript in isolated cloud sandboxes: /api/code-run and /api/code-run-pro",
       "Returns stdout, stderr, expression result, and error traceback",
       "Pro tier: 60s timeout and 50k char code limit for longer computations",
       "Each call runs in a fresh, isolated VM - nothing persists between calls",
@@ -313,7 +318,7 @@ const ENTRIES = [
     date: "2026-06-24",
     title: "Image generation gateway - 3-tier GPT Image via x402",
     items: [
-      "Generate images: /api/image-gen ($0.03), /api/image-gen-hd ($0.10), /api/image-gen-premium ($0.30)",
+      "Generate images: /api/image-gen, /api/image-gen-hd and /api/image-gen-premium",
       "Text-to-image - no API key needed, pay per call, returns base64 PNG",
       "Three quality tiers from fast drafts to high-fidelity output",
     ],
@@ -322,9 +327,9 @@ const ENTRIES = [
     date: "2026-06-24",
     title: "LLM proxy gateway - 3-tier inference via x402",
     items: [
-      "Chat completions: /api/llm ($0.01), /api/llm-pro ($0.10), /api/llm-premium ($0.50)",
+      "Chat completions: /api/llm, /api/llm-pro and /api/llm-premium",
       "OpenAI-format interface - no API key needed, pay per call",
-      "Models: GPT-4o-mini, GPT-4o, GPT-4.1, o3, o3-mini",
+      "Models at launch: GPT-4o-mini, GPT-4o, GPT-4.1, o3, o3-mini (the live list is GET /v1/models)",
     ],
   },
   {
@@ -341,7 +346,7 @@ const ENTRIES = [
     title: "Developer experience and SEO improvements",
     items: [
       "Proper caching headers on static and discovery routes for faster loads",
-      "/health endpoint now reports tool count, uptime, and mode",
+      "/health endpoint now reports tool count, uptime, and mode (it has since been trimmed to the tool count and build)",
       "Expanded sitemap with blog posts, adapter docs, and webhook pages",
       "Wiki and docs navigation updated with new developer resources",
     ],
@@ -350,8 +355,8 @@ const ENTRIES = [
     date: "2026-06-23",
     title: "Crypto-hash, string, and calendar kits - 15 new tools",
     items: [
-      "Crypto-hash kit: PBKDF2, scrypt, HKDF, constant-time compare, CRC32/Adler32 checksums",
-      "String kit: Jaccard similarity, case conversion, fuzzy matching, character frequency, word wrap",
+      "Crypto-hash kit: PBKDF2, scrypt, HKDF, constant-time compare, CRC32/Adler32 checksums (several since retired; the live list is /api/pricing)",
+      "String kit: Jaccard similarity, case conversion, fuzzy matching, character frequency, word wrap (several since retired; the live list is /api/pricing)",
       "Calendar kit: ISO week numbers, leap year check, Easter date, epoch conversion, day-of-year",
       "Google ADK adapter published - agent402-google-adk on npm",
     ],
@@ -361,8 +366,8 @@ const ENTRIES = [
     title: "Validation, encoding, and math kits - 15 new tools",
     items: [
       "Validation kit: phone formatting, XML validation, CSV linting, base detection, IPv6 expansion",
-      "Encoding kit: Punycode, NATO phonetic, Soundex, binary-text, Braille conversion",
-      "Math kit: Roman numerals, Fibonacci, primality check, GCD/LCM, number base conversion",
+      "Encoding kit: Punycode, NATO phonetic, Soundex, binary-text, Braille conversion (several since retired; the live list is /api/pricing)",
+      "Math kit: Roman numerals, Fibonacci, primality check, GCD/LCM, number base conversion (several since retired; the live list is /api/pricing)",
     ],
   },
   {
@@ -388,10 +393,10 @@ const ENTRIES = [
     date: "2026-06-19",
     title: "x402 economy dashboard and leaderboard",
     items: [
-      "/economy - daily x402 ecosystem volume, concentration, and network breakdown",
+      "/economy - daily x402 ecosystem volume, concentration, and network breakdown (now the economy section of /marketplace)",
       "/leaderboard - public on-chain ranking of x402 sellers by Base USDC settled volume",
       "/api/leaderboard - machine-readable seller rankings",
-      "Smart Order Router (/api/route) - find the cheapest healthy tool across the x402 ecosystem",
+      "Smart Order Router (/api/route) - rank healthy tools across the x402 ecosystem (the ranking order has grown since; each /api/route row names it)",
     ],
   },
   {
@@ -399,17 +404,17 @@ const ENTRIES = [
     title: "Docs hub, analytics dashboard, and caching",
     items: [
       "/docs - wiki content rendered on-site with sidebar navigation",
-      "/analytics - live tool-level call counts, error rates, and latency percentiles",
+      "/analytics - live tool-level call counts, error rates, and latency percentiles (operator-only since 2026-10-01; public uptime is on /status)",
       "Server-side response caching with cache-hit headers for supported routes",
       "Idempotency support - Idempotency-Key header prevents double-charging on retries",
     ],
   },
   {
     date: "2026-06-17",
-    title: "Tollbooth Cloud and framework adapters",
+    title: "Tollbooth Cloud (since retired) and framework adapters",
     items: [
-      "Tollbooth Cloud - hosted multi-site pay-per-crawl dashboard",
-      "8 framework adapters on npm: OpenAI, Anthropic, Vercel AI SDK, LangChain, LlamaIndex, Google ADK, OpenAI Agents, AWS Strands",
+      "Tollbooth Cloud - hosted multi-site pay-per-crawl dashboard (retired; the self-hosted agent402-tollbooth replaces it)",
+      "7 framework adapters on npm: OpenAI, Anthropic, Vercel AI SDK, LangChain, LlamaIndex, OpenAI Agents, AWS Strands",
       "agent402-client SDK - find() + call() with auto-payment",
     ],
   },
@@ -492,7 +497,7 @@ export function changelogPage(baseUrl) {
   <section>
   <div class="cl-eyebrow">$ GET /changelog</div>
   <h1>Changelog</h1>
-  <p class="cl-desc">${esc(description)}</p>
+  <p class="cl-desc">${esc(description)} Each entry describes the service on its date; current prices are on <a href="/pricing">/pricing</a> and in every 402.</p>
   <a class="cl-rss" href="${baseUrl}/changelog.xml">RSS feed</a>
   </section>
   <section>

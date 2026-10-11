@@ -88,6 +88,7 @@ const THIRD_PARTY = {
   "@ai-sdk/openai": ["openai"],
   "@langchain/openai": ["ChatOpenAI"],
   "@langchain/langgraph/prebuilt": ["createReactAgent"],
+  "langchain": ["createAgent"],
   "llamaindex": ["tool", "FunctionTool"],
   "@llamaindex/workflow": ["agent"],
   "@llamaindex/openai": ["openai"],
@@ -283,6 +284,72 @@ for (const page of pages) {
 // /playground runs catalog tools only; it has no /v1 gateway client.
 ok(!/\/v1\b/.test(decode(dropScripts((await get("/playground")).text))), "/playground does not offer the /v1 gateway it cannot call");
 ok(blocks > 50 && imports > 30 && toolCalls >= 12, `the sweep measured something (${blocks} blocks, ${imports} imports, ${toolCalls} agent402Tools calls)`);
+
+// ---- commands a reader runs as written ----------------------------------------
+// /demo.js is downloaded and run on its own ("curl -s .../demo.js -o demo.js;
+// node demo.js"), so it must import nothing from this repo. It once did, and
+// every copy died with ERR_MODULE_NOT_FOUND before doing anything. Run it here
+// the way a reader does: fetched from the server into an empty folder.
+{
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { spawnSync } = await import("node:child_process");
+  const r = await get("/demo.js");
+  ok(r.status === 200 && r.text.length > 500, `/demo.js is served (${r.status})`);
+  const relImports = [...r.text.matchAll(/(?:import\s[^"']*from\s*|import\s*\(\s*)["'](\.{1,2}\/[^"']+)["']/g)].map((m) => m[1]);
+  ok(relImports.length === 0, `/demo.js imports nothing by relative path (found: ${relImports.join(", ") || "none"})`);
+  const dir = mkdtempSync(join(tmpdir(), "demo-download-"));
+  try {
+    writeFileSync(join(dir, "demo.js"), r.text);
+    const run = spawnSync(process.execPath, ["demo.js"], { cwd: dir, env: { PATH: process.env.PATH, TARGET_URL: BASE }, encoding: "utf8", timeout: 60_000 });
+    const out = `${run.stdout || ""}${run.stderr || ""}`;
+    ok(run.status === 0, `the downloaded /demo.js runs its proof-of-work path to exit 0 in an empty folder (exit ${run.status}: ${out.slice(-300).replace(/\s+/g, " ")})`);
+    ok(/sha256 = [0-9a-f]{8}/.test(out) && !/ERR_MODULE_NOT_FOUND/.test(out), "...and prints the result it paid for");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+// A block that runs a package's bin through npx must install that package
+// beside its optional peers in the same block: npx runs the bin from its own
+// cache, which cannot see peers installed in the reader's folder, and the
+// wallet proxy then starts unpaid (the tollbooth refuses to start).
+{
+  const { docsSlugs } = await import("../src/docs.js");
+  const more = ["/docs", ...docsSlugs().map((s) => `/docs/${s}`)];
+  let openclawBlocks = 0, tollBlocks = 0, payFetchBlocks = 0;
+  for (const page of [...new Set([...pages, ...more])]) {
+    const { status, text } = await get(page);
+    if (status !== 200) continue;
+    for (const m of text.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/g)) {
+      const code = decode(m[1]);
+      if (/npx\s+(?:-y\s+)?agent402-openclaw(?:@\S+)?\s+proxy/.test(code)) {
+        openclawBlocks++;
+        ok(/npm i(?:nstall)?\s+agent402-openclaw\b[^\n]*@x402\/fetch[^\n]*@x402\/evm[^\n]*viem/.test(code) || /npx\s+(?:-y\s+)?-p\s+agent402-openclaw/.test(code),
+          `${page}: the wallet proxy block installs agent402-openclaw with @x402/fetch, @x402/evm and viem in one folder`);
+      }
+      if (/npx\s+agent402-tollbooth/.test(code) && /TOLLBOOTH_FACILITATOR_URL|TOLLBOOTH_CDP_API_KEY/.test(code)) {
+        tollBlocks++;
+        ok(/npm i(?:nstall)?\s+agent402-tollbooth\b[^\n]*@x402\/express[^\n]*@x402\/core[^\n]*@x402\/evm/.test(code), `${page}: a settling tollbooth block installs agent402-tollbooth with @x402/express, @x402/core and @x402/evm`);
+      }
+      if (/payFetch\([^)]*\{[\s\S]*?body:\s*JSON\.stringify/.test(code)) {
+        payFetchBlocks++;
+        ok(/Content-Type["']?\s*:\s*["']application\/json/i.test(code), `${page}: a payFetch call with a JSON string body sends Content-Type: application/json (express.json ignores text/plain)`);
+      }
+    }
+    const body = decode(dropScripts(text));
+    ok(!/smithery\.ai\/new/.test(body), `${page}: no dead "smithery.ai/new" add-server link`);
+    ok(!/Paid tools by card/.test(body), `${page}: no "Paid tools by card" block (new credits keys are not sold)`);
+  }
+  ok(openclawBlocks >= 3, `the wallet proxy blocks were seen (${openclawBlocks})`);
+  ok(tollBlocks >= 1 && payFetchBlocks >= 1, `the tollbooth and payFetch blocks were seen (${tollBlocks}, ${payFetchBlocks})`);
+}
+// The idempotent replay needs the same credential on the retry: an example
+// with no payment header on either call never replays in paid mode.
+{
+  const wh = (await get("/docs/webhooks")).text;
+  const pre = [...wh.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/g)].map((m) => decode(m[1])).find((c) => /Idempotency-Key/.test(c));
+  ok(!!pre, "/docs/webhooks shows an Idempotency-Key example");
+  ok(pre && (pre.match(/X-Pow-Solution|PAYMENT-SIGNATURE|Authorization: Bearer/g) || []).length >= 2, "...and both of its calls carry the credential the replay is bound to");
+  ok(!/All Agent402 tools return results synchronously/.test(decode(dropScripts(wh))), "/docs/webhooks does not say every tool is synchronous (Prefer: respond-async exists)");
+}
 
 // The checker must catch the defects it was written for (a planted control,
 // run through the same functions as the pages).

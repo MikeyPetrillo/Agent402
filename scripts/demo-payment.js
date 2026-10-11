@@ -1,31 +1,34 @@
-// Watch an agent pay an agent — a self-contained autonomous buyer with NO human
+// Watch an agent pay an agent: a self-contained autonomous buyer with NO human
 // in the loop. It discovers the catalog, hits an HTTP 402, settles payment, and
-// uses the result. Two settlement paths, both machine-native:
+// uses the result. Served as https://agent402.tools/demo.js; it imports nothing
+// from this repo, so the downloaded copy runs on its own (Node 18+).
+// Two settlement paths, both machine-native:
 //
-//   • proof-of-work (default) — no wallet, no funds: spend CPU. Runs anywhere.
-//       node scripts/demo-payment.js
-//   • USDC via x402 — real money on Base, if you supply a funded key:
-//       AGENT_KEY=0x... node scripts/demo-payment.js
+//   - proof-of-work (default): no wallet, no funds, no install. Spend CPU.
+//       node demo.js
+//   - USDC via x402: real money on Base (or another EVM rail the 402 offers),
+//     with a funded EVM key and four packages installed next to this file:
+//       npm i @x402/core @x402/evm @x402/fetch viem
+//       AGENT_KEY=0x... node demo.js
 //
-// TARGET defaults to the live service; point it anywhere with TARGET=...
-import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
+// The target defaults to the live service; point it anywhere with TARGET_URL=...
 import { createHash } from "node:crypto";
 
 const TARGET = process.env.TARGET_URL || "https://agent402.tools";
 const log = (s = "") => console.log(s);
 const hr = () => log("─".repeat(66));
 
-log(`\n  Agent402 — watch an agent pay an agent  (target: ${TARGET})`);
+log(`\n  Agent402: watch an agent pay an agent  (target: ${TARGET})`);
 hr();
 
-// 1) DISCOVER — the buyer reads the machine-readable catalog, no docs, no human.
+// 1) DISCOVER: the buyer reads the machine-readable catalog, no docs, no human.
 log("[1] Agent discovers the catalog (GET /api/pricing) …");
 const pricing = await (await fetch(`${TARGET}/api/pricing`)).json();
 const free = pricing.endpoints.filter((e) => e.computePayable);
 log(`    → ${pricing.endpoints.length} tools; ${free.length} payable with compute, the rest in USDC.`);
 log(`    → settlement: ${pricing.payment.protocol} on ${pricing.payment.network} (${pricing.payment.currency}).`);
 
-// 2) GET QUOTED — call a tool with no payment, receive the 402 price quote.
+// 2) GET QUOTED: call a tool with no payment, receive the 402 price quote.
 const tool = "/api/hash";
 log(`\n[2] Agent calls ${tool} with no payment …`);
 const unpaid = await fetch(`${TARGET}${tool}`, {
@@ -33,20 +36,26 @@ const unpaid = await fetch(`${TARGET}${tool}`, {
   headers: { "Content-Type": "application/json", Accept: "application/json" },
   body: JSON.stringify({ text: "machine to machine" }),
 });
-log(`    → HTTP ${unpaid.status} ${unpaid.status === 402 ? "Payment Required" : ""} — the server quotes a price, no human prompted.`);
+log(unpaid.status === 402
+  ? `    → HTTP 402 Payment Required: the server quotes a price, no human prompted.`
+  : `    → HTTP ${unpaid.status}: this server is not charging (free mode), so there is no quote; the steps below still run.`);
 const powChallengeUrl = unpaid.headers.get("x-pow-challenge");
 
 const AGENT_KEY = process.env.AGENT_KEY;
 let result;
 
 if (AGENT_KEY) {
-  // 3a) PAY IN USDC — sign an x402 payment from the agent's own wallet.
+  // 3a) PAY IN USDC: sign an x402 payment from the agent's own wallet.
   log(`\n[3] Agent pays in USDC via x402 (wallet settlement on Base) …`);
   const { x402Client } = await import("@x402/core/client");
   const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
   const { wrapFetchWithPayment } = await import("@x402/fetch");
   const { privateKeyToAccount } = await import("viem/accounts");
-  const client = disableVendorSpendControls(new x402Client());
+  const client = new x402Client();
+  // The client's built-in spend filter caps payments at its own default; this
+  // demo's spend is the one call below, so it is switched off (a no-op on
+  // client versions without it).
+  client.setSpendControls?.(false);
   registerExactEvmScheme(client, { signer: privateKeyToAccount(AGENT_KEY) });
   const payFetch = wrapFetchWithPayment(fetch, client);
   const res = await payFetch(`${TARGET}${tool}`, {
@@ -58,8 +67,8 @@ if (AGENT_KEY) {
   log(`      ${pricing && (await (await fetch(`${TARGET}/api/stats`)).json()).onchainRevenueProof}`);
   result = await res.json();
 } else {
-  // 3b) PAY WITH COMPUTE — solve the proof-of-work challenge, no wallet needed.
-  log(`\n[3] No wallet — agent pays with COMPUTE (proof-of-work) instead …`);
+  // 3b) PAY WITH COMPUTE: solve the proof-of-work challenge, no wallet needed.
+  log(`\n[3] No wallet: agent pays with COMPUTE (proof-of-work) instead …`);
   const c = await (await fetch(`${TARGET}/api/pow/challenge?slug=hash`)).json();
   log(`    → got challenge (difficulty ${c.difficulty} bits). Solving …`);
   const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
@@ -76,10 +85,10 @@ if (AGENT_KEY) {
   result = await res.json();
 }
 
-// 4) USE THE RESULT — the whole exchange happened with zero human involvement.
+// 4) USE THE RESULT: the whole exchange happened with zero human involvement.
 log(`\n[4] Agent has its result: sha256 = ${result.hex?.slice(0, 24)}…`);
 hr();
 log(`  One program discovered a service, was quoted a price over HTTP 402, settled`);
-log(`  payment ${AGENT_KEY ? "in USDC on-chain" : "with compute"}, and used the result — no human, no signup,`);
+log(`  payment ${AGENT_KEY ? "in USDC on-chain" : "with compute"}, and used the result: no human, no signup,`);
 log(`  no API key. That is machine-to-machine commerce. Live economy stats: ${TARGET}/api/stats\n`);
 process.exit(result.hex ? 0 : 1);

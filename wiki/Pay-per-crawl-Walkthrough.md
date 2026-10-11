@@ -72,7 +72,7 @@ Then read your counters with the token in a **header** (never a query string, wh
 curl -H "Authorization: Bearer $TOLLBOOTH_ADMIN_TOKEN" http://localhost:3000/__stats
 ```
 
-If instead you run the package as a **reverse proxy** (`TOLLBOOTH_UPSTREAM=https://your-site.com npx agent402-tollbooth`), it mounts the dashboard for you at `/__tollbooth` with JSON at `/__tollbooth/stats`, gated by `TOLLBOOTH_ADMIN_TOKEN` (or `TOLLBOOTH_STATS_TOKEN` for the JSON only) using the same `Authorization: Bearer` / `X-Admin-Token` headers. Either way you get:
+If instead you run the package as a **reverse proxy** (`TOLLBOOTH_UPSTREAM=https://your-site.com npx agent402-tollbooth`; observing needs nothing else, and settling x402 later needs `@x402/express @x402/core @x402/evm` installed next to it, see [[Pay-per-crawl]]), it mounts the dashboard for you at `/__tollbooth` with JSON at `/__tollbooth/stats`, gated by `TOLLBOOTH_ADMIN_TOKEN` (or `TOLLBOOTH_STATS_TOKEN` for the JSON only) using the same `Authorization: Bearer` / `X-Admin-Token` headers. Either way you get:
 
 - Total requests by classification (human / would-charge / bot-paid / errors)
 - Top user-agents seen
@@ -86,7 +86,7 @@ If instead you run the package as a **reverse proxy** (`TOLLBOOTH_UPSTREAM=https
 
 ## Phase 2: Charge known AI bots (10 minutes)
 
-Once Phase 1 shows realistic-looking numbers, flip one flag. The 28 user-agents in `AI_BOTS` get 402: GPTBot, OAI-SearchBot, ChatGPT-User, ClaudeBot, Claude-Web, Claude-User, anthropic-ai, PerplexityBot, Perplexity-User, CCBot, Bytespider, Google-Extended, Amazonbot, cohere-ai, Meta-ExternalAgent, Meta-ExternalFetcher, Applebot-Extended, Diffbot, Omgilibot, ImagesiftBot, YouBot, Timpibot, DuckAssistBot, PetalBot, FriendlyCrawler, AI2Bot, plus the generic scraper signatures Scrapy and python-requests. The live list is [`tollbooth/bots.js`](https://github.com/MikeyPetrillo/Agent402/blob/main/tollbooth/bots.js) (`AI_BOTS`); add your own with `botUserAgents: [...]`. Everyone else passes.
+Once Phase 1 shows realistic-looking numbers, flip one flag. The 28 user-agents in `AI_BOTS` get 402: GPTBot, OAI-SearchBot, ChatGPT-User, ClaudeBot, Claude-Web, Claude-User, anthropic-ai, PerplexityBot, Perplexity-User, CCBot, Bytespider, Google-Extended, Amazonbot, cohere-ai, Meta-ExternalAgent, Meta-ExternalFetcher, Applebot-Extended, Diffbot, Omgilibot, ImagesiftBot, YouBot, Timpibot, DuckAssistBot, PetalBot, FriendlyCrawler, AI2Bot, plus the generic scraper signatures Scrapy and python-requests. (Google-Extended and Applebot-Extended are robots.txt control tokens rather than crawler user agents: Google and Apple crawl with Googlebot and Applebot, which the gate lets through, so their AI-training use is governed by robots.txt, not by this list.) The live list is [`tollbooth/bots.js`](https://github.com/MikeyPetrillo/Agent402/blob/main/tollbooth/bots.js) (`AI_BOTS`); add your own with `botUserAgents: [...]`. Everyone else passes.
 
 ```js
 app.use(createTollbooth({

@@ -4,7 +4,7 @@
 - [[Getting Started]]
 - [[Agentic Finance]]
 - [[Why Pay Here|Why-Pay-Here]]
-- [[Reports, Monitors and Credits|Reports-and-Monitors]]
+- [[Reports and Monitors|Reports-and-Monitors]]
 - [[Paying with x402]]
 - [[Paying with MPP]]
 - [[Robinhood Chain (USDG)|Robinhood-Chain]]
@@ -47,7 +47,7 @@
 - [[Security Model]]
 - [[Operations]]
 - [[Self-Hosting]]
-- [[API Reference|API-Reference]]
+- [[API guide|API-Reference]]
 
 **[[FAQ]]**
 

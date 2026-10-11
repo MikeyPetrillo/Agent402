@@ -58,7 +58,7 @@ const agent = new Agent({ tools });
 const out = await agent.invoke("Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?");
 ```
 
-**No wallet yet?** The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run free with proof-of-work and no wallet. Leave out `fetch`; the default (`freeOnly: true`) keeps only those tools:
+**No wallet yet?** The pure-CPU tools (hash, uuid, base64, markdown-to-html, json-to-csv and more) run free with proof-of-work and no wallet. Leave out `fetch`; the default (`freeOnly: true`) keeps only those tools:
 
 ```ts
 const { tools } = await agent402Tools({
@@ -113,7 +113,7 @@ Adaptive proof-of-work means cash-poor agents can still pay in CPU. Edge-deploya
 │  │       │ tool.callback({...})                           │  │
 │  │       ▼                                                │  │
 │  │  agent402-client  ──── HTTP ────► agent402.tools       │  │
-│  │       │  401/402 Payment Required                      │  │
+│  │       │  402 Payment Required                          │  │
 │  │       │  ◄────────────────────────                     │  │
 │  │       │                                                │  │
 │  │       │  proof-of-work (free tier)                     │  │

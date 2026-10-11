@@ -24,18 +24,18 @@ neutral Smart Order Router across every seller).
 In an open marketplace, anyone can claim anything in a manifest. **What you
 can't fake is settlement on a public chain.** Every x402 paid call leaves a
 USDC `Transfer` log on Base. The leaderboard reads those logs directly - no
-self-reports, no caches you have to trust, no API keys involved.
+self-reports and no API keys involved: an hourly snapshot of public chain data that anyone can re-read.
 
 ## Pipeline
 
-1. **Discovery** - walk every page of the [Coinbase CDP Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar)
+1. **Discovery** - walk every page of the x402 Bazaar discovery
    `discovery/resources` endpoint (`limit=1000`, page until `pagination.total`
    reached). Extract each seller's `payTo` wallet from listings whose `network`
    is Base mainnet (`eip155:8453` / `base`) and whose asset is USDC.
 2. **On-chain scan** - call Base USDC `eth_getLogs` in chunks (`CHUNK_BLOCKS`,
    default `9000` blocks per call; `WALLET_CHUNK`, default `200` wallets per
    call) for the `Transfer(_, payTo, _)` topic across the active window. The
-   window is the operator's `SPAN_BLOCKS`; the hosted instance runs a **7d**
+   window is set by the operator's `LEADERBOARD_WINDOW_SECONDS` (the older `SPAN_BLOCKS` still works); the hosted instance runs a **7d**
    window (`302400` Base blocks at ~2s each), and sellers with bursty traffic
    show real revenue there that a tight scan would miss. Never assume the
    window: the response reports the blocks actually scanned in `scannedBlocks`
@@ -148,7 +148,7 @@ volume runs; `include=all` returns it, flagged `self: true`.
 
 ## Related
 
-- [[x402-Index-and-Router]] - Smart Order Router that uses the same Bazaar walk
+- [[x402-Index-and-Router]] - Smart Order Router that uses the same discovery walk
 - [[Architecture]] - where the leaderboard sits relative to the indexer
 - [`/.well-known/x402`](https://agent402.tools/.well-known/x402) - the service
   manifest now advertises the leaderboard in both `machineReadable` and

@@ -25,7 +25,7 @@ export const SLIDES = [
   {
     id: "cover", kicker: "x402 & MPP 101",
     headline: "How software pays for things.",
-    body: `<p class="s101-lead">A ten-minute walkthrough of the two open protocols that let an AI agent pay for what it uses, per request, with no account. Nothing here is a mock: on slide 4 you will watch a real payment request happen on this server.</p>
+    body: `<p class="s101-lead">A ten-minute walkthrough of the two open protocols that let an AI agent pay for what it uses, per request, with no account. Nothing here is a mock: on slide 03 you will watch a real payment request happen on this server.</p>
 <p class="s101-hint">Presenter: <kbd>&rarr;</kbd> / <kbd>&larr;</kbd> to move, <kbd>N</kbd> for your speaker notes, <kbd>P</kbd> to print the deck as one page.</p>`,
     notes: "Frame the ten minutes: one problem, one old idea, one live demo, then what it means for them. Ask what they already know about crypto payments; if the answer is 'nothing', say that is the right starting point, because this is not really about crypto - it is about HTTP.",
   },
@@ -83,7 +83,7 @@ export const SLIDES = [
     body: `<div class="s101-table"><table>
 <thead><tr><th></th><th>x402</th><th>MPP</th></tr></thead>
 <tbody>
-<tr><th>Started by</th><td>Coinbase (x402.org)</td><td>Tempo, with Stripe (mpp.dev), on the IETF standards track</td></tr>
+<tr><th>Started by</th><td>Coinbase (x402.org)</td><td>Tempo, with Stripe; the Payment auth scheme at paymentauth.org, published as an IETF Internet-Draft</td></tr>
 <tr><th>The price rides in</th><td><code>PAYMENT-REQUIRED</code> header</td><td><code>WWW-Authenticate: Payment</code> (the web's normal login mechanism)</td></tr>
 <tr><th>The payment rides in</th><td><code>PAYMENT-SIGNATURE</code> header</td><td><code>Authorization: Payment</code> header</td></tr>
 <tr><th>The receipt</th><td><code>PAYMENT-RESPONSE</code></td><td>signed <code>Payment-Receipt</code></td></tr>
@@ -103,7 +103,7 @@ export const SLIDES = [
   },
   {
     id: "agent402", kicker: "07 / where we sit",
-    headline: "Most of the ecosystem ships the protocol. Agent402 ships the market that runs on it.",
+    headline: "Agent402 ships the market that runs on the protocol.",
     body: `<div class="s101-grid">
 <div><div class="s101-tag">Buy</div><strong>500+ pay-per-call tools</strong><p>Web search with citations, headless browser, PDFs, OCR, financial and SEC data, an OpenAI-compatible LLM gateway. Every one priced per call and settled on chain over x402 or MPP; the model-backed ones are marked as such.</p></div>
 <div><div class="s101-tag">Route</div><strong>An open index and a Smart Order Router</strong><p>One call resolves a task to the best seller across the whole ecosystem, ours or anyone's, buys the result from that seller and sells it to the agent. ${routingProofSentence()}</p></div>

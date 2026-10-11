@@ -2240,7 +2240,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (17 scripts, one process each)
+      - name: Offline suites (20 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2248,6 +2248,8 @@ jobs:
           t node scripts/test-image-runtime-scripts.js
           # /api/pow/challenge envelope (free-tier gate — full shape + slug scoping + 404s)
           t node scripts/test-pow-challenge-envelope.js
+          # wiki/Why-Pay-Here.md is generated from WHY_POINTS (scripts/why-wiki.js) and must stay current
+          t node scripts/test-why-wiki.js
           # /api/pricing envelope contract (every scraper reads this — per-endpoint shape, slug uniqueness)
           t node scripts/test-pricing-envelope.js
           # /health envelope + .flags shape (boolean discipline locks the Yahoo-relay-flap class)
@@ -3261,6 +3263,8 @@ jobs:
 
       - name: Docs truth (every documented route, slug and price matches the served catalog)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-docs-truth.js
+      - name: Wiki facts (ranges, ladders, tier caps and the router order match the code)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-wiki-facts.js
       - name: Skill-pack pricing rule (every pack = sum of its tools minus 10%, recomputed from the live catalog)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-pack-pricing-rule.js
 

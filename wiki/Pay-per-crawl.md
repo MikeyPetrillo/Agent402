@@ -35,9 +35,13 @@ app.listen(3000);
 
 ```bash
 TOLLBOOTH_UPSTREAM=https://your-site.com node tollbooth/index.js
-# ...and to take money over x402 AND MPP from env alone (0.8.0). This one
-# settles on Base Sepolia (testnet); for mainnet, set TOLLBOOTH_NETWORK and
-# point TOLLBOOTH_FACILITATOR_URL at a facilitator that settles that network:
+# ...and to take money over x402 AND MPP from env alone (0.8.0). Settling
+# x402 needs the x402 packages installed next to the gate (it refuses to start
+# without them whenever TOLLBOOTH_FACILITATOR_URL or the CDP keys are set), so
+# install all four in one folder and run from there. This one settles on Base
+# Sepolia (testnet); for mainnet, set TOLLBOOTH_NETWORK and point
+# TOLLBOOTH_FACILITATOR_URL at a facilitator that settles that network:
+npm i agent402-tollbooth @x402/express @x402/core @x402/evm
 TOLLBOOTH_UPSTREAM=https://your-site.com TOLLBOOTH_PAYTO=0xYourWallet \
 TOLLBOOTH_NETWORK=base-sepolia TOLLBOOTH_FACILITATOR_URL=https://x402.org/facilitator \
 npx agent402-tollbooth
@@ -51,8 +55,9 @@ curl -A "ClaudeBot/1.0" localhost:4021/article   # bot   -> 402 Payment Required
 ## How it works
 
 - **Who pays:** by default, requests whose `User-Agent` matches a known AI/LLM
-  crawler (GPTBot, ClaudeBot, CCBot, PerplexityBot, Bytespider, Google-Extended,
-  …). Classic search indexers (Googlebot, Bingbot) are **not** charged, so SEO
+  crawler (GPTBot, ClaudeBot, CCBot, PerplexityBot, Bytespider, …).
+  Google's AI training use is governed by the `Google-Extended` robots.txt
+  token rather than a separate crawler user agent, so set that in robots.txt. Classic search indexers (Googlebot, Bingbot) are **not** charged, so SEO
   stays free. Override with `botUserAgents`, or a custom `charge(req)` predicate.
 - **This host's own router** is not a crawler: when it buys from you to
   resell the result it identifies itself with `User-Agent: Mozilla/5.0 (compatible;

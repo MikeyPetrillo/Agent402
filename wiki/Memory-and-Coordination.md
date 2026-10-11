@@ -75,7 +75,7 @@ A namespace is bounded on two axes at once, and hitting **either** returns `413 
 | Limit | Env var | Default | Why |
 |---|---|---|---|
 | Keys per namespace | `MEMORY_MAX_NS_KEYS` | 10,000 | Bounds index growth for one wallet |
-| Total value bytes per namespace | `MEMORY_MAX_NS_BYTES` | 32 MB | The disk-fill guard for the shared `/data` volume: a key count alone does not bound size, since one key can hold a very large value |
+| Total value bytes per namespace | `MEMORY_MAX_NS_BYTES` | 32 MB | The storage-fill guard for the shared store: a key count alone does not bound size, since one key can hold a very large value |
 
 Individual items are capped too: 256 bytes of key and 64 KB of value.
 
@@ -83,7 +83,7 @@ Both quotas are read at call time, so an operator can change them without a rede
 
 ## Properties
 
-- **Durable:** stored in SQLite on a persistent volume - survives redeploys and restarts.
+- **Durable:** stored in the state database (Postgres on the hosted instance; SQLite on a persistent volume when self-hosted without one) - survives redeploys and restarts.
 - **Private by default:** wallet-scoped; grants are explicit, revocable, and logged.
 - **Cheap:** $0.001–$0.003 per call.
 - **Identity without accounts:** the x402 payment on each request proves control of the wallet; there is no signup surface to attack.
