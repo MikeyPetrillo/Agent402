@@ -32,7 +32,7 @@ export function companyPage(baseUrl) {
   <div class="co-2col" style="display:grid;grid-template-columns:220px 1fr;gap:30px;padding-bottom:36px;border-bottom:1px solid var(--hairline);">
     <h2 style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);font-weight:700;margin:4px 0 0;">${esc(h)}</h2>
     <div><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 14px;">${body}</p>
-    <div style="display:flex;gap:18px;flex-wrap:wrap;">${links.map(([href, label]) => `<a href="${esc(href)}" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">${esc(label)} →</a>`).join("")}</div></div>
+    <div class="co-links" style="display:flex;gap:18px;flex-wrap:wrap;">${links.map(([href, label]) => `<a href="${esc(href)}" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">${esc(label)} →</a>`).join("")}</div></div>
   </div>
 </section>`;
   const body = `
@@ -64,7 +64,7 @@ ${row("Contact", `General, security, legal and abuse: <a href="mailto:mike@agent
   </div>
 </section>
 ${ledgerFooterCompact()}`;
-  const extraCss = `@media (max-width:900px){.co-2col{grid-template-columns:minmax(0,1fr)!important}}
+  const extraCss = `@media (max-width:900px){.co-2col{grid-template-columns:minmax(0,1fr)!important}}@media (max-width:600px){.co-links{display:grid!important;grid-template-columns:repeat(2,max-content);gap:8px 28px!important}}
 .co-field{display:block;margin-bottom:16px}
 .co-field label{display:block;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ink);margin-bottom:6px;font-weight:700}
 .co-field input,.co-field textarea{width:100%;padding:11px 14px;background:var(--paper);border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-body);font-size:var(--fs-md);outline:none}

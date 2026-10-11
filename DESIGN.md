@@ -149,7 +149,8 @@ rules below.
 - **Numbers are tabular**: any column or stat of figures uses
   `font-variant-numeric: tabular-nums` (Geist Mono is already fixed-width).
 - Use only `var(--fs-*)`. Body text is `--fs-base`; a lede is `--fs-lg`; inner-page h1 is
-  `--fs-3xl` to `--fs-5xl`.
+  `--fs-3xl` to `--fs-5xl` (`--fs-2xl` on a phone for a template h1 that carries a catalog
+  name: tool, skill pack, guide).
 - **One weight per heading level**: display h1 400 (serif), other h1 800, h2 700, h3 600.
   The guard reads inline `<hN style>` and any CSS rule whose selector names the level.
 - Eyebrows: `--fs-2xs` mono, uppercase, 0.12em tracking, `--faint`.
@@ -161,13 +162,27 @@ rules below.
   primary button alone, 50% for dots. The guard rejects any other radius.
 
 ## Wrap
-Measured, not eyeballed: `scripts/test-wrap-quality.js` lays out the public pages in Chromium
-at 1440 and 400 px, reads each block's line boxes and fails on any of these.
+Measured, not eyeballed: `scripts/test-wrap-quality.js` lays out every page in the sitemap
+plus every `/docs/<wiki page>` in Chromium at 1440 and 400 px, reads each block's line boxes
+and fails on any of these. CI runs every hand-written page and a fixed sample of 25 per
+generated family (tool, category, skill pack and report pages, longest titles and code
+names first); `WRAP_ALL=1` runs all of them.
 - **No rag**: a block of 2+ lines ends on a line of at least 30% of its widest line and at
-  least 3 words (a heading of 5 words or fewer may split 2 + 2 or 3 + 2). Widow control in
-  `assets/js/site-chrome.js` binds each block's last words to about a third of its measure;
-  if a block still rags, the copy or the measure is wrong, so shorten the words or widen
-  the column. Text rendered after load calls `window.a402BindWidows(root)`.
+  least 3 words (a heading of 5 words or fewer may split 2 + 2 or 3 + 2; punctuation alone
+  is not a word). Widow control in `assets/js/site-chrome.js` measures each block's tail
+  and binds its last words to about a third of its measure (two words that fit stay
+  together; a short cell of a scrolling table stays whole); if a block still rags, the copy
+  or the measure is wrong, so shorten the words or widen the column. Text rendered after
+  load calls `window.a402BindWidows(root)`.
+- **Code keeps whole words**: a code name in prose or a table cell breaks only at its own
+  punctuation or a camelCase seam (site-chrome.js adds a `<wbr>` there), never between two
+  letters. Inline code is `overflow-wrap: break-word`, never `anywhere` (that collapses a
+  table column to one letter); only an unbroken hash or address may split. A short name in
+  a table cell stays on one line and a wide table scrolls in its own wrapper.
+- **A page's own title is whole**: an h1 wraps with `text-wrap: balance`, never a
+  line clamp or an ellipsis; a long catalog name steps down to `--fs-2xl` on a phone.
+  Breadcrumbs (`.ml-crumb`) keep each link whole and drop the current page's name on a
+  phone, where the h1 below repeats it.
 - **A label never breaks inside itself**: small mono text, uppercase letter-spaced labels,
   chips, buttons, kickers, stat labels and each link of a link row stay on one line. A run
   of tags is `.ml-meta` (or `sectionMeta([...])`): one `<span>` per tag, wrapping between

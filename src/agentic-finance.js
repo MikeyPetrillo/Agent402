@@ -22,7 +22,7 @@ const FAQS = [
 ];
 
 const STACK = [
-  ["Agents", "Autonomous software with a wallet: MCP-connected assistants, crawlers, trading and research agents, other services' agents.", "the buyers and, increasingly, the sellers"],
+  ["Agents", "Autonomous software with a wallet: MCP-connected assistants, crawlers, trading and research agents, other services' agents.", "the buyers, and now sellers"],
   ["Applied layer", "Discovery, routing, pricing, reliability, receipts, transparency. Where an agent finds the right service and pays it once, safely.", "Agent402: index, router, tools, tollbooth"],
   ["Payment protocols", "x402 (HTTP 402 with machine-readable requirements) and MPP (the Payment HTTP auth scheme). Open, HTTP-native, wallet-as-identity.", "the wire"],
   ["Rails and money", "Stablecoins settled on public chains: USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar and Algorand; USDG on Robinhood Chain; native Tempo.", "twelve x402 chains plus Tempo"],
@@ -66,7 +66,7 @@ export function agenticFinancePage(baseUrl) {
     `<a href="${href}" style="padding:11px 18px;border-bottom:1px solid var(--panel-rule);text-decoration:none;color:var(--on-panel-soft);font-size:var(--fs-md);">${esc(label)}</a>`
   ).join("");
   const stackHtml = STACK.map(([layer, what, who], i) =>
-    `<div style="display:grid;grid-template-columns:150px 1fr 220px;gap:20px;padding:20px 24px;border-bottom:1px solid var(--hairline);align-items:baseline;" class="af-stack-row"><div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">0${i + 1} · <span style="color:var(--ink);font-weight:800;font-family:var(--font-body);font-size:var(--fs-lg);">${esc(layer)}</span></div><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">${esc(what)}</p><div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">${esc(who)}</div></div>`
+    `<div style="display:grid;grid-template-columns:210px minmax(0,1fr) 240px;gap:20px;padding:20px 24px;border-bottom:1px solid var(--hairline);align-items:baseline;" class="af-stack-row"><div><span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">0${i + 1} ·</span> <span style="color:var(--ink);font-weight:800;font-size:var(--fs-lg);white-space:nowrap;">${esc(layer)}</span></div><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">${esc(what)}</p><p style="font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:0;">${esc(who)}</p></div>`
   ).join("");
   const rolesHtml = ROLES.map(([tag, h, p, href, cta]) =>
     `<div style="padding:24px;border-right:1px solid var(--hairline);border-bottom:1px solid var(--hairline);background:var(--card);display:flex;flex-direction:column;"><div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:12px;">${esc(tag)}</div><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(h)}</h3><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;flex:1;">${esc(p)}</p><a href="${href}" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);align-self:flex-start;">${esc(cta)} →</a></div>`

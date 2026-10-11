@@ -434,7 +434,7 @@ export const PROGRAMMATIC_CSS = `
   .pg-table td{padding:11px 14px;border-bottom:1px solid var(--hairline);color:var(--muted);vertical-align:top}
   .pg-table tr:last-child td{border-bottom:0}
   .pg-table td.num{font-family:var(--font-mono);text-align:right;white-space:nowrap;color:var(--ink)}
-  .pg-table td.who{color:var(--ink)}
+  .pg-table td.who{color:var(--ink)}.pg-who-name{display:block;white-space:nowrap}.pg-who-role{display:block;color:var(--muted);font-size:var(--fs-sm);margin-top:2px}.pg-table td.kind{white-space:nowrap}
   .pg-buy{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:26px;margin-top:26px;box-shadow:inset 0 1px 0 var(--card-inset),0 1px 2px rgba(0,0,0,.08)}
   .pg-buy h2{font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 8px;color:var(--ink)}
   .pg-buy p{color:var(--muted);font-size:var(--fs-base);line-height:1.55;margin:0 0 16px;font-weight:300}
@@ -536,8 +536,8 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
   const rows = data?.rows || [];
   const table = rows.length
     ? `<div class="pg-table-wrap"><table class="pg-table">
-<thead><tr><th>Date</th><th>Insider</th><th>Role</th><th>Transaction</th><th>Code</th><th>Shares</th><th>Price</th><th>Owned after</th></tr></thead>
-<tbody>${rows.map((r) => `<tr><td class="num">${esc(r.date || "")}</td><td class="who">${esc(r.insider || "")}</td><td>${esc(r.role || "")}</td><td>${esc(r.kind || "")}</td><td class="num">${esc(r.code || "")}</td><td class="num">${esc(fmtInt(r.shares))}</td><td class="num">${esc(fmtPrice(r.price))}</td><td class="num">${esc(r.ownedAfter == null ? "" : fmtInt(r.ownedAfter))}</td></tr>`).join("")}</tbody></table></div>`
+<thead><tr><th>Date</th><th>Insider and role</th><th>Transaction</th><th>Code</th><th>Shares</th><th>Price</th><th>Owned after</th></tr></thead>
+<tbody>${rows.map((r) => `<tr><td class="num">${esc(r.date || "")}</td><td class="who"><span class="pg-who-name">${esc(r.insider || "")}</span>${r.role ? `<span class="pg-who-role">${esc(r.role)}</span>` : ""}</td><td class="kind">${esc(r.kind || "")}</td><td class="num">${esc(r.code || "")}</td><td class="num">${esc(fmtInt(r.shares))}</td><td class="num">${esc(fmtPrice(r.price))}</td><td class="num">${esc(r.ownedAfter == null ? "" : fmtInt(r.ownedAfter))}</td></tr>`).join("")}</tbody></table></div>`
     : `<div class="pg-empty">${degraded || !data ? "SEC EDGAR could not be read for this company just now. The filings themselves are unaffected: try again shortly, or buy the full report, which reads them at request time." : data.partial ? `Form 4 filings exist for ${esc(name)} in this window, but their transaction detail could not be read just now. The paid report reads the newest ${INSIDER_TIERS["insider-report"].maxFilings} filings at request time.` : `No Form 4 transactions were filed against ${esc(name)} in the last ${data.windowDays} days. An agent calling the report can widen the window to ${INSIDER_MAX_DAYS} days with <code>days</code>; a card purchase reads the last ${INSIDER_DEFAULT_DAYS}.`}</div>`;
   const body = `
 <section class="hero">

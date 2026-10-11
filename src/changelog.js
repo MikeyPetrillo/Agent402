@@ -236,7 +236,7 @@ const ENTRIES = [
       "402 responses carry a WWW-Authenticate: Payment challenge (EIP-3009 USDC on Base and Celo); Authorization: Payment credentials settle identically to x402; settled responses return a signed Payment-Receipt",
       "Proven live daily: the paid canary buys over the native MPP wire on Base and Celo, receipts on-chain",
       "Listed on MPPScan; /openapi.json now serves MPP discovery metadata (per-operation offers + service info)",
-      "MPP adoption is public: toolCallsServed.viaMPPWire at /api/stats",
+      "MPP adoption is public at /api/stats: toolCallsServed.viaMPPWire",
       "HEAD requests on paid routes now return the same 402 challenges as GET",
       "Explainer: what-is-x402 now covers how x402 and MPP compare",
     ],

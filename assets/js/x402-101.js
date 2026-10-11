@@ -142,7 +142,7 @@
       var rec = (rl.recent || []).filter(function (x) { return x && x.tx && x.external !== false; })[0];
       return rec ? { rail: rl.rail, asset: rl.asset || rec.asset || "USDC", usd: rec.usd, when: rec.when, tx: rec.tx } : null;
     }).filter(Boolean).sort(function (a, b) { return Date.parse(b.when) - Date.parse(a.when); }).slice(0, 5);
-    if (!rows.length) { line(receipts, "", "no recent settlement rows available right now · see /revenue", "k"); return; }
+    if (!rows.length) { line(receipts, "", "no recent settlements · see /revenue", "k"); return; }
     rows.forEach(function (x) {
       var d1 = document.createElement("div");
       var k = document.createElement("span"); k.className = "k"; k.textContent = String(x.rail || "").toUpperCase() + " "; d1.appendChild(k);

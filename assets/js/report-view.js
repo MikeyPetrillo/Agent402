@@ -31,6 +31,8 @@
   }
   function inline(l) {
     l = l.replace(/\[(\d+)\]/g, '<span class="cite">[$1]</span>');
+    // A run of citations ("[5][6][7]") is one mark: a word joiner keeps it from splitting across lines.
+    l = l.replace(/<\/span><span class="cite">/g, '</span>\u2060<span class="cite">');
     l = l.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     // [label](https://…) before the bare-URL autolink, or the bare rule would
     // eat the URL out of the parentheses and leave the label stranded.
@@ -244,7 +246,11 @@
 
     // Action bar (never printed).
     var dl = tables.map(function (t, i) {
-      return '<button class="btn btn-secondary dl-csv" data-i="' + i + '">Download ' + esc(t.label) + " (CSV)</button>";
+      // Two whole parts ("Download Insider flow:" and "Reported holdings (CSV)"):
+      // inline on a wide screen, stacked on a phone, never split mid-label.
+      var lab = String(t.label || ""), cut = lab.indexOf(": ");
+      var head = cut > 0 ? "Download " + lab.slice(0, cut + 1) : "Download", rest = (cut > 0 ? lab.slice(cut + 2) : lab) + " (CSV)";
+      return '<button class="btn btn-secondary dl-csv" data-i="' + i + '"><span>' + esc(head) + "</span> <span>" + esc(rest) + "</span></button>";
     }).join("");
     var included = [];
     if (sources.length) included.push(sources.length + " cited sources");

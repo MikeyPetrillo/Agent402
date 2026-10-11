@@ -3278,7 +3278,7 @@ jobs:
       - name: Chain page layout stability (no chain's page geometry shifts based on how long its name is)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-chain-page-layout-stability.js
 
-      - name: Title clamp coverage (tool/skill page titles never wrap unboundedly based on name length)
+      - name: Title coverage (tool, skill, doc and guide H1s wrap balanced, never clipped)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-title-clamp-coverage.js
 
       - name: Reveal-on-scroll coverage (shared, site-wide - not a per-page opt-in that only ever reached the homepage)
@@ -3879,8 +3879,11 @@ jobs:
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-text-contrast.js
       # Wrap quality, measured: line boxes read back in Chromium at 1440 and 400 px; a
       # last line under 30% or under 3 words, a label split over two lines, a link
-      # row ending on one stray link, or text past the viewport fails (DESIGN.md "Wrap").
-      - name: Wrap quality (rendered line boxes, 1440 + 400 px)
+      # row ending on one stray link, a code name split mid-word, or text past the
+      # viewport fails (DESIGN.md "Wrap"). Every hand-written page in the sitemap and
+      # every wiki page; each generated family is a fixed sample of 25 (WRAP_ALL=1
+      # runs all of them by hand).
+      - name: Wrap quality (rendered line boxes, 1440 + 400 px, sitemap + wiki, families sampled)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-wrap-quality.js
 
   test-sweeps2:

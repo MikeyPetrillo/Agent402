@@ -68,6 +68,8 @@ export function marketsPage(baseUrl, catalog) {
 
   const extraCss = `
 .mk-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+/* A group whose count leaves one card alone on a row of three takes four across instead. */
+.mk-grid.mk-4{grid-template-columns:repeat(auto-fill,minmax(240px,1fr))}
 .mk-card{display:block;background:var(--card);border:1px solid var(--hairline);padding:16px 18px;text-decoration:none;color:var(--ink)}
 .mk-card:hover{border-color:var(--accent)}
 .mk-card .mk-name{font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;margin:0 0 6px;display:flex;justify-content:space-between;gap:10px}
@@ -97,7 +99,7 @@ export function marketsPage(baseUrl, catalog) {
     <h2 style="font-weight:700;font-size:var(--fs-2xl);line-height:1.1;letter-spacing:-.02em;margin:0;color:var(--ink);">${esc(g.h)}</h2>
     <p style="font-size:var(--fs-base);color:var(--muted);margin:0;">${esc(g.p)}</p>
   </div>
-  <div class="mk-grid">${cardsHtml(g)}</div>
+  <div class="mk-grid${g.slugs.filter((x) => bySlug.has(x)).length % 3 === 1 ? " mk-4" : ""}">${cardsHtml(g)}</div>
 </section>`).join("");
 
   const body = `
