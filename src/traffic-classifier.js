@@ -23,6 +23,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync,
 import { basename, join } from "node:path";
 import { railOf } from "./payment-rail.js";
 import { importOnce, records, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady, withStateTx } from "./state-db.js";
+import { retryingLoad } from "./store-retry.js";
 
 // Counts in a rollup that are a size or a high-water mark, not a sum: two
 // containers' values merge by the larger one. Every other number adds.
@@ -225,11 +226,21 @@ export function createTrafficStore(opts = {}) {
    * promise (registered with the server's boot ordering) and fills memory
    * when it resolves. Both prune first.
    */
+  // A failed first load (the one-time import included) is retried until it
+  // lands (src/store-retry.js), never "started cold": a cold store's first
+  // persist would write rollups that lack the files' counts, and the import
+  // that never finished would then find its rows taken. Until it lands the
+  // store is listed as unloaded and persists wait for it (they stay dirty).
+  let loader = null;
   function load(now = Date.now()) {
     prune(now);
     if (!usePg) { loadFiles(now); return; }
-    ready = trackStoreReady(loadPg(now).catch((e) => { say(`load failed: ${String(e?.message || e).slice(0, 120)}; starting cold`); }));
-    return ready;
+    if (!loader) {
+      loader = retryingLoad(`[traffic] ${basename(o.dir)} store`, () => loadPg(now), { log: say });
+      trackStoreReady(loader.eventually, `traffic store (${basename(o.dir)})`);
+      ready = loader.eventually;
+    }
+    return loader.ready().then(() => true, () => false);
   }
   // The file writes (the file backend's persist, and the database backend's
   // write-through while the volume is there so a rollback reads current files).
@@ -277,7 +288,7 @@ export function createTrafficStore(opts = {}) {
         while (pendingBodies) {
           const b = pendingBodies; pendingBodies = null;
           try {
-            await ready;
+            if (loader && !loader.isLoaded()) await loader.ready(); // throws until the first load lands: the rollup stays dirty
             const written = { days: [], payers: null };
             for (const r of b.days) {
               const snap = cloneJson(r);

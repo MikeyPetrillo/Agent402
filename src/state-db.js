@@ -22,6 +22,7 @@
 // TLS follows src/db-ssl.js: relaxed on Railway's private mesh, verified and
 // fail-closed on any public host.
 import pg from "pg";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes, createHash } from "node:crypto";
 import { dbSsl } from "./db-ssl.js";
 
@@ -897,6 +898,31 @@ export async function withStateTx(fn, { timeoutMs = 0 } = {}) {
   }
 }
 
+// ---- one-time imports share a few slots ----------------------------------------
+// A first boot with the database on imports every store's file at once, and a
+// large import holds its pooled connection for as long as it takes to send.
+// Unbounded, the imports took every connection and the reads queued behind
+// them (other stores' loads, the first buyer calls) timed out waiting for one.
+// Imports therefore run STATE_DB_IMPORT_CONCURRENCY (default 2) at a time,
+// which leaves the rest of the pool to serving. Waiting for a slot holds no
+// connection, so it is not bounded by the connect timeout. A slot holder that
+// starts another import (nested) runs it inside its own slot.
+const importSlotScope = new AsyncLocalStorage();
+let importSlotsBusy = 0;
+const importSlotWaiters = [];
+const importSlots = () => Math.max(1, Math.floor(Number(process.env.STATE_DB_IMPORT_CONCURRENCY) || 2));
+/** Run `fn` holding one of the import slots (see above). */
+export async function withImportSlot(fn) {
+  if (importSlotScope.getStore()) return fn();
+  if (importSlotsBusy >= importSlots()) await new Promise((r) => importSlotWaiters.push(r));
+  else importSlotsBusy++;
+  try { return await importSlotScope.run(true, fn); }
+  finally {
+    const next = importSlotWaiters.shift();
+    if (next) next(); else importSlotsBusy--;
+  }
+}
+
 /**
  * Run an import exactly once per name (the imports table remembers it):
  * `run()` is called when no mark exists and the mark is written after it
@@ -907,9 +933,11 @@ export async function withStateTx(fn, { timeoutMs = 0 } = {}) {
 export async function importOnce(name, { source = "", run }) {
   if (typeof run !== "function") throw new Error("importOnce needs run()");
   if (await imports.done(name)) return { imported: false };
-  const out = await run();
-  await imports.mark(name, { source, bytes: Number(out?.bytes) || 0 });
-  return { imported: true, ...(out && typeof out === "object" ? out : {}) };
+  return withImportSlot(async () => {
+    const out = await run();
+    await imports.mark(name, { source, bytes: Number(out?.bytes) || 0 });
+    return { imported: true, ...(out && typeof out === "object" ? out : {}) };
+  });
 }
 
 /**

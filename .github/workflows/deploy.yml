@@ -1280,6 +1280,8 @@ jobs:
           t node scripts/test-crawl-kit.js
           # Memory v2 unit tests (grants, counters, audit chain, recall)
           t node scripts/test-memory.js
+          # The local embedding's token hash: unchanged for strings, string-coerced and bounded.
+          t node scripts/test-memory-fnv1a.js
           # Security regressions (proto-pollution, input-DoS, 500-hardening)
           t node scripts/test-security.js
 
@@ -1370,6 +1372,11 @@ jobs:
           t node scripts/test-store-boot-blip-pg.js
           t node scripts/test-store-retry-recovery-pg.js
           t node scripts/test-json-document-outage-pg.js
+          # An import that timed out is a failed load (retried), never an empty store.
+          t node scripts/test-json-document-import-fail-pg.js
+          t node scripts/test-store-import-fail-pg.js
+          # A first boot's imports share two slots: no connect timeouts, serving reads not starved.
+          t node scripts/test-state-db-import-congestion-pg.js
           t node scripts/test-store-ddl-race-pg.js
           t node scripts/test-store-write-retry-pg.js
           t node scripts/test-stats-ack-loss-pg.js
@@ -2378,6 +2385,8 @@ jobs:
           t node scripts/test-path-scoped-sellers.js
           # re-registration re-check: per-origin window + hourly route allowance
           t node scripts/test-register-recheck-cooldown.js
+          # A registration answers by its deadline (202 pending) and stops starting probes past it.
+          t node scripts/test-index-register-deadline.js
           # Settlement-derived proven-ness + discovery-gap honesty
           t node scripts/test-settlement-proof.js
           # "A venue with many payees is not one seller (multi-payTo index — offline)"

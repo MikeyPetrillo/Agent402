@@ -5386,7 +5386,7 @@ app.post("/__operator/index/seed", express.json({ limit: "64kb" }), async (req, 
     for (let o = unique[i++]; o; o = unique[i++]) {
       try {
         const r = await registerOrigin(o);
-        rows.push({ origin: o, listed: !!r?.listed, ...(r?.error ? { error: String(r.error).slice(0, 200) } : {}) });
+        rows.push({ origin: o, listed: !!r?.listed, ...(r?.pending ? { pending: true } : {}), ...(r?.error ? { error: String(r.error).slice(0, 200) } : {}) });
       } catch (e) {
         rows.push({ origin: o, listed: false, error: String(e?.message || e).slice(0, 200) });
       }
@@ -7102,6 +7102,9 @@ app.post("/api/index/register", async (req, res) => {
     if (mi >= 0) mine.splice(mi, 1);
     return res.status(503).set("Retry-After", "30").json(result);
   }
+  // Verification outlasted the registration's deadline: answered now (202),
+  // and the listing completes in the background (registerOrigin).
+  if (result?.pending) return res.status(202).set("Retry-After", String(result.retryAfterSeconds || 60)).json(result);
   // A re-registration that landed inside both of the origin's windows fetched
   // nothing, so it gives back its slot in the GLOBAL budget: repeated calls
   // about one known origin must not use up the hour for new sellers. (The
