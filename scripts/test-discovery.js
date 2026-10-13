@@ -2,7 +2,7 @@
 // /api/reliability). These are what make an agent PICK this seller, so the
 // contract — required fields present, links well-formed, counts coherent —
 // must not silently regress. Offline, no server, no secrets.
-import { serviceManifest, reliabilityReport } from "../src/discovery.js";
+import { serviceManifest, reliabilityReport, settlementFacilitatorsPublic } from "../src/discovery.js";
 
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
 const ok = (c, m) => { if (!c) fail(m); };
@@ -94,6 +94,20 @@ ok(/Base, Polygon/.test(m.ecosystem.note) && !/Solana|Stellar|Robinhood/.test(m.
 {
   const prose = JSON.stringify({ d: m.discovery, t: m.trust, mcp: m.mcp });
   for (const name of ["Coinbase", "CDP", "Cloudflare", "GitHub", "ChatGPT", "Copilot"]) ok(!prose.includes(name), `manifest prose does not name ${name}`);
+}
+
+// The settlement block carries role words, never a facilitator label: a label
+// is configuration (a vendor, or the hostname of a facilitator this deployment
+// runs), and the manifest is public.
+{
+  const labels = { "eip155:8453": "Zzvendor", "stellar:pubnet": "https://zz-facilitator.up.railway.app", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": "#2" };
+  const b = settlementFacilitatorsPublic(labels);
+  const text = JSON.stringify(b);
+  ok(b.settlementFacilitators && b.settlementFacilitators.count === 3, `settlementFacilitators counts the networks with a facilitator (got ${b.settlementFacilitators?.count})`);
+  ok(Object.values(b.settlementFacilitators.byNetwork).every((v) => v === "primary"), "byNetwork carries the role word only");
+  ok(!/Zzvendor|zz-facilitator|railway|#2/.test(text), "no facilitator label, hostname or index reaches the block");
+  ok(/primary/.test(b.settlementFacilitators.note) && /fallback/.test(b.settlementFacilitators.note), "the note explains the roles");
+  ok(JSON.stringify(settlementFacilitatorsPublic({})) === "{}" && JSON.stringify(settlementFacilitatorsPublic(null)) === "{}", "no probe yet: no block, never a fabricated one");
 }
 
 // Sepolia + no-wallet edge cases must not throw or fabricate proof links.

@@ -75,8 +75,8 @@ async function main() {
   const usdce = await erc20(USDCE), pathusd = await erc20(PATHUSD);
   if (usdce === null && pathusd === null) { console.error("REFUSING to run: Tempo balance unreadable (RPC) - cannot apply the balance floor"); process.exit(2); }
   const spendable = (usdce ?? 0) + (pathusd ?? 0);
-  console.log(`mpp-probe: ${MAX_BUYS} route(s) over tempo/charge | burner ${spendable >= 10 ? ">=$10" : spendable >= MIN_BALANCE_USD ? `>=$${MIN_BALANCE_USD}` : `<$${MIN_BALANCE_USD}`}`);
-  if (spendable < MIN_BALANCE_USD) { console.error(`REFUSING to run: burner under MPP_PROBE_MIN_BALANCE_USD $${MIN_BALANCE_USD} on Tempo - top up before the next run`); process.exit(2); }
+  console.log(`mpp-probe: ${MAX_BUYS} route(s) over tempo/charge | burner ${spendable >= MIN_BALANCE_USD ? "above the floor" : "below the floor"}`);
+  if (spendable < MIN_BALANCE_USD) { console.error("REFUSING to run: burner below its floor (MPP_PROBE_MIN_BALANCE_USD) on Tempo - top up before the next run"); process.exit(2); }
 
   const [{ Mppx, tempo }, { Challenge, Receipt }] = await Promise.all([import("mppx/client"), import("mppx")]);
   const client = Mppx.create({ methods: [tempo.charge({ account, autoSwap: true })], polyfill: false });

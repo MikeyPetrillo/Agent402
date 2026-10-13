@@ -21,8 +21,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 async function testSigterm() {
   const port = 3400 + (process.pid % 500);
   const child = spawn(process.execPath, ["src/server.js"], {
-    // No lame duck: the service is volume-backed, so Railway cannot start the
-    // replacement until this process exits (see the shutdown comment in
+    // No lame duck: deploys overlap, so the replacement is already serving
+    // new calls when SIGTERM lands (see the shutdown comment in
     // src/server.js). SIGTERM closes the listener at once and drains; the
     // in-flight half of that contract is test-drain-on-sigterm.js.
     env: { ...process.env, FREE_MODE: "true", PORT: String(port) },

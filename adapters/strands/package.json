@@ -1,6 +1,6 @@
 {
   "name": "agent402-strands",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Drop-in Strands Agents tools for Agent402.Tools (the applied layer of Agentic Finance): turn tools from its catalog of 500+ pay-per-call tools and skill packs (x402 or MPP) into Strands tool() instances, one per catalog tool, with payment handled by agent402-client. Free via proof-of-work for the pure-CPU tools, or pay per call in USDC on 11 chains or USDG on Robinhood Chain.",
   "type": "module",
   "main": "index.js",

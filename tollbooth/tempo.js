@@ -248,7 +248,7 @@ export function tempoProblem(kind, detail) {
 }
 
 // ---------------------------------------------------------------------------
-// Chain-truth confirm on broadcast failure (2026-08-20) — the relay's verdict
+// Chain-truth confirm on broadcast failure (2026-08-20), the relay's verdict
 // and the chain's truth can diverge: a buyer whose packed signature ends with
 // a yParity-style v byte (0x00/0x01) gets normalized to 27/28 by the Tempo
 // node, so the canonical txid stops matching keccak(submitted bytes) and the
@@ -256,9 +256,9 @@ export function tempoProblem(kind, detail) {
 // that SETTLED (measured live: two double charges in one buy attempt).
 // Before answering 402, ask the chain whether this credential's OWN
 // transaction landed. The txid commits to the signed bytes, so the candidates
-// are exact — the submitted form and its v-swapped twin — never a time-window
+// are exact, the submitted form and its v-swapped twin, never a time-window
 // or payer heuristic. Fails closed on every uncertainty. Dependency-free like
-// the rest of this file: keccak-256 is implemented below (BigInt lanes — it
+// the rest of this file: keccak-256 is implemented below (BigInt lanes, it
 // runs at most once per FAILED broadcast, so speed is irrelevant) and pinned
 // against standard vectors plus the live incident transaction in the tests.
 // ---------------------------------------------------------------------------
@@ -290,7 +290,7 @@ function keccakF(A) {
 }
 
 /** keccak-256 of a Buffer, as a 0x hex string. Original Keccak padding
- *  (0x01 … 0x80), NOT SHA-3's 0x06 — Ethereum txids use the former. */
+ *  (0x01 … 0x80), NOT SHA-3's 0x06, Ethereum txids use the former. */
 export function keccak256Hex(buf) {
   const rate = 136;
   const padded = Buffer.alloc(Math.ceil((buf.length + 1) / rate) * rate);
@@ -309,7 +309,7 @@ export function keccak256Hex(buf) {
 
 /** The txids this signed Tempo transaction could have landed under: the
  *  submitted bytes, plus (when the envelope verifiably ends with the 65-byte
- *  packed signature — RLP string header 0xb841 at the right offset) the
+ *  packed signature, RLP string header 0xb841 at the right offset) the
  *  v-swapped twin: yParity (0/1) <-> legacy (27/28). */
 export function candidateTxIds(signedTx) {
   const hex = String(signedTx || "").toLowerCase();

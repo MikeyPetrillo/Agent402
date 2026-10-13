@@ -330,6 +330,25 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
  * verify it independently. Liveness facts come from the live stats object; the
  * guarantees are operational facts about how the service is built and watched.
  */
+/**
+ * The settlement block of the manifest: which networks have a settlement
+ * facilitator, in role words. The input maps network -> the label of the
+ * facilitator tried first (from the boot /supported probes); the labels are
+ * configuration (a vendor, or the hostname of a facilitator this deployment
+ * runs) and never leave the process. Empty until the probe has run.
+ */
+export function settlementFacilitatorsPublic(firstTriedByNetwork) {
+  const networks = Object.keys(firstTriedByNetwork || {}).filter(Boolean).sort();
+  if (!networks.length) return {};
+  return {
+    settlementFacilitators: {
+      note: "each network settles at its primary facilitator, chosen from the live /supported probes at boot; a network's other configured candidates are fallbacks",
+      count: networks.length,
+      byNetwork: Object.fromEntries(networks.map((n) => [n, "primary"])),
+    },
+  };
+}
+
 export function reliabilityReport({ baseUrl, network, wallet, stats, observedStatus = null, meteredSkip = null }) {
   // Exact count of priced routes the catalog sweeps skip as metered, derived
   // from src/metered-slugs.js (the list the sweeps read) over the live catalog.

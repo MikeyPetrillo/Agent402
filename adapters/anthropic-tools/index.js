@@ -1,4 +1,4 @@
-// agent402-anthropic-tools — drop-in Anthropic tool-use tools for Agent402.
+// agent402-anthropic-tools: drop-in Anthropic tool-use tools for Agent402.
 //
 // Turn the Agent402 catalog (500+ pay-per-call web tools) into Claude tool
 // definitions the model can invoke, with payment handled for you under the
@@ -30,7 +30,7 @@ const sanitizeName = (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 6
 /**
  * Fetch the Agent402 catalog and return:
  *   - `tools`:    Anthropic tool definitions (array of { name, description, input_schema })
- *   - `execute`:  async (name, input) => result — pays under the hood
+ *   - `execute`:  async (name, input) => result, pays under the hood
  *   - `client`:   the underlying Agent402 client (use for find()/clearCache())
  *
  * @param {object} [opts]

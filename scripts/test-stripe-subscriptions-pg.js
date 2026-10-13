@@ -16,7 +16,8 @@ import { startPgRelay } from "./lib/pg-relay.js";
 import { journalHolds } from "./lib/journal-probe.js";
 
 requireTestPg({ label: "test-stripe-subscriptions-pg" });
-const relay = await startPgRelay(process.env.STATE_DATABASE_URL);
+const realUrl = process.env.STATE_DATABASE_URL;
+const relay = await startPgRelay(realUrl);
 process.env.STATE_DATABASE_URL = relay.url;
 process.env.STATE_DB_CONNECT_TIMEOUT_MS = "1500";
 process.env.SUBSCRIPTIONS_REPLAY_MS = "200";
@@ -110,10 +111,16 @@ try {
   // A replayed record never overwrites a newer copy.
   relay.cut();
   await A2.recordFromSession("cs_four"); // kept on disk, status active
+  // Before the replay can land (this container still cut off), another
+  // container cancels it (newer): written straight to the database, so no
+  // replay tick here can land the stale copy first.
+  const direct = new (await import("pg")).default.Client({ connectionString: realUrl });
+  await direct.connect();
+  try {
+    await direct.query(`UPDATE ${sdb.stateDbSchema()}.documents SET body = jsonb_set(body, '{sub_cs_four}', $2::jsonb, true), version = version + 1 WHERE name = $1`, [docName, JSON.stringify({ subId: "sub_cs_four", status: "canceled", product: "domain-monitor", target: "example.com", updatedAt: new Date(Date.now() + 60_000).toISOString() })]);
+  } finally { await direct.end(); }
   relay.heal();
-  // Before the replay lands, another container cancels it (newer).
-  await sdb.stateQuery(`UPDATE ${sdb.stateDbSchema()}.documents SET body = jsonb_set(body, '{sub_cs_four}', $2::jsonb, true), version = version + 1 WHERE name = $1`, [docName, JSON.stringify({ subId: "sub_cs_four", status: "canceled", product: "domain-monitor", target: "example.com", updatedAt: new Date(Date.now() + 60_000).toISOString() })]);
-  await A2.replayPending();
+  await A2.replayPending(); // joins the timer tick if one is already draining
   const r4 = (await sdb.stateQuery(`SELECT body -> 'sub_cs_four' AS r FROM ${sdb.stateDbSchema()}.documents WHERE name = $1`, [docName])).rows[0]?.r;
   ok(r4?.status === "canceled", `a replay does not overwrite a newer record (${r4?.status})`);
   ok(A2.get("sub_cs_four")?.status === "canceled", "...and this container takes the newer one");

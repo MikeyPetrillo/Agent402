@@ -69,11 +69,45 @@ for (const k of ["xDataSpend", "exaSpend", "exaAllowance", "upstreamBudgets"]) {
 // Heartbeat reads only .status, so bucketing must not break paging.
 ok(typeof pubBody?.upstreamBudgets?.status === "string", "upstreamBudgets keeps the top-level status the heartbeat reads");
 
-// --- per-vendor ceilings must not leak one at a time -----------------------
-const ups = pubBody?.upstreamBudgets?.upstreams || {};
-ok(Object.keys(ups).length > 0, "per-vendor rows are still present publicly (so a reader can see WHICH vendor is elevated)");
-ok(Object.values(ups).every((v) => Object.keys(v).join(",") === "status"),
-  "...but each carries the status word ONLY - never callsToday, never the budget");
+// --- the budget group is ONE word publicly ----------------------------------
+// The per-upstream rows name the upstreams and carry their daily ceilings;
+// together they are a map of where to push, so they stay on the operator view.
+ok(Object.keys(pubBody?.upstreamBudgets || {}).join(",") === "status", `upstreamBudgets publishes its word only (${JSON.stringify(pubBody?.upstreamBudgets)})`);
+ok(Object.keys(opBody?.upstreamBudgets?.upstreams || {}).length > 0 && Object.values(opBody.upstreamBudgets.upstreams).every((v) => typeof v.callsToday === "number"),
+  "the OPERATOR view keeps the per-upstream rows with their counts");
+for (const k of ["exaAllowance", "exaSpend", "xDataSpend", "jevSpend"]) {
+  ok(!("note" in (pubBody?.[k] || {})) && !("reason" in (pubBody?.[k] || {})), `${k} publishes no note or reason text (written for the operator, names the upstream)`);
+}
+
+// --- no upstream name and no money-shaped field anywhere on the public view --
+// The names list is hashed (scripts/data/vendor-name-hashes.json): a key or a
+// string value on the public response that names an upstream is a finding, as
+// is any field named for a cost or a dollar amount, whatever its value.
+{
+  const { loadVendorData, vendorHits } = await import("./lib/vendor-names.js");
+  const { vendors } = loadVendorData();
+  // `upstreamCosts` is the status word of the private cost TABLE (loaded,
+  // partial, missing): the heartbeat pages on it and it carries no amount.
+  const MONEY_NAMED_BY_DESIGN = new Set(["upstreamCosts"]);
+  const named = [], money = [];
+  (function walk(o, path) {
+    if (o && typeof o === "object") {
+      for (const [k, v] of Object.entries(o)) {
+        const p = path ? `${path}.${k}` : k;
+        if (vendorHits(p, "key", k, vendors).length) named.push(p);
+        if (/cost|usd|dollar/i.test(k) && !MONEY_NAMED_BY_DESIGN.has(p)) money.push(p);
+        walk(v, p);
+      }
+    } else if (typeof o === "string" && vendorHits(path, "value", o, vendors).length) named.push(`${path}="${o.slice(0, 40)}"`);
+  })(pubBody, "");
+  ok(vendorHits("x", "key", "databento", vendors).length === 1, "control: the vendor list is read and catches a known upstream name");
+  ok(named.length === 0, `no key or string on the PUBLIC response names an upstream${named.length ? `: ${named.join(", ")}` : ""}`);
+  ok(money.length === 0, `no field on the PUBLIC response is named for a cost or a dollar amount${money.length ? `: ${money.join(", ")}` : ""}`);
+  ok(Object.keys(pubBody?.upstreamCosts || {}).join(",") === "status", "upstreamCosts is the table's status word and nothing else");
+  const opNamed = [];
+  (function walk(o, path) { if (o && typeof o === "object") for (const [k, v] of Object.entries(o)) { const p = path ? `${path}.${k}` : k; if (vendorHits(p, "key", k, vendors).length) opNamed.push(p); walk(v, p); } })(opBody, "");
+  ok(opNamed.length > 0, `the same sweep names ${opNamed.length} upstream key(s) on the OPERATOR response (sanity: it is not blind)`);
+}
 
 // --- an operator read must not land in a shared cache ----------------------
 ok(/no-store/.test(opRes.headers.get("cache-control") || ""), "an operator-authed read is private, no-store");

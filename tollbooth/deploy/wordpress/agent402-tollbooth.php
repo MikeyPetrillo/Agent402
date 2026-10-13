@@ -19,11 +19,11 @@
  * dashboard.
  *
  * Free rail (proof-of-work) and paid rail (USDC via x402) require an
- * external verifier — pure PHP can't reuse the JS HMAC/replay store. Set
+ * external verifier, pure PHP can't reuse the JS HMAC/replay store. Set
  * "Verifier URL" in the settings page to point at the Cloudflare Worker
  * template at tollbooth/deploy/cloudflare; the plugin then forwards
  * candidate headers and trusts the verifier's pass/fail. Until you
- * configure that, the gate runs as a pure observe-or-block — which is
+ * configure that, the gate runs as a pure observe-or-block, which is
  * still the right starting point per the recommended rollout.
  */
 
@@ -65,7 +65,7 @@ class Agent402_Tollbooth {
         register_activation_hook(__FILE__, [__CLASS__, 'on_activate']);
         register_deactivation_hook(__FILE__, [__CLASS__, 'on_deactivate']);
 
-        // Hook the gate as early as possible — before WP routes are dispatched
+        // Hook the gate as early as possible, before WP routes are dispatched
         // and (importantly) before any heavy plugin bootstraps. We can't go
         // earlier than 'init' without forfeiting access to wp_remote_post.
         add_action('init', [__CLASS__, 'gate'], 0);
@@ -110,12 +110,12 @@ class Agent402_Tollbooth {
         update_option(self::STATS_KEY, $s, false);
     }
 
-    /** Mirrors tollbooth/index.js looksHuman() — browser UA + HTML Accept. */
+    /** Mirrors tollbooth/index.js looksHuman(): browser UA + HTML Accept. */
     private static function looks_human($ua, $accept) {
         return preg_match('#mozilla/5\.0#i', $ua) && stripos($accept, 'text/html') !== false;
     }
 
-    /** Mirrors tollbooth/bots.js makeBotMatcher() — case-insensitive substring. */
+    /** Mirrors tollbooth/bots.js makeBotMatcher(): case-insensitive substring. */
     private static function is_known_bot($ua) {
         if (!$ua) return false;
         $needle = strtolower($ua);
@@ -160,7 +160,7 @@ class Agent402_Tollbooth {
         }
 
         // Observe-only: classify, count, never 402. Run for 7-14 days before
-        // flipping enforcement on — same recommendation as the Node version.
+        // flipping enforcement on, same recommendation as the Node version.
         if ($mode === 'observe') {
             self::bump('wouldCharge');
             header('X-Tollbooth-Observed: would-charge');
@@ -344,10 +344,10 @@ class Agent402_Tollbooth {
                 <th><label for="att-mode">Mode</label></th>
                 <td>
                   <select id="att-mode" name="<?php echo esc_attr(self::OPT_KEY); ?>[mode]">
-                    <option value="observe" <?php selected($opts['mode'],'observe'); ?>>observe — classify only, never 402 (recommended first)</option>
-                    <option value="bots"    <?php selected($opts['mode'],'bots');    ?>>bots — charge known AI crawler UAs</option>
-                    <option value="all"     <?php selected($opts['mode'],'all');     ?>>all — charge everything except an explicit allow</option>
-                    <option value="strict"  <?php selected($opts['mode'],'strict');  ?>>strict — charge anything that doesn't look like a real browser</option>
+                    <option value="observe" <?php selected($opts['mode'],'observe'); ?>>observe: classify only, never 402 (recommended first)</option>
+                    <option value="bots"    <?php selected($opts['mode'],'bots');    ?>>bots: charge known AI crawler UAs</option>
+                    <option value="all"     <?php selected($opts['mode'],'all');     ?>>all: charge everything except an explicit allow</option>
+                    <option value="strict"  <?php selected($opts['mode'],'strict');  ?>>strict: charge anything that doesn't look like a real browser</option>
                   </select>
                   <p class="description">Run <code>observe</code> for 7-14 days. Watch the stats fill in. Flip to <code>bots</code> when the numbers look right.</p>
                 </td>
@@ -356,7 +356,7 @@ class Agent402_Tollbooth {
                 <th><label for="att-pay-to">USDC wallet (Base)</label></th>
                 <td>
                   <input type="text" id="att-pay-to" class="regular-text code" name="<?php echo esc_attr(self::OPT_KEY); ?>[pay_to]" value="<?php echo esc_attr($opts['pay_to']); ?>" placeholder="0x…">
-                  <p class="description">Your own wallet. Settled funds go direct from the bot to this address — Agent402 never touches the money.</p>
+                  <p class="description">Your own wallet. Settled funds go direct from the bot to this address; Agent402 never touches the money.</p>
                 </td>
               </tr>
               <tr>
@@ -381,7 +381,7 @@ class Agent402_Tollbooth {
                 <td>
                   <input type="url" id="att-verifier" class="regular-text code" name="<?php echo esc_attr(self::OPT_KEY); ?>[verifier_url]" value="<?php echo esc_attr($opts['verifier_url']); ?>" placeholder="https://tollbooth.your-domain.com/verify">
                   <p class="description">
-                    Optional. Point at a deployed <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare" target="_blank" rel="noopener">Cloudflare Worker</a> (or any HTTP service) that knows how to verify proof-of-work tokens and x402 settlements. Without it the plugin runs as a pure observe-or-block gate — fine for AI-training-deterrent use, but the free PoW rail and the paid USDC rail need this.
+                    Optional. Point at a deployed <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare" target="_blank" rel="noopener">Cloudflare Worker</a> (or any HTTP service) that knows how to verify proof-of-work tokens and x402 settlements. Without it the plugin runs as a pure observe-or-block gate, fine for AI-training-deterrent use, but the free PoW rail and the paid USDC rail need this.
                   </p>
                 </td>
               </tr>

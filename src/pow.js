@@ -292,16 +292,12 @@ export const WALLET_ONLY_SLUGS = new Set([
   "x402-quote", "usdc-balance", "tx-status", "gas-estimate", "x402-verify", "transfer-authorization", "ens-resolve", "x402-audit",
   "route-execute-max", // external tier can spend upstream — wallet-only
   "route-execute-plus", // same reasoning: proportional middle tier, spends upstream
-  // route-execute-pro (underlyingMaxUsd $3.00, the highest tier) was added
-  // 2026-08-07 and missed this list entirely - live PoW-eligible for days.
-  // Free tier has NO per-caller spend cap: external-spend-guard.js's
-  // maySpend() explicitly returns ok:true, uncapped, whenever the payer is
-  // unattributable (exactly every free/PoW call, since there is no signed
-  // EIP-3009 authorization to attribute to). A caller could solve a cheap PoW
-  // puzzle, call this for free, and direct up to $3.00 of OUR upstream
-  // spending wallet to a seller of their choosing - including one they
-  // control - repeated with no cumulative limit. Found 2026-08-11 auditing
-  // the free tier; fixed the same day found.
+  // route-execute-pro is the highest external tier and must never be
+  // PoW-eligible: the free tier has no per-caller spend cap, because
+  // external-spend-guard.js's maySpend() returns ok:true, uncapped, whenever
+  // the payer is unattributable, and every free/PoW call is unattributable
+  // (there is no signed EIP-3009 authorization to attribute to). Listed here,
+  // a PoW solution can direct nothing from the upstream spending wallet.
   "route-execute-pro",
   // x402-trending is the PAID ecosystem-analysis layer (momentum + organic-buyer
   // grade + week-over-week growth); the raw seller ranking stays free at

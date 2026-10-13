@@ -1192,8 +1192,8 @@ jobs:
           --health-timeout 3s
           --health-retries 20
       # A REAL Postgres for the state-database suites (src/state-db.js): the
-      # stores that left the /data volume. Each suite makes and drops its own
-      # schema. Under CI a missing database FAILS those suites (scripts/lib/test-pg.js).
+      # documents, records, ledgers and leases the server keeps there. Each
+      # suite makes and drops its own schema. Under CI a missing database FAILS those suites (scripts/lib/test-pg.js).
       postgres:
         image: postgres:16-alpine
         env:
@@ -1495,7 +1495,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (5 scripts, one process each)
+      - name: Offline suites (6 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1503,6 +1503,8 @@ jobs:
           t node scripts/test-composite-guard.js
           t node scripts/test-run-time-note.js
           t node scripts/test-async-jobs.js
+          # One payment_settled per settlement, from the one place a settlement becomes final: direct, async-replayed, hang-up (settled, owed), none for a 4xx or a refused payment (paid-mode boot vs stub facilitator - offline)
+          t node scripts/test-settlement-event.js
           # x402-market-pulse supply-mix per-seller tool cap
           t node scripts/test-ecosystem-supply.js
           # "Cache hygiene (M5 — Attack III: paid responses no-store, free discovery stays cacheable)"
@@ -2167,7 +2169,7 @@ jobs:
           t node scripts/test-openapi-header-params.js
           # Process lifecycle (A402-10 SIGTERM drains + exits 0; uncaught exception is fatal + exits non-zero — spawns child)
           t node scripts/test-shutdown.js
-          # SIGTERM closes the listener at once and drains in-flight (volume-backed service, nothing to overlap with; deadline fits the Railway grace)
+          # SIGTERM closes the listener at once and drains in-flight (the replacement is already serving when the signal lands; deadline fits the Railway grace)
           t node scripts/test-drain-on-sigterm.js
           t node scripts/test-db-status.js
           t node scripts/test-db-init-retry.js
@@ -2284,11 +2286,11 @@ jobs:
           t node scripts/test-edgar-kit.js
           # Form 13F data sets: index parser + bounded Range reads of a real in-memory zip (offline)
           t node scripts/test-edgar-13f-datasets.js
-          # Deploy quiet gate (outside-traffic lull incl. free/MCP calls, visibility, fail-open paths; offline)
+          # Deploy quiet gate (outside-traffic lull incl. free/MCP calls, visibility, the ledgerDeadLetter hold, fail-open paths per check; offline)
           t node scripts/test-quiet-gate.js
           # Self-check policy (transient-filtering, timeout, unknown-slug — the prod tool-failure alarm — offline)
           t node scripts/test-selfcheck.js
-          # /robots.txt policy (every LLM bot explicitly allowed + /api/memory disallowed + sitemap)
+          # /robots.txt policy (every LLM bot explicitly allowed, /api/ closed except the documented surfaces, sitemap URLs all allowed)
           t node scripts/test-robots-policy.js
           # /api/find envelope + top-1 ranking lock (per-row shape + known queries → known top slugs)
           t node scripts/test-find-envelope.js
@@ -2425,6 +2427,8 @@ jobs:
           t node scripts/test-index-register.js
           # Path-scoped sellers: an app under a prefix on a shared host (offline, crawl seam)
           t node scripts/test-path-scoped-sellers.js
+          # Live probes go to the origin a seller's manifest is served from; a same-host https upgrade is re-asked once (offline, loopback)
+          t node scripts/test-index-probe-redirect.js
           # re-registration re-check: per-origin window + hourly route allowance
           t node scripts/test-register-recheck-cooldown.js
           # A registration answers by its deadline (202 pending) and stops starting probes past it.
@@ -2562,6 +2566,10 @@ jobs:
           # CI lane gating (every test lane blocks deploy/publish; Chromium only where a script needs it — offline)
           t node scripts/test-ci-gating.js
           t node scripts/test-port-hygiene.js
+          # No em dash in a shipped package file or a workflow issue body (read from each package's files allowlist - offline)
+          t node scripts/test-no-em-dash-shipped.js
+          # A public issue body carries reasons and ids, never a dollar figure (workflow bodies + the quoted runner log lines - offline)
+          t node scripts/test-public-issue-figures.js
           # Dev-branch sync moves the branch only when merging it would change nothing on main (throwaway git repos - offline)
           t node scripts/test-sync-dev-branch.js
           # Free tier is an allowlist: a tool on no list is wallet-only by default (offline)
@@ -2688,7 +2696,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (85 scripts, one process each)
+      - name: Offline suites (86 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2846,6 +2854,8 @@ jobs:
           t node scripts/test-refund-backfill.js
           # Upstream-spend meter records with PostHog OFF and in exact micro-dollars (offline)
           t node scripts/test-upstream-spend.js
+          # Every model-backed kit outside the chat tiers (speech, STT, image, embeddings, judge, Exa, X) meters its per-call upstream spend from the private table (fake table, stubbed upstreams - offline)
+          t node scripts/test-upstream-spend-meter.js
           # Analytics redaction (per-tool table never reaches an unauthenticated caller - seeded, DB not required)
           t node scripts/test-analytics-redaction.js
           # Reveal-on-scroll no hero flash (the hero must never hide behind opacity:0 waiting on the observer)
@@ -2864,6 +2874,8 @@ jobs:
           t node scripts/test-price-premium.js
           # Canary underfunded classification (empty burner is funding, never an outage — offline)
           t node scripts/test-canary-underfunded.js
+          # Catalog buy (every tool bought at list price: grade, cap, rotation slice, funding preflight, exit codes - stub server + fake payer, offline)
+          t node scripts/test-catalog-buy.js
           # Payer identity (reads X-PAYMENT + legacy header; rejects unsigned/invalid — money-path regression lock — offline)
           t node scripts/test-payer.js
           # Payment rail scoping (A402-03 identity routes EVM-only; every other tool keeps all chains — offline)
@@ -2920,7 +2932,7 @@ jobs:
           t node scripts/test-db-ssl.js
           # Bounded rate-limit maps + global window ceiling (F21 — stale one-time-IP keys swept, distributed flood capped — offline)
           t node scripts/test-rate-sweep.js
-          # /data volume contract — stats + memory DBs fail loud in prod when missing
+          # Local SQLite fallback contract: the stats and memory stores report persistence honestly and fail loud in prod without durable storage
           t node scripts/test-stats-persistence.js
           # Buyer SDK response-size ceiling (refused before parsing; a paid oversize says it was paid - offline)
           t node scripts/test-client-response-cap.js
@@ -5705,34 +5717,6 @@ jobs:
           echo "service_id=$SERVICE_ID" >> "$GITHUB_OUTPUT"
           echo "Service: $SERVICE_ID"
 
-      - name: Ensure a persistent volume at /data (stats + memory + pow survive redeploys)
-        run: |
-          gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
-              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
-              --data @-
-          }
-          PROJECT_ID='${{ steps.project.outputs.project_id }}'
-          ENV_ID='${{ steps.project.outputs.env_id }}'
-          SERVICE_ID='${{ steps.service.outputs.service_id }}'
-          # Without a volume, the SQLite files (stats/memory/pow) live on the
-          # ephemeral container fs and reset on every redeploy — wiping the
-          # odometer AND agents' paid memory. Create one mounted at /data once.
-          EXISTING=$(jq -n --arg p "$PROJECT_ID" \
-            '{query:"query($p:String!){project(id:$p){volumes{edges{node{id volumeInstances{edges{node{mountPath serviceId}}}}}}}}",variables:{p:$p}}' | gql)
-          HAS_DATA=$(echo "$EXISTING" | jq -r --arg s "$SERVICE_ID" \
-            '[.data.project.volumes.edges[]?.node.volumeInstances.edges[]?.node | select(.serviceId==$s and .mountPath=="/data")] | length' 2>/dev/null || echo 0)
-          if [ "$HAS_DATA" = "0" ]; then
-            echo "No /data volume on the service — creating one…"
-            RESP=$(jq -n --arg p "$PROJECT_ID" --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
-              '{query:"mutation($p:String!,$e:String!,$s:String!){volumeCreate(input:{projectId:$p,environmentId:$e,serviceId:$s,mountPath:\"/data\"}){id}}",variables:{p:$p,e:$e,s:$s}}' | gql)
-            echo "$RESP" | jq -e '.data.volumeCreate.id' >/dev/null \
-              && echo "Created persistent volume at /data ✓ (redeploys now keep stats + memory)" \
-              || { echo "volumeCreate response:"; echo "$RESP"; echo "(if it errors that a volume already exists at this path, that's fine)"; }
-          else
-            echo "Persistent /data volume already attached ✓"
-          fi
-
       - name: Create public domain
         id: domain
         run: |
@@ -5823,7 +5807,7 @@ jobs:
       # proceed with a warning); the in-server SIGTERM drain plus the Railway
       # grace set below still protect whatever is in flight. Runs BEFORE the
       # variable upsert because that upsert can itself trigger a redeploy.
-      - name: Quiet gate - wait for a lull in outside traffic
+      - name: Quiet gate - wait for a lull in outside traffic and a clear ledger word
         env:
           TARGET_URL: https://${{ env.CUSTOM_DOMAIN || steps.domain.outputs.domain }}
           QUIET_GATE: ${{ vars.QUIET_GATE }}
@@ -5845,24 +5829,24 @@ jobs:
           # graceful drain never runs and every deploy hard-kills in-flight
           # (already paid-for) requests.
           #
-          # It is a SIGKILL backstop and nothing more. The server closes its
-          # listener on SIGTERM and exits as soon as in-flight requests finish
-          # (DRAIN_DEADLINE_MS 75s at the very worst), and this service is
-          # volume-backed, so Railway does not start the replacement until the
-          # old container has EXITED - every second the old one lingers is a
-          # second of deploy time and of outage. The 2026-08-24/25 values (240,
-          # 600, 900) were sized to a "gap" that was this very setting, and
-          # took deploys to 16 minutes. 120s clears the 75s deadline with
+          # It is a SIGKILL backstop and nothing more. Deploys overlap: Railway
+          # starts the replacement, routes new calls to it once it is healthy
+          # and keeps the old container serving for the service's overlap
+          # window, then sends SIGTERM. The server closes its listener on the
+          # signal and exits as soon as in-flight requests finish
+          # (DRAIN_DEADLINE_MS 75s at the very worst); the overlap window is
+          # the platform's setting, so a long grace here buys nothing and only
+          # keeps two containers running. 120s clears the 75s deadline with
           # margin; scripts/test-drain-on-sigterm.js enforces both bounds.
           VARS=$(jq -n --arg w "$WALLET_ADDRESS" --arg n "$NETWORK" --arg f "$FACILITATOR_URL" --arg b "$BASE" \
             '{WALLET_ADDRESS:$w, NETWORK:$n, FACILITATOR_URL:$f, BASE_URL:$b, RAILWAY_DEPLOYMENT_DRAINING_SECONDS:"120"}')
           if [ -n "$CDP_KEY_ID" ] && [ -n "$CDP_KEY_SECRET" ]; then
             VARS=$(echo "$VARS" | jq --arg i "$CDP_KEY_ID" --arg s "$CDP_KEY_SECRET" '. + {CDP_API_KEY_ID:$i, CDP_API_KEY_SECRET:$s}')
           fi
-          # Databento replaced Yahoo Finance for the equity tools (2026-09-20).
-          # Prod needs the key; CI deliberately does NOT get it - Databento
-          # bills per query, and an unkeyed CI is what keeps a sweep from
-          # spending, the same rule as Brave, E2B and CoinGecko.
+          # The equities feed behind the equity tools bills per query. Prod
+          # needs the key; CI deliberately does NOT get it, because an unkeyed
+          # CI is what keeps a sweep from spending, the same rule as every
+          # other metered upstream key below.
           if [ -n "$DATABENTO_API_KEY" ]; then
             VARS=$(echo "$VARS" | jq --arg d "$DATABENTO_API_KEY" '. + {DATABENTO_API_KEY:$d}')
           fi

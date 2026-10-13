@@ -5,10 +5,10 @@
     ["anthropic/", { "prompt": 1, "completion": 2 }],
     ["google/", { "prompt": 1, "completion": 2 }]
   ],
-  "speech": { "your/speech-model": 1 },
+  "speech": { "your/speech-model": 1, "tts-1": 1, "tts-1-hd": 1 },
   "fees": { "webSearchPerUse": 1, "groundedPerCall": 1, "rerankPerUnit": 1 },
   "embeddings": { "text-embedding-3-small": 1 },
-  "openai": { "gpt-4o-mini": { "prompt": 1, "cached": 1, "completion": 2 } },
+  "openai": { "gpt-4o-mini": { "prompt": 1, "cached": 1, "completion": 2 }, "gpt-image-2": { "prompt": 1, "cached": 1, "completion": 2 } },
   "sttPerMinute": { "gpt-transcribe": 1 },
   "media": { "your/image-model": { "worstCaseUsd": 1, "listedMaxUsd": 1 } },
   "meter": { "markup": 2 },

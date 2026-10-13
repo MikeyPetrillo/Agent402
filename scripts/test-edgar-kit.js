@@ -53,10 +53,16 @@ for (const [slug, args, label] of [
 }
 
 // --- live calls (tolerant of SEC rate-limiting / outages) ---
-async function live(slug, args, check, label) {
+// confirmUpstream(r): when the tool's answer fails the check, ask the outside
+// host the same question directly; true means the host itself answers that
+// way right now (its state, tolerated and named), false means the tool is at
+// fault (an assertion failure). The direct read is the only way to tell a
+// hollow answer of ours from a hollow answer of theirs.
+async function live(slug, args, check, label, confirmUpstream = null) {
   try {
     const r = await h(slug)(args);
     if (check(r)) { liveOk++; console.log(`ok - ${label}: ${JSON.stringify(r).slice(0, 140)}`); }
+    else if (confirmUpstream && await confirmUpstream(r).catch(() => false)) { liveErr++; console.warn(`warn - ${label}: the outside host answers the same way when asked directly (its state, not ours); tolerated`); }
     else { assertFail++; console.error(`ASSERT FAIL - ${label}: unexpected shape ${JSON.stringify(r).slice(0, 240)}`); }
   } catch (e) {
     liveErr++;
@@ -128,7 +134,15 @@ await live("edgar-recent-ipos", { form: "S-1", days: 30, limit: 5 },
 // hits given how many small companies disclose this.
 await live("edgar-search", { q: "going concern", forms: "10-Q", days: 90, limit: 5 },
   (r) => r.q === "going concern" && Array.isArray(r.hits) && r.hits.length > 0 && r.hits.every((h) => h.form === "10-Q"),
-  "edgar-search 'going concern' forms=10-Q days=90");
+  "edgar-search 'going concern' forms=10-Q days=90",
+  async (r) => {
+    if (!r || !Array.isArray(r.hits) || r.hits.length !== 0 || !r.startDate || !r.endDate) return false;
+    const u = `https://efts.sec.gov/LATEST/search-index?q=${encodeURIComponent('"going concern"')}&forms=10-Q&dateRange=custom&startdt=${r.startDate}&enddt=${r.endDate}`;
+    const res = await fetch(u, { headers: { "User-Agent": process.env.EDGAR_USER_AGENT || "Agent402 edgar-kit test (mike@agent402.tools)", Accept: "application/json" } });
+    if (!res.ok) return true; // the host refused the runner: its state
+    const j = await res.json();
+    return Number(j?.hits?.total?.value ?? 0) === 0;
+  });
 
 // Full-text search with company filter: searching Apple's own filings.
 await live("edgar-search", { q: "revenue", ticker: "AAPL", forms: "10-K", limit: 3 },

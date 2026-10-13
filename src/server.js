@@ -317,7 +317,7 @@ import { integrationPage } from "./integration-pages.js";
 import { learnPage, learnIndex } from "./learn.js";
 import { skillMd } from "./skill-md.js";
 import { createMcpMppLoopback } from "./mcp-mpp.js";
-import { serviceManifest, reliabilityReport } from "./discovery.js";
+import { serviceManifest, reliabilityReport, settlementFacilitatorsPublic } from "./discovery.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
 import { meteredSkip } from "./metered-slugs.js";
 import { runSelfCheck, createSelfCheckRoute } from "./selfcheck.js";
@@ -2485,9 +2485,9 @@ app.get("/__operator/followups.json", (req, res) => {
 // Off unless the Railway variable TWEET_QUEUE is set; TWEET_QUEUE_POSTING=off
 // keeps it read-only (the operator read below still previews the next item).
 // Only the production server posts: a FREE_MODE boot, a process without
-// NODE_ENV=production and a process with no /data volume stay read-only, so a
-// local boot that copies the production variables never becomes a second
-// poster. It replaces .github/workflows/tweet-queue.yml, which is disabled at
+// NODE_ENV=production and a process with no durable queue state (no state
+// database and no state file) stay read-only, so a local boot that copies the
+// production variables never becomes a second poster. It replaces .github/workflows/tweet-queue.yml, which is disabled at
 // cutover so exactly one poster runs. `draining` is read at tick time.
 const _tweetQueue = createTweetQueue({ ...tweetQueueOptionsFromEnv(process.env), isDraining: () => draining });
 _tweetQueue.start();
@@ -3050,13 +3050,13 @@ app.get("/health", (req, res) => {
     leadsDb: leadsDbReady,
     operatorToken: Boolean(OPERATOR_TOKEN),
     posthog: posthogEnabled(),
-    // True when the stats SQLite DB is on the /data volume (counters + the
-    // recentCalls ring buffer survive restarts). False = silent fallback to
-    // /tmp, which wipes the activity feed on every container restart and
-    // makes traffic look thinner than it is. CI auto-attaches /data, but
-    // surfacing this here means a misconfigured deploy can't hide.
+    // True when the stats store is durable (counters + the recentCalls ring
+    // buffer survive restarts). False = a temporary local file, which wipes
+    // the activity feed on every container restart and makes traffic look
+    // thinner than it is; surfacing it here means a misconfigured deploy
+    // cannot hide.
     statsPersistent,
-    // True when the memory tools' SQLite DB is on /data. Memory is the worst
+    // True when the memory tools' store is durable. Memory is the worst
     // case for a silent fallback because agents PAY USDC per write — the
     // value of that storage is its durability. Boot fails loud in prod if
     // /data is missing, but this flag lets an operator verify externally
@@ -3124,8 +3124,11 @@ app.get("/v1/models", (_req, res) => {
 // for the OpenRouter leg ("bucketed status, numbers never exposed") and the
 // spend counters added later did not honour it.
 function publicBucket(o) {
+  // Words and flags only. A `note` or `reason` is written for the operator
+  // (it names the upstream, the variable to set and the figure it measures),
+  // so neither leaves the operator view.
   if (!o || typeof o !== "object") return o;
-  const KEEP = new Set(["status", "configured", "day", "asset", "chain", "attests", "trend", "sinceRestart", "note", "reason", "unknownForMinutes"]);
+  const KEEP = new Set(["status", "configured", "day", "asset", "chain", "attests", "trend", "sinceRestart", "unknownForMinutes"]);
   const out = {};
   for (const [k, v] of Object.entries(o)) if (KEEP.has(k)) out[k] = v;
   return out;
@@ -3150,12 +3153,11 @@ function publicLoopLag(l) {
   return { watching: l.watching };
 }
 function publicBudgets(b) {
-  // Per-vendor: the WORD only. Never callsToday, never the budget - publishing
-  // seven exact daily ceilings is a map of where to push.
+  // One word for the whole group. The per-upstream rows name the upstreams and
+  // carry their daily ceilings, which together are a map of where to push, so
+  // they stay on the operator view.
   if (!b || typeof b !== "object") return b;
-  const upstreams = {};
-  for (const [k, v] of Object.entries(b.upstreams || {})) upstreams[k] = { status: v?.status ?? "unknown" };
-  return { day: b.day, status: b.status, sinceRestart: b.sinceRestart, note: b.note, upstreams };
+  return { status: b.status };
 }
 
 app.get("/api/gateway-status", async (req, res) => {
@@ -5599,10 +5601,10 @@ function getPerformance24h() {
 // query stalls, we serve the static manifest instead of blocking the call.
 const serveManifest = (_req, res) => {
   const perf = getPerformance24h();
-  // Who settles each rail (first-tried facilitator per network, labels only),
-  // from the boot /supported probe; absent until the probe has run.
-  const facilitators = facilitatorsByNetworkPublic();
-  const settlement = Object.keys(facilitators).length ? { settlementFacilitators: { note: "the facilitator tried first per network, read from its live /supported at boot; a chain's other candidates are fallbacks", byNetwork: facilitators } } : {};
+  // Which networks have a settlement facilitator (role words only, from the
+  // boot /supported probe); absent until the probe has run. The
+  // settlementFacilitators block never carries a facilitator label.
+  const settlement = settlementFacilitatorsPublic(facilitatorsByNetworkPublic());
   if (perf) res.json({ ...MANIFEST, ...settlement, performance24h: perf });
   else res.json({ ...MANIFEST, ...settlement });
 };
@@ -8314,8 +8316,9 @@ if (!FREE_MODE) {
   // every settlement point reads before it moves money, and every payment
   // gate's captured res.end is this hook's wrapper, so when a gate ends a
   // response whose client already left, recordHangupOutcome sees it - the
-  // "finish"-based charged-failure path below never runs on a destroyed
-  // socket. A charge that was taken anyway (no ticket, a Tempo push
+  // charged-failure branches of the settlement tally below never run on a
+  // destroyed socket (the tally's settled branch does, through
+  // onSettleOutcome). A charge that was taken anyway (no ticket, a Tempo push
   // credential, or a close during the settle call itself) is booked as owed
   // in the refund ledger.
   // Arrival stamp for the per-phase timing of paid calls
@@ -9043,7 +9046,15 @@ app.use((req, res, next) => {
     // their public caching. `no-store` blocks all caches; `private` is
     // belt-and-suspenders against shared caches specifically.
     res.setHeader("Cache-Control", "no-store, private");
-    res.on("finish", () => {
+    // Runs once when the settlement is decided (src/hangup-settlement.js), not
+    // on "finish" alone: Node emits no "finish" for a response ended on a
+    // socket the buyer already closed, and a long run whose buyer timed out
+    // without a forgiveness ticket is settled anyway, so its sale, its
+    // payment_settled event and its served-call tally were lost while the
+    // charge went through. The outcome hook also reports a stream cut after
+    // its headers (settled before the first byte) and skips a charge the
+    // forgiveness budget cancelled (nothing settled).
+    onSettleOutcome(req, res, (outcome) => {
       // Attribute by what the gate actually ACCEPTED, not by header presence —
       // an invalid PoW header on a USDC-settled call must count as usdc.
       // Heartbeat probe attribution requires a POW_SECRET-signed X-Heartbeat-Token
@@ -9151,6 +9162,11 @@ app.use((req, res, next) => {
           // /revenue reports - see src/stripe-shadow-ledger.js.
           recordShadowSettlement({ slug: def.slug, priceUsd, rail, network, tx: settleTx, synthetic });
         });
+      } else if (outcome.via === "undelivered") {
+        // A non-200 ended on a socket the buyer closed before the first byte:
+        // the hang-up recorder (recordHangupOutcome, the hook's onUndelivered)
+        // has already booked whatever that response proves, so the incident
+        // branches below are not run a second time for it.
       } else if (settleReceipt) {
         // A non-200 carrying the settle-receipt header. The receipt's `success`
         // field decides which incident this is: the middleware attaches the
@@ -10035,8 +10051,9 @@ if (process.env.LAZY_DEPS_WARM !== "off") {
 // Skipped in FREE_MODE/CI boots where no wallet is configured.
 if (WALLET_ADDRESS) revenueSnapshot(revenueWallets()).catch(() => { /* warm-up only */ });
 
-// All-time revenue ledger sync loop — self-gates on /data (prod volume) or
-// REVENUE_LEDGER=true, so test/CI boots never touch public RPCs.
+// All-time revenue ledger sync loop: self-gates on durable storage (the
+// production deployment) or REVENUE_LEDGER=true, so test/CI boots never touch
+// public RPCs.
 startRevenueLedger(revenueWallets());
 
 // DATABASE_URL Postgres: each boot drops the retired tollbooth_leads table if
@@ -10263,31 +10280,31 @@ bootStep("warmEconomySnapshot", () => warmEconomySnapshot());
 // once and let in-flight (already paid-for) requests finish before exiting -
 // a hard kill would take an agent's money and return nothing.
 //
-// THERE IS NO OVERLAP TO SERVE THROUGH, so do not add one. This service has a
-// volume (/data), and Railway cannot run two deployments of a volume-backed
-// service at once (docs.railway.com, "Roll Back a Bad Deploy": "a volume-backed
-// service has a brief window of downtime on every deploy even with a healthcheck
-// configured"). Measured on the 2026-08-25 01:54 deploy from both containers'
-// logs: image pushed 01:54:14, the OLD container got SIGTERM at 01:54:30, and the
-// NEW container was not started until the old one exited at 02:08. Railway stops
-// the old container FIRST, then starts the new one; `overlapSeconds` is inert.
-//
-// The 2026-08-24/25 "lame duck" (keep serving after SIGTERM until a window
-// elapsed, then until traffic stopped) was built on the opposite belief and was
-// the whole reason deploys took 16 minutes: the replacement could not start
-// until this process exited, so every second of lame duck was a second added to
-// the deploy, the "gap" it kept measuring was its own previous setting (grace
-// 90s -> 108s, 600s -> 595s, 900s -> 906s), and the traffic-driven variant served
-// until SIGKILL because traffic never stops when nothing else can take it.
+// Deploys overlap: Railway starts the replacement, waits for its health check,
+// routes new calls to it and keeps this container serving for the service's
+// overlap window (the platform's setting), and only then sends SIGTERM. So when
+// the signal lands the replacement has already been taking new calls for that
+// window, and nothing here has to keep serving FOR anyone: SIGTERM means close
+// the door and finish what is in flight. Do not add a wait after the signal (a
+// timer, or serving on until a traffic lull): the overlap is where the handover
+// happens, and a second wait here only keeps two containers running longer.
+// (The 2026-08-24/25 "lame duck" did exactly that and turned a ~3 minute deploy
+// into 16; this service was volume-backed then, with no overlap at all, and the
+// same rule held: the drain is for in-flight work, never for new calls.) A
+// self-hosted service with a volume still cannot overlap, and the same drain
+// serves it.
 //
 // What a deploy costs now: this process exits within seconds of SIGTERM when
 // idle (DRAIN_DEADLINE_MS at worst, sized above the slowest single-call
-// upstream, transcribe's 60s), then Railway starts the replacement and our boot
-// plus its health check takes ~55s. That ~60-90s is the floor for a volume-backed
-// single replica; it shrinks only by moving state off the volume or by a faster
-// boot, never by lingering here. RAILWAY_DEPLOYMENT_DRAINING_SECONDS (set by the
-// deploy job; self-hosters set it too, Railway's default is 0) only has to
-// exceed the deadline below so the SIGKILL never lands mid-drain.
+// upstream, transcribe's 60s), and the replacement is already serving, so a
+// buyer sees no gap. The container's disk holds nothing a deploy has to keep
+// (state lives in the state database and Redis: src/state-db.js,
+// src/ledger-mirror.js) except a money journal entry the journals could not
+// place; ledgerDeadLetter on /api/gateway-status names that state and the
+// deploy job's quiet gate holds while it reads "local" or "stuck".
+// RAILWAY_DEPLOYMENT_DRAINING_SECONDS (set by the deploy job; self-hosters set
+// it too, Railway's default is 0) only has to exceed the deadline below so the
+// SIGKILL never lands mid-drain.
 const DRAIN_DEADLINE_MS = 75_000;
 let shuttingDown = false;
 // `code`/`deadlineMs` default to the graceful-redeploy values. The fatal path
@@ -10342,9 +10359,10 @@ function shutdown(signal, { code = 0, deadlineMs = DRAIN_DEADLINE_MS } = {}) {
   // resolves at once. During a database outage that round fails; sales and
   // refund debts were written to the ledgers' local dead-letter when they
   // were queued, so they wait on this container's disk for the next boot's
-  // replay (ledgerDeadLetter on /api/gateway-status pages while they wait).
-  // Other stores' queued writes are lost with the process; while the /data
-  // volume exists the stores that write through to it keep their copy.
+  // replay (ledgerDeadLetter on /api/gateway-status pages while they wait,
+  // and the deploy job's quiet gate holds). Other stores' queued writes are
+  // lost with the process; a boot without a state database writes through to
+  // its files as before.
   httpServer.close(() => { flushStateQueues().finally(finish); });
   // server.close() waits for ALL connections, including idle keep-alive
   // sockets agents hold open between calls. Sweep those now and every few

@@ -97,7 +97,7 @@ jobs:
           TITLE="Discovery self-consistency: live prod drifted from source"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "${{ steps.check.outputs.status }}" = "down" ]; then
-            BODY="Live agent402.tools's agent-facing text (tools/list, about_agent402, get_payment_info, /llms.txt, /.well-known/x402) no longer matches what source says is registered — the same class of defect as #705, caught here before an outside agent reports it.
+            BODY="Live agent402.tools's agent-facing text (tools/list, about_agent402, get_payment_info, /llms.txt, /.well-known/x402) no longer matches what source says is registered: the same class of defect as #705, caught here before an outside agent reports it.
 
           \`\`\`
           $DETAIL

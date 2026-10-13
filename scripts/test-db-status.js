@@ -75,9 +75,9 @@ const hb = await import("node:fs").then((fs) => fs.readFileSync(new URL("../.git
 ok(/\.databases\.leads\.status/.test(hb) && /\.databases\.analytics\.status/.test(hb), "heartbeat reads databases.{leads,analytics}.status");
 ok(/Postgres UNREACHABLE/.test(hb), "heartbeat opens the Postgres UNREACHABLE issue");
 // SINGLE RETRY, like every other probe in that file. Without it the leg paged
-// on 2026-08-29 during our OWN deploy: the service is volume-backed, so every
-// deploy has a no-container window and the pools re-init behind the boot stall
-// after it. The boot log said "[leads-db] ready" three minutes before the issue
+// on 2026-08-29 during our OWN deploy: a reading taken while the containers
+// swapped, with the fresh container's pools still re-initializing behind its
+// boot. The boot log said "[leads-db] ready" three minutes before the issue
 // was filed. An alarm that fires on a state which heals itself trains everyone
 // to ignore it.
 const pgLeg = hb.slice(hb.indexOf("Postgres reachability check"), hb.indexOf("Upstream buyer wallet trend"));

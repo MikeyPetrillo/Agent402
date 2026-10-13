@@ -17,6 +17,8 @@
 // at least 60 s (75 s on premium).
 
 import { redactSecrets } from "./redact.js";
+import { upstreamCosts } from "../upstream-costs.js";
+import { capturePostHogGatewayUsage } from "../posthog.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
@@ -117,6 +119,7 @@ async function callOpenAI(prompt, size, tierSlug) {
   }
   const img = data.data?.[0];
   if (typeof img?.b64_json !== "string" || !img.b64_json) throw bad("OpenAI returned no image - retry", 502);
+  recordImageSpend(tierSlug, data.usage);
   return {
     model: tier.model,
     provider: "openai",
@@ -125,6 +128,23 @@ async function callOpenAI(prompt, size, tierSlug) {
     image: img.b64_json,
     revised_prompt: img?.revised_prompt ?? prompt,
   };
+}
+
+// The list price of a tier, read from its own tool def so it is never typed twice.
+const tierPriceUsd = (slug) => { const t = IMAGE_GEN_TOOLS.find((x) => x.slug === slug); return t ? Number(String(t.price).replace("$", "")) || 0 : 0; };
+
+/** The image API returns token counts and never a cost: text input tokens at
+ *  the model's prompt rate and image output tokens at its completion rate,
+ *  both from the model's OWN row in the private table (never a chat row's
+ *  fallback, which prices image tokens wrong), into the same meter and margin
+ *  event as the /v1 tiers. No row, no figure. */
+function recordImageSpend(tierSlug, usage) {
+  try {
+    const row = upstreamCosts().openai?.[TIERS[tierSlug].model];
+    const inTok = Number(usage?.input_tokens) || 0, outTok = Number(usage?.output_tokens) || 0;
+    const upstreamUsd = row && usage ? Math.round(((inTok * row.prompt + outTok * row.completion) / 1e6) * 1e6) / 1e6 : null;
+    capturePostHogGatewayUsage({ tier: tierSlug, model: TIERS[tierSlug].model, priceUsd: tierPriceUsd(tierSlug), upstreamUsd, promptTokens: inTok, completionTokens: outTok, source: "image-gen" });
+  } catch { /* telemetry must never fail a served response */ }
 }
 
 function makeHandler(tierSlug) {

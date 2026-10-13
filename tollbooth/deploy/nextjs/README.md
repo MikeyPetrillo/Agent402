@@ -1,6 +1,6 @@
 # Deploy agent402-tollbooth on Next.js (Vercel)
 
-Open, crypto-native pay-per-crawl in your existing Next.js app — no CDN lock-in,
+Open, crypto-native pay-per-crawl in your existing Next.js app, no CDN lock-in,
 no Stripe, no signup. Humans browse free; AI crawlers pay per request (USDC via
 x402, or free proof-of-work). Runs in Vercel's Edge runtime.
 
@@ -19,7 +19,7 @@ curl -o middleware.js https://raw.githubusercontent.com/MikeyPetrillo/Agent402/m
 vercel deploy   # or push to your connected Git branch
 ```
 
-That's it — the middleware gates every matched route. Tune `config.matcher` in
+That's it, the middleware gates every matched route. Tune `config.matcher` in
 `middleware.js` to charge only the paths you want (e.g. `/articles/:path*`).
 
 ## Notes for production
@@ -28,7 +28,7 @@ That's it — the middleware gates every matched route. Tune `config.matcher` in
   across stateless edge invocations; without a stable secret they're rejected.
 - **Replay protection is best-effort** at the edge (invocations don't share
   memory). For strict single-use, pass a `store` backed by a durable KV (Vercel
-  KV / Upstash) — see the [tollbooth README](../../README.md).
+  KV / Upstash), see the [tollbooth README](../../README.md).
 - **UA matching is the default, not a security boundary.** A bot forging a human
   UA only gains the same free access a human has. To charge everyone, pass
   `charge: () => true` to `createEdgeTollbooth`.

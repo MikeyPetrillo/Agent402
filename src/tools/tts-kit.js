@@ -38,6 +38,8 @@
 import { redactSecrets } from "./redact.js";
 import { SPEECH_MODELS, OPENROUTER_ATTRIBUTION } from "./llm-gateway-kit.js";
 import { transcodePcm } from "./media-kit.js";
+import { upstreamCosts } from "../upstream-costs.js";
+import { capturePostHogGatewayUsage } from "../posthog.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
@@ -402,7 +404,33 @@ async function callBackups(text, voice, format, tier, deadline, now, first) {
   throw last || Object.assign(bad("Speech upstream unavailable - retry shortly", 503), { outage: false });
 }
 
-function makeHandler(tierSlug, { now = () => Date.now() } = {}) {
+// The list price of a tier, read from its own tool def so it is never typed twice.
+const tierPriceUsd = (slug) => { const t = TTS_TOOLS.find((x) => x.slug === slug); return t ? Number(String(t.price).replace("$", "")) || 0 : 0; };
+
+/** Speech bills per character at the private rate of the model that SPOKE
+ *  (a backup link or the direct fallback bills at its own row), so the spend is
+ *  priced from the served answer, after every served call, into the same
+ *  meter and margin event as the /v1 tiers. Without a row for that model the
+ *  call is recorded with no figure: the meter never invents one. */
+function recordSpeechSpend(tierSlug, out) {
+  try {
+    const rate = upstreamCosts().speech?.[out?.model];
+    const chars = Number(out?.chars) || 0;
+    const upstreamUsd = rate != null && chars > 0 ? Math.round(chars * rate * 1e6) / 1e6 : null;
+    capturePostHogGatewayUsage({ tier: tierSlug, model: out?.model, priceUsd: tierPriceUsd(tierSlug), upstreamUsd, source: "speech" });
+  } catch { /* telemetry must never fail a served response */ }
+}
+
+function makeHandler(tierSlug, opts = {}) {
+  const serve = makeServe(tierSlug, opts);
+  return async (input) => {
+    const out = await serve(input);
+    recordSpeechSpend(tierSlug, out);
+    return out;
+  };
+}
+
+function makeServe(tierSlug, { now = () => Date.now() } = {}) {
   return async (input) => {
     const { text, voice, format } = validateInput(input, tierSlug);
     const tier = TIERS[tierSlug];

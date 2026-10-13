@@ -209,12 +209,19 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     if (!pending.add("sub", { subId, rec: store.get(subId) })) console.error(`[subscriptions] the record of ${subId} could not be kept on local disk`);
     return false;
   }
-  let replaying = false;
-  async function replayPending() {
-    if (!pending || replaying || !pending.size()) return 0;
-    replaying = true;
+  // One replay at a time: a call that finds one in flight (the timer tick,
+  // or an explicit call during it) joins it, so a caller that awaits
+  // replayPending reads the store after that drain has merged its records.
+  let replaying = null;
+  function replayPending() {
+    if (replaying) return replaying;
+    if (!pending || !pending.size()) return Promise.resolve(0);
+    replaying = replayPendingNow().finally(() => { replaying = null; });
+    return replaying;
+  }
+  async function replayPendingNow() {
     let landed = 0;
-    try {
+    {
       landed = await pending.drain(async (e) => {
         const { subId, rec } = e.payload || {};
         if (!subId || !rec) return "drop";
@@ -230,7 +237,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
         if (stored === mine || String(stored?.updatedAt || "") >= String(mine.updatedAt || "")) unsaved.delete(subId);
         return "landed";
       });
-    } finally { replaying = false; }
+    }
     if (landed) console.log(`[subscriptions] landed ${landed} record(s) kept on local disk`);
     return landed;
   }

@@ -1,10 +1,10 @@
 // A tiny self-contained operator dashboard for the tollbooth, served at
 // /__tollbooth by the reverse-proxy CLI. It polls /__tollbooth/stats and shows
-// how much of your traffic is bots and what the gate is collecting — the visual
+// how much of your traffic is bots and what the gate is collecting, the visual
 // answer to "I had to upgrade my plan to serve bots I don't monetize."
 //
 // Visual rhythm mirrors agent402.tools/analytics: stat-card grid, inline-SVG
-// rolling sparkline (built client-side from poll deltas — no server changes,
+// rolling sparkline (built client-side from poll deltas, no server changes,
 // no third-party chart lib), and a window selector that changes how many
 // recent polls feed the sparkline. Pure function (no deps) so it's trivially
 // testable.
@@ -13,7 +13,7 @@ export function dashboardHtml() {
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>agent402-tollbooth — live stats</title>
+<title>agent402-tollbooth: live stats</title>
 <style>
   :root{--bg:#0b0e14;--card:#131826;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--line:#1e2638;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
   *{box-sizing:border-box;margin:0}body{background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,sans-serif}
@@ -59,9 +59,9 @@ export function dashboardHtml() {
     <div class="row">
       <h2>Requests / poll</h2>
       <div class="meta">
-        <span>rate<b id="ratenow">—</b></span>
-        <span>peak<b id="ratepeak">—</b></span>
-        <span class="paid">paid<b id="paidnow">—</b></span>
+        <span>rate<b id="ratenow">-</b></span>
+        <span>peak<b id="ratepeak">-</b></span>
+        <span class="paid">paid<b id="paidnow">-</b></span>
       </div>
       <div class="windows" id="windows">
         <button class="w" data-n="12">1m</button>
@@ -76,23 +76,23 @@ export function dashboardHtml() {
     </svg>
   </div>
   <div class="ratios">
-    <div class="card"><div class="k">Bot share</div><div class="v" id="botpct">—</div><div class="hint">charged + would-charge</div></div>
-    <div class="card"><div class="k">Paid conversion</div><div class="v accent" id="paidpct">—</div><div class="hint">of all requests, paid (PoW or USDC)</div></div>
-    <div class="card"><div class="k">Paid in USDC</div><div class="v accent" id="usdcpct">—</div><div class="hint">of paid, settled on Base</div></div>
+    <div class="card"><div class="k">Bot share</div><div class="v" id="botpct">-</div><div class="hint">charged + would-charge</div></div>
+    <div class="card"><div class="k">Paid conversion</div><div class="v accent" id="paidpct">-</div><div class="hint">of all requests, paid (PoW or USDC)</div></div>
+    <div class="card"><div class="k">Paid in USDC</div><div class="v accent" id="usdcpct">-</div><div class="hint">of paid, settled on Base</div></div>
   </div>
   <div class="probes" id="probes">
     <h2>Operator probes</h2>
-    <div class="sub">Copy-paste curls — verify the gate is doing what these counters say.</div>
+    <div class="sub">Copy-paste curls: verify the gate is doing what these counters say.</div>
     <div class="probe">
       <div class="label"><span>Raw stats JSON (scrape this for metrics / alerts)</span><button class="copy" data-target="p1">copy</button></div>
       <pre id="p1">curl -s &lt;origin&gt;/__tollbooth/stats | jq</pre>
     </div>
     <div class="probe">
-      <div class="label"><span>Probe as a known bot — should see 402 (or pass-through in observe mode)</span><button class="copy" data-target="p2">copy</button></div>
+      <div class="label"><span>Probe as a known bot: should see 402 (or pass-through in observe mode)</span><button class="copy" data-target="p2">copy</button></div>
       <pre id="p2">curl -i -A 'GPTBot/1.0' &lt;origin&gt;/</pre>
     </div>
     <div class="probe">
-      <div class="label"><span>Probe as a browser — should be free</span><button class="copy" data-target="p3">copy</button></div>
+      <div class="label"><span>Probe as a browser: should be free</span><button class="copy" data-target="p3">copy</button></div>
       <pre id="p3">curl -i -A 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15' &lt;origin&gt;/</pre>
     </div>
     <div class="probe">
@@ -100,7 +100,7 @@ export function dashboardHtml() {
       <pre id="p4">curl -s -A 'GPTBot/1.0' &lt;origin&gt;/ | jq .</pre>
     </div>
     <div class="probe">
-      <div class="label"><span>KPI grep — single-line dashboard for a shell</span><button class="copy" data-target="p5">copy</button></div>
+      <div class="label"><span>KPI grep: a single-line dashboard for a shell</span><button class="copy" data-target="p5">copy</button></div>
       <pre id="p5">curl -s &lt;origin&gt;/__tollbooth/stats | jq '{requests, charged, powSolved, x402Paid, mppPaid}'</pre>
     </div>
   </div>
@@ -119,12 +119,12 @@ const cards=[
 ];
 // Rolling poll-delta series for the sparkline. We retain up to MAX_POINTS
 // raw deltas (one per 5s tick) and the active window selector controls how
-// many of the tail points are plotted. Built client-side — no server-side
+// many of the tail points are plotted. Built client-side, no server-side
 // timeseries store needed, and the data dies with the tab.
 var MAX_POINTS=180; // 15 minutes at one poll per 5s
 // Parallel deltas: total requests AND paid requests (PoW + USDC). Both are
 // computed off the same tick cadence so they share an x-axis and a single
-// y-scale. paidSeries is the dashed overlay — "is the bot traffic actually
+// y-scale. paidSeries is the dashed overlay, "is the bot traffic actually
 // paying, or just arriving?" at a glance, no math required.
 var series=[]; var paidSeries=[]; var lastRequests=null; var lastPaid=null; var activeWindow=60;
 function drawSpark(){
@@ -193,7 +193,7 @@ function bindWindows(){
 async function tick(){
   try{
     const s=await (await fetch("/__tollbooth/stats",{cache:"no-store"})).json();
-    // Counters are always numbers — coerce, never trust raw JSON from the
+    // Counters are always numbers, coerce, never trust raw JSON from the
     // configured stats endpoint (a compromised collector with httpStatsSink
     // could otherwise inject HTML through this innerHTML sink).
     document.getElementById("grid").innerHTML=cards.map(function(c){
@@ -203,7 +203,7 @@ async function tick(){
       var lbl=String(label).replace(/[&<>"']/g,function(ch){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch];});
       return '<div class="card"><div class="k">'+lbl+'</div><div class="v '+(acc||"")+'">'+v+'</div></div>';
     }).join("");
-    // Derived operator ratios — computed client-side so the gate stays a
+    // Derived operator ratios, computed client-side so the gate stays a
     // pure counter store. All inputs are coerced numbers (see render loop
     // above), so a malicious snapshot can't smuggle non-numerics here.
     var reqs=Number(s.requests)||0;
@@ -216,14 +216,14 @@ async function tick(){
     var paidPct=reqs?Math.round((paid/reqs)*100):0;
     document.getElementById("paidpct").textContent=paidPct+"%";
     // Paid-in-USDC share: of *paid* requests, how many settled in USDC vs PoW.
-    // Answers "are bots paying me real money, or just grinding compute?" "—"
+    // Answers "are bots paying me real money, or just grinding compute?" ", "
     // when there are no paid requests yet (avoids 0/0 NaN).
     document.getElementById("usdcpct").textContent=paid?Math.round((usd/paid)*100)+"%":"\u2014";
     document.getElementById("mode").textContent=s.observe?" \u00B7 OBSERVE":"";
     if(s.since)document.getElementById("since").textContent="since "+new Date(s.since).toLocaleString();
     // Roll the series: delta of total requests since the last tick is the
     // per-poll arrival rate. First tick seeds lastRequests/lastPaid with no
-    // plot — we need a baseline to subtract on tick #2.
+    // plot: we need a baseline to subtract on tick #2.
     var now=Number(s.requests); if(!Number.isFinite(now)) now=0;
     var nowPaid=(Number(s.powSolved)||0)+(Number(s.x402Paid)||0)+(Number(s.mppPaid)||0);
     if(lastRequests!==null){
@@ -240,7 +240,7 @@ async function tick(){
     lastPaid=nowPaid;
   }catch(e){/* keep last values */}
 }
-// Operator probes — replace the literal <origin> placeholder with the actual
+// Operator probes, replace the literal <origin> placeholder with the actual
 // host so what the operator copies is what they can run, no edit step. Done
 // once on load; probe text doesn't change after.
 function initProbes(){

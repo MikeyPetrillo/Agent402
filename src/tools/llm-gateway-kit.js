@@ -2640,6 +2640,14 @@ async function embeddingsHandler(input, req) {
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
   assertUpstreamBody(data);
   if (!Array.isArray(data?.data) || data.data.length === 0) throw bad("Upstream returned no embeddings - retry", 502);
+  // Embeddings bill input tokens only: the upstream's reported count (the
+  // local cl100k estimate when it reports none) at the model's private rate,
+  // into the same meter and margin event as the chat tiers.
+  try {
+    const tokens = Number(data.usage?.prompt_tokens) || embeddingsUpstreamCost(body).tokens;
+    const upstreamUsd = tokens > 0 ? Math.round((tokens / 1e6) * embeddingsRate(body.model) * 1e6) / 1e6 : null;
+    import("../posthog.js").then(({ capturePostHogGatewayUsage }) => capturePostHogGatewayUsage({ tier: "v1-embeddings", model: body.model, priceUsd: EMBEDDINGS_PRICE, upstreamUsd, promptTokens: tokens, source: "embeddings" })).catch(() => {});
+  } catch { /* telemetry must never fail a served response */ }
   // Full OpenAI wire shape passes through untouched (object, data[], model,
   // usage). Store unless the buyer opted out; oversized batches are skipped
   // by the store's own per-entry byte cap. FR4-01 class: defer the write to
@@ -2983,6 +2991,15 @@ async function speechHandler(input, req) {
       if (!res.ok) await throwUpstreamError(res);
       const buffer = Buffer.from(await res.arrayBuffer());
       if (buffer.length === 0) throw bad("Upstream returned no audio - retry, or rephrase the input", 502);
+      // Speech bills per input character at the served link's private rate
+      // (the wire reports no cost); the same meter and margin event as the
+      // chat tiers, priced from the link that answered. No row, no figure.
+      {
+        const rate = upstreamCosts().speech?.[body.model];
+        const chars = String(body.input || "").length;
+        const upstreamUsd = rate != null && chars > 0 ? Math.round(chars * rate * 1e6) / 1e6 : null;
+        import("../posthog.js").then(({ capturePostHogGatewayUsage }) => capturePostHogGatewayUsage({ tier: "v1-audio-speech", model: body.model, priceUsd: SPEECH_PRICE, upstreamUsd, source: "speech" })).catch(() => {});
+      }
       return { __binary: buffer, contentType };
     } catch (e) {
       // Walk on anything upstream-shaped (throwUpstreamError maps every

@@ -71,9 +71,12 @@ export function classifyLedger({ totals = {}, rows = [], now = Date.now(),
     );
   }
 
+  // Counts only. The whole output of this script is quoted into a public
+  // issue body, so a dollar total never appears here; the operator read of
+  // /__operator/refunds.json carries the amounts.
   const summary =
-    `owed ${t("owed").n} ($${t("owed").usd}) · sending ${t("sending").n} · ` +
-    `paid ${t("paid").n} ($${t("paid").usd}) · void ${t("void").n}`;
+    `owed ${t("owed").n} · sending ${t("sending").n} · ` +
+    `paid ${t("paid").n} · void ${t("void").n}`;
   return { level: reasons.length ? "attention" : "clean", reasons, summary };
 }
 

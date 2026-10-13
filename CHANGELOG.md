@@ -91,7 +91,7 @@ Since v2.4.0 (2026-09-18).
 - When every host of a requested model is down, its same-family successor
   serves, on chat, Messages and Responses, named in
   `agent402_model_substituted`.
-- `exa-contents` is repriced to cover its largest accepted call.
+- `exa-contents` is repriced to its largest accepted input.
 - Refund runs survive RPC rate limits: verification retries 429/5xx reads with
   backoff, and the refund ledger routes get their own operator limiter.
 - Connector instructions (hosted and stdio, identical) start one fact at
@@ -365,7 +365,7 @@ Since v2.4.0 (2026-09-18).
 - Add `kalshi-live-data` and `kalshi-weather-index`.
 - Add `edgar-13f-datasets` ($0.003) and `edgar-13f-dataset-head` ($0.005).
 - Restore `sol-token-holders` (was returning an empty table).
-- Move `stock-quote` and `stock-history` onto Databento DBEQ.BASIC: per-venue
+- Move `stock-quote` and `stock-history` onto a licensed equities feed: per-venue
   volume is reported as `venueVolume`, `stock-history` accepts up to 250 sessions,
   the 52-week high/low fields are gone.
 - Remove `options-chain`, `premarket-quote`, `stock-dividends`,

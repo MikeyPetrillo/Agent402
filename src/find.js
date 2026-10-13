@@ -351,10 +351,8 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   if (results.length && defining.length) {
     rarestTerm = defining.reduce((a, b) => (idf.get(b) > idf.get(a) ? b : a));
     const top = all.find((e) => e.t.slug === results[0].slug);
-    // Check the FULL catalog record. An earlier attempt tested the API response,
-    // which omits `tags` — so tools whose match lives in a tag looked like
-    // misses, and the rule appeared to have a 40% false-positive rate it did
-    // not have.
+    // Check the FULL catalog record, tags included: the API response omits
+    // `tags`, so a tool whose match lives in a tag would read as a miss there.
     const covers = (term) => !!top && (top.slug.includes(term) || top.hay.includes(term) || top.tagSet.has(term));
     rarestTermCovered = covers(rarestTerm);
     // An uncovered rarest term is often an incidental word that no tool

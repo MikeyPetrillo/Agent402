@@ -183,7 +183,7 @@ More: [Paying with MPP](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-wi
 | **OCR** | `image-ocr` (text out of any image - pure-CPU, no model) |
 | **Geo** | `geo-distance` (haversine, pure-CPU), `geocode`, `reverse-geocode`, `place-search`, `geo-lookup` |
 | **Live data** | `fx-rate` (ECB), `barcode-lookup` (Open Food Facts), `gov-data` (data.gov), `weather-forecast`/`weather-alerts`, `earthquakes` (USGS) |
-| **Finance & crypto** | `stock-quote`/`stock-history` (Databento, three-venue consolidation), `crypto-price`/`crypto-market`/`crypto-history`/`crypto-trending`/`crypto-global` (CoinGecko) |
+| **Finance & crypto** | `stock-quote`/`stock-history` (a licensed feed, multi-venue consolidation), `crypto-price`/`crypto-market`/`crypto-history`/`crypto-trending`/`crypto-global` (CoinGecko) |
 | **Crypto derivatives & options** | `perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`, `perp-open-interest`, `perp-klines`, `perp-orderbook` (live perpetuals: mark/oracle price, funding, OI, candles, depth); `options-summary`, `crypto-options-chain`, `options-ticker`, `options-volume` (options book, IV and greeks, onchain options volume) - $0.001 to $0.005 a call, no exchange account |
 | **DeFi & stablecoins** | `defi-yields` (screen pools by chain, project, TVL and stablecoin-only), `defi-yield-history`, `defi-protocols`, `defi-protocol`, `defi-chains`, `defi-chain-tvl-history`, `defi-fees`, `defi-dex-volume`, `stablecoins`, `stablecoin-supply-history` - $0.001 to $0.003 a call |
 | **Solana token intel** | `sol-token-safety` (authorities, liquidity, holder concentration, graded), `sol-token-report` (full risk write-up), `sol-token-holders`, `sol-token-pairs`, `sol-token-search`, `sol-trending`, `sol-price`, `sol-swap-quote`, `sol-token-lookup` - the due-diligence pass an agent needs before it touches a mint |
@@ -287,7 +287,7 @@ on** - Base, Solana, Algorand or Tempo - and sells it to you; see the
 history - no wallet parameter; the x402 payment is the identity, so nobody can
 read another wallet's profile.
 
-## For humans: reports, monitors and prepaid credits
+## For humans: reports and monitors
 
 The same catalog has a card-paying front door (Stripe Checkout; the operator
 enables it with `STRIPE_SECRET_KEY`, otherwise these pages simply do not mount):

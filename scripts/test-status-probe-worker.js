@@ -450,9 +450,9 @@ for (const [name, over, detail] of failCases) {
     assert.equal(created[0].title, "Upstream buyer wallet LOW (x402)");
   });
 
-  // The class that filed #1057 on a perfectly healthy service: production is
-  // volume-backed, so every deploy has a 60-90s no-container window and a
-  // reading taken inside it is indistinguishable from a fault.
+  // The class that filed #1057 on a perfectly healthy service: a reading
+  // taken while a deploy swaps containers can fail on its own and is
+  // indistinguishable from a fault until a second read disagrees.
   await acheck("a bad reading the second read does NOT confirm pages nobody", async () => {
     mkGh();
     const bad = withGateway({ databases: { leads: { status: "unreachable" }, analytics: { status: "ok" } } });

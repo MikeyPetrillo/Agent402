@@ -109,8 +109,8 @@ export function reconcileSettlements({ days = 7, now = Date.now(), dailyCalls = 
 
   // IS THIS CHECK ACTUALLY LOOKING AT ANYTHING?
   //
-  // The reconciliation reads the sales ledger, which lives on the /data volume.
-  // If that volume were lost, reset, or simply never written to, the join finds
+  // The reconciliation reads the sales ledger in the state database. If that
+  // store were lost, reset, or simply never written to, the join finds
   // nothing and reports zero unconfirmed — which renders identically to a
   // perfectly healthy service. That is this repo's oldest failure shape (a
   // charged-failure alarm sat dead for months reporting success), reappearing

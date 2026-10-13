@@ -40,7 +40,13 @@ const probeFn = guardSrc.slice(guardSrc.indexOf("export async function probePubl
 ok(/headers: \{ "User-Agent": USER_AGENT, \.\.\.headers \}/.test(probeFn), "probePublicUrl sends the crawler User-Agent on every probe");
 for (const [name, src] of [["x402-index.js", idxSrc], ["mpp-index.js", mppSrc]]) {
   const raw = [...src.matchAll(/await fetch\((target|url), \{/g)].length;
-  const probes = [...src.matchAll(/await probePublicUrl\(/g)].length;
+  // x402-index.js routes its per-route probes through probeSellerRoute, whose
+  // one request primitive (probeFetch) is probePublicUrl; a direct call counts
+  // the same way. Either shape means the guard and the crawler User-Agent.
+  const direct = [...src.matchAll(/await probePublicUrl\(/g)].length;
+  const viaSeller = [...src.matchAll(/await probeSellerRoute\(/g)].length;
+  const seam = /let probeFetch = \(url, opts\) => probePublicUrl\(url, opts\);/.test(src) ? 1 : 0;
+  const probes = direct + (viaSeller > 0 && seam ? viaSeller : 0);
   ok(raw === 0 && probes > 0, `${name}: every 402 probe (${probes}) goes through probePublicUrl and none is a raw fetch (${raw}), so "on every request" holds`);
   ok(/^import \{ safeFetch, probePublicUrl \} from "\.\/tools\/fetch-guard\.js";/m.test(src), `${name} imports the probe statically from fetch-guard.js`);
 }

@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // SIGTERM closes the door at once and drains what is in flight. Nothing else.
 //
-// This service has a volume, and Railway cannot run two deployments of a
-// volume-backed service at once: it stops the old container and only then
-// starts the new one. So after SIGTERM there is nothing to keep serving FOR -
-// every second this process lingers is a second added to the deploy and to the
-// outage, because the replacement cannot boot until we exit. The 2026-08-24/25
-// "lame duck" got this backwards and turned a ~3 minute deploy into 16 minutes
-// while measuring its own setting as "Railway's gap". This test pins the
-// opposite contract, with a real server and a real signal:
+// Deploys overlap: Railway starts the replacement, routes new calls to it once
+// it is healthy, keeps the old container serving for the service's overlap
+// window, and only then sends SIGTERM. So when the signal lands the replacement
+// has already been taking new calls for that window, and there is nothing to
+// keep serving FOR: serving on after the signal (the 2026-08-24/25 "lame duck",
+// a timer and then a traffic lull, which turned a ~3 minute deploy into 16
+// minutes) only keeps two containers running longer. This test pins the
+// contract, with a real server and a real signal:
 //
 //   1. a request that is IN FLIGHT when SIGTERM arrives still completes 200
 //      (that is the paid-for work the drain exists to protect);
