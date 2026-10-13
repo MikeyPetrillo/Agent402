@@ -1192,8 +1192,8 @@ jobs:
           --health-timeout 3s
           --health-retries 20
       # A REAL Postgres for the state-database suites (src/state-db.js): the
-      # stores that left the /data volume. Each suite makes and drops its own
-      # schema. Under CI a missing database FAILS those suites (scripts/lib/test-pg.js).
+      # documents, records, ledgers and leases the server keeps there. Each
+      # suite makes and drops its own schema. Under CI a missing database FAILS those suites (scripts/lib/test-pg.js).
       postgres:
         image: postgres:16-alpine
         env:
@@ -2566,6 +2566,8 @@ jobs:
           t node scripts/test-port-hygiene.js
           # No em dash in a shipped package file or a workflow issue body (read from each package's files allowlist - offline)
           t node scripts/test-no-em-dash-shipped.js
+          # A public issue body carries reasons and ids, never a dollar figure (workflow bodies + the quoted runner log lines - offline)
+          t node scripts/test-public-issue-figures.js
           # Dev-branch sync moves the branch only when merging it would change nothing on main (throwaway git repos - offline)
           t node scripts/test-sync-dev-branch.js
           # Free tier is an allowlist: a tool on no list is wallet-only by default (offline)
@@ -2926,7 +2928,7 @@ jobs:
           t node scripts/test-db-ssl.js
           # Bounded rate-limit maps + global window ceiling (F21 — stale one-time-IP keys swept, distributed flood capped — offline)
           t node scripts/test-rate-sweep.js
-          # /data volume contract — stats + memory DBs fail loud in prod when missing
+          # Local SQLite fallback contract: the stats and memory stores report persistence honestly and fail loud in prod without durable storage
           t node scripts/test-stats-persistence.js
           # Buyer SDK response-size ceiling (refused before parsing; a paid oversize says it was paid - offline)
           t node scripts/test-client-response-cap.js

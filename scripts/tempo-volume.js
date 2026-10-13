@@ -65,7 +65,7 @@ const usdce = await erc20(USDCE), pathusd = await erc20(PATHUSD);
 // Bucketed, not exact: the job log is public (public repo), and the issue
 // step quotes summary lines into a public issue. The funding sweep in the
 // paid canary is where exact balances are judged.
-const bucket = (v) => (v === null ? "unreadable" : v >= 10 ? ">=$10" : v >= MIN_BALANCE_USD ? `>=$${MIN_BALANCE_USD}` : `<$${MIN_BALANCE_USD}`);
+const bucket = (v) => (v === null ? "unreadable" : v >= MIN_BALANCE_USD ? "above the floor" : "below the floor");
 console.log(`tempo-volume: ${COUNT} x ${ROUTE} | burner USDC.e ${bucket(usdce)}, PathUSD ${bucket(pathusd)}`);
 const spendable = (usdce ?? 0) + (pathusd ?? 0);
 // An unreadable balance is not a green light: the guard's whole job is to
@@ -73,7 +73,7 @@ const spendable = (usdce ?? 0) + (pathusd ?? 0);
 // bounds a run that starts).
 if (usdce === null && pathusd === null) { console.error("REFUSING to run: Tempo balance unreadable (RPC) - cannot apply the balance floor"); process.exit(2); }
 if (spendable < MIN_BALANCE_USD) {
-  console.error(`REFUSING to run: burner holds under TEMPO_VOLUME_MIN_BALANCE_USD $${MIN_BALANCE_USD} on Tempo - top up (USDC.e preferred) before the next run`);
+  console.error("REFUSING to run: burner holds below its floor (TEMPO_VOLUME_MIN_BALANCE_USD) on Tempo - top up (USDC.e preferred) before the next run");
   process.exit(2);
 }
 
@@ -111,7 +111,7 @@ for (let i = 0; i < COUNT; i++) {
 }
 const secs = ((Date.now() - t0) / 1000).toFixed(0);
 const rate = ok / COUNT;
-console.log(`\ntempo-volume: ${ok}/${COUNT} settled at $0.001 in ${secs}s (${fail} failed${lastErr ? `, last: ${lastErr}` : ""})${refs.length ? `\n  sample txs: ${refs.map((r) => `https://explore.tempo.xyz/tx/${r}`).join(" ")}` : ""}`);
+console.log(`\ntempo-volume: ${ok}/${COUNT} settled at list price in ${secs}s (${fail} failed${lastErr ? `, last: ${lastErr}` : ""})${refs.length ? `\n  sample txs: ${refs.map((r) => `https://explore.tempo.xyz/tx/${r}`).join(" ")}` : ""}`);
 const after = await erc20(USDCE);
 if (after !== null && usdce !== null) console.log(`  USDC.e spent this run ~$${(usdce - after).toFixed(3)}; burner now ${bucket(after)}`);
 if (rate < MIN_SUCCESS) { console.error(`TEMPO VOLUME UNDER ${Math.round(MIN_SUCCESS * 100)}% (${ok}/${COUNT})`); process.exit(1); }
