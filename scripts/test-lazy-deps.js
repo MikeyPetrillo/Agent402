@@ -16,7 +16,7 @@
 //     the count.
 // Offline: the examples used here carry their input inline.
 import { spawn } from "node:child_process";
-import { readFileSync, mkdtempSync } from "node:fs";
+import { existsSync, readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
@@ -55,6 +55,11 @@ async function boot(extraEnv) {
   };
   s.stop = async () => { proc.kill("SIGTERM"); await new Promise((res) => { proc.once("exit", res); setTimeout(res, 5000); }); };
   await s.until(/Agent402 listening on/, 60_000);
+  // The hook writes the graph from a timer armed during the entry module's
+  // evaluation; under a loaded runner that timer can fire after the listen
+  // line, so wait for the file itself rather than assume the order.
+  for (let i = 0; i < 300 && !existsSync(s.graphFile); i++) await new Promise((r) => setTimeout(r, 50));
+  if (!existsSync(s.graphFile)) throw new Error(`boot graph never written to ${s.graphFile}; server log tail: ${s.log.slice(-1500)}`);
   return s;
 }
 
