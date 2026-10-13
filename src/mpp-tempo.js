@@ -400,19 +400,30 @@ export function classifyTempoRefusal(e) {
   return "unknown";
 }
 
+// The only relay text a buyer ever reads: a plain-prose sentence (letters,
+// spaces, sentence punctuation), such as the relay naming which of its
+// dependencies is down. A message carrying anything else (a digit, a bracket,
+// a code, an identifier) is not quoted and the fixed detail stands.
+const RELAY_PROSE = /^[A-Za-z][A-Za-z ,.'-]{0,159}$/;
+export function quotableRelayMessage(message) {
+  const s = String(message || "").trim();
+  return RELAY_PROSE.test(s) ? s : null;
+}
+
 /** The problem document for a refusal class. The class also rides in
  *  `details.reason` so a client can switch on it without parsing prose.
  *  `relayMessage` (the relay's own `error.message`) is quoted inside the
- *  detail only for relay-dependency-unavailable, addresses masked: it is the
- *  relay naming which of its dependencies is down, which the buyer can act
- *  on, and that class never carries a verdict on the credential. */
+ *  detail only for relay-dependency-unavailable and only when it is plain
+ *  prose (quotableRelayMessage): it is the relay naming which of its
+ *  dependencies is down, which the buyer can act on, and that class never
+ *  carries a verdict on the credential. */
 export function tempoRefusalProblem(cls, fallbackReason, { relayMessage = null } = {}) {
   const c = TEMPO_REFUSAL_CLASSES[cls] || TEMPO_REFUSAL_CLASSES.unknown;
   let detail = c.detail;
   if (cls === "unknown" && fallbackReason) detail = `Payment verification failed: ${String(fallbackReason).slice(0, 160)}`;
-  else if (cls === "relay-dependency-unavailable" && relayMessage) {
-    const said = maskAddresses(redactApiKey(relayMessage)).replace(/["\\]/g, "").slice(0, 160);
-    detail = `The Tempo payment relay reported one of its own dependencies temporarily unavailable ("${said}"), so the credential was not checked and nothing was charged.`;
+  else if (cls === "relay-dependency-unavailable") {
+    const said = quotableRelayMessage(relayMessage);
+    if (said) detail = `The Tempo payment relay reported one of its own dependencies temporarily unavailable ("${said}"), so the credential was not checked and nothing was charged.`;
   }
   return mppProblem(c.kind, detail, { status: c.status, hint: c.hint, details: { reason: cls in TEMPO_REFUSAL_CLASSES ? cls : "unknown", charged: false } });
 }

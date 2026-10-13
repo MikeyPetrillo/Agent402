@@ -617,7 +617,7 @@ function isDeepOrderOk(actual, expected) {
 // buyer can act on, every refusal is logged, a relay outage is a 503, a bad
 // body is refused before the relay, and a client that hung up is not charged.
 // ---------------------------------------------------------------------------
-const { classifyTempoRefusal, TEMPO_REFUSAL_CLASSES, bindingRefusal } = await import("../src/mpp-tempo.js");
+const { classifyTempoRefusal, TEMPO_REFUSAL_CLASSES, bindingRefusal, tempoRefusalProblem } = await import("../src/mpp-tempo.js");
 async function withWarnings(fn) {
   const warned = [];
   const orig = console.warn;
@@ -647,6 +647,12 @@ async function withWarnings(fn) {
   ok(classifyTempoRefusal(Object.assign(new Error("Payment verification failed."), { details: { code: "expired" } })) === "expired", "case L: relay code expired -> expired");
   ok(classifyTempoRefusal(Object.assign(new Error("Payment verification failed."), { details: { code: "insufficient_funds" } })) === "insufficient-funds", "case L: relay code insufficient_funds -> insufficient-funds");
   ok(classifyTempoRefusal(Object.assign(new Error("Transaction hash has already been used"), {})) === "replay", "case L: an already-used hash is replay");
+  const quoted = tempoRefusalProblem("relay-dependency-unavailable", null, { relayMessage: "Address screening is unavailable. Retry later." });
+  ok(/\("Address screening is unavailable\. Retry later\."\)/.test(quoted.detail) && /nothing was charged/.test(quoted.detail), "case L: a plain-prose relay message is quoted in the dependency detail");
+  for (const m of ["Address screening is unavailable (acct 8f3a)", "Screening down; ref 0x2222222222222222222222222222222222222222", "Retry later. key=tempo-live-abc", "", null]) {
+    const p = tempoRefusalProblem("relay-dependency-unavailable", null, { relayMessage: m });
+    ok(p.detail === TEMPO_REFUSAL_CLASSES["relay-dependency-unavailable"].detail && !p.detail.includes("("), `case L: a relay message with anything beyond prose is not quoted (${JSON.stringify(m)})`);
+  }
   const secretish = "tempo-api-key-SECRET-123";
   const leaky = traced(`relay /v1/mpp/validate HTTP 200 {"error":{"message":"memo is not bound to this challenge (key ${secretish})"}}`);
   const cls = classifyTempoRefusal(leaky);
@@ -724,8 +730,8 @@ async function withWarnings(fn) {
   if (priorKey === undefined) delete process.env.TEMPO_API_KEY;
   ok(r.status === 503 && Number(r.retry) > 0, `case N2: a relay dependency outage answers 503 with Retry-After (got ${r.status}, Retry-After ${r.retry})`);
   ok(r.body.type === "https://paymentauth.org/problems/internal-payment-error" && r.body.details?.reason === "relay-dependency-unavailable" && r.body.details?.charged === false && /nothing was charged/i.test(r.body.detail), `case N2: the problem names the class and says nothing was charged (${r.body.details?.reason})`);
-  ok(/Address screening is unavailable\. Retry later\./.test(r.body.detail) && !/not accepting requests from this server/.test(r.body.detail), `case N2: the detail carries the relay's own words, not ours (${r.body.detail})`);
-  ok(/0x<addr>/.test(r.body.detail) && !r.body.detail.includes(payer) && !r.body.detail.includes(KEY) && !JSON.stringify(r.body).includes(KEY), "case N2: the detail masks the address and never carries the api key");
+  ok(!/Address screening/.test(r.body.detail) && /temporarily unavailable/.test(r.body.detail) && !/not accepting requests from this server/.test(r.body.detail), `case N2: a relay message that is not plain prose is not quoted; the fixed detail stands (${r.body.detail})`);
+  ok(!r.body.detail.includes(payer) && !r.body.detail.includes("0x") && !r.body.detail.includes(KEY) && !JSON.stringify(r.body).includes(KEY), "case N2: the body carries neither the address nor the api key");
   ok(/same credential/.test(r.body.hint) && /x402/.test(r.body.hint) && /MPP evm/.test(r.body.hint) && /Base/.test(r.body.hint), `case N2: the hint offers the same credential again and x402 or MPP on Base (${r.body.hint})`);
   ok(!handlerRan && !broadcastCalled, "case N2: no handler run, no broadcast");
   ok(tempoLeads({ ip: "127.0.0.1", headers: { "user-agent": "agent/10" } }) === true, "case N2: the relay's dependency outage does not demote the buyer's tempo challenge");
