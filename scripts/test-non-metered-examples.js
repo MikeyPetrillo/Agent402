@@ -251,9 +251,14 @@ function upstreamAnswersRunner(label) {
   if (!runnerProbeMemo.has(label)) {
     // The same User-Agent the tool sends: an upstream that refuses our
     // identity from this runner must read as refusing, not as answering.
+    // Answering means a 2xx to the exact example request: a 4xx to it is the
+    // upstream refusing that request (the runner, or the report it names),
+    // and the tool's timeout on the same request is then the upstream's, not
+    // ours. Only the tool's own "<Label> upstream timed out" 504 reaches this
+    // probe, so a tool defect that answers anything else still fails.
     const t0 = Date.now();
     runnerProbeMemo.set(label, fetch(RUNNER_PROBES[label], { headers: { "User-Agent": RUNNER_PROBE_UA, Accept: "application/json" }, signal: AbortSignal.timeout(10_000) })
-      .then((res) => { console.log(`\n# runner probe ${label}: HTTP ${res.status} in ${Date.now() - t0} ms`); return res.status < 500; })
+      .then((res) => { console.log(`\n# runner probe ${label}: HTTP ${res.status} in ${Date.now() - t0} ms${res.ok ? "" : " (not answering the example request)"}`); return res.ok; })
       .catch((e) => { console.log(`\n# runner probe ${label}: ${e?.name || "error"} after ${Date.now() - t0} ms`); return false; }));
   }
   return runnerProbeMemo.get(label);
