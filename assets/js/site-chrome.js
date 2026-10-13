@@ -138,8 +138,10 @@ window.a402BreakCode=function(root){try{
       t.parentNode.replaceChild(f,t);});
   }
 }catch(e){}};
-/* Tails are measured, so binding waits for the web fonts (the fallback face measures differently). */
-window.a402BindWidows=function(root){if(document.fonts&&document.fonts.status!=='loaded'&&document.fonts.ready){document.fonts.ready.then(function(){a402BindNow(root);},function(){a402BindNow(root);});return;}a402BindNow(root);};
+/* Tails are measured, so binding waits for the web fonts (the fallback face measures differently).
+   A font starts loading at the first layout that needs it, and before that layout document.fonts.status
+   still reads "loaded"; a forced layout starts every fetch, so the status read after it is the real one. */
+window.a402BindWidows=function(root){void document.documentElement.offsetHeight;if(document.fonts&&document.fonts.status!=='loaded'&&document.fonts.ready){document.fonts.ready.then(function(){a402BindNow(root);},function(){a402BindNow(root);});return;}a402BindNow(root);};
 /* Two passes: binding a table cell changes its column, which moves its neighbours' lines, so the second pass binds against the settled layout. */
 var a402BindNow=function(root){if(window.a402BreakCode)window.a402BreakCode(root);a402BindPass(root);a402BindPass(root);};
 var a402BindPass=function(root){try{
