@@ -185,6 +185,21 @@ export function hintFor({ reason, balanceUsd, priceUsd, network, payer }) {
   const price = Number.isFinite(priceUsd) ? `$${priceUsd.toFixed(priceUsd < 0.01 ? 4 : 3)}` : "the listed price";
   const short = payer ? `${payer.slice(0, 6)}...${payer.slice(-4)}` : "your wallet";
   const reverted = /execution reverted|contract call failed|insufficient|balance/i.test(r);
+  // The facilitator simulated the transfer and the wallet came up short, said
+  // in the facilitator's own words: an AVM simulation reports "underflow on
+  // subtracting <price> from sender amount <held>". On Base the balance read
+  // below answers with the figure; on every other rail this text is the only
+  // reading there is, and without this branch the refusal fell through to
+  // "unclassified", which told the buyer the fault might be ours.
+  const cameUpShort = /underflow on subtracting|overspend|insufficient[ _](funds|balance)|not enough (funds|balance)/i.test(r);
+  if (cameUpShort && balanceUsd == null) {
+    const rail = network ? ` on ${String(network).split(":")[0]}` : "";
+    return {
+      reason: "insufficient-funds",
+      retry: "fund-wallet",
+      hint: `${short} holds less of the asset than this call costs (${price})${rail}. Fund the wallet, or pay on another network listed in accepts, then sign a NEW authorization; re-sending this one will keep failing.`,
+    };
+  }
   if (reverted && balanceUsd != null && (balanceUsd <= 0 || (Number.isFinite(priceUsd) && balanceUsd < priceUsd))) {
     // MEASURED 2026-09-19: 6,473 of 6,582 Base verify failures in 30 days came
     // from 20 wallets in this exact state - holding USDC, just less than the
@@ -197,6 +212,7 @@ export function hintFor({ reason, balanceUsd, priceUsd, network, payer }) {
     // catalog is reachable; the sentence degrades gracefully without it.
     const funded = balanceUsd > 0;
     return {
+      reason: "insufficient-funds",
       retry: funded ? "lower-price-route" : "fund-wallet",
       wantsAffordable: funded,
       hint: `${short} holds $${balanceUsd.toFixed(4)} USDC on Base and this call costs ${price}. ${funded
@@ -221,13 +237,21 @@ export function hintFor({ reason, balanceUsd, priceUsd, network, payer }) {
  *  the failed CREDENTIAL's key; `paymentPayload` is the decoded payload the
  *  paywall verified (`payer` alone is accepted for tests). */
 export async function noteVerifyFailure({ paymentPayload, payer, network, reason, priceUsd, now = Date.now, balanceReader = usdcBalanceOnBase }) {
-  const from = String(payer || paymentPayload?.payload?.authorization?.from || "").toLowerCase();
-  if (!/^0x[0-9a-f]{40}$/.test(from)) return null;
+  const rawFrom = String(payer || paymentPayload?.payload?.authorization?.from || "").toLowerCase();
+  // An EVM credential names its payer (authorization.from); an AVM, SVM or
+  // Stellar one does not, and until 2026-10-12 that ended the hint here, so a
+  // refusal on those rails stayed unexplained. The hint is keyed by the
+  // credential, which every scheme has; only the Base balance read needs the
+  // address.
+  const from = /^0x[0-9a-f]{40}$/.test(rawFrom) ? rawFrom : null;
   const key = paymentPayload ? credentialKeyOf(paymentPayload) : null;
+  if (!from && !key) return null;
   const isBase = /^eip155:8453$/.test(String(network || ""));
-  const balanceUsd = isBase ? await balanceReader(from) : null;
+  const balanceUsd = isBase && from ? await balanceReader(from) : null;
   const h = hintFor({ reason, balanceUsd, priceUsd, network, payer: from });
-  const entry = { ...h, balanceUsd, priceUsd, network, reason: String(reason || "").slice(0, 200), at: now() };
+  // `reason` on the entry is the facilitator's text (telemetry reads it);
+  // the refusal class the hint names rides as `reasonClass`.
+  const entry = { ...h, balanceUsd, priceUsd, network, reasonClass: h.reason || null, reason: String(reason || "").slice(0, 200), at: now() };
   if (key) { hints.set(key, entry); bounded(hints); }
   return { ...entry, bucket: balanceBucket(balanceUsd, priceUsd), key };
 }
@@ -273,7 +297,10 @@ export function verifyHintMiddleware() {
         const h = hintForCredential(credentialKeyFromHeader(header));
         if (h) {
           if (!res.headersSent) res.setHeader("Retry-After", h.retry === "fund-wallet" ? "60" : "5");
-          return origJson({ ...body, hint: h.hint, retry: h.retry, ...(h.balanceUsd != null ? { payerUsdcOnBase: Number(h.balanceUsd.toFixed(6)) } : {}) });
+          // A hint that names its class carries it as `reason`, the field
+          // every refusal class is read from (and the paywall rollup).
+          if (h.reasonClass) req.__paymentRejectReason = h.reasonClass;
+          return origJson({ ...body, ...(h.reasonClass ? { reason: h.reasonClass } : {}), hint: h.hint, retry: h.retry, ...(h.balanceUsd != null ? { payerUsdcOnBase: Number(h.balanceUsd.toFixed(6)) } : {}) });
         }
         // No facilitator hint means the payment never REACHED the facilitator:
         // @x402/express refused it first and threw the reason away. Read the

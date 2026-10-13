@@ -13,6 +13,7 @@
 // This is the exact defect we diagnosed in a third party the same day — a seller
 // at health 1 with dead paid routes — at scale, in our own data, on a public
 // page. A crawl completing is not a seller answering.
+import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
 import { loadPersistedIndexCache, indexSnapshot, sellerDetail, routableSellerSummaries } from "../src/x402-index.js";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";

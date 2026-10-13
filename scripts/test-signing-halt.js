@@ -4,6 +4,7 @@
 // Both halves run their CONTROL FIRST. A guard that only ever refuses would pass
 // while proving nothing, and a persistence test whose ceiling never refuses in
 // the first place proves nothing either.
+import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
 import { readFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

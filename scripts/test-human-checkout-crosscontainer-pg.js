@@ -29,6 +29,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { requireTestPg } from "./lib/test-pg.js";
 import { startPgRelay } from "./lib/pg-relay.js";
+import { hookStatements } from "./lib/pg-statement-hook.js";
 
 const SELF = fileURLToPath(import.meta.url);
 const stripeOf = (refunds) => ({
@@ -42,27 +43,27 @@ if (process.argv[2] === "child") {
   process.env.HUMAN_CHECKOUT_REPLAY_MS = "200";
   const { createHumanCheckout } = await import("../src/human-checkout.js");
   const sdb = await import("../src/state-db.js");
+  // Statements are hooked on both paths (pool.query and a checked-out client's
+  // query): stateQuery runs each statement on a checked-out client, so a hook
+  // on pool.query alone never sees the store's own reads and writes.
   if (process.env.XC_BEAT_BEFORE_CLAIM) {
     // The owner's heartbeat lands after B read the claim and before B's claim statement.
     const pool = await sdb.stateDb();
     const orig = pool.query.bind(pool);
-    pool.query = async (text, values, cb) => {
-      const sql = typeof text === "string" ? text : text?.text || "";
-      if (/DO UPDATE SET body = EXCLUDED\.body/.test(sql) && /'beatAt'/.test(sql) && Array.isArray(values)) {
+    hookStatements(pool, async (sql, values, run) => {
+      if (/DO UPDATE SET body = EXCLUDED\.body/.test(sql) && /'beatAt'/.test(sql) && values.length > 1) {
         await orig(`UPDATE ${sdb.stateDbSchema()}.records SET body = body || jsonb_build_object('beatAt', $2::bigint) WHERE collection = 'human-checkout' AND id = $1`, [values[1], Date.now()]);
       }
-      return orig(text, values, cb);
-    };
+      return run();
+    });
   }
   if (process.env.XC_SLOW_REPLAY) {
     // The boot replay of the journal is slow to land: B's first poll reads the stale claim before it does.
     const pool = await sdb.stateDb();
-    const orig = pool.query.bind(pool);
-    pool.query = async (text, values, cb) => {
-      const sql = typeof text === "string" ? text : text?.text || "";
+    hookStatements(pool, async (sql, values, run) => {
       if (/'refundId' IS NULL/.test(sql)) await new Promise((r) => setTimeout(r, 400));
-      return orig(text, values, cb);
-    };
+      return run();
+    });
   }
   let gens = 0; const refunds = [];
   const hc = createHumanCheckout({ stripe: stripeOf(refunds), baseUrl: "https://example.test", storeDir: process.env.XC_SAME_DIR || mkdtempSync(join(tmpdir(), "hc-xc-B-")), log: () => {}, generate: async () => { gens++; return { report: "# B" }; } });

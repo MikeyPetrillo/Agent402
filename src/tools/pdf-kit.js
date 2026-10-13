@@ -4,7 +4,7 @@
 // safeFetch); manipulation tools return the new PDF as base64 so agents can
 // chain them. The transforms are pure functions over Buffers (testable in
 // isolation); the handlers just fetch then delegate.
-import { PDFDocument, degrees } from "pdf-lib";
+import { loadPdfLib } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
@@ -24,6 +24,7 @@ const b64 = (bytes) => Buffer.from(bytes).toString("base64");
 // load unless told not to. Harmless for a PDF we produce, wrong for a read:
 // pdf-info reported every document as made by pdf-lib a moment ago.
 async function load(buffer, label = "url", { readOnly = false } = {}) {
+  const { PDFDocument } = await loadPdfLib();
   try {
     return await PDFDocument.load(buffer, { ignoreEncryption: true, ...(readOnly ? { updateMetadata: false } : {}) });
   } catch {
@@ -70,6 +71,7 @@ export async function pdfInfo(buffer) {
   };
 }
 export async function mergePdfs(buffers) {
+  const { PDFDocument } = await loadPdfLib();
   const out = await PDFDocument.create();
   for (const [idx, buf] of buffers.entries()) {
     const doc = await load(buf, `urls[${idx}]`);
@@ -80,6 +82,7 @@ export async function mergePdfs(buffers) {
   return { pages: out.getPageCount(), bytes: bytes.length, pdfBase64: b64(bytes) };
 }
 export async function extractPages(buffer, spec) {
+  const { PDFDocument } = await loadPdfLib();
   const doc = await load(buffer);
   const indices = parsePages(spec, doc.getPageCount());
   if (!indices.length) throw bad("No pages selected");
@@ -91,6 +94,7 @@ export async function extractPages(buffer, spec) {
 }
 export async function rotatePdf(buffer, deg, spec) {
   if (![90, 180, 270].includes(deg)) throw bad('"degrees" must be 90, 180, or 270');
+  const { degrees } = await loadPdfLib();
   const doc = await load(buffer);
   const indices = new Set(parsePages(spec, doc.getPageCount()));
   doc.getPages().forEach((page, idx) => {
@@ -100,6 +104,7 @@ export async function rotatePdf(buffer, deg, spec) {
   return { pages: doc.getPageCount(), bytes: bytes.length, pdfBase64: b64(bytes) };
 }
 export async function imagesToPdf(buffers) {
+  const { PDFDocument } = await loadPdfLib();
   const out = await PDFDocument.create();
   for (const [idx, buf] of buffers.entries()) {
     const head = buf.subarray(0, 4).toString("hex");

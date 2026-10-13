@@ -70,6 +70,7 @@ function fakeLedger(rows, { voidMarks = [] } = {}) {
   return {
     status,
     claim: async (id) => { if (status.get(id) !== "owed" || marks.has(evidence.get(id))) return false; status.set(id, "sending"); return true; },
+    release: async (id, note) => { if (status.get(id) !== "sending" || !String(note || "").trim()) return false; status.set(id, "owed"); return true; },
     markPaid: async (id, tx) => { if (status.get(id) !== "sending" || !tx) throw new Error("mark-paid refused"); status.set(id, "paid"); },
     owedRows: () => rows.filter((r) => status.get(r.id) === "owed").map((r) => ({ ...r, status: "owed" })),
   };
@@ -166,6 +167,68 @@ const planOptions = { senders: ALL_SENDERS, maxEachUsd: 0.25, maxTotalUsd: 2, ma
   const { calls, deps } = stubDeps(ledger, { prepare: async () => { throw new Error("the payer holds no USDC account"); } });
   const out = await executeRefunds(planRefunds(ROWS().slice(0, 1), planOptions).send, { ...deps, log: quiet });
   ok(out.failed === 1 && ledger.status.get(1) === "owed" && !calls.send.length && !calls.order.some((x) => x.startsWith("claim")), "a send that cannot be prepared claims nothing and sends nothing (the row stays owed)");
+}
+
+// ---- a send that fails BEFORE broadcast releases the claimed row; one after it does not ----
+{
+  const { isPreBroadcastFailure, prepareEvm } = rr;
+  // The classifier: the tag the sender sets, viem's insufficient-funds error
+  // (by name and by text, including one wrapped as a cause), and nothing else.
+  const tagged = Object.assign(new Error("nonce read failed"), { preBroadcast: true });
+  const viemLike = Object.assign(new Error("The total cost (gas * gas fee + value) of executing this transaction exceeds the balance of the account."), { name: "InsufficientFundsError" });
+  const wrapped = Object.assign(new Error("Transaction failed"), { name: "TransactionExecutionError", cause: Object.assign(new Error("insufficient funds for gas * price + value"), { name: "RpcRequestError" }) });
+  ok(isPreBroadcastFailure(tagged) && isPreBroadcastFailure(viemLike) && isPreBroadcastFailure(wrapped), "a tagged build/sign failure and an insufficient-funds refusal (bare or as a cause) are pre-broadcast");
+  ok(!isPreBroadcastFailure(new Error("timeout waiting for the receipt")) && !isPreBroadcastFailure(new Error("fetch failed")) && !isPreBroadcastFailure(null), "a timeout, a transport error or nothing at all is not: money may have moved");
+
+  // The executor: a claimed EVM row whose send fails pre-broadcast goes back to owed, noted.
+  const ledger = fakeLedger(ROWS());
+  const releases = [];
+  const { calls, deps } = stubDeps(ledger);
+  const out = await executeRefunds(planRefunds(ROWS().slice(2, 3), planOptions).send, {
+    ...deps,
+    send: async (row) => { calls.send.push(row.id); throw viemLike; },
+    release: async (id, note) => { releases.push({ id, note }); return ledger.release(id, note); },
+    log: quiet,
+  });
+  ok(calls.order.includes("claim:3") && calls.send.includes(3), "the row was claimed and the send attempted");
+  ok(ledger.status.get(3) === "owed" && out.released === 1 && out.failed === 1 && out.ok === 0, `...and is back to owed, counted released and failed (${JSON.stringify(out)})`);
+  ok(releases.length === 1 && releases[0].id === 3 && /released, the send failed before broadcast/.test(releases[0].note) && /exceeds the balance/.test(releases[0].note), "...with the reason in the release note");
+  // A rerun sends it again (the row is owed, the claim succeeds).
+  const again = await executeRefunds(planRefunds(ledger.owedRows().filter((r) => r.id === 3), planOptions).send, { ...stubDeps(ledger).deps, log: quiet });
+  ok(again.ok === 1 && ledger.status.get(3) === "paid", "the next run pays the released row");
+
+  // Control: a failure that may have broadcast leaves the row sending and never calls release.
+  const stuckLedger = fakeLedger(ROWS());
+  const stuckReleases = [];
+  const stuck = await executeRefunds(planRefunds(ROWS().slice(2, 3), planOptions).send, {
+    ...stubDeps(stuckLedger).deps,
+    send: async () => { throw new Error("The request took too long to respond (timeout)"); },
+    release: async (id, note) => { stuckReleases.push(id); return stuckLedger.release(id, note); },
+    log: quiet,
+  });
+  ok(stuck.failed === 1 && stuck.released === 0 && stuckLedger.status.get(3) === "sending" && stuckReleases.length === 0, "a failure after the broadcast may have moved money: the row stays sending, nothing is released");
+  // Without a release dependency the executor behaves as before.
+  const plain = fakeLedger(ROWS());
+  const noRelease = await executeRefunds(planRefunds(ROWS().slice(2, 3), planOptions).send, { ...stubDeps(plain).deps, send: async () => { throw viemLike; }, log: quiet });
+  ok(noRelease.failed === 1 && noRelease.released === 0 && plain.status.get(3) === "sending", "with no release step the row stays sending (the old shape)");
+
+  // prepareEvm refuses before the claim when the wallet holds less native coin than the gas needs.
+  const row = { ...ROWS()[2] };
+  const fakeClient = (native) => ({
+    readContract: async () => 6,
+    estimateGas: async () => 60_000n,
+    estimateFeesPerGas: async () => ({ maxFeePerGas: 25_000_000_000n, maxPriorityFeePerGas: 1n }),
+    getBalance: async () => native,
+  });
+  const accepts = { asset: "0x" + "20".repeat(20) };
+  let refused = null;
+  try { await prepareEvm(row, accepts, { clientFor: async () => ({ client: fakeClient(1n), account: { address: "0x" + "11".repeat(20) } }) }); } catch (e) { refused = e; }
+  ok(refused && /too little of the native coin/.test(refused.message) && /nothing was claimed or sent/.test(refused.message), `a wallet with no gas is refused at prepare, before any claim (${refused?.message.slice(0, 60)})`);
+  const prep = await prepareEvm(row, accepts, { clientFor: async () => ({ client: fakeClient(10n ** 18n), account: { address: "0x" + "11".repeat(20) } }) });
+  ok(prep.gas === 60_000n && prep.need === 60_000n * 25_000_000_000n && prep.amount === 10_000n && typeof prep.data === "string", `a funded wallet prepares the transfer (gas ${prep.gas}, amount ${prep.amount} at six decimals)`);
+  const src = readFileSync(new URL("./refund-run.js", import.meta.url), "utf8");
+  ok(/if \(family === "evm"\) return prepareEvm\(row, accepts\[row\.network\]\);/.test(src) && /release: releaseClaim,/.test(src) && /return sendEvm\(row, accepts\[row\.network\], prep\);/.test(src), "main wires the EVM prepare, the release step and the prepared send");
+  ok(/signTransaction\(request\)/.test(src) && /sendRawTransaction\(\{ serializedTransaction: serialized \}\)/.test(src) && /throw markPreBroadcast\(e\)/.test(src), "the EVM sender signs first (tagged pre-broadcast) and broadcasts the signed bytes separately");
 }
 
 // ---- an unverified inbound payment is never claimed -------------------------------------

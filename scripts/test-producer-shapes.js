@@ -23,6 +23,7 @@
 // So this asserts the CONTRACT BETWEEN modules, using real producer output and
 // no fixtures: for each (producer, consumer) pair, the fields the consumer
 // reads must exist on what the producer returns.
+import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
 import { bazaarItemToTool, normaliseOpenapiTools, routableSellerSummaries, sellerDetail, loadPersistedIndexCache } from "../src/x402-index.js";
 import { baseNetworkPayTo } from "../src/settlement-proof.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";

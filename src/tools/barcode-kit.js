@@ -6,16 +6,11 @@
 // 1D symbologies (EAN/UPC/Code39/Code128/ITF/Codabar); jsQR is a QR fallback.
 import { PNG } from "pngjs";
 import jpeg from "jpeg-js";
-import jsQR from "jsqr";
-// Imported via the default export, not named ESM imports: @zxing/library 0.23
-// ships CJS only, so `import { BarcodeFormat } from …` stops resolving there
-// and the whole server fails to boot. The default export carries every symbol
-// on both 0.21 and 0.23, so this form survives the bump either way.
-import zxing from "@zxing/library";
-
-const {
-  RGBLuminanceSource, BinaryBitmap, HybridBinarizer, MultiFormatReader, BarcodeFormat, DecodeHintType,
-} = zxing;
+// zxing and jsQR load on the first decode (./lazy-deps.js), not at boot.
+// zxing is read through its default export, not named ESM imports:
+// @zxing/library 0.23 ships CJS only, so a named import stops resolving there.
+// The default export carries every symbol on both 0.21 and 0.23.
+import { loadZxing, loadJsQR } from "./lazy-deps.js";
 
 function bad(message) {
   const err = new Error(message);
@@ -67,7 +62,10 @@ function luminance(rgba, width, height) {
   return lum;
 }
 
-function decodeBarcode({ data, width, height }) {
+function decodeBarcode({ data, width, height }, zxing, jsQR) {
+  const {
+    RGBLuminanceSource, BinaryBitmap, HybridBinarizer, MultiFormatReader, BarcodeFormat, DecodeHintType,
+  } = zxing;
   // Primary: zxing multi-format.
   try {
     const src = new RGBLuminanceSource(luminance(data, width, height), width, height);
@@ -105,6 +103,10 @@ export const BARCODE_TOOLS = [
       },
       output: { example: { found: true, format: "QR_CODE", text: "AGENT402", decoder: "zxing" } },
     },
-    handler: (i) => decodeBarcode(toRgba(i.image)),
+    handler: async (i) => {
+      const rgba = toRgba(i.image);
+      const [zxing, jsQR] = await Promise.all([loadZxing(), loadJsQR()]);
+      return decodeBarcode(rgba, zxing, jsQR);
+    },
   },
 ];

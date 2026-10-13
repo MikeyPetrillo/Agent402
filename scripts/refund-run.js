@@ -41,6 +41,13 @@
 //     a rerun never sends it again. The server refuses the claim of a row
 //     that is void, or whose evidence carries a void mark (a Tempo push
 //     transfer claimed for the request it paid), so a voided debt is never sent.
+//   * what a send needs is read BEFORE the claim (prepare: balances, the
+//     payer's token account, and on EVM chains the gas estimate against the
+//     wallet's native balance), so a wallet that cannot pay leaves the row
+//     owed. A send that still fails before anything is broadcast (building,
+//     signing, or a node refusing the bytes for lack of funds) releases the
+//     claimed row back to owed with the reason as its note; a failure after
+//     the broadcast leaves it `sending` for a human, as before.
 //   * Tempo and Solana repayments are also proven OUTBOUND before the row is
 //     marked paid: the same on-chain check (src/payment-verify.js) is run on
 //     the refund itself, from our sending wallet to the payer, for at least
@@ -381,33 +388,88 @@ export function refundMemoHex(row) {
 
 const decimalsCache = new Map();
 
-async function sendEvm(row, accepts) {
+/**
+ * A send failure that cannot have moved money: raised while the transaction
+ * was being built, estimated or signed (`preBroadcast` is set on it there), or
+ * a node's refusal to accept the signed transaction for lack of funds, which
+ * never reaches a mempool. Only such a failure may hand a claimed row back to
+ * owed (executeRefunds); anything later, a broadcast that timed out or a
+ * receipt that never came, stays `sending` for a human.
+ */
+export function isPreBroadcastFailure(e) {
+  if (!e || typeof e !== "object") return false;
+  if (e.preBroadcast === true) return true;
+  const texts = [];
+  for (let x = e, i = 0; x && typeof x === "object" && i < 6; x = x.cause, i++) texts.push(`${x.name || ""} ${x.shortMessage || ""} ${x.message || ""}`);
+  return /InsufficientFundsError|exceeds the balance of the account|insufficient funds/i.test(texts.join(" "));
+}
+const markPreBroadcast = (e) => { if (e && typeof e === "object") { try { e.preBroadcast = true; } catch { /* frozen */ } } return e; };
+
+async function evmClientFor(row) {
   const { createWalletClient, http, publicActions, defineChain } = await import("viem");
   const { privateKeyToAccount } = await import("viem/accounts");
   const id = Number(String(row.network).split(":")[1]);
   const rpc = (process.env[`REFUND_RPC_${id}`] || EVM_RPCS[row.network] || "").trim();
   if (!rpc) throw new Error(`no RPC for ${row.network}`);
-  const token = accepts?.asset;
-  if (!/^0x[0-9a-fA-F]{40}$/.test(String(token))) throw new Error(`no ERC-20 asset in live accepts for ${row.network}`);
-  if (!/^0x[0-9a-fA-F]{40}$/.test(String(row.payer))) throw new Error(`payer is not an EVM address (${tag(row.payer)})`);
   const account = privateKeyToAccount(process.env.REFUND_EVM_KEY.trim());
   const chain = defineChain({ id, name: row.network, nativeCurrency: { name: "n", symbol: "n", decimals: 18 }, rpcUrls: { default: { http: [rpc] } } });
   // viem's default retry (3 tries, 150 ms) gives up inside a public RPC's 429
   // window. Re-sending the same signed raw transaction is idempotent.
   const client = createWalletClient({ account, chain, transport: http(rpc, { retryCount: 5, retryDelay: 1000 }) }).extend(publicActions);
-  const erc20 = [
-    { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
-    { type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "bool" }] },
-  ];
+  return { client, account };
+}
+const ERC20 = [
+  { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
+  { type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "bool" }] },
+];
+
+/** Reads before the claim for an EVM refund: the token and its decimals, the
+ *  transfer data, the gas the transfer needs and the wallet's NATIVE balance
+ *  to pay it. The refund wallet holds the stablecoin on every chain it refunds
+ *  and the chain's own coin only where someone put it there, so a chain with
+ *  no gas refused the send after the claim and left the row `sending` for a
+ *  human. A refusal here leaves the row owed. */
+export async function prepareEvm(row, accepts, { clientFor = evmClientFor } = {}) {
+  const token = accepts?.asset;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(token))) throw new Error(`no ERC-20 asset in live accepts for ${row.network} (nothing was claimed or sent)`);
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(row.payer))) throw new Error(`payer is not an EVM address (${tag(row.payer)}; nothing was claimed or sent)`);
+  const { client, account } = await clientFor(row);
   // Read decimals from the token itself - assuming 6 and being wrong about a
   // future asset would refund a millionth (or a million times) the debt.
   const decKey = `${row.network}:${String(token).toLowerCase()}`;
-  if (!decimalsCache.has(decKey)) decimalsCache.set(decKey, await client.readContract({ address: token, abi: erc20, functionName: "decimals" }));
+  if (!decimalsCache.has(decKey)) decimalsCache.set(decKey, await client.readContract({ address: token, abi: ERC20, functionName: "decimals" }));
   const decimals = decimalsCache.get(decKey);
   const amount = BigInt(Math.round(row.priceUsd * 10 ** Number(decimals)));
   const { encodeFunctionData, concat } = await import("viem");
-  const data = concat([encodeFunctionData({ abi: erc20, functionName: "transfer", args: [row.payer, amount] }), refundMemoHex(row)]);
-  const hash = await client.sendTransaction({ to: token, data });
+  // The payer is encoded lowercased: the ledger records addresses as the
+  // credential spelled them, and a mixed-case spelling that is not a checksum
+  // is refused by the encoder.
+  const data = concat([encodeFunctionData({ abi: ERC20, functionName: "transfer", args: [String(row.payer).toLowerCase(), amount] }), refundMemoHex(row)]);
+  const gas = await client.estimateGas({ account, to: token, data });
+  const fees = await client.estimateFeesPerGas().catch(async () => ({ gasPrice: await client.getGasPrice() }));
+  const perGas = BigInt(fees.maxFeePerGas ?? fees.gasPrice ?? 0n);
+  const need = gas * perGas;
+  const native = await client.getBalance({ address: account.address });
+  if (native < need) throw new Error(`the refund wallet holds too little of the native coin on ${row.network} to pay for gas (nothing was claimed or sent)`);
+  return { client, account, token, amount, data, gas, native, need };
+}
+
+async function sendEvm(row, accepts, prep) {
+  const p = prep?.client ? prep : await prepareEvm(row, accepts);
+  const { client, token, data, gas } = p;
+  // Build and sign first: a failure here never left this process, so it is
+  // marked pre-broadcast and the executor hands the row back to owed.
+  let serialized;
+  try {
+    const request = await client.prepareTransactionRequest({ to: token, data, gas });
+    serialized = await client.signTransaction(request);
+  } catch (e) { throw markPreBroadcast(e); }
+  // The broadcast itself. A node that refuses the signed bytes for lack of
+  // funds never admitted them to its pool, so that refusal is pre-broadcast
+  // too; any other failure here may have been broadcast and is not.
+  let hash;
+  try { hash = await client.sendRawTransaction({ serializedTransaction: serialized }); }
+  catch (e) { throw isPreBroadcastFailure(e) ? markPreBroadcast(e) : e; }
   // Wait for it to land before the next send picks a nonce: a load-balanced
   // public RPC can hand back a stale pending nonce. A slow receipt is not a
   // failure; the hash is broadcast and goes in the ledger either way.
@@ -597,17 +659,23 @@ export async function proveRefundSent(row, tx, prep, { verify, attempts = 10, de
  * (a refusal there leaves the row owed), CLAIM it, send, prove the send on
  * chain where the family requires it, then mark it paid. Every step is
  * injected so the order is tested with stubs; main() wires the real ones.
- * Returns { ok, failed, unverified, stuck }.
+ * A claimed row whose send failed BEFORE anything was broadcast
+ * (isPreBroadcastFailure) is released back to owed through `release`, with
+ * the reason as its note, so the next run retries it; any other failure after
+ * the claim leaves the row `sending` for a human.
+ * Returns { ok, failed, unverified, stuck, released }.
  */
 export async function executeRefunds(rows, {
   verifyInbound, claim, send, markPaid,
   prepare = async () => null,
   prove = async () => ({ verified: false, reason: "no outbound verifier" }),
+  release = null,
   pause = (ms) => new Promise((r) => setTimeout(r, ms)),
   log = console,
 } = {}) {
-  let ok = 0, failed = 0, unverified = 0, stuck = 0;
+  let ok = 0, failed = 0, unverified = 0, stuck = 0, released = 0;
   for (const row of rows || []) {
+    let claimedRow = false; // this run holds the row's claim (set once the claim succeeds)
     try {
       // PROVE THE PAYMENT BEFORE REPAYING IT. The debt was recorded on the
       // facilitator's success:true, which is unforgeable by a buyer but not
@@ -639,6 +707,7 @@ export async function executeRefunds(rows, {
         unverified++;
         continue;
       }
+      claimedRow = true;
       const tx = await send(row, proof, prep);
       if (OUTBOUND_PROOF_FAMILIES.includes(familyOf(row.network))) {
         const out = await prove(row, tx, prep, proof);
@@ -654,15 +723,30 @@ export async function executeRefunds(rows, {
       ok++;
       await pause(1500);
     } catch (e) {
+      const msg = (e?.shortMessage || e?.message || String(e)).slice(0, 160);
+      // A claimed row whose send failed before anything was broadcast cannot
+      // have moved money, so it goes back to owed with the reason as its note
+      // and the next run retries it. Only that class is released here.
+      if (claimedRow && typeof release === "function" && isPreBroadcastFailure(e)) {
+        let back = false;
+        try { back = await release(row.id, `refund-run: released, the send failed before broadcast (${msg.slice(0, 100)})`); }
+        catch (re) { log.error(`      release of #${row.id} failed: ${(re?.message || String(re)).slice(0, 120)}`); }
+        if (back) {
+          log.error(`FAIL  #${row.id}: ${msg}`);
+          log.error(`      -> released back to owed: nothing was broadcast; the next run retries it once the wallet can pay`);
+          failed++; released++;
+          continue;
+        }
+      }
       // If the failure came after the claim, the row is now stuck in `sending`
       // and will NOT be retried automatically - that is deliberate. Whether the
       // money left is exactly what a human must check before releasing it.
-      log.error(`FAIL  #${row.id}: ${(e?.message || String(e)).slice(0, 160)}`);
+      log.error(`FAIL  #${row.id}: ${msg}`);
       log.error(`      -> if this row is now 'sending', check the chain before resolving it; it will not auto-retry`);
       failed++;
     }
   }
-  return { ok, failed, unverified, stuck };
+  return { ok, failed, unverified, stuck, released };
 }
 
 /**
@@ -685,7 +769,7 @@ export async function refundRun({ rows, totals = {}, live = false, planOptions =
   if (!live) { log.log("\nDRY RUN - no money moved. Set REFUND_LIVE=true to execute."); return { plan, executed: false }; }
   if (!plan.send.length) { log.log("nothing to send."); return { plan, executed: false }; }
   const result = await executeRefunds(plan.send, { ...(await (typeof deps === "function" ? deps(plan) : deps)), log });
-  log.log(`\ndone: ${result.ok} paid, ${result.failed} failed, ${result.unverified} held unverified, ${result.stuck} sent and awaiting proof (all unpaid rows remain owed or sending)`);
+  log.log(`\ndone: ${result.ok} paid, ${result.failed} failed (${result.released || 0} released back to owed), ${result.unverified} held unverified, ${result.stuck} sent and awaiting proof (all unpaid rows remain owed or sending)`);
   return { plan, executed: true, result };
 }
 
@@ -722,6 +806,15 @@ async function markPaid(id, tx) {
   if (!res.ok) throw new Error(`mark-paid failed for row ${id}: HTTP ${res.status}`);
 }
 
+// Hand a claimed row back to owed (the server's "release" action, note
+// required). Only executeRefunds calls it, and only for a send that failed
+// before anything was broadcast.
+async function releaseClaim(id, note) {
+  const res = await ledgerUpdate({ id, action: "release", note });
+  if (res.ok) return true;
+  throw new Error(`release failed for row ${id}: HTTP ${res.status} (the row stays sending)`);
+}
+
 async function main() {
   if (!TOKEN) { console.error("AGENT402_OPERATOR_TOKEN is required"); process.exit(2); }
   const senders = {
@@ -754,15 +847,17 @@ async function main() {
         stellarConfirm: confirmStellarTransfer,
       }),
       claim: claimForSend,
+      release: releaseClaim,
       prepare: (row, proof) => {
         const family = familyOf(row.network);
         if (family === "tempo") return prepareTempo(row, proof, accepts[row.network]);
         if (family === "solana") return prepareSolana(row, proof, accepts[row.network]);
+        if (family === "evm") return prepareEvm(row, accepts[row.network]);
         return null;
       },
       send: (row, proof, prep) => {
         const family = familyOf(row.network);
-        if (family === "evm") return sendEvm(row, accepts[row.network]);
+        if (family === "evm") return sendEvm(row, accepts[row.network], prep);
         if (family === "stellar") return sendStellar(row);
         if (family === "algorand") return sendAlgorand(row);
         if (family === "tempo") return sendTempo(row, prep);

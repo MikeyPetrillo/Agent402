@@ -4,7 +4,7 @@
 // relies on is asserted here, so a change that quietly weakens an assertion
 // (a `populated` that accepts [], a 500 read as upstream) fails this file
 // before it can turn the corpus green.
-import { checkExpect, classify, getPath, paceWaitMs } from "./test-corpus.js";
+import { checkExpect, classify, getPath, paceWaitMs, targetHostOf } from "./test-corpus.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -47,6 +47,38 @@ ok(T({ status: 400, body: { error: "\"x\" is required" }, tier: 1, expectFails: 
 ok(T({ status: 422, body: { error: "Source URL timed out" }, tier: 1, expectFails: ["status 422, expected 200"] }) === "upstream", "fetch-guard's own relabelled upstream timeout (422 'Source URL timed out') is upstream on a networked tool");
 ok(T({ status: 400, body: { error: '"timeout" must be a number' }, tier: 1, expectFails: ["status 400, expected 200"] }) === "fatal", "our own 400 that merely contains the word timeout is fatal (review, 2026-09-06)");
 ok(T({ status: 404, body: { error: "Price feed upstream: not found (check ids)" }, tier: 1, expectFails: ["status 404, expected 200"] }) === "fatal", "our own 404 that contains the word upstream is fatal");
+
+// Outside target hosts: a case whose input points the tool at another host
+// depends on that host for its expected value. Its 5xx or silence is upstream,
+// named; the same body with no target host is our hollow 200 (2026-10-12:
+// httpbin.org answered 503 to a 404 probe and http-check was paged as broken).
+{
+  ok(targetHostOf({ url: "https://httpbin.org/status/404" }) === "httpbin.org", "targetHostOf reads the input url's host");
+  ok(targetHostOf({ url: "https://agent402.tools/api/no-such-route" }) === null, "a url on our own host is not an outside target");
+  ok(targetHostOf({ url: "https://www.agent402.tools/x" }) === null, "nor is a subdomain of ours");
+  ok(targetHostOf({ feed: { url: "HTTPS://Example.COM/rss" } }) === "example.com", "nested inputs are walked; the host is lower-cased");
+  ok(targetHostOf({ symbol: "MSFT", note: "see https://" }) === null, "no parseable url: no target");
+  ok(targetHostOf(null) === null && targetHostOf("x") === null, "non-object inputs: no target");
+  const probe503 = { up: true, status: 503, latencyMs: 96, finalUrl: "https://httpbin.org/status/404", headers: {} };
+  const miss = ["status = 503, expected 404"];
+  const c = classify({ status: 200, body: probe503, tier: 1, expectFails: miss, targetHost: "httpbin.org" });
+  ok(c.kind === "upstream" && /httpbin\.org/.test(c.note) && /503/.test(c.note), `http-check reading an outside host's 503 is upstream and names the host (${c.note})`);
+  ok(T({ status: 200, body: probe503, tier: 1, expectFails: miss }) === "fatal", "the same body with no target host is our hollow 200: fatal");
+  ok(T({ status: 200, body: probe503, tier: 0, expectFails: miss, targetHost: "httpbin.org" }) === "fatal", "a pure-CPU tool has no outside host to blame: fatal");
+  ok(T({ status: 200, body: { up: true, status: 404 }, tier: 1, expectFails: ["status = 404, expected 200"], targetHost: "example.com" }) === "fatal", "an outside host's 4xx is a reading, not an outage: the miss stays fatal");
+  ok(T({ status: 200, body: { up: false, error: "Timed out after 15s", latencyMs: 15001 }, tier: 1, expectFails: ["up = false, expected true"], targetHost: "example.com" }) === "upstream", "up:false with the target's error is the target's silence");
+  ok(T({ status: 200, body: { up: false, error: "Timed out after 15s" }, tier: 1, expectFails: ["up = false, expected true"] }) === "fatal", "up:false with no target host stays ours");
+  ok(T({ status: 200, body: { items: [], count: 0 }, tier: 1, expectFails: ["items not populated"], targetHost: "example.com" }) === "fatal", "a hollow 200 that reports no target failure is ours even with a target host");
+  ok(T({ status: 200, body: { error: "Source URL returned HTTP 502" }, tier: 1, expectFails: ["x"], targetHost: "example.com" }) === "upstream", "a 200 whose error text is the network vocabulary names the target");
+  const u = classify({ status: 504, body: { error: "Source URL did not respond within 15s" }, tier: 1, expectFails: ["status 504, expected 200"], targetHost: "example.com" });
+  ok(u.kind === "upstream" && /outside host example\.com/.test(u.note), `a 5xx on a case with a target host names the host (${u.note})`);
+  ok(!/outside host/.test(classify({ status: 504, body: { error: "Price feed upstream timed out" }, tier: 1, expectFails: ["x"] }).note), "a tool on a fixed upstream carries its own message, no invented host");
+}
+// A keyless boot: a pack whose every step says "not configured" answers 502,
+// and that is configuration, not an outside host (three packs read as upstream
+// 21 nights running after the equities feed went key-gated on 2026-09-20).
+ok(T({ status: 502, body: { error: 'No step in the "trend-analysis" pack succeeded, so there is nothing to return (not charged). stock-history: Market data is not configured on this server (DATABENTO_API_KEY unset).; stats-summary: "values" must be a non-empty array' }, tier: 1 }) === "skipped", "a pack 502 whose steps are not configured is skipped");
+ok(T({ status: 502, body: { error: 'No step in the "x" pack succeeded, so there is nothing to return (not charged). edgar-search: EDGAR upstream HTTP 500' }, tier: 1 }) === "upstream", "a pack 502 whose steps hit an upstream stays upstream");
 
 // pace: cases sharing a paceKey share ONE clock across files. Three per-file
 // clocks at 3 s each started the CoinGecko cases 60/min against a 25/min

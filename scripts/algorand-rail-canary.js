@@ -116,6 +116,9 @@ const DRY = process.env.CANARY_DRY === "1" || args.includes("--dry");
 
 const die = (m) => { console.error("ABORT:", m); process.exit(1); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Exit code when the sweep's OWN wallet could not pay: the workflow files it
+// as funding (a different issue), never as a rail failure.
+const EXIT_UNFUNDED = 3;
 
 // Marks our own traffic synthetic in analytics. Does NOT bypass payment.
 const secret = (process.env.POW_SECRET || "").trim();
@@ -143,6 +146,21 @@ if (!DRY) {
   client.register("algorand:*", new ExactAvmScheme(signer, { algorandClient }));
   http = new x402HTTPClient(client);
   payerAddress = account.addr.toString();
+  // The wallet's USDC holding, read before anything is bought. A wallet that
+  // runs dry mid-sweep used to read as a string of rail failures on whichever
+  // tools came next (2026-10-12: fourteen skill packs). An empty wallet stops
+  // the run here with the funding exit code; a wallet below the run cap is
+  // noted, and the first refusal for the balance stops the run the same way
+  // (isBuyerUnfunded). The figure itself is never printed.
+  try {
+    const r = await fetch(`${algodUrl}/v2/accounts/${payerAddress}/assets/31566704`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(15000) });
+    const holding = r.status === 404 ? 0 : r.ok ? Number((await r.json())?.["asset-holding"]?.amount ?? 0) / 1e6 : null;
+    if (holding !== null && holding <= 0) {
+      console.error("ABORT: the sweep wallet holds no USDC on Algorand. Fund it and re-run; this is funding, not the rail.");
+      process.exit(EXIT_UNFUNDED);
+    }
+    if (holding !== null && holding < MAX_USD) console.log(`NOTE: the sweep wallet holds less USDC than the $${MAX_USD} run cap; the run stops with exit ${EXIT_UNFUNDED} if it runs short.`);
+  } catch (e) { console.warn(`USDC holding read failed (${String(e?.message || e).slice(0, 80)}); the sweep finds out by buying`); }
 } else {
   const { x402Client, x402HTTPClient } = await import("@x402/core/client");
   client = disableVendorSpendControls(new x402Client());
@@ -239,9 +257,11 @@ console.log(`catalog: ${tools.length} routes · dry=${DRY} · total cap $${MAX_U
 // toolFail    settled but the handler errored, or returned an empty body
 // noAvm       the live 402 offers no algorand:* accept for this tool
 // skipped     over the per-tool price cap, or the total cap was reached
+// unfunded    the sweep's own wallet held less USDC than the price: the run
+//             stops there and exits EXIT_UNFUNDED (funding, not the rail)
 const report = {
   target: TARGET, payer: payerAddress, dry: DRY,
-  ok: [], railFail: [], rateLimited: [], toolFail: [], throttled: [], upstreamFail: [], noAvm: [], skipped: [],
+  ok: [], railFail: [], rateLimited: [], toolFail: [], throttled: [], upstreamFail: [], noAvm: [], skipped: [], unfunded: [],
   // Refused by OUR OWN breaker before the handler ran: nothing was measured
   // about these tools, so they are neither a pass nor a failure.
   blocked: [], aborted: null,
@@ -435,6 +455,14 @@ for (const t of tools) {
     let a = await attempt();
     let out = outcomeOf(a);
     let retried = false;
+    // The sweep's own wallet could not pay (isBuyerUnfunded): no retry, since
+    // the same wallet cannot pass, and nothing after this can be measured.
+    const unfunded = () => {
+      report.unfunded.push({ key, slug: t.slug, usd, reason: String(a.body).slice(0, 160) });
+      report.aborted = { afterTools: processed + 1, unmeasured: tools.length - processed - 1, consecutive: 0, why: "the sweep wallet holds less USDC than the price - nothing after this could be measured" };
+      console.log(`UNFUNDED ${key.padEnd(41)} the sweep wallet holds less USDC than $${usd} - stopping; this is funding, not the rail`);
+    };
+    if (out === "unfunded") { unfunded(); break; }
     // Anything that is not a clean settled payload gets ONE fresh retry after a
     // real pause. fast-402/throttle already meant "our own burst"; slow-402 and
     // other non-200s get the same benefit of the doubt - a rail/edge/upstream
@@ -456,6 +484,7 @@ for (const t of tools) {
       a = await attempt();
       out = outcomeOf(a);
       retried = true;
+      if (out === "unfunded") { unfunded(); break; }
     }
 
     if (out === "ok") {
@@ -528,6 +557,7 @@ const recovered = report.ok.filter((o) => o.throttledFirst).length;
 console.log(`settled+payload: ${report.ok.length} · rail failures: ${report.railFail.length} · rate-limited: ${report.rateLimited.length} · tool failures: ${report.toolFail.length} · upstream throttles: ${report.throttled.length} · third-party outages: ${report.upstreamFail.length}${recovered ? ` (${recovered} recovered on retry)` : ""}`);
 if (report.blocked.length) console.log(`blocked by OUR OWN settle breaker (nothing measured, neither pass nor fail): ${report.blocked.length}`);
 if (report.aborted) console.log(`ABORTED: ${report.aborted.unmeasured} tools never tested (${report.aborted.why})`);
+if (report.unfunded.length) console.log(`SWEEP WALLET UNFUNDED at ${report.unfunded[0].key}: the wallet holds less USDC than the price (funding, not a rail verdict)`);
 console.log(`no AVM accept: ${report.noAvm.length} (${report.noAvm.length - unexpectedNoAvm.length} expected: identity-bound, long-running, or sub-cent while the facilitator's sub-cent allowance is spent (${report.noAvm.filter((n) => n.why).length}); ${unexpectedNoAvm.length} unexpected) · skipped: ${report.skipped.length}`);
 console.log(`spent (recycles to our own payTo): $${report.spentUsd.toFixed(4)}${capped ? "  [TOTAL CAP REACHED]" : ""}`);
 
@@ -591,6 +621,13 @@ if (OUT) { writeFileSync(OUT, JSON.stringify(report, null, 2)); console.log(`\nw
 // fault is a vendor or the edge, not our rail or handler - same doctrine as the
 // external buyer. They are printed above so a spike is still visible.
 const bad = report.railFail.length + report.toolFail.length + unexpectedNoAvm.length;
+// The sweep's own wallet ran short: a real defect seen before that still fails
+// the run; otherwise the run exits EXIT_UNFUNDED, which the workflow files as
+// funding and never as a rail failure.
+if (report.unfunded.length && !bad) {
+  console.error(`\nUNFUNDED: the sweep wallet holds less USDC than ${report.unfunded[0].key} costs; ${report.aborted?.unmeasured ?? 0} of ${tools.length} tools were never tested. Fund the wallet and re-run. This is not a rail verdict.`);
+  process.exit(EXIT_UNFUNDED);
+}
 // A sweep that aborted measured only part of the catalog. Saying "pass" over a
 // partial sweep is the flattering failure this whole script exists to avoid, so
 // an abort fails the run whether or not it also recorded a defect.

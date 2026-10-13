@@ -106,7 +106,40 @@ const NOT_CONFIGURED = /not configured|not set|not installed on this server|miss
 // ours (independent review, 2026-09-06).
 const UPSTREAM_TEXT = /fetch failed|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket hang up|rate.?limit|too many requests|Source URL (timed out|returned HTTP 5\d\d|is unreachable)/i;
 
-/** What one outcome says about OUR code. */
+// A host we operate: a reading of it is a reading of us.
+const isOurHost = (h) => h === "agent402.tools" || h.endsWith(".agent402.tools");
+
+/** The outside host a case's input points the tool at (the first http(s) URL
+ *  in the input whose host is not ours), or null. A case with an outside
+ *  target depends on that host for its expected value, so that host's own
+ *  5xx or silence must be reported as upstream, named, and never as our code
+ *  (2026-10-12: httpbin.org answered 503 to a 404 probe and the corpus paged
+ *  http-check as broken). */
+export function targetHostOf(input) {
+  let found = null;
+  const walk = (v) => {
+    if (found) return;
+    if (typeof v === "string" && /^https?:\/\//i.test(v)) {
+      try { const h = new URL(v).hostname.toLowerCase(); if (h && !isOurHost(h)) found = h; } catch { /* not a URL */ }
+    } else if (v && typeof v === "object") Object.values(v).forEach(walk);
+  };
+  walk(input);
+  return found;
+}
+
+/** A 200 whose body says the TARGET failed: http-check's `up`/`status`
+ *  reading of a 5xx, an `up:false` with the target's error, or an error text
+ *  in the network vocabulary. Null when the body says nothing of the kind, so
+ *  a hollow 200 stays ours. */
+function targetFailureIn(body) {
+  if (!body || typeof body !== "object") return null;
+  if ("up" in body && Number.isInteger(body.status) && body.status >= 500 && body.status < 600) return `answered ${body.status}`;
+  const err = String(body.error ?? body.message ?? "");
+  if (body.up === false && err) return err.slice(0, 120);
+  if (err && UPSTREAM_TEXT.test(err)) return err.slice(0, 120);
+  return null;
+}
+
 /** Pace scheduling, pure: reserve the next start slot on the case's clock and
  *  return how long to wait for it. `paceNext` maps paceKey -> next free ms.
  *  A case with no pace never waits and never advances any clock. */
@@ -118,15 +151,28 @@ export function paceWaitMs(c, paceNext, now) {
   return at - now;
 }
 
-export function classify({ status, body, netError, expectFails, tier }) {
+/** What one outcome says about OUR code. `targetHost` is the outside host the
+ *  case points the tool at (targetHostOf), or null for a tool on fixed or no
+ *  upstreams. */
+export function classify({ status, body, netError, expectFails, tier, targetHost = null }) {
   if (netError) return { kind: "upstream", note: `network: ${netError}` };
   const msg = String(body?.error ?? body?.message ?? "");
-  if (status === 503 && NOT_CONFIGURED.test(msg)) return { kind: "skipped", note: "not configured on this boot" };
-  if (status === 502 || status === 503 || status === 504 || status === 429) return { kind: tier === 0 ? "fatal" : "upstream", note: `${status} ${msg.slice(0, 120)}` };
+  // A keyless boot: a 503 that says so, or a pack's 502 whose steps all say so
+  // (the equities feed went key-gated on 2026-09-20 and three packs read as
+  // "upstream" every night after), is configuration, not a verdict.
+  if ((status === 503 || status === 502) && NOT_CONFIGURED.test(msg)) return { kind: "skipped", note: "not configured on this boot" };
+  const host = targetHost && tier !== 0 ? ` (outside host ${targetHost})` : "";
+  if (status === 502 || status === 503 || status === 504 || status === 429) return { kind: tier === 0 ? "fatal" : "upstream", note: `${status}${host} ${msg.slice(0, 120)}` };
   if (status >= 500) return { kind: "fatal", note: `${status} ${msg.slice(0, 160)}` };
   if (expectFails.length) {
+    // A 200 that reports the case's own outside target failing is that host's
+    // outage, named; without a target host the same body is our hollow 200.
+    if (targetHost && tier !== 0 && status < 400) {
+      const tf = targetFailureIn(body);
+      if (tf) return { kind: "upstream", note: `outside host ${targetHost} ${tf}` };
+    }
     // A 4xx from a T1 tool whose message blames the network is upstream.
-    if (status >= 400 && tier !== 0 && UPSTREAM_TEXT.test(msg) && !NOT_CONFIGURED.test(msg)) return { kind: "upstream", note: `${status} ${msg.slice(0, 120)}` };
+    if (status >= 400 && tier !== 0 && UPSTREAM_TEXT.test(msg) && !NOT_CONFIGURED.test(msg)) return { kind: "upstream", note: `${status}${host} ${msg.slice(0, 120)}` };
     return { kind: "fatal", note: expectFails.join("; ") };
   }
   return { kind: "ok", note: "" };
@@ -257,7 +303,7 @@ async function main() {
         try { out = await drive(base, ep, c.input); }
         catch (err) { out = { status: 0, body: null, ms: 0, netError: err?.cause?.code || err?.name || String(err) }; }
         const fails = out.netError ? [] : checkExpect(c.expect, out.status, out.body);
-        const cls = classify({ status: out.status, body: out.body, netError: out.netError, expectFails: fails, tier });
+        const cls = classify({ status: out.status, body: out.body, netError: out.netError, expectFails: fails, tier, targetHost: targetHostOf(c.input) });
         counts[cls.kind]++;
         const row = { slug: c.slug, name: c.name, file: c.file, tier, status: out.status, ms: out.ms, kind: cls.kind, note: cls.note };
         if (cls.kind === "fatal" || VERBOSE) row.body = JSON.stringify(out.body)?.slice(0, 600);

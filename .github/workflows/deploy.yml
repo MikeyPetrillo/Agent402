@@ -1400,6 +1400,8 @@ jobs:
           t node scripts/test-store-import-fail-pg.js
           # A first boot's imports share two slots: no connect timeouts, serving reads not starved.
           t node scripts/test-state-db-import-congestion-pg.js
+          # A blocked event loop is not a hung database: queries in flight across a block answer; schema-lock waiters hold no connection.
+          t node scripts/test-state-db-stall-timeout-pg.js
           t node scripts/test-store-ddl-race-pg.js
           t node scripts/test-store-write-retry-pg.js
           t node scripts/test-stats-ack-loss-pg.js
@@ -1642,6 +1644,10 @@ jobs:
           t node scripts/test-wish-reports.js
           t node scripts/test-x402-spend-controls.js
           t node scripts/test-x402-boot-init.js
+          # The vendor's per-route bazaar check runs after boot in short slices, never as one boot-time loop.
+          t node scripts/test-bazaar-route-check.js
+          # The strict sweep reports a listed keyless upstream's 5xx refusal; our own 5xx still fails.
+          t node scripts/test-sweep-upstream-refusal.js
           t node scripts/test-solana-kit-deps.js
           t node scripts/test-workflow-client-pins.js
 
@@ -2927,6 +2933,8 @@ jobs:
           t node scripts/test-finance-math-kit.js
           # Barcode-kit tests (QR/barcode decode round-trip, PNG + JPEG)
           t node scripts/test-barcode.js
+          # Lazy tool dependencies stay out of the boot graph; first call of each tool still answers (boots a server)
+          t node scripts/test-lazy-deps.js
 
       - name: Search-kit tests (Brave web/news/images/suggest — validation always runs; live calls opt-in via BRAVE_LIVE_TEST=1, otherwise paid-canary covers post-deploy)
         run: node scripts/test-search-kit.js
@@ -4305,6 +4313,8 @@ jobs:
           t node scripts/test-paid-settle-breaker.js
           # Algorand leaves sub-cent 402s while the facilitator's sponsored sub-cent allowance is spent; a quota refusal is never the buyer's (paid boot, stub facilitators + stub sponsorship status)
           t node scripts/test-avm-subcent-offer.js
+          # Every skill pack's Algorand accept matches the requirement the paid request rebuilds; a refusal for the buyer's balance is insufficient-funds to the buyer and funding (not a rail failure) to the sweep (offline, stub facilitator kinds)
+          t node scripts/test-skill-pack-avm-match.js
           # Router dispatch eligibility, labelled: one function for the resolver's Base gate and every public row (offline)
           t node scripts/test-dispatch-eligibility.js
           t node scripts/test-unproven-lane-labels.js
@@ -4342,6 +4352,8 @@ jobs:
           # moved off the critical path instead, where its duration stops mattering.
           # Pricing margin invariant (worst-case upstream < price on every gateway tier, failover links included; cap-before-spend; 410 tool_gone telemetry — offline)
           t node scripts/test-pricing-margin.js
+          # A model whose reasoning bills outside max_tokens is quoted and clamped for it: the metered quote covers the measured token mixes at the markup (private table, offline)
+          t node scripts/test-metered-uncapped-reasoning.js
 
   test-unit-c:
     # Test job runs on its own [test] marker AND auto-runs whenever a commit

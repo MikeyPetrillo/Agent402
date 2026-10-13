@@ -23,7 +23,7 @@
 // Covered by scripts/test-web-kit.js (offline validation; live upstream
 // checks opt-in via WEB_LIVE_TEST=1).
 
-import { JSDOM } from "jsdom";
+import { loadJsdom } from "./lazy-deps.js";
 import { ssrfDispatcher, safeFetch, assertPublicUrl, isSsrfBlock, retryTransient } from "./fetch-guard.js";
 
 import { REPO_URL } from "../repo-link.js";
@@ -163,7 +163,8 @@ function assertSaneNesting(text) {
   if (maxDepth > 256) throw bad("Feed XML nesting too deep (max 256 levels)", 422);
 }
 
-function parseFeedXml(text, warnings) {
+async function parseFeedXml(text, warnings) {
+  const JSDOM = await loadJsdom();
   const dom = new JSDOM("");
   const parse = (t) => {
     const doc = new dom.window.DOMParser().parseFromString(t, "text/xml");
@@ -401,7 +402,7 @@ export const WEB_TOOLS = [
       }));
       assertSaneNesting(text);
       const warnings = [];
-      const doc = parseFeedXml(text, warnings);
+      const doc = await parseFeedXml(text, warnings);
       const root = doc.documentElement;
       const rootName = root.localName;
 

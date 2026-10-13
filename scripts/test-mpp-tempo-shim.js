@@ -617,7 +617,7 @@ function isDeepOrderOk(actual, expected) {
 // buyer can act on, every refusal is logged, a relay outage is a 503, a bad
 // body is refused before the relay, and a client that hung up is not charged.
 // ---------------------------------------------------------------------------
-const { classifyTempoRefusal, TEMPO_REFUSAL_CLASSES, bindingRefusal } = await import("../src/mpp-tempo.js");
+const { classifyTempoRefusal, TEMPO_REFUSAL_CLASSES, bindingRefusal, tempoRefusalProblem } = await import("../src/mpp-tempo.js");
 async function withWarnings(fn) {
   const warned = [];
   const orig = console.warn;
@@ -634,9 +634,25 @@ async function withWarnings(fn) {
   ok(classifyTempoRefusal(traced('relay /v1/mpp/validate HTTP 200 {"error":{"code":"unknown","message":"Invalid transaction: no matching payment call found - amount: 1000"}}')) === "transfer-mismatch", "case L: 'no matching payment call' is transfer-mismatch (amount/currency/recipient)");
   ok(classifyTempoRefusal(traced("relay /v1/mpp/validate NETWORK ERROR after 10321ms: UND_ERR_CONNECT_TIMEOUT (attempts 2)", { networkError: true })) === "relay-unreachable", "case L: a connect timeout is relay-unreachable");
   ok(classifyTempoRefusal(traced('relay /v1/mpp/validate HTTP 403 {"error":{"code":"api_key_scope_missing"}}', { relayUnavailable: 403 })) === "relay-unavailable", "case L: a relay 401/403/5xx (our key or their outage) is relay-unavailable, never blamed on the buyer");
+  // The exact 2026-10-12 production body: HTTP 200, the relay's own
+  // temporarily_unavailable code (mppx keeps it in details with retry:
+  // same_credential) and the dependency named in message.
+  const LIVE_DEPENDENCY_BODY = 'relay /v1/mpp/validate HTTP 200 {"success":false,"error":{"code":"temporarily_unavailable","message":"Address screening is unavailable. Retry later."}}';
+  const dep = Object.assign(traced(LIVE_DEPENDENCY_BODY), { details: { code: "temporarily_unavailable", retry: "same_credential" } });
+  ok(classifyTempoRefusal(dep) === "relay-dependency-unavailable", "case L: a 2xx temporarily_unavailable body is relay-dependency-unavailable, not relay-unavailable");
+  ok(classifyTempoRefusal(traced(LIVE_DEPENDENCY_BODY)) === "relay-dependency-unavailable", "case L: the same body classifies from its text when mppx dropped the code");
+  ok(classifyTempoRefusal(traced('relay /v1/mpp/validate HTTP 503 {"error":{"code":"temporarily_unavailable"}}', { relayUnavailable: 503 })) === "relay-unavailable", "case L: a 5xx carrying the same code stays relay-unavailable (transport-level)");
+  ok(!/not accepting requests from this server/.test(TEMPO_REFUSAL_CLASSES["relay-unavailable"].detail) && !/not accepting requests from this server/.test(TEMPO_REFUSAL_CLASSES["relay-dependency-unavailable"].detail), "case L: neither relay class claims the relay is not accepting requests from this server");
+  ok(TEMPO_REFUSAL_CLASSES["relay-dependency-unavailable"].status === 503 && TEMPO_REFUSAL_CLASSES["relay-dependency-unavailable"].retryAfter > 0 && /same credential/.test(TEMPO_REFUSAL_CLASSES["relay-dependency-unavailable"].hint) && /x402/.test(TEMPO_REFUSAL_CLASSES["relay-dependency-unavailable"].hint) && /Base/.test(TEMPO_REFUSAL_CLASSES["relay-dependency-unavailable"].hint), "case L: relay-dependency-unavailable is a 503 with Retry-After whose hint offers the same credential again and x402 or MPP on Base");
   ok(classifyTempoRefusal(Object.assign(new Error("Payment verification failed."), { details: { code: "expired" } })) === "expired", "case L: relay code expired -> expired");
   ok(classifyTempoRefusal(Object.assign(new Error("Payment verification failed."), { details: { code: "insufficient_funds" } })) === "insufficient-funds", "case L: relay code insufficient_funds -> insufficient-funds");
   ok(classifyTempoRefusal(Object.assign(new Error("Transaction hash has already been used"), {})) === "replay", "case L: an already-used hash is replay");
+  const quoted = tempoRefusalProblem("relay-dependency-unavailable", null, { relayMessage: "Address screening is unavailable. Retry later." });
+  ok(/\("Address screening is unavailable\. Retry later\."\)/.test(quoted.detail) && /nothing was charged/.test(quoted.detail), "case L: a plain-prose relay message is quoted in the dependency detail");
+  for (const m of ["Address screening is unavailable (acct 8f3a)", "Screening down; ref 0x2222222222222222222222222222222222222222", "Retry later. key=tempo-live-abc", "", null]) {
+    const p = tempoRefusalProblem("relay-dependency-unavailable", null, { relayMessage: m });
+    ok(p.detail === TEMPO_REFUSAL_CLASSES["relay-dependency-unavailable"].detail && !p.detail.includes("("), `case L: a relay message with anything beyond prose is not quoted (${JSON.stringify(m)})`);
+  }
   const secretish = "tempo-api-key-SECRET-123";
   const leaky = traced(`relay /v1/mpp/validate HTTP 200 {"error":{"message":"memo is not bound to this challenge (key ${secretish})"}}`);
   const cls = classifyTempoRefusal(leaky);
@@ -684,6 +700,59 @@ async function withWarnings(fn) {
   ok(tempoLeads({ ip: "127.0.0.1", headers: { "user-agent": "agent/9" } }) === true, "case N: our relay outage does not demote the buyer's tempo challenge");
   ok(warned.some((w) => /class=relay-unreachable/.test(w)), "case N: the refusal is logged");
   server.close();
+}
+
+// Case N2: the relay answers 2xx with its own temporarily_unavailable code
+// (the exact 2026-10-12 production body) -> 503 + Retry-After, nothing
+// charged, the relay's own words in the detail with addresses masked, the
+// relay's request id in the log line, the api key in neither, no demotion.
+{
+  let handlerRan = false, broadcastCalled = false;
+  const { _resetTempoDemotion, tempoLeads } = await import("../src/mpp-tempo.js");
+  _resetTempoDemotion();
+  const priorKey = process.env.TEMPO_API_KEY;
+  const KEY = "test-tempo-key-redaction-probe";
+  process.env.TEMPO_API_KEY = KEY;
+  const payer = "0x2222222222222222222222222222222222222222";
+  const REQUEST_ID = "c9ffc771-ef3a-4b87-835a-87d0288906ca";
+  // What validateTempoCredential returns for that body: the relay body first
+  // in `error`, then mppx's message and details. The stub relay here echoes
+  // the key and a payer address in its message, so the redaction is proven.
+  const relayMessage = `Address screening is unavailable. Retry later. (sender ${payer}, key ${KEY})`;
+  const error = `relay /v1/mpp/validate HTTP 200 {"success":false,"error":{"code":"temporarily_unavailable","message":"${relayMessage}"}} Payment verification failed. details={"code":"temporarily_unavailable","retry":"same_credential"}`;
+  const app = express();
+  app.use(createTempoGate({ ...GATE, validate: async () => ({ ok: false, cls: "relay-dependency-unavailable", reason: "Payment verification failed. (temporarily_unavailable)", error, requestId: REQUEST_ID, relayMessage }), broadcast: async () => { broadcastCalled = true; return { ok: true, receipt: {} }; } }));
+  app.use(paywallStub);
+  app.get("/paid", (req, res) => { handlerRan = true; res.json({ served: true }); });
+  const { server, url } = await listen(app);
+  const { value: r, warned } = await withWarnings(async () => { const x = await fetch(`${url}/paid`, { headers: { Authorization: buildTempoCredential(), "User-Agent": "agent/10" } }); return { status: x.status, retry: x.headers.get("retry-after"), body: await x.json() }; });
+  process.env.TEMPO_API_KEY = priorKey;
+  if (priorKey === undefined) delete process.env.TEMPO_API_KEY;
+  ok(r.status === 503 && Number(r.retry) > 0, `case N2: a relay dependency outage answers 503 with Retry-After (got ${r.status}, Retry-After ${r.retry})`);
+  ok(r.body.type === "https://paymentauth.org/problems/internal-payment-error" && r.body.details?.reason === "relay-dependency-unavailable" && r.body.details?.charged === false && /nothing was charged/i.test(r.body.detail), `case N2: the problem names the class and says nothing was charged (${r.body.details?.reason})`);
+  ok(!/Address screening/.test(r.body.detail) && /temporarily unavailable/.test(r.body.detail) && !/not accepting requests from this server/.test(r.body.detail), `case N2: a relay message that is not plain prose is not quoted; the fixed detail stands (${r.body.detail})`);
+  ok(!r.body.detail.includes(payer) && !r.body.detail.includes("0x") && !r.body.detail.includes(KEY) && !JSON.stringify(r.body).includes(KEY), "case N2: the body carries neither the address nor the api key");
+  ok(/same credential/.test(r.body.hint) && /x402/.test(r.body.hint) && /MPP evm/.test(r.body.hint) && /Base/.test(r.body.hint), `case N2: the hint offers the same credential again and x402 or MPP on Base (${r.body.hint})`);
+  ok(!handlerRan && !broadcastCalled, "case N2: no handler run, no broadcast");
+  ok(tempoLeads({ ip: "127.0.0.1", headers: { "user-agent": "agent/10" } }) === true, "case N2: the relay's dependency outage does not demote the buyer's tempo challenge");
+  const line = warned.find((w) => w.includes("[mpp-tempo] refused"));
+  ok(!!line && /class=relay-dependency-unavailable/.test(line) && new RegExp(`relayRequestId=${REQUEST_ID}`).test(line), `case N2: the refusal line carries the class and the relay's request id (${line})`);
+  ok(!!line && /detail=relay \/v1\/mpp\/validate HTTP 200 \{"success":false,"error":\{"code":"temporarily_unavailable"/.test(line) && /Address screening is unavailable/.test(line), "case N2: the log detail starts with the relay body");
+  ok(!!line && !line.includes(KEY) && !line.includes(payer) && /0x<addr>/.test(line), "case N2: the log line never carries the api key or the payer address");
+  ok(!warned.some((w) => w.includes(KEY)), "case N2: no warning line anywhere carries the api key");
+  server.close();
+}
+
+// Case N3: a long relay body survives the log line to 600 characters, body
+// first, so a verdict's message is never the part that is cut.
+{
+  const { logTempoRefusal } = await import("../src/mpp-tempo.js");
+  const longMessage = "x".repeat(650);
+  const error = `relay /v1/mpp/validate HTTP 200 {"success":false,"error":{"code":"unknown","message":"${longMessage}"}} Payment verification failed.`;
+  const { value: line } = await withWarnings(async () => logTempoRefusal({ method: "GET", path: "/paid" }, { cls: "unknown", amountAtomic: 1000n, timings: { validate: 12 }, detail: error, requestId: "r-1" }));
+  const detail = line.slice(line.indexOf("detail=") + "detail=".length);
+  ok(detail.length === 600 && detail.startsWith("relay /v1/mpp/validate HTTP 200 ") && detail.includes("x".repeat(500)) && !detail.includes("Payment verification failed"), `case N3: the logged detail keeps 600 characters, relay body first (${detail.length})`);
+  ok(/relayRequestId=r-1 detail=/.test(line), "case N3: the request id rides before the detail, so a cut detail never hides it");
 }
 
 // Case O: a paid credential with a body the handler would refuse is answered

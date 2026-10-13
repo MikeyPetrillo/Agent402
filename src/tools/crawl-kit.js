@@ -36,9 +36,7 @@
 
 import { gunzipSync } from "node:zlib";
 import { isIP } from "node:net";
-import { JSDOM } from "jsdom";
-import { Readability } from "@mozilla/readability";
-import TurndownService from "turndown";
+import { loadJsdom, loadReadability, loadTurndown, lazyImport } from "./lazy-deps.js";
 import { ssrfDispatcher, assertPublicUrl, isSsrfBlock, isPrivateIp } from "./fetch-guard.js";
 import { parseRobots, robotsAllows } from "./kit.js";
 import { markUntrusted } from "./provenance.js";
@@ -90,8 +88,14 @@ const CRAWL_LINKS_PER_PAGE_QUEUE = 300; // links considered for the queue per pa
 const MAX_PATTERNS = 20;
 const MAX_PATTERN_LEN = 200;
 
-const turndown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-" });
-turndown.remove(["script", "style", "noscript", "template", "iframe", "svg"]);
+// turndown loads with the first page that needs markdown (./lazy-deps.js); one
+// configured instance is shared after that.
+const turndownInstance = lazyImport(async () => {
+  const TurndownService = await loadTurndown();
+  const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-" });
+  td.remove(["script", "style", "noscript", "template", "iframe", "svg"]);
+  return td;
+});
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -408,7 +412,8 @@ function cleanText(s) {
 // HTML -> { title, content } in markdown or text. Readability's main-content
 // extraction when it parses (articles, docs pages), the cleaned <body> when it
 // does not (home pages, indexes), so every HTML page yields SOMETHING.
-export function pageContent(html, url, format) {
+export async function pageContent(html, url, format) {
+  const [JSDOM, Readability, turndown] = await Promise.all([loadJsdom(), loadReadability(), format === "text" ? null : turndownInstance()]);
   const dom = new JSDOM(html, { url });
   const doc = dom.window.document;
   const title = titleOf(doc, html);
@@ -641,7 +646,7 @@ async function siteCrawlRun(input) {
     let content = "";
     let links = [];
     if (HTML_TYPES.test(r.contentType || "") || /<html|<body|<a\b/i.test(r.text.slice(0, 4096))) {
-      const pc = pageContent(r.text, r.finalUrl, format);
+      const pc = await pageContent(r.text, r.finalUrl, format);
       title = pc.title;
       content = pc.content;
       links = extractLinks(r.text, r.finalUrl, CRAWL_LINKS_PER_PAGE_QUEUE);

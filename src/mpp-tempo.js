@@ -236,9 +236,13 @@ async function relayFetch(input, init = {}) {
     res = retried;
   }
   if (!store) return res;
+  // The relay stamps every answer with a request id and asks for it when a
+  // verdict needs their side's logs; keep it with the trace (the key rides
+  // only in the request header, never here).
+  try { store.requestId = res.headers.get("tempo-request-id") || null; } catch { store.requestId = null; }
   if (res.status >= 500 || res.status === 429 || res.status === 401 || res.status === 403) store.relayUnavailable = res.status;
   let body = "";
-  try { body = (await res.clone().text()).replace(/\s+/g, " ").slice(0, 400); } catch { body = "(unreadable body)"; }
+  try { body = (await res.clone().text()).replace(/\s+/g, " ").slice(0, 600); } catch { body = "(unreadable body)"; }
   // Non-2xx is always a verdict worth keeping. A 2xx is ALSO one when it says
   // success:false — mppx keeps only a fixed allowlist of `error.code` values
   // as `.details` and drops the message; a code outside it (the live relay
@@ -273,10 +277,26 @@ function describeRelayFailure(e) {
   // non-2xx answer rides the trace captured by relayFetch. Show whichever
   // exists; both missing means the failure happened before any relay call
   // (HMAC/expiry/shape) or the relay was unreachable.
+  // The relay body leads: it is the part a truncated log line must keep.
   const detail = e?.details && typeof e.details === "object" && Object.keys(e.details).length ? JSON.stringify(e.details).slice(0, 200) : null;
   const raw = e?.__relayTrace?.relayError || null;
   const message = String(e?.message || e).slice(0, 200);
-  return `${message}${detail ? ` details=${detail}` : ""}${raw ? ` ${raw}` : ""}${!detail && !raw ? " (no relay verdict — failed before/without a relay round trip)" : ""}`;
+  return `${raw ? `${raw} ` : ""}${message}${detail ? ` details=${detail}` : ""}${!detail && !raw ? " (no relay verdict: failed before/without a relay round trip)" : ""}`;
+}
+/** The relay's own `error.message` from a 2xx success:false body kept on the
+ *  trace, or null when the body is absent, non-JSON or carries none. */
+function relayMessageOf(e) {
+  const raw = String(e?.__relayTrace?.relayError || "");
+  const at = raw.indexOf("{");
+  if (at < 0) return null;
+  try {
+    const m = JSON.parse(raw.slice(at))?.error?.message;
+    return typeof m === "string" && m.trim() ? m.replace(/\s+/g, " ").trim() : null;
+  } catch { return null; }
+}
+/** The fields every relay refusal result carries besides error/reason/cls. */
+function relayRefusalFields(e) {
+  return { requestId: e?.__relayTrace?.requestId || null, relayMessage: relayMessageOf(e) };
 }
 /** The BUYER-facing reason: mppx's own message plus the relay's error CODE
  *  only. Never the raw relay body (`__relayTrace.relayError`) - that is an
@@ -303,10 +323,20 @@ export const TEMPO_REFUSAL_CLASSES = Object.freeze({
     detail: "The Tempo payment relay could not be reached, so the credential was not checked and nothing was charged.",
     hint: "Retry the same request in a few seconds with a fresh challenge. Nothing was broadcast.",
   },
+  // Transport-level only: the relay answered 5xx/429/401/403 or not at all.
   "relay-unavailable": {
     kind: "internal-payment-error", status: 503, retryAfter: 30,
-    detail: "The Tempo payment relay is not accepting requests from this server right now, so the credential was not checked and nothing was charged.",
+    detail: "The Tempo payment relay did not accept this server's request (an HTTP error, not a verdict on the credential), so the credential was not checked and nothing was charged.",
     hint: "Retry shortly, or pay over another method offered in the WWW-Authenticate header (x402 USDC or MPP evm/charge).",
+  },
+  // The relay answered 2xx with its own `temporarily_unavailable` code: one of
+  // its dependencies (address screening, for one) could not run. The relay
+  // says the same credential may be re-presented. tempoRefusalProblem puts
+  // the relay's own message, addresses masked, into `detail`.
+  "relay-dependency-unavailable": {
+    kind: "internal-payment-error", status: 503, retryAfter: 30,
+    detail: "The Tempo payment relay reported one of its own dependencies temporarily unavailable, so the credential was not checked and nothing was charged.",
+    hint: "Re-present the same credential shortly (the relay says it may be retried as is), or pay over x402 USDC or MPP evm on Base from the WWW-Authenticate header; both remain available.",
   },
   "memo-unbound": {
     kind: "verification-failed", status: 402,
@@ -357,6 +387,9 @@ export function classifyTempoRefusal(e) {
   const text = `${String(e?.message || "")} ${code} ${raw}`.toLowerCase();
   if (trace.networkError) return "relay-unreachable";
   if (trace.relayUnavailable) return "relay-unavailable";
+  // mppx keeps this code in `.details` (with retry: same_credential); the
+  // text match covers a body whose code mppx dropped.
+  if (code === "temporarily_unavailable" || /temporarily[ _]unavailable/.test(text)) return "relay-dependency-unavailable";
   if (/memo is not bound/.test(text)) return "memo-unbound";
   if (/already[ _]used|already been used|already been submitted|nonce too low/.test(text)) return "replay";
   if (/insufficient[ _]funds|insufficient balance|exceeds balance/.test(text)) return "insufficient-funds";
@@ -364,29 +397,52 @@ export function classifyTempoRefusal(e) {
   if (/no matching (payment call|transfer)/.test(text)) return "transfer-mismatch";
   if (/simulation[ _]failed|reverted/.test(text)) return "simulation-failed";
   if (/policy[ _]denied|screen[ _]rejected/.test(text)) return "policy-denied";
-  if (/temporarily[ _]unavailable/.test(text)) return "relay-unavailable";
   return "unknown";
 }
 
+// The only relay text a buyer ever reads: a plain-prose sentence (letters,
+// spaces, sentence punctuation), such as the relay naming which of its
+// dependencies is down. A message carrying anything else (a digit, a bracket,
+// a code, an identifier) is not quoted and the fixed detail stands.
+const RELAY_PROSE = /^[A-Za-z][A-Za-z ,.'-]{0,159}$/;
+export function quotableRelayMessage(message) {
+  const s = String(message || "").trim();
+  return RELAY_PROSE.test(s) ? s : null;
+}
+
 /** The problem document for a refusal class. The class also rides in
- *  `details.reason` so a client can switch on it without parsing prose. */
-export function tempoRefusalProblem(cls, fallbackReason) {
+ *  `details.reason` so a client can switch on it without parsing prose.
+ *  `relayMessage` (the relay's own `error.message`) is quoted inside the
+ *  detail only for relay-dependency-unavailable and only when it is plain
+ *  prose (quotableRelayMessage): it is the relay naming which of its
+ *  dependencies is down, which the buyer can act on, and that class never
+ *  carries a verdict on the credential. */
+export function tempoRefusalProblem(cls, fallbackReason, { relayMessage = null } = {}) {
   const c = TEMPO_REFUSAL_CLASSES[cls] || TEMPO_REFUSAL_CLASSES.unknown;
-  const detail = cls === "unknown" && fallbackReason
-    ? `Payment verification failed: ${String(fallbackReason).slice(0, 160)}`
-    : c.detail;
+  let detail = c.detail;
+  if (cls === "unknown" && fallbackReason) detail = `Payment verification failed: ${String(fallbackReason).slice(0, 160)}`;
+  else if (cls === "relay-dependency-unavailable") {
+    const said = quotableRelayMessage(relayMessage);
+    if (said) detail = `The Tempo payment relay reported one of its own dependencies temporarily unavailable ("${said}"), so the credential was not checked and nothing was charged.`;
+  }
   return mppProblem(c.kind, detail, { status: c.status, hint: c.hint, details: { reason: cls in TEMPO_REFUSAL_CLASSES ? cls : "unknown", charged: false } });
 }
 
 // Operator log line for EVERY refused Tempo credential: reason class, route,
-// amount and timings. Never the payer address or any credential material; the
-// relay's own words (describeRelayFailure) ride along with addresses masked.
+// amount, timings and the relay's request id. Never the payer address, any
+// credential material or the api key; the relay's own words
+// (describeRelayFailure, relay body first) ride along with addresses masked.
 function maskAddresses(s) {
   return String(s || "").replace(/did:pkh:[^\s"']+/gi, "did:pkh:<masked>").replace(/0x[0-9a-fA-F]{40}(?![0-9a-fA-F])/g, "0x<addr>");
 }
-export function logTempoRefusal(req, { cls, amountAtomic = null, timings = {}, detail = "" } = {}) {
+function redactApiKey(s) {
+  const key = String(process.env.TEMPO_API_KEY || "");
+  return key.length >= 8 ? String(s || "").split(key).join("<api-key>") : String(s || "");
+}
+export function logTempoRefusal(req, { cls, amountAtomic = null, timings = {}, detail = "", requestId = null } = {}) {
   const t = Object.entries(timings).filter(([, v]) => Number.isFinite(v)).map(([k, v]) => `${k}=${v}ms`).join(" ");
-  const line = `[mpp-tempo] refused class=${cls} route="${req?.method || "?"} ${req?.path || "?"}" amount=${amountAtomic == null ? "?" : String(amountAtomic)}${t ? ` ${t}` : ""}${detail ? ` detail=${maskAddresses(detail).slice(0, 400)}` : ""}`;
+  const rid = requestId ? ` relayRequestId=${String(requestId).replace(/[^\w.:-]/g, "").slice(0, 80)}` : "";
+  const line = `[mpp-tempo] refused class=${cls} route="${req?.method || "?"} ${req?.path || "?"}" amount=${amountAtomic == null ? "?" : String(amountAtomic)}${t ? ` ${t}` : ""}${rid}${detail ? ` detail=${maskAddresses(redactApiKey(detail)).slice(0, 600)}` : ""}`;
   console.warn(line);
   return line;
 }
@@ -849,7 +905,7 @@ export async function validateTempoCredential(authorizationHeader) {
     // mppx's VerificationFailedError.message is ALWAYS the bare "Payment
     // verification failed." — the relay's verdict is elsewhere; see
     // describeRelayFailure for where.
-    return { ok: false, error: describeRelayFailure(e), reason: buyerReason(e), cls: classifyTempoRefusal(e) };
+    return { ok: false, error: describeRelayFailure(e), reason: buyerReason(e), cls: classifyTempoRefusal(e), ...relayRefusalFields(e) };
   }
 }
 
@@ -861,7 +917,7 @@ export async function broadcastTempoCredential(authorizationHeader) {
     const [receipt] = await withRelayTrace(() => Method.broadcastCredential([tempoMethod()], authorizationHeader));
     return { ok: true, receipt };
   } catch (e) {
-    return { ok: false, error: describeRelayFailure(e), reason: buyerReason(e), cls: classifyTempoRefusal(e) };
+    return { ok: false, error: describeRelayFailure(e), reason: buyerReason(e), cls: classifyTempoRefusal(e), ...relayRefusalFields(e) };
   }
 }
 
@@ -1119,16 +1175,16 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         // an unlogged rejection here is exactly what made the 2026-08-17
         // live-verify failure undiagnosable from Railway logs alone.
         const cls = v.cls || "unknown";
-        logTempoRefusal(req, { cls, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: tValidated - tStart }, detail: v.error || "(no error detail)" });
+        logTempoRefusal(req, { cls, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: tValidated - tStart }, detail: v.error || "(no error detail)", requestId: v.requestId });
         const c = TEMPO_REFUSAL_CLASSES[cls] || TEMPO_REFUSAL_CLASSES.unknown;
         if (c.status === 503) {
-          // The relay could not be reached (or refused OUR key) before the
-          // credential was checked: not the buyer's fault, nothing charged,
-          // retryable. A 503 with Retry-After says that; a bare 402 after a
-          // 10-22 s wait said "your payment failed". No demotion: the buyer's
-          // Tempo credential was never judged.
+          // The relay could not be reached, refused OUR key, or reported its
+          // own dependency down before the credential was checked: not the
+          // buyer's fault, nothing charged, retryable. A 503 with Retry-After
+          // says that; a bare 402 after a 10-22 s wait said "your payment
+          // failed". No demotion: the buyer's Tempo credential was never judged.
           res.setHeader("Retry-After", String(c.retryAfter || 5));
-          return sendMppProblem(res, tempoRefusalProblem(cls));
+          return sendMppProblem(res, tempoRefusalProblem(cls, null, { relayMessage: v.relayMessage }));
         }
         // This client's next 402 lists the evm challenge first (see tempoLeads).
         noteTempoRefusal(req);
@@ -1254,7 +1310,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         const f = await broadcast(auth);
         if (!f.ok) {
           const fcls = f.cls || "unknown";
-          logTempoRefusal(req, { cls: `finalize:${fcls}`, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, finalize: Date.now() - tFinal0, total: Date.now() - tStart }, detail: f.error || "" });
+          logTempoRefusal(req, { cls: `finalize:${fcls}`, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, finalize: Date.now() - tFinal0, total: Date.now() - tStart }, detail: f.error || "", requestId: f.requestId });
           const fc = TEMPO_REFUSAL_CLASSES[fcls] || TEMPO_REFUSAL_CLASSES.unknown;
           if (fc.status === 503) {
             // The relay could not be reached: the hash is NOT claimed, so the
@@ -1450,7 +1506,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         // relay's verdict, and only the numbers tell them apart.
         console.warn(`[mpp-tempo] broadcast failed AFTER a successful handler (${req.method} ${req.path}) — buyer answered 402, not charged by us: ${maskAddresses(b.error)} [${timing}]`);
         const bcls = b.cls || "unknown";
-        logTempoRefusal(req, { cls: `broadcast:${bcls}`, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, handler: tHandled - tValidated, broadcast: tBroadcast - tHandled, total: Date.now() - tStart } });
+        logTempoRefusal(req, { cls: `broadcast:${bcls}`, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, handler: tHandled - tValidated, broadcast: tBroadcast - tHandled, total: Date.now() - tStart }, requestId: b.requestId });
         bufferedCalls = [];
         restore();
         // Never a 503 here: after a failed broadcast whose outcome the chain

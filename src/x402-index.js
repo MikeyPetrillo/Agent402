@@ -6135,14 +6135,25 @@ async function importIndexCacheFile() {
   let source = null, entries = [];
   if (existsSync(INDEX_CACHE_NDJSON_FILE)) {
     source = INDEX_CACHE_NDJSON_FILE;
-    const text = readFileSync(source, "utf8");
+    // Read off the loop and parsed WARM_START_BATCH lines per turn: the file
+    // runs to a hundred MB and more, and one pass over it held the loop for
+    // seconds (the boot's other reads time out behind a block that long).
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile(source, "utf8");
     const nl = text.indexOf("\n");
     if (nl > 0) {
       try { JSON.parse(text.slice(0, nl)); } catch { source = null; } // header must parse: not our file
       if (source) {
-        for (const line of text.slice(nl + 1).split("\n")) {
-          if (!line) continue;
-          try { const e = JSON.parse(line); if (Array.isArray(e) && typeof e[0] === "string" && e[0] && e[1] && typeof e[1] === "object") entries.push(e); } catch { /* an unreadable line is skipped, as the file loader skips it */ }
+        let pos = nl + 1, n = 0;
+        while (pos < text.length) {
+          let end = text.indexOf("\n", pos);
+          if (end < 0) end = text.length;
+          const line = text.slice(pos, end);
+          pos = end + 1;
+          if (line) {
+            try { const e = JSON.parse(line); if (Array.isArray(e) && typeof e[0] === "string" && e[0] && e[1] && typeof e[1] === "object") entries.push(e); } catch { /* an unreadable line is skipped, as the file loader skips it */ }
+          }
+          if (++n % WARM_START_BATCH === 0) await new Promise((r) => setImmediate(r));
         }
       }
     } else source = null;

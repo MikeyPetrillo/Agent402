@@ -127,6 +127,85 @@ export function stateDbTimeouts() {
   };
 }
 
+// The client-side read limit does not count time the event loop spent
+// blocked. A timer and a reply that both come due during a block are handled
+// in that order (timers run before the loop reads its sockets), so a plain
+// timer turned every query in flight across a long block into a "Query read
+// timeout" and a discarded connection, although each reply was already
+// waiting in its socket. This timer, when it fires late, waits again for the
+// time it was late (up to `ms` more in all), and its last check runs after
+// the loop has read its sockets. A database that does not answer still fails
+// within the limit plus any blocked time.
+const STALL_SLACK_MS = 100;
+/** Call `onTimeout` once `ms` of unblocked time has passed; returns cancel(). */
+export function stallAwareTimeout(ms, onTimeout) {
+  let timer = null, done = false, credit = 0, expected = 0;
+  const arm = (d) => { expected = performance.now() + d; timer = setTimeout(fire, d); };
+  function fire() {
+    timer = null;
+    if (done) return;
+    const late = performance.now() - expected;
+    if (late > STALL_SLACK_MS && credit < ms) {
+      const extra = Math.min(late, ms - credit);
+      credit += extra;
+      arm(extra);
+      return;
+    }
+    setImmediate(() => { if (!done) { done = true; onTimeout(); } });
+  }
+  arm(ms);
+  return () => { done = true; if (timer) { clearTimeout(timer); timer = null; } };
+}
+const readTimeoutError = () => new Error("Query read timeout");
+/** `run()`'s promise, rejected with "Query read timeout" after `ms` of unblocked time (`onTimeout(err)` runs first). */
+function withReadTimeout(run, ms, onTimeout = () => {}) {
+  if (!(ms > 0)) return run();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cancel = stallAwareTimeout(ms, () => {
+      if (settled) return;
+      settled = true;
+      const e = readTimeoutError();
+      try { onTimeout(e); } catch { /* the timeout still answers */ }
+      reject(e);
+    });
+    let p;
+    try { p = run(); } catch (e) { settled = true; cancel(); reject(e); return; }
+    Promise.resolve(p).then(
+      (v) => { if (settled) return; settled = true; cancel(); resolve(v); },
+      (e) => { if (settled) return; settled = true; cancel(); reject(e); },
+    );
+  });
+}
+/**
+ * One statement on a pooled connection under the stall-aware read limit (the
+ * pool's own query() with its plain timer, otherwise). Any failure discards
+ * the connection, as the pool's query() does; a timeout discards it at once,
+ * so the statement still running on it never holds a pooled slot.
+ */
+async function pooledQuery(p, text, values, ms = stateDbTimeouts().queryMs) {
+  const client = await p.connect();
+  let released = false;
+  const release = (err) => {
+    if (released) return;
+    released = true;
+    client.removeListener("error", onError);
+    client.release(err);
+  };
+  let failWith = null;
+  const onError = (err) => { failWith = failWith || err; release(err); };
+  client.on("error", onError);
+  try {
+    const r = await withReadTimeout(() => client.query(text, values), ms, (e) => release(e));
+    if (failWith) throw failWith;
+    release();
+    return r;
+  } catch (e) {
+    release(e instanceof Error ? e : new Error(String(e)));
+    throw e;
+  }
+}
+
 // ---- text Postgres refuses ----------------------------------------------------
 // Postgres stores no NUL (U+0000) in text or jsonb, and jsonb refuses a lone
 // UTF-16 surrogate written as an escape; SQLite and the JSON files took both.
@@ -208,14 +287,23 @@ function getPool() {
   pool = new Pool({
     connectionString: url,
     ssl: dbSsl(url),
-    max: Number(process.env.STATE_DB_POOL_MAX) || 6,
+    // Ten: every store's first load runs at boot, a few holding a connection
+    // for a transaction, and the serving path needs connections meanwhile.
+    max: Number(process.env.STATE_DB_POOL_MAX) || 10,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: t.connectMs,
     statement_timeout: t.statementMs,
-    query_timeout: t.queryMs,
+    // The client-side read limit is applied per statement by pooledQuery and
+    // withStateTx (stallAwareTimeout above), not by the driver's plain timer.
     idle_in_transaction_session_timeout: t.idleTxMs,
     keepAlive: true,
     keepAliveInitialDelayMillis: 10_000,
+    // An idle connection never holds the process open. A statement sent after
+    // closeStateDb (a store's first load still in flight, an unref'd refresh
+    // timer) opens a new pool; without this, its idle connection kept a script
+    // that ended on closeStateDb alive, and a timer reusing it every few
+    // seconds kept it alive for good. A server stays up by its listener.
+    allowExitOnIdle: true,
   });
   pool.on("error", (err) => { noteFailure(err); console.error("[state-db] pool error:", lastError); });
   return pool;
@@ -282,10 +370,11 @@ async function setupSchema(p) {
   const onError = (err) => { broken = broken || err; };
   client.on("error", onError);
   try {
-    await client.query("BEGIN");
-    await client.query("SELECT pg_advisory_xact_lock($1, hashtext($2))", [SCHEMA_LOCK_KEY, schema()]);
-    await client.query(DDL(schema()));
-    await client.query("COMMIT");
+    const q = (text, values) => withReadTimeout(() => client.query(text, values), stateDbTimeouts().queryMs, (e) => { broken = broken || e; });
+    await q("BEGIN");
+    await q("SELECT pg_advisory_xact_lock($1, hashtext($2))", [SCHEMA_LOCK_KEY, schema()]);
+    await q(DDL(schema()));
+    await q("COMMIT");
   } catch (e) {
     if (!broken) { try { await client.query("ROLLBACK"); } catch (re) { broken = re; } }
     throw e;
@@ -334,14 +423,14 @@ export async function stateQuery(text, params = [], { idempotent = false } = {})
   if (!p) throw new Error("state database not configured");
   const values = cleanParams(params, text);
   try {
-    const r = await p.query(text, values);
+    const r = await pooledQuery(p, text, values);
     noteSuccess(); // the status word reads "on" again after a good query
     return r;
   } catch (e) {
     if (isDeadConnection(e)) await discardIdleClients(p);
     if (isDeadConnection(e) && (idempotent || (typeof text === "string" && READ_ONLY.test(text)))) {
       try {
-        const r = await p.query(text, values);
+        const r = await pooledQuery(p, text, values);
         noteSuccess();
         return r;
       } catch (e2) { noteFailure(e2); throw e2; }
@@ -876,18 +965,25 @@ export async function withStateTx(fn, { timeoutMs = 0 } = {}) {
   client.on("error", onError);
   const hadOwnQuery = Object.prototype.hasOwnProperty.call(client, "query");
   const ownQuery = client.query;
-  const queryTimeout = timeoutMs > 0 ? timeoutMs + 2_000 : 0;
+  // The read limit per statement: the raised statement limit plus a margin,
+  // else the default. Promise-style statements get the stall-aware timer
+  // (a timeout breaks the connection, so it is discarded below); a
+  // callback-style one keeps the driver's own timer.
+  const readMs = timeoutMs > 0 ? timeoutMs + 2_000 : stateDbTimeouts().queryMs;
+  const timed = (run) => withReadTimeout(run, readMs, (e) => { broken = broken || e; noteFailure(e); });
   client.query = function cleanedQuery(config, values, cb) {
+    const callback = typeof values === "function" ? values : typeof cb === "function" ? cb : null;
     if (typeof config === "string") {
-      return queryTimeout
-        ? ownQuery.call(this, { text: config, values: typeof values === "function" ? undefined : cleanParams(values, config), query_timeout: queryTimeout }, typeof values === "function" ? values : cb)
-        : ownQuery.call(this, config, typeof values === "function" ? values : cleanParams(values, config), typeof values === "function" ? undefined : cb);
+      const v = typeof values === "function" ? undefined : cleanParams(values, config);
+      if (callback) return ownQuery.call(this, { text: config, values: v, query_timeout: readMs }, callback);
+      return timed(() => ownQuery.call(this, config, v));
     }
     if (config && typeof config === "object" && typeof config.submit !== "function") {
       const c = { ...config };
       if (Array.isArray(c.values)) c.values = cleanParams(c.values, c.text);
-      if (queryTimeout && !c.query_timeout) c.query_timeout = queryTimeout;
-      return ownQuery.call(this, c, typeof values === "function" ? values : cleanParams(values, c.text), cb);
+      const v = typeof values === "function" || values === undefined ? undefined : cleanParams(values, c.text);
+      if (callback) { if (!c.query_timeout) c.query_timeout = readMs; return ownQuery.call(this, c, v, callback); }
+      return timed(() => (v === undefined ? ownQuery.call(this, c) : ownQuery.call(this, c, v)));
     }
     return ownQuery.call(this, config, values, cb);
   };
@@ -1006,9 +1102,23 @@ export async function closeStateDb() {
  * other instead of racing on the catalog. Commits on return, rolls back on
  * throw; the lock is released with the transaction.
  */
+//
+// Within one process the callers queue here first, so a store waiting for the
+// lock does not hold a pooled connection while it waits: at boot a dozen
+// stores create their tables at once, and each waiter used to hold one of the
+// pool's connections idle in a lock wait while the other stores' reads queued
+// for a connection. The advisory lock still orders two containers.
+const schemaLockScope = new AsyncLocalStorage();
+let schemaLockTail = Promise.resolve();
 export async function withSchemaLock(fn, { timeoutMs = 0 } = {}) {
-  return withStateTx(async (client) => {
+  const run = () => withStateTx(async (client) => {
     await client.query("SELECT pg_advisory_xact_lock($1, hashtext($2))", [SCHEMA_LOCK_KEY, schema()]);
-    return fn(client);
+    return schemaLockScope.run(true, () => fn(client));
   }, { timeoutMs });
+  if (schemaLockScope.getStore()) return run(); // nested: the outer holder already has the lock
+  const prev = schemaLockTail;
+  let done;
+  schemaLockTail = new Promise((r) => { done = r; });
+  try { await prev; return await run(); }
+  finally { done(); }
 }

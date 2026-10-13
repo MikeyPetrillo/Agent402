@@ -42,6 +42,7 @@ async function testSigterm() {
     await wait(250);
   }
   ok(up, "server booted in FREE_MODE");
+  if (!up) console.log(`# server output (last 2000 chars):\n${out.slice(-2000)}`);
 
   const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
   const t0 = Date.now();

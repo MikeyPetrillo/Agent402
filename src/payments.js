@@ -3,6 +3,7 @@ import { boundedResponseSchemaFor, boundedSchema } from "./openapi-schema.js";
 import { paymentMiddlewareFromHTTPServer, x402HTTPResourceServer } from "@x402/express";
 import { registerPhaseTimingHooks } from "./paid-phase-timing.js";
 import { createGuardedInit, withGuardedInit } from "./x402-boot-init.js";
+import { scheduleBazaarRouteCheck, withBazaarHidden } from "./bazaar-route-check.js";
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import { installAcceptOutputSchema, withOutputSchemaOnFirstAccept, outputSchemaFromExtensions, acceptOutputSchemaEnabled } from "./accept-output-schema.js";
 import { avmSubcentGateEnabled, installAvmSubcentGate, noteAvmSettleRefusal, startAvmSponsorshipRefresher, REFRESH_MS as AVM_SPONSORSHIP_REFRESH_MS } from "./avm-sponsorship.js";
@@ -1458,8 +1459,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // /supported guard's escape hatch (and its fail-open branch) into a crash
   // lever. Ours keeps the pre-2.25 contract: paid routes 500 until a retry
   // succeeds, the free tier serves, the process stays up.
+  //
+  // The vendor's per-route bazaar check (an Ajv compile per route, one
+  // synchronous loop) is moved off the boot path: see src/bazaar-route-check.js.
   const httpServer = new x402HTTPResourceServer(server, routes);
-  const vendorMw = paymentMiddlewareFromHTTPServer(httpServer, undefined, undefined, false);
+  const vendorMw = withBazaarHidden(routes, () => paymentMiddlewareFromHTTPServer(httpServer, undefined, undefined, false));
+  scheduleBazaarRouteCheck(routes);
   if (!syncOnStart) return vendorMw;
   return withGuardedInit(vendorMw, createGuardedInit(httpServer), httpServer);
 }

@@ -22,6 +22,7 @@
 //      seller's offer), per route, and it benches that route only on the
 //      second strike - never by a check whose URL a caller chose, and never
 //      for a 4xx or offer-less 402/401 the caller's own input produced.
+import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";

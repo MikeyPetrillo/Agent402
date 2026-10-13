@@ -20,6 +20,7 @@
 // Offline: every source is a stub, so this spends nothing and needs no key.
 //
 //   node scripts/test-scan-cap.js
+import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
 process.env.ALCHEMY_API_KEY ||= "stub-key-not-a-real-credential";
 
 let pass = 0;

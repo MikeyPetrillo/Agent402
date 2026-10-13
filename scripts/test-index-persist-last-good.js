@@ -12,6 +12,7 @@
 // sixth came back only because the per-operator cap happened to crawl it,
 // with health 0 and no history). Offline: the real register + crawl pipeline
 // through the __setCrawlFetchForTest seam, then persist -> reset -> warm start.
+import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
 process.env.X402_INDEX_CRAWL = "off";
 const { mkdtempSync, rmSync, readFileSync } = await import("node:fs");
 const { tmpdir } = await import("node:os");
