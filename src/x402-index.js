@@ -284,6 +284,63 @@ export function isUnderSeller(url, key) {
   return u.pathname === prefix || u.pathname.startsWith(`${prefix}/`);
 }
 
+/** The seller key a live probe builds its URLs from: the origin this seller's
+ *  manifest was permanently redirected to when the crawl recorded one (a
+ *  same-host scheme upgrade is the common case), else the stored key itself.
+ *  The stored key stays the index key; only the request goes to the recorded
+ *  origin. A path seller's documents are never accepted from another origin
+ *  (probePath), so its key is always its own. */
+export function probeOriginOf(key, redirectedTo) {
+  if (typeof redirectedTo !== "string" || !redirectedTo || sellerPrefixOf(key)) return key;
+  let u;
+  try { u = new URL(redirectedTo); } catch { return key; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return key;
+  return u.origin;
+}
+
+/** The URL an http probe is re-asked at when its 301/308 names the same
+ *  request over https on the same host (a scheme upgrade: hostname, path and
+ *  query unchanged); null for every other redirect, which is never followed. */
+export function schemeUpgradeOf(target, location) {
+  let a, b;
+  try { a = new URL(target); b = new URL(String(location || ""), target); } catch { return null; }
+  if (a.protocol !== "http:" || b.protocol !== "https:") return null;
+  if (a.hostname.toLowerCase() !== b.hostname.toLowerCase()) return null;
+  if (a.pathname !== b.pathname || a.search !== b.search) return null;
+  if (b.username || b.password) return null;
+  return b.href;
+}
+
+// Every unpaid per-route probe makes its requests through the public-URL guard
+// (assertPublicUrl + the pinned dispatcher, no redirect followed). Tests swap
+// the guard for a loopback fetch; production never does.
+let probeFetch = (url, opts) => probePublicUrl(url, opts);
+export function __setProbeFetchForTest(fn) { probeFetch = typeof fn === "function" ? fn : (url, opts) => probePublicUrl(url, opts); }
+
+/** One unpaid probe of a seller route. An http target answered 301/308 with
+ *  the same request over https on the same host is asked once more there,
+ *  through the same guard; any other redirect is the answer as given. Returns
+ *  the response and the URL that produced it; a thrown error carries the URL
+ *  being asked as `probedUrl`. */
+export async function probeSellerRoute(target, opts) {
+  let url = target;
+  try {
+    let res = await probeFetch(target, opts);
+    if (res.status === 301 || res.status === 308) {
+      const upgraded = schemeUpgradeOf(target, res.headers.get("location"));
+      if (upgraded) {
+        await res.body?.cancel?.().catch?.(() => {});
+        url = upgraded;
+        res = await probeFetch(upgraded, opts);
+      }
+    }
+    return { res, url };
+  } catch (e) {
+    if (e && typeof e === "object") e.probedUrl = url;
+    throw e;
+  }
+}
+
 /** A host-absolute path, as a route of this seller: unchanged for a bare
  *  origin; for a path seller, relative to the prefix, or null when it lies
  *  outside it. */
@@ -4121,7 +4178,10 @@ export function adoptLivePrice(row, livePrice, originUrl = "") {
   delete row.quoteCarriedForward;
 }
 
-export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0 } = {}) {
+export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null } = {}) {
+  // Requests go to the origin the manifest was redirected to, when the crawl
+  // recorded one; every key, mark and log line below stays on the stored key.
+  const probeOrigin = probeOriginOf(originUrl, redirectedTo);
   if (!Array.isArray(tools) || !tools.length) return tools;
   dropGoneRoutes(tools, originUrl);
   if (!tools.length) return tools;
@@ -4230,12 +4290,12 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       bump(quoteProbeStats.attempts, k);
       if (!firstOutcome) firstOutcome = k;
     };
-    probe: for (const { target, method, body: reqBody } of probeAttemptsFor(originUrl, tool)) {
+    probe: for (const { target, method, body: reqBody } of probeAttemptsFor(probeOrigin, tool)) {
       if (pastDeadline()) break;
       try {
         // Crawled URLs are external data and could DNS-rebind between crawl and
         // now: validate then pin, exactly as probePaywall does.
-        const res = await probePublicUrl(target, {
+        const { res } = await probeSellerRoute(target, {
           method,
           headers: { Accept: "application/json", ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
           ...(method === "POST" ? { body: reqBody } : {}),
@@ -4356,9 +4416,9 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       try {
         // seller + route, as every other probe builds it: a path seller's routes
         // are relative to its prefix, which URL resolution against the key drops.
-        const target = sellerRouteUrl(originUrl, tool.route);
+        const target = sellerRouteUrl(probeOrigin, tool.route);
         if (!target) throw new Error("route outside the seller");
-        const r = await probePublicUrl(target, { method: "GET", headers: { Accept: "application/json" } });
+        const { res: r } = await probeSellerRoute(target, { method: "GET", headers: { Accept: "application/json" } });
         statusByMethod.GET = r.status;
         await r.body?.cancel?.().catch?.(() => {});
       } catch { statusByMethod.GET = 0; }
@@ -4490,7 +4550,7 @@ export function isMppChallenge(wwwAuthHeaderValue) {
   return !!wwwAuthHeaderValue && /^Payment\b/i.test(String(wwwAuthHeaderValue).trim());
 }
 
-async function probePaywall(tools) {
+async function probePaywall(tools, { redirectedTo = null } = {}) {
   // A cached tool row has NO `url` field — the callable URL is derived as
   // seller + route, the same way routeQuery builds it (see the `url:` mapping
   // further down this file). The first version of this filtered on
@@ -4502,23 +4562,30 @@ async function probePaywall(tools) {
     (t) => t
       && typeof t.seller === "string" && t.seller !== LOCAL_SELLER  // never probe ourselves
       && typeof t.route === "string" && t.route.startsWith("/")
-      && Number(t.price) > 0
+      // Read as the public priceUsd is: a manifest row's "$0.005" is a price.
+      && parsePrice(t.price) > 0
   );
   // Prefer a GET: no body to guess, and a wrong body shape would produce a 400
   // that says nothing about the paywall.
   const pick = paid.find((t) => String(t.method || "GET").toUpperCase() === "GET") || paid[0];
   if (!pick) return null;
   const method = String(pick.method || "GET").toUpperCase();
-  const target = sellerRouteUrl(pick.seller, pick.route);
+  // Built from the origin the manifest was redirected to, when one is recorded:
+  // a stored http origin whose seller answers over https would otherwise read
+  // 301 here on every probe while its paywall is healthy.
+  const target = sellerRouteUrl(probeOriginOf(pick.seller, redirectedTo), pick.route);
   if (!target) return null;
+  let url = target;
   try {
     // Same guard as the router's live probe: crawled URLs are external data and
     // could DNS-rebind between crawl and now, so validate then pin.
-    const res = await probePublicUrl(target, {
+    const probed = await probeSellerRoute(target, {
       method,
       headers: { Accept: "application/json", ...(method !== "GET" ? { "Content-Type": "application/json" } : {}) },
       ...(method !== "GET" ? { body: "{}" } : {}),
     });
+    const res = probed.res;
+    url = probed.url;
     // 402 is the ONLY healthy answer for an unpaid call to a paid route. A 200
     // means the route is not actually paywalled; a 5xx means it is broken.
     //
@@ -4529,9 +4596,10 @@ async function probePaywall(tools) {
     // live-verified signal (we made the request and read the actual header),
     // never a claim inferred from a registry or a manifest field.
     const mpp = isMppChallenge(res.headers.get("www-authenticate"));
-    return { ok: res.status === 402, status: res.status, url: target, at: Date.now(), mpp };
+    // `url` is the URL that answered, which is the upgraded one after a 301/308.
+    return { ok: res.status === 402, status: res.status, url, at: Date.now(), mpp };
   } catch (e) {
-    return { ok: false, status: 0, url: target, at: Date.now(), error: String(e?.message || e).slice(0, 120), mpp: false };
+    return { ok: false, status: 0, url: e?.probedUrl || url, at: Date.now(), error: String(e?.message || e).slice(0, 120), mpp: false };
   }
 }
 
@@ -4912,12 +4980,13 @@ async function probeDoc(originUrl, path, opts, prevParsed) {
 }
 
 /** The origin a document fetch was permanently redirected to, when it is a
- *  DIFFERENT origin than the one asked; null otherwise. */
+ *  DIFFERENT origin than the one asked (another host, or the same host over
+ *  another scheme); null otherwise. */
 export function redirectedOriginOf(originUrl, finalUrl) {
   try {
     if (!finalUrl) return null;
     const a = new URL(originUrl), b = new URL(finalUrl);
-    if (canonicalHost(a.origin) === canonicalHost(b.origin)) return null;
+    if (a.protocol === b.protocol && canonicalHost(a.origin) === canonicalHost(b.origin)) return null;
     return b.origin;
   } catch { return null; }
 }
@@ -4965,7 +5034,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
     // listed beside its mainnet successor). Recorded so computeAliasOrigins can
     // fold it without needing a homepage field the manifest may not carry.
     const redirectedTo = redirectedOriginOf(originUrl, manifestDoc.finalUrl);
-    if (redirectedTo && redirectedTo !== prev?.redirectedTo) console.log(`[x402-index] ${originUrl}: manifest is served from ${redirectedTo} (permanent redirect) - treated as an alias of it`);
+    if (redirectedTo && redirectedTo !== prev?.redirectedTo) console.log(`[x402-index] ${originUrl}: manifest is served from ${redirectedTo} (permanent redirect) - live probes are sent there`);
 
     // OpenAPI is the tool-level detail. Best-effort: a seller without one still
     // shows up in the Index based on their manifest alone.
@@ -5021,7 +5090,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
     // Keep what earlier crawls already learned, THEN spend the probe budget on
     // routes we still know nothing about.
     tools = carryForwardLearnedQuotes(tools, prev);
-    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt });
+    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo });
 
     cache.set(originUrl, {
       manifest,
@@ -5045,7 +5114,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
       fallbackErrors: undefined,
       // Not this seller's turn: carry the last reading forward rather than
       // dropping it — null must mean "never probed", not "not probed today".
-      paywall: paywallProbeDue() && !pastDeadline() ? await probePaywall(tools) : (prev?.paywall ?? null),
+      paywall: paywallProbeDue() && !pastDeadline() ? await probePaywall(tools, { redirectedTo }) : (prev?.paywall ?? null),
     });
   } catch (e) {
     // No /.well-known/x402 — two fallback surfaces, richest metadata wins:
@@ -5146,7 +5215,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
       // FALLBACK surfaces is even less likely to have published a price, so
       // skipping it here would leave the worst-served sellers unpriced.
       carryForwardLearnedQuotes(tools, prev);
-      await enrichLiveQuotes(tools, originUrl, { deadlineAt });
+      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null });
       // A real (non-synthesized) manifest from a past crawl is kept; a stale
       // synthesized one is rebuilt so a newly appeared openapi title wins.
       const keepManifest = prev?.manifest && !prev.manifest.synthesized ? prev.manifest : null;
@@ -5197,7 +5266,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
         // while never having responded — and the marketplace rendered them
         // "healthy". A crawl completing is not a seller answering.
         originResponded: openapiTools.length > 0,
-        paywall: paywallProbeDue() && !pastDeadline() ? await probePaywall(tools) : (prev?.paywall ?? null),
+        paywall: paywallProbeDue() && !pastDeadline() ? await probePaywall(tools, { redirectedTo: prev?.redirectedTo ?? null }) : (prev?.paywall ?? null),
       });
       return;
     }
@@ -6871,6 +6940,9 @@ export function sellerDetail(originOrHost) {
       // says the manifest parsed; a seller whose every paid route 500s scores a
       // perfect 1.0 on it. null = not probed yet (never assume healthy).
       paywall: v.paywall || null,
+      // The origin this seller's manifest is served from by permanent redirect,
+      // when the crawl recorded one: live probes (and paywall.url) go there.
+      ...(v.redirectedTo ? { redirectedTo: v.redirectedTo } : {}),
       // Same probe, no extra request: does this seller's paid route also
       // carry WWW-Authenticate: Payment (native MPP dual-stack)? null = never
       // probed yet, matching paywall's own convention.

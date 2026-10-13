@@ -2425,6 +2425,8 @@ jobs:
           t node scripts/test-index-register.js
           # Path-scoped sellers: an app under a prefix on a shared host (offline, crawl seam)
           t node scripts/test-path-scoped-sellers.js
+          # Live probes go to the origin a seller's manifest is served from; a same-host https upgrade is re-asked once (offline, loopback)
+          t node scripts/test-index-probe-redirect.js
           # re-registration re-check: per-origin window + hourly route allowance
           t node scripts/test-register-recheck-cooldown.js
           # A registration answers by its deadline (202 pending) and stops starting probes past it.
