@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // No em dash in anything shipped or shown to a model.
 //
-// The published packages (their `files` allowlists and every README beside
-// them), the Python adapter's module, and the text a workflow writes into a
-// public issue are read by buyers, by models (tool descriptions, prompts,
-// error strings) and by anyone on the issue tracker. House style is a colon,
+// The published packages (their `files` allowlists, every README beside them
+// and the deploy templates a user copies whole), the Python adapter's module,
+// and the text a workflow writes into a public issue are read by buyers, by
+// models (tool descriptions, prompts, error strings) and by anyone on the
+// issue tracker. House style is a colon,
 // a comma or a period where an em dash would go. The shipped set is read from
 // each package.json (scripts/lib/shipped-files.js) rather than a folder list,
 // so a new shipped module is covered the day it is listed.

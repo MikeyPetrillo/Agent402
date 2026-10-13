@@ -42,5 +42,8 @@ export function shippedFiles(pkgDir) {
     }
   }
   walk(abs).filter((x) => /README\.md$/i.test(x)).forEach((x) => files.add(x));
+  // Deploy templates (tollbooth/deploy/*) are copied into a user's own project
+  // whole, so every file under them is shipped text too.
+  if (existsSync(join(abs, "deploy"))) walk(join(abs, "deploy")).forEach((x) => files.add(x));
   return [...files].sort();
 }

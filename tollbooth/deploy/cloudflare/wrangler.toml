@@ -1,4 +1,4 @@
-# agent402-tollbooth on Cloudflare Workers — open pay-per-crawl on the edge.
+# agent402-tollbooth on Cloudflare Workers: open pay-per-crawl on the edge.
 # Copy this to your project root, then: npm i agent402-tollbooth && npx wrangler deploy
 #
 # Humans pass through; AI crawlers get a 402 and pay (USDC via x402) or solve a
@@ -7,8 +7,8 @@
 name = "tollbooth"
 main = "node_modules/agent402-tollbooth/worker.js"
 compatibility_date = "2026-01-01"
-# worker.js + edge.js use only Web APIs (crypto.subtle, fetch, Headers, URL) —
-# no node:* imports — so nodejs_compat is NOT required.
+# worker.js + edge.js use only Web APIs (crypto.subtle, fetch, Headers, URL),
+# no node:* imports, so nodejs_compat is NOT required.
 
 [vars]
 TOLLBOOTH_UPSTREAM = "https://your-origin.example.com"  # where allowed requests are proxied
@@ -17,7 +17,7 @@ TOLLBOOTH_PRICE    = "$0.001"                           # optional: price per re
 TOLLBOOTH_NETWORK  = "base"                             # optional: x402 network
 # TOLLBOOTH_POW_BITS = "18"                             # optional: proof-of-work difficulty
 
-# Recommended first deploy: observe-only — classifies and counts but never 402s.
+# Recommended first deploy: observe-only (classifies and counts but never 402s).
 # Run for a week, watch /__tollbooth, then remove this line to start charging.
 # TOLLBOOTH_OBSERVE = "true"
 
@@ -33,9 +33,9 @@ TOLLBOOTH_NETWORK  = "base"                             # optional: x402 network
 # The HTML dashboard at /__tollbooth stays public (shareable read-only URL).
 
 # STRICT single-use replay protection (recommended for enforcement): bind a
-# Durable Object (audit F05). Unlike KV — which is eventually consistent and has
+# Durable Object. Unlike KV, which is eventually consistent and has
 # no compare-and-set, so concurrent duplicate solutions across isolates/locations
-# can BOTH pass — a Durable Object claims each token atomically. The Worker
+# can BOTH pass, a Durable Object claims each token atomically. The Worker
 # prefers TOLLBOOTH_REPLAY when bound; if only KV is bound, it warns in
 # enforcement that replay protection is best-effort.
 # [[durable_objects.bindings]]
@@ -46,7 +46,7 @@ TOLLBOOTH_NETWORK  = "base"                             # optional: x402 network
 # tag = "v1"
 # new_classes = ["TollboothReplay"]
 
-# Recommended for production: bind a KV namespace for DURABLE STATS — without it
+# Recommended for production: bind a KV namespace for DURABLE STATS; without it
 # the dashboard resets on every cold start, so observe-mode data is useless. (KV
 # can also serve as a best-effort replay store when no Durable Object is bound,
 # but the Durable Object above is the correct store for strict single-use.)
