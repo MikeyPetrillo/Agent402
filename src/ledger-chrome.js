@@ -101,10 +101,13 @@ export const LEDGER_CSS = `
    has no title, this supplies one without changing the page for anyone else. */
 .sr-section{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 /* Hard stop on page-level horizontal scroll: no content should ever push the
-   document sideways on a phone. Uses overflow-x: clip (not hidden) so it never
-   turns the root into a scroll container - position: sticky (docs TOC) keeps
-   working. Wide data tables get their own internal scroll below; everything
-   else is made to wrap/fit at mobile widths in the media queries. */
+   document sideways on a phone. Both the root and the body use overflow-x:
+   clip (never hidden, auto or scroll): any of those on html or body turns that
+   element into a scroll container, and every position: sticky element inside
+   (the top nav, the docs TOC) then anchors to it instead of the viewport and
+   scrolls away with the page. scripts/test-sticky-chrome.js measures this.
+   Wide data tables get their own internal scroll below; everything else is
+   made to wrap/fit at mobile widths in the media queries. */
 html { overflow-x: clip; }
 /* TWO themes, light is the DEFAULT (2026-08-22, second pass): the light "milled"
    palette sits directly on bare :root so the first paint is already light - no
@@ -1125,7 +1128,7 @@ ${jsonLdBlock}
 ${posthogSnippet(baseUrl)}
 ${gaSnippet(canonical)}
 </head>
-<body style="overflow-x:hidden;">
+<body style="overflow-x:clip;">
 ${nav(activePath)}
 <main>${body}</main>
 </body>
