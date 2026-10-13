@@ -513,6 +513,43 @@ try {
   await documents.put("after", { ok: true });
   ok(stateDbStatus() === "on", "a good query restores the status word to on");
 
+  // ---- a release that failed is re-sent, and never under a later tick ------
+  // The row of a tick whose release failed (the database unreachable as it
+  // ended) would otherwise hold its loop against every container for the
+  // ttl. Here the release is made to fail from inside the module, so the
+  // path under test is the wrapper's own.
+  {
+    const other = await import("../src/state-db.js?release-retry");
+    const realRelease = other.leases.release;
+    const cut = () => { other.leases.release = async () => { throw new Error("Connection terminated unexpectedly"); }; };
+    const heal = () => { other.leases.release = realRelease; };
+    const me = other.leaseOwnerId();
+    process.env.LEASE_RELEASE_RETRY_MS = "200"; // the retry timer is set when the first release fails, and keeps that delay
+    // A: the next tick of the same name owns the same row and releases it when it ends.
+    cut();
+    const first = await other.withLease("UNREL", { ttlMs: 60_000, log: () => {} }, async () => "ran");
+    const heldAfterFirst = (await leases.holder("UNREL"))?.owner;
+    heal();
+    ok(first.ran === true && heldAfterFirst === me, `a tick whose release failed still ran, and its row stays held by this process (${JSON.stringify({ first, holder: heldAfterFirst === me })})`);
+    const second = await other.withLease("UNREL", { ttlMs: 60_000, log: () => {} }, async () => "ran again");
+    ok(second.ran === true && (await leases.holder("UNREL")) === null, "the next tick of that name runs on the same row and releases it when it ends");
+    // B: with no later tick, the delete is re-sent on a timer once the database answers.
+    cut();
+    await other.withLease("UNREL-T", { ttlMs: 60_000, log: () => {} }, async () => "ran");
+    const heldBeforeRetry = (await leases.holder("UNREL-T"))?.owner === me;
+    heal();
+    await sleep(600);
+    ok(heldBeforeRetry && (await leases.holder("UNREL-T")) === null, "a failed release is re-sent on its own and lands once the database answers");
+    // C: shutdown re-sends a release that failed and has not landed yet.
+    cut();
+    await other.withLease("UNREL-S", { ttlMs: 60_000, log: () => {} }, async () => "ran");
+    const heldBeforeShutdown = (await leases.holder("UNREL-S"))?.owner === me;
+    heal();
+    const n = await other.releaseHeldLeases({ timeoutMs: 3000 });
+    ok(heldBeforeShutdown && n === 1 && (await leases.holder("UNREL-S")) === null, `shutdown re-sends the failed release and the row is gone (released ${n})`);
+    delete process.env.LEASE_RELEASE_RETRY_MS;
+  }
+
   // ---- a process that ends on closeStateDb exits ------------------------------
   // A store whose first load is still in flight when a script closes the pool
   // sends its next statement after the close, which opens a new pool, and its

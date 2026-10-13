@@ -695,6 +695,51 @@ export const leases = {
 const heldLeases = new Map();
 const leaseKey = (owner, name) => `${owner}\u0001${name}`;
 let leasesStopped = false;
+// A release that failed (the database unreachable as the tick ended) is not
+// forgotten: left alone, the row would hold its loop against every container
+// until the ttl. The entry waits here, the delete is re-sent every few
+// seconds while the row can still be live, and once more at shutdown. A
+// later tick of the same name in this process owns that same row (the owner
+// matches) and releases it when it ends, so a waiting entry never deletes a
+// row a running tick holds.
+const unreleased = new Map();
+let unreleasedTimer = null;
+const leaseReleaseRetryMs = () => Math.max(100, Number(process.env.LEASE_RELEASE_RETRY_MS) || 5_000);
+const rowMayBeLive = (entry) => Date.now() < entry.confirmedAt + entry.ttlMs;
+function releaseEntry(entry) {
+  if (entry.releasing) return entry.releasing;
+  const key = leaseKey(entry.owner, entry.name);
+  entry.released = true;
+  entry.releasing = (async () => {
+    try {
+      const gone = await leases.release(entry.name, { owner: entry.owner });
+      unreleased.delete(key);
+      return gone ? 1 : 0;
+    } catch (e) {
+      if (rowMayBeLive(entry)) {
+        const first = !unreleased.has(key);
+        unreleased.set(key, entry);
+        if (first) { try { entry.log(`[state-db] lease ${entry.name}: release failed (${String(e?.message || e).slice(0, 80)}); re-sent until it lands`); } catch { /* logging never throws here */ } }
+        scheduleUnreleasedRetry();
+      }
+      return 0;
+    } finally { entry.releasing = null; }
+  })();
+  return entry.releasing;
+}
+function scheduleUnreleasedRetry() {
+  if (unreleasedTimer || leasesStopped || !unreleased.size) return;
+  unreleasedTimer = setTimeout(retryUnreleased, leaseReleaseRetryMs());
+  unreleasedTimer.unref?.();
+}
+async function retryUnreleased() {
+  unreleasedTimer = null;
+  for (const [key, entry] of [...unreleased]) {
+    if (heldLeases.has(key) || !rowMayBeLive(entry)) { unreleased.delete(key); continue; } // a live tick here owns the row now, or it expired on its own
+    await releaseEntry(entry);
+  }
+  scheduleUnreleasedRetry();
+}
 const TRIVIAL_CTX = Object.freeze({ signal: new AbortController().signal, stillHeld: () => true });
 
 function entryHeld(e) {
@@ -763,9 +808,9 @@ async function acquireWithin(name, owner, ttlMs, limitMs) {
     if (!timedOut || !won) return;
     const key = leaseKey(owner, String(name));
     if (heldLeases.has(key)) return;
-    const releasing = { name: String(name), owner, ttlMs, controller: new AbortController(), acquired: false, confirmedAt: 0, lost: false, released: true, failOpen: false, log: () => {} };
+    const releasing = { name: String(name), owner, ttlMs, controller: new AbortController(), acquired: true, confirmedAt: Date.now(), lost: false, released: false, failOpen: false, log: () => {} };
     heldLeases.set(key, releasing);
-    leases.release(name, { owner }).catch(() => {}).finally(() => { if (heldLeases.get(key) === releasing) heldLeases.delete(key); });
+    releaseEntry(releasing).finally(() => { if (heldLeases.get(key) === releasing) heldLeases.delete(key); });
   }, () => {});
   try { return await Promise.race([attempt, deadline]); }
   catch (e) { if (timedOut) noteFailure(e); throw e; }
@@ -789,7 +834,9 @@ export async function withLease(name, opts = {}, fn) {
   try {
     const startedAt = Date.now();
     let held = false;
-    try { held = await acquireWithin(entry.name, owner, entry.ttlMs, acquireTimeoutMs); }
+    const acquiring = acquireWithin(entry.name, owner, entry.ttlMs, acquireTimeoutMs);
+    entry.acquiring = acquiring.then(() => {}, () => {}); // shutdown waits for this before it releases
+    try { held = await acquiring; }
     catch (e) {
       const why = String(e?.message || e).slice(0, 120);
       if (failOpen && uptimeMs >= leaseFailOpenMs()) {
@@ -801,8 +848,8 @@ export async function withLease(name, opts = {}, fn) {
       return { ran: false, reason: "db" };
     }
     if (!held) return { ran: false, reason: "held" };
-    if (leasesStopped) { await leases.release(entry.name, { owner }).catch(() => {}); return { ran: false, reason: "shutdown" }; }
     entry.acquired = true;
+    if (leasesStopped) { await releaseEntry(entry); return { ran: false, reason: "shutdown" }; }
     entry.confirmedAt = startedAt; // the row's expiry counts from no earlier than this
     let renewing = false;
     const beat = setInterval(async () => {
@@ -823,7 +870,7 @@ export async function withLease(name, opts = {}, fn) {
       return entry.lost ? { ran: true, result, lost: true } : { ran: true, result };
     } finally {
       clearInterval(beat);
-      if (!entry.released) await leases.release(entry.name, { owner }).catch(() => {});
+      if (!entry.released) await releaseEntry(entry);
     }
   } finally { heldLeases.delete(key); }
 }
@@ -852,10 +899,20 @@ export function stopLeases() {
 export async function releaseHeldLeases({ timeoutMs = 3_000 } = {}) {
   stopLeases();
   if (!stateDbEnabled()) return 0;
-  const work = [...heldLeases.values()].filter((e) => e.acquired && !e.released).map(async (e) => {
-    e.released = true;
-    try { return (await leases.release(e.name, { owner: e.owner })) ? 1 : 0; } catch { return 0; }
-  });
+  if (unreleasedTimer) { clearTimeout(unreleasedTimer); unreleasedTimer = null; }
+  const seen = new Set();
+  const work = [];
+  for (const [key, e] of [...heldLeases, ...unreleased]) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    work.push((async () => {
+      if (e.acquiring) await e.acquiring; // an acquire in flight lands (and is then released here) or fails first
+      if (e.releasing) return e.releasing; // a release in flight is awaited, never doubled
+      if (!e.acquired) return 0;
+      if (e.released && !unreleased.has(key)) return 0;
+      return releaseEntry(e);
+    })());
+  }
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); timer.unref?.(); });
   const r = await Promise.race([Promise.all(work), deadline]);
