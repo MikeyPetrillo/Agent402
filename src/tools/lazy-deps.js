@@ -35,15 +35,17 @@ export const LAZY_PACKAGES = [
 
 const WARMERS = [loadJsdom, loadReadability, loadTurndown, loadPdfParse, loadPdfLib, loadZxing, loadJsQR, loadJimp, loadMusicMetadata, loadTesseract];
 
-/** Load every lazy package in the background, one at a time so the event loop
- *  keeps turning between them. Called after listen; a failure is logged and
- *  left for the first real caller to retry. */
-export async function warmLazyDeps({ log = console.error } = {}) {
+/** Load every lazy package in the background, one at a time with a pause
+ *  between them (`gapMs`, LAZY_DEPS_WARM_GAP_MS, default 1 s): each import is
+ *  synchronous CPU for the loop, so the pause keeps the loads from forming one
+ *  burst while requests are being served. Called after listen; a failure is
+ *  logged and left for the first real caller to retry. */
+export async function warmLazyDeps({ log = console.error, gapMs = Number(process.env.LAZY_DEPS_WARM_GAP_MS ?? 1000) } = {}) {
   const t0 = Date.now();
   let loaded = 0;
   for (const load of WARMERS) {
     try { await load(); loaded++; } catch (e) { log(`[lazy-deps] warm-up load failed: ${e?.message || e}`); }
-    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => (gapMs > 0 ? setTimeout(r, gapMs).unref() : setImmediate(r)));
   }
   return { loaded, ms: Date.now() - t0 };
 }

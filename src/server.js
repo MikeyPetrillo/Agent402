@@ -10008,13 +10008,15 @@ httpServer.headersTimeout = Number(process.env.HTTP_HEADERS_TIMEOUT_MS) || 70_00
 httpServer.requestTimeout = Number(process.env.HTTP_REQUEST_TIMEOUT_MS) || 120_000;
 
 // The tool-only packages that no longer load at boot (src/tools/lazy-deps.js)
-// load shortly after listen, one per event-loop turn, so the first buyer of a
-// DOM, PDF, image or OCR tool finds them warm without the boot having waited
-// for them. LAZY_DEPS_WARM=off leaves every load to its first caller.
+// load after listen, once the first-crawl and index work has settled, one
+// package at a time with a pause between loads, so the first buyer of a DOM,
+// PDF, image or OCR tool finds them warm without the boot having waited for
+// them and without the loads forming one burst under live requests.
+// LAZY_DEPS_WARM=off leaves every load to its first caller.
 if (process.env.LAZY_DEPS_WARM !== "off") {
   setTimeout(() => {
     warmLazyDeps().then((r) => console.log(`[lazy-deps] warmed ${r.loaded} packages in ${r.ms}ms`)).catch(() => {});
-  }, Number(process.env.LAZY_DEPS_WARM_DELAY_MS) || 2_000).unref();
+  }, Number(process.env.LAZY_DEPS_WARM_DELAY_MS) || 30_000).unref();
 }
 
 // Warm the revenue snapshot at boot (fire-and-forget): revenueSnapshot is
