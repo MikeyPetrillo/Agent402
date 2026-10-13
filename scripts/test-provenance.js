@@ -31,7 +31,7 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
 // 2. Extract + render share htmlToArticle, so marking it covers both.
 {
   const html = "<html><body><article><h1>Title</h1><p>" + "word ".repeat(60) + "</p></article></body></html>";
-  const art = htmlToArticle(html, "https://example.com/a");
+  const art = await htmlToArticle(html, "https://example.com/a");
   ok(art.untrustedContent === true, "extracted/rendered article is marked untrusted");
   ok(art.url === "https://example.com/a" && typeof art.markdown === "string", "article keeps url + markdown (backward-compatible)");
 }

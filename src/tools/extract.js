@@ -1,19 +1,23 @@
-import { JSDOM } from "jsdom";
-import { Readability } from "@mozilla/readability";
-import TurndownService from "turndown";
+import { loadJsdom, loadReadability, loadTurndown, lazyImport } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
 import { markUntrusted } from "./provenance.js";
 
-const turndown = new TurndownService({
-  headingStyle: "atx",
-  codeBlockStyle: "fenced",
-  bulletListMarker: "-",
+// jsdom, Readability and turndown load on the first article (./lazy-deps.js),
+// not at boot. One configured turndown instance is shared after that.
+const turndownInstance = lazyImport(async () => {
+  const TurndownService = await loadTurndown();
+  return new TurndownService({
+    headingStyle: "atx",
+    codeBlockStyle: "fenced",
+    bulletListMarker: "-",
+  });
 });
 
 /**
  * Turn raw HTML into a readable article object (markdown + metadata).
  */
-export function htmlToArticle(html, finalUrl) {
+export async function htmlToArticle(html, finalUrl) {
+  const [JSDOM, Readability, turndown] = await Promise.all([loadJsdom(), loadReadability(), turndownInstance()]);
   const dom = new JSDOM(html, { url: finalUrl });
   const article = new Readability(dom.window.document).parse();
   if (!article || !article.content) {
@@ -53,6 +57,7 @@ function meta(doc, selector, attr = "content") {
  */
 export async function fetchPageMeta(rawUrl) {
   const { finalUrl, html } = await safeFetch(rawUrl);
+  const JSDOM = await loadJsdom();
   const doc = new JSDOM(html, { url: finalUrl }).window.document;
 
   const og = {};

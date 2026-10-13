@@ -360,6 +360,7 @@ import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
 import { confirmTempoSettlement } from "./tempo-confirm.js";
 import { KIT } from "./tools/kit.js";
+import { warmLazyDeps } from "./tools/lazy-deps.js";
 import { KIT2 } from "./tools/kit2.js";
 import { UNIT_CATEGORIES, convertAnyUnit } from "./tools/convert-gen.js";
 import { SEARCH_TOOLS, braveCallMeter } from "./tools/search.js";
@@ -10005,6 +10006,16 @@ const httpServer = app.listen(PORT, () =>
 httpServer.keepAliveTimeout = Number(process.env.HTTP_KEEPALIVE_TIMEOUT_MS) || 65_000;
 httpServer.headersTimeout = Number(process.env.HTTP_HEADERS_TIMEOUT_MS) || 70_000;
 httpServer.requestTimeout = Number(process.env.HTTP_REQUEST_TIMEOUT_MS) || 120_000;
+
+// The tool-only packages that no longer load at boot (src/tools/lazy-deps.js)
+// load shortly after listen, one per event-loop turn, so the first buyer of a
+// DOM, PDF, image or OCR tool finds them warm without the boot having waited
+// for them. LAZY_DEPS_WARM=off leaves every load to its first caller.
+if (process.env.LAZY_DEPS_WARM !== "off") {
+  setTimeout(() => {
+    warmLazyDeps().then((r) => console.log(`[lazy-deps] warmed ${r.loaded} packages in ${r.ms}ms`)).catch(() => {});
+  }, Number(process.env.LAZY_DEPS_WARM_DELAY_MS) || 2_000).unref();
+}
 
 // Warm the revenue snapshot at boot (fire-and-forget): revenueSnapshot is
 // stale-while-revalidate, but a COLD cache makes the first post-deploy visitor
