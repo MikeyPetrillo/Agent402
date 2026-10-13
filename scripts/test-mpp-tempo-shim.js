@@ -705,7 +705,7 @@ async function withWarnings(fn) {
   const { _resetTempoDemotion, tempoLeads } = await import("../src/mpp-tempo.js");
   _resetTempoDemotion();
   const priorKey = process.env.TEMPO_API_KEY;
-  const KEY = "test-tempo-key-SECRET-9f8e7d6c";
+  const KEY = "test-tempo-key-redaction-probe";
   process.env.TEMPO_API_KEY = KEY;
   const payer = "0x2222222222222222222222222222222222222222";
   const REQUEST_ID = "c9ffc771-ef3a-4b87-835a-87d0288906ca";

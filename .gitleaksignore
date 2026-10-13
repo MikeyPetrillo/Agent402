@@ -2,3 +2,10 @@
 # secret and catalog prose, neither a credential.
 2618171f254b05561488e97d54bf38f8fc42687b:scripts/test-payment-required-body.js:generic-api-key:168
 a9e421ab1fb4a8012fe7d648e7224ce18b3eb3b0:src/payments.js:generic-api-key:542
+# A test's placeholder relay key (scripts/test-mpp-tempo-shim.js), replaced in a
+# later commit by a lower-entropy literal; not a credential.
+ceeb84258930ff926092b1b75eee6a5788cd873d:scripts/test-mpp-tempo-shim.js:generic-api-key:708
+fcfa810cd67558b75b568269046c8c6ea203d731:scripts/test-mpp-tempo-shim.js:generic-api-key:708
+40ebb95544ce541554a5c482e803dec70db55abd:scripts/test-mpp-tempo-shim.js:generic-api-key:708
+8c08a3d320e820211f4ca8761bfc9878363daadc:scripts/test-mpp-tempo-shim.js:generic-api-key:708
+e0f43933cf2d31fe65b738f643bd919448a22a1d:scripts/test-mpp-tempo-shim.js:generic-api-key:708
