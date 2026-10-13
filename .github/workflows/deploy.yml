@@ -2866,6 +2866,8 @@ jobs:
           t node scripts/test-price-premium.js
           # Canary underfunded classification (empty burner is funding, never an outage — offline)
           t node scripts/test-canary-underfunded.js
+          # Catalog buy (every tool bought at list price: grade, cap, rotation slice, funding preflight, exit codes - stub server + fake payer, offline)
+          t node scripts/test-catalog-buy.js
           # Payer identity (reads X-PAYMENT + legacy header; rejects unsigned/invalid — money-path regression lock — offline)
           t node scripts/test-payer.js
           # Payment rail scoping (A402-03 identity routes EVM-only; every other tool keeps all chains — offline)

@@ -74,12 +74,15 @@ export const EMPTY_ARRAY_OK = new Map([
 ]);
 
 /** Keys whose documented example promises entries but whose live answer is an
- *  empty array. [] when there is nothing to compare or the path is excused. */
-export function emptyPromisedArrays(path, op, body) {
+ *  empty array. [] when there is nothing to compare or the path is excused.
+ *  `excuses` defaults to the CI list above; a run against production passes a
+ *  narrower one (scripts/catalog-buy.js), because the cold-boot excuses do not
+ *  hold where the index and the ledger are warm. */
+export function emptyPromisedArrays(path, op, body, excuses = EMPTY_ARRAY_OK) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return [];
   const example = op?.responses?.["200"]?.content?.["application/json"]?.example;
   if (!example || typeof example !== "object" || Array.isArray(example)) return [];
-  const excused = new Set((EMPTY_ARRAY_OK.get(path) || "").split(",").filter(Boolean));
+  const excused = new Set((excuses.get(path) || "").split(",").filter(Boolean));
   return Object.entries(example)
     .filter(([k, v]) => Array.isArray(v) && v.length > 0 && !excused.has(k))
     .filter(([k]) => Array.isArray(body[k]) && body[k].length === 0)

@@ -1,0 +1,156 @@
+name: Catalog buy (every tool at list price)
+
+# Buy every tool from production at its list price and grade the answer, so a
+# broken tool is found by us before a buyer finds it.
+#
+# The paid canary proves that buying settles. The catalog sweeps prove that
+# every tool answers its own example on a keyless CI boot. Neither proves that
+# the tool a buyer pays for on production, with production's keys and
+# upstreams, answers what its documentation promises. This does: it pays the
+# real 402 on Base from the CI burner to our own payTo (the USDC recycles; the
+# real cost is the upstream work each tool does) and grades the paid answer the
+# way the strict sweep grades a free one: 200, no error field, every documented
+# output key present, no empty array where the published example shows rows.
+#
+# Two tiers (scripts/catalog-buy.js). daily: every tool priced at or under
+# $0.10, once a day, with its published example. weekly: the products above
+# $0.10 (reports, dossiers, the ticker pack, the router tiers) on a seven-day
+# rotation balanced by price, so each is bought once a week; the daily run buys
+# that day's slice. The router tiers pay an outside seller for their answer, so
+# their weekly buy also spends the spending wallet; CATALOG_BUY_SKIP excludes a
+# slug without a code change.
+#
+# Spend is capped per run (CATALOG_BUY_MAX_USD, default in the script) against
+# list prices before anything is bought and against the settled total before
+# every signature; a quote above list is never signed. The run refuses to
+# start when the burner holds less than the planned spend plus a floor (exit 3:
+# funding, not a tool failure). Every request carries the heartbeat token, so
+# these buys book as internal traffic, not as outside demand.
+#
+# /status: this workflow never records an observation. A tool that answers
+# wrongly is not a settlement outage; settlement is the paid canary's
+# observation and stays so. One issue, "Catalog buy FAILING", names the failing
+# slugs and their grades; a green scheduled run closes it.
+on:
+  schedule:
+    # 11:47 UTC: clear of the paid canary's four-hourly slots at :17, the
+    # nightly corpus at 05:17 and the weekly report audit on Tuesday 06:37.
+    - cron: "47 11 * * *"
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: "daily (cheap set + today's weekly slice), weekly (today's slice only), cheap, all"
+        required: false
+        default: "daily"
+      only:
+        description: "Slug substring: buy only the matching tools (a narrowed run never closes the issue)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  buy:
+    runs-on: ubuntu-24.04
+    # The report products run minutes each and the paywall settles after the
+    # handler, so the client has to outlast the work on every one of them.
+    timeout-minutes: 150
+    environment: spending
+    # Wallet and pow secrets are NOT at job scope: job-scope env is in the
+    # environment of every step, including the dependency install, where a
+    # package lifecycle script could read them. They are scoped to the buy step.
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_URL: https://agent402.tools
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Install x402 client
+        # No wallet secret is in scope here, and --ignore-scripts blocks every
+        # dependency lifecycle script. The x402 client is pinned to the server's
+        # protocol version (test-workflow-client-pins.js holds it to
+        # package.json); viem is read from the lock, never hand-typed.
+        run: |
+          npm ci --ignore-scripts
+          VIEM=$(node -p "require('./package-lock.json').packages['node_modules/viem'].version")
+          npm install --no-save --ignore-scripts @x402/core@2.28.0 @x402/evm@2.28.0 "viem@$VIEM"
+          echo "installed viem@$(node -p "require('viem/package.json').version")"
+
+      - name: Buy the catalog from production (real USDC at list price)
+        id: buy
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+          TIER: ${{ inputs.tier || 'daily' }}
+          ONLY: ${{ inputs.only || '' }}
+        run: |
+          if [ -z "$BURNER_KEY" ]; then
+            echo "::error::BURNER_KEY is not set in the spending environment; nothing can be bought"
+            echo "result=noconfig" >> "$GITHUB_OUTPUT"; exit 1
+          fi
+          echo "::add-mask::$BURNER_KEY"
+          [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
+          set +e
+          node scripts/catalog-buy.js --tier "$TIER" --only "$ONLY" --out catalog-buy.json
+          CODE=$?
+          set -e
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          # 0 all passed, 5 some tool failed its grade, 3 unfunded: the script
+          # writes result= itself. Anything else is the script not finishing.
+          case "$CODE" in 0|3|5) ;; *) echo "result=crashed" >> "$GITHUB_OUTPUT" ;; esac
+          exit 0
+
+      - name: Upload the graded report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: catalog-buy
+          path: catalog-buy.json
+          if-no-files-found: ignore
+
+      # ONE issue. Opened on the first failing run, commented on each later one,
+      # closed by a green scheduled (or full daily dispatch) run. A run narrowed
+      # with `only` can open or update it but never closes it: a narrow green
+      # proves nothing about the rest of the catalog.
+      - name: Open, update or close the alert
+        if: always()
+        env:
+          RESULT: ${{ steps.buy.outputs.result }}
+          FAILING: ${{ steps.buy.outputs.failing }}
+          GRADED: ${{ steps.buy.outputs.graded }}
+          FAILED: ${{ steps.buy.outputs.failed }}
+          TIER: ${{ inputs.tier || 'daily' }}
+          ONLY: ${{ inputs.only || '' }}
+        run: |
+          TITLE="Catalog buy FAILING"
+          RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          SCOPE="tier $TIER"; [ -n "$ONLY" ] && SCOPE="$SCOPE, only '$ONLY'"
+          case "$RESULT" in
+            ok)
+              if [ -n "$OPEN" ] && [ -z "$ONLY" ] && [ "$TIER" = "daily" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every tool bought at list price passed its grade ($GRADED graded) at $(date -u +%FT%TZ). Run: $RUN"
+              fi
+              exit 0 ;;
+            fail)
+              BODY="Bought from production at list price and graded like the strict sweep ($SCOPE): $FAILED of $GRADED failed. A grade names what the paid answer lacked: http-NNN (the status), error-field (a 200 carrying an error), missing-keys (documented output keys absent), empty (an array the published example shows populated came back empty), unsettled (a 402 after paying), quote-over-list (the live 402 asked more than the list price and was not signed), cap (not bought, spend cap reached), no-example (no usable published example). The step summary carries the full table and the graded report is attached to the run.
+
+          Failing: $FAILING
+
+          Run: $RUN
+          A buyer copying the published example gets the same answer; fix the tool or its example, then dispatch this workflow. A green scheduled run closes this." ;;
+            unfunded)
+              BODY="The catalog buy did not start ($SCOPE): the burner's Base USDC balance is below this run's planned spend plus the floor, so nothing was bought and nothing was checked today. This is funding, not a tool failure. Top up the burner (the run log names the address), then dispatch this workflow; a green run closes this. Run: $RUN" ;;
+            *)
+              BODY="The catalog buy did not produce a verdict ($SCOPE, result '$RESULT'): the catalog was not checked today. Run: $RUN" ;;
+          esac
+          if [ -n "$OPEN" ]; then
+            gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ). $BODY"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+          fi
+          exit 1
