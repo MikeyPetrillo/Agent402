@@ -316,4 +316,33 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   ok(stale.length === 0, `no surface quotes a retired price${stale.length ? ` - ${stale.join(" | ")}` : ""}`);
 }
 
+// --- skill-pack prose quotes only the pack's own derived price --------------
+// A pack's useCase and tagline are served on /skills, in the MCP prompt list
+// and in the catalog JSON. PACK_PRICES is generated from the catalog and CI
+// recomputes it, so a pack price typed into a sentence beside it drifts the
+// moment a member tool is repriced. Every price-shaped dollar figure in pack
+// prose must equal the pack's own PACK_PRICES entry; a parts total or any
+// other figure has no derived source here and is refused.
+{
+  const { SKILL_PACKS, PACK_PRICES } = await import("../src/skills.js");
+  const PRICE = /\$(\d+(?:\.\d+)?)\b(?![kKmM]\b)/g; // "$0.065" yes, "$300k" no
+  const FIELDS = ["title", "tagline", "useCase", "description"];
+  const scan = (packs) => {
+    const bad = [];
+    for (const p of packs) for (const f of FIELDS) {
+      for (const m of String(p[f] || "").matchAll(PRICE)) {
+        const want = PACK_PRICES[p.slug];
+        if (!(Number.isFinite(want) && Math.abs(Number(m[1]) - want) < 1e-9)) bad.push(`${p.slug}.${f} quotes $${m[1]} (pack price ${want === undefined ? "unknown" : `$${want}`})`);
+      }
+    }
+    return bad;
+  };
+  ok(scan([{ slug: "macro-dashboard", useCase: "the 14 tools cost $0.143 a cycle; this bundle is $0.10" }]).length === 2, "control: two typed figures in a pack useCase are both reported");
+  ok(scan([{ slug: "macro-dashboard", useCase: `this pack is $${PACK_PRICES["macro-dashboard"]}` }]).length === 0, "control: the pack's own derived price passes");
+  const quoted = SKILL_PACKS.flatMap((p) => FIELDS.flatMap((f) => [...String(p[f] || "").matchAll(PRICE)].map(() => p.slug)));
+  ok(quoted.length >= 1, `pack prose quotes ${quoted.length} price(s) - if this hits zero the check below is vacuous`);
+  const bad = scan(SKILL_PACKS);
+  ok(bad.length === 0, `every dollar figure in pack prose is that pack's derived price${bad.length ? ` - ${bad.join(" | ")}` : ""}`);
+}
+
 console.log(`\n${pass} passed, 0 failed`);

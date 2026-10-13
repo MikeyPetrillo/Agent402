@@ -377,7 +377,8 @@ export const SKILL_PACKS = [
     tagline:
       "The full macro + crypto dashboard in one call: 5 FRED series, 5 Treasury reads, yield-curve spread, crypto market/trending/global, and live gas - a 14-tool macro + crypto basket, bundled below its a la carte price.",
     useCase:
-      "An agent keeping a live macro dashboard warm needs the same basket of reads every refresh cycle. Buying the 14 tools individually costs $0.143 per cycle; this bundle is $0.10 - one call, one payment, every series in one JSON envelope.",
+      // The price is read from PACK_PRICES (generated from the catalog), never typed.
+      `An agent keeping a live macro dashboard warm needs the same basket of reads every refresh cycle. Buying the tools one at a time costs more per cycle than the bundle; this pack is $${fmtPackUsd(PACK_PRICES["macro-dashboard"])} for one call, one payment, every series in one JSON envelope.`,
     promptArgs: [],
     toolSlugs: [
       "fred-release-calendar",
