@@ -350,8 +350,14 @@ try {
     const subB = await activate("Cancel Race B LP");
     advance(PERIOD);
     let renewalDone = null, cancelB = null;
-    const kvP = P.engine._store, realPutP = kvP.put;
-    kvP.put = async (k, v) => { if (k === key(subB.subId) && renewalDone) await renewalDone; return realPutP.call(kvP, k, v); };
+    // The cancel's write of the record waits for the renewal, whichever write
+    // it is: cancel() decides on the conditional write (compareAndSet), so a
+    // hook on put alone left the order to timing (the write landed first on a
+    // slower database and answered from the copy read before the renewal).
+    const kvP = P.engine._store, realPutP = kvP.put, realCasP = kvP.compareAndSet;
+    const waitRenewal = async (k) => { if (k === key(subB.subId) && renewalDone) await renewalDone; };
+    kvP.put = async (k, v) => { await waitRenewal(k); return realPutP.call(kvP, k, v); };
+    kvP.compareAndSet = async (k, d) => { await waitRenewal(k); return realCasP.call(kvP, k, d); };
     Q.setCharge(() => { cancelB = P.engine.cancel(subB.subId, P.engine.manageToken(subB.subId)); return { reference: "0xq-race-b" }; });
     let viewB;
     try {
@@ -359,7 +365,7 @@ try {
       await renewalDone;
       viewB = await cancelB;
       await P.engine.flush();
-    } finally { kvP.put = realPutP; }
+    } finally { kvP.put = realPutP; kvP.compareAndSet = realCasP; }
     const rowB = (await rowBody())?.[key(subB.subId)];
     ok(rowB?.lastChargedPeriod === 1 && rowB?.lastChargeTx === "0xq-race-b" && rowB?.cancelAtPeriodEnd === true, `a cancel decided on a copy read before the renewal's write keeps the charged period (row period=${rowB?.lastChargedPeriod} tx=${rowB?.lastChargeTx} cancel=${rowB?.cancelAtPeriodEnd})`);
     ok(rowB?.status === "active" && viewB?.status === "active", `...and, the new period being paid, stays active until it ends (row ${rowB?.status}, answer ${viewB?.status})`);
