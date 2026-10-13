@@ -64,6 +64,9 @@ if (CHILD) {
   const T = (t) => `${sdb.stateDbSchema()}.decide_ledger_${t}`;
 
   // Ack loss: the statement (or the transaction's COMMIT) lands, then the caller sees a dead connection.
+  // Armed statements are matched on the CONNECTION (pool.connect + client.query):
+  // stateQuery runs each statement on a checked-out client under its own read
+  // timer, so a hook on pool.query alone never sees them.
   const pool = await sdb.stateDb();
   const lost = () => Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
   const armed = [];
@@ -81,6 +84,7 @@ if (CHILD) {
         const p = oq.call(this, cfg, v, cb);
         if (txArmed && txArmed.test(text)) marked = true;
         if (/^COMMIT/i.test(text) && marked) { marked = false; txArmed = null; return Promise.resolve(p).then(() => { throw lost(); }); }
+        if (!cb && typeof v !== "function" && hit(text)) return Promise.resolve(p).then(() => { throw lost(); });
         return p;
       };
       const rel = c.release.bind(c);
