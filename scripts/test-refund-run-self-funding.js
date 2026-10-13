@@ -120,8 +120,18 @@ const server = http.createServer(async (req, res) => {
     seen.rpcMethods.push(method);
     if (method === "eth_getTransactionReceipt") return json(200, { jsonrpc: "2.0", id, result: receipts[params[0]] || null });
     if (method === "eth_call") return json(200, { jsonrpc: "2.0", id, result: amt(6) });
+    // The reads the job makes BEFORE the claim (gas against the wallet's native
+    // balance): answered, so the run reaches the claim the stub then refuses.
+    if (method === "eth_estimateGas") return json(200, { jsonrpc: "2.0", id, result: "0xea60" });
+    if (method === "eth_gasPrice" || method === "eth_maxPriorityFeePerGas") return json(200, { jsonrpc: "2.0", id, result: "0x3b9aca00" });
+    if (method === "eth_getBlockByNumber") return json(200, { jsonrpc: "2.0", id, result: { number: "0x1", hash: hex64("1"), parentHash: hex64("0"), baseFeePerGas: "0x3b9aca00", gasLimit: "0x1c9c380", gasUsed: "0x0", timestamp: "0x1", transactions: [] } });
+    if (method === "eth_chainId") return json(200, { jsonrpc: "2.0", id, result: "0x2105" });
+    if (method === "eth_getTransactionCount") return json(200, { jsonrpc: "2.0", id, result: "0x0" });
+    if (method === "eth_getBalance") return json(200, { jsonrpc: "2.0", id, result: amt(10n ** 18n) });
     if (method === "eth_sendRawTransaction") seen.sendRaw++;
-    return json(200, { jsonrpc: "2.0", id, error: { message: "not in stub" } });
+    // A node's own answer for a method it lacks (-32601): the client falls
+    // back from an optional method at once instead of retrying with backoff.
+    return json(200, { jsonrpc: "2.0", id, error: { code: -32601, message: `the method ${method} does not exist/is not available` } });
   }
   if (url.pathname.startsWith("/idx/v2/transactions/")) {
     const txid = decodeURIComponent(url.pathname.split("/").pop());
@@ -202,9 +212,11 @@ function runJob(extraEnv) {
       REFUND_LIVE: "true",
       REFUND_RPC_8453: `${base}/rpc`,
       REFUND_ALGORAND_INDEXERS: `${base}/idx`,
-      // Present so the planner has a sender for each family; neither is a
-      // valid key, and the stub refuses every claim before a send could start.
-      REFUND_EVM_KEY: "not-a-key",
+      // Present so the planner has a sender for each family. The EVM key is a
+      // throwaway built here (the job reads gas and the native balance from
+      // the stub RPC before it claims, so the key must parse); the mnemonic is
+      // not valid; and the stub refuses every claim before a send could start.
+      REFUND_EVM_KEY: "0x" + "11".repeat(32),
       REFUND_ALGORAND_MNEMONIC: "not a mnemonic",
       ...extraEnv,
     };

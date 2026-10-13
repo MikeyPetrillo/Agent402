@@ -501,8 +501,11 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
   const d = decodeFunctionData({ abi, data });
   ok(d.functionName === "transfer" && d.args[0].toLowerCase() === to && d.args[1] === 600000n, "transfer calldata with the memo suffix still decodes to the same recipient and amount");
   const src = readFileSync(new URL("./refund-run.js", import.meta.url), "utf8");
+  // The calldata is built in the pre-claim step (prepareEvm) and the sender
+  // signs and broadcasts exactly that data.
+  const prep = src.slice(src.indexOf("export async function prepareEvm"), src.indexOf("async function sendEvm"));
   const send = src.slice(src.indexOf("async function sendEvm"), src.indexOf("async function sendStellar"));
-  ok(/concat\(\[encodeFunctionData\(\{ abi: erc20, functionName: "transfer"[^\n]*refundMemoHex\(row\)\]\)/.test(send) && /sendTransaction\(\{ to: token, data \}\)/.test(send) && !/writeContract/.test(send), "the EVM sender sends the transfer with the memo suffix appended");
+  ok(/concat\(\[encodeFunctionData\(\{ abi: ERC20, functionName: "transfer"[^\n]*refundMemoHex\(row\)\]\)/.test(prep) && /prepareTransactionRequest\(\{ to: token, data, gas \}\)/.test(send) && /sendRawTransaction\(\{ serializedTransaction: serialized \}\)/.test(send) && !/writeContract/.test(prep + send), "the EVM sender sends the transfer with the memo suffix appended");
 }
 
 __resetRefunds();
