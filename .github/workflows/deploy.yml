@@ -5835,10 +5835,10 @@ jobs:
           if [ -n "$CDP_KEY_ID" ] && [ -n "$CDP_KEY_SECRET" ]; then
             VARS=$(echo "$VARS" | jq --arg i "$CDP_KEY_ID" --arg s "$CDP_KEY_SECRET" '. + {CDP_API_KEY_ID:$i, CDP_API_KEY_SECRET:$s}')
           fi
-          # Databento replaced Yahoo Finance for the equity tools (2026-09-20).
-          # Prod needs the key; CI deliberately does NOT get it - Databento
-          # bills per query, and an unkeyed CI is what keeps a sweep from
-          # spending, the same rule as Brave, E2B and CoinGecko.
+          # The equities feed behind the equity tools bills per query. Prod
+          # needs the key; CI deliberately does NOT get it, because an unkeyed
+          # CI is what keeps a sweep from spending, the same rule as every
+          # other metered upstream key below.
           if [ -n "$DATABENTO_API_KEY" ]; then
             VARS=$(echo "$VARS" | jq --arg d "$DATABENTO_API_KEY" '. + {DATABENTO_API_KEY:$d}')
           fi

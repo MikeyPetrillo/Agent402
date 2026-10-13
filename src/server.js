@@ -317,7 +317,7 @@ import { integrationPage } from "./integration-pages.js";
 import { learnPage, learnIndex } from "./learn.js";
 import { skillMd } from "./skill-md.js";
 import { createMcpMppLoopback } from "./mcp-mpp.js";
-import { serviceManifest, reliabilityReport } from "./discovery.js";
+import { serviceManifest, reliabilityReport, settlementFacilitatorsPublic } from "./discovery.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
 import { meteredSkip } from "./metered-slugs.js";
 import { runSelfCheck, createSelfCheckRoute } from "./selfcheck.js";
@@ -5601,10 +5601,10 @@ function getPerformance24h() {
 // query stalls, we serve the static manifest instead of blocking the call.
 const serveManifest = (_req, res) => {
   const perf = getPerformance24h();
-  // Who settles each rail (first-tried facilitator per network, labels only),
-  // from the boot /supported probe; absent until the probe has run.
-  const facilitators = facilitatorsByNetworkPublic();
-  const settlement = Object.keys(facilitators).length ? { settlementFacilitators: { note: "the facilitator tried first per network, read from its live /supported at boot; a chain's other candidates are fallbacks", byNetwork: facilitators } } : {};
+  // Which networks have a settlement facilitator (role words only, from the
+  // boot /supported probe); absent until the probe has run. The
+  // settlementFacilitators block never carries a facilitator label.
+  const settlement = settlementFacilitatorsPublic(facilitatorsByNetworkPublic());
   if (perf) res.json({ ...MANIFEST, ...settlement, performance24h: perf });
   else res.json({ ...MANIFEST, ...settlement });
 };

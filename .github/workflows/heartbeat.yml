@@ -280,7 +280,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if awk -v c="$CREDITS" -v t="$THRESH" 'BEGIN { exit !(c >= t) }'; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Weighted PayAI credits spent on Avalanche + Sei settlements since $CUT reached the warn threshold (repo var PAYAI_QUOTA_WARN). Past the allowance PayAI bills prepaid credits when PAYAI_API_KEY_ID/SECRET are set (top up at merchant.payai.network) and refuses settlement when they are not. Fallback hops onto PayAI are not counted here - this is a lower bound."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Weighted PayAI credits spent on Avalanche + Sei settlements since $CUT reached the warn threshold (repo var PAYAI_QUOTA_WARN). Past the allowance the facilitator bills its prepaid credits when PAYAI_API_KEY_ID/SECRET are set (top up in its merchant console) and refuses settlement when they are not. Fallback hops onto PayAI are not counted here - this is a lower bound."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still high at $(date -u +%FT%TZ)."
             fi
