@@ -218,7 +218,7 @@ export function markdownSummary(summary) {
   const lines = [
     `## Catalog buy: ${summary.unfunded ? "UNFUNDED" : failed.length ? `${failed.length} FAILED` : "all passed"}`,
     "",
-    `tier \`${plan.tier}\` (slice ${plan.sliceIndex} of ${ROTATION_DAYS}) | graded ${results.length} | passed ${results.length - failed.length} | planned ${usd(plan.plannedUsd)} | charged ${usd(spentUsd)} at list price${balanceUsd == null ? "" : ` | burner ${usd(balanceUsd)} before the run`}`,
+    `tier \`${plan.tier}\` (slice ${plan.sliceIndex} of ${ROTATION_DAYS}) | graded ${results.length} | passed ${results.length - failed.length} | planned ${usd(plan.plannedUsd)} | charged ${usd(spentUsd)} at list price${balanceUsd == null ? "" : ` | burner ${summary.unfunded ? "below" : "above"} its floor before the run`}`,
     "",
     "| slug | price | status | grade | ms |",
     "|---|---:|---|---|---:|",
@@ -296,7 +296,7 @@ export async function runCatalogBuy({
     if (summary.balanceUsd == null) log.warn("WARN  burner balance unreadable on every RPC: starting anyway, the cap bounds the run");
     else if (summary.balanceUsd < plan.plannedUsd + floorUsd) {
       summary.unfunded = true;
-      log.error(`CATALOG BUY UNFUNDED: the Base burner holds ${usd(summary.balanceUsd)} USDC, below the planned ${usd(plan.plannedUsd)} plus the ${usd(floorUsd)} floor. Nothing bought; top up ${payer.address}.`);
+      log.error(`CATALOG BUY UNFUNDED: the Base burner holds less USDC than the planned ${usd(plan.plannedUsd)} plus the ${usd(floorUsd)} floor. Nothing bought; top up ${payer.address}.`);
       summary.exitCode = 3;
       return summary;
     }
@@ -448,7 +448,7 @@ async function main() {
   if (summary.plan.skipped.length) console.log(`skipped by CATALOG_BUY_SKIP: ${summary.plan.skipped.map((r) => r.slug).join(", ")}`);
 
   if (out) {
-    writeFileSync(out, JSON.stringify({ target, tier: summary.plan.tier, sliceIndex: summary.plan.sliceIndex, dry, startedAt: new Date().toISOString(), plannedUsd: summary.plan.plannedUsd, chargedUsd: summary.spentUsd, balanceUsd: summary.balanceUsd, unfunded: summary.unfunded, results: summary.results }, null, 2));
+    writeFileSync(out, JSON.stringify({ target, tier: summary.plan.tier, sliceIndex: summary.plan.sliceIndex, dry, startedAt: new Date().toISOString(), plannedUsd: summary.plan.plannedUsd, chargedUsd: summary.spentUsd, funded: summary.balanceUsd == null ? null : !summary.unfunded, unfunded: summary.unfunded, results: summary.results }, null, 2));
     console.log(`wrote ${out}`);
   }
   if (process.env.GITHUB_STEP_SUMMARY) { try { appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdownSummary(summary)}\n`); } catch { /* local run */ } }
