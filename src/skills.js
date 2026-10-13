@@ -1,4 +1,4 @@
-// Skill packs — curated bundles of tools for a specific workflow. Each pack is
+// Skill packs, curated bundles of tools for a specific workflow. Each pack is
 // a discovery surface (a server-rendered page at /skills/<slug>) and, in the
 // follow-up PR, an MCP prompt that templates the workflow for an agent.
 //
@@ -6,12 +6,12 @@
 // tagline, a "when to use" sentence, the ordered list of tool slugs, a narrative
 // workflow (what each tool contributes), and a copy-pastable Claude prompt.
 // Both surfaces (HTML pages + MCP prompts) read from the same SKILL_PACKS
-// array — single source of truth.
+// array, single source of truth.
 //
 // The page renderer looks each toolSlug up in the live CATALOG so prices,
 // descriptions, and routes stay accurate even as tools evolve. If a pack
 // references a tool that's been removed, the page surfaces a "missing" placeholder
-// rather than crashing — useful for catching dead references in the test suite.
+// rather than crashing, useful for catching dead references in the test suite.
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc } from "./ledger-chrome.js";
 import { RAILS_SHORT } from "./rails.js";
 import { isComputePayable } from "./pow.js";
@@ -694,7 +694,7 @@ export const SKILL_PACKS = [
     // Ordered as: fetch (equity OR macro) → bake-off (forecast-eval is the
     // ranker, called once per method) → conditional forward forecast with the
     // winner. The four method-specific tools are listed so the agent has the
-    // full menu — only one will be called for the forward forecast based on
+    // full menu, only one will be called for the forward forecast based on
     // which won the bake-off. Holt-Winters is included for seasonal series
     // (monthly macro, quarterly earnings) where it usually wins outright.
     toolSlugs: [
@@ -739,7 +739,7 @@ export const SKILL_PACKS = [
     // narrowing (pdf-extract-pages), then fallbacks for the failure modes
     // (image-ocr for scans, barcode-decode for the 2D-barcode payload), then
     // reassembly tools (pdf-merge, images-to-pdf). All 7 are paid (egress +
-    // CPU-heavy) — they're wallet-only and not free over PoW. Composes
+    // CPU-heavy), they're wallet-only and not free over PoW. Composes
     // pdf-kit + ocr-kit + barcode-kit with the existing pdf-to-markdown.
     toolSlugs: [
       "pdf-info",
@@ -808,8 +808,8 @@ export const SKILL_PACKS = [
     // the single best predictor), then certificate evidence (transparency
     // log + live cert), then hosting reputation (ASN), then DNS topology,
     // then the fingerprintable application layer (tech-stack + page
-    // content). Each step is independent — you can short-circuit on any
-    // strong red flag — but combining all 7 gives the most confident
+    // content). Each step is independent, you can short-circuit on any
+    // strong red flag, but combining all 7 gives the most confident
     // assessment. Composes network-kit + network-kit2 + extract.
     toolSlugs: [
       "whois",
@@ -855,7 +855,7 @@ export const SKILL_PACKS = [
     // hunt for human docs (extract) and the machine spec (html-links chasing
     // /openapi.json or /swagger.json), then finally inspect actual response
     // payloads (json-format + json-query). Composes util-kit + html-kit +
-    // network-kit2 + extract — no new tools needed.
+    // network-kit2 + extract, no new tools needed.
     toolSlugs: [
       "url-parse",
       "http-check",
@@ -897,7 +897,7 @@ export const SKILL_PACKS = [
     // region). geocode/reverse-geocode/place-search work globally (OSM /
     // Nominatim); weather-forecast + weather-alerts are US-only (NWS);
     // earthquakes is global (USGS). Composes geo-kit + data-kit + gov-kit.
-    // All six tools touch external egress — wallet-only / not PoW-eligible.
+    // All six tools touch external egress, wallet-only / not PoW-eligible.
     toolSlugs: [
       "geocode",
       "reverse-geocode",
@@ -936,12 +936,12 @@ export const SKILL_PACKS = [
     // Seven tools, ordered by the dependency graph of a real signup:
     // validate inputs FIRST (email-validate, password-strength) so a
     // rejected signup never burns the mint steps; then mint the stable
-    // primary key (uuid) — every other field can change but the UUID
+    // primary key (uuid), every other field can change but the UUID
     // must be assigned once; then derive display surfaces (slugify) from
     // user-controlled input AFTER you have the immutable UUID as the
     // dedupe key; then generate auxiliary secrets (password) for API
     // keys / recovery codes; then hash the user-chosen password
-    // (note: hash is for fingerprinting/dedupe — real password storage
+    // (note: hash is for fingerprinting/dedupe, real password storage
     // needs bcrypt/argon2/scrypt with per-user salt, surface that in
     // the prompt); finally verify the 2FA setup with totp. The ordering
     // is also security-driven: never call hash on the plaintext before
@@ -2614,7 +2614,7 @@ export const SKILL_PACKS = [
 
 ];
 
-// HTML escape — copied from guides.js/pages.js to keep skills self-contained.
+// HTML escape, copied from guides.js/pages.js to keep skills self-contained.
 const esc = (s) =>
   String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
@@ -3045,7 +3045,7 @@ ${ledgerFooterCompact()}`;
 
 export const skillSlugs = () => SKILL_PACKS.map((p) => p.slug);
 
-// Machine-readable shape served at /api/skill-packs.json — also what the
+// Machine-readable shape served at /api/skill-packs.json, also what the
 // stdio agent402-mcp npm package fetches at startup to register its prompts.
 // We strip internal-only fields like `substitute` (a render hint) and expose
 // the public schema that any MCP client or discovery aggregator needs.
@@ -3068,18 +3068,18 @@ export function skillPacksJson() {
   };
 }
 
-// Build an MCP prompt response for a skill pack — `messages` array + a top-level
+// Build an MCP prompt response for a skill pack, `messages` array + a top-level
 // `description`. Two design choices baked in here, both Option-A from the
 // trade-off matrix:
 //   1. We name the exact tool slug at each step so the agent doesn't have to
 //      search the catalog first (deterministic; fewer round-trips).
 //   2. We pre-split the tool list into "free here" vs "wallet required" so the
-//      agent can short-circuit before getting a 402 — `freeSlugs` is computed
+//      agent can short-circuit before getting a 402, `freeSlugs` is computed
 //      per-session in mcp-http.js's buildServer().
 // `args` is the MCP-prompt arguments object the client passes (e.g.
 // `{ domain: "stripe.com" }`). For each entry in `pack.promptArgs` that
 // declares a `substitute` string, we replace literal occurrences of that
-// string in the prompt body — keeps the existing example-driven claudePrompt
+// string in the prompt body, keeps the existing example-driven claudePrompt
 // reusable as a template without introducing curly-brace placeholders that
 // would leak into the HTML render.
 export function buildPromptMessages(pack, args = {}, { freeSlugs } = {}) {
@@ -3185,7 +3185,7 @@ const PACK_STOPWORDS = new Set([
 // recommendation can state what the same work costs a la carte.
 //
 // That comparison is NOT decoration. Measured across the catalog, 99 of 102
-// packs cost MORE than calling their tools individually — several by 12-30x —
+// packs cost MORE than calling their tools individually, several by 12-30x -
 // because a pack is priced for orchestration, one round trip and one
 // settlement, not as a volume discount. Recommending the bundle harder while
 // staying quiet about that would be an upsell dressed as an answer, and an
@@ -3245,7 +3245,7 @@ export function rankSkillPacks(query, { k = 2, baseUrl = "", minScore = 4, toolP
       promptName: p.slug, // matches the MCP prompts/list name; agents can prompts/get this directly
       // THE ONE-CALL PURCHASE. Everything above describes a workflow; without
       // these three fields the only actionable thing we handed back was
-      // promptName, which means "orchestrate it yourself" — the agent then runs
+      // promptName, which means "orchestrate it yourself", the agent then runs
       // every underlying tool and pays for each. The bundled endpoint has
       // existed the whole time and was simply never named at the point of
       // recommendation, so the cheaper, single-payment path was invisible

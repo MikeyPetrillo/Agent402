@@ -1029,23 +1029,23 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: a canary proved a real purchase at $(date -u +%FT%TZ) (observation is ${AGEH}h old). /status is measuring settlement again."
           fi
 
-      # Solvador registry watch — their /discovery/resources speaks the
-      # standard Bazaar shape but is EMPTY (total: 0, probed 2026-07-21). The
-      # day it fills, it becomes the only discovery home for x402 sellers on
-      # Optimism/Unichain/World Chain/Linea, and the index should ingest it
-      # (one-line DISCOVERY_SOURCES entry, PayAI shape). One-shot informational signal: opens a single issue the first
-      # time total > 0, never re-opens, never alarms, never fails the run.
-      - name: Solvador registry watch (one-shot signal when it goes non-empty)
+      # Registry watch: a second facilitator's /discovery/resources speaks the
+      # standard discovery shape but has been empty. The day it fills, it is
+      # the discovery home for x402 sellers on the chains only it settles, and
+      # the index should ingest it (one DISCOVERY_SOURCES entry, same shape as
+      # the existing one). One-shot informational signal: opens a single issue
+      # the first time total > 0, never re-opens, never alarms, never fails.
+      - name: Registry watch (one-shot signal when a watched registry goes non-empty)
         if: always()
         continue-on-error: true
         run: |
           TOTAL=$(curl -s --max-time 15 "https://api.solvador.com/discovery/resources?limit=1" | jq -r '.pagination.total // 0' 2>/dev/null || echo 0)
-          echo "solvador registry total: $TOTAL"
+          echo "watched registry total: $TOTAL"
           [ "$TOTAL" -gt 0 ] 2>/dev/null || exit 0
-          TITLE="Solvador x402 registry is live (sellers detected)"
+          TITLE="A watched x402 registry is live (sellers detected)"
           ANY=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           [ -n "$ANY" ] && exit 0
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Solvador's discovery registry (https://api.solvador.com/discovery/resources) now reports $TOTAL resource(s). It was empty when the watch was added. Their facilitator uniquely covers Optimism, Unichain, World Chain, Linea, NEAR, and XRPL, so this registry is the discovery home for sellers on those chains. Action: add it to DISCOVERY_SOURCES in src/x402-index.js (same shape as the PayAI entry: paginate + synthesizeTools + strict) and consider the Tier 2 facilitator key (see the x402-chain-expansion-research memory)."
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The watched discovery registry now reports $TOTAL resource(s). It was empty when the watch was added. Its facilitator covers Optimism, Unichain, World Chain, Linea, NEAR and XRPL, so it is the discovery home for sellers on those chains. Action: add it to DISCOVERY_SOURCES in src/x402-index.js (same shape as the existing registry entry: paginate, synthesizeTools, strict)."
 
       - name: Alert (open issue) or clear (close issue)
         run: |
