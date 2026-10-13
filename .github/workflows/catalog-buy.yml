@@ -87,6 +87,9 @@ jobs:
           POW_SECRET: ${{ secrets.POW_SECRET }}
           TIER: ${{ inputs.tier || 'daily' }}
           ONLY: ${{ inputs.only || '' }}
+          # The route-execute products pay an outside seller from the spending
+          # wallet (its own daily ceiling); the paid canary covers that path.
+          CATALOG_BUY_SKIP: route-execute-pro,route-execute-max
         run: |
           if [ -z "$BURNER_KEY" ]; then
             echo "::error::BURNER_KEY is not set in the spending environment; nothing can be bought"
@@ -125,6 +128,9 @@ jobs:
           FAILED: ${{ steps.buy.outputs.failed }}
           TIER: ${{ inputs.tier || 'daily' }}
           ONLY: ${{ inputs.only || '' }}
+          # The route-execute products pay an outside seller from the spending
+          # wallet (its own daily ceiling); the paid canary covers that path.
+          CATALOG_BUY_SKIP: route-execute-pro,route-execute-max
         run: |
           TITLE="Catalog buy FAILING"
           RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
