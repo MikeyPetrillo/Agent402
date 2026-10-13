@@ -140,12 +140,20 @@ try {
   // Allow, and the seller-scoped index view stays closed beside them.
   const PRICED = ["/api/uuid", "/api/hash", "/api/search", "/api/edgar-company-lookup", "/api/skill/financial-analysis"];
   const SURFACES = ["/api/pricing", "/api/find?q=hash", "/api/route?q=ocr", "/api/index", "/api/index?limit=1", "/api/stats", "/api/status", "/api/reliability", "/api/leaderboard", "/api/cacheable", "/api/cache-stats", "/api/rails", "/api/revenue", "/api/revenue/daily", "/api/calls/daily", "/api/mpp-index", "/api/mpp-leaderboard", "/api/solana-leaderboard", "/api/x402-economy", "/api/skill-packs.json", "/api/refunds/lookup?tx=0x1", "/api/gateway-status", "/api/wishes"];
-  for (const ua of [...NAMED, "some-unnamed-bot/1.0"]) {
+  const SEARCH = ["Googlebot", "Bingbot", "Applebot", "DuckDuckBot", "some-unnamed-bot/1.0"];
+  const AI_AGENTS = ["GPTBot", "ClaudeBot", "PerplexityBot", "ChatGPT-User", "Claude-Web"];
+  for (const ua of SEARCH) {
     for (const p of PRICED) ok(!allows(ua, p), `${ua} is refused the priced route ${p}`);
     for (const p of SURFACES) ok(allows(ua, p), `${ua} is allowed the documented surface ${p}`);
     ok(!allows(ua, "/api/index?seller=example.test") && !allows(ua, "/api/index?limit=1&seller=example.test") && !allows(ua, "/base?seller=example.test"), `${ua} is refused the seller-scoped views`);
   }
-  ok(/^Disallow:\s*\/api\/\s*$/m.test(txt), "robots.txt closes /api/ as a whole (priced routes) with the surfaces re-opened above it");
+  // The AI agents keep reading per-route quotes: the close is a search-engine rule.
+  for (const ua of AI_AGENTS) {
+    for (const p of PRICED) ok(allows(ua, p), `${ua} may still read the priced route ${p}`);
+    for (const p of SURFACES) ok(allows(ua, p), `${ua} is allowed the documented surface ${p}`);
+    ok(!allows(ua, "/api/index?seller=example.test") && !allows(ua, "/base?seller=example.test"), `${ua} is refused the seller-scoped views`);
+  }
+  ok((txt.match(/^Disallow:\s*\/api\/\s*$/mg) || []).length === SEARCH.length, "robots.txt closes /api/ in the four search-engine groups and the wildcard group only");
   // Longest-match control: the parser must prefer the longer Allow over the
   // shorter Disallow, or every surface check above would be vacuous.
   const lm = parseRobots("User-agent: *\nAllow: /api/pricing\nDisallow: /api/\n");

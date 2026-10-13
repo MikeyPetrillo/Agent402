@@ -140,10 +140,10 @@ export function robotsTxt(baseUrl) {
   ];
   // PRICED ROUTES ARE NOT PAGES. Every /api/<tool> answers an unpaid crawler
   // 402, which a search console files as a crawl error ("other 4xx") against
-  // a healthy site, and a crawler that walks the catalog spends its budget on
-  // hundreds of those instead of the pages. The documented machine-readable
-  // surfaces stay open through explicit Allow lines; everything else under
-  // /api is closed. Allow lines come first for first-match readers; for
+  // a healthy site, and a search crawler that walks the catalog spends its
+  // budget on hundreds of those instead of the pages. For the search engines
+  // the documented machine-readable surfaces stay open through explicit
+  // Allow lines and everything else under /api is closed. Allow lines come first for first-match readers; for
   // longest-match readers (Googlebot) an Allow is longer than "/api/" and
   // wins on its own. The seller-scoped index view keeps its own, longer
   // Disallow so it never ties with the "/api/index" Allow.
@@ -170,18 +170,28 @@ export function robotsTxt(baseUrl) {
     "Allow: /api/gateway-status",
     "Allow: /api/wishes",
   ];
-  const priced = [
+  // The seller-scoped index view needs its own Disallow in EVERY group now
+  // that "/api/index" is an Allow of the same length as "/*?seller=": on a
+  // tie the least restrictive rule wins, so without these two lines the
+  // costly view would open up again.
+  const sellerScoped = [
     "Disallow: /api/index?seller=",
     "Disallow: /api/index?*seller=",
-    "Disallow: /api/",
   ];
-  const rules = [...catalog, ...priv, ...costly, ...priced].join("\n");
-  const blocks = agents.map((a) => `User-agent: ${a}\nAllow: /\n${rules}`).join("\n\n");
+  const priced = ["Disallow: /api/"];
+  // Only the search engines and the unnamed crawler get the /api close: a
+  // search index has no use for a 402 body, and that is where the crawl
+  // errors are filed. The AI agents named above keep reading per-route
+  // quotes as before; a paying client never consults this file.
+  const SEARCH_ENGINES = new Set(["Googlebot", "Bingbot", "Applebot", "DuckDuckBot"]);
+  const rules = [...catalog, ...priv, ...costly, ...sellerScoped].join("\n");
+  const searchRules = [...catalog, ...priv, ...costly, ...sellerScoped, ...priced].join("\n");
+  const blocks = agents.map((a) => `User-agent: ${a}\nAllow: /\n${SEARCH_ENGINES.has(a) ? searchRules : rules}`).join("\n\n");
   return `${blocks}
 
 User-agent: *
 Allow: /
-${rules}
+${searchRules}
 
 # Machine-readable catalogs for agents: ${baseUrl}/SKILL.md , ${baseUrl}/llms.txt , ${baseUrl}/openapi.json , ${baseUrl}/api/pricing , ${baseUrl}/api/cacheable , ${baseUrl}/.well-known/x402 , ${baseUrl}/.well-known/agent-card.json , ${baseUrl}/.well-known/agent-registration.json , ${baseUrl}/api/reliability , ${baseUrl}/api/find?q={task} , ${baseUrl}/api/route , ${baseUrl}/api/leaderboard
 # Crawling this catalog: every route and price is in ${baseUrl}/.well-known/x402 , ${baseUrl}/openapi.json and ${baseUrl}/api/pricing ; read those rather than each priced route. Crawl policy, including the hourly budget on unpaid price checks: ${baseUrl}/crawler
