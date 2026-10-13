@@ -17,7 +17,7 @@
 // access, which is how a limiter becomes decorative at exactly the moment it
 // matters. A buyer paying is a worse experience; unbounded free calls are a
 // worse failure.
-import { createClient } from "redis";
+import { loadRedis } from "./lazy-redis.js";
 
 // Mirror src/db-ssl.js for Redis: a plaintext redis:// URL is only acceptable
 // on Railway's private mesh; a public host must use rediss:// or the password,
@@ -104,6 +104,7 @@ async function getClient() {
       try { await stale.quit(); } catch { try { stale.destroy?.(); } catch { /* already gone */ } }
     }
     try {
+      const { createClient } = await loadRedis();
       const c = createClient({
         url: REDIS_URL,
         socket: {

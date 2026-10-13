@@ -27,7 +27,7 @@
 // prices; its per-minute rate row is pinned by the same margin test.
 
 import { parseMultipartFile } from "../multipart.js";
-import { parseBuffer } from "music-metadata";
+import { loadMusicMetadata } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
@@ -108,6 +108,7 @@ async function fetchAudio(url) {
  *  cannot be determined. Pure local parse — no upstream call, no cost. */
 export async function probeDurationSeconds(buf, filename) {
   try {
+    const { parseBuffer } = await loadMusicMetadata();
     const meta = await parseBuffer(buf, { path: filename }, { duration: true });
     const d = meta?.format?.duration;
     return Number.isFinite(d) && d > 0 ? d : null;

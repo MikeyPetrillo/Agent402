@@ -14,28 +14,28 @@ const PAYLOAD = "https://agent402.tools/x402";
 const pngBuf = await QR.toBuffer(PAYLOAD, { type: "png", margin: 2, width: 300 });
 
 // PNG path
-let r = handler({ image: pngBuf.toString("base64") });
+let r = await handler({ image: pngBuf.toString("base64") });
 ok(r.found && r.text === PAYLOAD, `decode QR from PNG base64 (got ${JSON.stringify(r.text)}, ${r.decoder})`);
 
 // data: URL prefix
-r = handler({ image: "data:image/png;base64," + pngBuf.toString("base64") });
+r = await handler({ image: "data:image/png;base64," + pngBuf.toString("base64") });
 ok(r.found && r.text === PAYLOAD, `decode QR from data: URL`);
 
 // JPEG path (re-encode the PNG pixels as JPEG, high quality so the QR survives)
 const png = PNG.sync.read(pngBuf);
 const jpgBuf = jpeg.encode({ data: Buffer.from(png.data), width: png.width, height: png.height }, 92).data;
-r = handler({ image: jpgBuf.toString("base64") });
+r = await handler({ image: jpgBuf.toString("base64") });
 ok(r.found && r.text === PAYLOAD, `decode QR from JPEG base64 (got ${JSON.stringify(r.text)}, ${r.decoder})`);
 
 // not-found: a blank white PNG
 const blank = new PNG({ width: 64, height: 64 });
 blank.data.fill(255);
-r = handler({ image: PNG.sync.write(blank).toString("base64") });
+r = await handler({ image: PNG.sync.write(blank).toString("base64") });
 ok(r.found === false && r.text === null, `blank image returns found:false`);
 
 // validation
-try { handler({}); ok(false, "missing image should throw"); } catch (e) { ok(e.statusCode === 400, "missing image throws 400"); }
-try { handler({ image: "not!!base64!!@@" }); ok(true, "garbage input handled without crash"); } catch (e) { ok(e.statusCode === 400, "garbage input throws 400"); }
+try { await handler({}); ok(false, "missing image should throw"); } catch (e) { ok(e.statusCode === 400, "missing image throws 400"); }
+try { await handler({ image: "not!!base64!!@@" }); ok(true, "garbage input handled without crash"); } catch (e) { ok(e.statusCode === 400, "garbage input throws 400"); }
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

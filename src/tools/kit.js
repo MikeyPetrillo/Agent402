@@ -10,8 +10,7 @@ import tls from "node:tls";
 import { lookup } from "node:dns/promises";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
-import { JSDOM } from "jsdom";
-import TurndownService from "turndown";
+import { loadJsdom, loadTurndown } from "./lazy-deps.js";
 // Named imports, not a default import: js-yaml v5 dropped the default export
 // ("does not provide an export named 'default'", which broke the v5 bump on
 // CI). Named imports resolve on both v4 (synthesized from the CJS build) and
@@ -767,7 +766,7 @@ const dataTools = [
       },
       output: { example: { json: { user: { _attrs: { id: "1" }, name: "Ada" } } } },
     },
-    handler: (input) => {
+    handler: async (input) => {
       const text = capText(need(input, "xml"), 100_000, "xml");
       // Guard against deeply-nested XML: JSDOM's parse is superlinear in depth and
       // can block the event loop for tens of seconds. Reject pathological nesting
@@ -778,6 +777,7 @@ const dataTools = [
         else if (!m[2] && !m[0].startsWith("<!") && !m[0].startsWith("<?")) { depth++; if (depth > maxDepth) maxDepth = depth; }
       }
       if (maxDepth > 256) throw bad("XML nesting too deep (max 256 levels)");
+      const JSDOM = await loadJsdom();
       const dom = new JSDOM("");
       const doc = new dom.window.DOMParser().parseFromString(text, "text/xml");
       if (doc.querySelector("parsererror")) throw bad("XML parse error");
@@ -824,7 +824,7 @@ const dataTools = [
       },
       output: { example: { markdown: "# Hi\n\n**bold**" } },
     },
-    handler: (input) => {
+    handler: async (input) => {
       // Accept html under several common aliases; agents frequently call this
       // with `body`, `content`, or `text` instead of `html`.
       const raw = input.html ?? input.body ?? input.content ?? input.text;
@@ -832,6 +832,7 @@ const dataTools = [
         throw bad('Missing "html". Send {"html":"<h1>Hi</h1>..."} - alternate fields body/content/text are also accepted.');
       }
       const text = capText(raw, 100_000, "html");
+      const TurndownService = await loadTurndown();
       const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
       return { markdown: td.turndown(text) };
     },

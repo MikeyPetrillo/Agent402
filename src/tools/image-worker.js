@@ -14,6 +14,12 @@
 // the containment property is the same as regex-worker's.
 import { parentPort } from "node:worker_threads";
 import { runImageOp } from "./image-ops.js";
+import { loadJimp } from "./lazy-deps.js";
+
+// jimp is a lazy import on the main thread (lazy-deps.js); this thread has no
+// listen to protect, so it loads jimp as soon as it starts and the first job
+// finds it warm, as the pool expects.
+loadJimp().catch(() => { /* the first job's decode reports the failure */ });
 
 parentPort.on("message", async (job) => {
   try {

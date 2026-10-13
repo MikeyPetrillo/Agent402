@@ -10,7 +10,7 @@
 //
 // Pricing tier $0.01 — OCR is meaningfully more compute than a hash but less
 // than browser/PDF tooling. PoW-eligible (pure CPU, no network in the hot path).
-import { createWorker } from "tesseract.js";
+import { loadTesseract } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
 
 function bad(message, statusCode = 400) {
@@ -33,7 +33,7 @@ async function getWorker(lang) {
   // hits in the common case.)
   if (!workerPromise || workerLang !== lang) {
     workerLang = lang;
-    workerPromise = createWorker(lang, undefined, {
+    workerPromise = loadTesseract().then(({ createWorker }) => createWorker(lang, undefined, {
       // CRITICAL: on a worker 'reject' (e.g. a malformed image tesseract can't
       // decode) tesseract.js rejects the recognize() promise AND, when no
       // errorHandler is set, `throw`s inside its own message handler — which
@@ -45,7 +45,7 @@ async function getWorker(lang) {
       errorHandler: (e) => {
         console.error("[ocr] tesseract worker error (contained):", (e && e.message) || e);
       },
-    }).catch((e) => {
+    })).catch((e) => {
       // Reset so the next request retries instead of permanently failing.
       workerPromise = null;
       workerLang = null;

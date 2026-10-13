@@ -7,7 +7,9 @@
 //
 // Nothing here may touch the network or the filesystem: this module is loaded in
 // a worker thread where safeFetch's SSRF guard is not the gate that ran.
-import { Jimp, JimpMime } from "jimp";
+// jimp loads with the first decode (./lazy-deps.js), not at boot: on the main
+// thread that keeps its evaluation off the startup path; the worker preloads it.
+import { loadJimp } from "./lazy-deps.js";
 
 export function bad(message) {
   return Object.assign(new Error(message), { statusCode: 400 });
@@ -15,7 +17,8 @@ export function bad(message) {
 
 export const MAX_SRC_PIXELS = 40_000_000; // ~6300x6300 source cap
 export const MAX_DIM = 4096; // output dimension cap
-export const MIME = { png: JimpMime.png, jpeg: JimpMime.jpeg, jpg: JimpMime.jpeg, bmp: JimpMime.bmp };
+// The same strings JimpMime carries; spelled out so the table exists before jimp loads.
+export const MIME = { png: "image/png", jpeg: "image/jpeg", jpg: "image/jpeg", bmp: "image/bmp" };
 
 // Source-pixel ceiling for the base64-only loader, which is used by exactly the
 // three compute-payable image tools (resize/convert/thumbnail) - i.e. the ones
@@ -127,6 +130,7 @@ export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS } = {}) {
   // A container whose size cannot be read from its header is refused: the
   // decoder would otherwise allocate the full canvas before any check runs.
   if (!declaredDimensions(buf)) throw bad("unsupported or unreadable image container (png, jpeg, gif, bmp, webp, tiff with a readable header)");
+  const { Jimp } = await loadJimp();
   let img;
   try { img = await Jimp.read(buf); }
   catch (e) { throw bad(`could not decode image: ${e.message}`); }
@@ -138,7 +142,7 @@ export async function toBuffer(img, format, quality) {
   const fmt = String(format || "png").toLowerCase();
   const mime = MIME[fmt];
   if (!mime) throw bad('format must be "png", "jpeg", or "bmp"');
-  const opts = mime === JimpMime.jpeg ? { quality: Math.min(Math.max(posInt(quality) || 80, 1), 100) } : undefined;
+  const opts = mime === MIME.jpeg ? { quality: Math.min(Math.max(posInt(quality) || 80, 1), 100) } : undefined;
   const buffer = await img.getBuffer(mime, opts);
   return { __binary: buffer, contentType: mime };
 }

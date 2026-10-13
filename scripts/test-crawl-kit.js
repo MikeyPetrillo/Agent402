@@ -63,9 +63,9 @@ ok(parseSitemap("<sitemapindex><sitemap><loc>https://example.com/s1.xml</loc></s
 ok(parseSitemap("https://example.com/p1\nnot a url\nhttps://example.com/p2\n").locs.length === 2, "parseSitemap: plain-text sitemap");
 const links = extractLinks('<base href="https://example.com/base/"><a href="a">A</a><a href=\'/b#x\'>B</a><a href=c>C</a><a href="#top">T</a><a href="mailto:x@y.z">M</a><a href="javascript:void(0)">J</a><a href="https://other.test/q?x=1&amp;y=2">O</a><a href="/b">dup</a>', "https://example.com/");
 ok(links.join(" ") === "https://example.com/base/a https://example.com/b https://example.com/base/c https://other.test/q?x=1&y=2", `extractLinks: base honoured, quotes/unquoted, fragments dropped, schemes filtered, deduped (${links.join(" ")})`);
-const pcMd = pageContent("<html><head><title> Hello  World </title></head><body><script>alert(1)</script><h1>Hi</h1><p>Some <b>bold</b> text.</p></body></html>", "https://example.com/", "markdown");
+const pcMd = await pageContent("<html><head><title> Hello  World </title></head><body><script>alert(1)</script><h1>Hi</h1><p>Some <b>bold</b> text.</p></body></html>", "https://example.com/", "markdown");
 ok(pcMd.title === "Hello World" && /Hi/.test(pcMd.content) && /\*\*bold\*\*/.test(pcMd.content) && !/alert/.test(pcMd.content), `pageContent markdown: title normalized, markdown produced, script dropped (${JSON.stringify(pcMd.content)})`);
-const pcTx = pageContent("<html><body><style>.x{}</style><p>Plain   text</p><p>here</p></body></html>", "https://example.com/", "text");
+const pcTx = await pageContent("<html><body><style>.x{}</style><p>Plain   text</p><p>here</p></body></html>", "https://example.com/", "text");
 ok(/Plain text/.test(pcTx.content) && !/\.x\{\}/.test(pcTx.content) && !/[#*]/.test(pcTx.content), `pageContent text: clean text, no style, no markdown marks (${JSON.stringify(pcTx.content)})`);
 
 // ----------------------------------------------------------------------------

@@ -18,7 +18,7 @@
 //     for ttl seconds).
 //   - Every read/write is wrapped in try/catch — a Redis stall NEVER takes
 //     down a tool. Worst case it adds a few ms then we serve fresh.
-import { createClient } from "redis";
+import { loadRedis } from "./lazy-redis.js";
 
 // Mirror src/db-ssl.js for Redis: a plaintext redis:// URL is only acceptable
 // on Railway's private mesh; a public host must use rediss:// or the password,
@@ -42,6 +42,7 @@ async function getClient() {
   if (connecting) return connecting;
   connecting = (async () => {
     try {
+      const { createClient } = await loadRedis();
       const c = createClient({
         url: REDIS_URL,
         socket: {

@@ -9,7 +9,7 @@
 //
 // All pure-CPU, no network, no LLM → proof-of-work eligible (free tier).
 // Covered by scripts/test-html-kit.js.
-import { JSDOM } from "jsdom";
+import { loadJsdom } from "./lazy-deps.js";
 import { compileUserRegex, testUserRegex } from "./safe-regex.js";
 
 function bad(message) {
@@ -27,9 +27,10 @@ function need(input, field, type = "string") {
 // pathological pages. 5MB is generous (a typical large news article HTML is
 // ~200KB; a heavy SPA's pre-render is ~1-2MB). Refuse rather than burn CPU.
 const MAX_HTML_BYTES = 5 * 1024 * 1024;
-function parseHtml(html) {
+async function parseHtml(html) {
   if (typeof html !== "string") throw bad('"html" must be a string');
   if (Buffer.byteLength(html, "utf8") > MAX_HTML_BYTES) throw bad(`"html" exceeds ${MAX_HTML_BYTES} byte limit`);
+  const JSDOM = await loadJsdom();
   // contentType=text/html so jsdom uses the HTML parser (lenient) not XML.
   // No resourceLoader — we never fetch sub-resources from a tool handler.
   return new JSDOM(html, { contentType: "text/html" });
@@ -43,7 +44,8 @@ const trimText = (s, max = 4000) => {
 // Validate a CSS selector by trying it against a synthetic empty doc.
 // Throws a 400 with the underlying message so callers see "Invalid selector"
 // instead of an opaque DOMException.
-function validateSelector(selector) {
+async function validateSelector(selector) {
+  const JSDOM = await loadJsdom();
   try {
     new JSDOM("<!doctype html><html><body></body></html>").window.document.querySelector(selector);
   } catch (e) {
@@ -89,17 +91,17 @@ export const HTML_TOOLS = [
       },
       output: { example: { count: 2, matches: [{ text: "One", attrs: {} }, { text: "Two", attrs: {} }] } },
     },
-    handler: (i) => {
+    handler: async (i) => {
       const html = need(i, "html");
       const selector = need(i, "selector");
-      validateSelector(selector);
+      await validateSelector(selector);
       const rawLimit = i.limit === undefined ? 25 : Number(i.limit);
       if (!Number.isFinite(rawLimit) || rawLimit < 1 || rawLimit > 200) throw bad(`"limit" must be 1-200`);
       const limit = Math.floor(rawLimit);
       const attr = i.attr ? String(i.attr) : null;
       const includeHtml = Boolean(i.includeHtml);
 
-      const doc = parseHtml(html).window.document;
+      const doc = (await parseHtml(html)).window.document;
       const all = doc.querySelectorAll(selector);
       const matches = [];
       for (let n = 0; n < all.length && matches.length < limit; n++) {
@@ -140,14 +142,14 @@ export const HTML_TOOLS = [
       },
       output: { example: { rows: [{ City: "NYC", Pop: "8.3M" }, { City: "LA", Pop: "3.9M" }], headers: ["City", "Pop"], format: "json", count: 2 } },
     },
-    handler: (i) => {
+    handler: async (i) => {
       const html = need(i, "html");
       const selector = (i.selector || "table").toString();
-      validateSelector(selector);
+      await validateSelector(selector);
       const format = (i.format || "json").toLowerCase();
       if (format !== "json" && format !== "csv") throw bad(`"format" must be "json" or "csv"`);
 
-      const doc = parseHtml(html).window.document;
+      const doc = (await parseHtml(html)).window.document;
       const table = doc.querySelector(selector);
       if (!table) throw bad(`no element matched selector "${selector}"`);
       if (table.tagName !== "TABLE") throw bad(`selector "${selector}" matched <${table.tagName.toLowerCase()}>, not <table>`);
@@ -200,11 +202,11 @@ export const HTML_TOOLS = [
       },
       output: { example: { text: "Title\n\nFirst paragraph.\n\nSecond.", chars: 30 } },
     },
-    handler: (i) => {
+    handler: async (i) => {
       const html = need(i, "html");
       const selector = i.selector ? String(i.selector) : null;
-      if (selector) validateSelector(selector);
-      const doc = parseHtml(html).window.document;
+      if (selector) await validateSelector(selector);
+      const doc = (await parseHtml(html)).window.document;
       const root = selector ? doc.querySelector(selector) : doc.body || doc.documentElement;
       if (!root) return { text: "", chars: 0 };
       // Remove <script> and <style> - their contents aren't visible text.
@@ -244,7 +246,7 @@ export const HTML_TOOLS = [
       },
       output: { example: { count: 2, links: [{ href: "https://agent402.tools/about", text: "About", rel: "" }, { href: "https://example.com/", text: "External", rel: "" }] } },
     },
-    handler: (i) => {
+    handler: async (i) => {
       const html = need(i, "html");
       const base = i.base ? String(i.base) : null;
       let filterRe = null;
@@ -259,7 +261,7 @@ export const HTML_TOOLS = [
       const limit = Math.floor(rawLimit);
       const unique = i.unique !== false;
 
-      const doc = parseHtml(html).window.document;
+      const doc = (await parseHtml(html)).window.document;
       const out = [];
       const seen = new Set();
       for (const a of doc.querySelectorAll("a[href]")) {
@@ -296,9 +298,9 @@ export const HTML_TOOLS = [
       },
       output: { example: { title: "Hi", description: "x", og: { title: "Hi OG" }, twitter: {}, canonical: null, jsonLd: [] } },
     },
-    handler: (i) => {
+    handler: async (i) => {
       const html = need(i, "html");
-      const doc = parseHtml(html).window.document;
+      const doc = (await parseHtml(html)).window.document;
       const head = doc.head || doc.documentElement;
       const title = (doc.querySelector("title")?.textContent || "").trim() || null;
       const og = {}, twitter = {};

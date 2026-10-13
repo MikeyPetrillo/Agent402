@@ -1,4 +1,4 @@
-import { PDFParse } from "pdf-parse";
+import { loadPdfParse } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
 
 // Cap on extracted text bytes — a small (within fetch budget) PDF can still
@@ -11,6 +11,7 @@ const MAX_EXTRACTED_TEXT_BYTES = 8 * 1024 * 1024;
  */
 export async function pdfToText(rawUrl) {
   const { finalUrl, buffer } = await safeFetch(rawUrl, { binary: true, maxBytes: 20 * 1024 * 1024 });
+  const PDFParse = await loadPdfParse();
   const parser = new PDFParse({ data: buffer });
   try {
     // The parser's worker cannot handle concurrent calls — keep these sequential.

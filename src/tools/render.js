@@ -247,7 +247,7 @@ async function withPage(rawUrl, fn, { signal } = {}) {
 export async function renderArticle(rawUrl, { signal } = {}) {
   return withPage(rawUrl, async (page) => {
     const html = await page.content();
-    const result = htmlToArticle(html, page.url());
+    const result = await htmlToArticle(html, page.url());
     result.rendered = true;
     return result;
   }, { signal });
