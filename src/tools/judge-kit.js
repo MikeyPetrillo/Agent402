@@ -21,6 +21,7 @@
 
 import { upstreamCosts } from "../upstream-costs.js";
 import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL } from "../decision-one.js";
+import { capturePostHogGatewayUsage } from "../posthog.js";
 
 // THREE BACKENDS, one answer shape. On /v1/judge TypeSafe's Jev answers first,
 // then Microsoft Decision-1 (over OpenRouter, the Jev wire with another model
@@ -245,6 +246,19 @@ function backends(body, lunaBytes) {
 }
 const nameOf = (b) => (b === "luna" ? LUNA : b === "decision-one" ? DECISION_ONE : "jev-latest");
 
+/** Luna and Decision-1 bill input tokens at their private rates per 1M and
+ *  report the count; recorded after every served call into the same meter and
+ *  margin event as the /v1 tiers. Jev has no rate row, so its calls are
+ *  recorded with no figure (volume stays queryable; nothing is invented). */
+function recordJudgeSpend(tier, backend, out) {
+  try {
+    const rate = backend === "luna" ? lunaRate() : backend === "decision-one" ? decisionOneRate() : null;
+    const tokens = Number(out?.j?.usage?.input_tokens) || 0;
+    const upstreamUsd = rate != null && tokens > 0 ? Math.round((tokens / 1e6) * rate * 1e6) / 1e6 : null;
+    capturePostHogGatewayUsage({ tier, model: out?.model, priceUsd: JUDGE_PRICE_USD, upstreamUsd, promptTokens: tokens, source: "judge" });
+  } catch { /* telemetry must never fail a served response */ }
+}
+
 /** Try each backend in order; the first answer wins. A failure settles
  *  nothing for the buyer, but the next backend is tried only when the failed
  *  one certainly did not bill us (refused, 5xx, 429, credentials, a request
@@ -276,6 +290,7 @@ export async function judge(input, { fetchImpl = fetch } = {}) {
     const j = await callLuna(request, fetchImpl);
     return { j, answers: fromDecisions(j, body, ids), model: j.model || LUNA };
   });
+  recordJudgeSpend("judge", backend, out);
   return {
     model: out.model,
     ...(backend !== order[0] ? { fallbackFrom: nameOf(order[0]) } : {}),
@@ -398,6 +413,7 @@ export async function decisions(input, { fetchImpl = fetch } = {}) {
     const j = b === "jev" ? await callJev(body, fetchImpl) : await callDecisionOne(body, fetchImpl);
     return { j, answers: toDecisionsAnswers(checkJev(j.answers, body), request, levels), model: b === "jev" ? j.model || "jev-latest" : DECISION_ONE };
   });
+  recordJudgeSpend("decisions", backend, out);
   return {
     model: out.model,
     ...(backend !== order[0] ? { fallback_from: nameOf(order[0]) } : {}),

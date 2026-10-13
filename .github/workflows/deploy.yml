@@ -2692,7 +2692,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (85 scripts, one process each)
+      - name: Offline suites (86 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2850,6 +2850,8 @@ jobs:
           t node scripts/test-refund-backfill.js
           # Upstream-spend meter records with PostHog OFF and in exact micro-dollars (offline)
           t node scripts/test-upstream-spend.js
+          # Every model-backed kit outside the chat tiers (speech, STT, image, embeddings, judge, Exa, X) meters its per-call upstream spend from the private table (fake table, stubbed upstreams - offline)
+          t node scripts/test-upstream-spend-meter.js
           # Analytics redaction (per-tool table never reaches an unauthenticated caller - seeded, DB not required)
           t node scripts/test-analytics-redaction.js
           # Reveal-on-scroll no hero flash (the hero must never hide behind opacity:0 waiting on the observer)

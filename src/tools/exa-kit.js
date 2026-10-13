@@ -43,6 +43,7 @@
 
 import { markUntrusted } from "./provenance.js";
 import { upstreamCosts } from "../upstream-costs.js";
+import { meterUpstreamSpend } from "../posthog.js";
 
 const EXA_API = "https://api.exa.ai";
 const TIMEOUT_MS = 30_000;
@@ -250,6 +251,9 @@ async function exaPost(path, body) {
   // the estimate with a real figure; an absent costDollars keeps the estimate.
   const actual = actualExaUsd(data);
   if (actual !== null) _exaSpendBook(actual - estimate);
+  // The served call's cost, in the server-side spend meter beside the model
+  // tiers (/__operator/margin.json): what Exa says it charged, else the card.
+  meterUpstreamSpend("exa", actual ?? estimate);
   return data;
 }
 

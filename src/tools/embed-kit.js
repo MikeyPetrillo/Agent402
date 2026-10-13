@@ -6,6 +6,8 @@
 //   embed-large  $0.010  — text-embedding-3-large  (32k chars)
 
 import { redactSecrets } from "./redact.js";
+import { upstreamCosts } from "../upstream-costs.js";
+import { capturePostHogGatewayUsage } from "../posthog.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
@@ -75,6 +77,7 @@ async function callOpenAI(text, tierSlug) {
   try { data = JSON.parse(body); } catch { throw bad("OpenAI returned non-JSON", 502); }
   const embedding = data.data?.[0]?.embedding;
   if (!Array.isArray(embedding) || embedding.length === 0) throw bad("OpenAI returned no embedding - retry", 502);
+  recordEmbedSpend(tierSlug, data.usage);
 
   return {
     model: tier.model,
@@ -85,6 +88,22 @@ async function callOpenAI(text, tierSlug) {
       total_tokens: data.usage?.total_tokens ?? 0,
     },
   };
+}
+
+// The list price of a tier, read from its own tool def so it is never typed twice.
+const tierPriceUsd = (slug) => { const t = EMBED_TOOLS.find((x) => x.slug === slug); return t ? Number(String(t.price).replace("$", "")) || 0 : 0; };
+
+/** Embeddings bill input tokens only, at the model's private rate per 1M;
+ *  the upstream reports the count. Recorded after every served call into the
+ *  same meter and margin event as the /v1 tiers. No rate row, no figure. */
+function recordEmbedSpend(tierSlug, usage) {
+  try {
+    const model = TIERS[tierSlug].model;
+    const rate = upstreamCosts().embeddings?.[model];
+    const tokens = Number(usage?.prompt_tokens ?? usage?.total_tokens) || 0;
+    const upstreamUsd = rate != null && tokens > 0 ? Math.round((tokens / 1e6) * rate * 1e6) / 1e6 : null;
+    capturePostHogGatewayUsage({ tier: tierSlug, model, priceUsd: tierPriceUsd(tierSlug), upstreamUsd, promptTokens: tokens, source: "embeddings" });
+  } catch { /* telemetry must never fail a served response */ }
 }
 
 function makeHandler(tierSlug) {

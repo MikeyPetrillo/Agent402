@@ -28,12 +28,26 @@ import { PostHog } from "posthog-node";
 // bare subprocess with NODE_ENV=production and no volume, and stats exits).
 // The server always has stats loaded, so after the first call this is sync.
 let __statsMod = null;
+let __meterSink = null;
 function meterSpend(source, usd) {
   try {
+    if (__meterSink) { __meterSink(source, usd); return; }
     if (__statsMod) { __statsMod.recordUpstreamSpend(source, usd); return; }
     import("./stats.js").then((m) => { __statsMod = m; m.recordUpstreamSpend(source, usd); }).catch(() => {});
   } catch { /* metering must never break telemetry */ }
 }
+/** Record one unit of upstream spend in the server-side meter (the stats
+ *  spend table behind /__operator/margin.json), by source. For a kit whose
+ *  upstream bills a vendor fee rather than a model call; model-backed kits go
+ *  through capturePostHogGatewayUsage so the margin event rides along. */
+export function meterUpstreamSpend(source, usd) {
+  if (typeof usd !== "number" || !Number.isFinite(usd) || usd <= 0) return false;
+  meterSpend(String(source || "unknown"), usd);
+  return true;
+}
+/** Tests only: route every metered spend to `fn(source, usd)` instead of the
+ *  stats table (null restores it). */
+export function setMeterSpendSinkForTest(fn) { __meterSink = typeof fn === "function" ? fn : null; }
 import { isPaidRail } from "./paid-rails.js";
 
 const API_KEY = process.env.POSTHOG_API_KEY || "";
@@ -701,14 +715,21 @@ export function capturePostHogCompositeUsage({ slug, upstreamUsd, ok, priceUsd, 
   } catch { /* never throw */ }
 }
 
-export function capturePostHogGatewayUsage({ tier, routeTier, model, priceUsd, upstreamUsd, promptTokens, completionTokens, serviceTier, serverToolCalls, serverToolSearches, defaulted }) {
+// `source` names the meter row the spend lands on (/__operator/margin.json
+// shows upstream by source): "gateway" for the /v1 model tiers and the kits
+// that bill through the same provider, "speech", "stt", "image-gen",
+// "embeddings" and "judge" for the model-backed kits that priced their own
+// usage from the private table. One event shape for all of them.
+export function capturePostHogGatewayUsage({ tier, routeTier, model, priceUsd, upstreamUsd, promptTokens, completionTokens, serviceTier, serverToolCalls, serverToolSearches, defaulted, source }) {
   // Server-side spend meter runs BEFORE the PostHog gate: cost must be
   // recorded even when telemetry is off (see recordUpstreamSpend's header).
-  if (upstreamUsd != null) meterSpend("gateway", upstreamUsd);
+  const src = source ? String(source) : "gateway";
+  if (upstreamUsd != null) meterSpend(src, upstreamUsd);
   if (!active()) return;
   const price = Number(priceUsd) || 0;
   const upstream = Number(upstreamUsd) || 0;
   capture("gateway_usage", {
+    ...(src !== "gateway" ? { source: src } : {}),
     // `tier` is the tier that SERVED (and was paid for); `routeTier` is the
     // route the request arrived on. They differ only when a flat route was
     // asked for another flat tier's model and priced at that tier.

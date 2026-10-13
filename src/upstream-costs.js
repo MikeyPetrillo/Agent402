@@ -4,10 +4,10 @@
 //
 // Shape:
 //   { models: [[prefix, { prompt, completion }], ...],   USD per 1M tokens, longest prefix wins
-//     speech: { modelId: usdPerChar },
+//     speech: { modelId: usdPerChar },                       the speech wire models and the direct speech fallbacks
 //     fees: { webSearchPerUse, groundedPerCall, rerankPerUnit },
 //     embeddings: { model: usdPer1MInputTokens },
-//     openai: { model: { prompt, cached, completion } },
+//     openai: { model: { prompt, cached, completion } },     USD per 1M tokens; the image model's completion rate is per image token
 //     sttPerMinute: { model: usdPerMinute },
 //     media: { model: { worstCaseUsd, listedMaxUsd } },
 //     meter: { markup },
@@ -39,6 +39,11 @@ const REQUIRED = [
   ["vendor", "exa", "search"], ["vendor", "exa", "instant"], ["vendor", "exa", "answer"], ["vendor", "exa", "content"],
   ["vendor", "x", "postRead"], ["vendor", "x", "userRead"], ["vendor", "decisions", "luna"], ["vendor", "decisions", "maxShare"],
   ["vendor", "decisions", "decisionOne"],
+  // The speech fallback models the /api/tts tiers reach directly (USD per
+  // character, like every other speech row) and the direct image model
+  // (USD per 1M tokens: prompt for text input, completion for image output),
+  // which the spend meter prices from these rows.
+  ["speech", "tts-1"], ["speech", "tts-1-hd"], ["openai", "gpt-image-2"],
 ];
 const NONEMPTY = ["speech", "embeddings", "openai", "sttPerMinute", "media"];
 
