@@ -538,5 +538,5 @@ export function createMppReconciler({
   }
   function stop() { if (timer) clearInterval(timer); if (firstTimer) clearTimeout(firstTimer); timer = firstTimer = null; }
 
-  return { runOnce, status, publicStatus, detail, start, stop, _state: () => state };
+  return { runOnce, status, publicStatus, detail, start, stop, ready: () => ready, _state: () => state };
 }

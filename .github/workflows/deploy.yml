@@ -1332,6 +1332,9 @@ jobs:
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
+          # The journals move to Redis only while its persistence reads on (src/redis-persistence.js);
+          # the service image starts without append-only, so turn it on first.
+          docker exec ${{ job.services.redis.id }} redis-cli CONFIG SET appendonly yes
           t node scripts/test-state-db.js
           t node scripts/test-stores-pg.js
           # The boot step drops the retired tollbooth_leads table, logs only its count, never recreates it.
@@ -1370,6 +1373,8 @@ jobs:
           t node scripts/test-ledger-journal-redis-pg.js
           # One drainer at a time, and every claimed entry leased: each guard on its own.
           t node scripts/test-ledger-journal-claim-redis.js
+          # The persistence gate on REAL redis: append-only off holds an entry on local disk (the word local); on sends the next to Redis.
+          t node scripts/test-ledger-journal-persistence-gate.js
           # A push debt replayed from another container's dead-letter never undoes that push's void.
           t node scripts/test-tempo-push-void-crosscontainer-pg.js
           t node scripts/test-mcp-tasks-pg.js
@@ -2988,6 +2993,8 @@ jobs:
           t node scripts/test-upstream-budgets.js
           # /api/gateway-status is public: verdicts only, never limits or balances
           t node scripts/test-gateway-status-privacy.js
+          # Redis persistence as one word (INFO persistence parse, the monitor, the journal gate on a stub client, the heartbeat and Worker legs - offline)
+          t node scripts/test-redis-persistence.js
           # SQL execution-certificate firewall (risk catalogue, false-positive guards, cert binding — offline)
           t node scripts/test-sql-guard.js
           # Whois RDAP bootstrap parser (IANA dns.json → TLD map — offline)
@@ -3909,6 +3916,11 @@ jobs:
       # twice. The templates are what this guards; seller data is not in the repo.
       - name: Wrap quality (rendered line boxes, 1440 + 400 px, sitemap + wiki, families sampled)
         run: node scripts/test-wrap-quality.js
+      # Sticky chrome, measured: html and body are never scroll containers, and the
+      # nav, docs TOC, playground panel and 101 bar hold their offsets after a scroll
+      # (Chromium, 1440 + 390 px). Boots its own server like the wrap check.
+      - name: Sticky chrome (nav and panels hold after a scroll, 1440 + 390 px)
+        run: node scripts/test-sticky-chrome.js
 
   test-sweeps2:
     # The second half of test-sweeps (2026-08-25, split by the seconds each item

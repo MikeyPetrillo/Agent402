@@ -36,6 +36,11 @@ const sdb = await import("../src/state-db.js");
 const { openDecideLedger } = await import("../src/decide/ledger.js");
 const { makeExecuteHandler, makeDecideHandler } = await import("../src/tools/decide-kit.js");
 const { ledgerDeadLetterStatus } = await import("../src/ledger-mirror.js");
+// With REDIS_URL set the journal takes an entry only once Redis persistence has read on (the gate); learn that before the first write.
+if (String(process.env.REDIS_URL || "").trim()) {
+  const g = await (await import("../src/ledger-journal-redis.js")).awaitJournalRedisGate({ timeoutMs: 5000 });
+  if (!g.open) { console.error(`FAIL - the Redis at REDIS_URL must run with append-only persistence on for the journal to take an entry (gate: ${g.reason})`); process.exit(1); }
+}
 
 const ext = (id, seller) => ({ id, slug: id, name: id, seller, firstParty: false, endpoint: `https://${seller}/x`, method: "POST", priceUsd: 0.02, inputSchema: { type: "object", properties: { q: { type: "string" } }, required: ["q"] }, exampleParams: { q: "x" } });
 const fp = (id) => ({ ...ext(id, "agent402"), firstParty: true });

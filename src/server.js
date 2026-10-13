@@ -542,6 +542,7 @@ import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores } from "./state-db.js";
 import { ledgerDeadLetterStatus, flushJournals } from "./ledger-mirror.js";
+import { startRedisPersistenceMonitor, redisPersistenceStatus } from "./redis-persistence.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
@@ -2490,6 +2491,11 @@ app.get("/__operator/followups.json", (req, res) => {
 // cutover so exactly one poster runs. `draining` is read at tick time.
 const _tweetQueue = createTweetQueue({ ...tweetQueueOptionsFromEnv(process.env), isDraining: () => draining });
 _tweetQueue.start();
+// Whether the Redis behind REDIS_URL keeps what it is given
+// (src/redis-persistence.js): INFO persistence, read shortly after boot and
+// then on a timer, never on a request's path. One word on /api/gateway-status;
+// the money journals move to Redis only while it reads on.
+startRedisPersistenceMonitor();
 app.get("/__operator/tweet-queue.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json(_tweetQueue.status());
@@ -3195,6 +3201,9 @@ app.get("/api/gateway-status", async (req, res) => {
     tweetQueue: (() => { try { return _tweetQueue.alarmStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // The state database (the stores that left the volume): one word.
     stateDb: { status: stateDbStatus() },
+    // Redis persistence (src/redis-persistence.js): on / degraded / off /
+    // unknown. One word publicly; the operator also gets the INFO fields.
+    redisPersistence: (() => { try { return redisPersistenceStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // Money writes waiting on this container's local disk for the database
     // (src/ledger-mirror.js journals: sales, refund debts, card checkout
     // finals, subscription records, decide writes): none / pending / stuck

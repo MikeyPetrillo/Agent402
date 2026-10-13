@@ -700,6 +700,39 @@ jobs:
               ;;
           esac
 
+      # Redis persistence (src/redis-persistence.js): one word on
+      # /api/gateway-status read from INFO persistence. "off" means the Redis
+      # behind REDIS_URL runs without append-only persistence, so anything kept
+      # there dies with its process; "degraded" means append-only is on but
+      # the last write or rewrite did not finish ok. In both the money journals
+      # stay on each container's local disk (the LEDGER_JOURNAL_REDIS switch has
+      # no effect until it reads on). Two readings 30 s apart, like the
+      # dead-letter check. "on" closes; "unknown" does neither.
+      - name: Redis persistence check (alarm when append-only is off or degraded)
+        if: always()
+        continue-on-error: true
+        run: |
+          read_rp() { curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.redisPersistence.status // "unknown"' 2>/dev/null || echo unknown; }
+          WORD=$(read_rp)
+          if [ "$WORD" = "off" ] || [ "$WORD" = "degraded" ]; then sleep 30; WORD=$(read_rp); fi
+          echo "redis persistence: $WORD"
+          TITLE="Redis append-only persistence is not on"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            off|degraded)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports redisPersistence.status=$WORD on two readings 30 s apart. off: the Redis behind REDIS_URL runs without append-only persistence (aof_enabled:0), so anything kept there dies with its process. degraded: append-only is on but the last AOF write or rewrite did not finish ok (aof_last_write_status / aof_last_bgrewrite_status), which usually means the disk behind it is full or unwritable. While either lasts the money journals stay on each container's local disk (LEDGER_JOURNAL_REDIS has no effect until it reads on) and an entry waiting there reads local on ledgerDeadLetter. Check the Redis service's start command on Railway (redis-server --appendonly yes --appendfsync everysec), run INFO persistence against it (aof_enabled, aof_last_write_status, aof_last_bgrewrite_status, rdb_last_bgsave_status) and its disk; the operator read of /api/gateway-status carries the same fields. The server log has one [ledger-journal] line naming why the journals are held and one more when Redis takes them again. Auto-closes when the word is on." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            on)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: redis persistence reads on at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Transactional email (src/email.js): one word on /api/gateway-status,
       # recorded from real sends and kept on the volume. exhausted / failing
       # page; ok closes; unknown and unconfigured do neither. Built 2026-10-01

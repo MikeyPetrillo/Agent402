@@ -45,6 +45,11 @@ ok(pubBody?.ledgerDeadLetter?.status === "off" && Object.keys(pubBody.ledgerDead
 ok(opBody?.ledgerDeadLetter?.status === "off" && typeof opBody?.ledgerDeadLetter?.sales?.onDisk === "number", "the operator view of ledgerDeadLetter carries the counts");
 ok(["sales", "refunds", "checkoutFinals", "subscriptions", "decide", "outbound"].every((n) => typeof opBody?.ledgerDeadLetter?.[n]?.onDisk === "number"), `the operator view counts every local money journal (${Object.keys(opBody?.ledgerDeadLetter || {}).join(",")})`);
 
+// --- Redis persistence: one word publicly, the INFO fields for the operator ---
+ok(pubBody?.redisPersistence?.status === "unknown" && Object.keys(pubBody.redisPersistence).join(",") === "status", `redisPersistence publishes its word only (${JSON.stringify(pubBody?.redisPersistence)}; unknown without REDIS_URL)`);
+ok(opBody?.redisPersistence?.status === "unknown" && opBody?.redisPersistence?.reason === "no_redis_url" && "fields" in (opBody?.redisPersistence || {}), `the operator view of redisPersistence carries the reason and the fields (${JSON.stringify(opBody?.redisPersistence)})`);
+ok(opBody?.ledgerDeadLetter?.journalRedis && typeof opBody.ledgerDeadLetter.journalRedis.backend === "string" && "reason" in opBody.ledgerDeadLetter.journalRedis, `the operator view of ledgerDeadLetter says where a new journal entry lands and why (${JSON.stringify(opBody?.ledgerDeadLetter?.journalRedis)})`);
+
 // --- Solana history reads: one word publicly, per-lane counts for the operator ---
 ok(typeof pubBody?.solanaHistory?.status === "string" && Object.keys(pubBody.solanaHistory).join(",") === "status", `solanaHistory publishes its word only (${JSON.stringify(pubBody?.solanaHistory)})`);
 ok(opBody?.solanaHistory && typeof opBody.solanaHistory.lanes === "object" && "publicShare" in opBody.solanaHistory, "the operator view of solanaHistory carries the per-lane counts");

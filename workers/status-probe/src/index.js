@@ -482,6 +482,27 @@ Auto-closes when the word is ok.`;
       `/api/gateway-status reports ledgerDeadLetter.status=${b?.ledgerDeadLetter?.status === "local" ? "local" : "stuck"}. local: the journals live in Redis but a money write sits on the container's local disk because Redis did not take it (check the Redis service). stuck: a money write (a sale, a refund debt, a card report's final record, a subscription record, a decide write or an outbound payment record) has waited on the container's local disk for the state database longer than LEDGER_DEAD_LETTER_STUCK_MINUTES (default 20). Each journal's replay retries on a timer; while it cannot land them they exist only on that container, so do not redeploy or restart it until they land. Check stateDb on the same endpoint, the Postgres service on Railway, and the [sales-ledger] / [refund-ledger] / [human-checkout] / [subscriptions] / [decide] / [outbound-ledger] log lines (a row the database refuses is named there). The operator read of /api/gateway-status has the counts per journal. Auto-closes when the word is none.`,
   },
   {
+    // Redis persistence (redisPersistence on /api/gateway-status,
+    // src/redis-persistence.js): what INFO persistence says about the Redis
+    // behind REDIS_URL. off and degraded page; on clears; unknown does
+    // neither. Title matches heartbeat.yml's.
+    title: "Redis append-only persistence is not on",
+    verdict: ({ gateway: b }) => {
+      const w = b.redisPersistence?.status;
+      if (REDIS_PERSISTENCE_BAD.has(w)) return "bad";
+      return w === "on" ? "good" : "quiet";
+    },
+    body: ({ gateway: b } = {}) => {
+      const w = REDIS_PERSISTENCE_BAD.has(b?.redisPersistence?.status) ? b.redisPersistence.status : "off";
+      return `/api/gateway-status reports redisPersistence.status=${w}.
+
+- off: the Redis behind REDIS_URL runs without append-only persistence (aof_enabled:0), so anything kept there dies with its process.
+- degraded: append-only is on but the last AOF write or rewrite did not finish ok (aof_last_write_status / aof_last_bgrewrite_status), which usually means the disk behind it is full or unwritable.
+
+While either lasts the money journals stay on each container's local disk (LEDGER_JOURNAL_REDIS has no effect until it reads on) and an entry waiting there reads local on ledgerDeadLetter. Check the Redis service's start command on Railway (redis-server --appendonly yes --appendfsync everysec), run INFO persistence against it (aof_enabled, aof_last_write_status, aof_last_bgrewrite_status, rdb_last_bgsave_status) and its disk; the operator read of /api/gateway-status carries the same fields. The server log has one [ledger-journal] line naming why the journals are held and one more when Redis takes them again. Auto-closes when the word is on.`;
+    },
+  },
+  {
     // The nightly offsite backup (backup on /api/gateway-status,
     // src/backup.js). held, failed and stale page; ok clears; off and
     // unknown do neither. Title matches heartbeat.yml's.
@@ -538,6 +559,7 @@ This observer cannot dispatch the canary itself (it holds an issues-only credent
 
 const TWEET_QUEUE_BAD = new Set(["halted", "no_credentials", "refused", "in_doubt"]);
 const BACKUP_BAD = new Set(["held", "failed", "stale"]);
+const REDIS_PERSISTENCE_BAD = new Set(["off", "degraded"]);
 
 // The shape shared by every wallet balance: low pages, ok clears, and
 // unknown/unconfigured do neither.

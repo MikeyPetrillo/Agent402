@@ -14,7 +14,7 @@ import Database from "better-sqlite3";
 import { existsSync, statSync, readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
-import { createRedisJournal, redisJournalConfigured, JOURNAL_LEASE_MS } from "./ledger-journal-redis.js";
+import { createRedisJournal, redisJournalConfigured, journalRedisGateStatus, JOURNAL_LEASE_MS } from "./ledger-journal-redis.js";
 
 /** Server-clock milliseconds, the `updated_at` stamp every write sets. */
 export const PG_NOW_MS = "((extract(epoch from clock_timestamp()) * 1000)::bigint)";
@@ -575,7 +575,10 @@ export const MONEY_JOURNALS = ["sales", "refunds", "checkoutFinals", "subscripti
  * ledgerDeadLetter on /api/gateway-status: one word over every money
  * journal (see deadLetterWord); `full` (the operator) adds the counts per
  * journal (`onDisk`: every entry kept, in Redis or on disk; `onLocalDisk`:
- * the ones on this container's disk). Never an id, an amount or a payload.
+ * the ones on this container's disk) and `journalRedis`: where a new entry
+ * lands now and, when that is local disk with the Redis journal configured,
+ * why (the persistence gate, src/ledger-journal-redis.js). Never an id, an
+ * amount or a payload.
  */
 export function ledgerDeadLetterStatus({ full = false, enabled = true, now = Date.now(), stuckMinutes = DEAD_LETTER_STUCK_MINUTES } = {}) {
   const states = journalStates();
@@ -583,7 +586,7 @@ export function ledgerDeadLetterStatus({ full = false, enabled = true, now = Dat
   const status = deadLetterWord(Object.values(states), { enabled, now, stuckMinutes });
   if (!full) return { status };
   const age = (s) => (s.oldestAt == null ? null : Math.floor((now - s.oldestAt) / 60_000));
-  const out = { status, stuckMinutes };
+  const out = { status, stuckMinutes, journalRedis: journalRedisGateStatus({ now }) };
   for (const [n, s] of Object.entries(states)) out[n] = { waiting: s.waiting, onDisk: s.total, onLocalDisk: Number(s.local) || 0, oldestMinutes: age(s) };
   return out;
 }
