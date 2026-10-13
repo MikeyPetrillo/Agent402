@@ -1,6 +1,6 @@
 {
   "name": "elizaos-plugin-agent402",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "elizaOS plugin for Agent402 (Agentic Finance): find and call pay-per-call web tools on a server that answers x402 and MPP on one 402. Pays in USDC over x402 from an EVM wallet or with an Agent402 credits key, under per-call and daily ceilings; pure-CPU tools are free via proof-of-work.",
   "type": "module",
   "main": "index.js",
