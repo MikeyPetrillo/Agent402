@@ -73,26 +73,39 @@ export const isUpstreamOutage = (status, body) =>
 // rejected", not the header's sentence), and a substring match could hit a
 // `reason` nested in an extension's example.
 // facilitator-quota is left out: it comes from a SETTLE refusal, which was
-// never a gate refusal.
-const GATE_REASONS = new Set(REJECTION_REASONS.map((r) => r.reason).filter((r) => r !== "facilitator-quota"));
-export const isGateRefusal = (status, body) => {
-  if (status !== 402) return false;
+// never a gate refusal. insufficient-funds is left out: it is the SWEEP'S OWN
+// wallet (isBuyerUnfunded below), never a verdict on the rail.
+const GATE_REASONS = new Set(REJECTION_REASONS.map((r) => r.reason).filter((r) => r !== "facilitator-quota" && r !== "insufficient-funds"));
+const refusalReasonOf = (status, body) => {
+  if (status !== 402) return null;
   let d;
-  try { d = JSON.parse(String(body || "")); } catch { return false; }
-  return !!d && typeof d === "object" && !Array.isArray(d) && GATE_REASONS.has(d.reason);
+  try { d = JSON.parse(String(body || "")); } catch { return null; }
+  return d && typeof d === "object" && !Array.isArray(d) && typeof d.reason === "string" ? d.reason : null;
 };
+export const isGateRefusal = (status, body) => GATE_REASONS.has(refusalReasonOf(status, body));
+
+// THE SWEEP'S OWN WALLET came up short: the facilitator simulated the transfer
+// and refused it for the balance, and the 402 names that class
+// (insufficient-funds, src/verify-hint.js). Nothing about the rail or the tool
+// was measured, a retry from the same wallet cannot pass, and every later tool
+// fails the same way, so the sweep stops and reports FUNDING. Before this class
+// existed, a wallet that ran dry mid-sweep read as a string of rail failures
+// on whichever tools happened to come next.
+export const isBuyerUnfunded = (status, body) => refusalReasonOf(status, body) === "insufficient-funds";
 
 // Terminal shape of one paid attempt:
-// "ok" | "empty" | "breaker" | "fast-402" | "throttle" | "slow-402" | "other".
+// "ok" | "empty" | "breaker" | "unfunded" | "fast-402" | "throttle" | "slow-402" | "other".
 //
-// `breaker` is tested BEFORE the 402 shapes and before isThrottle, because it
-// is the one outcome that says nothing about the tool under test: the request
-// was refused before its handler ran, so the sweep measured nothing and must
+// `breaker` and `unfunded` are tested BEFORE the 402 shapes and before
+// isThrottle, because they are the outcomes that say nothing about the tool
+// under test: the request was refused before its handler ran (our breaker), or
+// the sweep's own wallet could not pay, so the sweep measured nothing and must
 // not report a verdict either way.
 export const outcomeOf = (a) =>
   a.status === 200 && String(a.body || "").trim() ? "ok"
     : a.status === 200 ? "empty"
       : isOurSettleBreaker(a.status, a.body) ? "breaker"
+      : isBuyerUnfunded(a.status, a.body) ? "unfunded"
       : isGateRefusal(a.status, a.body) ? "slow-402"
       : a.status === 402 && a.elapsedMs < FAST_REJECT_MS ? "fast-402"
         : isThrottle(a.status, a.body) ? "throttle"

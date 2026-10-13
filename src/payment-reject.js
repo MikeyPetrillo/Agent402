@@ -63,6 +63,7 @@ export const REJECTION_REASONS = Object.freeze([
   { reason: "amount-below-price", means: "The authorized amount is under the price this route quoted." },
   { reason: "wrong-recipient", means: "The authorization pays an address this route did not advertise." },
   { reason: "authorization-expired", means: "validBefore has already passed. Signing well ahead of sending, or a clock adrift, will do it." },
+  { reason: "insufficient-funds", means: "The facilitator simulated the transfer and the paying wallet holds less of the asset than this route's price. Nothing was charged. Fund the wallet, or pay on another network listed in accepts, then sign a new authorization." },
   { reason: "unclassified", means: "It decoded and still matched nothing, in a way this server has no name for. The refusal lists the field NAMES received so you can compare them yourself, and we would like to hear about it: an unclassified refusal is as likely to be our defect as yours." },
   { reason: "facilitator-quota", means: "The payment verified and the call ran, then the facilitator for that network refused to settle it under a billing quota on this server's own account. Nothing was charged and nothing is wrong with your wallet. Ask the route for a fresh 402 without paying and pay on another network it lists." },
 ]);

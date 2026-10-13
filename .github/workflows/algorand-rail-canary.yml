@@ -75,11 +75,17 @@ jobs:
             echo "result=noconfig" >> "$GITHUB_OUTPUT"; exit 0
           fi
           [ -n "$ALGORAND_BURNER_MNEMONIC" ] && echo "::add-mask::$ALGORAND_BURNER_MNEMONIC"
-          if node scripts/algorand-rail-canary.js --out rail-report.json --max-usd "$CANARY_MAX_USD"; then
-            echo "result=pass" >> "$GITHUB_OUTPUT"
-          else
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-          fi
+          # Exit 3 is the sweep's own wallet holding less USDC than a price
+          # (EXIT_UNFUNDED in the script): funding, filed apart from a rail failure.
+          set +e
+          node scripts/algorand-rail-canary.js --out rail-report.json --max-usd "$CANARY_MAX_USD"
+          CODE=$?
+          set -e
+          case "$CODE" in
+            0) echo "result=pass" >> "$GITHUB_OUTPUT" ;;
+            3) echo "result=unfunded" >> "$GITHUB_OUTPUT" ;;
+            *) echo "result=fail" >> "$GITHUB_OUTPUT" ;;
+          esac
 
       - name: Upload report
         if: always()
@@ -93,15 +99,31 @@ jobs:
       # heartbeat uses, so repeated failures comment instead of piling up.
       - name: Alert (open issue) or clear (close issue)
         if: always() && steps.sweep.outputs.result != 'noconfig' && inputs.dry != 'true'
-        # RESULT is only ever pass/fail/noconfig today (set by this same
-        # workflow's own prior step), but routed through env: rather than
-        # spliced via ${{ }} to match the repo-wide convention for step
-        # outputs referenced inside run: - cheap consistency, not a live fix.
+        # RESULT is pass/fail/unfunded/noconfig (set by this same workflow's
+        # own prior step), but routed through env: rather than spliced via
+        # ${{ }} to match the repo-wide convention for step outputs
+        # referenced inside run: - cheap consistency, not a live fix.
         env:
           RESULT: ${{ steps.sweep.outputs.result }}
         run: |
           TITLE="Algorand rail canary FAILING"
+          FUND_TITLE="Algorand rail canary: sweep wallet needs USDC"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          FUND_OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FUND_TITLE\"" --json number --jq '.[0].number // empty')
+          # The sweep's own wallet ran short: its own issue, and the rail issue
+          # is left alone (nothing about the rail was measured either way).
+          if [ "$RESULT" = "unfunded" ]; then
+            FUND_BODY="The weekly Algorand rail sweep stopped because its own wallet holds less USDC than a tool's price; nothing about the rail was measured past that point. Fund the sweep wallet (the Algorand burner) and re-run the workflow. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            if [ -n "$FUND_OPEN" ]; then
+              gh issue comment "$FUND_OPEN" --repo "$GITHUB_REPOSITORY" --body "Still unfunded at $(date -u +%FT%TZ). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            else
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$FUND_TITLE" --body "$FUND_BODY"
+            fi
+            exit 0
+          fi
+          if [ -n "$FUND_OPEN" ]; then
+            gh issue close "$FUND_OPEN" --repo "$GITHUB_REPOSITORY" --comment "The sweep paid again at $(date -u +%FT%TZ)."
+          fi
           if [ "$RESULT" = "fail" ]; then
             BODY="The weekly Algorand rail sweep found problems. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
