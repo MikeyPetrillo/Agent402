@@ -32,6 +32,15 @@ const relay = createServer((req, res) => {
     hits++;
     let realm = "?";
     try { realm = JSON.parse(body).challenge.realm; } catch { /* leave ? */ }
+    if (mode === "200-dependency-unavailable") {
+      // The EXACT live shape measured 2026-10-12: HTTP 200, success:false,
+      // the relay's own temporarily_unavailable code (inside mppx's details
+      // allowlist) and the dependency named only in message, with the
+      // request id every relay answer carries in a header.
+      res.writeHead(200, { "content-type": "application/json", "tempo-request-id": "c9ffc771-ef3a-4b87-835a-87d0288906ca" });
+      res.end(JSON.stringify({ success: false, error: { code: "temporarily_unavailable", message: "Address screening is unavailable. Retry later." } }));
+      return;
+    }
     if (mode === "200-rejected") {
       // The EXACT live shape measured 2026-08-18: HTTP 200, success:false,
       // code "unknown" (outside mppx's details allowlist), reason in message.
@@ -82,10 +91,26 @@ ok(!/details=\(none/.test(a.error), "the old blind 'details=(none)' wording is g
 // there, through four straight rejections.
 mode = "200-rejected";
 const d = await validateTempoCredential(credentialFor("delta.test"));
-relay.close();
 ok(!d.ok, "200-rejected: still rejected (mppx sees success:false)");
 ok(/relay \/v1\/mpp\/validate HTTP 200 /.test(d.error), `200-rejected: a 2xx success:false body is captured too (got: ${d.error.slice(0, 100)})`);
 ok(/no matching payment call found \(realm delta\.test\)/.test(d.error), "200-rejected: the relay's human-readable reason (message) survives — the field mppx drops");
+ok(d.requestId === null, "200-rejected: no tempo-request-id header means a null request id, never a made-up one");
+ok(/^relay \/v1\/mpp\/validate HTTP 200 \{/.test(d.error), `200-rejected: the relay body leads the error string (got: ${d.error.slice(0, 60)})`);
+
+// Scenario 2b: HTTP 200 + success:false + the relay's own
+// temporarily_unavailable code: the relay could not run one of its
+// dependencies and says the same credential may be re-presented. This is
+// not a transport failure (relay-unavailable) and not a verdict on the
+// credential; the class, the relay's message and the request id all reach
+// the caller, and the api key does not.
+mode = "200-dependency-unavailable";
+const t = await validateTempoCredential(credentialFor("epsilon.test"));
+relay.close();
+ok(!t.ok && t.cls === "relay-dependency-unavailable", `200-dependency-unavailable: classified as relay-dependency-unavailable (got ${t.cls})`);
+ok(t.requestId === "c9ffc771-ef3a-4b87-835a-87d0288906ca", `200-dependency-unavailable: the tempo-request-id header is kept (got ${t.requestId})`);
+ok(t.relayMessage === "Address screening is unavailable. Retry later.", `200-dependency-unavailable: the relay's own message is read from the body (got ${t.relayMessage})`);
+ok(/^relay \/v1\/mpp\/validate HTTP 200 .*temporarily_unavailable.*Address screening is unavailable/.test(t.error), `200-dependency-unavailable: the error string carries the relay body first (got: ${t.error.slice(0, 160)})`);
+ok(!t.error.includes(process.env.TEMPO_API_KEY) && !String(t.relayMessage).includes(process.env.TEMPO_API_KEY), "200-dependency-unavailable: the api key is in neither the error string nor the relay message");
 
 // Scenario 3: the relay never answers — it accepts the connection and then
 // destroys the socket (what a relay-side deadline looks like from here).
