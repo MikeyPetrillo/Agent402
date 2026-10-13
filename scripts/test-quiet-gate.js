@@ -1,14 +1,16 @@
 // Tests for the deploy quiet gate: the CI step that holds a Railway deploy
-// until OUTSIDE traffic (paid or free, our own probes excluded) has a lull.
-// Pure checks on the verdict helpers, a source pin against the /api/stats
-// labels the gate reads, and end-to-end runs of the script against a stub
-// /api/stats server.
+// until OUTSIDE traffic (paid or free, our own probes excluded) has a lull and
+// no money journal entry waits on a container's local disk (the
+// ledgerDeadLetter word on /api/gateway-status). Pure checks on the verdict
+// helpers, source pins against the /api/stats labels and the dead-letter words
+// the gate reads, and end-to-end runs of the script against a stub server that
+// answers both surfaces.
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { lastOutsideAgeSeconds, isQuiet, isOurs, createQuietTracker, FEED_ROWS } from "./deploy-quiet-gate.js";
+import { lastOutsideAgeSeconds, isQuiet, isOurs, createQuietTracker, FEED_ROWS, LEDGER_HOLD_WORDS, ledgerHolds, ledgerDeadLetterWord } from "./deploy-quiet-gate.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -41,6 +43,28 @@ ok(isOurs({ paidWith: "heartbeat" }) && !isOurs({ paidWith: "usdc" }) && !isOurs
 // internal branch), which is what lets the gate ignore them.
 ok(/insertRecent\.run\(slug, "heartbeat", Date\.now\(\)\)/.test(statsSrc),
   "our own paid calls are written to the feed as heartbeat rows");
+
+// --- the ledger word the gate reads -----------------------------------------
+// The two words that hold a deploy are the two deadLetterWord() answers that
+// mean "on this container's local disk" (src/ledger-mirror.js), and they are
+// the same two the heartbeat pages on; pinned so the three cannot drift apart.
+const mirrorSrc = readFileSync(join(here, "..", "src", "ledger-mirror.js"), "utf8");
+const wordFn = mirrorSrc.slice(mirrorSrc.indexOf("export function deadLetterWord("), mirrorSrc.indexOf("export const MONEY_JOURNALS"));
+const wordsReturned = [...wordFn.matchAll(/return (?:waiting > 0 \? )?"([a-z]+)"/g)].map((m) => m[1]);
+ok(wordsReturned.includes("stuck") && wordsReturned.includes("local"), `deadLetterWord() still answers the words the gate holds on (${wordsReturned.join(", ")})`);
+ok(/if \(onLocalDisk > 0\) return "local";/.test(wordFn) && /return "stuck";/.test(wordFn), "\"local\" and \"stuck\" are the local-disk answers; \"pending\" is the shared journal");
+for (const w of LEDGER_HOLD_WORDS) ok(wordsReturned.includes(w), `gate hold word "${w}" is a word deadLetterWord() can answer`);
+const serverSrc = readFileSync(join(here, "..", "src", "server.js"), "utf8");
+ok(/ledgerDeadLetter: \(\(\) => \{\s*try \{ return ledgerDeadLetterStatus\(/.test(serverSrc), "/api/gateway-status publishes ledgerDeadLetter from ledgerDeadLetterStatus()");
+const heartbeat = readFileSync(join(here, "..", ".github", "workflows", "heartbeat.yml"), "utf8");
+ok(/\[ "\$WORD" = "stuck" \] \|\| \[ "\$WORD" = "local" \]/.test(heartbeat), "the heartbeat re-reads on the same two words the gate holds on");
+ok(ledgerHolds("local") && ledgerHolds("stuck"), "local and stuck hold the deploy");
+for (const w of ["none", "pending", "off", "unknown", "", undefined, null]) ok(!ledgerHolds(w), `${JSON.stringify(w)} does not hold the deploy (only a word that names local disk does)`);
+ok(ledgerDeadLetterWord({ ledgerDeadLetter: { status: "none" } }) === "none", "the word is read from ledgerDeadLetter.status");
+ok(ledgerDeadLetterWord({ ledgerDeadLetter: { status: "local" } }) === "local", "a holding word is read verbatim");
+for (const [payload, what] of [[{}, "no ledgerDeadLetter field"], [{ ledgerDeadLetter: {} }, "no status"], [{ ledgerDeadLetter: { status: "" } }, "empty status"], [{ ledgerDeadLetter: { status: 3 } }, "status not a string"], [null, "no body"]]) {
+  ok(ledgerDeadLetterWord(payload) === null, `unreadable gateway-status (${what}) reads null (fail-open, the gate warns)`);
+}
 
 // --- verdict helpers --------------------------------------------------------
 ok(lastOutsideAgeSeconds(stats([paid(30)]), NOW) === 30, "a paid call holds the gate (age measured)");
@@ -127,11 +151,23 @@ function runGate(env) {
 }
 
 // The stub keeps each call's own timestamp, like the real feed: a burst's rows
-// stay put and age in real time, and the gate has to wait them out.
+// stay put and age in real time, and the gate has to wait them out. `hits`
+// counts /api/stats polls; `ledgerHits` counts /api/gateway-status polls, which
+// answer `ledgerMode` (a word, "shape" for a payload without the field,
+// "http-500", or "local-then-none": local on the first two polls, then none).
 let mode = "paid-burst";
 let hits = 0;
 let burst = [];
+let ledgerMode = "none";
+let ledgerHits = 0;
 const server = createServer((req, res) => {
+  if (req.url.startsWith("/api/gateway-status")) {
+    ledgerHits++;
+    if (ledgerMode === "http-500") return void res.writeHead(500).end("boom");
+    const word = ledgerMode === "local-then-none" ? (ledgerHits <= 2 ? "local" : "none") : ledgerMode;
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return void res.end(JSON.stringify(ledgerMode === "shape" ? { stateDb: { status: "on" } } : { ledgerDeadLetter: { status: word } }));
+  }
   hits++;
   if (mode === "http-500") return void res.writeHead(500).end("boom");
   if (mode === "not-json") return void res.writeHead(200, { "Content-Type": "application/json" }).end("<html>");
@@ -185,6 +221,10 @@ ok(r.code === 0 && /our own traffic fills the feed/.test(r.out) && /PASS/.test(r
 
 hits = 0;
 const busyServer = createServer((req, res) => {
+  if (req.url.startsWith("/api/gateway-status")) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return void res.end(JSON.stringify({ ledgerDeadLetter: { status: "none" } }));
+  }
   hits++;
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify(stats([pow(0, Date.now())])));
@@ -201,6 +241,46 @@ ok(r.code === 0 && /failing OPEN/.test(r.out) && hits >= 4, "unreachable stats f
 hits = 0; mode = "not-json";
 r = await runGate(fast);
 ok(r.code === 0 && /failing OPEN/.test(r.out) && hits >= 4, "a non-JSON body counts as a failed read and fails open");
+
+// --- the ledger word, end to end ----------------------------------------------
+hits = 0; ledgerHits = 0; mode = "empty"; ledgerMode = "local-then-none"; t0 = Date.now();
+r = await runGate(fast);
+ok(r.code === 0 && /ledgerDeadLetter reads "local"/.test(r.out) && /PASS, .*ledgerDeadLetter none/.test(r.out),
+  "a held journal entry holds the gate while traffic is quiet, and the gate passes once the word clears");
+ok(ledgerHits === 3 && hits === 3 && Date.now() - t0 >= 400, `both surfaces are polled together at the gate's cadence (${hits} stats polls, ${ledgerHits} ledger polls, ${Date.now() - t0}ms)`);
+
+hits = 0; ledgerHits = 0; mode = "empty"; ledgerMode = "stuck";
+r = await runGate({ ...fast, MAX_WAIT_SECS: "1" });
+ok(r.code === 0 && /proceeding anyway/.test(r.out) && /still held after 1s \(ledgerDeadLetter stuck\)/.test(r.out) && /pages on ledgerDeadLetter stuck/.test(r.out),
+  "a word that never clears: proceeds after max wait, naming the word (never strands a deploy)");
+ok(!/PASS/.test(r.out) && ledgerHits >= 3, `the gate never called a held ledger a pass (${ledgerHits} ledger polls)`);
+
+hits = 0; ledgerHits = 0; mode = "paid-burst"; burst = []; ledgerMode = "local-then-none";
+r = await runGate(burstEnv);
+ok(r.code === 0 && /outside traffic \d+s ago/.test(r.out) && /ledgerDeadLetter reads "local"/.test(r.out) && /PASS/.test(r.out),
+  "traffic and the ledger word hold together and the gate passes only when both are clear");
+
+for (const word of ["none", "pending", "off", "unknown"]) {
+  hits = 0; ledgerHits = 0; mode = "empty"; ledgerMode = word;
+  r = await runGate(fast);
+  ok(r.code === 0 && /PASS/.test(r.out) && ledgerHits === 1 && hits === 1, `ledgerDeadLetter "${word}" lets the deploy go on the first poll`);
+}
+
+hits = 0; ledgerHits = 0; mode = "empty"; ledgerMode = "shape";
+r = await runGate(fast);
+ok(r.code === 0 && /ledgerDeadLetter is not in the expected shape/.test(r.out) && /PASS, .*ledgerDeadLetter unreadable/.test(r.out) && ledgerHits === 1,
+  "a gateway-status payload without the word fails open on the ledger at once, with a warning");
+
+hits = 0; ledgerHits = 0; mode = "empty"; ledgerMode = "http-500";
+r = await runGate(fast);
+ok(r.code === 0 && /gateway-status unreachable, failing OPEN/.test(r.out) && /PASS/.test(r.out) && ledgerHits === 4 && hits === 4,
+  `an unreachable gateway-status fails open after ${ledgerHits} consecutive errors; traffic is re-read on every poll until both are clear (${hits} stats polls)`);
+
+hits = 0; ledgerHits = 0; mode = "http-500"; ledgerMode = "local-then-none";
+r = await runGate(fast);
+ok(r.code === 0 && /stats unreachable, failing OPEN/.test(r.out) && /ledgerDeadLetter reads "local"/.test(r.out) && /PASS/.test(r.out),
+  "each check fails open on its own: unreadable stats do not release a held ledger word");
+ledgerMode = "none";
 
 r = await runGate({ TARGET_URL: base, QUIET_GATE: "off" });
 ok(r.code === 0 && /skipping/.test(r.out), "QUIET_GATE=off skips immediately");
