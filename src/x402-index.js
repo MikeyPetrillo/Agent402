@@ -5918,8 +5918,8 @@ function recordSubmittedSellerObservations() {
 // deploys that is most of the day. A visitor saw 569 sellers when the index
 // held 2,169 — not a bug in the counting, just a cache that had barely started.
 //
-// Same fix, same reasoning, same volume as the leaderboard's own warm-start
-// (see LEADERBOARD_SNAPSHOT_FILE): persist the crawl and load it at boot.
+// Same fix, same reasoning, same document store as the leaderboard's own
+// warm-start (see LEADERBOARD_SNAPSHOT_FILE): persist the crawl and load it at boot.
 // Stale-but-complete beats empty-and-correct here — a seller reachable an hour
 // ago is almost certainly still reachable, and the next crawl re-verifies it
 // anyway.

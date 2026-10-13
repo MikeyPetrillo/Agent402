@@ -270,7 +270,7 @@ export async function expectedRenewalMemo({ lookupKey, subscriptionId, periodInd
   return bytesToHex(buf);
 }
 // Every unpaid 402 mints and PERSISTS a server-owned access key, so an
-// unauthenticated caller can write to the shared /data volume by asking for
+// unauthenticated caller can grow the shared offer store by asking for
 // offers it never pays. Bounded two ways: unclaimed offers are swept once their
 // challenge can no longer be paid, and minting refuses outright past the cap
 // (the disk-fill guard, same posture as the memory namespace byte budget).

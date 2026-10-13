@@ -2485,9 +2485,9 @@ app.get("/__operator/followups.json", (req, res) => {
 // Off unless the Railway variable TWEET_QUEUE is set; TWEET_QUEUE_POSTING=off
 // keeps it read-only (the operator read below still previews the next item).
 // Only the production server posts: a FREE_MODE boot, a process without
-// NODE_ENV=production and a process with no /data volume stay read-only, so a
-// local boot that copies the production variables never becomes a second
-// poster. It replaces .github/workflows/tweet-queue.yml, which is disabled at
+// NODE_ENV=production and a process with no durable queue state (no state
+// database and no state file) stay read-only, so a local boot that copies the
+// production variables never becomes a second poster. It replaces .github/workflows/tweet-queue.yml, which is disabled at
 // cutover so exactly one poster runs. `draining` is read at tick time.
 const _tweetQueue = createTweetQueue({ ...tweetQueueOptionsFromEnv(process.env), isDraining: () => draining });
 _tweetQueue.start();
@@ -3050,13 +3050,13 @@ app.get("/health", (req, res) => {
     leadsDb: leadsDbReady,
     operatorToken: Boolean(OPERATOR_TOKEN),
     posthog: posthogEnabled(),
-    // True when the stats SQLite DB is on the /data volume (counters + the
-    // recentCalls ring buffer survive restarts). False = silent fallback to
-    // /tmp, which wipes the activity feed on every container restart and
-    // makes traffic look thinner than it is. CI auto-attaches /data, but
-    // surfacing this here means a misconfigured deploy can't hide.
+    // True when the stats store is durable (counters + the recentCalls ring
+    // buffer survive restarts). False = a temporary local file, which wipes
+    // the activity feed on every container restart and makes traffic look
+    // thinner than it is; surfacing it here means a misconfigured deploy
+    // cannot hide.
     statsPersistent,
-    // True when the memory tools' SQLite DB is on /data. Memory is the worst
+    // True when the memory tools' store is durable. Memory is the worst
     // case for a silent fallback because agents PAY USDC per write — the
     // value of that storage is its durability. Boot fails loud in prod if
     // /data is missing, but this flag lets an operator verify externally
@@ -10037,8 +10037,9 @@ if (process.env.LAZY_DEPS_WARM !== "off") {
 // Skipped in FREE_MODE/CI boots where no wallet is configured.
 if (WALLET_ADDRESS) revenueSnapshot(revenueWallets()).catch(() => { /* warm-up only */ });
 
-// All-time revenue ledger sync loop — self-gates on /data (prod volume) or
-// REVENUE_LEDGER=true, so test/CI boots never touch public RPCs.
+// All-time revenue ledger sync loop: self-gates on durable storage (the
+// production deployment) or REVENUE_LEDGER=true, so test/CI boots never touch
+// public RPCs.
 startRevenueLedger(revenueWallets());
 
 // DATABASE_URL Postgres: each boot drops the retired tollbooth_leads table if

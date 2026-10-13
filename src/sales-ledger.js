@@ -5,8 +5,9 @@
 // wallets actually buy? This module records one row per served catalog call
 // at settle time — slug, price, rail, settlement chain, verified payer, tx —
 // and classifies it internal/external so canary + burner + heartbeat traffic
-// never masquerades as demand. SQLite on the /data volume (same pattern as
-// stats.js / revenue-ledger.js): rows survive redeploys, and every USDC row
+// never masquerades as demand. Rows live in the state database, with a Redis
+// journal for writes made while it is unreachable (a local SQLite file
+// without either): rows survive redeploys, and every USDC row
 // keeps its settle tx so the ledger stays independently verifiable on-chain.
 //
 // Classification (internal = our own money/traffic):
