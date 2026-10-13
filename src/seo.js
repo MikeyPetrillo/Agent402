@@ -138,7 +138,44 @@ export function robotsTxt(baseUrl) {
     "Disallow: /api/pow/",
     "Disallow: /api/buy",
   ];
-  const rules = [...priv, ...costly].join("\n");
+  // PRICED ROUTES ARE NOT PAGES. Every /api/<tool> answers an unpaid crawler
+  // 402, which a search console files as a crawl error ("other 4xx") against
+  // a healthy site, and a crawler that walks the catalog spends its budget on
+  // hundreds of those instead of the pages. The documented machine-readable
+  // surfaces stay open through explicit Allow lines; everything else under
+  // /api is closed. Allow lines come first for first-match readers; for
+  // longest-match readers (Googlebot) an Allow is longer than "/api/" and
+  // wins on its own. The seller-scoped index view keeps its own, longer
+  // Disallow so it never ties with the "/api/index" Allow.
+  const catalog = [
+    "Allow: /api/pricing",
+    "Allow: /api/find",
+    "Allow: /api/route",
+    "Allow: /api/index",
+    "Allow: /api/stats",
+    "Allow: /api/status",
+    "Allow: /api/reliability",
+    "Allow: /api/leaderboard",
+    "Allow: /api/cacheable",
+    "Allow: /api/cache-stats",
+    "Allow: /api/rails",
+    "Allow: /api/revenue",
+    "Allow: /api/calls",
+    "Allow: /api/mpp-index",
+    "Allow: /api/mpp-leaderboard",
+    "Allow: /api/solana-leaderboard",
+    "Allow: /api/x402-economy",
+    "Allow: /api/skill-packs.json",
+    "Allow: /api/refunds/lookup",
+    "Allow: /api/gateway-status",
+    "Allow: /api/wishes",
+  ];
+  const priced = [
+    "Disallow: /api/index?seller=",
+    "Disallow: /api/index?*seller=",
+    "Disallow: /api/",
+  ];
+  const rules = [...catalog, ...priv, ...costly, ...priced].join("\n");
   const blocks = agents.map((a) => `User-agent: ${a}\nAllow: /\n${rules}`).join("\n\n");
   return `${blocks}
 

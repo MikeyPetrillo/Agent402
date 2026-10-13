@@ -2288,7 +2288,7 @@ jobs:
           t node scripts/test-quiet-gate.js
           # Self-check policy (transient-filtering, timeout, unknown-slug — the prod tool-failure alarm — offline)
           t node scripts/test-selfcheck.js
-          # /robots.txt policy (every LLM bot explicitly allowed + /api/memory disallowed + sitemap)
+          # /robots.txt policy (every LLM bot explicitly allowed, /api/ closed except the documented surfaces, sitemap URLs all allowed)
           t node scripts/test-robots-policy.js
           # /api/find envelope + top-1 ranking lock (per-row shape + known queries → known top slugs)
           t node scripts/test-find-envelope.js
