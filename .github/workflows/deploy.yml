@@ -1495,7 +1495,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (5 scripts, one process each)
+      - name: Offline suites (6 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1503,6 +1503,8 @@ jobs:
           t node scripts/test-composite-guard.js
           t node scripts/test-run-time-note.js
           t node scripts/test-async-jobs.js
+          # One payment_settled per settlement, from the one place a settlement becomes final: direct, async-replayed, hang-up (settled, owed), none for a 4xx or a refused payment (paid-mode boot vs stub facilitator - offline)
+          t node scripts/test-settlement-event.js
           # x402-market-pulse supply-mix per-seller tool cap
           t node scripts/test-ecosystem-supply.js
           # "Cache hygiene (M5 — Attack III: paid responses no-store, free discovery stays cacheable)"
