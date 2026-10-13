@@ -802,6 +802,7 @@
     {
       "slug": "skill-forecasting-bake-off",
       "name": "a second series",
+      "_why": "First step is stock-history on the licensed equities feed (key-gated since 2026-09-20): keyless, the pack answers 502 and nothing is measured. Keyed, so skipped on a keyless boot.",
       "input": {
         "series": "MSFT",
         "horizon": "10"
@@ -813,7 +814,8 @@
         "matches": {
           "summary": "^[1-9]"
         }
-      }
+      },
+      "requires": "DATABENTO_API_KEY"
     },
     {
       "slug": "skill-fraud-signals",
@@ -980,6 +982,7 @@
     {
       "slug": "skill-options-analytics",
       "name": "a second ticker",
+      "_why": "First step is stock-quote on the licensed equities feed (key-gated since 2026-09-20): keyless, the pack answers 502 and nothing is measured. Keyed, so skipped on a keyless boot.",
       "input": {
         "ticker": "MSFT"
       },
@@ -990,7 +993,8 @@
         "matches": {
           "summary": "^[1-9]"
         }
-      }
+      },
+      "requires": "DATABENTO_API_KEY"
     },
     {
       "slug": "skill-page-audit",
@@ -1330,6 +1334,7 @@
     {
       "slug": "skill-trend-analysis",
       "name": "a second series",
+      "_why": "The first step is stock-history on the licensed equities feed (key-gated since 2026-09-20); on a keyless boot every step fails and the pack answers 502, which the nightly filed as upstream for 21 nights in a row. Keyed, so skipped and never a verdict without the key.",
       "input": {
         "series": "MSFT",
         "horizon": "6mo"
@@ -1341,7 +1346,8 @@
         "matches": {
           "summary": "^[1-9]"
         }
-      }
+      },
+      "requires": "DATABENTO_API_KEY"
     },
     {
       "slug": "skill-ipo-watch",
