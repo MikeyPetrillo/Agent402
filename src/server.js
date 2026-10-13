@@ -3124,8 +3124,11 @@ app.get("/v1/models", (_req, res) => {
 // for the OpenRouter leg ("bucketed status, numbers never exposed") and the
 // spend counters added later did not honour it.
 function publicBucket(o) {
+  // Words and flags only. A `note` or `reason` is written for the operator
+  // (it names the upstream, the variable to set and the figure it measures),
+  // so neither leaves the operator view.
   if (!o || typeof o !== "object") return o;
-  const KEEP = new Set(["status", "configured", "day", "asset", "chain", "attests", "trend", "sinceRestart", "note", "reason", "unknownForMinutes"]);
+  const KEEP = new Set(["status", "configured", "day", "asset", "chain", "attests", "trend", "sinceRestart", "unknownForMinutes"]);
   const out = {};
   for (const [k, v] of Object.entries(o)) if (KEEP.has(k)) out[k] = v;
   return out;
@@ -3150,12 +3153,11 @@ function publicLoopLag(l) {
   return { watching: l.watching };
 }
 function publicBudgets(b) {
-  // Per-vendor: the WORD only. Never callsToday, never the budget - publishing
-  // seven exact daily ceilings is a map of where to push.
+  // One word for the whole group. The per-upstream rows name the upstreams and
+  // carry their daily ceilings, which together are a map of where to push, so
+  // they stay on the operator view.
   if (!b || typeof b !== "object") return b;
-  const upstreams = {};
-  for (const [k, v] of Object.entries(b.upstreams || {})) upstreams[k] = { status: v?.status ?? "unknown" };
-  return { day: b.day, status: b.status, sinceRestart: b.sinceRestart, note: b.note, upstreams };
+  return { status: b.status };
 }
 
 app.get("/api/gateway-status", async (req, res) => {
