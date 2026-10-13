@@ -287,7 +287,7 @@ on** - Base, Solana, Algorand or Tempo - and sells it to you; see the
 history - no wallet parameter; the x402 payment is the identity, so nobody can
 read another wallet's profile.
 
-## For humans: reports, monitors and prepaid credits
+## For humans: reports and monitors
 
 The same catalog has a card-paying front door (Stripe Checkout; the operator
 enables it with `STRIPE_SECRET_KEY`, otherwise these pages simply do not mount):
