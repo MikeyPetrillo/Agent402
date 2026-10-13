@@ -2167,7 +2167,7 @@ jobs:
           t node scripts/test-openapi-header-params.js
           # Process lifecycle (A402-10 SIGTERM drains + exits 0; uncaught exception is fatal + exits non-zero — spawns child)
           t node scripts/test-shutdown.js
-          # SIGTERM closes the listener at once and drains in-flight (volume-backed service, nothing to overlap with; deadline fits the Railway grace)
+          # SIGTERM closes the listener at once and drains in-flight (the replacement is already serving when the signal lands; deadline fits the Railway grace)
           t node scripts/test-drain-on-sigterm.js
           t node scripts/test-db-status.js
           t node scripts/test-db-init-retry.js
@@ -2284,7 +2284,7 @@ jobs:
           t node scripts/test-edgar-kit.js
           # Form 13F data sets: index parser + bounded Range reads of a real in-memory zip (offline)
           t node scripts/test-edgar-13f-datasets.js
-          # Deploy quiet gate (outside-traffic lull incl. free/MCP calls, visibility, fail-open paths; offline)
+          # Deploy quiet gate (outside-traffic lull incl. free/MCP calls, visibility, the ledgerDeadLetter hold, fail-open paths per check; offline)
           t node scripts/test-quiet-gate.js
           # Self-check policy (transient-filtering, timeout, unknown-slug — the prod tool-failure alarm — offline)
           t node scripts/test-selfcheck.js
@@ -5823,7 +5823,7 @@ jobs:
       # proceed with a warning); the in-server SIGTERM drain plus the Railway
       # grace set below still protect whatever is in flight. Runs BEFORE the
       # variable upsert because that upsert can itself trigger a redeploy.
-      - name: Quiet gate - wait for a lull in outside traffic
+      - name: Quiet gate - wait for a lull in outside traffic and a clear ledger word
         env:
           TARGET_URL: https://${{ env.CUSTOM_DOMAIN || steps.domain.outputs.domain }}
           QUIET_GATE: ${{ vars.QUIET_GATE }}
@@ -5845,14 +5845,14 @@ jobs:
           # graceful drain never runs and every deploy hard-kills in-flight
           # (already paid-for) requests.
           #
-          # It is a SIGKILL backstop and nothing more. The server closes its
-          # listener on SIGTERM and exits as soon as in-flight requests finish
-          # (DRAIN_DEADLINE_MS 75s at the very worst), and this service is
-          # volume-backed, so Railway does not start the replacement until the
-          # old container has EXITED - every second the old one lingers is a
-          # second of deploy time and of outage. The 2026-08-24/25 values (240,
-          # 600, 900) were sized to a "gap" that was this very setting, and
-          # took deploys to 16 minutes. 120s clears the 75s deadline with
+          # It is a SIGKILL backstop and nothing more. Deploys overlap: Railway
+          # starts the replacement, routes new calls to it once it is healthy
+          # and keeps the old container serving for the service's overlap
+          # window, then sends SIGTERM. The server closes its listener on the
+          # signal and exits as soon as in-flight requests finish
+          # (DRAIN_DEADLINE_MS 75s at the very worst); the overlap window is
+          # the platform's setting, so a long grace here buys nothing and only
+          # keeps two containers running. 120s clears the 75s deadline with
           # margin; scripts/test-drain-on-sigterm.js enforces both bounds.
           VARS=$(jq -n --arg w "$WALLET_ADDRESS" --arg n "$NETWORK" --arg f "$FACILITATOR_URL" --arg b "$BASE" \
             '{WALLET_ADDRESS:$w, NETWORK:$n, FACILITATOR_URL:$f, BASE_URL:$b, RAILWAY_DEPLOYMENT_DRAINING_SECONDS:"120"}')

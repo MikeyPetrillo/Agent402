@@ -160,11 +160,11 @@ const override = (process.env.CHALLENGE_ROUTES || "").split(",").map((r) => r.tr
 if (override.length) {
   probes = override.map((path) => ({ path, method: "POST", slug: path }));
 } else {
-  // Single-retry, because this reads LIVE production and our own deploys make
-  // it unreadable: the service is volume-backed, so every deploy has a 60-90s
-  // window with no container at all. Measured 2026-08-30 - this lane failed
-  // with "the catalog listed no endpoints" while the merge that triggered it
-  // was still swapping containers, and the same check passed seconds later.
+  // Single-retry, because this reads LIVE production and a reading taken while
+  // our own deploy swaps containers can fail on its own. Measured 2026-08-30 -
+  // this lane failed with "the catalog listed no endpoints" while the merge
+  // that triggered it was still swapping containers, and the same check passed
+  // seconds later.
   // One reading is never a verdict here; a real fault fails both. Same doctrine
   // as every heartbeat probe and the Postgres alarm.
   const readCatalog = async () => {

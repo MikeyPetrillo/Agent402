@@ -119,12 +119,12 @@ try {
   const { Agent402 } = await import(join(dir, "node_modules", "agent402-client", "index.js"));
   const client = new Agent402({ baseUrl: TARGET });
   // SINGLE RETRY, the same doctrine every other prod-facing probe in this repo
-  // uses. The service is volume-backed, so EVERY deploy has a 60-90s window with
-  // no container answering, and this job runs daily plus after each deploy - on
-  // 2026-08-31 it ran at 15:33 between main deploys at 15:29 and 15:36 and paged
-  // on a 502 that was our own rollout. A published package being unreachable for
-  // one moment during our deploy is not the package being broken; a package that
-  // is still unreachable 30 seconds later is worth waking someone for.
+  // uses. A reading taken while our own deploy swaps containers can fail on its
+  // own, and this job runs daily plus after each deploy - on 2026-08-31 it ran
+  // at 15:33 between main deploys at 15:29 and 15:36 and paged on a 502 that
+  // was our own rollout. A published package being unreachable for one moment
+  // during our deploy is not the package being broken; a package that is still
+  // unreachable 30 seconds later is worth waking someone for.
   const found = await retryOnce(
     () => client.find("generate a uuid"),
     (e) => /HTTP 50[0-9]|fetch failed|ECONNREFUSED|ETIMEDOUT|socket hang up/i.test(String(e?.message || e)),

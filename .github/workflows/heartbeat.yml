@@ -668,13 +668,13 @@ jobs:
       # records, decide writes) kept on the container's local disk because the
       # state database has not taken them (src/ledger-mirror.js): one word on
       # /api/gateway-status. "stuck" means an entry has waited past
-      # LEDGER_DEAD_LETTER_STUCK_MINUTES; without the /data volume that disk
-      # dies with the container, so a redeploy would lose those rows. "local"
-      # means the journals live in Redis but an entry sits on the container's
-      # disk because Redis did not take it (same risk). Two readings 30 s
-      # apart, like the state database check. "pending" (the
-      # replay is working through them), "none", "off" and "unknown" never page;
-      # none and off close.
+      # LEDGER_DEAD_LETTER_STUCK_MINUTES; that disk dies with the container, so
+      # a redeploy would lose those rows (the deploy job's quiet gate holds on
+      # the same two words). "local" means the journals live in Redis but an
+      # entry sits on the container's disk because Redis did not take it (same
+      # risk). Two readings 30 s apart, like the state database check.
+      # "pending" (the replay is working through them), "none", "off" and
+      # "unknown" never page; none and off close.
       - name: Ledger dead-letter check (alarm when money writes wait on local disk)
         if: always()
         continue-on-error: true
@@ -801,8 +801,8 @@ jobs:
 
       # Serving health: event-loop stalls, 5xx and paid-call error rates, and
       # load shedding, from /__operator/serving-health.json (counts only). Two
-      # readings 30 s apart must agree, because a deploy's no-container window
-      # produces one bad reading on its own.
+      # readings 30 s apart must agree, because a reading taken while a deploy
+      # swaps containers can be bad on its own.
       - name: Serving health check (alarm on stalls, paid-call errors, 5xx or shedding)
         if: always()
         continue-on-error: true
@@ -837,14 +837,14 @@ jobs:
         continue-on-error: true
         run: |
           # SINGLE-RETRY, like every other probe in this file. This leg shipped
-          # without one and paged on 2026-08-29 during our own deploy: the
-          # service is volume-backed, so each deploy has a ~60-90s window with
-          # no container, and the app's Postgres pools re-init behind a ~10-18s
-          # boot stall after that. The boot log showed "[leads-db] ready" three
-          # minutes BEFORE the issue was filed - a reading taken in that window,
-          # reported later. Five merges in a day is five chances to page on
-          # nothing, and an alarm that cries wolf is worse than no alarm.
-          # A REAL outage (a stopped Postgres container) fails both readings.
+          # without one and paged on 2026-08-29 during our own deploy: a reading
+          # taken while the containers swapped, when the fresh container's
+          # Postgres pools were still re-initializing behind its boot, was
+          # reported later as an outage. The boot log showed "[leads-db] ready"
+          # three minutes BEFORE the issue was filed. Five merges in a day is
+          # five chances to page on nothing, and an alarm that cries wolf is
+          # worse than no alarm. A REAL outage (a stopped Postgres container)
+          # fails both readings.
           probe_db() {
             local body leads analytics
             body=$(curl -s --max-time 20 "$PROD/api/gateway-status" 2>/dev/null || echo '{}')
