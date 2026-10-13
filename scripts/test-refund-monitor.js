@@ -90,7 +90,7 @@ const totals = (o = {}) => ({ owed: { n: 0, usd: 0 }, sending: { n: 0, usd: 0 },
 {
   const v = classifyLedger({ totals: totals({ paid: { n: 4, usd: 0.02 } }), rows: [row({ status: "paid" })], now: NOW });
   ok(v.level === "clean", "successful refunds do not raise an alarm");
-  ok(/paid 4 \(\$0.02\)/.test(v.summary), "but they ARE surfaced in the summary");
+  ok(/paid 4/.test(v.summary), "but they ARE surfaced in the summary");
 }
 
 // 7. Resolved rows never trigger anything, however old.
@@ -101,6 +101,21 @@ const totals = (o = {}) => ({ owed: { n: 0, usd: 0 }, sending: { n: 0, usd: 0 },
     now: NOW,
   });
   ok(v.level === "clean", "ancient paid/void rows are settled history, not a fault");
+}
+
+// 8. NEVER AMOUNTS. The workflow quotes this script's whole output into a
+//    public issue, so the summary and the reasons carry counts and ids only;
+//    the dollar totals stay on the operator read of the ledger.
+{
+  const v = classifyLedger({
+    totals: totals({ owed: { n: 2, usd: 1.25 }, sending: { n: 1, usd: 0.5 }, paid: { n: 4, usd: 3.75 }, void: { n: 1, usd: 0.1 } }),
+    rows: [row({ id: 11, status: "sending", createdAt: NOW - 2 * HOUR }), row({ id: 12, createdAt: NOW - 99 * HOUR })],
+    now: NOW,
+  });
+  const text = [v.summary, ...v.reasons].join(" ");
+  ok(!/\$\s*\d|\d\.\d\d|usd/i.test(text), `no dollar figure reaches the issue body (${v.summary})`);
+  ok(/owed 2/.test(v.summary) && /sending 1/.test(v.summary) && /paid 4/.test(v.summary) && /void 1/.test(v.summary), "every bucket is still counted");
+  ok(/#11/.test(text), "ids remain the operator's lookup key");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
