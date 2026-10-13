@@ -172,12 +172,17 @@
     {
       "slug": "http-check",
       "name": "a 404 is up:true with status 404",
+      "_why": "The 404 comes from a route we operate: an unknown /api path on our own host answers a JSON 404. The case used httpbin.org/status/404 until 2026-10-12, when that host answered 503 and the corpus paged http-check as broken; a case whose expected value depends on an outside host measures that host's uptime, not our tool.",
       "input": {
-        "url": "https://httpbin.org/status/404"
+        "url": "https://agent402.tools/api/no-such-route-corpus-404"
       },
       "expect": {
         "equals": {
+          "up": true,
           "status": 404
+        },
+        "matches": {
+          "finalUrl": "^https://agent402\\.tools/api/no-such-route-corpus-404$"
         }
       }
     },

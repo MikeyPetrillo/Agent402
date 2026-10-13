@@ -103,17 +103,35 @@ jobs:
             # say so and carry the log tail, never an empty code block.
             if [ -z "$FAILS" ]; then FAILS="(no per-tool FAIL lines - the harness itself did not complete; log tail follows)
           $(tail -25 corpus.log)"; fi
+            # Outside hosts ride along, named (the runner's note carries the
+            # host a case targets), so a repeat offender is visible from the
+            # issue and never mistaken for the failure that opened it.
+            UPSTREAM=$(grep -E '^upstream ' corpus.log | head -30 || true)
+            UPSTREAM_SECTION=""
+            if [ -n "$UPSTREAM" ]; then UPSTREAM_SECTION="
+
+          Outside hosts this run (reported, never fatal, listed so a repeat is visible):
+
+          \`\`\`
+          $UPSTREAM
+          \`\`\`"; fi
             BODY="The nightly correctness corpus found tools answering wrong on a second input. Run: $RUN
 
-          Only OUR code failing reaches here: a hollow 200, a silent fallback, our own 4xx on a valid input, or a 500. Upstream 502/503/504/429 are reported in the log and never open this issue.
+          Only OUR code failing reaches here: a hollow 200, a silent fallback, our own 4xx on a valid input, or a 500. An outside host's 5xx, timeout or 429 is reported as upstream with the host named and never opens this issue.
 
           \`\`\`
           $FAILS
-          \`\`\`
+          \`\`\`$UPSTREAM_SECTION
 
           Reproduce locally: \`node scripts/test-corpus.js --only <slug>\` (boots its own FREE_MODE server). Decide first whether the tool or the expectation is wrong (scripts/corpus/README.md)."
             if [ -n "$OPEN" ]; then
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ). Run: $RUN"
+              # The comment carries the cases too: a different case failing on
+              # the second night is a second defect, not the first one persisting.
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ). Run: $RUN
+
+          \`\`\`
+          $FAILS
+          \`\`\`$UPSTREAM_SECTION"
             else
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
             fi
