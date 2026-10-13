@@ -1337,8 +1337,28 @@ export function worstCaseUpstreamCost(body, tier, imageCount = 0) {
   const n = body.n || 1;
   // Every turn of the loop can produce a full output cap, so the output side
   // scales with turns exactly like the input side.
-  const outUsd = ((Number(body.max_tokens) || 0) / 1e6) * cost.completion * n * st.turns;
-  return { inTokens, inUsd, fixedUsd, outUsd, totalUsd: inUsd + fixedUsd + outUsd, cost, serverTools: st };
+  // A model whose reasoning bills OUTSIDE max_tokens (reasoningOutsideMaxTokens)
+  // can return more completion tokens than the cap: the visible answer is
+  // capped, the thinking before it is not, and both bill as completion.
+  // Metered calls to x-ai/grok-4.6 (2026-10-11 to 10-12, twelve calls)
+  // reported completion tokens up to 1.8x the request's max_tokens, and the
+  // three largest came in under a quote priced at the cap alone. The worst
+  // case prices UNCAPPED_REASONING_OUT_FACTOR times the cap for such a model
+  // and exactly the cap for every other.
+  const outFactor = reasoningOutsideMaxTokens(body.model) ? UNCAPPED_REASONING_OUT_FACTOR : 1;
+  const outTokens = (Number(body.max_tokens) || 0) * outFactor;
+  const outUsd = (outTokens / 1e6) * cost.completion * n * st.turns;
+  return { inTokens, inUsd, fixedUsd, outUsd, outTokens, outFactor, totalUsd: inUsd + fixedUsd + outUsd, cost, serverTools: st };
+}
+
+/** Output tokens priced per token of max_tokens for a model whose reasoning
+ *  the provider bills outside the cap (see worstCaseUpstreamCost). Three: the
+ *  largest measured overrun was 1.8x, and the bound leaves room above it. */
+export const UNCAPPED_REASONING_OUT_FACTOR = 3;
+/** True when the model's reasoning tokens are billed beyond max_tokens
+ *  (REASONING_MODELS rows flagged reasoningOutsideMaxTokens). */
+export function reasoningOutsideMaxTokens(model) {
+  return reasoningProfile(model)?.reasoningOutsideMaxTokens === true;
 }
 
 /** Shrinks body.max_tokens so the worst-case upstream bill stays ≤ MARGIN ×
@@ -1350,12 +1370,14 @@ export function clampToMargin(body, tier, imageCount) {
   // is nothing to clamp against - the ceiling grows with the request. The
   // per-call cap (maxQuoteUsd) is enforced in validateRequest instead.
   if (tier.metered) return;
-  const { inUsd, fixedUsd, inTokens, cost, serverTools } = worstCaseUpstreamCost(body, tier, imageCount);
+  const { inUsd, fixedUsd, inTokens, cost, serverTools, outFactor } = worstCaseUpstreamCost(body, tier, imageCount);
   const budgetUsd = tier.price * MARGIN;
   const n = body.n || 1;
   // A server-tool loop can produce a full output cap on every turn, so the
   // affordable output is divided by turns as well as by n. `turns` is 1 for
-  // every request that carries no server tool.
+  // every request that carries no server tool. `outFactor` is the output
+  // priced per token of the cap (above 1 only for a model whose reasoning
+  // bills outside max_tokens), so the cap it leaves still bounds the bill.
   const turns = serverTools.turns;
   // ZERO-COST MODEL (a free/stealth listing priced 0/0 in MODEL_COST): the
   // affordable-output division would be x/0 = Infinity, or 0/0 = NaN when the
@@ -1375,7 +1397,7 @@ export function clampToMargin(body, tier, imageCount) {
     }
     return;
   }
-  const affordableOut = Math.floor(((budgetUsd - inUsd - fixedUsd) * 1e6) / cost.completion / n / turns);
+  const affordableOut = Math.floor(((budgetUsd - inUsd - fixedUsd) * 1e6) / cost.completion / n / turns / outFactor);
   if (affordableOut < MIN_OUT_TOKENS) {
     throw bad(
       `Input is too large for "${body.model}" at this tier's price (est. ${inTokens} input tokens` +
@@ -1926,9 +1948,13 @@ export const REASONING_MODELS = [
   // Grok 4.5 / 4.6 / 4.7 (pro, via the x-ai/grok prefix): reasoning MANDATORY,
   // default effort high (live catalog 2026-09-24). Without a row a small
   // budget is spent reasoning at "high" and comes back empty.
-  { id: "x-ai/grok-4.5", efforts: ["low", "medium", "high"] },
-  { id: "x-ai/grok-4.6", efforts: ["low", "medium", "high", "xhigh"] },
-  { id: "x-ai/grok-4.7", efforts: ["low", "medium", "high", "xhigh"] },
+  // reasoningOutsideMaxTokens: the provider caps the visible answer at
+  // max_tokens and bills the reasoning before it on top, as completion tokens
+  // (metered usage 2026-10-11 to 10-12 reported up to 1.8x max_tokens), so
+  // the worst case prices more than the cap (worstCaseUpstreamCost).
+  { id: "x-ai/grok-4.5", efforts: ["low", "medium", "high"], reasoningOutsideMaxTokens: true },
+  { id: "x-ai/grok-4.6", efforts: ["low", "medium", "high", "xhigh"], reasoningOutsideMaxTokens: true },
+  { id: "x-ai/grok-4.7", efforts: ["low", "medium", "high", "xhigh"], reasoningOutsideMaxTokens: true },
   // qwen3.8-max-prime: reasoning MANDATORY, default effort xhigh (live 2026-09-24).
   { id: "qwen/qwen3.8-max-prime", efforts: ["minimal", "low", "medium", "high", "xhigh"] },
   // GPT-6 Astra: reasoning MANDATORY (no "none"), default effort medium; the

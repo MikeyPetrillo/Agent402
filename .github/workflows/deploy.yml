@@ -4348,6 +4348,8 @@ jobs:
           # moved off the critical path instead, where its duration stops mattering.
           # Pricing margin invariant (worst-case upstream < price on every gateway tier, failover links included; cap-before-spend; 410 tool_gone telemetry — offline)
           t node scripts/test-pricing-margin.js
+          # A model whose reasoning bills outside max_tokens is quoted and clamped for it: the metered quote covers the measured token mixes at the markup (private table, offline)
+          t node scripts/test-metered-uncapped-reasoning.js
 
   test-unit-c:
     # Test job runs on its own [test] marker AND auto-runs whenever a commit
