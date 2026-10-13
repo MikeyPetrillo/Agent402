@@ -56,6 +56,13 @@ const stripeOf = (refunds, product = "dossier") => ({
 });
 
 // ---- children (container B, or a replayer that dies) ------------------------
+// An add reaches Redis only once its persistence has read on (the gate,
+// src/ledger-journal-redis.js); a process that writes learns that before its
+// first write, after its imports (the journals open their connection first).
+const gateOpen = async () => {
+  const g = await (await import("../src/ledger-journal-redis.js")).awaitJournalRedisGate({ timeoutMs: 5000 });
+  if (!g.open) { console.log(JSON.stringify({ error: `journal gate closed: ${g.reason}` })); process.exit(1); }
+};
 if (MODE === "sales-b") {
   process.env.REFUND_DB_DIR = mkdtempSync(join(tmpdir(), "jr-B-"));
   process.env.SALES_LEDGER_DB = join(process.env.REFUND_DB_DIR, "agent402-sales.db");
@@ -73,6 +80,7 @@ if (MODE === "void-b") {
   const sdb = await import("../src/state-db.js");
   const rl = await import("../src/refund-ledger.js");
   await rl.refundLedgerReady();
+  await gateOpen();
   const voided = await rl.voidOwedOnClaim(process.argv[3], "claimed on retry");
   await rl.refundLedgerFlush();
   console.log(JSON.stringify({ voided }));
@@ -86,6 +94,7 @@ if (MODE === "claim-die" || MODE === "pending-die") {
     const got = await dl.claim();
     console.log(JSON.stringify({ claimed: got.length }));
   } else {
+    await gateOpen();
     for (let i = 0; i < 3; i++) dl.add("item", { n: 1000 + i }, { pending: true });
     await flushJournals();
     console.log(JSON.stringify({ added: 3 }));
@@ -131,6 +140,7 @@ if (MODE === "hc-b") {
   const hc = createHumanCheckout({ stripe: stripeOf(refunds), baseUrl: "https://example.test", storeDir: mkdtempSync(join(tmpdir(), "jr-hc-B-")), log: () => {}, onSale: (s) => sales.push(s.sessionId),
     generate: async () => { gens++; if (genDelay) await wait(genDelay); return { report: "# B", title: "t", sources: [], tables: [] }; } });
   await hc.ready();
+  await gateOpen();
   await hc.fulfill(process.argv[3]);
   let p; for (let i = 0; i < 40 + genDelay / 50; i++) { p = await hc.peek(process.argv[3]); if (p && p.status !== "generating") break; await wait(50); }
   console.log(JSON.stringify({ gens, refunds: refunds.length, sales: sales.length, status: p?.status, report: p?.report ?? null }));
@@ -142,7 +152,7 @@ if (MODE === "hc-b") {
 requireTestPg({ label: "test-ledger-journal-redis-pg" });
 const REDIS_DIRECT = String(process.env.REDIS_URL || "").trim();
 if (!REDIS_DIRECT) {
-  const msg = "test-ledger-journal-redis-pg: no REDIS_URL; start a local Redis (redis-server --port 26379 --save '' --appendonly no) and export REDIS_URL=redis://127.0.0.1:26379";
+  const msg = "test-ledger-journal-redis-pg: no REDIS_URL; start a local Redis (redis-server --port 26379 --save '' --appendonly yes) and export REDIS_URL=redis://127.0.0.1:26379";
   if (process.env.CI) { console.error(`FAIL - ${msg} (a missing Redis is a failure under CI)`); process.exit(1); }
   console.log(`SKIP - ${msg}`);
   process.exit(0);
@@ -207,6 +217,13 @@ const sale = (tx) => sl.recordSale({ slug: "hash", priceUsd: 0.002, rail: "usdc"
 const debt = (tx) => rl.recordRefundOwed({ slug: "hash", network: "eip155:8453", payer: PAYER, priceUsd: 0.002, tx, httpStatus: 502, wire: "x402" });
 const salesOf = (tx) => n(`SELECT count(*) AS n FROM ${schema}.sales WHERE tx = $1`, [tx]);
 const debtsOf = (tx) => n(`SELECT count(*) AS n FROM ${schema}.refunds WHERE evidence = $1`, [tx]);
+
+// An add reaches Redis only once its persistence has read on (the gate); read
+// after the imports, so the journals open the relay connection themselves.
+{
+  const g = await jr.awaitJournalRedisGate({ timeoutMs: 5000 });
+  if (!g.open) { console.error(`FAIL - the Redis at REDIS_URL must run with append-only persistence on for the journal to take an entry (gate: ${g.reason})`); process.exit(1); }
+}
 
 try {
   await rl.refundLedgerReady(); await sl.salesLedgerReady();

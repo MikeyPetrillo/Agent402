@@ -10,7 +10,7 @@ import { createClient } from "redis";
 
 const URL = String(process.env.REDIS_URL || "").trim();
 if (!URL) {
-  const msg = "test-ledger-journal-claim-redis: no REDIS_URL; start a local Redis (redis-server --port 26379 --save '' --appendonly no) and export REDIS_URL=redis://127.0.0.1:26379";
+  const msg = "test-ledger-journal-claim-redis: no REDIS_URL; start a local Redis (redis-server --port 26379 --save '' --appendonly yes) and export REDIS_URL=redis://127.0.0.1:26379";
   if (process.env.CI) { console.error(`FAIL - ${msg} (a missing Redis is a failure under CI)`); process.exit(1); }
   console.log(`SKIP - ${msg}`); process.exit(0);
 }
@@ -20,6 +20,11 @@ const client = createClient({ url: URL }); client.on("error", () => {}); await c
 jr.__setJournalRedisForTest(async () => client);
 // The journal unrefs the client it is handed; this keeps the test alive until it is done.
 const keepAlive = setInterval(() => {}, 1000);
+// An add reaches Redis only once its persistence has read on (the gate); this Redis must run append-only.
+{
+  const g = await jr.awaitJournalRedisGate({ timeoutMs: 5000 });
+  if (!g.open) { console.error(`FAIL - the Redis at REDIS_URL must run with append-only persistence on for the journal to take an entry (gate: ${g.reason})`); process.exit(1); }
+}
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };

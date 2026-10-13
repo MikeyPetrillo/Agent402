@@ -368,7 +368,7 @@ for (const [name, over, detail] of failCases) {
   // times), the record, a confirmed alarm reading, and every other alarm
   // closing an open issue (a comment and a PATCH each).
   let calls = 0;
-  const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, backup: { status: "ok" } };
+  const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" } };
   const { ALARMS } = await import("../workers/status-probe/src/index.js");
   stub({ health: () => new Response("down", { status: 503 }) });
   const prodStub = globalThis.fetch;
@@ -649,6 +649,30 @@ for (const [name, over, detail] of failCases) {
       assert.ok(text.includes("Each journal's replay retries on a timer"), `${name} says each replay retries on a timer`);
       for (const tag of ["[sales-ledger]", "[refund-ledger]", "[human-checkout]", "[subscriptions]", "[decide]", "[outbound-ledger]"]) assert.ok(text.includes(tag), `${name} lists the ${tag} log lines`);
       assert.ok(text.includes("counts per journal"), `${name} says the operator view has the counts per journal`);
+    }
+  });
+
+  await acheck("redis persistence: off and degraded page, on clears, unknown and absent do neither; body echoes only known words", async () => {
+    const { judge, ALARMS } = await import("../workers/status-probe/src/index.js");
+    const T = "Redis append-only persistence is not on";
+    assert.equal(judge({ gateway: { redisPersistence: { status: "off" } } })[T], "bad");
+    assert.equal(judge({ gateway: { redisPersistence: { status: "degraded" } } })[T], "bad");
+    assert.equal(judge({ gateway: { redisPersistence: { status: "on" } } })[T], "good");
+    assert.equal(judge({ gateway: { redisPersistence: { status: "unknown" } } })[T], "quiet");
+    assert.equal(judge({ gateway: {} })[T], "quiet");
+    assert.equal(judge(HEALTHY)[T], "quiet", "a gateway without the field (an older build) changes nothing");
+    const a = ALARMS.find((x) => x.title === T);
+    assert.match(a.body({ gateway: { redisPersistence: { status: "degraded" } } }), /redisPersistence\.status=degraded\./);
+    // An unexpected word is never echoed.
+    assert.match(a.body({ gateway: { redisPersistence: { status: "<b>x</b>" } } }), /redisPersistence\.status=off\./);
+    const yml = await readFile(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
+    const step = yml.slice(yml.indexOf(`TITLE="${T}"`), yml.indexOf("gh issue close", yml.indexOf(`TITLE="${T}"`)));
+    assert.ok(step.length > 0, "heartbeat.yml has the Redis persistence step");
+    for (const [name, text] of [["worker", a.body({ gateway: { redisPersistence: { status: "off" } } })], ["heartbeat.yml", step]]) {
+      assert.ok(text.includes("--appendonly yes --appendfsync everysec"), `${name} names the start command`);
+      assert.ok(text.includes("INFO persistence"), `${name} says to read INFO persistence`);
+      assert.ok(text.includes("LEDGER_JOURNAL_REDIS has no effect until it reads on"), `${name} says the journals stay on local disk`);
+      assert.ok(text.includes("Auto-closes when the word is on"), `${name} says when it closes`);
     }
   });
 

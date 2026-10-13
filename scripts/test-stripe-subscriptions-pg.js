@@ -23,6 +23,11 @@ process.env.SUBSCRIPTIONS_REPLAY_MS = "200";
 const sdb = await import("../src/state-db.js");
 const { createStripeSubscriptions } = await import("../src/stripe-subscriptions.js");
 const { ledgerDeadLetterStatus } = await import("../src/ledger-mirror.js");
+// With REDIS_URL set the journal takes an entry only once Redis persistence has read on (the gate); learn that before the first write.
+if (String(process.env.REDIS_URL || "").trim()) {
+  const g = await (await import("../src/ledger-journal-redis.js")).awaitJournalRedisGate({ timeoutMs: 5000 });
+  if (!g.open) { console.error(`FAIL - the Redis at REDIS_URL must run with append-only persistence on for the journal to take an entry (gate: ${g.reason})`); process.exit(1); }
+}
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
