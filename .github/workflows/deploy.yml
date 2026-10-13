@@ -2933,6 +2933,8 @@ jobs:
           t node scripts/test-finance-math-kit.js
           # Barcode-kit tests (QR/barcode decode round-trip, PNG + JPEG)
           t node scripts/test-barcode.js
+          # Lazy tool dependencies stay out of the boot graph; first call of each tool still answers (boots a server)
+          t node scripts/test-lazy-deps.js
 
       - name: Search-kit tests (Brave web/news/images/suggest — validation always runs; live calls opt-in via BRAVE_LIVE_TEST=1, otherwise paid-canary covers post-deploy)
         run: node scripts/test-search-kit.js
