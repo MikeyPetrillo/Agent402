@@ -8314,8 +8314,9 @@ if (!FREE_MODE) {
   // every settlement point reads before it moves money, and every payment
   // gate's captured res.end is this hook's wrapper, so when a gate ends a
   // response whose client already left, recordHangupOutcome sees it - the
-  // "finish"-based charged-failure path below never runs on a destroyed
-  // socket. A charge that was taken anyway (no ticket, a Tempo push
+  // charged-failure branches of the settlement tally below never run on a
+  // destroyed socket (the tally's settled branch does, through
+  // onSettleOutcome). A charge that was taken anyway (no ticket, a Tempo push
   // credential, or a close during the settle call itself) is booked as owed
   // in the refund ledger.
   // Arrival stamp for the per-phase timing of paid calls
@@ -9043,7 +9044,15 @@ app.use((req, res, next) => {
     // their public caching. `no-store` blocks all caches; `private` is
     // belt-and-suspenders against shared caches specifically.
     res.setHeader("Cache-Control", "no-store, private");
-    res.on("finish", () => {
+    // Runs once when the settlement is decided (src/hangup-settlement.js), not
+    // on "finish" alone: Node emits no "finish" for a response ended on a
+    // socket the buyer already closed, and a long run whose buyer timed out
+    // without a forgiveness ticket is settled anyway, so its sale, its
+    // payment_settled event and its served-call tally were lost while the
+    // charge went through. The outcome hook also reports a stream cut after
+    // its headers (settled before the first byte) and skips a charge the
+    // forgiveness budget cancelled (nothing settled).
+    onSettleOutcome(req, res, (outcome) => {
       // Attribute by what the gate actually ACCEPTED, not by header presence —
       // an invalid PoW header on a USDC-settled call must count as usdc.
       // Heartbeat probe attribution requires a POW_SECRET-signed X-Heartbeat-Token
@@ -9151,6 +9160,11 @@ app.use((req, res, next) => {
           // /revenue reports - see src/stripe-shadow-ledger.js.
           recordShadowSettlement({ slug: def.slug, priceUsd, rail, network, tx: settleTx, synthetic });
         });
+      } else if (outcome.via === "undelivered") {
+        // A non-200 ended on a socket the buyer closed before the first byte:
+        // the hang-up recorder (recordHangupOutcome, the hook's onUndelivered)
+        // has already booked whatever that response proves, so the incident
+        // branches below are not run a second time for it.
       } else if (settleReceipt) {
         // A non-200 carrying the settle-receipt header. The receipt's `success`
         // field decides which incident this is: the middleware attaches the

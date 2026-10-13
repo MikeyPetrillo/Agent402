@@ -20,6 +20,7 @@
 
 import { markUntrusted } from "./provenance.js";
 import { upstreamCosts } from "../upstream-costs.js";
+import { meterUpstreamSpend } from "../posthog.js";
 // The upstream bills per POST RETURNED, not per request, so the page size is
 // the real cost lever: a 100-post page at our per-call price would be sold far
 // below cost. Priced 2026-08-27 against X's published pay-per-use rate card
@@ -195,7 +196,11 @@ async function xGet(path, params = {}) {
   let data;
   try { data = await res.json(); } catch { throw bad("X API returned non-JSON", 502); }
   if (!data || typeof data !== "object") throw bad("X API returned an unexpected payload", 502);
-  _xSpendBook(actualXReadUsd(path, data) - estimate);
+  const actual = actualXReadUsd(path, data);
+  _xSpendBook(actual - estimate);
+  // The served read's cost, in the server-side spend meter beside the model
+  // tiers (/__operator/margin.json): X bills per item returned.
+  meterUpstreamSpend("x", actual);
   return data;
 }
 

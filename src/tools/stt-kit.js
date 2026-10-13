@@ -33,6 +33,7 @@ import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
 import { assertUpstreamBody } from "./llm-gateway-kit.js";
+import { capturePostHogGatewayUsage } from "../posthog.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
@@ -246,11 +247,26 @@ async function callScribe(audioBuffer, filename, model, language, probedDuration
   };
 }
 
-function transcribeBuffer(buf, filename, tierSlug, language, diarize, probedDuration) {
+/** Transcription bills per audio minute at the served model's private rate.
+ *  The minutes are the upstream's own duration when it reports one, else the
+ *  local probe that enforced the cap; recorded after every served call into
+ *  the same meter and margin event as the /v1 tiers. No rate row, no figure. */
+function recordSttSpend(tierSlug, out, probedDuration) {
+  try {
+    const seconds = Number.isFinite(out?.duration) ? out.duration : Number.isFinite(probedDuration) ? probedDuration : 0;
+    const rate = upstreamUsdPerMinute(out?.model);
+    const upstreamUsd = rate != null && seconds > 0 ? Math.round((seconds / 60) * rate * 1e6) / 1e6 : null;
+    capturePostHogGatewayUsage({ tier: tierSlug, model: out?.model, priceUsd: TIERS[tierSlug]?.priceUsd, upstreamUsd, source: "stt" });
+  } catch { /* telemetry must never fail a served response */ }
+}
+
+async function transcribeBuffer(buf, filename, tierSlug, language, diarize, probedDuration) {
   const tier = TIERS[tierSlug];
-  return diarize
+  const out = await (diarize
     ? callScribe(buf, filename, tier.diarizeModel, language, probedDuration)
-    : callOpenAI(buf, filename, tier.model, language, probedDuration);
+    : callOpenAI(buf, filename, tier.model, language, probedDuration));
+  recordSttSpend(tierSlug, out, probedDuration);
+  return out;
 }
 
 function makeHandler(tierSlug) {
