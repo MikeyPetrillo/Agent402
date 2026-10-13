@@ -1,4 +1,4 @@
-// agent402-llamaindex — drop-in LlamaIndex TS tools for Agent402.
+// agent402-llamaindex: drop-in LlamaIndex TS tools for Agent402.
 //
 // Turn the Agent402 catalog (500+ pay-per-call web tools) into LlamaIndex
 // `FunctionTool` instances any agent can invoke, with payment handled for you
@@ -25,7 +25,7 @@ const sanitizeName = (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 6
 /**
  * Fetch the Agent402 catalog and return:
  *   - `tools`:    FunctionTool[] ready to pass to a LlamaIndex agent
- *   - `execute`:  async (name, args) => result — pays under the hood
+ *   - `execute`:  async (name, args) => result, pays under the hood
  *   - `client`:   the underlying Agent402 client (use for find()/clearCache())
  */
 export async function agent402Tools({ baseUrl = DEFAULT_BASE, slugs, freeOnly = true, fetch: payFetch } = {}) {
@@ -86,7 +86,7 @@ async function loadLlamaIndex() {
   try {
     return await import("llamaindex");
   } catch {
-    throw new Error("agent402-llamaindex requires the 'llamaindex' package — install it with: npm install llamaindex");
+    throw new Error("agent402-llamaindex requires the 'llamaindex' package. Install it with: npm install llamaindex");
   }
 }
 

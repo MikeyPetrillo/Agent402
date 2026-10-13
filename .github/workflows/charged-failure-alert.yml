@@ -102,11 +102,11 @@ jobs:
           TITLE="Charged failure: a paid tool returned an error to a paying agent"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "${{ steps.check.outputs.status }}" = "alert" ]; then
-            BODY="One or more paid tools settled USDC on-chain and then returned an error to the paying agent since ${{ steps.check.outputs.cutoff }} — **they paid and got nothing.**
+            BODY="One or more paid tools settled USDC on-chain and then returned an error to the paying agent since ${{ steps.check.outputs.cutoff }}: **they paid and got nothing.**
 
           **Failing (slug(httpStatus)×count):** ${{ steps.check.outputs.detail }}
 
-          This is the earnings-calendar failure class — a broken paid tool — caught for ALL ~1,400 tools (not just the self-check's curated set), from data the server already records at \`/api/stats\` -> \`chargedFailures[]\`.
+          This is the earnings-calendar failure class (a broken paid tool), caught for ALL ~1,400 tools (not just the self-check's curated set), from data the server already records at \`/api/stats\` -> \`chargedFailures[]\`.
           Live: $PROD/api/stats · Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             if [ -n "$OPEN" ]; then
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still charging-and-failing at $(date -u +%FT%TZ): ${{ steps.check.outputs.detail }}"

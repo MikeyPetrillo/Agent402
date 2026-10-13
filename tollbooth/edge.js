@@ -1,4 +1,4 @@
-// Edge / runtime-agnostic tollbooth — the same pay-per-crawl gate, built on the
+// Edge / runtime-agnostic tollbooth, the same pay-per-crawl gate, built on the
 // Web Crypto + Fetch APIs so it runs anywhere: Cloudflare Workers, Next.js
 // middleware (edge), Deno, Bun, and Node 20+. No node:* imports.
 //
@@ -42,7 +42,7 @@ function constEq(a, b) {
  * Web Crypto proof-of-work. `secret` is required (edge runtimes can't keep a
  * random per-process secret across invocations). `store` is an optional
  * single-use replay backend: { claim(token, expMs) => bool|Promise<bool> } that
- * atomically returns true only the first time a token is seen — e.g. a Cloudflare
+ * atomically returns true only the first time a token is seen, e.g. a Cloudflare
  * KV wrapper; defaults to in-isolate memory.
  */
 export function createEdgePow({ secret, difficulty = 18, ttlMs = 5 * 60 * 1000, store } = {}) {
@@ -51,7 +51,7 @@ export function createEdgePow({ secret, difficulty = 18, ttlMs = 5 * 60 * 1000, 
   const MAX = 50_000; // bound memory: edge runtimes have no timer to sweep, so prune on write
   const used = store || {
     // Atomic single-use claim. The body is synchronous (no await), so two
-    // concurrent claims of the same token cannot both win within an isolate —
+    // concurrent claims of the same token cannot both win within an isolate,
     // closing the TOCTOU that a separate has()+add() would open.
     claim: (k, exp) => {
       const e = mem.get(k);
@@ -102,7 +102,7 @@ export function createEdgePow({ secret, difficulty = 18, ttlMs = 5 * 60 * 1000, 
     if (leadingZeroBits(h) < Number(diffStr)) return { ok: false, reason: "insufficient work" };
     // Atomically claim single-use only AFTER the work is validated, so an invalid
     // attempt never consumes the token and concurrent dupes can't both pass.
-    // F05: FAIL CLOSED — if the claim store is unavailable, deny rather than let
+    // F05: FAIL CLOSED, if the claim store is unavailable, deny rather than let
     // the exception propagate (or, worse, grant). Strict single-use needs an
     // atomic store (Durable Object); see worker.js durableObjectStore + the
     // wrangler template. A get-then-put KV store is best-effort only.
@@ -159,7 +159,7 @@ export function createEdgeTollbooth(config = {}) {
     // operators run the gate on a live site for a week before flipping on enforcement.
     observe = false,
     // Pluggable durable-stats sink. Default = in-memory (per-isolate, so on the
-    // edge it dies with the isolate — pass kvStatsSink(env.TOLLBOOTH_KV) for
+    // edge it dies with the isolate, pass kvStatsSink(env.TOLLBOOTH_KV) for
     // cross-isolate aggregation).
     statsSink,
     message = "This resource charges automated / AI clients per request. Humans browse free; bots pay in USDC via x402 or by solving a proof-of-work.",
@@ -181,7 +181,7 @@ export function createEdgeTollbooth(config = {}) {
   const mem = memorySink();
   const sink = statsSink || mem;
   const writeThrough = statsSink && statsSink !== mem;
-  // Stats must never break a request path — a buggy custom sink can throw
+  // Stats must never break a request path, a buggy custom sink can throw
   // synchronously; we shrug and continue.
   const incr = (k, n = 1) => {
     try { mem.incr(k, n); } catch { /* ignore */ }
@@ -189,7 +189,7 @@ export function createEdgeTollbooth(config = {}) {
   };
 
   // Heuristic only. A bot can trivially set `User-Agent: Mozilla/5.0 …` and
-  // `Accept: text/html` to pass — `strict` mode uses this as the lower bound
+  // `Accept: text/html` to pass, `strict` mode uses this as the lower bound
   // (charge anything that does NOT look like a browser), not as proof of
   // humanity. For hard guarantees use mode:"all" or `charge:` predicate.
   const looksHuman = (request) => {
@@ -212,7 +212,7 @@ export function createEdgeTollbooth(config = {}) {
     if (!shouldCharge(request)) { incr("freeAllowed"); return null; }
     if (observe) { incr("wouldCharge"); return null; }
     const u = new URL(request.url);
-    // F18: bind the canonical ORIGIN, not just path+query — otherwise a proof
+    // F18: bind the canonical ORIGIN, not just path+query, otherwise a proof
     // for /x transfers to any other site sharing the secret. On the edge the
     // request URL already carries the real origin; prefer an explicit
     // resourceBaseUrl when configured.
@@ -285,12 +285,12 @@ export function createEdgeTollbooth(config = {}) {
   }
 
   // Operator surface: in-process mirror (sync), durable snapshot (async),
-  // and an explicit flush() for edge runtimes — the Worker should call this
+  // and an explicit flush() for edge runtimes, the Worker should call this
   // inside ctx.waitUntil so buffered KV writes actually happen.
   gate.observe = observe;
   gate.stats = () => ({ ...mem.snapshot(), observe });
   gate.snapshot = async () => ({ ...(await sink.snapshot()), observe });
-  // flush() is typically wired to ctx.waitUntil — swallow errors so a sink
+  // flush() is typically wired to ctx.waitUntil, swallow errors so a sink
   // outage can't surface as an unhandled rejection after the response.
   gate.flush = async () => { try { if (sink.flush) await sink.flush(); } catch { /* ignore */ } };
   return gate;

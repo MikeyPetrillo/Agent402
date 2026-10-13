@@ -1,4 +1,4 @@
-// agent402-openai-tools — drop-in OpenAI function-calling tools for Agent402.
+// agent402-openai-tools: drop-in OpenAI function-calling tools for Agent402.
 //
 // Turn the Agent402 catalog (500+ pay-per-call web tools) into OpenAI tool
 // definitions the model can invoke, with payment handled for you under the
@@ -19,7 +19,7 @@
 //   // when the model returns a tool call:
 //   //   const out = await execute(call.function.name, JSON.parse(call.function.arguments));
 //
-// Works with chat.completions, the Assistants v2 API, and the Responses API —
+// Works with chat.completions, the Assistants v2 API, and the Responses API,
 // they all consume the same OpenAI function-calling JSON shape.
 
 import { Agent402 } from "agent402-client";
@@ -33,7 +33,7 @@ const sanitizeName = (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 6
 /**
  * Fetch the Agent402 catalog and return:
  *   - `tools`:    OpenAI function-calling tool definitions (array)
- *   - `execute`:  async (name, args) => result — pays under the hood
+ *   - `execute`:  async (name, args) => result, pays under the hood
  *   - `client`:   the underlying Agent402 client (use for find()/clearCache())
  *
  * @param {object} [opts]
@@ -121,7 +121,7 @@ export function agent402Execute({ baseUrl = DEFAULT_BASE, fetch: payFetch } = {}
 }
 
 function shortDesc(summary, description) {
-  // OpenAI tool descriptions should be concise — long descriptions hurt
+  // OpenAI tool descriptions should be concise, long descriptions hurt
   // tool-selection. Take the first sentence of the description.
   const d = (description || summary || "").split("\n\n")[0].trim();
   return d.length > 280 ? d.slice(0, 277) + "..." : d;

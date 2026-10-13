@@ -234,7 +234,7 @@ jobs:
           LOW=$(node -e "console.log($USD < $WARN_USD ? 1 : 0)")
           if [ "$LOW" = "1" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The paid canary's Base burner ($BURNER) is below its configured low-water mark (repo var CANARY_BURNER_LOW_USD). Top up before it runs dry — an empty burner now files as a funding issue rather than an outage, but a funded one is better."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The paid canary's Base burner ($BURNER) is below its configured low-water mark (repo var CANARY_BURNER_LOW_USD). Top up before it runs dry: an empty burner now files as a funding issue rather than an outage, but a funded one is better."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -402,7 +402,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD) — or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD), or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -1045,7 +1045,7 @@ jobs:
           TITLE="Solvador x402 registry is live (sellers detected)"
           ANY=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           [ -n "$ANY" ] && exit 0
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Solvador's discovery registry (https://api.solvador.com/discovery/resources) now reports $TOTAL resource(s) — it was empty when the watch was added (2026-07-21). Their facilitator uniquely covers Optimism, Unichain, World Chain, Linea, NEAR, and XRPL, so this registry is the discovery home for sellers on those chains. Action: add it to DISCOVERY_SOURCES in src/x402-index.js (same shape as the PayAI entry: paginate + synthesizeTools + strict) and consider the Tier 2 facilitator key (see the x402-chain-expansion-research memory)."
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Solvador's discovery registry (https://api.solvador.com/discovery/resources) now reports $TOTAL resource(s). It was empty when the watch was added. Their facilitator uniquely covers Optimism, Unichain, World Chain, Linea, NEAR, and XRPL, so this registry is the discovery home for sellers on those chains. Action: add it to DISCOVERY_SOURCES in src/x402-index.js (same shape as the PayAI entry: paginate + synthesizeTools + strict) and consider the Tier 2 facilitator key (see the x402-chain-expansion-research memory)."
 
       - name: Alert (open issue) or clear (close issue)
         run: |
@@ -1053,7 +1053,7 @@ jobs:
           if [ "${{ steps.probe.outputs.status }}" = "down" ]; then
             BODY="Heartbeat failed 3 consecutive probes (checks:${{ steps.probe.outputs.fails }}).
           Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
-          Railway dashboard: https://railway.app — check the agent402 service. Re-deploy with a [deploy] commit or the deploy workflow_dispatch."
+          Railway dashboard: https://railway.app (check the agent402 service). Re-deploy with a [deploy] commit or the deploy workflow_dispatch."
             if [ -n "$OPEN" ]; then
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still down at $(date -u +%FT%TZ).${{ steps.probe.outputs.fails }}"
             else

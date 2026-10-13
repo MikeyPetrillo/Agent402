@@ -1,15 +1,15 @@
-// agent402-openai-agents — turn Agent402 into OpenAI Agents SDK tools the
+// agent402-openai-agents: turn Agent402 into OpenAI Agents SDK tools the
 // agent can pick up directly. Four meta tools, all free to discover:
 //
-//   agent402_find    — local catalog resolver  (POST /api/find)
-//   agent402_route   — cross-seller x402 router  (POST /api/route)
-//   agent402_call    — call a tool by slug, auto-pays (PoW free / x402 paid)
-//   agent402_about   — service manifest  (GET /.well-known/x402)
+//   agent402_find:    local catalog resolver  (POST /api/find)
+//   agent402_route:   cross-seller x402 router  (POST /api/route)
+//   agent402_call:    call a tool by slug, auto-pays (PoW free / x402 paid)
+//   agent402_about:   service manifest  (GET /.well-known/x402)
 //
 // Why four and not "one tool per slug"? Frameworks balk at registering 500+
 // tools at once and the LLM can't reason over that many entries. Routing-as-
 // discovery means the LLM picks a task, the router picks the seller, and the
-// caller handles payment — exactly the wedge that makes Agent402 the default.
+// caller handles payment, exactly the wedge that makes Agent402 the default.
 //
 //   import { agent402Tools } from "agent402-openai-agents";
 //   import { Agent, run } from "@openai/agents";
@@ -51,7 +51,7 @@ function solvePow({ challenge, difficulty, token }) {
  * (or throws on HTTP error).
  */
 export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fetchImpl = globalThis.fetch } = {}) {
-  if (typeof fetchImpl !== "function") throw new Error("No fetch available — pass { fetchImpl } on Node < 18");
+  if (typeof fetchImpl !== "function") throw new Error("No fetch available: pass { fetchImpl } on Node < 18");
   const base = String(baseUrl).replace(/\/$/, "");
   const getJSON = async (path) => {
     const r = await fetchImpl(`${base}${path}`);
@@ -71,7 +71,7 @@ export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fet
     {
       name: "agent402_find",
       description:
-        "Resolve a plain-language task to the best Agent402 tool — returns slug, route, price, input schema, and a ready example so you skip the explore step. Local catalog only; for cross-seller use agent402_route.",
+        "Resolve a plain-language task to the best Agent402 tool: returns slug, route, price, input schema, and a ready example so you skip the explore step. Local catalog only; for cross-seller use agent402_route.",
       parametersJsonSchema: {
         type: "object",
         properties: {
@@ -85,7 +85,7 @@ export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fet
     {
       name: "agent402_route",
       description:
-        "Cross-seller x402 router: rank matching tools across every x402 seller (Agent402's catalog + other sellers auto-discovered from the Coinbase CDP Bazaar). Filters out unhealthy sellers, tiebreaks on health then price. include='external' excludes Agent402 itself — use as a neutral discovery API over the rest of the ecosystem.",
+        "Cross-seller x402 router: rank matching tools across every x402 seller (Agent402's catalog + other sellers auto-discovered from the Coinbase CDP Bazaar). Filters out unhealthy sellers, tiebreaks on health then price. include='external' excludes Agent402 itself. Use it as a neutral discovery API over the rest of the ecosystem.",
       parametersJsonSchema: {
         type: "object",
         properties: {
@@ -129,7 +129,7 @@ async function callTool({ base, slug, params, payFetch, fetchImpl }) {
   if (!pricingRes.ok) throw new Error(`could not load catalog: HTTP ${pricingRes.status}`);
   const pricing = await pricingRes.json();
   const entry = (pricing.endpoints || []).find((e) => e.slug === slug);
-  if (!entry) throw new Error(`unknown tool "${slug}" — use agent402_find or agent402_route to discover one`);
+  if (!entry) throw new Error(`unknown tool "${slug}": use agent402_find or agent402_route to discover one`);
 
   const idem = `a402oa-${createHash("sha256").update(`${slug}:${JSON.stringify(params)}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24)}`;
   const send = (extraHeaders = {}, useFetch = fetchImpl) => {
@@ -153,7 +153,7 @@ async function callTool({ base, slug, params, payFetch, fetchImpl }) {
       throw new Error(
         payFetch
           ? `call "${slug}" failed: HTTP ${r.status}`
-          : `call "${slug}" needs a wallet — construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch)`,
+          : `call "${slug}" needs a wallet: construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch)`,
       );
     }
     return r.json();
@@ -176,7 +176,7 @@ async function callTool({ base, slug, params, payFetch, fetchImpl }) {
  * Framework-native OpenAI Agents SDK tools. Dynamically imports `@openai/agents`
  * (a peer dependency) so the spec path works without it.
  *
- * Returns an array of tools — pass into `new Agent({ tools })`.
+ * Returns an array of tools, pass into `new Agent({ tools })`.
  */
 export async function agent402Tools(opts) {
   const { tool } = await import("@openai/agents");

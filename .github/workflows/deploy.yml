@@ -2564,6 +2564,8 @@ jobs:
           # CI lane gating (every test lane blocks deploy/publish; Chromium only where a script needs it — offline)
           t node scripts/test-ci-gating.js
           t node scripts/test-port-hygiene.js
+          # No em dash in a shipped package file or a workflow issue body (read from each package's files allowlist - offline)
+          t node scripts/test-no-em-dash-shipped.js
           # Dev-branch sync moves the branch only when merging it would change nothing on main (throwaway git repos - offline)
           t node scripts/test-sync-dev-branch.js
           # Free tier is an allowlist: a tool on no list is wallet-only by default (offline)
