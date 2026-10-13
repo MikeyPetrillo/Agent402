@@ -304,14 +304,11 @@ export async function probePublicUrl(rawUrl, { method = "GET", headers = {}, bod
 // just wastes the caller's time budget — fail fast. Capped at one extra
 // attempt by default so worst-case latency stays bounded.
 //
-// Originally lived in macro-kit.js (built for api.fiscaldata.treasury.gov's
-// ~4-7% transient 504 rate); moved here 2026-08-12 after the same shape of
-// failure — a legitimate-but-occasionally-slow public API losing the single
-// fixed-timeout safeFetch attempt — recurred across gov-kit.js and
-// weather-kit.js (different tool each time: weather-hourly, fec-candidates,
-// vehicle-recalls, feed-parse, all in one day) instead of staying macro-kit-
-// specific. macro-kit.js re-exports this so its own import path and tests
-// (test-macro-kit.js) are unaffected by the move.
+// Shared by every kit that reads a public API with an occasional slow or
+// 5xx answer (macro, gov and weather sources alike): one fixed-timeout
+// safeFetch attempt loses such a call, and the retry recovers it without a
+// kit-specific copy of the loop. macro-kit.js re-exports this so its own
+// import path and tests (test-macro-kit.js) are unchanged.
 export async function retryTransient(fn, { retries = 1, backoffMs = 300 } = {}) {
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {

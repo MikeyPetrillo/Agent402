@@ -1393,12 +1393,12 @@ export async function runLeaderboard(overrides = {}) {
 export const LEADERBOARD_HISTORY_FILE =
   process.env.LEADERBOARD_HISTORY_FILE || "/data/leaderboard-history.json";
 const HISTORY_MAX_DAYS = 35; // ~5 weeks — enough for WoW with slack
-const HISTORY_MAX_SELLERS = 300; // per point — bounds file size on /data
+const HISTORY_MAX_SELLERS = 300; // per point: bounds the size of the stored digest
 
 // Full-snapshot warm-start (origins included). The daily HISTORY digest above
 // keeps only wallets/totals, so it can't rebuild the origin→settled map the SOR
-// resolver joins on. This file persists the WHOLE latest snapshot to the same
-// /data volume so a fresh boot serves real reliability data immediately instead
+// resolver joins on. This module persists the WHOLE latest snapshot as a state
+// document so a fresh boot serves real reliability data immediately instead
 // of the empty "warming" placeholder — otherwise the resolver (and every
 // leaderboard consumer) reads ZERO settled sellers for the minutes the first
 // on-chain scan takes after each deploy, which silently kills SOR external
@@ -1412,7 +1412,7 @@ export const LEADERBOARD_SNAPSHOT_FILE =
 // file name so tests that pass their own paths keep their own stores.
 const docs = new Map();
 const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
-/** Best-effort persist of the full snapshot. No-op on a missing /data volume. */
+/** Best-effort persist of the full snapshot. No-op when the document store cannot be written. */
 function persistLeaderboardSnapshot(snapshot, file = LEADERBOARD_SNAPSHOT_FILE) {
   try {
     if (!snapshot || snapshot.scanSkipped || !Array.isArray(snapshot.leaderboard) || !snapshot.leaderboard.length) return false;
@@ -1495,7 +1495,7 @@ export function persistLeaderboardHistoryPoint(snapshot, file = LEADERBOARD_HIST
     if (docFor(file).backend === "pg") historyMemo.set(file, kept);
     return docFor(file).saveSync(kept);
   } catch {
-    return false; // no /data volume or disk error — skip silently
+    return false; // document store unwritable: skip silently
   }
 }
 
@@ -1539,7 +1539,7 @@ async function persistSellerFundingState(state, file = LEADERBOARD_FUNDING_FILE)
     // scan resumes from the row. A database error keeps it for the next try.
     if (r.conflict) { fundingStateCache = null; fundingStateVersion = null; }
     return false;
-  } catch { return false; } // no /data volume (local dev, CI): the next scan reads every payer's history again
+  } catch { return false; } // document store unwritable (local dev, CI): the next scan reads every payer's history again
 }
 /** Tests only: forget the cached funding state. */
 export function __resetSellerFundingStateForTest() { fundingStateCache = null; fundingStateVersion = null; }

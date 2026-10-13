@@ -275,11 +275,11 @@ jobs:
             FTITLE="Canary burner EMPTY (Base)"
             FOPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FTITLE\"" --json number --jq '.[0].number // empty')
             if [ -z "$FOPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$FTITLE" --body "The paid canary's Base burner is out of USDC — the run settled real purchases on the funded rails and every Base failure was a clean 402 with the live balance below the cheapest leg, so this is FUNDING, not an outage. Top up the burner (see the run log for the address), then dispatch paid-canary.yml; a green run closes this. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$FTITLE" --body "The paid canary's Base burner is out of USDC: the run settled real purchases on the funded rails and every Base failure was a clean 402 with the live balance below the cheapest leg, so this is FUNDING, not an outage. Top up the burner (see the run log for the address), then dispatch paid-canary.yml; a green run closes this. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
               gh issue comment "$FOPEN" --repo "$GITHUB_REPOSITORY" --body "Still empty at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
-            [ -n "$OPEN" ] && gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Reclassified: the failure is canary-wallet funding, not a broken paid path — settlement was proven in the same run. Tracking in the funding issue."
+            [ -n "$OPEN" ] && gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Reclassified: the failure is canary-wallet funding, not a broken paid path: settlement was proven in the same run. Tracking in the funding issue."
             exit 0
           fi
           # Partial rail failure: buying is proven; do NOT keep/open the
@@ -289,7 +289,7 @@ jobs:
             RTITLE="Paid canary rail FAILED"
             ROPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$RTITLE\"" --json number --jq '.[0].number // empty')
             RAIL_LIST="${RAILS:-see run log}"
-            RBODY="The daily paid canary settled real USDC tool purchases, but one or more chain rail legs failed ($RAIL_LIST). This is a per-rail payment proof failure, not a buying outage — /status records settlement as proven with the failed rail named.
+            RBODY="The daily paid canary settled real USDC tool purchases, but one or more chain rail legs failed ($RAIL_LIST). This is a per-rail payment proof failure, not a buying outage: /status records settlement as proven with the failed rail named.
 
           Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
           Check the named rail's burner balance/trustline and its facilitator; a fully green canary closes this."
@@ -298,7 +298,7 @@ jobs:
             else
               gh issue comment "$ROPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing ($RAIL_LIST) at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
-            [ -n "$OPEN" ] && gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Reclassified: tools settled this run — failure is rail-scoped ($RAIL_LIST), not a broken paid path. Tracking in the rail issue."
+            [ -n "$OPEN" ] && gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Reclassified: tools settled this run: failure is rail-scoped ($RAIL_LIST), not a broken paid path. Tracking in the rail issue."
             exit 1
           fi
           if [ "$RESULT" = "ok-low" ]; then
@@ -322,7 +322,7 @@ jobs:
             [ -n "$ROPEN" ] && gh issue close "$ROPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: all rail legs settled at $(date -u +%FT%TZ)."
           fi
           if [ "$RESULT" = "fail" ]; then
-            BODY="The daily paid-path canary could not complete a real USDC purchase from production — *buying may be broken* (paywall, facilitator, or settlement). The free/proof-of-work path is checked separately by the Heartbeat.
+            BODY="The daily paid-path canary could not complete a real USDC purchase from production: *buying may be broken* (paywall, facilitator, or settlement). The free/proof-of-work path is checked separately by the Heartbeat.
           Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
           If this is a funding issue, top up the test burner; otherwise check the x402 facilitator + the paywall on the Railway service."
             if [ -n "$OPEN" ]; then

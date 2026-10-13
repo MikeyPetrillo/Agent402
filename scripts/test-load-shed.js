@@ -112,4 +112,22 @@ try {
   ok(/const meter = \(ms\) => \{[^}]*discoveryCpuBudget\.record\(ms\)/.test(body), "each router slice is charged to the CPU budget as it runs");
 } finally { proc2.kill("SIGKILL"); }
 
+// --- the heartbeat leg that reads this endpoint ------------------------------
+// The issue it opens is public. The operator response carries counts (responses,
+// 5xx, paid calls, shed), and those belong in the run log and the operator view,
+// not in an issue body: the body carries the reason words only.
+{
+  const { readFileSync } = await import("node:fs");
+  const yml = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
+  const at = yml.indexOf("- name: Serving health check");
+  ok(at > 0, "heartbeat.yml has the serving health step");
+  const step = yml.slice(at, yml.indexOf("\n      - name:", at + 10));
+  const bodies = [...step.matchAll(/--(?:body|comment) "([^"]*)"/g)].map((m) => m[1]);
+  ok(bodies.length >= 3, `the step writes ${bodies.length} issue bodies (create, comment, close)`);
+  ok(bodies.every((b) => !/\$\{?SUMMARY/.test(b)), "no issue body quotes the figures line");
+  ok(bodies.some((b) => /\$\{?REASONS/.test(b)), "the issue body carries the reason words");
+  ok(/echo "serving health: \$STATUS \(\$SUMMARY\)"/.test(step), "the figures still reach the run log");
+  ok(/REASONS=.*\.reasons/.test(step) && !/REASONS=.*responses1h/.test(step), "the reasons variable reads the reason words and nothing counted");
+}
+
 console.log(`test-load-shed: ${n} passed`);

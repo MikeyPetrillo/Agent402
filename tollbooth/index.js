@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// agent402-tollbooth — an open-source, self-hostable x402 "pay-per-crawl" gate.
+// agent402-tollbooth: an open-source, self-hostable x402 "pay-per-crawl" gate.
 //
 // Put it in front of any site or API: human visitors pass through free, while
-// AI crawlers / agents must pay per request — either in USDC over the x402
+// AI crawlers / agents must pay per request, either in USDC over the x402
 // protocol, or for free by solving a proof-of-work (no wallet, no signup, no
 // Stripe, no Cloudflare). Use it two ways:
 //
@@ -11,7 +11,7 @@
 //
 // The proof-of-work rail works out of the box with zero configuration. To also
 // accept USDC, set `payTo` and supply `verifyX402` (wire it to the standard
-// x402 server middleware / your facilitator — see README).
+// x402 server middleware / your facilitator, see README).
 import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Readable } from "node:stream";
@@ -34,7 +34,7 @@ const VERIFY_TIMEOUT_MS = Number(process.env.TOLLBOOTH_VERIFY_TIMEOUT_MS) || 10_
 // P1.5 / FR4-10: a first-party `verifyX402` built from a standard @x402/express
 // payment middleware, that OWNS timeout + cancellation. The gate calls
 // verifyX402(req, opts) and puts an AbortSignal on `opts.signal` (aborted when
-// the gate's own verify timeout fires); this wrapper honors it — once the signal
+// the gate's own verify timeout fires); this wrapper honors it, once the signal
 // aborts (or its own optional backstop timeout fires) it settles the verify
 // promise immediately and reports NOT-verified, so a slow middleware can't leave
 // the gate hanging or produce a charged-then-denied result after the gate has
@@ -170,9 +170,9 @@ export function createTollbooth(config = {}) {
     replayStore,
     botUserAgents = AI_BOTS,
     // Who pays. Default "bots" = the original behavior (charge AI crawler UAs).
-    //  "all"    — charge every client except a `free()` match (UA detection is
+    //  "all":    charge every client except a `free()` match (UA detection is
     //             not a security boundary; this stops relying on it).
-    //  "strict" — charge anything that isn't a real-browser request (browser-like
+    //  "strict": charge anything that isn't a real-browser request (browser-like
     //             UA + an HTML Accept). Raises the bar on naive scrapers.
     // An explicit charge()/free() still wins over the mode.
     mode = process.env.TOLLBOOTH_MODE || "bots",
@@ -195,7 +195,7 @@ export function createTollbooth(config = {}) {
     resourceBaseUrl = process.env.TOLLBOOTH_RESOURCE_BASE || "",
     // Adaptive proof-of-work: raise difficulty as charged-request load climbs, so
     // high-volume abuse pays escalating CPU regardless of how it disguises itself.
-    // Off by default — behavior is unchanged unless explicitly enabled.
+    // Off by default, behavior is unchanged unless explicitly enabled.
     adaptive = config.adaptive ?? (process.env.TOLLBOOTH_ADAPTIVE === "true"),
     adaptivePerBit = Number(process.env.TOLLBOOTH_ADAPTIVE_PER_BIT) || 300, // +1 bit per N charged req/min
     maxDifficulty,
@@ -243,14 +243,14 @@ export function createTollbooth(config = {}) {
     return true;
   };
 
-  // Passive analytics — never affects request handling, just counts what happens.
+  // Passive analytics, never affects request handling, just counts what happens.
   // `mem` is an always-on in-process mirror so `.stats()` stays synchronous for
   // single-process Node deployments. A durable `statsSink` (KV/HTTP) is written
   // through alongside and is the source of truth for `.snapshot()`.
   const mem = memorySink();
   const sink = statsSink || mem;
   const writeThrough = statsSink && statsSink !== mem;
-  // Never let a buggy custom sink throw inside the request path — stats are
+  // Never let a buggy custom sink throw inside the request path, stats are
   // non-critical and must not be able to break a payment decision.
   const incr = (k, n = 1) => {
     try { mem.incr(k, n); } catch { /* ignore */ }
@@ -396,7 +396,7 @@ export function createTollbooth(config = {}) {
         // live 2026-08-20: a yParity-style v byte the node normalizes makes
         // the relay's post-broadcast hash check fail a payment that SETTLED;
         // the buyer retried into a double charge). Ask the chain whether this
-        // credential's own transaction landed before discarding the response —
+        // credential's own transaction landed before discarding the response,
         // exact txid derivation from the signed bytes, verification never a
         // re-broadcast, fails closed to the 402. See tempo.js.
         const check = tempoCfg.confirmSettlement || ((c) => confirmTempoSettlement(c, { rpcUrl: tempoCfg.confirmRpcUrl, fetchImpl: tempoCfg.fetch }));
@@ -602,7 +602,7 @@ export function createTollbooth(config = {}) {
   // .stats() is sync (in-process mirror). .snapshot() is async (durable sink).
   tollbooth.stats = () => ({ ...mem.snapshot(), difficultyNow: difficultyNow(), observe });
   tollbooth.snapshot = async () => ({ ...(await sink.snapshot()), difficultyNow: difficultyNow(), observe });
-  // Swallow flush errors — flush() is typically wired to ctx.waitUntil on the
+  // Swallow flush errors, flush() is typically wired to ctx.waitUntil on the
   // edge; an unhandled rejection there pollutes logs without affecting the
   // already-sent response.
   tollbooth.flush = async () => { try { if (sink.flush) await sink.flush(); } catch { /* ignore */ } };
@@ -617,7 +617,7 @@ export function createProxy(upstream, { maxBody = 10 * 1024 * 1024 } = {}) {
   return async (req, res) => {
     try {
       // Take ONLY the path+query from the (possibly hostile) target; the
-      // authority is always the operator's upstream — protocol-relative or
+      // authority is always the operator's upstream, protocol-relative or
       // absolute-form targets cannot redirect us to another host.
       const reqUrl = new URL(req.originalUrl || req.url || "/", base);
       const target = new URL(reqUrl.pathname + reqUrl.search, base);
@@ -769,7 +769,7 @@ async function startCli() {
   const port = rawPort !== "" && Number.isInteger(Number(rawPort)) && Number(rawPort) >= 0 ? Number(rawPort) : 4021;
   const _secret = process.env.TOLLBOOTH_SECRET;
   if (!_secret) {
-    console.warn("⚠ TOLLBOOTH_SECRET not set — proof-of-work tokens use a random per-process secret: they won't survive a restart and will be rejected across multiple workers/instances. Set a stable TOLLBOOTH_SECRET in production.");
+    console.warn("⚠ TOLLBOOTH_SECRET not set: proof-of-work tokens use a random per-process secret: they won't survive a restart and will be rejected across multiple workers/instances. Set a stable TOLLBOOTH_SECRET in production.");
   } else if (/^change-me/i.test(_secret) || _secret === "change-me-to-a-long-random-string") {
     // FATAL, not a warning. The placeholder is published in our own deploy
     // template, so anyone can read it, mint a token with difficulty 0 and walk
@@ -834,18 +834,18 @@ async function startCli() {
   const app = express();
   const x402mw = await buildCliX402Middleware();
   const gate = createTollbooth({ resourceBaseUrl: process.env.TOLLBOOTH_RESOURCE_BASE || upstream || "", replayStore, ...(x402mw ? { x402: x402mw } : {}) });
-  // Operator analytics — aggregate counts only (no per-request data), mounted
+  // Operator analytics, aggregate counts only (no per-request data), mounted
   // before the gate so they're always reachable and never themselves charged.
   // Two opt-in admin tokens (legacy `TOLLBOOTH_STATS_TOKEN` covers /stats only;
   // `TOLLBOOTH_ADMIN_TOKEN` covers both the HTML dashboard AND /stats). If
-  // neither is set the surfaces remain public (aggregate counts only — current
+  // neither is set the surfaces remain public (aggregate counts only, current
   // behavior) so existing deploys don't break. Comparison is timing-safe.
   const { dashboardHtml } = await import("./dashboard.js");
   const { timingSafeEqual } = await import("node:crypto");
   const ADMIN_TOKEN = process.env.TOLLBOOTH_ADMIN_TOKEN || "";
   const STATS_TOKEN = process.env.TOLLBOOTH_STATS_TOKEN || "";
   if (!ADMIN_TOKEN) {
-    console.warn("⚠ TOLLBOOTH_ADMIN_TOKEN not set — the /__tollbooth analytics dashboard is publicly reachable (aggregate counts only, no per-request/payer data). Set TOLLBOOTH_ADMIN_TOKEN to require a token.");
+    console.warn("⚠ TOLLBOOTH_ADMIN_TOKEN not set: the /__tollbooth analytics dashboard is publicly reachable (aggregate counts only, no per-request/payer data). Set TOLLBOOTH_ADMIN_TOKEN to require a token.");
   }
   const presented = (req) => {
     const auth = req.headers["authorization"];
@@ -855,7 +855,7 @@ async function startCli() {
     return "";
   };
   // tokenMatch returns true only on a real, timing-safe equal match. An empty
-  // `expected` is treated as "no rule configured", NOT as a wildcard — callers
+  // `expected` is treated as "no rule configured", NOT as a wildcard, callers
   // upstream decide whether to invoke this check at all.
   const tokenMatch = (expected, got) => {
     if (!expected || typeof got !== "string" || got.length !== expected.length) return false;
@@ -894,7 +894,7 @@ async function startCli() {
     const rails = [gate.pow ? "proof-of-work" : "", paidLabel].filter(Boolean).join(" + ");
     // The BOUND port, so PORT=0 (let the OS pick) prints something a caller can use.
     const bound = server.address()?.port ?? port;
-    console.log(`agent402-tollbooth listening on :${bound} — charging AI bots via ${rails || "proof-of-work"}`);
+    console.log(`agent402-tollbooth listening on :${bound}, charging AI bots via ${rails || "proof-of-work"}`);
     if (upstream) console.log(`  proxying → ${upstream}`);
   });
   // Evidence for a process that leaves without being told to. Four times

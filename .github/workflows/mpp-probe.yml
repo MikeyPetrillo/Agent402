@@ -74,7 +74,7 @@ jobs:
           TAIL=$(grep -E '^(mpp-probe:|OK |FAIL |REFUSING)' /tmp/mpp-probe.log 2>/dev/null | tail -n 8 || true)
           if [ "$CODE" != "0" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$(printf 'The 30-minute MPP probe (scripts/mpp-probe.js: up to 4 x $0.001 pure-CPU buys over tempo/charge from the canary burner) failed (exit %s). Exit 1 = a route failed after one retry (no 200, no Payment-Receipt, a wrong or empty answer, or over the latency bound); exit 2 = refused to start (burner under its floor on Tempo, balance unreadable, no tempo challenge on the live 402, or a missing secret).\n\n```\n%s\n```\n\nRun: %s/%s/actions/runs/%s\nThe next passing run closes this.' "$CODE" "$TAIL" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$(printf 'The 30-minute MPP probe (scripts/mpp-probe.js: up to 4 pure-CPU buys at list price over tempo/charge from the canary burner) failed (exit %s). Exit 1 = a route failed after one retry (no 200, no Payment-Receipt, a wrong or empty answer, or over the latency bound); exit 2 = refused to start (burner under its floor on Tempo, balance unreadable, no tempo challenge on the live 402, or a missing secret).\n\n```\n%s\n```\n\nRun: %s/%s/actions/runs/%s\nThe next passing run closes this.' "$CODE" "$TAIL" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "$(printf 'Still failing at %s (exit %s)\n\n```\n%s\n```' "$(date -u +%FT%TZ)" "$CODE" "$TAIL")"
             fi

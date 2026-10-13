@@ -21,8 +21,8 @@
 //     floor a redeploy restores); a malformed entry is dropped WHOLE and
 //     logged, never applied in part;
 //   - the runtime lever: POST /__operator/shared-paytos {action, wallet, note},
-//     persisted to a file on the /data volume (tmp + rename), applied from the
-//     next evidence read, no redeploy. An env-listed wallet cannot be removed
+//     persisted as a state document (the state database, or a local file
+//     without one), applied from the next evidence read, no redeploy. An env-listed wallet cannot be removed
 //     at runtime: the environment is the operator's standing decision.
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady } from "./state-db.js";

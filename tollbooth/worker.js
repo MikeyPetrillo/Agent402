@@ -1,4 +1,4 @@
-// Cloudflare Worker entry for the tollbooth — open-source pay-per-crawl on the
+// Cloudflare Worker entry for the tollbooth, open-source pay-per-crawl on the
 // edge. Deploy in front of your origin: humans pass through, AI crawlers pay
 // (USDC via x402, or free proof-of-work).
 //
@@ -16,7 +16,7 @@
 import { createEdgeTollbooth, kvStatsSink } from "./edge.js";
 import { dashboardHtml } from "./dashboard.js";
 
-// Constant-time string compare — Cloudflare Workers don't ship node:crypto's
+// Constant-time string compare, Cloudflare Workers don't ship node:crypto's
 // timingSafeEqual. Short-circuiting `===` on a secret token leaks length and
 // prefix bits to a sufficiently patient attacker; this doesn't.
 function constEq(a, b) {
@@ -29,7 +29,7 @@ function constEq(a, b) {
 
 const kvStore = (kv) => ({
   // Best-effort claim. KV has no native compare-and-set, so this is get-then-put
-  // (eventually consistent) — concurrent dupes across isolates/locations can
+  // (eventually consistent), concurrent dupes across isolates/locations can
   // both observe "unseen" and both pass. For STRICT single-use use the Durable
   // Object store below. Returns true only the first time a token is seen.
   claim: async (k, expMs) => {
@@ -40,7 +40,7 @@ const kvStore = (kv) => ({
 });
 
 // F05: strict single-use replay claim via a Durable Object. A DO instance is
-// single-threaded — every request addressed to one DO id is serialized — so the
+// single-threaded: every request addressed to one DO id is serialized, so the
 // get-then-put INSIDE it is ATOMIC across all isolates and locations (KV is
 // eventually consistent and has no compare-and-set). Each token is routed to its
 // own DO id, so claims only ever contend on the exact token they concern.
@@ -52,7 +52,7 @@ export class TollboothReplay {
     const already = await this.state.storage.get("claimed");
     if (already != null) return Response.json({ granted: false });
     await this.state.storage.put("claimed", 1);
-    // Auto-expire the DO storage at the token's expiry — the token is worthless
+    // Auto-expire the DO storage at the token's expiry, the token is worthless
     // after that, so the claim record can be dropped and storage stays bounded.
     if (expMs > Date.now()) { try { await this.state.storage.setAlarm(expMs); } catch { /* */ } }
     return Response.json({ granted: true });
@@ -82,7 +82,7 @@ export default {
     // FR4-04: FAIL CLOSED in enforcing mode without an ATOMIC replay store. A
     // Durable Object (TOLLBOOTH_REPLAY) gives strict single-use across isolates
     // and locations. KV is eventually consistent (get-then-put, NOT atomic), so
-    // concurrent duplicate PoW solutions can both pass — a warning does not
+    // concurrent duplicate PoW solutions can both pass, a warning does not
     // protect a production deployment. Refuse to enforce on a non-atomic (or
     // absent) store unless the operator sets an explicit, loud insecure override.
     const allowNonAtomic = env.TOLLBOOTH_ALLOW_NON_ATOMIC_REPLAY === "true";
@@ -97,12 +97,12 @@ export default {
       replayStore = durableObjectStore(env.TOLLBOOTH_REPLAY);
     } else if (env.TOLLBOOTH_KV) {
       replayStore = kvStore(env.TOLLBOOTH_KV);
-      if (enforcing) console.warn("agent402-tollbooth: ENFORCING on eventually-consistent KV via explicit TOLLBOOTH_ALLOW_NON_ATOMIC_REPLAY override (get-then-put is NOT atomic — concurrent duplicate solutions across isolates/locations can both pass). Bind a Durable Object as TOLLBOOTH_REPLAY for strict single-use.");
+      if (enforcing) console.warn("agent402-tollbooth: ENFORCING on eventually-consistent KV via explicit TOLLBOOTH_ALLOW_NON_ATOMIC_REPLAY override (get-then-put is NOT atomic: concurrent duplicate solutions across isolates/locations can both pass). Bind a Durable Object as TOLLBOOTH_REPLAY for strict single-use.");
     } else if (enforcing) {
-      console.warn("agent402-tollbooth: ENFORCING with NO replay store via explicit TOLLBOOTH_ALLOW_NON_ATOMIC_REPLAY override — proof-of-work replay protection is per-isolate only. Bind a Durable Object for production.");
+      console.warn("agent402-tollbooth: ENFORCING with NO replay store via explicit TOLLBOOTH_ALLOW_NON_ATOMIC_REPLAY override: proof-of-work replay protection is per-isolate only. Bind a Durable Object for production.");
     }
     // Durable stats live in KV if a namespace is bound. Without it, the dashboard
-    // is per-isolate (dies on cold start) — fine for dev, useless for prod.
+    // is per-isolate (dies on cold start), fine for dev, useless for prod.
     const statsSink = env.TOLLBOOTH_KV
       ? kvStatsSink(env.TOLLBOOTH_KV, { bucket: env.TOLLBOOTH_STATS_BUCKET || "default" })
       : undefined;
@@ -119,14 +119,14 @@ export default {
     });
 
     // Free, never-gated operator endpoints. Mounted BEFORE the gate so they
-    // can't be paywalled — and so the dashboard polls work even when the rest
+    // can't be paywalled, and so the dashboard polls work even when the rest
     // of the origin is fully gated.
     const u = new URL(request.url);
     if (u.pathname === "/__tollbooth" || u.pathname === "/__tollbooth/") {
       return new Response(dashboardHtml(), { headers: { "content-type": "text/html; charset=utf-8" } });
     }
     if (u.pathname === "/__tollbooth/stats") {
-      // Optional bearer-token gate — share with your monitoring caller. We
+      // Optional bearer-token gate, share with your monitoring caller. We
       // recommend setting this in any prod deploy: without it, anyone on the
       // internet can read aggregate counts (no per-request data, but still
       // potentially sensitive competitive info).
@@ -139,7 +139,7 @@ export default {
     }
 
     const blocked = await gate(request);
-    // Flush any buffered stats to KV after we've replied — survives the response.
+    // Flush any buffered stats to KV after we've replied, survives the response.
     if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(gate.flush());
     if (blocked) return blocked;
 

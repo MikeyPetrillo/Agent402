@@ -45,8 +45,8 @@
 //    reading would re-post everything inside the window.
 //  - Only the production server posts. A FREE_MODE boot, a process without
 //    NODE_ENV=production (TWEET_QUEUE_FORCE=true overrides that one check)
-//    and a process with no /data volume (and no TWEET_QUEUE_STATE_FILE) stay
-//    read-only and start no timer. A local boot that copies the production
+//    and a process with no durable queue state (no state database and no
+//    TWEET_QUEUE_STATE_FILE) stay read-only and start no timer. A local boot that copies the production
 //    variables must never become a second poster: its record of what was
 //    posted would be empty, and X's duplicate refusal would be all that stood
 //    between it and a second copy of every post.
@@ -108,9 +108,9 @@ const CONNECT_CODES = new Set(["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "UND_ER
 export const hourOf = (ms) => new Date(ms).toISOString().slice(0, 13);
 
 /**
- * The state file on the production volume, or null when there is no /data.
- * Deliberately no /tmp fallback: a process off the volume would start with an
- * empty record of what production already posted.
+ * The queue's state file on the production deployment's durable disk, or null
+ * without one. Deliberately no /tmp fallback: a process without the record
+ * would start with an empty view of what production already posted.
  */
 export function defaultStatePath(dataDirExists = () => existsSync("/data")) {
   return dataDirExists() ? join("/data", "tweet-queue-state.json") : null;

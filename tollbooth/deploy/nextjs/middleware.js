@@ -7,14 +7,14 @@
 // runs in Vercel's Edge runtime with no Node dependencies.
 //
 // OBSERVE-ONLY: set TOLLBOOTH_OBSERVE="true" to *measure* bot traffic for a
-// week without ever returning 402 — every request still gets classified and
+// week without ever returning 402, every request still gets classified and
 // counted, but they all pass through. Flip the env var back to undefined to
 // start enforcing. The dashboard counters (wouldCharge) show what would have
 // been charged.
 //
 // DURABLE STATS on Vercel: edge middleware runs across cold-starting isolates
 // so in-memory counters are useless across instances. To survive that, point
-// `statsSink` at a shared store — e.g. httpStatsSink(VERCEL_KV_REST_URL, ...)
+// `statsSink` at a shared store, e.g. httpStatsSink(VERCEL_KV_REST_URL, ...)
 // or a tiny route handler that proxies to Vercel KV / Upstash. See
 // app/__tollbooth/stats/route.js below.
 import { NextResponse } from "next/server";
@@ -22,9 +22,9 @@ import { createEdgeTollbooth, httpStatsSink } from "agent402-tollbooth/edge";
 
 // A stable secret is REQUIRED at the edge (PoW tokens are HMAC-signed and must
 // verify across stateless invocations). Set TOLLBOOTH_SECRET in your Vercel
-// project env (Settings → Environment Variables) — any long random string.
+// project env (Settings → Environment Variables): any long random string.
 // If it's missing we fail OPEN (let everyone through) rather than 500 the whole
-// site — including your human visitors. The warning makes the misconfig loud.
+// site, including your human visitors. The warning makes the misconfig loud.
 const statsSink = process.env.TOLLBOOTH_STATS_URL
   ? httpStatsSink(process.env.TOLLBOOTH_STATS_URL, { token: process.env.TOLLBOOTH_STATS_TOKEN })
   : undefined; // falls back to per-isolate in-memory (fine for dev)
@@ -71,7 +71,7 @@ export const config = {
 
 // ---- companion route handler (drop into app/__tollbooth/stats/route.js) ----
 //
-//   // app/__tollbooth/stats/route.js — JSON stats for the dashboard.
+//   // app/__tollbooth/stats/route.js: JSON stats for the dashboard.
 //   // Uses Vercel KV (or Upstash) as the shared counter; see sinks.js for the
 //   // delta-log format. This route is the *snapshot* side; the middleware is
 //   // the *writer* side via httpStatsSink → TOLLBOOTH_STATS_URL pointing here.
@@ -82,7 +82,7 @@ export const config = {
 //
 //   // Whitelist of known counters. The POST body is attacker-controlled (anyone
 //   // who knows the URL + token can call it), so NEVER interpolate the raw
-//   // field name into the KV key — that'd let a misbehaving caller pollute
+//   // field name into the KV key, that'd let a misbehaving caller pollute
 //   // the namespace with arbitrary keys (e.g. "../" or "rm -rf"). Also clamp
 //   // deltas to non-negative integers so they can't be used to zero out
 //   // a real counter or write floats.

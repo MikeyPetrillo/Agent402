@@ -1,4 +1,4 @@
-// agent402-strands — drop-in Strands Agents (TypeScript) tools for Agent402.
+// agent402-strands: drop-in Strands Agents (TypeScript) tools for Agent402.
 //
 // Turn the Agent402 catalog (500+ pay-per-call web tools) into Strands
 // `tool({...})` instances the agent can invoke, with payment handled for you
@@ -13,7 +13,7 @@
 //   const out = await agent.invoke("Hash 'hello world' with sha256");
 //
 // Built for AWS Bedrock AgentCore: Strands is the framework AgentCore Payments
-// surfaces as its preferred SDK, and AgentCore Payments orchestrates x402 —
+// surfaces as its preferred SDK, and AgentCore Payments orchestrates x402,
 // which is exactly what Agent402 speaks. The two halves snap together with
 // zero glue beyond this adapter.
 
@@ -21,13 +21,13 @@ import { Agent402 } from "agent402-client";
 
 const DEFAULT_BASE = "https://agent402.tools";
 
-// Strands tool names — function-name shape, conservative.
+// Strands tool names, function-name shape, conservative.
 const sanitizeName = (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 
 /**
  * Fetch the Agent402 catalog and return:
  *   - `tools`:    Strands Tool[] ready to pass to `new Agent({ tools })`
- *   - `execute`:  async (name, args) => result — pays under the hood
+ *   - `execute`:  async (name, args) => result, pays under the hood
  *   - `client`:   the underlying Agent402 client (use for find()/clearCache())
  *
  * @param {object} [opts]
@@ -77,7 +77,7 @@ export async function agent402Tools({ baseUrl = DEFAULT_BASE, slugs, freeOnly = 
   }
 
   // Strands `tool({...})` accepts a Zod schema directly. Convert from the
-  // simple JSON Schema shapes Agent402 emits — keeps users off needing their
+  // simple JSON Schema shapes Agent402 emits, keeps users off needing their
   // own conversion step. Strands callbacks can return any JSON-serializable
   // value directly, so no string-wrapping step is needed here.
   const tools = meta.map((m) => strands.tool({
@@ -94,7 +94,7 @@ async function loadStrands() {
   try {
     return await import("@strands-agents/sdk");
   } catch {
-    throw new Error("agent402-strands requires '@strands-agents/sdk' — install it with: npm install @strands-agents/sdk");
+    throw new Error("agent402-strands requires '@strands-agents/sdk'. Install it with: npm install @strands-agents/sdk");
   }
 }
 
@@ -102,7 +102,7 @@ async function loadZod() {
   try {
     return await import("zod");
   } catch {
-    throw new Error("agent402-strands requires 'zod' — install it with: npm install zod");
+    throw new Error("agent402-strands requires 'zod'. Install it with: npm install zod");
   }
 }
 
@@ -147,7 +147,7 @@ function jsonSchemaToZod(schema, z) {
     shape[key] = s;
   }
   // passthrough() lets extra fields the model invents pass through to the
-  // tool — Agent402 ignores unknowns anyway, and over-strict schemas confuse
+  // tool: Agent402 ignores unknowns anyway, and over-strict schemas confuse
   // agents.
   return z.object(shape).passthrough();
 }

@@ -1,12 +1,12 @@
 """agent402-langchain - turn Agent402 into LangChain tools a Python agent can
 pick up directly.
 
-Four meta-tools, all free to discover — the same design as the JS adapter:
+Four meta-tools, all free to discover (the same design as the JS adapter):
 
-    agent402_find    — resolve a plain-language task to the best tool  (/api/find)
-    agent402_route   — cross-seller x402 router                       (/api/route)
-    agent402_call    — call a tool by slug, auto-pays (PoW free / x402 paid)
-    agent402_about   — service manifest                     (/.well-known/x402)
+    agent402_find:    resolve a plain-language task to the best tool  (/api/find)
+    agent402_route:   cross-seller x402 router                       (/api/route)
+    agent402_call:    call a tool by slug, auto-pays (PoW free / x402 paid)
+    agent402_about:   service manifest                     (/.well-known/x402)
 
 Why four and not one-tool-per-slug? Frameworks balk at registering 500+ tools
 at once and an LLM can't reason over that many. The agent picks a task, `find`/
@@ -17,7 +17,7 @@ at once and an LLM can't reason over that many. The agent picks a task, `find`/
     tools = toolkit.get_tools()          # free tier (proof-of-work), no wallet
 
 Pure-CPU tools settle for free via built-in proof-of-work. Wallet-only tools
-(live data, egress) need payment: pass `x402_fetch=<callable>` — a function with
+(live data, egress) need payment: pass `x402_fetch=<callable>`: a function with
 the `requests`-style signature `(method, url, **kwargs) -> requests.Response`
 that signs the x402 payment (e.g. wrapping a funded wallet). Without it, calling
 a wallet-only tool raises a clear error naming what's needed. This mirrors the
@@ -92,7 +92,7 @@ class _Client:
         pricing = self._get("/api/pricing")
         entry = next((e for e in pricing.get("endpoints", []) if e.get("slug") == slug), None)
         if not entry:
-            raise ValueError(f'unknown tool "{slug}" — use agent402_find or agent402_route to discover one')
+            raise ValueError(f'unknown tool "{slug}": use agent402_find or agent402_route to discover one')
 
         method, path = entry["method"], entry["path"]
         idem = "a402lcpy-" + hashlib.sha256(
@@ -130,7 +130,7 @@ class _Client:
             return r.json()
 
         # Compute-payable tool: try unpaywalled (FREE_MODE) first, then pay with
-        # server-issued proof-of-work — no wallet required.
+        # server-issued proof-of-work, no wallet required.
         r = send()
         if not r.ok:
             chal = self._get("/api/pow/challenge", {"slug": slug})
@@ -149,7 +149,7 @@ def agent402_tool_specs(base_url: str = DEFAULT_BASE, x402_fetch: Optional[Calla
     return [
         {
             "name": "agent402_find",
-            "description": "Resolve a plain-language task to the best Agent402 tool — returns slug, route, price, input schema, and a ready example. Local catalog only; for cross-seller use agent402_route.",
+            "description": "Resolve a plain-language task to the best Agent402 tool: returns slug, route, price, input schema, and a ready example. Local catalog only; for cross-seller use agent402_route.",
             "schema": {"type": "object", "properties": {
                 "task": {"type": "string", "description": 'What you want to do, e.g. "extract the article from this URL"'},
                 "limit": {"type": "number", "description": "Max results (default 5)"},

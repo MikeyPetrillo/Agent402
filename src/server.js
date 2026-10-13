@@ -317,7 +317,7 @@ import { integrationPage } from "./integration-pages.js";
 import { learnPage, learnIndex } from "./learn.js";
 import { skillMd } from "./skill-md.js";
 import { createMcpMppLoopback } from "./mcp-mpp.js";
-import { serviceManifest, reliabilityReport } from "./discovery.js";
+import { serviceManifest, reliabilityReport, settlementFacilitatorsPublic } from "./discovery.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
 import { meteredSkip } from "./metered-slugs.js";
 import { runSelfCheck, createSelfCheckRoute } from "./selfcheck.js";
@@ -2485,9 +2485,9 @@ app.get("/__operator/followups.json", (req, res) => {
 // Off unless the Railway variable TWEET_QUEUE is set; TWEET_QUEUE_POSTING=off
 // keeps it read-only (the operator read below still previews the next item).
 // Only the production server posts: a FREE_MODE boot, a process without
-// NODE_ENV=production and a process with no /data volume stay read-only, so a
-// local boot that copies the production variables never becomes a second
-// poster. It replaces .github/workflows/tweet-queue.yml, which is disabled at
+// NODE_ENV=production and a process with no durable queue state (no state
+// database and no state file) stay read-only, so a local boot that copies the
+// production variables never becomes a second poster. It replaces .github/workflows/tweet-queue.yml, which is disabled at
 // cutover so exactly one poster runs. `draining` is read at tick time.
 const _tweetQueue = createTweetQueue({ ...tweetQueueOptionsFromEnv(process.env), isDraining: () => draining });
 _tweetQueue.start();
@@ -3050,13 +3050,13 @@ app.get("/health", (req, res) => {
     leadsDb: leadsDbReady,
     operatorToken: Boolean(OPERATOR_TOKEN),
     posthog: posthogEnabled(),
-    // True when the stats SQLite DB is on the /data volume (counters + the
-    // recentCalls ring buffer survive restarts). False = silent fallback to
-    // /tmp, which wipes the activity feed on every container restart and
-    // makes traffic look thinner than it is. CI auto-attaches /data, but
-    // surfacing this here means a misconfigured deploy can't hide.
+    // True when the stats store is durable (counters + the recentCalls ring
+    // buffer survive restarts). False = a temporary local file, which wipes
+    // the activity feed on every container restart and makes traffic look
+    // thinner than it is; surfacing it here means a misconfigured deploy
+    // cannot hide.
     statsPersistent,
-    // True when the memory tools' SQLite DB is on /data. Memory is the worst
+    // True when the memory tools' store is durable. Memory is the worst
     // case for a silent fallback because agents PAY USDC per write — the
     // value of that storage is its durability. Boot fails loud in prod if
     // /data is missing, but this flag lets an operator verify externally
@@ -3124,8 +3124,11 @@ app.get("/v1/models", (_req, res) => {
 // for the OpenRouter leg ("bucketed status, numbers never exposed") and the
 // spend counters added later did not honour it.
 function publicBucket(o) {
+  // Words and flags only. A `note` or `reason` is written for the operator
+  // (it names the upstream, the variable to set and the figure it measures),
+  // so neither leaves the operator view.
   if (!o || typeof o !== "object") return o;
-  const KEEP = new Set(["status", "configured", "day", "asset", "chain", "attests", "trend", "sinceRestart", "note", "reason", "unknownForMinutes"]);
+  const KEEP = new Set(["status", "configured", "day", "asset", "chain", "attests", "trend", "sinceRestart", "unknownForMinutes"]);
   const out = {};
   for (const [k, v] of Object.entries(o)) if (KEEP.has(k)) out[k] = v;
   return out;
@@ -3150,12 +3153,11 @@ function publicLoopLag(l) {
   return { watching: l.watching };
 }
 function publicBudgets(b) {
-  // Per-vendor: the WORD only. Never callsToday, never the budget - publishing
-  // seven exact daily ceilings is a map of where to push.
+  // One word for the whole group. The per-upstream rows name the upstreams and
+  // carry their daily ceilings, which together are a map of where to push, so
+  // they stay on the operator view.
   if (!b || typeof b !== "object") return b;
-  const upstreams = {};
-  for (const [k, v] of Object.entries(b.upstreams || {})) upstreams[k] = { status: v?.status ?? "unknown" };
-  return { day: b.day, status: b.status, sinceRestart: b.sinceRestart, note: b.note, upstreams };
+  return { status: b.status };
 }
 
 app.get("/api/gateway-status", async (req, res) => {
@@ -5599,10 +5601,10 @@ function getPerformance24h() {
 // query stalls, we serve the static manifest instead of blocking the call.
 const serveManifest = (_req, res) => {
   const perf = getPerformance24h();
-  // Who settles each rail (first-tried facilitator per network, labels only),
-  // from the boot /supported probe; absent until the probe has run.
-  const facilitators = facilitatorsByNetworkPublic();
-  const settlement = Object.keys(facilitators).length ? { settlementFacilitators: { note: "the facilitator tried first per network, read from its live /supported at boot; a chain's other candidates are fallbacks", byNetwork: facilitators } } : {};
+  // Which networks have a settlement facilitator (role words only, from the
+  // boot /supported probe); absent until the probe has run. The
+  // settlementFacilitators block never carries a facilitator label.
+  const settlement = settlementFacilitatorsPublic(facilitatorsByNetworkPublic());
   if (perf) res.json({ ...MANIFEST, ...settlement, performance24h: perf });
   else res.json({ ...MANIFEST, ...settlement });
 };
@@ -10049,8 +10051,9 @@ if (process.env.LAZY_DEPS_WARM !== "off") {
 // Skipped in FREE_MODE/CI boots where no wallet is configured.
 if (WALLET_ADDRESS) revenueSnapshot(revenueWallets()).catch(() => { /* warm-up only */ });
 
-// All-time revenue ledger sync loop — self-gates on /data (prod volume) or
-// REVENUE_LEDGER=true, so test/CI boots never touch public RPCs.
+// All-time revenue ledger sync loop: self-gates on durable storage (the
+// production deployment) or REVENUE_LEDGER=true, so test/CI boots never touch
+// public RPCs.
 startRevenueLedger(revenueWallets());
 
 // DATABASE_URL Postgres: each boot drops the retired tollbooth_leads table if

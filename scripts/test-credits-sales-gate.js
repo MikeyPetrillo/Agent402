@@ -31,6 +31,29 @@ const boot = (env) => new Promise(async (resolve) => {
   resolve(false);
 });
 
+// --- the copy that cannot read the switch ----------------------------------
+// The README and the published packages are static text: they cannot ask
+// creditsSalesEnabled(), so they may describe an issued key and must not offer
+// credits for sale or point a reader at the credits page to get one.
+{
+  const { packageDirs, shippedFiles, ROOT } = await import("./lib/shipped-files.js");
+  const { join, relative } = await import("node:path");
+  const OFFERS = [
+    [/^#+ (?!.*(?:already issued|not on sale)).*prepaid credits/im, "a heading that sells credits"],
+    [/credits keys?: https?:\/\/\S*\/credits/i, "a pointer to the credits page to obtain a key"],
+    [/\bbuy (prepaid )?credits\b/i, "an invitation to buy credits"],
+    [/\btop up (your )?credits\b/i, "an invitation to top up credits"],
+    [/\bcredits? packs?\b/i, "a credit pack on offer"],
+  ];
+  const files = [join(ROOT, "README.md"), ...packageDirs().flatMap(shippedFiles)].filter((f) => /\.(md|js|ts|py|json)$/.test(f));
+  ok(files.length >= 30, `credits copy: ${files.length} static surfaces read (README + shipped package files)`);
+  const scan = (text) => OFFERS.filter(([re]) => re.test(text)).map(([, why]) => why);
+  ok(scan("## For humans: reports, monitors and prepaid credits\n(credits keys: https://agent402.tools/credits)").length === 2, "control: the retired heading and key pointer are both reported");
+  ok(scan("## Prepaid credits (keys already issued)\n\nPrepaid credits: not on sale. A key already issued keeps working.").length === 0, "control: describing an issued key is not an offer");
+  const hits = files.flatMap((f) => scan(readFileSync(f, "utf8")).map((why) => `${relative(ROOT, f)}: ${why}`));
+  ok(hits.length === 0, `no static surface offers credits for sale${hits.length ? `:\n    ${hits.join("\n    ")}` : ""}`);
+}
+
 try {
   // --- default: a host that sets nothing is in the SAFE state, not the exposed one
   ok(await boot({}), "server booted with CREDITS_SALES unset");

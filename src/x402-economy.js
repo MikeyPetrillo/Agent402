@@ -27,8 +27,8 @@ import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady,
 import { retryingLoad } from "./store-retry.js";
 
 // Persistent daily history — the live query only reaches back 30 days, so
-// every snapshot upserts its daily rows into SQLite (same /data-volume
-// pattern as stats/revenue-ledger). History compounds forever; the weekly
+// every snapshot upserts its daily rows into the economy table (the state
+// database, or the local SQLite file without one). History compounds forever; the weekly
 // report reads trailing complete weeks from here, not from the query window.
 //
 // The open is GUARDED: since the /index fold this module loads at boot, so a

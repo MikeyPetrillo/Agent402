@@ -244,7 +244,7 @@ export const callAction = {
       const msg = errorText(e);
       const code = e?.name === "SpendingLimitError" || /exceeds maxPerCallUsd|dailyLimitUsd|maxPerHostUsd/.test(msg) ? "spend_limit"
         : /wallet-only|402|refused by credits/.test(msg) ? "payment_required" : "upstream_error";
-      const hint = code === "payment_required" ? " Set AGENT402_CREDITS_KEY (https://agent402.tools/credits) or AGENT402_WALLET_KEY to pay for this tool." : "";
+      const hint = code === "payment_required" ? " Set AGENT402_WALLET_KEY (or AGENT402_CREDITS_KEY for a credits key already issued) to pay for this tool." : "";
       return reply(callback, failure(code, `Agent402 \`${slug}\` failed: ${msg}${hint}`, { slug, params, resolvedVia: via }));
     }
     const data = out && typeof out === "object" ? out : { result: out };
@@ -312,7 +312,7 @@ export const agent402Plugin = {
   init: async (config, runtime) => {
     const hasKey = Boolean(setting(runtime, "AGENT402_CREDITS_KEY") || config?.AGENT402_CREDITS_KEY);
     const hasWallet = /^0x[0-9a-fA-F]{64}$/.test(setting(runtime, "AGENT402_WALLET_KEY") || config?.AGENT402_WALLET_KEY || "");
-    if (!hasKey && !hasWallet) console.warn("[agent402] no AGENT402_CREDITS_KEY or AGENT402_WALLET_KEY: free-tier tools only (credits keys: https://agent402.tools/credits)");
+    if (!hasKey && !hasWallet) console.warn("[agent402] no AGENT402_CREDITS_KEY or AGENT402_WALLET_KEY: free-tier tools only (set a wallet key to pay per call; a credits key already issued still works)");
   },
 };
 

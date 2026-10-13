@@ -2,8 +2,9 @@
 // since the beginning?" answered from on-chain ground truth, persistently.
 //
 // The live /revenue view reads a few recent hours per refresh; this module
-// owns the rest of history: a SQLite table (on the /data volume, same
-// pattern as stats.js) of every inbound stablecoin transfer to the revenue
+// owns the rest of history: a ledger table in the state database (with a
+// Redis journal for rows written while it is unreachable; a local SQLite
+// file without one) of every inbound stablecoin transfer to the revenue
 // wallet on every rail, each row classified with the scanners' shared rule
 // (external = not our burner + per-call-sized). A background loop backfills
 // from the wallet's first funding (LEDGER_EPOCH) in polite chunked

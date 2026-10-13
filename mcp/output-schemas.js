@@ -2,7 +2,7 @@
 // (stdio package cannot import src/ when published). Keep in sync manually
 // when flagship names or output schemas change.
 
-// Flagship MCP surface — the small default tools/list agents see first.
+// Flagship MCP surface, the small default tools/list agents see first.
 //
 // Product intent: Agent402 is a tools and models layer for agents -
 // deterministic utilities, a metered model gateway, finished reports. Default
@@ -26,7 +26,7 @@ export const FLAGSHIP_SLUGS = [
   "memory-write",
 ];
 
-// Smithery Naming grades DOT notation (domain.action tree), not snake_case —
+// Smithery Naming grades DOT notation (domain.action tree), not snake_case,
 // stuck-at-98 lesson: "Tool names should form a navigable tree using
 // dot-notation (e.g. admin.tools.list)". CallTool still accepts prior snake /
 // digit names via MCP_CALL_ALIASES.
@@ -43,7 +43,7 @@ export const FLAGSHIP_MCP_NAMES = {
   "decide-execute": "decide.execute",
 };
 
-/** Meta tools listed alongside flagships — dotted canonical names. */
+/** Meta tools listed alongside flagships, dotted canonical names. */
 export const META_MCP_NAMES = {
   search_tools: "catalog.search",
   find_tool: "catalog.find",
@@ -92,7 +92,7 @@ export function resolveListedName(name) {
   return name;
 }
 
-/** Open-world / egress tools — honest annotations for directory clients. */
+/** Open-world / egress tools, honest annotations for directory clients. */
 export const FLAGSHIP_OPEN_WORLD = new Set([
   "search", "answer", "search-news", "render", "stock-quote", "transcribe", "decide",
 ]);
@@ -108,7 +108,7 @@ export const MCP_SERVER_DESCRIPTION =
 export const MCP_SERVER_WEBSITE = "https://agent402.tools";
 
 // ---------------------------------------------------------------------------
-// outputSchema (JSON Schema) for every listed tool — Smithery Capability
+// outputSchema (JSON Schema) for every listed tool, Smithery Capability
 // Quality grades presence of named-field schemas; bare {type:"object"} does
 // not count. Keep in sync with CallTool structuredContent shapes in mcp-http.js
 // and the duplicated copy in mcp/output-schemas.js (stdio package).
@@ -225,7 +225,7 @@ export const META_OUTPUT_SCHEMAS = {
     },
     additionalProperties: true,
   },
-  // Smithery Naming wants pure [a-z_]+ verb_noun — no digits / brand tokens
+  // Smithery Naming wants pure [a-z_]+ verb_noun, no digits / brand tokens
   // (describe_agent402 / list_x402_sellers failed the scan). Old names stay
   // CallTool aliases.
   "server.describe": {
@@ -502,7 +502,7 @@ export function mcpInstallHints(baseUrl) {
 }
 
 /**
- * MCP initialize.instructions — orientation for clients that never call
+ * MCP initialize.instructions, orientation for clients that never call
  * server.describe. Keep tool names listed-only (dotted Smithery form) (self-consistency) and lead
  * with search/answer as the front door.
  */

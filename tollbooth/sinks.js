@@ -1,17 +1,17 @@
-// Pluggable stats sinks for the tollbooth — turn the in-memory counter into
+// Pluggable stats sinks for the tollbooth, turn the in-memory counter into
 // something that survives restart and aggregates across processes / isolates.
 //
 // A sink is just:
 //   {
 //     incr(field, n=1)   // fire-and-forget; sync from the gate's perspective
-//     flush()            // optional — run at end of request via ctx.waitUntil
+//     flush()            // optional, run at end of request via ctx.waitUntil
 //     snapshot()         // returns the aggregated counts as { field: number, ... }
 //   }
 //
 // Shipped sinks:
-//   memorySink()                       — default, in-process, zero config.
-//   kvStatsSink(kv, opts)              — Cloudflare KV (append-only, eventually consistent).
-//   httpStatsSink(url, opts)           — POST batched deltas to any collector.
+//   memorySink():                       default, in-process, zero config.
+//   kvStatsSink(kv, opts), Cloudflare KV (append-only, eventually consistent).
+//   httpStatsSink(url, opts), POST batched deltas to any collector.
 //
 // Want strong consistency on Cloudflare? Back it with a Durable Object that
 // implements the same { incr, snapshot } interface and pass it as `statsSink`.
@@ -22,7 +22,7 @@ const ZERO = () => Object.fromEntries(KNOWN_FIELDS.map((k) => [k, 0]));
 // Filter an untrusted JSON blob (KV value or HTTP collector response) to only
 // the known numeric counters. Prevents a compromised store from injecting
 // arbitrary keys or non-numeric values that downstream renderers (e.g.
-// dashboard.js) might treat as HTML. Defense in depth — the dashboard also
+// dashboard.js) might treat as HTML. Defense in depth, the dashboard also
 // coerces, but trim at the boundary.
 const sanitize = (obj) => {
   const out = ZERO();
@@ -56,7 +56,7 @@ export function memorySink() {
  *    delta becomes a KV write. Without that, deltas stay in isolate memory
  *    and die with the isolate.
  *  - KV has no atomic increment, so we never RMW a shared counter. Each
- *    flush writes a brand-new key (unique id + ts) — concurrent isolates
+ *    flush writes a brand-new key (unique id + ts), concurrent isolates
  *    can't lose each other's deltas. Snapshot sums every key under the prefix.
  *  - Tradeoff: snapshot reads list+get every key, which is fine for low traffic
  *    (deltas batched per request) but expensive for very high traffic. For
@@ -105,7 +105,7 @@ export function kvStatsSink(kv, { bucket = "default", ttlSeconds = 60 * 60 * 24 
 
 /**
  * HTTP-backed sink. Batched POSTs of `{ incr: { field: n, ... }, ts }`.
- * GET on the same URL returns the aggregated snapshot — wire that up on your
+ * GET on the same URL returns the aggregated snapshot, wire that up on your
  * collector (a tiny Vercel route hander, an Express app, anything).
  *
  *   incr(): buffers locally and schedules a flush via setTimeout (Node) or
@@ -163,7 +163,7 @@ export function httpStatsSink(url, { token, batchMs = 2000, fetchImpl, allowInse
           signal: AbortSignal.timeout(5000),
         });
         if (!r.ok) return ZERO();
-        // Sanitize at the trust boundary — a compromised or misconfigured
+        // Sanitize at the trust boundary, a compromised or misconfigured
         // collector cannot inject non-numeric values or extra keys that the
         // dashboard would render as HTML.
         return sanitize(await r.json());

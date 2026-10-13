@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Agent402 MCP server — exposes the agent402.tools catalog (1000+ pay-per-call
+// Agent402 MCP server, exposes the agent402.tools catalog (1000+ pay-per-call
 // web tools) to any MCP client (Claude, ChatGPT, custom agents) and settles
 // payment underneath, so the model never sees the 402 dance:
 //
@@ -13,15 +13,15 @@
 //
 // Config (env):
 //   AGENT402_URL          target service (default https://agent402.tools)
-//   AGENT_KEY             hex private key of a funded EVM wallet (USDC on Base/Polygon/Arbitrum) — optional
-//   SOLANA_AGENT_KEY      base58 (or JSON byte-array) secret key of a funded Solana wallet (USDC on Solana) — optional
+//   AGENT_KEY             hex private key of a funded EVM wallet (USDC on Base/Polygon/Arbitrum), optional
+//   SOLANA_AGENT_KEY      base58 (or JSON byte-array) secret key of a funded Solana wallet (USDC on Solana), optional
 //   AGENT402_TOOLS        comma-separated slugs to expose first-class (overrides default)
 //   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (e.g. 0.01)
 //   AGENT402_CREDITS_KEY  a prepaid credits key (a402_...) already issued (new credits are not on
 //                         sale); pays per successful call with no wallet
 //   AGENT402_BUDGET       hard cap on total USDC spent this session (e.g. 1.00)
 //   AGENT402_NETWORKS     restrict + order the chains to pay on (e.g. "robinhood" for USDG on
-//                         Robinhood Chain, "base,solana", or a raw CAIP-2 like eip155:4663) — optional
+//                         Robinhood Chain, "base,solana", or a raw CAIP-2 like eip155:4663), optional
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parseNetworkPrefs, withNetworkPreference } from "./networks.js";
@@ -58,12 +58,12 @@ const HAS_WALLET = Boolean(AGENT_KEY || SOLANA_AGENT_KEY);
 // list price only on a successful (200) call and returns X-Credits-Balance.
 const CREDITS_KEY = (process.env.AGENT402_CREDITS_KEY || "").trim();
 const HAS_CREDITS = /^a402_[A-Za-z0-9_-]{32,64}$/.test(CREDITS_KEY);
-// Version comes from package.json — the serverInfo self-report drifted from
+// Version comes from package.json, the serverInfo self-report drifted from
 // the published version once (0.11.5 vs 0.12.1) because this was a hardcoded
 // string bumped by hand. Reading the manifest makes drift impossible.
 const VERSION = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 
-// Spend controls — enforced BEFORE a payment is ever signed, so a confused or
+// Spend controls, enforced BEFORE a payment is ever signed, so a confused or
 // runaway model cannot drain the wallet. Unset = unlimited (back-compat).
 const num = (v) => (v !== undefined && v !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
 const MAX_PER_CALL = num(process.env.AGENT402_MAX_PER_CALL) ?? Infinity;
@@ -71,7 +71,7 @@ const BUDGET = num(process.env.AGENT402_BUDGET) ?? Infinity;
 let spentUsd = 0;
 
 const DEFAULT_CURATED = [
-  // Flagship demand set — keep aligned with src/mcp-flagship.js FLAGSHIP_SLUGS.
+  // Flagship demand set, keep aligned with src/mcp-flagship.js FLAGSHIP_SLUGS.
   // Search/answer is the front door; long tail stays behind catalog.search/catalog.call.
   "search", "answer", "search-news", "render",
   "stock-quote", "transcribe", "memory-read", "memory-write",
@@ -79,13 +79,13 @@ const DEFAULT_CURATED = [
   "decide", "decide-execute",
 ];
 
-// stdout is the MCP protocol channel — all logging goes to stderr.
+// stdout is the MCP protocol channel, all logging goes to stderr.
 const log = (...a) => console.error("[agent402-mcp]", ...a);
 
 // ---------------------------------------------------------------------------
 // Catalog: built from the service's own machine-readable surfaces.
 const catalog = new Map(); // slug -> { slug, method, path, price, description, category, computePayable, inputSchema }
-// Skill packs — curated multi-tool workflows, fetched at startup from the
+// Skill packs, curated multi-tool workflows, fetched at startup from the
 // hosted service so the npm package picks up new packs without a republish.
 // Empty if the discovery fetch fails (older services or transient errors);
 // prompts/list will just return an empty array in that case.
@@ -162,7 +162,7 @@ function getPayFetch() {
   return payFetchPromise;
 }
 
-// @solana/kit KeyPairSigner from SOLANA_AGENT_KEY — base58 64-byte secret key
+// @solana/kit KeyPairSigner from SOLANA_AGENT_KEY, base58 64-byte secret key
 // (Phantom / solana-keygen export) or a JSON byte array ([12,34,…]).
 let solanaSignerPromise;
 function solanaSigner() {
@@ -197,7 +197,7 @@ function walletRequiredText(tool) {
     `"${tool.slug}" costs ${tool.price}/call and requires a USDC wallet (it is not eligible for the proof-of-work tier).`,
     `To enable it: set AGENT_KEY on this MCP server to the hex private key of an EVM wallet funded with USDC`,
     `on Base (or Polygon/Arbitrum), and/or SOLANA_AGENT_KEY to the base58 secret key of a Solana wallet funded`,
-    `with USDC on Solana. Payment is per call via the x402 protocol — no signup or API key.`,
+    `with USDC on Solana. Payment is per call via the x402 protocol: no signup or API key.`,
     `Already hold a prepaid credits key? Set AGENT402_CREDITS_KEY to the a402_ key and it pays per successful call (new credits are not on sale).`,
     `Pricing and details: ${BASE}/tools/${tool.slug}`,
   ].join(" ");
@@ -340,10 +340,10 @@ async function callEndpoint(tool, args = {}) {
     const payFetch = await getPayFetch();
     res = await payFetch(url, init);
     // Count spend when the server confirms settlement (payment receipt header),
-    // falling back to any 2xx — conservative in the buyer's favor.
+    // falling back to any 2xx, conservative in the buyer's favor.
     if (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok) spentUsd += price;
   } else if (tool.computePayable) {
-    // No wallet: pay with compute up front — solving before the call skips the
+    // No wallet: pay with compute up front, solving before the call skips the
     // 402 round-trip entirely (challenges are single-use and tool-scoped).
     const challenge = await (await fetch(`${BASE}/api/pow/challenge?slug=${encodeURIComponent(tool.slug)}`)).json();
     const nonce = solvePow(challenge);
@@ -382,7 +382,7 @@ function applyFrontDoorTerms(terms, q) {
   if (!terms.includes("websearch") && (
     /\b(search\s+the\s+web|web\s+search|search\s+online|google\s+|bing\s+|look\s+up\s+online|find\s+on\s+the\s+web)\b/.test(ql)
   )) {
-    // pricing descriptions carry "web search" / "Live web search" — boost those.
+    // pricing descriptions carry "web search" / "Live web search", boost those.
     terms.push("web", "search");
   }
   if (!terms.includes("answer") && (
@@ -427,8 +427,8 @@ function searchTools(query, limit = 10) {
 
 // Rank the curated multi-tool skill packs against the same query, so a single
 // search_tools call also tells the agent "this looks like a `security-audit`
-// or `email-deliverability` job — fetch the whole template via prompts/get".
-// Weighted slug/title/tagline/useCase/toolSlugs match — same shape as the
+// or `email-deliverability` job, fetch the whole template via prompts/get".
+// Weighted slug/title/tagline/useCase/toolSlugs match, same shape as the
 // hosted /api/find ranking, kept inline here so the stdio package stays
 // dependency-free. Returns [] when no pack scores above the noise floor.
 function rankWorkflows(query, k = 2) {
@@ -482,7 +482,7 @@ const server = new Server(
   { capabilities: { tools: {}, prompts: {} }, instructions: INIT_INSTRUCTIONS },
 );
 
-// Skill packs are exposed as MCP prompts — discoverable in slash menus on any
+// Skill packs are exposed as MCP prompts, discoverable in slash menus on any
 // MCP-aware client. The list is fetched once at boot in loadCatalog(); the
 // per-prompt rendering is delegated to the hosted service so the npm package
 // stays thin and prompt text stays canonical with the website at /skills.
@@ -816,7 +816,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const include = args.include === "all" ? "all" : "external";
       // /api/leaderboard is free + unpaywalled, so this stays free regardless
       // of payment mode. Honor its query params verbatim so the surface is a
-      // thin pass-through — single source of truth for ranking + filtering.
+      // thin pass-through, single source of truth for ranking + filtering.
       const url = new URL(`${BASE}/api/leaderboard`);
       url.searchParams.set("top", String(limit));
       url.searchParams.set("sort", sort);
@@ -826,7 +826,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return { content: [{ type: "text", text: `Failed to fetch leaderboard from ${BASE}: HTTP ${res.status}` }], isError: true };
       }
       const snap = await res.json();
-      // Trim to the same compact row shape the hosted MCP connector returns —
+      // Trim to the same compact row shape the hosted MCP connector returns,
       // cross-surface agents see one mental model. Full row (origins,
       // endpoints, scan metadata) stays accessible at /api/leaderboard.
       // Same untrusted-content marking as the hosted connector: a seller's
@@ -851,7 +851,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         include: snap.include || include,
         totalSellers: snap.totalSellers ?? (snap.leaderboard || []).length,
         results: rows,
-        ...(snap.warming || snap.scanSkipped ? { note: "Cache is warming — results may be partial. Retry in ~60s." } : {}),
+        ...(snap.warming || snap.scanSkipped ? { note: "Cache is warming: results may be partial. Retry in ~60s." } : {}),
         source: `${BASE}/api/leaderboard`,
       });
     }
@@ -867,13 +867,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         : maxUsd > 0.005 ? "route-execute-plus"
         : "route-execute";
       const tool = catalog.get(slug);
-      if (!tool) return { content: [{ type: "text", text: `External routing (${slug}) is not in the catalog from ${BASE} yet — it may be rolling out. Retry shortly.` }], isError: true };
+      if (!tool) return { content: [{ type: "text", text: `External routing (${slug}) is not in the catalog from ${BASE} yet. It may be rolling out; retry shortly.` }], isError: true };
       // Body matches the route-execute input schema; include:"external" is what
       // pays an OUTSIDE seller (vs this host's catalog). Paid via callEndpoint.
       return await callEndpoint(tool, { task, include: "external", maxUsd, ...(args.params && typeof args.params === "object" ? { params: args.params } : {}) });
     }
     // Curated tools are exposed verb_noun for tools/list consistency, but the
-    // real slug is kebab — accept exposed name, plain snake, or raw slug.
+    // real slug is kebab, accept exposed name, plain snake, or raw slug.
     const mcpToSlug = new Map(Object.entries(FLAGSHIP_MCP_NAMES).map(([slug, mcp]) => [mcp, slug]));
     const wanted = name === "catalog.call"
       ? String(args.slug ?? "")
@@ -903,11 +903,11 @@ try {
   pricingInfo = await loadCatalog();
 } catch (err) {
   // Don't hard-exit: starting with an empty catalog still lets the server
-  // connect and answer introspection (tools/list) — required to pass directory
+  // connect and answer introspection (tools/list), required to pass directory
   // health checks (e.g. Glama) and more resilient if the catalog endpoint is
   // briefly unreachable. catalog.search/catalog.call just return nothing until the
   // catalog is reachable again.
-  log(`Could not load the catalog from ${BASE}: ${err.message} — starting with an empty catalog`);
+  log(`Could not load the catalog from ${BASE}: ${err.message}: starting with an empty catalog`);
 }
 const requested = (process.env.AGENT402_TOOLS || DEFAULT_CURATED.join(","))
   .split(",").map((s) => s.trim()).filter(Boolean);

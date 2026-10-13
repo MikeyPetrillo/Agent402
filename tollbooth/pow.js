@@ -1,5 +1,5 @@
 // Self-contained proof-of-work for the tollbooth: a no-wallet payment rail.
-// A client without USDC proves it spent real CPU instead — the same scheme
+// A client without USDC proves it spent real CPU instead, the same scheme
 // Agent402 uses, packaged standalone so the tollbooth has zero crypto deps.
 //
 // Tokens are HMAC-signed by this process (stateless to issue), bound to the

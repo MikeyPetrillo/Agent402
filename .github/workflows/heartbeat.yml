@@ -234,7 +234,7 @@ jobs:
           LOW=$(node -e "console.log($USD < $WARN_USD ? 1 : 0)")
           if [ "$LOW" = "1" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The paid canary's Base burner ($BURNER) is below its configured low-water mark (repo var CANARY_BURNER_LOW_USD). Top up before it runs dry — an empty burner now files as a funding issue rather than an outage, but a funded one is better."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The paid canary's Base burner ($BURNER) is below its configured low-water mark (repo var CANARY_BURNER_LOW_USD). Top up before it runs dry: an empty burner now files as a funding issue rather than an outage, but a funded one is better."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -280,7 +280,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if awk -v c="$CREDITS" -v t="$THRESH" 'BEGIN { exit !(c >= t) }'; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Weighted PayAI credits spent on Avalanche + Sei settlements since $CUT reached the warn threshold (repo var PAYAI_QUOTA_WARN). Past the allowance PayAI bills prepaid credits when PAYAI_API_KEY_ID/SECRET are set (top up at merchant.payai.network) and refuses settlement when they are not. Fallback hops onto PayAI are not counted here - this is a lower bound."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Weighted PayAI credits spent on Avalanche + Sei settlements since $CUT reached the warn threshold (repo var PAYAI_QUOTA_WARN). Past the allowance the facilitator bills its prepaid credits when PAYAI_API_KEY_ID/SECRET are set (top up in its merchant console) and refuses settlement when they are not. Fallback hops onto PayAI are not counted here - this is a lower bound."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still high at $(date -u +%FT%TZ)."
             fi
@@ -352,21 +352,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Counts OUR outbound calls per paid vendor against a daily budget.
+          # Counts OUR outbound calls per paid upstream against a daily budget.
           # Not a balance - most of these publish none. Catches a step change
-          # (a loop, a leak, a sweep that started buying) before the bill or
-          # the quota does. Brave backs our best-selling tool and Alchemy is
-          # pay-as-you-go, so both directions are covered: revenue at risk and
-          # cost with no revenue.
+          # (a loop, a sweep that started buying) before the bill or the quota
+          # does, in both directions: a quota that lapses refuses a product,
+          # and a pay-as-you-go host bills without earning.
           BODY=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
           STATUS=$(echo "$BODY" | jq -r '.upstreamBudgets.status // "unknown"' 2>/dev/null || echo unknown)
-          OVER=$(echo "$BODY" | jq -r '[.upstreamBudgets.upstreams // {} | to_entries[] | select(.value.status=="elevated") | "\(.key) \(.value.callsToday)/\(.value.budget)"] | join(", ")' 2>/dev/null || echo "")
           TITLE="Upstream call budget ELEVATED"
           EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number --jq '.[0].number' 2>/dev/null || echo "")
           if [ "$STATUS" = "elevated" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.upstreamBudgets\` reports **elevated**: ${OVER:-see the endpoint}. These are OUR outbound call counts against a daily budget, not a vendor balance. Check whether a loop, a new sweep or real demand is behind it, then either fix the cause or raise the budget env var for that vendor. The counter is daily and resets on deploy, so the real figure is at or above what is shown."
+                --body "\`/api/gateway-status.upstreamBudgets\` reports **elevated**: at least one upstream's daily call budget is reached. These are our outbound call counts against a daily budget, not a vendor balance; the per-upstream rows are on the operator view of the same endpoint. Check whether a loop, a new sweep or real demand is behind it, then either fix the cause or raise that upstream's budget variable. The counter is daily and resets on deploy, so the real figure is at or above what the operator view shows."
             fi
           elif [ -n "$EXISTING" ] && [ "$STATUS" = "ok" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "upstreamBudgets is ok; closing." || true
@@ -388,7 +386,7 @@ jobs:
           if [ "$STATUS" = "low" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.exaAllowance\` reports **low**: cumulative Exa spend has passed the configured share of \`EXA_CREDITS_USD\`. Top up at https://exa.ai and raise \`EXA_CREDITS_USD\` on Railway to the new funded total. Note the counter is in memory and resets on deploy, so real remaining credit is at or below what is reported."
+                --body "\`/api/gateway-status.exaAllowance\` reports **low**: cumulative spend on that upstream has passed the configured share of its funded total. Top up in the upstream's console and raise \`EXA_CREDITS_USD\` on Railway to the new funded total. Note the counter is in memory and resets on deploy, so real remaining credit is at or below what is reported."
             fi
           elif [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "exaAllowance is ${STATUS}; closing." || true
@@ -404,7 +402,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD) — or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD), or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -814,18 +812,20 @@ jobs:
           J=$(read1); S1=$(echo "$J" | jq -r '.status // "unknown"' 2>/dev/null || echo unknown)
           if [ "$S1" = "degraded" ]; then sleep 30; J=$(read1); fi
           STATUS=$(echo "$J" | jq -r '.status // "unknown"' 2>/dev/null || echo unknown)
+          # The run log keeps the figures; the issue (public) carries the reason words only.
           SUMMARY=$(echo "$J" | jq -r '"reasons=\(.reasons|join(",")) loopP99=\(.loop.p99LastMinuteMs)ms stalls1h=\(.loop.stalls1h) maxStall=\(.loop.maxStall1hMs)ms responses1h=\(.responses1h.total) 5xx=\(.responses1h.s5xx) paid=\(.responses1h.paid) paid5xx=\(.responses1h.paid5xx) shed=\(.shed.shed)"' 2>/dev/null || echo "unreadable")
+          REASONS=$(echo "$J" | jq -r '(.reasons // []) | join(", ")' 2>/dev/null || echo "unreadable")
           echo "serving health: $STATUS ($SUMMARY)"
           TITLE="Serving health DEGRADED"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "degraded" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/__operator/serving-health.json reported degraded on two readings 30 s apart: $SUMMARY. Thresholds are in the response. Check [loop-stats], [loop-lag] and [stall-profile] lines in the Railway log. Auto-closes when it reads ok." >/dev/null 2>&1 || echo "issue create failed"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/__operator/serving-health.json reported degraded on two readings 30 s apart (reasons: ${REASONS:-none given}). The figures and thresholds are in the operator response and this run's log. Check [loop-stats], [loop-lag] and [stall-profile] lines in the Railway log. Auto-closes when it reads ok." >/dev/null 2>&1 || echo "issue create failed"
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ): $SUMMARY" >/dev/null 2>&1 || true
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ) (reasons: ${REASONS:-none given})." >/dev/null 2>&1 || true
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $(date -u +%FT%TZ): $SUMMARY" >/dev/null 2>&1 || true
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
           fi
 
       # Postgres reachability (DATABASE_URL, reported as `leads`, + analytics). Both databases were DOWN from
@@ -1045,7 +1045,7 @@ jobs:
           TITLE="Solvador x402 registry is live (sellers detected)"
           ANY=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           [ -n "$ANY" ] && exit 0
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Solvador's discovery registry (https://api.solvador.com/discovery/resources) now reports $TOTAL resource(s) — it was empty when the watch was added (2026-07-21). Their facilitator uniquely covers Optimism, Unichain, World Chain, Linea, NEAR, and XRPL, so this registry is the discovery home for sellers on those chains. Action: add it to DISCOVERY_SOURCES in src/x402-index.js (same shape as the PayAI entry: paginate + synthesizeTools + strict) and consider the Tier 2 facilitator key (see the x402-chain-expansion-research memory)."
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Solvador's discovery registry (https://api.solvador.com/discovery/resources) now reports $TOTAL resource(s). It was empty when the watch was added. Their facilitator uniquely covers Optimism, Unichain, World Chain, Linea, NEAR, and XRPL, so this registry is the discovery home for sellers on those chains. Action: add it to DISCOVERY_SOURCES in src/x402-index.js (same shape as the PayAI entry: paginate + synthesizeTools + strict) and consider the Tier 2 facilitator key (see the x402-chain-expansion-research memory)."
 
       - name: Alert (open issue) or clear (close issue)
         run: |
@@ -1053,7 +1053,7 @@ jobs:
           if [ "${{ steps.probe.outputs.status }}" = "down" ]; then
             BODY="Heartbeat failed 3 consecutive probes (checks:${{ steps.probe.outputs.fails }}).
           Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
-          Railway dashboard: https://railway.app — check the agent402 service. Re-deploy with a [deploy] commit or the deploy workflow_dispatch."
+          Railway dashboard: https://railway.app (check the agent402 service). Re-deploy with a [deploy] commit or the deploy workflow_dispatch."
             if [ -n "$OPEN" ]; then
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still down at $(date -u +%FT%TZ).${{ steps.probe.outputs.fails }}"
             else

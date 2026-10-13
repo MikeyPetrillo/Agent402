@@ -1448,11 +1448,10 @@ let refreshing = null;
 // The per-rail last-good carry-forward below used to live only in process
 // memory, so every deploy wiped it — and the non-EVM rails' public endpoints
 // throttle Railway's datacenter IP often enough that the FIRST read after a
-// boot can fail, leaving that card on "unreachable" until a read succeeds
-// (observed on Algorand after the 2026-07-16 deploys). Persist the last-good
-// rails to the /data volume (same convention as stats.js: /data if mounted,
-// /tmp otherwise) and seed the carry-forward from disk on boot — a redeploy
-// is not evidence a chain went down. Best-effort top to bottom: a read/write
+// boot can fail, leaving that card on "unreachable" until a read succeeds.
+// Persist the last-good rails as a state document (the state database, or a
+// local file without one) and seed the carry-forward from it on boot: a
+// redeploy is not evidence a chain went down. Best-effort top to bottom: a read/write
 // failure just falls back to the old in-memory behavior. Carried-forward
 // balances keep their original balanceAsOf, so the card honestly shows
 // "live · cached" rather than a fake-fresh reading.

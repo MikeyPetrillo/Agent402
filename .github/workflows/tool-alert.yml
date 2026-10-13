@@ -86,7 +86,7 @@ jobs:
           TITLE="Tool self-check: paid tool failing"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "${{ steps.check.outputs.status }}" = "down" ]; then
-            BODY="A curated high-value tool failed its own documented example on prod (twice in a row — transient blips are already filtered).
+            BODY="A curated high-value tool failed its own documented example on prod (twice in a row: transient blips are already filtered).
 
           **Failing:** $DETAIL
 
