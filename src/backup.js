@@ -36,6 +36,8 @@
 //   BACKUP_KEEP_DAYS     default 14
 //   BACKUP_MAX_RUN_MB    default 512 (compressed, per run)
 //   BACKUP_MAX_TOTAL_GB  default 20  (stored, bill guard)
+//   BACKUP_RETRY_MAX     default 6   (extra attempts per bucket request)
+//   BACKUP_RETRY_BASE_MS default 1000, BACKUP_RETRY_CAP_MS default 30000
 
 import { createHash, createHmac } from "node:crypto";
 import { createReadStream, createWriteStream, statSync, readdirSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
@@ -182,8 +184,52 @@ function sig({ method, host, path, query = "", headers, secret, keyId, region, n
   };
 }
 
+// Bucket pushback. The bucket answers HTTP 503 SlowDown ("reduce your request
+// rate") or 429 when a prefix's request rate is exceeded, and one such answer
+// used to fail the whole nightly run. Every request here is idempotent (a PUT
+// rewrites the same date key; GET, LIST and DELETE repeat safely), so a
+// request that is pushed back, or that fails in transport, is retried with
+// exponential backoff and jitter, bounded by BACKUP_RETRY_MAX extra attempts.
+// Uploads already run one at a time (the run awaits each ship), so the retry
+// is the only pacing a run needs. A stream body cannot be re-sent, so a
+// caller passes a factory and a fresh stream is opened per attempt.
+const RETRY_STATUSES = new Set([429, 503]);
+const retryCfg = () => ({
+  max: clampInt(process.env.BACKUP_RETRY_MAX, 6, 0, 12),
+  baseMs: clampInt(process.env.BACKUP_RETRY_BASE_MS, 1000, 1, 60_000),
+  capMs: clampInt(process.env.BACKUP_RETRY_CAP_MS, 30_000, 1, 300_000),
+});
+/** Delay before retry number `attempt` (1-based): exponential, capped at
+ *  capMs, with jitter in [half, full) so retries from one run never line up. */
+export function retryDelayMs(attempt, { baseMs = 1000, capMs = 30_000 } = {}, rand = Math.random) {
+  const full = Math.min(capMs, baseMs * 2 ** Math.max(0, attempt - 1));
+  return Math.floor(full / 2 + rand() * (full / 2));
+}
+/** True for a status the bucket uses to ask for a slower request rate. */
+export const isBucketPushback = (status) => RETRY_STATUSES.has(Number(status));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let runRetries = 0;            // retries the current run needed (reported on the result and the status)
+let retryLog = () => {};       // the run's logger while a run is in progress
+
 async function s3(method, key, { body, contentLength, query = "" } = {}) {
   const c = cfg();
+  const rc = retryCfg();
+  for (let attempt = 0; ; attempt++) {
+    let res = null, err = null;
+    try {
+      res = await s3Once(method, key, { body: typeof body === "function" ? body() : body, contentLength, query, c });
+    } catch (e) { err = e; }
+    if (!err && !isBucketPushback(res.status)) return res;
+    if (attempt >= rc.max) { if (err) throw err; return res; }
+    if (res) await res.text().catch(() => {}); // drain before the retry
+    const wait = retryDelayMs(attempt + 1, rc);
+    runRetries++;
+    retryLog(`[backup] ${method} ${key || "(list)"}: ${err ? `transport error (${String(err?.message || err).slice(0, 80)})` : `HTTP ${res.status} (bucket pushback)`}, retry ${attempt + 1}/${rc.max} in ${wait}ms`);
+    await sleep(wait);
+  }
+}
+
+async function s3Once(method, key, { body, contentLength, query = "", c } = {}) {
   const url = new URL(c.endpoint);
   // SigV4 signs the canonical URI, and the request must send exactly that, so
   // the path is percent-encoded PER SEGMENT here and the same string is used
@@ -283,6 +329,8 @@ const status = {
   lastUploaded: [], lastHeld: [], lastHeldState: [], lastPruned: 0, storedBytes: null,
   // "ok" | "held" (a state table did not go up) | "failed" (the run threw).
   lastResult: null,
+  // Bucket requests the last run had to repeat (pushback or transport).
+  lastRetries: 0,
 };
 // Persisted beside the data it describes, so /__operator/backup.json still
 // shows the last run after a redeploy (it read null on every fresh container
@@ -355,6 +403,8 @@ export async function runBackup({ log = console.log } = {}) {
   running = true;
   loadStatus();
   status.lastAttempt = new Date().toISOString();
+  runRetries = 0;
+  retryLog = log;
   const c = cfg();
   const day = status.lastAttempt.slice(0, 10);
   const tmp = mkdtempSync(join(tmpdir(), "a402-backup-"));
@@ -388,7 +438,7 @@ export async function runBackup({ log = console.log } = {}) {
         return false;
       }
       const key = `backups/${day}/${objName}${suffix}`;
-      const res = await s3("PUT", key, { body: createReadStream(up), contentLength: bytes });
+      const res = await s3("PUT", key, { body: () => createReadStream(up), contentLength: bytes });
       if (!res.ok) throw new Error(`upload ${key} failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
       budget -= bytes;
       uploaded.push({ name, gzBytes: bytes, encrypted: Boolean(c.encKey), ...extra });
@@ -464,7 +514,8 @@ export async function runBackup({ log = console.log } = {}) {
     status.lastHeld = held;
     status.lastHeldState = heldState;
     status.lastPruned = pruned;
-    const summary = `day=${day} uploaded=${uploaded.length} (${(uploaded.reduce((a, u) => a + u.gzBytes, 0) / 1e6).toFixed(1)}MB gz) held=${held.length} pruned=${pruned} stored=${(storedBytes / 1e6).toFixed(0)}MB`;
+    status.lastRetries = runRetries;
+    const summary = `day=${day} uploaded=${uploaded.length} (${(uploaded.reduce((a, u) => a + u.gzBytes, 0) / 1e6).toFixed(1)}MB gz) held=${held.length} pruned=${pruned} stored=${(storedBytes / 1e6).toFixed(0)}MB${runRetries ? ` retries=${runRetries}` : ""}`;
     // A state table that did not go up leaves the database without an offsite
     // copy of it: that is a failed run, named, never a quiet success.
     if (heldState.length) {
@@ -472,19 +523,21 @@ export async function runBackup({ log = console.log } = {}) {
       status.lastError = `${new Date().toISOString()} ${error.slice(0, 300)}`;
       status.lastResult = "held";
       log(`[backup] INCOMPLETE ${summary} - ${error}`);
-      return { ok: false, error, day, uploaded, held, heldState, pruned };
+      return { ok: false, error, day, uploaded, held, heldState, pruned, retries: runRetries };
     }
     status.lastSuccess = new Date().toISOString();
     status.lastError = null;
     status.lastResult = "ok";
     log(`[backup] OK ${summary}`);
-    return { ok: true, day, uploaded, held, heldState, pruned };
+    return { ok: true, day, uploaded, held, heldState, pruned, retries: runRetries };
   } catch (e) {
+    status.lastRetries = runRetries;
     status.lastError = `${new Date().toISOString()} ${String(e.message).slice(0, 300)}`;
     status.lastResult = "failed";
     log(`[backup] FAILED: ${e.message}`);
-    return { ok: false, error: String(e.message) };
+    return { ok: false, error: String(e.message), retries: runRetries };
   } finally {
+    retryLog = () => {};
     saveStatus();
     rmSync(tmp, { recursive: true, force: true });
     running = false;

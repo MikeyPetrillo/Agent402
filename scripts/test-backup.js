@@ -14,6 +14,8 @@
 //   - the alarm word (backupAlarmStatus): off / ok / failed / stale
 //   - the status read back at boot, also with STATE_DATABASE_URL set (the
 //     suite runs in both modes; with it set it uses its own schema)
+//   - bucket pushback: a 503 SlowDown is retried with backoff and the run
+//     still reports ok; an endless pushback fails the run after the bound
 //
 //   node scripts/test-backup.js
 import { createServer } from "node:http";
@@ -38,6 +40,8 @@ const ok = (cond, msg) => {
 const objects = new Map();      // key -> Buffer
 const sizeOverride = new Map(); // key -> reported size (lets the stub claim GB without allocating them)
 const requests = [];
+// Bucket pushback: while `left` is above zero every PUT answers 503 SlowDown.
+const slowDown = { left: 0, hits: 0 };
 const stub = createServer((req, res) => {
   const chunks = [];
   req.on("data", (c) => chunks.push(c));
@@ -46,6 +50,11 @@ const stub = createServer((req, res) => {
     const url = new URL(req.url, "http://x");
     const key = decodeURIComponent(url.pathname.replace(/^\/test-bucket\/?/, ""));
     requests.push({ method: req.method, key, auth: req.headers.authorization || "", query: url.search });
+    if (req.method === "PUT" && slowDown.left > 0) {
+      slowDown.left--; slowDown.hits++;
+      res.writeHead(503, { "content-type": "application/xml" }).end('<?xml version="1.0" encoding="UTF-8"?><Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>');
+      return;
+    }
     if (req.method === "PUT") { objects.set(key, body); res.writeHead(200).end(); }
     else if (req.method === "DELETE") { objects.delete(key); sizeOverride.delete(key); res.writeHead(204).end(); }
     else if (req.method === "GET" && url.searchParams.get("list-type") === "2") {
@@ -80,7 +89,7 @@ process.env.BACKUP_DATA_DIR = dataDir;
 process.env.BACKUP_KEEP_DAYS = "14";
 
 process.env.BACKUP_ENCRYPTION_KEY = "ab".repeat(32); // 32-byte test key built at runtime (no key-shaped literal in the tree for the secret scanner)
-const { backupPlan, runBackup, backupStatus, backupConfigured, backupAlarmStatus, decryptBackupBuffer, parseEncKey } = await import("../src/backup.js");
+const { backupPlan, runBackup, backupStatus, backupConfigured, backupAlarmStatus, decryptBackupBuffer, parseEncKey, retryDelayMs, isBucketPushback } = await import("../src/backup.js");
 ok(backupAlarmStatus() === "stale", `configured with no successful run yet: the alarm word is stale (${backupAlarmStatus()})`);
 
 // --- plan ------------------------------------------------------------------
@@ -164,6 +173,36 @@ const countAfterRun2 = volumeKeys().length;
 ok(countAfterRun2 === countAfterRun1, `same-day keys overwrite (still ${countAfterRun1} objects, no growth)`);
 const run2Puts = requests.slice(0).filter((r) => r.method === "PUT").slice(putsBeforeRun2).map((r) => r.key);
 ok(stateAfterRun1.every((k) => run2Puts.includes(k)) && new Set(run2Puts).size === run2Puts.length, `same-day state objects are rewritten in place (${stateAfterRun1.length} from run 1, ${run2Puts.length} puts in run 2)`);
+
+// --- bucket pushback: 503 SlowDown is retried, the run still succeeds ------
+{
+  process.env.BACKUP_RETRY_BASE_MS = "1"; process.env.BACKUP_RETRY_CAP_MS = "4";
+  slowDown.left = 3; slowDown.hits = 0;
+  const logs = [];
+  const slowed = await runBackup({ log: (m) => logs.push(m) });
+  ok(slowed.ok === true, `a run pushed back three times still succeeds (${JSON.stringify(slowed).slice(0, 80)})`);
+  ok(slowDown.hits === 3 && slowed.retries >= 3, `...after ${slowDown.hits} pushbacks and ${slowed.retries} retries`);
+  ok(objects.has(`backups/${day}/agent402-refunds.db.gz.enc`), "...and the pushed-back object still went up");
+  ok(logs.some((l) => /HTTP 503 \(bucket pushback\), retry 1\/6 in \d+ms/.test(l)) && logs.some((l) => /retry 3\/6/.test(l)), "...each retry is logged with its count and wait");
+  ok(backupAlarmStatus() === "ok" && backupStatus().lastRetries >= 3 && /retries=/.test(logs.find((l) => /\[backup\] OK/.test(l)) || ""), "...the alarm word is ok and the status and summary carry the retry count");
+  // Bounded: a bucket that never stops pushing back fails the run, and the
+  // first object sees exactly one attempt plus the configured retries.
+  slowDown.left = 1000; slowDown.hits = 0;
+  process.env.BACKUP_RETRY_MAX = "2";
+  const endless = await runBackup({ log: () => {} });
+  ok(endless.ok === false && /HTTP 503/.test(String(endless.error)) && slowDown.hits === 3, `an endless pushback fails the run after the bounded retries (${slowDown.hits} attempts: ${String(endless.error).slice(0, 70)})`);
+  ok(backupAlarmStatus() === "failed" && backupStatus().lastRetries === 2, "...and the alarm word is failed with the retries recorded");
+  slowDown.left = 0;
+  delete process.env.BACKUP_RETRY_MAX; delete process.env.BACKUP_RETRY_BASE_MS; delete process.env.BACKUP_RETRY_CAP_MS;
+  // The backoff itself: exponential, jittered within [half, full), capped.
+  const lo = (n) => retryDelayMs(n, { baseMs: 1000, capMs: 30_000 }, () => 0), hi = (n) => retryDelayMs(n, { baseMs: 1000, capMs: 30_000 }, () => 0.999);
+  ok(lo(1) === 500 && hi(1) < 1000 && lo(4) === 4000 && hi(4) < 8000 && hi(9) < 30_000 && lo(9) === 15_000, `backoff doubles per retry with jitter and is capped (${lo(1)}-${hi(1)}, ${lo(4)}-${hi(4)}, ${lo(9)}-${hi(9)})`);
+  ok(isBucketPushback(503) && isBucketPushback(429) && !isBucketPushback(500) && !isBucketPushback(403), "only 503 and 429 are pushback; a 500 or 403 is not retried");
+  // The next run is clean again (the stub answers 200), so the later blocks
+  // start from an ok word.
+  const clean = await runBackup({ log: () => {} });
+  ok(clean.ok === true && clean.retries === 0, "a clean run after pushback needs no retries");
+}
 
 // --- budget: tiny run cap holds bulk but the refund ledger still ships -----
 {
