@@ -3909,6 +3909,11 @@ jobs:
       # twice. The templates are what this guards; seller data is not in the repo.
       - name: Wrap quality (rendered line boxes, 1440 + 400 px, sitemap + wiki, families sampled)
         run: node scripts/test-wrap-quality.js
+      # Sticky chrome, measured: html and body are never scroll containers, and the
+      # nav, docs TOC, playground panel and 101 bar hold their offsets after a scroll
+      # (Chromium, 1440 + 390 px). Boots its own server like the wrap check.
+      - name: Sticky chrome (nav and panels hold after a scroll, 1440 + 390 px)
+        run: node scripts/test-sticky-chrome.js
 
   test-sweeps2:
     # The second half of test-sweeps (2026-08-25, split by the seconds each item
