@@ -155,6 +155,20 @@ if [ -f scripts/test-commit-message-framing.js ]; then
   fi
 fi
 
+# A money journal entry kept only on a container's local disk dies with that
+# container, and the merge replaces every container. Production publishes one
+# word for it (ledgerDeadLetter.status on /api/gateway-status, src/ledger-mirror.js):
+# "local" and "stuck" mean an entry is waiting outside the shared stores, so
+# stop here and let the replay or the operator clear it first. An unreadable
+# word is not a verdict: the deploy job's quiet gate (scripts/deploy-quiet-gate.js)
+# holds on the same two words and is the enforcement.
+DL=$(curl -s --max-time 10 "${TARGET_URL:-https://agent402.tools}/api/gateway-status" 2>/dev/null | jq -r '.ledgerDeadLetter.status // empty' 2>/dev/null || true)
+case "$DL" in
+  local|stuck) echo "production ledgerDeadLetter reads '$DL' (a money journal entry is waiting on a container's local disk) - not merging"; exit 1 ;;
+  "") echo "could not read production's ledgerDeadLetter word; continuing (the deploy job's quiet gate holds on it)" ;;
+  *) echo "production ledgerDeadLetter: $DL" ;;
+esac
+
 gh pr ready "$PR" >/dev/null 2>&1 || true
 # Pinned to the tested SHA: if the branch moved since, gh refuses and we stop.
 gh pr merge "$PR" --merge --admin --match-head-commit "$SHA"

@@ -147,6 +147,19 @@ for (const [name, j] of Object.entries(jobs)) {
      "CLAUDE.md tells the next author to put the marker in a commit SUBJECT, not the PR title");
   ok(!/put the marker in the PR TITLE so the merge commit carries it/.test(claude),
      "...and no longer carries the advice that silently skipped a publish");
+
+  // The helper reads production's ledgerDeadLetter word before it merges and
+  // refuses on the two words the deploy job's quiet gate holds on (a money
+  // journal entry waiting on a container's local disk); an unreadable word
+  // continues, because the gate in CI is the enforcement. Pinned to the order:
+  // the read has to come before `gh pr merge`, or it reads nothing in time.
+  const mergeAt = mog.indexOf("gh pr merge ");
+  const readAt = mog.indexOf(".ledgerDeadLetter.status");
+  ok(readAt > 0 && mergeAt > readAt, "merge-on-green.sh reads ledgerDeadLetter.status from /api/gateway-status before gh pr merge");
+  ok(/\n\s*local\|stuck\)[^\n]*exit 1/.test(mog), "...and exits 1 without merging on local or stuck");
+  ok(/\n\s*""\)[^\n]*continuing/.test(mog), "...and continues when the word is unreadable");
+  const gate = readFileSync(new URL("./deploy-quiet-gate.js", import.meta.url), "utf8");
+  ok(/LEDGER_HOLD_WORDS = new Set\(\["local", "stuck"\]\)/.test(gate), "the quiet gate holds on the same two words");
 }
 
 console.log(`${pass} passed, ${fail} failed`);
