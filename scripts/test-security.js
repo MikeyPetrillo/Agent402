@@ -34,7 +34,7 @@ console.log("2. stats returns 400 (not 500) on bad input ✓");
   const xml = "<a>".repeat(5000) + "x" + "</a>".repeat(5000);
   const t0 = Date.now();
   let threw = false;
-  try { call("xml-to-json", { xml }); } catch (e) { threw = true; if (e.statusCode !== 400) fail(`xml-to-json should 400 on deep nesting, got ${e.statusCode}`); }
+  try { await call("xml-to-json", { xml }); } catch (e) { threw = true; if (e.statusCode !== 400) fail(`xml-to-json should 400 on deep nesting, got ${e.statusCode}`); }
   const ms = Date.now() - t0;
   if (!threw) fail("xml-to-json should reject deeply-nested XML");
   if (ms > 1000) fail(`xml-to-json depth guard too slow: ${ms}ms`);
