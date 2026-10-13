@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { requireTestPg } from "./lib/test-pg.js";
 import { startPgRelay } from "./lib/pg-relay.js";
+import { hookStatements } from "./lib/pg-statement-hook.js";
 
 requireTestPg({ label: "test-human-checkout-failures-pg" });
 delete process.env.REDIS_URL;
@@ -41,13 +42,17 @@ const age = async (id) => sdb.stateQuery(`UPDATE ${sdb.stateDbSchema()}.records 
 const pool = await sdb.stateDb();
 const lost = () => Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
 const armed = [];
+// The pool's own query, kept for the test's side writes so they stay off the hooks.
 const origQuery = pool.query.bind(pool);
-pool.query = async (text, values, cb) => {
-  const r = await origQuery(text, values, cb);
-  const a = armed.find((x) => x.left > 0 && x.re.test(String(text?.text ?? text)) && (!x.id || (values || []).includes(x.id)));
+// Statements are hooked on both paths (pool.query and a checked-out client's
+// query): stateQuery runs each statement on a checked-out client, so a hook
+// on pool.query alone never sees the store's own reads and writes.
+hookStatements(pool, async (sql, values, run) => {
+  const r = await run();
+  const a = armed.find((x) => x.left > 0 && x.re.test(sql) && (!x.id || values.includes(x.id)));
   if (a) { a.left--; throw lost(); }
   return r;
-};
+});
 
 let gens = 0, genHook = null, failGen = false;
 const refunds = [], sales = [];
@@ -155,17 +160,16 @@ try {
       ? { status: "done", kind: "dossier", slug: "dossier", input: "MSFT", report: "# landed elsewhere", title: "t", sources: [], tables: [], at: new Date().toISOString() }
       : { status: "error", refundId: "re_elsewhere", refundOwed: false, error: "refunded", at: new Date().toISOString() };
     await sdb.stateQuery(`INSERT INTO ${sdb.stateDbSchema()}.records (collection, id, body) VALUES ('human-checkout', $1, $2::jsonb)`, [id, JSON.stringify({ status: "generating", claimedAt: Date.now() - 11 * 60_000, takeovers: 1, at: new Date().toISOString() })]);
-    const origQ = pool.query;
     let flipped = false;
-    pool.query = async (text, values, cb) => {
-      if (!flipped && /->> 'status' = 'generating'/.test(String(text?.text ?? text)) && (values || []).includes(id)) {
+    const unhook = hookStatements(pool, async (sql, values, run) => {
+      if (!flipped && /->> 'status' = 'generating'/.test(sql) && values.includes(id)) {
         flipped = true;
         await origQuery(`UPDATE ${sdb.stateDbSchema()}.records SET body = $2::jsonb WHERE collection = 'human-checkout' AND id = $1`, [id, JSON.stringify(done)]);
       }
-      return origQ(text, values, cb);
-    };
+      return run();
+    });
     let ans;
-    try { ans = await hc.fulfill(id); } finally { pool.query = origQ; }
+    try { ans = await hc.fulfill(id); } finally { unhook(); }
     await wait(300);
     const r = await row(id);
     const issues = (await row("_issues")) || {};
