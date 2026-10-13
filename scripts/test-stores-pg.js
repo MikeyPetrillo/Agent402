@@ -75,11 +75,11 @@ try {
     writeFileSync(file + ".webhooks.json", JSON.stringify({ received: 5, verified: 4, rejected: 1, unconfigured: 0, byType: { x: 4 } }));
     const stripe = { checkout: { sessions: { create: async () => ({ id: "cs", url: "u" }) } }, webhooks: { constructEvent: () => { throw new Error("no"); } } };
     const subs = createStripeSubscriptions({ stripe, baseUrl: "https://t.example", storePath: file, onInvoicePaid: () => {} });
-    await new Promise((r) => setTimeout(r, 300));
+    await subs.ready();
     ok(subs.get("sub_old")?.status === "active", "stripe-subscriptions: imported");
     ok(subs.webhookStats().received === 5, "stripe-subscriptions: the tally is imported");
     const subs2 = createStripeSubscriptions({ stripe, baseUrl: "https://t.example", storePath: join(D2, "stripe-subscriptions.json"), onInvoicePaid: () => {} });
-    await new Promise((r) => setTimeout(r, 300));
+    await subs2.ready();
     ok(subs2.get("sub_old")?.status === "active" && subs2.webhookStats().received === 5, "stripe-subscriptions: a fresh instance reads the row and the tally");
     const merged = await sdb.documents.mergeKeys("stripe-subscriptions.json", { sub_new: { subId: "sub_new", status: "active" } });
     ok(merged.body.sub_old && merged.body.sub_new, "stripe-subscriptions: the row is a key-merged object, so two writers never drop each other's records");
@@ -125,7 +125,7 @@ try {
     const file = join(D1, "mpp-reconcile.json");
     writeFileSync(file, JSON.stringify({ days: { "2026-10-01": { status: "clean" } }, window: null, lastRunAt: 1, lastError: null, runs: 3 }));
     const rec = createMppReconciler({ file, log: quiet });
-    await new Promise((r) => setTimeout(r, 300));
+    await rec.ready();
     const st = await rec.status();
     ok(st && typeof st === "object", "mpp-reconcile: status reads after import");
   }
