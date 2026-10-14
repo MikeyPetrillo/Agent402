@@ -4628,6 +4628,8 @@ jobs:
           t node scripts/test-mpp-discovery-parity.js
           # MPP start-here set: every slug offers tempo, and /what-is-mpp, /llms.txt, /openapi.json and MCP payment.info derive from src/mpp-flagship.js at catalog prices (boots FREE_MODE, offline)
           t node scripts/test-mpp-flagship.js
+          # 30 concurrent buyers for 45 s against a FREE_MODE server on a free port, /health probed beside them: zero 5xx on tool routes, discovery sheds under its ceiling, /health p95 bounded relative to its idle reading, no request past the hard timeout. The server child strips every spend key from its environment. Runs last in the lane so no other step shares the runner's CPU with it (offline)
+          t node scripts/test-load-concurrency.js
 
   publish-gate:
     # Every per-package gate that used to run INSIDE the publish job. It is a
