@@ -49,7 +49,7 @@ function assertBodyWithinCap(res, capBytes, label) {
   }
 }
 
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504. Most documents answered under a second when measured
@@ -1168,4 +1168,4 @@ export const __test = {
 };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(DEFI_TOOLS);
+underBudgetAll(DEFI_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

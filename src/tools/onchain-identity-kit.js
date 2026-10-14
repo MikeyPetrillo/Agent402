@@ -25,7 +25,7 @@
 
 import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll, budgetSpent, currentBudget, isUpstreamFailure, upstreamDeadline } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget, isUpstreamFailure, upstreamDeadline } from "../upstream-deadline.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, so the ENS fan-out and the EAS retry end inside it;
@@ -500,4 +500,4 @@ export const __test = {
 };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(ONCHAIN_IDENTITY_TOOLS);
+underBudgetAll(ONCHAIN_IDENTITY_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

@@ -12,7 +12,7 @@
 // (which probes Alchemy end-to-end via gas-snapshot).
 
 import { redactSecrets } from "./redact.js";
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, so dex-pool's two rounds of parallel reads still
@@ -488,4 +488,4 @@ export const __test = {
 };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(DEX_TOOLS);
+underBudgetAll(DEX_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

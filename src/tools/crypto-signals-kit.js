@@ -34,7 +34,7 @@ function assertBodyWithinCap(res, capBytes, label) {
 
 const HL_INFO = "https://api.hyperliquid.xyz/info";
 const UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504. The Hyperliquid reads answered in 0.3 to 0.5 s when
@@ -880,4 +880,4 @@ for (const t of CRYPTO_SIGNALS_TOOLS) {
 }
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(CRYPTO_SIGNALS_TOOLS);
+underBudgetAll(CRYPTO_SIGNALS_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

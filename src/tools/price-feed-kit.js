@@ -286,4 +286,4 @@ for (const t of PRICE_FEED_TOOLS) if (t.slug === "price-coingecko") t.descriptio
 // Every handler runs under one budget (src/upstream-deadline.js): the 20 s
 // data-kit budget, except defi-tvl, whose protocol document keeps its 25 s
 // cap and so runs under the route's payment-window budget.
-underBudgetAll(PRICE_FEED_TOOLS, (t) => (t.slug === "defi-tvl" ? PAYMENT_WINDOW_BUDGET_MS : null));
+underBudgetAll(PRICE_FEED_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

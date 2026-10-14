@@ -23,7 +23,7 @@
 
 import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll, isUpstreamFailure, budgetSpent } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, isUpstreamFailure, budgetSpent, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, so the relay walk (three relays in turn) ends
@@ -611,4 +611,4 @@ export const __test = {
 };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(MEV_AND_L2_TOOLS);
+underBudgetAll(MEV_AND_L2_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

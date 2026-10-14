@@ -34,7 +34,7 @@ function bad(message, statusCode = 400) {
 
 export const CG_BASE = "https://api.coingecko.com/api/v3";
 const SOURCE = "coingecko";
-import { upstreamFetch, underBudgetAll, budgetSpent, currentBudget } from "../upstream-deadline.js";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget, the one retry included; a read that outlives it is a 503
 // naming the upstream and the step, never a 504.
@@ -1218,4 +1218,4 @@ export const __test = { takeId, takeCurrency, takeInt, takeBool, takeIdList, tak
 function stepOf(path) { return String(path || "").replace(/^\/api\/v3\//, "").split("?")[0].split("/").filter((seg) => /^[a-z_]+$/.test(seg)).join(" ").replace(/_/g, " ") || "market data"; }
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(CRYPTO_MARKETS_TOOLS);
+underBudgetAll(CRYPTO_MARKETS_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

@@ -203,23 +203,19 @@ async function stalled(fn, label) {
   return { err, out, ms, label };
 }
 // The budget each route is wrapped with (the knob above shortens all of them
-// for the stalls below; this is the size production runs). The 20 s budget is
-// for the keyless kits whose reads answer in under a second; every route whose
-// upstream is keyed or measured slower runs under its payment window, less the
-// facilitator's settle rule and the settle margin.
+// for the stalls below; this is the size production runs). Every route runs
+// under its payment window, less the facilitator's settle rule and the settle
+// margin, so a route keeps every read and retry it had before the helper.
 const { DEFAULT_MAX_TIMEOUT_SECONDS, SETTLE_RULE_SECONDS, SETTLE_MARGIN_SECONDS } = await import("../src/evm-validity.js");
 ok(PAYMENT_WINDOW_BUDGET_MS === (DEFAULT_MAX_TIMEOUT_SECONDS - SETTLE_RULE_SECONDS - SETTLE_MARGIN_SECONDS) * 1000 && PAYMENT_WINDOW_BUDGET_MS > HANDLER_BUDGET_MS,
   `the payment-window budget is the stock window less the settle rule and margin (${PAYMENT_WINDOW_BUDGET_MS} ms)`);
-const DATA_KIT_SLUGS = new Set(["price-coingecko", "dex-top-pools", "dex-pool", "mev-recent-blocks", "l2-tvl", "eas-attestations", "ens-bulk-resolve", "kalshi-markets",
-  "crypto-indicators", "perp-markets", "defi-protocols", "exchange-rates", "contract-abi", "cve-lookup", "crypto-price", "sol-price"]);
 for (const [file, , slug] of KITS) {
   const tool = (mods.get(file) || []).find((t) => t.slug === slug);
-  const want = DATA_KIT_SLUGS.has(slug) ? HANDLER_BUDGET_MS : PAYMENT_WINDOW_BUDGET_MS;
-  ok(tool?.handler?.__budgetMs === want, `${slug}: runs under the ${want === HANDLER_BUDGET_MS ? "20 s data-kit" : "payment-window"} budget in production (${tool?.handler?.__budgetMs} ms)`);
+  ok(tool?.handler?.__budgetMs === PAYMENT_WINDOW_BUDGET_MS, `${slug}: runs under the payment-window budget in production (${tool?.handler?.__budgetMs} ms)`);
 }
 {
   const tvl = (mods.get("price-feed-kit.js") || []).find((t) => t.slug === "defi-tvl");
-  ok(tvl?.handler?.__budgetMs === PAYMENT_WINDOW_BUDGET_MS, "defi-tvl, whose protocol document keeps its 25 s cap, runs under the payment-window budget while the rest of its kit keeps 20 s");
+  ok(tvl?.handler?.__budgetMs === PAYMENT_WINDOW_BUDGET_MS, "defi-tvl, whose protocol document keeps its 25 s cap, runs under the payment-window budget");
 }
 // Every kit's call runs together: each is its own handler call with its own budget.
 const runs = await Promise.all(KITS.map(([file, , slug, input]) => {

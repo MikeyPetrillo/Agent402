@@ -33,7 +33,7 @@
 
 import { markUntrusted } from "./provenance.js";
 import { partialFields } from "../partial-answer.js";
-import { HANDLER_BUDGET_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+import { HANDLER_BUDGET_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 const MAX_BODY_BYTES = 24 * 1024 * 1024;  // DefiLlama bulk docs run ~11MB; this is the hard ceiling.
 // Refuse an over-large body BEFORE reading it into a string: `res.text()` has
 // no cap of its own, so a broken or hostile upstream could push an unbounded
@@ -1105,4 +1105,4 @@ for (const t of SOLANA_INTEL_TOOLS) {
 }
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(SOLANA_INTEL_TOOLS);
+underBudgetAll(SOLANA_INTEL_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

@@ -15,7 +15,7 @@
 // All tools are wallet-only (every call egresses). Offline coverage:
 // scripts/test-derivatives-kit.js (stubbed fetch).
 
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // The reads answered in 0.1 to 1 s when measured (2026-10-14).
 const TIMEOUT_MS = 10_000;
 const HL_INFO = "https://api.hyperliquid.xyz/info";
@@ -1396,4 +1396,4 @@ export const __test = {
 };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(DERIVATIVES_TOOLS);
+underBudgetAll(DERIVATIVES_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

@@ -16,7 +16,7 @@
 //
 // Covered by scripts/test-prediction-market-kit.js (offline + opt-in live).
 
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll, budgetSpent, currentBudget } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, so the one retry after a 429 or 5xx (its wait
@@ -685,4 +685,4 @@ export const __test = {
 };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(PREDICTION_MARKET_TOOLS);
+underBudgetAll(PREDICTION_MARKET_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

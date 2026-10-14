@@ -18,7 +18,7 @@ const { keccak256 } = sha3;
 import { ssrfDispatcher } from "./fetch-guard.js";
 import { publicJsonRpc, pickNetwork } from "./chain-kit.js";
 
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504. The reads answered in 0.02 to 0.7 s when measured
@@ -1051,4 +1051,4 @@ export const CONTRACT_TOOLS = [
 ];
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(CONTRACT_TOOLS);
+underBudgetAll(CONTRACT_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

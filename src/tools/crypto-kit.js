@@ -17,7 +17,7 @@
 // use the same assertPublicUrl + native fetch pattern as finance-kit for
 // consistency and to keep the per-host UA option open.
 import { assertPublicUrl } from "./fetch-guard.js";
-import { upstreamFetch, underBudgetAll, budgetSpent, currentBudget } from "../upstream-deadline.js";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 const CRYPTO_READ_MS = 10_000;
 const CRYPTO_RETRY_READ_MS = 12_000;
 import { cgTokenRefusal, cgRefusalMessage, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
@@ -634,4 +634,4 @@ export const CRYPTO_TOOLS = [
 for (const t of CRYPTO_TOOLS) if (t.slug !== "crypto-orderbook") t.description = `${t.description} ${COINGECKO_ATTRIBUTION}`;
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(CRYPTO_TOOLS);
+underBudgetAll(CRYPTO_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
