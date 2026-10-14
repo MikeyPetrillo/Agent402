@@ -225,8 +225,12 @@ async function exaPost(path, body) {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (e) {
-    if (e?.name === "TimeoutError" || e?.name === "AbortError") throw bad("Exa did not respond in time", 504);
-    throw bad("could not reach Exa", 502);
+    // The upstream-failure class (unreachable, 5xx, non-JSON) answers 503 with
+    // the upstream named and the no-charge stated: a handler status >= 400 is
+    // never settled, and a 503 tells the buyer to retry rather than that the
+    // request was wrong. A timeout keeps its own class (504).
+    if (e?.name === "TimeoutError" || e?.name === "AbortError") throw bad("Exa did not respond in time. Nothing was charged for this request.", 504);
+    throw bad("Could not reach Exa (upstream unreachable). Nothing was charged for this request.", 503);
   }
 
   // Never relay an upstream error body to the buyer: it can carry our own key
@@ -239,13 +243,13 @@ async function exaPost(path, body) {
     if (res.status === 402) throw bad("Exa tools are temporarily unavailable. Nothing was charged for this request.", 503);
     if (res.status === 429) throw bad("Exa is rate-limiting this deployment right now - retry shortly", 503);
     if (res.status === 404) throw bad("Exa has nothing for that request", 404);
-    if (res.status >= 500) throw bad(`Exa upstream error (HTTP ${res.status})`, 502);
+    if (res.status >= 500) throw bad(`Exa upstream error (HTTP ${res.status}) - the upstream is having trouble; retry shortly. Nothing was charged for this request.`, 503);
     throw bad(`Exa refused the request (HTTP ${res.status}) - check the query and any filters`, 400);
   }
 
   let data;
   try { data = await res.json(); }
-  catch { throw bad("Exa returned a body that is not JSON", 502); }
+  catch { throw bad("Exa upstream error: the upstream returned a body that is not JSON. Nothing was charged for this request.", 503); }
 
   // Correct the day's booking to what Exa says it charged. Only ever replaces
   // the estimate with a real figure; an absent costDollars keeps the estimate.
@@ -333,9 +337,11 @@ function shapeResult(r) {
   };
 }
 
+// The example reads one of our own pages (scripts/test-example-hosts.js): a
+// buyer copying it, and the daily catalog buy, get a page that exists.
 const RESULT_EXAMPLE = {
-  title: "What is the x402 payment protocol?",
-  url: "https://example.com/x402-explained",
+  title: "Agent402.Tools: pay-per-call tools for AI agents",
+  url: "https://agent402.tools/",
   publishedDate: "2026-08-02T00:00:00.000Z",
   author: null,
   text: null,
@@ -475,7 +481,7 @@ export const EXA_TOOLS = [
     tags: [...SHARED_TAGS, "contents", "extract"],
     discovery: {
       bodyType: "json",
-      input: { urls: ["https://example.com/x402-explained"] },
+      input: { urls: ["https://agent402.tools/"] },
       inputSchema: {
         properties: {
           urls: { type: "array", description: `Absolute http(s) URLs to read, 1 to ${MAX_URLS}.` },
@@ -490,7 +496,7 @@ export const EXA_TOOLS = [
           fetchedAt: "2026-09-13T20:00:00.000Z",
           count: 1,
           results: [{ ...RESULT_EXAMPLE, text: "x402 is an HTTP-native payment protocol ..." }],
-          statuses: [{ id: "https://example.com/x402-explained", status: "success" }],
+          statuses: [{ id: "https://agent402.tools/", status: "success" }],
         },
       },
     },
