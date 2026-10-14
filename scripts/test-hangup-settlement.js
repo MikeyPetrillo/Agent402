@@ -376,8 +376,15 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   ok(/if \(clientGoneBeforeFirstByte\(req\)\) \{\s*\n\s*try \{ res\.status\(499\)/.test(mw) && /X-Pow-Accepted/.test(mw) && /req\.__a402Dispatched = true;/.test(mw), "that middleware answers 499 for a buyer already gone, skips proof-of-work and trial calls, and marks the request dispatched");
   // A request whose payment settled before its handler (a Tempo push
   // credential) is owed if undelivered, so it must not spend the budget.
-  ok(/if \(req\.tempoSettled\) return next\(\);\s*\n(\s*\/\/[^\n]*\n)*\s*try \{ await reserveHangupForgiveness\(/.test(server), "a request already settled before its handler (Tempo push) takes no ticket (the reservation is awaited: a promise with a shared store)");
-  ok(/res\.once\("close", \(\) => settleHangupTicket\(req, \{ abandoned: clientGoneBeforeFirstByte\(req\) \}\)\);/.test(server), "the ticket is settled on close (abandoned when gone before the first byte)");
+  {
+    const tempoAt = server.indexOf("if (req.tempoSettled) return next();");
+    const awaitAt = server.indexOf("try { await reserveHangupForgiveness(", tempoAt);
+    const closeAt = server.indexOf("res.once(\"close\", () => { closed = true; if (reserved) settle(); });", tempoAt);
+    ok(tempoAt > 0 && awaitAt > tempoAt && awaitAt - tempoAt < 2000, "a request already settled before its handler (Tempo push) takes no ticket (the reservation is awaited: a promise with a shared store)");
+    ok(closeAt > tempoAt && closeAt < awaitAt, "the close listener is registered before the shared budget read, so a socket that closes during it is not missed");
+    const tail = server.slice(awaitAt, awaitAt + 900);
+    ok(/const settle = \(\) => settleHangupTicket\(req, \{ abandoned: clientGoneBeforeFirstByte\(req\) \}\);/.test(server.slice(tempoAt, awaitAt)) && /reserved = true;\s*\n\s*if \(closed \|\| res\.destroyed\) \{\s*\n\s*settle\(\);/.test(tail), "the ticket is settled on close (abandoned when gone before the first byte), including a close during the read");
+  }
   ok(/const who = payer \|\| \(req\.mppTempoSender \? `tempo:\$\{req\.mppTempoSender\}` : req\.creditsKeyId \? `credits:\$\{req\.creditsKeyId\}` : null\);\s*\n\s*return \[who, `ip:\$\{clientIp\(req\)\}`\];/.test(server), "ticket keys: the verified payer (never the Tempo source hint) AND always the client IP");
   ok(!/mppTempoPayer/.test(server.slice(server.indexOf("function hangupForgivenessKeys("), server.indexOf("function hangupForgivenessKeys(") + 600)), "the ticket keys never read the client-supplied Tempo payer hint");
   // Both post-handler broadcasts (the early-confirm race and the relay-only

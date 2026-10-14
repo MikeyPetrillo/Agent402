@@ -9453,9 +9453,21 @@ if (!FREE_MODE) {
     // Synchronous without a shared store; a promise with one (the shared
     // budget read). A reservation that throws must still let the call run:
     // the ticket stays denied and the charge stands, as it did before the rule.
+    // The close listener is registered before the (possibly async) shared
+    // read, so a socket that closes during that read still settles the ticket
+    // once it exists; otherwise the ticket would hold its share of the budget
+    // in this process until restart.
+    let closed = false, reserved = false;
+    const settle = () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) });
+    res.once("close", () => { closed = true; if (reserved) settle(); });
     try { await reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: quotedPriceUsd(def, req), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true }); }
     catch (err) { console.warn(`[hangup] ticket reservation failed (${String(err?.message || err).slice(0, 80)}); the call runs without a ticket`); }
-    res.once("close", () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) }));
+    reserved = true;
+    if (closed || res.destroyed) {
+      settle();
+      try { res.status(499).json({ error: "The connection closed before the call started; nothing ran and nothing was charged.", tool: def.slug, charged: false }); } catch { /* socket already gone */ }
+      return;
+    }
     next();
   });
 }
