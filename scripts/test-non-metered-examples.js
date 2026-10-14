@@ -232,17 +232,18 @@ function isClientTimeoutFlake(status, body, threw) {
 
 // An upstream that stops answering THIS RUNNER (2026-09-25: RugCheck timed out
 // on every GitHub-hosted run for hours while answering production and a local
-// machine in under a second). A tool's own "<Label> upstream timed out" 504
-// counts as that only when the harness, from the same runner, cannot reach the
-// upstream directly either; if the direct probe answers, the tool failing is
-// ours and it fails. One probe per label per run.
+// machine in under a second). A tool's own deadline 503, "<Label> did not
+// answer the <step> read within N s (upstream deadline)" or "<Label> is
+// unreachable from here", counts as that only when the harness, from the same
+// runner, cannot reach the upstream directly either; if the direct probe
+// answers, the tool failing is ours and it fails. One probe per label per run.
 const RUNNER_PROBES = {
   // The exact request sol-token-safety's published example makes (JUP summary).
   RugCheck: "https://api.rugcheck.xyz/v1/tokens/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN/report/summary",
 };
 export function runnerProbeLabel(status, body) {
-  if (status !== 504) return null;
-  const m = /^(\w+) upstream timed out/.exec(String(body?.error || ""));
+  if (status !== 503) return null;
+  const m = /^([\w ]+?) (?:did not answer the [\w -]+ read within \d+ s \(upstream deadline\)|is unreachable from here)/.exec(String(body?.error || ""));
   return m && RUNNER_PROBES[m[1]] ? m[1] : null;
 }
 const RUNNER_PROBE_UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
@@ -254,8 +255,8 @@ function upstreamAnswersRunner(label) {
     // Answering means a 2xx to the exact example request: a 4xx to it is the
     // upstream refusing that request (the runner, or the report it names),
     // and the tool's timeout on the same request is then the upstream's, not
-    // ours. Only the tool's own "<Label> upstream timed out" 504 reaches this
-    // probe, so a tool defect that answers anything else still fails.
+    // ours. Only the tool's own deadline or unreachable 503 in its exact words
+    // reaches this probe, so a tool defect that answers anything else still fails.
     const t0 = Date.now();
     runnerProbeMemo.set(label, fetch(RUNNER_PROBES[label], { headers: { "User-Agent": RUNNER_PROBE_UA, Accept: "application/json" }, signal: AbortSignal.timeout(10_000) })
       .then((res) => { console.log(`\n# runner probe ${label}: HTTP ${res.status} in ${Date.now() - t0} ms${res.ok ? "" : " (not answering the example request)"}`); return res.ok; })
@@ -507,10 +508,14 @@ function runControls() {
     "control: client AbortSignal timeout is a soft-skip");
   ok(isClientTimeoutFlake(504, { error: "timeout" }, null) === false,
     "control: server HTTP 504 timeout is NOT a client-timeout soft-skip");
-  ok(runnerProbeLabel(504, { error: "RugCheck upstream timed out" }) === "RugCheck",
-    "control: a tool's RugCheck timeout is a runner-probe candidate");
-  ok(runnerProbeLabel(504, { error: "data.gov upstream timed out" }) === null && runnerProbeLabel(502, { error: "RugCheck upstream timed out" }) === null,
-    "control: only a listed upstream's 504 is a candidate (an unlisted host, or a 502, still fails)");
+  ok(runnerProbeLabel(503, { error: "RugCheck did not answer the report summary read within 8 s (upstream deadline); nothing was charged - retry shortly" }) === "RugCheck",
+    "control: a tool's RugCheck deadline 503 is a runner-probe candidate");
+  ok(runnerProbeLabel(503, { error: "RugCheck is unreachable from here (report read failed before any answer); nothing was charged - retry shortly" }) === "RugCheck",
+    "control: a tool's RugCheck unreachable 503 is a runner-probe candidate");
+  ok(runnerProbeLabel(503, { error: "Solana RPC did not answer the getTokenLargestAccounts read within 5 s (upstream deadline); nothing was charged - retry shortly" }) === null
+    && runnerProbeLabel(504, { error: "RugCheck upstream timed out" }) === null
+    && runnerProbeLabel(503, { error: "RugCheck could not produce a report right now (upstream) - retry shortly" }) === null,
+    "control: only a listed upstream's deadline 503 is a candidate (an unlisted upstream, the old 504 words, or a RugCheck refusal in other words still fails)");
   // Upstream refusals: only a listed keyless upstream, only the tool's own
   // "<Label> upstream error (HTTP 5xx)" 502, is reported instead of failing.
   ok(upstreamRefusalOf(502, { error: "Jupiter upstream error (HTTP 503)" })?.label === "Jupiter",
