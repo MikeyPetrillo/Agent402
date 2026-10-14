@@ -334,7 +334,7 @@ import { startRouterPool, routerPoolStatus } from "./router-pool.js";
 import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
-import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled } from "./mpp-tempo.js";
+import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
 import { createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc } from "./mpp-reconcile.js";
 import { tempoDataKey } from "./tempo-transfers.js";
 import { verifyInboundPayment } from "./payment-verify.js";
@@ -8583,7 +8583,7 @@ if (!FREE_MODE) {
   });
   if (tempoGate) {
     app.use(tempoGate);
-    console.log("Tempo MPP settlement enabled (native tempo/charge via Tempo's relay)");
+    console.log(`Tempo MPP settlement enabled (native tempo/charge, ${tempoSettlementMode() === "direct" ? "verified and broadcast directly over the Tempo RPC" : "via Tempo's relay"})`);
   }
 
   // Stripe cards-over-MPP settlement — settles a Stripe PaymentIntent (via the

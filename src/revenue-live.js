@@ -1651,7 +1651,7 @@ const netName = (n) => NET_ALIAS[n] || n;
 const MPP_RAIL_META = {
   base: { label: "Base", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://basescan.org/address/", tx: "https://basescan.org/tx/" },
   celo: { label: "Celo", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://celoscan.io/address/", tx: "https://celoscan.io/tx/" },
-  tempo: { label: "Tempo", asset: "USDC.e / PathUSD", how: "native tempo/charge via Tempo's relay", explorer: "https://explore.tempo.xyz/address/", tx: "https://explore.tempo.xyz/tx/" },
+  tempo: { label: "Tempo", asset: "USDC.e / PathUSD", how: "native tempo/charge", explorer: "https://explore.tempo.xyz/address/", tx: "https://explore.tempo.xyz/tx/" },
   // Card payments over MPP settle in US dollars, not a stablecoin.
   stripe: { label: "Card (MPP wire)", asset: "USD", how: "a card credential on an MPP call; card checkout purchases are counted separately in the headline" },
 };

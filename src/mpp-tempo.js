@@ -94,7 +94,16 @@ function envDecimals() {
  *  Currency now has a verified default (PathUSD) so only the key and a
  *  receiving address are required. */
 export function tempoEnabled() {
-  return !!(process.env.TEMPO_API_KEY && envRecipient());
+  return !!((process.env.TEMPO_API_KEY || tempoSettlementMode() === "direct") && envRecipient());
+}
+/** How a Tempo credential is checked and settled. "relay" (default): Tempo's
+ *  hosted relay validates and broadcasts it (/v1/mpp/validate, /v1/mpp/broadcast).
+ *  "direct" (TEMPO_RELAY=off): mppx verifies the signed transaction itself,
+ *  simulates it against the chain and broadcasts it over the public Tempo RPC;
+ *  the HMAC route binding, the amount and recipient checks and the chain-truth
+ *  confirm are the same either way. Call-time read, like every rollout knob. */
+export function tempoSettlementMode() {
+  return String(process.env.TEMPO_RELAY || "").trim().toLowerCase() === "off" ? "direct" : "relay";
 }
 /** Our own Tempo payTo, or null when the tempo method is not enabled - the
  *  MPP leaderboard ranks it as "this server" (self-flagged) so we are held
@@ -453,20 +462,25 @@ export function logTempoRefusal(req, { cls, amountAtomic = null, timings = {}, d
 let cachedMethod = null;
 let cachedKey = "";
 
+/** @internal test hook: whether the configured method routes through the relay. */
+export function _tempoMethodUsesRelay() { tempoMethod(); return tempoSettlementMode() === "relay" && cachedMethodUsesRelay; }
+let cachedMethodUsesRelay = false;
 function tempoMethod() {
-  const key = `${process.env.TEMPO_API_KEY || ""}|${envRecipient()}|${envCurrencies().join(",")}|${envDecimals()}|${process.env.TEMPO_API_BASE_URL || ""}`;
+  const mode = tempoSettlementMode();
+  const key = `${mode}|${process.env.TEMPO_API_KEY || ""}|${envRecipient()}|${envCurrencies().join(",")}|${envDecimals()}|${process.env.TEMPO_API_BASE_URL || ""}`;
   if (cachedMethod && cachedKey === key) return cachedMethod;
   cachedMethod = tempo.charge({
     currency: envCurrency(),
     decimals: envDecimals(),
     recipient: envRecipient(),
-    relay: {
+    ...(mode === "relay" ? { relay: {
       apiKey: process.env.TEMPO_API_KEY,
       fetch: relayFetch,
       ...(process.env.TEMPO_API_BASE_URL ? { apiBaseUrl: process.env.TEMPO_API_BASE_URL } : {}),
-    },
+    } } : {}),
   });
   cachedKey = key;
+  cachedMethodUsesRelay = mode === "relay";
   return cachedMethod;
 }
 

@@ -2924,6 +2924,8 @@ jobs:
           t node scripts/test-mpp-tempo-relay-errors.js
           # A keyed broadcast the relay refuses for its validBefore is re-sent once without the key (offline)
           t node scripts/test-mpp-tempo-idempotency-policy.js
+          # Tempo settlement mode: TEMPO_RELAY=off never calls the relay; unset keeps it (offline)
+          t node scripts/test-mpp-tempo-direct.js
           # workflow_run references name a workflow that exists (GitHub matches on name:, a mismatch never fires - offline)
           t node scripts/test-workflow-run-refs.js
           # Every workflow job names a versioned runner image, never a moving -latest label (offline)
