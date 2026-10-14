@@ -48,6 +48,7 @@ const {
   isExemptUserAgent, isMcpLoopback, isExemptPath, secondsToHourBoundary,
 } = await import("../src/unpaid-quote-budget.js");
 const { crawlerPage, catalogCrawlSection } = await import("../src/crawler-page.js");
+const { perReplica } = await import("../src/rate-limit.js");
 const { issueChallenge, issueHeartbeatToken } = await import("../src/pow.js");
 
 let pass = 0;
@@ -89,6 +90,31 @@ ok(secondsToHourBoundary(10 * HOUR + 1) === 3600 && secondsToHourBoundary(10 * H
   let limited = false;
   for (let i = 0; i < 50; i++) limited = limited || off.hit("a", t0 + i).limited;
   ok(!limited, "budget 0 never limits");
+}
+// Two containers enforce the published figure between them: each counts its
+// RATE_LIMIT_REPLICAS share (perReplica, as every limiter in src/rate-limit.js
+// does), the published figure is what the 429 and the operator read quote, and
+// a share never divides below one request.
+{
+  const t0 = 55 * HOUR + 10_000;
+  const two = createUnpaidQuoteBudget({ budget: 10, isPriced: () => true, replicas: 2 });
+  let limitedAt = 0;
+  for (let i = 1; i <= 10 && !limitedAt; i++) if (two.hit("a", t0 + i).limited) limitedAt = i;
+  ok(limitedAt === 6, `budget 10 across two replicas: this replica limits the sixth request (limited at ${limitedAt})`);
+  ok(two.stats(t0).budget === 10 && two.stats(t0).perReplicaBudget === 5, `the operator read carries the published figure and this replica's share (${JSON.stringify({ budget: two.stats(t0).budget, perReplicaBudget: two.stats(t0).perReplicaBudget })})`);
+  const one = createUnpaidQuoteBudget({ budget: 10, isPriced: () => true, replicas: 1 });
+  limitedAt = 0;
+  for (let i = 1; i <= 12 && !limitedAt; i++) if (one.hit("a", t0 + i).limited) limitedAt = i;
+  ok(limitedAt === 11, `control: one replica limits the eleventh (limited at ${limitedAt})`);
+  const floor = createUnpaidQuoteBudget({ budget: 1, isPriced: () => true, replicas: 4 });
+  ok(!floor.hit("a", t0).limited && floor.hit("a", t0 + 1).limited && floor.stats(t0).perReplicaBudget === 1, "a share never divides below one request (a budget of zero is an outage, not a limit)");
+  const def = createUnpaidQuoteBudget({ budget: 10, isPriced: () => true });
+  ok(def.stats(t0).perReplicaBudget === perReplica(10), `with no replica count handed in, the share is RATE_LIMIT_REPLICAS's (${def.stats(t0).perReplicaBudget})`);
+  const req = (over = {}) => ({ method: "GET", path: "/api/uuid", ip: "10.0.0.3", headers: { "user-agent": "walker/2" }, socket: { remoteAddress: "10.0.0.3" }, ...over });
+  const res = { headers: {}, set(k, v) { this.headers[k] = v; return this; }, status(c) { this.code = c; return this; }, json(b) { this.body = b; return this; }, once() { return this; } };
+  const mw = createUnpaidQuoteBudget({ budget: 10, isPriced: () => true, replicas: 2, log: () => {} });
+  for (let i = 0; i < 6; i++) mw.middleware(req(), res, () => {});
+  ok(res.code === 429 && /budget 10 per hour/.test(res.body?.hint || ""), "the 429 quotes the published figure, not this replica's share");
 }
 {
   const b = createUnpaidQuoteBudget({ budget: 10, isPriced: () => true, keyCap: 3 });

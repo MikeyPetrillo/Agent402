@@ -136,6 +136,17 @@ async function contract(label, make) {
     ok((await d.today(now + 86_400_000)) === 0, "daily spend helper: the next day starts at zero");
   }
 }
+{
+  // A cap counted in whole units (the judge's tokens) passes scale 1.
+  const t = createSharedDailySpend(`${RUN}-tokens`, "test-tokens", { scale: 1 });
+  if (!sharedLimitsConfigured()) {
+    ok((await t.reserve(600, 1000)) === true && (await t.today()) === null, "daily spend helper, scale 1: without a shared store reserve answers true and today reads null");
+  } else {
+    const now = Date.UTC(2030, 0, 2, 12);
+    ok((await t.reserve(600, 1000, now)) === true && (await t.reserve(600, 1000, now)) === false, "daily spend helper, scale 1: 600 of a 1000-token day is taken, a second 600 is refused");
+    ok((await t.today(now)) === 600, `daily spend helper, scale 1: today reads the whole units as given (${await t.today(now)})`);
+  }
+}
 ok(SHARED_LIMITS_WORDS.join() === "on,memory,degraded", "the status words are on, memory, degraded");
 
 // ---- the Redis backend (a real server) ---------------------------------------------------

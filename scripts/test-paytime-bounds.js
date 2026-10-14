@@ -171,17 +171,17 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   const g = await import("../src/composite-spend-guard.js");
   g._compositeGuardReset();
   for (let i = 0; i < 12; i++) g.recordCompositeSpendFailure("0xBURST");
-  ok(!g.compositeGuardGlobalPaused(), "one wallet's twelve failures do not pause every buyer's reports");
-  ok(g.compositeGuardBlocked("0xBURST"), "... that wallet is blocked by the per-key bound");
+  ok(!(await g.compositeGuardGlobalPaused()), "one wallet's twelve failures do not pause every buyer's reports");
+  ok(await g.compositeGuardBlocked("0xBURST"), "... that wallet is blocked by the per-key bound");
   for (let w = 0; w < 2; w++) for (let i = 0; i < 3; i++) g.recordCompositeSpendFailure(`0xLapse${w}`);
-  ok(!g.compositeGuardGlobalPaused(), "three buyers with three failures each (nine) do not pause");
+  ok(!(await g.compositeGuardGlobalPaused()), "three buyers with three failures each (nine) do not pause");
   for (let i = 0; i < 3; i++) g.recordCompositeSpendFailure("0xLapse2");
-  ok(g.compositeGuardGlobalPaused(), "a fourth buyer's third failure makes twelve: a refusal that hits every buyer still pauses at twelve failures");
+  ok(await g.compositeGuardGlobalPaused(), "a fourth buyer's third failure makes twelve: a refusal that hits every buyer still pauses at twelve failures");
   g._compositeGuardReset();
   for (let i = 0; i < 11; i++) g.recordCompositeSpendFailure(`0xWallet${i}`);
-  ok(!g.compositeGuardGlobalPaused(), "eleven buyers with one failure each do not pause");
+  ok(!(await g.compositeGuardGlobalPaused()), "eleven buyers with one failure each do not pause");
   g.recordCompositeSpendFailure(null);
-  ok(g.compositeGuardGlobalPaused(), "a twelfth, unkeyed, does: an unkeyed failure counts as its own buyer");
+  ok(await g.compositeGuardGlobalPaused(), "a twelfth, unkeyed, does: an unkeyed failure counts as its own buyer");
   g._compositeGuardReset();
 }
 
@@ -575,7 +575,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
 {
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   const breaker = readFileSync(new URL("../src/gateway-settle-breaker.js", import.meta.url), "utf8");
-  const from = server.indexOf("if (compositeGuardBlocked(guardKey))");
+  const from = server.indexOf("if (await compositeGuardBlocked(guardKey))");
   const listener = server.slice(from, server.indexOf("let cacheKey = null;", from));
   ok(/onSettleOutcome\(req, res, \(\) => \{/.test(listener) && !/res\.on\("finish"/.test(listener), "the composite guard hears settlement through onSettleOutcome, not finish");
   ok(/onSettleOutcome\(req, res, \(\) => \{/.test(breaker) && !/res\.once\("finish"/.test(breaker), "the gateway and catalog breakers hear settlement through onSettleOutcome, not finish");
@@ -657,8 +657,11 @@ await new Promise((r) => orStub.listen(OR_PORT, "127.0.0.1", r));
 // settled), every later one is settled, and nothing priced above $0.005 (the
 // image and video tiers) is ever forgiven. The forgiveness rule itself is
 // scripts/test-hangup-settlement.js; here it only has to stay uncounted.
+// With REDIS_URL the server keeps its controls in the shared store: its own
+// key prefix, so state the unit sections above wrote (and a fire-and-forget
+// write that lands after their reset) is not this server's.
 proc = spawn("node", ["--import", "./scripts/lib/openrouter-stub-preload.js", "src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
+  env: { ...process.env, SHARED_LIMITS_PREFIX: `ptb${process.pid}${Date.now().toString(36)}`, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_STUB_URL: `http://127.0.0.1:${OR_PORT}`, OPENROUTER_FLEX: "off",

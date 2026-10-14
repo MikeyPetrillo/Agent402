@@ -7,12 +7,15 @@
 //   1. Two real servers (src/server.js, FREE_MODE, port 0) report the shared
 //      store on /api/gateway-status (sharedLimits.status on), and a control
 //      that runs end to end in free mode, the operator wrong-credential
-//      counter, is counted on one server and read elevated on the other.
+//      counter, is counted on one server and read elevated on the other. An
+//      operator browser session minted on one is honoured on the other, and a
+//      logout on the first revokes it on both.
 //   2. Two child processes load the real control modules (the gateway settle
 //      breaker, the composite spend guard, the external spend guard's
 //      per-payer ledger, the hang-up forgiveness budget, the daily spend
-//      helper) with the same REDIS_URL: failures and spend recorded on A are
-//      refused on B, and a settlement or a success on A clears B.
+//      helper, the judge's daily token ceiling, the in-flight run cover) with
+//      the same REDIS_URL: failures and spend recorded on A are refused on B,
+//      and a settlement or a success on A clears B.
 // Deliberately does not skip without REDIS_URL: this is the test the
 // two-replica deployment rests on, and CI provides the service container.
 import { spawn } from "node:child_process";
@@ -36,10 +39,10 @@ const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } 
 // ---- 1. two real servers -----------------------------------------------------------
 {
   const TOKEN = "operator-crossprocess-secret";
-  const [pa, pb] = await getFreePorts(2);
-  const boot = (port) => {
+  const [pa, pb, pr] = await getFreePorts(3);
+  const boot = (port, token = TOKEN) => {
     const c = spawn(process.execPath, ["src/server.js"], {
-      env: { ...BASE_ENV, FREE_MODE: "true", PORT: String(port), AGENT402_OPERATOR_TOKEN: TOKEN, OPERATOR_AUTH_FAIL_ALERT: "10" },
+      env: { ...BASE_ENV, FREE_MODE: "true", PORT: String(port), AGENT402_OPERATOR_TOKEN: token, OPERATOR_AUTH_FAIL_ALERT: "10" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     c.log = "";
@@ -48,11 +51,12 @@ const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } 
     children.push(c);
     return c;
   };
-  const A = boot(pa), Bs = boot(pb);
+  // R runs a rotated operator token on the same Redis (a container after a rotation).
+  const A = boot(pa), Bs = boot(pb), R = boot(pr, `${TOKEN}-rotated`);
   const up = async (port) => { for (let i = 0; i < 120; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) return true; } catch { /* */ } await wait(500); } return false; };
-  const [ua, ub] = await Promise.all([up(pa), up(pb)]);
-  ok(ua && ub, "two servers booted on free ports against one Redis");
-  if (!(ua && ub)) { console.error(A.log.slice(-800), Bs.log.slice(-800)); done(1); }
+  const [ua, ub, ur] = await Promise.all([up(pa), up(pb), up(pr)]);
+  ok(ua && ub && ur, "three servers booted on free ports against one Redis");
+  if (!(ua && ub && ur)) { console.error(A.log.slice(-800), Bs.log.slice(-800), R.log.slice(-800)); done(1); }
   const status = async (port, auth = false) => (await fetch(`http://127.0.0.1:${port}/api/gateway-status`, auth ? { headers: { authorization: `Bearer ${TOKEN}` } } : {})).json();
   const sa = await status(pa), sb = await status(pb);
   ok(sa.sharedLimits?.status === "on" && sb.sharedLimits?.status === "on", `both servers publish sharedLimits.status on (${sa.sharedLimits?.status}, ${sb.sharedLimits?.status})`);
@@ -60,19 +64,37 @@ const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } 
   const opA = await status(pa, true);
   ok(opA.sharedLimits?.mode === "redis" && typeof opA.sharedLimits?.ops === "number", `the operator view carries the mode and counts (${JSON.stringify(opA.sharedLimits)})`);
   ok(opA.operatorAuth?.status === "ok", "control: before any wrong credential the operator auth word is ok on A");
+  // An operator browser session: minted on A, honoured on B, revoked on both
+  // by a logout on A. (Before the wrong credentials below, which spend the
+  // address's guessing budget on A.)
+  {
+    const page = async (port, cookie) => (await fetch(`http://127.0.0.1:${port}/__operator`, { headers: cookie ? { cookie } : {}, redirect: "manual" })).status;
+    ok((await page(pb)) === 404, "session control: without a cookie the dashboard on B is hidden (404)");
+    const login = await fetch(`http://127.0.0.1:${pa}/__operator/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN }) });
+    const cookie = (login.headers.get("set-cookie") || "").split(";")[0];
+    ok(login.status === 200 && /^a402_op=[0-9a-f]{64}$/.test(cookie), `login on A sets a session cookie (${login.status})`);
+    ok((await page(pa, cookie)) === 200, "the cookie authenticates the dashboard on A");
+    ok((await page(pb, cookie)) === 200, "the same cookie authenticates the dashboard on B, which never saw the login");
+    ok((await page(pb, "a402_op=" + "ab".repeat(32))) === 404, "control: a well-formed session id minted nowhere is refused on B");
+    ok((await page(pr, cookie)) === 404, "a container running a rotated operator token refuses the session though it is in the shared store");
+    const out = await fetch(`http://127.0.0.1:${pa}/__operator/logout`, { method: "POST", headers: { cookie }, redirect: "manual" });
+    ok(out.status === 303, `logout on A redirects (${out.status})`);
+    ok((await page(pa, cookie)) === 404, "the logged-out session is refused on A");
+    ok((await page(pb, cookie)) === 404, "and on B, which had cached it as valid a moment ago");
+  }
   // Ten wrong credentials, all on A; the alarm threshold is ten.
   for (let i = 0; i < 10; i++) await fetch(`http://127.0.0.1:${pa}/__operator`, { headers: { authorization: `Bearer wrong-${i}` } });
   const opB = await status(pb, true);
   ok(opB.operatorAuth?.status === "elevated" && opB.operatorAuth?.failures1h >= 10, `B reads the wrong credentials counted on A: operatorAuth ${opB.operatorAuth?.status}, failures1h ${opB.operatorAuth?.failures1h}`);
   const pubB = await status(pb);
   ok(pubB.operatorAuth?.status === "elevated" && !("failures1h" in pubB.operatorAuth), "and the public word on B is elevated, with no number");
-  A.kill("SIGKILL"); Bs.kill("SIGKILL");
+  A.kill("SIGKILL"); Bs.kill("SIGKILL"); R.kill("SIGKILL");
 }
 
 // ---- 2. two replicas of the control modules --------------------------------------------
 function replica(name) {
   const c = spawn(process.execPath, ["scripts/lib/shared-limits-driver.js"], {
-    env: { ...BASE_ENV, EXTERNAL_MAX_UNSETTLED_USD: "1", HANGUP_FORGIVE_KEY_USD: "0.25", HANGUP_FORGIVE_GLOBAL_USD: "2", HANGUP_FORGIVE_SALT: `salt-${PREFIX}`, HANGUP_FORGIVE_FILE: "off", COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_GLOBAL_MAX_FAILS: "6", GATEWAY_SETTLE_BREAKER_MAX: "3", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "4" },
+    env: { ...BASE_ENV, EXTERNAL_MAX_UNSETTLED_USD: "1", HANGUP_FORGIVE_KEY_USD: "0.25", HANGUP_FORGIVE_GLOBAL_USD: "2", HANGUP_FORGIVE_SALT: `salt-${PREFIX}`, HANGUP_FORGIVE_FILE: "off", COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_GLOBAL_MAX_FAILS: "6", GATEWAY_SETTLE_BREAKER_MAX: "3", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "4", TYPESAFE_API_KEY: "test-key-never-sent", OPENROUTER_API_KEY: "", DECIDE_OPENROUTER_API_KEY: "", INFLIGHT_COVER: "" },
     stdio: ["pipe", "pipe", "pipe"],
   });
   children.push(c);
@@ -93,7 +115,7 @@ ok((await A.ready) && (await B.ready), "two control replicas started");
 {
   const ma = await A.send({ op: "mode" }), mb = await B.send({ op: "mode" });
   ok(ma.mode === "redis" && mb.mode === "redis" && ma.word === "on", `both replicas run the shared backend (${ma.mode}, word ${ma.word})`);
-  ok(ma.breakerShared && ma.compositeShared && ma.hangupShared && ma.payerLedgerShared, "every control reports writing through to the shared store");
+  ok(ma.breakerShared && ma.compositeShared && ma.hangupShared && ma.payerLedgerShared && ma.jevShared && ma.coverShared, "every control reports writing through to the shared store");
 }
 // --- the gateway settle breaker ---
 {
@@ -204,6 +226,45 @@ ok((await A.ready) && (await B.ready), "two control replicas started");
   ok(r.ok === false && Math.abs(r.today - 0.6) < 1e-9, `B's $0.6 would pass the day's cap with A's spend counted and is refused (today ${r.today})`);
   r = await B.send({ op: "daily.reserve", name: "cap", usd: 0.3, cap: 1 });
   ok(r.ok === true, "B's $0.3 fits");
+}
+// --- the judge's daily token ceiling (one figure for the service) ---
+{
+  let r = await A.send({ op: "jev.judge", task: "turn this web page into json, run one" });
+  ok(r.answered && r.calls === 1 && r.localTokens > 0 && r.sharedTokens === r.localTokens, `judge: A's call is booked in the shared day (${r.sharedTokens} tokens)`);
+  const T = r.localTokens;
+  // A day of one and a half calls: B's own counter is empty, the shared one is not.
+  await A.send({ op: "jev.cap", tokens: Math.floor(T * 1.5) });
+  await B.send({ op: "jev.cap", tokens: Math.floor(T * 1.5) });
+  r = await B.send({ op: "jev.judge", task: "turn this web page into json, run two" });
+  ok(!r.answered && r.calls === 0 && r.refused === 1 && r.localTokens === 0, `B refuses past the shared ceiling with no model call, though its own counter is empty (calls ${r.calls}, local ${r.localTokens})`);
+  ok(r.sharedTokens === T, `the refused reservation is given back to the shared day (${r.sharedTokens})`);
+  await B.send({ op: "jev.cap", tokens: T * 3 });
+  r = await B.send({ op: "jev.judge", task: "turn this web page into json, run two" });
+  ok(r.answered && r.calls === 1 && r.sharedTokens > T, `control: with room for two calls B is answered and books on the same day (${r.sharedTokens})`);
+  await A.send({ op: "jev.cap", tokens: null }); await B.send({ op: "jev.cap", tokens: null });
+}
+// --- the in-flight run cover (a wallet's concurrent runs, summed across containers) ---
+{
+  const W = "0x" + "f6".repeat(20), V = "0x" + "f7".repeat(20), PRICE = 600000;
+  let r = await A.send({ op: "ic.admit", run: "a1", payer: W, atomic: PRICE, balance: PRICE });
+  ok(r.admitted, "cover: A admits a wallet's first run (its balance covers one)");
+  r = await B.send({ op: "ic.admit", run: "b1", payer: W, atomic: PRICE, balance: PRICE });
+  ok(!r.admitted && r.status === 429 && /does not cover this one as well/.test(r.message || ""), `B refuses a second run from that wallet: A's run in flight counts against the balance (${r.status})`);
+  let st = await B.send({ op: "ic.status" });
+  ok(st.shared && st.runsInFlight === 0 && st.foreignReads >= 1, `B's own ledger held nothing; the refusal came from the shared window (foreign reads ${st.foreignReads})`);
+  r = await B.send({ op: "ic.admit", run: "b2", payer: V, atomic: PRICE, balance: PRICE });
+  ok(r.admitted, "control: another wallet's first run is admitted on B");
+  r = await B.send({ op: "ic.admit", run: "b3", payer: W, atomic: PRICE, balance: 2 * PRICE });
+  ok(r.admitted, "control: a balance that covers both runs admits the second on B");
+  r = await A.send({ op: "ic.admit", run: "a2", payer: W, atomic: PRICE, balance: 2 * PRICE });
+  ok(!r.admitted && r.status === 429, "a third, on A, against a balance for two: B's run counts on A too");
+  await A.send({ op: "ic.release", run: "a1" });
+  r = await A.send({ op: "ic.admit", run: "a3", payer: W, atomic: PRICE, balance: 2 * PRICE });
+  ok(r.admitted, "once A's first run leaves, a run on A fits beside B's");
+  for (const [rep, run] of [[A, "a3"], [B, "b2"], [B, "b3"]]) await rep.send({ op: "ic.release", run });
+  r = await B.send({ op: "ic.admit", run: "b4", payer: W, atomic: PRICE, balance: PRICE });
+  ok(r.admitted, "every run released on both: the wallet's next run is admitted on its own proof");
+  await B.send({ op: "ic.release", run: "b4" });
 }
 A.exit(); B.exit();
 await wait(200);

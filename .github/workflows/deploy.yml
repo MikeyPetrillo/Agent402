@@ -1323,7 +1323,7 @@ jobs:
           REDIS_URL: redis://127.0.0.1:6379
         run: node scripts/test-replay-guard-redis.js
 
-      - name: "Shared limits (REAL redis: the counter primitive on both backends, two Redis instances read one count, a store that does not answer is a miss and never an exception; then two servers and two control replicas on one Redis: a breaker, a money guard and a budget counted on A refuse on B)"
+      - name: "Shared limits (REAL redis: the counter primitive on both backends, two Redis instances read one count, a store that does not answer is a miss and never an exception; then two servers and two control replicas on one Redis: a breaker, a money guard and a budget counted on A refuse on B, an operator session minted on A is honoured and revoked on B, the judge's token ceiling and a wallet's in-flight runs are summed across A and B)"
         env:
           REDIS_URL: redis://127.0.0.1:6379
         run: |
@@ -1331,6 +1331,10 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           t node scripts/test-shared-limits.js
           t node scripts/test-shared-limits-crossprocess.js
+          # The in-flight run cover: memory, a store that does not answer (local ledger decides), and real Redis.
+          t node scripts/test-inflight-cover-shared.js
+          # The judge's daily token ceiling on the Redis backend (the memory half runs in its own lane).
+          t node scripts/test-tool-judge.js
 
       - name: "State database (REAL postgres: documents/records/log lines/leases; every migrated store imports its file once and reads the row; loops skip under another holder's lease; idempotency answers and claims shared over REAL redis)"
         env:

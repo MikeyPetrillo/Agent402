@@ -7,7 +7,8 @@ import assert from "node:assert/strict";
 // fallback (src/decision-one.js); scripts/test-decision-one.js covers it.
 delete process.env.OPENROUTER_API_KEY; delete process.env.DECIDE_OPENROUTER_API_KEY;
 process.env.TYPESAFE_API_KEY = "test-key";
-const { decide, judgeTool, criteriaFor, NONE, _jevReset, jevSpendStatus } = await import("../src/tool-judge.js");
+const { decide, judgeTool, criteriaFor, NONE, _jevReset, jevSpendStatus, _jevShared, _jevSharedToday } = await import("../src/tool-judge.js");
+const { sharedLimitsConfigured, createSharedDailySpend } = await import("../src/shared-limits.js");
 const { buildRouteExecuteTool } = await import("../src/tools/route-execute.js");
 
 let n = 0;
@@ -203,3 +204,40 @@ console.log(`test-tool-judge (with content-keyed cache): ${n} assertions ok`);
   globalThis.fetch = o;
 }
 console.log(`test-tool-judge (with free share + admission): ${n} assertions ok`);
+
+// --- the daily ceiling is one figure for the service: with a shared store
+//     (REDIS_URL) the tokens are reserved in a day counter every replica adds
+//     to; without one the process's own counter decides alone. Runs on
+//     whichever backend this process has; the two-replica case is
+//     scripts/test-shared-limits-crossprocess.js.
+{
+  const o = globalThis.fetch;
+  let hits = 0;
+  globalThis.fetch = async () => { hits++; return new Response(JSON.stringify({ answers: { best: { choice: "html-to-json", confidence: 0.95 } } }), { status: 200 }); };
+  _jevReset();
+  ok(_jevShared === sharedLimitsConfigured(), `the judge writes through to the shared store exactly when one is configured (${_jevShared})`);
+  await judgeTool("shared ceiling task", [A, B]);
+  const local = jevSpendStatus().tokens;
+  const sharedNow = await _jevSharedToday();
+  if (!_jevShared) {
+    ok(hits === 1 && local > 0 && sharedNow.tokens === null, "memory backend: the call is booked locally and the shared day reads null");
+  } else {
+    ok(hits === 1 && sharedNow.tokens === local && local > 0, `redis backend: the shared day counter carries the tokens this process booked (${sharedNow.tokens} = ${local})`);
+    // Another replica's spend: a second handle on the same counter reserves
+    // the rest of the day; this process's own counter is empty, and the
+    // judge still refuses before any call is made.
+    const other = createSharedDailySpend("jev-day", "test", { scale: 1 });
+    process.env.JEV_DAILY_MAX_TOKENS = String(local * 2 + 100);
+    ok((await other.reserve(local + 100, local * 2 + 100)) === true, "another replica reserves most of the day");
+    hits = 0;
+    const before = jevSpendStatus().refusedToday;
+    ok((await judgeTool("a different task past the shared ceiling", [A, B])) === null && hits === 0 && jevSpendStatus().refusedToday === before + 1, "the judge refuses on the shared total with no model call, though this process's own counter would have allowed it");
+    ok((await _jevSharedToday()).tokens === local * 2 + 100, `a refused reservation is given back to the shared day (${(await _jevSharedToday()).tokens})`);
+    delete process.env.JEV_DAILY_MAX_TOKENS;
+    _jevReset();
+  }
+  globalThis.fetch = o;
+}
+console.log(`test-tool-judge (with the shared ceiling): ${n} assertions ok`);
+// The shared client (with REDIS_URL) keeps the loop alive; every assertion above threw or passed.
+process.exit(0);
