@@ -976,7 +976,7 @@ jobs:
           t node scripts/test-gateway-settle-breaker.js
 
       - name: Tollbooth tests (pay-per-crawl gate — node + edge/Web-Crypto)
-        run: node tollbooth/test.js && node tollbooth/edge.test.js && node tollbooth/features.test.js && node tollbooth/tempo.test.js
+        run: node tollbooth/test.js && node tollbooth/edge.test.js && node tollbooth/features.test.js && node tollbooth/tempo.test.js && node tollbooth/nano.test.js
       - name: Live visualizer tests (services/live, offline)
         run: node services/live/test.js
 
