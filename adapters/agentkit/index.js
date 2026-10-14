@@ -22,6 +22,50 @@ import { Agent402 } from "agent402-client";
 
 const DEFAULT_BASE = "https://agent402.tools";
 
+// Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
+// settle nothing, so a 503 the server sheds under load is safe to repeat. It
+// is retried only when it names its own delay (a Retry-After header or a
+// retryAfterSeconds body field), at most DISCOVERY_ATTEMPTS tries in all,
+// each wait capped at DISCOVERY_MAX_WAIT_MS. A paid call never goes through
+// here: a repeat of one could settle twice.
+const DISCOVERY_ATTEMPTS = 3;
+const DISCOVERY_MAX_WAIT_MS = 5000;
+
+async function shedRetryWaitMs(r) {
+  if (!r || r.status !== 503) return null;
+  const header = r.headers && typeof r.headers.get === "function" ? r.headers.get("retry-after") : null;
+  let seconds = header != null && String(header).trim() !== "" ? Number(header) : NaN;
+  if (!Number.isFinite(seconds)) {
+    try {
+      const body = await (typeof r.clone === "function" ? r.clone() : r).json();
+      seconds = Number(body && body.retryAfterSeconds);
+    } catch { seconds = NaN; }
+  }
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  return Math.min(seconds * 1000, DISCOVERY_MAX_WAIT_MS);
+}
+
+// Resolves with the 2xx response, or throws `${label}: HTTP <status>` (plus
+// "after N attempts" when it retried) with `.status` and `.attempts` set.
+// `init` may be a function, so each attempt gets its own timeout signal.
+async function discoveryFetch(fetchImpl, label, url, init) {
+  let r;
+  let attempts = 0;
+  for (;;) {
+    attempts++;
+    r = await fetchImpl(url, typeof init === "function" ? init() : init);
+    if (r.ok) return r;
+    if (attempts >= DISCOVERY_ATTEMPTS) break;
+    const wait = await shedRetryWaitMs(r);
+    if (wait == null) break;
+    await new Promise((resolve) => setTimeout(resolve, wait));
+  }
+  const err = new Error(`${label}: HTTP ${r.status}${attempts > 1 ? ` after ${attempts} attempts` : ""}`);
+  err.status = r.status;
+  err.attempts = attempts;
+  throw err;
+}
+
 /**
  * The three actions, as plain AgentKit custom-action definitions.
  * @param {object} [opts]
@@ -67,8 +111,7 @@ export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = glob
       k: z.number().int().min(1).max(10).optional().describe("How many matches to return (default 5)"),
     }),
     invoke: async ({ task, k = 5 }) => {
-      const r = await fetchImpl(`${base}/api/find?q=${encodeURIComponent(task)}&k=${k}`);
-      if (!r.ok) throw new Error(`agent402_find failed: HTTP ${r.status}`);
+      const r = await discoveryFetch(fetchImpl, "agent402_find failed (GET /api/find)", `${base}/api/find?q=${encodeURIComponent(task)}&k=${k}`);
       const j = await r.json();
       const rows = (j.results || []).map((t) => ({
         slug: t.slug, name: t.name, price: t.price, route: t.route, walletRequired: t.computePayable === false || t.walletOnly === true,
@@ -104,8 +147,7 @@ export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = glob
     description: "What Agent402 is, how it is paid, and how many tools it serves right now. Free.",
     schema: z.object({}),
     invoke: async () => {
-      const r = await fetchImpl(`${base}/api/pricing`);
-      if (!r.ok) throw new Error(`agent402_about failed: HTTP ${r.status}`);
+      const r = await discoveryFetch(fetchImpl, "agent402_about failed (GET /api/pricing)", `${base}/api/pricing`);
       const p = await r.json();
       const endpoints = p.endpoints || [];
       return JSON.stringify({
