@@ -128,6 +128,15 @@ try {
     }
   }));
 
+  // The amount a 402 asks for against what the price list publishes. A
+  // fixed-price route asks exactly its list price. A quoted route (its row says
+  // quoted: true with a quoteRange) prices the body it was sent, so its 402 for
+  // this probe's empty body lands anywhere inside the published range, whose
+  // floor is the list price. This boot offers Base only, so accepts[0] is USDC
+  // on Base at six decimals; compared as integer micro-dollars.
+  const microOf = (usd) => Math.round(Number(String(usd ?? "").replace(/[^0-9.]/g, "")) * 1e6);
+  let fixedPriced = 0;
+  let quotedPriced = 0;
   let requiredRoutes = 0;
   let variableRoutes = 0;
   let rawRoutes = 0;
@@ -182,6 +191,24 @@ try {
       if (!specificTagSeen) fail(route, `route-specific tag "scraping" was displaced (${JSON.stringify(tags)})`);
     }
 
+    {
+      // accepts[0] is read here ahead of the outputSchema checks below, which
+      // declare their own `accepts` for the whole list.
+      const amount = Number(paymentRequired.accepts?.[0]?.amount);
+      const list = microOf(endpoint.price);
+      if (!Number.isFinite(amount) || !(list > 0)) fail(route, `unreadable 402 amount (${paymentRequired.accepts?.[0]?.amount}) or list price (${endpoint.price})`);
+      else if (endpoint.quoted === true) {
+        quotedPriced++;
+        const min = microOf(endpoint.quoteRange?.minUsd), max = microOf(endpoint.quoteRange?.maxUsd);
+        if (!(min > 0) || !(max >= min)) fail(route, `quoted row without a usable quoteRange (${JSON.stringify(endpoint.quoteRange)})`);
+        else if (min !== list) fail(route, `quoted row's floor (${min}) is not its list price (${list})`);
+        else if (amount < min || amount > max) fail(route, `402 asks ${amount} micro-USD, outside the published range ${min}..${max}`);
+      } else {
+        fixedPriced++;
+        if (amount !== list) fail(route, `402 asks ${amount} micro-USD, list price is ${list} (a route whose 402 varies must say quoted: true with a quoteRange on /api/pricing)`);
+      }
+    }
+
     const extension = paymentRequired.extensions?.bazaar;
     if (!extension) { fail(route, "missing bazaar extension"); continue; }
     const spec = validateDiscoveryExtensionSpec(extension);
@@ -231,11 +258,13 @@ try {
   }
 
   if (rows.length !== endpoints.length) fail("catalog", `probed ${rows.length}/${endpoints.length} endpoints`);
+  if (!quotedPriced) fail("catalog", "no quoted route was checked against its published range (the metered tiers and decide are quoted)");
   if (!speechSeen) fail("POST /v1/audio/speech", "route was not validated as a raw output");
   if (!specificTagSeen) fail("POST /api/extract", "representative route-specific tag did not survive sanitization");
 
   console.log(`catalog routes: ${endpoints.length}`);
   console.log(`route-aware required schemas: ${requiredRoutes}; variable schemas without required: ${variableRoutes}; raw/array schemas: ${rawRoutes}`);
+  console.log(`402 amount vs price list: ${fixedPriced} fixed routes at list price, ${quotedPriced} quoted routes inside their published range`);
   console.log(`largest challenge: ${largest.route} at ${largest.bytes} bytes`);
   console.log(`largest 402 body: ${largestBody.route} at ${largestBody.bytes} bytes; largest own fields: ${largestOwn.route} at ${largestOwn.bytes} bytes`);
   if (failures.length) {
