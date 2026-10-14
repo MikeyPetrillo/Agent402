@@ -47,6 +47,11 @@ import { meterUpstreamSpend } from "../posthog.js";
 import { createSharedDailySpend } from "../shared-limits.js";
 
 const EXA_API = "https://api.exa.ai";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+// DEADLINES (src/upstream-deadline.js): one read per handler under its own
+// 30 s cap and the route's payment-window budget (PAYMENT_WINDOW_BUDGET_MS);
+// a read that outlives it is a 503 naming the upstream and the step, never a
+// 504 (the booked estimate stays booked).
 const TIMEOUT_MS = 30_000;
 const USER_AGENT = "agent402-exa/1";
 const SHARED_TAGS = ["web", "search"];
@@ -222,22 +227,11 @@ async function exaPost(path, body) {
   const book = (usd) => { _exaSpendBook(usd); exaShared.book(usd); };
   spend.calls++;
 
-  let res;
-  try {
-    res = await fetch(`${EXA_API}${path}`, {
-      method: "POST",
-      headers: { "x-api-key": key, "Content-Type": "application/json", Accept: "application/json", "User-Agent": USER_AGENT },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (e) {
-    // The upstream-failure class (unreachable, 5xx, non-JSON) answers 503 with
-    // the upstream named and the no-charge stated: a handler status >= 400 is
-    // never settled, and a 503 tells the buyer to retry rather than that the
-    // request was wrong. A timeout keeps its own class (504).
-    if (e?.name === "TimeoutError" || e?.name === "AbortError") throw bad("Exa did not respond in time. Nothing was charged for this request.", 504);
-    throw bad("Could not reach Exa (upstream unreachable). Nothing was charged for this request.", 503);
-  }
+  const res = await upstreamFetch(`${EXA_API}${path}`, {
+    method: "POST",
+    headers: { "x-api-key": key, "Content-Type": "application/json", Accept: "application/json", "User-Agent": USER_AGENT },
+    body: JSON.stringify(body),
+  }, { label: "Exa", step: String(path).replace(/^\//, "") || "search", timeoutMs: TIMEOUT_MS, tag: "[exa]" });
 
   // Never relay an upstream error body to the buyer: it can carry our own key
   // material, account identifiers or another tenant's text.
@@ -544,3 +538,6 @@ for (const t of EXA_TOOLS) {
   const inner = t.handler;
   t.handler = async (...args) => markUntrusted(await inner(...args));
 }
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(EXA_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

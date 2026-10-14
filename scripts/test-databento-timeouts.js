@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// A slow or unreachable market-data upstream is a 504/502 naming the
+// A slow or unreachable market-data upstream is a 503 naming the
 // upstream, never a bare 500 (a fetch timeout carries no status of its own).
 // Offline: global fetch is stubbed.
 process.env.DATABENTO_API_KEY = "db-test-key-not-real";
@@ -12,14 +12,14 @@ const timeoutErr = () => Object.assign(new DOMException("The operation was abort
 
 globalThis.fetch = async () => { throw timeoutErr(); };
 try { await availableEnd(); ok(false, "range read times out"); }
-catch (e) { ok(e.statusCode === 504 && /did not answer/.test(e.message), `a timed-out range read is a 504 naming the upstream (${e.statusCode}: ${e.message})`); }
+catch (e) { ok(e.statusCode === 503 && /^Market data upstream did not answer the dataset range read within \d+ s \(upstream deadline\)/.test(e.message), `a timed-out range read is a 503 naming the upstream and the step (${e.statusCode}: ${e.message})`); }
 
 try { await dailyBars({ symbol: "AAPL", start: "2026-08-01", end: "2026-09-05" }); ok(false, "data read times out"); }
-catch (e) { ok(e.statusCode === 504, `a timed-out data read is a 504, not a 500 (${e.statusCode})`); }
+catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream", `a timed-out data read is a 503 attributed upstream, not a 500 (${e.statusCode})`); }
 
 globalThis.fetch = async () => { throw new TypeError("fetch failed"); };
 try { await dailyBars({ symbol: "AAPL", start: "2026-08-01", end: "2026-09-05" }); ok(false, "unreachable"); }
-catch (e) { ok(e.statusCode === 502 && /could not be reached/.test(e.message), `an unreachable upstream is a 502 (${e.statusCode})`); }
+catch (e) { ok(e.statusCode === 503 && /^Market data upstream is unreachable from here/.test(e.message), `an unreachable upstream is a 503 naming the step (${e.statusCode})`); }
 
 // The cost read failing is not a reason to refuse: the data read still runs.
 // These reads use a range wider than a quote's lookback, the shape that keeps
@@ -62,7 +62,7 @@ ok(dataReads === 1 && costReads === 1 && second[0].close === 1.5, `a repeat of t
 await dailyBars({ ...q, end: "2026-09-08" });
 ok(dataReads === 2, `a new available end is a new key and reads upstream again (${dataReads})`);
 failData = true;
-try { await dailyBars({ ...q, symbol: "MSFT" }); ok(false, "failed read"); } catch (e) { ok(e.statusCode === 504, `a failed data read is still the 504 (${e.statusCode})`); }
+try { await dailyBars({ ...q, symbol: "MSFT" }); ok(false, "failed read"); } catch (e) { ok(e.statusCode === 503, `a failed data read is still the 503 (${e.statusCode})`); }
 failData = false;
 await dailyBars({ ...q, symbol: "MSFT" });
 ok(dataReads === 4, `a failed read is never cached: the retry reads upstream (${dataReads})`);

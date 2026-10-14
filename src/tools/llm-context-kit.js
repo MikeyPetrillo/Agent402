@@ -39,8 +39,13 @@ const BRAVE_CONTEXT_URL = "https://api.search.brave.com/res/v1/llm/context";
 
 // Brave's own docs advise a 30s client timeout for this endpoint. We hold a
 // tighter budget than that: this handler occupies a request slot behind the
-// paywall, and a call that cannot answer in 25s is better returned as a 504
+// paywall, and a call that cannot answer in 25s is better returned as a 503
 // (>= 400 cancels settlement, so nobody is charged) than held open.
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+// DEADLINES (src/upstream-deadline.js): one read per handler under its own
+// 25 s cap and the route's payment-window budget (PAYMENT_WINDOW_BUDGET_MS);
+// a read that outlives it is a 503 naming the upstream and the step, never a
+// 504.
 const TIMEOUT_MS = 25_000;
 
 // Backstops, not the operating limits. Brave already bounds the payload by the
@@ -186,18 +191,8 @@ async function fetchContext(params) {
   if (params.safesearch) url.searchParams.set("safesearch", params.safesearch);
   if (params.freshness) url.searchParams.set("freshness", params.freshness);
 
-  let res;
   meterBraveCall("/llm/context", "llm-context");
-  try {
-    res = await fetch(url, {
-      headers: { "X-Subscription-Token": key, Accept: "application/json" },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (err) {
-    // Keep the evidence in the log; never in the buyer's error.
-    console.warn(`[llm-context] upstream unreachable: api.search.brave.com -> ${err.name ?? err.code ?? err.message}`);
-    throw bad("LLM context upstream unreachable or timed out", 504);
-  }
+  const res = await upstreamFetch(url, { headers: { "X-Subscription-Token": key, Accept: "application/json" } }, { label: "LLM context", step: "context", timeoutMs: TIMEOUT_MS, tag: "[llm-context]" });
 
   // Controlled messages only - the upstream body is NEVER relayed to a caller.
   if (res.status === 429) throw bad("LLM context rate limit reached upstream - retry shortly", 503);
@@ -319,3 +314,6 @@ export const LLM_CONTEXT_TOOLS = [
 
 // Exported for the offline tests: the pure halves, without standing up egress.
 export const __test = { validate, normalizeContext, approxTokens, TIMEOUT_MS, MAX_CHUNK_CHARS, MAX_CHUNKS, MAX_TOTAL_CHARS };
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(LLM_CONTEXT_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

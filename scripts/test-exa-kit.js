@@ -114,7 +114,7 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   reset();
   globalThis.fetch = async () => { const e = new Error("timeout"); e.name = "TimeoutError"; throw e; };
   const before = exaSpendStatus().spentUsd;
-  await throws(() => tool("exa-search").handler({ query: "slow" }), /did not respond in time/, "a timeout is a 504");
+  await throws(() => tool("exa-search").handler({ query: "slow" }), /^Exa did not answer the search read within \d+ s \(upstream deadline\)/, "a deadline is a 503 naming the upstream and the step");
   ok(exaSpendStatus().spentUsd > before, "and the day's spend still moved - a guard that only books on success is one a timeout walks through");
 }
 

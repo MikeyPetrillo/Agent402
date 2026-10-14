@@ -9,11 +9,16 @@
 // Enabled when OPENROUTER_API_KEY is set and DECISION_ONE is not "off".
 // Model-backed: an answer is a model's judgment, not a computed value.
 import { OPENROUTER_ATTRIBUTION } from "./openrouter-attribution.js";
+import { upstreamFetch, bodyUnderDeadline } from "./upstream-deadline.js";
 
 export const DECISION_ONE_MODEL = "microsoft/microsoft-decision-1";
 const ENDPOINT = () => (process.env.DECISION_ONE_URL || "https://openrouter.ai/api/alpha/decisions").trim();
 const keyOf = () => (process.env.OPENROUTER_API_KEY || "").trim();
-const TIMEOUT_MS = 25_000;
+// DEADLINES (src/upstream-deadline.js): the one read runs under its own cap
+// and the caller's handler budget (judge-kit walks up to three backends under
+// one budget); a read that outlives it is a 503 naming the step, never a 504.
+export const DECISION_ONE_READ_MS = 25_000;
+const TIMEOUT_MS = DECISION_ONE_READ_MS;
 // The spend bound for every caller, paid route and internal judges alike. A
 // token can be one byte, so the bytes sent are the worst-case input tokens:
 // one call is capped at DECISION_ONE_MAX_BODY_BYTES, and a UTC day's calls at
@@ -52,21 +57,25 @@ export async function askDecisionOne(body, { fetchImpl = fetch, timeoutMs = TIME
   const bytes = Buffer.byteLength(payload);
   if (bytes > maxBodyBytes()) throw fail(`Judgment request is ${bytes} bytes; Decision-1 accepts ${maxBodyBytes()}.`, 503);
   if (!bookBytes(bytes)) throw fail("Decision-1's daily ceiling is reached on this server.", 503);
+  // A read that outlives its cap, or a host that cannot be reached, is the
+  // upstream's 503 class. A timed-out call may still have been billed
+  // upstream (mayBeBilled, so the caller tries no other backend); a refused
+  // connection was not.
+  const ctx = { label: "Judgment upstream", step: "judgment", timeoutMs: Math.max(1, timeoutMs), tag: "[decision-one]", fetchImpl };
   let res;
   try {
-    res = await fetchImpl(ENDPOINT(), {
+    res = await upstreamFetch(ENDPOINT(), {
       method: "POST",
       headers: { ...OPENROUTER_ATTRIBUTION, authorization: `Bearer ${String(apiKey).trim()}`, "content-type": "application/json" },
       body: payload,
-      signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
-    });
+    }, ctx);
   } catch (err) {
-    // A timed-out call may still have been billed upstream; a refused
-    // connection was not.
-    const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
-    throw fail(timedOut ? "Judgment upstream timed out." : "Judgment upstream is unreachable.", timedOut ? 504 : 502, timedOut);
+    if (err?.upstreamFailure === "deadline") err.mayBeBilled = true;
+    throw err;
   }
-  const text = await res.text();
+  let text;
+  try { text = await bodyUnderDeadline(res.text(), ctx); }
+  catch (err) { if (err?.statusCode) { err.mayBeBilled = true; throw err; } throw fail("Judgment upstream returned an unreadable body.", 502, true); }
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) throw fail("Judgment upstream rejected our credentials.", 503);
     if (res.status === 402) throw fail("Judgment upstream is unavailable.", 503);

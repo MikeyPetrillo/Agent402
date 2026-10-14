@@ -13,7 +13,7 @@
 //   429     -> 503 with a retry hint from x-rate-limit-reset
 //   404     -> 404 (unknown user / tweet)
 //   other 4xx -> 400 (the request itself was invalid: bad query syntax)
-//   5xx     -> 502, timeout -> 504
+//   5xx     -> 502; deadline or unreachable -> 503 naming the step
 //
 // Covered by scripts/test-x-data-kit.js (offline, stubbed fetch). Live
 // calls need a real bearer and are not exercised in CI.
@@ -31,6 +31,11 @@ const X_MAX_POSTS_PER_CALL = () => Math.max(5, Math.min(100, parseInt(process.en
 const X_MAX_USERS_PER_LOOKUP = 10;
 
 const X_API = "https://api.x.com/2";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+// DEADLINES (src/upstream-deadline.js): one read per handler under its own
+// cap and the handler budget; a read that outlives it is a 503 naming the
+// upstream and the step, never a 504 (the spend reservation is kept, as for
+// any failure after the request left).
 const TIMEOUT_MS = 12_000;
 const USER_AGENT = "Agent402/1.0 (+https://agent402.tools)";
 
@@ -175,16 +180,9 @@ async function xGet(path, params = {}) {
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
   }
-  let res;
-  try {
-    res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "User-Agent": USER_AGENT },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (err) {
-    console.warn(`[x-data] api.x.com unreachable: ${err?.name ?? err?.code ?? err?.message}`);
-    throw bad("X API did not respond in time - try again shortly", 504);
-  }
+  const res = await upstreamFetch(url, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "User-Agent": USER_AGENT },
+  }, { label: "X API", step: String(path).replace(/^\/2\//, "").split("/").filter((seg) => /^[a-z_]+$/.test(seg)).join(" ").replace(/_/g, " ") || "read", timeoutMs: TIMEOUT_MS, tag: "[x-data]" });
 
   if (res.status >= 400 && res.status < 500) release();
   if (res.status === 401 || res.status === 403) {
@@ -582,3 +580,6 @@ for (const t of X_DATA_TOOLS) {
   const inner = t.handler;
   t.handler = async (...args) => markUntrusted(await inner(...args));
 }
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(X_DATA_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

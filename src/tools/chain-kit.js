@@ -17,8 +17,15 @@ import { ssrfDispatcher } from "./fetch-guard.js";
 import { redactSecrets } from "./redact.js";
 import sha3 from "js-sha3"; // CommonJS — default import, then destructure (same as b20-kit)
 const { keccak256 } = sha3;
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, isUpstreamFailure, upstreamDeadline, budgetSpent, currentBudget } from "../upstream-deadline.js";
 
-const TIMEOUT_MS = 10_000;
+// DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
+// with the handler budget, so a fallback walk over several public nodes ends
+// inside it instead of running one cap per node; a read that outlives its cap
+// is a 503 naming the upstream and the step, never a 504. The keyless node
+// reads answered in 0.05 to 0.8 s (event-logs the slowest) when measured
+// (2026-10-14).
+const ALCHEMY_READ_MS = 10_000;
 
 // Alchemy URL conventions:
 //   JSON-RPC node:  https://{net}-mainnet.g.alchemy.com/v2/{KEY}
@@ -62,22 +69,16 @@ function takeAddress(raw, field = "address") {
   return raw.trim().toLowerCase();
 }
 
-async function alchemyFetch(url, opts = {}) {
-  let res;
-  try {
-    res = await fetch(url, {
-      ...opts,
-      headers: { "Content-Type": "application/json", Accept: "application/json", ...(opts.headers || {}) },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (err) {
-    // Keep the evidence: log the transport cause (price-feed-kit rule).
-    console.warn(`[chain] upstream unreachable: ${(() => { try { return new URL(url).host; } catch { return "?"; } })()} → ${err.name ?? err.code ?? err.message}`);
-    throw bad("Chain upstream timed out", 504);
-  }
+async function alchemyFetch(url, opts = {}, step = "data") {
+  const ctx = { label: "Chain", step, timeoutMs: ALCHEMY_READ_MS, tag: "[chain]" };
+  const res = await upstreamFetch(url, {
+    ...opts,
+    headers: { "Content-Type": "application/json", Accept: "application/json", ...(opts.headers || {}) },
+  }, ctx);
   if (res.status === 429) throw bad("Chain rate limit reached upstream - retry shortly", 503);
   if (!res.ok) throw bad(`Chain upstream error (HTTP ${res.status})`, 502);
-  return res.json();
+  try { return await bodyUnderDeadline(res.json(), ctx); }
+  catch (err) { if (err?.statusCode) throw err; throw bad("Chain upstream returned non-JSON", 502); }
 }
 
 async function jsonRpc(network, method, params) {
@@ -86,7 +87,7 @@ async function jsonRpc(network, method, params) {
   const data = await alchemyFetch(url, {
     method: "POST",
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-  });
+  }, method);
   // Upstream-derived text — the Alchemy key rides the request URL, so redact
   // before echoing (the route binder returns err.message verbatim to buyers).
   if (data.error) throw bad(`Chain RPC error: ${redactSecrets(String(data.error.message || "unknown")).slice(0, 300)}`, 502);
@@ -97,19 +98,19 @@ async function nftApi(network, method, params) {
   const key = requireKey();
   const qs = new URLSearchParams(params).toString();
   const url = `https://${network.subdomain}.g.alchemy.com/nft/v3/${key}/${method}?${qs}`;
-  return alchemyFetch(url);
+  return alchemyFetch(url, {}, method);
 }
 
 async function pricesApi(method, body) {
   const key = requireKey();
   const url = `https://api.g.alchemy.com/prices/v1/${key}/${method}`;
-  return alchemyFetch(url, { method: "POST", body: JSON.stringify(body) });
+  return alchemyFetch(url, { method: "POST", body: JSON.stringify(body) }, method);
 }
 
 async function dataApi(method, body) {
   const key = requireKey();
   const url = `https://api.g.alchemy.com/data/v1/${key}/${method}`;
-  return alchemyFetch(url, { method: "POST", body: JSON.stringify(body) });
+  return alchemyFetch(url, { method: "POST", body: JSON.stringify(body) }, method);
 }
 
 // Convert a hex string ("0x...") to a decimal string. We return decimal strings,
@@ -187,19 +188,24 @@ export async function publicJsonRpc(network, method, params) {
     ...PUBLIC_RPCS[network.name],
   ];
   let lastErr;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  // Each endpoint read runs under its own cap AND what is left of the handler
+  // budget; the walk stops when the budget cannot hold another read, so a
+  // list of stalled nodes ends as one deadline answer, never one cap per node.
+  let tried = 0;
+  walk: for (let attempt = 0; attempt < 2; attempt++) {
     for (const url of urls) {
+      if (tried++ && budgetSpent()) break walk;
       let res, text;
+      const ctx = { label: "Chain RPC", step: method, timeoutMs: EVM_RPC_TIMEOUT_MS, tag: "[chain]" };
       try {
-        res = await fetch(url, {
+        res = await upstreamFetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-          signal: AbortSignal.timeout(EVM_RPC_TIMEOUT_MS),
           dispatcher: ssrfDispatcher,
-        });
-        text = await res.text();
-      } catch (e) { lastErr = e; continue; } // timeout / transport → next endpoint
+        }, ctx);
+        text = await bodyUnderDeadline(res.text(), ctx);
+      } catch (e) { lastErr = e; continue; } // deadline / transport -> next endpoint
       let data;
       try { data = JSON.parse(text); } catch { lastErr = new Error(`non-JSON from upstream (HTTP ${res.status})`); continue; }
       if (data.error) {
@@ -230,6 +236,11 @@ export async function publicJsonRpc(network, method, params) {
       lastErr = new Error(`HTTP ${res.status} from upstream`);
     }
   }
+  // Every endpoint ended at its deadline or could not be reached: that is the
+  // upstream's 503 class, not a 502 of ours. A provider refusal or a node's
+  // own error keeps the 502.
+  if (isUpstreamFailure(lastErr)) throw lastErr;
+  if (!lastErr && budgetSpent()) throw upstreamDeadline("Chain RPC", method, currentBudget()?.totalMs ?? EVM_RPC_TIMEOUT_MS);
   throw bad(`RPC upstream unavailable for ${network.name}${lastErr ? ` (${redactSecrets(String(lastErr.message)).slice(0, 120)})` : ""}`, 502);
 }
 
@@ -1091,3 +1102,6 @@ export const CHAIN_TOOLS = [
     },
   },
 ];
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(CHAIN_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

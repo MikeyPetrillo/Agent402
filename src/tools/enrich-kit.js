@@ -22,6 +22,11 @@
 import { createHash } from "node:crypto";
 import { ssrfDispatcher, safeFetch } from "./fetch-guard.js";
 
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+// DEADLINES (src/upstream-deadline.js): each read under its own cap and the
+// handler budget; a read that outlives it is a 503 naming the upstream and the
+// step, never a 504. The reads answered in 0.05 to 1.6 s when measured
+// (2026-10-14).
 const TIMEOUT_MS = 12_000;
 
 function bad(message, statusCode = 400) {
@@ -33,17 +38,12 @@ function bad(message, statusCode = 400) {
 // an SSRF surface, but every fetch still rides the guarded dispatcher.
 // 404 passes through as { status: 404 } so handlers can return structured
 // misses instead of errors.
-async function getJson(url, upstream, headers = {}) {
-  let res;
-  try {
-    res = await fetch(url, {
-      headers: { Accept: "application/json", "User-Agent": "Agent402/1.0 (+https://agent402.tools)", ...headers },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      dispatcher: ssrfDispatcher,
-    });
-  } catch {
-    throw bad(`${upstream} did not respond - try again shortly`, 504);
-  }
+async function getJson(url, upstream, headers = {}, step = "lookup") {
+  const ctx = { label: upstream, step, timeoutMs: TIMEOUT_MS, tag: "[enrich]" };
+  const res = await upstreamFetch(url, {
+    headers: { Accept: "application/json", "User-Agent": "Agent402/1.0 (+https://agent402.tools)", ...headers },
+    dispatcher: ssrfDispatcher,
+  }, ctx);
   if (res.status === 429) throw bad(`${upstream} rate limit reached - retry shortly`, 503);
   if (res.status === 403) {
     // GitHub reports an exhausted per-IP quota as 403 with a zeroed remaining
@@ -55,7 +55,8 @@ async function getJson(url, upstream, headers = {}) {
   }
   if (!res.ok && res.status !== 404) throw bad(`${upstream} error (HTTP ${res.status})`, 502);
   let data = null;
-  try { data = await res.json(); } catch {
+  try { data = await bodyUnderDeadline(res.json(), ctx); } catch (err) {
+    if (err?.statusCode) throw err;
     if (res.status !== 404) throw bad(`${upstream} returned non-JSON`, 502);
   }
   return { status: res.status, data };
@@ -170,17 +171,11 @@ function renderSnak(snak) {
 const HASH_RE = /^[a-f0-9]{32}$|^[a-f0-9]{64}$/;
 
 async function gravatarProbe(url, upstream, accept = "*/*") {
-  let res;
-  try {
-    res = await fetch(url, {
-      method: "GET",
-      headers: { Accept: accept, "User-Agent": "Agent402/1.0 (+https://agent402.tools)" },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      dispatcher: ssrfDispatcher,
-    });
-  } catch {
-    throw bad(`${upstream} did not respond - try again shortly`, 504);
-  }
+  const res = await upstreamFetch(url, {
+    method: "GET",
+    headers: { Accept: accept, "User-Agent": "Agent402/1.0 (+https://agent402.tools)" },
+    dispatcher: ssrfDispatcher,
+  }, { label: upstream, step: "probe", timeoutMs: TIMEOUT_MS, tag: "[enrich]" });
   if (res.status === 429) throw bad(`${upstream} rate limit reached - retry shortly`, 503);
   return res;
 }
@@ -725,3 +720,6 @@ export const ENRICH_TOOLS = [
     },
   },
 ];
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(ENRICH_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

@@ -22,6 +22,7 @@
 import { upstreamCosts } from "../upstream-costs.js";
 import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL } from "../decision-one.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
+import { upstreamFetch, bodyUnderDeadline, withBudget, currentBudget, handlerBudgetMs, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
 // THREE BACKENDS, one answer shape. On /v1/judge TypeSafe's Jev answers first,
 // then Microsoft Decision-1 (over OpenRouter, the Jev wire with another model
@@ -70,6 +71,10 @@ export const LIMITS = {
   bodyBytes: Number(process.env.JUDGE_MAX_BODY_BYTES || 16_000),   // the money bound: one token per byte worst case
 };
 const MODELS = new Set([LUNA, DECISION_ONE, "jev-latest", "jev-preview"]);
+// DEADLINES (src/upstream-deadline.js): every backend read keeps its 25 s cap
+// (the measured judgment tail runs to about 30 s) and the whole walk runs
+// under the route's payment-window budget; a read that outlives its cap is a
+// 503 naming the step, never a 504.
 const TIMEOUT_MS = 25_000;
 
 const bad = (msg) => { const e = new Error(msg); e.statusCode = 400; return e; };
@@ -150,26 +155,25 @@ async function callLuna(request, fetchImpl = fetch) {
 }
 
 async function post(url, key, body, fetchImpl, hasAnswers) {
+  // Unreachable or slow upstream: theirs, not ours (the 503 classes of
+  // src/upstream-deadline.js), and a >= 400 cancels settlement. A timed-out
+  // call may still have been billed upstream (mayBeBilled: no other backend is
+  // tried after it); a refused connection was not.
+  const ctx = { label: "Judgment upstream", step: "judgment", timeoutMs: TIMEOUT_MS, tag: "[judge]", fetchImpl };
   let res;
   try {
-    res = await fetchImpl(url, {
+    res = await upstreamFetch(url, {
       method: "POST",
       headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
+    }, ctx);
   } catch (err) {
-    // Unreachable or slow upstream: theirs, not ours, and a >= 400 cancels
-    // settlement. A bare throw here reached the buyer as a 500.
-    const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
-    const e = new Error(timedOut ? "Judgment upstream timed out." : "Judgment upstream is unreachable.");
-    e.statusCode = timedOut ? 504 : 502;
-    // A timed-out call may still have been billed upstream; a refused
-    // connection was not.
-    if (timedOut) e.mayBeBilled = true;
-    throw e;
+    if (err?.upstreamFailure === "deadline") err.mayBeBilled = true;
+    throw err;
   }
-  const text = await res.text();
+  let text;
+  try { text = await bodyUnderDeadline(res.text(), ctx); }
+  catch (err) { if (err?.statusCode) { err.mayBeBilled = true; throw err; } const e = new Error("Judgment upstream returned an unreadable body."); e.statusCode = 502; e.mayBeBilled = true; throw e; }
   if (!res.ok) {
     // Relay the CLASS, never the body: it can echo the buyer's own state back.
     if (res.status === 401 || res.status === 403) { const e = new Error("Judgment upstream rejected our credentials."); e.statusCode = 503; throw e; }
@@ -277,7 +281,14 @@ async function firstAnswer(order, attempt) {
   throw last || Object.assign(new Error("Judgment is not configured on this server."), { statusCode: 503 });
 }
 
-export async function judge(input, { fetchImpl = fetch } = {}) {
+export function judge(input, opts = {}) {
+  // The whole backend walk runs under one budget: the caller's when it runs
+  // under one already, else the route's payment-window budget (the measured
+  // judgment tail runs past the 20 s data-kit budget).
+  return currentBudget() ? judgeUnderBudget(input, opts) : withBudget(() => judgeUnderBudget(input, opts), handlerBudgetMs(PAYMENT_WINDOW_BUDGET_MS));
+}
+
+async function judgeUnderBudget(input, { fetchImpl = fetch } = {}) {
   if (!judgeEnabled()) { const e = new Error("Judgment is not configured on this server."); e.statusCode = 503; throw e; }
   const body = validateJudgeRequest(input);
   const { ids, request } = toDecisions(body);

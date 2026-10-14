@@ -39,14 +39,21 @@
 //
 // Upstream bodies are never relayed to buyers: JSON-RPC error text is logged
 // server-side (secret-redacted) and the buyer gets a generic 502; 429 -> 503;
-// transport/timeout -> 504; a Prices-API 404 -> 404 "token not found".
+// a read that outlives its deadline or an unreachable host -> 503 naming the
+// upstream and the step (src/upstream-deadline.js); a Prices-API 404 -> 404
+// "token not found".
 //
 // Covered by scripts/test-alchemy-data-kit.js (offline, stubbed fetch; live
 // examples opt-in via ALCHEMY_LIVE_TEST=1).
 
 import { redactSecrets } from "./redact.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
-const TIMEOUT_MS = 10_000;
+// DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
+// with the handler budget (block-receipts reads the head, then the receipts;
+// token-balances reads balances, then metadata in parallel); a read that
+// outlives its cap is a 503 naming the upstream and the step, never a 504.
+const READ_MS = 10_000;
 const SOURCE = "alchemy";
 
 // Same chain map as chain-kit so an agent can pivot between kits freely.
@@ -225,18 +232,12 @@ function hostOf(url) { try { return new URL(url).host; } catch { return "?"; } }
 // (the token genuinely is not in the feed - a 400 would blame the input
 // shape, a 502 would blame us).
 // ---------------------------------------------------------------------------
-async function alchemyFetch(url, opts = {}, { notFound } = {}) {
-  let res;
-  try {
-    res = await fetch(url, {
-      ...opts,
-      headers: { "Content-Type": "application/json", Accept: "application/json", ...(opts.headers || {}) },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (err) {
-    console.warn(`[alchemy-data] upstream unreachable: ${hostOf(url)} -> ${err?.name ?? err?.code ?? err?.message}`);
-    throw bad("Chain data upstream timed out", 504);
-  }
+async function alchemyFetch(url, opts = {}, { notFound, step = "data" } = {}) {
+  const ctx = { label: "Chain data", step, timeoutMs: READ_MS, tag: "[alchemy-data]" };
+  const res = await upstreamFetch(url, {
+    ...opts,
+    headers: { "Content-Type": "application/json", Accept: "application/json", ...(opts.headers || {}) },
+  }, ctx);
   if (res.status === 429) throw bad("Chain data rate limit reached upstream - retry shortly", 503);
   if (res.status === 404 && notFound) throw bad(notFound, 404);
   if (!res.ok) {
@@ -248,7 +249,8 @@ async function alchemyFetch(url, opts = {}, { notFound } = {}) {
     throw bad(`Chain data upstream error (HTTP ${res.status})`, 502);
   }
   let data;
-  try { data = await res.json(); } catch { throw bad("Chain data upstream returned a malformed response", 502); }
+  try { data = await bodyUnderDeadline(res.json(), ctx); }
+  catch (err) { if (err?.statusCode) throw err; throw bad("Chain data upstream returned a malformed response", 502); }
   return data;
 }
 
@@ -270,7 +272,7 @@ async function rpc(network, method, params) {
   const data = await alchemyFetch(rpcUrl(network, key), {
     method: "POST",
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-  });
+  }, { step: method });
   if (data?.error) throw rpcError(data, network, method);
   return data?.result;
 }
@@ -279,7 +281,7 @@ async function rpc(network, method, params) {
 async function rpcBatch(network, calls) {
   const key = requireKey();
   const body = calls.map((c, idx) => ({ jsonrpc: "2.0", id: idx + 1, method: c.method, params: c.params }));
-  const data = await alchemyFetch(rpcUrl(network, key), { method: "POST", body: JSON.stringify(body) });
+  const data = await alchemyFetch(rpcUrl(network, key), { method: "POST", body: JSON.stringify(body) }, { step: `batch of ${calls.length} calls` });
   if (!Array.isArray(data)) {
     if (data?.error) throw rpcError(data, network, "batch");
     throw bad("Chain data upstream returned a malformed batch response", 502);
@@ -298,7 +300,7 @@ async function pricesApi(method, body, extra) {
   return alchemyFetch(`https://api.g.alchemy.com/prices/v1/${key}/${method}`, {
     method: "POST",
     body: JSON.stringify(body),
-  }, extra);
+  }, { ...extra, step: method });
 }
 
 // ---------------------------------------------------------------------------
@@ -939,3 +941,6 @@ export const __test = {
   TRANSFERS_MAX_COUNT, TRANSFERS_MAX_CONTRACTS, BALANCES_MAX_CONTRACTS, BLOCK_RECEIPTS_MAX_ROWS, RECEIPT_MAX_TRANSFERS,
   METADATA_CACHE_MAX_ENTRIES, PRICE_INTERVALS,
 };
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(ALCHEMY_DATA_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

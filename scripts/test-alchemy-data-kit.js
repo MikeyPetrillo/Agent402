@@ -3,7 +3,8 @@
 // no network. Covers: no key -> 503 before any fetch; input validation -> 400
 // without fetch; fixture-shaped upstream responses -> our mapping; CU bounding
 // (one request per call, metadata fan-out capped + cached, row caps); upstream
-// error classification (429 -> 503, 5xx -> 502, transport -> 504, Prices 404 ->
+// error classification (429 -> 503, 5xx -> 502, a deadline or an unreachable
+// host -> 503 naming the upstream and the step, Prices 404 ->
 // 404) with no upstream body relayed. Live run of every example opt-in via
 // ALCHEMY_LIVE_TEST=1 with ALCHEMY_API_KEY set.
 
@@ -375,7 +376,11 @@ responder = rpcResponder({ alchemy_getTokenAllowance: () => ({ __error: { code: 
 try { await h("token-allowance")({ contract: USDC, owner: V, spender: V }); fail++; console.error("ASSERT FAIL - rpc error should throw"); }
 catch (e) { ok(e.statusCode === 502 && e.rpcCode === -32602 && !e.message.includes("secret echo") && !e.message.includes("test-key"), `JSON-RPC error -> 502 with code, message not relayed`); }
 responder = () => { const err = new Error("aborted"); err.name = "TimeoutError"; throw err; };
-await expectStatus(() => h("tx-receipt")({ hash: HASH }), 504, "transport timeout -> 504");
+try { await h("tx-receipt")({ hash: HASH }); ok(false, "deadline expiry resolved"); }
+catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream" && /^Chain data did not answer the batch of 2 calls read within \d+ s \(upstream deadline\); nothing was charged/.test(e.message), `deadline expiry -> 503 naming the upstream and the step, attributed upstream (got ${e.statusCode} "${e.message}")`); }
+responder = () => { throw Object.assign(new Error("fetch failed"), { code: "ECONNREFUSED" }); };
+try { await h("tx-receipt")({ hash: HASH }); ok(false, "connection refused resolved"); }
+catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream" && /^Chain data is unreachable from here \(batch of 2 calls read failed before any answer\)/.test(e.message), `connection refused -> 503 unreachable naming the step (got ${e.statusCode} "${e.message}")`); }
 responder = () => ({ json: "not an array" });
 await expectStatus(() => h("tx-receipt")({ hash: HASH }), 502, "malformed batch -> 502");
 responder = () => ({ status: 404, json: {} });

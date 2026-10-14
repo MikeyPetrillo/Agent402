@@ -14,6 +14,7 @@
 // because it counts only those venues. Every tool here says so in its own
 // output rather than letting a partial figure read as a total.
 import { assertPublicUrl } from "./fetch-guard.js";
+import { upstreamFetch } from "../upstream-deadline.js";
 
 const HOST = "https://hist.databento.com/v0";
 export const DATASET = "DBEQ.BASIC";
@@ -38,16 +39,13 @@ function auth() {
 // Per-call upstream bounds. A slow upstream used to surface as a bare 500
 // after up to 55 s (range read 15 s + cost read 20 s + data read 20 s, and a
 // timeout carried no status), which read as our defect. Each read is bounded
-// tighter now and a timeout or a dropped connection is a 504/502 naming the
-// upstream; a >= 400 cancels settlement, so nobody is charged for it.
+// tighter now, composed with the handler budget (src/upstream-deadline.js),
+// and a read that outlives its cap or a dropped connection is a 503 naming
+// the upstream and the step; a >= 400 cancels settlement, so nobody is
+// charged for it.
 export const DATABENTO_TIMEOUTS_MS = { range: 6_000, cost: 5_000, data: 12_000 };
-async function upstreamFetch(url, init, timeoutMs) {
-  try {
-    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
-  } catch (e) {
-    if (e?.name === "TimeoutError" || e?.name === "AbortError") throw bad(`Market data upstream did not answer within ${Math.round(timeoutMs / 1000)} s. Retry shortly.`, 504);
-    throw bad("Market data upstream could not be reached. Retry shortly.", 502);
-  }
+function readUnderDeadline(url, init, timeoutMs, step) {
+  return upstreamFetch(url, init, { label: "Market data upstream", step, timeoutMs, tag: "[databento]" });
 }
 
 // The SSRF check resolves the host through DNS. HOST is a constant (never a
@@ -64,11 +62,11 @@ async function checkHost(url) {
 async function post(path, params, timeoutMs = DATABENTO_TIMEOUTS_MS.data) {
   const url = `${HOST}/${path}`;
   await checkHost(url);
-  const res = await upstreamFetch(url, {
+  const res = await readUnderDeadline(url, {
     method: "POST",
     headers: { authorization: auth(), "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(params),
-  }, timeoutMs);
+  }, timeoutMs, path.replace(/^.*\./, "").replace(/_/g, " "));
   const text = await res.text();
   if (!res.ok) {
     // Their 4xx bodies name the cause (unknown symbol, range past the data).
@@ -84,7 +82,7 @@ async function post(path, params, timeoutMs = DATABENTO_TIMEOUTS_MS.data) {
 async function get(path, params) {
   const url = `${HOST}/${path}?${new URLSearchParams(params)}`;
   await checkHost(url);
-  const res = await upstreamFetch(url, { headers: { authorization: auth() } }, DATABENTO_TIMEOUTS_MS.range);
+  const res = await readUnderDeadline(url, { headers: { authorization: auth() } }, DATABENTO_TIMEOUTS_MS.range, "dataset range");
   if (!res.ok) throw bad(`Market data upstream returned ${res.status}.`, 502);
   return res.json();
 }

@@ -21,13 +21,17 @@
 //   402/429 -> 503 quota (credits exhausted or rate cap)
 //   404     -> 404 (no record)
 //   other 4xx -> 400 (the request itself was invalid)
-//   5xx     -> 502, timeout -> 504
+//   5xx     -> 502; deadline or unreachable -> 503 naming the step
 //
 // Covered by scripts/test-b2b-enrich-kit.js (offline, stubbed fetch). Live
 // calls need real keys and are not exercised in CI.
 
 const HUNTER_API = "https://api.hunter.io/v2";
 const APOLLO_API = "https://api.apollo.io/api/v1";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+// DEADLINES (src/upstream-deadline.js): each read under its own cap and the
+// handler budget; a read that outlives it is a 503 naming the upstream and the
+// step, never a 504.
 const TIMEOUT_MS = 15_000;
 const USER_AGENT = "Agent402/1.0 (+https://agent402.tools)";
 
@@ -138,16 +142,7 @@ function mapStatus(res, label) {
 }
 
 async function doFetch(url, init, label) {
-  let res;
-  try {
-    res = await fetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
-  } catch (err) {
-    let host = "?";
-    try { host = new URL(url).host; } catch {}
-    console.warn(`[b2b-enrich] ${host} unreachable: ${err?.name ?? err?.code ?? err?.message}`);
-    throw bad(`${label} did not respond in time - try again shortly`, 504);
-  }
-  return res;
+  return upstreamFetch(url, { ...init }, { label, step: "lookup", timeoutMs: TIMEOUT_MS, tag: "[b2b-enrich]" });
 }
 
 async function readJson(res, label) {
@@ -749,3 +744,6 @@ export function b2bEnrichEnabled() {
 }
 
 export const __test = { takeDomain, takeEmail, takeName, takeInt, takeStringList, shapeHunterEmail, shapeHunterCompany, shapeApolloPerson, shapeApolloOrgFull, HUNTER_API, APOLLO_API };
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(B2B_ENRICH_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

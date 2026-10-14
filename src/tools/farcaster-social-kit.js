@@ -20,7 +20,7 @@
 //   429         -> 503 with a retry hint from x-ratelimit-reset
 //   404         -> 404 (unknown cast / channel)
 //   other 4xx   -> 400 (the request itself was invalid) - parameter NAME only
-//   5xx         -> 502, timeout -> 504
+//   5xx         -> 502; deadline or unreachable -> 503 naming the step
 //
 // Plan awareness: Neynar's per-minute allowance rides back in
 // x-ratelimit-limit / -remaining / -reset; every response carries it as
@@ -37,6 +37,10 @@
 
 import { markUntrusted } from "./provenance.js";
 const NEYNAR_API = "https://api.neynar.com/v2/farcaster";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+// DEADLINES (src/upstream-deadline.js): one read per handler under its own
+// cap and the handler budget; a read that outlives it is a 503 naming the
+// upstream and the step, never a 504.
 const TIMEOUT_MS = 10_000;
 const CACHE_TTL_MS = 60_000;
 const CACHE_MAX_ENTRIES = 256;
@@ -215,16 +219,9 @@ async function neynarGet(path, params = {}, { notFound = "Not found on Farcaster
     if (hit) return { ...hit.value, cached: true };
   }
 
-  let res;
-  try {
-    res = await fetch(href, {
-      headers: { "x-api-key": key, accept: "application/json", "user-agent": USER_AGENT },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (err) {
-    console.warn(`[farcaster-social] api.neynar.com unreachable: ${err?.name ?? err?.code ?? err?.message}`);
-    throw bad("Farcaster upstream did not respond in time - try again shortly", 504);
-  }
+  const res = await upstreamFetch(href, {
+    headers: { "x-api-key": key, accept: "application/json", "user-agent": USER_AGENT },
+  }, { label: "Farcaster upstream", step: String(path).replace(/^\//, "").split("/").filter((seg) => /^[a-z_-]+$/.test(seg)).join(" ").replace(/[_-]/g, " ") || "lookup", timeoutMs: TIMEOUT_MS, tag: "[farcaster-social]" });
 
   const rateLimit = readRateLimit(res.headers);
 
@@ -870,3 +867,6 @@ for (const t of FARCASTER_SOCIAL_TOOLS) {
   const inner = t.handler;
   t.handler = async (...args) => markUntrusted(await inner(...args));
 }
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(FARCASTER_SOCIAL_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

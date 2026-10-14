@@ -1670,6 +1670,8 @@ jobs:
           t node scripts/test-sweep-upstream-refusal.js
           # A Solana intel read that outlives its deadline answers a 503 naming the upstream and the step on the real route, inside the handler budget (stubbed upstreams).
           t node scripts/test-solana-intel-deadline.js
+          # Every kit that reads an upstream: a stalled read ends at its cap, composed with the handler budget, as the shared 503 class naming the upstream and the step (stubbed fetch, short budget).
+          t node scripts/test-upstream-deadline.js
           t node scripts/test-solana-kit-deps.js
           t node scripts/test-workflow-client-pins.js
 

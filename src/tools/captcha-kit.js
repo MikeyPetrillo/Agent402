@@ -13,6 +13,7 @@
 // Explicitly NOT here: a captcha SOLVER (getting past a third party's
 // challenge). That's the abuse-enabling half of the cluster and stays declined.
 import { createHash, randomInt, randomBytes } from "node:crypto";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -130,20 +131,19 @@ export const CAPTCHA_TOOLS = [
       if (!token) throw bad('Missing "token" (the client captcha response)');
       const form = new URLSearchParams({ secret, response: token });
       if (input?.remoteip) form.set("remoteip", String(input.remoteip));
-      let res;
-      try {
-        res = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: form.toString(),
-          signal: AbortSignal.timeout(10000),
-        });
-      } catch (e) {
-        throw bad(`Captcha provider unreachable: ${String(e?.message || e).slice(0, 80)}`, 502);
-      }
+      // One siteverify read under its own cap and the handler budget
+      // (src/upstream-deadline.js): a provider that outlives it, or cannot be
+      // reached, is a 503 naming the provider and the step, attributed upstream.
+      // The body carries the caller's secret and is never logged.
+      const ctx = { label: "Captcha provider", step: "siteverify", timeoutMs: 10_000, tag: "[captcha]" };
+      const res = await upstreamFetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: form.toString(),
+      }, ctx);
       if (!res.ok) throw bad(`Captcha provider returned HTTP ${res.status}`, 502);
       let j;
-      try { j = await res.json(); } catch { throw bad("Captcha provider returned non-JSON", 502); }
+      try { j = await bodyUnderDeadline(res.json(), ctx); } catch (err) { if (err?.statusCode) throw err; throw bad("Captcha provider returned non-JSON", 502); }
       // Normalize the three providers' fields into one shape.
       return {
         provider,
@@ -157,3 +157,6 @@ export const CAPTCHA_TOOLS = [
     },
   },
 ];
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(CAPTCHA_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
