@@ -30,12 +30,12 @@ const X_MAX_POSTS_PER_CALL = () => Math.max(5, Math.min(100, parseInt(process.en
 const X_MAX_USERS_PER_LOOKUP = 10;
 
 const X_API = "https://api.x.com/2";
-import { upstreamFetch, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): one read per handler under its own
 // cap and the handler budget; a read that outlives it is a 503 naming the
 // upstream and the step, never a 504 (the spend reservation is kept, as for
 // any failure after the request left).
-const TIMEOUT_MS = 10_000;
+const TIMEOUT_MS = 12_000;
 const USER_AGENT = "Agent402/1.0 (+https://agent402.tools)";
 
 const TWEET_FIELDS = "created_at,public_metrics,author_id,lang,conversation_id,possibly_sensitive";
@@ -573,4 +573,4 @@ for (const t of X_DATA_TOOLS) {
 }
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(X_DATA_TOOLS);
+underBudgetAll(X_DATA_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

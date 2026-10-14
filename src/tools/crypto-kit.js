@@ -18,7 +18,8 @@
 // consistency and to keep the per-host UA option open.
 import { assertPublicUrl } from "./fetch-guard.js";
 import { upstreamFetch, underBudgetAll, budgetSpent, currentBudget } from "../upstream-deadline.js";
-const CRYPTO_READ_MS = 8_000;
+const CRYPTO_READ_MS = 10_000;
+const CRYPTO_RETRY_READ_MS = 12_000;
 import { cgTokenRefusal, cgRefusalMessage, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
 import { redactSecrets } from "./redact.js";
 
@@ -168,7 +169,7 @@ async function jsonGet(url, host = "CoinGecko") {
     // Single retry on a deadline or transport failure (same pattern as
     // finance-kit), only while the budget can hold another read.
     if (!mayRetry() || budgetSpent(currentBudget(), 2_000)) throw e;
-    res = await attempt(CRYPTO_READ_MS);
+    res = await attempt(CRYPTO_RETRY_READ_MS);
   }
   // Retry once on 429/5xx after a short backoff. CoinGecko burst-limits per
   // IP; a chained skill pack (crypto-dossier: price → history → trending →
@@ -179,7 +180,7 @@ async function jsonGet(url, host = "CoinGecko") {
     await new Promise((r) => setTimeout(r, 2500));
     if (mayRetry()) {
       try {
-        const retryRes = await attempt(CRYPTO_READ_MS);
+        const retryRes = await attempt(CRYPTO_RETRY_READ_MS);
         if (retryRes.ok || retryRes.status !== res.status) res = retryRes;
       } catch { /* fall through with the original response */ }
     }

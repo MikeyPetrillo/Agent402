@@ -37,11 +37,11 @@
 
 import { markUntrusted } from "./provenance.js";
 const NEYNAR_API = "https://api.neynar.com/v2/farcaster";
-import { upstreamFetch, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): one read per handler under its own
 // cap and the handler budget; a read that outlives it is a 503 naming the
 // upstream and the step, never a 504.
-const TIMEOUT_MS = 8_000;
+const TIMEOUT_MS = 10_000;
 const CACHE_TTL_MS = 60_000;
 const CACHE_MAX_ENTRIES = 256;
 const USER_AGENT = "Agent402/1.0 (+https://agent402.tools)";
@@ -869,4 +869,4 @@ for (const t of FARCASTER_SOCIAL_TOOLS) {
 }
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(FARCASTER_SOCIAL_TOOLS);
+underBudgetAll(FARCASTER_SOCIAL_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

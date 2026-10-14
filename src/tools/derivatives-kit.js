@@ -17,7 +17,7 @@
 
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
 // The reads answered in 0.1 to 1 s when measured (2026-10-14).
-const TIMEOUT_MS = 8_000;
+const TIMEOUT_MS = 10_000;
 const HL_INFO = "https://api.hyperliquid.xyz/info";
 const DERIBIT = "https://www.deribit.com/api/v2/public";
 const LLAMA_OPTIONS =

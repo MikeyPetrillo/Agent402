@@ -42,9 +42,20 @@
 // each kit: those differ per upstream and are not this module's concern.
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { DEFAULT_MAX_TIMEOUT_SECONDS, SETTLE_RULE_SECONDS, SETTLE_MARGIN_SECONDS } from "./evm-validity.js";
 
-/** The whole handler, every read included, answers inside this. */
+/** The whole handler, every read included, answers inside this: the budget of
+ *  the keyless data kits, whose reads answer in well under a second, sized so
+ *  the answer lands while this server's own router's 30 s authorization can
+ *  still settle. */
 export const HANDLER_BUDGET_MS = 20_000;
+/** The budget of a route whose upstream is measured slower (speech, judgment,
+ *  answer synthesis): the route's own payment window, as a stock client signs
+ *  it (validBefore = now + maxTimeoutSeconds, src/evm-validity.js), less the
+ *  facilitator's settle-time rule and the settle margin, so the work still
+ *  ends where the payment can settle. Those routes keep their own measured
+ *  per-read caps; this only bounds the walk. */
+export const PAYMENT_WINDOW_BUDGET_MS = (DEFAULT_MAX_TIMEOUT_SECONDS - SETTLE_RULE_SECONDS - SETTLE_MARGIN_SECONDS) * 1000;
 /** An optional read is not started with less than this left in the budget. */
 export const OPTIONAL_READ_FLOOR_MS = 1_500;
 /** The cap most keyless JSON APIs get: a normal answer is well under a second. */
@@ -64,34 +75,40 @@ export function currentBudget() {
   return store.getStore() ?? null;
 }
 
-/** The budget a wrapped handler gets. UPSTREAM_HANDLER_BUDGET_MS, when set to
- *  a number, overrides it: the shared deadline test runs every kit's stalled
- *  example under a short budget instead of waiting a real cap out. Production
- *  leaves it unset. */
-export function handlerBudgetMs() {
+/** The budget a wrapped handler gets: `totalMs` (HANDLER_BUDGET_MS when
+ *  absent). UPSTREAM_HANDLER_BUDGET_MS, when set to a number, overrides every
+ *  budget: the shared deadline test runs every kit's stalled example under a
+ *  short budget instead of waiting a real cap out. Production leaves it unset. */
+export function handlerBudgetMs(totalMs = null) {
   const n = Number(process.env.UPSTREAM_HANDLER_BUDGET_MS);
-  return Number.isFinite(n) && n > 0 ? n : HANDLER_BUDGET_MS;
+  if (Number.isFinite(n) && n > 0) return n;
+  return Number(totalMs) > 0 ? Number(totalMs) : HANDLER_BUDGET_MS;
 }
 
 /** Wrap a tool handler so it runs under one budget. The budget starts when
  *  the handler starts (after the paywall verified the payment) and every
- *  upstreamFetch inside it, through any depth of calls, reads it. */
+ *  upstreamFetch inside it, through any depth of calls, reads it. The
+ *  configured size rides on the wrapper as __budgetMs. */
 export function underBudget(handler, totalMs = null) {
-  return function budgeted(...args) {
-    return store.run(budgetOf(totalMs ?? handlerBudgetMs()), () => handler.apply(this, args));
+  const budgeted = function budgeted(...args) {
+    return store.run(budgetOf(handlerBudgetMs(totalMs)), () => handler.apply(this, args));
   };
+  return Object.assign(budgeted, { __underBudget: true, __budgetMs: Number(totalMs) > 0 ? Number(totalMs) : HANDLER_BUDGET_MS });
 }
 
 /** Wrap every handler in a kit's tool array, in place, and return the array:
- *  one line at the end of the kit, and no handler can be added without it. */
+ *  one line at the end of the kit, and no handler can be added without it.
+ *  `totalMs` is a number for every tool, or a function of the tool (null for
+ *  the default) when one kit's routes have different windows. */
 export function underBudgetAll(tools, totalMs = null) {
   for (const t of tools) if (t && typeof t.handler === "function" && !t.handler.__underBudget) {
-    t.handler = Object.assign(underBudget(t.handler, totalMs), { __underBudget: true });
+    t.handler = underBudget(t.handler, typeof totalMs === "function" ? totalMs(t) : totalMs);
   }
   return tools;
 }
 
-/** Run `fn` under a fresh budget (for code that is not a tool handler). */
+/** Run `fn` under a fresh budget of exactly `totalMs` (handlerBudgetMs() when
+ *  absent), for code that is not a tool handler. */
 export function withBudget(fn, totalMs = null) {
   return store.run(budgetOf(totalMs ?? handlerBudgetMs()), fn);
 }

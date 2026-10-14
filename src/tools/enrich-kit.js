@@ -22,12 +22,12 @@
 import { createHash } from "node:crypto";
 import { ssrfDispatcher, safeFetch } from "./fetch-guard.js";
 
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504. The reads answered in 0.05 to 1.6 s when measured
 // (2026-10-14).
-const TIMEOUT_MS = 8_000;
+const TIMEOUT_MS = 12_000;
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -722,4 +722,4 @@ export const ENRICH_TOOLS = [
 ];
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(ENRICH_TOOLS);
+underBudgetAll(ENRICH_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

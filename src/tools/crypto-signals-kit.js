@@ -39,7 +39,7 @@ import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-de
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504. The Hyperliquid reads answered in 0.3 to 0.5 s when
 // measured (2026-10-14); the feeds keep their shorter cap and report per row.
-const HL_TIMEOUT_MS = 8_000;
+const HL_TIMEOUT_MS = 10_000;
 const FEED_TIMEOUT_MS = 6_000;
 export const FEED_TTL_MS = 5 * 60_000;
 const FEED_FAIL_TTL_MS = 60_000;

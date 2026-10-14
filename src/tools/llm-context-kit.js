@@ -39,14 +39,14 @@ const BRAVE_CONTEXT_URL = "https://api.search.brave.com/res/v1/llm/context";
 
 // Brave's own docs advise a 30s client timeout for this endpoint. We hold a
 // tighter budget than that: this handler occupies a request slot behind the
-// paywall, and a call that cannot answer in 25s is better returned as a 504
+// paywall, and a call that cannot answer in 25s is better returned as a 503
 // (>= 400 cancels settlement, so nobody is charged) than held open.
-import { upstreamFetch, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): one read per handler under its own
-// cap and the handler budget, so the answer still lands while a 30 s payment
-// authorization can settle; a read that outlives it is a 503 naming the
-// upstream and the step, never a 504.
-const TIMEOUT_MS = 18_000;
+// 25 s cap and the route's payment-window budget (PAYMENT_WINDOW_BUDGET_MS);
+// a read that outlives it is a 503 naming the upstream and the step, never a
+// 504.
+const TIMEOUT_MS = 25_000;
 
 // Backstops, not the operating limits. Brave already bounds the payload by the
 // caller's token budget (<= 32,768 tokens ~ 130 KB of text); these exist so an
@@ -316,4 +316,4 @@ export const LLM_CONTEXT_TOOLS = [
 export const __test = { validate, normalizeContext, approxTokens, TIMEOUT_MS, MAX_CHUNK_CHARS, MAX_CHUNKS, MAX_TOTAL_CHARS };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(LLM_CONTEXT_TOOLS);
+underBudgetAll(LLM_CONTEXT_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

@@ -40,7 +40,7 @@ import { SPEECH_MODELS, OPENROUTER_ATTRIBUTION } from "./llm-gateway-kit.js";
 import { transcodePcm } from "./media-kit.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
-import { upstreamFetch, upstreamDeadline, bodyUnderDeadline, underBudgetAll, HANDLER_BUDGET_MS } from "../upstream-deadline.js";
+import { upstreamFetch, upstreamDeadline, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
@@ -126,7 +126,7 @@ function validateInput(input, tierSlug) {
   return { text, voice, format };
 }
 
-async function callOpenAI(text, voice, format, tierSlug, model, timeoutMs = TTS_LINK_TIMEOUT_MS) {
+async function callOpenAI(text, voice, format, tierSlug, model, timeoutMs = 30_000) {
   const key = OPENAI_KEY();
   if (!key) throw bad("OpenAI not configured", 503);
 
@@ -205,7 +205,8 @@ async function callKokoro(text, voice, format, tierSlug) {
   // OpenAI voice name -> Kokoro's own id, from the shared table.
   const nativeVoice = KOKORO?.map?.[voice] || KOKORO?.map?.alloy || "af_alloy";
   // One read under its cap; a read that outlives it is the upstream's 503
-  // (src/upstream-deadline.js), never a 504. Kokoro answers in about 2 s.
+  // (src/upstream-deadline.js), never a 504. Kokoro's measured tail runs past
+  // 30 s, so its cap stays at 60 s.
   const res = await upstreamFetch(OPENROUTER_SPEECH_URL, {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...OPENROUTER_ATTRIBUTION },
@@ -242,14 +243,14 @@ async function callKokoro(text, voice, format, tierSlug) {
  *  answer may already have been generated and billed, so each is final: an
  *  uncharged 5xx with no further upstream call, which keeps one paid call to
  *  at most one billed generation. A 4xx is the request's fault: a 400.
- *  The whole call, fallback included, runs inside TTS_DEADLINE_MS, which is
- *  the handler budget (src/upstream-deadline.js): a 30 s payment
- *  authorization must still settle after the answer. Each link gets
- *  TTS_LINK_TIMEOUT_MS or what is left, so a stalled first link leaves the
- *  backups time; a link that outlives its cap is a 503 naming the step. */
-export const TTS_DEADLINE_MS = HANDLER_BUDGET_MS;
-const TTS_LINK_TIMEOUT_MS = 12_000;
-const KOKORO_READ_MS = 15_000;
+ *  The whole call, fallback included, runs inside TTS_DEADLINE_MS, and the
+ *  handler under the route's payment-window budget (src/upstream-deadline.js,
+ *  PAYMENT_WINDOW_BUDGET_MS), never the 20 s data-kit budget: the measured
+ *  speech tail runs past it. Each link gets TTS_LINK_TIMEOUT_MS or what is
+ *  left; a link that outlives its cap is a 503 naming the step. */
+export const TTS_DEADLINE_MS = 40_000;
+const TTS_LINK_TIMEOUT_MS = 25_000;
+const KOKORO_READ_MS = 60_000;
 const CONNECT_FAILURES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "UND_ERR_CONNECT_TIMEOUT"]);
 
 // --- ElevenLabs traffic control --------------------------------------------
@@ -401,7 +402,7 @@ async function callBackups(text, voice, format, tier, deadline, now, first) {
   if (tier.fallback && OPENAI_KEY() && now() < OPENAI_TTS_SHUTDOWN) {
     const left = deadline - Date.now();
     if (left >= 3_000) {
-      try { return await callOpenAI(text, name, format, null, tier.fallback, Math.min(TTS_LINK_TIMEOUT_MS, left)); }
+      try { return await callOpenAI(text, name, format, null, tier.fallback, left); }
       catch (e) { if (e?.final || (e?.statusCode !== 502 && e?.statusCode !== 503)) throw e; last = e; }
     }
   }
@@ -574,4 +575,4 @@ export const TTS_TOOLS = [
 ];
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(TTS_TOOLS);
+underBudgetAll(TTS_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

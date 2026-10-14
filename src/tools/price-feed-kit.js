@@ -10,13 +10,13 @@
 
 import { protocols as llamaProtocols } from "./defi-kit.js";
 import { cgTokenRefusal, cgRefusalMessage, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, and a read that outlives it is a 503 naming the
 // upstream and the step, never a 504. The simple-price read answered in 0.15 s
 // and the DeFiLlama protocol document in 0.6 to 1.4 s when measured
 // (2026-10-14), so the caps below leave room for a slow day.
-const FEED_READ_MS = 8_000;
+const FEED_READ_MS = 10_000;
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -26,9 +26,10 @@ function bad(message, statusCode = 400) {
 // a CDN miss takes past 10 s from a cold region (the nightly corpus timed
 // `uniswap` out at exactly 10 s in three of four runs, 2026-09-06/07, the
 // server log naming api.llama.fi -> TimeoutError) while a warm read is 0.2 s.
-// So this one read gets most of the handler budget: a 503 is never charged,
-// and the answer still lands while a 30 s payment authorization can settle.
-const LLAMA_DOC_TIMEOUT_MS = 18_000;
+// So this one read keeps a 25 s cap, and defi-tvl runs under the route's
+// payment-window budget instead of the 20 s data-kit budget; a 503 is never
+// charged.
+const LLAMA_DOC_TIMEOUT_MS = 25_000;
 
 // Short in-process cache for CoinGecko reads, keyed on the exact URL: an
 // identical request inside the window gets the answer fetched moments ago and
@@ -282,5 +283,7 @@ export const PRICE_FEED_TOOLS = [
 // COINGECKO_ATTRIBUTION in coingecko-rate.js).
 for (const t of PRICE_FEED_TOOLS) if (t.slug === "price-coingecko") t.description = `${t.description} ${COINGECKO_ATTRIBUTION}`;
 
-// Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(PRICE_FEED_TOOLS);
+// Every handler runs under one budget (src/upstream-deadline.js): the 20 s
+// data-kit budget, except defi-tvl, whose protocol document keeps its 25 s
+// cap and so runs under the route's payment-window budget.
+underBudgetAll(PRICE_FEED_TOOLS, (t) => (t.slug === "defi-tvl" ? PAYMENT_WINDOW_BUDGET_MS : null));

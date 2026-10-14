@@ -30,12 +30,12 @@
 // Covered by scripts/test-nft-market-kit.js (offline + opt-in live).
 
 import { redactSecrets } from "./redact.js";
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
 // DEADLINES (src/upstream-deadline.js): one read per handler, under its own
 // cap and the handler budget; a read that outlives it is a 503 naming the
 // upstream and the step, never a 504.
-const READ_MS = 10_000;
+const READ_MS = 12_000;
 
 // Same chain map as chain-kit/dex-kit/mev-and-l2-kit so an agent can pivot
 // freely. NFT API supports the same 5 chains.
@@ -261,4 +261,4 @@ export const __test = {
 };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(NFT_MARKET_TOOLS);
+underBudgetAll(NFT_MARKET_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

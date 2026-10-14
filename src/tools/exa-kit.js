@@ -46,12 +46,12 @@ import { upstreamCosts } from "../upstream-costs.js";
 import { meterUpstreamSpend } from "../posthog.js";
 
 const EXA_API = "https://api.exa.ai";
-import { upstreamFetch, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): one read per handler under its own
-// cap and the handler budget, so the answer still lands while a 30 s payment
-// authorization can settle; a read that outlives it is a 503 naming the
-// upstream and the step, never a 504 (the booked estimate stays booked).
-const TIMEOUT_MS = 18_000;
+// 30 s cap and the route's payment-window budget (PAYMENT_WINDOW_BUDGET_MS);
+// a read that outlives it is a 503 naming the upstream and the step, never a
+// 504 (the booked estimate stays booked).
+const TIMEOUT_MS = 30_000;
 const USER_AGENT = "agent402-exa/1";
 const SHARED_TAGS = ["web", "search"];
 
@@ -532,4 +532,4 @@ for (const t of EXA_TOOLS) {
 }
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(EXA_TOOLS);
+underBudgetAll(EXA_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

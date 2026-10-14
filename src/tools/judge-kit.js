@@ -22,7 +22,7 @@
 import { upstreamCosts } from "../upstream-costs.js";
 import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL } from "../decision-one.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
-import { upstreamFetch, bodyUnderDeadline, withBudget, currentBudget } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, withBudget, currentBudget, handlerBudgetMs, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
 // THREE BACKENDS, one answer shape. On /v1/judge TypeSafe's Jev answers first,
 // then Microsoft Decision-1 (over OpenRouter, the Jev wire with another model
@@ -71,11 +71,11 @@ export const LIMITS = {
   bodyBytes: Number(process.env.JUDGE_MAX_BODY_BYTES || 16_000),   // the money bound: one token per byte worst case
 };
 const MODELS = new Set([LUNA, DECISION_ONE, "jev-latest", "jev-preview"]);
-// DEADLINES (src/upstream-deadline.js): every backend read runs under its own
-// cap and one handler budget for the whole walk, so a slow first backend
-// leaves the next one what remains instead of each taking a full cap; a read
-// that outlives its cap is a 503 naming the step, never a 504.
-const TIMEOUT_MS = 18_000;
+// DEADLINES (src/upstream-deadline.js): every backend read keeps its 25 s cap
+// (the measured judgment tail runs to about 30 s) and the whole walk runs
+// under the route's payment-window budget; a read that outlives its cap is a
+// 503 naming the step, never a 504.
+const TIMEOUT_MS = 25_000;
 
 const bad = (msg) => { const e = new Error(msg); e.statusCode = 400; return e; };
 
@@ -283,8 +283,9 @@ async function firstAnswer(order, attempt) {
 
 export function judge(input, opts = {}) {
   // The whole backend walk runs under one budget: the caller's when it runs
-  // under one already, else its own.
-  return currentBudget() ? judgeUnderBudget(input, opts) : withBudget(() => judgeUnderBudget(input, opts));
+  // under one already, else the route's payment-window budget (the measured
+  // judgment tail runs past the 20 s data-kit budget).
+  return currentBudget() ? judgeUnderBudget(input, opts) : withBudget(() => judgeUnderBudget(input, opts), handlerBudgetMs(PAYMENT_WINDOW_BUDGET_MS));
 }
 
 async function judgeUnderBudget(input, { fetchImpl = fetch } = {}) {

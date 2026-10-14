@@ -39,7 +39,7 @@ if (!process.env.UPSTREAM_COSTS_JSON && !process.env.UPSTREAM_COSTS_FILE) {
 
 import { generateKeyPairSync } from "node:crypto";
 import {
-  HANDLER_BUDGET_MS, OPTIONAL_READ_FLOOR_MS, budgetOf, capOf, currentBudget, underBudget, withBudget, budgetSpent,
+  HANDLER_BUDGET_MS, PAYMENT_WINDOW_BUDGET_MS, OPTIONAL_READ_FLOOR_MS, budgetOf, capOf, currentBudget, underBudget, withBudget, budgetSpent,
   upstreamFetch, bodyUnderDeadline, workUnderDeadline, upstreamDeadline, upstreamUnreachable, isUpstreamFailure, handlerBudgetMs,
 } from "../src/upstream-deadline.js";
 import { runnerProbeLabel } from "./test-non-metered-examples.js";
@@ -80,6 +80,15 @@ const keepAlive = setInterval(() => {}, 1000);
   const seen = await underBudget(async () => [currentBudget(), await inner(), await Promise.all([inner(), inner()])])();
   ok(seen[0] && seen[0] === seen[1] && seen[2].every((x) => x === seen[0]) && seen[0].totalMs === BUDGET, "underBudget carries one budget through nested awaits and Promise.all");
   ok(await withBudget(() => currentBudget()?.totalMs, 333) === 333, "withBudget runs work under a budget of the given size");
+  {
+    const knob = process.env.UPSTREAM_HANDLER_BUDGET_MS;
+    delete process.env.UPSTREAM_HANDLER_BUDGET_MS;
+    const sizes = [await underBudget(() => currentBudget().totalMs)(), await underBudget(() => currentBudget().totalMs, PAYMENT_WINDOW_BUDGET_MS)()];
+    process.env.UPSTREAM_HANDLER_BUDGET_MS = knob;
+    const short = await underBudget(() => currentBudget().totalMs, PAYMENT_WINDOW_BUDGET_MS)();
+    ok(sizes[0] === HANDLER_BUDGET_MS && sizes[1] === PAYMENT_WINDOW_BUDGET_MS && short === BUDGET,
+      `a handler runs under its own budget size (${sizes.join(" / ")} ms), and the test knob shortens every one of them (${short} ms)`);
+  }
 
   const d = upstreamDeadline("RugCheck", "report summary", 8000);
   ok(d.statusCode === 503 && d.attribution === "upstream" && d.upstreamFailure === "deadline" && DEADLINE_RE.test(d.message) && isUpstreamFailure(d),
@@ -192,6 +201,25 @@ async function stalled(fn, label) {
   try { out = await fn(); } catch (e) { err = e; }
   const ms = Date.now() - t0;
   return { err, out, ms, label };
+}
+// The budget each route is wrapped with (the knob above shortens all of them
+// for the stalls below; this is the size production runs). The 20 s budget is
+// for the keyless kits whose reads answer in under a second; every route whose
+// upstream is keyed or measured slower runs under its payment window, less the
+// facilitator's settle rule and the settle margin.
+const { DEFAULT_MAX_TIMEOUT_SECONDS, SETTLE_RULE_SECONDS, SETTLE_MARGIN_SECONDS } = await import("../src/evm-validity.js");
+ok(PAYMENT_WINDOW_BUDGET_MS === (DEFAULT_MAX_TIMEOUT_SECONDS - SETTLE_RULE_SECONDS - SETTLE_MARGIN_SECONDS) * 1000 && PAYMENT_WINDOW_BUDGET_MS > HANDLER_BUDGET_MS,
+  `the payment-window budget is the stock window less the settle rule and margin (${PAYMENT_WINDOW_BUDGET_MS} ms)`);
+const DATA_KIT_SLUGS = new Set(["price-coingecko", "dex-top-pools", "dex-pool", "mev-recent-blocks", "l2-tvl", "eas-attestations", "ens-bulk-resolve", "kalshi-markets",
+  "crypto-indicators", "perp-markets", "defi-protocols", "exchange-rates", "contract-abi", "cve-lookup", "crypto-price", "sol-price"]);
+for (const [file, , slug] of KITS) {
+  const tool = (mods.get(file) || []).find((t) => t.slug === slug);
+  const want = DATA_KIT_SLUGS.has(slug) ? HANDLER_BUDGET_MS : PAYMENT_WINDOW_BUDGET_MS;
+  ok(tool?.handler?.__budgetMs === want, `${slug}: runs under the ${want === HANDLER_BUDGET_MS ? "20 s data-kit" : "payment-window"} budget in production (${tool?.handler?.__budgetMs} ms)`);
+}
+{
+  const tvl = (mods.get("price-feed-kit.js") || []).find((t) => t.slug === "defi-tvl");
+  ok(tvl?.handler?.__budgetMs === PAYMENT_WINDOW_BUDGET_MS, "defi-tvl, whose protocol document keeps its 25 s cap, runs under the payment-window budget while the rest of its kit keeps 20 s");
 }
 // Every kit's call runs together: each is its own handler call with its own budget.
 const runs = await Promise.all(KITS.map(([file, , slug, input]) => {

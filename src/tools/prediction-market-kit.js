@@ -23,7 +23,7 @@ import { upstreamFetch, bodyUnderDeadline, underBudgetAll, budgetSpent, currentB
 // included) ends inside it; a read that outlives its cap is a 503 naming the
 // upstream and the step, never a 504. The reads answered in 0.04 to 0.23 s
 // when measured (2026-10-14).
-const KALSHI_READ_MS = 8_000;
+const KALSHI_READ_MS = 12_000;
 
 // Kalshi's trade API, keyless (https://trading-api.readme.io/reference/getmarkets).
 const KALSHI = "https://api.elections.kalshi.com/trade-api/v2";

@@ -30,9 +30,9 @@ import { upstreamFetch, bodyUnderDeadline, underBudgetAll, isUpstreamFailure, bu
 // inside it instead of running one cap per relay; a read that outlives its
 // cap is a 503 naming the upstream and the step, never a 504. The relay and
 // chains reads answered in 0.04 to 0.14 s when measured (2026-10-14).
-const RELAY_READ_MS = 8_000;
-const LLAMA_READ_MS = 8_000;
-const ALCHEMY_READ_MS = 10_000;
+const RELAY_READ_MS = 12_000;
+const LLAMA_READ_MS = 12_000;
+const ALCHEMY_READ_MS = 12_000;
 const LLAMA = "https://api.llama.fi/v2/chains";
 
 // All major MEV-Boost relays implement the identical data API. Ordered by

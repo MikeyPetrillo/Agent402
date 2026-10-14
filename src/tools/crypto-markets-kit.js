@@ -38,7 +38,7 @@ import { upstreamFetch, underBudgetAll, budgetSpent, currentBudget } from "../up
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget, the one retry included; a read that outlives it is a 503
 // naming the upstream and the step, never a 504.
-const TIMEOUT_MS = 8_000;
+const TIMEOUT_MS = 10_000;
 const RETRY_BACKOFF_MS = 1500;
 
 // --- in-process response cache ------------------------------------------------

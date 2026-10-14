@@ -23,7 +23,7 @@ import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-de
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504. The reads answered in 0.02 to 0.7 s when measured
 // (2026-10-14).
-const TIMEOUT_MS = 8_000;
+const TIMEOUT_MS = 12_000;
 const ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
 const HEX_RE = /^0x[a-fA-F0-9]*$/;
 

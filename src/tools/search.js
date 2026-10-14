@@ -10,7 +10,7 @@
 
 import { markUntrusted } from "./provenance.js";
 import { recordUpstreamCall } from "../stats.js";
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
 const BRAVE_HOST = "https://api.search.brave.com/res/v1";
 
@@ -55,11 +55,12 @@ export function braveCallMeter() {
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget; a read that outlives its cap is a 503 naming the
 // upstream and the step, never a 504. A search answers well under a second
-// upstream; the answer stream runs about 5 s (the published p50) and gets most
-// of the budget, so the answer still lands while a 30 s payment authorization
-// can settle.
+// upstream; the answer stream runs about 5 s (the published p50) and keeps
+// its 20 s cap. The handlers run under the route's payment-window budget
+// (PAYMENT_WINDOW_BUDGET_MS), since the keyed reads are not the sub-second
+// keyless class the 20 s data-kit budget is sized for.
 const TIMEOUT_MS = 10000;
-const ANSWER_TIMEOUT_MS = 18000;
+const ANSWER_TIMEOUT_MS = 20000;
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -790,4 +791,4 @@ export const SEARCH_TOOLS = [
 ];
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(SEARCH_TOOLS);
+underBudgetAll(SEARCH_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

@@ -13,7 +13,7 @@
 // Explicitly NOT here: a captcha SOLVER (getting past a third party's
 // challenge). That's the abuse-enabling half of the cluster and stays declined.
 import { createHash, randomInt, randomBytes } from "node:crypto";
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -135,7 +135,7 @@ export const CAPTCHA_TOOLS = [
       // (src/upstream-deadline.js): a provider that outlives it, or cannot be
       // reached, is a 503 naming the provider and the step, attributed upstream.
       // The body carries the caller's secret and is never logged.
-      const ctx = { label: "Captcha provider", step: "siteverify", timeoutMs: 8_000, tag: "[captcha]" };
+      const ctx = { label: "Captcha provider", step: "siteverify", timeoutMs: 10_000, tag: "[captcha]" };
       const res = await upstreamFetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -159,4 +159,4 @@ export const CAPTCHA_TOOLS = [
 ];
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(CAPTCHA_TOOLS);
+underBudgetAll(CAPTCHA_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

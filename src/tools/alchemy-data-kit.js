@@ -47,7 +47,7 @@
 // examples opt-in via ALCHEMY_LIVE_TEST=1).
 
 import { redactSecrets } from "./redact.js";
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget (block-receipts reads the head, then the receipts;
@@ -943,4 +943,4 @@ export const __test = {
 };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(ALCHEMY_DATA_TOOLS);
+underBudgetAll(ALCHEMY_DATA_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

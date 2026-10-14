@@ -17,7 +17,7 @@ import { ssrfDispatcher } from "./fetch-guard.js";
 import { redactSecrets } from "./redact.js";
 import sha3 from "js-sha3"; // CommonJS — default import, then destructure (same as b20-kit)
 const { keccak256 } = sha3;
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll, isUpstreamFailure, upstreamDeadline, budgetSpent, currentBudget } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, isUpstreamFailure, upstreamDeadline, budgetSpent, currentBudget } from "../upstream-deadline.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, so a fallback walk over several public nodes ends
@@ -1104,4 +1104,4 @@ export const CHAIN_TOOLS = [
 ];
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(CHAIN_TOOLS);
+underBudgetAll(CHAIN_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

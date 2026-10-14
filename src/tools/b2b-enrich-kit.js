@@ -28,11 +28,11 @@
 
 const HUNTER_API = "https://api.hunter.io/v2";
 const APOLLO_API = "https://api.apollo.io/api/v1";
-import { upstreamFetch, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504.
-const TIMEOUT_MS = 12_000;
+const TIMEOUT_MS = 15_000;
 const USER_AGENT = "Agent402/1.0 (+https://agent402.tools)";
 
 const DOMAIN_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
@@ -746,4 +746,4 @@ export function b2bEnrichEnabled() {
 export const __test = { takeDomain, takeEmail, takeName, takeInt, takeStringList, shapeHunterEmail, shapeHunterCompany, shapeApolloPerson, shapeApolloOrgFull, HUNTER_API, APOLLO_API };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(B2B_ENRICH_TOOLS);
+underBudgetAll(B2B_ENRICH_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

@@ -17,7 +17,7 @@ const keyOf = () => (process.env.OPENROUTER_API_KEY || "").trim();
 // DEADLINES (src/upstream-deadline.js): the one read runs under its own cap
 // and the caller's handler budget (judge-kit walks up to three backends under
 // one budget); a read that outlives it is a 503 naming the step, never a 504.
-export const DECISION_ONE_READ_MS = 18_000;
+export const DECISION_ONE_READ_MS = 25_000;
 const TIMEOUT_MS = DECISION_ONE_READ_MS;
 // The spend bound for every caller, paid route and internal judges alike. A
 // token can be one byte, so the bytes sent are the worst-case input tokens:

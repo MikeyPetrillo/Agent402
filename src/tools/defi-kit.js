@@ -18,7 +18,7 @@
 // MAX_ROWS rows. If a refresh fails, a stale copy up to STALE_MAX old is
 // served (marked `stale: true`) so one upstream blip does not fail a paid
 // call. Cold-miss latency measured 0.3-0.4s transfer + parse; the bulk
-// fetch carries an 18 s cap (BULK_TIMEOUT_MS) and everything else 8 s, both
+// fetch carries an 18 s cap (BULK_TIMEOUT_MS) and everything else 10 s, both
 // inside the handler budget.
 //
 // Every handler validates inputs (400) before egress, bounds list sizes,
@@ -55,7 +55,7 @@ import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-de
 // step, never a 504. Most documents answered under a second when measured
 // (2026-10-14); the bulk documents (dex volume) ran 1.9 s warm and past the
 // old 15 s cap cold, so they get most of the budget.
-const TIMEOUT_MS = 8_000;
+const TIMEOUT_MS = 10_000;
 const BULK_TIMEOUT_MS = 18_000;
 export const CACHE_TTL_MS = 5 * 60_000;
 const STALE_MAX_MS = 30 * 60_000;

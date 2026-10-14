@@ -18,7 +18,7 @@
 //   • safeFetch hardcodes our own User-Agent (right behavior for HTML scrapers),
 //     so we use assertPublicUrl + native fetch for the EDGAR-specific UA.
 import { assertPublicUrl } from "./fetch-guard.js";
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { dataSetsIndex, dataSetHead } from "./edgar-13f-datasets.js";
 
 // Hard per-request socket bound for every EDGAR read (undici defaults to 300 s).
@@ -1213,4 +1213,4 @@ EDGAR_TOOLS.push(
 export { resolveCompany, eftsSearch, fetchXmlText, edgarGetJson, parse13fInformationTable };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(EDGAR_TOOLS);
+underBudgetAll(EDGAR_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

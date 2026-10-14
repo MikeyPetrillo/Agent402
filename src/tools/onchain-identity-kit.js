@@ -32,9 +32,9 @@ import { upstreamFetch, bodyUnderDeadline, underBudgetAll, budgetSpent, currentB
 // a read that outlives its cap is a 503 naming the upstream and the step,
 // never a 504. The ENS and EAS reads answered in 0.04 to 0.64 s when measured
 // (2026-10-14).
-const ENS_READ_MS = 8_000;
-const NEYNAR_READ_MS = 8_000;
-const EAS_READ_MS = 10_000;
+const ENS_READ_MS = 12_000;
+const NEYNAR_READ_MS = 12_000;
+const EAS_READ_MS = 12_000;
 
 // Endpoints. Keep them at the top so a swap is a one-line change.
 const ENS_API = "https://api.ensideas.com/ens";

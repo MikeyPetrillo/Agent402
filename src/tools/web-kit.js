@@ -24,7 +24,7 @@
 // checks opt-in via WEB_LIVE_TEST=1).
 
 import { loadJsdom } from "./lazy-deps.js";
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { ssrfDispatcher, safeFetch, assertPublicUrl, isSsrfBlock, retryTransient } from "./fetch-guard.js";
 
 import { REPO_URL } from "../repo-link.js";
@@ -56,12 +56,12 @@ function takeUrl(raw) {
 // MemGator Memento aggregator as a diverse fallback.
 // ============================================================================
 // DEADLINES (src/upstream-deadline.js): each archive read under its own cap
-// and the handler budget, so the Memento fallback after a stalled Wayback read
-// gets what remains; a read that outlives it is a 503 naming the upstream and
-// the step, never a 504. Wayback answered in 9.2 s cold and 0.3 s warm when
-// measured (2026-10-14), so it keeps its 12 s cap.
+// (Wayback 12 s, Memento 20 s, as before) and the route's payment-window
+// budget, since Wayback answered in 9.2 s cold and 0.3 s warm when measured
+// (2026-10-14); a read that outlives its cap is a 503 naming the upstream and
+// the step, never a 504.
 const WAYBACK_TIMEOUT_MS = 12_000;
-const MEMENTO_TIMEOUT_MS = 12_000;
+const MEMENTO_TIMEOUT_MS = 20_000;
 
 async function waybackAvailable(url, timestamp) {
   const api = new URL("https://archive.org/wayback/available");
@@ -535,4 +535,4 @@ export const WEB_TOOLS = [
 ];
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(WEB_TOOLS);
+underBudgetAll(WEB_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

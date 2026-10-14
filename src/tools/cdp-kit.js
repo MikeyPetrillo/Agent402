@@ -25,7 +25,7 @@
 // the SDK's auth/utils/jwt.ts exactly.
 import { createPrivateKey, createSign, randomBytes, sign as edSign } from "node:crypto";
 import { redactSecrets } from "./redact.js";
-import { upstreamFetch, underBudgetAll, currentBudget, isUpstreamFailure, OPTIONAL_READ_FLOOR_MS } from "../upstream-deadline.js";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, currentBudget, isUpstreamFailure, OPTIONAL_READ_FLOOR_MS } from "../upstream-deadline.js";
 
 const CDP_HOST = "api.cdp.coinbase.com";
 
@@ -477,4 +477,4 @@ export const CDP_TOOLS = [
 ];
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(CDP_TOOLS);
+underBudgetAll(CDP_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
