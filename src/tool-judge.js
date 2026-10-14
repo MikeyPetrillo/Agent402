@@ -7,6 +7,7 @@
 // lexical order on a null, so a second backend only adds answers.
 import { createHash } from "node:crypto";
 import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL } from "./decision-one.js";
+import { raceDeadline } from "./inflight-gauge.js";
 
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 const MODEL = (process.env.TYPESAFE_MODEL || "jev-latest").trim();
@@ -82,13 +83,30 @@ function book(est, cap, free, outcome) {
 }
 const hasAnswers = (j) => !!j?.answers && typeof j.answers === "object";
 
+// Grace past the upstream timeout before the caller's own timer answers for a
+// call that has not settled: enough for the abort to land, short enough that a
+// free search is never held much past its bound.
+const OWN_TIMER_GRACE_MS = 250;
+
 /** One judgment under the ceiling, or null. Never throws. Jev first; when it
  *  fails (non-ok, timeout, network, or an answer `usable` rejects), Decision-1
  *  is asked the same questions within what is left of the timeout, booked
  *  against the same ceiling and free share. `pool: "free"` books against the
  *  free share as well. `outcome` (optional object) learns `skipped: "budget"`
- *  when a ceiling refused it. */
-async function callJev(payload, fetchImpl, timeoutMs, { pool = "paid", outcome = null, usable = hasAnswers } = {}) {
+ *  when a ceiling refused it.
+ *
+ *  Bounded twice: each upstream call carries an abort signal, and the whole
+ *  call is raced against a timer of our own. The caller's wait therefore ends
+ *  by the timeout whether or not the upstream call's promise ever settles; a
+ *  judgment that lands after that is dropped (never cached, since no `out`
+ *  reached the caller). A free search that waits on this is a slot in the
+ *  discovery gate, and a wait with no bound of its own is how a slot is lost. */
+function callJev(payload, fetchImpl, timeoutMs, opts = {}) {
+  const budgetMs = (timeoutMs || TIMEOUT_MS()) + OWN_TIMER_GRACE_MS;
+  return raceDeadline(callJevUnbounded(payload, fetchImpl, timeoutMs, opts), budgetMs)
+    .then((r) => (r.timedOut ? null : r.value), () => null);
+}
+async function callJevUnbounded(payload, fetchImpl, timeoutMs, { pool = "paid", outcome = null, usable = hasAnswers } = {}) {
   const fallback = decisionOneEnabled();
   if (!keyOf() && !fallback) return null;
   const cap = jevDailyMaxTokens();

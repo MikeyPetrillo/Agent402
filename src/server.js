@@ -25,6 +25,7 @@ setGlobalDispatcher(new UndiciAgent({ connect: { family: 4 } }));
 import { loopLagStatus, setStallContext, resetLoopLag, stallsInWindow } from "./loop-lag.js";
 import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, oldestInFlight, inFlightCount, responseCounts } from "./request-timing.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters } from "./load-shed.js";
+import { createInFlightGauge, raceDeadline } from "./inflight-gauge.js";
 import express from "express";
 import compression from "compression";
 import { readFileSync } from "node:fs";
@@ -2369,7 +2370,11 @@ const PH_MAX_RESPONSE_BYTES = Number(process.env.POSTHOG_PROXY_MAX_BYTES) || 8 *
 // hold unbounded upstream sockets/memory at once.
 const PH_UPSTREAM_TIMEOUT_MS = Number(process.env.POSTHOG_PROXY_TIMEOUT_MS) || 10_000;
 const PH_MAX_CONCURRENT = Number(process.env.POSTHOG_PROXY_MAX_CONCURRENT) || 64;
-let phInFlight = 0;
+// The upstream call is bounded, the relay to the client is paced by the
+// client. A relay still open past this age no longer counts toward the
+// ceiling, so a set of stalled clients cannot close the proxy (src/inflight-gauge.js).
+const PH_INFLIGHT_STALE_MS = Number(process.env.POSTHOG_PROXY_INFLIGHT_STALE_MS) || 60_000;
+const phInFlight = createInFlightGauge({ staleMs: PH_INFLIGHT_STALE_MS });
 const phProxyLimiter = createRateLimiter("posthog-proxy", { perMin: PH_MAX_PER_MIN, perHour: PH_MAX_PER_MIN * 30 });
 // Per-IP limiter for the unauthenticated Stripe-session-creating endpoints
 // (/api/buy, /api/subscribe) - each makes an outbound Stripe API call, so cap
@@ -2641,8 +2646,8 @@ app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb" }), async (r
   if (!PH_METHODS.has(req.method)) return res.status(405).end();
   const ip = (req.ip || req.socket.remoteAddress || "?").trim();
   if (phProxyLimiter.check(ip).limited) return res.status(429).end();
-  if (phInFlight >= PH_MAX_CONCURRENT) return res.status(503).end(); // F15 global ceiling
-  phInFlight++;
+  if (phInFlight.live() >= PH_MAX_CONCURRENT) return res.status(503).end(); // F15 global ceiling
+  const releaseRelay = phInFlight.enter();
   try {
     const sub = req.params[0] || "";
     const qs = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
@@ -2693,7 +2698,7 @@ app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb" }), async (r
   } catch {
     if (!res.headersSent) res.status(502).end(); else res.destroy();
   } finally {
-    phInFlight--;
+    releaseRelay();
   }
 });
 // gzip/deflate every response EXCEPT: (1) /v1/* and /mcp — the LLM gateway's
@@ -4906,7 +4911,7 @@ app.get("/__operator/perf.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // ?reset=1 clears the stall high-water mark first (the load test reads a fresh one per scenario).
   if (req.query.reset === "1") resetLoopLag();
-  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), inFlight: inFlightCount(), shed: shedStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), paidPhases: paidPhaseSummary(), stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
+  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), inFlight: inFlightCount(), shed: shedStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
 });
 // One short CPU-profile window on demand (stall attribution without the
 // per-minute cost of continuous profiling). Answers the longest busy run:
@@ -5932,8 +5937,29 @@ function discoveryClientBudget(ip) {
 // scored rows in memory; the CPU budget alone cannot bound that, because a
 // burst passes the budget check before any of it is charged. Past this many,
 // an outside caller is shed like any other over-budget search.
-const DISCOVERY_MAX_INFLIGHT = (() => { const n = Number(process.env.DISCOVERY_MAX_INFLIGHT); return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 4; })();
-let discoveryInFlight = 0;
+//
+// Every compute also runs under a hard deadline (DISCOVERY_COMPUTE_DEADLINE_MS).
+// The slot is held by the promise the compute returns, and a promise is only
+// as bounded as its slowest await: a wait inside it that never settles would
+// hold the slot for the life of the process, and enough of those would close
+// /api/find and /api/route until a restart. At the deadline the slot is
+// released, the caller gets the shed answer with `reason`, and the result, if
+// it ever arrives, is neither sent nor cached. The admission count itself
+// heals: it reads only entries younger than the deadline (src/inflight-gauge.js),
+// so a slot the deadline somehow missed stops refusing anyone once it is that old.
+// With computes bounded, the cap can sit higher; the CPU budget still governs.
+const DISCOVERY_MAX_INFLIGHT = (() => { const n = Number(process.env.DISCOVERY_MAX_INFLIGHT); return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 8; })();
+const DISCOVERY_COMPUTE_DEADLINE_MS = (() => { const n = Number(process.env.DISCOVERY_COMPUTE_DEADLINE_MS); return Number.isFinite(n) && n >= 100 ? Math.floor(n) : 15_000; })();
+const discoveryInFlight = createInFlightGauge({ staleMs: DISCOVERY_COMPUTE_DEADLINE_MS });
+// Test hook, free-mode only: a query containing this marker runs a compute that
+// never settles, so the deadline and the self-healing count can be exercised
+// against a real boot (scripts/test-discovery-deadline.js). Never read when
+// payments are on.
+const DISCOVERY_TEST_HANG_QUERY = process.env.FREE_MODE === "true" && process.env.DISCOVERY_TEST_HANG_QUERY ? String(process.env.DISCOVERY_TEST_HANG_QUERY) : null;
+/** Operator view of the discovery gate: counts and ages only. */
+function discoveryGateStatus() {
+  return { ...discoveryInFlight.snapshot(), maxInFlight: DISCOVERY_MAX_INFLIGHT, deadlineMs: DISCOVERY_COMPUTE_DEADLINE_MS };
+}
 async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlug, req, res) {
   const startedAt = Date.now();
   const synthetic = isSyntheticRequest(req);
@@ -5982,10 +6008,10 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
       noteShed("discovery-budget");
       return shedResponse(res, 2);
     }
-    if (!synthetic && !isLoopbackIp(clientIp(req)) && discoveryInFlight >= DISCOVERY_MAX_INFLIGHT) {
+    if (!synthetic && !isLoopbackIp(clientIp(req)) && discoveryInFlight.live() >= DISCOVERY_MAX_INFLIGHT) {
       status = 503; shed = true;
       noteShed("discovery-inflight");
-      return shedResponse(res, 2);
+      return shedResponse(res, 2, { reason: "discovery-inflight" });
     }
     const computeStarted = Date.now();
     // A compute may be async: the router query yields between slices
@@ -5998,17 +6024,30 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     // did not already charge is added here (else that slice counted twice).
     let asyncCpuMs = 0;
     const meter = (ms) => { asyncCpuMs += ms; discoveryCpuBudget.record(ms); clientBudget?.record(ms); };
-    discoveryInFlight++;
-    let result, syncMs;
+    const releaseSlot = discoveryInFlight.enter({ slug: analyticsSlug });
+    let result, syncMs, pastDeadline = false;
     try {
-      const pending = computeFn(meter);
+      const pending = DISCOVERY_TEST_HANG_QUERY && String(input?.q ?? "").includes(DISCOVERY_TEST_HANG_QUERY)
+        ? new Promise(() => {})
+        : computeFn(meter);
       const meteredInStart = asyncCpuMs;
       syncMs = Math.max(0, Date.now() - computeStarted - meteredInStart);
       discoveryCpuBudget.record(syncMs);
       clientBudget?.record(syncMs);
-      result = await pending;
+      // The slot is held only until the deadline. A compute still running then
+      // keeps running (its slices still charge the budget through `meter`), but
+      // it no longer holds a slot, and its answer is dropped on arrival.
+      const raced = await raceDeadline(pending, DISCOVERY_COMPUTE_DEADLINE_MS);
+      if (raced.timedOut) pastDeadline = true;
+      else result = raced.value;
     } finally {
-      discoveryInFlight--;
+      releaseSlot();
+    }
+    if (pastDeadline) {
+      status = 503; shed = true;
+      noteShed("discovery-deadline");
+      console.warn(`[discovery] ${analyticsSlug} compute passed the ${DISCOVERY_COMPUTE_DEADLINE_MS}ms deadline (query ${String(input?.q ?? "").length} chars): slot released, answer dropped`);
+      return shedResponse(res, 2, { reason: "discovery-deadline" });
     }
     const cpuMs = Math.round(syncMs + asyncCpuMs);
     const computeMs = Date.now() - computeStarted;
@@ -6597,7 +6636,10 @@ function chainPayable(chainKey) {
 }
 // ?seller= views render per request; at most this many at once (2026-10-01).
 const CHAIN_SELLER_VIEW_MAX_INFLIGHT = 2;
-let chainSellerViewsInFlight = 0;
+// Same self-healing shape as the discovery gate: a view whose build never
+// settled stops counting toward admission once it is this old.
+const CHAIN_SELLER_VIEW_STALE_MS = 60_000;
+const chainSellerViewsInFlight = createInFlightGauge({ staleMs: CHAIN_SELLER_VIEW_STALE_MS });
 for (const chainKey of Object.keys(SNAPSHOT_RAIL_LABEL)) {
   app.get(`/${chainKey}`, async (req, res) => {
     try {
@@ -6615,11 +6657,11 @@ for (const chainKey of Object.keys(SNAPSHOT_RAIL_LABEL)) {
       }
       // A ?seller= view is caller-keyed and renders per request, so it is
       // bounded: past the cap it is shed like other free work.
-      if (chainSellerViewsInFlight >= CHAIN_SELLER_VIEW_MAX_INFLIGHT) { noteShed("chain-seller-view"); return shedResponse(res, 5); }
-      chainSellerViewsInFlight++;
+      if (chainSellerViewsInFlight.live() >= CHAIN_SELLER_VIEW_MAX_INFLIGHT) { noteShed("chain-seller-view"); return shedResponse(res, 5, { reason: "chain-seller-view" }); }
+      const releaseView = chainSellerViewsInFlight.enter({ chain: chainKey });
       try {
         htmlCache(res, 120, 600).send(await buildChainPage(chainKey, req.query.seller, all));
-      } finally { chainSellerViewsInFlight--; }
+      } finally { releaseView(); }
     } catch (e) {
       res.status(500).type("text/plain").send("temporarily unavailable");
     }

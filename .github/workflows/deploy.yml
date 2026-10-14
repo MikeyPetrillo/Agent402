@@ -1688,6 +1688,8 @@ jobs:
           t node scripts/test-solana-router.js
           # Tool resolver (/api/find ranking, guards)
           t node scripts/test-find.js
+          # Discovery gate: every compute under a deadline, slot released, self-healing in-flight count, perf fields (booted, offline)
+          t node scripts/test-discovery-deadline.js
           t node scripts/test-plan-sketch.js
           # Report synthesis: a length stop is retried once, then trimmed to a complete block and marked (offline)
           t node scripts/test-report-synthesis.js

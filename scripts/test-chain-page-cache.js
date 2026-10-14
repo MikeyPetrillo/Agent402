@@ -15,7 +15,9 @@ const memoAt = loop.indexOf("memoSurfaceAsync(`market:${chainKey}:${all}`");
 ok(memoAt > 0, "the plain chain page is served through the shared async cache");
 ok(memoAt < loop.indexOf("buildChainPage(chainKey, req.query.seller"), "the cache is consulted before any per-request build");
 ok(!/resolveMarketSeller\(|revenueSnapshot\(|getActivityForChain\(/.test(loop), "the handler itself does no seller resolution, revenue read or activity scan");
-ok(/chainSellerViewsInFlight >= CHAIN_SELLER_VIEW_MAX_INFLIGHT/.test(loop) && /shedResponse\(res, 5\)/.test(loop), "per-request ?seller= views are capped and shed past the cap");
+// The cap reads the gauge's live count (entries younger than its deadline), so
+// a view whose build never settled stops refusing anyone once it is that old.
+ok(/chainSellerViewsInFlight\.live\(\) >= CHAIN_SELLER_VIEW_MAX_INFLIGHT/.test(loop) && /shedResponse\(res, 5, \{ reason: "chain-seller-view" \}\)/.test(loop), "per-request ?seller= views are capped and shed past the cap");
 
 const port = await getFreePort();
 const proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "" }, stdio: ["ignore", "ignore", "inherit"] });

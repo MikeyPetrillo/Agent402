@@ -43,7 +43,7 @@ export function createComputeBudget({ budgetMs = Number(process.env.DISCOVERY_CP
 
 const LAG_SHED_MS = Number(process.env.SHED_LAG_MS) || 250;
 const INFLIGHT_SHED = Number(process.env.SHED_INFLIGHT) || 400;
-const counters = { shed: 0, shedLag: 0, shedInflight: 0, discoveryBudget: 0, discoveryInflight: 0, since: Date.now() };
+const counters = { shed: 0, shedLag: 0, shedInflight: 0, discoveryBudget: 0, discoveryInflight: 0, discoveryDeadline: 0, since: Date.now() };
 
 /** Why free traffic should be refused right now, or null. */
 // Lag sheds only while the loop is SATURATED: the smoothed lag is high AND at
@@ -71,12 +71,17 @@ export function noteShed(kind) {
   else if (kind === "inflight") counters.shedInflight++;
   else if (kind === "discovery-budget") counters.discoveryBudget++;
   else if (kind === "discovery-inflight") counters.discoveryInflight++;
+  // A discovery compute that passed its deadline: the slot was released and the
+  // caller refused, so it is a shed with its own count (server.js, serveCachedDiscovery).
+  else if (kind === "discovery-deadline") counters.discoveryDeadline++;
 }
 
 /** Counts only, for /__operator/perf.json and the heartbeat. */
 export function shedStatus() { return { ...counters, lagShedMs: LAG_SHED_MS, inFlightShed: INFLIGHT_SHED }; }
 
-export function shedResponse(res, retryAfter = 2) {
+/** `extra` (optional) adds fields to the body, such as a `reason` naming which
+ *  bound refused the call; the error text and Retry-After stay the same. */
+export function shedResponse(res, retryAfter = 2, extra = null) {
   // Marked so the 5xx-rate counts leave it out: shedding is deliberate and has its own alarm reason.
   if (res.locals) res.locals.shed = true;
   res.set("Retry-After", String(retryAfter));
@@ -84,6 +89,7 @@ export function shedResponse(res, retryAfter = 2) {
   return res.status(503).json({
     error: "The server is busy; free and discovery requests are paused briefly so paid calls keep flowing.",
     retryAfterSeconds: retryAfter,
+    ...(extra && typeof extra === "object" ? extra : {}),
   });
 }
 
