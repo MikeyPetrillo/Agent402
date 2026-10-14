@@ -1,7 +1,7 @@
 # Agent402 Tollbooth for WordPress
 
-Open-source pay-per-crawl for WordPress, with no Cloudflare or Stripe in
-the middle. Drop the plugin in, paste your Base USDC wallet, and AI
+Open-source pay-per-crawl for WordPress that settles straight to your own
+wallet. Drop the plugin in, paste your Base USDC wallet, and AI
 crawlers (GPTBot, ClaudeBot, CCBot, PerplexityBot, Bytespider,
 Google-Extended, …) start getting `HTTP 402 Payment Required` while
 humans and classic search indexers (Googlebot, Bingbot) keep browsing

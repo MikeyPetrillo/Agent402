@@ -2869,6 +2869,8 @@ jobs:
           t node scripts/test-seller-payability.js
           # Package integrity (files allowlist covers every import; no sibling dep range excludes what we ship — offline)
           t node scripts/test-package-integrity.js
+          # Published packages retry a shed discovery 503 (bounded, capped, never a paid call) and then name the surface (offline stubs)
+          t node scripts/test-package-shed-retry.js
           # Every SOLD skill pack has a real step config (a pack without one answers 200 with 0/N steps and still charges — offline)
           t node scripts/test-skill-pack-steps.js
           # Refund backfill decides who is OWED money: who is in, who is out, idempotent (offline, temp ledgers)

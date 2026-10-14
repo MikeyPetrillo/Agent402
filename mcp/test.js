@@ -47,6 +47,74 @@ const fail = (msg) => { console.error("FAIL:", msg); process.exit(1); };
 }
 const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text : `<${c.type}>`)).join("\n") ?? "";
 
+// 0b) Shed-503 retry on discovery reads (./discovery.js): a 503 that names
+// its delay is retried up to 3 tries with each wait capped; any other answer
+// is returned as is. Then the real server process against a stub host that
+// sheds: the catalog loads through one shed 503, and catalog.find that is
+// shed 3 times reports the surface and the status.
+{
+  const { fetchDiscovery, getDiscoveryJson, shedRetryWaitMs } = await import("./discovery.js");
+  const shed = (body, headers = {}) => new Response(JSON.stringify(body), { status: 503, headers: { "content-type": "application/json", ...headers } });
+  const seq = (answers) => { const calls = []; return { calls, fetchImpl: async (u) => { calls.push(String(u)); return answers.length > 1 ? answers.shift() : answers[0]; } }; };
+  const waits = [];
+  const sleep = async (ms) => { waits.push(ms); };
+  if (await shedRetryWaitMs(shed({ retryAfterSeconds: 2 })) !== 2000) fail("body retryAfterSeconds read as ms");
+  if (await shedRetryWaitMs(shed({}, { "retry-after": "1" })) !== 1000) fail("Retry-After header read as ms");
+  if (await shedRetryWaitMs(shed({ retryAfterSeconds: 600 })) !== 5000) fail("server delay capped at 5 s");
+  if (await shedRetryWaitMs(shed({ error: "busy" })) !== null) fail("a 503 naming no delay is not a shed");
+  if (await shedRetryWaitMs(new Response("{}", { status: 500, headers: { "retry-after": "1" } })) !== null) fail("only a 503 retries");
+  {
+    const s1 = seq([shed({ retryAfterSeconds: 2 }), new Response(JSON.stringify({ endpoints: [] }), { status: 200 })]);
+    const out = await getDiscoveryJson("catalog load", "https://shed.example/api/pricing", undefined, { fetchImpl: s1.fetchImpl, sleep });
+    if (!Array.isArray(out.endpoints) || s1.calls.length !== 2 || waits.join(",") !== "2000") fail(`one shed 503 then 200 must succeed after one wait (${s1.calls.length}, ${waits})`);
+  }
+  {
+    waits.length = 0;
+    const s2 = seq([shed({ retryAfterSeconds: 1 })]);
+    let err = null;
+    try { await getDiscoveryJson("catalog load", "https://shed.example/api/pricing?x=1", undefined, { fetchImpl: s2.fetchImpl, sleep }); } catch (e) { err = e; }
+    if (!err || err.message !== "catalog load failed: HTTP 503 from /api/pricing after 3 attempts" || err.status !== 503) fail(`3 shed 503s must fail naming the surface: ${err && err.message}`);
+    if (s2.calls.length !== 3 || waits.length !== 2) fail(`exactly 3 attempts and 2 waits (${s2.calls.length}, ${waits.length})`);
+  }
+  {
+    const s3 = seq([shed({ error: "busy" })]);
+    const { res, attempts } = await fetchDiscovery("https://shed.example/api/find", undefined, { fetchImpl: s3.fetchImpl, sleep });
+    if (res.status !== 503 || attempts !== 1 || s3.calls.length !== 1) fail("a 503 without a delay is answered once");
+  }
+
+  const { createServer } = await import("node:http");
+  const counts = { pricing: 0, find: 0 };
+  const stub = createServer((req, res) => {
+    const u = new URL(req.url, "http://stub");
+    const send = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
+    const shedIt = () => send(503, { error: "The server is busy", retryAfterSeconds: 0 }, { "retry-after": "0" });
+    if (u.pathname === "/api/pricing") {
+      counts.pricing++;
+      if (counts.pricing === 1) return shedIt();
+      return send(200, { endpoints: [{ slug: "stub-hash", method: "GET", path: "/api/stub-hash", price: "$0.001", description: "Hash a string with SHA-256", category: "Text", computePayable: true }] });
+    }
+    if (u.pathname === "/openapi.json") return send(200, { paths: { "/api/stub-hash": { get: { parameters: [{ name: "text", required: true, schema: { type: "string" } }] } } } });
+    if (u.pathname === "/api/find") { counts.find++; return shedIt(); }
+    return send(404, { error: "not found" });
+  });
+  await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+  const stubUrl = `http://127.0.0.1:${stub.address().port}`;
+  const stubEnv = { ...process.env, AGENT402_URL: stubUrl };
+  delete stubEnv.AGENT_KEY; delete stubEnv.SOLANA_AGENT_KEY; delete stubEnv.AGENT402_CREDITS_KEY;
+  const shedClient = new Client({ name: "agent402-mcp-shed-test", version: "0.0.0" });
+  await shedClient.connect(new StdioClientTransport({ command: process.execPath, args: [join(ROOT, "mcp", "index.js")], env: stubEnv, stderr: "ignore" }));
+  try {
+    const found = await shedClient.callTool({ name: "catalog.search", arguments: { query: "hash a string" } });
+    if (counts.pricing !== 2 || !text(found).includes("stub-hash")) fail(`catalog must load through one shed 503 (pricing reads ${counts.pricing}): ${text(found).slice(0, 200)}`);
+    const shedFind = await shedClient.callTool({ name: "catalog.find", arguments: { task: "hash a string" } });
+    if (!shedFind.isError || counts.find !== 3 || !/HTTP 503 from \/api\/find after 3 attempts/.test(text(shedFind))) fail(`catalog.find shed 3 times must name the surface and status (${counts.find}): ${text(shedFind)}`);
+  } finally {
+    await shedClient.close().catch(() => {});
+    stub.close();
+  }
+  console.log("discovery.js shed-503 retry \u2713 (bounded, capped, 503-only; catalog loads through a shed, catalog.find names the surface)");
+}
+
 // 1) Boot a paywalled API instance (PoW gate live, facilitator not contacted).
 const api = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,

@@ -52,7 +52,7 @@ try {
   r = await visit(CRAWLER, { "x-pow-solution": `${q.proofOfWork.token}:${nonce}` });
   log(`   → HTTP ${r.status} ${c.green}OK${c.reset} (paid via ${r.headers.get("x-tollbooth-paid")})  "${await r.text()}"\n`);
 
-  log(`${c.bold}${c.green}✓ Pay-per-crawl, end to end${c.reset}: humans free, bots pay (USDC or compute). No Cloudflare, no Stripe, no signup.`);
+  log(`${c.bold}${c.green}✓ Pay-per-crawl, end to end${c.reset}: humans free, bots pay (USDC or compute), settled to your own wallet with no signup.`);
 } finally {
   server.close();
 }

@@ -55,7 +55,9 @@ try {
 
   // --- 1. the published stdio MCP server, spoken to over real stdio ---------
   const proc = spawn("node", [join(dir, "node_modules", "agent402-mcp", "index.js")], {
-    env: { ...process.env, AGENT402_BASE_URL: TARGET },
+    // The server reads AGENT402_URL; TARGET must reach it, or a run aimed at
+    // another host silently tests production.
+    env: { ...process.env, AGENT402_URL: TARGET },
     stdio: ["pipe", "pipe", "pipe"],
   });
   let buf = "";
@@ -103,14 +105,19 @@ try {
   // package also logs "Could not load the catalog ... starting with an empty
   // catalog" to stderr when /api/pricing is mid-rollout, which is the same
   // moment expressed a second way.
+  // Rows, not text: a server whose catalog never loaded still answers with a
+  // "No tools matched" message, so only a non-empty results list counts.
+  const searchRows = (reply) => {
+    try { const doc = JSON.parse(reply?.result?.content?.map((c) => c.text || "").join("") || ""); return Array.isArray(doc.results) ? doc.results.length : 0; } catch { return 0; }
+  };
   let called = await rpc(3, "tools/call", { name: "catalog.search", arguments: { query: "uuid" } });
-  if (called?.error || !(called?.result?.content?.[0]?.text || "").length) {
+  if (called?.error || searchRows(called) === 0) {
     console.log(`  (catalog.search came back empty or errored - retrying once in ${RETRY_DELAY_MS / 1000}s, prod may be mid-deploy)`);
     await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
     called = await rpc(4, "tools/call", { name: "catalog.search", arguments: { query: "uuid" } });
   }
-  const text = called?.result?.content?.map((c) => c.text || "").join("") || "";
-  ok(!called?.error && text.length > 0, `a catalog.search through the published package reaches ${TARGET} and returns results${called?.error ? ` (${JSON.stringify(called.error).slice(0, 160)})` : ""}`);
+  const rows = searchRows(called);
+  ok(!called?.error && rows > 0, `a catalog.search through the published package reaches ${TARGET} and returns ${rows} catalog rows${called?.error ? ` (${JSON.stringify(called.error).slice(0, 160)})` : ""}`);
 
   proc.kill();
   if (stderr.trim()) console.log(`  (server stderr: ${stderr.trim().split("\n")[0].slice(0, 160)})`);

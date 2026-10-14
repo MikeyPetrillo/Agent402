@@ -9,6 +9,50 @@
 import { Agent402 } from "agent402-client";
 
 const DEFAULT_BASE = "https://agent402.tools";
+
+// Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
+// settle nothing, so a 503 the server sheds under load is safe to repeat. It
+// is retried only when it names its own delay (a Retry-After header or a
+// retryAfterSeconds body field), at most DISCOVERY_ATTEMPTS tries in all,
+// each wait capped at DISCOVERY_MAX_WAIT_MS. A paid call never goes through
+// here: a repeat of one could settle twice.
+const DISCOVERY_ATTEMPTS = 3;
+const DISCOVERY_MAX_WAIT_MS = 5000;
+
+async function shedRetryWaitMs(r) {
+  if (!r || r.status !== 503) return null;
+  const header = r.headers && typeof r.headers.get === "function" ? r.headers.get("retry-after") : null;
+  let seconds = header != null && String(header).trim() !== "" ? Number(header) : NaN;
+  if (!Number.isFinite(seconds)) {
+    try {
+      const body = await (typeof r.clone === "function" ? r.clone() : r).json();
+      seconds = Number(body && body.retryAfterSeconds);
+    } catch { seconds = NaN; }
+  }
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  return Math.min(seconds * 1000, DISCOVERY_MAX_WAIT_MS);
+}
+
+// Resolves with the 2xx response, or throws `${label}: HTTP <status>` (plus
+// "after N attempts" when it retried) with `.status` and `.attempts` set.
+// `init` may be a function, so each attempt gets its own timeout signal.
+async function discoveryFetch(fetchImpl, label, url, init) {
+  let r;
+  let attempts = 0;
+  for (;;) {
+    attempts++;
+    r = await fetchImpl(url, typeof init === "function" ? init() : init);
+    if (r.ok) return r;
+    if (attempts >= DISCOVERY_ATTEMPTS) break;
+    const wait = await shedRetryWaitMs(r);
+    if (wait == null) break;
+    await new Promise((resolve) => setTimeout(resolve, wait));
+  }
+  const err = new Error(`${label}: HTTP ${r.status}${attempts > 1 ? ` after ${attempts} attempts` : ""}`);
+  err.status = r.status;
+  err.attempts = attempts;
+  throw err;
+}
 // The runtime owns configuration: runtime.getSetting() reads the character's
 // settings/secrets and, in elizaOS, the process environment behind them. The
 // plugin reads nothing else, so a host that scopes settings per agent is
@@ -123,7 +167,7 @@ export const findAction = {
   ],
   examples: [[
     { name: "user", content: { text: "Find a tool that extracts the article text from a URL" } },
-    { name: "agent", content: { text: "Agent402 has `extract` ($0.005 per call) for that. I can call it with { url }.", actions: ["AGENT402_FIND"] } },
+    { name: "agent", content: { text: "Agent402 has `extract` for that (its price is in the result). I can call it with { url }.", actions: ["AGENT402_FIND"] } },
   ]],
   validate: async () => true,
   handler: async (runtime, message, _state, options, callback) => {
@@ -276,8 +320,7 @@ export const aboutAction = {
   handler: async (runtime, _message, _state, _options, callback) => {
     const baseUrl = (setting(runtime, "AGENT402_BASE_URL") || DEFAULT_BASE).replace(/\/+$/, "");
     try {
-      const r = await fetch(`${baseUrl}/api/pricing`);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const r = await discoveryFetch(globalThis.fetch, "GET /api/pricing", `${baseUrl}/api/pricing`);
       const p = await r.json();
       const endpoints = p.endpoints || [];
       const data = {
