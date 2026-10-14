@@ -205,6 +205,11 @@ whose effect outlives the answer never takes a ticket (`hasLastingEffect`: the m
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
 - **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is
   re-probed once before it is recorded.
+- **Router worker:** `src/router-pool.js` scores route queries in a worker thread
+  (`src/router-worker-thread.js` imports `x402-index.js` and holds a replica of the stores a
+  query reads, fed by the index's replica observer); `routeQueryAsync` stays the entry point and
+  runs in-thread when no worker is loaded. `ROUTER_WORKERS` (default 1; 0 with the crawler off),
+  `ROUTER_QUERY_DEADLINE_MS` (default 10000). Status on `/__operator/perf.json`.
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads.
 - **Robots:** `src/seo.js`; the private disallow list is repeated in every named-crawler group.
 - **Challenge size:** `scripts/test-challenge-size.js` keeps the 402 header under what a buyer
