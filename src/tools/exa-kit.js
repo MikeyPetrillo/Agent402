@@ -44,6 +44,7 @@
 import { markUntrusted } from "./provenance.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { meterUpstreamSpend } from "../posthog.js";
+import { createSharedDailySpend } from "../shared-limits.js";
 
 const EXA_API = "https://api.exa.ai";
 const TIMEOUT_MS = 30_000;
@@ -166,7 +167,12 @@ export function exaSpendStatus(now = Date.now()) {
  *  (Exa is an indexed x402 and MPP seller), unpaid, so a host-level count of
  *  that domain is not this number. */
 export function exaCallsToday(now = Date.now()) { spentToday(now); return spend.calls; }
-export function _exaSpendReset() { spend.day = ""; spend.micro = 0; spend.refused = 0; spend.calls = 0; }
+export function _exaSpendReset() { spend.day = ""; spend.micro = 0; spend.refused = 0; spend.calls = 0; exaShared.reset(); }
+// Shared across replicas (src/shared-limits.js): the day's spend is also a
+// shared counter per UTC day, reserved before the call and corrected after; a
+// reserve that takes the shared total past the cap is given back and refused.
+// The local counter stays the floor when the store does not answer.
+const exaShared = createSharedDailySpend("exa-day", "exa");
 export function _exaSpendBook(usd) { spentToday(); spend.micro += Math.round(usd * 1e6); lifetime.micro += Math.round(usd * 1e6); }
 
 /**
@@ -203,17 +209,17 @@ async function exaPost(path, body) {
   const key = requireKey();
   const cap = EXA_DAILY_MAX_USD();
   const estimate = estimateExaUsd(path, body);
-  if (cap > 0 && spentToday() + estimate > cap) {
-    spend.refused++;
-    throw bad(
-      `Exa tools have reached today's usage cap - retry after 00:00 UTC. Nothing was charged for this request.`,
-      503,
-    );
-  }
+  const capped = () => { spend.refused++; return bad(`Exa tools have reached today's usage cap - retry after 00:00 UTC. Nothing was charged for this request.`, 503); };
+  // The shared reserve first (an atomic add on the store, awaited only when
+  // there is one): over the cap there, nothing is booked here. Then this
+  // process's check and booking, with no await between them.
+  if (cap > 0 && exaShared.enabled && !(await exaShared.reserve(estimate, cap))) throw capped();
+  if (cap > 0 && spentToday() + estimate > cap) { exaShared.book(-estimate); throw capped(); }
   // Book the estimate BEFORE the call. If the request dies mid-flight we may
   // still have been billed, and a guard that only books on success is a guard
   // a timeout walks straight through.
   _exaSpendBook(estimate);
+  const book = (usd) => { _exaSpendBook(usd); exaShared.book(usd); };
   spend.calls++;
 
   let res;
@@ -238,7 +244,7 @@ async function exaPost(path, body) {
   if (!res.ok) {
     // A clean refusal did no billable work: release the booked estimate so
     // refused calls cannot fill the day's cap. Timeouts and 5xx keep it.
-    if (EXA_RELEASE_STATUSES.has(res.status)) _exaSpendBook(-estimate);
+    if (EXA_RELEASE_STATUSES.has(res.status)) book(-estimate);
     if (res.status === 401 || res.status === 403) throw bad("Exa tools are not configured on this deployment. Nothing was charged for this request.", 503);
     if (res.status === 402) throw bad("Exa tools are temporarily unavailable. Nothing was charged for this request.", 503);
     if (res.status === 429) throw bad("Exa is rate-limiting this deployment right now - retry shortly", 503);
@@ -254,7 +260,7 @@ async function exaPost(path, body) {
   // Correct the day's booking to what Exa says it charged. Only ever replaces
   // the estimate with a real figure; an absent costDollars keeps the estimate.
   const actual = actualExaUsd(data);
-  if (actual !== null) _exaSpendBook(actual - estimate);
+  if (actual !== null) book(actual - estimate);
   // The served call's cost, in the server-side spend meter beside the model
   // tiers (/__operator/margin.json): what Exa says it charged, else the card.
   meterUpstreamSpend("exa", actual ?? estimate);

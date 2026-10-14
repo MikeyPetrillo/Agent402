@@ -10,6 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-external-spend-guard-pg" });
+// Keys this run writes to a shared store (REDIS_URL set beside the database) are its own.
+process.env.SHARED_LIMITS_PREFIX ||= `esgpg${process.pid}${Date.now().toString(36)}`;
 const TMP = mkdtempSync(join(tmpdir(), "spend-guard-pg-"));
 const file = join(TMP, "wallet-daily-spend.json");
 process.env.WALLET_DAILY_LEDGER_FILE = file;

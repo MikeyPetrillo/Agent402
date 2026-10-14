@@ -95,10 +95,10 @@ ok(fast.some((a) => a.network.startsWith("solana:")) && fast.some((a) => a.netwo
   ok(!isBillingRefusalReceipt({ success: true, errorReason: "free_tier_exhausted" }) && !isBillingRefusalReceipt(null), "a settled or absent receipt is never one");
   const { readFileSync } = await import("node:fs");
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  const from = server.indexOf("if (compositeGuardBlocked(guardKey))");
+  const from = server.indexOf("if (await compositeGuardBlocked(guardKey))");
   const listener = server.slice(from, server.indexOf("let cacheKey = null;", from));
   ok(/else if \(st === 402 \|\| st >= 500\) recordCompositeSpendFailure\(guardKey, \{ global: !ownGlobalBound \}\);/.test(listener), "the composite finish listener counts every 402 and 5xx, billing refusals included");
-  ok(/if \(!ownGlobalBound && compositeGuardGlobalPaused\(\)\)/.test(server), "only slugs without their own global bound honour the global pause");
+  ok(/if \(!ownGlobalBound && await compositeGuardGlobalPaused\(\)\)/.test(server), "only slugs without their own global bound honour the global pause (awaited: a promise with a shared store)");
   ok(!/isBillingRefusalReceipt|isWithdrawnSubcentRefusal/.test(listener), "...with no billing exemption anywhere in it");
 }
 

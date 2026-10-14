@@ -41,10 +41,18 @@
 // settlement failure here. scripts/test-gateway-settle-breaker.js pins that
 // invariant from source for every gateway kit.
 //
-// In-memory per process (a restart resets it, the same as the composite and
-// external-spend guards); tune via env. Not a reputation system: a settled
-// call clears the wallet's count at once.
+// In memory per process (a restart resets it, the same as the composite and
+// external-spend guards), and shared across replicas through
+// src/shared-limits.js when a Redis is configured: every failure is written
+// to a shared window under the same key, the global pause is a shared flag,
+// and the consult reads the shared counts with this process's own as the
+// floor. Without Redis the consult is synchronous, exactly as before; with it
+// the consult returns a promise (the handlers await it), and when the shared
+// store does not answer the consult decides on this process's counts alone,
+// which is never looser than one replica was. Tune via env. Not a reputation
+// system: a settled call clears the wallet's count at once.
 import { payerFromRequest } from "./payer.js";
+import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { isBillingRefusalReceipt } from "./payment-reject.js";
 import { isWithdrawnSubcentRefusal } from "./avm-sponsorship.js";
 import { onSettleOutcome } from "./hangup-settlement.js";
@@ -80,6 +88,61 @@ let globalFailKeys = new Map();
 let anonSeq = 0;
 let globalPausedUntil = 0;
 let globalTrips = 0;
+
+// ---- the shared half ----------------------------------------------------------
+// Window names: gwb-fail / gwb-bill (per key, one entry per failure),
+// gwb-global (one entry per distinct buyer; a keyless failure is its own
+// entry), and the flag gwb-pause. A window add returns the shared count, so
+// the trip decision is made on the count every replica contributed to.
+const SHARED = sharedLimitsEnabled();
+const PROC = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+let sharedSeq = 0;
+const CONTROL = "gateway-settle-breaker";
+function sharedKey(key) { return key.replace(/[\s]/g, "_"); }
+function sharedRecordFailure(key, now, { global, billing, withdrawn }) {
+  const member = `${PROC}:${++sharedSeq}`;
+  if (global) {
+    void sharedWrite(CONTROL, shared.windowAdd("gwb-global", "all", { windowMs: WINDOW_MS, member: key ? sharedKey(key) : `${withdrawn ? "withdrawn" : "anon"}:${member}`, now })).then((r) => {
+      if (!r?.ok || r.count < GLOBAL_MAX_FAILS) return;
+      void sharedWrite(CONTROL, shared.flagSet("gwb-pause", "all", now + WINDOW_MS, { now }));
+      void sharedWrite(CONTROL, shared.windowClear("gwb-global", "all"));
+      if (globalPausedUntil <= now) {
+        globalPausedUntil = now + WINDOW_MS;
+        globalTrips++;
+        console.warn(`[gateway-breaker] unsettled gateway calls from ${r.count} buyer(s) across replicas inside ${Math.round(WINDOW_MS / 1000)} s - pausing every /v1 tier until ${new Date(globalPausedUntil).toISOString()}`);
+      }
+    });
+  }
+  if (!key) return;
+  void sharedWrite(CONTROL, shared.windowAdd("gwb-fail", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
+  if (billing) void sharedWrite(CONTROL, shared.windowAdd("gwb-bill", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
+}
+function sharedRecordSuccess(key) {
+  void sharedWrite(CONTROL, shared.windowClear("gwb-fail", sharedKey(key)));
+  void sharedWrite(CONTROL, shared.windowClear("gwb-bill", sharedKey(key)));
+}
+/** The per-key state with the shared window folded in: the shared entries
+ *  when the store answered and holds at least as many as this process does,
+ *  else this process's own. */
+async function sharedBlocked(key, now) {
+  const local = gatewaySettleBreakerBlocked(key, now);
+  if (!key) return local;
+  const r = await shared.windowReadMany([{ name: "gwb-fail", key: sharedKey(key), windowMs: WINDOW_MS }, { name: "gwb-bill", key: sharedKey(key), windowMs: WINDOW_MS }], { now });
+  if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return local; }
+  const [f, b] = r.results;
+  if (f.count <= local.fails || !f.entries) return local;
+  const times = f.entries.map((e) => e.score).sort((x, y) => x - y);
+  const out = { blocked: false, fails: f.count, billingFails: Math.max(b.count, local.billingFails) };
+  if (f.count < MAX_FAILS) return out;
+  return { ...out, blocked: true, until: times[times.length - MAX_FAILS] + WINDOW_MS };
+}
+async function sharedGlobalPaused(now) {
+  const local = gatewaySettleBreakerGlobalPaused(now);
+  if (local.paused) return local;
+  const r = await shared.flagGet("gwb-pause", "all", { now });
+  if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return local; }
+  return r.until > now ? { paused: true, until: r.until } : local;
+}
 
 /** The identity a gateway call is counted under. Same derivation as the
  *  composite guard in server.js: the signed EVM payer, else the Tempo sender
@@ -126,6 +189,7 @@ export function gatewaySettleBreakerGlobalPaused(now = Date.now()) {
 
 /** A payment was presented, the handler served, and settlement FAILED. */
 export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, billing = false, withdrawn = false } = {}) {
+  if (SHARED) sharedRecordFailure(key, now, { global, billing, withdrawn });
   // `global:false` (the wallet-only catalog consult): the failure counts
   // against the WALLET only. A catalog read costs a fraction of a cent, so
   // twelve of them must never pause the LLM tiers - that would hand anyone
@@ -161,7 +225,7 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
 
 /** A settled 200 clears the key at once - a good buyer is never impeded. */
 export function recordGatewaySettleSuccess(key) {
-  if (key) { fails.delete(key); billingFails.delete(key); }
+  if (key) { fails.delete(key); billingFails.delete(key); if (SHARED) sharedRecordSuccess(key); }
 }
 
 function decodeReceipt(res) {
@@ -230,16 +294,31 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
 }
 
 /**
- * THE CONSULT LINE. Every gateway handler calls this first, before validation
+ * THE CONSULT LINE. Every gateway handler awaits this first, before validation
  * and before any upstream call. Throws 503 while the global pause holds, 429
  * while this buyer is blocked; otherwise arms the outcome listener.
+ * Synchronous (returns undefined, throws at once) without a shared store; a
+ * promise with one, so `await` covers both.
  */
 export function gatewaySettleBreakerCheck(req, { now = Date.now(), global = true } = {}) {
   const key = gatewaySettleBreakerKey(req);
+  if (!SHARED) {
+    decide(req, key, now, global, global ? gatewaySettleBreakerGlobalPaused(now) : { paused: false }, gatewaySettleBreakerBlocked(key, now));
+    return undefined;
+  }
+  // Shared: the pause flag and this key's window, read together with this
+  // process's own counts as the floor; a store that does not answer leaves
+  // the decision to those counts.
+  return (async () => {
+    const g = global ? await sharedGlobalPaused(now) : { paused: false };
+    const b = g.paused ? null : await sharedBlocked(key, now);
+    decide(req, key, now, global, g, b);
+  })();
+}
+function decide(req, key, now, global, g, b) {
   // The wallet-only catalog consults with global:false: no global pause is
   // honoured and none is fed. Only the /v1 tiers, where a wasted call costs
   // real money, take part in the global pause.
-  const g = global ? gatewaySettleBreakerGlobalPaused(now) : { paused: false };
   if (g.paused) {
     const secs = Math.max(1, Math.ceil((g.until - now) / 1000));
     const e = new Error(`Paid tools are briefly paused after a burst of payments that verified and then failed to settle; retry after ${new Date(g.until).toISOString()} (about ${secs} s). Nothing was charged for this request.`);
@@ -248,7 +327,6 @@ export function gatewaySettleBreakerCheck(req, { now = Date.now(), global = true
     try { req?.res?.setHeader?.("Retry-After", String(secs)); } catch { /* headers are best-effort */ }
     throw e;
   }
-  const b = gatewaySettleBreakerBlocked(key, now);
   if (b.blocked) {
     const secs = Math.max(1, Math.ceil((b.until - now) / 1000));
     const mins = Math.round(WINDOW_MS / 60_000);
@@ -287,4 +365,12 @@ export function gatewaySettleBreakerStatus(now = Date.now()) {
 }
 
 /** Test-only. */
-export function _gatewaySettleBreakerReset() { fails.clear(); billingFails.clear(); globalFailKeys = new Map(); globalPausedUntil = 0; globalTrips = 0; }
+export function _gatewaySettleBreakerReset() {
+  if (SHARED) {
+    for (const k of new Set([...fails.keys(), ...billingFails.keys()])) sharedRecordSuccess(k);
+    void shared.flagSet("gwb-pause", "all", 0); void shared.windowClear("gwb-global", "all");
+  }
+  fails.clear(); billingFails.clear(); globalFailKeys = new Map(); globalPausedUntil = 0; globalTrips = 0;
+}
+/** Whether this process writes the breaker through to the shared store. */
+export const _gatewaySettleBreakerShared = SHARED;
