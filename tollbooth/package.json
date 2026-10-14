@@ -33,6 +33,7 @@
     "mpp-codec.js",
     "edge-mpp.js",
     "tempo.js",
+    "nano.js",
     "dashboard.js",
     "sinks.js",
     "replay.js",
@@ -44,7 +45,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node test.js && node edge.test.js && node features.test.js && node tempo.test.js",
+    "test": "node test.js && node edge.test.js && node features.test.js && node tempo.test.js && node nano.test.js",
     "demo": "node demo.js",
     "example": "node example.js"
   },

@@ -291,6 +291,38 @@ Options: `confirm: false` disables, `confirmRpcUrl` overrides the Tempo RPC
 dependency-free (keccak-256 is implemented in-package and pinned against the
 live incident transaction in the tests).
 
+## MPP nano/charge
+
+Tollbooth can also take XNO on the Nano network through MPP's `nano/charge`
+method (draft-nano-charge-00). Nano has no fees and no settlement step: the
+buyer publishes a send block, waits for it to confirm, and presents the block
+hash. The gate only reads that block from a Nano node; it holds no keys and
+never sends anything.
+
+```js
+app.use(createTollbooth({
+  price: "$0.001",
+  nano: {
+    recipient: "nano_1yourAddress...",          // checksum validated at construction
+    priceRaw: "1000000000000000000000000000",   // 0.001 XNO in raw
+    rpcUrl: "http://127.0.0.1:7076",            // a node you trust, ideally your own
+  },
+}));
+```
+
+Or from env: `TOLLBOOTH_NANO_RECIPIENT`, `TOLLBOOTH_NANO_PRICE_RAW`,
+`TOLLBOOTH_NANO_RPC_URL`. Unset, nothing changes.
+
+A Nano block carries no memo, so each 402 asks for `priceRaw` plus a random
+suffix below 10^24 raw (under 0.000001 XNO), and only a confirmed `send` of
+exactly that amount to `recipient` answers that challenge (`binding:
+"amount"`). The amount sits inside the HMAC-bound challenge, so a buyer cannot
+choose its own. A paid request is served with a `Payment-Receipt` and
+`X-Tollbooth-Paid: mpp-nano`; the block hash is claimed in the `replayStore`
+as `nano:<HASH>`. An unconfirmed block, or a node that is down, gets a 402
+with `Retry-After` and does not use up the hash. The gate trusts the node's
+`confirmed` flag, so point `rpcUrl` at a node you run.
+
 ## Configuration
 
 | Option | Default | What |
@@ -313,6 +345,7 @@ live incident transaction in the tests).
 | `mppNetworks` | `[8453, 42220]` | EVM chain ids to offer as MPP challenges (`"all"` = every EVM chain the middleware advertises) |
 | `tempo` | env (`TOLLBOOTH_TEMPO_*`) or off | Native MPP on Tempo (0.9.0): `{ apiKey, recipient, currency \| currencies, splits, chainId, apiBaseUrl, decimals, timeoutSeconds, confirm, confirmRpcUrl }` - mints `tempo/charge` challenges, validates with Tempo's relay before the handler, broadcasts after a <400 response. Works with or without `x402` |
 | `tempo.confirm` | `true` | Chain-truth confirm (0.9.2): on a relay broadcast failure, check the chain for the credential's own txid before answering 402; `false` disables |
+| `nano` | env (`TOLLBOOTH_NANO_*`) or off | MPP `nano/charge`: `{ recipient, priceRaw, rpcUrl, network, timeoutSeconds }` - verifies a confirmed XNO send block by hash against your Nano node. Works with or without `x402` |
 | `tempo.confirmRpcUrl` | `https://rpc.tempo.xyz` (`TOLLBOOTH_TEMPO_RPC_URL`) | Tempo JSON-RPC used by the confirm step |
 | `verifyX402(req, opts)` | – | Legacy verify-only USDC check (deprecated for settle-after-handler middlewares; see above) |
 | `resourceBaseUrl` | `""` | Absolute base used for the `resource` field / PoW binding |
@@ -342,6 +375,9 @@ Read by the bundled proxy / Express entry point (`index.js`):
 | `TOLLBOOTH_TEMPO_SPLITS` | – | `0xabc:0.0002,0xdef:0.0001` - split recipients + USD amounts paid in the same transaction (≤10, total below the price) |
 | `TOLLBOOTH_TEMPO_API_BASE` | `https://api.tempo.xyz` | Tempo relay base URL override |
 | `TOLLBOOTH_TEMPO_RPC_URL` | `https://rpc.tempo.xyz` | Tempo JSON-RPC for the chain-truth confirm step (0.9.2) |
+| `TOLLBOOTH_NANO_RECIPIENT` | – | `nano_` address to be paid in XNO. Presence switches on the Nano rail |
+| `TOLLBOOTH_NANO_PRICE_RAW` | – | Price per request in raw (1 XNO = 10^30 raw) |
+| `TOLLBOOTH_NANO_RPC_URL` | – | Nano node RPC used to read the buyer's block (`block_info`) |
 | `TOLLBOOTH_ASSET` | `"USDC"` | Asset symbol in the quote (`USDG` charges in USDG on Robinhood Chain) |
 | `TOLLBOOTH_POW_BITS` | `18` | Proof-of-work difficulty in leading zero bits |
 | `TOLLBOOTH_MODE` | `"bots"` | Who pays: `bots` · `all` · `strict` |
@@ -409,7 +445,7 @@ changes. Bots see a `X-Tollbooth-Observed: would-charge` header in observe mode
 ## Analytics
 
 The middleware keeps aggregate counters (no per-request data):
-- `gate.stats()` → sync, in-process mirror: `{ requests, freeAllowed, wouldCharge, charged, powSolved, x402Paid, mppPaid, tempoPaid, difficultyNow, observe }`.
+- `gate.stats()` → sync, in-process mirror: `{ requests, freeAllowed, wouldCharge, charged, powSolved, x402Paid, mppPaid, tempoPaid, nanoPaid, difficultyNow, observe }`.
 - `gate.snapshot()` → async, reads from the configured durable sink (defaults to memory).
 - `gate.flush()` → flush any buffered deltas to the durable sink (call inside `ctx.waitUntil` on edge runtimes).
 

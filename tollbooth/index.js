@@ -21,6 +21,7 @@ import { makeBotMatcher, AI_BOTS } from "./bots.js";
 import { memorySink } from "./sinks.js";
 import { challengesFromPaymentRequired, translateCredential, receiptFromPaymentResponse, isMppCredential, DEFAULT_MPP_CHAIN_IDS } from "./mpp.js";
 import { tempoConfig, mintTempoChallenges, parseTempoCredential, checkTempoBinding, tempoRelay, relayInput, broadcastIdempotencyKey, tempoReceiptHeader, tempoProblem, confirmTempoSettlement } from "./tempo.js";
+import { nanoConfig, mintNanoChallenge, parseNanoCredential, checkNanoBinding, verifyNanoPayment, nanoReceiptHeader, nanoProblem } from "./nano.js";
 
 export { AI_BOTS, makeBotMatcher } from "./bots.js";
 export { createPow, leadingZeroBits } from "./pow.js";
@@ -28,6 +29,7 @@ export { memorySink, kvStatsSink, httpStatsSink } from "./sinks.js";
 export { sqliteReplayStore, redisReplayStore } from "./replay.js";
 export { challengesFromPaymentRequired, translateCredential, receiptFromPaymentResponse, DEFAULT_MPP_CHAIN_IDS } from "./mpp.js";
 export { tempoConfig, mintTempoChallenges, parseTempoCredential, checkTempoBinding, tempoRelay, toBaseUnits, TEMPO_USDC_E, TEMPO_PATHUSD, TEMPO_MAINNET_CHAIN_ID } from "./tempo.js";
+export { nanoConfig, mintNanoChallenge, parseNanoCredential, checkNanoBinding, verifyNanoPayment, nanoAddressToPublicKey, NANO_MAINNET } from "./nano.js";
 
 const VERIFY_TIMEOUT_MS = Number(process.env.TOLLBOOTH_VERIFY_TIMEOUT_MS) || 10_000;
 
@@ -150,6 +152,13 @@ export function tempoFromEnv(env = process.env) {
   };
 }
 
+/** Nano config from env (null when TOLLBOOTH_NANO_RECIPIENT is unset). */
+export function nanoFromEnv(env = process.env) {
+  const recipient = (env.TOLLBOOTH_NANO_RECIPIENT || "").trim();
+  if (!recipient) return null;
+  return { recipient, priceRaw: (env.TOLLBOOTH_NANO_PRICE_RAW || "").trim(), rpcUrl: (env.TOLLBOOTH_NANO_RPC_URL || "").trim() };
+}
+
 export function createTollbooth(config = {}) {
   const {
     price = process.env.TOLLBOOTH_PRICE || "$0.001",
@@ -192,6 +201,11 @@ export function createTollbooth(config = {}) {
     // TOLLBOOTH_TEMPO_API_KEY + TOLLBOOTH_TEMPO_RECIPIENT (+ TOLLBOOTH_TEMPO_CURRENCY,
     // TOLLBOOTH_TEMPO_SPLITS="0xabc:0.0002,0xdef:0.0001").
     tempo = config.tempo !== undefined ? config.tempo : tempoFromEnv(process.env),
+    // MPP nano/charge: { recipient, priceRaw, rpcUrl, network, timeoutSeconds }.
+    // Verification only: the buyer publishes a confirmed XNO send block and
+    // presents its hash; the gate reads it from the operator's Nano node. From
+    // env: TOLLBOOTH_NANO_RECIPIENT + TOLLBOOTH_NANO_PRICE_RAW + TOLLBOOTH_NANO_RPC_URL.
+    nano = config.nano !== undefined ? config.nano : nanoFromEnv(process.env),
     resourceBaseUrl = process.env.TOLLBOOTH_RESOURCE_BASE || "",
     // Adaptive proof-of-work: raise difficulty as charged-request load climbs, so
     // high-volume abuse pays escalating CPU regardless of how it disguises itself.
@@ -240,6 +254,26 @@ export function createTollbooth(config = {}) {
     for (const [k, exp] of tempoSeen) if (exp <= now) tempoSeen.delete(k);
     if (tempoSeen.has(id)) return false;
     tempoSeen.set(id, expiresAtMs);
+    return true;
+  };
+
+  const nanoCfg = nano ? nanoConfig(nano) : null; // throws on a bad config, like tempo
+  const nanoKey = nanoCfg
+    ? (mppKey || tempoKey || String(mppSecret || powSecret || process.env.TOLLBOOTH_MPP_SECRET || process.env.TOLLBOOTH_SECRET || randomBytes(32).toString("hex")))
+    : null;
+  if (nanoCfg && !mppKey && !tempoKey && !(mppSecret || powSecret || process.env.TOLLBOOTH_MPP_SECRET || process.env.TOLLBOOTH_SECRET)) {
+    console.warn("[agent402-tollbooth] Nano enabled with a per-process random secret - set TOLLBOOTH_SECRET (or mppSecret) for multi-worker deploys.");
+  }
+  // Single-use record for nano block hashes, kept until the challenge expires:
+  // a challenge's amount is unique, so after it expires no other challenge
+  // can be answered by the same block.
+  const nanoSeen = new Map(); // HASH -> expiresAt (in-process fallback)
+  const nanoClaim = async (hash, expiresAtMs) => {
+    if (replayStore && typeof replayStore.claim === "function") return replayStore.claim(`nano:${hash}`, expiresAtMs);
+    const now = Date.now();
+    for (const [k, exp] of nanoSeen) if (exp <= now) nanoSeen.delete(k);
+    if (nanoSeen.has(hash)) return false;
+    nanoSeen.set(hash, expiresAtMs);
     return true;
   };
 
@@ -334,6 +368,10 @@ export function createTollbooth(config = {}) {
         const tempoWww = mintTempoChallenges({ price, realm: mppRealm(req), secretKey: tempoKey, tempo: tempoCfg });
         if (tempoWww) headers = { ...headers, "WWW-Authenticate": [headers["WWW-Authenticate"], tempoWww].filter(Boolean).join(", ") };
       }
+      if (nanoCfg) {
+        const nanoWww = mintNanoChallenge({ realm: mppRealm(req), secretKey: nanoKey, nano: nanoCfg });
+        headers = { ...headers, "WWW-Authenticate": [headers["WWW-Authenticate"], nanoWww].filter(Boolean).join(", ") };
+      }
       for (const [k, v] of Object.entries(headers)) { if (v != null && v !== "") res.setHeader(k, v); }
       res.status(402).json(body);
     };
@@ -420,6 +458,32 @@ export function createTollbooth(config = {}) {
       res.setHeader("Payment-Receipt", tempoReceiptHeader(b.receipt));
       res.setHeader("X-Tollbooth-Paid", "mpp-tempo");
       replay();
+    };
+
+    // Nano rail: the payment is already final on the ledger when the
+    // credential arrives, so there is nothing to settle after the handler.
+    // Local checks first (no node call for a credential we did not mint),
+    // then block_info, then the single-use claim on the block hash. An
+    // unconfirmed or unreachable block is refused WITHOUT consuming the hash,
+    // so the buyer can retry the same credential.
+    const nanoRail = async (cred) => {
+      const reject = (kind, detail, retry) => {
+        res.setHeader("X-Tollbooth-Error", `nano-${kind}`);
+        if (retry) res.setHeader("Retry-After", "1");
+        return send402({ problem: nanoProblem(kind, detail) });
+      };
+      const binding = checkNanoBinding(cred, { secretKey: nanoKey, realm: mppRealm(req), nano: nanoCfg });
+      if (!binding.ok) return reject("invalid-challenge", `Challenge is invalid: ${binding.reason}. Request the resource again for a fresh challenge.`);
+      if (!cred.blockHash) return reject("malformed-credential", "Credential payload must be {type:\"hash\", hash:<64 hex block hash>}.");
+      const v = await verifyNanoPayment(cred.blockHash, { amount: binding.amount, nano: nanoCfg });
+      if (!v.ok) return reject(v.kind, `Payment verification failed: ${v.reason}.`, v.retry);
+      let claimed;
+      try { claimed = await nanoClaim(cred.blockHash, binding.expiresAtMs); } catch { claimed = false; }
+      if (!claimed) return reject("invalid-challenge", "Challenge is invalid: this payment was already used. Request the resource again for a fresh challenge.");
+      incr("nanoPaid");
+      res.setHeader("Payment-Receipt", nanoReceiptHeader(cred.blockHash));
+      res.setHeader("X-Tollbooth-Paid", "mpp-nano");
+      return next();
     };
 
     // Paid rail, middleware mode: delegate to the operator's x402 middleware
@@ -545,6 +609,10 @@ export function createTollbooth(config = {}) {
       if (tempoCfg) {
         const cred = parseTempoCredential(req.headers.authorization);
         if (cred) return tempoRail(cred);
+      }
+      if (nanoCfg) {
+        const cred = parseNanoCredential(req.headers.authorization);
+        if (cred) return nanoRail(cred);
       }
       if (x402) return middlewareRail();
       const payHeader = req.headers["x-payment"] || req.headers["payment-signature"];
