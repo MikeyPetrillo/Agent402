@@ -657,7 +657,7 @@ server.setRequestHandler(ListToolsRequestSchema, withCatalog(async () => {
         properties: {
           task: { type: "string", description: "Plain-language task, e.g. 'crypto news headlines' or 'sentiment of a tweet'. Resolved to a proven external seller." },
           params: { type: "object", description: "Input parameters for the resolved external tool (optional; the seller decides its own schema)." },
-          maxUsd: { type: "number", description: "Max underlying seller price in USD. Default 0.005 (the $0.01 fee tier); a value above 0.005 uses the $0.55 tier (seller up to $0.50)." },
+          maxUsd: { type: "number", description: "Max underlying seller price in USD. Default 0.005 (the $0.01 fee tier); above 0.005 and up to 0.04 uses the $0.05 tier; above 0.04 the $0.55 tier (seller up to $0.50)." },
         },
         required: ["task"],
       },

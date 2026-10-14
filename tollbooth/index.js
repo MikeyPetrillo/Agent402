@@ -4,7 +4,7 @@
 // Put it in front of any site or API: human visitors pass through free, while
 // AI crawlers / agents must pay per request, either in USDC over the x402
 // protocol, or for free by solving a proof-of-work (no wallet, no signup, no
-// Stripe, no Cloudflare). Use it two ways:
+// account). Use it two ways:
 //
 //   1. Express middleware:   app.use(createTollbooth({ ... }))
 //   2. Reverse proxy (CLI):  TOLLBOOTH_UPSTREAM=https://your-site.com npx agent402-tollbooth

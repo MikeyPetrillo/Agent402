@@ -167,7 +167,7 @@ export const findAction = {
   ],
   examples: [[
     { name: "user", content: { text: "Find a tool that extracts the article text from a URL" } },
-    { name: "agent", content: { text: "Agent402 has `extract` ($0.005 per call) for that. I can call it with { url }.", actions: ["AGENT402_FIND"] } },
+    { name: "agent", content: { text: "Agent402 has `extract` for that (its price is in the result). I can call it with { url }.", actions: ["AGENT402_FIND"] } },
   ]],
   validate: async () => true,
   handler: async (runtime, message, _state, options, callback) => {

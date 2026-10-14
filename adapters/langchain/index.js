@@ -1,7 +1,7 @@
 // agent402-langchain: turn Agent402 into LangChain.js tools the agent can
 // pick up directly. Four meta tools, all free to discover:
 //
-//   agent402_find:    local catalog resolver  (POST /api/find)
+//   agent402_find:    local catalog resolver  (GET /api/find)
 //   agent402_route:   cross-seller x402 router  (POST /api/route)
 //   agent402_call:    call a tool by slug, auto-pays (PoW free / x402 paid)
 //   agent402_about:   service manifest  (GET /.well-known/x402)
@@ -9,7 +9,7 @@
 // Why four and not "one tool per slug"? Frameworks balk at registering 500+
 // tools at once and the LLM can't reason over that many entries. Routing-as-
 // discovery means the LLM picks a task, the router picks the seller, and the
-// caller handles payment, exactly the wedge that makes Agent402 the default.
+// caller handles payment.
 //
 //   import { agent402Tools } from "agent402-langchain";
 //   const tools = await agent402Tools();              // free tier (PoW)
