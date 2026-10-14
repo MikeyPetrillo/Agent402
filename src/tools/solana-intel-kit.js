@@ -33,6 +33,7 @@
 
 import { markUntrusted } from "./provenance.js";
 import { partialFields } from "../partial-answer.js";
+import { HANDLER_BUDGET_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
 const MAX_BODY_BYTES = 24 * 1024 * 1024;  // DefiLlama bulk docs run ~11MB; this is the hard ceiling.
 // Refuse an over-large body BEFORE reading it into a string: `res.text()` has
 // no cap of its own, so a broken or hostile upstream could push an unbounded
@@ -57,8 +58,9 @@ function assertBodyWithinCap(res, capBytes, label) {
 // step (never charged, settlement runs after the handler) instead of waiting
 // it out, and an optional step (the RPC holder table) is skipped when the
 // budget cannot hold it. AbortSignal.timeout bounds headers AND body, so a
-// stalled body read ends at the same deadline.
-const HANDLER_BUDGET_MS = 20_000;
+// stalled body read ends at the same deadline. The budget, the caps'
+// composition and the two 503 classes are src/upstream-deadline.js, shared
+// with every other kit that reads an upstream.
 const RUGCHECK_SUMMARY_MS = 8_000;
 const RUGCHECK_REPORT_MS = 12_000;
 const JUPITER_MS = 8_000;
@@ -66,22 +68,6 @@ const DEXSCREENER_MS = 8_000;
 const RPC_MS = 5_000;
 // An optional read is not started with less than this left in the budget.
 const RPC_FLOOR_MS = 1_500;
-/** One budget per handler call: remaining() is what the next read may spend. */
-function budgetOf(totalMs = HANDLER_BUDGET_MS) {
-  const endsAt = Date.now() + totalMs;
-  return { remaining: () => endsAt - Date.now() };
-}
-const secondsOf = (ms) => String(Math.max(1, Math.round(ms / 1000)));
-/** The 503 a read answers when its upstream does not come back in time. The
- *  message is the contract the strict sweep's runner probe reads
- *  (scripts/test-non-metered-examples.js, runnerProbeLabel): the upstream's
- *  label first, then the step, then the deadline. */
-function upstreamDeadline(label, step, ms) {
-  return Object.assign(bad(`${label} did not answer the ${step} read within ${secondsOf(ms)} s (upstream deadline); nothing was charged - retry shortly`, 503), { attribution: "upstream", upstreamFailure: "deadline" });
-}
-function upstreamUnreachable(label, step) {
-  return Object.assign(bad(`${label} is unreachable from here (${step} read failed before any answer); nothing was charged - retry shortly`, 503), { attribution: "upstream", upstreamFailure: "unreachable" });
-}
 const UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
 
 const RUGCHECK = "https://api.rugcheck.xyz/v1";
@@ -142,35 +128,23 @@ function round(v, places = 4) {
   return Math.round(n * f) / f;
 }
 
-function hostOf(url) {
-  try { return new URL(url).host; } catch { return "?"; }
-}
-
 // One shared egress helper. Upstream bodies are NEVER relayed to the buyer:
 // the only text that leaves here is our own, keyed off the status class.
-async function upstreamJson(url, { label, step = "data", timeoutMs = JUPITER_MS, budget = null, method = "GET", body, notFound } = {}) {
+async function upstreamJson(url, { label, step = "data", timeoutMs = JUPITER_MS, budget, method = "GET", body, notFound } = {}) {
   // The read gets its own cap, or what is left of the handler's budget if
-  // that is shorter; a budget already spent refuses before any egress.
-  const cap = budget ? Math.min(timeoutMs, budget.remaining()) : timeoutMs;
-  if (cap <= 0) throw upstreamDeadline(label, step, timeoutMs);
-  let res;
-  try {
-    res = await fetch(url, {
-      method,
-      headers: {
-        "User-Agent": UA,
-        Accept: "application/json",
-        ...(body ? { "Content-Type": "application/json" } : {}),
-        ...(label === "Jupiter" ? jupiterHeaders(url) : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(cap),
-    });
-  } catch (err) {
-    const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
-    console.warn(`[solana-intel] ${label} ${timedOut ? `did not answer within ${cap} ms` : "unreachable"}: ${hostOf(url)} (${step}) -> ${err.name ?? err.code ?? err.message}`);
-    throw timedOut ? upstreamDeadline(label, step, cap) : upstreamUnreachable(label, step);
-  }
+  // that is shorter; a budget already spent refuses before any egress
+  // (upstreamFetch). The deadline classes are the shared module's.
+  const ctx = { label, step, timeoutMs, budget, tag: "[solana-intel]" };
+  const res = await upstreamFetch(url, {
+    method,
+    headers: {
+      "User-Agent": UA,
+      Accept: "application/json",
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(label === "Jupiter" ? jupiterHeaders(url) : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  }, ctx);
   if (res.status === 429) throw bad(`${label} rate limit reached upstream - retry shortly`, 503);
   if (res.status >= 500) throw bad(`${label} upstream error (HTTP ${res.status})`, 502);
   if (res.status === 404 || res.status === 400) {
@@ -192,8 +166,8 @@ async function upstreamJson(url, { label, step = "data", timeoutMs = JUPITER_MS,
   assertBodyWithinCap(res, MAX_BODY_BYTES, label);
   // The same signal bounds the body, so a body that stalls past the cap ends
   // as the deadline it is, not as an unreadable response.
-  try { text = await res.text(); } catch (err) {
-    if (err?.name === "TimeoutError" || err?.name === "AbortError") throw upstreamDeadline(label, step, cap);
+  try { text = await bodyUnderDeadline(res.text(), ctx); } catch (err) {
+    if (err?.statusCode) throw err;
     throw bad(`${label} response could not be read`, 502);
   }
   try { return JSON.parse(text); } catch { throw bad(`${label} returned non-JSON`, 502); }
@@ -1129,3 +1103,6 @@ for (const t of SOLANA_INTEL_TOOLS) {
   const inner = t.handler;
   t.handler = async (...args) => markUntrusted(await inner(...args));
 }
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(SOLANA_INTEL_TOOLS);

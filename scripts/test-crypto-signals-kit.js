@@ -13,7 +13,7 @@
 //     Bollinger, ATR, VWAP) and the summary/notes assembly,
 //   - market pulse arithmetic (breadth, median, volume-weighted change,
 //     totals, minVolumeUsd filter, funding extremes),
-//   - upstream 5xx -> 502, 429 -> 503, transport timeout -> 504, and the
+//   - upstream 5xx -> 502, 429 -> 503, a deadline -> 503 naming the step, and the
 //     "unknown coin" shape Hyperliquid really returns (500 "null") -> 422.
 // Live coverage is the catalog's answers-its-own-example sweep (test-all.js).
 
@@ -234,7 +234,7 @@ ok(Object.keys(NEWS_SOURCES).length >= 5 && Object.keys(NEWS_SOURCES).length <= 
   ok(r.sources.find((s) => s.id === "decrypt")?.items === 0 && !r.sources.find((s) => s.id === "decrypt")?.error, "truncated feed reports 0 items without an error entry");
   ok(r.errors.every((e) => !/boom|down|html/i.test(e.error)), "upstream error bodies never relayed in errors[]");
   ok(r.errors.some((e) => e.source === "theblock" && /HTTP 500/.test(e.error)), "HTTP 500 feed reported as HTTP 500");
-  ok(r.errors.some((e) => e.source === "thedefiant" && /timed out/.test(e.error)), "timed-out feed reported as timed out");
+  ok(r.errors.some((e) => e.source === "thedefiant" && /did not answer the feed read within \d+ s \(upstream deadline\)/.test(e.error)), "a feed that outlived its deadline is reported as the deadline it is");
   ok(r.errors.some((e) => e.source === "cointelegraph" && /not a valid RSS\/Atom/.test(e.error)), "HTML page reported as not-a-feed");
   const urls = r.items.map((i) => i.url);
   ok(new Set(urls).size === urls.length && urls.filter((u) => u === "https://a.example/news/btc-etf").length === 1, "same story from two feeds deduped by canonical URL");
@@ -382,7 +382,7 @@ ok(Object.keys(NEWS_SOURCES).length >= 5 && Object.keys(NEWS_SOURCES).length <= 
   mode = "http429"; __test.resetCaches();
   await throws(h("crypto-indicators")({ coin: "BTC" }), 503, "HL 429 -> 503");
   mode = "timeout"; __test.resetCaches();
-  await throws(h("crypto-indicators")({ coin: "BTC" }), 504, "HL timeout -> 504");
+  await throws(h("crypto-indicators")({ coin: "BTC" }), 503, "HL deadline -> 503 naming the upstream and the step");
   mode = "ok"; __test.resetCaches();
 }
 
@@ -420,7 +420,7 @@ ok(Object.keys(NEWS_SOURCES).length >= 5 && Object.keys(NEWS_SOURCES).length <= 
   mode = "http500";
   await throws(h("crypto-market-pulse")({}), 502, "pulse HL 500 -> 502");
   mode = "timeout";
-  await throws(h("crypto-market-pulse")({}), 504, "pulse HL timeout -> 504");
+  await throws(h("crypto-market-pulse")({}), 503, "pulse HL deadline -> 503");
   mode = "ok";
 }
 

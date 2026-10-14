@@ -24,8 +24,17 @@
 // Covered by scripts/test-onchain-identity-kit.js (offline + opt-in live).
 
 import { redactSecrets } from "./redact.js";
+import { partialFields } from "../partial-answer.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, budgetSpent, currentBudget, isUpstreamFailure, upstreamDeadline } from "../upstream-deadline.js";
 
-const TIMEOUT_MS = 12_000;
+// DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
+// with the handler budget, so the ENS fan-out and the EAS retry end inside it;
+// a read that outlives its cap is a 503 naming the upstream and the step,
+// never a 504. The ENS and EAS reads answered in 0.04 to 0.64 s when measured
+// (2026-10-14).
+const ENS_READ_MS = 8_000;
+const NEYNAR_READ_MS = 8_000;
+const EAS_READ_MS = 10_000;
 
 // Endpoints. Keep them at the top so a swap is a one-line change.
 const ENS_API = "https://api.ensideas.com/ens";
@@ -51,20 +60,12 @@ function takeAddress(raw, field = "address") {
   return raw.trim().toLowerCase();
 }
 
-async function fetchJson(url, label, init) {
-  let res;
-  try {
-    res = await fetch(url, {
-      ...init,
-      headers: { accept: "application/json", "user-agent": "agent402/onchain-identity-kit", ...(init?.headers || {}) },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (e) {
-    if (e.name === "TimeoutError" || /aborted/i.test(e.message)) {
-      throw bad(`${label} upstream timed out after ${TIMEOUT_MS}ms`, 504);
-    }
-    throw bad(`${label} upstream unreachable: ${e.message}`, 502);
-  }
+async function fetchJson(url, label, init, step = "data", timeoutMs = NEYNAR_READ_MS) {
+  const ctx = { label, step, timeoutMs, tag: "[identity]" };
+  const res = await upstreamFetch(url, {
+    ...init,
+    headers: { accept: "application/json", "user-agent": "agent402/onchain-identity-kit", ...(init?.headers || {}) },
+  }, ctx);
   const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
     // Redact the FULL body before slicing (a secret straddling the 240-char cut
@@ -75,7 +76,8 @@ async function fetchJson(url, label, init) {
     const body = redactSecrets(raw).slice(0, 240);
     throw bad(`${label} upstream returned HTTP ${res.status}${body ? ": " + body : ""}`, res.status >= 500 ? 502 : res.status);
   }
-  return res.json();
+  try { return await bodyUnderDeadline(res.json(), ctx); }
+  catch (err) { if (err?.statusCode) throw err; throw bad(`${label} upstream returned non-JSON`, 502); }
 }
 
 async function gqlFetch(url, query, variables, label) {
@@ -89,12 +91,15 @@ async function gqlFetch(url, query, variables, label) {
   // retry a 4xx — that's a real answer, and hammering a rate limit makes it worse.
   let json;
   try {
-    json = await fetchJson(url, label, init);
+    json = await fetchJson(url, label, init, "attestations", EAS_READ_MS);
   } catch (e) {
-    if (!(e.statusCode >= 500)) throw e; // fetchJson maps upstream 5xx→502, timeout→504
+    if (!(e.statusCode >= 500)) throw e; // fetchJson maps upstream 5xx -> 502, a deadline -> 503
+    // The retry is taken only when the handler budget can hold the backoff and
+    // another read; otherwise the first failure is the answer.
+    if (budgetSpent(currentBudget(), 2_500)) throw e;
     console.warn(`[eas] ${new URL(url).host} failed (HTTP ${e.statusCode}: ${e.message}) - retrying once in 1s`);
     await new Promise((r) => setTimeout(r, 1000));
-    json = await fetchJson(url, label, init);
+    json = await fetchJson(url, label, init, "attestations", EAS_READ_MS);
   }
   if (json.errors) {
     const msg = json.errors.map((e) => e.message).join("; ").slice(0, 240);
@@ -127,11 +132,18 @@ async function ensBulkResolve({ addresses } = {}) {
   // ensideas API is single-address; fan out sequentially with a small concurrency
   // cap so we don't hammer the upstream. The pool's per-IP rate limit is shared.
   const results = [];
+  let firstFailure = null;
   const CONCURRENCY = 5;
   for (let i = 0; i < normalized.length; i += CONCURRENCY) {
     const batch = normalized.slice(i, i + CONCURRENCY);
+    // A batch is not started when the handler budget cannot hold it: its rows
+    // say so, and the partial-answer fields below mark the list incomplete.
+    if (i > 0 && budgetSpent()) {
+      for (const addr of batch) results.push({ address: addr, name: null, displayName: null, avatar: null, error: "not read: the handler budget was used by earlier lookups" });
+      continue;
+    }
     const batchRes = await Promise.allSettled(
-      batch.map((a) => fetchJson(`${ENS_API}/resolve/${a}`, "ENS resolver")),
+      batch.map((a) => fetchJson(`${ENS_API}/resolve/${a}`, "ENS resolver", undefined, "resolve", ENS_READ_MS)),
     );
     batch.forEach((addr, idx) => {
       const r = batchRes[idx];
@@ -143,6 +155,7 @@ async function ensBulkResolve({ addresses } = {}) {
           avatar: r.value.avatar ?? null,
         });
       } else {
+        firstFailure ??= r.reason;
         results.push({ address: addr, name: null, displayName: null, avatar: null, error: r.reason?.message || "lookup-failed" });
       }
     });
@@ -155,12 +168,18 @@ async function ensBulkResolve({ addresses } = {}) {
     console.warn(`[ens-bulk] ${failed.length}/${results.length} lookups failed upstream (${ENS_API}): ${failed[0].error}`);
   }
   if (failed.length === results.length) {
-    // Every lookup failed — that is an upstream outage, not a result set. A
+    // Every lookup failed: that is an upstream outage, not a result set. A
     // 5xx also cancels the buyer's settlement instead of charging for nulls.
+    // Lookups that all ended at the deadline, or could not reach the host,
+    // answer the upstream's 503 class naming the step.
+    if (isUpstreamFailure(firstFailure)) throw firstFailure;
+    if (!firstFailure) throw upstreamDeadline("ENS resolver", "resolve", currentBudget()?.totalMs ?? ENS_READ_MS);
     throw Object.assign(new Error(`ENS resolver upstream unavailable: ${failed[0].error}`), { statusCode: 502 });
   }
   return {
     count: results.length,
+    // Rows that were read against rows requested: a row with `error` was not.
+    ...partialFields(results.length, results.length - failed.length),
     namedCount: named,
     namedPct: results.length ? Math.round((named / results.length) * 10000) / 100 : 0,
     failedCount: failed.length,
@@ -479,3 +498,6 @@ export const __test = {
   NEYNAR_API,
   EAS_INDEXERS,
 };
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(ONCHAIN_IDENTITY_TOOLS);

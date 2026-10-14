@@ -18,10 +18,11 @@
 // MAX_ROWS rows. If a refresh fails, a stale copy up to STALE_MAX old is
 // served (marked `stale: true`) so one upstream blip does not fail a paid
 // call. Cold-miss latency measured 0.3-0.4s transfer + parse; the bulk
-// fetch carries a 15s timeout (BULK_TIMEOUT_MS) and everything else 10s.
+// fetch carries an 18 s cap (BULK_TIMEOUT_MS) and everything else 8 s, both
+// inside the handler budget.
 //
 // Every handler validates inputs (400) before egress, bounds list sizes,
-// maps transport timeout -> 504, upstream 5xx -> 502, 429 -> 503, "unknown
+// maps a deadline or a transport failure -> 503 naming the step, upstream 5xx -> 502, 429 -> 503, "unknown
 // pool/chain/protocol" -> 422, and never relays an upstream body. Output is
 // compact JSON with `source` + `fetchedAt` (the upstream fetch time, which
 // is the cache time when served from cache).
@@ -48,8 +49,14 @@ function assertBodyWithinCap(res, capBytes, label) {
   }
 }
 
-const TIMEOUT_MS = 10_000;
-const BULK_TIMEOUT_MS = 15_000;
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
+// DEADLINES (src/upstream-deadline.js): each read under its own cap and the
+// handler budget; a read that outlives it is a 503 naming the upstream and the
+// step, never a 504. Most documents answered under a second when measured
+// (2026-10-14); the bulk documents (dex volume) ran 1.9 s warm and past the
+// old 15 s cap cold, so they get most of the budget.
+const TIMEOUT_MS = 8_000;
+const BULK_TIMEOUT_MS = 18_000;
 export const CACHE_TTL_MS = 5 * 60_000;
 const STALE_MAX_MS = 30 * 60_000;
 const MAX_ROWS = 100;
@@ -170,20 +177,12 @@ const canonChain = (s) => {
 const chainMatches = (rowChain, want) => canonChain(rowChain) === canonChain(want);
 
 // --- egress -----------------------------------------------------------------
-async function rawFetch(url, { timeout = TIMEOUT_MS, label = "DefiLlama" } = {}) {
-  let res;
-  try {
-    res = await fetch(url, {
-      headers: { "User-Agent": UA, Accept: "application/json" },
-      signal: AbortSignal.timeout(timeout),
-    });
-  } catch (err) {
-    console.warn(`[defi] ${label} unreachable: ${err?.name ?? err?.code ?? err?.message}`);
-    throw bad(`${label} request timed out or was unreachable`, 504);
-  }
+async function rawFetch(url, { timeout = TIMEOUT_MS, label = "DefiLlama", step = "document" } = {}) {
+  const ctx = { label, step, timeoutMs: timeout, tag: "[defi]" };
+  const res = await upstreamFetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } }, ctx);
   let text = "";
   assertBodyWithinCap(res, MAX_BODY_BYTES, "Upstream");
-  try { text = await res.text(); } catch { text = ""; }
+  try { text = await bodyUnderDeadline(res.text(), ctx); } catch (err) { if (err?.statusCode) throw err; text = ""; }
   if (res.status === 429) throw bad(`${label} rate limit reached upstream - retry shortly`, 503);
   return { status: res.status, text };
 }
@@ -1167,3 +1166,6 @@ export const __test = {
   ageCache: (key, ms) => { const e = cache.get(key); if (e) e.fetchedAt -= ms; },
   chainMatches, canonChain, splitChainTvls, trimPool, trimProtocol, trimStablecoin, trimOverviewRow, summarisePoints,
 };
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(DEFI_TOOLS);

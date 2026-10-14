@@ -16,7 +16,14 @@
 //
 // Covered by scripts/test-prediction-market-kit.js (offline + opt-in live).
 
-const TIMEOUT_MS = 12_000;
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, budgetSpent, currentBudget } from "../upstream-deadline.js";
+
+// DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
+// with the handler budget, so the one retry after a 429 or 5xx (its wait
+// included) ends inside it; a read that outlives its cap is a 503 naming the
+// upstream and the step, never a 504. The reads answered in 0.04 to 0.23 s
+// when measured (2026-10-14).
+const KALSHI_READ_MS = 8_000;
 
 // Kalshi's trade API, keyless (https://trading-api.readme.io/reference/getmarkets).
 const KALSHI = "https://api.elections.kalshi.com/trade-api/v2";
@@ -56,20 +63,11 @@ function staleFields(meta) {
   return meta?.stale ? { stale: true, asOf: meta.asOf } : {};
 }
 
-async function fetchJson(url, label, meta = null) {
-  async function attempt() {
-    try {
-      return await fetch(url, {
-        headers: { accept: "application/json", "user-agent": "agent402/prediction-market-kit" },
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-    } catch (e) {
-      if (e.name === "TimeoutError" || /aborted/i.test(e.message)) {
-        throw bad(`${label} upstream timed out after ${TIMEOUT_MS}ms`, 504);
-      }
-      throw bad(`${label} upstream unreachable: ${e.message}`, 502);
-    }
-  }
+async function fetchJson(url, label, meta = null, step = "data") {
+  const ctx = { label, step, timeoutMs: KALSHI_READ_MS, tag: "[prediction]" };
+  const attempt = () => upstreamFetch(url, {
+    headers: { accept: "application/json", "user-agent": "agent402/prediction-market-kit" },
+  }, ctx);
   let res;
   try {
     res = await attempt();
@@ -80,7 +78,9 @@ async function fetchJson(url, label, meta = null) {
   // intermittently 429 a first call) and both venues can 5xx under load.
   // Honor the venue's Retry-After when sent (capped so the route budget
   // survives), and jitter so a shared-egress thundering herd doesn't re-collide.
-  if (res.status === 429 || res.status >= 500) {
+  // The retry is taken only when the handler budget can hold the wait and
+  // another read; otherwise the first answer stands.
+  if ((res.status === 429 || res.status >= 500) && !budgetSpent(currentBudget(), 7_500)) {
     const ra = Number(res.headers.get("retry-after"));
     const waitMs = Math.min(Number.isFinite(ra) && ra > 0 ? ra * 1000 : 2500, 5000) + Math.floor(Math.random() * 500);
     console.warn(`[prediction] ${label} HTTP ${res.status} - retrying once in ${waitMs}ms${Number.isFinite(ra) && ra > 0 ? " (Retry-After honored)" : ""}`);
@@ -101,7 +101,9 @@ async function fetchJson(url, label, meta = null) {
   if (!ct.includes("json")) {
     return serveStale(url, label, meta, bad(`${label} upstream returned non-JSON content-type: ${ct}`, 502));
   }
-  const json = await res.json();
+  let json;
+  try { json = await bodyUnderDeadline(res.json(), ctx); }
+  catch (err) { if (err?.statusCode) return serveStale(url, label, meta, err); throw bad(`${label} upstream returned non-JSON`, 502); }
   cachePut(url, json);
   return json;
 }
@@ -217,7 +219,7 @@ async function kalshiMarkets({ status, eventTicker, limit } = {}) {
     params.set("event_ticker", eventTicker.trim().toUpperCase());
   }
   const meta = {};
-  const raw = await fetchJson(`${KALSHI}/markets?${params}`, "Kalshi", meta);
+  const raw = await fetchJson(`${KALSHI}/markets?${params}`, "Kalshi", meta, "markets");
   const markets = Array.isArray(raw.markets) ? raw.markets.map(shapeKalshiMarket) : [];
   return {
     count: markets.length,
@@ -239,6 +241,7 @@ async function kalshiEvent({ eventTicker } = {}) {
     `${KALSHI}/events/${encodeURIComponent(t)}?with_nested_markets=true`,
     "Kalshi",
     meta,
+    "event",
   );
   const event = raw.event ?? raw;
   const markets = Array.isArray(event.markets) ? event.markets.map(shapeKalshiMarket) : [];
@@ -348,14 +351,14 @@ async function kalshiLiveData({ eventTicker, seriesTicker, range, limit } = {}) 
   const meta = {};
   let resolvedFrom = null;
   if (!ticker) {
-    const ev = await fetchJson(`${KALSHI}/events?${new URLSearchParams({ series_ticker: series, status: "open", limit: "1" })}`, "Kalshi", meta);
+    const ev = await fetchJson(`${KALSHI}/events?${new URLSearchParams({ series_ticker: series, status: "open", limit: "1" })}`, "Kalshi", meta, "events");
     const first = Array.isArray(ev?.events) ? ev.events[0] : null;
     if (!first?.event_ticker) throw bad(`Kalshi has no open event in series "${series}" right now - pass an eventTicker instead`, 404);
     ticker = String(first.event_ticker).toUpperCase();
     resolvedFrom = { seriesTicker: series, title: first.title ?? null, strikeDate: first.strike_date ?? null };
   }
   const qs = rng ? `?${new URLSearchParams({ range: rng })}` : "";
-  const raw = await fetchJson(`${KALSHI}/live_data/events/${encodeURIComponent(ticker)}${qs}`, "Kalshi", meta);
+  const raw = await fetchJson(`${KALSHI}/live_data/events/${encodeURIComponent(ticker)}${qs}`, "Kalshi", meta, "live data");
   return {
     ...shapeKalshiLiveData(raw, { eventTicker: ticker, limit: lim }),
     ...(resolvedFrom ? { resolvedFrom } : {}),
@@ -444,7 +447,7 @@ async function kalshiWeatherIndex({ city, lastSec, from, to, detailed, includeCa
   const meta = {};
   let raw;
   try {
-    raw = await fetchJson(`${KALSHI}/live_data/weather/${encodeURIComponent(c)}?${params}`, "Kalshi", meta);
+    raw = await fetchJson(`${KALSHI}/live_data/weather/${encodeURIComponent(c)}?${params}`, "Kalshi", meta, "weather index");
   } catch (e) {
     // Kalshi answers 400 for a city it does not index; that is the caller's
     // input, so it is a 422 naming the cities it does index.
@@ -471,7 +474,7 @@ async function kalshiWeatherIndex({ city, lastSec, from, to, detailed, includeCa
     ...staleFields(meta),
   };
   if (includeCalibrations === true || includeCalibrations === "true") {
-    const cal = await fetchJson(`${KALSHI}/live_data/weather/${encodeURIComponent(c)}/calibrations`, "Kalshi", meta);
+    const cal = await fetchJson(`${KALSHI}/live_data/weather/${encodeURIComponent(c)}/calibrations`, "Kalshi", meta, "weather calibrations");
     out.calibrations = Array.isArray(cal?.calibrations) ? cal.calibrations.map(shapeWeatherCalibration) : [];
     out.calibrationUnits = cal?.units ?? "celsius";
   }
@@ -680,3 +683,6 @@ export const __test = {
   WEATHER_CITIES,
   KALSHI,
 };
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(PREDICTION_MARKET_TOOLS);

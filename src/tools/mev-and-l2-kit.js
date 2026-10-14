@@ -22,8 +22,17 @@
 // a per-IP rate limit (Flashbots relay) or our compute-unit quota (Alchemy).
 
 import { redactSecrets } from "./redact.js";
+import { partialFields } from "../partial-answer.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, isUpstreamFailure, budgetSpent } from "../upstream-deadline.js";
 
-const TIMEOUT_MS = 12_000;
+// DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
+// with the handler budget, so the relay walk (three relays in turn) ends
+// inside it instead of running one cap per relay; a read that outlives its
+// cap is a 503 naming the upstream and the step, never a 504. The relay and
+// chains reads answered in 0.04 to 0.14 s when measured (2026-10-14).
+const RELAY_READ_MS = 8_000;
+const LLAMA_READ_MS = 8_000;
+const ALCHEMY_READ_MS = 10_000;
 const LLAMA = "https://api.llama.fi/v2/chains";
 
 // All major MEV-Boost relays implement the identical data API. Ordered by
@@ -67,27 +76,20 @@ function pickNetwork(value, dflt = "ethereum") {
   return { name: n, ...def };
 }
 
-async function fetchJson(url, label, init) {
-  let res;
-  try {
-    res = await fetch(url, {
-      ...init,
-      headers: { accept: "application/json", "user-agent": "agent402/mev-and-l2-kit", ...(init?.headers || {}) },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (e) {
-    if (e.name === "TimeoutError" || /aborted/i.test(e.message)) {
-      throw bad(`${label} upstream timed out after ${TIMEOUT_MS}ms`, 504);
-    }
-    throw bad(`${label} upstream unreachable: ${e.message}`, 502);
-  }
+async function fetchJson(url, label, init, step = "data", timeoutMs = RELAY_READ_MS) {
+  const ctx = { label, step, timeoutMs, tag: "[mev]" };
+  const res = await upstreamFetch(url, {
+    ...init,
+    headers: { accept: "application/json", "user-agent": "agent402/mev-and-l2-kit", ...(init?.headers || {}) },
+  }, ctx);
   if (!res.ok) {
     // Redact the FULL body before slicing — the Alchemy key rides the request
     // URL and an upstream error body could reflect it.
     const body = redactSecrets(await res.text().catch(() => "")).slice(0, 240);
     throw bad(`${label} upstream returned HTTP ${res.status}${body ? ": " + body : ""}`, res.status >= 500 ? 502 : res.status);
   }
-  return res.json();
+  try { return await bodyUnderDeadline(res.json(), ctx); }
+  catch (err) { if (err?.statusCode) throw err; throw bad(`${label} upstream returned non-JSON`, 502); }
 }
 
 // Walk the relay chain: try each relay's bidtraces endpoint in order, moving on
@@ -101,10 +103,14 @@ async function fetchBidtraces(params) {
   let lastErr = null;
   for (let i = 0; i < MEV_RELAYS.length; i++) {
     const { name, host } = MEV_RELAYS[i];
+    // The walk stops when the handler budget cannot hold another relay read.
+    if (i > 0 && budgetSpent()) break;
     try {
       const raw = await fetchJson(
         `https://${host}/relay/v1/data/bidtraces/proposer_payload_delivered?${params}`,
         `MEV relay ${host}`,
+        undefined,
+        "bidtraces",
       );
       if (!Array.isArray(raw)) throw bad(`MEV relay ${host} returned non-array JSON`, 502);
       return { relay: name, rows: raw };
@@ -114,6 +120,9 @@ async function fetchBidtraces(params) {
       if (next) console.warn(`[mev] relay ${host} failed (${e.message}) - trying ${next.host}`);
     }
   }
+  // Every relay tried ended at its deadline or could not be reached: the
+  // upstream's 503 class, not a 502 of ours.
+  if (isUpstreamFailure(lastErr)) throw lastErr;
   throw bad(`All ${MEV_RELAYS.length} MEV-Boost relays failed - last: ${lastErr?.message || "unknown"}`, 502);
 }
 
@@ -122,7 +131,7 @@ async function alchemyRpc(network, method, params) {
   const net = pickNetwork(network);
   const url = `https://${net.subdomain}.g.alchemy.com/v2/${key}`;
   const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
-  const json = await fetchJson(url, "Alchemy", { method: "POST", body, headers: { "content-type": "application/json" } });
+  const json = await fetchJson(url, "Alchemy", { method: "POST", body, headers: { "content-type": "application/json" } }, method, ALCHEMY_READ_MS);
   // Redact upstream-derived text: this error's message is folded into the
   // 200-status l2-gas-comparison body as networks[].error (not just a thrown
   // error), so an echoed Alchemy key would ship in a SUCCESS response.
@@ -277,7 +286,7 @@ async function mevBlockPayment({ slot, blockNumber } = {}) {
 // ----------------------------------------------------------------------------
 async function l2Tvl({ limit } = {}) {
   const lim = Math.max(1, Math.min(50, Number.parseInt(limit, 10) || 15));
-  const raw = await fetchJson(LLAMA, "DeFiLlama");
+  const raw = await fetchJson(LLAMA, "DeFiLlama", undefined, "chains", LLAMA_READ_MS);
   const arr = Array.isArray(raw) ? raw : [];
   // DeFiLlama tags chains with categories. The reliable signal for "is L2"
   // is when chain.parent.chain === "Ethereum" AND chain.parent.types
@@ -355,9 +364,13 @@ async function l2GasComparison({ networks } = {}) {
     if (b.error) return -1;
     return (a.gasPriceGwei ?? Infinity) - (b.gasPriceGwei ?? Infinity);
   });
+  // A chain whose node did not answer is a row with `error`, so the list is
+  // only complete when every requested chain answered (partial-answer fields).
+  const answered = sorted.filter((r) => !r.error).length;
   return {
     queriedAt: new Date().toISOString(),
     networks: sorted,
+    ...partialFields(requested.length, answered),
     cheapest: sorted.find((r) => !r.error)?.network ?? null,
     source: "alchemy",
   };
@@ -596,3 +609,6 @@ export const __test = {
   NETWORKS,
   IS_L2,
 };
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(MEV_AND_L2_TOOLS);

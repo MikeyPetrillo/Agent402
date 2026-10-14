@@ -25,7 +25,7 @@
 //
 // Error mapping (never relays an upstream body): 404 / unknown id -> 422,
 // 429 -> 503 with a retry hint, 5xx -> 502, 401/403 -> 422 (plan limit),
-// timeout/network -> 504. Every result carries `source` + `fetchedAt` (the
+// deadline/network -> 503 naming the step. Every result carries `source` + `fetchedAt` (the
 // time the upstream answer was fetched, so a cached answer says so).
 
 function bad(message, statusCode = 400) {
@@ -34,7 +34,11 @@ function bad(message, statusCode = 400) {
 
 export const CG_BASE = "https://api.coingecko.com/api/v3";
 const SOURCE = "coingecko";
-const TIMEOUT_MS = 10_000;
+import { upstreamFetch, underBudgetAll, budgetSpent, currentBudget } from "../upstream-deadline.js";
+// DEADLINES (src/upstream-deadline.js): each read under its own cap and the
+// handler budget, the one retry included; a read that outlives it is a 503
+// naming the upstream and the step, never a 504.
+const TIMEOUT_MS = 8_000;
 const RETRY_BACKOFF_MS = 1500;
 
 // --- in-process response cache ------------------------------------------------
@@ -101,18 +105,15 @@ async function cgGet(path, params, ttlMs) {
 
   const why = cgTokenRefusal(Date.now());
   if (why) throw bad(cgRefusalMessage(why, "Market data"), 503);
-  const attempt = () => fetch(key, { headers: headers(), signal: AbortSignal.timeout(TIMEOUT_MS) });
-  let res;
-  try {
-    res = await attempt();
-  } catch (e) {
-    throw bad(`Market data upstream unreachable: ${e?.name === "TimeoutError" ? "timed out" : "network error"}`, 504);
-  }
+  const attempt = () => upstreamFetch(key, { headers: headers() }, { label: "Market data upstream", step: stepOf(path), timeoutMs: TIMEOUT_MS, tag: "[crypto-markets]" });
+  let res = await attempt();
   // One retry on 429/5xx after a short backoff: the Demo bucket is 30/min and
   // a chained agent call can brush it; a second failure of the same class maps
   // below.
   // The retry is a second request, so it takes its own token.
-  if (res.status === 429 || res.status >= 500) {
+  // The retry is taken only when the handler budget can hold the backoff and
+  // another read.
+  if ((res.status === 429 || res.status >= 500) && !budgetSpent(currentBudget(), RETRY_BACKOFF_MS + 2_000)) {
     await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
     if (cgTokenRefusal(Date.now()) === null) {
       try {
@@ -1212,3 +1213,9 @@ CRYPTO_MARKETS_TOOLS.push(...RWA_TOOLS);
 for (const t of CRYPTO_MARKETS_TOOLS) t.description = `${t.description} ${COINGECKO_ATTRIBUTION}`;
 
 export const __test = { takeId, takeCurrency, takeInt, takeBool, takeIdList, takeContracts, takeTime, takeLookback, cgGet, TTL, MAX_ENTRIES, MAX_HISTORY_DAYS, takeRwaType, shapeRwaMarket };
+
+// The step a buyer reads in a deadline 503, from the upstream path.
+function stepOf(path) { return String(path || "").replace(/^\/api\/v3\//, "").split("?")[0].split("/").filter((seg) => /^[a-z_]+$/.test(seg)).join(" ").replace(/_/g, " ") || "market data"; }
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(CRYPTO_MARKETS_TOOLS);

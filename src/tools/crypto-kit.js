@@ -17,6 +17,8 @@
 // use the same assertPublicUrl + native fetch pattern as finance-kit for
 // consistency and to keep the per-host UA option open.
 import { assertPublicUrl } from "./fetch-guard.js";
+import { upstreamFetch, underBudgetAll, budgetSpent, currentBudget } from "../upstream-deadline.js";
+const CRYPTO_READ_MS = 8_000;
 import { cgTokenRefusal, cgRefusalMessage, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
 import { redactSecrets } from "./redact.js";
 
@@ -145,38 +147,39 @@ async function jsonGet(url, host = "CoinGecko") {
     const why = cgTokenRefusal(Date.now());
     if (why) throw bad(cgRefusalMessage(why), 503);
   }
+  // DEADLINES (src/upstream-deadline.js): each attempt runs under its own cap
+  // and the handler budget, so the retry gets what remains instead of a second
+  // full cap; a read that outlives it is a 503 naming the upstream and the
+  // step, never a 504. The reads answered in 0.04 to 0.3 s when measured
+  // (2026-10-14).
   const attempt = (timeout) =>
-    fetch(safeUrl, {
+    upstreamFetch(safeUrl, {
       headers: {
         "User-Agent": cryptoUserAgent(),
         Accept: "application/json",
         ...(sendCgKey ? { "x-cg-demo-api-key": cgKey.trim() } : {}),
       },
-      signal: AbortSignal.timeout(timeout),
-    });
+    }, { label: host, step: "query", timeoutMs: timeout, tag: "[crypto]" });
   const mayRetry = () => !isCg || cgTokenRefusal(Date.now()) === null;
   let res;
   try {
-    res = await attempt(10000);
+    res = await attempt(CRYPTO_READ_MS);
   } catch (e) {
-    // Single retry on network/timeout failure (same pattern as finance-kit).
-    if (!mayRetry()) throw bad(`${host} request failed: ${e.message}`, 504);
-    try {
-      res = await attempt(12000);
-    } catch (e2) {
-      throw bad(`${host} request failed: ${e2.message}`, 504);
-    }
+    // Single retry on a deadline or transport failure (same pattern as
+    // finance-kit), only while the budget can hold another read.
+    if (!mayRetry() || budgetSpent(currentBudget(), 2_000)) throw e;
+    res = await attempt(CRYPTO_READ_MS);
   }
   // Retry once on 429/5xx after a short backoff. CoinGecko burst-limits per
   // IP; a chained skill pack (crypto-dossier: price → history → trending →
   // global) fires four CG calls in ~3s and the fourth intermittently 429s —
   // the backoff clears the burst window without threatening the pack's
   // overall time budget. (finance-kit/gov-kit carry the same 5xx retry.)
-  if (res.status === 429 || res.status >= 500) {
+  if ((res.status === 429 || res.status >= 500) && !budgetSpent(currentBudget(), 4_500)) {
     await new Promise((r) => setTimeout(r, 2500));
     if (mayRetry()) {
       try {
-        const retryRes = await attempt(12000);
+        const retryRes = await attempt(CRYPTO_READ_MS);
         if (retryRes.ok || retryRes.status !== res.status) res = retryRes;
       } catch { /* fall through with the original response */ }
     }
@@ -628,3 +631,6 @@ export const CRYPTO_TOOLS = [
 // The CoinGecko-backed tools carry the attribution its terms require (see
 // COINGECKO_ATTRIBUTION in coingecko-rate.js); crypto-orderbook reads an exchange.
 for (const t of CRYPTO_TOOLS) if (t.slug !== "crypto-orderbook") t.description = `${t.description} ${COINGECKO_ATTRIBUTION}`;
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(CRYPTO_TOOLS);

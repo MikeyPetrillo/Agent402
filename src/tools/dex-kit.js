@@ -12,8 +12,15 @@
 // (which probes Alchemy end-to-end via gas-snapshot).
 
 import { redactSecrets } from "./redact.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll } from "../upstream-deadline.js";
 
-const TIMEOUT_MS = 10_000;
+// DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
+// with the handler budget, so dex-pool's two rounds of parallel reads still
+// answer inside it; a read that outlives its cap is a 503 naming the upstream
+// and the step, never a 504. The yields document answered in 0.5 to 0.7 s when
+// measured (2026-10-14); the node reads are normally well under a second.
+const RPC_READ_MS = 10_000;
+const LLAMA_READ_MS = 10_000;
 
 // Uniswap V3 deployments. Ethereum/Polygon/Arbitrum/Optimism share the
 // canonical factory; Base has a Coinbase-deployed factory at a different
@@ -109,22 +116,16 @@ function decodeInt(slot) {
 function decodeAddr(slot) { return "0x" + slot.slice(-40); }
 
 // --- RPC plumbing ---------------------------------------------------------
-async function alchemyFetch(url, opts = {}) {
-  let res;
-  try {
-    res = await fetch(url, {
-      ...opts,
-      headers: { "Content-Type": "application/json", Accept: "application/json", ...(opts.headers || {}) },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (err) {
-    // Keep the evidence: log the transport cause (price-feed-kit rule).
-    console.warn(`[dex] upstream unreachable: ${(() => { try { return new URL(url).host; } catch { return "?"; } })()} → ${err.name ?? err.code ?? err.message}`);
-    throw bad("Chain upstream timed out", 504);
-  }
+async function alchemyFetch(url, opts = {}, step = "data") {
+  const ctx = { label: "Chain", step, timeoutMs: RPC_READ_MS, tag: "[dex]" };
+  const res = await upstreamFetch(url, {
+    ...opts,
+    headers: { "Content-Type": "application/json", Accept: "application/json", ...(opts.headers || {}) },
+  }, ctx);
   if (res.status === 429) throw bad("Chain rate limit reached upstream - retry shortly", 503);
   if (!res.ok) throw bad(`Chain upstream error (HTTP ${res.status})`, 502);
-  return res.json();
+  try { return await bodyUnderDeadline(res.json(), ctx); }
+  catch (err) { if (err?.statusCode) throw err; throw bad("Chain upstream returned non-JSON", 502); }
 }
 
 async function jsonRpc(network, method, params) {
@@ -133,7 +134,7 @@ async function jsonRpc(network, method, params) {
   const data = await alchemyFetch(url, {
     method: "POST",
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-  });
+  }, method);
   // Upstream-derived text — the Alchemy key rides the request URL, so redact
   // before echoing (the route binder returns err.message verbatim to buyers).
   if (data.error) throw bad(`Chain RPC error: ${redactSecrets(String(data.error.message || "unknown")).slice(0, 300)}`, 502);
@@ -443,16 +444,13 @@ export const DEX_TOOLS = [
       const chain = typeof i.chain === "string" ? i.chain.trim() : "";
       const project = typeof i.project === "string" ? i.project.trim().toLowerCase() : "";
 
-      let res;
-      try {
-        res = await fetch("https://yields.llama.fi/pools", { signal: AbortSignal.timeout(TIMEOUT_MS) });
-      } catch (err) {
-        console.warn(`[dex] yields.llama.fi unreachable: ${err.name ?? err.code ?? err.message}`);
-        throw bad("DeFiLlama upstream timed out", 504);
-      }
+      const ctx = { label: "DeFiLlama", step: "pools", timeoutMs: LLAMA_READ_MS, tag: "[dex]" };
+      const res = await upstreamFetch("https://yields.llama.fi/pools", {}, ctx);
       if (res.status === 429) throw bad("DeFiLlama rate limit reached upstream - retry shortly", 503);
       if (!res.ok) throw bad(`DeFiLlama upstream error (HTTP ${res.status})`, 502);
-      const json = await res.json();
+      let json;
+      try { json = await bodyUnderDeadline(res.json(), ctx); }
+      catch (err) { if (err?.statusCode) throw err; throw bad("DeFiLlama upstream returned non-JSON", 502); }
       let pools = Array.isArray(json.data) ? json.data : [];
 
       if (chain) {
@@ -488,3 +486,6 @@ export const __test = {
   priceFromSqrt, spotQuote, slots, decodeUint, decodeInt, decodeAddr,
   pad32, encAddr, encUint, pickNetwork, pickFee, takeAddress, NETWORKS, V3_FACTORY, ZERO_ADDR,
 };
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(DEX_TOOLS);
