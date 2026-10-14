@@ -443,16 +443,48 @@ class GuardedMap extends Map {
 let cacheVersion = 0;
 /** Changes whenever the crawl cache does; readers memoize derived views on it. */
 export function indexCacheVersion() { return cacheVersion; }
+// Router replica observer (src/router-pool.js). The router worker thread holds
+// a copy of every store a route query reads; each mutation of one of them is
+// reported here so the copy follows this thread's state. Null until the pool
+// installs it, and in the worker itself (which is the copy).
+let replicaObserver = null;
+export function _setRouterReplicaObserver(fn) { replicaObserver = typeof fn === "function" ? fn : null; }
 class IndexCache extends Map {
   set(origin, v) {
     if (isRemovedOrigin(origin)) { this.delete(origin); return this; }
     cacheVersion++;
-    routeIndexNoteSet(origin, super.get(origin), v); return super.set(origin, v);
+    routeIndexNoteSet(origin, super.get(origin), v);
+    super.set(origin, v);
+    if (replicaObserver) replicaObserver("cache", "set", origin, v);
+    return this;
   }
-  delete(origin) { if (super.has(origin)) { cacheVersion++; routeIndexNoteSet(origin, super.get(origin), null); } return super.delete(origin); }
-  clear() { cacheVersion++; super.clear(); routeIndexReset(); }
+  delete(origin) {
+    if (super.has(origin)) {
+      cacheVersion++;
+      routeIndexNoteSet(origin, super.get(origin), null);
+      if (replicaObserver) replicaObserver("cache", "delete", origin);
+    }
+    return super.delete(origin);
+  }
+  clear() { cacheVersion++; super.clear(); routeIndexReset(); if (replicaObserver) replicaObserver("cache", "clear"); }
 }
 const cache = new IndexCache();
+// The Bazaar maps the router reads, observed the same way (keyed by name so
+// the replica applies each to the right map).
+class ObservedMap extends GuardedMap {
+  constructor(kind) { super(); this.kind = kind; }
+  set(k, v) { super.set(k, v); if (replicaObserver && super.has(k)) replicaObserver(this.kind, "set", k, v); return this; }
+  delete(k) { const had = super.delete(k); if (had && replicaObserver) replicaObserver(this.kind, "delete", k); return had; }
+  clear() { super.clear(); if (replicaObserver) replicaObserver(this.kind, "clear"); }
+}
+// Successions are small and replaced whole; a version lets the pool ship them
+// only when they changed.
+let successionsVersion = 0;
+class VersionedMap extends Map {
+  set(k, v) { successionsVersion++; return super.set(k, v); }
+  delete(k) { const had = super.delete(k); if (had) successionsVersion++; return had; }
+  clear() { successionsVersion++; super.clear(); }
+}
 // Set of origins auto-discovered from public x402 registries (distinct from
 // the env-configured seed list so we can show provenance separately on /index).
 const discoveredSeeds = new GuardedSet();
@@ -545,7 +577,7 @@ function persistSubmittedSeeds() {
 export const SUCCESSIONS_FILE = "/data/origin-successions.json";
 const SUCCESSIONS_MAX = 2_000;
 const SUCCESSION_MAX_CHAIN = 16;
-const successions = new Map(); // old origin -> { to: new origin, at: recordedAt }
+const successions = new VersionedMap(); // old origin -> { to: new origin, at: recordedAt }
 
 export function loadSuccessions() {
   const d = docFor(SUCCESSIONS_FILE);
@@ -828,6 +860,7 @@ function ensureRemovalsLoaded() { if (!removalsLoadStarted) loadRemovedOrigins()
  * one the operator removed.
  */
 export function removalsKnown() {
+  if (routerReplica) return routerReplica.removalsKnown === true;
   ensureRemovalsLoaded();
   const d = docFor(removedFile());
   return d.backend !== "pg" || d.loadState === "ok";
@@ -1481,7 +1514,7 @@ const discoveryStatus = new Map(); // name -> { url, fetchedAt, resources, origi
 // entries. Used as a fallback for sellers whose /.well-known/x402 endpoint
 // 404s (the bulk of the unhealthy cohort — they only ever published settled
 // resources, never a manifest). Map<origin, Array<tool>>.
-const bazaarToolsByOrigin = new GuardedMap();
+const bazaarToolsByOrigin = new ObservedMap("bazaarTools");
 // Per-origin Bazaar `quality` (Coinbase-measured 30-day calls + unique payers,
 // last call time), aggregated from the discovery feed's per-resource objects:
 // calls summed, unique payers MAX across resources (a seller-level unique
@@ -1490,7 +1523,7 @@ const bazaarToolsByOrigin = new GuardedMap();
 // evidence source next to our own on-chain scan: a Base seller Coinbase has
 // watched being paid by N distinct wallets this month is proven for the SOR
 // gate whether or not our scan has caught up, and /api/find can rank on it.
-const bazaarQualityByOrigin = new GuardedMap();
+const bazaarQualityByOrigin = new ObservedMap("bazaarQuality");
 export function bazaarQualityFor(origin) {
   return bazaarQualityByOrigin.get(String(origin || "").replace(/\/$/, "")) || null;
 }
@@ -7749,12 +7782,90 @@ export function routeQuery(args) {
   return r.value;
 }
 
+// ---------------------------------------------------------------------------
+// Router worker (src/router-pool.js, src/router-worker-thread.js).
+//
+// Even sliced, a query holds this thread for its whole CPU cost (0.5-3 s on
+// prod for a query whose words are common), and twenty concurrent ones take
+// turns at the slice boundaries, so every other request waits behind them.
+// The pool moves the scoring to a worker thread that imports THIS module and
+// holds a replica of every store a query reads (cache, Bazaar maps,
+// successions, circular wallets, removals flag, delivery observations), fed
+// by `replicaObserver` above and the state snapshot below. The same code runs
+// over the same data, so the answer is the same; only the thread differs.
+//
+// `routerOffload(args, opts)` resolves to the worker's answer, to null when
+// no worker can take the query (pool off, worker not loaded, queue full), or
+// rejects when the query hit its deadline. Null runs the in-thread form.
+// ---------------------------------------------------------------------------
+let routerOffload = null;
+export function _setRouterOffload(fn) { routerOffload = typeof fn === "function" ? fn : null; }
+// Installed in the worker only: the shipped values the two reads above take
+// instead of this thread's own (which, in the worker, would be empty).
+let routerReplica = null;
+export function _installRouterReplica(state) { routerReplica = state && typeof state === "object" ? state : null; }
+/** What the pool ships beside the cache deltas, with a version per part so an
+ *  unchanged part is not re-sent. */
+export function _routerStateVersion() {
+  const c = getLeaderboardCircularWallets();
+  return { successions: successionsVersion, circular: c.version, removalsKnown: removalsKnown() };
+}
+export function _routerStateSnapshot() {
+  const c = getLeaderboardCircularWallets();
+  return { successions: [...successions], circular: { wallets: [...c.wallets], version: c.version }, removalsKnown: removalsKnown() };
+}
+/** The index stores as the pool reads them for a full resync of a worker. */
+export function _routerStoresForReplica() {
+  return { cache, bazaarTools: bazaarToolsByOrigin, bazaarQuality: bazaarQualityByOrigin };
+}
+/** Apply one shipped message to this (worker) thread's stores. */
+export function _routerReplicaApply(msg) {
+  if (!msg || typeof msg !== "object") return;
+  if (msg.t === "cache") {
+    if (msg.clear) cache.clear();
+    for (const o of msg.del || []) cache.delete(o);
+    for (const [o, v] of msg.set || []) cache.set(o, v);
+    return;
+  }
+  if (msg.t === "bazaarTools" || msg.t === "bazaarQuality") {
+    const m = msg.t === "bazaarTools" ? bazaarToolsByOrigin : bazaarQualityByOrigin;
+    if (msg.clear) m.clear();
+    for (const o of msg.del || []) m.delete(o);
+    for (const [o, v] of msg.set || []) m.set(o, v);
+    return;
+  }
+  if (msg.t === "state") {
+    if (Array.isArray(msg.successions)) { successions.clear(); for (const [o, r] of msg.successions) successions.set(o, r); }
+    if (routerReplica) {
+      if (msg.circular) routerReplica.circular = { wallets: new Set(msg.circular.wallets || []), version: msg.circular.version };
+      if (typeof msg.removalsKnown === "boolean") routerReplica.removalsKnown = msg.removalsKnown;
+    }
+  }
+}
+/** The entry as the replica needs it: the manifest keeps the keys a query
+ *  reads (name, homepage), and the OpenAPI documents kept for the crawler's
+ *  304 path are left out (nothing a query reads is in them). */
+export function _routerReplicaEntryOf(v) {
+  if (!v || typeof v !== "object") return v;
+  const { openapiTools, openapiRoutes, ...rest } = v;
+  if (rest.manifest && typeof rest.manifest === "object") rest.manifest = slimManifestForPersist(rest.manifest);
+  return rest;
+}
+
+export async function routeQueryAsync(args, opts = {}) {
+  if (routerOffload) {
+    const r = await routerOffload(args, opts);
+    if (r !== null) return r;
+  }
+  return routeQueryAsyncInThread(args, opts);
+}
+
 const yieldToLoop = () => new Promise((r) => setImmediate(r));
 // `onBusy(ms)` is called once per slice with the time that slice held the
 // thread, so a caller's CPU budget is charged while the query runs, not only
 // when it ends (a burst of queries would otherwise all pass a budget check
 // that none of them had charged yet).
-export async function routeQueryAsync(args, { sliceMs = 8, onBusy = null } = {}) {
+export async function routeQueryAsyncInThread(args, { sliceMs = 8, onBusy = null } = {}) {
   const steps = routeQuerySteps(args);
   let sliceStart = performance.now();
   let r = steps.next();
@@ -7859,7 +7970,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   };
   const payersBySeller = new Map();
   // Self-funded Bazaar counts never break a tie (rankingPayersOf above).
-  const circular = getLeaderboardCircularWallets();
+  const circular = routerReplica ? routerReplica.circular : getLeaderboardCircularWallets();
   const payersOf = (seller) => {
     let p = payersBySeller.get(seller);
     if (p === undefined) { p = rankingPayersOf(bazaarQualityFor(seller), circular.wallets); payersBySeller.set(seller, p); }

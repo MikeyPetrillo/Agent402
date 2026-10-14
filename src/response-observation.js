@@ -25,6 +25,17 @@ const WINDOW = 20;                // last N paid calls per route
 
 const store = new Map();          // "METHOD origin+route" -> record
 const key = (origin, method, route) => `${String(method || "POST").toUpperCase()} ${origin}${route}`;
+// Bumped on every write, so the router worker's replica (src/router-pool.js)
+// is re-sent only when an observation changed.
+let version = 0;
+export function observationsVersion() { return version; }
+export function observationsSnapshot() { return [...store]; }
+/** Replace this thread's observations with a shipped snapshot (worker only). */
+export function applyObservationsSnapshot(rows) {
+  store.clear();
+  for (const [k, rec] of Array.isArray(rows) ? rows : []) store.set(k, rec);
+  version++;
+}
 
 /** Is a dotted path present in a parsed JSON body?
  *
@@ -76,6 +87,7 @@ export function observeDelivery({ origin, method, route, guaranteedPaths, body, 
       lastSeenAt: now(),
     };
     store.set(k, rec);
+    version++;
     return rec;
   } catch {
     return null;   // never break a paid call to record a statistic about it
@@ -105,5 +117,5 @@ export function deliveryProjection(origin, method, route) {
   return o ? { responseDelivery: { ...o, source: "agent402_paid_call" } } : {};
 }
 
-export function __resetObservationsForTest() { store.clear(); }
+export function __resetObservationsForTest() { store.clear(); version++; }
 export function __observationCountForTest() { return store.size; }
