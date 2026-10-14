@@ -85,10 +85,27 @@ export const MCP_CALL_ALIASES = {
   top_x402_sellers: "sellers.list",
 };
 
-/** Resolve any CallTool name to the canonical listed dotted name. */
+/** Every listed dotted name (flagships, meta tools, the router). */
+const LISTED_DOTTED = new Set([
+  ...Object.values(FLAGSHIP_MCP_NAMES),
+  ...Object.values(META_MCP_NAMES),
+  ...Object.values(MCP_CALL_ALIASES),
+]);
+
+/**
+ * Resolve any CallTool name to the canonical listed dotted name: a prior
+ * public alias (MCP_CALL_ALIASES), or the snake form of a listed dotted name
+ * (catalog_search, catalog_find, payment_info, web_search), which a client
+ * that cannot send a dot in a tool name produces. Anything else is returned as
+ * given, so a raw catalog slug still reaches the slug lookup.
+ */
 export function resolveListedName(name) {
   if (!name) return name;
   if (MCP_CALL_ALIASES[name]) return MCP_CALL_ALIASES[name];
+  if (typeof name === "string" && name.includes("_") && !name.includes(".")) {
+    const dotted = name.replace(/_/g, ".");
+    if (LISTED_DOTTED.has(dotted)) return dotted;
+  }
   return name;
 }
 

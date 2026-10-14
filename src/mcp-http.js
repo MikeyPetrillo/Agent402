@@ -830,7 +830,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // Funnel stage 1 (discovery) — same event the HTTP discovery
           // surfaces emit in server.js; env-gated no-op without PostHog.
           capturePostHogDiscovery({ surface: "mcp:catalog.search" });
-          const q = args.query ?? "";
+          const q = String(args.query ?? "").trim();
           const { rows: results, topScore, matched } = searchTools(q, args.limit);
           // Multi-tool workflows that match the same query — surface them so an
           // agent asking "audit a domain" sees the whole security-audit pack
@@ -846,7 +846,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           if (!results.length && !workflows.length) {
             return mcpJsonResult({
               results: [],
-              message: `No tools matched "${q}". Full catalog: ${baseUrl}/tools. ${WISH_HINT_TEXT}`,
+              // A caller that passed no query is told which argument to pass,
+              // not shown an empty string in quotes.
+              message: q
+                ? `No tools matched "${q}". Full catalog: ${baseUrl}/tools. ${WISH_HINT_TEXT}`
+                : `catalog.search needs a "query" argument: what the tool should do (for example "convert miles to kilometers"). Full catalog: ${baseUrl}/tools. ${WISH_HINT_TEXT}`,
               hint: WISH_HINT_TEXT,
             });
           }
