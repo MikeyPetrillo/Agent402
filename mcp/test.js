@@ -118,6 +118,24 @@ try {
   if (!text(search).includes("unit-convert")) fail(`search_tools missed the conversion tool: ${text(search).slice(0, 300)}`);
   console.log("search_tools finds long-tail catalog tools ✓");
 
+  // The snake form of a listed dotted name is a CallTool alias too: a client
+  // that cannot send a dot sends catalog_search, and it must reach the meta
+  // tool, never fall through to the slug lookup as "catalog-search".
+  const snakeSearch = await client.callTool({ name: "catalog_search", arguments: { query: "convert miles to kilometers" } });
+  if (snakeSearch.isError || /Unknown tool slug/i.test(text(snakeSearch)) || !text(snakeSearch).includes("unit-convert")) fail(`catalog_search must alias catalog.search: ${text(snakeSearch).slice(0, 300)}`);
+  const snakeFind = await client.callTool({ name: "catalog_find", arguments: { task: "convert miles to kilometers", limit: 3 } });
+  if (snakeFind.isError || /Unknown tool slug/i.test(text(snakeFind)) || !text(snakeFind).includes("unit-convert")) fail(`catalog_find must alias catalog.find: ${text(snakeFind).slice(0, 300)}`);
+  const snakePay = await client.callTool({ name: "payment_info", arguments: {} });
+  if (snakePay.isError || !text(snakePay).includes("proof-of-work")) fail(`payment_info must alias payment.info: ${text(snakePay).slice(0, 300)}`);
+  console.log("snake forms of the dotted meta names (catalog_search, catalog_find, payment_info) are CallTool aliases ✓");
+
+  // No query: the empty answer names the argument instead of echoing "".
+  const noQuery = await client.callTool({ name: "catalog.search", arguments: {} });
+  const noQueryText = text(noQuery);
+  // The text is the JSON envelope, so the quotes around query arrive escaped.
+  if (noQuery.isError || !/needs a \\?"query\\?" argument/.test(noQueryText) || /matched \\?"\\?"/.test(noQueryText)) fail(`catalog.search without a query must name the query argument, got: ${noQueryText.slice(0, 300)}`);
+  console.log("catalog.search without a query names the query argument ✓");
+
   // find_tool reaches long-tail via hosted /api/find
   const found = await client.callTool({ name: "find_tool", arguments: { task: "convert miles to kilometers", limit: 3 } });
   if (found.isError || !text(found).includes("unit-convert")) fail(`find_tool missed unit-convert: ${text(found).slice(0, 300)}`);

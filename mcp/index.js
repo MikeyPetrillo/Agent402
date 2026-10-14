@@ -648,13 +648,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const name = resolveListedName(rawName);
   try {
     if (name === "catalog.search") {
-      const q = args.query ?? "";
+      const q = String(args.query ?? "").trim();
       const results = searchTools(q, args.limit ?? 10);
       const workflows = rankWorkflows(q, 2);
       if (!results.length && !workflows.length) {
+        // A caller that passed no query is told which argument to pass, not
+        // shown an empty string in quotes.
         return mcpJsonResult({
           results: [],
-          message: `No tools matched "${q}". Browse the catalog at ${BASE}/tools or ${BASE}/api/pricing.`,
+          message: q
+            ? `No tools matched "${q}". Browse the catalog at ${BASE}/tools or ${BASE}/api/pricing.`
+            : `catalog.search needs a "query" argument: what the tool should do (for example "convert miles to kilometers"). Browse the catalog at ${BASE}/tools or ${BASE}/api/pricing.`,
         });
       }
       return mcpJsonResult({

@@ -8246,7 +8246,7 @@ app.get("/api/pricing", (_req, res) => {
     openapi: `${BASE_URL}/openapi.json`,
     categories: Object.fromEntries(Object.entries(CATEGORIES).map(([k, v]) => [k, v.label])),
     endpoints: Object.entries(CATALOG).map(([route, def]) => {
-      const { name, price, description, category, slug, tierQuote } = def;
+      const { name, price, description, category, slug, tierQuote, quote, quoteRange } = def;
       const [method, path] = route.split(" ");
       return {
         method,
@@ -8264,6 +8264,13 @@ app.get("/api/pricing", (_req, res) => {
         // row rather than discover it in a 402 (llmGateway.pricingByModel says
         // it in words). Absent, never false, on the routes it cannot happen to.
         ...(typeof tierQuote === "function" ? { pricedByModel: true } : {}),
+        // A QUOTED route prices each request from its body: `price` is the
+        // floor its 402 can quote and quoteRange.maxUsd the documented ceiling
+        // (the same def.quoteRange /openapi.json publishes as a dynamic price).
+        // Said on the row so a consumer that budgets per route never takes the
+        // floor for the price: the live 402 for a given body lands anywhere in
+        // the range. Absent on fixed-price routes, whose 402 is the list price.
+        ...(typeof quote === "function" && quoteRange ? { quoted: true, fromUsd: quoteRange.minUsd, quoteRange: { minUsd: quoteRange.minUsd, maxUsd: quoteRange.maxUsd } } : {}),
         // Published per row because the doc's own description says these are
         // marked: a consumer that wants only deterministic code should be able
         // to FILTER for it rather than take a sentence's word for it.
