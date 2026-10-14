@@ -2619,7 +2619,7 @@ export function embeddingsCacheKey(input) {
 }
 
 async function embeddingsHandler(input, req) {
-  gatewaySettleBreakerCheck(req);
+  await gatewaySettleBreakerCheck(req);
   const body = validateEmbeddingsRequest(input);
   const key = OPENAI_KEY();
   if (!key) throw bad("Embeddings gateway not configured (OPENAI_API_KEY unset)", 503);
@@ -2724,7 +2724,7 @@ export function rerankCacheKey(input) {
   return createHash("sha256").update(`v1-rerank\n${stableStringify(body)}`).digest("hex");
 }
 async function rerankHandler(input, req) {
-  gatewaySettleBreakerCheck(req);
+  await gatewaySettleBreakerCheck(req);
   const body = validateRerankRequest(input);
   const key = OPENROUTER_KEY();
   if (!key) throw bad("Rerank gateway not configured (OPENROUTER_API_KEY unset)", 503);
@@ -2803,7 +2803,7 @@ export function validateImagesRequest(input) {
 }
 
 async function imagesHandler(input, req) {
-  gatewaySettleBreakerCheck(req);
+  await gatewaySettleBreakerCheck(req);
   const { prompt, zdr } = validateImagesRequest(input);
   // Loaded at call time: the images kit imports this module, so a static
   // import here would be a cycle.
@@ -2958,7 +2958,7 @@ export function validateSpeechRequest(input) {
 
 const SPEECH_TIMEOUT_MS = 60_000;
 async function speechHandler(input, req) {
-  gatewaySettleBreakerCheck(req);
+  await gatewaySettleBreakerCheck(req);
   const { bodies, contentType } = validateSpeechRequest(input);
   const key = OPENROUTER_KEY();
   if (!key) throw bad("LLM gateway not configured (OPENROUTER_API_KEY unset)", 503);
@@ -3024,7 +3024,7 @@ function countImages(messages) {
 
 function makeHandler(routeTier) {
   return async (input, req) => {
-    gatewaySettleBreakerCheck(req);
+    await gatewaySettleBreakerCheck(req);
     // Price by model: every serving decision below reads `tierSlug`, which is
     // the route's tier unless the body names another flat tier's model AND the
     // request was gated at that tier's price (see servedTierFor).

@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { createJsonDocument, documentNameOf } from "./json-document.js";
 import { stateDbEnabled, stateDbSchema, withStateTx, trackStoreReady } from "./state-db.js";
+import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 // Bound what a single buyer can make us spend upstream before they have paid us.
 //
 // THE HOLE. @x402/express runs the handler FIRST and settles AFTER, and a <400
@@ -65,6 +66,29 @@ function exemptSet() {
 // payer -> [{ usd, at, settled }]
 const ledger = new Map();
 let seq = 0;
+
+// ---- the shared half of the PER-PAYER ledger ------------------------------------
+// The chain ledger below is shared through the state database. The per-payer
+// unsettled ledger was this process's alone, so each replica let a payer carry
+// the whole ceiling once more. With a Redis configured (src/shared-limits.js)
+// every unsettled spend is also an entry in a shared window per payer (weight =
+// micro-dollars, inside STALE_MS), lowered when the real price is known and
+// removed when the payment settles, and a decision reads that window first:
+// the exposure is the larger of this process's figure and the shared one.
+// maySpend and reserveSpend return promises in that mode too (route-execute and
+// the kits await them already); without Redis and without the database they
+// stay synchronous. A store that does not answer leaves the decision to this
+// process's own rows.
+const SHARED = sharedLimitsEnabled();
+const SHARED_PROC = `${process.pid}-${randomBytes(3).toString("hex")}`;
+const CONTROL = "external-spend-guard";
+const microOf = (usd) => Math.round((Number(usd) || 0) * 1e6);
+async function sharedPayerExposureUsd(k, now) {
+  if (!k) return null;
+  const r = await shared.windowRead("esg-payer", k, { windowMs: STALE_MS, now });
+  if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return null; }
+  return r.sum / 1e6;
+}
 
 // ---------------------------------------------------------------------------
 // PER-CHAIN-WALLET DAILY CEILING.
@@ -377,10 +401,18 @@ export function payerExposureUsd(payer, now = Date.now()) {
  * per-payer debt ceiling, not an identity requirement.
  */
 export function maySpend(payer, usd, opts = {}) {
-  if (!PG) return decideSpend(payer, usd, opts);
+  if (!PG && !SHARED) return decideSpend(payer, usd, opts);
+  if (!PG) return withSharedExposure(payer, opts).then((o) => decideSpend(payer, usd, o));
   // With the state database: the stored body (both containers' bookings) is
   // read before the ceiling is applied. One small read per spend decision.
-  return refreshFromPg().then(() => unreadableRefusal(opts) || decideSpend(payer, usd, opts));
+  return refreshFromPg().then(() => withSharedExposure(payer, opts)).then((o) => unreadableRefusal(o) || decideSpend(payer, usd, o));
+}
+/** `opts` with the payer's shared exposure folded in (unchanged without a shared store). */
+async function withSharedExposure(payer, opts = {}) {
+  if (!SHARED) return opts;
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const exposure = await sharedPayerExposureUsd(keyOf(payer), now);
+  return exposure == null ? opts : { ...opts, sharedExposureUsd: exposure };
 }
 
 /** Database mode: a chain spend while the day's ledger has never been read is refused. */
@@ -405,14 +437,21 @@ function unreadableRefusal(opts = {}) {
  */
 export function reserveSpend(payer, usd, opts = {}) {
   if (!PG) {
-    const d = decideSpend(payer, usd, opts);
-    return d.ok ? { ...d, handle: noteSpend(payer, usd, opts) } : d;
+    if (!SHARED) {
+      const d = decideSpend(payer, usd, opts);
+      return d.ok ? { ...d, handle: noteSpend(payer, usd, opts) } : d;
+    }
+    return withSharedExposure(payer, opts).then((o) => {
+      const d = decideSpend(payer, usd, o);
+      return d.ok ? { ...d, handle: noteSpend(payer, usd, o) } : d;
+    });
   }
   return reserveSpendPg(payer, usd, opts);
 }
 let reserveReadHook = null;
-async function reserveSpendPg(payer, usd, opts) {
+async function reserveSpendPg(payer, usd, opts0) {
   await pgReady;
+  const opts = await withSharedExposure(payer, opts0);
   const ck = chainKeyOf(opts.chain);
   const now = Number.isFinite(opts.now) ? opts.now : Date.now();
   const amount = Number(usd) || 0;
@@ -475,7 +514,7 @@ export function composeReserve(may, note) {
 }
 /** Test-only: awaited between the locked read and the decision of a reservation. */
 export function __onReserveRead(fn) { reserveReadHook = typeof fn === "function" ? fn : null; }
-function decideSpend(payer, usd, { maxUnsettledUsd = DEFAULT_MAX_UNSETTLED_USD, now = Date.now(), chain = null, walletDailyMaxUsd } = {}) {
+function decideSpend(payer, usd, { maxUnsettledUsd = DEFAULT_MAX_UNSETTLED_USD, now = Date.now(), chain = null, walletDailyMaxUsd, sharedExposureUsd = null } = {}) {
   // The chain-wallet ceiling is checked FIRST and for every caller, attributable
   // payer or not: it bounds the wallet, not the buyer. `code` is the field a
   // caller branches on - the per-payer refusal below carries none.
@@ -502,7 +541,9 @@ function decideSpend(payer, usd, { maxUnsettledUsd = DEFAULT_MAX_UNSETTLED_USD, 
   const k = keyOf(payer);
   if (!k) return { ok: true, reason: "payer not attributable - bounded by the tier cap alone" };
   if (exemptSet().has(k.toLowerCase())) return { ok: true, reason: "exempt" };
-  const exposure = payerExposureUsd(k, now);
+  // The shared figure (every replica's unsettled spend for this payer) when
+  // it was read, never below this process's own.
+  const exposure = Math.max(payerExposureUsd(k, now), Number.isFinite(sharedExposureUsd) ? sharedExposureUsd : 0);
   const next = exposure + (Number(usd) || 0);
   if (next > maxUnsettledUsd) {
     return {
@@ -542,6 +583,10 @@ function bookLocal(k, ck, amount, now) {
     const rows = prune(ledger.get(k) || [], now);
     rows.push({ id, usd: amount, at: now, settled: false });
     ledger.set(k, rows);
+    // The shared entry reaches the store before the buy (the write is sent
+    // now; the other replica's next read counts it); its member names this
+    // process so the lowering and the settlement below find it.
+    if (SHARED) void sharedWrite(CONTROL, shared.windowAdd("esg-payer", k, { windowMs: STALE_MS, member: `${SHARED_PROC}:${id}`, weight: microOf(amount), now, score: now }));
   }
   if (ck) {
     const rows = pruneChain(ck, now);
@@ -576,7 +621,17 @@ export function adjustSpend(handle, usd) {
     const row = rows?.find((r) => r.id === handle.id && (!own || r.o === PROC));
     if (row && actual < row.usd) row.usd = actual;
   };
-  if (handle.payer) lower(ledger.get(handle.payer));
+  if (handle.payer) {
+    const row = ledger.get(handle.payer)?.find((r) => r.id === handle.id);
+    const before = row?.usd;
+    lower(ledger.get(handle.payer));
+    if (SHARED && row && actual < before) {
+      // Replace the entry at the same time with the lower weight.
+      const member = `${SHARED_PROC}:${handle.id}`;
+      void sharedWrite(CONTROL, shared.windowRemove("esg-payer", handle.payer, { member, weight: microOf(before) }))
+        .then(() => sharedWrite(CONTROL, shared.windowAdd("esg-payer", handle.payer, { windowMs: STALE_MS, member, weight: microOf(actual), now: Date.now(), score: row.at })));
+    }
+  }
   if (handle.chain) { lower(chainLedger.get(handle.chain), PG); persistChainLedgerSoon(); }
 }
 
@@ -597,6 +652,7 @@ export function resolveSpend(handle, settled) {
     row.settled = true;
     const left = rows.filter((r) => !r.settled);
     if (left.length) ledger.set(handle.payer, left); else ledger.delete(handle.payer);
+    if (SHARED) void sharedWrite(CONTROL, shared.windowRemove("esg-payer", handle.payer, { member: `${SHARED_PROC}:${handle.id}`, weight: microOf(row.usd) }));
   }
   // NOT settled: the row stays as exposure until it ages out. That is the
   // whole point - an unpaid spend must keep counting against the payer.
@@ -633,6 +689,7 @@ export function walletDailyStatus(now = Date.now()) {
 
 /** Test-only. */
 export function __reset() {
+  if (SHARED) for (const k of ledger.keys()) void shared.windowClear("esg-payer", k);
   ledger.clear(); chainLedger.clear(); seq = 0;
   if (!PG) return undefined;
   // With the state database the document row goes too, so a test starts clean.
@@ -643,4 +700,6 @@ export function __ready() { return pgReady; }
 /** Resolves once every queued ledger write has landed (at once without a database). */
 export async function __flush() { while (pgWriting) await pgWriting; }
 export const __backend = PG ? "pg" : "file";
+/** Whether the per-payer ledger is written through to the shared store. */
+export const __sharedPayerLedger = SHARED;
 export const __config = { DEFAULT_MAX_UNSETTLED_USD, STALE_MS, DEFAULT_WALLET_DAILY_MAX_USD, WALLET_DAY_MS };

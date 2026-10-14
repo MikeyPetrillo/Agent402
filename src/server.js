@@ -543,6 +543,7 @@ import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores } from "./state-db.js";
 import { ledgerDeadLetterStatus, flushJournals } from "./ledger-mirror.js";
 import { startRedisPersistenceMonitor, redisPersistenceStatus } from "./redis-persistence.js";
+import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sharedLimitsEnabled, sharedWrite as sharedLimitsWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
@@ -2496,6 +2497,10 @@ _tweetQueue.start();
 // then on a timer, never on a request's path. One word on /api/gateway-status;
 // the money journals move to Redis only while it reads on.
 startRedisPersistenceMonitor();
+// The shared admission and money controls (src/shared-limits.js): one read of
+// the store shortly after boot and then on a timer, so sharedLimits on
+// /api/gateway-status is measured (on / memory / degraded), never assumed.
+startSharedLimitsProbe();
 app.get("/__operator/tweet-queue.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json(_tweetQueue.status());
@@ -3172,6 +3177,8 @@ app.get("/api/gateway-status", async (req, res) => {
   // The operator sees the real figures; everyone else sees the verdict. The
   // heartbeat reads only `.status` fields, so bucketing costs it nothing.
   const full = operatorAuthed(req);
+  // The wrong-credential count every replica contributed to, when shared.
+  await refreshOperatorAuthShared();
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
   const body = {
@@ -3206,6 +3213,11 @@ app.get("/api/gateway-status", async (req, res) => {
     // Redis persistence (src/redis-persistence.js): on / degraded / off /
     // unknown. One word publicly; the operator also gets the INFO fields.
     redisPersistence: (() => { try { return redisPersistenceStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // The shared admission and money controls (src/shared-limits.js): on (the
+    // store answers), memory (no Redis configured: every control is this
+    // process's own), degraded (Redis configured, a command failed inside the
+    // last minute). One word publicly; counts for the operator.
+    sharedLimits: (() => { try { return sharedLimitsStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // Money writes waiting on this container's local disk for the database
     // (src/ledger-mirror.js journals: sales, refund debts, card checkout
     // finals, subscription records, decide writes): none / pending / stuck
@@ -4618,20 +4630,45 @@ const operatorAttemptIp = (req) => req.ip || req.socket?.remoteAddress || "unkno
 const OPERATOR_AUTH_FAIL_ALERT = Math.max(10, parseInt(process.env.OPERATOR_AUTH_FAIL_ALERT || "100", 10) || 100);
 const _opAuthFails = [];
 let _opAuthAlertedAt = 0;
+// Shared across replicas (src/shared-limits.js): every wrong credential is
+// also an entry in a shared hour window, and the count every replica
+// contributed to is kept here (refreshed by each write, and by the status
+// read); the status is the larger of that and this process's own.
+const OP_AUTH_SHARED = sharedLimitsEnabled();
+let _opAuthShared = { count: 0, at: 0 };
+let _opAuthSeq = 0;
+const _opAuthProc = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 function noteOperatorAuthFailure() {
   const now = Date.now();
   _opAuthFails.push(now);
   while (_opAuthFails.length && now - _opAuthFails[0] > 3_600_000) _opAuthFails.shift();
   if (_opAuthFails.length > 5000) _opAuthFails.splice(0, _opAuthFails.length - 5000);
-  if (_opAuthFails.length >= OPERATOR_AUTH_FAIL_ALERT && now - _opAuthAlertedAt > 600_000) {
-    _opAuthAlertedAt = now;
-    console.warn(`[operator-auth] ${_opAuthFails.length} wrong operator credentials in the last hour (threshold ${OPERATOR_AUTH_FAIL_ALERT}) - token guessing in progress; rotate AGENT402_OPERATOR_TOKEN if this persists`);
+  if (OP_AUTH_SHARED) {
+    void sharedLimitsWrite("operator-auth", sharedLimits.windowAdd("opauth-fail", "all", { windowMs: 3_600_000, member: `${_opAuthProc}:${++_opAuthSeq}`, now }))
+      .then((r) => { if (r?.ok) { _opAuthShared = { count: r.count, at: now }; alertOperatorAuth(Math.max(_opAuthFails.length, r.count), now); } });
   }
+  alertOperatorAuth(_opAuthFails.length, now);
+}
+function alertOperatorAuth(n, now) {
+  if (n >= OPERATOR_AUTH_FAIL_ALERT && now - _opAuthAlertedAt > 600_000) {
+    _opAuthAlertedAt = now;
+    console.warn(`[operator-auth] ${n} wrong operator credentials in the last hour (threshold ${OPERATOR_AUTH_FAIL_ALERT}) - token guessing in progress; rotate AGENT402_OPERATOR_TOKEN if this persists`);
+  }
+}
+/** Read the shared hour window into the mirror (a no-op without a shared store). */
+async function refreshOperatorAuthShared(now = Date.now()) {
+  if (!OP_AUTH_SHARED) return;
+  const r = await sharedLimits.windowRead("opauth-fail", "all", { windowMs: 3_600_000, now });
+  if (r.ok) _opAuthShared = { count: r.count, at: now }; else noteSharedLimitsDegraded("operator-auth", r);
 }
 export function operatorAuthStatus(full = false) {
   const now = Date.now();
   while (_opAuthFails.length && now - _opAuthFails[0] > 3_600_000) _opAuthFails.shift();
-  const n = _opAuthFails.length;
+  // The shared count is a reading of the hour window; one older than a few
+  // minutes may overstate (entries age out), never understate, so it is kept
+  // only that long.
+  const sharedN = now - _opAuthShared.at < 300_000 ? _opAuthShared.count : 0;
+  const n = Math.max(_opAuthFails.length, sharedN);
   // `full` is operator-only. On the PUBLIC surface this is the verdict alone,
   // because the pair {failures1h, threshold} is a live brute-force oracle
   // against our most powerful credential: the threshold says how many wrong
@@ -9302,7 +9339,7 @@ if (!FREE_MODE) {
     const r = loadHangupForgiveness();
     if (r.loaded) console.log(`[hangup] forgiveness records restored: ${r.global} service-wide, ${r.keys} keys`);
   } catch (err) { console.warn(`[hangup] forgiveness records not restored: ${err?.message || err}`); }
-  app.use((req, res, next) => {
+  app.use(async (req, res, next) => {
     const def = CATALOG[`${req.method} ${req.path}`];
     if (!def || res.getHeader("X-Pow-Accepted") || res.getHeader("X-Trial-Accepted")) return next();
     if (!(quotedPriceUsd(def, req) > 0)) return next();
@@ -9321,7 +9358,11 @@ if (!FREE_MODE) {
     // own end.
     markPaidHandlerStart(req, res, def.slug);
     if (req.tempoSettled) return next();
-    reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: quotedPriceUsd(def, req), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true });
+    // Synchronous without a shared store; a promise with one (the shared
+    // budget read). A reservation that throws must still let the call run:
+    // the ticket stays denied and the charge stands, as it did before the rule.
+    try { await reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: quotedPriceUsd(def, req), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true }); }
+    catch (err) { console.warn(`[hangup] ticket reservation failed (${String(err?.message || err).slice(0, 80)}); the call runs without a ticket`); }
     res.once("close", () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) }));
     next();
   });
@@ -9602,12 +9643,12 @@ for (const tool of ALL_KIT) {
         // payer is only known post-settlement) - nobody is unkeyed.
         const guardKey = payer || (req.mppTempoSender ? `tempo:${req.mppTempoSender}` : req.creditsKeyId ? `credits:${req.creditsKeyId}` : `ip:${clientIp(req)}`);
         const ownGlobalBound = OWN_GLOBAL_BOUND_SLUGS.has(tool.slug);
-        if (!ownGlobalBound && compositeGuardGlobalPaused()) {
+        if (!ownGlobalBound && await compositeGuardGlobalPaused()) {
           const e = new Error("Premium report generation is briefly paused after a burst of unsettled runs; please retry in a few minutes. Not charged.");
           e.statusCode = 503;
           throw e;
         }
-        if (compositeGuardBlocked(guardKey)) {
+        if (await compositeGuardBlocked(guardKey)) {
           const e = new Error("Too many recent failed settlements on this route from this buyer; blocked briefly to prevent upstream abuse. A successful payment clears it.");
           e.statusCode = 429;
           throw e;
@@ -9678,7 +9719,7 @@ for (const tool of ALL_KIT) {
       // a guard. The /v1 tiers keep their own global pause inside their handlers.
       // Keyed on "paid" (not PoW-eligible), not on WALLET_ONLY_SLUGS: the free tier is an
       // allowlist, so a new tool on neither list is paid and must be covered here too.
-      if (!FREE_MODE && !isComputePayable(tool)) gatewaySettleBreakerCheck(req, { global: false });
+      if (!FREE_MODE && !isComputePayable(tool)) await gatewaySettleBreakerCheck(req, { global: false });
 
       // A wallet's concurrent runs on the expensive routes must be covered by
       // its balance together (verify checks each authorization alone). A run

@@ -389,7 +389,7 @@ delete process.env.OPENAI_API_KEY;
     const m = src.match(sigRe);
     if (!m) return false;
     const after = src.slice(m.index + m[0].length).split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("//"));
-    return after[0] === "gatewaySettleBreakerCheck(req);";
+    return after[0] === "await gatewaySettleBreakerCheck(req);";
   };
   ok(firstStatementIs(kit, /function makeHandler\((?:tierSlug|routeTier)\) \{\n\s*return async \(input, req\) => \{/), "chat tiers: the consult is the handler's first statement");
   ok(firstStatementIs(kit, /async function embeddingsHandler\(input, req\) \{/), "embeddings: consult first");

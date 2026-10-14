@@ -21,6 +21,7 @@ import { provenPayToMatches } from "./settlement-proof.js";
 import { usdcDomainVerdict, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { disableVendorSpendControls } from "./x402-spend-controls.js";
 import { readBytesCapped, readTextCapped, declaredLength, discardBody, decodeUtf8 } from "./capped-body.js";
+import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -608,18 +609,46 @@ export async function sellerServesModel(url, model, { fetchImpl = fetch, trusted
 }
 export function __resetModelListsForTest() { modelLists.clear(); }
 
+// Shared across replicas (src/shared-limits.js): the same cap is also a shared
+// counter per fixed minute, reserved before signing and given back on release.
+// Without a shared store the reserve is synchronous as before; with one it
+// returns a promise of the token (payX402 awaits it). A store that does not
+// answer leaves the decision to this process's own window.
+const SPEND_SHARED = sharedLimitsEnabled();
+const spendBucket = (now) => String(Math.floor(now / SPEND_WINDOW_MS));
 export function reserveSpend(atomic) {
   const now = Date.now();
   if (now - spendWindowStart > SPEND_WINDOW_MS) { spendWindowStart = now; spentThisWindow = 0n; }
   const amt = BigInt(atomic);
   if (spentThisWindow + amt > SPEND_CAP_ATOMIC) throw bad("Upstream spend budget for this window is exhausted - try again shortly", 429);
   spentThisWindow += amt;
-  return spendWindowStart; // token: identifies the window this hold belongs to
+  // The token names the window this hold belongs to, and the fixed minute the
+  // shared counter booked it under (the two differ: the local window rolls
+  // from its first spend, the shared one is the clock's minute).
+  const token = { window: spendWindowStart, bucket: spendBucket(now) };
+  if (!SPEND_SHARED) return token;
+  return (async () => {
+    const r = await shared.counterAdd("x402-buyer-window", token.bucket, Number(amt), SPEND_WINDOW_MS * 2);
+    if (!r.ok) { noteSharedLimitsDegraded("x402-buyer", r); return token; }
+    if (BigInt(Math.trunc(r.value)) > SPEND_CAP_ATOMIC) {
+      void sharedWrite("x402-buyer", shared.counterAdd("x402-buyer-window", token.bucket, -Number(amt), SPEND_WINDOW_MS * 2));
+      releaseLocal(amt, token);
+      throw bad("Upstream spend budget for this window is exhausted - try again shortly", 429);
+    }
+    return token;
+  })();
+}
+function releaseLocal(amt, token) {
+  if (token?.window !== spendWindowStart) return; // window rolled: the hold is already gone
+  spentThisWindow = spentThisWindow > amt ? spentThisWindow - amt : 0n;
 }
 export function releaseSpend(atomic, token) {
-  if (token !== spendWindowStart) return; // window rolled — the hold is already gone
   const amt = BigInt(atomic);
-  spentThisWindow = spentThisWindow > amt ? spentThisWindow - amt : 0n;
+  releaseLocal(amt, token);
+  // The shared hold lives in the minute it was booked under; one from a minute
+  // that has since rolled has already expired there, and a release that lands
+  // after that only makes the next minute's count lower by what was never spent.
+  if (SPEND_SHARED && token?.bucket) void sharedWrite("x402-buyer", shared.counterAdd("x402-buyer-window", token.bucket, -Number(amt), SPEND_WINDOW_MS * 2));
 }
 export function _spentThisWindow() { return spentThisWindow; } // test hook
 
@@ -903,7 +932,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     }
     console.log(`[x402-buyer] paying UNPROVEN Base seller ${String(payable.payTo).slice(0, 10)}… - quote ${quote} atomic is within the unproven ceiling ${ceiling}`);
   }
-  const spendToken = reserveSpend(quotedAtomic); // F3 belt — before signing (throws 429 if over the window budget)
+  const spendToken = await reserveSpend(quotedAtomic); // F3 belt, before signing (throws 429 if over the window budget)
   let committed = false;
   try {
     // Normalize v1-style accepts before signing: sellers that quote ONLY via

@@ -343,7 +343,7 @@ function stripBilling(usage) {
 export function makeMessagesHandler(routeTier) {
   return async function messagesHandler(input, req) {
     // Settle-failure breaker first: refuse (nobody charged) before any upstream call.
-    gatewaySettleBreakerCheck(req);
+    await gatewaySettleBreakerCheck(req);
     // Price by model (chat-wire parity): `tierSlug` is the route's tier unless
     // the body names another flat tier's model and the request was gated at
     // that tier's price; then that tier's whole config serves it.
