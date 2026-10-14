@@ -166,16 +166,16 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
     if (status >= 500) eq(e.statusCode, 503, "an upstream 5xx answers 503 (>= 400: never settled)");
   }
   // The rest of the upstream-failure class: unreachable and non-JSON are 503s
-  // naming the upstream; a timeout keeps its 504.
+  // naming the upstream; a timeout is the shared deadline 503 (src/upstream-deadline.js).
   reset(); globalThis.fetch = async () => { throw new Error("ECONNRESET"); };
   const down = await tool("exa-search").handler({ query: "x" }).catch((x) => x);
-  ok(down.statusCode === 503 && /Exa.*unreachable.*Nothing was charged/.test(down.message), "an unreachable upstream is a 503 naming the upstream and the uncharged call");
+  ok(down.statusCode === 503 && down.attribution === "upstream" && /Exa is unreachable from here/.test(down.message) && /nothing was charged/i.test(down.message), "an unreachable upstream is a 503 naming the upstream and the uncharged call");
   reset(); globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new Error("bad json"); }, headers: { get: () => null } });
   const junk = await tool("exa-search").handler({ query: "x" }).catch((x) => x);
   ok(junk.statusCode === 503 && /not JSON.*Nothing was charged/.test(junk.message), "a non-JSON upstream body is a 503 naming the upstream");
   reset(); globalThis.fetch = async () => { throw Object.assign(new Error("timeout"), { name: "TimeoutError" }); };
   const slow = await tool("exa-search").handler({ query: "x" }).catch((x) => x);
-  ok(slow.statusCode === 504 && /Nothing was charged/.test(slow.message), "a timeout keeps its 504 and states the no-charge");
+  ok(slow.statusCode === 503 && slow.upstreamFailure === "deadline" && /Exa did not answer/.test(slow.message) && /nothing was charged/i.test(slow.message), "a timeout is the deadline 503 naming Exa and the no-charge");
   ok(tool("exa-contents").discovery.input.urls.every((u) => /^https:\/\/agent402\.tools\//.test(u)), "the contents example reads our own page (example.com/x402-explained answers 404, so the published example could never be read)");
 }
 
