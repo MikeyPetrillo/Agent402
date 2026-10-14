@@ -2821,7 +2821,9 @@ app.use(chainNamespaceMiddleware);
 // it serves), BEFORE the body parsers and every payment/PoW gate, so a
 // throttled request costs no parse and no challenge build. Not mounted under
 // FREE_MODE: there is no paywall there, and CI sweeps boot in that mode. The
-// same figure is quoted on /crawler, so the page cannot drift from the gate.
+// same figure is quoted on /crawler, so the page cannot drift from the gate;
+// each container enforces its RATE_LIMIT_REPLICAS share of it (the factory
+// divides, like every limiter in src/rate-limit.js).
 const UNPAID_QUOTE_BUDGET = FREE_MODE ? 0 : unpaidQuoteBudgetPerHour();
 const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
   budget: UNPAID_QUOTE_BUDGET,
@@ -4582,11 +4584,47 @@ const getOperatorToken = (req) => {
 // expire after OP_SESSION_TTL_MS, and logout (or a token rotation) revokes them
 // without touching the root token.
 const OP_SESSION_TTL_MS = 8 * 3600 * 1000;
+// Shared across replicas (src/shared-limits.js): a session is a flag in the
+// shared store, keyed by a digest of the operator token and its id (never the
+// id itself) and valued with its expiry, written on login and cleared on
+// logout, so a cookie minted on one container is known on the other and a
+// logout revokes it everywhere. The token is in the key, so a token rotation
+// still revokes every session: the stored ones outlive the restart, but no
+// container running the new token looks under their keys.
+// This process's map is the fallback (no shared store, or one that does not
+// answer) and the cache the synchronous gate reads: syncOperatorSession
+// refreshes it from the store before any operator route runs.
+const OP_SESSION_SHARED = sharedLimitsEnabled();
+const OP_SID_RE = /^[0-9a-f]{64}$/;
+const opSessionKey = (sid) => createHash("sha256").update(OPERATOR_TOKEN).update("\0").update(String(sid)).digest("hex");
 const operatorSessions = new Map(); // sid -> expiresAt (ms)
-function newOperatorSession() {
+async function newOperatorSession() {
   const sid = randomBytes(32).toString("hex");
-  operatorSessions.set(sid, Date.now() + OP_SESSION_TTL_MS);
+  const exp = Date.now() + OP_SESSION_TTL_MS;
+  operatorSessions.set(sid, exp);
+  // Awaited (bounded by the store's op timeout): the browser's next request
+  // may land on the other container.
+  if (OP_SESSION_SHARED) await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess", opSessionKey(sid), exp));
   return sid;
+}
+async function revokeOperatorSession(sid) {
+  if (!sid) return;
+  operatorSessions.delete(sid);
+  if (OP_SESSION_SHARED) await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess", opSessionKey(sid), 0));
+}
+/** Before the operator routes: the cookie's session is read from the shared
+ *  store and this process's map takes the answer (an expiry, or nothing: it
+ *  was revoked or minted nowhere). A store that does not answer leaves the map
+ *  as it stands. Only a cookie of the right shape, from an address with
+ *  guessing budget left, reaches the store. */
+async function syncOperatorSession(req) {
+  if (!OP_SESSION_SHARED) return;
+  const sid = readCookie(req, OPERATOR_COOKIE);
+  if (!sid || !OP_SID_RE.test(sid)) return;
+  if (operatorAttemptLimiter.peek(operatorAttemptIp(req)).limited) return;
+  const r = await sharedLimits.flagGet("opsess", opSessionKey(sid));
+  if (!r.ok) { noteSharedLimitsDegraded("operator-session", r); return; }
+  if (r.until > Date.now()) operatorSessions.set(sid, r.until); else operatorSessions.delete(sid);
 }
 function operatorSessionValid(sid) {
   if (!sid) return false;
@@ -4715,16 +4753,19 @@ const operatorLoginLimiter = createRateLimiter("operator-login", { perMin: 5, pe
 // Forbid any browser-history cache, shared proxy, or future CDN from retaining
 // them. Registered before the routes so it runs on every /__operator response
 // (login form, dashboard, stats, wishes, logout).
-app.use("/__operator", (_req, res, next) => {
+app.use("/__operator", (req, res, next) => {
   res.set("Cache-Control", "no-store, private");
   res.set("Pragma", "no-cache");
   res.set("Vary", "Cookie, Authorization");
-  next();
+  // A browser session minted on another container: read it from the shared
+  // store before the gate below looks at the cookie.
+  if (!OP_SESSION_SHARED) return next();
+  syncOperatorSession(req).then(() => next(), () => next());
 });
 app.get("/__operator/login", (_req, res) => {
   res.type("html").send(operatorLoginPage(BASE_URL));
 });
-app.post("/__operator/login", (req, res) => {
+app.post("/__operator/login", async (req, res) => {
   const ip = (req.ip || req.socket.remoteAddress || "?").trim();
   if (operatorLoginLimiter.check(ip).limited) return res.status(429).json({ ok: false, error: "too many attempts, slow down" });
   const token = typeof req.body?.token === "string" ? req.body.token : "";
@@ -4738,17 +4779,18 @@ app.post("/__operator/login", (req, res) => {
   // (tighter) limiter, so clearing here cannot be used to refill the budget.
   operatorAttemptLimiter.reset(ip);
   // Exchange the token for an opaque session id; the cookie never holds the token.
-  const sid = newOperatorSession();
+  const sid = await newOperatorSession();
   const attrs = `Path=/__operator; HttpOnly; SameSite=Strict; Max-Age=${8 * 3600}${operatorCookieSecure(req) ? "; Secure" : ""}`;
   res.setHeader("Set-Cookie", `${OPERATOR_COOKIE}=${sid}; ${attrs}`);
   res.json({ ok: true });
 });
 // Logout is a POST (no GET side effect) + SameSite=Strict cookie (CSRF-proof:
 // a cross-site page can't attach the cookie). It revokes the session
-// server-side, not just clears the cookie.
-app.post("/__operator/logout", (req, res) => {
+// server-side, not just clears the cookie, on every container (the shared
+// store is cleared before the redirect).
+app.post("/__operator/logout", async (req, res) => {
   const sid = readCookie(req, OPERATOR_COOKIE);
-  if (sid) operatorSessions.delete(sid);
+  await revokeOperatorSession(sid);
   const attrs = `Path=/__operator; HttpOnly; SameSite=Strict; Max-Age=0${operatorCookieSecure(req) ? "; Secure" : ""}`;
   res.setHeader("Set-Cookie", `${OPERATOR_COOKIE}=; ${attrs}`);
   // POST-redirect-GET so the form submit lands back on the login page.

@@ -345,15 +345,17 @@ export function sharedWrite(control, p) {
 }
 
 /**
- * A shared daily spend cap for an upstream vendor, in micro-dollars per UTC day
- * (a counter per day, kept two days). `reserve(usd, capUsd)` adds the estimate
- * and answers false (giving the estimate back) when the shared total would
- * pass the cap; `book(usd)` corrects the day by a signed amount. A store that
- * does not answer lets the caller's own counter decide (reserve answers true).
+ * A shared daily cap for an upstream vendor, per UTC day (a counter per day,
+ * kept two days). The unit is dollars stored as micro-dollars (`scale` 1e6);
+ * a cap counted in whole units (tokens) passes `scale: 1`. `reserve(amount,
+ * cap)` adds the estimate and answers false (giving the estimate back) when the
+ * shared total would pass the cap; `book(amount)` corrects the day by a signed
+ * amount. A store that does not answer lets the caller's own counter decide
+ * (reserve answers true).
  */
-export function createSharedDailySpend(name, control, { day = (now) => new Date(now).toISOString().slice(0, 10) } = {}) {
+export function createSharedDailySpend(name, control, { day = (now) => new Date(now).toISOString().slice(0, 10), scale = 1e6 } = {}) {
   const TTL_MS = 48 * 3_600_000;
-  const micro = (usd) => Math.round((Number(usd) || 0) * 1e6);
+  const micro = (usd) => Math.round((Number(usd) || 0) * scale);
   return {
     /** False without a shared store: the caller keeps its synchronous check and book. */
     enabled: sharedLimitsEnabled(),
@@ -370,11 +372,11 @@ export function createSharedDailySpend(name, control, { day = (now) => new Date(
       const m = micro(usd);
       if (m) void sharedWrite(control, shared.counterAdd(name, day(now), m, TTL_MS));
     },
-    /** The shared total for the day in USD, or null. */
+    /** The shared total for the day in the caller's unit, or null. */
     async today(now = Date.now()) {
       if (!sharedLimitsEnabled()) return null;
       const r = await shared.counterGet(name, day(now));
-      return r.ok ? r.value / 1e6 : null;
+      return r.ok ? r.value / scale : null;
     },
     /** Test seam: the day's shared counter is dropped (beside the kit's own reset). */
     reset(now = Date.now()) {

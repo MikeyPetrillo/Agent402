@@ -20,6 +20,11 @@
 // that is not priced, a client that has already settled a payment this hour,
 // and every request under FREE_MODE (the server does not mount this there).
 // Memory is bounded: at most `keyCap` keys, least recently seen dropped first.
+// Counted in THIS process: like every limiter in src/rate-limit.js the budget
+// is divided by RATE_LIMIT_REPLICAS (perReplica), so two containers enforce
+// the published figure between them rather than twice it. A client pinned to
+// one container gets its share, never more than the whole; the published
+// figure (the 429 hint, /crawler) stays the system-wide one.
 //
 // Two shapes of bypass this had to close, both found by probing a paid boot:
 // a path spelled differently still reached the paywall and built its challenge
@@ -30,6 +35,7 @@
 // credential must now LOOK like one - the gates still decide whether it really
 // is.
 import { DISCOVERY_PATHS, OWN_UA, indexerFor, uaToken } from "./traffic-classifier.js";
+import { perReplica } from "./rate-limit.js";
 
 export const DEFAULT_UNPAID_QUOTE_BUDGET_PER_HOUR = 3000;
 export const UNPAID_QUOTE_BUDGET_KEY_CAP = 20_000;
@@ -144,8 +150,12 @@ export const secondsToHourBoundary = (now = Date.now()) => Math.max(1, Math.ceil
  * @param {() => number} [o.now]
  * @param {(line:string) => void} [o.log]
  */
-export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => false, policyUrl = "/crawler", keyCap = UNPAID_QUOTE_BUDGET_KEY_CAP, now = Date.now, log = console.warn } = {}) {
-  const limit = Number(budget) || 0;
+export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => false, policyUrl = "/crawler", keyCap = UNPAID_QUOTE_BUDGET_KEY_CAP, now = Date.now, log = console.warn, replicas = null } = {}) {
+  // `published` is the configured, system-wide figure; `limit` is this
+  // process's share of it (RATE_LIMIT_REPLICAS, or `replicas` when given).
+  const published = Number(budget) || 0;
+  const share = (n) => (replicas == null ? perReplica(n) : Math.max(1, Math.floor(n / Math.max(1, Number(replicas) || 1))));
+  const limit = published > 0 ? share(published) : 0;
   let hour = -1;
   const counts = new Map();       // `${ip}|${uaToken}` -> requests this hour, least recently seen first
   const logged = new Set();       // keys already logged as throttled this hour
@@ -231,14 +241,14 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
       throttled += 1;
       if (!logged.has(key) && logged.size < UNPAID_QUOTE_BUDGET_LOG_CAP) {
         logged.add(key);
-        try { log(`[unpaid-budget] ${ua} passed ${limit} unpaid price checks this hour; answering 429 until the hour turns`); } catch { /* logging never breaks a response */ }
+        try { log(`[unpaid-budget] ${ua} passed ${limit} unpaid price checks on this container this hour (budget ${published} per hour); answering 429 until the hour turns`); } catch { /* logging never breaks a response */ }
       }
     } catch { return next(); }
     res.set("Retry-After", String(verdict.retryAfterSeconds)).set("Cache-Control", "no-store");
     return res.status(429).json({
       ok: false,
       error: "rate-limited",
-      hint: `Too many unpaid price checks from one client this hour (budget ${limit} per hour, per address and User-Agent). Every route and price is published at /.well-known/x402, /openapi.json and /api/pricing, and a request carrying a payment, a credits key or a proof-of-work solution is never counted. A client that settles a payment stops being counted for the rest of the hour. See ${policyUrl}`,
+      hint: `Too many unpaid price checks from one client this hour (budget ${published} per hour, per address and User-Agent). Every route and price is published at /.well-known/x402, /openapi.json and /api/pricing, and a request carrying a payment, a credits key or a proof-of-work solution is never counted. A client that settles a payment stops being counted for the rest of the hour. See ${policyUrl}`,
       retryAfterSeconds: verdict.retryAfterSeconds,
     });
   }
@@ -249,7 +259,8 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
   const stats = (t = now()) => {
     const stale = Math.floor(t / HOUR_MS) !== hour;
     return {
-      budget: limit,
+      budget: published,
+      perReplicaBudget: limit,
       clientsThisHour: stale ? 0 : counts.size,
       clientsSettledThisHour: stale ? 0 : settled.size,
       clientsThrottledThisHour: stale ? 0 : logged.size,

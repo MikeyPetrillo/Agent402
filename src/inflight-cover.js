@@ -46,9 +46,25 @@
 //     against every run in flight at that moment. Runs woken together share
 //     that read and are admitted one at a time, each counting the ones before
 //     it, so they are covered together too.
+//   - Across containers (src/shared-limits.js): every admitted run is also a
+//     reservation in a shared window keyed by wallet and chain (member = run
+//     id, weight = atomic amount), written before the run is judged and
+//     removed when it leaves, so a run on another container counts here
+//     exactly as a local one does: the judged set is this process's ledger
+//     plus every reservation another container holds (admitted there or still
+//     being judged there; run ids carry the process, so this process's own
+//     reservations are not counted twice). A run another container holds
+//     drew on a balance verify never saw, so while one is in the window no
+//     cached read older than that view decides; and a run of another
+//     container that leaves during a read is a departure like a local one,
+//     judged again on a read taken after it. A store that does not answer
+//     leaves the decision to this process's ledger, which is what one replica
+//     always had. A reservation nobody removed (a container that died mid-run)
+//     ages out after INFLIGHT_COVER_SHARED_WINDOW_MS.
 // INFLIGHT_COVER=off disables the check.
 
 import { paymentHeaderOf } from "./payer.js";
+import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 
 const CHAIN_BY_CAIP2 = Object.freeze({
   "eip155:8453": "base", "eip155:137": "polygon", "eip155:42161": "arbitrum", "eip155:143": "monad",
@@ -64,6 +80,18 @@ const SETTLE_WAIT_MS = 5_000;
 const HEX_ADDR = /^0x[0-9a-fA-F]{40}$/;
 const UINT = /^\d{1,78}$/;
 
+// The shared half: on with a shared store. Run ids carry this process's
+// prefix, so a member of the shared window is known to be ours or another
+// container's by its id alone.
+const SHARED = sharedLimitsEnabled();
+const SHARED_NAME = "inflight-cover";
+const SHARED_WINDOW_MS = () => Math.max(60_000, Number(process.env.INFLIGHT_COVER_SHARED_WINDOW_MS) || 15 * 60_000);
+const PROC = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+let runSeq = 0;
+const isOurs = (member) => String(member).startsWith(`${PROC}:`);
+/** True when the shared half writes through (a shared store is configured). */
+export const _inflightCoverShared = SHARED;
+
 const ledger = new Map(); // coverKey -> { count, atomic: bigint, settling }
 const waiters = new Map(); // coverKey -> Set<() => void>, woken when a run leaves
 const balances = new Map(); // coverKey -> { atomic: bigint, at }
@@ -73,7 +101,57 @@ let readsInFlight = 0;
 // The settled-release of an admitted run, kept on its request (own,
 // non-enumerable) for the settle hook, which sees only the request.
 const SETTLED = Symbol("a402.inflightCoverSettled");
-const stats = { admitted: 0, admittedByRead: 0, admittedUnread: 0, refused: 0, refusedUnread: 0, settleWaits: 0 };
+const stats = { admitted: 0, admittedByRead: 0, admittedUnread: 0, refused: 0, refusedUnread: 0, settleWaits: 0, sharedMisses: 0, foreignReads: 0 };
+
+/**
+ * The OTHER runs a shared window read reports: everything but this run's own
+ * reservation. `foreign` are the members another container holds, with their
+ * count and sum (`foreignCount`, `foreignAtomic`); all three are null when the
+ * window was too large to list, and the totals stand in.
+ */
+function othersOf(r, selfId, selfAtomic) {
+  const entries = Array.isArray(r.entries) ? r.entries.filter((e) => e.member !== selfId) : null;
+  if (entries) {
+    let atomic = 0n, foreignAtomic = 0n;
+    const foreign = new Set();
+    for (const e of entries) {
+      const w = BigInt(Math.trunc(e.weight));
+      atomic += w;
+      if (!isOurs(e.member)) { foreign.add(e.member); foreignAtomic += w; }
+    }
+    return { count: entries.length, atomic, foreign, foreignCount: foreign.size, foreignAtomic };
+  }
+  const count = Math.max(0, (Number(r.count) || 0) - 1);
+  const atomic = BigInt(Math.max(0, Math.round(Number(r.sum) || 0))) - selfAtomic;
+  return { count, atomic: atomic > 0n ? atomic : 0n, foreign: null, foreignCount: null, foreignAtomic: null };
+}
+/**
+ * The runs judged against the balance: this process's ledger (its own runs,
+ * admitted one at a time) plus every run another container holds in the
+ * shared window, admitted or still being judged there (either may settle).
+ * This process's own reservations of runs still being judged here are not
+ * counted twice: they enter the ledger in turn. A window too large to list is
+ * judged on the larger of the two totals.
+ */
+function judgedSet(loc, others) {
+  if (!others) return loc;
+  if (others.foreignCount != null) return { count: loc.count + others.foreignCount, atomic: loc.atomic + others.foreignAtomic, settling: loc.settling };
+  return { count: Math.max(loc.count, others.count), atomic: loc.atomic > others.atomic ? loc.atomic : others.atomic, settling: loc.settling };
+}
+/** A run of another container left the window between two readings. */
+function foreignDeparted(before, after) {
+  if (!before) return false;
+  if (!before.foreign || !after.foreign) return after.count < before.count;
+  for (const m of before.foreign) if (!after.foreign.has(m)) return true;
+  return false;
+}
+/** Another container holds a run of this wallet (or, unlisted, may). */
+function foreignHeld(others, held, judgesHere = 1) {
+  if (!others) return false;
+  if (others.foreign) return others.foreign.size > 0;
+  return others.count > (held?.count || 0) + judgesHere - 1;
+}
+const removeShared = (coverKey, id, atomic) => sharedWrite(SHARED_NAME, shared.windowRemove(SHARED_NAME, coverKey, { member: id, weight: Number(atomic) }));
 
 function unreadMax() {
   const n = Number(process.env.INFLIGHT_COVER_UNREAD_MAX);
@@ -132,13 +210,16 @@ let reader = readTokenBalance;
 /** Test seam. */
 export function _setBalanceReaderForTest(fn) { reader = typeof fn === "function" ? fn : readTokenBalance; }
 
-async function balanceFor(coverKey, terms, now) {
+// `minAt`: a cached or pending read taken before it does not count (another
+// container's run may have drawn on the balance since).
+async function balanceFor(coverKey, terms, now, minAt = 0) {
   const hit = balances.get(coverKey);
-  if (hit && now - hit.at < CACHE_MS) return hit.atomic;
-  if (pendingReads.has(coverKey)) return pendingReads.get(coverKey).p;
+  if (hit && now - hit.at < CACHE_MS && hit.at >= minAt) return hit.atomic;
+  const pending = pendingReads.get(coverKey);
+  if (pending && pending.startedAt >= minAt) return pending.p;
   if (readsInFlight >= MAX_READS_IN_FLIGHT) return null; // never queue: a full lane reads as unknown
   readsInFlight++;
-  const entry = { p: null };
+  const entry = { p: null, startedAt: Date.now() };
   entry.p = (async () => {
     try {
       const atomic = await reader(terms);
@@ -192,20 +273,44 @@ export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SE
   const judges = judging.get(coverKey) || new Set();
   judging.set(coverKey, judges);
   judges.add(me);
+  // The shared reservation goes in before the judgment, so two containers
+  // judging one wallet at once each see the other's run; it is taken back on
+  // a refusal and when the admitted run leaves.
+  const sharedId = SHARED ? `${PROC}:${++runSeq}` : null;
+  let others = null, sharedAt = 0;
+  if (sharedId) {
+    const r = await shared.windowAdd(SHARED_NAME, coverKey, { windowMs: SHARED_WINDOW_MS(), member: sharedId, weight: Number(terms.atomic), now });
+    if (r.ok) { others = othersOf(r, sharedId, terms.atomic); sharedAt = Date.now(); }
+    else { stats.sharedMisses++; noteSharedLimitsDegraded(SHARED_NAME, r); }
+  }
+  let admitted = false;
   try {
     let at = now;
     for (;;) {
       const held = ledger.get(coverKey);
-      if (me.left === 0 && (!held || held.count <= 0)) break;
+      if (me.left === 0 && (!held || held.count <= 0) && !foreignHeld(others, held)) break;
       const leftBefore = me.left;
-      const balance = await balanceFor(coverKey, terms, at);
+      // Another container's run is in flight: verify's proof may predate its
+      // settlement, so only a read taken after the shared view decides.
+      const foreign = foreignHeld(others, held, judges.size);
+      if (foreign) stats.foreignReads++;
+      const balance = await balanceFor(coverKey, terms, at, foreign ? sharedAt : 0);
       // A run left while the balance was being read: the read may predate its
       // settlement. Judge again on a read taken after the departure.
       if (me.left !== leftBefore) { at = Date.now(); continue; }
+      if (others) {
+        const r = await shared.windowRead(SHARED_NAME, coverKey, { windowMs: SHARED_WINDOW_MS() });
+        if (r.ok) {
+          const next = othersOf(r, sharedId, terms.atomic);
+          const departed = foreignDeparted(others, next);
+          others = next; sharedAt = Date.now();
+          if (departed) { at = Date.now(); continue; }
+        } else { stats.sharedMisses++; noteSharedLimitsDegraded(SHARED_NAME, r); }
+      }
       // Re-read the ledger AFTER the await: other runs may have been admitted
       // meanwhile, and the check and the admission (synchronous, below) must
-      // see the same numbers.
-      const cur = ledger.get(coverKey) || { count: 0, atomic: 0n, settling: 0 };
+      // see the same numbers, with another container's runs added on.
+      const cur = judgedSet(ledger.get(coverKey) || { count: 0, atomic: 0n, settling: 0 }, others);
       const need = cur.atomic + terms.atomic;
       const unread = balance === null;
       const covered = unread ? cur.count < unreadMax() : balance >= need;
@@ -232,9 +337,11 @@ export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SE
       e.retryAfter = 30;
       throw e;
     }
+    admitted = true;
   } finally {
     judges.delete(me);
     if (!judges.size && judging.get(coverKey) === judges) judging.delete(coverKey);
+    if (sharedId && !admitted) void removeShared(coverKey, sharedId, terms.atomic);
   }
   const entry = ledger.get(coverKey) || { count: 0, atomic: 0n, settling: 0 };
   entry.count += 1;
@@ -245,6 +352,7 @@ export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SE
   const release = () => {
     if (released) return;
     released = true;
+    if (sharedId) void removeShared(coverKey, sharedId, terms.atomic);
     const e = ledger.get(coverKey);
     if (e) {
       e.count -= 1;
@@ -293,7 +401,7 @@ export function markCoveredRunSettled(req) {
 export function inflightCoverStatus() {
   let runs = 0;
   for (const e of ledger.values()) runs += e.count;
-  return { enabled: inflightCoverEnabled(), walletsInFlight: ledger.size, runsInFlight: runs, unreadMax: unreadMax(), ...stats };
+  return { enabled: inflightCoverEnabled(), shared: SHARED, walletsInFlight: ledger.size, runsInFlight: runs, unreadMax: unreadMax(), ...stats };
 }
 
 /** Test-only. */
