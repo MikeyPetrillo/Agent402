@@ -22,10 +22,18 @@ name: Catalog buy (every tool at list price)
 #
 # Spend is capped per run (CATALOG_BUY_MAX_USD, default in the script) against
 # list prices before anything is bought and against the settled total before
-# every signature; a quote above list is never signed. The run refuses to
-# start when the burner holds less than the planned spend plus a floor (exit 3:
-# funding, not a tool failure). Every request carries the heartbeat token, so
-# these buys book as internal traffic, not as outside demand.
+# every signature. A fixed-price tool is never signed above its list price; a
+# quoted tool (the metered /v1 tiers, decide) is never signed above the ceiling
+# its /api/pricing row and /openapi.json publish. The run refuses to start when
+# the burner holds less than the planned spend plus a floor (exit 3: funding,
+# not a tool failure). One paid call is in flight at a time, about a second
+# apart (CATALOG_BUY_CONCURRENCY, CATALOG_BUY_PACE_MS below). Every request
+# carries the heartbeat token, so these buys book as internal traffic, not as
+# outside demand.
+#
+# A tool the cap left unbought is cap-deferred, counted apart from failures in
+# the headline, the issue and the exit code (4): nothing is known about it, so
+# the issue stays open until a run buys it, but it is not called broken.
 #
 # /status: this workflow never records an observation. A tool that answers
 # wrongly is not a settlement outage; settlement is the paid canary's
@@ -64,6 +72,9 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       TARGET_URL: https://agent402.tools
+      # Production serves buyers first: one paid call in flight, a second apart.
+      CATALOG_BUY_CONCURRENCY: "1"
+      CATALOG_BUY_PACE_MS: "1000"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -89,7 +100,10 @@ jobs:
           ONLY: ${{ inputs.only || '' }}
           # The route-execute products pay an outside seller from the spending
           # wallet (its own daily ceiling); the paid canary covers that path.
-          CATALOG_BUY_SKIP: route-execute-pro,route-execute-max
+          # decide-execute's published example names a decision that exists only
+          # after a paid decide call on the same server, so bought cold it answers
+          # 404 (uncharged); scripts/test-decide-execute.js covers the run itself.
+          CATALOG_BUY_SKIP: route-execute-pro,route-execute-max,decide-execute
         run: |
           if [ -z "$BURNER_KEY" ]; then
             echo "::error::BURNER_KEY is not set in the spending environment; nothing can be bought"
@@ -102,9 +116,10 @@ jobs:
           CODE=$?
           set -e
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
-          # 0 all passed, 5 some tool failed its grade, 3 unfunded: the script
-          # writes result= itself. Anything else is the script not finishing.
-          case "$CODE" in 0|3|5) ;; *) echo "result=crashed" >> "$GITHUB_OUTPUT" ;; esac
+          # 0 all passed, 5 some tool failed its grade, 4 nothing failed but the
+          # cap deferred some tools, 3 unfunded: the script writes result= itself.
+          # Anything else is the script not finishing.
+          case "$CODE" in 0|3|4|5) ;; *) echo "result=crashed" >> "$GITHUB_OUTPUT" ;; esac
           exit 0
 
       - name: Upload the graded report
@@ -124,13 +139,18 @@ jobs:
         env:
           RESULT: ${{ steps.buy.outputs.result }}
           FAILING: ${{ steps.buy.outputs.failing }}
+          DEFERRING: ${{ steps.buy.outputs.deferring }}
           GRADED: ${{ steps.buy.outputs.graded }}
           FAILED: ${{ steps.buy.outputs.failed }}
+          DEFERRED: ${{ steps.buy.outputs.deferred }}
           TIER: ${{ inputs.tier || 'daily' }}
           ONLY: ${{ inputs.only || '' }}
           # The route-execute products pay an outside seller from the spending
           # wallet (its own daily ceiling); the paid canary covers that path.
-          CATALOG_BUY_SKIP: route-execute-pro,route-execute-max
+          # decide-execute's published example names a decision that exists only
+          # after a paid decide call on the same server, so bought cold it answers
+          # 404 (uncharged); scripts/test-decide-execute.js covers the run itself.
+          CATALOG_BUY_SKIP: route-execute-pro,route-execute-max,decide-execute
         run: |
           TITLE="Catalog buy FAILING"
           RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -143,12 +163,16 @@ jobs:
               fi
               exit 0 ;;
             fail)
-              BODY="Bought from production at list price and graded like the strict sweep ($SCOPE): $FAILED of $GRADED failed. A grade names what the paid answer lacked: http-NNN (the status), error-field (a 200 carrying an error), missing-keys (documented output keys absent), empty (an array the published example shows populated came back empty), unsettled (a 402 after paying), quote-over-list (the live 402 asked more than the list price and was not signed), cap (not bought, spend cap reached), no-example (no usable published example). The step summary carries the full table and the graded report is attached to the run.
+              DEFER_LINE=""; [ "${DEFERRED:-0}" != "0" ] && DEFER_LINE="Cap-deferred (not bought, nothing known): $DEFERRED tool(s): $DEFERRING"
+              BODY="Bought from production and graded like the strict sweep ($SCOPE): $FAILED of $GRADED failed, $DEFERRED cap-deferred. A grade names what the paid answer lacked: http-NNN (the status), error-field (a 200 carrying an error), missing-keys (documented output keys absent), empty (an array the published example shows populated came back empty), unsettled (a 402 after paying), quote-over-list (a fixed-price tool's live 402 asked more than its list price and was not signed), quote-over-ceiling (a quoted tool's live 402 asked more than its documented ceiling and was not signed), no-example (no usable published example). A cap-deferred tool was not bought because the run's spend cap was reached; it is counted apart because nothing is known about it. The step summary carries the full table and the graded report is attached to the run.
 
           Failing: $FAILING
+          $DEFER_LINE
 
           Run: $RUN
           A buyer copying the published example gets the same answer; fix the tool or its example, then dispatch this workflow. A green scheduled run closes this." ;;
+            deferred)
+              BODY="Every tool bought from production passed its grade ($SCOPE, $GRADED graded), but $DEFERRED tool(s) were not bought because the run's spend cap was reached, so nothing is known about them: $DEFERRING. Raise CATALOG_BUY_MAX_USD, or dispatch this workflow with tier weekly for the products the daily cap cannot fit. Run: $RUN" ;;
             unfunded)
               BODY="The catalog buy did not start ($SCOPE): the burner's Base USDC balance is below this run's planned spend plus the floor, so nothing was bought and nothing was checked today. This is funding, not a tool failure. Top up the burner (the run log names the address), then dispatch this workflow; a green run closes this. Run: $RUN" ;;
             *)
