@@ -14,7 +14,7 @@
 //   3. output normalization on a real-shaped payload
 //   4. markUntrusted is stamped (chunks are third-party web text)
 //   5. error mapping: 429/401/403 -> 503, 5xx -> 502, other non-2xx -> 502,
-//      timeout -> 504, malformed body -> 502, oversized body -> 502, and no
+//      a deadline or transport failure -> 503 naming the step, malformed body -> 502, oversized body -> 502, and no
 //      upstream body text ever reaches the caller
 //   6. no key -> 503 BEFORE any fetch
 import { LLM_CONTEXT_TOOLS, __test } from "../src/tools/llm-context-kit.js";
@@ -227,8 +227,8 @@ await expectError(() => jsonResponse(SECRET, 500), 502, "500 upstream error");
 await expectError(() => jsonResponse(SECRET, 503), 502, "503 upstream error");
 await expectError(() => jsonResponse(SECRET, 422), 502, "422 upstream rejection");
 await expectError(() => jsonResponse(`not json ${SECRET}`, 200), 502, "malformed 200 body");
-await expectError(() => { const e = new Error("The operation was aborted"); e.name = "TimeoutError"; throw e; }, 504, "upstream timeout");
-await expectError(() => { throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }); }, 504, "transport failure");
+await expectError(() => { const e = new Error("The operation was aborted"); e.name = "TimeoutError"; throw e; }, 503, "upstream deadline (503 naming the upstream and the step)");
+await expectError(() => { throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }); }, 503, "transport failure (503 unreachable)");
 // Oversized body: bigger than the 4 MB cap, streamed through the reader.
 await expectError(() => jsonResponse(JSON.stringify({ pad: "y".repeat(5 * 1024 * 1024) })), 502, "oversized upstream body");
 

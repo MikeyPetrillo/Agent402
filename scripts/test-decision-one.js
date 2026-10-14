@@ -95,8 +95,10 @@ const withoutModel = (b) => { const { model, ...rest } = b; return JSON.stringif
     ["a 429", reply(429, {}), 503, false],
     ["a 401", reply(401, {}), 503, false],
     ["a 400", reply(400, {}), 400, false],
-    ["a refused connection", null, 502, false],
-    ["a timeout", timeout, 504, true],
+    // A refused connection and a deadline are the upstream's 503 classes
+    // (src/upstream-deadline.js); only the deadline may have been billed.
+    ["a refused connection", null, 503, false],
+    ["a timeout", timeout, 503, true],
     ["an unreadable 200", reply(200, "not json"), 502, true],
     ["a 200 without answers", reply(200, { model: "x" }), 502, true],
   ]) {

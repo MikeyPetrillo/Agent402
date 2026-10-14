@@ -40,6 +40,7 @@ import { SPEECH_MODELS, OPENROUTER_ATTRIBUTION } from "./llm-gateway-kit.js";
 import { transcodePcm } from "./media-kit.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
+import { upstreamFetch, upstreamDeadline, bodyUnderDeadline, underBudgetAll, HANDLER_BUDGET_MS } from "../upstream-deadline.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
@@ -125,13 +126,20 @@ function validateInput(input, tierSlug) {
   return { text, voice, format };
 }
 
-async function callOpenAI(text, voice, format, tierSlug, model, timeoutMs = 30_000) {
+async function callOpenAI(text, voice, format, tierSlug, model, timeoutMs = TTS_LINK_TIMEOUT_MS) {
   const key = OPENAI_KEY();
   if (!key) throw bad("OpenAI not configured", 503);
 
+  // A read that outlives its cap, or a socket dropped after the request left,
+  // may already have been generated and billed, so it is final (no backup
+  // after it); only a connection that was never set up is not. Both are the
+  // upstream's 503 classes, never a 504.
+  let neverConnected = false;
+  const probe = (url, init) => fetch(url, init).catch((e) => { neverConnected = CONNECT_FAILURES.has(e?.cause?.code || e?.code); throw e; });
+  const ctx = { label: "OpenAI", step: "speech", timeoutMs, tag: "[tts]", fetchImpl: probe };
   let res;
   try {
-    res = await fetch("https://api.openai.com/v1/audio/speech", {
+    res = await upstreamFetch("https://api.openai.com/v1/audio/speech", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${key}`,
@@ -143,10 +151,10 @@ async function callOpenAI(text, voice, format, tierSlug, model, timeoutMs = 30_0
         voice,
         response_format: format,
       }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    }, ctx);
   } catch (e) {
-    throw bad(`OpenAI request failed: ${e.message}`, 504);
+    if (!neverConnected) e.final = true;
+    throw e;
   }
 
   if (!res.ok) {
@@ -169,9 +177,11 @@ async function callOpenAI(text, voice, format, tierSlug, model, timeoutMs = 30_0
     throw bad(`OpenAI rejected the request: ${msg}`, 400);
   }
 
-  const buf = Buffer.from(await res.arrayBuffer());
+  let buf;
+  try { buf = Buffer.from(await bodyUnderDeadline(res.arrayBuffer(), ctx)); }
+  catch (e) { if (e?.statusCode) { e.final = true; throw e; } throw Object.assign(bad("OpenAI response could not be read", 502), { final: true }); }
   // A 200 with no audio is not an answer; it may have been billed, so final.
-  if (buf.length === 0) throw bad("OpenAI returned no audio - retry, or rephrase the input", 504);
+  if (buf.length === 0) throw Object.assign(bad("OpenAI returned no audio - retry, or rephrase the input", 502), { final: true });
   return {
     model,
     provider: "openai",
@@ -194,17 +204,13 @@ async function callKokoro(text, voice, format, tierSlug) {
   const tier = TIERS[tierSlug];
   // OpenAI voice name -> Kokoro's own id, from the shared table.
   const nativeVoice = KOKORO?.map?.[voice] || KOKORO?.map?.alloy || "af_alloy";
-  let res;
-  try {
-    res = await fetch(OPENROUTER_SPEECH_URL, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...OPENROUTER_ATTRIBUTION },
-      body: JSON.stringify({ model: tier.model, input: text, voice: nativeVoice, response_format: format }),
-      signal: AbortSignal.timeout(60_000),
-    });
-  } catch (e) {
-    throw bad(`Upstream request failed: ${String(e?.message || e).slice(0, 120)}`, 504);
-  }
+  // One read under its cap; a read that outlives it is the upstream's 503
+  // (src/upstream-deadline.js), never a 504. Kokoro answers in about 2 s.
+  const res = await upstreamFetch(OPENROUTER_SPEECH_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...OPENROUTER_ATTRIBUTION },
+    body: JSON.stringify({ model: tier.model, input: text, voice: nativeVoice, response_format: format }),
+  }, { label: "Speech upstream", step: "speech", timeoutMs: KOKORO_READ_MS, tag: "[tts]" });
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
     const safe = redactSecrets(errText);
@@ -236,9 +242,14 @@ async function callKokoro(text, voice, format, tierSlug) {
  *  answer may already have been generated and billed, so each is final: an
  *  uncharged 5xx with no further upstream call, which keeps one paid call to
  *  at most one billed generation. A 4xx is the request's fault: a 400.
- *  The whole call, fallback included, runs inside TTS_DEADLINE_MS. */
-export const TTS_DEADLINE_MS = 40_000;
-const TTS_LINK_TIMEOUT_MS = 25_000;
+ *  The whole call, fallback included, runs inside TTS_DEADLINE_MS, which is
+ *  the handler budget (src/upstream-deadline.js): a 30 s payment
+ *  authorization must still settle after the answer. Each link gets
+ *  TTS_LINK_TIMEOUT_MS or what is left, so a stalled first link leaves the
+ *  backups time; a link that outlives its cap is a 503 naming the step. */
+export const TTS_DEADLINE_MS = HANDLER_BUDGET_MS;
+const TTS_LINK_TIMEOUT_MS = 12_000;
+const KOKORO_READ_MS = 15_000;
 const CONNECT_FAILURES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "UND_ERR_CONNECT_TIMEOUT"]);
 
 // --- ElevenLabs traffic control --------------------------------------------
@@ -320,7 +331,7 @@ async function callElevenLabs(text, voice, format, tierSlug, deadline) {
       last = e;
     }
   }
-  throw last || Object.assign(bad("Speech upstream did not answer in time - retry shortly", 504), { outage: false });
+  throw last || Object.assign(upstreamDeadline("Speech upstream", "speech", TTS_DEADLINE_MS), { outage: false });
 }
 
 /** One model over OpenRouter's speech wire. mp3 and pcm come back as is; wav,
@@ -330,22 +341,22 @@ async function callSpeechModel(model, nativeVoice, text, format, timeoutMs) {
   const key = OPENROUTER_KEY();
   if (!key) throw Object.assign(bad("Speech gateway not configured (OPENROUTER_API_KEY unset)", 503), { outage: true });
   const wireFormat = WIRE_FORMATS.has(format) ? format : "pcm";
+  // The cause is read before the shared helper maps the failure, because only
+  // a connection that was never set up is certainly unbilled (an outage, so
+  // a backup may be tried). Anything later (a deadline, a socket dropped
+  // mid-answer) may have been generated and billed, so it is final. Both are
+  // the upstream's 503 classes (src/upstream-deadline.js), never a 504.
+  let neverConnected = false;
+  const probe = (url, init) => fetch(url, init).catch((e) => { neverConnected = CONNECT_FAILURES.has(e?.cause?.code || e?.code); throw e; });
   let res;
   try {
-    res = await fetch(OPENROUTER_SPEECH_URL, {
+    res = await upstreamFetch(OPENROUTER_SPEECH_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...OPENROUTER_ATTRIBUTION },
       body: JSON.stringify({ model, input: text, voice: nativeVoice, response_format: wireFormat }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    }, { label: "Speech upstream", step: "speech", timeoutMs, tag: "[tts]", fetchImpl: probe });
   } catch (e) {
-    // Only a connection that was never set up is certainly unbilled: an outage.
-    // Anything later (a timeout, a socket dropped mid-answer) may have been
-    // generated and billed, so it is final.
-    const code = e?.cause?.code || e?.code;
-    const neverConnected = CONNECT_FAILURES.has(code);
-    const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError";
-    throw Object.assign(bad(timedOut ? "Speech upstream timed out - retry shortly" : `Upstream request failed: ${String(e?.message || e).slice(0, 120)}`, 504), { outage: neverConnected, unhealthy: true });
+    throw Object.assign(e, { outage: neverConnected, unhealthy: true });
   }
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
@@ -390,8 +401,8 @@ async function callBackups(text, voice, format, tier, deadline, now, first) {
   if (tier.fallback && OPENAI_KEY() && now() < OPENAI_TTS_SHUTDOWN) {
     const left = deadline - Date.now();
     if (left >= 3_000) {
-      try { return await callOpenAI(text, name, format, null, tier.fallback, left); }
-      catch (e) { if (e?.statusCode !== 502 && e?.statusCode !== 503) throw e; last = e; }
+      try { return await callOpenAI(text, name, format, null, tier.fallback, Math.min(TTS_LINK_TIMEOUT_MS, left)); }
+      catch (e) { if (e?.final || (e?.statusCode !== 502 && e?.statusCode !== 503)) throw e; last = e; }
     }
   }
   for (const id of TTS_BACKUP_MODELS) {
@@ -561,3 +572,6 @@ export const TTS_TOOLS = [
     handler: makeHandler("tts-hd"),
   },
 ];
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(TTS_TOOLS);

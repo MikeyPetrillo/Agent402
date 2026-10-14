@@ -46,7 +46,12 @@ import { upstreamCosts } from "../upstream-costs.js";
 import { meterUpstreamSpend } from "../posthog.js";
 
 const EXA_API = "https://api.exa.ai";
-const TIMEOUT_MS = 30_000;
+import { upstreamFetch, underBudgetAll } from "../upstream-deadline.js";
+// DEADLINES (src/upstream-deadline.js): one read per handler under its own
+// cap and the handler budget, so the answer still lands while a 30 s payment
+// authorization can settle; a read that outlives it is a 503 naming the
+// upstream and the step, never a 504 (the booked estimate stays booked).
+const TIMEOUT_MS = 18_000;
 const USER_AGENT = "agent402-exa/1";
 const SHARED_TAGS = ["web", "search"];
 
@@ -216,18 +221,11 @@ async function exaPost(path, body) {
   _exaSpendBook(estimate);
   spend.calls++;
 
-  let res;
-  try {
-    res = await fetch(`${EXA_API}${path}`, {
-      method: "POST",
-      headers: { "x-api-key": key, "Content-Type": "application/json", Accept: "application/json", "User-Agent": USER_AGENT },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (e) {
-    if (e?.name === "TimeoutError" || e?.name === "AbortError") throw bad("Exa did not respond in time", 504);
-    throw bad("could not reach Exa", 502);
-  }
+  const res = await upstreamFetch(`${EXA_API}${path}`, {
+    method: "POST",
+    headers: { "x-api-key": key, "Content-Type": "application/json", Accept: "application/json", "User-Agent": USER_AGENT },
+    body: JSON.stringify(body),
+  }, { label: "Exa", step: String(path).replace(/^\//, "") || "search", timeoutMs: TIMEOUT_MS, tag: "[exa]" });
 
   // Never relay an upstream error body to the buyer: it can carry our own key
   // material, account identifiers or another tenant's text.
@@ -532,3 +530,6 @@ for (const t of EXA_TOOLS) {
   const inner = t.handler;
   t.handler = async (...args) => markUntrusted(await inner(...args));
 }
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(EXA_TOOLS);

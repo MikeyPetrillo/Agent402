@@ -10,7 +10,7 @@
 //   4. the answer carries {query, count, results[{title, url, description}]}
 //      plus the untrustedContent marker, and nothing else from Brave's body;
 //   5. the upstream error mapping is the one `search` uses (429 -> 503,
-//      5xx -> 502, transport failure -> 504);
+//      5xx -> 502, a deadline or transport failure -> 503 naming the step);
 //   6. the call is metered under its own caller name;
 //   7. the tool is wallet-only: never reachable on the free PoW tier;
 //   8. the published OpenAPI parameter carries the type the schema declares,
@@ -248,7 +248,9 @@ try {
   respond = () => jsonRes(401, {});
   await expectStatus({ q: "x402" }, 502, "upstream 401");
   respond = () => { throw Object.assign(new Error("timeout"), { name: "TimeoutError" }); };
-  await expectStatus({ q: "x402" }, 504, "upstream transport failure");
+  await expectStatus({ q: "x402" }, 503, "upstream deadline expiry (503 naming the upstream and the step)");
+  respond = () => { throw Object.assign(new Error("fetch failed"), { code: "ECONNREFUSED" }); };
+  await expectStatus({ q: "x402" }, 503, "upstream unreachable (503)");
   {
     let msg = "";
     respond = () => jsonRes(500, { secret: "upstream body" });

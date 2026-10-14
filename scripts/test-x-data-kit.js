@@ -238,7 +238,7 @@ await throws(h("x-search-recent")({ query: "x402" }), 502, "500 -> 502");
 globalThis.fetch = async () => jsonRes(503, {});
 await throws(h("x-users-lookup")({ usernames: ["coinbase"] }), 502, "503 -> 502");
 globalThis.fetch = async () => { throw Object.assign(new Error("aborted"), { name: "TimeoutError" }); };
-await throws(h("x-search-recent")({ query: "x402" }), 504, "timeout -> 504");
+await throws(h("x-search-recent")({ query: "x402" }), 503, "deadline -> 503 naming the upstream and the step");
 globalThis.fetch = async () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => { throw new Error("bad json"); } });
 await throws(h("x-search-recent")({ query: "x402" }), 502, "non-JSON 200 -> 502");
 // Upstream bodies are never relayed
