@@ -77,6 +77,7 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   const out = Buffer.from(r.audio, "base64");
   ok(sent.model === "elevenlabs/eleven-v4-turbo" && sent.voice === "sarah", `${format}: the request pins the model and sends nova's own voice (sarah)`);
   ok(sent.response_format === (format === "mp3" ? "mp3" : "pcm"), `${format}: asks the wire for ${format === "mp3" ? "mp3" : "pcm"}`);
+  if (format === "mp3") ok(sent.provider?.data_collection === "deny" && sent.provider?.zdr === true && !("instructions" in sent), "the ElevenLabs request carries our data policy (data_collection deny, zdr)");
   const head = out.subarray(0, 4).toString("latin1");
   const shaped = format === "mp3" ? head === "ID3f" : format === "pcm" ? out.equals(pcm) : format === "aac" ? out[0] === 0xff && (out[1] & 0xf0) === 0xf0 : head === magic[format];
   ok(r.format === format && shaped && r.provider === "openrouter" && r.voice === "sarah" && r.chars === 20, `${format}: answered as ${format} (${out.length} bytes), naming the voice that spoke`);
@@ -316,7 +317,7 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="diarize"\r\n\r\ntrue\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.wav"\r\nContent-Type: audio/wav\r\n\r\n`),
     wav, Buffer.from(`\r\n--${boundary}--\r\n`),
   ]);
-  const scribe = { text: "Hello there. Hi.", language: "eng", duration: 1, words: [
+  const scribe = { text: "Hello there. Hi.", language: "eng", language_confidence: 0.96041744, duration: 1, words: [
     { word: "Hello", start: 0, end: 0.3, speaker: 0 }, { word: "there.", start: 0.3, end: 0.5, speaker: 0 }, { word: "Hi.", start: 0.6, end: 0.9, speaker: 1 }] };
   let form = null;
   globalThis.fetch = async (url, init) => { const x = new URL(String(url)); if (x.host === "openrouter.ai" && x.pathname === "/api/v1/audio/transcriptions") { form = init.body; return { ok: true, status: 200, text: async () => JSON.stringify(scribe) }; } throw new Error(`unexpected ${url}`); };
@@ -325,6 +326,10 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   ok(form?.get("model") === "elevenlabs/scribe-v2" && form.get("diarize") === "true" && form.get("response_format") === "verbose_json", "diarize sends Scribe v2 with speaker labels and verbose output");
   ok(r.model === "elevenlabs/scribe-v2" && r.speakers === 2 && r.words.length === 3 && r.words[2].speaker === 1 && r.words[0].end === 0.3, "the answer carries words with times and speakers, and the speaker count");
   ok(r.text === scribe.text && r.duration === 1, "and the transcript and duration, like the default path");
+  ok(r.language_confidence === 0.9604, `Scribe's language confidence passes through, rounded (got ${r.language_confidence})`);
+  let policy = null; try { policy = JSON.parse(form?.get("provider")); } catch {}
+  ok(policy?.data_collection === "deny" && policy?.zdr === true && Object.keys(policy).length === 2, "the Scribe request carries our data policy as the multipart provider field");
+  ok(!form?.has("keyterms") && !form?.has("keyterms[]") && !form?.has("entities"), "and sends no keyterms or entity fields");
   const scribeWith = async (status, answer) => {
     globalThis.fetch = async (url) => { const x = new URL(String(url)); if (x.host === "openrouter.ai") return { ok: status === 200, status, text: async () => JSON.stringify(answer) }; throw new Error("unexpected"); };
     try { return await makeMultipartHandler("transcribe")({}, { headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, body }); }
@@ -338,8 +343,41 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   ok(noText?.statusCode === 502, "a 200 with no transcript field is a 502");
   const silent = await scribeWith(200, { text: "", words: [], duration: 1 });
   ok(silent?.text === "" && silent?.speakers === 0, "silent audio is still a valid empty transcript");
+  ok(silent?.language_confidence === null, "an unscored language is a null confidence, never an invented one");
+  const outOfRange = await scribeWith(200, { text: "hi", words: [], duration: 1, language_confidence: 7 });
+  ok(outOfRange?.language_confidence === null, "a confidence outside 0..1 is dropped to null");
   const e = await throwsWith(() => transcribe.handler({ url: "https://agent402.tools/fixtures/sample-audio.wav", diarize: "yes" }));
   ok(e?.statusCode === 400 && /diarize/.test(e.message), "a diarize value that is not true/false is a 400 before any fetch");
+
+  // keyterms and entities: no serving model honors them (every listed model
+  // refuses keyterms upstream; entity detection is not forwarded), so a set
+  // value is a 400 before any fetch, never a transcript that ignored it.
+  let fetched = 0;
+  globalThis.fetch = async () => { fetched++; throw new Error("no fetch expected"); };
+  const pro = STT_TOOLS.find((t) => t.slug === "transcribe-pro");
+  for (const [label, extra] of [["keyterms list", { keyterms: ["Agent402"] }], ["keyterms string", { keyterms: "Agent402" }], ["entities", { entities: true }], ["entities string", { entities: "true" }]]) {
+    for (const tool of [transcribe, pro]) {
+      const x = await throwsWith(() => tool.handler({ url: "https://agent402.tools/fixtures/sample-speech.wav", ...extra }));
+      ok(x?.statusCode === 400 && /not supported/.test(x.message) && /nothing was charged/.test(x.message), `${tool.slug}: ${label} is a self-explaining 400`);
+    }
+  }
+  const mp = (name, value) => Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.wav"\r\nContent-Type: audio/wav\r\n\r\n`),
+    wav, Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  for (const [name, value] of [["keyterms[]", "Agent402"], ["keyterms", "Agent402"], ["entities", "true"]]) {
+    const x = await throwsWith(() => makeMultipartHandler("transcribe")({}, { headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, body: mp(name, value) }));
+    ok(x?.statusCode === 400 && /not supported/.test(x.message), `multipart ${name} is a 400`);
+  }
+  globalThis.fetch = realFetch;
+  ok(fetched === 0, "no refused request fetched audio or called an upstream");
+  // Asking for nothing passes validation (it fails later, on the stubbed fetch, not on the field).
+  const { refuseUnservedFields } = await import("../src/tools/stt-kit.js");
+  let passed = true;
+  for (const extra of [{}, { keyterms: [] }, { keyterms: "" }, { entities: false }, { entities: "false" }, { keyterms: null, entities: null }]) { try { refuseUnservedFields(extra); } catch { passed = false; } }
+  ok(passed, "an empty keyterms list or entities:false asks for nothing and passes");
+  ok(!("keyterms" in transcribe.discovery.inputSchema.properties) && !("entities" in transcribe.discovery.inputSchema.properties), "the schema advertises neither field");
+  ok(/language confidence/.test(transcribe.description) && /language_confidence/.test(transcribe.discovery.inputSchema.properties.diarize.description), "the description and the diarize schema name the language confidence it adds");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

@@ -37,6 +37,9 @@
 
 import { redactSecrets } from "./redact.js";
 import { SPEECH_MODELS, OPENROUTER_ATTRIBUTION } from "./llm-gateway-kit.js";
+// Our data policy on every OpenRouter speech request: data_collection deny,
+// and zdr on the models whose every endpoint is ZDR (see the module).
+import { audioProviderPolicy } from "../openrouter-audio-policy.js";
 import { transcodePcm } from "./media-kit.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
@@ -210,7 +213,7 @@ async function callKokoro(text, voice, format, tierSlug) {
   const res = await upstreamFetch(OPENROUTER_SPEECH_URL, {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...OPENROUTER_ATTRIBUTION },
-    body: JSON.stringify({ model: tier.model, input: text, voice: nativeVoice, response_format: format }),
+    body: JSON.stringify({ model: tier.model, input: text, voice: nativeVoice, response_format: format, provider: audioProviderPolicy(tier.model) }),
   }, { label: "Speech upstream", step: "speech", timeoutMs: KOKORO_READ_MS, tag: "[tts]" });
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
@@ -354,7 +357,7 @@ async function callSpeechModel(model, nativeVoice, text, format, timeoutMs) {
     res = await upstreamFetch(OPENROUTER_SPEECH_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...OPENROUTER_ATTRIBUTION },
-      body: JSON.stringify({ model, input: text, voice: nativeVoice, response_format: wireFormat }),
+      body: JSON.stringify({ model, input: text, voice: nativeVoice, response_format: wireFormat, provider: audioProviderPolicy(model) }),
     }, { label: "Speech upstream", step: "speech", timeoutMs, tag: "[tts]", fetchImpl: probe });
   } catch (e) {
     throw Object.assign(e, { outage: neverConnected, unhealthy: true });

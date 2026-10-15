@@ -9,6 +9,7 @@ const ENTRIES = [
       "Search and routing (/api/find, /api/route and the MCP catalog tools) bound every uncached search with a deadline and recover on their own if one stalls; under load they answer 503 with Retry-After instead of hanging.",
       "Every published npm package retries a discovery read that answers 503 with a retry delay, a few times and briefly, and never repeats a paid call.",
       "Data tools that wait on an outside service answer 503 naming the service and the step when it does not answer in time, and nothing is charged.",
+      "Transcription with diarize:true adds language_confidence, the model's 0 to 1 confidence in the language it detected. Speech requests, and transcription with diarize:true, route only to model providers that do not collect the data, and to zero-data-retention endpoints wherever every endpoint of the model offers it.",
     ],
   },
   {

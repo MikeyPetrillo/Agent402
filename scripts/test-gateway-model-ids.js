@@ -184,6 +184,27 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
   const liveSec = await dearest(DIARIZE_MODEL), perMin = upstreamCosts().sttPerMinute[DIARIZE_MODEL];
   ok(liveSec !== null && Number.isFinite(perMin) && perMin >= liveSec * 60 - 1e-9, brief(DIARIZE_MODEL, `${DIARIZE_MODEL}: private per-minute row ${perMin} covers ${liveSec}/s`));
 }
+// 1e. Our audio data policy (src/openrouter-audio-policy.js) sends zdr:true to
+//     the models in AUDIO_ZDR_MODELS. That is only safe while EVERY endpoint
+//     OpenRouter lists for the model is a ZDR endpoint: otherwise the flag
+//     narrows routing, and with none left the call answers 404 (a failover
+//     walk ends; the Scribe path fails). Every listed model must be one we
+//     send, so the set cannot hold a stale id.
+{
+  const { AUDIO_ZDR_MODELS } = await import("../src/openrouter-audio-policy.js");
+  const { TTS_TIERS, TTS_BACKUP_MODELS } = await import("../src/tools/tts-kit.js");
+  const { DIARIZE_MODEL } = await import("../src/tools/stt-kit.js");
+  const sent = new Set([...SPEECH_MODELS.map((m) => m.id), ...Object.values(TTS_TIERS).flatMap((t) => t.chain || [t.model]), ...TTS_BACKUP_MODELS, DIARIZE_MODEL]);
+  ok([...AUDIO_ZDR_MODELS].every((id) => sent.has(id)), `every zdr audio model is one we send${[...AUDIO_ZDR_MODELS].filter((id) => !sent.has(id)).map((id) => ` (stale: ${id})`).join("")}`);
+  const zdrNames = new Set(((await (await fetch("https://openrouter.ai/api/v1/endpoints/zdr", { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json().catch(() => null))?.data || []).map((e) => e.name));
+  ok(zdrNames.size > 50, `the ZDR endpoint list is readable (${zdrNames.size} endpoints)`);
+  for (const id of sent) {
+    const eps = (await (await fetch(`https://openrouter.ai/api/v1/models/${id}/endpoints`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json().catch(() => null))?.data?.endpoints || [];
+    const nonZdr = eps.filter((e) => !zdrNames.has(e.name)).map((e) => e.name);
+    if (AUDIO_ZDR_MODELS.has(id)) ok(eps.length > 0 && nonZdr.length === 0, `${id}: every endpoint is ZDR, so zdr:true never narrows its routing${nonZdr.length ? ` (not ZDR: ${nonZdr.join(", ")})` : ""}`);
+    else if (eps.length > 0 && nonZdr.length === 0) console.log(`note - ${id} is now ZDR on every endpoint; it can join AUDIO_ZDR_MODELS`);
+  }
+}
 // 4. Price floor: for every live model a tier admits, MODEL_COST must not price
 //    it UNDER the DEAREST endpoint a default-tier call can be routed to, prompt
 //    and completion taken separately, while that endpoint sits inside the

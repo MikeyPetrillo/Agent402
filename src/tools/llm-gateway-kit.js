@@ -54,6 +54,7 @@ import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { clientGoneSignal } from "../drain-abort.js";
 import { clientGoneError } from "../hangup-settlement.js";
 import { evmCredentialSettleableMs } from "../evm-validity.js";
+import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-policy.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -2953,13 +2954,24 @@ export function validateSpeechRequest(input) {
     if (!Number.isFinite(s) || s < 0.25 || s > 4) throw bad('"speed" must be between 0.25 and 4');
   }
   const zdr = input.zdr === true || input.provider?.zdr === true;
+  // A buyer's zdr opt-in keeps the walk on links that have a ZDR endpoint: a
+  // link without one answers 404 under zdr:true, which would end the walk.
+  if (zdr) {
+    const pinned = chain[0];
+    chain = chain.filter((e) => AUDIO_ZDR_MODELS.has(e.id));
+    if (input.model !== undefined && !AUDIO_ZDR_MODELS.has(pinned.id)) {
+      throw bad(`"model" ${pinned.id} has no zero-data-retention endpoint, so it cannot serve a zdr request - omit "model" or pick one of: ${chain.map((e) => e.id).join(", ")}`);
+    }
+  }
+  // Our data policy (src/openrouter-audio-policy.js): data_collection deny on
+  // every link, zdr on the links whose every endpoint is ZDR.
   const bodies = chain.map((entry) => ({
     model: entry.id,
     input: text,
     voice: speechVoiceFor(entry, voice),
     response_format: format,
     ...(input.speed !== undefined ? { speed: Number(input.speed) } : {}),
-    ...(zdr ? { provider: { zdr: true } } : {}),
+    provider: audioProviderPolicy(entry.id, { zdr }),
   }));
   return { bodies, contentType: SPEECH_FORMATS[format] };
 }
