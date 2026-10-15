@@ -1374,6 +1374,8 @@ jobs:
           t node scripts/test-traffic-classifier-pg.js
           t node scripts/test-tweet-queue-pg.js
           t node scripts/test-x402-index-pg.js
+          # Two containers, one seller index: pull, newer wins, removals stick.
+          t node scripts/test-index-replicas-pg.js
           t node scripts/test-x402-removals-pg.js
           t node scripts/test-scan-state-version-pg.js
           t node scripts/test-revenue-ledger-pg.js
