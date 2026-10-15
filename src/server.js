@@ -2907,6 +2907,17 @@ app.use(REVENUE_READ_PATHS, (req, res, next) => {
 });
 
 app.use(express.json({ limit: "100kb" }));
+// Decide execute is quoted from the decision and the caller's credit, read
+// synchronously from the ledger's mirror when the 402 is priced. Before any
+// gate runs, both are read fresh from the database, so a plan made or a
+// credit minted on the other container moments ago is priced correctly.
+app.post("/api/decide/execute", async (req, _res, next) => {
+  try {
+    const L = DECIDE_TOOLS_ENABLED.length ? decideLedger() : null;
+    if (L?.warmForQuote && req.body && typeof req.body === "object") await L.warmForQuote(req.body.decisionId, req.body.creditToken);
+  } catch { /* the mirror prices as before */ }
+  next();
+});
 
 // Funnel stage 1 — discovery. An agent fetching any of these machine-readable
 // surfaces is the top of the buyer journey (it learned the catalog exists and

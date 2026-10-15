@@ -236,6 +236,8 @@ function openFileLedger(path) {
       st.feedback.run(decisionId, step, toolId || null, outcome, quality, latencyMs, now);
       return had;
     },
+    // One process: the file is the truth and the sync reads already see it.
+    async warmForQuote() {},
     getDecision(id) {
       const r = st.getDecision.get(String(id || ""));
       if (!r) return null;
@@ -583,6 +585,18 @@ function openDatabaseLedger(path) {
       return r.rows[0]?.had === true;
     },
     async getDecision(id) { await readyP(); const d = await getDecisionRow(id); return d ? publicDecision(d) : null; },
+    /** Read this decision and credit from the database into the mirror, so
+     *  the synchronous 402 quote that follows sees what another container
+     *  wrote moments ago (a plan made, a credit minted there). Bounded: a
+     *  slow database leaves the mirror as it was. */
+    async warmForQuote(id, token, { ms = 1500 } = {}) {
+      const work = (async () => {
+        await readyP();
+        if (typeof id === "string" && id) await getDecisionRow(id);
+        if (typeof token === "string" && token) await getCreditRow(hashToken(token));
+      })().catch(() => {});
+      await Promise.race([work, new Promise((r) => setTimeout(r, ms).unref?.())]);
+    },
     async markDecisionSettled(id) {
       await readyP();
       const r = await q(`UPDATE ${T("decisions")} SET settled = 1, updated_at = now() WHERE id = $1`, [id]);
