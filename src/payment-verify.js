@@ -46,7 +46,7 @@ function addrFromTopic(topic) {
 const RPC_RETRY_STATUSES = new Set([429, 502, 503, 504]);
 export const RPC_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
 
-export async function rpc(url, method, params, fetchImpl, timeoutMs, delays = RPC_RETRY_DELAYS_MS) {
+async function rpc(url, method, params, fetchImpl, timeoutMs, delays = RPC_RETRY_DELAYS_MS) {
   let res;
   for (let attempt = 0; ; attempt++) {
     res = await fetchImpl(url, {
@@ -62,26 +62,6 @@ export async function rpc(url, method, params, fetchImpl, timeoutMs, delays = RP
   const j = await res.json();
   if (j.error) throw new Error(`rpc ${method}: ${j.error.message || "error"}`);
   return j.result;
-}
-
-/**
- * Sum of `token` Transfer logs in a receipt that move from `from` to any
- * address in `toSet` (EVM addresses, compared lowercased).
- */
-export function evmTransferredInReceipt(receipt, { token, from, toSet }) {
-  const tok = String(token || "").toLowerCase();
-  const payer = String(from || "").toLowerCase();
-  const ours = new Set([...toSet].map((a) => String(a).toLowerCase()));
-  let moved = 0n;
-  for (const log of receipt?.logs || []) {
-    if (String(log.address || "").toLowerCase() !== tok) continue;        // the right token only
-    const topics = log.topics || [];
-    if (String(topics[0] || "").toLowerCase() !== ERC20_TRANSFER_TOPIC) continue;
-    if (addrFromTopic(topics[1]) !== payer) continue;                    // from the SAME payer
-    if (!ours.has(addrFromTopic(topics[2]))) continue;                   // to ANY wallet we control
-    try { moved += BigInt(log.data); } catch { /* unparseable value - ignore this log */ }
-  }
-  return moved;
 }
 
 /**
@@ -117,7 +97,16 @@ async function verifyEvm({ tx, payer, payToSet, amountUsd, asset, rpcUrl, fetchI
 
   const from = String(payer).toLowerCase();
 
-  const moved = evmTransferredInReceipt(receipt, { token: asset, from, toSet: ours });
+  const token = String(asset).toLowerCase();
+  let moved = 0n;
+  for (const log of receipt.logs || []) {
+    if (String(log.address || "").toLowerCase() !== token) continue;      // the right token only
+    const topics = log.topics || [];
+    if (String(topics[0] || "").toLowerCase() !== ERC20_TRANSFER_TOPIC) continue;
+    if (addrFromTopic(topics[1]) !== from) continue;                     // from the SAME payer
+    if (!ours.has(addrFromTopic(topics[2]))) continue;                   // to ANY wallet we control
+    try { moved += BigInt(log.data); } catch { /* unparseable value - ignore this log */ }
+  }
   if (moved === 0n) return fail("no transfer from this payer to our payTo in that transaction");
   // >= not ==: premium-priced chains quote MORE than list, and the debt is
   // recorded at list, so the buyer legitimately paid at least the expected sum.
