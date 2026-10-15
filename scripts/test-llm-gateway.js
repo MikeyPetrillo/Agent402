@@ -1295,6 +1295,14 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   throws(() => validateSpeechRequest({ input: "hi", response_format: "flac" }), "response_format", "unsupported format rejected");
   throws(() => validateSpeechRequest({ input: "hi", speed: 5 }), '"speed"', "speed above 4 rejected");
   ok(validateSpeechRequest({ input: "hi", zdr: true }).bodies.every((b) => b.provider?.zdr === true), "zdr folds into every chain link");
+  // Our data policy (src/openrouter-audio-policy.js) rides every link: data
+  // collection denied everywhere, zdr only where every endpoint is ZDR.
+  ok(v.bodies.every((b) => b.provider?.data_collection === "deny"), "every chain link sends data_collection deny without being asked");
+  ok(v.bodies.filter((b) => b.provider?.zdr === true).map((b) => b.model).join() === SPEECH_MODELS.map((e) => e.id).filter((id) => id !== "x-ai/grok-voice-tts-1.0").join() && !("zdr" in v.bodies[1].provider), "zdr on every link but the one with a non-ZDR endpoint (it would answer 404 and end the walk)");
+  const zdrChain = validateSpeechRequest({ input: "hi", zdr: true });
+  ok(zdrChain.bodies.length === 4 && !zdrChain.bodies.some((b) => b.model === "x-ai/grok-voice-tts-1.0") && zdrChain.bodies.every((b) => b.provider.data_collection === "deny"), "a buyer's zdr opt-in walks only the ZDR links, still with data_collection deny");
+  throws(() => validateSpeechRequest({ input: "hi", zdr: true, model: "x-ai/grok-voice-tts-1.0" }), "zero-data-retention", "a zdr request pinned to a link with no ZDR endpoint is a 400 naming why");
+  ok(validateSpeechRequest({ input: "hi", provider: { data_collection: "allow", zdr: false } }).bodies.every((b) => b.provider.data_collection === "deny"), "a buyer cannot loosen our data policy through provider");
 
   process.env.OPENROUTER_API_KEY = "test-key";
   const realFetch = globalThis.fetch;
@@ -1309,6 +1317,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const out = await speechTool.handler({ input: "hello", voice: "nova" });
   ok(seenUrl.includes("openrouter.ai/api/v1/audio/speech"), "hits OpenRouter's audio speech endpoint");
   ok(seen.model === "mistralai/voxtral-mini-tts-2603" && seen.voice === "gb_jane_confident", "upstream body carries the primary model and mapped voice");
+  ok(seen.provider?.data_collection === "deny" && seen.provider?.zdr === true, "the outbound speech body carries our data policy");
   ok(Buffer.isBuffer(out.__binary) && out.__binary.length === FAKE_MP3.length && out.contentType === "audio/mpeg", "raw bytes returned via the __binary sentinel");
   ok(!("user" in seen), "a request we cannot key sends NO user (never a shared placeholder, which would pool every buyer upstream)");
 

@@ -25,6 +25,18 @@
 // ElevenLabs Scribe v2 over OpenRouter instead and adds `words` (each with
 // start, end and a speaker number) and `speakers` to the answer. Same caps and
 // prices; its per-minute rate row is pinned by the same margin test.
+//
+// OPENROUTER'S 2026-09-29 STT FIELDS (read 2026-10-14): the diarized answer now
+// carries `language_confidence` (Scribe scores its language detection). The
+// request field `keyterms` is refused upstream by every transcription model
+// listed today ("does not support keyterms", probed per model), and Scribe's
+// entity detection is not forwarded through provider options (no `entities`
+// in the answer, same billed cost), so neither is offered here: a buyer who
+// sends one gets a 400 before any fetch or spend rather than a transcript that
+// quietly ignored it. Offering them is a change here once a serving model
+// honors them live. Our data policy goes on every Scribe request
+// (src/openrouter-audio-policy.js: data_collection deny, zdr); the default
+// path calls OpenAI directly, outside OpenRouter's routing.
 
 import { parseMultipartFile } from "../multipart.js";
 import { loadMusicMetadata } from "./lazy-deps.js";
@@ -34,6 +46,7 @@ import { upstreamCosts } from "../upstream-costs.js";
 import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
 import { assertUpstreamBody } from "./llm-gateway-kit.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
+import { audioProviderPolicy } from "../openrouter-audio-policy.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
@@ -67,7 +80,23 @@ function validateInput(input) {
   if (!/^https?:\/\//i.test(url)) throw bad('"url" must be an HTTP(S) URL');
 
   const language = typeof input.language === "string" ? input.language.trim().toLowerCase() : undefined;
+  refuseUnservedFields(input);
   return { url, language, diarize: diarizeFlag(input.diarize) };
+}
+
+/** `keyterms` and `entities` are not honored by the models this kit sends
+ *  (see the header), so a request that sets one is a 400, never a transcript
+ *  that silently ignored it. An empty list or `entities: false` asks for
+ *  nothing and passes. Multipart spellings: keyterms, keyterms[], entities. */
+export function refuseUnservedFields(input) {
+  const kt = input?.keyterms ?? input?.["keyterms[]"];
+  if (kt !== undefined && kt !== null && kt !== "" && !(Array.isArray(kt) && kt.length === 0)) {
+    throw bad('"keyterms" is not supported by the transcription models this route serves; remove it (nothing was charged)');
+  }
+  const ent = input?.entities;
+  if (ent !== undefined && ent !== null && ent !== "" && ent !== false && ent !== "false") {
+    throw bad('"entities" (entity detection) is not supported by the transcription models this route serves; remove it (nothing was charged)');
+  }
 }
 
 /** `diarize` as JSON true or the multipart string "true". Anything else that
@@ -208,6 +237,8 @@ async function callScribe(audioBuffer, filename, model, language, probedDuration
   form.append("diarize", "true");
   form.append("timestamp_granularities[]", "word");
   if (language) form.append("language", language);
+  // Our data policy, set on the request (multipart takes it as a JSON string).
+  form.append("provider", JSON.stringify(audioProviderPolicy(model)));
   let res;
   try {
     res = await fetch(OPENROUTER_STT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, ...OPENROUTER_ATTRIBUTION }, body: form, signal: AbortSignal.timeout(120_000) });
@@ -241,6 +272,8 @@ async function callScribe(audioBuffer, filename, model, language, probedDuration
     provider: "openrouter",
     text: data.text ?? "",
     language: data.language ?? null,
+    // Scribe's 0-1 confidence in the detected language; null when not scored.
+    language_confidence: Number.isFinite(data.language_confidence) && data.language_confidence >= 0 && data.language_confidence <= 1 ? Math.round(data.language_confidence * 1e4) / 1e4 : null,
     duration: Number.isFinite(data.duration) ? data.duration : (Number.isFinite(probedDuration) ? Math.round(probedDuration * 100) / 100 : null),
     speakers,
     words,
@@ -302,6 +335,7 @@ export function makeMultipartHandler(tierSlug) {
     if (!file) throw bad('multipart body has no "file" part');
     const language = typeof fields.language === "string" && fields.language ? fields.language : undefined;
     const diarize = diarizeFlag(fields.diarize);
+    refuseUnservedFields(fields);
     const probedDuration = await assertWithinDurationCap(file.buf, file.filename, tierSlug);
     return transcribeBuffer(file.buf, file.filename, tierSlug, language, diarize, probedDuration);
   };
@@ -317,7 +351,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.030",
     description:
-      "Transcribe audio to text with the gpt-transcribe model. Provide a URL to an audio file (mp3, wav, m4a, etc.) and get back the transcript. Add diarize:true for speaker labels and word timestamps (the scribe-v2 model, same price). No API key needed; pay per call via x402. Max 4 minutes of audio, 25 MB file size; /api/transcribe-pro takes the same models to 10 minutes.",
+      "Transcribe audio to text with the gpt-transcribe model. Provide a URL to an audio file (mp3, wav, m4a, etc.) and get back the transcript. Add diarize:true for speaker labels, word timestamps and a language confidence score (the scribe-v2 model, same price). No API key needed; pay per call via x402. Max 4 minutes of audio, 25 MB file size; /api/transcribe-pro takes the same models to 10 minutes.",
     tags: [...SHARED_TAGS, "gpt-transcribe"],
     discovery: {
       bodyType: "json",
@@ -326,7 +360,7 @@ export const STT_TOOLS = [
         properties: {
           url: { type: "string", description: "URL of the audio file to transcribe (mp3, wav, m4a, ogg, flac, webm)" },
           language: { type: "string", description: "Optional ISO-639-1 language code (e.g. 'en', 'es', 'fr') for better accuracy" },
-          diarize: { type: "boolean", description: "true: transcribe with the scribe-v2 model and add speaker labels and word timestamps (`words`, `speakers`). Same price and cap. Default false" },
+          diarize: { type: "boolean", description: "true: transcribe with the scribe-v2 model and add speaker labels and word timestamps (`words`, `speakers`) and `language_confidence` (0 to 1, the model's confidence in the detected language). Same price and cap. Default false" },
         },
         required: ["url"],
       },
@@ -349,7 +383,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.100",
     description:
-      "Transcribe audio to text with the gpt-transcribe model - the same model as /api/transcribe with a longer cap. Provide a URL to an audio file and get back the transcript; add diarize:true for speaker labels and word timestamps (the scribe-v2 model). No API key needed; pay per call via x402. Max 10 minutes of audio, 25 MB file size.",
+      "Transcribe audio to text with the gpt-transcribe model - the same model as /api/transcribe with a longer cap. Provide a URL to an audio file and get back the transcript; add diarize:true for speaker labels, word timestamps and a language confidence score (the scribe-v2 model). No API key needed; pay per call via x402. Max 10 minutes of audio, 25 MB file size.",
     tags: [...SHARED_TAGS, "gpt-transcribe", "pro"],
     discovery: {
       bodyType: "json",
@@ -358,7 +392,7 @@ export const STT_TOOLS = [
         properties: {
           url: { type: "string", description: "URL of the audio file to transcribe (mp3, wav, m4a, ogg, flac, webm)" },
           language: { type: "string", description: "Optional ISO-639-1 language code (e.g. 'en', 'es', 'fr') for better accuracy" },
-          diarize: { type: "boolean", description: "true: transcribe with the scribe-v2 model and add speaker labels and word timestamps (`words`, `speakers`). Same price and cap. Default false" },
+          diarize: { type: "boolean", description: "true: transcribe with the scribe-v2 model and add speaker labels and word timestamps (`words`, `speakers`) and `language_confidence` (0 to 1, the model's confidence in the detected language). Same price and cap. Default false" },
         },
         required: ["url"],
       },
@@ -386,7 +420,7 @@ export const STT_TOOLS = [
     discovery: {
       bodyType: "form-data",
       input: { file: "<audio bytes, multipart part named file>", language: "en" },
-      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels and word timestamps (the scribe-v2 model)" } } },
+      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels, word timestamps and language_confidence (the scribe-v2 model)" } } },
       output: { example: { text: "Example transcript.", duration: 3.2, model: "gpt-transcribe" } },
     },
     handler: makeMultipartHandler("transcribe"),
@@ -403,7 +437,7 @@ export const STT_TOOLS = [
     discovery: {
       bodyType: "form-data",
       input: { file: "<audio bytes, multipart part named file>" },
-      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels and word timestamps (the scribe-v2 model)" } } },
+      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels, word timestamps and language_confidence (the scribe-v2 model)" } } },
       output: { example: { text: "Example transcript.", duration: 420.5, model: "gpt-transcribe" } },
     },
     handler: makeMultipartHandler("transcribe-pro"),

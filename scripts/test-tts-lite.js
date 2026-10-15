@@ -38,6 +38,7 @@ process.env.OPENROUTER_API_KEY = "test-key";
 {
   const outKeys = (o) => Object.keys(o).sort().join(",");
   const r = await call({ text: "Hello from Agent402!", voice: "alloy", format: "mp3" }, audio());
+  ok(call.last.body.provider?.data_collection === "deny" && call.last.body.provider?.zdr === true, "the Kokoro request carries our data policy (data_collection deny, zdr)");
   ok(outKeys(r) === outKeys(full.discovery.output.example), `the response carries the same fields as /api/tts (${outKeys(r)})`);
   ok(r.provider === "openrouter" && r.model === "hexgrad/kokoro-82m", "it names the model and provider that served it");
   ok(r.voice === "af_alloy", `the OpenAI voice name is mapped to Kokoro's own and NAMED BACK, so a buyer knows what spoke (got ${r.voice})`);
