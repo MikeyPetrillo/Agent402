@@ -53,7 +53,7 @@ export const REPORTS_CSS = `
   .field:focus-within{border-color:var(--ink)}
   .field input{flex:1;border:0;background:transparent;color:var(--ink);font-family:var(--font-body);font-size:var(--fs-lg);outline:none;min-width:0}
   .gets{font-size:var(--fs-md);line-height:1.55;color:var(--muted);margin:0 0 6px}.gets b{color:var(--ink);font-weight:500}
-  .note{font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin-top:16px}.pcard .note a{white-space:nowrap;margin-right:12px}
+  .note{font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin-top:16px}.pcard .note a{white-space:nowrap;margin-right:12px}.note a{white-space:nowrap}
   .err{color:var(--bad);font-size:var(--fs-md);margin-top:8px;min-height:18px}
   .trust{display:flex;gap:20px;flex-wrap:wrap;color:var(--muted);font-size:var(--fs-md);margin-top:16px}
   .trust span{display:inline-flex;gap:7px;align-items:center;white-space:nowrap}

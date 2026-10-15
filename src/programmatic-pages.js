@@ -474,7 +474,7 @@ function buySection({ family, input, headline, blurb, alertKind = null }) {
   <button class="btn btn-primary" data-buy-product="${esc(family.product)}" data-buy-input="${esc(input)}">Get the full report, $${esc(price)} →</button>
   <div class="err" id="err-buy"></div>
   <div class="pg-agent"><span>agents: ${esc(family.route)}</span> <span>with ${esc(family.agentBody(input))}</span> <span>over x402 or MPP, ${esc(family.agentPrice())}</span></div>
-  <p class="note" style="margin-top:12px;"><a href="/tools/${esc(family.toolSlug)}" style="color:var(--muted);">Sample output and API docs</a> · <a href="/reports" style="color:var(--muted);">all reports</a></p>
+  <p class="note pg-meta-tags" style="margin-top:12px;"><span><a href="/tools/${esc(family.toolSlug)}" style="color:var(--muted);">Sample output and API docs</a></span><span><a href="/reports" style="color:var(--muted);">all reports</a></span></p>
 </div>`;
 }
 

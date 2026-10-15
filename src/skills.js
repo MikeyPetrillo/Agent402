@@ -2665,7 +2665,7 @@ const SKILLS_CSS = `
 .sk-buy-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
 .sk-buy-price { font-family:var(--font-mono); font-size:var(--fs-2xl); font-weight:700; color:var(--accent); }
 .sk-buy-unit { color:var(--muted); font-size:var(--fs-md); }
-.sk-buy-route { font-family:var(--font-mono); font-size:var(--fs-sm); color:var(--ink); margin-top:6px; }
+.sk-buy-route { font-family:var(--font-mono); font-size:var(--fs-sm); color:var(--ink); margin-top:6px; white-space:nowrap; overflow-x:auto; }
 .sk-buy-note { color:var(--muted); font-size:var(--fs-md); line-height:1.7; margin:10px 0 0; }
 .sk-tl .price { color:var(--accent); font-family:var(--font-mono); font-size:var(--fs-sm); }
 .sk-tl .route { color:var(--faint); font-family:var(--font-mono); font-size:var(--fs-xs); }
