@@ -3,18 +3,12 @@
 // (src/mpp-tempo.js, TEMPO_RELAY=off), which checks every payment party here
 // before any money moves.
 //
-// SOURCE. The SDN list in OFAC's legacy XML format, published by the Sanctions
-// List Service:
-//   https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.XML
-// (a 302 to a signed download of the current publication, about 30 MB; root
-// <sdnList xmlns="https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/XML">,
-// <publshInformation><Publish_Date>MM/DD/YYYY</Publish_Date>; read through the
-// regexes below, which do not depend on the namespace). Each <sdnEntry> carries an <idList>
-// whose <id> rows hold <idType>Digital Currency Address - <ASSET></idType> and
-// <idNumber><address></idNumber>. This export is used rather than SDN.CSV
-// because the CSV's remarks column, where the CSV carries the same addresses,
-// is cut at about a thousand characters, so an entry with many addresses
-// loses the ones past the cut. A US government publication.
+// SOURCE. OFAC's SDN list in its legacy XML format (SDN.XML), downloaded and
+// parsed by src/ofac-sdn.js: the same parser, and the same in-memory parse,
+// the sanctions tools and the router's payout screen
+// (src/tools/sanctions-kit.js) read, so the two never read the list
+// differently and one download feeds both (SHARED LOAD in src/ofac-sdn.js).
+// This screen keeps only the EVM set of that parse.
 //
 // WHAT IS KEPT. Every idNumber that is an EVM-format address (0x + 40 hex),
 // whatever asset ticker it is listed under (ETH, USDT, USDC, ETC, BNB, ...):
@@ -39,46 +33,26 @@ import { existsSync } from "node:fs";
 import { createJsonDocument } from "./json-document.js";
 import { leased, trackStoreReady } from "./state-db.js";
 import { shared, noteSharedLimitsDegraded } from "./shared-limits.js";
+import { parseSdnXml, sdnEvmAddresses, loadSdnList, sdnListUrl, SDN_LIST_DEFAULT_URL } from "./ofac-sdn.js";
 
-export const SANCTIONS_LIST_DEFAULT_URL = "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.XML";
-const MAX_BYTES = 96 * 1024 * 1024; // the export is ~30 MB; far past that is a surprise worth refusing
+export const SANCTIONS_LIST_DEFAULT_URL = SDN_LIST_DEFAULT_URL;
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 
 const envMs = (k, d, min = 1) => { const n = Number(process.env[k]); return Number.isFinite(n) && n >= min ? n : d; };
 export function sanctionsListRefreshMs() { return envMs("SANCTIONS_LIST_REFRESH_MS", 6 * 3600_000, 1000); }
 function retryMs() { return envMs("SANCTIONS_LIST_RETRY_MS", 5 * 60_000, 1000); }
-function fetchTimeoutMs() { return envMs("SANCTIONS_LIST_TIMEOUT_MS", 10 * 60_000, 1000); }
-export function sanctionsListUrl() { return String(process.env.SANCTIONS_LIST_URL || "").trim() || SANCTIONS_LIST_DEFAULT_URL; }
+export function sanctionsListUrl() { return sdnListUrl(); }
 
-const decodeXml = (s) => String(s).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&apos;/g, "'").replace(/&amp;/g, "&").trim();
-
-/** Every EVM-format Digital Currency Address in an SDN.XML export.
+/** Every EVM-format Digital Currency Address in an SDN.XML export, read
+ *  through the shared parser (src/ofac-sdn.js).
  *  Returns { addresses: Set<lowercase>, perAsset: {TICKER: n}, digitalCurrencyIds, publishDate }.
  *  perAsset counts distinct EVM addresses per ticker. Pure; never throws. */
 export function parseSdnXmlEvmAddresses(xml) {
-  const text = String(xml || "");
-  const addresses = new Set();
-  const perAssetSets = new Map();
-  let digitalCurrencyIds = 0;
-  for (const m of text.matchAll(/<id>([\s\S]*?)<\/id>/g)) {
-    const block = m[1];
-    const type = /<idType>([\s\S]*?)<\/idType>/.exec(block);
-    if (!type) continue;
-    const t = /^Digital Currency Address\s*-\s*([A-Za-z0-9.]+)\s*$/i.exec(decodeXml(type[1]));
-    if (!t) continue;
-    digitalCurrencyIds++;
-    const num = /<idNumber>([\s\S]*?)<\/idNumber>/.exec(block);
-    const addr = num ? decodeXml(num[1]) : "";
-    if (!EVM_RE.test(addr)) continue;
-    const key = addr.toLowerCase();
-    const asset = t[1].toUpperCase();
-    addresses.add(key);
-    if (!perAssetSets.has(asset)) perAssetSets.set(asset, new Set());
-    perAssetSets.get(asset).add(key);
-  }
-  const perAsset = Object.fromEntries([...perAssetSets].sort(([a], [b]) => a.localeCompare(b)).map(([k, s]) => [k, s.size]));
-  const pd = /<Publish_Date>([^<]*)<\/Publish_Date>/.exec(text);
-  return { addresses, perAsset, digitalCurrencyIds, publishDate: pd ? pd[1].trim() : null };
+  return fromParse(parseSdnXml(xml));
+}
+function fromParse(parsed) {
+  const { addresses, perAsset } = sdnEvmAddresses(parsed);
+  return { addresses, perAsset, digitalCurrencyIds: parsed.digitalCurrencyIds, publishDate: parsed.publishDate };
 }
 
 // ---------------------------------------------------------------------------
@@ -135,24 +109,22 @@ function failed(reason, log) {
   return { ok: false, reason: state.lastError };
 }
 
-/** Fetch, parse and (when plausible) adopt and store the list. Unleased. */
-export async function refreshSanctionsScreen({ fetchImpl = globalThis.fetch, now = () => Date.now(), log = console.warn } = {}) {
+/** Fetch (or take the shared parse fetched within `maxAgeMs`, src/ofac-sdn.js),
+ *  then (when plausible) adopt and store the list. Unleased. */
+export async function refreshSanctionsScreen({ fetchImpl = globalThis.fetch, now = () => Date.now(), log = console.warn, maxAgeMs = 0 } = {}) {
   state.lastAttemptAt = now();
-  let xml;
+  let list;
   try {
-    const res = await fetchImpl(sanctionsListUrl(), { headers: { accept: "application/xml, text/xml" }, redirect: "follow", signal: AbortSignal.timeout(fetchTimeoutMs()) });
-    if (!res.ok) return failed(`fetch answered HTTP ${res.status}`, log);
-    xml = await res.text();
+    list = await loadSdnList({ maxAgeMs, fetchImpl, now });
   } catch (e) {
     return failed(`fetch failed: ${String(e?.message || e).slice(0, 120)}`, log);
   }
-  if (xml.length > MAX_BYTES) return failed(`export is ${xml.length} bytes, over the ${MAX_BYTES} cap`, log);
-  const parsed = parseSdnXmlEvmAddresses(xml);
+  const parsed = fromParse(list);
   if (!parsed.addresses.size) return failed(`parsed to zero EVM addresses (${parsed.digitalCurrencyIds} digital currency ids); treated as a format change`, log);
   if (state.set && parsed.addresses.size * 2 < state.set.size) return failed(`parsed to ${parsed.addresses.size} EVM addresses against ${state.set.size} held; a drop past half is treated as a bad export`, log);
   state.set = parsed.addresses;
   state.perAsset = parsed.perAsset;
-  state.loadedAt = now();
+  state.loadedAt = list.fetchedAt;
   state.publishDate = parsed.publishDate;
   state.source = "fetch";
   state.lastError = null;
@@ -174,7 +146,9 @@ export async function sanctionsScreenTick(opts = {}) {
     await loadStoredSanctionsScreen();
     const now = (opts.now || Date.now)();
     if (state.loadedAt && now - state.loadedAt < sanctionsListRefreshMs()) return { skipped: "fresh" };
-    const r = await refreshLeased(opts);
+    // A parse the sanctions tools fetched within a quarter period is taken
+    // rather than downloaded a second time.
+    const r = await refreshLeased({ maxAgeMs: sanctionsListRefreshMs() / 4, ...opts });
     if (r?.skipped) await loadStoredSanctionsScreen();
     return r;
   } finally { running = false; }

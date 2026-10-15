@@ -1,0 +1,375 @@
+<?xml version="1.0" standalone="yes"?>
+<sdnList xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/XML">
+  <publshInformation>
+    <Publish_Date>10/14/2026</Publish_Date>
+    <Record_Count>4</Record_Count>
+  </publshInformation>
+  <sdnEntry>
+    <uid>910001</uid>
+    <lastName>FIXTURE EXCHANGE WITH MANY ADDRESSES</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>CYBER2</program>
+      <program>RUSSIA-EO14024</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>991000</uid>
+        <idType>Digital Currency Address - USDT</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000001</idNumber>
+      </id>
+      <id>
+        <uid>991001</uid>
+        <idType>Digital Currency Address - USDC</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000002</idNumber>
+      </id>
+      <id>
+        <uid>991002</uid>
+        <idType>Digital Currency Address - BSC</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000003</idNumber>
+      </id>
+      <id>
+        <uid>991003</uid>
+        <idType>Digital Currency Address - ARB</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000004</idNumber>
+      </id>
+      <id>
+        <uid>991004</uid>
+        <idType>Digital Currency Address - ETC</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000005</idNumber>
+      </id>
+      <id>
+        <uid>991005</uid>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000006</idNumber>
+      </id>
+      <id>
+        <uid>991006</uid>
+        <idType>Digital Currency Address - USDT</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000007</idNumber>
+      </id>
+      <id>
+        <uid>991007</uid>
+        <idType>Digital Currency Address - USDC</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000008</idNumber>
+      </id>
+      <id>
+        <uid>991008</uid>
+        <idType>Digital Currency Address - BSC</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000009</idNumber>
+      </id>
+      <id>
+        <uid>991009</uid>
+        <idType>Digital Currency Address - ARB</idType>
+        <idNumber>0xFeEd00000000000000000000000000000000000a</idNumber>
+      </id>
+      <id>
+        <uid>991010</uid>
+        <idType>Digital Currency Address - ETC</idType>
+        <idNumber>0xFeEd00000000000000000000000000000000000b</idNumber>
+      </id>
+      <id>
+        <uid>991011</uid>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0xFeEd00000000000000000000000000000000000c</idNumber>
+      </id>
+      <id>
+        <uid>991012</uid>
+        <idType>Digital Currency Address - USDT</idType>
+        <idNumber>0xFeEd00000000000000000000000000000000000d</idNumber>
+      </id>
+      <id>
+        <uid>991013</uid>
+        <idType>Digital Currency Address - USDC</idType>
+        <idNumber>0xFeEd00000000000000000000000000000000000e</idNumber>
+      </id>
+      <id>
+        <uid>991014</uid>
+        <idType>Digital Currency Address - BSC</idType>
+        <idNumber>0xFeEd00000000000000000000000000000000000f</idNumber>
+      </id>
+      <id>
+        <uid>991015</uid>
+        <idType>Digital Currency Address - ARB</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000010</idNumber>
+      </id>
+      <id>
+        <uid>991016</uid>
+        <idType>Digital Currency Address - ETC</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000011</idNumber>
+      </id>
+      <id>
+        <uid>991017</uid>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000012</idNumber>
+      </id>
+      <id>
+        <uid>991018</uid>
+        <idType>Digital Currency Address - USDT</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000013</idNumber>
+      </id>
+      <id>
+        <uid>991019</uid>
+        <idType>Digital Currency Address - USDC</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000014</idNumber>
+      </id>
+      <id>
+        <uid>991020</uid>
+        <idType>Digital Currency Address - BSC</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000015</idNumber>
+      </id>
+      <id>
+        <uid>991021</uid>
+        <idType>Digital Currency Address - ARB</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000016</idNumber>
+      </id>
+      <id>
+        <uid>991022</uid>
+        <idType>Digital Currency Address - ETC</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000017</idNumber>
+      </id>
+      <id>
+        <uid>991023</uid>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000018</idNumber>
+      </id>
+      <id>
+        <uid>991024</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TzBuKbD1mo77ZVybuRT55HRDHDKwbmf951</idNumber>
+      </id>
+      <id>
+        <uid>991025</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>Twu19XhB7yfyhHhTuowRV7h9wdFZohXhbF</idNumber>
+      </id>
+      <id>
+        <uid>991026</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>T23wFVu5y5DmV1mTqZVFssjBuyVVfyq9u7</idNumber>
+      </id>
+      <id>
+        <uid>991027</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>T77wHKFPFybPjhZjXZofK1Rdmb9Bw17H5Z</idNumber>
+      </id>
+      <id>
+        <uid>991028</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>T4319oRHy9KmfmPZ3q1Fjh19Bb7m3V73HP</idNumber>
+      </id>
+      <id>
+        <uid>991029</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>T97sTmdu1F99bf7mjmBM5bDs7H1sZXbTKT</idNumber>
+      </id>
+      <id>
+        <uid>991030</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TE3w9mqb3duD7Hs3X5uKuTT7qKmf9Zbbq7</idNumber>
+      </id>
+      <id>
+        <uid>991031</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TBFuymPfP9KD319HZbK3boM3mFbDmHV3jM</idNumber>
+      </id>
+      <id>
+        <uid>991032</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TG319u3bP5shF7MfTfTZwZu7TdhfTBw5K1</idNumber>
+      </id>
+      <id>
+        <uid>991033</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TM7sD9ymD7wVoMT5BPMM1Kmj1m7yPTzsub</idNumber>
+      </id>
+      <id>
+        <uid>991034</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TS3qM7w1dZddhHZ7XF3HM79uPoVf5Pb1Zy</idNumber>
+      </id>
+      <id>
+        <uid>991035</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TPDmPDP13K7RBVTKM5737R1oV9PBH1dZyF</idNumber>
+      </id>
+      <id>
+        <uid>991036</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TU3uB1uRRoHdjVw919Rom9FjTdMMHhdZP3</idNumber>
+      </id>
+      <id>
+        <uid>991037</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TZ7sD9my3D7ssjyBXMoZByufK53yjqhDjR</idNumber>
+      </id>
+      <id>
+        <uid>991038</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TW9fT1VVoXf5F7B3TqsqjwsshyHFs9KDjF</idNumber>
+      </id>
+      <id>
+        <uid>991039</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>Tb7oFoKXdmZdV3m75HyTKs5wDjhjKq7ZdM</idNumber>
+      </id>
+      <id>
+        <uid>991040</uid>
+        <idType>Digital Currency Address - USDT</idType>
+        <idNumber>TUfnm1h7RumBBXXwj9DRHKou7TKXdHKXTF</idNumber>
+      </id>
+      <id>
+        <uid>991041</uid>
+        <idType>Digital Currency Address - USDT</idType>
+        <idNumber>TZjhqXKfXMhPfbPomMXXKmy1bRmZwPK7uw</idNumber>
+      </id>
+      <id>
+        <uid>991042</uid>
+        <idType>Digital Currency Address - USDT</idType>
+        <idNumber>TeT7DooD9buHFTdmdZb5FyPdbXwPVDdKwo</idNumber>
+      </id>
+      <id>
+        <uid>991043</uid>
+        <idType>Digital Currency Address - USDT</idType>
+        <idNumber>TbRZuhF7FZm1kZ35fHHmPHBuZw95qDbTZo</idNumber>
+      </id>
+      <id>
+        <uid>991044</uid>
+        <idType>Digital Currency Address - USDT</idType>
+        <idNumber>TgfuhhZqTPhwTZKV7j7ZPqFXF1hVdsKPXh</idNumber>
+      </id>
+      <id>
+        <uid>991045</uid>
+        <idType>Digital Currency Address - USDT</idType>
+        <idNumber>TmXuMZ7dyFfRyobBdXhdys9VM1uuKffbbh</idNumber>
+      </id>
+      <id>
+        <uid>991046</uid>
+        <idType>Digital Currency Address - USDT</idType>
+        <idNumber>TrsqmqmsouwhDqyqXMHBPH5yjfumV9M5H7</idNumber>
+      </id>
+      <id>
+        <uid>991047</uid>
+        <idType>Digital Currency Address - USDT</idType>
+        <idNumber>ToqsjF9j3VMBPDsj7yj7hf9qBuFPhHBKMD</idNumber>
+      </id>
+      <id>
+        <uid>991048</uid>
+        <idType>Digital Currency Address - XBT</idType>
+        <idNumber>bc1q6hwydmfdrmszfu1dfdq13mph3zp5rmyrmvm3oj</idNumber>
+      </id>
+      <id>
+        <uid>991049</uid>
+        <idType>Digital Currency Address - XBT</idType>
+        <idNumber>bc1qbmo3mdsfy3f5ubbjmbtybxdu75vhvxhwqwzk7m</idNumber>
+      </id>
+      <id>
+        <uid>991050</uid>
+        <idType>Digital Currency Address - XBT</idType>
+        <idNumber>bc1qghsufuvhdbprohumbqqd15jkpmztshzydsbvzw</idNumber>
+      </id>
+      <id>
+        <uid>991051</uid>
+        <idType>Digital Currency Address - XBT</idType>
+        <idNumber>bc1qdzohwo5sr1xkbyffzpbf7hpbh1drmbzv97q5xq</idNumber>
+      </id>
+      <id>
+        <uid>991052</uid>
+        <idType>Digital Currency Address - XBT</idType>
+        <idNumber>bc1qjho3qxsj7voy1o5mzpmmfdh3tqfmhmkmbu73mm</idNumber>
+      </id>
+      <id>
+        <uid>991053</uid>
+        <idType>Digital Currency Address - XBT</idType>
+        <idNumber>bc1qpmo3spduxfvjmm9hqqjys9mh31whhm1b5ut7wd</idNumber>
+      </id>
+      <id>
+        <uid>991054</uid>
+        <idType>Digital Currency Address - XMR</idType>
+        <idNumber>4i7hXBBPqF15KqVRZ7PXqMmHyo91DjyXwPoK3sMFqbRXBMbFXmwKwXHjsMHoudqyZ5s59wudH7sBKm1Duu1XFoVTjHsfmyT</idNumber>
+      </id>
+      <id>
+        <uid>991055</uid>
+        <idType>Digital Currency Address - XMR</idType>
+        <idNumber>4oBZjBjbRjhTHKuuPo7oVH9qwqTVHj3MwPs9RTwsMhZTdom5mMTFhH7VMRMMVXs1FuThsbVHufXFPT5XqmKMF5RHB9oqf3h</idNumber>
+      </id>
+      <id>
+        <uid>991056</uid>
+        <idType>Digital Currency Address - XMR</idType>
+        <idNumber>4kf7HVXuH3X1mjdXXsuRDqFbDhRo7XHBbD71HuFs7f79KK13q7sKFyyMmMF7T9mPy3H9wVomq3hVsDdsh3TVwqDVZPb3KZh</idNumber>
+      </id>
+      <id>
+        <uid>991057</uid>
+        <idType>Digital Currency Address - DOGE</idType>
+        <idNumber>DLwTRFDfdoswZwPbZPd1FFM9Ty7597j5PP</idNumber>
+      </id>
+      <id>
+        <uid>991058</uid>
+        <idType>Digital Currency Address - DOGE</idType>
+        <idNumber>DR1THhsXosBM3X3XPHfTXP7hh5qsdfodDH</idNumber>
+      </id>
+      <id>
+        <uid>991059</uid>
+        <idType>Digital Currency Address - SOL</idType>
+        <idNumber>sRRVdD31dT5XRKXZZ7uHP3Pmqb5bh9qddRXZDhXFXXww</idNumber>
+      </id>
+      <id>
+        <uid>991060</uid>
+        <idType>Website</idType>
+        <idNumber>fixture.invalid</idNumber>
+      </id>
+    </idList>
+    <akaList>
+      <aka>
+        <uid>991061</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>FIXTURE ALIAS NAME</lastName>
+      </aka>
+    </akaList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>910002</uid>
+    <firstName>Ivan Fixturovich</firstName>
+    <lastName>FIXTUROV</lastName>
+    <sdnType>Individual</sdnType>
+    <programList>
+      <program>CYBER2</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>991062</uid>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0xFeEd000000000000000000000000000000000018</idNumber>
+      </id>
+    </idList>
+    <akaList>
+      <aka>
+        <uid>991063</uid>
+        <type>a.k.a.</type>
+        <category>weak</category>
+        <lastName>FIXTUROFF</lastName>
+        <firstName>Vanya</firstName>
+      </aka>
+    </akaList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>910003</uid>
+    <lastName>FIXTURE JOINT STOCK COMPANY &quot;HOLDING&quot; &amp; PARTNERS</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>UKRAINE-EO13662</program>
+    </programList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>910004</uid>
+    <lastName>FIXTURE VESSEL</lastName>
+    <sdnType>Vessel</sdnType>
+    <programList>
+      <program>IRAN</program>
+    </programList>
+    <vesselInfo>
+      <callSign>FIX1</callSign>
+    </vesselInfo>
+  </sdnEntry>
+</sdnList>
