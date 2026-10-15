@@ -324,7 +324,7 @@ import { meteredSkip } from "./metered-slugs.js";
 import { runSelfCheck, createSelfCheckRoute } from "./selfcheck.js";
 import { installEgressMeter, egressReport } from "./egress-meter.js";
 import { acpFeed, acpManifest } from "./acp.js";
-import { findTools, findRelatedSellers, markWeakMatches } from "./find.js";
+import { findTools, findRelatedSellers, markWeakMatches, markMissRows } from "./find.js";
 import { buildPlanSketch } from "./plan-sketch.js";
 import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE, startWishRotation } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
@@ -5917,7 +5917,10 @@ const computeFind = async (q, k, meter = null, ip = null) => {
       // build next.
       markWeakMatches(result, `${BASE_URL}/api/route?q=${encodeURIComponent(String(q ?? ""))}&include=external`);
     } else {
-      result.hint = "POST /api/wish with what you needed";
+      if (result.count > 0) markMissRows(result);
+      result.hint = result.count > 0
+        ? "none of these results does this task; POST /api/wish with what you needed"
+        : "POST /api/wish with what you needed";
       const qStr = String(q ?? "").trim();
       if (qStr) {
         try { recordWish({ need: qStr, source: "find-miss", ip: ip || "?" }); } catch { /* best-effort; never break /api/find */ }
