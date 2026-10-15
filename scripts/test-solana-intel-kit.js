@@ -473,6 +473,16 @@ try {
       `a stalled RugCheck summary answers the deadline 503 at the summary cap (${ms} ms, got ${err?.statusCode} "${err?.message}")`);
     ok(ms < D.HANDLER_BUDGET_MS, `the safety read answers inside the handler budget (${ms} ms < ${D.HANDLER_BUDGET_MS})`);
   }
+  // The safety tool's optional full-report fill is bounded by its own short
+  // cap: a stalled report leaves the blocks null and the answer still lands.
+  {
+    stub((url, opts) => url.endsWith("/report/summary") ? Promise.resolve(jsonRes(RC_SUMMARY_CLEAN)) : url.endsWith("/report") ? stall(url, opts) : Promise.resolve(jsonRes([])));
+    const t0 = Date.now();
+    const out = await h("sol-token-safety")({ mint: PUMP });
+    const ms = Date.now() - t0;
+    ok(out.fullReport?.read === false && out.fullReport.why === "deadline-or-refused" && out.token === null && out.riskLevel === "good" && ms >= D.RUGCHECK_FALLBACK_MS - 50 && ms < D.RUGCHECK_FALLBACK_MS + 1500 && D.RUGCHECK_FALLBACK_MS < D.RUGCHECK_REPORT_MS,
+      `a stalled report fill gives up at its own ${D.RUGCHECK_FALLBACK_MS} ms cap and the safety answer still lands (${ms} ms, ${JSON.stringify(out.fullReport)})`);
+  }
   // The RPC fallback is bounded: with RugCheck publishing no holder table and
   // the RPC stalling, the holders tool still answers (the table is optional)
   // at the RPC cap, says which read did not finish, and the partial fields

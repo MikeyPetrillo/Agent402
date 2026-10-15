@@ -72,6 +72,12 @@ const RPC_FLOOR_MS = 1_500;
 // The safety tool's optional full-report read is not started with less than
 // this left: the report is measured at 1.2 to 3.6 s on a blue chip.
 const FULL_REPORT_FLOOR_MS = 4_000;
+// ...and gets a shorter cap than the report tools' own read: the safety tool
+// is the fast headline read (summary + index answer in well under a second),
+// so an optional fill must not hold it for the report tools' full 12 s.
+// Measured 2026-10-14: a healthy report answers in 1.2 to 3.6 s; a slow day
+// ran past 12 s, where the fill gives up and the answer says why.
+const RUGCHECK_FALLBACK_MS = 6_000;
 const UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
 
 const RUGCHECK = "https://api.rugcheck.xyz/v1";
@@ -185,8 +191,9 @@ const stamp = () => new Date().toISOString();
 // concurrent reads share one request (src/tools/ttl-dedupe.js, dedupe only:
 // a multi-megabyte document is never held after it is answered).
 const reportReads = createTtlCache({ maxEntries: 1 });
-async function rugcheckReport(mint, budget) {
-  const { value } = await reportReads.get(mint, 0, () => upstreamJson(`${RUGCHECK}/tokens/${mint}/report`, { label: "RugCheck", step: "report", timeoutMs: RUGCHECK_REPORT_MS, budget, notFound: "RugCheck has no report for that mint (not an SPL token mint?)" }));
+async function rugcheckReport(mint, budget, timeoutMs = RUGCHECK_REPORT_MS) {
+  // A caller joining a read already in flight waits on that read's own cap.
+  const { value } = await reportReads.get(mint, 0, () => upstreamJson(`${RUGCHECK}/tokens/${mint}/report`, { label: "RugCheck", step: "report", timeoutMs, budget, notFound: "RugCheck has no report for that mint (not an SPL token mint?)" }));
   return value;
 }
 
@@ -564,7 +571,7 @@ export const SOLANA_INTEL_TOOLS = [
           fullReport = { read: false, needed: need, filled: [], why: "budget" };
         } else {
           try {
-            full = await rugcheckReport(mint, budget);
+            full = await rugcheckReport(mint, budget, RUGCHECK_FALLBACK_MS);
           } catch (e) {
             fullReport = { read: false, needed: need, filled: [], why: e?.statusCode === 503 ? "deadline-or-refused" : e?.statusCode === 422 ? "no-report" : "upstream-error" };
           }
@@ -586,7 +593,9 @@ export const SOLANA_INTEL_TOOLS = [
           name: full?.tokenMeta?.name ?? full?.fileMeta?.name ?? null,
           symbol: full?.tokenMeta?.symbol ?? full?.fileMeta?.symbol ?? null,
           decimals: num(full?.token?.decimals),
-          holderCount: num(full?.totalHolders),
+          // RugCheck reports 0 when it has not counted (measured on USDC):
+          // a zero is "no count", never "no holders".
+          holderCount: num(full?.totalHolders) > 0 ? num(full.totalHolders) : null,
           isVerified: full?.verification ? Boolean(full.verification.jup_verified) : null,
           organicScore: null, organicScoreLabel: null,
           launchpad: full?.launchpad?.name ?? full?.launchpad?.platform ?? null,
@@ -1156,7 +1165,7 @@ for (const t of SOLANA_INTEL_TOOLS) if (JUPITER_SLUGS.has(t.slug)) t.description
 
 // Exported for offline unit tests (pure shaping, no network).
 export const __test = { takeMint, takeLimit, shapeHolders, shapeMarkets, shapePair, shapeJupToken, authorityState, riskCounts, BASE58_RE, budgetOf, topAccountsFromRpc,
-  DEADLINES: Object.freeze({ HANDLER_BUDGET_MS, RUGCHECK_SUMMARY_MS, RUGCHECK_REPORT_MS, JUPITER_MS, DEXSCREENER_MS, RPC_MS, RPC_FLOOR_MS, FULL_REPORT_FLOOR_MS }), reportReadsInflight: () => reportReads.inflightSize() };
+  DEADLINES: Object.freeze({ HANDLER_BUDGET_MS, RUGCHECK_SUMMARY_MS, RUGCHECK_REPORT_MS, JUPITER_MS, DEXSCREENER_MS, RPC_MS, RPC_FLOOR_MS, FULL_REPORT_FLOOR_MS, RUGCHECK_FALLBACK_MS }), reportReadsInflight: () => reportReads.inflightSize() };
 
 // Free text in these results is written by third parties (headlines, posts,
 // casts, token names and descriptions, page titles). Anyone can mint a token or
