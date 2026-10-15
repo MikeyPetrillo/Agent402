@@ -21,7 +21,9 @@ if (!KEY) { console.error("visual-judge: set TYPESAFE_API_KEY"); process.exit(2)
 const MODEL = (process.env.JEV_MODEL || "jev-1.13.0").trim();
 
 const QUESTIONS = {
-  overlap: { type: "noul", instructions: "In `page`, does any text overlap other text or an element, or run off the edge of its box so that words are cut off?" },
+  // A code block or table that scrolls sideways is cut at its edge by design;
+  // without the second sentence the model reads every one as a bug.
+  overlap: { type: "noul", instructions: "In `page`, does any text overlap other text or an element, or get cut off by its box? A code block or table that continues off its right edge because it scrolls sideways is normal and does not count." },
   broken: { type: "noul", instructions: "Does `page` look broken: unstyled content, a large empty area where content should be, elements stacked on top of each other, or a layout that is clearly not what a designer intended?" },
   contrast: { type: "noul", instructions: "Is any body text or button label in `page` hard to read because its color is too close to the color behind it?" },
 };

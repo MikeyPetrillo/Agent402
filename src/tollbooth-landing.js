@@ -29,7 +29,7 @@ export function tollboothLandingPage(baseUrl) {
   .tb-wrap { max-width:1180px; margin:0 auto; padding:56px 30px; }
   h1 {font-family:var(--font-display);font-weight:400;letter-spacing:-.01em; font-size:var(--fs-5xl);line-height:.96;margin:0 0 12px; }
   .lede { color:var(--muted); margin:0 0 32px; font-size:var(--fs-lg); line-height:1.6; }
-  .lede a { color:var(--accent); text-decoration:none; }
+  .lede a { color:var(--accent); text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px; }
   .lede a:hover { text-decoration:underline; }
   h2 { font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:36px 0 12px;color:var(--accent); }
   .config { background:var(--card); border:1px solid var(--hairline); padding:18px; margin:0 0 14px; display:grid; gap:14px; grid-template-columns:1fr 160px 1fr; align-items:end; }
@@ -40,7 +40,7 @@ export function tollboothLandingPage(baseUrl) {
   @media (max-width:720px){ .config { grid-template-columns:1fr; } }
   .install { background:var(--panel); border:1.5px solid var(--panel-rule); padding:16px 18px; position:relative; overflow:auto; }
   .install pre { margin:0; font-family:var(--font-mono); font-size:var(--fs-md); color:var(--on-panel); white-space:pre; }
-  .install .copy { position:absolute; top:10px; right:10px; background:var(--ink-panel); color:var(--on-panel); border:1px solid var(--panel-rule); padding:4px 9px; cursor:pointer; font-family:var(--font-mono); font-size:var(--fs-xs); }
+  .install .copy { position:absolute; top:10px; right:10px; background:var(--panel); color:var(--on-panel); border:1px solid var(--panel-rule); padding:4px 9px; cursor:pointer; font-family:var(--font-mono); font-size:var(--fs-xs); }
   .install .copy:hover { border-color:var(--accent); color:var(--accent); }
   .install + .install { margin-top:10px; }
   .kw { color:var(--on-panel-violet); } .str { color:var(--accent-lit); } .com { color:var(--on-panel-faint); } .num { color:var(--on-panel-warn); }

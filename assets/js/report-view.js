@@ -72,6 +72,8 @@
       // href; the class also stops at an escaped quote/angle so the link text
       // does not swallow trailing markup.
 
+      // A heading ends an open list: a list holds only list items.
+      if (inList && /^#{1,3} /.test(l)) { out.push("</ul>"); inList = false; }
       if (/^### /.test(l)) { out.push("<h3>" + l.slice(4) + "</h3>"); continue; }
       if (/^## /.test(l)) { out.push("<h2>" + l.slice(3) + "</h2>"); continue; }
       if (/^# /.test(l)) { out.push("<h1>" + l.slice(2) + "</h1>"); continue; }

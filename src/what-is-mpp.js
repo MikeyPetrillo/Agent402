@@ -119,7 +119,7 @@ table{border-collapse:collapse;width:100%}
     <div class="wm-2col" style="display:grid;grid-template-columns:1.1fr .9fr;gap:50px;align-items:start;">
       <div>
         <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);">What is <span style="color:var(--accent);">MPP</span>?</h1>
-        <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--on-panel-soft);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">MPP, the Machine Payments Protocol, is an open protocol, published as an IETF Internet-Draft,</strong> that lets software pay for web services per request through HTTP's native authentication headers. A paid endpoint answers with <span style="font-family:var(--font-mono);font-size:var(--fs-lg);">402 Payment Required</span> and a <span style="font-family:var(--font-mono);font-size:var(--fs-base);">WWW-Authenticate: Payment</span> challenge; the client answers with a signed stablecoin payment; the server verifies, settles on chain, and returns a signed receipt.</p>
+        <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">MPP, the Machine Payments Protocol, is an open protocol, published as an IETF Internet-Draft,</strong> that lets software pay for web services per request through HTTP's native authentication headers. A paid endpoint answers with <span style="font-family:var(--font-mono);font-size:var(--fs-lg);">402 Payment Required</span> and a <span style="font-family:var(--font-mono);font-size:var(--fs-base);">WWW-Authenticate: Payment</span> challenge; the client answers with a signed stablecoin payment; the server verifies, settles on chain, and returns a signed receipt.</p>
         <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">No accounts, no API keys, no subscriptions. For the broader story of why machine payments exist and how x402 fits alongside MPP, see <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">What is x402?</a> MPP is one of the two wires underneath <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Agentic Finance</a>; the vocabulary (challenge, credential, receipt, facilitator, settlement) is defined in the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>.</p>
       </div>
       <div style="border:1px solid var(--hairline);background:var(--panel);">
@@ -154,7 +154,7 @@ Authorization: Payment eyJjaGFsbGVuZ2UiOn&hellip;
 <span style="color:var(--on-panel-faint);"># 4. verified, the handler runs, then the payment settles
 </span><span style="color:var(--accent-lit);">HTTP/1.1 200 OK</span>
 Payment-Receipt: eyJtZXRob2QiOiJldm0i&hellip;
-<span style="color:var(--faint);">{ "algo": "sha256", "hex": "&hellip;" }</span></pre>
+<span style="color:var(--on-panel-faint);">{ "algo": "sha256", "hex": "&hellip;" }</span></pre>
     </div>
   </div>
 </section>
@@ -173,7 +173,7 @@ Payment-Receipt: eyJtZXRob2QiOiJldm0i&hellip;
 
 <section id="live" style="background:var(--panel);margin-top:64px;border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
-    <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">03 / IS IT REAL?</div>
+    <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent-lit);margin-bottom:12px;">03 / IS IT REAL?</div>
     <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--on-panel);">Where MPP settles today.</h2>
     <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--on-panel-muted);max-width:820px;margin:0 0 20px;">Every paid endpoint on <a href="/" style="color:var(--accent-lit);">Agent402.Tools</a> is dual-stack: the same 402 carries an x402 offer <em>and</em> an MPP challenge, a stock <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--on-panel);">mppx</span> client works unmodified (the wallet-identity routes, such as memory, and the long-running report routes take its evm method only), and a real purchase settles over the native MPP wire every day as part of the service's paid canary - so "MPP works here" is continuously re-proven on mainnet, not demonstrated once. Other x402 sellers have begun advertising MPP as an alternate rail as well.</p>
     <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-faint);margin:0;">Reference tooling: <a href="https://github.com/tempoxyz/mpp" rel="noopener" style="color:var(--accent-lit);">tempoxyz/mpp</a> on GitHub. Spec: the Payment auth scheme at <a href="https://paymentauth.org" rel="noopener" style="color:var(--accent-lit);">paymentauth.org</a>.</p>

@@ -108,7 +108,7 @@ export function sdkPlaygroundPage(baseUrl) {
 <div class="sp-editor-wrap">
   <div class="sp-editor">
     <div class="sp-label">Code</div>
-    <textarea class="sp-code" id="spCode" spellcheck="false">${esc(EXAMPLES[0].code)}</textarea>
+    <textarea class="sp-code" id="spCode" spellcheck="false" aria-label="Example code to run">${esc(EXAMPLES[0].code)}</textarea>
   </div>
   <div class="sp-output">
     <div class="sp-label">Output</div>

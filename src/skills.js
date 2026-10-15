@@ -2780,7 +2780,7 @@ export function skillsIndex(baseUrl) {
       <div style="border:1px solid var(--hairline);background:var(--panel);">
         <div style="padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);display:flex;justify-content:space-between;gap:12px;"><span>THE SAME JOB, TWO WAYS</span><span style="color:var(--on-panel-faint);">security-audit</span></div>
         <table style="font-family:var(--font-mono);font-size:var(--fs-sm);">
-          <thead><tr style="border-bottom:1px solid var(--panel-rule);color:var(--on-panel-faint);"><th scope="col" style="text-align:left;font-weight:400;padding:10px 18px;"></th><th scope="col" style="text-align:right;font-weight:400;padding:10px 18px;">you orchestrate</th><th scope="col" style="text-align:right;font-weight:700;padding:10px 18px;color:var(--accent);">one pack</th></tr></thead>
+          <thead><tr style="border-bottom:1px solid var(--panel-rule);color:var(--on-panel-faint);"><th scope="col" style="text-align:left;font-weight:400;padding:10px 18px;"></th><th scope="col" style="text-align:right;font-weight:400;padding:10px 18px;">you orchestrate</th><th scope="col" style="text-align:right;font-weight:700;padding:10px 18px;color:var(--accent-lit);">one pack</th></tr></thead>
           <tbody>${comparisonRowsHtml}</tbody>
         </table>
         <div style="padding:12px 18px;border-top:1px solid var(--panel-rule-2);font-size:var(--fs-sm);line-height:1.5;color:var(--on-panel-faint);">The pack still runs all seven tools; you just stop managing them.</div>
@@ -2796,7 +2796,7 @@ export function skillsIndex(baseUrl) {
   <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:740px;margin:0 0 28px;">This is the real difference, and it only shows up when something goes wrong. Orchestrate seven calls yourself and a failure on step six leaves you holding five results you have already paid for, a broken chain, and the job of working out what to retry. A pack returns the whole ledger: what succeeded, what did not, and why - in one response you can act on.</p>
   <div class="sk-scroll" style="border:1px solid var(--hairline);background:var(--panel);">
     <table style="font-family:var(--font-body);font-size:var(--fs-md);">
-      <caption style="text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);padding:14px 18px;border-bottom:1px solid var(--panel-rule);">One run · a step failed · the response is still usable</caption>
+      <caption style="text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--on-panel-faint);padding:14px 18px;border-bottom:1px solid var(--panel-rule);">One run · a step failed · the response is still usable</caption>
       <thead><tr style="border-bottom:1.5px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);"><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;width:44px;">step</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">tool</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">outcome</th><th scope="col" style="text-align:right;font-weight:700;padding:12px 18px;">status</th></tr></thead>
       <tbody>
         ${illustrativeRowsHtml}
@@ -2816,7 +2816,7 @@ export function skillsIndex(baseUrl) {
   <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:700px;margin:0 0 28px;">Every pack publishes its tool sequence before you pay. These are deterministic sequences, not an agent improvising - the same inputs run the same steps in the same order, every time. Six are set out in full below; the rest of the ${packCount} follow.</p>
   <div class="sk-cardgrid">${flagshipCardsHtml}</div>
   <div style="border:1px solid var(--hairline);border-top:none;background:var(--footer-bg);padding:22px 24px;">
-    <div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--on-panel-faint);margin:0 0 14px;"><span>${rest.length} more</span><span>every pack links to its own sequence</span></div>
+    <div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:0 0 14px;"><span>${rest.length} more</span><span>every pack links to its own sequence</span></div>
     <div class="sk-rest-grid" style="display:flex;flex-wrap:wrap;gap:8px;">${restChipsHtml}</div>
   </div>
 </section>

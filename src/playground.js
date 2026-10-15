@@ -106,7 +106,7 @@ export function playgroundPage(baseUrl, catalog) {
 <div class="pg-wrap" data-base="${esc(baseUrl)}">
   <div class="pg-left">
     <input class="pg-search" id="pgSearch" type="text" placeholder="Search tools..." autocomplete="off">
-    <select class="pg-select" id="pgSelect"><option value="">Loading tools...</option></select>
+    <select class="pg-select" id="pgSelect" aria-label="Tool to try"><option value="">Loading tools...</option></select>
     <div id="pgForm"></div>
   </div>
   <div class="pg-right">

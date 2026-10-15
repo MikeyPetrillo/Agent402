@@ -344,7 +344,7 @@ body { overflow-wrap: break-word; }
 @media (max-width: 600px) { .ml-strip { flex-wrap: nowrap !important; overflow-x: auto; max-width: 100%; padding-bottom: 4px; } .ml-strip > * { flex: none; } }
 /* Breadcrumbs: each link stays whole; on a phone the current page's name (the
    h1 right below repeats it) drops out, so the trail never wraps mid-label. */
-.ml-crumb a { white-space: nowrap; }
+.ml-crumb a { white-space: nowrap; text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px; }
 /* The current page's name is one line: a title longer than the row ends in an ellipsis. */
 .ml-crumb-cur { display: inline-block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
 @media (max-width: 640px) { .ml-crumb-cur { display: none; } }
@@ -475,6 +475,15 @@ a { color: inherit; }
    fully visible, not blank. Class added by JS, transition lives in CSS. */
 .ml-reveal { opacity: 0; transform: translateY(18px); transition: opacity .75s cubic-bezier(.22,.61,.36,1), transform .75s cubic-bezier(.22,.61,.36,1); }
 .ml-reveal.ml-reveal-in { opacity: 1; transform: none; }
+/* A breadcrumb link is told apart from the plain crumbs by more than color
+   (WCAG 1.4.1): an underline, whatever the page's inline style says. */
+nav[aria-label="Breadcrumb"] a { text-decoration: underline !important; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+/* The same rule for a plain link inside running text: underlined unless it
+   is a styled component (a class) or already carries a border underline. */
+p a:not([class]):not([style*="border"]), li a:not([class]):not([style*="border"]) { text-decoration: underline !important; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+/* A code block that scrolls sideways takes keyboard focus (site-chrome.js
+   adds tabindex), and shows it. */
+pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-table-wrap[tabindex="0"]:focus-visible, .wx-scroll[tabindex="0"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* Home hero color field (assets/js/hero-aura.js): a canvas behind the hero,
    faded out toward the bottom so the hero meets the page ground without an
    edge. Hidden until the script has drawn, so a browser without WebGL keeps

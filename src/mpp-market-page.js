@@ -102,7 +102,7 @@ function leaderboardHtml(lb, host = null) {
   const MAX_NAMES = 4;
   const trs = active.map((r) => {
     const all = r.sellers || [];
-    const shown = all.slice(0, MAX_NAMES).map((x) => `<a href="${safeHref(x.url || x.origin)}" rel="noopener" style="color:var(--ink);text-decoration:none;font-weight:700;">${esc(x.name)}</a>`).join(", ");
+    const shown = all.slice(0, MAX_NAMES).map((x) => `<a href="${safeHref(x.url || x.origin)}" rel="noopener" style="color:var(--ink);text-decoration:none;font-weight:700;white-space:nowrap;">${esc(x.name)}</a>`).join(", ");
     const more = all.length > MAX_NAMES ? ` <span class="mlb-tag" title="${esc(all.slice(MAX_NAMES).map((x) => x.name).join(", "))}">+${all.length - MAX_NAMES} more on this recipient</span>` : "";
     // One recipient credited under several names is a shared payment address
     // (a gateway that collects for many services), so it says so instead of
