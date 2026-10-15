@@ -30,14 +30,14 @@ const BASE_CAIP2 = "eip155:8453";
 const kind = (scheme) => ({ x402Version: 2, scheme, network: BASE_CAIP2 });
 
 /** A stub facilitator advertising exactly the kinds it is told to. */
-function stubFacilitator(port, kinds) {
+function stubFacilitator(port, kinds, signers = {}) {
   const srv = createServer((req, res) => {
     let body = "";
     req.on("data", (c) => { body += c; });
     req.on("end", () => {
       if (req.url === "/supported") {
         res.writeHead(200, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify({ kinds, extensions: [], signers: {} }));
+        return res.end(JSON.stringify({ kinds: typeof kinds === "function" ? kinds() : kinds, extensions: [], signers }));
       }
       res.writeHead(404); res.end();
     });
@@ -46,8 +46,8 @@ function stubFacilitator(port, kinds) {
 }
 
 /** Boot a paid-mode server and return the decoded accepts for one route. */
-async function acceptsFor(env, port, facPort, kinds) {
-  const fac = await stubFacilitator(facPort, kinds);
+async function acceptsFor(env, port, facPort, kinds, signers) {
+  const fac = await stubFacilitator(facPort, kinds, signers);
   let log = "";
   const child = spawn(process.execPath, ["src/server.js"], {
     env: {
@@ -111,6 +111,40 @@ const P = 3960 + (process.pid % 20);
   ok(ex && up2 && ex.amount === up2.amount,
     `both schemes quote the same amount, so no buyer pays more than today (exact=${ex?.amount} upto=${up2?.amount})`);
   ok(ex && up2 && ex.payTo === up2.payTo, "and both settle to the same payTo");
+}
+
+// --- 2b. ONE SIGNER ON EVERY REPLICA ------------------------------------------
+// A facilitator with several signers may name a different one on each
+// /supported call. Two processes booted against it must still offer the same
+// upto requirements, or a paid retry that lands on the other replica finds no
+// match. Each boot here reads a stub that names a random signer per call.
+{
+  const SIGNERS = ["0x5555555555555555555555555555555555555555", "0x3333333333333333333333333333333333333333",
+    "0x9999999999999999999999999999999999999999", "0x1111111111111111111111111111111111111111", "0x7777777777777777777777777777777777777777"];
+  let calls = 0;
+  const rotating = () => { calls++; return [kind("exact"), { ...kind("upto"), extra: { facilitatorAddress: SIGNERS[(calls + process.pid) % SIGNERS.length] } }]; };
+  const named = [];
+  for (const i of [0, 1, 2]) {
+    const { up, accepts } = await acceptsFor({ X402_UPTO_NETWORKS: BASE_CAIP2 }, P + 6 + i, P + 46 + i, rotating, { "eip155:*": SIGNERS });
+    ok(up, `replica ${i + 1} booted against a facilitator that rotates its signer`);
+    named.push((accepts || []).find((a) => a.scheme === "upto")?.extra?.facilitatorAddress || null);
+  }
+  ok(calls >= 3, `the stub was read on every boot (${calls} reads), so each boot saw its own random signer`);
+  ok(named.every((a) => a && a.toLowerCase() === SIGNERS[3]), `every replica offers the same upto signer, the lowest published (${named.join(", ")})`);
+}
+{
+  const { pinUptoFacilitatorAddress: pin } = await import("../src/upto-signer.js");
+  const sup = (addr, signers) => ({ kinds: [{ x402Version: 2, scheme: "upto", network: BASE_CAIP2, extra: { facilitatorAddress: addr, other: 1 } }, { x402Version: 2, scheme: "exact", network: BASE_CAIP2, extra: { facilitatorAddress: "0x9" } }], signers });
+  const L = { "eip155:*": ["0xBB", "0xaa", "0xCc"] };
+  const r = pin(sup("0xCc", L));
+  ok(r.kinds[0].extra.facilitatorAddress === "0xaa" && r.kinds[0].extra.other === 1, "a listed signer is pinned to the lowest listed address, other extra fields kept");
+  ok(r.kinds[1].extra.facilitatorAddress === "0x9", "an exact kind is never touched");
+  ok(pin(sup("0xDD", L)).kinds[0].extra.facilitatorAddress === "0xDD", "an address outside the published list is left as the facilitator sent it");
+  ok(pin(sup("0xCc", {})).kinds[0].extra.facilitatorAddress === "0xCc", "an answer with no signer list is left as sent");
+  ok(pin(sup("0xCc", { [BASE_CAIP2]: ["0xCc", "0x0b"] })).kinds[0].extra.facilitatorAddress === "0x0b", "an exact-network signer list counts too");
+  ok(pin(sup("0xCc", { "solana:*": ["0x01", "0xCc"] })).kinds[0].extra.facilitatorAddress === "0xCc", "another chain family's list does not count");
+  const src = (await import("node:fs")).readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
+  ok(/promise: orig\(\)\.then\(pinUptoFacilitatorAddress\)/.test(src), "every facilitator's /supported answer passes through the pin");
 }
 
 // --- 3. THE GATE WITH TEETH: opted in, facilitator does NOT advertise upto ---
