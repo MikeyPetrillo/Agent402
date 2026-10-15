@@ -439,7 +439,12 @@ for (const row of REASONING_MODELS) {
     continue;
   }
   ok(matches.length > 0, `reasoning: ${label} matches at least one live model`);
-  for (const m of matches) {
+  // A live id is served by the LONGEST row that matches it (reasoningProfile),
+  // so a prefix row is graded only on the ids no longer row claims
+  // (meta/muse-spark-open has its own row under the meta/muse-spark prefix).
+  const keyLen = (r) => (r.id || r.prefix).length;
+  const governs = (m) => !REASONING_MODELS.some((o) => o !== row && keyLen(o) > keyLen(row) && reasoningRowMatches(o, m.id));
+  for (const m of matches.filter(governs)) {
     const r = m.reasoning || {};
     const live = Array.isArray(r.supported_efforts) ? r.supported_efforts : [];
     const missing = row.efforts.filter((e) => !live.includes(e));
@@ -465,10 +470,27 @@ for (const [requested, succ] of Object.entries(AVAILABILITY_SUCCESSORS).flatMap(
   if (!Array.isArray(succEps) || !succEps.length) continue;
   const tools = (eps) => (eps || []).some((e) => (e.supported_parameters || []).includes("tools"));
   ok(!tools(reqEps) || tools(succEps), `${succ} supports tools wherever ${requested} does`);
+  // The successor serves under the requested model's row on the metered tier
+  // (provider.max_price = costFor(requested)), and every link is re-clamped at
+  // its OWN row on every tier. So a successor endpoint dearer than the
+  // requested row is safe only when (a) the successor's own row covers it and
+  // (b) endpoints inside the requested row remain, with tools wherever the
+  // requested model has them, for the metered cap to route to.
   const row = costFor(requested);
-  const dear = (k) => Math.max(...succEps.map((e) => Number(e?.pricing?.[k])).filter(Number.isFinite)) * 1e6;
-  const cheaper = dear("prompt") <= row.prompt + 1e-9 && dear("completion") <= row.completion + 1e-9;
-  ok(cheaper, `${succ}'s dearest live endpoint costs no more than ${requested}'s row${cheaper ? "" : brief(" (it costs more; amounts withheld in CI)", ` (live ${dear("prompt")}/${dear("completion")} per 1M vs row ${row.prompt}/${row.completion})`)}`);
+  const succRow = costFor(succ);
+  const priceOf = (e, k) => Number(e?.pricing?.[k]) * 1e6;
+  const within = (e, r) => ["prompt", "completion"].every((k) => !Number.isFinite(priceOf(e, k)) || priceOf(e, k) <= r[k] + 1e-9);
+  const dear = (k) => Math.max(...succEps.map((e) => priceOf(e, k)).filter(Number.isFinite));
+  const cheaper = succEps.every((e) => within(e, row));
+  if (cheaper) {
+    ok(true, `${succ}'s dearest live endpoint costs no more than ${requested}'s row`);
+  } else {
+    const capped = succEps.filter((e) => within(e, row));
+    const covered = !!succRow && succEps.every((e) => within(e, succRow));
+    ok(covered, `${succ}'s own row covers its dearest live endpoint, so the per-link clamp holds where it costs more than ${requested}'s row${covered ? "" : brief(" (amounts withheld in CI)", ` (live ${dear("prompt")}/${dear("completion")} per 1M vs row ${succRow ? `${succRow.prompt}/${succRow.completion}` : "none"})`)}`);
+    ok(capped.length > 0, `${succ} keeps live endpoints inside ${requested}'s row for the metered cap to route to (${capped.length} of ${succEps.length})`);
+    ok(!tools(reqEps) || tools(capped), `${succ} supports tools on an endpoint inside ${requested}'s row wherever ${requested} supports tools`);
+  }
 }
 
 // Published examples name a real model. The tier tables above can be clean

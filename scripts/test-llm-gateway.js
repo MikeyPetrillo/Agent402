@@ -1667,7 +1667,10 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   {
     const id = "deepseek/deepseek-v3.2";
     ok(!retiringModel(id) && tierFor(id) === "v1-chat" && tierAllows("v1-chat-metered", id), "deepseek-v3.2: admitted again on base (its home) and metered");
-    ok(cf(id) === ROW(id) && cf("deepseek/deepseek-v4-flash") === ROW("deepseek/"), "deepseek-v3.2 has its own row; the deepseek/ family row still prices the rest");
+    ok(cf(id) === ROW(id) && cf("deepseek/deepseek-chat") === ROW("deepseek/"), "deepseek-v3.2 has its own row; the deepseek/ family row still prices the rest");
+    // deepseek-v4-flash gained a provider dearer than the family row (live
+    // catalog 2026-10-15): its own row keeps rule 4 and the per-link clamp whole.
+    ok(cf("deepseek/deepseek-v4-flash") === ROW("deepseek/deepseek-v4-flash") && ROW("deepseek/deepseek-v4-flash") !== undefined, "deepseek-v4-flash is priced by its own row");
     let e = null; try { validateRequest({ model: id, messages: [{ role: "user", content: "hi" }] }, "v1-chat"); } catch (x) { e = x; }
     ok(e === null, "deepseek-v3.2 validates on the base tier (no retirement refusal)");
     const body = { model: id, messages: [{ role: "user", content: "hi" }], max_tokens: 64 };
