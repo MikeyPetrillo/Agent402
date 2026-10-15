@@ -14,9 +14,18 @@
 // transaction. Without proof (not found in the bound, RPC down, a transfer to
 // someone else, short, reverted) the failure stands exactly as before. This
 // never settles again: it only reads the chain.
+//
+// The same words come back for a REPLAY: a payload whose authorization
+// already settled an earlier call. Chain proof alone would serve it a second
+// answer for one payment, so recovery also requires that the transaction is
+// this request's own (recoverAlreadyOnChain): mined no earlier than this
+// request's payment was first seen, not a recorded sale (read fresh from the
+// database), this request holding the authorization's nonce claim, and an
+// atomic claim of the tx (src/settlement-claims.js).
 
 import { rpc, evmTransferredInReceipt } from "./payment-verify.js";
 import { evmRpcFor } from "./evm-rpcs.js";
+import { claimSettlementKey, extendSettlementKey, nonceClaimKey, txClaimKey, settleClaimStateOf, INFLIGHT_TTL_SECONDS } from "./settlement-claims.js";
 
 export const AUTHORIZATION_USED_TOPIC = "0x98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5";
 
@@ -24,6 +33,7 @@ export const AUTHORIZATION_USED_TOPIC = "0x98de503528ee59b575ef0c0a2576a82497bfc
 // the broadcast; 1,000 blocks is minutes on the fastest chain we serve and
 // stays inside public RPCs' getLogs range limits.
 const LOG_WINDOW_BLOCKS = 1000;
+const CLOCK_SKEW_MS = 2000;
 
 const ALREADY_ON_CHAIN = [
   /\bnonce already (submitted|used)\b/i,
@@ -54,6 +64,7 @@ export async function proveAuthorizationSettled({
   deadlineMs = 15_000,
   pollDelaysMs = [0, 1500, 3000, 4500, 6000],
   callTimeoutMs = 4000,
+  notBeforeMs = null,
 } = {}) {
   const network = String(requirements?.network || "");
   if (!network.startsWith("eip155:")) return { proven: false, reason: "not an EVM network" };
@@ -95,10 +106,52 @@ export async function proveAuthorizationSettled({
       const moved = evmTransferredInReceipt(receipt, { token: asset, from: auth.from, toSet: [payTo] });
       if (moved === 0n) return { proven: false, reason: "the authorization's transaction moved nothing from the payer to our payTo" };
       if (moved < required) return { proven: false, reason: `transfer is short: moved ${moved} < required ${required} (atomic)` };
+      if (notBeforeMs != null) {
+        // A transaction mined before this request's payment was first seen
+        // settled an earlier call: the payload is a replay, never this
+        // request's settlement. Block time is whole seconds; the skew
+        // allowance covers that and clock drift.
+        const block = await call("eth_getBlockByNumber", [receipt.blockNumber, false]);
+        const minedMs = Number(BigInt(block?.timestamp ?? "0x0")) * 1000;
+        if (!minedMs) { lastReason = "block time unreadable"; continue; }
+        if (minedMs < notBeforeMs - CLOCK_SKEW_MS) return { proven: false, reason: `transaction was mined before this request's payment was first seen (${new Date(minedMs).toISOString()})` };
+      }
       return { proven: true, transaction: log.transactionHash, payer: auth.from };
     } catch (e) {
       lastReason = `could not read the chain: ${String(e?.message || e).slice(0, 120)}`;
     }
   }
   return { proven: false, reason: lastReason };
+}
+
+const reqOf = (ctx) => ctx?.transportContext?.request?.adapter?.req;
+
+/**
+ * The whole recovery decision for an already-on-chain settle failure.
+ * Returns `{ recovered: true, result }` or `{ recovered: false, reason }`.
+ * `saleByTx` defaults to the sales ledger's fresh read.
+ */
+export async function recoverAlreadyOnChain(ctx, { saleByTx = null, prove = proveAuthorizationSettled } = {}) {
+  const network = String(ctx?.requirements?.network || "");
+  const nonce = ctx?.paymentPayload?.payload?.authorization?.nonce;
+  const state = settleClaimStateOf(reqOf(ctx));
+  if (!state) return { recovered: false, reason: "the request carries no first-seen stamp" };
+  if (typeof nonce !== "string" || !nonce) return { recovered: false, reason: "no EIP-3009 authorization in the payload" };
+  // The first request to reach settle with this authorization owns it; a
+  // replay that arrives while (or after) the original settles does not.
+  const nonceKey = nonceClaimKey(network, nonce);
+  const nonceOwner = await claimSettlementKey(nonceKey, state.id, { ttlSeconds: INFLIGHT_TTL_SECONDS });
+  if (!nonceOwner.claimed) return { recovered: false, reason: "another request owns this authorization" };
+  state.nonceKey = nonceKey;
+  const proof = await prove({ paymentPayload: ctx?.paymentPayload, requirements: ctx?.requirements, notBeforeMs: state.seenAt });
+  if (!proof.proven) return { recovered: false, reason: proof.reason };
+  let lookup = saleByTx;
+  if (!lookup) lookup = (await import("./sales-ledger.js")).saleByTxFresh;
+  let sold = null;
+  try { sold = await lookup(proof.transaction); } catch (e) { return { recovered: false, reason: `could not read the sales ledger: ${String(e?.message || e).slice(0, 80)}` }; }
+  if (sold) return { recovered: false, reason: "the transaction is already a recorded sale" };
+  const txOwner = await claimSettlementKey(txClaimKey(network, proof.transaction), state.id);
+  if (!txOwner.claimed) return { recovered: false, reason: "another request already served this transaction" };
+  await extendSettlementKey(nonceKey, state.id);
+  return { recovered: true, result: { success: true, transaction: proof.transaction, network, payer: proof.payer } };
 }

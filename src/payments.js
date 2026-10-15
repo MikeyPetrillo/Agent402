@@ -31,7 +31,8 @@ import { declarePaymentIdentifierExtension, PAYMENT_IDENTIFIER } from "@x402/ext
 import { normalizePayerAddress } from "./payer.js";
 import { x402EvmOnly } from "./rails.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
-import { isAlreadyOnChainSettleError, proveAuthorizationSettled } from "./settle-onchain-proof.js";
+import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
+import { registerSettlementClaimHooks, registerSettlementClaimRelease } from "./settlement-claims.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 
@@ -1242,6 +1243,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   registerWalletBlocklistHook(server);
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
+  // One authorization, one answer (src/settlement-claims.js). The claim runs
+  // after the hooks that may abort a settle, so an aborted settle never holds
+  // the authorization; the release runs after the failure hooks, so it fires
+  // only when nothing recovered the payment.
+  registerSettlementClaimHooks(server);
+  registerSettlementClaimRelease(server);
   // Per-phase timing (src/paid-phase-timing.js). Registered last: a hook
   // that aborts settlement first leaves no settle mark, which is the truth.
   registerPhaseTimingHooks(server);
@@ -1921,19 +1928,20 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       `[payments] facilitator SETTLE failed on ${ctx?.requirements?.network} ` +
         `${ctx?.requirements?.scheme}: ${failure}`
     );
-    // "Already on-chain": the facilitator's own transfer may have landed. Only
-    // chain proof recovers it (src/settle-onchain-proof.js), and the failure
-    // never reaches the fallback chain, since a second settle could charge twice.
+    // "Already on-chain": the facilitator's own transfer may have landed, or
+    // the payload is a replay of one that settled another call. Only chain
+    // proof that the transfer is THIS request's recovers it
+    // (src/settle-onchain-proof.js), and the failure never reaches the
+    // fallback chain, since a second settle could charge twice.
     if (isAlreadyOnChainSettleError(ctx?.error)) {
-      const proof = await proveAuthorizationSettled({ paymentPayload: ctx?.paymentPayload, requirements: ctx?.requirements });
-      if (!proof.proven) {
-        console.warn(`[payments] already-on-chain settle on ${ctx?.requirements?.network} not recovered: ${proof.reason}`);
+      const r = await recoverAlreadyOnChain(ctx);
+      if (!r.recovered) {
+        console.warn(`[payments] already-on-chain settle on ${ctx?.requirements?.network} not recovered: ${r.reason}`);
         return;
       }
-      const result = { success: true, transaction: proof.transaction, network: ctx.requirements.network, payer: proof.payer };
-      releaseCoverOnSettled(ctx, result);
-      console.warn(`[payments] recovered ${ctx.requirements.network} settlement from chain proof: tx ${proof.transaction}`);
-      return { recovered: true, result };
+      releaseCoverOnSettled(ctx, r.result);
+      console.warn(`[payments] recovered ${r.result.network} settlement from chain proof: tx ${r.result.transaction}`);
+      return { recovered: true, result: r.result };
     }
     if (!fallbackEnabled) return;
     if (!isPreBroadcastSettleRejection(ctx?.error)) return;

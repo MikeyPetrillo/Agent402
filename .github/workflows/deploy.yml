@@ -1335,6 +1335,8 @@ jobs:
           t node scripts/test-inflight-cover-shared.js
           # The judge's daily token ceiling on the Redis backend (the memory half runs in its own lane).
           t node scripts/test-tool-judge.js
+          # An already-on-chain settle recovers only this request's own transfer; replays across two servers on one Redis never answer twice.
+          t node scripts/test-settle-onchain-proof.js
 
       - name: "State database (REAL postgres: documents/records/log lines/leases; every migrated store imports its file once and reads the row; loops skip under another holder's lease; idempotency answers and claims shared over REAL redis)"
         env:
