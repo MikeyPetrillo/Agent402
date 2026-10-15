@@ -64,6 +64,7 @@
 
 import { createHash, createHmac } from "node:crypto";
 import { hasLastingEffect } from "../src/hangup-forgiveness.js";
+import { EVM_RPCS } from "../src/evm-rpcs.js";
 
 // This repo is PUBLIC, so every Actions log is world-readable. The project's
 // standing rule for buyer identities is "counts only, never addresses - a
@@ -115,26 +116,11 @@ const MAX_PER_PAYER = capUsd(process.env.REFUND_MAX_PER_PAYER_USD, "0.5", "REFUN
 const MIN_REFUND = capUsd(process.env.REFUND_MIN_USD, "0", "REFUND_MIN_USD");
 const ONLY_CHAIN = (process.env.REFUND_ONLY_CHAIN || "").trim(); // optional CAIP-2 filter
 
-// Public RPCs for the EVM rails we can refund on. Overridable per chain via
-// REFUND_RPC_<id> (e.g. REFUND_RPC_8453). A chain with no RPC entry holds its
-// rows - refusing loudly beats broadcasting through a guessed endpoint.
-export const EVM_RPCS = {
-  "eip155:8453": "https://mainnet.base.org",
-  // polygon-rpc.com was shut off 2026-07-31 (probe: "tenant disabled", 403) and
-  // was the ONLY Polygon RPC here, so every Polygon refund held unpaid.
-  "eip155:137": "https://polygon-bor-rpc.publicnode.com",
-  "eip155:42161": "https://arb1.arbitrum.io/rpc",
-  "eip155:43114": "https://api.avax.network/ext/bc/C/rpc",
-  "eip155:10": "https://mainnet.optimism.io",
-  "eip155:42220": "https://forno.celo.org",
-  "eip155:1329": "https://evm-rpc.sei-apis.com",
-  // Rails that had no entry until the all-chains verifier sweep - without one
-  // their rows held as "no RPC configured", which is safe but never repays.
-  "eip155:143": "https://rpc.monad.xyz",
-  // rpc.robinhoodchain.com answers an EMPTY body; the host the rest of the repo
-  // and Robinhood's own docs use is this one (probe: chainId 0x1237).
-  "eip155:4663": "https://rpc.mainnet.chain.robinhood.com",
-};
+// Public RPCs for the EVM rails we can refund on (src/evm-rpcs.js, shared
+// with the settle path). Overridable per chain via REFUND_RPC_<id> (e.g.
+// REFUND_RPC_8453). A chain with no RPC entry holds its rows - refusing loudly
+// beats broadcasting through a guessed endpoint.
+export { EVM_RPCS };
 
 // The sales ledger records SHORT chain names ("base", "solana"); settle
 // receipts record CAIP-2 ("eip155:8453"). Debts minted by the charged-failure
