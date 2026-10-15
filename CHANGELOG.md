@@ -10,10 +10,11 @@ Since v2.5.0 (2026-10-07).
 
 ### 2026-10-15
 - sanctions-wallet now reads OFAC's full SDN XML export. Since it launched
-  on 2026-09-12 it read the CSV export, which cuts long entries short and
-  dropped about a quarter of the listed Ethereum-format addresses; an address
-  on that part of the list could have been answered as not listed. Every
-  published address is now matched.
+  on 2026-09-12 it read the CSV export, which cuts long entries short: it saw
+  about half of the published digital currency addresses, and some Tron,
+  Dogecoin and other case-sensitive addresses were stored in the wrong case.
+  An address in either group could have been answered as not listed. Every
+  published address is now matched exactly as listed.
 - Search and routing (/api/find, /api/route and the MCP catalog tools) bound
   every uncached search with a deadline and recover on their own if one
   stalls; under load they answer 503 with Retry-After instead of hanging.
