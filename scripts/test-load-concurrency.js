@@ -75,6 +75,14 @@ const HARD_TIMEOUT_MS = 10_000;
 // The slow tool's input: two strings of this length to /api/levenshtein (an
 // O(n*m) synchronous compute, about 25 ms locally; the kit caps far above).
 const SLOW_INPUT_CHARS = 2_000;
+// The slow tool takes at most this share of the server thread, whatever the
+// runner: each buyer calls it no more often than BUYERS x its idle cost /
+// this share, so a slower core sends proportionally fewer of them. Without
+// it the mix itself saturates a slow runner (thirty buyers at a 50 ms compute
+// are most of a core) and the /health bound measures the machine, not the
+// loop. One CPU-bound tool hammered by every buyer is a capacity question for
+// replicas, not a responsiveness one.
+const SLOW_TOOL_THREAD_SHARE = 0.25;
 
 // ---- the server ----------------------------------------------------------
 // Keys the server could spend are stripped from the child's environment:
@@ -218,6 +226,8 @@ try {
   // ---- 30 buyers for LOAD_MS, with the probe beside them -----------------
   const loadStart = Date.now();
   const until = loadStart + LOAD_MS;
+  const slowGapMs = Math.ceil((BUYERS * slowIdleP50) / SLOW_TOOL_THREAD_SHARE);
+  console.log(`# slow tool: one call per buyer every ${slowGapMs} ms (${Math.round(SLOW_TOOL_THREAD_SHARE * 100)}% of the thread at ${r0(slowIdleP50)} ms idle)`);
   const probe = probeHealth(LOAD_MS);
   let powAccepted = 0, powSolves = 0;
   const buyer = async (id) => {
@@ -226,6 +236,7 @@ try {
     const think = () => sleep(Math.round(THINK_MS * (0.6 + 0.8 * (next() / 0x7fffffff))));
     let nextDiscoveryAt = loadStart + (id * 61) % DISCOVERY_MIN_GAP_MS; // staggered first search
     let useFind = id % 2 === 0;
+    let nextSlowAt = loadStart + (id * 97) % slowGapMs; // staggered first slow call
     for (let i = 0; Date.now() < until; i++) {
       if (Date.now() >= nextDiscoveryAt) {
         const q = `${WORDS[(id + i) % WORDS.length]} ${WORDS[(id * 7 + i * 3) % WORDS.length]} ${WORDS[(i * 11) % WORDS.length]} ${id}-${i}`;
@@ -249,8 +260,11 @@ try {
       }
       await think();
       if (Date.now() >= until) break;
-      await call("POST /api/levenshtein", `${base}/api/levenshtein`, slowInit, ip);
-      await think();
+      if (Date.now() >= nextSlowAt) {
+        await call("POST /api/levenshtein", `${base}/api/levenshtein`, slowInit, ip);
+        nextSlowAt = Date.now() + slowGapMs;
+        await think();
+      }
     }
   };
   await Promise.all([...Array.from({ length: BUYERS }, (_, id) => buyer(id))]);
