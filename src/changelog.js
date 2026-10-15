@@ -3,6 +3,19 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-10-15",
+    title: "Questions about images, and search that forgives a typo",
+    items: [
+      "POST /v1/judge/vision (preview) asks typed questions about up to four PNG or JPEG images: a yes or no probability, a choice, a score, or a box that says where something is, as edges from 0 to 1. Name each image and refer to it as `name` in a question. Built on Jev features its maker labels experimental, and model-backed.",
+      "POST /v1/judge/locate (preview) finds up to four things in one image: each comes back with whether it is there and its box. A box is always returned, so found reads false when the model judges the thing absent.",
+      "POST /v1/judge/long (preview) runs /v1/judge's questions over a document of up to about 262k tokens in one call.",
+      "On /v1/judge, jev-latest is the Jev version we have tested, and every answer names the version that served it; jev-preview reaches the newer release.",
+      "/api/find corrects a one-letter slip in a long word and says what it corrected in `corrected`, and when no tool does the task, the nearest matches it still returns are marked `weak`.",
+      "Receipts, usage, attestations, feedback, refund lookups, monitor links and Decide quotes read the same record whichever server instance answers.",
+      "Site pages meet WCAG 2.1 AA on color contrast, form labels, link styling and keyboard access to scrolling code and tables.",
+    ],
+  },
+  {
+    date: "2026-10-15",
     title: "A complete sanctions list, and steadier search under load",
     items: [
       "sanctions-wallet now reads OFAC's full SDN XML export. Since it launched on 2026-09-12 it read the CSV export, which cuts long entries short: it saw about half of the published digital currency addresses, and some Tron, Dogecoin and other case-sensitive addresses were stored in the wrong case. An address in either group could have been answered as not listed. Every published address is now matched exactly as listed.",

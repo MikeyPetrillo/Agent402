@@ -6,7 +6,26 @@ carries its own version on npm.
 
 ## Unreleased
 
-Since v2.5.0 (2026-10-07).
+Nothing yet.
+
+## v2.7.0 - 2026-10-15
+
+### 2026-10-15 (second batch)
+- `POST /v1/judge/vision` (preview) asks typed questions about up to four PNG
+  or JPEG images: noul, choice, score, and box answers (where something is,
+  as edges from 0 to 1). Model-backed; built on Jev features its maker labels
+  experimental.
+- `POST /v1/judge/locate` (preview) finds up to four things in one image, each
+  with whether it is there and its box.
+- `POST /v1/judge/long` (preview) runs `/v1/judge`'s questions over a document
+  of up to about 262k tokens.
+- On `/v1/judge`, `jev-latest` is the Jev version we have tested and every
+  answer names it; `jev-preview` reaches the newer release.
+- `/api/find` corrects a one-letter slip in a long word (`corrected`) and marks
+  the nearest matches `weak` when no tool does the task.
+- Receipts, usage, attestations, feedback, refund lookups, monitor links and
+  Decide quotes read the same record whichever server instance answers.
+- Site pages meet WCAG 2.1 AA on contrast, labels, links and keyboard access.
 
 ### 2026-10-15
 - sanctions-wallet now reads OFAC's full SDN XML export. Since it launched
@@ -22,6 +41,8 @@ Since v2.5.0 (2026-10-07).
   a retry delay, a few times and briefly, and never repeats a paid call.
 - Data tools that wait on an outside service answer 503 naming the service
   and the step when it does not answer in time, and nothing is charged.
+
+## v2.6.0 - 2026-10-08
 
 ### 2026-10-08
 - Slow routes (reports, video, the premium image, `/api/decide/execute`)
