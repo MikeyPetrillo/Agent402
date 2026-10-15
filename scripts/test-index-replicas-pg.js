@@ -50,7 +50,11 @@ try {
   const x = await sdb.records.get(COLLECTION, X);
   ok(x?.fetchedAt === 3_000 && x?.manifest?.name === "/x-fresh", `B's save does not write its older copy over the newer row (row fetchedAt ${x?.fetchedAt}, ${x?.manifest?.name})`);
   // A direct older write is refused by the table itself, not only by the pull.
-  await sdb.stateQuery(`UPDATE ${sdb.stateDbSchema()}.records SET body = jsonb_set(body, '{fetchedAt}', '5000') WHERE collection = $1 AND id = $2`, [COLLECTION, X]);
+  // Let B pull everything first, then change the row behind its back with an
+  // OLD stamp, so no pull can see it: only the upsert's guard stands between
+  // B's older copy and the row.
+  await B.pullIndexChanges();
+  await sdb.stateQuery(`UPDATE ${sdb.stateDbSchema()}.records SET body = jsonb_set(body, '{fetchedAt}', '5000'), updated_at = now() - interval '1 day' WHERE collection = $1 AND id = $2`, [COLLECTION, X]);
   B.__testSeedCache([[X, entry("/x-older", 4_000)]]);
   await B.persistIndexCacheAsync();
   ok((await sdb.records.get(COLLECTION, X))?.fetchedAt === 5_000, "a row fetched later than the copy being saved keeps its body (the upsert's own guard)");
