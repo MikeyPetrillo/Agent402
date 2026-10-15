@@ -553,3 +553,50 @@ export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false
     `Docs: ${baseUrl}/llms.txt · ${baseUrl}/api/find?q=… · status ${baseUrl}/status`,
   ].join("\n");
 }
+
+// Tool input element bound. The SDK's maxToolInputElements option lives on
+// McpServer and is checked inside McpServer's own tools/call handler; both
+// connectors use the low-level Server with their own CallTool handler, where
+// that option is never read. So the same check runs here, with the SDK's
+// counting rule (every array element and every own object member, at any
+// depth) and its InvalidParams message.
+//
+// The bound: a JSON element costs at least two bytes ("0,"), so the hosted
+// connector's 100kb body parser admits at most 51,200 of them. A bound at that
+// figure never refuses a body the parser accepts, and the largest
+// handler-capped input (three 10,000-value series) sits well under it. On the
+// stdio package, which reads lines with no byte cap, an argument tree past it
+// is refused before it is serialized and sent to a server that would 413 it.
+export const MCP_MAX_TOOL_INPUT_ELEMENTS = 51_200;
+
+// Counts array elements and object members in `value`, stopping once the
+// count passes `max` (so a huge tree costs at most max + 1 steps).
+export function toolInputElementCount(value, max = MCP_MAX_TOOL_INPUT_ELEMENTS) {
+  let count = 0;
+  const stack = [value];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node === null || typeof node !== "object") continue;
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        if (++count > max) return count;
+        if (child !== null && typeof child === "object") stack.push(child);
+      }
+    } else {
+      for (const key in node) {
+        if (!Object.prototype.hasOwnProperty.call(node, key)) continue;
+        if (++count > max) return count;
+        const child = node[key];
+        if (child !== null && typeof child === "object") stack.push(child);
+      }
+    }
+  }
+  return count;
+}
+
+// The refusal text for an over-bound call, or null when the input is within
+// the bound. Same wording as the SDK's McpServer refusal.
+export function toolInputBoundRefusal(toolName, args, max = MCP_MAX_TOOL_INPUT_ELEMENTS) {
+  if (toolInputElementCount(args, max) <= max) return null;
+  return `Invalid arguments for tool ${toolName}: arguments contain more than the maximum of ${max} elements`;
+}

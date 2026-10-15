@@ -33,6 +33,8 @@ import {
   ListToolsRequestSchema,
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
+  McpError,
+  ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
   FLAGSHIP_MCP_NAMES,
@@ -45,6 +47,7 @@ import {
   mcpJsonResult,
   outputSchemaFromExample,
   mcpInitializeInstructions,
+  toolInputBoundRefusal,
 } from "./output-schemas.js";
 
 const BASE = (process.env.AGENT402_URL || "https://agent402.tools").replace(/\/$/, "");
@@ -670,6 +673,8 @@ server.setRequestHandler(ListToolsRequestSchema, withCatalog(async () => {
 server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req) => {
   const { name: rawName, arguments: args = {} } = req.params;
   const name = resolveListedName(rawName);
+  const overBound = toolInputBoundRefusal(rawName, args);
+  if (overBound) throw new McpError(ErrorCode.InvalidParams, overBound);
   try {
     if (name === "catalog.search") {
       const q = String(args.query ?? "").trim();

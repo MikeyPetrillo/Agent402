@@ -3751,6 +3751,10 @@ jobs:
           t node scripts/test-paytime-bounds.js
           # One-product MCP endpoint (/mcp/sec): profile lists only the SEC tools, hides the catalog meta tools, /mcp unchanged (boots a free server)
           t node scripts/test-mcp-sec.js
+          # MCP wire: a 2026-07-28 client that opens with initialize is served the negotiated revision; tools/call arguments past the element bound are InvalidParams on /mcp and on the stdio package (boots a free server)
+          t node scripts/test-mcp-protocol-input-bound.js
+          # Prepared Railway IaC file keeps the facilitator and worker settings from their config files, as a named partial with unmanaged variables (offline: type-stripped load, SDK stubbed)
+          t node scripts/test-railway-iac.js
 
 
   test-sweeps:
