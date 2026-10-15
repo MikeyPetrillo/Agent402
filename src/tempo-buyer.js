@@ -11,6 +11,8 @@
 //     seller quoting anything else is refused before any signing.
 //   - MARGIN GUARD: the live 402's amount must be <= maxAtomic; a seller cannot
 //     quote a cheap registry price and charge a dear one.
+//   - SANCTIONS SCREEN: the recipient is screened against the OFAC SDN address
+//     map before signing; a listed recipient, or no list held, is refused.
 //   - PROVEN SELLERS ONLY: before signing, the challenge's recipient must show
 //     recent inbound USDC.e transfers on-chain (rpc.tempo.xyz eth_getLogs) -
 //     the same "route only to sellers with real settled volume" gate the Base
@@ -23,6 +25,7 @@
 //     window, never by ours.
 import { createHash } from "node:crypto";
 import { assertSigningAllowed } from "./signing-halt.js";
+import { assertPayoutScreened } from "./tools/sanctions-kit.js";
 import { ROUTER_UA, noteSellerDeliveryFailure, clearSellerDeliveryFailure, isCallerInputStatus } from "./x402-buyer.js";
 import { recordUpstreamSpend } from "./stats.js";
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
@@ -232,7 +235,13 @@ export async function payTempo(url, {
   if (quotedAtomic > BigInt(maxAtomic)) throw bad(`Seller's live quote (${Number(quotedAtomic) / 1e6} USDC) exceeds this call's ceiling (${Number(maxAtomic) / 1e6})`, 409);
   const recipient = String(req.recipient || "");
   if (!/^0x[0-9a-fA-F]{40}$/.test(recipient)) throw bad("Seller's challenge names no valid recipient", 502);
-  // 3. PROVEN-SELLER GATE (fail closed).
+  // 3. SANCTIONS SCREEN on the recipient this credential would pay, the same
+  //    gate payX402 applies (src/tools/sanctions-kit.js): 403 when it is
+  //    listed, 503 when no list is held (an unscreened payout is never made),
+  //    both before anything is signed. A Tempo address is an EVM address,
+  //    compared lowercased.
+  await assertPayoutScreened(recipient, { label: recipient.toLowerCase() });
+  // 4. PROVEN-SELLER GATE (fail closed).
   let inbound;
   let inboundPayers;
   try {
@@ -248,7 +257,7 @@ export async function payTempo(url, {
   // names no payer figure (a primed count from an older read) is judged on
   // the count, as before.
   if (Number.isFinite(inboundPayers) && inboundPayers < minPayers) throw bad(`Seller recipient ${recipient.slice(0, 8)}… has ${inboundPayers} distinct recent payers on Tempo (floor ${minPayers}) - not routable yet`, 409);
-  // 4. Sign a credential (validBefore = now + 25s in mppx) and send it at once.
+  // 5. Sign a credential (validBefore = now + 25s in mppx) and send it at once.
   //    Not minted when too little time is left for the seller to answer: an
   //    unsent pull credential moves nothing, a sent one may.
   if (leftMs() < MIN_MINT_MS) throw bad("Too little of this call's time budget is left to pay the seller; nothing was signed", 504);

@@ -10,6 +10,9 @@ import { join } from "node:path";
 // module (and the ledger it imports) is loaded, so a test run never writes to
 // the volume path.
 process.env.OUTBOUND_LEDGER_FILE = join(mkdtempSync(join(tmpdir(), "x402-buyer-test-")), "outbound-spend.ndjson");
+// The payout screen refuses every payment while no sanctions list is held;
+// this suite drives the payer, so it holds a fixture list.
+(await import("../src/tools/sanctions-kit.js")).__seedPayoutListForTests();
 const { quoteWithinCap, readAfterSpend } = await import("../src/x402-buyer.js");
 
 let pass = 0, fail = 0;
@@ -409,7 +412,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   const buyer = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
   const payFn = buyer.slice(buyer.indexOf("export async function payX402("));
   const at = payFn.indexOf("evidenceWallets.length");
-  ok(at > payFn.indexOf("quoteWithinCap(quotedAtomic, maxAtomic)") && at < payFn.indexOf("screenAddressForPayment") && at < payFn.indexOf("reserveSpend(quotedAtomic)"),
+  ok(at > payFn.indexOf("quoteWithinCap(quotedAtomic, maxAtomic)") && at < payFn.indexOf("assertPayoutScreened(payable.payTo") && at < payFn.indexOf("reserveSpend(quotedAtomic)"),
     "A7: the check sits after the cap check and before the sanctions screen and any budget hold");
 }
 

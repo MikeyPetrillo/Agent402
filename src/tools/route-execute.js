@@ -607,7 +607,11 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // A Solana refusal is proven only after waiting out the credential,
             // which spends most of the buyer's own window: no second seller.
             const waitedOnRefusal = chain === "solana" && e?.refused === true;
-            if (hasNext && !spentMaybe && !unanswered && chain !== "tempo" && !waitedOnRefusal) {
+            // No sanctions list held: every candidate would get the same
+            // refusal before signing, so the first one ends the request.
+            const screenUnavailable = e?.screenUnavailable === true;
+            if (screenUnavailable) lastErr.screenUnavailable = true;
+            if (hasNext && !spentMaybe && !unanswered && chain !== "tempo" && !waitedOnRefusal && !screenUnavailable) {
               console.warn(e?.refused
                 ? `[sor] seller ${ext.seller} refused the payment and the chain shows no debit - trying next candidate, nothing spent`
                 : `[sor] seller ${ext.seller} failed pre-payment (${sc}) - trying next candidate, nothing spent`);

@@ -26,6 +26,7 @@ const CLEAN = "0x1234567890123456789012345678901234567890";
 const PATH_USD = "0x20C000000000000000000000b9537d11c60E8b50";
 
 process.env.SANCTIONS_SCREEN_FILE = join(dir, "screen.json");
+process.env.SANCTIONS_PAYOUT_FILE = join(dir, "payout.json");
 process.env.SANCTIONS_LIST_URL = "http://fixture.local/SDN.XML";
 process.env.TEMPO_RECIPIENT_ADDRESS = TREASURY;
 delete process.env.TEMPO_DATA_API_KEY;

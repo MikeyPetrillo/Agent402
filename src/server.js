@@ -475,7 +475,7 @@ import { TTS_TOOLS, elevenLabsBreakerState } from "./tools/tts-kit.js";
 // 2026-08-22 seller-landscape builds: keyless derivatives data + env-gated X data / B2B enrichment.
 import { DERIVATIVES_TOOLS } from "./tools/derivatives-kit.js";
 import { SOLANA_INTEL_TOOLS } from "./tools/solana-intel-kit.js";
-import { SANCTIONS_TOOLS, startSanctionsRefresh, sanctionsStatus, sanctionsHealth } from "./tools/sanctions-kit.js";
+import { SANCTIONS_TOOLS, startSanctionsRefresh, startSanctionsPayoutStore, sanctionsStatus, sanctionsHealth } from "./tools/sanctions-kit.js";
 import { IMAGES_FAST_TOOLS } from "./tools/llm-images-fast-kit.js";
 import { ALCHEMY_DATA_TOOLS } from "./tools/alchemy-data-kit.js";
 import { FARCASTER_SOCIAL_TOOLS, farcasterSocialEnabled } from "./tools/farcaster-social-kit.js";
@@ -10169,6 +10169,10 @@ console.log(`[upstream-costs] ${upstreamCostsLoaded() ? `loaded (${upstreamCosts
 // because its row has not arrived. Without a database this resolves at once.
 // The stores that retry their own first load (src/store-retry.js) report
 // by label through the probe, so the status and this line name them.
+// The router's payout screen reads the address map stored with the last
+// download (src/tools/sanctions-kit.js) as one of these stores, so a payout
+// after a restart is screened at once; until a list is held it is refused.
+startSanctionsPayoutStore();
 setUnloadedStoresProbe(unloadedStores);
 {
   const t0 = Date.now();

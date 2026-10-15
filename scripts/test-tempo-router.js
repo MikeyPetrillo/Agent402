@@ -20,6 +20,10 @@ import { payTempo, __testResetProofCache, tempoInboundCount, tempoInboundEvidenc
 import { sellerDeliveryFailingRecently, sellerDeliveryMemoEntries, __resetSellerDeliveryFailuresForTest, noteSellerDeliveryFailure } from "../src/x402-buyer.js";
 import { buyerPaymentNetwork, externalChainsFor, EXTERNAL_CHAIN_BY_NETWORK, buildRouteExecuteTool, EXEC_TIERS } from "../src/tools/route-execute.js";
 import { Challenge } from "mppx";
+// The payout screen refuses every payment while no sanctions list is held;
+// this suite drives the payer, so it holds a fixture list.
+import { __seedPayoutListForTests } from "../src/tools/sanctions-kit.js";
+__seedPayoutListForTests();
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };

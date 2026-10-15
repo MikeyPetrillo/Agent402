@@ -90,6 +90,9 @@ if (cb) {
   ok(typeof cb.decodeUtf8 === "function" && cb.decodeUtf8(Buffer.concat([BOM, Buffer.from("x")])) === "x" && cb.decodeUtf8(Buffer.from("x\ufeffy")) === "x\ufeffy", "decodeUtf8 drops only a LEADING mark");
 }
 
+// The payout screen refuses every payment while no sanctions list is held;
+// this suite drives the payer, so it holds a fixture list.
+(await import("../src/tools/sanctions-kit.js")).__seedPayoutListForTests();
 const buyer = await import("../src/x402-buyer.js");
 
 // ---------------------------------------------------------------------------

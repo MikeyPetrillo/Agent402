@@ -28,6 +28,9 @@ const eq = (a, b, m) => { assert.equal(a, b, m); n++; };
 // A key is required before the request is built, and this one signs nothing:
 // every fetch is stubbed, so no credential it produces ever reaches a chain.
 process.env.X402_UPSTREAM_BUYER_KEY = "0x" + "11".repeat(32);
+// The payout screen refuses every payment while no sanctions list is held;
+// this suite drives the payer, so it holds a fixture list.
+(await import("../src/tools/sanctions-kit.js")).__seedPayoutListForTests();
 const { payX402, ROUTER_UA } = await import("../src/x402-buyer.js");
 const { CRAWLER_UA } = await import("../src/crawler-page.js");
 

@@ -13,9 +13,13 @@
 // last one is the one that would be catastrophic to get wrong: an empty parse
 // served as "no match" makes every query on earth come back clean.
 import { strict as assert } from "node:assert";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { sdnCryptoAddresses, sdnNames, lookupAddress, screenName, foldName, normalizeAddress, SANCTIONS_VERDICTS } from "../src/tools/sanctions-core.js";
 import { parseSdnXml, sdnEvmAddresses, loadSdnList, SDN_MAX_BYTES, __resetSdnListForTests } from "../src/ofac-sdn.js";
+// The payout map a load stores goes to a scratch file, never the shared default.
+process.env.SANCTIONS_PAYOUT_FILE = join(mkdtempSync(join(tmpdir(), "sanctions-")), "payout.json");
 
 let n = 0;
 const ok = (c, m) => { assert.ok(c, m); n++; };

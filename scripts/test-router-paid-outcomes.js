@@ -35,6 +35,9 @@ process.env.WALLET_DAILY_LEDGER_FILE = join(scratch, "wallet-daily-spend.json");
 process.env.OUTBOUND_LEDGER_FILE = join(scratch, "outbound-spend.ndjson");
 process.env.X402_INDEX_CRAWL = "off";
 
+// The payout screen refuses every payment while no sanctions list is held;
+// this suite drives the payer, so it holds a fixture list.
+(await import("../src/tools/sanctions-kit.js")).__seedPayoutListForTests();
 const buyer = await import("../src/x402-buyer.js");
 const guard = await import("../src/external-spend-guard.js");
 const { buildRouteExecuteTool, EXEC_TIERS } = await import("../src/tools/route-execute.js");

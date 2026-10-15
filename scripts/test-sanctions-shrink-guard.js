@@ -11,6 +11,7 @@ const doc = (entries, perEntry) => `<?xml version="1.0"?><sdnList><publshInforma
 let body = doc(20, 5); // 100 addresses
 const fetchImpl = async () => new Response(body, { status: 200, headers: { "content-type": "application/xml" } });
 process.env.SANCTIONS_LIST_URL = "https://fixture.invalid/SDN.XML";
+process.env.SANCTIONS_PAYOUT_FILE = (await import("node:path")).join((await import("node:fs")).mkdtempSync((await import("node:path")).join((await import("node:os")).tmpdir(), "sanctions-shrink-")), "payout.json");
 const sdn = await import("../src/ofac-sdn.js");
 const kit = await import("../src/tools/sanctions-kit.js");
 const st = await kit.loadSanctions({ fetchImpl, force: true });
