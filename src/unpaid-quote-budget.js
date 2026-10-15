@@ -36,6 +36,8 @@
 // is.
 import { DISCOVERY_PATHS, OWN_UA, indexerFor, uaToken } from "./traffic-classifier.js";
 import { perReplica } from "./rate-limit.js";
+import { cacheGet, cacheSet, cacheEnabled } from "./cache.js";
+import { createHash } from "node:crypto";
 
 export const DEFAULT_UNPAID_QUOTE_BUDGET_PER_HOUR = 3000;
 export const UNPAID_QUOTE_BUDGET_KEY_CAP = 20_000;
@@ -150,7 +152,20 @@ export const secondsToHourBoundary = (now = Date.now()) => Math.max(1, Math.ceil
  * @param {() => number} [o.now]
  * @param {(line:string) => void} [o.log]
  */
-export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => false, policyUrl = "/crawler", keyCap = UNPAID_QUOTE_BUDGET_KEY_CAP, now = Date.now, log = console.warn, replicas = null } = {}) {
+// Which clients have paid this hour, shared by every container through the
+// Redis cache (src/cache.js). Keys are a digest of the address and User-Agent
+// plus the hour, never the address itself, and expire with the hour. Without
+// Redis there is no shared record and each container keeps its own, as before.
+export function redisSharedSettled(now = Date.now) {
+  if (!cacheEnabled()) return null;
+  const slot = (key) => `a402:uqb:${createHash("sha256").update(String(key)).digest("hex").slice(0, 32)}:${Math.floor(now() / HOUR_MS)}`;
+  return {
+    mark: (key) => { void cacheSet(slot(key), 1, 3600); },
+    has: async (key) => (await cacheGet(slot(key))) !== null,
+  };
+}
+
+export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => false, policyUrl = "/crawler", keyCap = UNPAID_QUOTE_BUDGET_KEY_CAP, now = Date.now, log = console.warn, replicas = null , sharedSettled = null} = {}) {
   // `published` is the configured, system-wide figure; `limit` is this
   // process's share of it (RATE_LIMIT_REPLICAS, or `replicas` when given).
   const published = Number(budget) || 0;
@@ -191,6 +206,10 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
     if (settled.size >= keyCap) return;
     settled.add(key);
     counts.delete(key);
+    // Shared with the other containers (src/cache.js), so a client that paid
+    // on one replica is exempt on the other too. Best-effort and never
+    // awaited: without Redis the exemption is per container, as before.
+    try { sharedSettled?.mark?.(key); } catch { /* never break a response */ }
   }
 
   /** The method and path half: is this a request to a priced catalog route at
@@ -223,10 +242,25 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
     if (limit <= 0) return next();
     let verdict;
     let ua = "-";
+    let key = null;
+    const refuse = () => {
+      throttled += 1;
+      if (!logged.has(key) && logged.size < UNPAID_QUOTE_BUDGET_LOG_CAP) {
+        logged.add(key);
+        try { log(`[unpaid-budget] ${ua} passed ${limit} unpaid price checks on this container this hour (budget ${published} per hour); answering 429 until the hour turns`); } catch { /* logging never breaks a response */ }
+      }
+      res.set("Retry-After", String(verdict.retryAfterSeconds)).set("Cache-Control", "no-store");
+      return res.status(429).json({
+        ok: false,
+        error: "rate-limited",
+        hint: `Too many unpaid price checks from one client this hour (budget ${published} per hour, per address and User-Agent). Every route and price is published at /.well-known/x402, /openapi.json and /api/pricing, and a request carrying a payment, a credits key or a proof-of-work solution is never counted. A client that settles a payment stops being counted for the rest of the hour. See ${policyUrl}`,
+        retryAfterSeconds: verdict.retryAfterSeconds,
+      });
+    };
     try {
       const path = normalizeCatalogPath(req.path);
       if (!isCountablePath(req, path)) return next();
-      const key = keyOf(req);
+      key = keyOf(req);
       ua = key.slice(key.indexOf("|") + 1);
       // Armed on every request to a priced route, paid or not: the receipt goes
       // out on the PAID retry, which carries a credential and is never counted.
@@ -238,18 +272,13 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
       try { if (isSynthetic(req)) return next(); } catch { /* an unreadable token is not ours */ }
       verdict = hit(key);
       if (!verdict.limited) return next();
-      throttled += 1;
-      if (!logged.has(key) && logged.size < UNPAID_QUOTE_BUDGET_LOG_CAP) {
-        logged.add(key);
-        try { log(`[unpaid-budget] ${ua} passed ${limit} unpaid price checks on this container this hour (budget ${published} per hour); answering 429 until the hour turns`); } catch { /* logging never breaks a response */ }
-      }
     } catch { return next(); }
-    res.set("Retry-After", String(verdict.retryAfterSeconds)).set("Cache-Control", "no-store");
-    return res.status(429).json({
-      ok: false,
-      error: "rate-limited",
-      hint: `Too many unpaid price checks from one client this hour (budget ${published} per hour, per address and User-Agent). Every route and price is published at /.well-known/x402, /openapi.json and /api/pricing, and a request carrying a payment, a credits key or a proof-of-work solution is never counted. A client that settles a payment stops being counted for the rest of the hour. See ${policyUrl}`,
-      retryAfterSeconds: verdict.retryAfterSeconds,
+    // About to refuse: this client may have paid on another container. The
+    // shared check runs only here, on the rare refusal path.
+    if (!sharedSettled?.has) return refuse();
+    return Promise.resolve().then(() => sharedSettled.has(key)).catch(() => false).then((paidElsewhere) => {
+      if (paidElsewhere) { noteSettled(key); return next(); }
+      return refuse();
     });
   }
 

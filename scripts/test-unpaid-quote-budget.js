@@ -212,6 +212,29 @@ ok(isExemptPath("/mcp") && isExemptPath("/api/pricing") && isExemptPath("/openap
   drive(cold); drive(cold);
   ok(drive(cold).status === 429, "control: at budget 2, the third unpaid price check from one client is a 429");
 
+  // A client that paid on ANOTHER replica (2026-10-15): the shared record is
+  // read on the refusal path, and a hit lets the request through.
+  {
+    const marks = [];
+    const shared = (paid) => ({ mark: (k) => marks.push(k), has: async () => paid });
+    const driveAsync = async (b) => {
+      const req = { method: "GET", path: "/api/uuid", ip: "10.0.0.8", headers: { "user-agent": "buyer/2" }, socket: { remoteAddress: "10.0.0.8" } };
+      const res = fakeRes(); let nexted = false;
+      await b.middleware(req, res, () => { nexted = true; });
+      return { nexted, status: res.statusCode };
+    };
+    const elsewhere = createUnpaidQuoteBudget({ budget: 2, isPriced: () => true, sharedSettled: shared(true) });
+    await driveAsync(elsewhere); await driveAsync(elsewhere);
+    const r = await driveAsync(elsewhere);
+    ok(r.nexted && r.status === 200, `a client that paid on another replica passes instead of a 429 (status ${r.status})`);
+    const nowhere = createUnpaidQuoteBudget({ budget: 2, isPriced: () => true, sharedSettled: shared(false) });
+    await driveAsync(nowhere); await driveAsync(nowhere);
+    ok((await driveAsync(nowhere)).status === 429, "...and one that paid nowhere is still refused");
+    const local = createUnpaidQuoteBudget({ budget: 2, isPriced: () => true, sharedSettled: shared(false) });
+    local.noteSettled?.("10.0.0.9|x");
+    ok(typeof local.noteSettled !== "function" || marks.includes("10.0.0.9|x"), "a settlement here is written to the shared record");
+  }
+
   const warm = budget();
   drive(warm); drive(warm);
   const paid = drive(warm, {

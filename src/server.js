@@ -4,7 +4,7 @@ import { securityHeaders } from "./security-headers.js";
 import { carriesPaymentAttempt } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
-import { createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
+import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
 // Railway's egress has NO working IPv6 (every AAAA is ENETUNREACH). Node's
 // happy-eyeballs races the IPv6 address on dual-stack upstreams and fails ~15% of
@@ -2832,6 +2832,8 @@ const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
   isPriced: (method, path) => Boolean(CATALOG[`${method} ${path}`]),
   isSynthetic: isSyntheticRequest,
   policyUrl: `${BASE_URL.replace(/\/$/, "")}/crawler`,
+  // A client that paid on one replica is exempt on every replica (Redis).
+  sharedSettled: redisSharedSettled(),
 }) : null;
 if (UNPAID_BUDGET) app.use(UNPAID_BUDGET.middleware);
 // The metered tier prices every request from its body, so a big body is a big
