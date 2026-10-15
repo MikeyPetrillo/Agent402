@@ -7,13 +7,17 @@
 // deliberately not used here).
 //
 // Every handler validates its inputs (400), bounds list sizes (limit <= 500),
-// times out at 10s (504), maps upstream 5xx to 502 and 429 to 503, and never
+// ends a read at its deadline as a 503 naming the upstream and the step
+// (src/upstream-deadline.js), maps upstream 5xx to 502 and 429 to 503, and never
 // relays an upstream error body to the buyer. Output is compact JSON with
 // `source` + `fetchedAt` on every response.
 //
 // All tools are wallet-only (every call egresses). Offline coverage:
 // scripts/test-derivatives-kit.js (stubbed fetch).
 
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { hlSharedInfo, __hlShared } from "./hyperliquid-shared.js";
+// The reads answered in 0.1 to 1 s when measured (2026-10-14).
 const TIMEOUT_MS = 10_000;
 const HL_INFO = "https://api.hyperliquid.xyz/info";
 const DERIBIT = "https://www.deribit.com/api/v2/public";
@@ -89,25 +93,19 @@ function takeInstrument(raw) {
 // One transport wrapper for all three upstreams. Returns { status, text } so
 // the per-source helpers can interpret non-2xx bodies (Deribit puts its error
 // in a 400 JSON envelope, Hyperliquid answers 500 "null" for unknown coins).
-async function rawFetch(url, { method = "GET", body, label }) {
-  let res;
-  try {
-    res = await fetch(url, {
-      method,
-      headers: {
-        "User-Agent": UA,
-        Accept: "application/json",
-        ...(body ? { "Content-Type": "application/json" } : {}),
-      },
-      body,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (err) {
-    console.warn(`[derivatives] ${label} unreachable: ${err?.name ?? err?.code ?? err?.message}`);
-    throw bad(`${label} request timed out or was unreachable`, 504);
-  }
+async function rawFetch(url, { method = "GET", body, label, step = "data" }) {
+  const ctx = { label, step, timeoutMs: TIMEOUT_MS, tag: "[derivatives]" };
+  const res = await upstreamFetch(url, {
+    method,
+    headers: {
+      "User-Agent": UA,
+      Accept: "application/json",
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    body,
+  }, ctx);
   let text = "";
-  try { text = await res.text(); } catch { text = ""; }
+  try { text = await bodyUnderDeadline(res.text(), ctx); } catch (err) { if (err?.statusCode) throw err; text = ""; }
   if (res.status === 429) throw bad(`${label} rate limit reached upstream - retry shortly`, 503);
   return { status: res.status, text };
 }
@@ -120,8 +118,14 @@ function parseJson(text, label) {
 // Hyperliquid info endpoint. Unknown coins come back as HTTP 500 "null"
 // (candleSnapshot, fundingHistory) or HTTP 200 "null" (l2Book); both are
 // "no such market" to a buyer, not an outage.
-async function hlInfo(payload) {
-  const { status, text } = await rawFetch(HL_INFO, { method: "POST", body: JSON.stringify(payload), label: "Hyperliquid" });
+// Universe-wide documents (metaAndAssetCtxs, meta, predictedFundings, the
+// HIP-3 listings) go through the cache this kit shares with the other
+// Hyperliquid kit: one IP budget upstream, so one cache here
+// (src/tools/hyperliquid-shared.js). Everything else reads straight through.
+function hlInfo(payload) { return hlSharedInfo(payload, hlInfoDirect); }
+
+async function hlInfoDirect(payload) {
+  const { status, text } = await rawFetch(HL_INFO, { method: "POST", body: JSON.stringify(payload), label: "Hyperliquid", step: String(payload?.type || "info") });
   const trimmed = text.trim();
   if (status >= 500) {
     if (trimmed === "null") throw bad("Hyperliquid has no market for that coin", 422);
@@ -140,7 +144,7 @@ async function deribit(method, params = {}) {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v != null) qs.set(k, String(v));
   const url = `${DERIBIT}/${method}${qs.toString() ? `?${qs}` : ""}`;
-  const { status, text } = await rawFetch(url, { label: "Deribit" });
+  const { status, text } = await rawFetch(url, { label: "Deribit", step: "public method" });
   if (status >= 500) throw bad(`Deribit upstream HTTP ${status} - try again later`, 502);
   const json = parseJson(text, "Deribit");
   if (json && json.error) {
@@ -156,7 +160,7 @@ async function deribit(method, params = {}) {
 }
 
 async function llamaOptionsOverview() {
-  const { status, text } = await rawFetch(LLAMA_OPTIONS, { label: "DefiLlama" });
+  const { status, text } = await rawFetch(LLAMA_OPTIONS, { label: "DefiLlama", step: "options overview" });
   if (status >= 500) throw bad(`DefiLlama upstream HTTP ${status} - try again later`, 502);
   if (status >= 400) throw bad("DefiLlama refused the request", 502);
   const json = parseJson(text, "DefiLlama");
@@ -1384,7 +1388,7 @@ export const DERIVATIVES_TOOLS = [
 ];
 
 export const __test = {
-  resetMetaCache: () => { metaCache = { at: 0, names: null }; },
+  resetMetaCache: () => { metaCache = { at: 0, names: null }; __hlShared.clear(); },
   shapePerpDex,
   shapeDeployAuction,
   pairsToRows,
@@ -1397,3 +1401,6 @@ export const __test = {
   DERIBIT,
   LLAMA_OPTIONS,
 };
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(DERIVATIVES_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

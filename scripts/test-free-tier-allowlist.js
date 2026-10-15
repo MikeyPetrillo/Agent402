@@ -24,7 +24,7 @@ ok(isComputePayable({ slug: PROBE_POW_SLUG }), `the PoW probe slug (${PROBE_POW_
 // and a WALLET_ONLY_SLUGS-keyed breaker would leave it uncovered.
 import("node:fs").then(({ readFileSync }) => {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/!FREE_MODE && !isComputePayable\(tool\)\) gatewaySettleBreakerCheck\(req, \{ global: false \}\)/.test(src), "the catalog settle breaker is keyed on !isComputePayable(tool)");
+  ok(/!FREE_MODE && !isComputePayable\(tool\)\) (await )?gatewaySettleBreakerCheck\(req, \{ global: false \}\)/.test(src), "the catalog settle breaker is keyed on !isComputePayable(tool)");
   ok(!/WALLET_ONLY_SLUGS\.has\(tool\.slug\)\) gatewaySettleBreakerCheck/.test(src), "the catalog settle breaker is not keyed on WALLET_ONLY_SLUGS");
   ok(!/walletOnlySet: WALLET_ONLY_SLUGS/.test(src), "the operator breakdown is not keyed on WALLET_ONLY_SLUGS");
   ok(/const PAID_SLUGS = \{ has: \(slug\) => Object\.hasOwn\(TOOL_PRICES, slug\) && !isComputePayable\(\{ slug \}\) \}/.test(src), "PAID_SLUGS is the catalog complement of isComputePayable");

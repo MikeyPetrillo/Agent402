@@ -123,7 +123,7 @@ for (const [why, lunaReply, code] of [
 {
   const s = stub({ [OPENAI]: () => { throw Object.assign(new Error("timeout"), { name: "TimeoutError" }); }, [TYPESAFE]: json(200, JEV_ANSWERS) });
   let e = null; try { await judge(LUNA_IN, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
-  ok(e?.statusCode === 504 && s.hosts().join() === OPENAI, "a Luna timeout is an uncharged 504 and Jev is not called (the timed-out call may be billed)");
+  ok(e?.statusCode === 503 && e?.attribution === "upstream" && /did not answer the judgment read within \d+ s \(upstream deadline\)/.test(e?.message || "") && s.hosts().join() === OPENAI, `a Luna deadline is an uncharged 503 naming the step and Jev is not called (the timed-out call may be billed) (got ${e?.statusCode} "${e?.message}")`);
 }
 {
   const s = stub({ [TYPESAFE]: json(200, { model: "jev-1.13.0", answers: {} }) });

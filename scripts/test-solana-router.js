@@ -17,6 +17,9 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 
 // ---- 1. accept pinning --------------------------------------------------
 {
+  // The payout screen refuses every payment while no sanctions list is held;
+  // this suite drives the payer, so it holds a fixture list.
+  (await import("../src/tools/sanctions-kit.js")).__seedPayoutListForTests();
   const { pickPayableAccept } = await import("../src/x402-buyer.js");
   const good = { network: MAINNET, scheme: "exact", asset: USDC, amount: "5000", payTo: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg" };
   ok(pickPayableAccept([good], "solana") === good, "mainnet solana/exact/USDC accept is pinned");

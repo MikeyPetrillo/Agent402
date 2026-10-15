@@ -11,7 +11,7 @@
 //     refresh serves the stale copy (marked) inside STALE_MAX and fails past it,
 //   - every filter / sort / limit and the trimmed output shapes,
 //   - upstream 5xx -> 502, 402 (paywalled) -> 502, 429 -> 503, non-JSON ->
-//     502, transport timeout -> 504, unknown pool/chain/protocol -> 422,
+//     502, a deadline -> 503 naming the step, unknown pool/chain/protocol -> 422,
 //     and that no upstream body text is ever relayed to the buyer.
 // Live coverage is the catalog's answers-its-own-example sweep (test-all.js).
 
@@ -296,7 +296,7 @@ const countCalls = (pred) => calls.filter(pred).length;
 // ----------------------------------------------------------------------------
 {
   __test.resetCache();
-  for (const [m, status, label] of [["timeout", 504, "timeout"], ["http500", 502, "5xx"], ["http402", 502, "402 paywalled"], ["http429", 503, "429"], ["htmljunk", 502, "non-JSON"]]) {
+  for (const [m, status, label] of [["timeout", 503, "deadline (503 naming the upstream and the step)"], ["http500", 502, "5xx"], ["http402", 502, "402 paywalled"], ["http429", 503, "429"], ["htmljunk", 502, "non-JSON"]]) {
     mode = m;
     await throws(h("defi-chains")({}), status, `chains on ${label}`);
     await throws(h("defi-yield-history")({ pool: POOL_A }), status, `yield history on ${label}`);

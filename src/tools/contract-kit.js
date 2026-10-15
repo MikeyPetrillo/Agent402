@@ -18,6 +18,11 @@ const { keccak256 } = sha3;
 import { ssrfDispatcher } from "./fetch-guard.js";
 import { publicJsonRpc, pickNetwork } from "./chain-kit.js";
 
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+// DEADLINES (src/upstream-deadline.js): each read under its own cap and the
+// handler budget; a read that outlives it is a 503 naming the upstream and the
+// step, never a 504. The reads answered in 0.02 to 0.7 s when measured
+// (2026-10-14).
 const TIMEOUT_MS = 12_000;
 const ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
 const HEX_RE = /^0x[a-fA-F0-9]*$/;
@@ -166,21 +171,13 @@ function deriveAbiViews(abi) {
 // 4byte / Blockscout). Hosts are hardcoded by the handlers, so this is not an
 // SSRF surface, but every fetch still rides the guarded dispatcher by
 // convention.
-async function getJson(url, upstream) {
-  let res;
-  try {
-    res = await fetch(url, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      dispatcher: ssrfDispatcher,
-    });
-  } catch {
-    throw bad(`${upstream} did not respond - try again shortly`, 504);
-  }
+async function getJson(url, upstream, step = "lookup") {
+  const ctx = { label: upstream, step, timeoutMs: TIMEOUT_MS, tag: "[contract]" };
+  const res = await upstreamFetch(url, { headers: { Accept: "application/json" }, dispatcher: ssrfDispatcher }, ctx);
   if (res.status === 429) throw bad(`${upstream} rate limit reached - retry shortly`, 503);
   if (!res.ok && res.status !== 404) throw bad(`${upstream} error (HTTP ${res.status})`, 502);
   let data;
-  try { data = await res.json(); } catch { throw bad(`${upstream} returned non-JSON`, 502); }
+  try { data = await bodyUnderDeadline(res.json(), ctx); } catch (err) { if (err?.statusCode) throw err; throw bad(`${upstream} returned non-JSON`, 502); }
   return { status: res.status, data };
 }
 
@@ -1052,3 +1049,6 @@ export const CONTRACT_TOOLS = [
     },
   },
 ];
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(CONTRACT_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

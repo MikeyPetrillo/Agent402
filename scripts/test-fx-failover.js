@@ -27,8 +27,10 @@ const src = readFileSync(new URL("../src/tools/macro-kit.js", import.meta.url), 
 // Locate the DASHBOARD call specifically. There are three frankfurter call
 // sites and matching the first one tested fx-rate, which is a different case
 // (see below). The explanatory comment above the call also names the host, so
-// a bare hostname match finds prose rather than code.
-const callIdx = src.indexOf("v1/latest?from=USD");
+// a bare hostname match finds prose rather than code. Every call builds its
+// URL with ratesUrl() (src/tools/frankfurter.js, the v2 adapter); the
+// dashboard's is the one that asks for the whole G10 basket.
+const callIdx = src.indexOf("ratesUrl({ base: \"USD\", quotes: G10 })");
 const call = callIdx >= 0 ? src.slice(callIdx, callIdx + 200) : "";
 ok(callIdx >= 0, "the fx-dashboard call site is found");
 ok(/FX_PRIMARY/.test(call),
@@ -47,7 +49,10 @@ ok(/retries:\s*0/.test(budget),
 //    'fix' that pointed both at the same host would pass the timing test and
 //    remove the redundancy that makes it worth having.
 ok(/open\.er-api\.com/.test(src), "the second publisher is still wired in");
+const adapter = readFileSync(new URL("../src/tools/frankfurter.js", import.meta.url), "utf8");
 const primaryHost = "api.frankfurter.dev";
+ok(adapter.includes(`https://${primaryHost}/v2`), "the primary is Frankfurter v2 (v1 is frozen)");
+ok(/providers:\s*"ecb"/.test(adapter), "every v2 read is pinned to the ECB provider, not the blended default");
 ok(!src.includes(`open.er-api.com/${primaryHost}`) && primaryHost !== "open.er-api.com",
   "primary and fallback are genuinely different hosts");
 
@@ -69,7 +74,7 @@ ok(ms * 1 + 3000 < SELFCHECK_BUDGET_MS,
 //    short timeout there would just convert slow successes into fast failures
 //    and lower the hit rate for a paid call. Blanket-applying the fix would
 //    have been the wrong move, so the difference is pinned deliberately.
-const others = [...src.matchAll(/await getJson\(`https:\/\/api\.frankfurter\.dev\/v1\/\$\{[^`]*`([^)]*)\)/g)]
+const others = [...src.matchAll(/await getJson\(ratesUrl\(\{ base: from[^}]*\}\)([^;]*);/g)]
   .map((x) => x[1]);
 ok(others.length >= 2, `the two fallback-less frankfurter calls are present (${others.length})`);
 ok(others.every((a) => !/FX_PRIMARY/.test(a)),

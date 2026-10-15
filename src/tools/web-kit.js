@@ -24,6 +24,7 @@
 // checks opt-in via WEB_LIVE_TEST=1).
 
 import { loadJsdom } from "./lazy-deps.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { ssrfDispatcher, safeFetch, assertPublicUrl, isSsrfBlock, retryTransient } from "./fetch-guard.js";
 
 import { REPO_URL } from "../repo-link.js";
@@ -54,6 +55,11 @@ function takeUrl(raw) {
 // archive-snapshot — Wayback Machine availability API (keyless), with ODU's
 // MemGator Memento aggregator as a diverse fallback.
 // ============================================================================
+// DEADLINES (src/upstream-deadline.js): each archive read under its own cap
+// (Wayback 12 s, Memento 20 s, as before) and the route's payment-window
+// budget, since Wayback answered in 9.2 s cold and 0.3 s warm when measured
+// (2026-10-14); a read that outlives its cap is a 503 naming the upstream and
+// the step, never a 504.
 const WAYBACK_TIMEOUT_MS = 12_000;
 const MEMENTO_TIMEOUT_MS = 20_000;
 
@@ -61,22 +67,11 @@ async function waybackAvailable(url, timestamp) {
   const api = new URL("https://archive.org/wayback/available");
   api.searchParams.set("url", url);
   if (timestamp) api.searchParams.set("timestamp", timestamp);
-  let res;
-  try {
-    res = await fetch(api, {
-      headers: { Accept: "application/json", "User-Agent": USER_AGENT },
-      signal: AbortSignal.timeout(WAYBACK_TIMEOUT_MS),
-      dispatcher: ssrfDispatcher,
-    });
-  } catch (err) {
-    // Log the real transport cause before mapping to a buyer-facing 504 —
-    // this catch used to be bare and discarded the evidence.
-    console.warn(`[archive-snapshot] archive.org fetch failed: ${err.name}: ${err.message}`);
-    throw bad("Wayback Machine did not respond - try again shortly", 504);
-  }
+  const ctx = { label: "Wayback Machine", step: "availability", timeoutMs: WAYBACK_TIMEOUT_MS, tag: "[archive-snapshot]" };
+  const res = await upstreamFetch(api, { headers: { Accept: "application/json", "User-Agent": USER_AGENT }, dispatcher: ssrfDispatcher }, ctx);
   if (res.status === 429) throw bad("Wayback Machine rate limit reached - retry shortly", 503);
   if (!res.ok) throw bad(`Wayback Machine error (HTTP ${res.status})`, 502);
-  try { return await res.json(); } catch { throw bad("Wayback Machine returned non-JSON", 502); }
+  try { return await bodyUnderDeadline(res.json(), ctx); } catch (err) { if (err?.statusCode) throw err; throw bad("Wayback Machine returned non-JSON", 502); }
 }
 
 // Fallback: MemGator at memgator.cs.odu.edu — a public Memento aggregator
@@ -95,20 +90,11 @@ async function mementoClosest(url, timestamp) {
   const ts = timestamp || new Date().toISOString().replace(/\D/g, "").slice(0, 14);
   const dt = ts.slice(0, ts.length - (ts.length % 2));
   const bare = url.replace(/^https?:\/\//i, "");
-  let res;
-  try {
-    res = await fetch(`https://memgator.cs.odu.edu/memento/json/${dt}/${bare}`, {
-      headers: { Accept: "application/json", "User-Agent": USER_AGENT },
-      signal: AbortSignal.timeout(MEMENTO_TIMEOUT_MS),
-      dispatcher: ssrfDispatcher,
-    });
-  } catch (err) {
-    console.warn(`[archive-snapshot] memgator.cs.odu.edu fetch failed: ${err.name}: ${err.message}`);
-    throw bad("Memento aggregator did not respond - try again shortly", 504);
-  }
+  const ctx = { label: "Memento aggregator", step: "closest memento", timeoutMs: MEMENTO_TIMEOUT_MS, tag: "[archive-snapshot]" };
+  const res = await upstreamFetch(`https://memgator.cs.odu.edu/memento/json/${dt}/${bare}`, { headers: { Accept: "application/json", "User-Agent": USER_AGENT }, dispatcher: ssrfDispatcher }, ctx);
   if (res.status === 404) return null;
   if (!res.ok) throw bad(`Memento aggregator error (HTTP ${res.status})`, 502);
-  try { return await res.json(); } catch { throw bad("Memento aggregator returned non-JSON", 502); }
+  try { return await bodyUnderDeadline(res.json(), ctx); } catch (err) { if (err?.statusCode) throw err; throw bad("Memento aggregator returned non-JSON", 502); }
 }
 
 // ============================================================================
@@ -284,9 +270,11 @@ export const WEB_TOOLS = [
         try {
           m = await mementoClosest(url, timestamp);
         } catch (err2) {
-          // Both archives down — keep the Wayback error's status semantics
-          // (504/503/502) but carry both causes in the message.
-          throw bad(`${err.message}; Memento fallback also failed: ${err2.message}`, err.statusCode || 502);
+          // Both archives down: keep the Wayback error's status and its
+          // class fields (attribution, upstreamFailure) and carry both causes
+          // in the message.
+          throw Object.assign(bad(`${err.message}; Memento fallback also failed: ${err2.message}`, err.statusCode || 502),
+            ...(err.attribution ? [{ attribution: err.attribution }] : []), ...(err.upstreamFailure ? [{ upstreamFailure: err.upstreamFailure }] : []));
         }
         const mClosest = m?.mementos?.closest;
         const mAvailable = typeof mClosest?.uri === "string" && mClosest.uri.length > 0;
@@ -545,3 +533,6 @@ export const WEB_TOOLS = [
     },
   },
 ];
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(WEB_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

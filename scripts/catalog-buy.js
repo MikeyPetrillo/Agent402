@@ -22,8 +22,19 @@
 //
 // SPEND CONTROL
 //   - Pays ONLY on Base, ONLY the accept the live 402 quotes, and NEVER above
-//     the list price /api/pricing publishes: a quote over list is a graded
-//     failure and is not signed.
+//     the tool's documented ceiling. A fixed-price tool's ceiling is the list
+//     price /api/pricing publishes (a quote over list is graded
+//     quote-over-list). A QUOTED tool (the metered /v1 tiers, decide) prices
+//     each request from its body between a floor, which is what the list shows,
+//     and a documented ceiling: its row says `quoted: true` with a
+//     `quoteRange` on /api/pricing and `x-payment-info.price` reads mode
+//     "dynamic" with min/max on /openapi.json (both derived from the same
+//     catalog field, def.quoteRange). A quote at or under that ceiling is
+//     signed; one above it is graded quote-over-ceiling. The list floor is
+//     never the maximum for a quoted tool.
+//   - One paid call in flight and about a second between calls by default
+//     (CATALOG_BUY_CONCURRENCY, CATALOG_BUY_PACE_MS): production serves buyers
+//     first, and a run that walks 500 tools has all day.
 //   - Hard cap per run (CATALOG_BUY_MAX_USD): the plan is cut against list
 //     prices before anything is bought (the dearest products go first, each one
 //     named), and the settled total is checked again before every signature.
@@ -38,18 +49,20 @@
 //   A 5xx from our side is retried once after a backoff (nothing is charged on
 //   a 5xx: settlement runs after the handler) and the second answer is graded.
 //   A 402 after paying is `unsettled`. A tool with no usable published example
-//   is `no-example`, a tool cut by the cap is `cap`: both are reported by name
-//   and both fail the run, because a tool nobody checked is not a tool that
-//   passed.
+//   is `no-example` and fails the run (a tool nobody can check is not a tool
+//   that passed). A tool cut by the spend cap is `cap`: NOT a failure, it is
+//   counted apart as cap-deferred in the headline, the issue and the exit code,
+//   because a tool the budget skipped says nothing about the tool.
 //     0  every graded tool passed      5  some tool failed its grade
-//     3  unfunded (nothing bought)     2  misconfigured (no key, no catalog)
+//     4  nothing failed, some tools    3  unfunded (nothing bought)
+//        were cap-deferred (unchecked) 2  misconfigured (no key, no catalog)
 //
 // Usage:
 //   node scripts/catalog-buy.js [--tier daily|weekly|cheap|all] [--only <slug substring>]
 //                               [--dry] [--out report.json]
 // Env: TARGET_URL, BURNER_KEY, POW_SECRET, CATALOG_BUY_MAX_USD, CATALOG_BUY_FLOOR_USD,
-//      CATALOG_BUY_SKIP (comma slugs), CATALOG_BUY_CONCURRENCY, CATALOG_BUY_PACE_MS,
-//      CATALOG_BUY_TIMEOUT_MS, CATALOG_BUY_SLOW_TIMEOUT_MS.
+//      CATALOG_BUY_SKIP (comma slugs), CATALOG_BUY_CONCURRENCY (default 1),
+//      CATALOG_BUY_PACE_MS (default 1000), CATALOG_BUY_TIMEOUT_MS, CATALOG_BUY_SLOW_TIMEOUT_MS.
 //
 // The pure parts (catalog, plan, rotation, grading, exit code, summary) are
 // exported and unit-tested offline by scripts/test-catalog-buy.js against a stub
@@ -65,6 +78,8 @@ export const DAILY_MAX_USD = 0.10;
 export const ROTATION_DAYS = 7;
 export const DEFAULT_CAP_USD = 12;
 export const DEFAULT_FLOOR_USD = 2;
+export const DEFAULT_CONCURRENCY = 1;
+export const DEFAULT_PACE_MS = 1000;
 export const TIERS = ["daily", "weekly", "cheap", "all"];
 const BASE_RPCS = ["https://mainnet.base.org", "https://base.blockscout.com/api/eth-rpc"];
 
@@ -78,8 +93,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // list: that one also excuses the board-backed tools because a keyless CI boot
 // indexes nothing, and on production those must be populated. The memory
 // family is keyed on the payer, and this run is the only writer in the
-// burner's namespace, so a read can land before the day's write.
+// burner's namespace, so a read can land before the day's write. Receipts are
+// keyed on the payer too and list EXTERNAL settlements only (sales-ledger's
+// payer view filters internal = 0): every buy this run makes carries the
+// heartbeat token and books as internal, so the burner's own receipts are
+// empty by construction, while a real payer's carry the rows the example shows.
 export const PROD_EMPTY_ARRAY_OK = new Map([
+  ["/api/receipts", "rows"],
   ["/api/weather-alerts", "alerts"],
   ["/api/nft-metadata", "attributes"],
   ["/api/coin-profile", "platforms"],
@@ -106,6 +126,27 @@ export function exampleOf(method, op) {
   return { kind: "json", body };
 }
 
+/**
+ * The most a quoted tool's live 402 may ask for, in USD, or null for a
+ * fixed-price tool. Read from the price list's row first (`quoted: true` with
+ * `quoteRange.maxUsd`), else from the operation's `x-payment-info.price` when
+ * it reads mode "dynamic"; both are derived from the catalog's own quoteRange.
+ * A priced-by-model flat tier also publishes a dynamic range (its body may name
+ * a model another flat tier serves), but its published example is served by
+ * its own tier, so it is held to its list price like any fixed-price tool.
+ */
+export function quoteCeilingUsd(ep, op) {
+  const fromRow = ep?.quoted === true ? Number(ep.quoteRange?.maxUsd) : NaN;
+  if (Number.isFinite(fromRow) && fromRow > 0) return fromRow;
+  if (ep?.pricedByModel === true) return null;
+  const price = op?.["x-payment-info"]?.price;
+  if (price && price.mode === "dynamic") {
+    const max = Number(price.max);
+    if (Number.isFinite(max) && max > 0) return max;
+  }
+  return null;
+}
+
 /** Every priced operation on /openapi.json, priced from /api/pricing. */
 export function catalogFromSurfaces(pricing, spec) {
   const byPath = new Map((pricing.endpoints || pricing.tools || []).map((e) => [e.path, e]));
@@ -119,9 +160,20 @@ export function catalogFromSurfaces(pricing, spec) {
       const ep = byPath.get(path);
       const usd = parsePriceUsd(ep?.price ?? op["x-price"] ?? 0);
       if (!(usd > 0)) continue;
+      // The slug is a label (the price list's, else spelled from the path).
+      // The PATH is the spec's own key and is what gets requested: a slug is
+      // never turned back into a path (decide-execute lives at /api/decide/execute).
       const slug = ep?.slug || path.replace(/^\/api\//, "").replace(/^\/v1\//, "v1-").replace(/\//g, "-");
       const types = Object.keys(op.responses?.["200"]?.content || {});
-      rows.push({ slug, path, method, usd, op, example: exampleOf(method, op), binary: types.length > 0 && !types.includes("application/json") });
+      const ceiling = quoteCeilingUsd(ep, op);
+      rows.push({
+        slug, path, method, usd, op, example: exampleOf(method, op),
+        binary: types.length > 0 && !types.includes("application/json"),
+        // quoted: the list price is a floor and maxUsd the documented ceiling;
+        // fixed: both are the list price.
+        quoted: ceiling != null && micro(ceiling) > micro(usd),
+        maxUsd: ceiling != null && micro(ceiling) > micro(usd) ? ceiling : usd,
+      });
     }
   }
   rows.sort((a, b) => a.slug.localeCompare(b.slug) || a.path.localeCompare(b.path));
@@ -196,13 +248,28 @@ export function gradeAnswer(row, r) {
   return { pass: true, grade: "ok" };
 }
 
+/** A tool the spend cap left unbought: unchecked, never failed. */
+export const isDeferred = (r) => r.grade === "cap";
+export const failedOf = (results) => results.filter((r) => !r.pass && !isDeferred(r));
+export const deferredOf = (results) => results.filter(isDeferred);
+
 export function exitCodeFor(summary) {
   if (summary.unfunded) return 3;
-  return summary.results.every((r) => r.pass) ? 0 : 5;
+  if (failedOf(summary.results).length) return 5;
+  return deferredOf(summary.results).length ? 4 : 0;
+}
+
+/** One word for the run: ok, fail, deferred (nothing failed, some unchecked) or unfunded. */
+export function resultWordFor(summary) {
+  if (summary.unfunded) return "unfunded";
+  if (failedOf(summary.results).length) return "fail";
+  return deferredOf(summary.results).length ? "deferred" : "ok";
 }
 
 const usd = (n) => `$${Number(n || 0).toFixed(3)}`;
-const sortRows = (rows) => [...rows].sort((a, b) => Number(a.pass) - Number(b.pass) || a.slug.localeCompare(b.slug));
+// Failures first, then the cap-deferred, then the passes.
+const rank = (r) => (r.pass ? 2 : isDeferred(r) ? 1 : 0);
+const sortRows = (rows) => [...rows].sort((a, b) => rank(a) - rank(b) || a.slug.localeCompare(b.slug));
 
 export function summaryTable(results) {
   const rows = sortRows(results).map((r) => [r.slug, usd(r.usd), r.status == null ? "-" : String(r.status), r.grade, r.ms == null ? "-" : String(r.ms)]);
@@ -212,13 +279,20 @@ export function summaryTable(results) {
   return [line(head), line(w.map((n) => "-".repeat(n))), ...rows.map(line)].join("\n");
 }
 
+export function headlineFor(summary) {
+  if (summary.unfunded) return "UNFUNDED";
+  const failed = failedOf(summary.results).length, deferred = deferredOf(summary.results).length;
+  if (!failed && !deferred) return "all passed";
+  return [failed ? `${failed} FAILED` : "nothing failed", deferred ? `${deferred} cap-deferred` : ""].filter(Boolean).join(", ");
+}
+
 export function markdownSummary(summary) {
   const { results, plan, spentUsd, balanceUsd } = summary;
-  const failed = results.filter((r) => !r.pass);
+  const failed = failedOf(results), deferred = deferredOf(results);
   const lines = [
-    `## Catalog buy: ${summary.unfunded ? "UNFUNDED" : failed.length ? `${failed.length} FAILED` : "all passed"}`,
+    `## Catalog buy: ${headlineFor(summary)}`,
     "",
-    `tier \`${plan.tier}\` (slice ${plan.sliceIndex} of ${ROTATION_DAYS}) | graded ${results.length} | passed ${results.length - failed.length} | planned ${usd(plan.plannedUsd)} | charged ${usd(spentUsd)} at list price${balanceUsd == null ? "" : ` | burner ${summary.unfunded ? "below" : "above"} its floor before the run`}`,
+    `tier \`${plan.tier}\` (slice ${plan.sliceIndex} of ${ROTATION_DAYS}) | graded ${results.length} | passed ${results.length - failed.length - deferred.length} | failed ${failed.length} | cap-deferred ${deferred.length} | planned ${usd(plan.plannedUsd)} | charged ${usd(spentUsd)}, never above a tool's documented ceiling${balanceUsd == null ? "" : ` | burner ${summary.unfunded ? "below" : "above"} its floor before the run`}`,
     "",
     "| slug | price | status | grade | ms |",
     "|---|---:|---|---|---:|",
@@ -272,7 +346,7 @@ async function readBody(res) {
  */
 export async function runCatalogBuy({
   target, payer, fetchImpl = fetch, readBalanceUsd = null, powSecret = "", tier = "daily", only = "", skip = [],
-  capUsd = DEFAULT_CAP_USD, floorUsd = DEFAULT_FLOOR_USD, concurrency = 2, paceMs = 400, timeoutMs = 90_000,
+  capUsd = DEFAULT_CAP_USD, floorUsd = DEFAULT_FLOOR_USD, concurrency = DEFAULT_CONCURRENCY, paceMs = DEFAULT_PACE_MS, timeoutMs = 90_000,
   slowTimeoutMs = 330_000, retryBackoffMs = 5_000, now = new Date(), dry = false, log = console,
 } = {}) {
   const base = String(target).replace(/\/+$/, "");
@@ -282,7 +356,7 @@ export async function runCatalogBuy({
   if (!catalog.length) throw Object.assign(new Error("the catalog read empty: nothing to buy"), { exitCode: 2 });
   const plan = planRun(catalog, { tier, only, skip, now, capUsd });
   log.log(`[catalog-buy] ${base} tier=${plan.tier} slice=${plan.sliceIndex}/${ROTATION_DAYS} catalog=${catalog.length} (daily ${plan.dailyCount}, weekly ${plan.weeklyCount}, today's slice ${usd(plan.sliceUsd)})`);
-  log.log(`[catalog-buy] buying ${plan.buy.length} at list price, planned ${usd(plan.plannedUsd)} under the ${usd(capUsd)} cap; cap-deferred ${plan.deferred.length}, no example ${plan.noExample.length}, skipped ${plan.skipped.length}${dry ? " [dry run: nothing is bought]" : ""}`);
+  log.log(`[catalog-buy] buying ${plan.buy.length} (${plan.buy.filter((r) => r.quoted).length} quoted under a documented ceiling, the rest at list price), planned ${usd(plan.plannedUsd)} under the ${usd(capUsd)} cap; cap-deferred ${plan.deferred.length}, no example ${plan.noExample.length}, skipped ${plan.skipped.length}; ${concurrency} in flight, ${paceMs} ms pace${dry ? " [dry run: nothing is bought]" : ""}`);
 
   const results = [];
   const unbought = (r, grade) => ({ slug: r.slug, path: r.path, usd: r.usd, status: null, grade, pass: false, ms: null, attempts: 0 });
@@ -349,7 +423,9 @@ export async function runCatalogBuy({
     if (!accepts.length) return { status: 402, grade: "no-base-accept" };
     const quoted = Number(accepts[0].amount ?? accepts[0].maxAmountRequired);
     if (!Number.isFinite(quoted) || quoted <= 0) return { status: 402, grade: "unreadable-quote" };
-    if (quoted > micro(row.usd)) return { status: 402, grade: "quote-over-list", quotedUsd: quoted / 1e6 };
+    // A fixed-price tool may ask exactly its list price; a quoted tool may ask
+    // anything up to its documented ceiling (its list price is the floor).
+    if (quoted > micro(row.maxUsd)) return { status: 402, grade: row.quoted ? "quote-over-ceiling" : "quote-over-list", quotedUsd: quoted / 1e6 };
     if (reserved + quoted > cap) return { status: 402, grade: "cap", quotedUsd: quoted / 1e6 };
     reserved += quoted;
     try {
@@ -430,8 +506,8 @@ async function main() {
       skip: String(process.env.CATALOG_BUY_SKIP || "").split(","),
       capUsd: num("CATALOG_BUY_MAX_USD", DEFAULT_CAP_USD),
       floorUsd: num("CATALOG_BUY_FLOOR_USD", DEFAULT_FLOOR_USD),
-      concurrency: num("CATALOG_BUY_CONCURRENCY", 2),
-      paceMs: num("CATALOG_BUY_PACE_MS", 400),
+      concurrency: num("CATALOG_BUY_CONCURRENCY", DEFAULT_CONCURRENCY),
+      paceMs: num("CATALOG_BUY_PACE_MS", DEFAULT_PACE_MS),
       timeoutMs: num("CATALOG_BUY_TIMEOUT_MS", 90_000),
       slowTimeoutMs: num("CATALOG_BUY_SLOW_TIMEOUT_MS", 330_000),
     });
@@ -440,9 +516,9 @@ async function main() {
     process.exit(e?.exitCode || 1);
   }
 
-  const failed = summary.results.filter((r) => !r.pass);
+  const failed = failedOf(summary.results), deferred = deferredOf(summary.results);
   console.log(`\n${summaryTable(summary.results)}`);
-  console.log(`\ngraded ${summary.results.length}: ${summary.results.length - failed.length} passed, ${failed.length} failed | planned ${usd(summary.plan.plannedUsd)} | charged ${usd(summary.spentUsd)} at list price${summary.payer ? ` | payer ${summary.payer}` : ""}`);
+  console.log(`\ngraded ${summary.results.length}: ${summary.results.length - failed.length - deferred.length} passed, ${failed.length} failed, ${deferred.length} cap-deferred | planned ${usd(summary.plan.plannedUsd)} | charged ${usd(summary.spentUsd)}, never above a tool's documented ceiling${summary.payer ? ` | payer ${summary.payer}` : ""}`);
   if (summary.plan.deferred.length) console.log(`not bought (cap): ${summary.plan.deferred.map((r) => r.slug).join(", ")}`);
   if (summary.plan.noExample.length) console.log(`no usable published example: ${summary.plan.noExample.map((r) => r.slug).join(", ")}`);
   if (summary.plan.skipped.length) console.log(`skipped by CATALOG_BUY_SKIP: ${summary.plan.skipped.map((r) => r.slug).join(", ")}`);
@@ -453,9 +529,10 @@ async function main() {
   }
   if (process.env.GITHUB_STEP_SUMMARY) { try { appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdownSummary(summary)}\n`); } catch { /* local run */ } }
   if (process.env.GITHUB_OUTPUT) {
-    const result = summary.unfunded ? "unfunded" : failed.length ? "fail" : "ok";
+    const result = resultWordFor(summary);
     const named = failed.slice(0, 60).map((r) => `${r.slug} (${r.grade})`).join(", ") + (failed.length > 60 ? `, and ${failed.length - 60} more` : "");
-    try { appendFileSync(process.env.GITHUB_OUTPUT, `result=${result}\nfailing=${named}\ngraded=${summary.results.length}\nfailed=${failed.length}\ncharged=${usd(summary.spentUsd)}\n`); } catch { /* local run */ }
+    const deferredNamed = deferred.slice(0, 60).map((r) => r.slug).join(", ") + (deferred.length > 60 ? `, and ${deferred.length - 60} more` : "");
+    try { appendFileSync(process.env.GITHUB_OUTPUT, `result=${result}\nfailing=${named}\ndeferring=${deferredNamed}\ngraded=${summary.results.length}\nfailed=${failed.length}\ndeferred=${deferred.length}\ncharged=${usd(summary.spentUsd)}\n`); } catch { /* local run */ }
   }
   process.exit(summary.exitCode);
 }

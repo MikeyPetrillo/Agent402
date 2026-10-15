@@ -2,6 +2,18 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-10-15",
+    title: "A complete sanctions list, and steadier search under load",
+    items: [
+      "sanctions-wallet now reads OFAC's full SDN XML export. Since it launched on 2026-09-12 it read the CSV export, which cuts long entries short: it saw about half of the published digital currency addresses, and some Tron, Dogecoin and other case-sensitive addresses were stored in the wrong case. An address in either group could have been answered as not listed. Every published address is now matched exactly as listed.",
+      "Search and routing (/api/find, /api/route and the MCP catalog tools) bound every uncached search with a deadline and recover on their own if one stalls; under load they answer 503 with Retry-After instead of hanging.",
+      "Every published npm package retries a discovery read that answers 503 with a retry delay, a few times and briefly, and never repeats a paid call.",
+      "Data tools that wait on an outside service answer 503 naming the service and the step when it does not answer in time, and nothing is charged.",
+      "Transcription with diarize:true adds language_confidence, the model's 0 to 1 confidence in the language it detected. Speech requests, and transcription with diarize:true, route only to model providers that do not collect the data, and to zero-data-retention endpoints wherever every endpoint of the model offers it.",
+      "stock-quote and stock-history read the consolidated end-of-day summary across all US exchanges and ATSs: the official close and the market's total volume, returned as volume. Each answer names its dataset and coverage; a read that falls back to the three-venue feed says coverage three-venue and returns volume null.",
+    ],
+  },
+  {
     date: "2026-10-09",
     title: "A third model behind every judgment",
     items: [

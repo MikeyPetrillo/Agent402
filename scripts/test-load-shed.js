@@ -105,10 +105,13 @@ try {
   // The in-flight ceiling: sliced router queries can overlap, and a burst
   // passes the CPU budget before any of it is charged, so a count of computes
   // in progress bounds them. Checked after the cache, before the compute; the
-  // count is released in a finally so a throwing compute cannot leak a slot.
-  const inflightCheck = body.indexOf("discoveryInFlight >= DISCOVERY_MAX_INFLIGHT");
+  // slot is released in a finally so a throwing compute cannot leak it, and the
+  // count admission reads is the gauge's live count, so a slot a deadline missed
+  // stops refusing anyone once it is that old (scripts/test-discovery-deadline.js
+  // pins the deadline itself).
+  const inflightCheck = body.indexOf("discoveryInFlight.live() >= DISCOVERY_MAX_INFLIGHT");
   ok(inflightCheck > body.indexOf("cacheGet(cacheKey)") && inflightCheck < body.indexOf("computeFn("), "the in-flight ceiling is checked after the cache lookup and before the compute");
-  ok(/discoveryInFlight\+\+;\s*let result, syncMs;\s*try \{[\s\S]*?\} finally \{\s*discoveryInFlight--;/.test(body), "...and the in-flight count is released in a finally");
+  ok(/const releaseSlot = discoveryInFlight\.enter\(\{ slug: analyticsSlug \}\);\s*let result, syncMs, pastDeadline = false;\s*try \{[\s\S]*?\} finally \{\s*releaseSlot\(\);/.test(body), "...and the in-flight slot is released in a finally");
   ok(/const meter = \(ms\) => \{[^}]*discoveryCpuBudget\.record\(ms\)/.test(body), "each router slice is charged to the CPU budget as it runs");
 } finally { proc2.kill("SIGKILL"); }
 

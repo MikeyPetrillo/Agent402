@@ -867,13 +867,15 @@ export function createMppSubscriptions({
   // rollout switch passed, and that switch already requires this account.
   const feePayer = subscriptionFeePayer();
 
-  const method = tempoServer.subscription({
+  // mppx 0.12+ returns an ordered group of subscription offers, one per
+  // currency; this server bills in one, so the group has one member.
+  const [method] = tempoServer.subscription({
     // Every monitor product is priced the same today, and the activation path
     // never reads this default: `verify` works off the CHALLENGE's own request,
     // which we mint per product. It is set anyway so the method is never
     // constructed with an incomplete request shape.
     amount: (MONITOR_PRODUCTS["domain-monitor"].price / 100).toFixed(envDecimals()),
-    currency, decimals, recipient, chainId: TEMPO_MAINNET_CHAIN_ID,
+    currencies: [currency], decimals, recipient, chainId: TEMPO_MAINNET_CHAIN_ID,
     periodCount: PERIOD_COUNT, periodUnit: PERIOD_UNIT,
     subscriptionExpires: new Date(Math.floor((Date.now() + SUBSCRIPTION_TERM_MS) / 1000) * 1000),
     store: kv,

@@ -7,6 +7,8 @@
 // lexical order on a null, so a second backend only adds answers.
 import { createHash } from "node:crypto";
 import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL } from "./decision-one.js";
+import { raceDeadline } from "./inflight-gauge.js";
+import { createSharedDailySpend } from "./shared-limits.js";
 
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 const MODEL = (process.env.TYPESAFE_MODEL || "jev-latest").trim();
@@ -27,7 +29,16 @@ export const toolJudgeEnabled = () => (!!keyOf() || decisionOneEnabled()) && Str
 // daily token ceiling (JEV_DAILY_MAX_TOKENS; 0 or "off" disables) before it is
 // made. Past the ceiling, decisions fall back to the lexical order. Booked from
 // request size (one token per byte) plus an output allowance.
+// The ceiling is one figure for the service: with a shared store
+// (src/shared-limits.js) the tokens are reserved in a day counter every
+// replica adds to, so two containers spend one day's budget, not two; the
+// free share has its own shared counter. This process's own counters stay as
+// the floor and decide alone when the store does not answer.
 const OUTPUT_ALLOWANCE_TOKENS = 300;
+const jevShared = createSharedDailySpend("jev-day", "jev", { scale: 1 });
+const jevSharedFree = createSharedDailySpend("jev-free-day", "jev", { scale: 1 });
+/** True when the ceiling is reserved through the shared store (a shared store is configured). */
+export const _jevShared = jevShared.enabled;
 const jevDailyMaxTokens = () => {
   const raw = String(process.env.JEV_DAILY_MAX_TOKENS ?? "").trim().toLowerCase();
   if (raw === "off") return 0;
@@ -51,7 +62,9 @@ export function jevSpendStatus() {
   const cap = jevDailyMaxTokens();
   return { day: spend.day, tokens: spend.tokens, capTokens: cap, freeTokens: spend.freeTokens, freeCapTokens: Math.floor(cap * freeShare()), calls: spend.calls, cacheHits: spend.cacheHits, refusedToday: spend.refused, status: cap > 0 && spend.tokens >= cap ? "capped" : "ok" };
 }
-export function _jevReset() { spend.day = ""; rollDay(); cache.clear(); }
+export function _jevReset() { spend.day = ""; rollDay(); cache.clear(); jevShared.reset(); jevSharedFree.reset(); }
+/** Test seam: the day's shared token totals (null without a shared store). */
+export async function _jevSharedToday() { return { tokens: await jevShared.today(), freeTokens: await jevSharedFree.today() }; }
 
 const cache = new Map(); // key -> { at, value }
 const CACHE_TTL_MS = 24 * 3_600_000;
@@ -68,13 +81,19 @@ function remember(key, value) {
 }
 
 // Books `est` tokens against the ceiling (and the free share for `free`), or
-// counts a refusal and answers false.
-function book(est, cap, free, outcome) {
+// counts a refusal and answers false. The shared day is reserved first (and
+// given back on a refusal, by either counter); this process's counters then
+// decide as before, so a refusal here is never looser than one replica's.
+async function book(est, cap, free, outcome) {
+  const refuse = () => { spend.refused++; if (outcome) outcome.skipped = "budget"; return false; };
+  if (jevShared.enabled) {
+    if (!(await jevShared.reserve(est, cap))) { rollDay(); return refuse(); }
+    if (free && !(await jevSharedFree.reserve(est, Math.floor(cap * freeShare())))) { jevShared.book(-est); rollDay(); return refuse(); }
+  }
   rollDay();
   if (spend.tokens + est > cap || (free && spend.freeTokens + est > cap * freeShare())) {
-    spend.refused++;
-    if (outcome) outcome.skipped = "budget";
-    return false;
+    if (jevShared.enabled) { jevShared.book(-est); if (free) jevSharedFree.book(-est); }
+    return refuse();
   }
   spend.tokens += est; spend.calls++;
   if (free) spend.freeTokens += est;
@@ -82,13 +101,30 @@ function book(est, cap, free, outcome) {
 }
 const hasAnswers = (j) => !!j?.answers && typeof j.answers === "object";
 
+// Grace past the upstream timeout before the caller's own timer answers for a
+// call that has not settled: enough for the abort to land, short enough that a
+// free search is never held much past its bound.
+const OWN_TIMER_GRACE_MS = 250;
+
 /** One judgment under the ceiling, or null. Never throws. Jev first; when it
  *  fails (non-ok, timeout, network, or an answer `usable` rejects), Decision-1
  *  is asked the same questions within what is left of the timeout, booked
  *  against the same ceiling and free share. `pool: "free"` books against the
  *  free share as well. `outcome` (optional object) learns `skipped: "budget"`
- *  when a ceiling refused it. */
-async function callJev(payload, fetchImpl, timeoutMs, { pool = "paid", outcome = null, usable = hasAnswers } = {}) {
+ *  when a ceiling refused it.
+ *
+ *  Bounded twice: each upstream call carries an abort signal, and the whole
+ *  call is raced against a timer of our own. The caller's wait therefore ends
+ *  by the timeout whether or not the upstream call's promise ever settles; a
+ *  judgment that lands after that is dropped (never cached, since no `out`
+ *  reached the caller). A free search that waits on this is a slot in the
+ *  discovery gate, and a wait with no bound of its own is how a slot is lost. */
+function callJev(payload, fetchImpl, timeoutMs, opts = {}) {
+  const budgetMs = (timeoutMs || TIMEOUT_MS()) + OWN_TIMER_GRACE_MS;
+  return raceDeadline(callJevUnbounded(payload, fetchImpl, timeoutMs, opts), budgetMs)
+    .then((r) => (r.timedOut ? null : r.value), () => null);
+}
+async function callJevUnbounded(payload, fetchImpl, timeoutMs, { pool = "paid", outcome = null, usable = hasAnswers } = {}) {
   const fallback = decisionOneEnabled();
   if (!keyOf() && !fallback) return null;
   const cap = jevDailyMaxTokens();
@@ -97,7 +133,7 @@ async function callJev(payload, fetchImpl, timeoutMs, { pool = "paid", outcome =
   const deadline = Date.now() + (timeoutMs || TIMEOUT_MS());
   if (keyOf()) {
     const body = JSON.stringify(payload);
-    if (!book(Buffer.byteLength(body) + OUTPUT_ALLOWANCE_TOKENS, cap, free, outcome)) return null;
+    if (!(await book(Buffer.byteLength(body) + OUTPUT_ALLOWANCE_TOKENS, cap, free, outcome))) return null;
     try {
       const res = await fetchImpl(ENDPOINT, {
         method: "POST",
@@ -118,7 +154,7 @@ async function callJev(payload, fetchImpl, timeoutMs, { pool = "paid", outcome =
   const left = deadline - Date.now();
   if (left < 250) return null;
   const est = Buffer.byteLength(JSON.stringify({ ...payload, model: DECISION_ONE_MODEL })) + OUTPUT_ALLOWANCE_TOKENS;
-  if (!book(est, cap, free, outcome)) return null;
+  if (!(await book(est, cap, free, outcome))) return null;
   try {
     const j = await askDecisionOne(payload, { fetchImpl, timeoutMs: left });
     return usable(j) ? j : null;

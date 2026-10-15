@@ -26,6 +26,7 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
   McpError,
+  ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
   MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, MCP_PAYMENT_REQUIRED_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, challengeIdFromMeta,
@@ -64,6 +65,8 @@ import {
   mcpInitializeInstructions,
   mcpJsonResult,
   outputSchemaFromExample,
+  toolInputBoundRefusal,
+  MCP_MAX_TOOL_INPUT_ELEMENTS,
 } from "./mcp-flagship.js";
 import {
   createLimiter,
@@ -181,7 +184,7 @@ export function mcpPaymentMethods() {
   };
 }
 
-export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null }) {
+export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS }) {
   const scoped = profile?.metaTools === false;
   const HIDDEN_WHEN_SCOPED = new Set([META_MCP_NAMES.search_tools, META_MCP_NAMES.find_tool, META_MCP_NAMES.call_tool, META_MCP_NAMES.request_tool, META_MCP_NAMES.list_top_sellers]);
   const listable = (arr) => (scoped ? arr.filter((t) => !HIDDEN_WHEN_SCOPED.has(t.name)) : arr);
@@ -822,6 +825,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const { name: rawName, arguments: args = {} } = req.params;
       const name = resolveListedName(rawName);
+      const overBound = toolInputBoundRefusal(rawName, args, maxToolInputElements);
+      if (overBound) throw new McpError(ErrorCode.InvalidParams, overBound);
       if (scoped && HIDDEN_WHEN_SCOPED.has(name)) {
         return { content: [{ type: "text", text: `${rawName} is not available on ${path} - this endpoint serves one product (${[...flagshipSet].map(mcpNameOf).join(", ")}). The full catalog connector is ${baseUrl}/mcp.` }], isError: true };
       }
@@ -830,7 +835,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // Funnel stage 1 (discovery) — same event the HTTP discovery
           // surfaces emit in server.js; env-gated no-op without PostHog.
           capturePostHogDiscovery({ surface: "mcp:catalog.search" });
-          const q = args.query ?? "";
+          const q = String(args.query ?? "").trim();
           const { rows: results, topScore, matched } = searchTools(q, args.limit);
           // Multi-tool workflows that match the same query — surface them so an
           // agent asking "audit a domain" sees the whole security-audit pack
@@ -846,7 +851,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           if (!results.length && !workflows.length) {
             return mcpJsonResult({
               results: [],
-              message: `No tools matched "${q}". Full catalog: ${baseUrl}/tools. ${WISH_HINT_TEXT}`,
+              // A caller that passed no query is told which argument to pass,
+              // not shown an empty string in quotes.
+              message: q
+                ? `No tools matched "${q}". Full catalog: ${baseUrl}/tools. ${WISH_HINT_TEXT}`
+                : `catalog.search needs a "query" argument: what the tool should do (for example "convert miles to kilometers"). Full catalog: ${baseUrl}/tools. ${WISH_HINT_TEXT}`,
               hint: WISH_HINT_TEXT,
             });
           }

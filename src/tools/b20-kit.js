@@ -334,7 +334,7 @@ export const B20_TOOLS = [
     discovery: {
       input: { blocks: 1000 },
       inputSchema: { properties: {
-        blocks: { type: "number", description: "lookback window in blocks (default 50000 ≈ 28h, max 200000)" },
+        blocks: { type: "number", description: "lookback window in blocks (default 50000, max 200000)" },
         limit: { type: "number", description: "max tokens returned, newest first (default 25, max 100)" },
       } },
       output: { example: { network: "base", factory: FACTORY, fromBlock: 1, toBlock: 2, scannedFromBlock: 1, truncated: false, count: 0, skipped: 0, tokens: [] } },

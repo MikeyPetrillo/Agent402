@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 // when COINGECKO_API_KEY is set, absent otherwise), the in-process cache (a
 // repeat call inside the TTL makes no second fetch; a different input does),
 // the upstream status mapping (404 -> 422, 429 -> 503 after one retry, 5xx ->
-// 502, 401 -> 422, non-JSON -> 502, timeout -> 504, body never relayed),
+// 502, 401 -> 422, non-JSON -> 502, a deadline -> 503 naming the step, body never relayed),
 // input validation (400), and fixture output shapes per tool. Live coverage
 // is the examples themselves (every example answers live; see test-all).
 
@@ -218,10 +218,10 @@ routes = { "/api/v3/global/decentralized_finance_defi": jsonRes(200, { nope: tru
 await throws(h("global-defi")({}), 502, "unexpected shape -> 502");
 reset();
 routes = { "/api/v3/exchange_rates": () => { const e = new Error("aborted"); e.name = "TimeoutError"; throw e; } };
-await throws(h("exchange-rates")({}), 504, "timeout -> 504", /timed out/);
+await throws(h("exchange-rates")({}), 503, "deadline -> 503 naming the upstream and the step", /^Market data upstream did not answer the exchange rates read within \d+ s \(upstream deadline\)/);
 reset();
 routes = { "/api/v3/exchange_rates": () => { throw new Error("ECONNRESET"); } };
-await throws(h("exchange-rates")({}), 504, "network error -> 504");
+await throws(h("exchange-rates")({}), 503, "network error -> 503 unreachable", /^Market data upstream is unreachable from here/);
 ok(calls.length === 1, "network error: no retry loop (timeout budget stays bounded)");
 
 // ----------------------------------------------------------------------------

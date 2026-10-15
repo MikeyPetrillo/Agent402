@@ -54,6 +54,16 @@
 // boot load is a promise the server awaits before it listens
 // (loadHangupForgiveness returns at once with `loaded: false` and a `ready`
 // promise in that mode). The budget survives a deploy either way.
+//
+// With a Redis configured (src/shared-limits.js) the budget is also shared
+// across replicas as it is spent: every granted ticket is an entry in a shared
+// in-flight window under each of its keys and under the service, every
+// abandoned run an entry in a shared abandoned window for the budget window,
+// and a reservation reads those windows (one round trip) and decides on the
+// larger of the shared and this process's own figures. Without Redis the
+// reservation is synchronous as before; with it, it returns a promise of the
+// ticket (the dispatcher awaits it). A shared store that does not answer
+// leaves the decision to this process's own records, never a wider budget.
 
 import { createHmac, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -61,6 +71,7 @@ import { writeFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createJsonDocument } from "./json-document.js";
 import { stateDbEnabled, trackStoreReady } from "./state-db.js";
+import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 
 const MICRO = 1_000_000;
 const MAX_KEYS = 20_000;
@@ -148,6 +159,41 @@ export function hangupForgivenessConfig() {
   };
 }
 
+// ---- the shared half ----------------------------------------------------------
+// hf-in: granted, unfinished runs (an entry per ticket per key, weight = micro,
+// inside HANGUP_INFLIGHT_WINDOW_MS so a holder that died stops counting);
+// hf-ab: abandoned runs inside the budget window. "global" is the service.
+const SHARED = sharedLimitsEnabled();
+const PROC = `${process.pid}-${randomBytes(3).toString("hex")}`;
+let ticketSeq = 0;
+const CONTROL = "hangup-forgiveness";
+/** How long a granted, unfinished run counts as in flight on the shared store (HANGUP_INFLIGHT_WINDOW_MS). */
+export const INFLIGHT_WINDOW_MS = () => Math.max(10_000, envNumber("HANGUP_INFLIGHT_WINDOW_MS", 15 * 60_000));
+const GLOBAL_KEY = "global";
+/** Shared view for the keys of a ticket: { inflight: Map, abandoned: Map } by key (GLOBAL_KEY included), or null. */
+async function readSharedBudget(keys, now, windowMs) {
+  const all = [GLOBAL_KEY, ...keys];
+  const items = [];
+  for (const k of all) {
+    items.push({ name: "hf-in", key: k, windowMs: INFLIGHT_WINDOW_MS() });
+    items.push({ name: "hf-ab", key: k, windowMs });
+  }
+  const r = await shared.windowReadMany(items, { now });
+  if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return null; }
+  const inflight = new Map(), abandoned = new Map();
+  all.forEach((k, i) => { inflight.set(k, r.results[2 * i]?.sum || 0); abandoned.set(k, r.results[2 * i + 1]?.sum || 0); });
+  return { inflight, abandoned };
+}
+function sharedGrant(ticket, now) {
+  for (const k of [GLOBAL_KEY, ...ticket.keys]) void sharedWrite(CONTROL, shared.windowAdd("hf-in", k, { windowMs: INFLIGHT_WINDOW_MS(), member: ticket.id, weight: ticket.micro, now }));
+}
+function sharedSettle(ticket, abandoned, now, windowMs) {
+  for (const k of [GLOBAL_KEY, ...ticket.keys]) {
+    void sharedWrite(CONTROL, shared.windowRemove("hf-in", k, { member: ticket.id, weight: ticket.micro }));
+    if (abandoned) void sharedWrite(CONTROL, shared.windowAdd("hf-ab", k, { windowMs, member: ticket.id, weight: ticket.micro, now }));
+  }
+}
+
 const inflightByKey = new Map(); // key -> micro-dollars held by granted, unfinished runs
 let globalInflight = 0;
 const abandonedByKey = new Map(); // key -> [[t, micro], ...] oldest first
@@ -203,6 +249,8 @@ export function hangupTicketDenial(req) {
 
 /**
  * Reserve a forgiveness ticket for a paid request whose handler is starting.
+ * Returns the ticket (synchronously without a shared store; a promise of it
+ * with one, so `await` covers both).
  * `keys` are the verified identities it carries (falsy entries dropped);
  * `priceUsd` is what it would be charged; `slug` is the catalog route, and a
  * slug with a lasting effect (hasLastingEffect), or any route whose def says
@@ -215,7 +263,7 @@ export function reserveHangupForgiveness(req, { keys = [], priceUsd = 0, slug = 
   const cfg = hangupForgivenessConfig();
   const uniq = [...new Set(keys.filter((k) => typeof k === "string" && k).map(hangupKeyDigest))];
   const micro = Math.max(0, Math.round(Number(priceUsd) * MICRO) || 0);
-  const ticket = { granted: false, keys: uniq, micro, state: "denied", reason: null };
+  const ticket = { granted: false, keys: uniq, micro, state: "denied", reason: null, id: `${PROC}:${++ticketSeq}` };
   const store = (t) => { if (req && typeof req === "object") Object.defineProperty(req, "__a402HangupTicket", { value: t, writable: true, configurable: true, enumerable: false }); return t; };
   if (!cfg.enabled) { ticket.reason = "disabled"; return store(ticket); }
   // Before any budget is read: a route that leaves something behind is never
@@ -229,26 +277,39 @@ export function reserveHangupForgiveness(req, { keys = [], priceUsd = 0, slug = 
   // whatever else is spent: say so, and keep it from reading as (and warning
   // about) a spent service-wide budget.
   if (micro > cfg.keyMicro) { ticket.reason = "over per-key budget"; return store(ticket); }
+  if (!SHARED) return store(decideTicket(ticket, cfg, now, null));
+  return readSharedBudget(uniq, now, cfg.windowMs).then((view) => store(decideTicket(ticket, cfg, now, view)));
+}
+/** The budget decision. `view` is the shared figures (or null): each budget
+ *  is checked against the larger of this process's figure and the shared one,
+ *  so a store that answers less than this process knows never widens it. */
+function decideTicket(ticket, cfg, now, view) {
+  const { micro } = ticket;
   globalAbandoned = prune(globalAbandoned, now, cfg.windowMs);
-  if (globalInflight + sumOf(globalAbandoned) + micro > cfg.globalMicro) {
+  const gIn = Math.max(globalInflight, view?.inflight.get(GLOBAL_KEY) || 0);
+  const gAb = Math.max(sumOf(globalAbandoned), view?.abandoned.get(GLOBAL_KEY) || 0);
+  if (gIn + gAb + micro > cfg.globalMicro) {
     ticket.reason = "global budget";
     if (now - lastExhaustedLog > 60_000) {
       lastExhaustedLog = now;
       console.warn("[hangup] forgiveness budget for the whole service is spent for this window: a buyer who leaves before the answer is charged and the charge booked as owed until it clears");
     }
-    return store(ticket);
+    return ticket;
   }
-  for (const k of uniq) {
-    if ((inflightByKey.get(k) || 0) + abandonedMicro(k, now, cfg.windowMs) + micro > cfg.keyMicro) {
+  for (const k of ticket.keys) {
+    const kIn = Math.max(inflightByKey.get(k) || 0, view?.inflight.get(k) || 0);
+    const kAb = Math.max(abandonedMicro(k, now, cfg.windowMs), view?.abandoned.get(k) || 0);
+    if (kIn + kAb + micro > cfg.keyMicro) {
       ticket.reason = k.startsWith("ip:") ? "ip budget" : "payer budget";
-      return store(ticket);
+      return ticket;
     }
   }
-  for (const k of uniq) inflightByKey.set(k, (inflightByKey.get(k) || 0) + micro);
+  for (const k of ticket.keys) inflightByKey.set(k, (inflightByKey.get(k) || 0) + micro);
   globalInflight += micro;
   ticket.granted = true;
   ticket.state = "inflight";
-  return store(ticket);
+  if (SHARED) sharedGrant(ticket, now);
+  return ticket;
 }
 
 /**
@@ -264,6 +325,7 @@ export function settleHangupTicket(req, { abandoned = false, now = Date.now() } 
     if (left > 0) inflightByKey.set(k, left); else inflightByKey.delete(k);
   }
   globalInflight = Math.max(0, globalInflight - t.micro);
+  if (SHARED) sharedSettle(t, abandoned, now, hangupForgivenessConfig().windowMs);
   if (abandoned) {
     evictIfFull();
     for (const k of t.keys) { const list = abandonedByKey.get(k) || []; list.push([now, t.micro]); abandonedByKey.set(k, list); }
@@ -506,6 +568,8 @@ function applyLoadedDoc(doc, now) {
   return out;
 }
 
+/** Whether this process writes the budget through to the shared store. */
+export const _hangupForgivenessShared = SHARED;
 /** Test seam only. */
 export function _resetHangupForgiveness() {
   inflightByKey.clear(); globalInflight = 0; abandonedByKey.clear(); globalAbandoned = []; lastExhaustedLog = 0;

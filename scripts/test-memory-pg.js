@@ -356,6 +356,9 @@ try {
     await m.grant(D, G, "readwrite");
     await m.memoryPut(D, "gone", { secret: "name" }, { actor: G });
     await m.memoryIncr(D, "gone", 0, D).catch(() => {});
+    // The age check below cuts at the second-to-last entry's millisecond, so
+    // the last entry must land on a later one.
+    await new Promise((r) => setTimeout(r, 5));
     await m.memoryDelete(D, "gone");
     await m.memoryPut(Z, "only", 1); await m.memoryDelete(Z, "only");
     const before = (await m.getLog(D, D, 1000)).entries;

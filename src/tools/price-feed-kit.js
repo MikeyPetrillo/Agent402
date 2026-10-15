@@ -10,17 +10,25 @@
 
 import { protocols as llamaProtocols } from "./defi-kit.js";
 import { cgTokenRefusal, cgRefusalMessage, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
-const TIMEOUT_MS = 10_000;
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+// DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
+// with the handler budget, and a read that outlives it is a 503 naming the
+// upstream and the step, never a 504. The simple-price read answered in 0.15 s
+// and the DeFiLlama protocol document in 0.6 to 1.4 s when measured
+// (2026-10-14), so the caps below leave room for a slow day.
+const FEED_READ_MS = 10_000;
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
 // DefiLlama's /protocol/{slug} document is 2-10 MB rendered at their origin;
-// a CDN miss takes past 10 s from a cold region (the nightly corpus 504'd
-// `uniswap` at exactly 10 s in three of four runs, 2026-09-06/07, the server
-// log naming api.llama.fi → TimeoutError) while a warm read is 0.2 s. A 504 is
-// never charged, so waiting longer costs the buyer nothing but the wait.
+// a CDN miss takes past 10 s from a cold region (the nightly corpus timed
+// `uniswap` out at exactly 10 s in three of four runs, 2026-09-06/07, the
+// server log naming api.llama.fi -> TimeoutError) while a warm read is 0.2 s.
+// So this one read keeps a 25 s cap, and defi-tvl runs under the route's
+// payment-window budget instead of the 20 s data-kit budget; a 503 is never
+// charged.
 const LLAMA_DOC_TIMEOUT_MS = 25_000;
 
 // Short in-process cache for CoinGecko reads, keyed on the exact URL: an
@@ -32,7 +40,7 @@ const cgCache = new Map();
 /** Test seam: drop every cached CoinGecko answer. */
 export function clearPriceFeedCache() { cgCache.clear(); }
 
-async function feedFetch(url, { timeout = TIMEOUT_MS } = {}) {
+async function feedFetch(url, { timeout = FEED_READ_MS, step = "data" } = {}) {
   const host = new URL(url).hostname;
   const headers = { Accept: "application/json" };
   const cacheKey = isCoinGeckoHost(host) ? String(url) : null;
@@ -54,18 +62,10 @@ async function feedFetch(url, { timeout = TIMEOUT_MS } = {}) {
     const why = cgTokenRefusal(Date.now());
     if (why) throw bad(cgRefusalMessage(why), 503);
   }
-  let res;
-  try {
-    res = await fetch(url, {
-      headers,
-      signal: AbortSignal.timeout(timeout),
-    });
-  } catch (err) {
-    // Keep the evidence: the transport cause must reach the server log, not
-    // vanish into a generic 504.
-    console.warn(`[price-feed] upstream unreachable: ${host} → ${err.name ?? err.code ?? err.message}`);
-    throw bad("Price feed upstream timed out", 504);
-  }
+  // A read that outlives its cap, or a host that cannot be reached, is the
+  // upstream's: a 503 naming the step (the transport cause reaches the log).
+  const ctx = { label: "Price feed", step, timeoutMs: timeout, tag: "[price-feed]" };
+  const res = await upstreamFetch(url, { headers }, ctx);
   if (res.status === 429) throw bad("Price feed rate limit reached upstream - retry shortly", 503);
   if (res.status === 404) throw bad("Price feed upstream: not found (check ids / contract)", 404);
   // DefiLlama answers 400 for a protocol slug it does not know: that is the
@@ -77,8 +77,8 @@ async function feedFetch(url, { timeout = TIMEOUT_MS } = {}) {
     throw bad(`Price feed upstream returned non-JSON (${ct.split(";")[0] || "unknown"})`, 502);
   }
   let text, parsed;
-  try { text = await res.text(); parsed = JSON.parse(text); }
-  catch { throw bad("Price feed upstream returned malformed JSON", 502); }
+  try { text = await bodyUnderDeadline(res.text(), ctx); parsed = JSON.parse(text); }
+  catch (err) { if (err?.statusCode) throw err; throw bad("Price feed upstream returned malformed JSON", 502); }
   // A body over 256 KB is served but not kept, so the cache stays small.
   if (cacheKey && text.length <= 256 * 1024) {
     if (cgCache.size >= CG_CACHE_MAX) { const oldest = cgCache.keys().next().value; if (oldest !== undefined) cgCache.delete(oldest); }
@@ -145,7 +145,7 @@ export const PRICE_FEED_TOOLS = [
       const wantChange = i.include24hChange === true;
       const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(",")}&vs_currencies=${vs}&include_last_updated_at=true` +
         (wantChange ? `&include_24hr_change=true` : "");
-      const data = await feedFetch(url);
+      const data = await feedFetch(url, { step: "simple price" });
       const prices = ids.map((id) => {
         const row = data[id];
         if (!row) return { id, price: null, change24h: null, lastUpdated: null };
@@ -204,7 +204,7 @@ export const PRICE_FEED_TOOLS = [
       const protocol = typeof i.protocol === "string" ? i.protocol.trim().toLowerCase() : "";
       if (!protocol) throw bad(`"protocol" is required`);
       if (!/^[a-z0-9-]+$/.test(protocol)) throw bad(`"protocol" must be a slug (lowercase, alphanumerics + hyphens)`);
-      const data = await feedFetch(`https://api.llama.fi/protocol/${protocol}`, { timeout: LLAMA_DOC_TIMEOUT_MS });
+      const data = await feedFetch(`https://api.llama.fi/protocol/${protocol}`, { timeout: LLAMA_DOC_TIMEOUT_MS, step: "protocol document" });
       // DeFiLlama returns chainTvls as an object keyed by chain. Flatten for the
       // caller — they don't want to iterate object keys.
       // DeFiLlama's chainTvls object also carries aggregate pseudo-keys
@@ -282,3 +282,8 @@ export const PRICE_FEED_TOOLS = [
 // price-coingecko reads CoinGecko, whose terms require the attribution (see
 // COINGECKO_ATTRIBUTION in coingecko-rate.js).
 for (const t of PRICE_FEED_TOOLS) if (t.slug === "price-coingecko") t.description = `${t.description} ${COINGECKO_ATTRIBUTION}`;
+
+// Every handler runs under one budget (src/upstream-deadline.js): the 20 s
+// data-kit budget, except defi-tvl, whose protocol document keeps its 25 s
+// cap and so runs under the route's payment-window budget.
+underBudgetAll(PRICE_FEED_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

@@ -36,14 +36,17 @@
 // — deliberately out of scope here; see the approved plan.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mppProblem, markMppProblem, sendMppProblem } from "./mpp-problem.js";
-import { Challenge, Credential, Method, Receipt } from "mppx";
+import { Challenge, Credential, Errors, Method, Receipt } from "mppx";
 import { tempo } from "mppx/server";
+import { mppxReplayStore } from "./mppx-store.js";
 import { mppChallengesSuppressed, clientFingerprint } from "./mpp-fallback.js";
 import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization } from "ox/tempo";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { Abis, Addresses } from "viem/tempo";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { tempoPushSender } from "./tempo-confirm.js";
+import { screenAddresses, screenFunding, sanctionsScreenStatus } from "./sanctions-screen.js";
+import { Secp256k1 } from "ox";
 
 const DEFAULT_DECIMALS = 6; // matches every other stablecoin rail this repo settles (unconfirmed specifically for pathUSD — decimals() unread, this is the USDC-family convention, not a live lookup)
 
@@ -94,7 +97,26 @@ function envDecimals() {
  *  Currency now has a verified default (PathUSD) so only the key and a
  *  receiving address are required. */
 export function tempoEnabled() {
-  return !!(process.env.TEMPO_API_KEY && envRecipient());
+  return tempoConfigured() && (tempoSettlementMode() === "relay" || sanctionsScreenStatus() !== "missing");
+}
+/** The configuration half of tempoEnabled: a relay key or direct mode, and a
+ *  receiving address. Decides whether the gate and the challenge appender
+ *  mount at boot. tempoEnabled adds the runtime half: in direct mode no tempo
+ *  challenge is offered while the payment-party screen
+ *  (src/sanctions-screen.js) has no list loaded, so the method comes and goes
+ *  with the list while the gate stays mounted and refuses (screen-unavailable,
+ *  503, nothing charged) anything presented meanwhile. */
+export function tempoConfigured() {
+  return !!((process.env.TEMPO_API_KEY || tempoSettlementMode() === "direct") && envRecipient());
+}
+/** How a Tempo credential is checked and settled. "relay" (default): Tempo's
+ *  hosted relay validates and broadcasts it (/v1/mpp/validate, /v1/mpp/broadcast).
+ *  "direct" (TEMPO_RELAY=off): mppx verifies the signed transaction itself,
+ *  simulates it against the chain and broadcasts it over the public Tempo RPC;
+ *  the HMAC route binding, the amount and recipient checks and the chain-truth
+ *  confirm are the same either way. Call-time read, like every rollout knob. */
+export function tempoSettlementMode() {
+  return String(process.env.TEMPO_RELAY || "").trim().toLowerCase() === "off" ? "direct" : "relay";
 }
 /** Our own Tempo payTo, or null when the tempo method is not enabled - the
  *  MPP leaderboard ranks it as "this server" (self-flagged) so we are held
@@ -368,6 +390,23 @@ export const TEMPO_REFUSAL_CLASSES = Object.freeze({
     detail: "The signed transaction failed simulation on Tempo, so it would not settle.",
     hint: "Check the wallet's balance and that the transaction pays the challenge exactly, then pay a fresh challenge.",
   },
+  // Direct mode only (src/sanctions-screen.js): an address party to this
+  // payment (the source, the signer, the fee payer, the recipient, any
+  // address the transaction's calls name) is on the OFAC SDN list, or a
+  // recent sender of funds to the payer is (the one-hop funding check).
+  // Checked before verification and the exact match again before the broadcast.
+  "screen-rejected": {
+    kind: "verification-failed", status: 402,
+    detail: "An address in this payment, or an address that recently sent funds to the paying wallet, appears on the US Treasury OFAC SDN list, which this server screens every Tempo payment against. The payment was not broadcast and nothing was charged.",
+    hint: "This server does not accept this payment.",
+  },
+  // Direct mode only: the screen has no list loaded, so no payment address
+  // can be checked and none is accepted. Retryable; nothing charged.
+  "screen-unavailable": {
+    kind: "internal-payment-error", status: 503, retryAfter: 60,
+    detail: "This server screens every Tempo payment address against the OFAC SDN list before accepting a payment, and the list is not loaded right now, so the credential was not checked and nothing was charged.",
+    hint: "Retry shortly, or pay over another method offered in the WWW-Authenticate header (x402 USDC or MPP evm/charge).",
+  },
   "policy-denied": {
     kind: "verification-failed", status: 402,
     detail: "The Tempo relay declined this payment under its own policy.",
@@ -385,6 +424,16 @@ export function classifyTempoRefusal(e) {
   const code = e?.details && typeof e.details === "object" && typeof e.details.code === "string" ? e.details.code : "";
   const raw = String(trace.relayError || "");
   const text = `${String(e?.message || "")} ${code} ${raw}`.toLowerCase();
+  // mppx (0.13.5+) names a spent payment itself: a hash or proof already
+  // claimed, one a concurrent request holds, or a settled transfer whose memo
+  // is bound to another challenge. Its HTTP transport answers that 403 with no
+  // challenge; this gate keeps its own refusal classes: "replay" for a claimed
+  // hash, and "memo-unbound" (as before the error existed) for a settled
+  // transfer bound to another challenge, so the push path still books that
+  // transfer as owed instead of treating it as one it already paid for.
+  if (e?.name === "CredentialReplayedError" || e instanceof Errors.CredentialReplayedError) {
+    return /memo is not bound/.test(text) ? "memo-unbound" : "replay";
+  }
   if (trace.networkError) return "relay-unreachable";
   if (trace.relayUnavailable) return "relay-unavailable";
   // mppx keeps this code in `.details` (with retry: same_credential); the
@@ -450,23 +499,36 @@ export function logTempoRefusal(req, { cls, amountAtomic = null, timings = {}, d
 // The configured Method.Server is cheap to hold but not free to rebuild per
 // request; memoize it, keyed on the config values that actually shape it so
 // an env change (redeploy-time only, never mid-process) rebuilds cleanly.
+// Since mppx 0.12 `tempo.charge()` returns an ORDERED GROUP of methods, one
+// per entry in `currencies` (all name "tempo", intent "charge"). Each mints its
+// own currency's challenge; validate/broadcast dispatch to the first method of
+// the group and read the currency from the credential's (HMAC-verified)
+// challenge, so any member settles any of our currencies. Every member shares
+// one replay store (src/mppx-store.js): redis-backed when REDIS_URL is set, so
+// a hash one replica claimed is refused on every other.
 let cachedMethod = null;
 let cachedKey = "";
 
+/** @internal test hook: whether the configured method routes through the relay. */
+export function _tempoMethodUsesRelay() { tempoMethod(); return tempoSettlementMode() === "relay" && cachedMethodUsesRelay; }
+let cachedMethodUsesRelay = false;
 function tempoMethod() {
-  const key = `${process.env.TEMPO_API_KEY || ""}|${envRecipient()}|${envCurrencies().join(",")}|${envDecimals()}|${process.env.TEMPO_API_BASE_URL || ""}`;
+  const mode = tempoSettlementMode();
+  const key = `${mode}|${process.env.TEMPO_API_KEY || ""}|${envRecipient()}|${envCurrencies().join(",")}|${envDecimals()}|${process.env.TEMPO_API_BASE_URL || ""}`;
   if (cachedMethod && cachedKey === key) return cachedMethod;
   cachedMethod = tempo.charge({
-    currency: envCurrency(),
+    currencies: envCurrencies(),
     decimals: envDecimals(),
     recipient: envRecipient(),
-    relay: {
+    store: mppxReplayStore(),
+    ...(mode === "relay" ? { relay: {
       apiKey: process.env.TEMPO_API_KEY,
       fetch: relayFetch,
       ...(process.env.TEMPO_API_BASE_URL ? { apiBaseUrl: process.env.TEMPO_API_BASE_URL } : {}),
-    },
+    } } : {}),
   });
   cachedKey = key;
+  cachedMethodUsesRelay = mode === "relay";
   return cachedMethod;
 }
 
@@ -499,8 +561,8 @@ export function mintTempoChallenge({ priceUsd, description, realm, secretKey, ti
   // add are supplied here: chainId (fixed — Tempo mainnet 4217, mppx's
   // `defaults.chainId.mainnet`); there is no local feePayer, so none is set
   // and the buyer pays their own fee, exactly as the hook would resolve it.
-  const method = tempoMethod();
-  const challenges = envCurrencies().map((currency) => Challenge.fromMethod(method, {
+  const group = tempoMethod();
+  const challenges = envCurrencies().map((currency, i) => Challenge.fromMethod(group[i] || group[0], {
     realm,
     expires: new Date(Date.now() + timeoutSeconds * 1000),
     request: {
@@ -893,13 +955,129 @@ function amountOfCredential(authorizationHeader) {
   try { return String(Credential.deserialize(authorizationHeader)?.challenge?.request?.amount ?? "?"); } catch { return "?"; }
 }
 
+/** Every address that is party to a Tempo credential, read offline and
+ *  lowercased: the credential's did:pkh source, the challenge recipient, and
+ *  for a pull credential the transaction's sender, the keychain account and
+ *  access key, the fee payer recovered from a fee payer signature, each
+ *  call's target and every address-shaped word in each call's data (a
+ *  transfer's recipient among them). A value that does not decode adds
+ *  nothing. Never throws. Exported for tests. */
+export function tempoPaymentParties(authorizationHeader) {
+  const out = new Set();
+  const add = (a) => { const v = lcAddress(a); if (v) out.add(v); };
+  let credential;
+  try { credential = Credential.deserialize(authorizationHeader); } catch { return []; }
+  const m = /^did:pkh:eip155:\d+:(0x[0-9a-fA-F]{40})$/.exec(String(credential?.source || ""));
+  if (m) add(m[1]);
+  add(credential?.challenge?.request?.recipient);
+  const p = credential?.payload;
+  if (p?.type === "transaction" && typeof p.signature === "string" && /^0x7[68](?:[0-9a-fA-F]{2})+$/.test(p.signature)) {
+    try {
+      const tx = TxEnvelopeTempo.deserialize(p.signature);
+      add(tx?.from);
+      const sig = tx?.signature;
+      if (sig?.type === "keychain") add(sig.userAddress);
+      try {
+        if (sig) {
+          const signPayload = TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(tx));
+          if (PRIMITIVE_ENVELOPES.has(sig.type)) add(SignatureEnvelope.extractAddress({ payload: signPayload, signature: sig }));
+          if (sig.type === "keychain" && sig.inner && PRIMITIVE_ENVELOPES.has(sig.inner.type)) {
+            const keyPayload = sig.version === "v1" ? signPayload : TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(tx), { from: lcAddress(sig.userAddress) });
+            add(SignatureEnvelope.extractAddress({ payload: keyPayload, signature: sig.inner }));
+          }
+        }
+      } catch { /* an unrecoverable signer adds nothing; verification refuses it */ }
+      if (tx?.feePayerSignature && tx.from) {
+        try { add(Secp256k1.recoverAddress({ payload: TxEnvelopeTempo.getFeePayerSignPayload(tx, { sender: tx.from }), signature: tx.feePayerSignature })); } catch { /* nothing to add */ }
+      }
+      for (const c of Array.isArray(tx?.calls) ? tx.calls : []) {
+        add(c?.to);
+        const data = typeof c?.data === "string" ? c.data.replace(/^0x/i, "") : "";
+        for (let i = 8; i + 64 <= data.length; i += 64) {
+          const word = data.slice(i, i + 64);
+          if (/^0{24}/.test(word) && !/^0{64}$/.test(word)) add(`0x${word.slice(24)}`);
+        }
+      }
+    } catch { /* a transaction that does not decode adds nothing; verification refuses it */ }
+  }
+  return [...out];
+}
+
+/** The addresses a credential names as the PAYER (the account whose funding
+ *  the one-hop check reads): the did:pkh source, and for a pull credential the
+ *  transaction's sender, the keychain account and the recovered primitive
+ *  signer. Never the recipient, a call target or calldata. Never throws.
+ *  Exported for tests. */
+export function tempoPayerAddresses(authorizationHeader) {
+  const out = new Set();
+  const add = (a) => { const v = lcAddress(a); if (v) out.add(v); };
+  let credential;
+  try { credential = Credential.deserialize(authorizationHeader); } catch { return []; }
+  const m = /^did:pkh:eip155:\d+:(0x[0-9a-fA-F]{40})$/.exec(String(credential?.source || ""));
+  if (m) add(m[1]);
+  const p = credential?.payload;
+  if (p?.type === "transaction" && typeof p.signature === "string" && /^0x7[68](?:[0-9a-fA-F]{2})+$/.test(p.signature)) {
+    try {
+      const tx = TxEnvelopeTempo.deserialize(p.signature);
+      add(tx?.from);
+      const sig = tx?.signature;
+      if (sig?.type === "keychain") add(sig.userAddress);
+      else if (sig && PRIMITIVE_ENVELOPES.has(sig.type)) {
+        try { add(SignatureEnvelope.extractAddress({ payload: TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(tx)), signature: sig })); } catch { /* nothing to add */ }
+      }
+    } catch { /* nothing to add */ }
+  }
+  return [...out];
+}
+
+const maskOne = (a) => (typeof a === "string" && a.length > 12 ? `${a.slice(0, 6)}...${a.slice(-4)}` : "?");
+/** Direct mode's payment-party screen. null when every party passes, else the
+ *  refusal result validate/broadcast return (screen-rejected or
+ *  screen-unavailable). The address in `error` is masked. */
+function screenTempoParties(authorizationHeader, phase, extra = []) {
+  const parties = [...tempoPaymentParties(authorizationHeader), ...extra.map(lcAddress).filter(Boolean)];
+  const v = screenAddresses(parties);
+  if (v.ok) return null;
+  if (v.reason === "listed") {
+    return { ok: false, cls: "screen-rejected", error: `screen ${phase}: party ${maskOne(v.address)} is on the OFAC SDN list (${parties.length} parties screened)`, reason: "a payment address is on the OFAC SDN list", requestId: null, relayMessage: null };
+  }
+  return { ok: false, cls: "screen-unavailable", error: `screen ${phase}: no list loaded (status ${sanctionsScreenStatus()})`, reason: "payment-party screening unavailable", requestId: null, relayMessage: null };
+}
+/** The one-hop funding check (src/sanctions-screen.js screenFunding) for the
+ *  credential's payers plus `extra`. null when it passes, is only flagged, or
+ *  could not run (the exact match above is then the only screen), else a
+ *  screen-rejected refusal naming both addresses masked and the amount. */
+async function screenTempoFunding(authorizationHeader, phase, extra = []) {
+  const payers = [...new Set([...tempoPayerAddresses(authorizationHeader), ...extra.map(lcAddress).filter(Boolean)])];
+  if (!payers.length) return null;
+  let v;
+  try { v = await screenFunding(payers); } catch { v = { ok: true }; }
+  if (v.ok) return null;
+  const amount = Number.isFinite(v.listedUsd) ? ` $${v.listedUsd.toFixed(6)} in ${v.count} transfer(s), ${(v.share * 100).toFixed(2)}% of inflows read` : "";
+  return { ok: false, cls: "screen-rejected", error: `screen ${phase}: funded by a listed address (payer ${maskOne(v.payer)}, funder ${v.funder ? maskOne(v.funder) : "cached verdict"}${amount})`, reason: "a payment address is on the OFAC SDN list", requestId: null, relayMessage: null };
+}
+
 /** Non-mutating check (credential shape, relay pre-validation). The HMAC /
  *  route binding is checkTempoCredentialBinding above - this only asks the
  *  relay whether the signed transaction is valid FOR THE CHALLENGE IT CARRIES,
  *  which is necessary but never sufficient. Never broadcasts, never moves money. */
 export async function validateTempoCredential(authorizationHeader) {
+  const direct = tempoSettlementMode() === "direct";
+  if (direct) {
+    const refused = screenTempoParties(authorizationHeader, "before validate") || await screenTempoFunding(authorizationHeader, "before validate");
+    if (refused) return refused;
+  }
   try {
-    const [validation] = await withRelayTrace(() => Method.validateCredential([tempoMethod()], authorizationHeader));
+    const [validation] = await withRelayTrace(() => Method.validateCredential(tempoMethod(), authorizationHeader));
+    // The sender mppx itself settled on (a push transfer's on-chain sender,
+    // a pull transaction's signer, and since mppx 0.13.5 the payer its
+    // matched transfers debited): screened too, before anything is claimed
+    // or broadcast.
+    if (direct) {
+      const settledSenders = [validation?.details?.sender, validation?.receipt?.from, validation?.payer];
+      const refused = screenTempoParties(authorizationHeader, "after validate", settledSenders) || await screenTempoFunding(authorizationHeader, "after validate", settledSenders);
+      if (refused) return refused;
+    }
     return { ok: true, validation };
   } catch (e) {
     // mppx's VerificationFailedError.message is ALWAYS the bare "Payment
@@ -913,8 +1091,13 @@ export async function validateTempoCredential(authorizationHeader) {
  *  this after a successful (<400) handler response; see the server wiring
  *  in server.js for the buffer-then-decide discipline this depends on. */
 export async function broadcastTempoCredential(authorizationHeader) {
+  // Again at the broadcast: the list may have refreshed since validation.
+  if (tempoSettlementMode() === "direct") {
+    const refused = screenTempoParties(authorizationHeader, "before broadcast");
+    if (refused) return refused;
+  }
   try {
-    const [receipt] = await withRelayTrace(() => Method.broadcastCredential([tempoMethod()], authorizationHeader));
+    const [receipt] = await withRelayTrace(() => Method.broadcastCredential(tempoMethod(), authorizationHeader));
     return { ok: true, receipt };
   } catch (e) {
     return { ok: false, error: describeRelayFailure(e), reason: buyerReason(e), cls: classifyTempoRefusal(e), ...relayRefusalFields(e) };
@@ -1011,7 +1194,7 @@ export function tempoLeads(req, now = Date.now()) {
 export function _resetTempoDemotion() { tempoDemoted.clear(); }
 
 export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
-  if (!tempoEnabled()) return null;
+  if (!tempoConfigured()) return null;
   return function tempoChallengeAppender(req, res, next) {
     const origWriteHead = res.writeHead;
     res.writeHead = function tempoWriteHead(...args) {
@@ -1069,7 +1252,7 @@ export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
  *  broadcasts at settlement time — the same "Five Attacks on x402" Attack II
  *  class replay-guard.js documents, just unguarded on this second path. */
 export function createTempoGate({ validate = validateTempoCredential, broadcast = broadcastTempoCredential, confirmSettlement = null, earlyConfirm = null, replayGuard, secretKey, realm, priceFor, preValidate = null, verifyKeychainSender = verifyTempoKeychainSender, pushSender = tempoPushSender, onPushNotClaimed = null, onPushInputRefused = null, pushClaimAllowed = null } = {}) {
-  if (!tempoEnabled()) return null;
+  if (!tempoConfigured()) return null;
   // Fail CLOSED on the binding inputs: a gate that cannot verify "we minted
   // this challenge for this price" must not exist, because its existence is
   // what lets a tempo credential bypass the whole x402/PoW dispatcher.
@@ -1326,7 +1509,9 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
           // request), that transfer is money we hold for nothing delivered:
           // book it as owed before answering, keyed on the hash.
           let owed = false;
-          if (fcls !== "replay" && typeof onPushNotClaimed === "function") {
+          if (fcls === "screen-rejected") {
+            console.warn(`[mpp-tempo] push transfer not claimed: a party is on the OFAC SDN list (${req.method} ${req.path} tx=${pushHash || "?"}); not booked as owed, held for operator review`);
+          } else if (fcls !== "replay" && typeof onPushNotClaimed === "function") {
             const payer = await readPushSender();
             const hash = pushHash;
             try { owed = (await onPushNotClaimed(req, { hash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, cls: fcls })) === true; } catch { owed = false; }
@@ -1453,7 +1638,14 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       let b;
       let early = false;
       const watch = {};
-      if (earlyConfirm) {
+      // Direct mode screens the parties once more before anything can settle
+      // or be read back from the chain: a list refreshed during the handler
+      // that now names a party refuses here, and no chain read below may turn
+      // that refusal into a sale.
+      const screenedOut = tempoSettlementMode() === "direct" ? screenTempoParties(auth, "before broadcast") : null;
+      if (screenedOut) {
+        b = screenedOut;
+      } else if (earlyConfirm) {
         let relayAnswered = false;
         const relayP = Promise.resolve(broadcast(auth)).then((r) => { relayAnswered = true; return r; }, (e) => { relayAnswered = true; throw e; });
         const chainP = Promise.resolve(earlyConfirm(auth, () => relayAnswered, watch)).catch((e) => { watch.error = watch.error || String(e?.message || e).slice(0, 60); return null; })
@@ -1472,7 +1664,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       const tBroadcast = Date.now();
       const watched = earlyConfirm && !early ? ` watch=reads:${watch.reads || 0}${watch.seenAt ? ` seen:+${watch.seenAt - tHandled}ms` : ""}${watch.finalizedLag != null ? ` lag:${watch.finalizedLag}` : ""}${watch.error ? ` err:${watch.error}` : ""}` : "";
       const timing = `validate=${tValidated - t0}ms handler=${tHandled - tValidated}ms broadcast=${tBroadcast - tHandled}ms${early ? " (chain-confirmed)" : ""}${watched}`;
-      if (!b.ok && confirmSettlement) {
+      if (!b.ok && confirmSettlement && b.cls !== "screen-rejected" && b.cls !== "screen-unavailable") {
         // The relay's verdict and the chain's truth can diverge: on
         // 2026-08-20 the relay reported "Broadcast transaction hash does not
         // match the signed transaction" for two payments that had SETTLED

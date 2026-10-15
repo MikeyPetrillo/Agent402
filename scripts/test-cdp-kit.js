@@ -135,7 +135,8 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     // A faucet POST that timed out is never resent, and its slot is kept (it may have dripped).
     calls = []; reply = timeout;
     e = await fund(addr("b")).catch((x) => x);
-    ok(e?.statusCode === 504 && calls.length === 1, `a faucet POST that timed out is not retried (attempts ${calls.length})`);
+    ok(e?.statusCode === 503 && e?.attribution === "upstream" && /^Coinbase Developer Platform did not answer the faucet read within 15 s \(upstream deadline\)/.test(e.message) && calls.length === 1,
+      `a faucet POST that timed out is a 503 naming the step and is not retried (attempts ${calls.length}, ${e?.statusCode} "${e?.message}")`);
     calls = []; reply = () => J(200, { transactionHash: "0xabc" });
     const f1 = await fund(addr("b"));
     const f2 = await fund(addr("b")).catch((x) => x);
@@ -154,6 +155,25 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     // Control: a GET that timed out is still retried.
     calls = []; reply = (n) => (n === 1 ? timeout() : J(200, { balances: [] }));
     ok((await bal()).count === 0 && calls.length === 2, "a GET that timed out is retried");
+    // The retry walk composes with the handler budget: a GET whose every
+    // attempt stalls ends as one deadline answer inside the budget, not up to
+    // five 15 s caps plus backoff.
+    process.env.UPSTREAM_HANDLER_BUDGET_MS = "1500";
+    const keep = setInterval(() => {}, 1000);
+    const signals = [];
+    globalThis.fetch = (url, init = {}) => new Promise((_, reject) => {
+      calls.push({ url: String(url), method: init.method || "GET" });
+      signals.push(init.signal);
+      init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "TimeoutError" })), { once: true });
+    });
+    calls = [];
+    const t1 = Date.now();
+    e = await bal().catch((x) => x);
+    const ms = Date.now() - t1;
+    clearInterval(keep);
+    delete process.env.UPSTREAM_HANDLER_BUDGET_MS;
+    ok(e?.statusCode === 503 && e?.upstreamFailure === "deadline" && /token balances read/.test(e.message) && calls.length === 1 && ms >= 1400 && ms < 3000,
+      `a stalled GET under a 1.5 s budget is one 503 deadline at the budget, with no retry it cannot hold (${calls.length} attempt(s), ${ms} ms, "${e?.message}")`);
   } finally {
     globalThis.fetch = realFetch;
     delete process.env.CDP_API_KEY_ID; delete process.env.CDP_API_KEY_SECRET;

@@ -17,7 +17,8 @@
 // Anything else (error, timeout, rate limit, range cap, behind its head,
 // malformed) falls through to the configured list, exactly the read that ran
 // before this module. A lane is skipped, never tried, for a range wider than
-// its measured cap or older than `maxDepthBlocks` behind the head.
+// its measured cap or older than `maxDepthBlocks` (or the lane's own depth,
+// in seconds at the live block time) behind the head.
 //
 // EVM_LOGS_ALCHEMY_FIRST=on is the rollback: every read goes straight to the
 // configured list, as before.
@@ -25,6 +26,7 @@
 // public lanes; an empty value turns them off for that chain.
 import { rpcCall } from "./revenue-live.js";
 import { redactSecrets } from "./tools/redact.js";
+import { blocksForSeconds } from "./chain-block-time.js";
 
 const onFlag = (v) => /^(1|on|true|yes)$/i.test(String(v || "").trim());
 
@@ -36,7 +38,10 @@ const onFlag = (v) => /^(1|on|true|yes)$/i.test(String(v || "").trim());
 // (every getLogs refused). The head check above covers the ones that answer
 // [] past their head.
 export const EVM_LOGS_PUBLICS = Object.freeze({
-  base: [{ url: "https://base-rpc.publicnode.com", maxRange: 9_000, maxDepth: 9_000 }],
+  // Depth is TIME: 9,000 blocks at Base's original 2 s, counted at the live
+  // block time (src/chain-block-time.js) so it stays five hours across Denim.
+  // maxRange is the provider's per-request block cap and stays in blocks.
+  base: [{ url: "https://base-rpc.publicnode.com", maxRange: 9_000, maxDepthSeconds: 18_000 }],
   arbitrum: [{ url: "https://arb1.arbitrum.io/rpc", maxRange: 9_000 }],
   monad: [{ url: "https://rpc2.monad.xyz", maxRange: 9_000 }, { url: "https://rpc.monad.xyz", maxRange: 100 }],
   celo: [{ url: "https://forno.celo.org", maxRange: 5_000 }],
@@ -44,6 +49,13 @@ export const EVM_LOGS_PUBLICS = Object.freeze({
   optimism: [{ url: "https://mainnet.optimism.io", maxRange: 9_000 }, { url: "https://optimism-rpc.publicnode.com", maxRange: 9_000 }],
   robinhood: [{ url: "https://rpc.mainnet.chain.robinhood.com", maxRange: 9_000 }],
 });
+
+/** A lane's depth gate in blocks: `maxDepthSeconds` at the chain's live block
+ *  time, else a fixed `maxDepth` block count. */
+export function laneDepthBlocks(lane, chain) {
+  if (Number.isFinite(lane?.maxDepthSeconds)) return blocksForSeconds(chain, lane.maxDepthSeconds);
+  return lane?.maxDepth ?? Infinity;
+}
 
 export function evmLogsPublicLanes(chain, env = process.env) {
   const k = `EVM_LOGS_PUBLIC_RPCS_${String(chain).toUpperCase()}`;
@@ -151,7 +163,8 @@ export async function evmLogsRead(filter, opts = {}) {
     for (const lane of lanes) {
       const st = stateOf(lane.url);
       if (to - from + 1 > (lane.maxRange || 9_000)) { c.publicSkipped.range++; continue; }
-      const laneDepth = Math.min(Number.isFinite(depth) ? depth : Infinity, lane.maxDepth ?? Infinity);
+      const laneMax = Number.isFinite(lane.maxDepthSeconds) ? laneDepthBlocks(lane, opts.chain) : (lane.maxDepth ?? Infinity);
+      const laneDepth = Math.min(Number.isFinite(depth) ? depth : Infinity, laneMax);
       if (!Number.isFinite(head) || !Number.isFinite(laneDepth) || from < head - laneDepth) { c.publicSkipped.depth++; continue; }
       if (st.coolUntil > Date.now()) { c.publicSkipped.cooling++; continue; }
       const out = await tryPublic(lane.url, filter, from, to, opts.publicTimeoutMs ?? 5000, fetchImpl);

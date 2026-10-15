@@ -7,14 +7,16 @@
 // None of that is a posture worth defending for a $0.001 tool.
 //
 // Databento is a paid commercial account, so access is licensed. The dataset is
-// DBEQ.BASIC, a three-venue consolidation - see databento.js for what that does
-// and does not mean, particularly for volume.
+// EQUS.SUMMARY, the consolidated end-of-day summary across all US exchanges
+// and ATSs, with DBEQ.BASIC (a three-venue consolidation) as the fallback -
+// see databento.js for what each covers, particularly for volume. Every
+// answer names the dataset it came from and its coverage.
 //
 // Three tools went with Yahoo rather than moving: options-chain (would need a
 // separate OPRA build), premarket-quote (extended-hours needs the live feed)
 // and stock-dividends (corporate actions are not market data and Databento
 // does not carry them). Removing beat keeping an unlicensed source.
-import { availableEnd, availableEndInfo, dailyBars, dailyBarsRead, noteQuoteSymbol, quoteWindow, DATASET, VENUES } from "./databento.js";
+import { availableEnd, availableEndInfo, dailyBarsRead, noteQuoteSymbol, quoteWindow, COVERAGE, PRIMARY_DATASET } from "./databento.js";
 import { computeIndicators } from "./crypto-signals-kit.js";
 
 function bad(message, statusCode = 400) {
@@ -35,7 +37,8 @@ function assertSymbol(raw) {
 
 const MAX_DAYS = 250;
 // Indicators stock-history can compute from its daily bars. VWAP is left out:
-// the bars carry three-venue volume, not the consolidated tape.
+// on the fallback dataset the bars carry three-venue volume, not the
+// consolidated tape, and an indicator must not change meaning by dataset.
 const STOCK_INDICATOR_IDS = ["rsi", "macd", "ema", "sma", "bollinger", "atr"];
 function stockIndicatorSet(raw) {
   if (raw === undefined || raw === null || raw === "" || raw === false || raw === "false") return null;
@@ -48,6 +51,17 @@ function stockIndicatorSet(raw) {
 }
 const MAX_QUERY_USD = 0.0035;
 
+// What an answer says about where its bars came from. The note is the one
+// caveat a reader needs for that dataset; `volume` is the market total only
+// when the dataset is consolidated, and null otherwise.
+const SUMMARY_NOTE = "Official consolidated end-of-day bars across all US exchanges and ATSs; volume is the consolidated total and includes post-market trading. Prices are unadjusted for splits and dividends.";
+const FALLBACK_NOTE = "Daily bars from a three-venue consolidation (the consolidated dataset was unavailable for this read); venueVolume counts those venues only, not the consolidated tape, and volume is null.";
+function provenance(dataset) {
+  const c = COVERAGE[dataset];
+  return { dataset: c.dataset, coverage: c.coverage, venues: c.venues, source: "databento.com " + c.dataset, note: c.consolidated ? SUMMARY_NOTE : FALLBACK_NOTE };
+}
+const COVERAGE_COPY = "Built from the official consolidated end-of-day summary across all US exchanges and ATSs, so price, range and volume are market totals. If that dataset is unavailable for a read, the answer comes from a consolidation of three U.S. exchange venues instead and says so: coverage reads three-venue, venueVolume counts those venues only and volume is null.";
+
 export const FINANCE_TOOLS = [
   {
     route: "GET /api/stock-quote",
@@ -58,7 +72,7 @@ export const FINANCE_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "End-of-day US equity quote: last close, day range, previous close and the change between them. US equities only; indices, FX and crypto are not covered (crypto-price serves those). Built from a consolidation of three U.S. exchange venues, so the prices track the wider market but the volume counts those three venues only and is returned as venueVolume rather than as a total. No 52-week range and no intraday print: for a date range call stock-history. Each answer says whether its bars came from this session's cache (cached, fetchedAt).",
+      `End-of-day US equity quote: last close, day range, consolidated volume, previous close and the change between them. US equities only; indices, FX and crypto are not covered (crypto-price serves those). ${COVERAGE_COPY} No 52-week range and no intraday print: for a date range call stock-history. Each answer names its dataset and coverage, and says whether its bars came from this session's cache (cached, fetchedAt).`,
     tags: ["finance", "stocks", "quote", "market-data", "price"],
     discovery: {
       input: { symbol: "AAPL" },
@@ -72,20 +86,20 @@ export const FINANCE_TOOLS = [
         example: {
           symbol: "AAPL",
           currency: "USD",
-          price: 335.5,
-          previousClose: 336.79,
-          changeAbs: -1.29,
-          changePct: -0.383,
-          dayHigh: 338.41,
-          dayLow: 332.545,
-          venueVolume: 1630155,
-          asOf: "2026-09-18",
-          venues: VENUES,
-          source: "databento.com DBEQ.BASIC",
+          price: 341.27,
+          previousClose: 340.97,
+          changeAbs: 0.3,
+          changePct: 0.088,
+          dayHigh: 348.1499,
+          dayLow: 340.74,
+          volume: 38983839,
+          venueVolume: 38983839,
+          asOf: "2026-10-13",
+          ...provenance(PRIMARY_DATASET),
+          note: `End-of-day close, not a live intraday quote, and no 52-week range (use stock-history for a range). ${SUMMARY_NOTE}`,
           cached: true,
-          fetchedAt: "2026-09-19T13:05:12.000Z",
-          rangeCheckedAt: "2026-09-19T13:00:03.000Z",
-          note: "End-of-day close from a three-venue consolidation. Not a live intraday quote, not consolidated-tape volume, and no 52-week range - use stock-history for a range.",
+          fetchedAt: "2026-10-14T13:05:12.000Z",
+          rangeCheckedAt: "2026-10-14T13:00:03.000Z",
         },
       },
     },
@@ -108,6 +122,7 @@ export const FINANCE_TOOLS = [
       if (!ctx?.selfcheck) noteQuoteSymbol(symbol);
       const bars = read.bars;
       const last = bars.at(-1), prev = bars.at(-2) || null;
+      const where = provenance(read.dataset);
       return {
         symbol,
         currency: "USD",
@@ -117,16 +132,18 @@ export const FINANCE_TOOLS = [
         changePct: prev ? Number((((last.close - prev.close) / prev.close) * 100).toFixed(4)) : null,
         dayHigh: last.high,
         dayLow: last.low,
-        // NOT total market volume: DBEQ.BASIC covers three venues, so this is
-        // their share only. Named venueVolume so it cannot read as a total.
+        // The market total on the consolidated dataset; null on the
+        // three-venue fallback, whose share is only ever venueVolume.
+        volume: last.volume ?? null,
+        // Volume across the venues named in `venues`: the whole market on
+        // the consolidated dataset, three venues on the fallback.
         venueVolume: last.venueVolume,
         asOf: last.day,
-        venues: VENUES,
-        source: "databento.com " + DATASET,
+        ...where,
         cached: read.cached,
         fetchedAt: read.fetchedAt,
         rangeCheckedAt: range.checkedAt,
-        note: "End-of-day close from a three-venue consolidation. Not a live intraday quote, not consolidated-tape volume, and no 52-week range - use stock-history for a range.",
+        note: `End-of-day close, not a live intraday quote, and no 52-week range (use stock-history for a range). ${where.note}`,
       };
     },
   },
@@ -140,7 +157,7 @@ export const FINANCE_TOOLS = [
     category: "data",
     price: "$0.005",
     description:
-      "Daily OHLCV bars for a US equity: the last `days` sessions, 1 to 250, default 30. Daily only, no intraday. Built from a consolidation of three U.S. exchange venues, so each bar's high and low are the extremes across those venues, open and close come from the venue that traded the most that session, and venueVolume sums those three venues rather than the consolidated tape. A flat ascending array ready for charting or backtests. Set indicators to also get technical analysis computed from the same bars: RSI(14), MACD(12,26,9), EMA 20/50/200, SMA 20/50, Bollinger(20,2) and ATR(14), with a plain summary (close vs EMA50, RSI zone, MACD cross). Indicators need enough sessions (EMA200 needs days >= 200) and are descriptive, not a trading recommendation.",
+      `Daily OHLCV bars for a US equity: the last \`days\` sessions, 1 to 250, default 30. Daily only, no intraday. ${COVERAGE_COPY} On that fallback each bar's high and low are the extremes across the three venues and open and close come from the venue that traded the most that session. A flat ascending array ready for charting or backtests. Set indicators to also get technical analysis computed from the same bars: RSI(14), MACD(12,26,9), EMA 20/50/200, SMA 20/50, Bollinger(20,2) and ATR(14), with a plain summary (close vs EMA50, RSI zone, MACD cross). Indicators need enough sessions (EMA200 needs days >= 200) and are descriptive, not a trading recommendation.`,
     tags: ["finance", "stocks", "history", "ohlcv", "technical-analysis"],
     discovery: {
       input: { symbol: "AAPL", days: 30 },
@@ -158,13 +175,11 @@ export const FINANCE_TOOLS = [
           symbol: "AAPL",
           days: 2,
           bars: [
-            { day: "2026-09-17", open: 218.2, high: 220.3, low: 217.65, close: 219.8, venueVolume: 1481234 },
-            { day: "2026-09-18", open: 219.9, high: 221.05, low: 219.1, close: 220.4, venueVolume: 1630155 },
+            { day: "2026-10-12", open: 338.215, high: 342.63, low: 337.6, close: 340.97, venueVolume: 25900599, volume: 25900599 },
+            { day: "2026-10-13", open: 344.665, high: 348.1499, low: 340.74, close: 341.27, venueVolume: 38983839, volume: 38983839 },
           ],
-          asOf: "2026-09-18",
-          venues: VENUES,
-          source: "databento.com DBEQ.BASIC",
-          note: "Daily bars from a three-venue consolidation; venueVolume counts those venues only, not the consolidated tape.",
+          asOf: "2026-10-13",
+          ...provenance(PRIMARY_DATASET),
         },
       },
     },
@@ -199,15 +214,14 @@ export const FINANCE_TOOLS = [
       // with the calendar span, so the advertised maximum is one a buyer can
       // actually spend. A flat 365 was advertised
       // and refused at 90.
-      const bars = (await dailyBars({ symbol, start, end, maxUsd: MAX_QUERY_USD })).slice(-days);
+      const read = await dailyBarsRead({ symbol, start, end, maxUsd: MAX_QUERY_USD });
+      const bars = read.bars.slice(-days);
       return {
         symbol,
         days: bars.length,
         bars,
         asOf: bars.at(-1)?.day ?? null,
-        venues: VENUES,
-        source: "databento.com " + DATASET,
-        note: "Daily bars from a three-venue consolidation; venueVolume counts those venues only, not the consolidated tape.",
+        ...provenance(read.dataset),
         ...(want && bars.length >= 2 ? { analysis: stockAnalysis(bars, want, points) } : {}),
       };
     },

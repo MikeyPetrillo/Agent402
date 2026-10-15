@@ -25,12 +25,18 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   const slugs = FINANCE_TOOLS.map((t) => t.slug).sort();
   ok(JSON.stringify(slugs) === JSON.stringify(["stock-history", "stock-quote"]),
     `finance-kit serves only the licensed tools (got ${slugs.join(", ")})`);
-  ok(FINANCE_TOOLS.every((t) => /three U\.S\. exchange venues/.test(t.description) && /venueVolume/.test(t.description) && !/Databento|DBEQ/.test(t.description)),
-    "each description names the venue scope and the venue-partial volume, not the vendor");
+  ok(FINANCE_TOOLS.every((t) => /consolidated end-of-day summary across all US exchanges and ATSs/.test(t.description) &&
+      /three U\.S\. exchange venues/.test(t.description) && /venueVolume counts those venues only and volume is null/.test(t.description) &&
+      !/Databento|DBEQ|EQUS/.test(t.description)),
+    "each description names the consolidated scope, the three-venue fallback and its partial volume, not the vendor");
+  ok(FINANCE_TOOLS.every((t) => {
+    const ex = t.discovery.output.example;
+    return ex.dataset === "EQUS.SUMMARY" && ex.coverage === "consolidated" && /all US exchanges and ATSs/i.test(ex.venues);
+  }), "every published example names the consolidated dataset and its coverage");
   ok(!/yahoo/i.test(JSON.stringify(FINANCE_TOOLS)), "no surface of this kit still names the unlicensed provider");
   ok(FINANCE_TOOLS.every((t) => {
     const keys = Object.keys(t.discovery.output.example);
-    return keys.includes("source") && keys.includes("venues") && keys.includes("note");
+    return ["source", "venues", "note", "dataset", "coverage"].every((k) => keys.includes(k));
   }), "every published example carries the source, the venues and the caveat");
 }
 
@@ -125,7 +131,8 @@ if (!databentoEnabled()) {
 } else {
   await live("stock-quote", { symbol: "AAPL" },
     (r) => r.symbol === "AAPL" && r.currency === "USD" && typeof r.price === "number" && r.price > 0 &&
-      typeof r.venueVolume === "number" && typeof r.note === "string" && /venue/i.test(r.note),
+      typeof r.venueVolume === "number" && typeof r.note === "string" && /venue|consolidated/i.test(r.note) &&
+      (r.coverage === "consolidated" ? r.volume === r.venueVolume : r.volume === null),
     "stock-quote AAPL");
 
   // An unknown ticker is the caller's input, so it must be a 4xx naming the

@@ -10,6 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-external-spend-guard-pg" });
+// Keys this run writes to a shared store (REDIS_URL set beside the database) are its own.
+process.env.SHARED_LIMITS_PREFIX ||= `esgpg${process.pid}${Date.now().toString(36)}`;
 const TMP = mkdtempSync(join(tmpdir(), "spend-guard-pg-"));
 const file = join(TMP, "wallet-daily-spend.json");
 process.env.WALLET_DAILY_LEDGER_FILE = file;
@@ -37,6 +39,8 @@ function otherContainer(usd, chain = "base") {
     await G.__flush();
     const { closeStateDb } = await import(${JSON.stringify(new URL("../src/state-db.js", import.meta.url).href)});
     await closeStateDb();
+    const { closeSharedRedis } = await import(${JSON.stringify(new URL("../src/shared-limit.js", import.meta.url).href)});
+    await closeSharedRedis();
     console.log(JSON.stringify({ booked: Boolean(h), spent: G.walletDailySpentUsd(${JSON.stringify(chain)}) }));
   `;
   const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { env: process.env, encoding: "utf8" });
@@ -139,6 +143,8 @@ try {
       out.later = { ok: later.ok, code: later.code || null, spent: G.walletDailySpentUsd("base") };
       const { closeStateDb } = await import(${JSON.stringify(new URL("../src/state-db.js", import.meta.url).href)});
       await closeStateDb();
+      const { closeSharedRedis } = await import(${JSON.stringify(new URL("../src/shared-limit.js", import.meta.url).href)});
+      await closeSharedRedis();
       console.log(JSON.stringify(out));
     `;
     const child = spawn(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, STATE_DATABASE_URL: relay.url, WALLET_DAILY_LEDGER_FILE: childFile }, stdio: ["ignore", "pipe", "pipe"] });

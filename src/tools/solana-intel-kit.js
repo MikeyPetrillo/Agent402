@@ -10,7 +10,9 @@
 // per upstream (sol-token-safety fans out to two small ones in parallel), bounds
 // every list, trims upstream payloads to the fields an agent acts on, and never
 // relays an upstream error body (only our own status mapping: 429 -> 503,
-// 5xx -> 502, timeout -> 504, other 4xx -> 422 with a plain message).
+// 5xx -> 502, other 4xx -> 422 with a plain message; a read that outlives its
+// deadline, or an upstream that cannot be reached, is a 503 naming the
+// upstream and the step, see DEADLINES below).
 //
 // Shapes were verified live on 2026-08-22 with curl; notes on drift:
 //   - Jupiter price v2 (api.jup.ag/price/v2) answers 404 - v3 on lite-api is
@@ -30,6 +32,9 @@
 // scripts/test-solana-intel-kit.js (stubbed fetch).
 
 import { markUntrusted } from "./provenance.js";
+import { partialFields } from "../partial-answer.js";
+import { createTtlCache } from "./ttl-dedupe.js";
+import { HANDLER_BUDGET_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 const MAX_BODY_BYTES = 24 * 1024 * 1024;  // DefiLlama bulk docs run ~11MB; this is the hard ceiling.
 // Refuse an over-large body BEFORE reading it into a string: `res.text()` has
 // no cap of its own, so a broken or hostile upstream could push an unbounded
@@ -42,7 +47,37 @@ function assertBodyWithinCap(res, capBytes, label) {
   }
 }
 
-const TIMEOUT_MS = 10_000;
+// DEADLINES. Every upstream read carries its own cap, and every handler runs
+// under one budget, so the longest path (the full report, then the two RPC
+// fallback reads) still answers while a short payment window is open: this
+// server's own router signs 30 s authorizations and the facilitator refuses one
+// within six seconds of expiry, so the answer must be on the wire inside 20 s.
+// The caps are sized from measured normal answers (summary, Jupiter and
+// DexScreener reads under a second; the RugCheck full report 1.2 s on a blue
+// chip at 2.8 MB) with room for a slow day. A read that outlives its cap is the
+// upstream's outage: the tool answers a 503 that names the upstream and the
+// step (never charged, settlement runs after the handler) instead of waiting
+// it out, and an optional step (the RPC holder table) is skipped when the
+// budget cannot hold it. AbortSignal.timeout bounds headers AND body, so a
+// stalled body read ends at the same deadline. The budget, the caps'
+// composition and the two 503 classes are src/upstream-deadline.js, shared
+// with every other kit that reads an upstream.
+const RUGCHECK_SUMMARY_MS = 8_000;
+const RUGCHECK_REPORT_MS = 12_000;
+const JUPITER_MS = 8_000;
+const DEXSCREENER_MS = 8_000;
+const RPC_MS = 5_000;
+// An optional read is not started with less than this left in the budget.
+const RPC_FLOOR_MS = 1_500;
+// The safety tool's optional full-report read is not started with less than
+// this left: the report is measured at 1.2 to 3.6 s on a blue chip.
+const FULL_REPORT_FLOOR_MS = 4_000;
+// ...and gets a shorter cap than the report tools' own read: the safety tool
+// is the fast headline read (summary + index answer in well under a second),
+// so an optional fill must not hold it for the report tools' full 12 s.
+// Measured 2026-10-14: a healthy report answers in 1.2 to 3.6 s; a slow day
+// ran past 12 s, where the fill gives up and the answer says why.
+const RUGCHECK_FALLBACK_MS = 6_000;
 const UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
 
 const RUGCHECK = "https://api.rugcheck.xyz/v1";
@@ -103,30 +138,23 @@ function round(v, places = 4) {
   return Math.round(n * f) / f;
 }
 
-function hostOf(url) {
-  try { return new URL(url).host; } catch { return "?"; }
-}
-
 // One shared egress helper. Upstream bodies are NEVER relayed to the buyer:
 // the only text that leaves here is our own, keyed off the status class.
-async function upstreamJson(url, { label, method = "GET", body, notFound } = {}) {
-  let res;
-  try {
-    res = await fetch(url, {
-      method,
-      headers: {
-        "User-Agent": UA,
-        Accept: "application/json",
-        ...(body ? { "Content-Type": "application/json" } : {}),
-        ...(label === "Jupiter" ? jupiterHeaders(url) : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (err) {
-    console.warn(`[solana-intel] ${label} unreachable: ${hostOf(url)} -> ${err.name ?? err.code ?? err.message}`);
-    throw bad(`${label} upstream timed out`, 504);
-  }
+async function upstreamJson(url, { label, step = "data", timeoutMs = JUPITER_MS, budget, method = "GET", body, notFound } = {}) {
+  // The read gets its own cap, or what is left of the handler's budget if
+  // that is shorter; a budget already spent refuses before any egress
+  // (upstreamFetch). The deadline classes are the shared module's.
+  const ctx = { label, step, timeoutMs, budget, tag: "[solana-intel]" };
+  const res = await upstreamFetch(url, {
+    method,
+    headers: {
+      "User-Agent": UA,
+      Accept: "application/json",
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(label === "Jupiter" ? jupiterHeaders(url) : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  }, ctx);
   if (res.status === 429) throw bad(`${label} rate limit reached upstream - retry shortly`, 503);
   if (res.status >= 500) throw bad(`${label} upstream error (HTTP ${res.status})`, 502);
   if (res.status === 404 || res.status === 400) {
@@ -146,11 +174,28 @@ async function upstreamJson(url, { label, method = "GET", body, notFound } = {})
   if (!res.ok) throw bad(`${label} refused the request (HTTP ${res.status})`, 502);
   let text;
   assertBodyWithinCap(res, MAX_BODY_BYTES, label);
-  try { text = await res.text(); } catch { throw bad(`${label} response could not be read`, 502); }
+  // The same signal bounds the body, so a body that stalls past the cap ends
+  // as the deadline it is, not as an unreadable response.
+  try { text = await bodyUnderDeadline(res.text(), ctx); } catch (err) {
+    if (err?.statusCode) throw err;
+    throw bad(`${label} response could not be read`, 502);
+  }
   try { return JSON.parse(text); } catch { throw bad(`${label} returned non-JSON`, 502); }
 }
 
 const stamp = () => new Date().toISOString();
+
+// The full report, read once per mint at a time. sol-token-report,
+// sol-token-holders and the safety tool's fallback all read this document;
+// the brief composite runs two of them in parallel for one mint, so
+// concurrent reads share one request (src/tools/ttl-dedupe.js, dedupe only:
+// a multi-megabyte document is never held after it is answered).
+const reportReads = createTtlCache({ maxEntries: 1 });
+async function rugcheckReport(mint, budget, timeoutMs = RUGCHECK_REPORT_MS) {
+  // A caller joining a read already in flight waits on that read's own cap.
+  const { value } = await reportReads.get(mint, 0, () => upstreamJson(`${RUGCHECK}/tokens/${mint}/report`, { label: "RugCheck", step: "report", timeoutMs, budget, notFound: "RugCheck has no report for that mint (not an SPL token mint?)" }));
+  return value;
+}
 
 // ---------------------------------------------------------------------------
 // RugCheck shaping
@@ -200,12 +245,21 @@ function authorityState(v) {
  * the field a buyer actually acts on. Returns null - never an empty list - when
  * the RPC is unset or unhappy, so the caller can tell "no data" from "no
  * holders".
+ *
+ * The fan-out is bounded: at most two RPC reads (the RPC itself returns at most
+ * 20 largest accounts; the owners come back in ONE batched read), each under
+ * RPC_MS and under what remains of the handler's budget, and neither is started
+ * when the budget cannot hold it. Returns { rows, why }: rows is null, never an
+ * empty list, when there is no table, and why names the reason the tool's
+ * note repeats (unset, budget, deadline, unreachable, refused, empty).
  */
-async function topAccountsFromRpc(mint, supplyRaw) {
+const RPC_TABLE_MAX = 20;
+async function topAccountsFromRpc(mint, supplyRaw, budget) {
   const url = (process.env.SOLANA_RPC_URL || "").trim();
-  if (!url) return null;
-  const call = async (body) => {
-    const r = await upstreamJson(url, { label: "Solana RPC", method: "POST", body });
+  if (!url) return { rows: null, why: "unset" };
+  if (budget && budget.remaining() < RPC_FLOOR_MS) return { rows: null, why: "budget" };
+  const call = async (body, step) => {
+    const r = await upstreamJson(url, { label: "Solana RPC", step, timeoutMs: RPC_MS, budget, method: "POST", body });
     // No upstream text: this module's own rule is that an upstream body is
     // never relayed to the buyer. Unreachable today (both call sites catch and
     // fall back to null), which is exactly why it is worth deleting rather
@@ -213,28 +267,57 @@ async function topAccountsFromRpc(mint, supplyRaw) {
     if (r?.error) throw bad("Solana RPC refused the read", 502);
     return r?.result?.value ?? null;
   };
+  const whyOf = (e) => (e?.upstreamFailure === "deadline" || e?.upstreamFailure === "unreachable" ? e.upstreamFailure : "refused");
   let largest;
-  try { largest = await call({ jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mint] }); } catch { return null; }
-  if (!Array.isArray(largest) || !largest.length) return null;
-  const rows = largest.slice(0, 20);
+  try { largest = await call({ jsonrpc: "2.0", id: 1, method: "getTokenLargestAccounts", params: [mint] }, "getTokenLargestAccounts"); } catch (e) { return { rows: null, why: whyOf(e) }; }
+  if (!Array.isArray(largest) || !largest.length) return { rows: null, why: "empty" };
+  const rows = largest.slice(0, RPC_TABLE_MAX);
+  // Owners are a refinement: with the budget spent or the read refused the
+  // table still answers, owner null, rather than the tool losing the table.
   let owners = [];
-  try {
-    owners = (await call({ jsonrpc: "2.0", id: 2, method: "getMultipleAccounts", params: [rows.map((r) => r.address), { encoding: "jsonParsed" }] })) || [];
-  } catch { owners = []; }
+  if (!budget || budget.remaining() >= RPC_FLOOR_MS) {
+    try {
+      owners = (await call({ jsonrpc: "2.0", id: 2, method: "getMultipleAccounts", params: [rows.map((r) => r.address), { encoding: "jsonParsed" }] }, "getMultipleAccounts")) || [];
+    } catch { owners = []; }
+  }
   // pct is computed against the mint's own raw supply, so it matches the
   // figure RugCheck used to publish rather than a share of the top 20.
   const supply = Number(supplyRaw);
-  return rows.map((r, idx) => {
-    const info = owners[idx]?.data?.parsed?.info || {};
-    const raw = Number(r?.amount);
-    return {
-      address: r?.address ?? null,
-      owner: info?.owner ?? null,
-      uiAmount: num(r?.uiAmount),
-      pct: Number.isFinite(supply) && supply > 0 && Number.isFinite(raw) ? (raw / supply) * 100 : null,
-      insider: false,
-    };
-  });
+  return {
+    why: null,
+    rows: rows.map((r, idx) => {
+      const info = owners[idx]?.data?.parsed?.info || {};
+      const raw = Number(r?.amount);
+      return {
+        address: r?.address ?? null,
+        owner: info?.owner ?? null,
+        uiAmount: num(r?.uiAmount),
+        pct: Number.isFinite(supply) && supply > 0 && Number.isFinite(raw) ? (raw / supply) * 100 : null,
+        insider: false,
+      };
+    }),
+  };
+}
+
+/** An empty table that was never READ (no RPC, no budget, a deadline, a refusal)
+ *  is not a complete answer of zero rows: partialFields(0, 0) would say
+ *  complete, which is absence published as evidence of absence, so these two
+ *  fields are set by hand there. An RPC that answered no accounts is complete. */
+function unreadTableFields(rows, why) {
+  return rows.length === 0 && why && why !== "empty" ? { complete: false, truncated: true } : {};
+}
+
+/** The sentence an empty holder table carries, exact about which source said what. */
+function noTableNote(why) {
+  const rpc = {
+    unset: "no Solana RPC is configured here",
+    budget: "the Solana RPC read was not started because the report read used the time budget",
+    deadline: "the Solana RPC did not answer within its deadline",
+    unreachable: "the Solana RPC could not be reached",
+    refused: "the Solana RPC refused the read",
+    empty: "the Solana RPC returned no token accounts",
+  }[why] || "the Solana RPC returned no token accounts";
+  return `No top-holder table is available for this mint: RugCheck published none and ${rpc}. totalHolders, when present, is still RugCheck's own count.`;
 }
 
 function shapeHolders(report, limit, rpcRows) {
@@ -263,6 +346,9 @@ function shapeHolders(report, limit, rpcRows) {
   const unlabeledPct = (n) => round(unlabeled.slice(0, n).reduce((s, r) => s + (r.pct || 0), 0), 4);
   return {
     rows: all.slice(0, limit),
+    // The table the sources publish is at most 20 rows (both RugCheck and the
+    // RPC cap it there); the partial-answer fields read against that table.
+    tableRows: all.length,
     concentration: {
       top1Pct: pctOf(1),
       top5Pct: pctOf(5),
@@ -436,7 +522,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "Safety headline for any Solana SPL token mint: a public token-risk score (raw + 0-100 normalised), the named risks with level (danger/warn/info), LP locked percentage, and the aggregator's audit facts - mint authority and freeze authority revoked or live, top-holder share, dev mints, holder count, verified flag and organic score. Two keyless public sources read in parallel; one compact verdict for pre-trade screening of memecoins and new launches.",
+      "Safety headline for any Solana SPL token mint: a public token-risk score (raw + 0-100 normalised), the named risks with level (danger/warn/info), LP locked percentage, and the aggregator's audit facts - mint authority and freeze authority revoked or live, top-holder share, dev mints, holder count, verified flag and organic score. Two keyless public sources read in parallel; one compact verdict for pre-trade screening of memecoins and new launches. The full token-risk report is read only when a published field needs it (the aggregator does not index the mint, or the summary carries no score), and fullReport names the fields it filled.",
     tags: ["solana", "token", "safety", "memecoin", "risk", "spl"],
     discovery: {
       bodyType: "json",
@@ -463,14 +549,63 @@ export const SOLANA_INTEL_TOOLS = [
     },
     handler: async (i) => {
       const mint = takeMint(i.mint);
+      const budget = budgetOf();
+      // SUMMARY FIRST. The summary (a few hundred bytes, measured ~0.4 s) and
+      // Jupiter's index entry carry every field this tool publishes for the
+      // tokens it is asked about. The full report (megabytes on a blue chip,
+      // measured 3.6 s for JUP) is read only when a published field would
+      // otherwise be null: the summary carried no score, or Jupiter does not
+      // index the mint (token, authorities). That read is optional: when it
+      // cannot finish, the fields stay null and `fullReport` says why.
       const [summary, jupList] = await Promise.all([
-        upstreamJson(`${RUGCHECK}/tokens/${mint}/report/summary`, { label: "RugCheck", notFound: "RugCheck has no report for that mint (not an SPL token mint?)" }),
-        upstreamJson(`${jupiterBase()}/tokens/v2/search?query=${encodeURIComponent(mint)}`, { label: "Jupiter" }),
+        upstreamJson(`${RUGCHECK}/tokens/${mint}/report/summary`, { label: "RugCheck", step: "report summary", timeoutMs: RUGCHECK_SUMMARY_MS, budget, notFound: "RugCheck has no report for that mint (not an SPL token mint?)" }),
+        upstreamJson(`${jupiterBase()}/tokens/v2/search?query=${encodeURIComponent(mint)}`, { label: "Jupiter", step: "token search", timeoutMs: JUPITER_MS, budget }),
       ]);
-      const risks = shapeRisks(summary?.risks);
-      const counts = riskCounts(risks);
       const jt = shapeJupToken((Array.isArray(jupList) ? jupList : []).find((t) => t?.id === mint) || null);
-      const normalised = num(summary?.score_normalised);
+      const need = [];
+      if (num(summary?.score_normalised) == null) need.push("score");
+      if (!jt) need.push("token", "authorities");
+      let full = null, fullReport = null;
+      if (need.length) {
+        if (budget && budget.remaining() < FULL_REPORT_FLOOR_MS) {
+          fullReport = { read: false, needed: need, filled: [], why: "budget" };
+        } else {
+          try {
+            full = await rugcheckReport(mint, budget, RUGCHECK_FALLBACK_MS);
+          } catch (e) {
+            fullReport = { read: false, needed: need, filled: [], why: e?.statusCode === 503 ? "deadline-or-refused" : e?.statusCode === 422 ? "no-report" : "upstream-error" };
+          }
+        }
+      }
+      const filled = [];
+      let risks = shapeRisks(summary?.risks);
+      let score = num(summary?.score);
+      let normalised = num(summary?.score_normalised);
+      if (full && need.includes("score") && num(full?.score_normalised) != null) {
+        score = num(full.score); normalised = num(full.score_normalised); risks = shapeRisks(full.risks); filled.push("score", "risks");
+      }
+      const counts = riskCounts(risks);
+      let token = jt ? { name: jt.name, symbol: jt.symbol, decimals: jt.decimals, holderCount: jt.holderCount, isVerified: jt.isVerified, organicScore: jt.organicScore, organicScoreLabel: jt.organicScoreLabel, launchpad: jt.launchpad } : null;
+      let authorities = jt ? { mintAuthorityDisabled: jt.audit.mintAuthorityDisabled, freezeAuthorityDisabled: jt.audit.freezeAuthorityDisabled, mintAuthority: jt.mintAuthority, freezeAuthority: jt.freezeAuthority } : null;
+      if (full && !jt) {
+        // The report's own fields; Jupiter-only facts (organic score) stay null.
+        token = {
+          name: full?.tokenMeta?.name ?? full?.fileMeta?.name ?? null,
+          symbol: full?.tokenMeta?.symbol ?? full?.fileMeta?.symbol ?? null,
+          decimals: num(full?.token?.decimals),
+          // RugCheck reports 0 when it has not counted (measured on USDC):
+          // a zero is "no count", never "no holders".
+          holderCount: num(full?.totalHolders) > 0 ? num(full.totalHolders) : null,
+          isVerified: full?.verification ? Boolean(full.verification.jup_verified) : null,
+          organicScore: null, organicScoreLabel: null,
+          launchpad: full?.launchpad?.name ?? full?.launchpad?.platform ?? null,
+        };
+        const m = authorityState(full?.token?.mintAuthority ?? full?.mintAuthority);
+        const f = authorityState(full?.token?.freezeAuthority ?? full?.freezeAuthority);
+        authorities = { mintAuthorityDisabled: m.revoked, freezeAuthorityDisabled: f.revoked, mintAuthority: m.address, freezeAuthority: f.address };
+        filled.push("token", "authorities");
+      }
+      if (full) fullReport = { read: true, needed: need, filled };
       // Deterministic band from RugCheck's own numbers (lower is safer). Note
       // RugCheck flags "LP Vault unlocked" as danger on established tokens too,
       // so an old blue chip can land in "danger"; the authorities/holders
@@ -483,18 +618,22 @@ export const SOLANA_INTEL_TOOLS = [
       }
       return {
         mint,
-        score: num(summary?.score),
+        score,
         scoreNormalised: normalised,
         lpLockedPct: round(summary?.lpLockedPct, 2),
-        tokenProgram: summary?.tokenProgram ?? null,
+        tokenProgram: summary?.tokenProgram ?? full?.tokenProgram ?? null,
         risks,
         riskCounts: counts,
-        token: jt ? { name: jt.name, symbol: jt.symbol, decimals: jt.decimals, holderCount: jt.holderCount, isVerified: jt.isVerified, organicScore: jt.organicScore, organicScoreLabel: jt.organicScoreLabel, launchpad: jt.launchpad } : null,
-        authorities: jt ? { mintAuthorityDisabled: jt.audit.mintAuthorityDisabled, freezeAuthorityDisabled: jt.audit.freezeAuthorityDisabled, mintAuthority: jt.mintAuthority, freezeAuthority: jt.freezeAuthority } : null,
+        token,
+        authorities,
         holders: jt ? { topHoldersPct: jt.audit.topHoldersPct, devBalancePct: jt.audit.devBalancePct, devMints: jt.audit.devMints } : null,
         riskLevel,
-        note: "riskLevel bands RugCheck's own score and risk levels (lower score is safer, normalised 0-100); it is not a recommendation. Jupiter fields are null when Jupiter does not index the mint.",
-        source: ["rugcheck", "jupiter"],
+        // null when the summary and Jupiter carried everything (the usual
+        // case); otherwise which fields needed the full report, which it
+        // filled, and why it could not when it could not.
+        fullReport,
+        note: "riskLevel bands RugCheck's own score and risk levels (lower score is safer, normalised 0-100); it is not a recommendation. Jupiter fields are null when Jupiter does not index the mint; token and authorities then come from RugCheck's full report when it answers (fullReport says which), and holders stays null.",
+        source: filled.length ? ["rugcheck", "jupiter", "rugcheck-report"] : ["rugcheck", "jupiter"],
         fetchedAt: stamp(),
       };
     },
@@ -510,7 +649,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.010",
     description:
-      "Full public token-risk report for a Solana token mint, trimmed to what an agent acts on: score and risks, mint/freeze authority state, metadata mutability and update authority, supply and decimals, creator and creator balance, top 20 holders with percent, owner, insider flag and pool/locker labels, concentration totals, the deepest markets (liquidity, LP locked %), lockers, total market liquidity, LP providers, holder count, rugged flag, insider-network count, launchpad and transfer-fee config. One request; blue-chip reports run to megabytes upstream and come back here in a few KB.",
+      "Full public token-risk report for a Solana token mint, trimmed to what an agent acts on: score and risks, mint/freeze authority state, metadata mutability and update authority, supply and decimals, creator and creator balance, top 20 holders with percent, owner, insider flag and pool/locker labels, concentration totals, the deepest markets (liquidity, LP locked %), lockers, total market liquidity, LP providers, holder count, rugged flag, insider-network count, launchpad and transfer-fee config. One report read, plus at most two bounded reads from our Solana RPC (the 20 largest token accounts, then one batched owner lookup) only when the report carries no holder table; every read runs under a deadline, so a slow upstream answers as a retryable refusal, never a charge. The holders and markets blocks carry returned, matched and complete fields. Blue-chip reports run to megabytes upstream and come back here in a few KB.",
     tags: ["solana", "token", "report", "holders", "liquidity", "risk", "spl"],
     discovery: {
       bodyType: "json",
@@ -532,8 +671,8 @@ export const SOLANA_INTEL_TOOLS = [
           creator: null, creatorBalance: 0, launchpad: null, detectedAt: "2024-05-29T00:40:51Z",
           priceUsd: 0.2027, totalMarketLiquidityUsd: 3585833.66, totalLpProviders: 173, totalHolders: 2873512, insiderNetworks: 0,
           transferFee: { pct: 0, maxAmount: 0 },
-          holders: { rows: [{ tokenAccount: "6G4X...", owner: "EXJH...", uiAmount: 1700000000.1, pct: 24.77, insider: false, label: null }], concentration: { top1Pct: 24.77, top5Pct: 57.67, top10Pct: 66.1, top20Pct: 75.2, top10PctExcludingPools: 66.1, insiderHolders: 0, labeledPoolOrLockerAccounts: 0 } },
-          markets: { total: 1409, rows: [{ pool: "C8Gr...", type: "meteoraDlmm", mintA: MINTS.JUP, mintB: MINTS.SOL, liquidityUsd: 1260729.15, lpLockedPct: 0, lpLockedUsd: 0, lpProviders: 0 }] },
+          holders: { rows: [{ tokenAccount: "6G4X...", owner: "EXJH...", uiAmount: 1700000000.1, pct: 24.77, insider: false, label: null }], returned: 10, matched: 20, complete: false, truncated: true, maxHolders: 20, concentration: { top1Pct: 24.77, top5Pct: 57.67, top10Pct: 66.1, top20Pct: 75.2, top10PctExcludingPools: 66.1, insiderHolders: 0, labeledPoolOrLockerAccounts: 0 } },
+          markets: { total: 1409, rows: [{ pool: "C8Gr...", type: "meteoraDlmm", mintA: MINTS.JUP, mintB: MINTS.SOL, liquidityUsd: 1260729.15, lpLockedPct: 0, lpLockedUsd: 0, lpProviders: 0 }], returned: 5, matched: 1409, complete: false, truncated: true, maxMarkets: 25 },
           lockers: { total: 2, rows: [] },
           source: "rugcheck", fetchedAt: "2026-08-22T12:00:00.000Z",
         },
@@ -543,11 +682,14 @@ export const SOLANA_INTEL_TOOLS = [
       const mint = takeMint(i.mint);
       const marketLimit = takeLimit(i.marketLimit, 5, 25);
       const holderLimit = takeLimit(i.holderLimit, 20, 20);
-      const r = await upstreamJson(`${RUGCHECK}/tokens/${mint}/report`, { label: "RugCheck", notFound: "RugCheck has no report for that mint (not an SPL token mint?)" });
+      const budget = budgetOf();
+      const r = await rugcheckReport(mint, budget);
       const risks = shapeRisks(r?.risks);
       const decimals = num(r?.token?.decimals);
       const rawSupply = num(r?.token?.supply);
-      const reportRpcRows = Array.isArray(r?.topHolders) && r.topHolders.length ? null : await topAccountsFromRpc(mint, rawSupply);
+      const rpc = Array.isArray(r?.topHolders) && r.topHolders.length ? { rows: null, why: null } : await topAccountsFromRpc(mint, rawSupply, budget);
+      const holdersShaped = shapeHolders(r, holderLimit, rpc.rows);
+      const marketsShaped = shapeMarkets(r, marketLimit);
       return {
         mint,
         token: {
@@ -583,8 +725,15 @@ export const SOLANA_INTEL_TOOLS = [
         verification: r?.verification ? { jupVerified: Boolean(r.verification.jup_verified), jupStrict: Boolean(r.verification.jup_strict) } : null,
         // Same RugCheck-empty fallback as /api/sol-token-holders: without it
         // this block's rows and concentration go hollow on every mint.
-        holders: shapeHolders(r, holderLimit, reportRpcRows),
-        markets: shapeMarkets(r, marketLimit),
+        holders: {
+          rows: holdersShaped.rows,
+          ...partialFields(holdersShaped.tableRows, holdersShaped.rows.length),
+          ...unreadTableFields(holdersShaped.rows, rpc.why),
+          maxHolders: 20,
+          ...(holdersShaped.rows.length === 0 ? { note: noTableNote(rpc.why) } : {}),
+          concentration: holdersShaped.concentration,
+        },
+        markets: { ...marketsShaped, ...partialFields(marketsShaped.total, marketsShaped.rows.length), maxMarkets: 25 },
         lockers: shapeLockers(r, 10),
         source: "rugcheck",
         fetchedAt: stamp(),
@@ -602,7 +751,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "Top-holder concentration for a Solana token mint: the 20 largest holders with token account, owner wallet, balance, percent of supply, insider flag and a pool/locker label when the account is a known AMM vault or locker, plus top-1/5/10/20 share, top-10 share excluding labelled pool accounts, insider count, total holder count and supply. Use it to tell a whale-held launch from one whose largest holder is the liquidity pool. Read from a public token-risk report (the public Solana RPC throttles getTokenLargestAccounts).",
+      "Top-holder concentration for a Solana token mint: the 20 largest holders with token account, owner wallet, balance, percent of supply, insider flag and a pool/locker label when the account is a known AMM vault or locker, plus top-1/5/10/20 share, top-10 share excluding labelled pool accounts, insider count, total holder count and supply. Use it to tell a whale-held launch from one whose largest holder is the liquidity pool. Read from a public token-risk report; when that report carries no holder table, at most two bounded reads from our Solana RPC fill it (the 20 largest token accounts, then one batched owner lookup). Every read runs under a deadline, so a slow upstream answers as a retryable refusal, never a charge; the answer carries returned, matched and complete fields against the 20-row table.",
     tags: ["solana", "token", "holders", "whales", "concentration", "memecoin", "spl"],
     discovery: {
       bodyType: "json",
@@ -618,6 +767,7 @@ export const SOLANA_INTEL_TOOLS = [
         example: {
           mint: MINTS.JUP, symbol: "JUP", decimals: 6, supply: 6862431164.93, totalHolders: 2873512,
           holders: [{ tokenAccount: "6G4X...", owner: "EXJH...", uiAmount: 1700000000.1, pct: 24.77, insider: false, label: null }],
+          returned: 10, matched: 20, complete: false, truncated: true, maxHolders: 20,
           concentration: { top1Pct: 24.77, top5Pct: 57.67, top10Pct: 66.1, top20Pct: 75.2, top10PctExcludingPools: 66.1, insiderHolders: 0, labeledPoolOrLockerAccounts: 0 },
           source: "rugcheck", fetchedAt: "2026-08-22T12:00:00.000Z",
         },
@@ -626,12 +776,13 @@ export const SOLANA_INTEL_TOOLS = [
     handler: async (i) => {
       const mint = takeMint(i.mint);
       const limit = takeLimit(i.limit, 20, 20);
-      const r = await upstreamJson(`${RUGCHECK}/tokens/${mint}/report`, { label: "RugCheck", notFound: "RugCheck has no report for that mint (not an SPL token mint?)" });
+      const budget = budgetOf();
+      const r = await rugcheckReport(mint, budget);
       const decimals = num(r?.token?.decimals);
       const rawSupply = num(r?.token?.supply);
       const fromRugcheck = Array.isArray(r?.topHolders) && r.topHolders.length > 0;
-      const rpcRows = fromRugcheck ? null : await topAccountsFromRpc(mint, rawSupply);
-      const h = shapeHolders(r, limit, rpcRows);
+      const rpc = fromRugcheck ? { rows: null, why: null } : await topAccountsFromRpc(mint, rawSupply, budget);
+      const h = shapeHolders(r, limit, rpc.rows);
       return {
         mint,
         symbol: r?.tokenMeta?.symbol ?? null,
@@ -648,10 +799,13 @@ export const SOLANA_INTEL_TOOLS = [
         // the count come from different sources now, so each says its own
         // truth and neither invents the other.
         totalHolders: num(r?.totalHolders) > 0 ? num(r?.totalHolders) : null,
-        ...(h.rows.length === 0
-          ? { note: "No top-holder table is available for this mint: RugCheck published none and the Solana RPC returned no token accounts. totalHolders, when present, is still RugCheck's own count." }
-          : {}),
+        ...(h.rows.length === 0 ? { note: noTableNote(rpc.why) } : {}),
         holders: h.rows,
+        // The table either source publishes is at most 20 rows: returned is
+        // what this answer holds, matched what the table held.
+        ...partialFields(h.tableRows, h.rows.length),
+        ...unreadTableFields(h.rows, rpc.why),
+        maxHolders: 20,
         concentration: h.rows.length ? h.concentration : null,
         // Say which source produced the TABLE. The insider flag and the
         // pool/locker labels only exist on the RugCheck path, so a buyer reading
@@ -697,7 +851,7 @@ export const SOLANA_INTEL_TOOLS = [
     handler: async (i) => {
       const mint = takeMint(i.mint);
       const limit = takeLimit(i.limit, 10, 30);
-      const list = await upstreamJson(`${DEXSCREENER}/token-pairs/v1/solana/${mint}`, { label: "DexScreener" });
+      const list = await upstreamJson(`${DEXSCREENER}/token-pairs/v1/solana/${mint}`, { label: "DexScreener", step: "token pairs", timeoutMs: DEXSCREENER_MS });
       const rows = (Array.isArray(list) ? list : []).filter((p) => p?.chainId === "solana").map(shapePair).sort(byLiquidity);
       return {
         mint,
@@ -746,7 +900,7 @@ export const SOLANA_INTEL_TOOLS = [
       const query = i.query.trim();
       if (query.length > 80) throw bad('"query" must be 80 characters or fewer');
       const limit = takeLimit(i.limit, 10, 30);
-      const data = await upstreamJson(`${DEXSCREENER}/latest/dex/search?q=${encodeURIComponent(query)}`, { label: "DexScreener" });
+      const data = await upstreamJson(`${DEXSCREENER}/latest/dex/search?q=${encodeURIComponent(query)}`, { label: "DexScreener", step: "pair search", timeoutMs: DEXSCREENER_MS });
       // Upstream relevance order is kept on purpose: re-sorting by liquidity
       // put ticker impostors with spoofed nine-figure liquidity above the real
       // token (measured live on "JUP"). hasProfile + liquidity let the caller
@@ -799,9 +953,10 @@ export const SOLANA_INTEL_TOOLS = [
       if (!["boosts", "profiles", "both"].includes(list)) throw bad('"list" must be "boosts", "profiles", or "both"');
       const wantBoosts = list !== "profiles";
       const wantProfiles = list !== "boosts";
+      const budget = budgetOf();
       const [boosts, profiles] = await Promise.all([
-        wantBoosts ? upstreamJson(`${DEXSCREENER}/token-boosts/top/v1`, { label: "DexScreener" }) : Promise.resolve([]),
-        wantProfiles ? upstreamJson(`${DEXSCREENER}/token-profiles/latest/v1`, { label: "DexScreener" }) : Promise.resolve([]),
+        wantBoosts ? upstreamJson(`${DEXSCREENER}/token-boosts/top/v1`, { label: "DexScreener", step: "top boosts", timeoutMs: DEXSCREENER_MS, budget }) : Promise.resolve([]),
+        wantProfiles ? upstreamJson(`${DEXSCREENER}/token-profiles/latest/v1`, { label: "DexScreener", step: "latest profiles", timeoutMs: DEXSCREENER_MS, budget }) : Promise.resolve([]),
       ]);
       const bAll = Array.isArray(boosts) ? boosts : [];
       const pAll = Array.isArray(profiles) ? profiles : [];
@@ -865,7 +1020,7 @@ export const SOLANA_INTEL_TOOLS = [
       if (!Array.isArray(raw) || raw.length === 0) throw bad('"mints" is required: 1-50 base58 mint addresses');
       if (raw.length > 50) throw bad(`"mints" must contain at most 50 entries (got ${raw.length})`);
       const mints = [...new Set(raw.map((m) => takeMint(m, "mints[]")))];
-      const data = await upstreamJson(`${jupiterBase()}/price/v3?ids=${mints.join(",")}`, { label: "Jupiter" });
+      const data = await upstreamJson(`${jupiterBase()}/price/v3?ids=${mints.join(",")}`, { label: "Jupiter", step: "price", timeoutMs: JUPITER_MS });
       const prices = {};
       const missing = [];
       for (const m of mints) {
@@ -928,7 +1083,7 @@ export const SOLANA_INTEL_TOOLS = [
         if (!Number.isFinite(slippageBps) || slippageBps < 0 || slippageBps > 5000) throw bad('"slippageBps" must be an integer between 0 and 5000');
       }
       const url = `${jupiterBase()}/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountStr}&slippageBps=${slippageBps}`;
-      const q = await upstreamJson(url, { label: "Jupiter", notFound: "Jupiter cannot route that swap (token not tradable or no liquidity)" });
+      const q = await upstreamJson(url, { label: "Jupiter", step: "swap quote", timeoutMs: JUPITER_MS, notFound: "Jupiter cannot route that swap (token not tradable or no liquidity)" });
       const plan = Array.isArray(q?.routePlan) ? q.routePlan : [];
       return {
         inputMint,
@@ -991,7 +1146,7 @@ export const SOLANA_INTEL_TOOLS = [
       const query = i.query.trim();
       if (query.length > 80) throw bad('"query" must be 80 characters or fewer');
       const limit = takeLimit(i.limit, 5, 20);
-      const list = await upstreamJson(`${jupiterBase()}/tokens/v2/search?query=${encodeURIComponent(query)}`, { label: "Jupiter" });
+      const list = await upstreamJson(`${jupiterBase()}/tokens/v2/search?query=${encodeURIComponent(query)}`, { label: "Jupiter", step: "token search", timeoutMs: JUPITER_MS });
       let rows = (Array.isArray(list) ? list : []).map(shapeJupToken).filter(Boolean);
       // Exact mint match first when the query is an address.
       if (BASE58_RE.test(query)) rows.sort((a, b) => (b.mint === query) - (a.mint === query));
@@ -1009,7 +1164,8 @@ const JUPITER_SLUGS = new Set(["sol-token-safety", "sol-price", "sol-swap-quote"
 for (const t of SOLANA_INTEL_TOOLS) if (JUPITER_SLUGS.has(t.slug)) t.description = `${t.description} ${JUPITER_ATTRIBUTION}`;
 
 // Exported for offline unit tests (pure shaping, no network).
-export const __test = { takeMint, takeLimit, shapeHolders, shapeMarkets, shapePair, shapeJupToken, authorityState, riskCounts, BASE58_RE };
+export const __test = { takeMint, takeLimit, shapeHolders, shapeMarkets, shapePair, shapeJupToken, authorityState, riskCounts, BASE58_RE, budgetOf, topAccountsFromRpc,
+  DEADLINES: Object.freeze({ HANDLER_BUDGET_MS, RUGCHECK_SUMMARY_MS, RUGCHECK_REPORT_MS, JUPITER_MS, DEXSCREENER_MS, RPC_MS, RPC_FLOOR_MS, FULL_REPORT_FLOOR_MS, RUGCHECK_FALLBACK_MS }), reportReadsInflight: () => reportReads.inflightSize() };
 
 // Free text in these results is written by third parties (headlines, posts,
 // casts, token names and descriptions, page titles). Anyone can mint a token or
@@ -1021,3 +1177,6 @@ for (const t of SOLANA_INTEL_TOOLS) {
   const inner = t.handler;
   t.handler = async (...args) => markUntrusted(await inner(...args));
 }
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(SOLANA_INTEL_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

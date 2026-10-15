@@ -30,6 +30,7 @@ import { trackStoreReady, leased } from "./state-db.js";
 import { timedSync } from "./boot-timing.js";
 import { fetchAllBazaarItems as walkBazaar } from "./bazaar-pager.js";
 import { EVM, OUR_EVM_WALLETS } from "./revenue-live.js";
+import { blockMs, blocksForSeconds } from "./chain-block-time.js";
 import { redactSecrets } from "./tools/redact.js";
 import { FUNDING_DEFAULTS, posOf, endOfBlock, circularWalletsFrom, readSellerFunding, readPayerHistory, readFundingGaps, newFundingReadControl, fundingDayCalls, processSellerFunding, sellerFundingFigures, createFundingState, serializeFundingState, parseFundingState, pruneFundingState, fundingPairCount, fundingKnownCount, historyFromBlockFor, isScannableWallet } from "./seller-funding.js";
 import { NETWORKS } from "./payments.js";
@@ -240,7 +241,7 @@ export function priceMatches(microUsd, prices) {
  *  that already define them: NETWORKS (CAIP-2) and revenue-live's EVM block
  *  (USDC address, Alchemy-first RPCs, and a span already tuned to that chain's
  *  block time — Arbitrum's 0.25s blocks need a very different window from
- *  Base's 2s, which is the whole reason this is not one constant).
+ *  Base's (2 s, 200 ms from Denim), which is the whole reason this is not one constant).
  *
  *  Returns null for a chain we have no config for, so a caller can never
  *  silently scan the wrong token on the wrong rail. */
@@ -1029,7 +1030,11 @@ export async function resolveScanWindow(clock, opts, blockNumber) {
   try { head = await clock.latest(); } catch { /* estimated below */ }
   const latest = head ? head.number : parseInt(await blockNumber(), 16);
   if (Number.isFinite(opts.spanBlocks) && opts.spanBlocks > 0) {
-    return { latest, start: Math.max(0, latest - opts.spanBlocks), spanBlocks: opts.spanBlocks, windowSeconds: opts.spanBlocks * LEGACY_SECONDS_PER_BLOCK, source: "pinned" };
+    // The window a pinned count covers is read at the chain's measured rate
+    // (else its live block time), not at the 2 s the count may be written in.
+    const chainKey = opts.chain?.key || (typeof opts.chain === "string" ? opts.chain : "base");
+    const rate = (await clock.recentMsPerBlock?.()) || blockMs(chainKey);
+    return { latest, start: Math.max(0, latest - opts.spanBlocks), spanBlocks: opts.spanBlocks, windowSeconds: Math.round((opts.spanBlocks * rate) / 1000), source: "pinned" };
   }
   const windowSeconds = Number(opts.windowSeconds) > 0 ? Number(opts.windowSeconds) : 86_400;
   const nowSec = head ? head.timestamp : Math.floor((opts.now ?? Date.now()) / 1000);
@@ -1045,9 +1050,12 @@ export async function resolveScanWindow(clock, opts, blockNumber) {
  * 2 s blocks; a count that could not be read from the chain is never allowed
  * below them, because a narrower TTL prunes state that is still needed.
  */
-export async function fundingWindowBlocks(clock, latest, nowSec) {
+export async function fundingWindowBlocks(clock, latest, nowSec, chainKey = "base") {
   const d = 86_400;
-  const blocksBack = async (secs, floor) => {
+  const blocksBack = async (secs, fixedFloor) => {
+    // The floor is the window at the live block time, never less than the 2 s
+    // constant: after Denim the constant alone is a tenth of the window.
+    const floor = Math.max(fixedFloor, blocksForSeconds(chainKey, secs));
     try {
       const at = await clock.blockAtOrAfter(nowSec - secs, { headNumber: latest });
       const n = latest - at.block;
@@ -1286,7 +1294,7 @@ export async function runLeaderboard(overrides = {}) {
       };
       processSellerFunding(state, byWallet, { throughFor, windowStartBlock: start, gaps: gapRead.gaps, histories: history.histories, classify });
       const pruned = {};
-      fundingWindows = await fundingWindowBlocks(clock, latest, win.headTimestamp ?? Math.floor(nowMs / 1000));
+      fundingWindows = await fundingWindowBlocks(clock, latest, win.headTimestamp ?? Math.floor(nowMs / 1000), opts.chain?.key || "base");
       pruneFundingState(state, { now: nowMs, latest, counts: pruned, ...held, ...fundingWindows });
       const h = history.stats;
       const g = gapRead.stats;

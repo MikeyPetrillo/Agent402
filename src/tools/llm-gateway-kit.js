@@ -54,6 +54,7 @@ import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { clientGoneSignal } from "../drain-abort.js";
 import { clientGoneError } from "../hangup-settlement.js";
 import { evmCredentialSettleableMs } from "../evm-validity.js";
+import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-policy.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -198,7 +199,10 @@ export async function probeOxAlphaAvailability({ fetchImpl } = {}) {
 //
 // Each list doubles as the tier's failover chain: a provider error walks down
 // the ranking, and every list contains openai/gpt-4o-mini — the model the
-// daily paid canary proves alive.
+// daily paid canary proves alive. It retires 2027-01-14 (RETIRING_MODELS) and
+// stays the terminal rung until a successor is decided (gpt-5-nano returns no
+// content under about 32 output tokens, so it cannot take the slot as is);
+// test-llm-gateway fails 30 days before the date while a rung still names it.
 //
 // The `quality` knob picks the BAND (fast / balanced / best); all three stay
 // inside the flat $0.01 price — a per-request price can't exist under x402's
@@ -335,6 +339,8 @@ export const TIERS = {
     ],
   },
   "v1-chat": {
+    // gpt-4o-mini retires 2027-01-14 (RETIRING_MODELS) and stays the default
+    // until a successor is decided; test-llm-gateway fails 30 days ahead.
     defaultModel: "openai/gpt-4o-mini", // served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
     reasoningDefault: "lowest", // budget tier: lowest non-none effort on default-on reasoning models
     route: "POST /v1/chat/completions",
@@ -372,6 +378,8 @@ export const TIERS = {
     ],
   },
   "v1-chat-pro": {
+    // gpt-4o retires 2027-01-14 (RETIRING_MODELS) and stays the default until
+    // a successor is decided; test-llm-gateway fails 30 days ahead.
     defaultModel: "openai/gpt-4o", // served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
     reasoningDefault: "low", // real reasoning, but never medium/high by default under a 4k cap
     route: "POST /v1/pro/chat/completions",
@@ -619,6 +627,8 @@ const METERED_PREFIXES = [...new Set(Object.values(TIERS)
   .filter((t) => !t.router && !t.lockedModel && !t.stealth)
   .flatMap((t) => t.prefixes || []))];
 TIERS["v1-chat-metered"] = {
+  // Haiku 5.5 is served by its explicit id (refuseUnsupportedParams covers the
+  // parameters it does not take); the default stays Haiku 4.5.
   defaultModel: "anthropic/claude-haiku-4.5", // served when the caller names no model (quoted like any explicit model)
   metered: true,
   reasoningDefault: "lowest", // the buyer pays for reasoning tokens: default to the cheapest effort, opt up explicitly
@@ -737,10 +747,41 @@ export const RETIRING_MODELS = Object.freeze({
   // both non-reasoning and priced inside the tier's max_price.
   "poolside/laguna-xs-2.1": { until: "2026-10-31", use: "mistralai/ministral-3b-2512" },
   "poolside/laguna-s-2.1": { until: "2026-10-31", use: "mistralai/ministral-8b-2512" },
+  // Claude Sonnet 4 (OpenRouter expiration_date 2026-10-15). The pro tier's
+  // family prefix still admits the id; its successor is the same family's
+  // current model, priced below it.
+  "anthropic/claude-sonnet-4": { until: "2026-10-15", use: "anthropic/claude-sonnet-5.5" },
+  // Qwen 3.5 9B (OpenRouter expiration_date 2026-10-21). The base tier admits
+  // the qwen/ family; its successor is the family's current flash model,
+  // priced below it and inside the tier's max_price.
+  "qwen/qwen3.5-9b": { until: "2026-10-21", use: "qwen/qwen3.7-flash" },
+  // OpenAI shuts down GPT-4o, GPT-4o mini, GPT-4.1 and GPT-4.1 mini on
+  // 2027-01-14 (OpenAI's deprecations page). OpenRouter lists no expiration
+  // date for them yet, so these entries are SCHEDULED (asItselfUntil): each
+  // id is served as itself until that day, and from then on canonicalModel
+  // serves the named successor, disclosed in agent402_model_substituted. A
+  // dated snapshot (gpt-4o-2024-08-06) follows its family id. The successors
+  // are provisional; test-llm-gateway fails 30 days before the date while a
+  // tier default, fallback or auto rung still names a retiring id.
+  "openai/gpt-4o": { until: "2027-01-14", use: "openai/gpt-6.1-sol", asItselfUntil: true },
+  "openai/gpt-4o-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true },
+  "openai/gpt-4.1": { until: "2027-01-14", use: "openai/gpt-6.1-sol", asItselfUntil: true },
+  "openai/gpt-4.1-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true },
 });
+let retiringClock = () => Date.now();
+/** Tests only: read scheduled retirements against another clock (null resets). */
+export function setRetiringClockForTest(fn) { retiringClock = typeof fn === "function" ? fn : () => Date.now(); }
+/** True when a scheduled (asItselfUntil) entry's date has not come yet. */
+export function retirementPending(entry, now = retiringClock()) {
+  return !!entry?.asItselfUntil && now < Date.parse(`${entry.until}T00:00:00Z`);
+}
 export function retiringModel(model) {
-  const id = canonicalModelRaw(model).toLowerCase().split(":")[0];
-  return Object.hasOwn(RETIRING_MODELS, id) ? { id, ...RETIRING_MODELS[id] } : null;
+  const raw = canonicalModelRaw(model).toLowerCase().split(":")[0];
+  const key = Object.hasOwn(RETIRING_MODELS, raw) ? raw : raw.replace(/-\d{4}-\d{2}-\d{2}$/, "");
+  if (!Object.hasOwn(RETIRING_MODELS, key)) return null;
+  const entry = RETIRING_MODELS[key];
+  if (retirementPending(entry)) return null;
+  return { id: raw, ...entry };
 }
 
 /** Same-family successors for models whose whole upstream can vanish at once
@@ -758,6 +799,8 @@ export const AVAILABILITY_SUCCESSORS = Object.freeze({
   // Not gpt-4.1-nano: OpenAI removes it 2026-10-23. Pro admits no current
   // OpenAI model at or under gpt-4o-mini's cost, so pro keeps no successor.
   "openai/gpt-4o-mini": ["openai/gpt-5-nano"],
+  // gpt-4.1 shuts down with gpt-4o on 2027-01-14; from then canonicalModel
+  // serves gpt-4o's scheduled successor, so this entry stops mattering.
   "openai/gpt-4o": ["openai/gpt-4.1"],
 });
 const successorsOf = (model) => {
@@ -1032,6 +1075,36 @@ export function tokenizerFactor(model) {
  *  wire, where the Anthropic-native fields are. Exported for the tests. */
 export function noSamplingKnobs(model) {
   return /^openai\/gpt-6-astra/.test(canonicalModel(model).toLowerCase());
+}
+
+/** Claude Haiku 5 and later. Live 2026-10-14 on haiku-5.5: the parameter list
+ *  carries no temperature, top_p or top_k and OpenRouter drops all three
+ *  silently on both wires (each answered 200 with no effect); an assistant
+ *  prefill is refused upstream with a 400 ("does not support assistant
+ *  message prefill"); thinking is adaptive, a fixed budget (reasoning.max_tokens,
+ *  thinking.budget_tokens) answered 200 and was ignored, and effort is the
+ *  depth control. Exported for the tests. */
+export function adaptiveOnlyClaude(model) {
+  return /^anthropic\/claude-haiku-(?:[5-9]|\d{2,})(?=[.:-]|$)/.test(canonicalModel(model).toLowerCase());
+}
+
+/** One refusal for the parameters a model does not take, shared by the chat,
+ *  Messages and Responses wires: a knob the upstream would drop silently, or
+ *  refuse with an unexplained upstream error, is named in a 400 before any
+ *  upstream call (a 400 cancels settlement, so nothing is charged).
+ *  `effortField` is how this wire spells the depth control. */
+export function refuseUnsupportedParams(model, { sampling = {}, endsWithAssistant = false, reasoningBudget = false, effortField = "reasoning.effort" } = {}) {
+  if (noSamplingKnobs(model)) {
+    for (const k of ["temperature", "top_p"]) {
+      if (sampling[k] !== undefined) throw bad(`"${k}" is not supported by ${model} (its reasoning is mandatory and it takes no sampling parameters; the upstream drops the field silently). Remove it, or steer with ${effortField} instead.`);
+    }
+  }
+  if (!adaptiveOnlyClaude(model)) return;
+  for (const k of ["temperature", "top_p", "top_k"]) {
+    if (sampling[k] !== undefined) throw bad(`"${k}" is not supported by ${model} (it takes no sampling parameters; the upstream drops the field silently). Remove it, or steer depth with ${effortField}.`);
+  }
+  if (endsWithAssistant) throw bad(`${model} does not take an assistant prefill: the conversation must end with a user turn or a tool result. Put the prefill text in the user turn as an instruction.`);
+  if (reasoningBudget) throw bad(`A fixed reasoning budget is not supported by ${model}: its thinking is adaptive and ${effortField} (low, medium, high, xhigh, max) is the depth control. Send that instead.`);
 }
 
 /** Buyer's prompt-cache preference (top-level OpenRouter `cache_control`):
@@ -1658,12 +1731,13 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   // DROPS them silently (measured 2026-09-18: temperature 0.2 and top_p 0.5
   // both answered 200 with no effect), so a buyer would believe they set a
   // knob that did nothing. Say so, the way the Messages wire already does for
-  // the post-Opus-4.6 Claude models.
-  if (noSamplingKnobs(model)) {
-    for (const k of ["temperature", "top_p"]) {
-      if (body[k] !== undefined) throw bad(`"${k}" is not supported by ${model} (its reasoning is mandatory and it takes no sampling parameters; the upstream drops the field silently). Remove it, or steer with reasoning.effort instead.`);
-    }
-  }
+  // the post-Opus-4.6 Claude models. Claude Haiku 5 adds top_k, an assistant
+  // prefill and a fixed reasoning budget (adaptiveOnlyClaude).
+  refuseUnsupportedParams(model, {
+    sampling: { temperature: body.temperature, top_p: body.top_p, top_k: input.top_k },
+    endsWithAssistant: messages[messages.length - 1]?.role === "assistant",
+    reasoningBudget: input.reasoning?.max_tokens !== undefined,
+  });
   // Buyer reasoning preference (changes the answer -> normalized body).
   const reasoning = validateReasoning(input, tier);
   if (reasoning !== undefined) body.reasoning = reasoning;
@@ -1932,6 +2006,12 @@ export const REASONING_MODELS = [
   // Claude Sonnet 5.5 (pro, via the claude-sonnet prefix): reasoning MANDATORY,
   // default effort high (live catalog 2026-09-29); pro injects "low".
   { id: "anthropic/claude-sonnet-5.5", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  // Claude Haiku 5.5 (base via the claude-haiku prefix, by its explicit id):
+  // adaptive thinking, default effort medium, no "none" (live catalog
+  // 2026-10-14, which lists default_effort but neither mandatory nor
+  // default_enabled for it: `adaptive` tells the live guard so). The budget
+  // tiers inject "low", pro "low".
+  { id: "anthropic/claude-haiku-5.5", efforts: ["low", "medium", "high", "xhigh", "max"], adaptive: true },
   // Mercury 2.5: reasoning default-on at medium, "none" supported (live 2026-09-29).
   { id: "inception/mercury-2.5", efforts: ["none", "low", "medium", "high"] },
   { id: "anthropic/claude-opus-5", efforts: ["low", "medium", "high", "xhigh", "max"] },
@@ -2619,7 +2699,7 @@ export function embeddingsCacheKey(input) {
 }
 
 async function embeddingsHandler(input, req) {
-  gatewaySettleBreakerCheck(req);
+  await gatewaySettleBreakerCheck(req);
   const body = validateEmbeddingsRequest(input);
   const key = OPENAI_KEY();
   if (!key) throw bad("Embeddings gateway not configured (OPENAI_API_KEY unset)", 503);
@@ -2724,7 +2804,7 @@ export function rerankCacheKey(input) {
   return createHash("sha256").update(`v1-rerank\n${stableStringify(body)}`).digest("hex");
 }
 async function rerankHandler(input, req) {
-  gatewaySettleBreakerCheck(req);
+  await gatewaySettleBreakerCheck(req);
   const body = validateRerankRequest(input);
   const key = OPENROUTER_KEY();
   if (!key) throw bad("Rerank gateway not configured (OPENROUTER_API_KEY unset)", 503);
@@ -2803,7 +2883,7 @@ export function validateImagesRequest(input) {
 }
 
 async function imagesHandler(input, req) {
-  gatewaySettleBreakerCheck(req);
+  await gatewaySettleBreakerCheck(req);
   const { prompt, zdr } = validateImagesRequest(input);
   // Loaded at call time: the images kit imports this module, so a static
   // import here would be a cycle.
@@ -2925,8 +3005,12 @@ export function validateSpeechRequest(input) {
   // not turn a provider outage into their 502).
   let chain = SPEECH_MODELS;
   if (input.model !== undefined) {
+    // The caller's own spelling is matched too: canonicalModel prefixes some
+    // bare names (grok-* becomes x-ai/grok-*), which would turn a documented
+    // alias such as "grok-voice-tts" into an id no entry carries.
+    const raw = String(input.model).trim().toLowerCase();
     const m = canonicalModel(input.model).toLowerCase();
-    const hit = SPEECH_MODELS.find((e) => m === e.id || e.aliases.includes(m));
+    const hit = SPEECH_MODELS.find((e) => m === e.id || e.aliases.includes(m) || raw === e.id || e.aliases.includes(raw));
     if (!hit) {
       throw bad(`"model" must be one of: ${SPEECH_MODELS.map((e) => e.id).join(", ")} (or omit it for the default chain)`);
     }
@@ -2945,20 +3029,31 @@ export function validateSpeechRequest(input) {
     if (!Number.isFinite(s) || s < 0.25 || s > 4) throw bad('"speed" must be between 0.25 and 4');
   }
   const zdr = input.zdr === true || input.provider?.zdr === true;
+  // A buyer's zdr opt-in keeps the walk on links that have a ZDR endpoint: a
+  // link without one answers 404 under zdr:true, which would end the walk.
+  if (zdr) {
+    const pinned = chain[0];
+    chain = chain.filter((e) => AUDIO_ZDR_MODELS.has(e.id));
+    if (input.model !== undefined && !AUDIO_ZDR_MODELS.has(pinned.id)) {
+      throw bad(`"model" ${pinned.id} has no zero-data-retention endpoint, so it cannot serve a zdr request - omit "model" or pick one of: ${chain.map((e) => e.id).join(", ")}`);
+    }
+  }
+  // Our data policy (src/openrouter-audio-policy.js): data_collection deny on
+  // every link, zdr on the links whose every endpoint is ZDR.
   const bodies = chain.map((entry) => ({
     model: entry.id,
     input: text,
     voice: speechVoiceFor(entry, voice),
     response_format: format,
     ...(input.speed !== undefined ? { speed: Number(input.speed) } : {}),
-    ...(zdr ? { provider: { zdr: true } } : {}),
+    provider: audioProviderPolicy(entry.id, { zdr }),
   }));
   return { bodies, contentType: SPEECH_FORMATS[format] };
 }
 
 const SPEECH_TIMEOUT_MS = 60_000;
 async function speechHandler(input, req) {
-  gatewaySettleBreakerCheck(req);
+  await gatewaySettleBreakerCheck(req);
   const { bodies, contentType } = validateSpeechRequest(input);
   const key = OPENROUTER_KEY();
   if (!key) throw bad("LLM gateway not configured (OPENROUTER_API_KEY unset)", 503);
@@ -3024,7 +3119,7 @@ function countImages(messages) {
 
 function makeHandler(routeTier) {
   return async (input, req) => {
-    gatewaySettleBreakerCheck(req);
+    await gatewaySettleBreakerCheck(req);
     // Price by model: every serving decision below reads `tierSlug`, which is
     // the route's tier unless the body names another flat tier's model AND the
     // request was gated at that tier's price (see servedTierFor).
@@ -3466,7 +3561,7 @@ export const LLM_GATEWAY_TOOLS = [
       bodyType: "json",
       input: { messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 },
       inputSchema: AUTO_INPUT_SCHEMA,
-      output: { example: { ...EXAMPLE_OUT, agent402_router: { category: "general", quality: "balanced", served: "openai/gpt-4o-mini" } } },
+      output: { example: { ...EXAMPLE_OUT, agent402_router: { category: "general", quality: "balanced", served: "openai/gpt-5.6-luna" } } },
     },
     handler: makeHandler("v1-chat-auto"),
   },
@@ -3483,7 +3578,7 @@ export const LLM_GATEWAY_TOOLS = [
       bodyType: "json",
       input: { messages: [{ role: "user", content: "What is the current Node.js LTS version? One line, cite the source." }], max_tokens: 120 },
       inputSchema: AUTO_INPUT_SCHEMA,
-      output: { example: { ...EXAMPLE_OUT, agent402_router: { category: "general", quality: "balanced", served: "openai/gpt-4o-mini" } } },
+      output: { example: { ...EXAMPLE_OUT, agent402_router: { category: "general", quality: "balanced", served: "openai/gpt-5.6-luna" } } },
     },
     handler: makeHandler("v1-chat-grounded"),
   },

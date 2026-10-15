@@ -12,6 +12,8 @@ import { tempoSelfRecipient } from "./mpp-tempo.js";
 import { existsSync } from "node:fs";
 import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady } from "./state-db.js";
+import { blocksForSeconds, blockTimeChanges, refreshBlockMs } from "./chain-block-time.js";
+import { rpcHeaderReader } from "./block-clock.js";
 import { standingBand } from "./standing.js";
 import { join } from "node:path";
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
@@ -99,9 +101,13 @@ export const OUR_ALGORAND_WALLETS = new Set(
 
 // Chain read-config. Stablecoin contracts mirror scripts/revenue-scan.js;
 // span ≈ a few hours of blocks so "recent inbound" stays a cheap filtered read.
+// Base's span is TIME (spanSeconds, 30,000 blocks at its original 2 s), read
+// as a block count at the live block time (src/chain-block-time.js), so the
+// window covers the same hours before and after its Denim upgrade (200 ms).
 export const EVM = {
   base: {
-    label: "Base", asset: "USDC", span: 30000,
+    label: "Base", asset: "USDC", spanSeconds: 60_000,
+    get span() { return blocksForSeconds("base", this.spanSeconds); },
     token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
@@ -476,6 +482,9 @@ async function evmRail(name, wallet) {
     const balHex = await rpcCall(cheapRpcs, "eth_call", [{ to: c.token, data: "0x70a08231" + pad(wallet).slice(2) }, "latest"]);
     out.balance = Number(BigInt(balHex && balHex !== "0x" ? balHex : "0x0")) / 1e6;
     const latest = parseInt(await rpcCall(cheapRpcs, "eth_blockNumber", []), 16);
+    // A chain whose block time changes (Base Denim) is re-measured (throttled,
+    // never throws) so c.span below counts the same hours at the live rate.
+    if (blockTimeChanges(name)) await refreshBlockMs(name, rpcHeaderReader((m, p) => rpcCall(cheapRpcs, m, p)));
 
     // Prefer the ledger. These transfers are already indexed by the background
     // revenue sync; re-deriving them here meant chunked eth_getLogs on every
@@ -1048,11 +1057,13 @@ export function parseEvmTransfer(t) {
 // cutoff, and otherwise at the scan budget above (which sets truncated).
 // Public RPCs don't implement this method, so no ALCHEMY_API_KEY → immediate honest "unavailable" rather than
 // a failed call per page.
-/** How far back a resumed scan re-reads, in blocks. Base produces a block
- *  every ~2s, so this is a couple of minutes of overlap: enough that a
- *  transfer landing between two scans cannot fall in the gap, small enough to
- *  cost nothing. Duplicates are removed by uid, so overlap is free. */
-const RESUME_OVERLAP_BLOCKS = 60;
+/** How far back a resumed scan re-reads: two minutes of the chain's blocks
+ *  at its live block time (src/chain-block-time.js; Base: 60 blocks at 2 s,
+ *  600 at 200 ms). Enough that a transfer landing between two scans cannot
+ *  fall in the gap, small enough to cost nothing. Duplicates are removed by
+ *  uid, so overlap is free. */
+export const RESUME_OVERLAP_SECONDS = 120;
+export const resumeOverlapBlocks = (chainKey) => blocksForSeconds(chainKey, RESUME_OVERLAP_SECONDS);
 
 /** Rows retained per wallet for a resume. The busiest wallet on Base holds
  *  ~30k in a 30-day window at ~150 bytes each; the cap bounds one pathological
@@ -1163,7 +1174,7 @@ export async function evmActivity(chainKey, wallet, { days = 30, maxPages = SCAN
       if (!covered) farBlock = oldestOf(merged);
     } else {
       activityCounters.resumed++;
-      const startBlock = Math.max(0, prior.newestBlock - RESUME_OVERLAP_BLOCKS);
+      const startBlock = Math.max(0, prior.newestBlock - resumeOverlapBlocks(chainKey));
       const head = await walk({ fromBlock: startBlock, stopBelow: startBlock, pages: maxPages });
       if (head.more) {
         // The head itself did not catch up with the prior's newest block, so
@@ -1651,7 +1662,7 @@ const netName = (n) => NET_ALIAS[n] || n;
 const MPP_RAIL_META = {
   base: { label: "Base", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://basescan.org/address/", tx: "https://basescan.org/tx/" },
   celo: { label: "Celo", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://celoscan.io/address/", tx: "https://celoscan.io/tx/" },
-  tempo: { label: "Tempo", asset: "USDC.e / PathUSD", how: "native tempo/charge via Tempo's relay", explorer: "https://explore.tempo.xyz/address/", tx: "https://explore.tempo.xyz/tx/" },
+  tempo: { label: "Tempo", asset: "USDC.e / PathUSD", how: "native tempo/charge", explorer: "https://explore.tempo.xyz/address/", tx: "https://explore.tempo.xyz/tx/" },
   // Card payments over MPP settle in US dollars, not a stablecoin.
   stripe: { label: "Card (MPP wire)", asset: "USD", how: "a card credential on an MPP call; card checkout purchases are counted separately in the headline" },
 };

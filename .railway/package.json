@@ -1,0 +1,9 @@
+{
+  "name": "agent402-railway-iac",
+  "private": true,
+  "description": "Railway IaC SDK for evaluating .railway/railway.ts with railway config plan.",
+  "type": "module",
+  "dependencies": {
+    "railway": "3.12.0"
+  }
+}

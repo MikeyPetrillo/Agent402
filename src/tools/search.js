@@ -10,6 +10,7 @@
 
 import { markUntrusted } from "./provenance.js";
 import { recordUpstreamCall } from "../stats.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
 const BRAVE_HOST = "https://api.search.brave.com/res/v1";
 
@@ -51,10 +52,14 @@ export function meterBraveCall(path, caller) {
 export function braveCallMeter() {
   return { since: braveMeter.since, total: braveMeter.total, byPath: { ...braveMeter.byPath }, byCaller: { ...braveMeter.byCaller } };
 }
+// DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
+// with the handler budget; a read that outlives its cap is a 503 naming the
+// upstream and the step, never a 504. A search answers well under a second
+// upstream; the answer stream runs about 5 s (the published p50) and keeps
+// its 20 s cap. The handlers run under the route's payment-window budget
+// (PAYMENT_WINDOW_BUDGET_MS), since the keyed reads are not the sub-second
+// keyless class the 20 s data-kit budget is sized for.
 const TIMEOUT_MS = 10000;
-// Answers streams ~5s on average for single-search mode (Brave's published p50)
-// but the SSE response can run longer than the GET routes' fixed budget.
-// 20s gives Brave headroom without holding the dyno indefinitely.
 const ANSWER_TIMEOUT_MS = 20000;
 
 function bad(message, statusCode = 400) {
@@ -145,10 +150,11 @@ async function braveAnswerPost(query, opts = {}) {
   if (!token) {
     throw bad("Web answer is not configured on this deployment", 503);
   }
-  let res;
-  try {
-    meterBrave("/chat/completions", "answer");
-    res = await fetch(`${BRAVE_HOST}/chat/completions`, {
+  meterBrave("/chat/completions", "answer");
+  // The stream runs under its own cap and the handler budget; an abort while
+  // it streams is the deadline it is (bodyUnderDeadline below).
+  const ctx = { label: "Web answer", step: "answer stream", timeoutMs: ANSWER_TIMEOUT_MS, tag: "[search]" };
+  const res = await upstreamFetch(`${BRAVE_HOST}/chat/completions`, {
       method: "POST",
       headers: {
         "X-Subscription-Token": token,
@@ -177,14 +183,7 @@ async function braveAnswerPost(query, opts = {}) {
         country: opts.country || "us",
         language: opts.language || "en",
       }),
-      signal: AbortSignal.timeout(ANSWER_TIMEOUT_MS),
-    });
-  } catch (err) {
-    // Keep the evidence: the transport cause must reach the server log, not
-    // vanish into a generic 504 (same rule as price-feed-kit).
-    console.warn(`[search] answers upstream unreachable: ${err.name ?? err.code ?? err.message}`);
-    throw bad("Web answer upstream timed out", 504);
-  }
+  }, ctx);
   if (res.status === 429) throw bad("Web answer rate limit reached upstream - retry shortly", 503);
   if (!res.ok) throw bad(`Web answer upstream error (HTTP ${res.status})`, 502);
 
@@ -197,7 +196,7 @@ async function braveAnswerPost(query, opts = {}) {
   let content = "";
   let upstreamError = false;
   for (;;) {
-    const { done, value } = await reader.read();
+    const { done, value } = await bodyUnderDeadline(reader.read(), ctx);
     if (done) break;
     buf += decoder.decode(value, { stream: true });
     let nl;
@@ -279,24 +278,21 @@ async function braveGet(path, params, apiKey, caller) {
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
   }
-  let res;
   meterBrave(path, caller);
-  try {
-    res = await fetch(url, {
-      headers: { "X-Subscription-Token": key, Accept: "application/json" },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (err) {
-    // Keep the evidence: log the transport cause (never swallowed into the 504).
-    console.warn(`[search] upstream unreachable: ${(() => { try { return new URL(url).host; } catch { return "?"; } })()} → ${err.name ?? err.code ?? err.message}`);
-    throw bad("Search upstream timed out", 504);
-  }
+  const ctx = { label: "Search", step: stepOf(path), timeoutMs: TIMEOUT_MS, tag: "[search]" };
+  const res = await upstreamFetch(url, { headers: { "X-Subscription-Token": key, Accept: "application/json" } }, ctx);
   // Controlled messages only — never echo the upstream body to callers, but
   // do surface the upstream status code so plan-tier mismatches (401/403) are
   // distinguishable from real outages (5xx) in logs and error tracking.
   if (res.status === 429) throw bad("Search rate limit reached upstream - retry shortly", 503);
   if (!res.ok) throw bad(`Search upstream error (HTTP ${res.status})`, 502);
-  return res.json();
+  try { return await bodyUnderDeadline(res.json(), ctx); }
+  catch (err) { if (err?.statusCode) throw err; throw bad("Search upstream returned non-JSON", 502); }
+}
+// The step a buyer reads in a deadline 503, from the upstream path.
+function stepOf(path) {
+  const m = /^\/([a-z]+)\/([a-z]+)/.exec(String(path));
+  return m ? `${m[1]} ${m[2]}` : "search";
 }
 
 // Whitelist freshness values once — Brave also accepts YYYY-MM-DDtoYYYY-MM-DD
@@ -793,3 +789,6 @@ export const SEARCH_TOOLS = [
     },
   },
 ];
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(SEARCH_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

@@ -44,8 +44,14 @@
 import { markUntrusted } from "./provenance.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { meterUpstreamSpend } from "../posthog.js";
+import { createSharedDailySpend } from "../shared-limits.js";
 
 const EXA_API = "https://api.exa.ai";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+// DEADLINES (src/upstream-deadline.js): one read per handler under its own
+// 30 s cap and the route's payment-window budget (PAYMENT_WINDOW_BUDGET_MS);
+// a read that outlives it is a 503 naming the upstream and the step, never a
+// 504 (the booked estimate stays booked).
 const TIMEOUT_MS = 30_000;
 const USER_AGENT = "agent402-exa/1";
 const SHARED_TAGS = ["web", "search"];
@@ -166,7 +172,12 @@ export function exaSpendStatus(now = Date.now()) {
  *  (Exa is an indexed x402 and MPP seller), unpaid, so a host-level count of
  *  that domain is not this number. */
 export function exaCallsToday(now = Date.now()) { spentToday(now); return spend.calls; }
-export function _exaSpendReset() { spend.day = ""; spend.micro = 0; spend.refused = 0; spend.calls = 0; }
+export function _exaSpendReset() { spend.day = ""; spend.micro = 0; spend.refused = 0; spend.calls = 0; exaShared.reset(); }
+// Shared across replicas (src/shared-limits.js): the day's spend is also a
+// shared counter per UTC day, reserved before the call and corrected after; a
+// reserve that takes the shared total past the cap is given back and refused.
+// The local counter stays the floor when the store does not answer.
+const exaShared = createSharedDailySpend("exa-day", "exa");
 export function _exaSpendBook(usd) { spentToday(); spend.micro += Math.round(usd * 1e6); lifetime.micro += Math.round(usd * 1e6); }
 
 /**
@@ -203,54 +214,47 @@ async function exaPost(path, body) {
   const key = requireKey();
   const cap = EXA_DAILY_MAX_USD();
   const estimate = estimateExaUsd(path, body);
-  if (cap > 0 && spentToday() + estimate > cap) {
-    spend.refused++;
-    throw bad(
-      `Exa tools have reached today's usage cap - retry after 00:00 UTC. Nothing was charged for this request.`,
-      503,
-    );
-  }
+  const capped = () => { spend.refused++; return bad(`Exa tools have reached today's usage cap - retry after 00:00 UTC. Nothing was charged for this request.`, 503); };
+  // The shared reserve first (an atomic add on the store, awaited only when
+  // there is one): over the cap there, nothing is booked here. Then this
+  // process's check and booking, with no await between them.
+  if (cap > 0 && exaShared.enabled && !(await exaShared.reserve(estimate, cap))) throw capped();
+  if (cap > 0 && spentToday() + estimate > cap) { exaShared.book(-estimate); throw capped(); }
   // Book the estimate BEFORE the call. If the request dies mid-flight we may
   // still have been billed, and a guard that only books on success is a guard
   // a timeout walks straight through.
   _exaSpendBook(estimate);
+  const book = (usd) => { _exaSpendBook(usd); exaShared.book(usd); };
   spend.calls++;
 
-  let res;
-  try {
-    res = await fetch(`${EXA_API}${path}`, {
-      method: "POST",
-      headers: { "x-api-key": key, "Content-Type": "application/json", Accept: "application/json", "User-Agent": USER_AGENT },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (e) {
-    if (e?.name === "TimeoutError" || e?.name === "AbortError") throw bad("Exa did not respond in time", 504);
-    throw bad("could not reach Exa", 502);
-  }
+  const res = await upstreamFetch(`${EXA_API}${path}`, {
+    method: "POST",
+    headers: { "x-api-key": key, "Content-Type": "application/json", Accept: "application/json", "User-Agent": USER_AGENT },
+    body: JSON.stringify(body),
+  }, { label: "Exa", step: String(path).replace(/^\//, "") || "search", timeoutMs: TIMEOUT_MS, tag: "[exa]" });
 
   // Never relay an upstream error body to the buyer: it can carry our own key
   // material, account identifiers or another tenant's text.
   if (!res.ok) {
     // A clean refusal did no billable work: release the booked estimate so
     // refused calls cannot fill the day's cap. Timeouts and 5xx keep it.
-    if (EXA_RELEASE_STATUSES.has(res.status)) _exaSpendBook(-estimate);
+    if (EXA_RELEASE_STATUSES.has(res.status)) book(-estimate);
     if (res.status === 401 || res.status === 403) throw bad("Exa tools are not configured on this deployment. Nothing was charged for this request.", 503);
     if (res.status === 402) throw bad("Exa tools are temporarily unavailable. Nothing was charged for this request.", 503);
     if (res.status === 429) throw bad("Exa is rate-limiting this deployment right now - retry shortly", 503);
     if (res.status === 404) throw bad("Exa has nothing for that request", 404);
-    if (res.status >= 500) throw bad(`Exa upstream error (HTTP ${res.status})`, 502);
+    if (res.status >= 500) throw bad(`Exa upstream error (HTTP ${res.status}) - the upstream is having trouble; retry shortly. Nothing was charged for this request.`, 503);
     throw bad(`Exa refused the request (HTTP ${res.status}) - check the query and any filters`, 400);
   }
 
   let data;
   try { data = await res.json(); }
-  catch { throw bad("Exa returned a body that is not JSON", 502); }
+  catch { throw bad("Exa upstream error: the upstream returned a body that is not JSON. Nothing was charged for this request.", 503); }
 
   // Correct the day's booking to what Exa says it charged. Only ever replaces
   // the estimate with a real figure; an absent costDollars keeps the estimate.
   const actual = actualExaUsd(data);
-  if (actual !== null) _exaSpendBook(actual - estimate);
+  if (actual !== null) book(actual - estimate);
   // The served call's cost, in the server-side spend meter beside the model
   // tiers (/__operator/margin.json): what Exa says it charged, else the card.
   meterUpstreamSpend("exa", actual ?? estimate);
@@ -333,9 +337,11 @@ function shapeResult(r) {
   };
 }
 
+// The example reads one of our own pages (scripts/test-example-hosts.js): a
+// buyer copying it, and the daily catalog buy, get a page that exists.
 const RESULT_EXAMPLE = {
-  title: "What is the x402 payment protocol?",
-  url: "https://example.com/x402-explained",
+  title: "Agent402.Tools: pay-per-call tools for AI agents",
+  url: "https://agent402.tools/",
   publishedDate: "2026-08-02T00:00:00.000Z",
   author: null,
   text: null,
@@ -475,7 +481,7 @@ export const EXA_TOOLS = [
     tags: [...SHARED_TAGS, "contents", "extract"],
     discovery: {
       bodyType: "json",
-      input: { urls: ["https://example.com/x402-explained"] },
+      input: { urls: ["https://agent402.tools/"] },
       inputSchema: {
         properties: {
           urls: { type: "array", description: `Absolute http(s) URLs to read, 1 to ${MAX_URLS}.` },
@@ -490,7 +496,7 @@ export const EXA_TOOLS = [
           fetchedAt: "2026-09-13T20:00:00.000Z",
           count: 1,
           results: [{ ...RESULT_EXAMPLE, text: "x402 is an HTTP-native payment protocol ..." }],
-          statuses: [{ id: "https://example.com/x402-explained", status: "success" }],
+          statuses: [{ id: "https://agent402.tools/", status: "success" }],
         },
       },
     },
@@ -532,3 +538,6 @@ for (const t of EXA_TOOLS) {
   const inner = t.handler;
   t.handler = async (...args) => markUntrusted(await inner(...args));
 }
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(EXA_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

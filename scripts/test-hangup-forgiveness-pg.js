@@ -19,10 +19,14 @@ const TMP = mkdtempSync(join(tmpdir(), "hangup-pg-"));
 const file = join(TMP, "hangup-forgiveness.json");
 process.env.HANGUP_FORGIVE_FILE = file;
 process.env.HANGUP_FORGIVE_SALT = "unit-salt";
+// Keys this run writes to a shared store (REDIS_URL set) are its own.
+process.env.SHARED_LIMITS_PREFIX ||= `hfpg${process.pid}${Date.now().toString(36)}`;
 process.env.HANGUP_FORGIVE_KEY_USD = "0.25";
 process.env.HANGUP_FORGIVE_GLOBAL_USD = "2";
 const now = Date.now();
-const spend = (keys, price) => { const req = {}; reserveHangupForgiveness(req, { keys, priceUsd: price, now }); settleHangupTicket(req, { abandoned: true, now }); return req; };
+// The reservation is awaited: with REDIS_URL set beside the database (the CI
+// lane), the budget is also shared and the reservation is a promise.
+const spend = async (keys, price) => { const req = {}; await reserveHangupForgiveness(req, { keys, priceUsd: price, now }); settleHangupTicket(req, { abandoned: true, now }); return req; };
 
 try {
   // ---- 1. the file is imported once ----------------------------------------
@@ -47,7 +51,7 @@ try {
   ok(r2.loaded && r2.global === 1, `a second boot reads the row, not the changed file (${JSON.stringify(r2)})`);
 
   // ---- 2. a persist writes the row; a fresh load sees it -----------------
-  spend(["0xother", "ip:203.0.113.8"], 0.03);
+  await spend(["0xother", "ip:203.0.113.8"], 0.03);
   ok(await persistNow() === true, "persistNow resolves true once the row is written");
   const row2 = await documents.get(HANGUP_DOCUMENT_NAME);
   ok(row2?.body?.global?.length === 2 && row2.body.keys.length === 3, "the row now holds both abandoned records and every key");
@@ -59,9 +63,9 @@ try {
   ok(hangupForgivenessStatus(now).abandonedInWindow === 0, "(the in-memory record is empty before the load)");
   const r3 = await loadHangupForgiveness(now).ready;
   ok(r3.loaded && r3.global === 2 && r3.keys === 3, `after a restart the records come back from the row (${JSON.stringify(r3)})`);
-  const again = {}; reserveHangupForgiveness(again, { keys: ["0xpersist", "ip:203.0.113.99"], priceUsd: 0.1, now });
+  const again = {}; await reserveHangupForgiveness(again, { keys: ["0xpersist", "ip:203.0.113.99"], priceUsd: 0.1, now });
   ok(!hangupForgiven(again) && again.__a402HangupTicket.reason === "payer budget", `the same wallet is still past its budget after the restart (${again.__a402HangupTicket.reason})`);
-  const fresh = {}; reserveHangupForgiveness(fresh, { keys: ["0xnew", "ip:203.0.113.50"], priceUsd: 0.1, now });
+  const fresh = {}; await reserveHangupForgiveness(fresh, { keys: ["0xnew", "ip:203.0.113.50"], priceUsd: 0.1, now });
   ok(hangupForgiven(fresh), "a wallet with no abandoned record is still forgiven");
   settleHangupTicket(fresh, { abandoned: true, now });
   // The shutdown flush starts the row write and writes the file synchronously.
@@ -79,14 +83,14 @@ try {
     process.env.HANGUP_FORGIVE_FILE = "off"; // no file to import: the row is the only store here
     HA._resetHangupForgiveness(); HB._resetHangupForgiveness();
     await documents.del(HANGUP_DOCUMENT_NAME);
-    const spendOn = (M, keys, price, t) => { const req = {}; M.reserveHangupForgiveness(req, { keys, priceUsd: price, now: t }); M.settleHangupTicket(req, { abandoned: true, now: t }); };
-    spendOn(HA, ["0xaaaa", "ip:198.51.100.1"], 0.02, now - 3_000);
-    spendOn(HB, ["0xbbbb", "ip:198.51.100.2"], 0.03, now - 2_000);
+    const spendOn = async (M, keys, price, t) => { const req = {}; await M.reserveHangupForgiveness(req, { keys, priceUsd: price, now: t }); M.settleHangupTicket(req, { abandoned: true, now: t }); };
+    await spendOn(HA, ["0xaaaa", "ip:198.51.100.1"], 0.02, now - 3_000);
+    await spendOn(HB, ["0xbbbb", "ip:198.51.100.2"], 0.03, now - 2_000);
     await Promise.all([HA.persistNow(), HB.persistNow()]);
     const both = (await documents.get(HANGUP_DOCUMENT_NAME))?.body;
     const has = (body, raw) => (body?.keys || []).some((r) => r[0] === HA.hangupKeyDigest(raw));
     ok(both?.global?.length === 2 && has(both, "0xaaaa") && has(both, "0xbbbb") && both.keys.length === 4, `both containers' records are in the row (${both?.global?.length} service-wide, ${both?.keys?.length} keys)`);
-    spendOn(HA, ["0xaaaa", "ip:198.51.100.1"], 0.01, now - 1_000);
+    await spendOn(HA, ["0xaaaa", "ip:198.51.100.1"], 0.01, now - 1_000);
     await HA.persistNow();
     const after = (await documents.get(HANGUP_DOCUMENT_NAME))?.body;
     ok(after.global.length === 3 && after.keys.find((r) => r[0] === HA.hangupKeyDigest("0xbbbb"))?.[1]?.length === 1, "a later persist from one container keeps the other's records");

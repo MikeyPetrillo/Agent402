@@ -1,7 +1,7 @@
 # Deploy agent402-tollbooth on Next.js (Vercel)
 
-Open, crypto-native pay-per-crawl in your existing Next.js app, no CDN lock-in,
-no Stripe, no signup. Humans browse free; AI crawlers pay per request (USDC via
+Open, crypto-native pay-per-crawl in your existing Next.js app, settled to your
+own wallet with no signup. Humans browse free; AI crawlers pay per request (USDC via
 x402, or free proof-of-work). Runs in Vercel's Edge runtime.
 
 ## 3-step deploy

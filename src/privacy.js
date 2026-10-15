@@ -39,7 +39,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-11.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-14.</p>
 </section>
 
 <section>
@@ -99,7 +99,11 @@ so every claim below is verifiable in code.</p>
   audio you upload) and other AI-proxy tools are <b>forwarded to the upstream model
   provider</b> (OpenAI, or the model operator serving the request via OpenRouter) to generate the
   response, subject to that provider's own privacy terms. We don't store gateway inputs or outputs
-  beyond short-lived caches (minutes) that make repeated identical calls cheaper.</li>
+  beyond short-lived caches (minutes) that make repeated identical calls cheaper. For requests served
+  via OpenRouter, our account keeps its optional prompt and completion logging off, routes only to
+  endpoints that do not train on or publish request data, and does not let OpenRouter use inputs or
+  outputs to improve its product. Request metadata such as the model, token counts and cost is still
+  recorded for billing and monitoring, without the prompt or completion text.</li>
   <li><b>On-chain payments.</b> For x402 and MPP payments there are no card numbers, names, or emails.
   Payments settle in USDC on the public Base blockchain (or the other chains listed at <a href="/pricing">/pricing</a>,
   USDG on Robinhood Chain, or MPP on Base, Celo or Tempo) via the x402 or MPP protocol; wallet addresses, amounts, and

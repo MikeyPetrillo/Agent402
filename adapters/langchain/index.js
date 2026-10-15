@@ -1,7 +1,7 @@
 // agent402-langchain: turn Agent402 into LangChain.js tools the agent can
 // pick up directly. Four meta tools, all free to discover:
 //
-//   agent402_find:    local catalog resolver  (POST /api/find)
+//   agent402_find:    local catalog resolver  (GET /api/find)
 //   agent402_route:   cross-seller x402 router  (POST /api/route)
 //   agent402_call:    call a tool by slug, auto-pays (PoW free / x402 paid)
 //   agent402_about:   service manifest  (GET /.well-known/x402)
@@ -9,7 +9,7 @@
 // Why four and not "one tool per slug"? Frameworks balk at registering 500+
 // tools at once and the LLM can't reason over that many entries. Routing-as-
 // discovery means the LLM picks a task, the router picks the seller, and the
-// caller handles payment, exactly the wedge that makes Agent402 the default.
+// caller handles payment.
 //
 //   import { agent402Tools } from "agent402-langchain";
 //   const tools = await agent402Tools();              // free tier (PoW)
@@ -26,6 +26,50 @@
 import { createHash } from "node:crypto";
 
 const DEFAULT_BASE = "https://agent402.tools";
+
+// Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
+// settle nothing, so a 503 the server sheds under load is safe to repeat. It
+// is retried only when it names its own delay (a Retry-After header or a
+// retryAfterSeconds body field), at most DISCOVERY_ATTEMPTS tries in all,
+// each wait capped at DISCOVERY_MAX_WAIT_MS. A paid call never goes through
+// here: a repeat of one could settle twice.
+const DISCOVERY_ATTEMPTS = 3;
+const DISCOVERY_MAX_WAIT_MS = 5000;
+
+async function shedRetryWaitMs(r) {
+  if (!r || r.status !== 503) return null;
+  const header = r.headers && typeof r.headers.get === "function" ? r.headers.get("retry-after") : null;
+  let seconds = header != null && String(header).trim() !== "" ? Number(header) : NaN;
+  if (!Number.isFinite(seconds)) {
+    try {
+      const body = await (typeof r.clone === "function" ? r.clone() : r).json();
+      seconds = Number(body && body.retryAfterSeconds);
+    } catch { seconds = NaN; }
+  }
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  return Math.min(seconds * 1000, DISCOVERY_MAX_WAIT_MS);
+}
+
+// Resolves with the 2xx response, or throws `${label}: HTTP <status>` (plus
+// "after N attempts" when it retried) with `.status` and `.attempts` set.
+// `init` may be a function, so each attempt gets its own timeout signal.
+async function discoveryFetch(fetchImpl, label, url, init) {
+  let r;
+  let attempts = 0;
+  for (;;) {
+    attempts++;
+    r = await fetchImpl(url, typeof init === "function" ? init() : init);
+    if (r.ok) return r;
+    if (attempts >= DISCOVERY_ATTEMPTS) break;
+    const wait = await shedRetryWaitMs(r);
+    if (wait == null) break;
+    await new Promise((resolve) => setTimeout(resolve, wait));
+  }
+  const err = new Error(`${label}: HTTP ${r.status}${attempts > 1 ? ` after ${attempts} attempts` : ""}`);
+  err.status = r.status;
+  err.attempts = attempts;
+  throw err;
+}
 
 const leadingZeroBits = (buf) => {
   let n = 0;
@@ -53,17 +97,15 @@ export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fet
   if (typeof fetchImpl !== "function") throw new Error("No fetch available: pass { fetchImpl } on Node < 18");
   const base = String(baseUrl).replace(/\/$/, "");
   const getJSON = async (path) => {
-    const r = await fetchImpl(`${base}${path}`);
-    if (!r.ok) throw new Error(`GET ${path}: HTTP ${r.status}`);
+    const r = await discoveryFetch(fetchImpl, `GET ${path}`, `${base}${path}`);
     return r.json();
   };
   const postJSON = async (path, body) => {
-    const r = await fetchImpl(`${base}${path}`, {
+    const r = await discoveryFetch(fetchImpl, `POST ${path}`, `${base}${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!r.ok) throw new Error(`POST ${path}: HTTP ${r.status}`);
     return r.json();
   };
   return [
@@ -124,8 +166,7 @@ export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fet
 // proof-of-work (free tier) or the user's x402 fetch (wallet-required tools).
 // Mirrors agent402-client.call() behavior so this package stays zero-dep.
 async function callTool({ base, slug, params, payFetch, fetchImpl }) {
-  const pricingRes = await fetchImpl(`${base}/api/pricing`);
-  if (!pricingRes.ok) throw new Error(`could not load catalog: HTTP ${pricingRes.status}`);
+  const pricingRes = await discoveryFetch(fetchImpl, "could not load catalog (GET /api/pricing)", `${base}/api/pricing`);
   const pricing = await pricingRes.json();
   const entry = (pricing.endpoints || []).find((e) => e.slug === slug);
   if (!entry) throw new Error(`unknown tool "${slug}": use agent402_find or agent402_route to discover one`);
@@ -162,8 +203,7 @@ async function callTool({ base, slug, params, payFetch, fetchImpl }) {
   // to proof-of-work using the server-issued challenge.
   let r = await send();
   if (!r.ok) {
-    const challengeRes = await fetchImpl(`${base}/api/pow/challenge?slug=${encodeURIComponent(slug)}`);
-    if (!challengeRes.ok) throw new Error(`proof-of-work challenge for "${slug}" failed: HTTP ${challengeRes.status}`);
+    const challengeRes = await discoveryFetch(fetchImpl, `proof-of-work challenge for "${slug}" failed (GET /api/pow/challenge)`, `${base}/api/pow/challenge?slug=${encodeURIComponent(slug)}`);
     const chal = await challengeRes.json();
     r = await send({ "X-Pow-Solution": solvePow(chal) });
   }

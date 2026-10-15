@@ -8,6 +8,21 @@ carries its own version on npm.
 
 Since v2.5.0 (2026-10-07).
 
+### 2026-10-15
+- sanctions-wallet now reads OFAC's full SDN XML export. Since it launched
+  on 2026-09-12 it read the CSV export, which cuts long entries short: it saw
+  about half of the published digital currency addresses, and some Tron,
+  Dogecoin and other case-sensitive addresses were stored in the wrong case.
+  An address in either group could have been answered as not listed. Every
+  published address is now matched exactly as listed.
+- Search and routing (/api/find, /api/route and the MCP catalog tools) bound
+  every uncached search with a deadline and recover on their own if one
+  stalls; under load they answer 503 with Retry-After instead of hanging.
+- Every published npm package retries a discovery read that answers 503 with
+  a retry delay, a few times and briefly, and never repeats a paid call.
+- Data tools that wait on an outside service answer 503 naming the service
+  and the step when it does not answer in time, and nothing is charged.
+
 ### 2026-10-08
 - Slow routes (reports, video, the premium image, `/api/decide/execute`)
   accept `Prefer: respond-async` on a paid call: it answers `202` with a job

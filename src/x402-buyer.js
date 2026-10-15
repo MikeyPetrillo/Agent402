@@ -18,9 +18,11 @@ import { recordOutbound } from "./outbound-ledger.js";
 import { assertSigningAllowed } from "./signing-halt.js";
 import { recordUpstreamSpend } from "./stats.js";
 import { provenPayToMatches } from "./settlement-proof.js";
+import { assertPayoutScreened } from "./tools/sanctions-kit.js";
 import { usdcDomainVerdict, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { disableVendorSpendControls } from "./x402-spend-controls.js";
 import { readBytesCapped, readTextCapped, declaredLength, discardBody, decodeUtf8 } from "./capped-body.js";
+import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -608,18 +610,46 @@ export async function sellerServesModel(url, model, { fetchImpl = fetch, trusted
 }
 export function __resetModelListsForTest() { modelLists.clear(); }
 
+// Shared across replicas (src/shared-limits.js): the same cap is also a shared
+// counter per fixed minute, reserved before signing and given back on release.
+// Without a shared store the reserve is synchronous as before; with one it
+// returns a promise of the token (payX402 awaits it). A store that does not
+// answer leaves the decision to this process's own window.
+const SPEND_SHARED = sharedLimitsEnabled();
+const spendBucket = (now) => String(Math.floor(now / SPEND_WINDOW_MS));
 export function reserveSpend(atomic) {
   const now = Date.now();
   if (now - spendWindowStart > SPEND_WINDOW_MS) { spendWindowStart = now; spentThisWindow = 0n; }
   const amt = BigInt(atomic);
   if (spentThisWindow + amt > SPEND_CAP_ATOMIC) throw bad("Upstream spend budget for this window is exhausted - try again shortly", 429);
   spentThisWindow += amt;
-  return spendWindowStart; // token: identifies the window this hold belongs to
+  // The token names the window this hold belongs to, and the fixed minute the
+  // shared counter booked it under (the two differ: the local window rolls
+  // from its first spend, the shared one is the clock's minute).
+  const token = { window: spendWindowStart, bucket: spendBucket(now) };
+  if (!SPEND_SHARED) return token;
+  return (async () => {
+    const r = await shared.counterAdd("x402-buyer-window", token.bucket, Number(amt), SPEND_WINDOW_MS * 2);
+    if (!r.ok) { noteSharedLimitsDegraded("x402-buyer", r); return token; }
+    if (BigInt(Math.trunc(r.value)) > SPEND_CAP_ATOMIC) {
+      void sharedWrite("x402-buyer", shared.counterAdd("x402-buyer-window", token.bucket, -Number(amt), SPEND_WINDOW_MS * 2));
+      releaseLocal(amt, token);
+      throw bad("Upstream spend budget for this window is exhausted - try again shortly", 429);
+    }
+    return token;
+  })();
+}
+function releaseLocal(amt, token) {
+  if (token?.window !== spendWindowStart) return; // window rolled: the hold is already gone
+  spentThisWindow = spentThisWindow > amt ? spentThisWindow - amt : 0n;
 }
 export function releaseSpend(atomic, token) {
-  if (token !== spendWindowStart) return; // window rolled — the hold is already gone
   const amt = BigInt(atomic);
-  spentThisWindow = spentThisWindow > amt ? spentThisWindow - amt : 0n;
+  releaseLocal(amt, token);
+  // The shared hold lives in the minute it was booked under; one from a minute
+  // that has since rolled has already expired there, and a release that lands
+  // after that only makes the next minute's count lower by what was never spent.
+  if (SPEND_SHARED && token?.bucket) void sharedWrite("x402-buyer", shared.counterAdd("x402-buyer-window", token.bucket, -Number(amt), SPEND_WINDOW_MS * 2));
 }
 export function _spentThisWindow() { return spentThisWindow; } // test hook
 
@@ -834,42 +864,27 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       );
     }
   }
-  // SANCTIONS: never sign a payment to a listed address.
+  // SANCTIONS: never sign a payment to a listed address, and never sign one
+  // to an address that was not screened.
   //
   // Checked HERE, against `payable.payTo` - the single accept we are about to
   // sign - for the same reason the payTo-binding above is: what we verify has
   // to be what we sign, and the 402 is the only authoritative statement of
-  // where the money actually goes. An origin's advertised address is a claim;
-  // this one is the instruction.
+  // where the money actually goes. One rule for every chain this payer signs
+  // on (Base, Solana, Algorand), with the kit's case rules: an EVM address is
+  // compared lowercased, every other address exactly as written.
   //
-  // FAILS OPEN ON UNKNOWN, and that is a deliberate and uncomfortable choice.
-  // The list is a cached copy of a government export; if it has not loaded, or
-  // the address is not on it, we learn nothing and route as before. Failing
-  // CLOSED would mean a failed download silently stops every external payment
-  // this host makes - an outage disguised as compliance - and a screening tool
-  // that takes the whole router down when Treasury changes a URL is worse than
-  // one that is honest about what it does not know. A MATCH is a fact and
-  // refuses; everything else is not a clearance and is not treated as one.
-  // (src/tools/sanctions-core.js carries the same rule for buyers of the tool.)
-  try {
-    const { screenAddressForPayment } = await import("./tools/sanctions-kit.js");
-    const hit = await screenAddressForPayment(payable.payTo);
-    if (hit) {
-      const e = bad(
-        `Refusing to pay ${String(payable.payTo).slice(0, 64)}: that address is on the OFAC SDN list ` +
-        `(${String(hit.entity || "listed entity").slice(0, 80)}, SDN ${String(hit.sdnId || "?").slice(0, 16)}). Nothing was signed.`,
-        403,
-      );
-      e.sanctioned = true;
-      throw e;
-    }
-  } catch (e) {
-    if (e?.sanctioned) throw e;         // the refusal itself, never swallowed
-    // Anything else - list not loaded, import failed - is UNKNOWN. Logged
-    // loudly so a screening gate that has quietly stopped screening is
-    // visible, and never converted into a refusal or a clearance.
-    console.warn(`[x402-buyer] sanctions screen unavailable for ${String(payable.payTo).slice(0, 24)} (${String(e?.message || e).slice(0, 80)}) - proceeding unscreened`);
-  }
+  // assertPayoutScreened (src/tools/sanctions-kit.js) throws before anything
+  // is signed:
+  //   - 403 when the address is on the list;
+  //   - 503 when no list is held at all (none downloaded and no stored copy
+  //     read), so the address cannot be screened; the router stops on this
+  //     refusal rather than trying another seller into the same answer;
+  //   - 502 when the address is unreadable.
+  // A list older than its refresh period still screens. The payout map is
+  // stored with each download and read back before the server listens, so a
+  // restart screens at once instead of waiting for the next download.
+  await assertPayoutScreened(payable.payTo, { label: String(payable.payTo).slice(0, 64) });
 
   // SOLANA PROVEN-SELLER GATE (pay time, fail closed - the Tempo lesson):
   // the address that gets paid is only authoritative on THIS 402's accept, so
@@ -903,7 +918,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     }
     console.log(`[x402-buyer] paying UNPROVEN Base seller ${String(payable.payTo).slice(0, 10)}… - quote ${quote} atomic is within the unproven ceiling ${ceiling}`);
   }
-  const spendToken = reserveSpend(quotedAtomic); // F3 belt — before signing (throws 429 if over the window budget)
+  const spendToken = await reserveSpend(quotedAtomic); // F3 belt, before signing (throws 429 if over the window budget)
   let committed = false;
   try {
     // Normalize v1-style accepts before signing: sellers that quote ONLY via

@@ -13,7 +13,7 @@
 //   429     -> 503 with a retry hint from x-rate-limit-reset
 //   404     -> 404 (unknown user / tweet)
 //   other 4xx -> 400 (the request itself was invalid: bad query syntax)
-//   5xx     -> 502, timeout -> 504
+//   5xx     -> 502; deadline or unreachable -> 503 naming the step
 //
 // Covered by scripts/test-x-data-kit.js (offline, stubbed fetch). Live
 // calls need a real bearer and are not exercised in CI.
@@ -21,6 +21,7 @@
 import { markUntrusted } from "./provenance.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { meterUpstreamSpend } from "../posthog.js";
+import { createSharedDailySpend } from "../shared-limits.js";
 // The upstream bills per POST RETURNED, not per request, so the page size is
 // the real cost lever: a 100-post page at our per-call price would be sold far
 // below cost. Priced 2026-08-27 against X's published pay-per-use rate card
@@ -30,6 +31,11 @@ const X_MAX_POSTS_PER_CALL = () => Math.max(5, Math.min(100, parseInt(process.en
 const X_MAX_USERS_PER_LOOKUP = 10;
 
 const X_API = "https://api.x.com/2";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+// DEADLINES (src/upstream-deadline.js): one read per handler under its own
+// cap and the handler budget; a read that outlives it is a 503 naming the
+// upstream and the step, never a 504 (the spend reservation is kept, as for
+// any failure after the request left).
 const TIMEOUT_MS = 12_000;
 const USER_AGENT = "Agent402/1.0 (+https://agent402.tools)";
 
@@ -108,6 +114,11 @@ function xRate(k) {
 }
 const X_DATA_DAILY_MAX_USD = () => { const n = Number(process.env.X_DATA_DAILY_MAX_USD); return Number.isFinite(n) && n >= 0 ? n : 1; };
 const xSpend = { day: "", micro: 0, refused: 0 };
+// Shared across replicas (src/shared-limits.js): the day's spend is also a
+// shared counter per UTC day, reserved before the call and corrected after,
+// and a reserve that takes the shared total past the cap is given back and
+// refused. The local counter stays the floor when the store does not answer.
+const xShared = createSharedDailySpend("xdata-day", "x-data");
 const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 const xSpendToday = (now = Date.now()) => { const d = utcDay(now); if (xSpend.day !== d) { xSpend.day = d; xSpend.micro = 0; xSpend.refused = 0; } return xSpend.micro / 1e6; };
 /** Worst-case cost of one read at X's card, from the path and params. */
@@ -130,7 +141,7 @@ export function xDataSpendStatus(now = Date.now()) {
   const cap = X_DATA_DAILY_MAX_USD();
   return { day: xSpend.day, spentUsd: Number(spent.toFixed(4)), capUsd: cap, refusedToday: xSpend.refused, status: cap > 0 && spent >= cap ? "capped" : "ok" };
 }
-export function _xSpendReset() { xSpend.day = ""; xSpend.micro = 0; xSpend.refused = 0; }
+export function _xSpendReset() { xSpend.day = ""; xSpend.micro = 0; xSpend.refused = 0; xShared.reset(); }
 export function _xSpendBook(usd) { xSpendToday(); xSpend.micro += Math.round(usd * 1e6); }
 
 // "Not found on X" comes in two shapes - an HTTP 404, or a 200 whose body
@@ -153,29 +164,25 @@ async function xGet(path, params = {}) {
   const token = requireBearer();
   const cap = X_DATA_DAILY_MAX_USD();
   const estimate = estimateXReadUsd(path, params);
-  if (cap > 0 && xSpendToday() + estimate > cap) {
-    xSpend.refused++;
-    throw bad(`X data tools have reached today's usage cap - retry after 00:00 UTC. Nothing was charged for this request.`, 503);
-  }
-  // Reserve the estimate before the call so concurrent reads cannot all pass
-  // the check above; corrected to the actual cost after, released on a clean
-  // refusal. A timeout or 5xx keeps the reservation.
+  const capped = () => { xSpend.refused++; return bad(`X data tools have reached today's usage cap - retry after 00:00 UTC. Nothing was charged for this request.`, 503); };
+  // The shared reserve first (an atomic add on the store, awaited only when
+  // there is one): over the cap there, nothing is booked here. Then this
+  // process's check and booking, with no await between them, so concurrent
+  // reads cannot all pass the check before any of them books.
+  if (cap > 0 && xShared.enabled && !(await xShared.reserve(estimate, cap))) throw capped();
+  if (cap > 0 && xSpendToday() + estimate > cap) { xShared.book(-estimate); throw capped(); }
+  // Reserve the estimate before the call; corrected to the actual cost after,
+  // released on a clean refusal. A timeout or 5xx keeps the reservation.
   _xSpendBook(estimate);
-  const release = () => _xSpendBook(-estimate);
+  const book = (usd) => { _xSpendBook(usd); xShared.book(usd); };
+  const release = () => book(-estimate);
   const url = new URL(X_API + path);
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
   }
-  let res;
-  try {
-    res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "User-Agent": USER_AGENT },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (err) {
-    console.warn(`[x-data] api.x.com unreachable: ${err?.name ?? err?.code ?? err?.message}`);
-    throw bad("X API did not respond in time - try again shortly", 504);
-  }
+  const res = await upstreamFetch(url, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "User-Agent": USER_AGENT },
+  }, { label: "X API", step: String(path).replace(/^\/2\//, "").split("/").filter((seg) => /^[a-z_]+$/.test(seg)).join(" ").replace(/_/g, " ") || "read", timeoutMs: TIMEOUT_MS, tag: "[x-data]" });
 
   if (res.status >= 400 && res.status < 500) release();
   if (res.status === 401 || res.status === 403) {
@@ -197,7 +204,7 @@ async function xGet(path, params = {}) {
   try { data = await res.json(); } catch { throw bad("X API returned non-JSON", 502); }
   if (!data || typeof data !== "object") throw bad("X API returned an unexpected payload", 502);
   const actual = actualXReadUsd(path, data);
-  _xSpendBook(actual - estimate);
+  book(actual - estimate);
   // The served read's cost, in the server-side spend meter beside the model
   // tiers (/__operator/margin.json): X bills per item returned.
   meterUpstreamSpend("x", actual);
@@ -573,3 +580,6 @@ for (const t of X_DATA_TOOLS) {
   const inner = t.handler;
   t.handler = async (...args) => markUntrusted(await inner(...args));
 }
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(X_DATA_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

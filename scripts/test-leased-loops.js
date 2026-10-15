@@ -52,7 +52,10 @@ try {
   // opt-in, and only loops whose effects stay inside our own state take it:
   // a loop that mails, posts, charges or reports never does.
   const failOpenOk = new Set(["x402-index-crawl", "x402-index-discovery", "mpp-index-crawl", "mpp-index-discover-registry", "mpp-index-discover-scan",
-    "leaderboard-refresh", "solana-leaderboard-refresh", "mpp-leaderboard-refresh", "mpp-reconcile-run", "backup-nightly", "revenue-ledger-tick"]);
+    "leaderboard-refresh", "solana-leaderboard-refresh", "mpp-leaderboard-refresh", "mpp-reconcile-run", "backup-nightly", "revenue-ledger-tick",
+    // Reads the published sanctions list into our own store; a second container
+    // refreshing it at the same time only downloads the same public file twice.
+    "sanctions-screen-refresh"]);
   const { readdirSync } = await import("node:fs");
   const leasedCall = /\b(?:leased|withLease)\(\s*([`"][^`"]+[`"])\s*,\s*\{([^}]*)\}/g;
   let sites = 0;

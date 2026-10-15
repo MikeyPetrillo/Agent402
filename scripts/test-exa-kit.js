@@ -114,7 +114,7 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   reset();
   globalThis.fetch = async () => { const e = new Error("timeout"); e.name = "TimeoutError"; throw e; };
   const before = exaSpendStatus().spentUsd;
-  await throws(() => tool("exa-search").handler({ query: "slow" }), /did not respond in time/, "a timeout is a 504");
+  await throws(() => tool("exa-search").handler({ query: "slow" }), /^Exa did not answer the search read within \d+ s \(upstream deadline\)/, "a deadline is a 503 naming the upstream and the step");
   ok(exaSpendStatus().spentUsd > before, "and the day's spend still moved - a guard that only books on success is one a timeout walks through");
 }
 
@@ -156,14 +156,27 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
     [402, /temporarily unavailable/, "402 is a 503 that says temporarily unavailable, never the account state"],
     [429, /rate-limiting/, "429 is a 503 with a retry hint"],
     [404, /nothing for that request/, "404 stays a 404"],
-    [500, /upstream error/, "5xx is a 502"],
+    [500, /upstream error.*Nothing was charged/, "5xx is a 503 that names the upstream and the uncharged call"],
     [400, /refused the request/, "4xx blames the request"],
   ]) {
     reset(); stub(status, { error: `leaked ${secret}` });
     const e = await tool("exa-search").handler({ query: "x" }).catch((x) => x);
     ok(re.test(e.message), label);
     ok(!e.message.includes(secret), `and the ${status} body is not relayed to the buyer`);
+    if (status >= 500) eq(e.statusCode, 503, "an upstream 5xx answers 503 (>= 400: never settled)");
   }
+  // The rest of the upstream-failure class: unreachable and non-JSON are 503s
+  // naming the upstream; a timeout is the shared deadline 503 (src/upstream-deadline.js).
+  reset(); globalThis.fetch = async () => { throw new Error("ECONNRESET"); };
+  const down = await tool("exa-search").handler({ query: "x" }).catch((x) => x);
+  ok(down.statusCode === 503 && down.attribution === "upstream" && /Exa is unreachable from here/.test(down.message) && /nothing was charged/i.test(down.message), "an unreachable upstream is a 503 naming the upstream and the uncharged call");
+  reset(); globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new Error("bad json"); }, headers: { get: () => null } });
+  const junk = await tool("exa-search").handler({ query: "x" }).catch((x) => x);
+  ok(junk.statusCode === 503 && /not JSON.*Nothing was charged/.test(junk.message), "a non-JSON upstream body is a 503 naming the upstream");
+  reset(); globalThis.fetch = async () => { throw Object.assign(new Error("timeout"), { name: "TimeoutError" }); };
+  const slow = await tool("exa-search").handler({ query: "x" }).catch((x) => x);
+  ok(slow.statusCode === 503 && slow.upstreamFailure === "deadline" && /Exa did not answer/.test(slow.message) && /nothing was charged/i.test(slow.message), "a timeout is the deadline 503 naming Exa and the no-charge");
+  ok(tool("exa-contents").discovery.input.urls.every((u) => /^https:\/\/agent402\.tools\//.test(u)), "the contents example reads our own page (example.com/x402-explained answers 404, so the published example could never be read)");
 }
 
 // --- answer + contents ------------------------------------------------------

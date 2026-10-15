@@ -541,6 +541,75 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
   }
 }
 
+// Offline: a discovery read retries a load-shed 503 that names its own delay
+// (Retry-After header or retryAfterSeconds body), at most 3 tries with each
+// wait capped, then throws naming the surface and the last status. A paid
+// call is never repeated by this path.
+{
+  const shed = (seconds, { header = false } = {}) => new Response(
+    JSON.stringify({ error: "The server is busy", ...(header ? {} : { retryAfterSeconds: seconds }) }),
+    { status: 503, headers: { "content-type": "application/json", ...(header ? { "retry-after": String(seconds) } : {}) } },
+  );
+  const okJson = (body) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  const mk = (answers, extra = {}) => {
+    const calls = [];
+    const c = new Agent402({ baseUrl: "https://shed.example", cache: false, ...extra, fetchImpl: async (url) => { calls.push(String(url)); return answers.length > 1 ? answers.shift() : answers[0]; } });
+    const waits = [];
+    c._sleep = async (ms) => { waits.push(ms); };
+    return { c, calls, waits };
+  };
+
+  {
+    const { c, calls, waits } = mk([shed(2), okJson({ results: [{ slug: "hash" }] })]);
+    const out = await c.find("hash a string");
+    ok(out.length === 1 && out[0].slug === "hash", "find() answers after one shed 503");
+    ok(calls.length === 2 && waits.join(",") === "2000", `find() waited the body's retryAfterSeconds once (${waits})`);
+  }
+  {
+    const { c, waits } = mk([shed(1, { header: true }), okJson({ query: "x", results: [] })]);
+    await c.route("ocr");
+    ok(waits.join(",") === "1000", `route() honors a Retry-After header (${waits})`);
+  }
+  {
+    const { c, waits } = mk([shed(600), okJson({ endpoints: [] })]);
+    await c._loadCatalog();
+    ok(waits.join(",") === "5000", `a long server delay is capped at 5 s (${waits})`);
+  }
+  {
+    const { c, calls, waits } = mk([shed(2)]);
+    let err = null;
+    try { await c.find("hash"); } catch (e) { err = e; }
+    ok(err && /^find failed: HTTP 503 from \/api\/find after 3 attempts$/.test(err.message), `3 shed 503s throw naming the surface and status (${err && err.message})`);
+    ok(err.status === 503 && err.surface === "/api/find" && err.attempts === 3, "the error carries status, surface and attempts");
+    ok(calls.length === 3 && waits.length === 2, "exactly 3 attempts, 2 waits");
+  }
+  {
+    const { c, calls } = mk([new Response(JSON.stringify({ error: "busy" }), { status: 503 })]);
+    let err = null;
+    try { await c.topSellers(); } catch (e) { err = e; }
+    ok(calls.length === 1 && /topSellers failed: HTTP 503 from \/api\/leaderboard$/.test(err.message), "a 503 that names no delay is not retried");
+  }
+  {
+    const { c, calls } = mk([new Response(JSON.stringify({ error: "x", retryAfterSeconds: 1 }), { status: 500 })]);
+    let err = null;
+    try { await c.findWorkflows("audit"); } catch (e) { err = e; }
+    ok(calls.length === 1 && err && err.status === 500, "only a 503 is retried, not another status");
+  }
+  {
+    // A paid call answering a shed-looking 503 is reported, never repeated.
+    const payCalls = [];
+    const c = new Agent402({
+      baseUrl: "https://shed.example", cache: false,
+      fetchImpl: async () => okJson({ endpoints: [{ slug: "paid", method: "POST", path: "/api/paid", computePayable: false, price: "$0.01" }] }),
+      fetch: async (url) => { payCalls.push(String(url)); return shed(1); },
+    });
+    c._sleep = async () => {};
+    let err = null;
+    try { await c.call("paid", { a: 1 }); } catch (e) { err = e; }
+    ok(err && payCalls.length === 1, `a paid call that answers 503 is sent once (${payCalls.length})`);
+  }
+}
+
 // Offline: every request the SDK issues carries its own User-Agent product
 // token (agent402-client/<version>) - the plain-fetch path AND the x402
 // payFetch path that settles real payments - so sellers can attribute paid

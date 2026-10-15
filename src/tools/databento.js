@@ -8,16 +8,45 @@
 // access itself, so the remaining question is redistribution scope rather
 // than whether we may read the data at all.
 //
-// DBEQ.BASIC is a three-venue consolidation (NYSE Texas, NYSE National,
-// IEX), not the consolidated tape. MIAX Pearl left the dataset on
+// TWO DATASETS, one answer shape.
+//
+// EQUS.SUMMARY (primary) is the consolidated end-of-day summary that Nasdaq
+// disseminates on its NLS+ feed: one ohlcv-1d bar per symbol per session,
+// across all US exchanges and ATSs, volume included (the 20:15 ET summary,
+// so post-market volume is in it). Prices are unadjusted. Its history starts
+// 2024-07-01, which covers every window these tools serve.
+//
+// DBEQ.BASIC (fallback) is a three-venue consolidation (NYSE Texas, NYSE
+// National, IEX), not the consolidated tape. MIAX Pearl left the dataset on
 // 2024-04-01. Prices track the wider market closely; VOLUME DOES NOT,
-// because it counts only those venues. Every tool here says so in its own
-// output rather than letting a partial figure read as a total.
+// because it counts only those venues. A read falls back to it only when the
+// primary answers with an error or no rows (a dataset-level failure). A
+// transport failure (timeout, refused connection) is the same host for both,
+// so it does not double the wait by retrying the other dataset.
+//
+// Every answer names the dataset it came from and its coverage, so a
+// three-venue figure never reads as a total. DATABENTO_SUMMARY=off pins the
+// fallback.
 import { assertPublicUrl } from "./fetch-guard.js";
+import { upstreamFetch } from "../upstream-deadline.js";
 
 const HOST = "https://hist.databento.com/v0";
-export const DATASET = "DBEQ.BASIC";
+export const PRIMARY_DATASET = "EQUS.SUMMARY";
+export const FALLBACK_DATASET = "DBEQ.BASIC";
 export const VENUES = "NYSE Texas (formerly NYSE Chicago), NYSE National, IEX";
+/** What each dataset covers, as the tools report it. */
+export const COVERAGE = Object.freeze({
+  [PRIMARY_DATASET]: Object.freeze({
+    dataset: PRIMARY_DATASET, coverage: "consolidated", consolidated: true,
+    venues: "All US exchanges and ATSs (consolidated end-of-day summary)",
+  }),
+  [FALLBACK_DATASET]: Object.freeze({
+    dataset: FALLBACK_DATASET, coverage: "three-venue", consolidated: false, venues: VENUES,
+  }),
+});
+const summaryOn = () => String(process.env.DATABENTO_SUMMARY || "").trim().toLowerCase() !== "off";
+/** The datasets a read tries, in order. */
+export const datasetOrder = () => (summaryOn() ? [PRIMARY_DATASET, FALLBACK_DATASET] : [FALLBACK_DATASET]);
 // Databento prices are fixed-point integers scaled by 1e9.
 const PX = 1e-9;
 // A query is priced by uncompressed bytes. Nothing we issue should cost more
@@ -26,6 +55,9 @@ const PX = 1e-9;
 const DEFAULT_MAX_QUERY_USD = Number(process.env.DATABENTO_MAX_QUERY_USD || 0.0002);
 
 const bad = (msg, code = 400) => { const e = new Error(msg); e.statusCode = code; return e; };
+// A failure the dataset itself answered (an HTTP error status or no rows), as
+// opposed to a transport failure: only this kind moves a read to the fallback.
+const datasetFailure = (e) => Object.assign(e, { datasetError: true });
 const keyOf = () => (process.env.DATABENTO_API_KEY || "").trim();
 export const databentoEnabled = () => !!keyOf();
 
@@ -38,16 +70,13 @@ function auth() {
 // Per-call upstream bounds. A slow upstream used to surface as a bare 500
 // after up to 55 s (range read 15 s + cost read 20 s + data read 20 s, and a
 // timeout carried no status), which read as our defect. Each read is bounded
-// tighter now and a timeout or a dropped connection is a 504/502 naming the
-// upstream; a >= 400 cancels settlement, so nobody is charged for it.
+// tighter now, composed with the handler budget (src/upstream-deadline.js),
+// and a read that outlives its cap or a dropped connection is a 503 naming
+// the upstream and the step; a >= 400 cancels settlement, so nobody is
+// charged for it.
 export const DATABENTO_TIMEOUTS_MS = { range: 6_000, cost: 5_000, data: 12_000 };
-async function upstreamFetch(url, init, timeoutMs) {
-  try {
-    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
-  } catch (e) {
-    if (e?.name === "TimeoutError" || e?.name === "AbortError") throw bad(`Market data upstream did not answer within ${Math.round(timeoutMs / 1000)} s. Retry shortly.`, 504);
-    throw bad("Market data upstream could not be reached. Retry shortly.", 502);
-  }
+function readUnderDeadline(url, init, timeoutMs, step) {
+  return upstreamFetch(url, init, { label: "Market data upstream", step, timeoutMs, tag: "[databento]" });
 }
 
 // The SSRF check resolves the host through DNS. HOST is a constant (never a
@@ -64,19 +93,20 @@ async function checkHost(url) {
 async function post(path, params, timeoutMs = DATABENTO_TIMEOUTS_MS.data) {
   const url = `${HOST}/${path}`;
   await checkHost(url);
-  const res = await upstreamFetch(url, {
+  const res = await readUnderDeadline(url, {
     method: "POST",
     headers: { authorization: auth(), "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(params),
-  }, timeoutMs);
+  }, timeoutMs, path.replace(/^.*\./, "").replace(/_/g, " "));
   const text = await res.text();
   if (!res.ok) {
     // Their 4xx bodies name the cause (unknown symbol, range past the data).
     // Relay the CLASS, never the raw body: it can carry query details.
+    // An unknown symbol is the caller's input: no fallback read for it.
     if (res.status === 422 && /symbol/i.test(text)) throw bad("No market data for that symbol. US equities only - indices, FX and crypto are not covered.");
-    if (res.status === 422) throw bad("That date range is outside the available data.");
-    if (res.status === 401 || res.status === 403) throw bad("Market data upstream rejected our credentials.", 503);
-    throw bad(`Market data upstream returned ${res.status}.`, 502);
+    if (res.status === 422) throw datasetFailure(bad("That date range is outside the available data."));
+    if (res.status === 401 || res.status === 403) throw datasetFailure(bad("Market data upstream rejected our credentials.", 503));
+    throw datasetFailure(bad(`Market data upstream returned ${res.status}.`, 502));
   }
   return text;
 }
@@ -84,8 +114,8 @@ async function post(path, params, timeoutMs = DATABENTO_TIMEOUTS_MS.data) {
 async function get(path, params) {
   const url = `${HOST}/${path}?${new URLSearchParams(params)}`;
   await checkHost(url);
-  const res = await upstreamFetch(url, { headers: { authorization: auth() } }, DATABENTO_TIMEOUTS_MS.range);
-  if (!res.ok) throw bad(`Market data upstream returned ${res.status}.`, 502);
+  const res = await readUnderDeadline(url, { headers: { authorization: auth() } }, DATABENTO_TIMEOUTS_MS.range, "dataset range");
+  if (!res.ok) throw datasetFailure(bad(`Market data upstream returned ${res.status}.`, 502));
   return res.json();
 }
 
@@ -100,16 +130,30 @@ async function get(path, params) {
 const envMs = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? n : dflt; };
 export const RANGE_REFRESH_MS = envMs("DATABENTO_RANGE_REFRESH_MS", 15 * 60_000);
 const rangeMaxAgeMs = () => envMs("DATABENTO_RANGE_MAX_AGE_MS", 60 * 60_000);
-let rangeState = { end: null, at: 0 };
+let rangeState = { end: null, at: 0, dataset: null };
 let rangeInflight = null;
+async function readRangeOf(dataset) {
+  const r = await get("metadata.get_dataset_range", { dataset });
+  const end = String(r.end ?? r.end_date ?? "").slice(0, 10);
+  if (!end) throw datasetFailure(bad("Market data upstream did not report its available range.", 502));
+  return end;
+}
+// The primary's range, or the fallback's when the primary answers with an
+// error. A read that then asks the primary past its own end gets a 422 and
+// falls back to the dataset the end came from.
 function readRange() {
   if (!rangeInflight) {
     rangeInflight = (async () => {
-      const r = await get("metadata.get_dataset_range", { dataset: DATASET });
-      const end = String(r.end ?? r.end_date ?? "").slice(0, 10);
-      if (!end) throw bad("Market data upstream did not report its available range.", 502);
-      rangeState = { end, at: Date.now() };
-      return end;
+      const order = datasetOrder();
+      for (const [i, dataset] of order.entries()) {
+        try {
+          const end = await readRangeOf(dataset);
+          rangeState = { end, at: Date.now(), dataset };
+          return end;
+        } catch (e) {
+          if (!e.datasetError || i === order.length - 1) throw e;
+        }
+      }
     })().finally(() => { rangeInflight = null; });
   }
   return rangeInflight;
@@ -178,7 +222,7 @@ export function barsCacheSize() { return barsCache.size; }
 export const QUOTE_LOOKBACK_DAYS = 10;
 const QUOTE_AUDIT_SYMBOL = "AAPL";
 let quotePriceInline = false;     // latched true by a failed audit
-let quotePriceAudit = { end: null, at: 0, ok: null };
+let quotePriceAudit = { end: null, at: 0, ok: null, dataset: null };
 export function quoteWindow(end) {
   return { start: new Date(new Date(end) - QUOTE_LOOKBACK_DAYS * 864e5).toISOString().slice(0, 10), end };
 }
@@ -190,15 +234,31 @@ function isQuoteShape(params) {
 
 export async function dailyBars(opts) { return (await dailyBarsRead(opts)).bars; }
 
-/** Bars plus where they came from: { bars, cached, fetchedAt }. */
+const barsKey = (p) => `${p.dataset}|${p.symbols}|${p.schema}|${p.start}|${p.end}`;
+
+/** Bars plus where they came from: { bars, cached, fetchedAt, dataset }.
+ *  Tries the primary dataset, then the fallback on a dataset-level failure
+ *  (see the header). A refusal of our own (the price bound), an unknown
+ *  symbol and a transport failure are answered as they are. */
 export async function dailyBarsRead({ symbol, start, end, maxUsd }) {
-  const params = { dataset: DATASET, symbols: String(symbol).toUpperCase(), schema: "ohlcv-1d", start, end };
-  const key = `${params.dataset}|${params.symbols}|${params.schema}|${start}|${end}`;
+  const order = datasetOrder();
+  for (const [i, dataset] of order.entries()) {
+    try { return await dailyBarsOf(dataset, { symbol, start, end, maxUsd }); }
+    catch (e) {
+      if (!e.datasetError || i === order.length - 1) throw e;
+      console.warn(`[databento] ${dataset} read failed (${e.statusCode}); answering from ${order[i + 1]}`);
+    }
+  }
+}
+
+async function dailyBarsOf(dataset, { symbol, start, end, maxUsd }) {
+  const params = { dataset, symbols: String(symbol).toUpperCase(), schema: "ohlcv-1d", start, end };
+  const key = barsKey(params);
   const hit = barsCache.get(key);
   if (hit) {
     // Refresh recency so a symbol polled daily is never the oldest entry.
     barsCache.delete(key); barsCache.set(key, hit);
-    return { bars: hit.bars.map((b) => ({ ...b })), cached: true, fetchedAt: hit.fetchedAt };
+    return { bars: hit.bars.map((b) => ({ ...b })), cached: true, fetchedAt: hit.fetchedAt, dataset };
   }
   let p = barsInflight.get(key);
   if (!p) {
@@ -206,14 +266,14 @@ export async function dailyBarsRead({ symbol, start, end, maxUsd }) {
     barsInflight.set(key, p);
   }
   const r = await p;
-  return { bars: r.bars.map((b) => ({ ...b })), cached: false, fetchedAt: r.fetchedAt };
+  return { bars: r.bars.map((b) => ({ ...b })), cached: false, fetchedAt: r.fetchedAt, dataset };
 }
 
 /** Whether a read of `params` is priced on the request path: always, except
  *  a quote-shaped read of a session whose audit came back within the bound
  *  (an audit that has not run, threw, or answered no number leaves it on). */
 export function readPricesInline(params, maxUsd) {
-  const audited = quotePriceAudit.ok === true && quotePriceAudit.end === params.end;
+  const audited = quotePriceAudit.ok === true && quotePriceAudit.end === params.end && quotePriceAudit.dataset === params.dataset;
   return quotePriceInline || !audited || !isQuoteShape(params) || (maxUsd !== undefined && maxUsd < DEFAULT_MAX_QUERY_USD);
 }
 
@@ -224,8 +284,12 @@ async function readBars(params, key, maxUsd) {
   if (readPricesInline(params, maxUsd)) await assertAffordable(params, maxUsd);
   const text = await post("timeseries.get_range", { ...params, encoding: "json" });
   const rows = text.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
-  if (!rows.length) throw bad("No market data for that symbol in that range. US equities only.");
-  const bars = consolidate(rows);
+  if (!rows.length) throw datasetFailure(bad("No market data for that symbol in that range. US equities only."));
+  // A consolidated dataset's volume is the market total, so it is also
+  // returned as `volume`; a venue-partial one carries volume: null, never
+  // its partial sum under that name.
+  const total = COVERAGE[params.dataset]?.consolidated === true;
+  const bars = consolidate(rows).map((b) => ({ ...b, volume: total ? b.venueVolume : null }));
   const entry = { bars: bars.map((b) => Object.freeze({ ...b })), fetchedAt: new Date().toISOString() };
   barsCache.set(key, entry);
   while (barsCache.size > barsCacheMax) barsCache.delete(barsCache.keys().next().value);
@@ -294,11 +358,12 @@ export function warmSymbols(n = warmTopN()) {
 }
 
 async function auditQuotePrice(end) {
-  if (quotePriceAudit.end === end) return;
+  const dataset = datasetOrder()[0];
+  if (quotePriceAudit.end === end && quotePriceAudit.dataset === dataset) return;
   if (!spendBackground()) return;
-  quotePriceAudit = { end, at: Date.now(), ok: null };
+  quotePriceAudit = { end, at: Date.now(), ok: null, dataset };
   try {
-    const usd = await priceOf({ dataset: DATASET, symbols: QUOTE_AUDIT_SYMBOL, schema: "ohlcv-1d", ...quoteWindow(end) });
+    const usd = await priceOf({ dataset, symbols: QUOTE_AUDIT_SYMBOL, schema: "ohlcv-1d", ...quoteWindow(end) });
     // No number: the session is not audited, and the next tick tries again.
     if (!Number.isFinite(usd)) { quotePriceAudit.end = null; return; }
     quotePriceAudit.ok = usd <= DEFAULT_MAX_QUERY_USD;
@@ -329,12 +394,14 @@ export async function warmTick() {
   if (idle || end === warm.lastWarmedEnd) return { end };
   warm.lastWarmedEnd = end;
   let read = 0;
+  const dataset = datasetOrder()[0];
   for (const symbol of warmSymbols()) {
     const { start } = quoteWindow(end);
-    if (barsCache.has(`${DATASET}|${symbol}|ohlcv-1d|${start}|${end}`)) continue;
+    const params = { dataset, symbols: symbol, schema: "ohlcv-1d", start, end };
+    if (barsCache.has(barsKey(params))) continue;
     // A pre-read priced inline is two upstream calls; both count.
     if (!spendBackground()) break;
-    if (readPricesInline({ dataset: DATASET, symbols: symbol, schema: "ohlcv-1d", start, end }) && !spendBackground()) break;
+    if (readPricesInline(params) && !spendBackground()) break;
     try { await dailyBarsRead({ symbol, start, end }); read++; warm.prefetched++; } catch { /* a failed pre-read is a cold read later */ }
   }
   return { end, prefetched: read };
@@ -378,7 +445,7 @@ export function quoteWarmerStatus() {
   return {
     running: warm.started,
     lastTickAt: warm.lastTickAt ? new Date(warm.lastTickAt).toISOString() : null,
-    range: rangeState.end ? { end: rangeState.end, ageSec: Math.round((Date.now() - rangeState.at) / 1000) } : null,
+    range: rangeState.end ? { end: rangeState.end, dataset: rangeState.dataset, ageSec: Math.round((Date.now() - rangeState.at) / 1000) } : null,
     background: { day, calls: warm.day === day ? warm.calls : 0, dailyMax: backgroundDailyMax(), ceilingHit: warm.ceilingHitDay === day },
     trackedSymbols: popularity.size, topN: warmTopN(), prefetched: warm.prefetched,
     quotePriceCheck: quotePriceInline ? "inline" : "per-session",
@@ -390,13 +457,14 @@ export function quoteWarmerStatus() {
 /** Test hook: forget every piece of warm state. */
 export function __resetDatabentoState() {
   stopQuoteWarmer();
-  rangeState = { end: null, at: 0 }; rangeInflight = null; hostCheckedAt = 0;
+  rangeState = { end: null, at: 0, dataset: null }; rangeInflight = null; hostCheckedAt = 0;
   barsCache.clear(); barsInflight.clear(); popularity.clear(); lastDemandAt = 0;
-  quotePriceInline = false; quotePriceAudit = { end: null, at: 0, ok: null };
+  quotePriceInline = false; quotePriceAudit = { end: null, at: 0, ok: null, dataset: null };
   Object.assign(warm, { lastTickAt: 0, lastWarmedEnd: null, day: null, calls: 0, ceilingHitDay: null, prefetched: 0, primed: false });
 }
 
-/** DBEQ.BASIC returns ONE BAR PER VENUE. A quote consolidates them: the day's
+/** DBEQ.BASIC returns ONE BAR PER VENUE (EQUS.SUMMARY returns one bar per
+ *  session, which this passes through unchanged). A quote consolidates them: the day's
  *  high/low are the extremes across venues, volume is their sum (and is
  *  therefore venue-partial), and open/close come from the venue that traded
  *  the most that session - a thin venue's print is not the day's close. */

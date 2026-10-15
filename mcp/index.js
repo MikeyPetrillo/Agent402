@@ -25,6 +25,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parseNetworkPrefs, withNetworkPreference } from "./networks.js";
+import { fetchDiscovery, discoveryFailure, getDiscoveryJson } from "./discovery.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -32,6 +33,8 @@ import {
   ListToolsRequestSchema,
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
+  McpError,
+  ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
   FLAGSHIP_MCP_NAMES,
@@ -44,6 +47,7 @@ import {
   mcpJsonResult,
   outputSchemaFromExample,
   mcpInitializeInstructions,
+  toolInputBoundRefusal,
 } from "./output-schemas.js";
 
 const BASE = (process.env.AGENT402_URL || "https://agent402.tools").replace(/\/$/, "");
@@ -91,12 +95,16 @@ const catalog = new Map(); // slug -> { slug, method, path, price, description, 
 // prompts/list will just return an empty array in that case.
 let skillPacks = [];
 
+// Each surface retries a shed 503 (./discovery.js). A failed pricing or
+// openapi read throws, so the catalog is never built from an error body; the
+// skill packs are optional and read as empty.
 async function loadCatalog() {
   const [pricing, openapi, packs] = await Promise.all([
-    fetch(`${BASE}/api/pricing`).then((r) => r.json()),
-    fetch(`${BASE}/openapi.json`).then((r) => r.json()),
-    fetch(`${BASE}/api/skill-packs.json`).then((r) => (r.ok ? r.json() : { packs: [] })).catch(() => ({ packs: [] })),
+    getDiscoveryJson("catalog load", `${BASE}/api/pricing`),
+    getDiscoveryJson("catalog load", `${BASE}/openapi.json`),
+    getDiscoveryJson("skill packs", `${BASE}/api/skill-packs.json`).catch(() => ({ packs: [] })),
   ]);
+  if (!Array.isArray(pricing?.endpoints)) throw new Error(`catalog load failed: ${BASE}/api/pricing carried no endpoints list`);
   skillPacks = Array.isArray(packs?.packs) ? packs.packs : [];
   for (const e of pricing.endpoints) {
     const slug = e.slug ?? e.docs?.split("/tools/").pop();
@@ -345,7 +353,7 @@ async function callEndpoint(tool, args = {}) {
   } else if (tool.computePayable) {
     // No wallet: pay with compute up front, solving before the call skips the
     // 402 round-trip entirely (challenges are single-use and tool-scoped).
-    const challenge = await (await fetch(`${BASE}/api/pow/challenge?slug=${encodeURIComponent(tool.slug)}`)).json();
+    const challenge = await getDiscoveryJson(`proof-of-work challenge for "${tool.slug}"`, `${BASE}/api/pow/challenge?slug=${encodeURIComponent(tool.slug)}`);
     const nonce = solvePow(challenge);
     res = await fetch(url, { ...init, headers: { ...init.headers, "X-Pow-Solution": `${challenge.token}:${nonce}` } });
   } else {
@@ -506,15 +514,34 @@ server.setRequestHandler(GetPromptRequestSchema, async (req) => {
   for (const [k, v] of Object.entries(args || {})) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
   }
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to render prompt "${name}" from ${BASE}: HTTP ${res.status}`);
+  const { res, attempts } = await fetchDiscovery(url);
+  if (!res.ok) throw new Error(`Failed to render prompt "${name}" from ${BASE}: ${discoveryFailure(url, res, attempts)}`);
   return await res.json();
 });
 
 let curated = [];
 let pricingInfo = null;
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+// A catalog that could not load at boot (a shed or unreachable service) is
+// read again on the next tools/list or tools/call, at most once per
+// CATALOG_RETRY_MS, so a session that started during a busy minute recovers
+// without a restart.
+const CATALOG_RETRY_MS = 30_000;
+let catalogRetryAt = 0;
+async function ensureCatalog() {
+  if (catalog.size > 0 || Date.now() < catalogRetryAt) return;
+  catalogRetryAt = Date.now() + CATALOG_RETRY_MS;
+  try {
+    pricingInfo = await loadCatalog();
+    curated = requested.map((slug) => catalog.get(slug)).filter(Boolean);
+    log(`catalog: ${catalog.size} tools from ${BASE} on a later read; ${curated.length} first-class`);
+  } catch (err) {
+    log(`Could not load the catalog from ${BASE}: ${err.message}: next read in ${CATALOG_RETRY_MS / 1000}s`);
+  }
+}
+const withCatalog = (handler) => async (req) => { await ensureCatalog(); return handler(req); };
+
+server.setRequestHandler(ListToolsRequestSchema, withCatalog(async () => {
   const SAFE = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
   const OPEN = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
   const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
@@ -633,7 +660,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         properties: {
           task: { type: "string", description: "Plain-language task, e.g. 'crypto news headlines' or 'sentiment of a tweet'. Resolved to a proven external seller." },
           params: { type: "object", description: "Input parameters for the resolved external tool (optional; the seller decides its own schema)." },
-          maxUsd: { type: "number", description: "Max underlying seller price in USD. Default 0.005 (the $0.01 fee tier); a value above 0.005 uses the $0.55 tier (seller up to $0.50)." },
+          maxUsd: { type: "number", description: "Max underlying seller price in USD. Default 0.005 (the $0.01 fee tier); above 0.005 and up to 0.04 uses the $0.05 tier; above 0.04 the $0.55 tier (seller up to $0.50)." },
         },
         required: ["task"],
       },
@@ -641,20 +668,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     }
   );
   return { tools };
-});
+}));
 
-server.setRequestHandler(CallToolRequestSchema, async (req) => {
+server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req) => {
   const { name: rawName, arguments: args = {} } = req.params;
   const name = resolveListedName(rawName);
+  const overBound = toolInputBoundRefusal(rawName, args);
+  if (overBound) throw new McpError(ErrorCode.InvalidParams, overBound);
   try {
     if (name === "catalog.search") {
-      const q = args.query ?? "";
+      const q = String(args.query ?? "").trim();
       const results = searchTools(q, args.limit ?? 10);
       const workflows = rankWorkflows(q, 2);
       if (!results.length && !workflows.length) {
+        // A caller that passed no query is told which argument to pass, not
+        // shown an empty string in quotes.
         return mcpJsonResult({
           results: [],
-          message: `No tools matched "${q}". Browse the catalog at ${BASE}/tools or ${BASE}/api/pricing.`,
+          message: q
+            ? `No tools matched "${q}". Browse the catalog at ${BASE}/tools or ${BASE}/api/pricing.`
+            : `catalog.search needs a "query" argument: what the tool should do (for example "convert miles to kilometers"). Browse the catalog at ${BASE}/tools or ${BASE}/api/pricing.`,
         });
       }
       return mcpJsonResult({
@@ -672,9 +705,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const url = new URL(`${BASE}/api/find`);
       url.searchParams.set("q", task);
       url.searchParams.set("k", String(limit));
-      const res = await fetch(url);
+      const { res, attempts } = await fetchDiscovery(url);
       if (!res.ok) {
-        return { content: [{ type: "text", text: `catalog.find failed against ${BASE}/api/find: HTTP ${res.status}` }], isError: true };
+        return { content: [{ type: "text", text: `catalog.find failed against ${BASE}/api/find: ${discoveryFailure(url, res, attempts)}` }], isError: true };
       }
       const body = await res.json();
       const matches = (body.results || []).map((t) => ({
@@ -770,9 +803,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const limit = Math.min(Math.max(parseInt(args.limit, 10) || 10, 1), 50);
       const sort = args.sort === "usd" ? "usd" : "calls";
       const include = args.include === "all" ? "all" : "external";
-      const res = await fetch(`${BASE}/api/mpp-leaderboard`);
+      const { res, attempts } = await fetchDiscovery(`${BASE}/api/mpp-leaderboard`);
       if (!res.ok) {
-        return { content: [{ type: "text", text: `Failed to fetch the MPP leaderboard from ${BASE}: HTTP ${res.status}` }], isError: true };
+        return { content: [{ type: "text", text: `Failed to fetch the MPP leaderboard from ${BASE}: ${discoveryFailure(`${BASE}/api/mpp-leaderboard`, res, attempts)}` }], isError: true };
       }
       const lb = await res.json();
       let board = (Array.isArray(lb.rows) ? lb.rows : []).filter((r) => r.transfers > 0 || (r.d30?.transfers || 0) > 0);
@@ -821,9 +854,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       url.searchParams.set("top", String(limit));
       url.searchParams.set("sort", sort);
       url.searchParams.set("include", include);
-      const res = await fetch(url);
+      const { res, attempts } = await fetchDiscovery(url);
       if (!res.ok) {
-        return { content: [{ type: "text", text: `Failed to fetch leaderboard from ${BASE}: HTTP ${res.status}` }], isError: true };
+        return { content: [{ type: "text", text: `Failed to fetch leaderboard from ${BASE}: ${discoveryFailure(url, res, attempts)}` }], isError: true };
       }
       const snap = await res.json();
       // Trim to the same compact row shape the hosted MCP connector returns,
@@ -896,7 +929,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   } catch (err) {
     return { content: [{ type: "text", text: `Agent402 call failed: ${err.message}` }], isError: true };
   }
-});
+}));
 
 // ---------------------------------------------------------------------------
 try {
@@ -905,9 +938,10 @@ try {
   // Don't hard-exit: starting with an empty catalog still lets the server
   // connect and answer introspection (tools/list), required to pass directory
   // health checks (e.g. Glama) and more resilient if the catalog endpoint is
-  // briefly unreachable. catalog.search/catalog.call just return nothing until the
-  // catalog is reachable again.
+  // briefly unreachable. The next tools/list or tools/call reads it again
+  // (ensureCatalog).
   log(`Could not load the catalog from ${BASE}: ${err.message}: starting with an empty catalog`);
+  catalogRetryAt = Date.now() + CATALOG_RETRY_MS;
 }
 const requested = (process.env.AGENT402_TOOLS || DEFAULT_CURATED.join(","))
   .split(",").map((s) => s.trim()).filter(Boolean);

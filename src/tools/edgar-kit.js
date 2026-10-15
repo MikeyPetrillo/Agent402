@@ -18,6 +18,7 @@
 //   • safeFetch hardcodes our own User-Agent (right behavior for HTML scrapers),
 //     so we use assertPublicUrl + native fetch for the EDGAR-specific UA.
 import { assertPublicUrl } from "./fetch-guard.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { dataSetsIndex, dataSetHead } from "./edgar-13f-datasets.js";
 
 // Hard per-request socket bound for every EDGAR read (undici defaults to 300 s).
@@ -37,23 +38,15 @@ function edgarUserAgent() {
 
 async function edgarGetJson(url) {
   const safeUrl = await assertPublicUrl(url);
-  let res;
-  try {
-    res = await fetch(safeUrl, {
-      headers: {
-        "User-Agent": edgarUserAgent(),
-        Accept: "application/json",
-      },
-      // Without this the socket has no bound of its own: a caller-side deadline
-      // (the programmatic pages use 12 s) frees its concurrency slot while the
-      // request keeps running, so a throttling SEC grows in-flight sockets far
-      // past whatever gate is supposed to be holding the line.
-      signal: AbortSignal.timeout(EDGAR_FETCH_TIMEOUT_MS),
-    });
-  } catch (e) {
-    throw bad(`EDGAR request failed: ${e.message}`, 504);
-  }
-  const text = await res.text();
+  // The read runs under its own cap and the handler budget
+  // (src/upstream-deadline.js): without a bound of its own a caller-side
+  // deadline (the programmatic pages use 12 s) frees its concurrency slot
+  // while the request keeps running, so a throttling SEC grows in-flight
+  // sockets far past whatever gate is supposed to be holding the line. A read
+  // that outlives its cap is a 503 naming the upstream and the step.
+  const ctx = { label: "EDGAR", step: "document", timeoutMs: EDGAR_FETCH_TIMEOUT_MS, tag: "[edgar]" };
+  const res = await upstreamFetch(safeUrl, { headers: { "User-Agent": edgarUserAgent(), Accept: "application/json" } }, ctx);
+  const text = await bodyUnderDeadline(res.text(), ctx);
   if (!res.ok) {
     // 404 from data.sec.gov usually means "unknown CIK" or "no XBRL for this
     // tag/period" — surface as 422 (caller-attributable) so the dashboard
@@ -656,20 +649,13 @@ async function fetchInformationTableUrl(cikInt, accession) {
 
 async function fetchXmlText(url) {
   const safeUrl = await assertPublicUrl(url);
-  let res;
-  try {
-    res = await fetch(safeUrl, {
-      headers: { "User-Agent": edgarUserAgent(), Accept: "application/xml,text/xml,*/*" },
-      signal: AbortSignal.timeout(EDGAR_FETCH_TIMEOUT_MS),
-    });
-  } catch (e) {
-    throw bad(`EDGAR XML fetch failed: ${e.message}`, 504);
-  }
+  const ctx = { label: "EDGAR", step: "XML attachment", timeoutMs: EDGAR_FETCH_TIMEOUT_MS, tag: "[edgar]" };
+  const res = await upstreamFetch(safeUrl, { headers: { "User-Agent": edgarUserAgent(), Accept: "application/xml,text/xml,*/*" } }, ctx);
   if (!res.ok) {
     if (res.status === 404) throw Object.assign(bad("EDGAR XML attachment not found (filing may not have the expected layout)", 422), { upstreamStatus: 404 });
     throw Object.assign(bad(`EDGAR XML HTTP ${res.status}`, res.status >= 500 ? 502 : 422), { upstreamStatus: res.status });
   }
-  return await res.text();
+  return await bodyUnderDeadline(res.text(), ctx);
 }
 
 // Key XBRL tags for the company-financials summary tool. Companies may report
@@ -1225,3 +1211,6 @@ EDGAR_TOOLS.push(
 // Shared EDGAR primitives for the composite report kits (insider-flow, ipo):
 // same User-Agent policy, same politeness, one implementation.
 export { resolveCompany, eftsSearch, fetchXmlText, edgarGetJson, parse13fInformationTable };
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(EDGAR_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

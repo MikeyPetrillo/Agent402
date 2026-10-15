@@ -9,7 +9,7 @@
 //
 // No LLM anywhere: every number is arithmetic over a public upstream, every
 // sentence is a fixed template. Handlers validate input (400), bound list
-// sizes, time out (504), map upstream 5xx -> 502 and 429 -> 503, and never
+// sizes, end a stalled read at its deadline (503 naming the step), map upstream 5xx -> 502 and 429 -> 503, and never
 // relay an upstream error body. Every response carries `source` + `fetchedAt`.
 //
 // Feed fetches are cached in-process for 5 minutes per source so call volume
@@ -34,6 +34,12 @@ function assertBodyWithinCap(res, capBytes, label) {
 
 const HL_INFO = "https://api.hyperliquid.xyz/info";
 const UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { hlSharedInfo, __hlShared } from "./hyperliquid-shared.js";
+// DEADLINES (src/upstream-deadline.js): each read under its own cap and the
+// handler budget; a read that outlives it is a 503 naming the upstream and the
+// step, never a 504. The Hyperliquid reads answered in 0.3 to 0.5 s when
+// measured (2026-10-14); the feeds keep their shorter cap and report per row.
 const HL_TIMEOUT_MS = 10_000;
 const FEED_TIMEOUT_MS = 6_000;
 export const FEED_TTL_MS = 5 * 60_000;
@@ -108,34 +114,34 @@ function takeList(raw, name, allowed, max) {
 }
 
 // --- transport ------------------------------------------------------------
-async function rawFetch(url, { method = "GET", body, label, timeoutMs, accept }) {
-  let res;
-  try {
-    res = await fetch(url, {
-      method,
-      headers: {
-        "User-Agent": UA,
-        Accept: accept || "application/json",
-        ...(body ? { "Content-Type": "application/json" } : {}),
-      },
-      body,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err) {
-    console.warn(`[crypto-signals] ${label} unreachable: ${err?.name ?? err?.code ?? err?.message}`);
-    throw bad(`${label} request timed out or was unreachable`, 504);
-  }
+async function rawFetch(url, { method = "GET", body, label, timeoutMs, accept, step = "data" }) {
+  const ctx = { label, step, timeoutMs, tag: "[crypto-signals]" };
+  const res = await upstreamFetch(url, {
+    method,
+    headers: {
+      "User-Agent": UA,
+      Accept: accept || "application/json",
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    body,
+  }, ctx);
   let text = "";
   assertBodyWithinCap(res, FEED_MAX_BYTES, "Feed");
-  try { text = await res.text(); } catch { text = ""; }
+  try { text = await bodyUnderDeadline(res.text(), ctx); } catch (err) { if (err?.statusCode) throw err; text = ""; }
   if (res.status === 429) throw bad(`${label} rate limit reached upstream - retry shortly`, 503);
   return { status: res.status, text };
 }
 
 // Hyperliquid info endpoint. Unknown coins come back as HTTP 500 "null".
-async function hlInfo(payload) {
+// Universe-wide documents (metaAndAssetCtxs, meta, predictedFundings, the
+// HIP-3 listings) go through the cache this kit shares with the other
+// Hyperliquid kit: one IP budget upstream, so one cache here
+// (src/tools/hyperliquid-shared.js). Everything else reads straight through.
+function hlInfo(payload) { return hlSharedInfo(payload, hlInfoDirect); }
+
+async function hlInfoDirect(payload) {
   const { status, text } = await rawFetch(HL_INFO, {
-    method: "POST", body: JSON.stringify(payload), label: "Hyperliquid", timeoutMs: HL_TIMEOUT_MS,
+    method: "POST", body: JSON.stringify(payload), label: "Hyperliquid", timeoutMs: HL_TIMEOUT_MS, step: String(payload?.type || "info"),
   });
   const trimmed = text.trim();
   if (status >= 500) {
@@ -342,7 +348,7 @@ async function fetchFeed(id) {
   let entry;
   try {
     const { status, text } = await rawFetch(src.url, {
-      label: src.name, timeoutMs: FEED_TIMEOUT_MS,
+      label: src.name, timeoutMs: FEED_TIMEOUT_MS, step: "feed",
       accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5",
     });
     if (status >= 400) throw bad(`HTTP ${status}`, status >= 500 ? 502 : 422);
@@ -863,7 +869,7 @@ export function marketPulse(rows, { limit, minVolumeUsd }) {
 export const __test = {
   HL_INFO,
   INTERVALS,
-  resetCaches: () => { metaCache = { at: 0, names: null }; feedCache.clear(); },
+  resetCaches: () => { metaCache = { at: 0, names: null }; feedCache.clear(); __hlShared.clear(); },
   feedCacheSize: () => feedCache.size,
   cleanText,
   canonicalUrl,
@@ -879,3 +885,6 @@ for (const t of CRYPTO_SIGNALS_TOOLS) {
   const inner = t.handler;
   t.handler = async (...args) => markUntrusted(await inner(...args));
 }
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(CRYPTO_SIGNALS_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

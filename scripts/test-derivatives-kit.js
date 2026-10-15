@@ -5,7 +5,7 @@
 //   - the catalog envelope (11 tools, prices, discovery),
 //   - input validation (400s) before any egress,
 //   - the output shape of every tool on fixture data,
-//   - upstream 5xx -> 502, 429 -> 503, transport timeout -> 504,
+//   - upstream 5xx -> 502, 429 -> 503, a deadline -> 503 naming the step,
 //   - the "unknown coin" shapes Hyperliquid really returns (500 "null",
 //     200 "null") -> 422, and Deribit's 400 error envelope -> 422 with no
 //     upstream body relayed.
@@ -381,7 +381,8 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
   ok(calls.filter((c) => c.url === __test.HL_INFO).length === 3, "perp-dexs: exactly three info reads (perpDexs + perpDeployAuctionStatus + allPerpMetas)");
   ok(xyz.markets === 3 && xyz.activeMarkets === 2 && xyz.delistedMarkets === 1, "perp-dexs: market counts are read from allPerpMetas by coin prefix (active vs delisted)");
   ok(out.dexs[1].markets === 1 && out.dexs[1].activeMarkets === 0 && out.dexs[1].delistedMarkets === 1, "perp-dexs: a wound-down dex reads 1 market, 0 active, 1 delisted");
-  mode = "no-all-metas";
+  // A new upstream state: drop the shared 60 s listing cache so the read lands.
+  mode = "no-all-metas"; __test.resetMetaCache();
   const noMetas = await h("perp-dexs")({});
   ok(noMetas.count === 2 && noMetas.dexs[0].markets === null && noMetas.dexs[0].deployer === xyz.deployer, "perp-dexs: an unreadable allPerpMetas leaves the rows with null counts, never fails the call");
   mode = "ok";
@@ -445,9 +446,9 @@ mode = "http429";
 await throws(h("perp-orderbook")({ coin: "BTC" }), 503, "HL 429 -> 503");
 await throws(h("options-volume")({}), 503, "DefiLlama 429 -> 503");
 mode = "timeout";
-await throws(h("perp-klines")({ coin: "BTC" }), 504, "HL timeout -> 504");
-await throws(h("crypto-options-chain")({}), 504, "Deribit timeout -> 504");
-await throws(h("options-volume")({}), 504, "DefiLlama timeout -> 504");
+await throws(h("perp-klines")({ coin: "BTC" }), 503, "HL deadline -> 503 naming the upstream and the step");
+await throws(h("crypto-options-chain")({}), 503, "Deribit deadline -> 503");
+await throws(h("options-volume")({}), 503, "DefiLlama deadline -> 503");
 mode = "htmljunk";
 await throws(h("perp-markets")({}), 502, "HL non-JSON 200 -> 502");
 await throws(h("options-ticker")({ instrument: "BTC-PERPETUAL" }), 502, "Deribit non-JSON 200 -> 502");

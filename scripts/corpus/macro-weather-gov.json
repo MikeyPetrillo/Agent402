@@ -425,6 +425,105 @@
           "topReactions[0].reaction"
         ]
       }
+    },
+    {
+      "slug": "drug-label",
+      "name": "a drug whose label carries a boxed warning",
+      "input": {
+        "name": "warfarin",
+        "maxChars": 400
+      },
+      "expect": {
+        "minCount": {
+          "labels": 1
+        },
+        "populated": [
+          "labels[0].sections.boxedWarning.text",
+          "labels[0].sections.indications.text",
+          "labels[0].genericName"
+        ],
+        "matches": {
+          "labels[0].sections.boxedWarning.text": "bleeding"
+        },
+        "equals": {
+          "maxChars": 400
+        },
+        "truthy": [
+          "labels[0].sections.warnings.truncated"
+        ]
+      }
+    },
+    {
+      "slug": "drug-ndc",
+      "name": "a brand name with several products",
+      "input": {
+        "name": "ozempic",
+        "limit": 3
+      },
+      "expect": {
+        "count": {
+          "products": 3
+        },
+        "populated": [
+          "products[0].productNdc",
+          "products[0].activeIngredients[0].name",
+          "products[0].packaging[0].packageNdc"
+        ],
+        "matches": {
+          "products[0].genericName": "semaglutide"
+        },
+        "truthy": [
+          "truncated"
+        ]
+      }
+    },
+    {
+      "slug": "device-510k",
+      "name": "clearances under one product code",
+      "input": {
+        "productCode": "LZG",
+        "limit": 3
+      },
+      "expect": {
+        "count": {
+          "clearances": 3
+        },
+        "equals": {
+          "clearances[0].productCode": "LZG",
+          "clearances[0].deviceClass": "2"
+        },
+        "matches": {
+          "clearances[0].kNumber": "^K\\d{6}$"
+        },
+        "populated": [
+          "clearances[0].decisionDate",
+          "clearances[0].applicant"
+        ]
+      }
+    },
+    {
+      "slug": "device-adverse-events",
+      "name": "reports under one product code",
+      "input": {
+        "productCode": "DXY",
+        "limit": 2
+      },
+      "expect": {
+        "count": {
+          "recentReports": 2
+        },
+        "populated": [
+          "eventTypes[0].eventType",
+          "topProblems[0].problem",
+          "recentReports[0].dateReceived"
+        ],
+        "gt": {
+          "totalReports": 1000
+        },
+        "falsy": [
+          "complete"
+        ]
+      }
     }
   ]
 }

@@ -5,7 +5,8 @@
 // Covers: catalog envelope, input validation (400 before any egress), output
 // shapes on fixtures cut from live responses (2026-08-22), the upstream error
 // mapping (429 -> 503, 5xx -> 502, 400/404 -> 422, non-JSON -> 502, transport
-// failure/timeout -> 504), and that every request goes to one of the three
+// deadline expiry or transport failure -> 503 naming the upstream and the
+// step), and that every request goes to one of the three
 // allowed hosts with the validated mint in the path.
 
 import { SOLANA_INTEL_TOOLS, MINTS, __test, jupiterBase, jupiterHeaders } from "../src/tools/solana-intel-kit.js";
@@ -202,9 +203,34 @@ try {
   ok(r.holders.topHoldersPct === 15.28 && r.holders.devMints === 1, "safety: holder facts");
   ok(Array.isArray(r.source) && r.source.includes("rugcheck") && typeof r.fetchedAt === "string", "safety: source + fetchedAt");
 
-  stub((url) => url.includes("rugcheck") ? Promise.resolve(jsonRes(RC_SUMMARY_CLEAN)) : Promise.resolve(jsonRes([])));
+  ok(r.fullReport === null && !calls.some((c) => c.url.endsWith("/report")), "safety: summary + Jupiter carried every field, so the full report is never read");
+
+  // Jupiter does not index the mint: the full report fills token and
+  // authorities (and only those), and says so.
+  stub((url) => url.endsWith("/report/summary") ? Promise.resolve(jsonRes(RC_SUMMARY_CLEAN)) : url.endsWith(`/tokens/${PUMP}/report`) ? Promise.resolve(jsonRes({ ...RC_REPORT, mint: PUMP })) : Promise.resolve(jsonRes([])));
   r = await h("sol-token-safety")({ mint: PUMP });
-  ok(r.riskLevel === "good" && r.token === null && r.authorities === null, "safety: clean summary -> good; Jupiter miss -> null blocks");
+  ok(calls.length === 3 && calls.filter((c) => c.url.endsWith(`/tokens/${PUMP}/report`)).length === 1, `safety: a Jupiter miss reads the full report once (${calls.length} reads)`);
+  ok(r.riskLevel === "good" && r.scoreNormalised === 1 && r.risks.length === 0, "safety: score and risks still come from the summary (it carried them)");
+  ok(r.token?.symbol === "JUP" && r.token.decimals === 6 && r.token.holderCount === 2873512 && r.token.isVerified === true && r.token.organicScore === null && r.token.launchpad === "Pump.Fun", "safety: token block from the report; Jupiter-only organic score stays null");
+  ok(r.authorities?.mintAuthorityDisabled === true && r.authorities.freezeAuthorityDisabled === false && r.authorities.freezeAuthority === "7dGbd2QZcCKcTndnHcTL8q7SMVXAkp688NTQYwrRCrar", "safety: authorities from the report (a live freeze authority reads live, with its address)");
+  ok(r.holders === null, "safety: holders stays null without Jupiter (no measure is substituted)");
+  ok(r.fullReport?.read === true && r.fullReport.needed.join(",") === "token,authorities" && r.fullReport.filled.join(",") === "token,authorities" && r.source.includes("rugcheck-report"), `safety: fullReport names what it filled (${JSON.stringify(r.fullReport)})`);
+
+  // The report read failing is not the buyer's loss: the fields stay null,
+  // the answer still lands, and fullReport says why.
+  stub((url) => url.endsWith("/report/summary") ? Promise.resolve(jsonRes(RC_SUMMARY_CLEAN)) : url.endsWith("/report") ? Promise.resolve(textRes("x", 500)) : Promise.resolve(jsonRes([])));
+  r = await h("sol-token-safety")({ mint: PUMP });
+  ok(r.riskLevel === "good" && r.token === null && r.authorities === null && r.fullReport?.read === false && r.fullReport.why === "upstream-error" && !r.source.includes("rugcheck-report"), `safety: a failed report read leaves null blocks and names why (${JSON.stringify(r.fullReport)})`);
+
+  // A summary with no score: the report fills score and risks.
+  stub((url) => url.endsWith("/report/summary") ? Promise.resolve(jsonRes({ tokenProgram: "T", risks: [], lpLockedPct: 5 })) : url.endsWith("/report") ? Promise.resolve(jsonRes(RC_REPORT)) : Promise.resolve(jsonRes([JUP_TOKEN_OTHER, JUP_TOKEN])));
+  r = await h("sol-token-safety")({ mint: JUP });
+  ok(r.scoreNormalised === 97 && r.risks.length === 2 && r.riskLevel === "danger" && r.lpLockedPct === 5 && r.token.symbol === "JUP" && r.fullReport.filled.join(",") === "score,risks", `safety: a scoreless summary is completed from the report (${JSON.stringify(r.fullReport)})`);
+
+  // Concurrent reads of one mint's full report share one request.
+  stub((url) => url.endsWith(`/tokens/${JUP}/report`) ? new Promise((res) => setTimeout(() => res(jsonRes(RC_REPORT)), 20)) : Promise.reject(new Error("bad url " + url)));
+  await Promise.all([h("sol-token-report")({ mint: JUP }), h("sol-token-holders")({ mint: JUP, limit: 5 })]);
+  ok(calls.length === 1 && __test.reportReadsInflight() === 0, `report + holders in parallel for one mint spend one report read (${calls.length})`);
 
   stub((url) => url.includes("rugcheck") ? Promise.resolve(jsonRes(RC_SUMMARY_CLEAN)) : Promise.resolve(jsonRes([JUP_TOKEN_USDC])));
   r = await h("sol-token-safety")({ mint: USDC });
@@ -404,11 +430,15 @@ try {
   await throws(h("sol-token-lookup")({ query: "x" }), 502, "403 -> 502");
   stub(() => Promise.resolve(textRes("<html>cloudflare</html>", 200)));
   await throws(h("sol-token-search")({ query: "x" }), 502, "non-JSON 200 -> 502");
-  // Transport failure / timeout: AbortSignal.timeout rejects with TimeoutError.
+  // Deadline expiry (AbortSignal.timeout rejects with TimeoutError) and a
+  // transport failure are both the upstream's: a 503 naming the upstream and
+  // the step, attributed upstream, never a 504 and never charged.
   stub(() => Promise.reject(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" })));
-  await throws(h("sol-token-safety")({ mint: JUP }), 504, "timeout -> 504");
+  try { await h("sol-token-safety")({ mint: JUP }); ok(false, "deadline expiry resolved"); }
+  catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream" && /^(RugCheck did not answer the report summary|Jupiter did not answer the token search) read within \d+ s \(upstream deadline\)/.test(e.message), `deadline expiry -> 503 naming upstream and step, attributed upstream (got ${e.statusCode} "${e.message}")`); }
   stub(() => Promise.reject(Object.assign(new Error("fetch failed"), { code: "ECONNRESET" })));
-  await throws(h("sol-swap-quote")({ inputMint: SOL, outputMint: USDC, amount: "1" }), 504, "connection reset -> 504");
+  try { await h("sol-swap-quote")({ inputMint: SOL, outputMint: USDC, amount: "1" }); ok(false, "connection reset resolved"); }
+  catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream" && /^Jupiter is unreachable from here \(swap quote read/.test(e.message), `connection reset -> 503 naming upstream and step (got ${e.statusCode} "${e.message}")`); }
   // One leg failing fails the parallel tool (no half answers billed as whole).
   stub((url) => url.includes("rugcheck") ? Promise.resolve(jsonRes(RC_SUMMARY)) : Promise.resolve(textRes("x", 500)));
   await throws(h("sol-token-safety")({ mint: JUP }), 502, "safety: Jupiter leg 500 -> whole call 502");
@@ -424,6 +454,72 @@ try {
   // The timeout signal is an AbortSignal with a bounded deadline on every call.
   stub((url, opts) => { ok(opts.signal instanceof AbortSignal, "request carries an AbortSignal (timeout)"); return Promise.resolve(jsonRes(JUP_PRICE)); });
   await h("sol-price")({ mints: [SOL] });
+
+  // A STALLED upstream, through the real signal: the stub never answers and
+  // rejects only when the signal the tool passed aborts, the way undici does.
+  // The tool answers its 503 at the summary cap, not at some longer wait.
+  const D = __test.DEADLINES;
+  const stall = (url, opts) => new Promise((_, reject) => { opts.signal.addEventListener("abort", () => reject(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" })), { once: true }); });
+  // AbortSignal.timeout's timer is unref'd (a server's listener keeps its loop
+  // alive; this script has nothing else), so hold the loop open for the stalls.
+  const keepAlive = setInterval(() => {}, 1000);
+  {
+    stub(stall);
+    const t0 = Date.now();
+    let err = null;
+    try { await h("sol-token-safety")({ mint: JUP }); } catch (e) { err = e; }
+    const ms = Date.now() - t0;
+    ok(err?.statusCode === 503 && /^RugCheck did not answer the report summary read within 8 s/.test(err?.message || "") && ms >= D.RUGCHECK_SUMMARY_MS - 50 && ms < D.RUGCHECK_SUMMARY_MS + 1500,
+      `a stalled RugCheck summary answers the deadline 503 at the summary cap (${ms} ms, got ${err?.statusCode} "${err?.message}")`);
+    ok(ms < D.HANDLER_BUDGET_MS, `the safety read answers inside the handler budget (${ms} ms < ${D.HANDLER_BUDGET_MS})`);
+  }
+  // The safety tool's optional full-report fill is bounded by its own short
+  // cap: a stalled report leaves the blocks null and the answer still lands.
+  {
+    stub((url, opts) => url.endsWith("/report/summary") ? Promise.resolve(jsonRes(RC_SUMMARY_CLEAN)) : url.endsWith("/report") ? stall(url, opts) : Promise.resolve(jsonRes([])));
+    const t0 = Date.now();
+    const out = await h("sol-token-safety")({ mint: PUMP });
+    const ms = Date.now() - t0;
+    ok(out.fullReport?.read === false && out.fullReport.why === "deadline-or-refused" && out.token === null && out.riskLevel === "good" && ms >= D.RUGCHECK_FALLBACK_MS - 50 && ms < D.RUGCHECK_FALLBACK_MS + 1500 && D.RUGCHECK_FALLBACK_MS < D.RUGCHECK_REPORT_MS,
+      `a stalled report fill gives up at its own ${D.RUGCHECK_FALLBACK_MS} ms cap and the safety answer still lands (${ms} ms, ${JSON.stringify(out.fullReport)})`);
+  }
+  // The RPC fallback is bounded: with RugCheck publishing no holder table and
+  // the RPC stalling, the holders tool still answers (the table is optional)
+  // at the RPC cap, says which read did not finish, and the partial fields
+  // read zero rows of a zero-row table rather than a complete list.
+  {
+    const prevRpc = process.env.SOLANA_RPC_URL;
+    process.env.SOLANA_RPC_URL = "https://rpc.test.invalid/";
+    stub((url, opts) => url.includes("rugcheck") ? Promise.resolve(jsonRes({ ...RC_REPORT, topHolders: [] })) : stall(url, opts));
+    const t0 = Date.now();
+    let out = null, err = null;
+    try { out = await h("sol-token-holders")({ mint: JUP, limit: 5 }); } catch (e) { err = e; }
+    const ms = Date.now() - t0;
+    if (prevRpc === undefined) delete process.env.SOLANA_RPC_URL; else process.env.SOLANA_RPC_URL = prevRpc;
+    const rpcCalls = calls.filter((c) => c.url.startsWith("https://rpc.test.invalid/")).length;
+    ok(!err && Array.isArray(out?.holders) && out.holders.length === 0 && out.holdersSource === null && out.returned === 0 && out.matched === 0 && out.complete === false && out.truncated === true && out.maxHolders === 20,
+      `a stalled RPC leaves the optional table empty, and the partial fields say the answer is NOT complete (${err ? "threw " + err.statusCode : JSON.stringify({ holders: out?.holders?.length, returned: out?.returned, matched: out?.matched, complete: out?.complete })})`);
+    ok(/Solana RPC did not answer within its deadline/.test(out?.note || ""), `the note names the read that did not finish (got: ${out?.note})`);
+    ok(rpcCalls === 1 && ms >= D.RPC_MS - 50 && ms < D.RPC_MS + 1500, `one RPC read, answered at the RPC cap (${rpcCalls} read(s), ${ms} ms)`);
+  }
+  clearInterval(keepAlive);
+  // A budget too small for an optional read skips it before any egress.
+  {
+    stub(() => { ok(false, "an RPC read was started with no budget for it"); return Promise.resolve(jsonRes({})); });
+    const prevRpc = process.env.SOLANA_RPC_URL;
+    process.env.SOLANA_RPC_URL = "https://rpc.test.invalid/";
+    const r = await __test.topAccountsFromRpc(JUP, 1, { remaining: () => D.RPC_FLOOR_MS - 1 });
+    if (prevRpc === undefined) delete process.env.SOLANA_RPC_URL; else process.env.SOLANA_RPC_URL = prevRpc;
+    ok(r.rows === null && r.why === "budget" && calls.length === 0, `a spent budget skips the RPC table with why=budget and no egress (got ${JSON.stringify(r)}, ${calls.length} call(s))`);
+    const b = __test.budgetOf(100);
+    ok(b.remaining() > 0 && b.remaining() <= 100, "a budget counts down from its total");
+    // The deadlines compose: every single read cap sits inside the handler
+    // budget, and the report cap leaves at least the RPC floor behind it, so the
+    // holder-table fallback can start after a slow report instead of being
+    // skipped every time the report is slow.
+    ok([D.RUGCHECK_REPORT_MS, D.RUGCHECK_SUMMARY_MS, D.JUPITER_MS, D.DEXSCREENER_MS, D.RPC_MS].every((cap) => cap < D.HANDLER_BUDGET_MS) && D.RUGCHECK_REPORT_MS + D.RPC_FLOOR_MS <= D.HANDLER_BUDGET_MS,
+      `every read cap sits inside the handler budget and the report cap leaves the RPC floor (${JSON.stringify(D)})`);
+  }
 } finally {
   restore();
 }

@@ -1323,6 +1323,19 @@ jobs:
           REDIS_URL: redis://127.0.0.1:6379
         run: node scripts/test-replay-guard-redis.js
 
+      - name: "Shared limits (REAL redis: the counter primitive on both backends, two Redis instances read one count, a store that does not answer is a miss and never an exception; then two servers and two control replicas on one Redis: a breaker, a money guard and a budget counted on A refuse on B, an operator session minted on A is honoured and revoked on B, the judge's token ceiling and a wallet's in-flight runs are summed across A and B)"
+        env:
+          REDIS_URL: redis://127.0.0.1:6379
+        run: |
+          set -euo pipefail
+          t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
+          t node scripts/test-shared-limits.js
+          t node scripts/test-shared-limits-crossprocess.js
+          # The in-flight run cover: memory, a store that does not answer (local ledger decides), and real Redis.
+          t node scripts/test-inflight-cover-shared.js
+          # The judge's daily token ceiling on the Redis backend (the memory half runs in its own lane).
+          t node scripts/test-tool-judge.js
+
       - name: "State database (REAL postgres: documents/records/log lines/leases; every migrated store imports its file once and reads the row; loops skip under another holder's lease; idempotency answers and claims shared over REAL redis)"
         env:
           REDIS_URL: redis://127.0.0.1:6379
@@ -1529,6 +1542,8 @@ jobs:
           t node scripts/test-sanctions.js
           # The router must never sign a payment to a sanctioned payee - and must NOT stop paying everyone when the list fails to load
           t node scripts/test-router-sanctions.js
+          # Sanctions tools keep the held list when a download shrinks past half (offline)
+          t node scripts/test-sanctions-shrink-guard.js
           # Paid seller verification: an allowlisted projection, a manifest that states the limit of the claim, and a workflow that never holds bucket credentials
           t node scripts/test-seller-verification.js
           # Delivery-failure memory: a seller whose PAID call 5xx'd with no receipt (or never answered) stops being ranked and stops being labelled callable, until a call to it succeeds
@@ -1655,6 +1670,10 @@ jobs:
           t node scripts/test-bazaar-route-check.js
           # The strict sweep reports a listed keyless upstream's 5xx refusal; our own 5xx still fails.
           t node scripts/test-sweep-upstream-refusal.js
+          # A Solana intel read that outlives its deadline answers a 503 naming the upstream and the step on the real route, inside the handler budget (stubbed upstreams).
+          t node scripts/test-solana-intel-deadline.js
+          # Every kit that reads an upstream: a stalled read ends at its cap, composed with the handler budget, as the shared 503 class naming the upstream and the step (stubbed fetch, short budget).
+          t node scripts/test-upstream-deadline.js
           t node scripts/test-solana-kit-deps.js
           t node scripts/test-workflow-client-pins.js
 
@@ -1688,6 +1707,10 @@ jobs:
           t node scripts/test-solana-router.js
           # Tool resolver (/api/find ranking, guards)
           t node scripts/test-find.js
+          # Discovery gate: every compute under a deadline, slot released, self-healing in-flight count, perf fields (booted, offline)
+          t node scripts/test-discovery-deadline.js
+          # Router worker pool: worker answers equal in-thread, /health stays fast under a burst, crash and deadline recovery, refresh reaches the worker (offline, boots a server from the fixture)
+          t node scripts/test-router-worker.js
           t node scripts/test-plan-sketch.js
           # Report synthesis: a length stop is retried once, then trimmed to a complete block and marked (offline)
           t node scripts/test-report-synthesis.js
@@ -1700,6 +1723,8 @@ jobs:
           # Revenue ledger unit tests (all-time external accounting, idempotent rescans, CI self-gate)
           t node scripts/test-revenue-ledger.js
           t node scripts/test-block-clock.js
+          # Base block time across Denim (2 s to 200 ms): windows stay the same wall-clock length (offline)
+          t node scripts/test-chain-block-time.js
           t node scripts/test-payai-credit-watch.js
           t node scripts/test-revenue-fresh-recent.js
           t node scripts/test-chain-page-own-settle.js
@@ -2493,6 +2518,7 @@ jobs:
           # Finance-kit tests (Yahoo chart quote+history, Nasdaq earnings calendar — keyless live APIs)
           t node scripts/test-finance-kit.js
           t node scripts/test-databento-timeouts.js
+          t node scripts/test-databento-fallback.js
           # "stock-quote: warm symbol answers with no upstream call, cold symbol with one; warmer ceiling (offline, stubbed)"
           t node scripts/test-stock-quote-speed.js
           # "Operator bulk seed route: token-only, bounded, same validation as /sell, dry by default"
@@ -2508,7 +2534,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (24 scripts, one process each)
+      - name: Offline suites (23 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2848,6 +2874,8 @@ jobs:
           t node scripts/test-seller-payability.js
           # Package integrity (files allowlist covers every import; no sibling dep range excludes what we ship — offline)
           t node scripts/test-package-integrity.js
+          # Published packages retry a shed discovery 503 (bounded, capped, never a paid call) and then name the surface (offline stubs)
+          t node scripts/test-package-shed-retry.js
           # Every SOLD skill pack has a real step config (a pack without one answers 200 with 0/N steps and still charges — offline)
           t node scripts/test-skill-pack-steps.js
           # Refund backfill decides who is OWED money: who is in, who is out, idempotent (offline, temp ledgers)
@@ -2901,6 +2929,12 @@ jobs:
           t node scripts/test-mpp-tempo-relay-errors.js
           # A keyed broadcast the relay refuses for its validBefore is re-sent once without the key (offline)
           t node scripts/test-mpp-tempo-idempotency-policy.js
+          # Tempo settlement mode: TEMPO_RELAY=off never calls the relay; unset keeps it (offline)
+          t node scripts/test-mpp-tempo-direct.js
+          # mppx's own Tempo charge replay claims sit in one store per process, redis-backed when configured: a push credential one replica settled is refused on another (offline, stub chain + stub redis)
+          t node scripts/test-mppx-store.js
+          # Tempo direct mode screens every payment party against the OFAC SDN list before money moves (fixture list, offline)
+          t node scripts/test-sanctions-screen.js
           # workflow_run references name a workflow that exists (GitHub matches on name:, a mismatch never fires - offline)
           t node scripts/test-workflow-run-refs.js
           # Every workflow job names a versioned runner image, never a moving -latest label (offline)
@@ -3215,7 +3249,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (9 scripts, one process each)
+      - name: Offline suites (11 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3234,6 +3268,10 @@ jobs:
           t node scripts/test-cve-kit.js
           # crypto-signals kit (offline)
           t node scripts/test-crypto-signals-kit.js
+          # Hyperliquid info cache shared by the two Hyperliquid kits (offline)
+          t node scripts/test-hyperliquid-shared-cache.js
+          # openFDA reference tools: labels, NDC, 510(k), device MDRs (offline)
+          t node scripts/test-openfda-reference.js
           # x402-market-pulse category classifier (path-aware, closed taxonomy)
           t node scripts/test-ecosystem-category.js
           # token brief kit (offline)
@@ -3717,6 +3755,10 @@ jobs:
           t node scripts/test-paytime-bounds.js
           # One-product MCP endpoint (/mcp/sec): profile lists only the SEC tools, hides the catalog meta tools, /mcp unchanged (boots a free server)
           t node scripts/test-mcp-sec.js
+          # MCP wire: a 2026-07-28 client that opens with initialize is served the negotiated revision; tools/call arguments past the element bound are InvalidParams on /mcp and on the stdio package (boots a free server)
+          t node scripts/test-mcp-protocol-input-bound.js
+          # Prepared Railway IaC file keeps the facilitator and worker settings from their config files, as a named partial with unmanaged variables (offline: type-stripped load, SDK stubbed)
+          t node scripts/test-railway-iac.js
 
 
   test-sweeps:
@@ -4628,6 +4670,8 @@ jobs:
           t node scripts/test-mpp-discovery-parity.js
           # MPP start-here set: every slug offers tempo, and /what-is-mpp, /llms.txt, /openapi.json and MCP payment.info derive from src/mpp-flagship.js at catalog prices (boots FREE_MODE, offline)
           t node scripts/test-mpp-flagship.js
+          # 30 concurrent buyers for 45 s against a FREE_MODE server on a free port, /health probed beside them: zero 5xx on tool routes, discovery sheds under its ceiling, /health p95 bounded relative to its idle reading, no request past the hard timeout. The server child strips every spend key from its environment. Runs last in the lane so no other step shares the runner's CPU with it (offline)
+          t node scripts/test-load-concurrency.js
 
   publish-gate:
     # Every per-package gate that used to run INSIDE the publish job. It is a

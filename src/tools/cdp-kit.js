@@ -25,6 +25,7 @@
 // the SDK's auth/utils/jwt.ts exactly.
 import { createPrivateKey, createSign, randomBytes, sign as edSign } from "node:crypto";
 import { redactSecrets } from "./redact.js";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, currentBudget, isUpstreamFailure, OPTIONAL_READ_FLOOR_MS } from "../upstream-deadline.js";
 
 const CDP_HOST = "api.cdp.coinbase.com";
 
@@ -90,6 +91,23 @@ function retryAfterMs(res) {
   return Number.isFinite(at) ? Math.min(RETRY_AFTER_CAP_MS, Math.max(0, at - Date.now())) : null;
 }
 
+// DEADLINES (src/upstream-deadline.js): each attempt runs under its own cap
+// and the handler budget, and a retry (with its backoff) is started only while
+// the budget can hold it, so the retry walk answers inside the payment window
+// instead of running up to five full caps. An attempt that outlives its cap,
+// or a host that cannot be reached, is a 503 naming the upstream and the step,
+// attributed upstream, never a 504. Outside a handler (a scheduled read) an
+// attempt keeps its own cap.
+const CDP_READ_MS = 15_000;
+function cdpStep(path) {
+  if (/\/faucet$/.test(path)) return "faucet";
+  if (/\/token-balances\//.test(path)) return "token balances";
+  if (/\/onramp\/sessions$/.test(path)) return "onramp session";
+  if (/\/data\/query\/schema$/.test(path)) return "query schema";
+  if (/\/data\/query\/run$/.test(path)) return "query";
+  return "request";
+}
+
 async function cdpFetch(method, path, body, { idempotent = method === "GET" } = {}) {
   if (!keyId() || !keySecret()) {
     throw bad("This tool is temporarily unavailable: the operator has not configured Coinbase Developer Platform credentials (CDP_API_KEY_ID / CDP_API_KEY_SECRET).", 503);
@@ -105,22 +123,25 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET" } = 
     if (attempt > 0) {
       const backoff = waitMs ?? (Math.min(4000, 400 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 250));
       waitMs = null;
+      // A retry is started only while the handler budget can hold the wait
+      // and a read after it; otherwise the last failure is the answer.
+      const budget = currentBudget();
+      if (budget && budget.remaining() - backoff < OPTIONAL_READ_FLOOR_MS) throw lastErr;
       await new Promise((r) => setTimeout(r, backoff));
     }
     const jwt = await mintCdpJwt({ method, path });
     let res;
     try {
-      res = await fetch(`https://${CDP_HOST}${path}`, {
+      res = await upstreamFetch(`https://${CDP_HOST}${path}`, {
         method,
         headers: { Authorization: `Bearer ${jwt}`, "Content-Type": "application/json" },
         body: body ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(15_000),
-      });
+      }, { label: "Coinbase Developer Platform", step: cdpStep(path), timeoutMs: CDP_READ_MS, tag: "[cdp]" });
     } catch (e) {
-      lastErr = bad(`Coinbase Developer Platform did not respond: ${String(e?.message || e).slice(0, 80)}`, 504);
+      lastErr = e;
       // The request may have reached CDP and taken effect: never resend it.
       if (!idempotent) throw lastErr;
-      continue; // network error / timeout — retry
+      continue; // network error / timeout: retry while the budget holds
     }
     const json = await res.json().catch(() => ({}));
     if (res.ok) return json;
@@ -294,8 +315,10 @@ export const CDP_TOOLS = [
           ? await cdpFetch("POST", "/platform/v2/solana/faucet", { address, token })
           : await cdpFetch("POST", "/platform/v2/evm/faucet", { address, network, token });
       } catch (e) {
-        // A timeout may still have dripped: keep the slot. Any other failure did not.
-        if (e?.statusCode !== 504) gate.release();
+        // A read that ended without an answer (its deadline, or a transport
+        // failure after the request may have left) may still have dripped:
+        // keep the slot. Any failure with an answer did not.
+        if (!isUpstreamFailure(e)) gate.release();
         throw e;
       }
       const tx = res?.transactionHash || res?.transactionSignature || null;
@@ -452,3 +475,6 @@ export const CDP_TOOLS = [
     },
   },
 ];
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(CDP_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

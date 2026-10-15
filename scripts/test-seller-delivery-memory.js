@@ -22,6 +22,9 @@ let n = 0;
 const ok = (c, m) => { assert.ok(c, m); n++; };
 const eq = (a, b, m) => { assert.deepEqual(a, b, m); n++; };
 
+// The payout screen refuses every payment while no sanctions list is held;
+// this suite drives the payer, so it holds a fixture list.
+(await import("../src/tools/sanctions-kit.js")).__seedPayoutListForTests();
 const {
   payX402, noteSellerDeliveryFailure, clearSellerDeliveryFailure,
   sellerDeliveryFailingRecently, __resetSellerDeliveryFailuresForTest,

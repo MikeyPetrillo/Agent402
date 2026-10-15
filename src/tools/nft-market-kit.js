@@ -30,8 +30,12 @@
 // Covered by scripts/test-nft-market-kit.js (offline + opt-in live).
 
 import { redactSecrets } from "./redact.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
-const TIMEOUT_MS = 12_000;
+// DEADLINES (src/upstream-deadline.js): one read per handler, under its own
+// cap and the handler budget; a read that outlives it is a 503 naming the
+// upstream and the step, never a 504.
+const READ_MS = 12_000;
 
 // Same chain map as chain-kit/dex-kit/mev-and-l2-kit so an agent can pivot
 // freely. NFT API supports the same 5 chains.
@@ -85,25 +89,18 @@ async function alchemyGet(network, path, params, label) {
   const net = pickNetwork(network);
   const qs = new URLSearchParams(params).toString();
   const url = `https://${net.subdomain}.g.alchemy.com/nft/v3/${key}/${path}${qs ? "?" + qs : ""}`;
-  let res;
-  try {
-    res = await fetch(url, {
-      headers: { accept: "application/json", "user-agent": "agent402/nft-market-kit" },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (e) {
-    if (e.name === "TimeoutError" || /aborted/i.test(e.message)) {
-      throw bad(`${label} upstream timed out after ${TIMEOUT_MS}ms`, 504);
-    }
-    throw bad(`${label} upstream unreachable: ${e.message}`, 502);
-  }
+  const ctx = { label, step: path, timeoutMs: READ_MS, tag: "[nft-market]" };
+  const res = await upstreamFetch(url, {
+    headers: { accept: "application/json", "user-agent": "agent402/nft-market-kit" },
+  }, ctx);
   if (!res.ok) {
     // Redact the FULL body before slicing — the Alchemy key rides the request
     // URL and an upstream error body could reflect it.
     const body = redactSecrets(await res.text().catch(() => "")).slice(0, 240);
     throw bad(`${label} upstream returned HTTP ${res.status}${body ? ": " + body : ""}`, res.status >= 500 ? 502 : res.status);
   }
-  return res.json();
+  try { return await bodyUnderDeadline(res.json(), ctx); }
+  catch (err) { if (err?.statusCode) throw err; throw bad(`${label} upstream returned non-JSON`, 502); }
 }
 
 // ----------------------------------------------------------------------------
@@ -262,3 +259,6 @@ export const __test = {
   pickNetwork,
   NETWORKS,
 };
+
+// Every handler runs under one budget (src/upstream-deadline.js).
+underBudgetAll(NFT_MARKET_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

@@ -292,7 +292,7 @@ for (const [label, call] of [["hunter", () => h("hunter-domain-search")({ domain
   globalThis.fetch = async () => jsonRes(502, {});
   await throws(call(), 502, `${label}: 502 -> 502`);
   globalThis.fetch = async () => { throw Object.assign(new Error("aborted"), { name: "TimeoutError" }); };
-  await throws(call(), 504, `${label}: timeout -> 504`);
+  await throws(call(), 503, `${label}: deadline -> 503 naming the upstream and the step`);
   globalThis.fetch = async () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => { throw new Error("bad json"); } });
   await throws(call(), 502, `${label}: non-JSON 200 -> 502`);
   const msgs = [];

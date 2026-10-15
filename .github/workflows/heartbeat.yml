@@ -552,12 +552,36 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "stale" ] || [ "$STATUS" = "unloaded" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The OFAC SDN list behind sanctions-wallet, sanctions-name and the router's payout screen reads $STATUS on /api/gateway-status. stale: the 12-hourly refresh has failed for over a day and screening is answering from an old copy. unloaded: it never loaded after boot and every screening call is refused 503. The operator view of /api/gateway-status carries the last error; the source is OFAC's sanctionslistservice export (src/tools/sanctions-kit.js). Auto-closes when it reads ok."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The OFAC SDN list behind sanctions-wallet, sanctions-name and the router's payout screen reads $STATUS on /api/gateway-status. stale: the 12-hourly refresh has failed for over a day and screening is answering from an old copy. unloaded: it never loaded after boot and every screening call is refused 503. The operator view of /api/gateway-status carries the last error; the source is OFAC's SDN.XML export, loaded by src/ofac-sdn.js for src/tools/sanctions-kit.js. Auto-closes when it reads ok."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $STATUS at $(date -u +%FT%TZ)."
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the list reads ok at $(date -u +%FT%TZ)."
+          fi
+
+      # Tempo direct mode's payment-party screen (src/sanctions-screen.js): the
+      # EVM set of the same OFAC SDN.XML load. The field is present only while
+      # direct mode is on; absent means nothing to check. "stale" (refreshes
+      # failing, still screening against the last good set) and "missing" (no
+      # list: direct mode offers no tempo challenge) page; "fresh" closes;
+      # "unknown" does neither.
+      - name: Tempo payment-party screen check (alarm on stale or missing)
+        if: always()
+        continue-on-error: true
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.sanctionsScreen.status // "absent"' 2>/dev/null || echo unknown)
+          echo "tempo payment-party screen: $STATUS"
+          TITLE="Tempo payment-party screen STALE or MISSING (OFAC SDN)"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [ "$STATUS" = "stale" ] || [ "$STATUS" = "missing" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Tempo direct mode's payment-party screen reads $STATUS on /api/gateway-status (sanctionsScreen.status). stale: no successful refresh in two refresh periods (12 h by default) and the screen is checking payments against the last good set. missing: no list is loaded, so direct mode offers no tempo challenge until one loads. The operator view of /api/gateway-status carries lastError and lastAttemptAt; the source is OFAC's SDN.XML export (src/ofac-sdn.js, read by src/sanctions-screen.js). Auto-closes when it reads fresh."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $STATUS at $(date -u +%FT%TZ)."
+            fi
+          elif [ "$STATUS" = "fresh" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the screen reads fresh at $(date -u +%FT%TZ)."
           fi
 
       # Subscription gas sponsor - watches PATHUSD, not USDC.e. A sponsored
@@ -1028,24 +1052,6 @@ jobs:
           elif [ "$STATE" = "operational" ] && [ -n "$OPEN" ]; then
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: a canary proved a real purchase at $(date -u +%FT%TZ) (observation is ${AGEH}h old). /status is measuring settlement again."
           fi
-
-      # Registry watch: a second facilitator's /discovery/resources speaks the
-      # standard discovery shape but has been empty. The day it fills, it is
-      # the discovery home for x402 sellers on the chains only it settles, and
-      # the index should ingest it (one DISCOVERY_SOURCES entry, same shape as
-      # the existing one). One-shot informational signal: opens a single issue
-      # the first time total > 0, never re-opens, never alarms, never fails.
-      - name: Registry watch (one-shot signal when a watched registry goes non-empty)
-        if: always()
-        continue-on-error: true
-        run: |
-          TOTAL=$(curl -s --max-time 15 "https://api.solvador.com/discovery/resources?limit=1" | jq -r '.pagination.total // 0' 2>/dev/null || echo 0)
-          echo "watched registry total: $TOTAL"
-          [ "$TOTAL" -gt 0 ] 2>/dev/null || exit 0
-          TITLE="A watched x402 registry is live (sellers detected)"
-          ANY=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
-          [ -n "$ANY" ] && exit 0
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The watched discovery registry now reports $TOTAL resource(s). It was empty when the watch was added. Its facilitator covers Optimism, Unichain, World Chain, Linea, NEAR and XRPL, so it is the discovery home for sellers on those chains. Action: add it to DISCOVERY_SOURCES in src/x402-index.js (same shape as the existing registry entry: paginate, synthesizeTools, strict)."
 
       - name: Alert (open issue) or clear (close issue)
         run: |

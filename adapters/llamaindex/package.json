@@ -1,6 +1,6 @@
 {
   "name": "agent402-llamaindex",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Drop-in LlamaIndex TS tools for Agent402.Tools (the applied layer of Agentic Finance): turn tools from its catalog of 500+ pay-per-call tools and skill packs (x402 or MPP) into FunctionTool instances, one per catalog tool, with payment handled by agent402-client. Free via proof-of-work for the pure-CPU tools, or pay per call in USDC on 11 chains or USDG on Robinhood Chain.",
   "type": "module",
   "main": "index.js",
@@ -53,5 +53,13 @@
   "homepage": "https://agent402.tools",
   "dependencies": {
     "agent402-client": ">=0.6.0 <1.0.0"
+  },
+  "peerDependencies": {
+    "llamaindex": ">=0.12.0"
+  },
+  "peerDependenciesMeta": {
+    "llamaindex": {
+      "optional": true
+    }
   }
 }

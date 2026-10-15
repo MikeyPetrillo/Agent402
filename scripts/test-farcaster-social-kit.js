@@ -3,7 +3,7 @@
 // globalThis.fetch is stubbed. Pins: catalog envelope, no-key 503 WITHOUT a
 // fetch, the x-api-key header, input validation, upstream status mapping
 // (401/402/403 -> 503, 429 -> 503 + hint, 404 -> 404, 4xx -> 400 name-only,
-// 5xx -> 502, timeout -> 504), the 60 s in-process cache, and the compact
+// 5xx -> 502, a deadline -> 503 naming the step), the 60 s in-process cache, and the compact
 // output mapping against fixtures shaped like the live Neynar payloads.
 
 import { FARCASTER_SOCIAL_TOOLS, farcasterSocialEnabled, __test } from "../src/tools/farcaster-social-kit.js";
@@ -231,7 +231,7 @@ try { await h("fc-cast")({ identifier: CAST.hash }); } catch (e) { ok(!/SECRET/.
 responder = () => jsonRes(400, { message: "bad", property: "<script>" }, RL);
 await throws(h("fc-cast")({ identifier: CAST.hash }), 400, "upstream 400 with junk property -> generic", /check the parameters/);
 responder = () => { const e = new Error("The operation was aborted due to timeout"); e.name = "TimeoutError"; throw e; };
-await throws(h("fc-channel")({ id: "base" }), 504, "timeout -> 504", /did not respond in time/);
+await throws(h("fc-channel")({ id: "base" }), 503, "deadline -> 503 naming the upstream and the step", /^Farcaster upstream did not answer the channel read within \d+ s \(upstream deadline\)/);
 responder = () => ({ status: 200, ok: true, headers: { get: () => null }, json: async () => { throw new Error("nope"); } });
 await throws(h("fc-channel")({ id: "base" }), 502, "non-JSON 200 -> 502");
 responder = () => jsonRes(200, { channel: null }, RL);
@@ -335,9 +335,30 @@ calls = [];
 await h("fc-cast-metrics")({ q: "x402" }); const m2 = await h("fc-cast-metrics")({ q: "x402" });
 ok(calls.length === 1 && m2.cached === true, "fc-cast-metrics: cached");
 calls = [];
-await h("fc-cast-search")({ q: "x402" }); await h("fc-cast-search")({ q: "x402" });
+// Cast search is stored for CAST_SEARCH_TTL_MS (its own per-minute meter);
+// a single-cast lookup is never stored.
+await h("fc-cast-search")({ q: "x402" }); const s2 = await h("fc-cast-search")({ q: "x402" });
+ok(calls.length === 1 && s2.cached === true, "fc-cast-search: an identical search inside the window is one upstream call");
+ok(__test.CAST_SEARCH_TTL_MS >= 5_000 && __test.CAST_SEARCH_TTL_MS <= 15_000, `fc-cast-search: the search window is short (${__test.CAST_SEARCH_TTL_MS} ms)`);
+await h("fc-cast-search")({ q: "x402", cursor: "abc" });
+ok(calls.length === 2, "fc-cast-search: a different cursor is a different read");
+{
+  const realNow2 = Date.now; const t0 = realNow2();
+  Date.now = () => t0 + __test.CAST_SEARCH_TTL_MS + 1;
+  const s3 = await h("fc-cast-search")({ q: "x402" });
+  Date.now = realNow2;
+  ok(calls.length === 3 && s3.cached === false, "fc-cast-search: past the window the search is read again");
+}
+calls = [];
 await h("fc-cast")({ identifier: CAST.hash }); await h("fc-cast")({ identifier: CAST.hash });
-ok(calls.length === 4, "search + cast lookups are never cached");
+ok(calls.length === 2, "single-cast lookups are never stored");
+// In-flight dedupe: concurrent identical reads share one request, stored or not.
+clearCache(); calls = [];
+const [d1, d2, d3] = await Promise.all([h("fc-cast-search")({ q: "dedupe" }), h("fc-cast-search")({ q: "dedupe" }), h("fc-cast-search")({ q: "dedupe" })]);
+ok(calls.length === 1 && d1.cached === false && d2.cached === true && d3.cached === true, `fc-cast-search: three concurrent identical searches spend one call (${calls.length})`);
+calls = [];
+await Promise.all([h("fc-cast")({ identifier: CAST.hash }), h("fc-cast")({ identifier: CAST.hash })]);
+ok(calls.length === 1, "fc-cast: concurrent identical lookups share one request even though they are never stored");
 // Errors are never cached (a 5xx followed by a 200 fetches twice).
 clearCache(); calls = [];
 const good = responder;

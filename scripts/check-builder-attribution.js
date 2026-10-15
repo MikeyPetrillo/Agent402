@@ -31,12 +31,17 @@
 //
 //   TARGET_URL=https://agent402.tools node scripts/check-builder-attribution.js
 import { fileURLToPath } from "node:url";
+import { blocksForSeconds, refreshBlockMs } from "../src/chain-block-time.js";
+import { rpcHeaderReader } from "../src/block-clock.js";
 
 const BASE = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
 const WALLET = (process.env.REVENUE_WALLET || "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0").toLowerCase();
 const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"; // native USDC on Base
 const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-const SPAN = parseInt(process.env.SPAN_BLOCKS || "40000", 10); // ~22h at 2s blocks — covers a full canary cycle
+// ~22h (40,000 blocks at Base's original 2 s): covers a full canary cycle.
+// Counted at Base's live block time in main() unless SPAN_BLOCKS pins it.
+const SPAN_SECONDS = 80_000;
+let SPAN = parseInt(process.env.SPAN_BLOCKS || String(blocksForSeconds("base", SPAN_SECONDS)), 10);
 const MAX_TXS = parseInt(process.env.MAX_TXS || "25", 10);
 const ERC_8021_MARKER = "80218021802180218021802180218021";
 const SCHEMA_2_ID = 2;
@@ -200,6 +205,10 @@ async function main() {
   const txReport = [];
   let scanError = null;
   try {
+    if (!process.env.SPAN_BLOCKS) {
+      await refreshBlockMs("base", rpcHeaderReader((m, p) => rpc(m, p)));
+      SPAN = blocksForSeconds("base", SPAN_SECONDS);
+    }
     const latest = parseInt(await rpc("eth_blockNumber", []), 16);
     // Free-tier public RPCs cap eth_getLogs at 10k-block ranges (same cap the
     // Polygon revenue scan hit) — walk the window in chunks instead of one call.

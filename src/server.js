@@ -25,6 +25,7 @@ setGlobalDispatcher(new UndiciAgent({ connect: { family: 4 } }));
 import { loopLagStatus, setStallContext, resetLoopLag, stallsInWindow } from "./loop-lag.js";
 import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, oldestInFlight, inFlightCount, responseCounts } from "./request-timing.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters } from "./load-shed.js";
+import { createInFlightGauge, raceDeadline } from "./inflight-gauge.js";
 import express from "express";
 import compression from "compression";
 import { readFileSync } from "node:fs";
@@ -329,10 +330,12 @@ import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SC
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
 import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { submissionSlotStatus } from "./x402-index.js";
+import { startRouterPool, routerPoolStatus } from "./router-pool.js";
 import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
-import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled } from "./mpp-tempo.js";
+import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
+import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc } from "./mpp-reconcile.js";
 import { tempoDataKey } from "./tempo-transfers.js";
 import { verifyInboundPayment } from "./payment-verify.js";
@@ -472,7 +475,7 @@ import { TTS_TOOLS, elevenLabsBreakerState } from "./tools/tts-kit.js";
 // 2026-08-22 seller-landscape builds: keyless derivatives data + env-gated X data / B2B enrichment.
 import { DERIVATIVES_TOOLS } from "./tools/derivatives-kit.js";
 import { SOLANA_INTEL_TOOLS } from "./tools/solana-intel-kit.js";
-import { SANCTIONS_TOOLS, startSanctionsRefresh, sanctionsStatus, sanctionsHealth } from "./tools/sanctions-kit.js";
+import { SANCTIONS_TOOLS, startSanctionsRefresh, startSanctionsPayoutStore, sanctionsStatus, sanctionsHealth } from "./tools/sanctions-kit.js";
 import { IMAGES_FAST_TOOLS } from "./tools/llm-images-fast-kit.js";
 import { ALCHEMY_DATA_TOOLS } from "./tools/alchemy-data-kit.js";
 import { FARCASTER_SOCIAL_TOOLS, farcasterSocialEnabled } from "./tools/farcaster-social-kit.js";
@@ -543,6 +546,7 @@ import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores } from "./state-db.js";
 import { ledgerDeadLetterStatus, flushJournals } from "./ledger-mirror.js";
 import { startRedisPersistenceMonitor, redisPersistenceStatus } from "./redis-persistence.js";
+import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sharedLimitsEnabled, sharedWrite as sharedLimitsWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
@@ -2369,7 +2373,11 @@ const PH_MAX_RESPONSE_BYTES = Number(process.env.POSTHOG_PROXY_MAX_BYTES) || 8 *
 // hold unbounded upstream sockets/memory at once.
 const PH_UPSTREAM_TIMEOUT_MS = Number(process.env.POSTHOG_PROXY_TIMEOUT_MS) || 10_000;
 const PH_MAX_CONCURRENT = Number(process.env.POSTHOG_PROXY_MAX_CONCURRENT) || 64;
-let phInFlight = 0;
+// The upstream call is bounded, the relay to the client is paced by the
+// client. A relay still open past this age no longer counts toward the
+// ceiling, so a set of stalled clients cannot close the proxy (src/inflight-gauge.js).
+const PH_INFLIGHT_STALE_MS = Number(process.env.POSTHOG_PROXY_INFLIGHT_STALE_MS) || 60_000;
+const phInFlight = createInFlightGauge({ staleMs: PH_INFLIGHT_STALE_MS });
 const phProxyLimiter = createRateLimiter("posthog-proxy", { perMin: PH_MAX_PER_MIN, perHour: PH_MAX_PER_MIN * 30 });
 // Per-IP limiter for the unauthenticated Stripe-session-creating endpoints
 // (/api/buy, /api/subscribe) - each makes an outbound Stripe API call, so cap
@@ -2496,6 +2504,10 @@ _tweetQueue.start();
 // then on a timer, never on a request's path. One word on /api/gateway-status;
 // the money journals move to Redis only while it reads on.
 startRedisPersistenceMonitor();
+// The shared admission and money controls (src/shared-limits.js): one read of
+// the store shortly after boot and then on a timer, so sharedLimits on
+// /api/gateway-status is measured (on / memory / degraded), never assumed.
+startSharedLimitsProbe();
 app.get("/__operator/tweet-queue.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json(_tweetQueue.status());
@@ -2641,8 +2653,8 @@ app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb" }), async (r
   if (!PH_METHODS.has(req.method)) return res.status(405).end();
   const ip = (req.ip || req.socket.remoteAddress || "?").trim();
   if (phProxyLimiter.check(ip).limited) return res.status(429).end();
-  if (phInFlight >= PH_MAX_CONCURRENT) return res.status(503).end(); // F15 global ceiling
-  phInFlight++;
+  if (phInFlight.live() >= PH_MAX_CONCURRENT) return res.status(503).end(); // F15 global ceiling
+  const releaseRelay = phInFlight.enter();
   try {
     const sub = req.params[0] || "";
     const qs = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
@@ -2693,7 +2705,7 @@ app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb" }), async (r
   } catch {
     if (!res.headersSent) res.status(502).end(); else res.destroy();
   } finally {
-    phInFlight--;
+    releaseRelay();
   }
 });
 // gzip/deflate every response EXCEPT: (1) /v1/* and /mcp — the LLM gateway's
@@ -2810,7 +2822,9 @@ app.use(chainNamespaceMiddleware);
 // it serves), BEFORE the body parsers and every payment/PoW gate, so a
 // throttled request costs no parse and no challenge build. Not mounted under
 // FREE_MODE: there is no paywall there, and CI sweeps boot in that mode. The
-// same figure is quoted on /crawler, so the page cannot drift from the gate.
+// same figure is quoted on /crawler, so the page cannot drift from the gate;
+// each container enforces its RATE_LIMIT_REPLICAS share of it (the factory
+// divides, like every limiter in src/rate-limit.js).
 const UNPAID_QUOTE_BUDGET = FREE_MODE ? 0 : unpaidQuoteBudgetPerHour();
 const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
   budget: UNPAID_QUOTE_BUDGET,
@@ -3172,6 +3186,8 @@ app.get("/api/gateway-status", async (req, res) => {
   // The operator sees the real figures; everyone else sees the verdict. The
   // heartbeat reads only `.status` fields, so bucketing costs it nothing.
   const full = operatorAuthed(req);
+  // The wrong-credential count every replica contributed to, when shared.
+  await refreshOperatorAuthShared();
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
   const body = {
@@ -3192,6 +3208,12 @@ app.get("/api/gateway-status", async (req, res) => {
     // OFAC SDN list behind sanctions-wallet / sanctions-name and the router's
     // payout screen: one word publicly, counts and the last error for the operator.
     sanctions: full ? { ...sanctionsHealth(), ...sanctionsStatus() } : sanctionsHealth(),
+    // Tempo direct mode's payment-party screen (src/sanctions-screen.js):
+    // fresh / stale / missing, only while direct mode's gate is mounted. One word
+    // publicly; counts and the last load time for the operator.
+    ...(sanctionsScreenStarted() && tempoSettlementMode() === "direct"
+      ? { sanctionsScreen: (() => { try { return full ? sanctionsScreenOperatorView() : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
+      : {}),
     mppEvmDomainFallback: full ? mppFallbackStatus() : publicFallback(mppFallbackStatus()),
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),
     // Daily MPP reconciliation (src/mpp-reconcile.js): status words + counts,
@@ -3206,6 +3228,11 @@ app.get("/api/gateway-status", async (req, res) => {
     // Redis persistence (src/redis-persistence.js): on / degraded / off /
     // unknown. One word publicly; the operator also gets the INFO fields.
     redisPersistence: (() => { try { return redisPersistenceStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // The shared admission and money controls (src/shared-limits.js): on (the
+    // store answers), memory (no Redis configured: every control is this
+    // process's own), degraded (Redis configured, a command failed inside the
+    // last minute). One word publicly; counts for the operator.
+    sharedLimits: (() => { try { return sharedLimitsStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // Money writes waiting on this container's local disk for the database
     // (src/ledger-mirror.js journals: sales, refund debts, card checkout
     // finals, subscription records, decide writes): none / pending / stuck
@@ -4564,11 +4591,47 @@ const getOperatorToken = (req) => {
 // expire after OP_SESSION_TTL_MS, and logout (or a token rotation) revokes them
 // without touching the root token.
 const OP_SESSION_TTL_MS = 8 * 3600 * 1000;
+// Shared across replicas (src/shared-limits.js): a session is a flag in the
+// shared store, keyed by a digest of the operator token and its id (never the
+// id itself) and valued with its expiry, written on login and cleared on
+// logout, so a cookie minted on one container is known on the other and a
+// logout revokes it everywhere. The token is in the key, so a token rotation
+// still revokes every session: the stored ones outlive the restart, but no
+// container running the new token looks under their keys.
+// This process's map is the fallback (no shared store, or one that does not
+// answer) and the cache the synchronous gate reads: syncOperatorSession
+// refreshes it from the store before any operator route runs.
+const OP_SESSION_SHARED = sharedLimitsEnabled();
+const OP_SID_RE = /^[0-9a-f]{64}$/;
+const opSessionKey = (sid) => createHash("sha256").update(OPERATOR_TOKEN).update("\0").update(String(sid)).digest("hex");
 const operatorSessions = new Map(); // sid -> expiresAt (ms)
-function newOperatorSession() {
+async function newOperatorSession() {
   const sid = randomBytes(32).toString("hex");
-  operatorSessions.set(sid, Date.now() + OP_SESSION_TTL_MS);
+  const exp = Date.now() + OP_SESSION_TTL_MS;
+  operatorSessions.set(sid, exp);
+  // Awaited (bounded by the store's op timeout): the browser's next request
+  // may land on the other container.
+  if (OP_SESSION_SHARED) await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess", opSessionKey(sid), exp));
   return sid;
+}
+async function revokeOperatorSession(sid) {
+  if (!sid) return;
+  operatorSessions.delete(sid);
+  if (OP_SESSION_SHARED) await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess", opSessionKey(sid), 0));
+}
+/** Before the operator routes: the cookie's session is read from the shared
+ *  store and this process's map takes the answer (an expiry, or nothing: it
+ *  was revoked or minted nowhere). A store that does not answer leaves the map
+ *  as it stands. Only a cookie of the right shape, from an address with
+ *  guessing budget left, reaches the store. */
+async function syncOperatorSession(req) {
+  if (!OP_SESSION_SHARED) return;
+  const sid = readCookie(req, OPERATOR_COOKIE);
+  if (!sid || !OP_SID_RE.test(sid)) return;
+  if (operatorAttemptLimiter.peek(operatorAttemptIp(req)).limited) return;
+  const r = await sharedLimits.flagGet("opsess", opSessionKey(sid));
+  if (!r.ok) { noteSharedLimitsDegraded("operator-session", r); return; }
+  if (r.until > Date.now()) operatorSessions.set(sid, r.until); else operatorSessions.delete(sid);
 }
 function operatorSessionValid(sid) {
   if (!sid) return false;
@@ -4618,20 +4681,45 @@ const operatorAttemptIp = (req) => req.ip || req.socket?.remoteAddress || "unkno
 const OPERATOR_AUTH_FAIL_ALERT = Math.max(10, parseInt(process.env.OPERATOR_AUTH_FAIL_ALERT || "100", 10) || 100);
 const _opAuthFails = [];
 let _opAuthAlertedAt = 0;
+// Shared across replicas (src/shared-limits.js): every wrong credential is
+// also an entry in a shared hour window, and the count every replica
+// contributed to is kept here (refreshed by each write, and by the status
+// read); the status is the larger of that and this process's own.
+const OP_AUTH_SHARED = sharedLimitsEnabled();
+let _opAuthShared = { count: 0, at: 0 };
+let _opAuthSeq = 0;
+const _opAuthProc = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 function noteOperatorAuthFailure() {
   const now = Date.now();
   _opAuthFails.push(now);
   while (_opAuthFails.length && now - _opAuthFails[0] > 3_600_000) _opAuthFails.shift();
   if (_opAuthFails.length > 5000) _opAuthFails.splice(0, _opAuthFails.length - 5000);
-  if (_opAuthFails.length >= OPERATOR_AUTH_FAIL_ALERT && now - _opAuthAlertedAt > 600_000) {
-    _opAuthAlertedAt = now;
-    console.warn(`[operator-auth] ${_opAuthFails.length} wrong operator credentials in the last hour (threshold ${OPERATOR_AUTH_FAIL_ALERT}) - token guessing in progress; rotate AGENT402_OPERATOR_TOKEN if this persists`);
+  if (OP_AUTH_SHARED) {
+    void sharedLimitsWrite("operator-auth", sharedLimits.windowAdd("opauth-fail", "all", { windowMs: 3_600_000, member: `${_opAuthProc}:${++_opAuthSeq}`, now }))
+      .then((r) => { if (r?.ok) { _opAuthShared = { count: r.count, at: now }; alertOperatorAuth(Math.max(_opAuthFails.length, r.count), now); } });
   }
+  alertOperatorAuth(_opAuthFails.length, now);
+}
+function alertOperatorAuth(n, now) {
+  if (n >= OPERATOR_AUTH_FAIL_ALERT && now - _opAuthAlertedAt > 600_000) {
+    _opAuthAlertedAt = now;
+    console.warn(`[operator-auth] ${n} wrong operator credentials in the last hour (threshold ${OPERATOR_AUTH_FAIL_ALERT}) - token guessing in progress; rotate AGENT402_OPERATOR_TOKEN if this persists`);
+  }
+}
+/** Read the shared hour window into the mirror (a no-op without a shared store). */
+async function refreshOperatorAuthShared(now = Date.now()) {
+  if (!OP_AUTH_SHARED) return;
+  const r = await sharedLimits.windowRead("opauth-fail", "all", { windowMs: 3_600_000, now });
+  if (r.ok) _opAuthShared = { count: r.count, at: now }; else noteSharedLimitsDegraded("operator-auth", r);
 }
 export function operatorAuthStatus(full = false) {
   const now = Date.now();
   while (_opAuthFails.length && now - _opAuthFails[0] > 3_600_000) _opAuthFails.shift();
-  const n = _opAuthFails.length;
+  // The shared count is a reading of the hour window; one older than a few
+  // minutes may overstate (entries age out), never understate, so it is kept
+  // only that long.
+  const sharedN = now - _opAuthShared.at < 300_000 ? _opAuthShared.count : 0;
+  const n = Math.max(_opAuthFails.length, sharedN);
   // `full` is operator-only. On the PUBLIC surface this is the verdict alone,
   // because the pair {failures1h, threshold} is a live brute-force oracle
   // against our most powerful credential: the threshold says how many wrong
@@ -4672,16 +4760,19 @@ const operatorLoginLimiter = createRateLimiter("operator-login", { perMin: 5, pe
 // Forbid any browser-history cache, shared proxy, or future CDN from retaining
 // them. Registered before the routes so it runs on every /__operator response
 // (login form, dashboard, stats, wishes, logout).
-app.use("/__operator", (_req, res, next) => {
+app.use("/__operator", (req, res, next) => {
   res.set("Cache-Control", "no-store, private");
   res.set("Pragma", "no-cache");
   res.set("Vary", "Cookie, Authorization");
-  next();
+  // A browser session minted on another container: read it from the shared
+  // store before the gate below looks at the cookie.
+  if (!OP_SESSION_SHARED) return next();
+  syncOperatorSession(req).then(() => next(), () => next());
 });
 app.get("/__operator/login", (_req, res) => {
   res.type("html").send(operatorLoginPage(BASE_URL));
 });
-app.post("/__operator/login", (req, res) => {
+app.post("/__operator/login", async (req, res) => {
   const ip = (req.ip || req.socket.remoteAddress || "?").trim();
   if (operatorLoginLimiter.check(ip).limited) return res.status(429).json({ ok: false, error: "too many attempts, slow down" });
   const token = typeof req.body?.token === "string" ? req.body.token : "";
@@ -4695,17 +4786,18 @@ app.post("/__operator/login", (req, res) => {
   // (tighter) limiter, so clearing here cannot be used to refill the budget.
   operatorAttemptLimiter.reset(ip);
   // Exchange the token for an opaque session id; the cookie never holds the token.
-  const sid = newOperatorSession();
+  const sid = await newOperatorSession();
   const attrs = `Path=/__operator; HttpOnly; SameSite=Strict; Max-Age=${8 * 3600}${operatorCookieSecure(req) ? "; Secure" : ""}`;
   res.setHeader("Set-Cookie", `${OPERATOR_COOKIE}=${sid}; ${attrs}`);
   res.json({ ok: true });
 });
 // Logout is a POST (no GET side effect) + SameSite=Strict cookie (CSRF-proof:
 // a cross-site page can't attach the cookie). It revokes the session
-// server-side, not just clears the cookie.
-app.post("/__operator/logout", (req, res) => {
+// server-side, not just clears the cookie, on every container (the shared
+// store is cleared before the redirect).
+app.post("/__operator/logout", async (req, res) => {
   const sid = readCookie(req, OPERATOR_COOKIE);
-  if (sid) operatorSessions.delete(sid);
+  await revokeOperatorSession(sid);
   const attrs = `Path=/__operator; HttpOnly; SameSite=Strict; Max-Age=0${operatorCookieSecure(req) ? "; Secure" : ""}`;
   res.setHeader("Set-Cookie", `${OPERATOR_COOKIE}=; ${attrs}`);
   // POST-redirect-GET so the form submit lands back on the login page.
@@ -4906,7 +4998,7 @@ app.get("/__operator/perf.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // ?reset=1 clears the stall high-water mark first (the load test reads a fresh one per scenario).
   if (req.query.reset === "1") resetLoopLag();
-  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), inFlight: inFlightCount(), shed: shedStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), paidPhases: paidPhaseSummary(), stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
+  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), inFlight: inFlightCount(), shed: shedStatus(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
 });
 // One short CPU-profile window on demand (stall attribution without the
 // per-minute cost of continuous profiling). Answers the longest busy run:
@@ -5932,8 +6024,29 @@ function discoveryClientBudget(ip) {
 // scored rows in memory; the CPU budget alone cannot bound that, because a
 // burst passes the budget check before any of it is charged. Past this many,
 // an outside caller is shed like any other over-budget search.
-const DISCOVERY_MAX_INFLIGHT = (() => { const n = Number(process.env.DISCOVERY_MAX_INFLIGHT); return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 4; })();
-let discoveryInFlight = 0;
+//
+// Every compute also runs under a hard deadline (DISCOVERY_COMPUTE_DEADLINE_MS).
+// The slot is held by the promise the compute returns, and a promise is only
+// as bounded as its slowest await: a wait inside it that never settles would
+// hold the slot for the life of the process, and enough of those would close
+// /api/find and /api/route until a restart. At the deadline the slot is
+// released, the caller gets the shed answer with `reason`, and the result, if
+// it ever arrives, is neither sent nor cached. The admission count itself
+// heals: it reads only entries younger than the deadline (src/inflight-gauge.js),
+// so a slot the deadline somehow missed stops refusing anyone once it is that old.
+// With computes bounded, the cap can sit higher; the CPU budget still governs.
+const DISCOVERY_MAX_INFLIGHT = (() => { const n = Number(process.env.DISCOVERY_MAX_INFLIGHT); return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 8; })();
+const DISCOVERY_COMPUTE_DEADLINE_MS = (() => { const n = Number(process.env.DISCOVERY_COMPUTE_DEADLINE_MS); return Number.isFinite(n) && n >= 100 ? Math.floor(n) : 15_000; })();
+const discoveryInFlight = createInFlightGauge({ staleMs: DISCOVERY_COMPUTE_DEADLINE_MS });
+// Test hook, free-mode only: a query containing this marker runs a compute that
+// never settles, so the deadline and the self-healing count can be exercised
+// against a real boot (scripts/test-discovery-deadline.js). Never read when
+// payments are on.
+const DISCOVERY_TEST_HANG_QUERY = process.env.FREE_MODE === "true" && process.env.DISCOVERY_TEST_HANG_QUERY ? String(process.env.DISCOVERY_TEST_HANG_QUERY) : null;
+/** Operator view of the discovery gate: counts and ages only. */
+function discoveryGateStatus() {
+  return { ...discoveryInFlight.snapshot(), maxInFlight: DISCOVERY_MAX_INFLIGHT, deadlineMs: DISCOVERY_COMPUTE_DEADLINE_MS };
+}
 async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlug, req, res) {
   const startedAt = Date.now();
   const synthetic = isSyntheticRequest(req);
@@ -5982,10 +6095,10 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
       noteShed("discovery-budget");
       return shedResponse(res, 2);
     }
-    if (!synthetic && !isLoopbackIp(clientIp(req)) && discoveryInFlight >= DISCOVERY_MAX_INFLIGHT) {
+    if (!synthetic && !isLoopbackIp(clientIp(req)) && discoveryInFlight.live() >= DISCOVERY_MAX_INFLIGHT) {
       status = 503; shed = true;
       noteShed("discovery-inflight");
-      return shedResponse(res, 2);
+      return shedResponse(res, 2, { reason: "discovery-inflight" });
     }
     const computeStarted = Date.now();
     // A compute may be async: the router query yields between slices
@@ -5998,17 +6111,30 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     // did not already charge is added here (else that slice counted twice).
     let asyncCpuMs = 0;
     const meter = (ms) => { asyncCpuMs += ms; discoveryCpuBudget.record(ms); clientBudget?.record(ms); };
-    discoveryInFlight++;
-    let result, syncMs;
+    const releaseSlot = discoveryInFlight.enter({ slug: analyticsSlug });
+    let result, syncMs, pastDeadline = false;
     try {
-      const pending = computeFn(meter);
+      const pending = DISCOVERY_TEST_HANG_QUERY && String(input?.q ?? "").includes(DISCOVERY_TEST_HANG_QUERY)
+        ? new Promise(() => {})
+        : computeFn(meter);
       const meteredInStart = asyncCpuMs;
       syncMs = Math.max(0, Date.now() - computeStarted - meteredInStart);
       discoveryCpuBudget.record(syncMs);
       clientBudget?.record(syncMs);
-      result = await pending;
+      // The slot is held only until the deadline. A compute still running then
+      // keeps running (its slices still charge the budget through `meter`), but
+      // it no longer holds a slot, and its answer is dropped on arrival.
+      const raced = await raceDeadline(pending, DISCOVERY_COMPUTE_DEADLINE_MS);
+      if (raced.timedOut) pastDeadline = true;
+      else result = raced.value;
     } finally {
-      discoveryInFlight--;
+      releaseSlot();
+    }
+    if (pastDeadline) {
+      status = 503; shed = true;
+      noteShed("discovery-deadline");
+      console.warn(`[discovery] ${analyticsSlug} compute passed the ${DISCOVERY_COMPUTE_DEADLINE_MS}ms deadline (query ${String(input?.q ?? "").length} chars): slot released, answer dropped`);
+      return shedResponse(res, 2, { reason: "discovery-deadline" });
     }
     const cpuMs = Math.round(syncMs + asyncCpuMs);
     const computeMs = Date.now() - computeStarted;
@@ -6597,7 +6723,10 @@ function chainPayable(chainKey) {
 }
 // ?seller= views render per request; at most this many at once (2026-10-01).
 const CHAIN_SELLER_VIEW_MAX_INFLIGHT = 2;
-let chainSellerViewsInFlight = 0;
+// Same self-healing shape as the discovery gate: a view whose build never
+// settled stops counting toward admission once it is this old.
+const CHAIN_SELLER_VIEW_STALE_MS = 60_000;
+const chainSellerViewsInFlight = createInFlightGauge({ staleMs: CHAIN_SELLER_VIEW_STALE_MS });
 for (const chainKey of Object.keys(SNAPSHOT_RAIL_LABEL)) {
   app.get(`/${chainKey}`, async (req, res) => {
     try {
@@ -6615,11 +6744,11 @@ for (const chainKey of Object.keys(SNAPSHOT_RAIL_LABEL)) {
       }
       // A ?seller= view is caller-keyed and renders per request, so it is
       // bounded: past the cap it is shed like other free work.
-      if (chainSellerViewsInFlight >= CHAIN_SELLER_VIEW_MAX_INFLIGHT) { noteShed("chain-seller-view"); return shedResponse(res, 5); }
-      chainSellerViewsInFlight++;
+      if (chainSellerViewsInFlight.live() >= CHAIN_SELLER_VIEW_MAX_INFLIGHT) { noteShed("chain-seller-view"); return shedResponse(res, 5, { reason: "chain-seller-view" }); }
+      const releaseView = chainSellerViewsInFlight.enter({ chain: chainKey });
       try {
         htmlCache(res, 120, 600).send(await buildChainPage(chainKey, req.query.seller, all));
-      } finally { chainSellerViewsInFlight--; }
+      } finally { releaseView(); }
     } catch (e) {
       res.status(500).type("text/plain").send("temporarily unavailable");
     }
@@ -8203,7 +8332,7 @@ app.get("/api/pricing", (_req, res) => {
     openapi: `${BASE_URL}/openapi.json`,
     categories: Object.fromEntries(Object.entries(CATEGORIES).map(([k, v]) => [k, v.label])),
     endpoints: Object.entries(CATALOG).map(([route, def]) => {
-      const { name, price, description, category, slug, tierQuote } = def;
+      const { name, price, description, category, slug, tierQuote, quote, quoteRange } = def;
       const [method, path] = route.split(" ");
       return {
         method,
@@ -8221,6 +8350,13 @@ app.get("/api/pricing", (_req, res) => {
         // row rather than discover it in a 402 (llmGateway.pricingByModel says
         // it in words). Absent, never false, on the routes it cannot happen to.
         ...(typeof tierQuote === "function" ? { pricedByModel: true } : {}),
+        // A QUOTED route prices each request from its body: `price` is the
+        // floor its 402 can quote and quoteRange.maxUsd the documented ceiling
+        // (the same def.quoteRange /openapi.json publishes as a dynamic price).
+        // Said on the row so a consumer that budgets per route never takes the
+        // floor for the price: the live 402 for a given body lands anywhere in
+        // the range. Absent on fixed-price routes, whose 402 is the list price.
+        ...(typeof quote === "function" && quoteRange ? { quoted: true, fromUsd: quoteRange.minUsd, quoteRange: { minUsd: quoteRange.minUsd, maxUsd: quoteRange.maxUsd } } : {}),
         // Published per row because the doc's own description says these are
         // marked: a consumer that wants only deterministic code should be able
         // to FILTER for it rather than take a sentence's word for it.
@@ -8454,7 +8590,10 @@ if (!FREE_MODE) {
   });
   if (tempoGate) {
     app.use(tempoGate);
-    console.log("Tempo MPP settlement enabled (native tempo/charge via Tempo's relay)");
+    // Direct mode screens every payment party before any money moves, and
+    // offers no tempo challenge until the list has loaded (tempoEnabled).
+    if (tempoSettlementMode() === "direct") startSanctionsScreen();
+    console.log(`Tempo MPP settlement enabled (native tempo/charge, ${tempoSettlementMode() === "direct" ? "verified and broadcast directly over the Tempo RPC" : "via Tempo's relay"})`);
   }
 
   // Stripe cards-over-MPP settlement — settles a Stripe PaymentIntent (via the
@@ -9302,7 +9441,7 @@ if (!FREE_MODE) {
     const r = loadHangupForgiveness();
     if (r.loaded) console.log(`[hangup] forgiveness records restored: ${r.global} service-wide, ${r.keys} keys`);
   } catch (err) { console.warn(`[hangup] forgiveness records not restored: ${err?.message || err}`); }
-  app.use((req, res, next) => {
+  app.use(async (req, res, next) => {
     const def = CATALOG[`${req.method} ${req.path}`];
     if (!def || res.getHeader("X-Pow-Accepted") || res.getHeader("X-Trial-Accepted")) return next();
     if (!(quotedPriceUsd(def, req) > 0)) return next();
@@ -9321,8 +9460,24 @@ if (!FREE_MODE) {
     // own end.
     markPaidHandlerStart(req, res, def.slug);
     if (req.tempoSettled) return next();
-    reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: quotedPriceUsd(def, req), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true });
-    res.once("close", () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) }));
+    // Synchronous without a shared store; a promise with one (the shared
+    // budget read). A reservation that throws must still let the call run:
+    // the ticket stays denied and the charge stands, as it did before the rule.
+    // The close listener is registered before the (possibly async) shared
+    // read, so a socket that closes during that read still settles the ticket
+    // once it exists; otherwise the ticket would hold its share of the budget
+    // in this process until restart.
+    let closed = false, reserved = false;
+    const settle = () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) });
+    res.once("close", () => { closed = true; if (reserved) settle(); });
+    try { await reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: quotedPriceUsd(def, req), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true }); }
+    catch (err) { console.warn(`[hangup] ticket reservation failed (${String(err?.message || err).slice(0, 80)}); the call runs without a ticket`); }
+    reserved = true;
+    if (closed || res.destroyed) {
+      settle();
+      try { res.status(499).json({ error: "The connection closed before the call started; nothing ran and nothing was charged.", tool: def.slug, charged: false }); } catch { /* socket already gone */ }
+      return;
+    }
     next();
   });
 }
@@ -9602,12 +9757,12 @@ for (const tool of ALL_KIT) {
         // payer is only known post-settlement) - nobody is unkeyed.
         const guardKey = payer || (req.mppTempoSender ? `tempo:${req.mppTempoSender}` : req.creditsKeyId ? `credits:${req.creditsKeyId}` : `ip:${clientIp(req)}`);
         const ownGlobalBound = OWN_GLOBAL_BOUND_SLUGS.has(tool.slug);
-        if (!ownGlobalBound && compositeGuardGlobalPaused()) {
+        if (!ownGlobalBound && await compositeGuardGlobalPaused()) {
           const e = new Error("Premium report generation is briefly paused after a burst of unsettled runs; please retry in a few minutes. Not charged.");
           e.statusCode = 503;
           throw e;
         }
-        if (compositeGuardBlocked(guardKey)) {
+        if (await compositeGuardBlocked(guardKey)) {
           const e = new Error("Too many recent failed settlements on this route from this buyer; blocked briefly to prevent upstream abuse. A successful payment clears it.");
           e.statusCode = 429;
           throw e;
@@ -9678,7 +9833,7 @@ for (const tool of ALL_KIT) {
       // a guard. The /v1 tiers keep their own global pause inside their handlers.
       // Keyed on "paid" (not PoW-eligible), not on WALLET_ONLY_SLUGS: the free tier is an
       // allowlist, so a new tool on neither list is paid and must be covered here too.
-      if (!FREE_MODE && !isComputePayable(tool)) gatewaySettleBreakerCheck(req, { global: false });
+      if (!FREE_MODE && !isComputePayable(tool)) await gatewaySettleBreakerCheck(req, { global: false });
 
       // A wallet's concurrent runs on the expensive routes must be covered by
       // its balance together (verify checks each authorization alone). A run
@@ -10014,6 +10169,10 @@ console.log(`[upstream-costs] ${upstreamCostsLoaded() ? `loaded (${upstreamCosts
 // because its row has not arrived. Without a database this resolves at once.
 // The stores that retry their own first load (src/store-retry.js) report
 // by label through the probe, so the status and this line name them.
+// The router's payout screen reads the address map stored with the last
+// download (src/tools/sanctions-kit.js) as one of these stores, so a payout
+// after a restart is screened at once; until a list is held it is refused.
+startSanctionsPayoutStore();
 setUnloadedStoresProbe(unloadedStores);
 {
   const t0 = Date.now();
@@ -10095,6 +10254,10 @@ if (String(process.env.X402_INDEX_CRAWL || "").toLowerCase() === "off") {
 } else {
   startCrawler({ selfOrigin: BASE_URL });
 }
+// Router worker pool (src/router-pool.js): route queries score in a worker
+// thread so a burst of them never holds this one. ROUTER_WORKERS=0 keeps them
+// here; until a worker is loaded (or when none is) queries run here anyway.
+startRouterPool();
 
 // Stripe SHADOW ledger drain (src/stripe-shadow-ledger.js). Arms the unref'd
 // timer that posts queued on-chain settlements to Stripe as PaymentIntents in
@@ -10195,7 +10358,7 @@ const datasetSources = () => ({
 bootStep("startBackupScheduler", () => startBackupScheduler());
 bootStep("searchData.start", () => searchData.start());
 bootStep("mppReconciler.start", () => mppReconciler.start());
-// Warm the sanctions list at boot so the first buyer does not wait on a 5.7MB
+// Warm the sanctions list at boot so the first buyer does not wait on a ~30MB
 // download, and refresh on a timer - a stale list answering "no match" is the
 // failure mode this tool exists to avoid.
 bootStep("startSanctionsRefresh", () => startSanctionsRefresh());

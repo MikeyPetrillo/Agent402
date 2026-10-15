@@ -8,8 +8,9 @@
 import { createServer } from "node:http";
 import { createHmac } from "node:crypto";
 import {
-  catalogFromSurfaces, planRun, weeklySlices, sliceIndexFor, dayOfYear, gradeAnswer, exitCodeFor,
-  summaryTable, markdownSummary, runCatalogBuy, tierOf, micro, DAILY_MAX_USD, ROTATION_DAYS, PROD_EMPTY_ARRAY_OK,
+  catalogFromSurfaces, quoteCeilingUsd, planRun, weeklySlices, sliceIndexFor, dayOfYear, gradeAnswer, exitCodeFor,
+  resultWordFor, headlineFor, summaryTable, markdownSummary, runCatalogBuy, tierOf, micro, DAILY_MAX_USD, ROTATION_DAYS,
+  PROD_EMPTY_ARRAY_OK, DEFAULT_CONCURRENCY, DEFAULT_PACE_MS,
 } from "./catalog-buy.js";
 
 let pass = 0, fail = 0;
@@ -37,11 +38,28 @@ const ROUTES = {
   "/api/verb":        { slug: "verb",        usd: 0.001, input: { q: "a" },      output: { ok: true },                    answer: () => [200, { ok: true }], pricingMethod: "GET" },
   "/v1/pricey":       { slug: "pricey",      usd: 5,     input: { topic: "t" },  output: { report: "r", sources: [1] },   answer: () => [200, { report: "r", sources: [1] }] },
   "/v1/pricey-two":   { slug: "pricey-two",  usd: 0.5,   input: { topic: "t" },  output: { report: "r" },                 answer: () => [200, { report: "r" }] },
+  // Quoted tools: the list price is the floor, the 402 quotes per request under a documented ceiling.
+  // The price-list row carries quoted + quoteRange; the spec op carries x-payment-info mode dynamic.
+  "/api/quoted-ok":   { slug: "quoted-ok",   usd: 0.001, input: { depth: "plan" }, output: { plan: [1] },                 answer: () => [200, { plan: [1] }], quoteMicro: 20_000, quoted: { minUsd: 0.001, maxUsd: 0.05 } },
+  "/api/quoted-high": { slug: "quoted-high", usd: 0.001, input: { depth: "full" }, output: { plan: [1] },                 answer: () => [200, { plan: [1] }], quoteMicro: 60_000, quoted: { minUsd: 0.001, maxUsd: 0.05 } },
+  // Ceiling published on the spec only (an older price list without the row fields).
+  "/api/quoted-spec": { slug: "quoted-spec", usd: 0.001, input: { q: "a" },      output: { ok: true },                    answer: () => [200, { ok: true }], quoteMicro: 15_000, quoted: { minUsd: 0.001, maxUsd: 2 }, rowSaysNothing: true },
+  // A priced-by-model flat tier publishes a dynamic range too, but its own example is held to its list price.
+  "/api/by-model":    { slug: "by-model",    usd: 0.001, input: { q: "a" },      output: { ok: true },                    answer: () => [200, { ok: true }], quoteMicro: 2_000, quoted: { minUsd: 0.001, maxUsd: 0.5 }, rowSaysNothing: true, pricedByModel: true },
+  // A slug whose route is not /api/<slug>: the spec's path is requested, never one spelled from the slug.
+  "/api/nested/run":  { slug: "nested-run",  usd: 0.001, input: { q: "a" },      output: { ok: true },                    answer: () => [200, { ok: true }] },
+  // Payer-keyed receipts list external settlements only; the run's own buys book internal, so the burner's are empty.
+  "/api/receipts":    { slug: "receipts",    usd: 0.001, input: { from: "2026-09-01" }, output: { total: 2, rows: [{ item: "hash" }] }, answer: () => [200, { total: 0, rows: [] }] },
 };
-const pricing = { endpoints: Object.entries(ROUTES).map(([path, r]) => ({ method: r.pricingMethod || (r.get ? "GET" : "POST"), path, slug: r.slug, price: `$${r.usd.toFixed(3)}` })) };
+const pricing = { endpoints: Object.entries(ROUTES).map(([path, r]) => ({
+  method: r.pricingMethod || (r.get ? "GET" : "POST"), path, slug: r.slug, price: `${r.usd.toFixed(3)}`,
+  ...(r.quoted && !r.rowSaysNothing ? { quoted: true, fromUsd: r.usd, quoteRange: r.quoted } : {}),
+  ...(r.pricedByModel ? { pricedByModel: true } : {}),
+})) };
 const spec = { paths: {} };
 for (const [path, r] of Object.entries(ROUTES)) {
   const op = { tags: ["stub"], responses: { 200: { content: r.binary ? { "image/png": {} } : { "application/json": { example: r.output } } } } };
+  op["x-payment-info"] = { price: r.quoted ? { mode: "dynamic", currency: "USD", min: String(r.quoted.minUsd), max: String(r.quoted.maxUsd) } : { mode: "fixed", currency: "USD", amount: String(r.usd) } };
   if (r.get) op.parameters = r.get;
   else if (r.input !== undefined) op.requestBody = { content: { "application/json": { example: r.input } } };
   spec.paths[path] = { [r.get ? "get" : "post"]: op };
@@ -53,11 +71,14 @@ const seen = [];          // every request: { path, method, query, paid, heartbe
 let inflight = 0, maxInflight = 0;
 const paidAttempts = new Map();
 const server = createServer(async (req, res) => {
-  inflight++; maxInflight = Math.max(maxInflight, inflight);
   const url = new URL(req.url, "http://127.0.0.1");
+  const surface = url.pathname === "/api/pricing" || url.pathname === "/openapi.json";
+  // The two surface reads are unpaid and deliberately parallel; the in-flight
+  // bound under test is the one on tool requests.
+  if (!surface) { inflight++; maxInflight = Math.max(maxInflight, inflight); }
   const chunks = []; for await (const c of req) chunks.push(c);
   const json = (code, body) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
-  const done = () => { inflight--; };
+  const done = () => { if (!surface) inflight--; };
   await new Promise((r) => setTimeout(r, 5));
   if (url.pathname === "/api/pricing") { json(200, pricing); return done(); }
   if (url.pathname === "/openapi.json") { json(200, spec); return done(); }
@@ -98,6 +119,21 @@ eq(catalog.find((r) => r.slug === "get-one").example, { kind: "query", query: { 
 ok(catalog.find((r) => r.slug === "binary").binary === true, "a non-JSON documented response is marked binary");
 eq(catalog.filter((r) => tierOf(r) === "weekly").map((r) => r.slug), ["pricey", "pricey-two"], `products above $${DAILY_MAX_USD} are the weekly tier`);
 ok(tierOf({ usd: 0.10 }) === "daily" && tierOf({ usd: 0.101 }) === "weekly", "the daily tier includes exactly $0.10 and excludes $0.101");
+ok(DEFAULT_CONCURRENCY === 1 && DEFAULT_PACE_MS === 1000, "defaults: one paid call in flight, a second apart");
+
+// Quoted tools: the ceiling comes from the price list's row, else from the spec's dynamic range.
+{
+  const by = Object.fromEntries(catalog.map((r) => [r.slug, r]));
+  ok(by["quoted-ok"].quoted === true && by["quoted-ok"].maxUsd === 0.05 && by["quoted-ok"].usd === 0.001, "a quoted row keeps the list price as the floor and reads the ceiling from quoteRange.maxUsd");
+  ok(by["quoted-spec"].quoted === true && by["quoted-spec"].maxUsd === 2, "a row the price list does not mark reads the ceiling from the spec's x-payment-info dynamic max");
+  ok(by["by-model"].quoted === false && by["by-model"].maxUsd === 0.001, "a priced-by-model flat tier is held to its list price despite the spec's dynamic range");
+  ok(by.healthy.quoted === false && by.healthy.maxUsd === by.healthy.usd, "a fixed-price tool's ceiling is its list price");
+  eq(quoteCeilingUsd({ quoted: true, quoteRange: { minUsd: 0.001, maxUsd: 3 } }, {}), 3, "quoteCeilingUsd: the row's quoteRange wins");
+  eq(quoteCeilingUsd({ pricedByModel: true }, { "x-payment-info": { price: { mode: "dynamic", min: "0.02", max: "0.5" } } }), null, "quoteCeilingUsd: pricedByModel is not a quote ceiling");
+  eq(quoteCeilingUsd(undefined, { "x-payment-info": { price: { mode: "dynamic", min: "0.001", max: "2" } } }), 2, "quoteCeilingUsd: a dynamic spec range without a row is the ceiling");
+  eq(quoteCeilingUsd({ price: "$0.005" }, { "x-payment-info": { price: { mode: "fixed", amount: "0.005" } } }), null, "quoteCeilingUsd: a fixed price has no ceiling beyond the list");
+  eq(by["nested-run"].path, "/api/nested/run", "the path is the spec's key, never spelled from the slug");
+}
 
 // Rotation slice math.
 eq(dayOfYear(new Date(Date.UTC(2026, 0, 1))), 1, "day of year starts at 1 on Jan 1");
@@ -157,6 +193,7 @@ eq(gradeAnswer(catalog.find((r) => r.slug === "binary"), { status: 200, bytes: 1
 eq(gradeAnswer(catalog.find((r) => r.slug === "binary"), { status: 200, bytes: 0 }).grade, "empty-body", "an empty binary body fails");
 eq(gradeAnswer(catalog.find((r) => r.slug === "memory"), { status: 200, body: { keys: [] } }).grade, "ok", "the payer-keyed memory reads may be empty on production");
 eq(gradeAnswer(catalog.find((r) => r.slug === "demand-radar"), { status: 200, body: { radar: [] } }).grade, "empty:radar", "a board-backed tool is NOT excused on production (the CI cold-boot excuse does not apply)");
+eq(gradeAnswer(catalog.find((r) => r.slug === "receipts"), { status: 200, body: { total: 0, rows: [] } }).grade, "ok", "the burner's receipts may be empty: the run's own buys book internal and receipts list external rows");
 ok(!PROD_EMPTY_ARRAY_OK.has("/api/demand-radar") && !PROD_EMPTY_ARRAY_OK.has("/api/bestsellers") && !PROD_EMPTY_ARRAY_OK.has("/api/x402-trending"), "control: the production excuse list carries none of the board-backed cold-boot excuses");
 
 // ---- a full run against the stub ----------------------------------------------
@@ -186,8 +223,17 @@ const run = (opts) => runCatalogBuy({ target, payer: fakePayer, powSecret: SECRE
   eq(by.binary.grade, "ok", "a binary answer passes on bytes");
   eq(by["no-example"].grade, "no-example", "the tool without an example is reported by name");
   ok(by["no-example"].status === null && !seen.some((x) => x.path === "/api/no-example"), "and is never called");
-  eq(by["quote-high"].grade, "quote-over-list", "a 402 quoting above list price is a graded failure");
+  eq(by["quote-high"].grade, "quote-over-list", "a fixed-price tool's 402 quoting above list price is a graded failure");
   ok(!seen.some((x) => x.path === "/api/quote-high" && x.paid), "and it is not signed or paid");
+  eq(by["quoted-ok"].grade, "ok", "a quoted tool's 402 above its list floor but under its documented ceiling is signed and graded on the answer");
+  ok(seen.some((x) => x.path === "/api/quoted-ok" && x.paid) && by["quoted-ok"].quotedUsd === 0.02, "the quote that was paid is recorded");
+  eq(by["quoted-high"].grade, "quote-over-ceiling", "a quoted tool's 402 above its documented ceiling is graded quote-over-ceiling");
+  ok(!seen.some((x) => x.path === "/api/quoted-high" && x.paid), "and it is not signed or paid");
+  eq(by["quoted-spec"].grade, "ok", "a ceiling read from the spec alone admits a quote under it");
+  eq(by["by-model"].grade, "quote-over-list", "a priced-by-model flat tier quoting above its list price for its own example is a graded failure, not a quote under a ceiling");
+  eq(by["nested-run"].grade, "ok", "a slug whose route is not /api/<slug> is bought at the spec's path");
+  ok(seen.some((x) => x.path === "/api/nested/run" && x.paid) && !seen.some((x) => x.path === "/api/nested-run"), "the request went to /api/nested/run and never to a path spelled from the slug");
+  eq(by.receipts.grade, "ok", "receipts empty for the burner passes");
   eq(paidQuotes.length, seen.filter((x) => x.paid).length, "every signature the payer produced was sent as a paid request (none for the over-list quote)");
   eq(by.pricey.grade, "ok", "a weekly product passes on its documented keys");
   eq(by.verb.grade, "ok", "a tool whose price-list row names another verb is still bought");
@@ -198,13 +244,15 @@ const run = (opts) => runCatalogBuy({ target, payer: fakePayer, powSecret: SECRE
   const valid = new Set([-1, 0, 1].map((o) => createHmac("sha256", SECRET).update(`heartbeat:${minute + o}`).digest("base64url").slice(0, 32)));
   ok(tools.every((x) => valid.has(x.heartbeat)), "the heartbeat token is the HMAC of the secret and the UTC minute");
   ok(tools.filter((x) => !x.paid).length >= catalog.length - 1, "every bought tool was first asked unpaid (the live 402 is the authority on the quote)");
-  ok(maxInflight <= 2, `at most two requests in flight (saw ${maxInflight})`);
+  ok(maxInflight <= 1, `by default at most one request in flight (saw ${maxInflight})`);
   // Charged = every 200, whatever its grade: settlement runs on the 200.
   const charged = s.results.filter((r) => r.status === 200).reduce((a, r) => a + micro(r.quotedUsd), 0) / 1e6;
   ok(Math.abs(s.spentUsd - charged) < 1e-9, `the charged total counts every 200 at its quote ($${s.spentUsd})`);
   ok(s.results.filter((r) => r.status !== 200 && r.status !== null).every((r) => r.grade !== "ok"), "no non-200 answer is graded ok");
   eq(exitCodeFor(s), 5, "a run with failing grades exits 5");
   eq(s.exitCode, 5, "the summary carries the exit code");
+  eq(resultWordFor(s), "fail", "the result word is fail");
+  ok(/^\d+ FAILED$/.test(headlineFor(s)), `the headline counts failures only when nothing was cap-deferred (${headlineFor(s)})`);
   const table = summaryTable(s.results);
   ok(/slug\s+price\s+status\s+grade\s+ms/.test(table) && /hollow\s+\$0\.002\s+200\s+empty:items/.test(table), "the summary table has slug, price, status, grade, ms");
   ok(table.indexOf("hollow") < table.indexOf("healthy"), "failures are listed before passes");
@@ -213,16 +261,28 @@ const run = (opts) => runCatalogBuy({ target, payer: fakePayer, powSecret: SECRE
   ok(!md.includes("stub-sig") && !table.includes("stub-sig") && !JSON.stringify(s.results).includes('"body"'), "neither summary nor results carry a payment header or a response body");
 }
 
-// Cap at run time, and the plan's cut.
+// Cap at run time, and the plan's cut: cap-deferred is counted apart from failures.
 {
   seen.length = 0; paidAttempts.clear();
-  const s = await run({ capUsd: 0.52 });
+  const s = await run({ capUsd: 0.6 });
   const by = Object.fromEntries(s.results.map((r) => [r.slug, r]));
   eq(by.pricey.grade, "cap", "the product over the cap is reported as not bought");
   ok(!seen.some((x) => x.path === "/v1/pricey"), "and never requested");
   eq(by["pricey-two"].grade, "ok", "the product under the cap is bought");
-  ok(s.spentUsd <= 0.52 + 1e-9, `the charged total never exceeds the cap ($${s.spentUsd})`);
-  eq(s.exitCode, 5, "a cap cut fails the run so the unchecked tool is visible");
+  ok(s.spentUsd <= 0.6 + 1e-9, `the charged total never exceeds the cap (${s.spentUsd})`);
+  eq(s.exitCode, 5, "real failures still exit 5 when tools were also cap-deferred");
+  ok(/^\d+ FAILED, 1 cap-deferred$/.test(headlineFor(s)), `the headline counts failures and cap-deferred apart (${headlineFor(s)})`);
+  ok(markdownSummary(s).includes("| failed ") && markdownSummary(s).includes("cap-deferred 1"), "the markdown summary carries both counts");
+  const table = summaryTable(s.results);
+  ok(table.indexOf("hollow") < table.indexOf("pricey") && table.indexOf("pricey") < table.indexOf("healthy"), "failures are listed first, then the cap-deferred, then the passes");
+  // Nothing failed but the cap left a tool unbought: exit 4, result deferred, not a failure.
+  seen.length = 0;
+  const d = await run({ only: "pricey", capUsd: 0.6 });
+  eq(d.results.map((r) => [r.slug, r.grade]), [["pricey", "cap"], ["pricey-two", "ok"]], "only pricey products: one bought, one cap-deferred");
+  eq(d.exitCode, 4, "nothing failed and a tool was cap-deferred: exit 4");
+  eq(resultWordFor(d), "deferred", "the result word is deferred");
+  eq(headlineFor(d), "nothing failed, 1 cap-deferred", "the headline says nothing failed and names the deferred count");
+  ok(d.results.filter((r) => r.grade === "cap").every((r) => !r.pass), "a cap-deferred row is not a pass either");
 }
 
 // Funding preflight.
@@ -232,7 +292,8 @@ const run = (opts) => runCatalogBuy({ target, payer: fakePayer, powSecret: SECRE
   ok(s.unfunded === true && s.exitCode === 3, "a burner below planned spend plus the floor exits 3");
   ok(!seen.some((x) => !["/api/pricing", "/openapi.json"].includes(x.path)), "and buys nothing");
   ok(markdownSummary(s).includes("UNFUNDED"), "the summary says unfunded");
-  const exact = await run({ readBalanceUsd: async () => 5.516 + 2 - 0.001 });
+  const planned = (await run({ dry: true })).plan.plannedUsd;
+  const exact = await run({ readBalanceUsd: async () => planned + 2 - 0.001 });
   ok(exact.unfunded === true, "the floor is added to the planned spend, not compared alone");
   seen.length = 0;
   const unreadable = await run({ readBalanceUsd: async () => null });
@@ -245,6 +306,8 @@ const run = (opts) => runCatalogBuy({ target, payer: fakePayer, powSecret: SECRE
   const s = await run({ only: "healthy" });
   eq(s.results.map((r) => r.slug), ["healthy"], "only= narrows the run");
   eq(s.exitCode, 0, "a run where every graded tool passes exits 0");
+  eq(resultWordFor(s), "ok", "the result word is ok");
+  eq(headlineFor(s), "all passed", "the headline says all passed");
   ok(Math.abs(s.spentUsd - 0.001) < 1e-9, "and charged the one list price");
   seen.length = 0;
   const d = await run({ dry: true });

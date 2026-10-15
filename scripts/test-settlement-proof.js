@@ -238,7 +238,7 @@ const merchant = (m, payments, payers = 3, volumeUsd = 1) => ({ merchant: m, pay
   // rewritten for every rail rather than guarding the one thing it is for.
   ok(/provenPayToMatches\(\{\s*provenPayTo,\s*livePayTo:\s*payable\.payTo\s*[,}]/.test(buyer),
     "payX402 binds against `payable` - the accept it signs - and not accepts[0]");
-  ok(buyer.indexOf("provenPayToMatches") < buyer.indexOf("const spendToken = reserveSpend"),
+  ok(buyer.indexOf("provenPayToMatches({") > 0 && buyer.search(/const spendToken = (await )?reserveSpend\(/) > buyer.indexOf("provenPayToMatches({"),
     "the binding runs BEFORE any spend is held or signed, so a mismatch costs nothing");
 }
 

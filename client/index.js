@@ -23,7 +23,7 @@ import { createHash, randomBytes } from "node:crypto";
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.12";
+const VERSION = "0.8.13";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // 32MB: about a hundred times any realistic response from this catalog (the
 // largest is a base64 image at a few MB), so it cannot break a legitimate
@@ -32,6 +32,33 @@ const USER_AGENT = `agent402-client/${VERSION}`;
 const DEFAULT_MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 const leadingZeroBits = (buf) => { let n = 0; for (const b of buf) { if (b === 0) { n += 8; continue; } n += Math.clz32(b) - 24; break; } return n; };
+
+// Discovery reads (catalog, find, route, skill packs, leaderboard, a
+// proof-of-work challenge) settle nothing, so a 503 the server sheds under
+// load is safe to repeat. It is retried only when it names its own delay
+// (a Retry-After header or a retryAfterSeconds body field), at most
+// DISCOVERY_ATTEMPTS tries in all, each wait capped at DISCOVERY_MAX_WAIT_MS.
+// A paid or priced call never goes through here: a repeat of one could settle
+// twice.
+const DISCOVERY_ATTEMPTS = 3;
+const DISCOVERY_MAX_WAIT_MS = 5000;
+
+/** The wait (ms) a shed 503 asks for, or null when `r` is not one. */
+async function shedRetryWaitMs(r, maxWaitMs = DISCOVERY_MAX_WAIT_MS) {
+  if (!r || r.status !== 503) return null;
+  const header = r.headers && typeof r.headers.get === "function" ? r.headers.get("retry-after") : null;
+  let seconds = header != null && String(header).trim() !== "" ? Number(header) : NaN;
+  if (!Number.isFinite(seconds)) {
+    try {
+      const body = await (typeof r.clone === "function" ? r.clone() : r).json();
+      seconds = Number(body && body.retryAfterSeconds);
+    } catch { seconds = NaN; }
+  }
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  return Math.min(seconds * 1000, maxWaitMs);
+}
+
+const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class Agent402 {
   /**
@@ -62,6 +89,8 @@ export class Agent402 {
     // above). Caller-supplied init.headers still win on a key collision.
     this.f = (url, init = {}) => fetchImpl(url, { ...init, headers: { "User-Agent": USER_AGENT, ...(init.headers || {}) } });
     this._catalog = null;
+    // The wait between shed-503 retries of a discovery read (tests replace it).
+    this._sleep = sleepMs;
     this._cache = cache ? new Map() : null;
     // Salt for the default Idempotency-Key: one per client instance, so the key
     // for (slug, params) is stable across call() invocations on THIS client
@@ -147,10 +176,35 @@ export class Agent402 {
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   }
 
+  /**
+   * GET a discovery surface, retrying a shed 503 (see DISCOVERY_ATTEMPTS).
+   * Returns the response once it is 2xx; otherwise throws an Error naming the
+   * operation, the surface and the last status, with `.status`, `.surface`
+   * and `.attempts` set.
+   */
+  async _discoveryGet(label, path) {
+    let r;
+    let attempts = 0;
+    for (;;) {
+      attempts++;
+      r = await this.f(`${this.baseUrl}${path}`);
+      if (r.ok) return r;
+      if (attempts >= DISCOVERY_ATTEMPTS) break;
+      const wait = await shedRetryWaitMs(r);
+      if (wait == null) break;
+      await this._sleep(wait);
+    }
+    const surface = path.split("?")[0];
+    const err = new Error(`${label} failed: HTTP ${r.status} from ${surface}${attempts > 1 ? ` after ${attempts} attempts` : ""}`);
+    err.status = r.status;
+    err.surface = surface;
+    err.attempts = attempts;
+    throw err;
+  }
+
   async _loadCatalog() {
     if (this._catalog) return this._catalog;
-    const r = await this.f(`${this.baseUrl}/api/pricing`);
-    if (!r.ok) throw new Error(`could not load catalog: HTTP ${r.status}`);
+    const r = await this._discoveryGet("could not load catalog", "/api/pricing");
     const j = await r.json();
     const m = new Map();
     for (const e of j.endpoints || []) m.set(e.slug, { method: e.method, path: e.path, computePayable: e.computePayable, price: e.price });
@@ -160,8 +214,7 @@ export class Agent402 {
 
   /** Resolve a plain-language task to the best-matching tools (route, price, schema, example). */
   async find(task, { k = 5 } = {}) {
-    const r = await this.f(`${this.baseUrl}/api/find?q=${encodeURIComponent(task)}&k=${k}`);
-    if (!r.ok) throw new Error(`find failed: HTTP ${r.status}`);
+    const r = await this._discoveryGet("find", `/api/find?q=${encodeURIComponent(task)}&k=${k}`);
     return (await r.json()).results || [];
   }
 
@@ -190,8 +243,7 @@ export class Agent402 {
     const includeParam = include === "external" || include === "local" ? include : "all";
     const qs = new URLSearchParams({ q: String(task ?? ""), k: String(top), include: includeParam });
     if (network) qs.set("network", String(network));
-    const r = await this.f(`${this.baseUrl}/api/route?${qs}`);
-    if (!r.ok) throw new Error(`route failed: HTTP ${r.status}`);
+    const r = await this._discoveryGet("route", `/api/route?${qs}`);
     return r.json();
   }
 
@@ -204,8 +256,7 @@ export class Agent402 {
    * to fetch the rendered prompt messages, or hand the slug to an MCP client.
    */
   async findWorkflows(task, { k = 2 } = {}) {
-    const r = await this.f(`${this.baseUrl}/api/find?q=${encodeURIComponent(task)}&k=${k}`);
-    if (!r.ok) throw new Error(`findWorkflows failed: HTTP ${r.status}`);
+    const r = await this._discoveryGet("findWorkflows", `/api/find?q=${encodeURIComponent(task)}&k=${k}`);
     return (await r.json()).packs || [];
   }
 
@@ -216,8 +267,7 @@ export class Agent402 {
    */
   async getWorkflowPrompt(slug, args = {}) {
     const qs = new URLSearchParams(Object.entries(args).map(([k, v]) => [k, String(v)])).toString();
-    const r = await this.f(`${this.baseUrl}/api/skill-packs/${encodeURIComponent(slug)}/prompt${qs ? `?${qs}` : ""}`);
-    if (!r.ok) throw new Error(`getWorkflowPrompt("${slug}") failed: HTTP ${r.status}`);
+    const r = await this._discoveryGet(`getWorkflowPrompt("${slug}")`, `/api/skill-packs/${encodeURIComponent(slug)}/prompt${qs ? `?${qs}` : ""}`);
     return r.json();
   }
 
@@ -238,9 +288,7 @@ export class Agent402 {
     const top = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 50);
     const sortParam = sort === "calls" ? "calls" : "usd";
     const includeParam = include === "all" ? "all" : "external";
-    const url = `${this.baseUrl}/api/leaderboard?top=${top}&sort=${sortParam}&include=${includeParam}`;
-    const r = await this.f(url);
-    if (!r.ok) throw new Error(`topSellers failed: HTTP ${r.status}`);
+    const r = await this._discoveryGet("topSellers", `/api/leaderboard?top=${top}&sort=${sortParam}&include=${includeParam}`);
     const snap = await r.json();
     return {
       window: snap.windowLabel || snap.windowServed || "24h",
@@ -436,8 +484,7 @@ export class Agent402 {
   }
 
   async _powChallenge(slug) {
-    const r = await this.f(`${this.baseUrl}/api/pow/challenge?slug=${encodeURIComponent(slug)}`);
-    if (!r.ok) throw new Error(`proof-of-work challenge for "${slug}" failed: HTTP ${r.status}`);
+    const r = await this._discoveryGet(`proof-of-work challenge for "${slug}"`, `/api/pow/challenge?slug=${encodeURIComponent(slug)}`);
     return r.json();
   }
 
