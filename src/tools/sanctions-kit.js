@@ -46,12 +46,19 @@ function adoptList(list) {
   // every query would read as clean. Keep the previous good load instead.
   if (!names.length) throw new Error("OFAC SDN parsed to zero entries - treating as a format change, not an empty list");
   if (!addresses.size) throw new Error("OFAC SDN parsed to zero digital currency addresses - treating as a format change, not an empty list");
+  // A list under half the size of the one held is a truncated or bad export,
+  // not a mass delisting: keep the held list (the screen applies the same rule).
+  if (state.addresses?.size && addresses.size * 2 < state.addresses.size) throw new Error(`OFAC SDN parsed to ${addresses.size} digital currency addresses against ${state.addresses.size} held; a drop past half is treated as a bad export`);
+  if (state.names?.length && names.length * 2 < state.names.length) throw new Error(`OFAC SDN parsed to ${names.length} entries against ${state.names.length} held; a drop past half is treated as a bad export`);
   state = { addresses, names, fetchedAt: list.fetchedAt, error: null, loading: state.loading, bytes: list.bytes, publishDate: list.publishDate };
 }
 
 // Every list the payment-party screen (src/sanctions-screen.js) fetches is
 // adopted here too, so the timer below downloads only when nobody has.
-onSdnList((list) => { if (!state.fetchedAt || list.fetchedAt > state.fetchedAt) adoptList(list); });
+onSdnList((list) => {
+  if (state.fetchedAt && list.fetchedAt <= state.fetchedAt) return;
+  try { adoptList(list); } catch (e) { state.error = String(e?.message || e).slice(0, 200); console.warn(`[sanctions] kept the held list: ${state.error}`); }
+});
 
 /** Load the SDN list. Injectable fetch so the tests never touch a government
  *  endpoint. `force` skips this kit's own cache; a parse the shared loader

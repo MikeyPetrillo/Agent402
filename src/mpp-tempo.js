@@ -1618,7 +1618,14 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       let b;
       let early = false;
       const watch = {};
-      if (earlyConfirm) {
+      // Direct mode screens the parties once more before anything can settle
+      // or be read back from the chain: a list refreshed during the handler
+      // that now names a party refuses here, and no chain read below may turn
+      // that refusal into a sale.
+      const screenedOut = tempoSettlementMode() === "direct" ? screenTempoParties(auth, "before broadcast") : null;
+      if (screenedOut) {
+        b = screenedOut;
+      } else if (earlyConfirm) {
         let relayAnswered = false;
         const relayP = Promise.resolve(broadcast(auth)).then((r) => { relayAnswered = true; return r; }, (e) => { relayAnswered = true; throw e; });
         const chainP = Promise.resolve(earlyConfirm(auth, () => relayAnswered, watch)).catch((e) => { watch.error = watch.error || String(e?.message || e).slice(0, 60); return null; })
@@ -1637,7 +1644,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       const tBroadcast = Date.now();
       const watched = earlyConfirm && !early ? ` watch=reads:${watch.reads || 0}${watch.seenAt ? ` seen:+${watch.seenAt - tHandled}ms` : ""}${watch.finalizedLag != null ? ` lag:${watch.finalizedLag}` : ""}${watch.error ? ` err:${watch.error}` : ""}` : "";
       const timing = `validate=${tValidated - t0}ms handler=${tHandled - tValidated}ms broadcast=${tBroadcast - tHandled}ms${early ? " (chain-confirmed)" : ""}${watched}`;
-      if (!b.ok && confirmSettlement) {
+      if (!b.ok && confirmSettlement && b.cls !== "screen-rejected" && b.cls !== "screen-unavailable") {
         // The relay's verdict and the chain's truth can diverge: on
         // 2026-08-20 the relay reported "Broadcast transaction hash does not
         // match the signed transaction" for two payments that had SETTLED

@@ -1542,6 +1542,8 @@ jobs:
           t node scripts/test-sanctions.js
           # The router must never sign a payment to a sanctioned payee - and must NOT stop paying everyone when the list fails to load
           t node scripts/test-router-sanctions.js
+          # Sanctions tools keep the held list when a download shrinks past half (offline)
+          t node scripts/test-sanctions-shrink-guard.js
           # Paid seller verification: an allowlisted projection, a manifest that states the limit of the claim, and a workflow that never holds bucket credentials
           t node scripts/test-seller-verification.js
           # Delivery-failure memory: a seller whose PAID call 5xx'd with no receipt (or never answered) stops being ranked and stops being labelled callable, until a call to it succeeds
