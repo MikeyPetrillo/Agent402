@@ -65,7 +65,7 @@ function stripeMethod() {
   const sig = `${key}|${profile}`;
   if (cachedMethod && cachedKeyProfile === sig) return cachedMethod;
   const client = new Stripe(key);
-  cachedMethod = stripeMethods.charge({
+  cachedMethod = stripeMethods.spt({
     client,
     networkId: profile,
     paymentMethodTypes: ["card"],
