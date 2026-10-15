@@ -36,8 +36,9 @@
 // — deliberately out of scope here; see the approved plan.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mppProblem, markMppProblem, sendMppProblem } from "./mpp-problem.js";
-import { Challenge, Credential, Method, Receipt } from "mppx";
+import { Challenge, Credential, Errors, Method, Receipt } from "mppx";
 import { tempo } from "mppx/server";
+import { mppxReplayStore } from "./mppx-store.js";
 import { mppChallengesSuppressed, clientFingerprint } from "./mpp-fallback.js";
 import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization } from "ox/tempo";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
@@ -423,6 +424,16 @@ export function classifyTempoRefusal(e) {
   const code = e?.details && typeof e.details === "object" && typeof e.details.code === "string" ? e.details.code : "";
   const raw = String(trace.relayError || "");
   const text = `${String(e?.message || "")} ${code} ${raw}`.toLowerCase();
+  // mppx (0.13.5+) names a spent payment itself: a hash or proof already
+  // claimed, one a concurrent request holds, or a settled transfer whose memo
+  // is bound to another challenge. Its HTTP transport answers that 403 with no
+  // challenge; this gate keeps its own refusal classes: "replay" for a claimed
+  // hash, and "memo-unbound" (as before the error existed) for a settled
+  // transfer bound to another challenge, so the push path still books that
+  // transfer as owed instead of treating it as one it already paid for.
+  if (e?.name === "CredentialReplayedError" || e instanceof Errors.CredentialReplayedError) {
+    return /memo is not bound/.test(text) ? "memo-unbound" : "replay";
+  }
   if (trace.networkError) return "relay-unreachable";
   if (trace.relayUnavailable) return "relay-unavailable";
   // mppx keeps this code in `.details` (with retry: same_credential); the
@@ -488,6 +499,13 @@ export function logTempoRefusal(req, { cls, amountAtomic = null, timings = {}, d
 // The configured Method.Server is cheap to hold but not free to rebuild per
 // request; memoize it, keyed on the config values that actually shape it so
 // an env change (redeploy-time only, never mid-process) rebuilds cleanly.
+// Since mppx 0.12 `tempo.charge()` returns an ORDERED GROUP of methods, one
+// per entry in `currencies` (all name "tempo", intent "charge"). Each mints its
+// own currency's challenge; validate/broadcast dispatch to the first method of
+// the group and read the currency from the credential's (HMAC-verified)
+// challenge, so any member settles any of our currencies. Every member shares
+// one replay store (src/mppx-store.js): redis-backed when REDIS_URL is set, so
+// a hash one replica claimed is refused on every other.
 let cachedMethod = null;
 let cachedKey = "";
 
@@ -499,9 +517,10 @@ function tempoMethod() {
   const key = `${mode}|${process.env.TEMPO_API_KEY || ""}|${envRecipient()}|${envCurrencies().join(",")}|${envDecimals()}|${process.env.TEMPO_API_BASE_URL || ""}`;
   if (cachedMethod && cachedKey === key) return cachedMethod;
   cachedMethod = tempo.charge({
-    currency: envCurrency(),
+    currencies: envCurrencies(),
     decimals: envDecimals(),
     recipient: envRecipient(),
+    store: mppxReplayStore(),
     ...(mode === "relay" ? { relay: {
       apiKey: process.env.TEMPO_API_KEY,
       fetch: relayFetch,
@@ -542,8 +561,8 @@ export function mintTempoChallenge({ priceUsd, description, realm, secretKey, ti
   // add are supplied here: chainId (fixed — Tempo mainnet 4217, mppx's
   // `defaults.chainId.mainnet`); there is no local feePayer, so none is set
   // and the buyer pays their own fee, exactly as the hook would resolve it.
-  const method = tempoMethod();
-  const challenges = envCurrencies().map((currency) => Challenge.fromMethod(method, {
+  const group = tempoMethod();
+  const challenges = envCurrencies().map((currency, i) => Challenge.fromMethod(group[i] || group[0], {
     realm,
     expires: new Date(Date.now() + timeoutSeconds * 1000),
     request: {
@@ -1049,12 +1068,13 @@ export async function validateTempoCredential(authorizationHeader) {
     if (refused) return refused;
   }
   try {
-    const [validation] = await withRelayTrace(() => Method.validateCredential([tempoMethod()], authorizationHeader));
+    const [validation] = await withRelayTrace(() => Method.validateCredential(tempoMethod(), authorizationHeader));
     // The sender mppx itself settled on (a push transfer's on-chain sender,
-    // a pull transaction's signer): screened too, before anything is claimed
+    // a pull transaction's signer, and since mppx 0.13.5 the payer its
+    // matched transfers debited): screened too, before anything is claimed
     // or broadcast.
     if (direct) {
-      const settledSenders = [validation?.details?.sender, validation?.receipt?.from];
+      const settledSenders = [validation?.details?.sender, validation?.receipt?.from, validation?.payer];
       const refused = screenTempoParties(authorizationHeader, "after validate", settledSenders) || await screenTempoFunding(authorizationHeader, "after validate", settledSenders);
       if (refused) return refused;
     }
@@ -1077,7 +1097,7 @@ export async function broadcastTempoCredential(authorizationHeader) {
     if (refused) return refused;
   }
   try {
-    const [receipt] = await withRelayTrace(() => Method.broadcastCredential([tempoMethod()], authorizationHeader));
+    const [receipt] = await withRelayTrace(() => Method.broadcastCredential(tempoMethod(), authorizationHeader));
     return { ok: true, receipt };
   } catch (e) {
     return { ok: false, error: describeRelayFailure(e), reason: buyerReason(e), cls: classifyTempoRefusal(e), ...relayRefusalFields(e) };

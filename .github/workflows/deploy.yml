@@ -2930,6 +2930,8 @@ jobs:
           t node scripts/test-mpp-tempo-idempotency-policy.js
           # Tempo settlement mode: TEMPO_RELAY=off never calls the relay; unset keeps it (offline)
           t node scripts/test-mpp-tempo-direct.js
+          # mppx's own Tempo charge replay claims sit in one store per process, redis-backed when configured: a push credential one replica settled is refused on another (offline, stub chain + stub redis)
+          t node scripts/test-mppx-store.js
           # Tempo direct mode screens every payment party against the OFAC SDN list before money moves (fixture list, offline)
           t node scripts/test-sanctions-screen.js
           # workflow_run references name a workflow that exists (GitHub matches on name:, a mismatch never fires - offline)

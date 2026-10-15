@@ -80,6 +80,33 @@ const RUN = `it${process.pid}${Date.now().toString(36)}`;
     `a value survives a real set/get round trip (got ${JSON.stringify(hit)})`);
 }
 
+// --- mppx replay store against a live server ---------------------------------
+// The Tempo charge replay claims (src/mppx-store.js): two store objects over
+// one redis stand in for two replicas. SET NX with a TTL and the EVAL
+// compare-and-set are exactly what a fake cannot prove.
+{
+  const { createMppxStore, MPPX_STORE_PREFIX } = await import("../src/mppx-store.js");
+  const { getSharedRedisClient } = await import("../src/shared-limit.js");
+  const a = createMppxStore();
+  const b = createMppxStore();
+  ok(await a.backend() === "redis", "the mppx store writes to the real redis");
+  const key = `mppx:charge:0x${RUN}`;
+  const exp = Date.now() + 30_000;
+  ok(await a.tryClaim(key, exp) === true, "replica A claims a hash against a real redis");
+  ok(await b.tryClaim(key, exp) === false, "replica B is refused the same hash (SET NX across connections' callers)");
+  const c = await getSharedRedisClient();
+  const pttl = await c.pTTL(`${MPPX_STORE_PREFIX}${key}`);
+  ok(pttl > 0 && pttl <= 31_000, `the claim carries a TTL at the challenge expiry (pttl=${pttl})`);
+  await a.delete(key);
+  ok(await b.tryClaim(key, exp) === true, "a released claim can be made again");
+  await a.put(`k:${RUN}`, { n: 1n });
+  // Ten concurrent increments through the EVAL compare-and-set: none lost.
+  await Promise.all(Array.from({ length: 10 }, (_, i) => (i % 2 ? a : b).update(`k:${RUN}`, (cur) => ({ op: "set", value: { n: cur.n + 1n }, result: true }))));
+  const v = await b.get(`k:${RUN}`);
+  ok(v && v.n === 11n, `ten concurrent updates from two replicas all land (n=${v?.n})`);
+  ok(await a.update(`k:${RUN}`, () => ({ op: "delete", result: "gone" })) === "gone" && (await b.get(`k:${RUN}`)) === null, "update can delete against a real redis");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 // Redis keeps the process alive on an open connection; the assertions are done.
 process.exit(fail ? 1 : 0);
