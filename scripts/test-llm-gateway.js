@@ -1595,13 +1595,37 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(tierAllows("v1-chat-metered", "qwen/qwen3.8-max-prime") && JSON.stringify(dr("qwen/qwen3.8-max-prime", "v1-chat-metered")) === '{"effort":"minimal"}', "qwen3.8-max-prime is metered-admitted and gets the lowest effort there (mandatory, default xhigh upstream)");
   // Retiring ids: served by their successor (since 2026-10-02; refused by name
   // before), the swap named in the reply, never priced as themselves.
+  // A scheduled entry (asItselfUntil) is read on its date, when it takes effect.
   for (const id of Object.keys(RETIRING_MODELS)) {
-    const use = RETIRING_MODELS[id].use;
+    const { use, until, asItselfUntil } = RETIRING_MODELS[id];
+    if (asItselfUntil) K.setRetiringClockForTest(() => Date.parse(`${until}T00:00:00Z`));
     ok(retiringModel(id + ":nitro")?.id === id && tierFor(id) === tierFor(use), `${id}: resolves to the successor's tier (${tierFor(use)}), a :variant too`);
     const b = validateRequest({ model: id, messages: [{ role: "user", content: "hi" }] }, tierFor(use));
     ok(b.model === use && b.__substitutedFrom === id && !Object.keys(b).includes("__substitutedFrom"), `${id}: served as ${use}, the requested id carried non-enumerably for the reply`);
+    K.setRetiringClockForTest(null);
   }
-  ok(!K.modelCostRows().some(([p]) => Object.hasOwn(RETIRING_MODELS, p)), "no cost row prices a retiring id");
+  ok(!K.modelCostRows().some(([p]) => Object.hasOwn(RETIRING_MODELS, p) && !K.retirementPending(RETIRING_MODELS[p])), "no cost row prices a retiring id (a scheduled one keeps its row until its date)");
+  // OpenAI's 2027-01-14 shutdown of gpt-4o, gpt-4o-mini, gpt-4.1, gpt-4.1-mini:
+  // served as themselves until the day, then by the scheduled successor.
+  {
+    const sched = [["openai/gpt-4o", "openai/gpt-6.1-sol", "v1-chat-pro"], ["openai/gpt-4o-mini", "openai/gpt-6-luna", "v1-chat"], ["openai/gpt-4.1", "openai/gpt-6.1-sol", "v1-chat-pro"], ["openai/gpt-4.1-mini", "openai/gpt-6-luna", "v1-chat"]];
+    const m1 = [{ role: "user", content: "hi" }];
+    for (const [id, use, home] of sched) {
+      ok(RETIRING_MODELS[id]?.until === "2027-01-14" && RETIRING_MODELS[id].use === use && RETIRING_MODELS[id].asItselfUntil === true, `${id}: scheduled to retire 2027-01-14, successor ${use}`);
+      K.setRetiringClockForTest(() => Date.parse("2027-01-13T23:59:59Z"));
+      const before = validateRequest({ model: id, messages: m1 }, home);
+      ok(!retiringModel(id) && tierFor(id) === home && before.model === id && before.__substitutedFrom === undefined && cf(id) === ROW(id), `${id}: the day before, served as itself on ${home} and priced by its own row`);
+      K.setRetiringClockForTest(() => Date.parse("2027-01-14T00:00:00Z"));
+      const after = validateRequest({ model: id, messages: m1 }, tierFor(use));
+      ok(after.model === use && after.__substitutedFrom === id && retiringModel(id + "-2024-08-06")?.use === use, `${id}: from 2027-01-14 served as ${use} (priced and served on its home, ${tierFor(use)}), the swap named, a dated snapshot retiring with it`);
+      K.setRetiringClockForTest(null);
+    }
+    K.setRetiringClockForTest(() => Date.parse("2027-01-14T00:00:00Z"));
+    const dated = validateRequest({ model: "openai/gpt-4o-2024-08-06", messages: m1 }, "v1-chat-pro");
+    ok(dated.model === "openai/gpt-6.1-sol" && dated.__substitutedFrom === "openai/gpt-4o-2024-08-06", "a dated snapshot follows its family id onto the successor, the requested snapshot named");
+    K.setRetiringClockForTest(null);
+    ok(validateRequest({ model: "openai/gpt-4o-2024-08-06", messages: m1 }, "v1-chat-pro").model === "openai/gpt-4o-2024-08-06", "before the date a dated snapshot is served as asked");
+  }
   // Gemini 2.5 (upstream expiration 2026-10-20): refused by name on every tier
   // and wire, the successor live on a tier we serve, gone from flex and pricing.
   for (const id of ["google/gemini-2.5-flash-lite", "google/gemini-2.5-flash", "google/gemini-2.5-pro"]) {
@@ -1669,6 +1693,51 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(cf(MER) === ROW(MER) && cf(MER).completion <= TIERS["v1-chat-nano"].maxPrice.completion && cf(MER).completion <= TIERS["v1-chat-auto"].maxPrice.completion, "mercury-2.5 has its own row, inside the nano and auto bounds");
   ok(JSON.stringify(dr(MER, "v1-chat-nano")) === '{"effort":"low"}' && JSON.stringify(dr(MER, "v1-chat-auto")) === '{"effort":"low"}' && !fe(MER), "mercury-2.5: budget tiers inject low (default medium upstream); not flex");
   ok(!tierFor("nvidia/nemotron-3.5-lightning"), "nemotron-3.5-lightning stays out (reasons by default with no effort knob in the catalog)");
+}
+
+// ---- 2026-10-14: Claude Haiku 5.5 by its id; scheduled retirements guarded ----
+{
+  const K = await import("../src/tools/llm-gateway-kit.js");
+  const H5 = "anthropic/claude-haiku-5.5", H4 = "anthropic/claude-haiku-4.5";
+  const m1 = [{ role: "user", content: "hi" }];
+  ok(K.canonicalModel("anthropic/claude-haiku") === H4 && TIERS["v1-chat-metered"].defaultModel === H4, "the bare haiku family name and the metered default stay on Haiku 4.5 (5.5 kept off the defaults by the side-by-side)");
+  ok(tierFor(H5) === "v1-chat" && tierAllows("v1-chat-metered", H5), "Haiku 5.5 is served by its explicit id on base and metered");
+  ok(K.costFor(H5) === ROW(H5) && K.costFor(H4) === ROW(H4), "Haiku 5.5 is priced by its own row, never by the 4.5 row or the family fallback");
+  ok(K.adaptiveOnlyClaude(H5) && !K.adaptiveOnlyClaude(H4) && !K.adaptiveOnlyClaude("anthropic/claude-sonnet-5.5") && !K.adaptiveOnlyClaude("anthropic/claude-haiku"), "the Haiku 5 parameter rules apply to Haiku 5 only");
+  ok(JSON.stringify(K.defaultReasoningFor(H5, "v1-chat")) === '{"effort":"low"}' && JSON.stringify(K.defaultReasoningFor(H5, "v1-chat-metered")) === '{"effort":"low"}', "Haiku 5.5: the budget tiers inject effort low (adaptive, default medium upstream)");
+  for (const [k, v] of [["temperature", 0.2], ["temperature", 1], ["top_p", 0.99], ["top_k", 5]]) {
+    throws(() => validateRequest({ model: H5, messages: m1, [k]: v }, "v1-chat"), `"${k}" is not supported by ${H5}`, `chat wire: ${k}=${v} on Haiku 5.5 is a 400 naming it (dropped silently upstream)`);
+  }
+  throws(() => validateRequest({ model: H5, messages: [...m1, { role: "assistant", content: "Sure," }] }, "v1-chat"), "does not take an assistant prefill", "chat wire: an assistant prefill on Haiku 5.5 is a 400 before upstream");
+  throws(() => validateRequest({ model: H5, messages: m1, reasoning: { max_tokens: 1024 }, max_tokens: 2000 }, "v1-chat"), "thinking is adaptive", "chat wire: a fixed reasoning budget on Haiku 5.5 is a 400 naming effort");
+  ok(validateRequest({ model: H5, messages: m1, reasoning: { effort: "high" } }, "v1-chat").reasoning?.effort === "high", "Haiku 5.5 takes reasoning.effort");
+  throws(() => validateRequest({ model: H5, messages: m1, reasoning: { effort: "none" } }, "v1-chat"), "not supported by", "Haiku 5.5 offers no effort none");
+  {
+    const tool = { type: "function", function: { name: "get_weather", parameters: { type: "object", properties: { city: { type: "string" } } } } };
+    const v = validateRequest({ model: H5, messages: [...m1, { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "get_weather", arguments: "{}" } }] }, { role: "tool", tool_call_id: "c1", content: "sunny" }], tools: [tool] }, "v1-chat");
+    ok(v.model === H5 && v.tools.length === 1, "a tool result after an assistant tool call is not a prefill");
+  }
+  ok(validateRequest({ model: H4, messages: m1, temperature: 0.2 }, "v1-chat").temperature === 0.2, "Haiku 4.5 keeps temperature");
+  ok(validateRequest({ model: H4, messages: [...m1, { role: "assistant", content: "Sure," }] }, "v1-chat").model === H4, "Haiku 4.5 keeps the assistant prefill");
+  ok(!tierAllows("v1-chat", "openai/gpt-6-luna") && tierFor("openai/gpt-6-luna") === "v1-chat-nano", "gpt-6-luna is not admitted on base (a buyer naming it keeps the nano price)");
+  ok(TIERS["v1-chat"].defaultModel === "openai/gpt-4o-mini" && TIERS["v1-chat-pro"].defaultModel === "openai/gpt-4o" && K.failoverChain("openai/gpt-4o", "v1-chat-pro")[1] === "openai/gpt-4.1", "base and pro defaults and gpt-4o's successor are unchanged until a replacement is decided");
+  // A default, fallback or auto rung with a scheduled retirement must be
+  // replaced before its date: this fails from 30 days ahead while one names it.
+  const named = new Map();
+  for (const [slug, t] of Object.entries(TIERS)) {
+    if (t.defaultModel) named.set(`${slug} default`, t.defaultModel);
+    for (const m of t.fallbacks || []) named.set(`${slug} fallback ${m}`, m);
+  }
+  for (const [q, b] of Object.entries(AUTO_RANKINGS)) for (const [c, list] of Object.entries(b)) for (const m of list) named.set(`auto ${q}/${c} rung ${m}`, m);
+  let scheduled = 0;
+  for (const [where, m] of named) {
+    const r = K.RETIRING_MODELS[m];
+    if (!r?.asItselfUntil) continue;
+    scheduled++;
+    const days = (Date.parse(`${r.until}T00:00:00Z`) - Date.now()) / 86_400_000;
+    if (days <= 30) ok(false, `${where}: ${m} retires ${r.until} (${Math.floor(days)} days left): replace it before 30 days remain`);
+  }
+  ok(scheduled > 0, `the 30-day guard sees ${scheduled} default/fallback/rung slots naming a scheduled retirement (each fails CI from 30 days before its date)`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

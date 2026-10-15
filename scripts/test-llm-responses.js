@@ -245,5 +245,19 @@ delete process.env.OPENROUTER_API_KEY;
   } finally { globalThis.fetch = pbmReal; }
 }
 
+// ---- 2026-10-14: Claude Haiku 5.5 on the Responses wire ----
+{
+  const H5 = "anthropic/claude-haiku-5.5";
+  const refused = (body, tier = "v1-chat") => { try { validateResponsesRequest(body, tier); return null; } catch (e) { return e; } };
+  for (const [k, v] of [["temperature", 0.5], ["top_p", 0.99]]) {
+    const e = refused({ model: H5, input: "hi", [k]: v });
+    ok(e?.statusCode === 400 && e.message.includes(`"${k}" is not supported by ${H5}`), `Responses: ${k} on Haiku 5.5 is a 400 naming it`);
+  }
+  const pre = refused({ model: H5, input: [{ role: "user", content: "hi" }, { role: "assistant", content: "Sure," }] });
+  ok(pre?.statusCode === 400 && /assistant prefill/.test(pre.message), "Responses: a trailing assistant message on Haiku 5.5 is a 400 before upstream");
+  ok(refused({ model: H5, input: [{ role: "user", content: "hi" }, { type: "function_call", name: "f", call_id: "c1", arguments: "{}" }, { type: "function_call_output", call_id: "c1", output: "ok" }] }) === null, "Responses: a function_call_output last is not a prefill");
+  ok(refused({ model: "anthropic/claude-haiku-4.5", input: "hi", temperature: 0.2 }) === null && refused({ model: "openai/gpt-6-astra", input: "hi", temperature: 0.2 }, "v1-chat-premium")?.statusCode === 400, "Responses: Haiku 4.5 keeps temperature; GPT-6 Astra's sampling refusal now holds on this wire too");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

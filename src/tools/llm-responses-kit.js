@@ -31,7 +31,7 @@ import {
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   defaultReasoningFor, validateReasoning,
-  refuseCostVariants,
+  refuseCostVariants, refuseUnsupportedParams,
   assertUpstreamBody,
 } from "./llm-gateway-kit.js";
 
@@ -178,6 +178,17 @@ export function validateResponsesRequest(input, tierSlug) {
 
   const body = { model: isRouted ? undefined : model, input: input.input, max_output_tokens: maxOut, store: false };
   if (instructions !== undefined) body.instructions = instructions;
+  // Parameters the model does not take (GPT-6 Astra sampling; Claude Haiku 5
+  // sampling and assistant prefill): named before any upstream call, as on the
+  // chat and Messages wires.
+  if (!isRouted) {
+    const last = Array.isArray(input.input) ? input.input[input.input.length - 1] : null;
+    refuseUnsupportedParams(model, {
+      sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k },
+      endsWithAssistant: !!last && (last.type || (last.role ? "message" : null)) === "message" && last.role === "assistant",
+      reasoningBudget: input.reasoning?.max_tokens !== undefined,
+    });
+  }
   for (const k of ["temperature", "top_p", "metadata", "tool_choice", "parallel_tool_calls", "truncation", "text"]) if (input[k] !== undefined) body[k] = input[k];
   // tool_choice mirrors the tools guard (function tools only): Responses wire
   // is "none"|"auto"|"required" or {type:"function", name} - a hosted-tool

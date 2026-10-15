@@ -64,4 +64,25 @@ const ok = (c, m) => { assert.ok(c, m); n++; };
   ok(delta === 13_000, `the meter recorded 13,000 micro-USD ($0.013) for the call under source "gateway" (got ${delta})`);
 }
 
+// --- 2026-10-14: scheduled retirements and reasoning effort ---------------
+{
+  const { retiredSuccessor, RETIRING } = await import("../src/tools/llm-kit.js");
+  const sent = [];
+  globalThis.fetch = async (_u, init) => { sent.push(JSON.parse(init.body)); return new Response(JSON.stringify({ model: "x", usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }, choices: [{ message: { role: "assistant", content: "hi" }, finish_reason: "stop" }] }), { status: 200, headers: { "content-type": "application/json" } }); };
+  const llm = LLM_TOOLS.find((t) => t.slug === "llm"), pro = LLM_TOOLS.find((t) => t.slug === "llm-pro");
+  const m = [{ role: "user", content: "hello" }];
+  await llm.handler({ messages: m });
+  ok(sent.at(-1).model === "gpt-4o-mini" && sent.at(-1).reasoning_effort === undefined, "llm: no model is still gpt-4o-mini, with no reasoning_effort");
+  await llm.handler({ model: "gpt-6-luna", messages: m });
+  ok(sent.at(-1).model === "gpt-6-luna" && sent.at(-1).reasoning_effort === "low", "llm: gpt-6-luna by id gets reasoning_effort low by default");
+  await pro.handler({ model: "gpt-6.1-sol", messages: m, reasoning_effort: "high" });
+  ok(sent.at(-1).reasoning_effort === "high", "llm-pro: a buyer reasoning_effort rides through on a reasoning model");
+  await assert.rejects(llm.handler({ model: "gpt-4o-mini", messages: m, reasoning_effort: "low" }), /not supported by gpt-4o-mini/);
+  await assert.rejects(pro.handler({ model: "gpt-6.1-sol", messages: m, reasoning_effort: "ultra" }), /must be one of/);
+  n += 2;
+  const before = Date.parse("2027-01-13T23:59:59Z"), on = Date.parse("2027-01-14T00:00:00Z");
+  ok(Object.keys(RETIRING).every((k) => RETIRING[k].until === "2027-01-14" && retiredSuccessor(k, before) === null && retiredSuccessor(k, on) === RETIRING[k].use), "each retiring id is served as itself until 2027-01-14, then by its successor");
+  ok(retiredSuccessor("gpt-4o-2024-08-06", on) === "gpt-6.1-sol" && retiredSuccessor("gpt-4o-mini-2024-07-18", on) === "gpt-6-luna" && retiredSuccessor("o3", on) === null, "dated snapshots follow their family; other ids are untouched");
+}
+
 console.log(`test-llm-kit-spend: ${n} assertions OK`);

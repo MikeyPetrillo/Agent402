@@ -335,5 +335,26 @@ delete process.env.OPENROUTER_API_KEY;
   } finally { globalThis.fetch = pbmReal; }
 }
 
+// ---- 2026-10-14: Claude Haiku 5.5 on the Messages wire ----
+{
+  const H5 = "anthropic/claude-haiku-5.5", H4 = "anthropic/claude-haiku-4.5";
+  const m = [{ role: "user", content: "hi" }];
+  const refused = (body, tier = "v1-chat") => { try { validateMessagesRequest(body, tier); return null; } catch (e) { return e; } };
+  for (const [k, v] of [["temperature", 0.5], ["temperature", 1], ["top_p", 0.99], ["top_k", 5]]) {
+    const e = refused({ model: H5, max_tokens: 64, messages: m, [k]: v });
+    ok(e?.statusCode === 400 && e.message.includes(`"${k}" is not supported by ${H5}`) && e.message.includes("effort"), `Messages: ${k}=${v} on Haiku 5.5 is a 400 naming it and effort`);
+  }
+  const pre = refused({ model: H5, max_tokens: 64, messages: [...m, { role: "assistant", content: "Sure," }] });
+  ok(pre?.statusCode === 400 && /assistant prefill/.test(pre.message), "Messages: an assistant prefill on Haiku 5.5 is a 400 before upstream");
+  const bud = refused({ model: H5, max_tokens: 4096, messages: m, thinking: { type: "enabled", budget_tokens: 1024 } });
+  ok(bud?.statusCode === 400 && /adaptive/.test(bud.message) && /effort/.test(bud.message), "Messages: thinking.budget_tokens on Haiku 5.5 is a 400 naming effort");
+  ok(validateMessagesRequest({ model: H5, max_tokens: 64, messages: m, thinking: { type: "adaptive" }, effort: "low" }, "v1-chat").body.effort === "low", "Messages: Haiku 5.5 takes adaptive thinking and effort");
+  ok(refused({ max_tokens: 64, messages: m, temperature: 0.2 }, "v1-chat-metered") === null, "Messages: a metered call with no model keeps temperature (the default stays Haiku 4.5)");
+  const tr = { model: H5, max_tokens: 64, messages: [...m, { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "f", input: {} }] }, { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] }], tools: [{ name: "f", input_schema: { type: "object" } }] };
+  ok(refused(tr) === null, "Messages: a tool round trip ending in a tool_result is not a prefill");
+  const v4 = validateMessagesRequest({ model: H4, max_tokens: 4096, messages: [...m, { role: "assistant", content: "Sure," }], temperature: 0.2, thinking: { type: "enabled", budget_tokens: 1024 } }, "v1-chat");
+  ok(v4.body.temperature === 0.2 && v4.body.thinking?.budget_tokens === 1024, "Messages: Haiku 4.5 keeps temperature, prefill and budget_tokens");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
