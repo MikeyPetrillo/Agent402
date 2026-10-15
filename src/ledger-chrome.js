@@ -475,6 +475,13 @@ a { color: inherit; }
    fully visible, not blank. Class added by JS, transition lives in CSS. */
 .ml-reveal { opacity: 0; transform: translateY(18px); transition: opacity .75s cubic-bezier(.22,.61,.36,1), transform .75s cubic-bezier(.22,.61,.36,1); }
 .ml-reveal.ml-reveal-in { opacity: 1; transform: none; }
+/* Home hero color field (assets/js/hero-aura.js): a canvas behind the hero,
+   faded out toward the bottom so the hero meets the page ground without an
+   edge. Hidden until the script has drawn, so a browser without WebGL keeps
+   the plain ground. */
+.hm-aura { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: 0; transition: opacity 1.2s ease; -webkit-mask-image: linear-gradient(to bottom, rgb(0 0 0) 45%, transparent 100%); mask-image: linear-gradient(to bottom, rgb(0 0 0) 45%, transparent 100%); }
+.hm-aura.is-on { opacity: .30; }
+:root[data-theme="dark"] .hm-aura.is-on { opacity: .42; }
 @media (prefers-reduced-motion: reduce) {
   .ml-stagger > * { opacity: 1; transform: none; animation: none; }
   .ml-dot { animation: none; }
