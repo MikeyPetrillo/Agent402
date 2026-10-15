@@ -373,6 +373,8 @@ body { overflow-wrap: break-word; }
   .ml-rowlist td { padding: 0 16px 14px !important; text-align: left !important; }
   .ml-rowlist td + td { margin-top: -6px; }
 }
+/* Market stat tiles: one per row on a narrow phone, so a tile's label never shares a half-width column. */
+@media (max-width: 420px) { .ml-2col.ml-4col { grid-template-columns: minmax(0,1fr) !important; } }
 /* A label/value table (a stat panel, a "what it costs" list): each label and each value is one whole item. On a phone a
    row is a wrapping line, so a value that does not fit beside its label drops under it, right-aligned, instead of
    either one breaking inside itself. */

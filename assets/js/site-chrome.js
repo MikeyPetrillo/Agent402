@@ -144,14 +144,14 @@ window.a402BreakCode=function(root){try{
 window.a402BindWidows=function(root){void document.documentElement.offsetHeight;if(document.fonts&&document.fonts.status!=='loaded'&&document.fonts.ready){document.fonts.ready.then(function(){a402BindNow(root);},function(){a402BindNow(root);});return;}a402BindNow(root);};
 /* A prose cell of a table that scrolls in its own wrapper keeps a reading width: on a phone the table would
    otherwise squeeze its widest column to a word or two per line, so a cell of a sentence or more gets a
-   floor of about 20em (a phrase of four words or more, 10em) and the table scrolls sideways instead.
+   floor of about 20em (a phrase of four words or more, 14em) and the table scrolls sideways instead.
    Short cells (a name, a price) are untouched, and so is a wider screen, where the table has room. */
 var a402CellMeasure=function(root){try{var cells=(root||document).querySelectorAll('td,th'),todo=[];
   /* A cell that is only a list of code names ("a, b, c") is a list: it takes .ml-codelist, and on a phone each name gets its own line. */
   for(var j=0;j<cells.length;j++){var d=cells[j],codes=0,other=false;for(var n=d.firstChild;n;n=n.nextSibling){if(n.nodeType===1&&/^(CODE|KBD|SAMP)$/.test(n.tagName))codes++;else if(n.nodeType===1||(n.nodeType===3&&/[^\s,;·|/]/.test(n.data)))other=true;}if(codes>=3&&!other)d.classList.add('ml-codelist');}
   if(!(window.matchMedia&&window.matchMedia('(max-width: 600px)').matches))return;
   var scrolls=function(e){for(var a=e.parentElement;a&&a!==document.body;a=a.parentElement){var ox=getComputedStyle(a).overflowX;if(ox==='auto'||ox==='scroll')return true;}return false;};
-  for(var i=0;i<cells.length;i++){var c=cells[i];if(c.style.minWidth||c.classList.contains('ml-codelist'))continue;var t=(c.textContent||'').replace(/\s+/g,' ').trim();var em=t.length>=48&&t.indexOf(' ')>0?20:t.length>=20&&t.split(' ').length>=4?10:0;if(em&&scrolls(c))todo.push([c,em]);}
+  for(var i=0;i<cells.length;i++){var c=cells[i];if(c.style.minWidth||c.classList.contains('ml-codelist'))continue;var t=(c.textContent||'').replace(/\s+/g,' ').trim();var em=t.length>=48&&t.indexOf(' ')>0?20:t.length>=20&&t.split(' ').length>=4?14:0;if(em&&scrolls(c))todo.push([c,em]);}
   todo.forEach(function(x){x[0].style.minWidth=x[1]+'em';});
 }catch(e){}};
 /* Two passes: binding a table cell changes its column, which moves its neighbours' lines, so the second pass binds against the settled layout. */

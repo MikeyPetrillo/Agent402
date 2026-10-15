@@ -77,10 +77,11 @@ table{border-collapse:collapse;width:100%}
 .cat-scroll thead{display:none}
 .cat-row{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;padding:14px 16px}
 .cat-row>th,.cat-row>td{display:block;padding:0!important;text-align:left!important;min-width:0}
-.cat-row>td:nth-child(3){grid-column:2;grid-row:1;text-align:right!important;white-space:nowrap}
+.cat-row>th{grid-column:1/-1}
+.cat-row>td:nth-child(3){grid-column:2;grid-row:3;text-align:right!important;white-space:nowrap;margin-top:6px}
 .cat-row>td:nth-child(3)::after{content:" tools"}
 .cat-row>.cat-blurb{grid-column:1/-1;margin-top:4px}
-.cat-row>td:nth-child(4){grid-column:1/-1;margin-top:6px}
+.cat-row>td:nth-child(4){grid-column:1;grid-row:3;margin-top:6px}
 }
 @media (max-width:900px){.cat-2col{grid-template-columns:minmax(0,1fr)!important}}
 .cat-search-wrap{border:1px solid var(--hairline)}
