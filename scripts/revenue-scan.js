@@ -21,6 +21,8 @@
 //
 // Best-effort: flaky public RPCs → empty result, exit 0 (never fail the heartbeat).
 import { fileURLToPath } from "node:url";
+import { blocksForSeconds, blockTimeChanges, refreshBlockMs } from "../src/chain-block-time.js";
+import { rpcHeaderReader } from "../src/block-clock.js";
 
 const WALLET = (process.env.REVENUE_WALLET || "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0").toLowerCase();
 const OUR_WALLETS = new Set(
@@ -62,7 +64,11 @@ const EVM_NETWORKS = {
   base: {
     usdc: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     rpcs: [...alchemy("base-mainnet"), "https://mainnet.base.org", "https://base.drpc.org"],
-    spanBlocks: 12000, // ~6.5h at 2s blocks
+    // TIME (12,000 blocks at Base's original 2 s): main() counts it at the
+    // live block time (src/chain-block-time.js), so the scan covers the same
+    // hours across Base's Denim upgrade (200 ms blocks).
+    spanSeconds: 24_000,
+    get spanBlocks() { return blocksForSeconds("base", this.spanSeconds); },
   },
   polygon: {
     usdc: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
@@ -120,7 +126,7 @@ if (!NET) {
   console.error(`revenue-scan: unknown SCAN_NETWORK "${SCAN_NETWORK}" (known: ${Object.keys(EVM_NETWORKS).join(", ")})`);
   process.exit(2);
 }
-const SPAN = parseInt(process.env.SPAN_BLOCKS || String(NET.spanBlocks), 10);
+let SPAN = parseInt(process.env.SPAN_BLOCKS || String(NET.spanBlocks), 10);
 
 const USDC = NET.usdc;
 const TOKEN = NET.token || "USDC";
@@ -223,6 +229,12 @@ async function main() {
   // 4 chunks; a failed chunk degrades to a partial scan, never skips the rail.
   // Per-net chunk cap: default 9,000 (Alchemy bound); nets whose RPCs enforce
   // tighter getLogs ranges declare chunkBlocks (Sei: 1,900).
+  // A time-based span is re-counted at the chain's measured block time first
+  // (a failed read leaves the schedule in charge). SPAN_BLOCKS pins it.
+  if (!process.env.SPAN_BLOCKS && NET.spanSeconds && blockTimeChanges(SCAN_NETWORK)) {
+    await refreshBlockMs(SCAN_NETWORK, rpcHeaderReader((m, p) => rpc(m, p)));
+    SPAN = blocksForSeconds(SCAN_NETWORK, NET.spanSeconds);
+  }
   const LOG_CHUNKS = Math.max(4, Math.ceil(SPAN / (NET.chunkBlocks || 9000)));
   try {
     latest = parseInt(await rpc("eth_blockNumber", []), 16);

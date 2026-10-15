@@ -12,6 +12,8 @@
 // explains, so a human can see whether the worst case happened.
 
 import Database from "better-sqlite3";
+import { blockMs, blocksForSeconds, refreshBlockMs } from "../src/chain-block-time.js";
+import { rpcHeaderReader } from "../src/block-clock.js";
 
 const USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f179163c4a11628f55a4df523b";
@@ -92,17 +94,20 @@ async function main() {
       .reduce((a, l) => a + Number(BigInt(l.data)), 0);
     receipts.set(tx.toLowerCase(), rc ? m : null);
   }
-  // Outgoing transfers in the window (Base ~2s blocks; a generous range).
+  // Outgoing transfers in the window (a generous range), counted at Base's
+  // measured block time (src/chain-block-time.js: 2 s, 200 ms after Denim).
+  await refreshBlockMs("base", rpcHeaderReader((m, p) => rpc(url, m, p)));
+  const msPerBlock = blockMs("base");
   const head = Number(await rpc(url, "eth_blockNumber", []));
-  const from = Math.max(0, head - Math.ceil((hours * 3600 + 3600) / 2));
+  const from = Math.max(0, head - blocksForSeconds("base", hours * 3600 + 3600));
   const transfers = [];
   for (let b = from; b <= head; b += 2000) {
     const logs = await rpc(url, "eth_getLogs", [{ address: USDC_BASE, topics: [TRANSFER, walletTopic], fromBlock: "0x" + b.toString(16), toBlock: "0x" + Math.min(head, b + 1999).toString(16) }]);
     for (const l of logs) transfers.push({ tx: l.transactionHash, to: "0x" + l.topics[2].slice(26), micro: Number(BigInt(l.data)), block: Number(l.blockNumber) });
   }
-  // Block -> time, from the head (approximate, Base ~2s).
+  // Block -> time, from the head (approximate, at the measured rate).
   const headTime = Date.now();
-  for (const t of transfers) t.at = headTime - (head - t.block) * 2000;
+  for (const t of transfers) t.at = headTime - (head - t.block) * msPerBlock;
   const out = reconcile({ runs, receipts, transfers });
   if (process.argv.includes("--json")) console.log(JSON.stringify(out, null, 2));
   else {
