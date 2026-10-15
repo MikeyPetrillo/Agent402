@@ -704,7 +704,7 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
+import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
@@ -3440,13 +3440,15 @@ app.get("/decide", (req, res, next) => (CATALOG["POST /api/decide"] ? htmlCache(
 // so this only stops a spray; it does not ride sessionReadLimiter, which guards
 // the routes a paying buyer polls.
 const refundLookupLimiter = createRateLimiter("refund-lookup", { perMin: 30, perHour: 300 });
-function serveRefundLookup(req, res) {
+async function serveRefundLookup(req, res) {
   res.set("Cache-Control", "no-store");
   if (refundLookupLimiter.check(clientIp(req)).limited) {
     res.set("Retry-After", "60");
     return res.status(429).json({ error: "Too many refund lookups from this address; retry in a minute.", retryAfterSeconds: 60 });
   }
   const tx = (req.query && typeof req.query.tx === "string" ? req.query.tx : null) ?? (req.body && typeof req.body.tx === "string" ? req.body.tx : "");
+  // Another container may have paid this refund moments ago: pull first.
+  try { await refundByEvidenceFresh(""); } catch { /* the mirror answers */ }
   try { return res.json(refundLookup(tx)); }
   catch (e) { return res.status(e?.statusCode === 400 ? 400 : 500).json({ error: e?.statusCode === 400 ? e.message : "Refund lookup failed" }); }
 }
@@ -8596,7 +8598,9 @@ if (!FREE_MODE) {
     // src/tempo-push-debts.js); a served claim voids the debt.
     onPushNotClaimed: (req, info) => tempoPushDebts.notClaimed(req, info),
     onPushInputRefused: (req, info) => tempoPushDebts.inputRefused(req, info),
-    pushClaimAllowed: (hash) => !["sending", "paid"].includes(refundByEvidence(hash)?.status),
+    // Read fresh: a refund another container just started for this push must
+    // stop this one from serving it (served and refunded is the case to avoid).
+    pushClaimAllowed: async (hash) => !["sending", "paid"].includes((await refundByEvidenceFresh(hash))?.status),
   });
   if (tempoGate) {
     app.use(tempoGate);

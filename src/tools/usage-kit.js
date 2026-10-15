@@ -9,8 +9,18 @@
 // SVM/Stellar payments carry no signed payer the server can verify, so they
 // get a self-explaining 400 instead of a report.
 import { payerFromRequest } from "../payer.js";
-import { payerUsage, payerReceipts } from "../sales-ledger.js";
-import { refundsForPayer } from "../refund-ledger.js";
+import { payerUsage, payerReceipts, salesLedgerRefresh } from "../sales-ledger.js";
+import { refundsForPayer, refundLedgerRefresh } from "../refund-ledger.js";
+
+// The answer covers purchases made on ANY container: the local mirrors pull
+// other containers' writes on a timer, so a wallet's latest call made on the
+// other replica could be missing from a paid answer for up to that interval.
+// Both ledgers pull once first, bounded so a slow database never holds the
+// call (the mirror then answers as before).
+async function freshLedgers(ms = 2000) {
+  const pull = Promise.allSettled([salesLedgerRefresh(), refundLedgerRefresh()]);
+  await Promise.race([pull, new Promise((r) => setTimeout(r, ms).unref?.())]);
+}
 import { ownRefundsView } from "../refund-lookup.js";
 
 function bad(message, statusCode = 400) {
@@ -82,6 +92,7 @@ export const USAGE_TOOLS = [
       const limit = input?.limit === undefined ? 50 : parseInt(input.limit, 10);
       if (Number.isNaN(limit) || limit < 1 || limit > 200) throw bad('"limit" must be an integer between 1 and 200 (default 50)');
       // The wallet's own refunds, all time (a refund can lag the call it repays).
+      await freshLedgers();
       return { ...payerUsage(wallet, { days, limit }), refunds: ownRefundsView(refundsForPayer(wallet, { limit })) };
     },
   },
@@ -133,6 +144,7 @@ export const USAGE_TOOLS = [
       }
       const limit = input?.limit === undefined ? 500 : parseInt(input.limit, 10);
       if (Number.isNaN(limit) || limit < 1 || limit > 5000) throw bad('"limit" must be an integer between 1 and 5000 (default 500)');
+      await freshLedgers();
       const out = payerReceipts(wallet, { from: input?.from ?? null, to: input?.to ?? null, limit });
       if (out.error) throw bad(`"from"/"to" must be an ISO date or timestamp (${out.error})`);
       out.note = "Every row's settlementTx is verifiable on the named chain without asking us.";
