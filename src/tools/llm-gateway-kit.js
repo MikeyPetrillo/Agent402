@@ -737,6 +737,14 @@ export const RETIRING_MODELS = Object.freeze({
   // both non-reasoning and priced inside the tier's max_price.
   "poolside/laguna-xs-2.1": { until: "2026-10-31", use: "mistralai/ministral-3b-2512" },
   "poolside/laguna-s-2.1": { until: "2026-10-31", use: "mistralai/ministral-8b-2512" },
+  // Claude Sonnet 4 (OpenRouter expiration_date 2026-10-15). The pro tier's
+  // family prefix still admits the id; its successor is the same family's
+  // current model, priced below it.
+  "anthropic/claude-sonnet-4": { until: "2026-10-15", use: "anthropic/claude-sonnet-5.5" },
+  // Qwen 3.5 9B (OpenRouter expiration_date 2026-10-21). The base tier admits
+  // the qwen/ family; its successor is the family's current flash model,
+  // priced below it and inside the tier's max_price.
+  "qwen/qwen3.5-9b": { until: "2026-10-21", use: "qwen/qwen3.7-flash" },
 });
 export function retiringModel(model) {
   const id = canonicalModelRaw(model).toLowerCase().split(":")[0];
