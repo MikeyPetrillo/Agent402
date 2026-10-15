@@ -33,6 +33,17 @@ export const INFLIGHT_TTL_SECONDS = 300;
 // sales ledger still holds every served tx.
 export const SETTLED_TTL_SECONDS = 30 * 24 * 3600;
 const LOCAL_MAX = 100_000;
+// A claim sits on the paid path, so a Redis that stops answering must not hold
+// a settle: each command gets this long, then the claim is made in this
+// process (the same fallback as no Redis at all).
+export const COMMAND_DEADLINE_MS = Number(process.env.SETTLE_CLAIM_DEADLINE_MS) > 0 ? Number(process.env.SETTLE_CLAIM_DEADLINE_MS) : 250;
+function within(p) {
+  let timer;
+  return Promise.race([
+    p,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer in ${COMMAND_DEADLINE_MS} ms`)), COMMAND_DEADLINE_MS); timer.unref?.(); }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 const local = new Map(); // key -> { holder, until }
 
@@ -61,11 +72,11 @@ export async function claimSettlementKey(key, holder, { ttlSeconds = SETTLED_TTL
   if (c) {
     try {
       const k = PREFIX + key;
-      if (await c.set(k, holder, { NX: true, EX: ttlSeconds })) {
+      if (await within(c.set(k, holder, { NX: true, EX: ttlSeconds }))) {
         localSet(key, holder, ttlSeconds, now);
         return { claimed: true, holder };
       }
-      const owner = await c.get(k);
+      const owner = await within(c.get(k));
       return { claimed: owner === holder, holder: owner };
     } catch (e) {
       console.error("[settlement-claims] redis claim failed, falling back to local state:", e.message);
@@ -83,8 +94,8 @@ export async function extendSettlementKey(key, holder, { ttlSeconds = SETTLED_TT
   if (c) {
     try {
       const k = PREFIX + key;
-      const owner = await c.get(k);
-      if (owner === null || owner === holder) await c.set(k, holder, { EX: ttlSeconds });
+      const owner = await within(c.get(k));
+      if (owner === null || owner === holder) await within(c.set(k, holder, { EX: ttlSeconds }));
       if (owner === null || owner === holder) localSet(key, holder, ttlSeconds, now);
       return;
     } catch (e) {
@@ -103,7 +114,7 @@ export async function releaseSettlementKey(key, holder, { now = Date.now() } = {
   if (!c) return;
   try {
     const k = PREFIX + key;
-    if ((await c.get(k)) === holder) await c.del(k);
+    if ((await within(c.get(k))) === holder) await within(c.del(k));
   } catch (e) {
     console.error("[settlement-claims] redis release failed:", e.message);
   }

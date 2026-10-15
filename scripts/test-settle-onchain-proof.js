@@ -374,6 +374,23 @@ try {
   r = await one(A, "already a sale", { tx: soldTx });
   ok(r.status === 402 && serverLog.some((l) => l.includes("the transaction is already a recorded sale")), `a tx already in the sales ledger -> 402 (status ${r.status})`);
 
+  // --- A Redis that stops answering never holds a settle ----------------------
+  {
+    const { __setTestClient } = await import("../src/shared-limit.js");
+    const claims = await import("../src/settlement-claims.js");
+    const never = () => new Promise(() => {});
+    __setTestClient({ isReady: true, set: never, get: never, del: never });
+    const t0 = Date.now();
+    const a = await claims.claimSettlementKey("stall:1", "holder-a", { ttlSeconds: 60 });
+    const b = await claims.claimSettlementKey("stall:1", "holder-b", { ttlSeconds: 60 });
+    await claims.extendSettlementKey("stall:1", "holder-a");
+    await claims.releaseSettlementKey("stall:1", "holder-a");
+    const took = Date.now() - t0;
+    __setTestClient(null);
+    ok(a.claimed && !b.claimed, "a stalled Redis falls back to this process: the first holder claims, a second is refused");
+    ok(took < claims.COMMAND_DEADLINE_MS * 8, `every command gives up at the deadline (${took} ms for 4 calls, deadline ${claims.COMMAND_DEADLINE_MS} ms)`);
+  }
+
   console.log(`\nOK: ${pass} passed, 0 failed`);
 } catch (e) {
   fail(`unexpected: ${e.stack || e}`);
