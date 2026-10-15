@@ -20,6 +20,7 @@ import { payTempo, __testResetProofCache, tempoInboundCount, tempoInboundEvidenc
 import { sellerDeliveryFailingRecently, sellerDeliveryMemoEntries, __resetSellerDeliveryFailuresForTest, noteSellerDeliveryFailure } from "../src/x402-buyer.js";
 import { buyerPaymentNetwork, externalChainsFor, EXTERNAL_CHAIN_BY_NETWORK, buildRouteExecuteTool, EXEC_TIERS } from "../src/tools/route-execute.js";
 import { Challenge } from "mppx";
+import { readFileSync } from "node:fs";
 // The payout screen refuses every payment while no sanctions list is held;
 // this suite drives the payer, so it holds a fixture list.
 import { __seedPayoutListForTests } from "../src/tools/sanctions-kit.js";
@@ -95,9 +96,9 @@ ok(rankTempoResources(cat, "", { capUsd: 1 }).length === 0, "empty task ranks no
 // ---- stub MPP seller ----
 const RECIPIENT = "0x1111111111111111111111111111111111111111";
 let sellerMode = "ok"; let paidHits = 0; let lastAuth = null;
-const challengeHeader = ({ currency = TEMPO_USDC, amount = "2000", chainId = 4217, supportedModes } = {}) => Challenge.serialize(Challenge.from({
+const challengeHeader = ({ currency = TEMPO_USDC, amount = "2000", chainId = 4217, supportedModes, splits } = {}) => Challenge.serialize(Challenge.from({
   realm: "seller.test", method: "tempo", intent: "charge", expires: new Date(Date.now() + 60_000),
-  request: { amount, currency, recipient: RECIPIENT, methodDetails: { chainId, feePayer: true, ...(supportedModes ? { supportedModes } : {}) } }, secretKey: "seller-secret",
+  request: { amount, currency, recipient: RECIPIENT, methodDetails: { chainId, feePayer: true, ...(supportedModes ? { supportedModes } : {}), ...(splits ? { splits } : {}) } }, secretKey: "seller-secret",
 }));
 const seller = createServer((req, res) => {
   let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
@@ -117,7 +118,7 @@ const seller = createServer((req, res) => {
       return res.end(JSON.stringify({ scraped: true, echo: body ? JSON.parse(body) : null }));
     }
     const opts = sellerMode === "pathusd" ? { currency: PATH_USD } : sellerMode === "expensive" ? { amount: "900000" } : sellerMode === "wrong-chain" ? { chainId: 42431 }
-      : sellerMode === "push-only" ? { supportedModes: ["push"] } : sellerMode === "pull-push" ? { supportedModes: ["pull", "push"] } : {};
+      : sellerMode === "splits" ? { splits: [{ recipient: "0x" + "4c".repeat(20), amount: "1900" }] } : sellerMode === "push-only" ? { supportedModes: ["push"] } : sellerMode === "pull-push" ? { supportedModes: ["pull", "push"] } : {};
     res.writeHead(402, { "www-authenticate": challengeHeader(opts) });
     res.end("{}");
   });
@@ -149,6 +150,11 @@ await refuse("pathusd", { proof: proofOk }, /pays only USDC\.e/, "seller quotes 
 await refuse("expensive", { proof: proofOk }, /exceeds this call's ceiling/, "live quote above the cap (registry price was a hint)");
 await refuse("wrong-chain", { proof: proofOk }, /not Tempo mainnet/, "challenge targets another chain");
 await refuse("ok", { proof: proofLow }, /not routable yet/, "seller below the proven-settlement floor");
+await refuse("splits", { proof: proofOk }, /splits the payment across other recipients/, "challenge splits the payment to an unscreened recipient");
+{
+  const src = readFileSync(new URL("../src/tempo-buyer.js", import.meta.url), "utf8");
+  ok(/defaultCredentialFactory\(recipient\)/.test(src) && /expectedRecipients: \[recipient\]/.test(src), "the stock signer is pinned to the screened recipient, so mppx itself refuses any other payee");
+}
 await refuse("ok", { proof: proofDown }, /refusing to spend/, "proof RPC down (fail closed)");
 sellerMode = "reject-paid";
 let rej = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: proofOk }); } catch (e) { rej = e; }

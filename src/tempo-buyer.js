@@ -241,6 +241,11 @@ export async function payTempo(url, {
   //    both before anything is signed. A Tempo address is an EVM address,
   //    compared lowercased.
   await assertPayoutScreened(recipient, { label: recipient.toLowerCase() });
+  // A charge may name split recipients that the payment also pays. Only the
+  // primary recipient is screened and proven, so a challenge with any split
+  // is refused before anything is signed.
+  const splits = req.methodDetails?.splits;
+  if (splits !== undefined && splits !== null && !(Array.isArray(splits) && splits.length === 0)) throw bad("Seller's challenge splits the payment across other recipients, which this wallet does not pay; nothing was signed", 409);
   // 4. PROVEN-SELLER GATE (fail closed).
   let inbound;
   let inboundPayers;
@@ -261,7 +266,7 @@ export async function payTempo(url, {
   //    Not minted when too little time is left for the seller to answer: an
   //    unsent pull credential moves nothing, a sent one may.
   if (leftMs() < MIN_MINT_MS) throw bad("Too little of this call's time budget is left to pay the seller; nothing was signed", 504);
-  const mint = createCredential || (await defaultCredentialFactory());
+  const mint = createCredential || (await defaultCredentialFactory(recipient));
   let credential;
   try { credential = await withinDeadline(Promise.resolve().then(() => mint(new Response(null, { status: 402, headers: { "WWW-Authenticate": Challenge.serialize(ch) } }))), "credential signing"); }
   catch (e) {
@@ -327,13 +332,13 @@ export async function payTempo(url, {
   }
 }
 
-async function defaultCredentialFactory() {
+async function defaultCredentialFactory(recipient) {
   const acct = await account();
   if (!acct) throw bad("Tempo spending wallet not configured (TEMPO_UPSTREAM_BUYER_KEY)", 409);
   const { Mppx, tempo } = await import("mppx/client");
   // Pull only: a push credential is a transaction we broadcast ourselves
   // before the seller answers, so a push-only challenge is refused unsigned.
-  const client = Mppx.create({ methods: [tempo.charge({ account: acct, mode: "pull" })], polyfill: false });
+  const client = Mppx.create({ methods: [tempo.charge({ account: acct, mode: "pull", ...(recipient ? { expectedRecipients: [recipient] } : {}) })], polyfill: false });
   return (res402) => client.createCredential(res402);
 }
 
