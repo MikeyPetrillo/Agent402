@@ -827,7 +827,10 @@ try {
     const s0 = fac.settle, owed0 = (await refunds()).length, e0 = or.imagesClosedEarly;
     await hangUpMidRun(PRO, wallet(0x71), "10.0.4.1"); await sleep(2_300);
     ok(or.imagesClosedEarly - e0 === 1 && fac.settle === s0, "h. a fresh wallet on a fresh IP inside the global budget: forgiven");
-    await hangUpMidRun(PRO, wallet(0x72), "10.0.4.2"); await sleep(2_300);
+    // Not forgiven, so this run works to the end and then settles: wait for
+    // that settlement (a run that never settles still fails below).
+    await hangUpMidRun(PRO, wallet(0x72), "10.0.4.2"); await waitFor(() => fac.settle >= s0 + 1, 10_000);
+    for (let i = 0; i < 50 && (await refunds()).length < owed0 + 1; i++) await sleep(100);
     ok(or.imagesClosedEarly - e0 === 1 && fac.settle === s0 + 1 && (await refunds()).length === owed0 + 1, `h. the next fresh wallet on a fresh IP is past the global budget: settled and owed (settles +${fac.settle - s0})`);
     ok(serverLog.some((l) => /\[hangup\] forgiveness budget for the whole service is spent/.test(l)), "h. the server says the service-wide budget is spent");
     const owedNow = await refunds();
