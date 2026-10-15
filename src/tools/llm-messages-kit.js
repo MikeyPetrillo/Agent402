@@ -36,7 +36,7 @@ import {
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, costFor,
-  assertUpstreamBody, reasoningProfile, REASONING_EFFORTS,
+  assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams,
 } from "./llm-gateway-kit.js";
 import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
@@ -216,6 +216,17 @@ export function validateMessagesRequest(input, tierSlug) {
   // Only the models released AFTER Opus 4.6 (opus-4.7/4.8/5, sonnet-5, and
   // Fable 5.x, whose live parameter list carries no temperature at all).
   // Haiku 4.5 and everything older keep the old freedom.
+  // Claude Haiku 5 takes none of temperature, top_p or top_k (dropped
+  // silently upstream), refuses an assistant prefill and a fixed thinking
+  // budget: named here, before any upstream call (refuseUnsupportedParams).
+  if (!isRouted) {
+    refuseUnsupportedParams(model, {
+      sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k },
+      endsWithAssistant: messages[messages.length - 1]?.role === "assistant",
+      reasoningBudget: input.thinking?.type === "enabled",
+      effortField: "effort",
+    });
+  }
   const strictSampling = isPostOpus46(model);
   if (strictSampling) {
     if (input.top_k !== undefined) throw bad('"top_k" is not supported by this model (Anthropic removed it for models after Claude Opus 4.6); omit it');
@@ -297,7 +308,7 @@ export function validateMessagesRequest(input, tierSlug) {
     if (typeof effort !== "string" || !REASONING_EFFORTS.includes(effort) || effort === "none") throw bad(`"effort" must be one of: ${REASONING_EFFORTS.filter((e) => e !== "none").join(", ")}`);
     if (!isRouted) {
       const prof = reasoningProfile(model);
-      if (!prof) throw bad(`"effort" is not supported by ${model} - it is the depth control on Claude 4.7+ (Opus 5, Sonnet 5, Fable 5.1). On this model use thinking:{type:"enabled", budget_tokens} instead, or omit effort.`);
+      if (!prof) throw bad(`"effort" is not supported by ${model} - it is the depth control on Claude 4.7+ (Opus 5, Sonnet 5, Fable 5.1) and Claude Haiku 5.5. On this model use thinking:{type:"enabled", budget_tokens} instead, or omit effort.`);
       if (!prof.efforts.includes(effort)) throw bad(`"effort" ${JSON.stringify(effort)} is not supported by ${model} - it accepts: ${prof.efforts.join(", ")}`);
     }
     // Anthropic's own rule: thinking disabled with effort xhigh/max is a 400
@@ -493,8 +504,8 @@ const INPUT_SCHEMA = {
     messages: { type: "array", description: "Anthropic messages: {role: user|assistant, content: string | [text|image|tool_use|tool_result blocks]}" },
     system: { type: "string", description: "Optional system prompt (string or text blocks)" },
     tools: { type: "array", description: "Optional client tools {name, description, input_schema}; server/built-in tools are not served" },
-    thinking: { type: "object", description: 'Optional {type:"enabled", budget_tokens} | {type:"adaptive"} | {type:"disabled"} - thinking tokens are output tokens; a budget is clamped along with max_tokens to fit the tier output cap. On Claude 4.7+ (Opus 5, Sonnet 5, Fable 5.1) thinking is adaptive and `effort` is the depth control; a budget_tokens value is advisory there' },
-    effort: { type: "string", description: 'Optional depth control for Claude 4.7+ (Opus 5, Sonnet 5, Fable 5.1): low | medium | high | xhigh | max, validated against the model\'s own list (GET /v1/models). Not accepted on Haiku 4.5 and older, which take thinking.budget_tokens instead' },
+    thinking: { type: "object", description: 'Optional {type:"enabled", budget_tokens} | {type:"adaptive"} | {type:"disabled"} - thinking tokens are output tokens; a budget is clamped along with max_tokens to fit the tier output cap. On Claude 4.7+ (Opus 5, Sonnet 5, Fable 5.1) thinking is adaptive and `effort` is the depth control; a budget_tokens value is advisory there. Claude Haiku 5.5 refuses {type:"enabled", budget_tokens} with a 400 (send effort instead)' },
+    effort: { type: "string", description: 'Optional depth control for Claude 4.7+ (Opus 5, Sonnet 5, Fable 5.1) and Claude Haiku 5.5: low | medium | high | xhigh | max, validated against the model\'s own list (GET /v1/models). Not accepted on Haiku 4.5 and older, which take thinking.budget_tokens instead' },
     stream: { type: "boolean", description: "Anthropic SSE (message_start … message_stop)" },
     zdr: { type: "boolean", description: "Optional - zero-data-retention providers only" },
   },
@@ -508,7 +519,7 @@ function describe(tierSlug) {
   if (tierSlug === "v1-chat-metered") {
     return `Anthropic Messages API billed per request from what the call costs: the 402 quotes exact-BPE input (system + messages + tools) plus your max_tokens, from ${price} up to a $${t.maxQuoteUsd} per-call cap. Point the Anthropic SDK (or any Messages-format client) at base_url https://agent402.tools/v1/metered. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto, credits or card and settle actual usage. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.`;
   }
-  const base = `Anthropic Messages API over x402 - point the Anthropic SDK (or Claude Code / the Agent SDK) at base_url https://agent402.tools${MESSAGES_PATH_BY_TIER[tierSlug].replace(/\/messages$/, "")} and pay ${price} per call in USDC, no API key, no signup. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Messages wire (Claude natively, others translated). Depth: \`effort\` (low..max) on Claude 4.7+, thinking.budget_tokens on older Claude. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.`;
+  const base = `Anthropic Messages API over x402 - point the Anthropic SDK (or Claude Code / the Agent SDK) at base_url https://agent402.tools${MESSAGES_PATH_BY_TIER[tierSlug].replace(/\/messages$/, "")} and pay ${price} per call in USDC, no API key, no signup. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Messages wire (Claude natively, others translated). Depth: \`effort\` (low..max) on Claude 4.7+ and Haiku 5.5, thinking.budget_tokens on older Claude. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.`;
   return tierSlug === "v1-chat-auto"
     ? `${base} Omit "model" and the gateway routes the prompt to the top-ranked model for its task type; the response adds agent402_router {category, quality, served}.`
     : base + dflt;

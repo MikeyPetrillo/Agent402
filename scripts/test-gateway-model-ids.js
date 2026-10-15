@@ -15,7 +15,7 @@
 // silent green that let every one of those ship.
 import { readFileSync } from "node:fs";
 import {
-  TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, FLEX_MODELS, REASONING_MODELS, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
+  TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, retirementPending, FLEX_MODELS, REASONING_MODELS, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
   IMAGES_MODEL, AVAILABILITY_SUCCESSORS,
 } from "../src/tools/llm-gateway-kit.js";
 import { IMAGE_TIERS, IMAGES_FAST_TOOLS } from "../src/tools/llm-images-fast-kit.js";
@@ -266,7 +266,10 @@ const admitted = models.filter((m) => {
   if (/:(batch|online)$/.test(m.id)) return false;
   // A retiring id is never sent upstream as itself: canonicalModel serves its
   // successor, priced by the successor's row, so its own listing bounds nothing.
-  if (Object.hasOwn(RETIRING_MODELS, m.id.split(":")[0])) return false;
+  // A scheduled one (asItselfUntil) is still served as itself until its date,
+  // so its row is graded like any other until then.
+  const retiring = RETIRING_MODELS[m.id.split(":")[0]];
+  if (retiring && !retirementPending(retiring)) return false;
   return !!tierFor(m.id);
 });
 const under = [];
@@ -341,7 +344,10 @@ ok(expiring.length === 0, `no ranked/fallback model expires within 14 days${expi
 for (const [id, r] of Object.entries(RETIRING_MODELS)) {
   const m = models.find((x) => x.id === id);
   if (!m) { warn(`RETIRING_MODELS: ${id} is gone upstream - its entry stays, mapping callers to ${r.use}`); continue; }
-  ok(!!expiryOf(m), `RETIRING_MODELS: ${id} carries an upstream expiration date (${expiryOf(m) || "none - a refusal with no retirement behind it"})`);
+  // A scheduled entry rests on the vendor's own shutdown notice, which the
+  // upstream catalog may not carry yet.
+  if (r.asItselfUntil && !expiryOf(m)) warn(`RETIRING_MODELS: ${id} is scheduled for ${r.until} from the vendor's notice; the upstream lists no expiration date yet`);
+  else ok(!!expiryOf(m), `RETIRING_MODELS: ${id} carries an upstream expiration date (${expiryOf(m) || "none - a refusal with no retirement behind it"})`);
   ok(ids.has(r.use) && !!tierFor(r.use), `RETIRING_MODELS: ${id}'s named successor ${r.use} is live and admitted`);
 }
 // 5b. DEFAULTS have no horizon: a tier's defaultModel is what a caller who names
@@ -438,7 +444,9 @@ for (const row of REASONING_MODELS) {
     const live = Array.isArray(r.supported_efforts) ? r.supported_efforts : [];
     const missing = row.efforts.filter((e) => !live.includes(e));
     ok(missing.length === 0, `reasoning: ${m.id} supports every effort we list${missing.length ? ` (missing upstream: ${missing.join(", ")}; live: ${live.join(", ")})` : ""}`);
-    ok(r.mandatory === true || r.default_enabled === true, `reasoning: ${m.id} still reasons by default (mandatory=${r.mandatory}, default_enabled=${r.default_enabled}) - else drop it from the table`);
+    // `adaptive` rows (Claude Haiku 5.5): the catalog lists a default effort
+    // but neither flag; thinking is adaptive, on by default.
+    ok(r.mandatory === true || r.default_enabled === true || (row.adaptive === true && typeof r.default_effort === "string"), `reasoning: ${m.id} still reasons by default (mandatory=${r.mandatory}, default_enabled=${r.default_enabled}) - else drop it from the table`);
   }
 }
 // Availability successors (AVAILABILITY_SUCCESSORS) stand in for a requested
