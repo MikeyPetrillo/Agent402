@@ -1382,6 +1382,8 @@ jobs:
           t node scripts/test-sales-ledger-pg.js
           # A receipt check on one container finds a sale another just recorded.
           t node scripts/test-sale-lookup-crosscontainer-pg.js
+          # Two containers attesting one sale write one attestation.
+          t node scripts/test-attest-crosscontainer-pg.js
           # The gateway response cache is shared across replicas (needs this lane's Redis).
           t node scripts/test-prompt-cache-shared.js
           t node scripts/test-ledger-dead-letter-pg.js

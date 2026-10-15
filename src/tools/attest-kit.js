@@ -31,6 +31,7 @@
 import { createHash } from "node:crypto";
 import { assertSigningAllowed } from "../signing-halt.js";
 import { saleByTxFresh, setAttestation } from "../sales-ledger.js";
+import { withLease } from "../state-db.js";
 import { maySpend, noteSpend, adjustSpend, reserveSpend, composeReserve } from "../external-spend-guard.js";
 import { payerFromRequest } from "../payer.js";
 
@@ -268,8 +269,15 @@ export function makeAttestHandler(deps = {}) {
       payment: `follow settlementTx on ${fields.settlementNetwork || "the settlement chain"}: the payer paid this server's payTo`,
       attestation: `fetch the UID on ${EASSCAN_BASE} (or read EAS ${EAS_ADDRESS} on Base): attester must be this server's wallet, schema must match`,
     };
-    if (sale.attestUid) {
-      return { uid: sale.attestUid, attestationUrl: view(sale.attestUid), attestTx: sale.attestTx, existing: true, chain: `eip155:${CHAIN_ID}`, eas: EAS_ADDRESS, schemaUid: uid, schema: ATTEST_SCHEMA, data: publicFields, verify };
+    // ONE ATTESTATION PER SALE ACROSS CONTAINERS. The wallet's nonce and the
+    // sale's write-once UID are shared by every container, so the check and
+    // the send run under one database lease, and the sale is read again from
+    // Postgres inside it: a second container sees the first one's UID and
+    // answers with it instead of paying for a second attestation.
+    return underWalletLease(async () => {
+    const cur = deps.saleByTx ? sale : (await saleByTxFresh(tx, { force: true })) || sale;
+    if (cur.attestUid) {
+      return { uid: cur.attestUid, attestationUrl: view(cur.attestUid), attestTx: cur.attestTx, existing: true, chain: `eip155:${CHAIN_ID}`, eas: EAS_ADDRESS, schemaUid: uid, schema: ATTEST_SCHEMA, data: publicFields, verify };
     }
     const chain = await getChain();
     // Bound the gas before anything is signed. The worst case is booked
@@ -296,7 +304,7 @@ export function makeAttestHandler(deps = {}) {
       // Write-once on the row: if a concurrent call won, the chain now carries
       // two attestations of one sale and the ledger keeps the first. Harmless
       // (both true), and the serial queue above makes it rare.
-      persist(sale.id, { uid: written.uid, attestTx: written.attestTx });
+      await persist(sale.id, { uid: written.uid, attestTx: written.attestTx });
       return {
         uid: written.uid, attestationUrl: view(written.uid), attestTx: written.attestTx, block: written.block, existing: false,
         attester: chain.address, chain: `eip155:${CHAIN_ID}`, eas: EAS_ADDRESS, schemaUid: uid, schema: ATTEST_SCHEMA,
@@ -311,7 +319,23 @@ export function makeAttestHandler(deps = {}) {
       if (noFunds) throw bad("Attestation is temporarily unavailable. Nothing was charged; retry later.", 503);
       throw bad(`Attestation failed before it could be confirmed (${msg.slice(0, 140)}). Nothing was charged.`, 502);
     }
+    });
   };
+}
+
+// The attest wallet's lease: wait briefly for another container's send to
+// finish, then refuse with nothing charged. Without the database (one
+// process) it runs at once; the in-process serial queue still orders sends.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function underWalletLease(fn, { waitMs = 20_000 } = {}) {
+  const until = Date.now() + waitMs;
+  for (;;) {
+    const r = await withLease("attest-wallet", { ttlMs: 90_000 }, () => fn());
+    if (r.ran) return r.result;
+    if (r.reason !== "held" && r.reason !== "busy") throw bad("Attestations are briefly unavailable. Nothing was charged; retry shortly.", 503);
+    if (Date.now() >= until) throw bad("Another attestation is being written right now. Nothing was charged; retry in a few seconds.", 503);
+    await sleep(400);
+  }
 }
 
 export const ATTEST_TOOLS = [

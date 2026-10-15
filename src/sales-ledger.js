@@ -595,11 +595,13 @@ export function saleByTx(tx) {
  * mirror pulls the other containers' writes on a timer, so a receipt check
  * made moments after the purchase can miss a sale that is already in
  * Postgres. On a miss this pulls the newer rows once and looks again before
- * the caller refuses. File mode (one process) answers from the mirror alone.
+ * the caller refuses; `force` pulls even on a hit (a caller about to act on
+ * a field another container may have just set, like the attestation UID).
+ * File mode (one process) answers from the mirror alone.
  */
-export async function saleByTxFresh(tx) {
+export async function saleByTxFresh(tx, { force = false } = {}) {
   const hit = saleByTx(tx);
-  if (hit || !USE_PG) return hit;
+  if ((hit && !force) || !USE_PG) return hit;
   try { await readyP(); await refresh(); } catch { /* the database is unreachable: answer from the mirror */ }
   return saleByTx(tx);
 }
