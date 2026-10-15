@@ -203,9 +203,34 @@ try {
   ok(r.holders.topHoldersPct === 15.28 && r.holders.devMints === 1, "safety: holder facts");
   ok(Array.isArray(r.source) && r.source.includes("rugcheck") && typeof r.fetchedAt === "string", "safety: source + fetchedAt");
 
-  stub((url) => url.includes("rugcheck") ? Promise.resolve(jsonRes(RC_SUMMARY_CLEAN)) : Promise.resolve(jsonRes([])));
+  ok(r.fullReport === null && !calls.some((c) => c.url.endsWith("/report")), "safety: summary + Jupiter carried every field, so the full report is never read");
+
+  // Jupiter does not index the mint: the full report fills token and
+  // authorities (and only those), and says so.
+  stub((url) => url.endsWith("/report/summary") ? Promise.resolve(jsonRes(RC_SUMMARY_CLEAN)) : url.endsWith(`/tokens/${PUMP}/report`) ? Promise.resolve(jsonRes({ ...RC_REPORT, mint: PUMP })) : Promise.resolve(jsonRes([])));
   r = await h("sol-token-safety")({ mint: PUMP });
-  ok(r.riskLevel === "good" && r.token === null && r.authorities === null, "safety: clean summary -> good; Jupiter miss -> null blocks");
+  ok(calls.length === 3 && calls.filter((c) => c.url.endsWith(`/tokens/${PUMP}/report`)).length === 1, `safety: a Jupiter miss reads the full report once (${calls.length} reads)`);
+  ok(r.riskLevel === "good" && r.scoreNormalised === 1 && r.risks.length === 0, "safety: score and risks still come from the summary (it carried them)");
+  ok(r.token?.symbol === "JUP" && r.token.decimals === 6 && r.token.holderCount === 2873512 && r.token.isVerified === true && r.token.organicScore === null && r.token.launchpad === "Pump.Fun", "safety: token block from the report; Jupiter-only organic score stays null");
+  ok(r.authorities?.mintAuthorityDisabled === true && r.authorities.freezeAuthorityDisabled === false && r.authorities.freezeAuthority === "7dGbd2QZcCKcTndnHcTL8q7SMVXAkp688NTQYwrRCrar", "safety: authorities from the report (a live freeze authority reads live, with its address)");
+  ok(r.holders === null, "safety: holders stays null without Jupiter (no measure is substituted)");
+  ok(r.fullReport?.read === true && r.fullReport.needed.join(",") === "token,authorities" && r.fullReport.filled.join(",") === "token,authorities" && r.source.includes("rugcheck-report"), `safety: fullReport names what it filled (${JSON.stringify(r.fullReport)})`);
+
+  // The report read failing is not the buyer's loss: the fields stay null,
+  // the answer still lands, and fullReport says why.
+  stub((url) => url.endsWith("/report/summary") ? Promise.resolve(jsonRes(RC_SUMMARY_CLEAN)) : url.endsWith("/report") ? Promise.resolve(textRes("x", 500)) : Promise.resolve(jsonRes([])));
+  r = await h("sol-token-safety")({ mint: PUMP });
+  ok(r.riskLevel === "good" && r.token === null && r.authorities === null && r.fullReport?.read === false && r.fullReport.why === "upstream-error" && !r.source.includes("rugcheck-report"), `safety: a failed report read leaves null blocks and names why (${JSON.stringify(r.fullReport)})`);
+
+  // A summary with no score: the report fills score and risks.
+  stub((url) => url.endsWith("/report/summary") ? Promise.resolve(jsonRes({ tokenProgram: "T", risks: [], lpLockedPct: 5 })) : url.endsWith("/report") ? Promise.resolve(jsonRes(RC_REPORT)) : Promise.resolve(jsonRes([JUP_TOKEN_OTHER, JUP_TOKEN])));
+  r = await h("sol-token-safety")({ mint: JUP });
+  ok(r.scoreNormalised === 97 && r.risks.length === 2 && r.riskLevel === "danger" && r.lpLockedPct === 5 && r.token.symbol === "JUP" && r.fullReport.filled.join(",") === "score,risks", `safety: a scoreless summary is completed from the report (${JSON.stringify(r.fullReport)})`);
+
+  // Concurrent reads of one mint's full report share one request.
+  stub((url) => url.endsWith(`/tokens/${JUP}/report`) ? new Promise((res) => setTimeout(() => res(jsonRes(RC_REPORT)), 20)) : Promise.reject(new Error("bad url " + url)));
+  await Promise.all([h("sol-token-report")({ mint: JUP }), h("sol-token-holders")({ mint: JUP, limit: 5 })]);
+  ok(calls.length === 1 && __test.reportReadsInflight() === 0, `report + holders in parallel for one mint spend one report read (${calls.length})`);
 
   stub((url) => url.includes("rugcheck") ? Promise.resolve(jsonRes(RC_SUMMARY_CLEAN)) : Promise.resolve(jsonRes([JUP_TOKEN_USDC])));
   r = await h("sol-token-safety")({ mint: USDC });
