@@ -2,7 +2,7 @@
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-**500+ endpoints, 70+ of them multi-tool [[Skill Packs|Skill-Packs]].** Most tools are deterministic code with full input/output schemas; the model-backed ones (the `/v1` model gateway, the report products, and the media, speech, embedding and `answer` tools) carry `modelBacked: true` in `/api/pricing` and are priced as such. Discover them machine-readably (don't hardcode this page):
+**500+ endpoints, 70+ of them multi-tool [[Skill Packs|Skill-Packs]].** Most tools are deterministic code with full input/output schemas; the model-backed ones (the `/v1` model gateway and judgment routes, the report products, and the media, speech, embedding and `answer` tools) carry `modelBacked: true` in `/api/pricing` and are priced as such. Discover them machine-readably (don't hardcode this page):
 
 - [`/api/find?q={task}`](https://agent402.tools/api/find?q=extract%20article) - **resolve a plain-language task to the right tool** (route, price, schema, ready example) in one call, so an agent skips the token-heavy "search to find a tool" step. Also the `catalog.find` MCP tool on the connector.
 - [`/api/pricing`](https://agent402.tools/api/pricing) - slug, route, price, category, description for everything
@@ -64,6 +64,14 @@ Generation priced per picture or per clip rather than per token, on the OpenAI w
 | `POST /v1/images/generations` | $0.08 | The flagship image route |
 | `POST /v1/videos/generations` | $0.20 | One silent 4-second 720p clip, MP4 inline base64, 16:9 or 9:16. A failed or timed-out generation is not charged on x402 |
 
+## Health and safety data (openFDA)
+
+- `GET /api/drug-label` ($0.004): a drug's FDA label by `name` or NDC.
+- `GET /api/drug-ndc` ($0.004): NDC directory entries by `ndc` or name.
+- `GET /api/device-510k` ($0.004): 510(k) device clearances by applicant, product code, K number or device name.
+- `GET /api/device-adverse-events` ($0.004): device adverse event reports (MAUDE).
+- `GET /api/drug-recalls` and `GET /api/device-recalls` ($0.004 each), and `GET /api/drug-adverse-events` ($0.001).
+
 ## Report products (outcome-priced, same 402)
 
 When the job is a whole report rather than a call, the `/v1` report routes sell one finished, cited report per payment - `POST /v1/research` ($0.60, pro $0.85, max $1.10), `/v1/research/market-brief` ($0.85), `/v1/dossier` ($0.85, max $1.10), `/v1/ticker-pack` ($2.00), `/v1/fund` ($0.60, max $0.85), `/v1/filing-report` ($0.85), `/v1/domain-audit` ($0.60, pro $0.85), `/v1/recall-report` ($0.60), `/v1/insider-report` ($0.60), `/v1/token-brief` ($0.60), `/v1/token-risk` ($0.60, pro $0.85), `/v1/linkedin-article` ($1.10, a publish-ready article package with images at LinkedIn's sizes), and the deterministic `/v1/ipo-report` digest ($0.05). Same x402 / MPP 402 as every other route (a credits key issued earlier also pays); people buy the same reports by card at `/reports` for $2 to $5, a price that includes payment processing. Inputs, cadences and the $5/month monitors are on [[Reports and Monitors|Reports-and-Monitors]].
@@ -74,7 +82,7 @@ When the job is a whole report rather than a call, the `/v1` report routes sell 
 
 `unit-convert` accepts the other spelling of a unit (plural or singular, British spellings, spaces or underscores, the `statute-` prefix); an unknown unit is still a 400.
 
-`judge` ($0.001, listed when the judgment upstream is configured) is the one model-backed tool at this price: a typed judgment over supplied state (a choice from your named options with a probability each, a position on levels you describe, or a yes/no as a probability), up to 8 questions per call, input bounded by bytes.
+`judge` and `decisions` ($0.001 each, listed when the judgment upstream is configured) are model-backed, wallet-only typed judgments: a choice from your named options, a position on levels you describe, or a yes/no as a probability. The image, locate and long-document preview routes are on [[LLM Gateway|LLM-Gateway]].
 
 Why would an agent pay $0.001 instead of writing the code? Because writing, testing, and debugging a CSV parser mid-task burns 10–100× that in tokens - and some sandboxes can't execute code at all.
 

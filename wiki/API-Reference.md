@@ -42,6 +42,14 @@ this page is the whole answer (it is a capped page when `truncated` is true; rai
 matching [[Skill Pack|Skill-Packs]] for the same query, so a task-shaped question
 can point at a whole workflow instead of one tool.
 
+When no tool does the task, the rows that still come back are its nearest
+word matches, not answers: the response carries `weakMatches: true`, each row
+`weak: true`, and a `hint` (with `routeAcross`, a router link, when an indexed
+outside seller does the task). A one-letter slip in a word of six or more
+letters that no tool mentions is corrected before ranking, and the response
+says what it changed in `corrected` (for example `{ "danctions": "sanctions" }`).
+Under heavy load an uncached search may answer `503` with `Retry-After`.
+
 ### `POST /api/route`
 
 Cross-seller Smart Order Router. Ranks the tools that match a task across Agent402 and the x402 sellers it has indexed: candidates are shortlisted by how well they match the task, then ordered by crawl health, by distinct payers over the last 30 days, by price, by a discovery listing's curated flag and by slug length, shorter first; a judgment model can then pick one from that shortlist or decline them all. Each row's `why.tiebreaks` names the order applied. The response returns the top N and carries `matched` for how many scored.

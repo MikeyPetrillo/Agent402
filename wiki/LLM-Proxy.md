@@ -17,6 +17,8 @@ Three tiers of OpenAI inference, paywalled via x402. An agent sends a standard `
 | `POST /api/llm-pro` | $0.10 | `gpt-4o`, `gpt-4.1` | 16k chars | 2,048 tokens |
 | `POST /api/llm-premium` | $0.50 | `o3-mini`, `o3` (reasoning) | 32k chars | 2,048 tokens |
 
+GPT-4o, GPT-4o mini and GPT-4.1 are scheduled to be retired upstream on 2027-01-14; these routes will move to their successors before then.
+
 All three tiers are **wallet-only**: there is no proof-of-work free tier because every call burns real upstream inference credit. See [[Security Model]] for the wallet-only rationale.
 
 ## Request format
