@@ -9,6 +9,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const TREASURY = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
 process.env.TEMPO_RECIPIENT_ADDRESS = TREASURY;
 process.env.TEMPO_API_KEY = "test-tempo-key";
+process.env.SANCTIONS_SCREEN_FILE = (await import("node:path")).join((await import("node:os")).tmpdir(), `tempo-direct-screen-${process.pid}.json`);
 const calls = [];
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
@@ -35,9 +36,14 @@ const v = await mod.validateTempoCredential(credentialHeader());
 ok(!calls.some((u) => /api\.tempo\.xyz/.test(u)), `direct mode never calls the relay (${calls.filter((u) => /api\.tempo\.xyz/.test(u)).length} relay call(s))`);
 ok(v.ok === false, "an unverifiable credential is still refused in direct mode");
 delete process.env.TEMPO_API_KEY;
-ok(mod.tempoEnabled() === true, "direct mode does not need a relay key to stay enabled");
+ok(mod.tempoEnabled() === false && mod.tempoConfigured() === true, "direct mode offers nothing until its payment-party screen has a list");
+const screen = await import("../src/sanctions-screen.js");
+const fixture = (await import("node:fs")).readFileSync(new URL("./fixtures/ofac-sdn-sample.xml", import.meta.url), "utf8");
+await screen.refreshSanctionsScreen({ fetchImpl: async () => new Response(fixture, { status: 200 }), log: () => {} });
+ok(mod.tempoEnabled() === true, "direct mode does not need a relay key to stay enabled once the screen is loaded");
 process.env.TEMPO_RELAY = "";
 ok(mod.tempoEnabled() === false, "relay mode without a key stays off, as before");
 globalThis.fetch = realFetch;
+try { (await import("node:fs")).rmSync(process.env.SANCTIONS_SCREEN_FILE, { force: true }); } catch { /* nothing to remove */ }
 console.log(`test-mpp-tempo-direct: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

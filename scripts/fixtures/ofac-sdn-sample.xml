@@ -1,0 +1,76 @@
+<?xml version="1.0" standalone="yes"?>
+<sdnList xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/XML">
+  <publshInformation>
+    <Publish_Date>10/14/2026</Publish_Date>
+    <Record_Count>3</Record_Count>
+  </publshInformation>
+  <sdnEntry>
+    <uid>900001</uid>
+    <lastName>FIXTURE ENTITY ONE</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>TEST</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>990001</uid>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0xBad0000000000000000000000000000000000001</idNumber>
+      </id>
+      <id>
+        <uid>990002</uid>
+        <idType>Digital Currency Address - XBT</idType>
+        <idNumber>1FixtureBitcoinAddressNotEvm0000001</idNumber>
+      </id>
+      <id>
+        <uid>990003</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TFixtureTronAddressNotEvm00000000001</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>900002</uid>
+    <lastName>FIXTURE ENTITY TWO</lastName>
+    <sdnType>Entity</sdnType>
+    <idList>
+      <id>
+        <uid>990004</uid>
+        <idType>Digital Currency Address - USDT</idType>
+        <idNumber>0xbad0000000000000000000000000000000000002</idNumber>
+      </id>
+      <id>
+        <uid>990005</uid>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0xbad0000000000000000000000000000000000002</idNumber>
+      </id>
+      <id>
+        <uid>990006</uid>
+        <idType>Digital Currency Address - SOL</idType>
+        <idNumber>FixtureSo1anaAddressNotEvm11111111111111111</idNumber>
+      </id>
+      <id>
+        <uid>990007</uid>
+        <idType>Passport</idType>
+        <idNumber>0xbad0000000000000000000000000000000000009</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>900003</uid>
+    <lastName>FIXTURE FUNDER</lastName>
+    <sdnType>Individual</sdnType>
+    <idList>
+      <id>
+        <uid>990008</uid>
+        <idType>Digital Currency Address - USDC</idType>
+        <idNumber>0xBAD0000000000000000000000000000000000003</idNumber>
+      </id>
+      <id>
+        <uid>990009</uid>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0xnotanaddress</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+</sdnList>
