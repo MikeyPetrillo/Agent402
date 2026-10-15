@@ -37,6 +37,7 @@ import { solanaHistoryRead } from "./solana-history-rpc.js";
 import { evmLogsRead } from "./evm-logs-rpc.js";
 import { externalTempoPayments } from "./sales-ledger.js";
 import { createBlockClock, rpcHeaderReader, dateFromAnchors } from "./block-clock.js";
+import { NOMINAL_BLOCK_MS, blockMs, blocksForSeconds, refreshBlockMs, blockTimeChanges } from "./chain-block-time.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DB_PATH = process.env.REVENUE_LEDGER_DB || join(HAS_DATA_DIR ? "/data" : "/tmp", "agent402-revenue.db");
@@ -61,11 +62,13 @@ const LEDGER_EPOCH_MS = Date.parse(process.env.REVENUE_LEDGER_EPOCH || "2026-05-
 //   celo 1000 · sei 448 · monad 302
 // New rows no longer depend on this at all (syncEvmChain now stores the real
 // block timestamp); it remains only to date rows recorded before that landed.
-export const LEDGER_BLOCK_MS = {
-  base: 2000, polygon: 2100, arbitrum: 250, robinhood: 150, // robinhood measured ~0.15s (not the 2s Orbit default)
-  monad: 300, celo: 1000, avalanche: 1140, sei: 450, optimism: 2000,
-};
-const BLOCK_MS = LEDGER_BLOCK_MS;
+// The table lives in src/chain-block-time.js; each entry here reads the rate
+// in force now (Base: 2 s, then 200 ms from its Denim activation, or from the
+// first measured sample past it), so a count taken from it stays time-correct.
+export const LEDGER_BLOCK_MS = Object.freeze(Object.defineProperties({}, Object.fromEntries(
+  Object.keys(NOMINAL_BLOCK_MS).map((k) => [k, { enumerable: true, get: () => blockMs(k) }]),
+)));
+const msPerBlock = (chain) => blockMs(chain);
 
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
@@ -382,7 +385,7 @@ export function undatedRowDater(chain, wallet, { anchorsFor = datedAnchors } = {
   return (block) => {
     if (block == null) return null;
     if (!anchors) anchors = anchorsFor(chain, wallet);
-    return dateFromAnchors(Number(block), anchors, BLOCK_MS[chain] || 2000);
+    return dateFromAnchors(Number(block), anchors, msPerBlock(chain));
   };
 }
 function datedAnchors(chain, wallet) {
@@ -417,10 +420,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export async function startBlockFor(chain, head, { getHeader = null, epochMs = LEDGER_EPOCH_MS } = {}) {
   const env = parseInt(process.env[`REVENUE_LEDGER_FROM_${chain.toUpperCase()}`] || "", 10);
   if (Number.isFinite(env)) return Math.max(0, env);
-  const estimate = Math.max(0, head - Math.ceil((Date.now() - epochMs) / (BLOCK_MS[chain] || 2000)));
+  const estimate = Math.max(0, head - Math.ceil((Date.now() - epochMs) / msPerBlock(chain)));
   try {
     const reader = getHeader || rpcHeaderReader((m, p) => rpcCall(EVM[chain].rpcs, m, p, 6000));
-    const at = await createBlockClock(reader, { fallbackMsPerBlock: BLOCK_MS[chain] || 2000 }).blockAtOrAfter(Math.floor(epochMs / 1000), { headNumber: head });
+    const at = await createBlockClock(reader, { fallbackMsPerBlock: msPerBlock(chain) }).blockAtOrAfter(Math.floor(epochMs / 1000), { headNumber: head });
     return at.source === "chain" ? at.block : Math.min(estimate, at.block);
   } catch { return estimate; }
 }
@@ -480,7 +483,12 @@ export function nextChunkSpan(message, span) {
 // One hour of a chain's blocks: how far behind the head a range may start and
 // still be read from a public lane first (src/evm-logs-rpc.js). The ledger's
 // tail is minutes; a backfill or a catch-up after downtime stays keyed-first.
-const publicDepthBlocks = (chain) => Math.ceil(3_600_000 / (BLOCK_MS[chain] || 2000));
+// Written in seconds and counted at the live block time, so the hour stays an
+// hour when the block time changes.
+export const LEDGER_PUBLIC_DEPTH_SECONDS = 3600;
+export const LEDGER_HEAD_MARGIN_SECONDS = 10;
+export const publicDepthBlocks = (chain) => blocksForSeconds(chain, LEDGER_PUBLIC_DEPTH_SECONDS);
+export const headMarginBlocks = (chain) => blocksForSeconds(chain, LEDGER_HEAD_MARGIN_SECONDS);
 
 async function getLogsAdaptive(c, wallet, from, to, onNarrow, { chain = null, head = null } = {}) {
   let span = to - from + 1;
@@ -518,7 +526,11 @@ export async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
   // block or two behind can still answer it in full (src/evm-logs-rpc.js
   // refuses a public answer past that node's own head); the next tick reads
   // the rest.
-  const head = Math.max(0, parseInt(await rpcCall(c.rpcs, "eth_blockNumber", [], 6000), 16) - Math.ceil(10_000 / (BLOCK_MS[chain] || 2000)));
+  // The block time is re-read from the chain first (throttled; a failed read
+  // leaves the schedule in charge), so the margin, the public depth and the
+  // chunk sizes below are counted at the rate the chain runs now.
+  if (blockTimeChanges(chain)) await refreshBlockMs(chain, rpcHeaderReader((m, p) => rpcCall(c.rpcs, m, p, 6000)));
+  const head = Math.max(0, parseInt(await rpcCall(c.rpcs, "eth_blockNumber", [], 6000), 16) - headMarginBlocks(chain));
   const cur = await readCursor(chain, wallet);
   let next = cur?.next_block ?? await startBlockFor(chain, head);
   // Capped at 9,000 blocks like the other two scanners (revenue-scan.js and
