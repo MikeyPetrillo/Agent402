@@ -276,6 +276,11 @@ try {
     const offerR = await P.engine.mintOffer({ product: "fund-monitor", target: "Claim Manager LP" });
     const subR = await P.engine.activateFromCredential(await signCredential(Challenge.deserialize(offerR.header)));
     await P.engine.flush();
+    // The buyer's status read right after paying, on the OTHER container,
+    // before its mirror has re-read the row (the status route uses getFresh).
+    ok(Q.engine.get(subR.subId) === null, "the other container's mirror does not have the new subscriber yet");
+    const seen = await Q.engine.getFresh(subR.subId);
+    ok(seen?.subId === subR.subId && seen.status === "active", `getFresh on the other container finds the subscription just activated (${seen?.status})`);
     await Q.engine.refreshMirror(true);
     ok(Q.engine.listActive().some((r) => r.subId === subR.subId), "listActive on the other container picks up a new subscriber from the row");
     advance(PERIOD);

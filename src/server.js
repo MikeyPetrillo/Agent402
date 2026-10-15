@@ -60,7 +60,7 @@ import { translateV1Accepts, v1AcceptsTranslationEnabled } from "./x402-v1-accep
 import { mountShortlinks } from "./shortlinks.js";
 import { withHouseStyle } from "./house-style.js";
 import { withNextCall, nextCallFor } from "./next-call.js";
-import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS, reportHeadline, readPublicReport } from "./human-checkout.js";
+import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS, reportHeadline, readPublicReport, readPublicReportFresh } from "./human-checkout.js";
 import { humanReportsPage, reportDeliveryPage } from "./human-reports-page.js";
 import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
@@ -3395,11 +3395,11 @@ app.get("/reports/sample/:product", (req, res) => {
 // Public reports (buyer's choice, src/human-checkout.js readPublicReport):
 // the same viewer, indexable, own title/preview/JSON-LD, buy box for the
 // reader's own subject. Served with or without Stripe (files on the volume).
-app.get("/reports/public/:publicId", (req, res, next) => {
+app.get("/reports/public/:publicId", async (req, res, next) => {
   if (wantsJson(req)) { req.url = `/api/reports/public/${encodeURIComponent(String(req.params.publicId || ""))}`; return next(); }
   if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).type("html").send("<p>Too many requests, please slow down.</p>");
   res.set("Link", `</api/reports/public/${encodeURIComponent(String(req.params.publicId || ""))}>; rel="alternate"; type="application/json"`);
-  const r = readPublicReport(String(req.params.publicId || ""));
+  const r = await readPublicReportFresh(String(req.params.publicId || ""));
   if (!r) return notFoundPage(res, { what: "Public report", href: "/reports", label: "All reports" });
   const canonical = `${BASE_URL}/reports/public/${r.publicId}`;
   const label = HUMAN_PRODUCTS[r.product]?.label || "report";
@@ -3414,9 +3414,9 @@ app.get("/reports/public/:publicId", (req, res, next) => {
     ],
   }));
 });
-app.get("/api/reports/public/:publicId", (req, res) => {
+app.get("/api/reports/public/:publicId", async (req, res) => {
   if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
-  const r = readPublicReport(String(req.params.publicId || ""));
+  const r = await readPublicReportFresh(String(req.params.publicId || ""));
   if (!r) return res.status(404).json({ status: "not_found" });
   res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=900").json(r);
 });
@@ -4096,7 +4096,9 @@ if (_mppSubs) {
     if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
     res.set("Cache-Control", "no-store");
     const subId = String(req.params.subId || "");
-    const rec = _mppSubs.isMine(subId) ? _mppSubs.get(subId) : null;
+    // Read fresh: the subscription may have been activated or cancelled on
+    // the other container moments ago.
+    const rec = _mppSubs.isMine(subId) ? await _mppSubs.getFresh(subId) : null;
     if (!rec || !_mppSubs.manageTokenOk(subId, req.query.token)) return res.status(404).json({ error: "Unknown subscription" });
     // ?refresh=1 drives refreshStatus - which is also where a due period is
     // PULLED - and is therefore restricted to the rail canary's own
