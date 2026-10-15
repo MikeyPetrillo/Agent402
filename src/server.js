@@ -335,6 +335,7 @@ import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, ind
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
+import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc } from "./mpp-reconcile.js";
 import { tempoDataKey } from "./tempo-transfers.js";
 import { verifyInboundPayment } from "./payment-verify.js";
@@ -3207,6 +3208,12 @@ app.get("/api/gateway-status", async (req, res) => {
     // OFAC SDN list behind sanctions-wallet / sanctions-name and the router's
     // payout screen: one word publicly, counts and the last error for the operator.
     sanctions: full ? { ...sanctionsHealth(), ...sanctionsStatus() } : sanctionsHealth(),
+    // Tempo direct mode's payment-party screen (src/sanctions-screen.js):
+    // fresh / stale / missing, only while direct mode's gate is mounted. One word
+    // publicly; counts and the last load time for the operator.
+    ...(sanctionsScreenStarted() && tempoSettlementMode() === "direct"
+      ? { sanctionsScreen: (() => { try { return full ? sanctionsScreenOperatorView() : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
+      : {}),
     mppEvmDomainFallback: full ? mppFallbackStatus() : publicFallback(mppFallbackStatus()),
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),
     // Daily MPP reconciliation (src/mpp-reconcile.js): status words + counts,
@@ -8583,6 +8590,9 @@ if (!FREE_MODE) {
   });
   if (tempoGate) {
     app.use(tempoGate);
+    // Direct mode screens every payment party before any money moves, and
+    // offers no tempo challenge until the list has loaded (tempoEnabled).
+    if (tempoSettlementMode() === "direct") startSanctionsScreen();
     console.log(`Tempo MPP settlement enabled (native tempo/charge, ${tempoSettlementMode() === "direct" ? "verified and broadcast directly over the Tempo RPC" : "via Tempo's relay"})`);
   }
 

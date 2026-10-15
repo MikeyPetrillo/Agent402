@@ -45,6 +45,9 @@ ok(pubBody?.ledgerDeadLetter?.status === "off" && Object.keys(pubBody.ledgerDead
 ok(opBody?.ledgerDeadLetter?.status === "off" && typeof opBody?.ledgerDeadLetter?.sales?.onDisk === "number", "the operator view of ledgerDeadLetter carries the counts");
 ok(["sales", "refunds", "checkoutFinals", "subscriptions", "decide", "outbound"].every((n) => typeof opBody?.ledgerDeadLetter?.[n]?.onDisk === "number"), `the operator view counts every local money journal (${Object.keys(opBody?.ledgerDeadLetter || {}).join(",")})`);
 
+// --- the Tempo direct-mode screen word appears only while direct mode is mounted ---
+ok(!("sanctionsScreen" in pubBody) && !("sanctionsScreen" in opBody), "no sanctionsScreen field without Tempo direct mode (scripts/test-sanctions-screen.js covers the direct-mode words)");
+
 // --- Redis persistence: one word publicly, the INFO fields for the operator ---
 ok(pubBody?.redisPersistence?.status === "unknown" && Object.keys(pubBody.redisPersistence).join(",") === "status", `redisPersistence publishes its word only (${JSON.stringify(pubBody?.redisPersistence)}; unknown without REDIS_URL)`);
 ok(opBody?.redisPersistence?.status === "unknown" && opBody?.redisPersistence?.reason === "no_redis_url" && "fields" in (opBody?.redisPersistence || {}), `the operator view of redisPersistence carries the reason and the fields (${JSON.stringify(opBody?.redisPersistence)})`);
