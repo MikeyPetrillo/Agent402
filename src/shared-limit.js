@@ -188,6 +188,16 @@ export function sharedLimitEnabled() {
 // degraded call. Exposed so an operator surface can show the TRUE state rather
 // than the configured one.
 let state = { connected: null, lastError: null, degradedCalls: 0 };
+/** Close the shared client, so a one-shot process (an ops script, a test
+ *  child) that touched a shared limit can exit. The server never calls it.
+ *  A later read connects again. */
+export async function closeSharedRedis() {
+  const c = client;
+  client = null;
+  if (!c) return;
+  try { await c.quit(); } catch { try { c.destroy?.(); } catch { /* already gone */ } }
+}
+
 export function connectionState() { return { ...state, configured: Boolean(REDIS_URL) }; }
 
 /** The fail-closed answer, counted. Every caller that cannot reach the shared
