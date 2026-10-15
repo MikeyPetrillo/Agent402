@@ -13,32 +13,70 @@
 // last one is the one that would be catastrophic to get wrong: an empty parse
 // served as "no match" makes every query on earth come back clean.
 import { strict as assert } from "node:assert";
-import { parseSdnCryptoAddresses, parseSdnNames, screenName, foldName, normalizeAddress, SANCTIONS_VERDICTS } from "../src/tools/sanctions-core.js";
+import { readFileSync } from "node:fs";
+import { sdnCryptoAddresses, sdnNames, lookupAddress, screenName, foldName, normalizeAddress, SANCTIONS_VERDICTS } from "../src/tools/sanctions-core.js";
+import { parseSdnXml, sdnEvmAddresses, loadSdnList, SDN_MAX_BYTES, __resetSdnListForTests } from "../src/ofac-sdn.js";
 
 let n = 0;
 const ok = (c, m) => { assert.ok(c, m); n++; };
 const eq = (a, b, m) => { assert.deepEqual(a, b, m); n++; };
 
-// A miniature SDN export in the real format, including the shapes that matter:
-// several addresses on one entry, mixed assets, and an entry with none.
-const CSV = [
-  '24003,"MESRI, Behzad",-0- ,"IRAN",-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,"Digital Currency Address - ETH 0x252a8Bd2319D8A555b872990601221b3A2053bCE; alt. Digital Currency Address - XBT 1LrxsRd7zNuxPJcL5rttnoeJFyfq5HTMe4"',
-  '12345,"GAZPROMBANK JOINT STOCK COMPANY","entity","RUSSIA",-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- ',
-  '999,"PLAIN ENTITY WITH NO ADDRESSES","entity","CUBA",-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- ',
-].join("\n");
+// Miniature SDN.XML exports in the real format (scripts/fixtures). The sample
+// has several addresses per entry, mixed assets, a non-currency id holding an
+// EVM-looking value and a malformed address. The long entry carries 60
+// Digital Currency Addresses on one entry: the shape SDN.CSV cut short,
+// because the CSV packs them into a remarks column truncated at about a
+// thousand characters.
+const SAMPLE = readFileSync(new URL("./fixtures/ofac-sdn-sample.xml", import.meta.url), "utf8");
+const LONG = readFileSync(new URL("./fixtures/ofac-sdn-long-entry.xml", import.meta.url), "utf8");
+const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), LONG.indexOf("</sdnList>")) + "</sdnList>");
 
 // --- parsing -----------------------------------------------------------------
 {
-  const addrs = parseSdnCryptoAddresses(CSV);
-  eq(addrs.size, 2, "both addresses on ONE entry are parsed - OFAC packs many into a single remarks field, and stopping at the first would silently miss most of the list");
-  const eth = addrs.get("0x252a8bd2319d8a555b872990601221b3a2053bce");
-  ok(eth && eth.entity === "MESRI, Behzad" && eth.sdnId === "24003", "a hit names the entity and its SDN id, so the caller can check it against the published list themselves");
+  const list = parseSdnXml(SAMPLE);
+  const addrs = sdnCryptoAddresses(list);
+  eq(addrs.size, 7, "every Digital Currency Address of every asset is kept (ETH, XBT, TRX, USDT, SOL, USDC), and the Passport id is not");
+  ok(addrs.has("0xnotanaddress") && !sdnEvmAddresses(list).addresses.has("0xnotanaddress"), "a currency id that is not a well-formed address is kept as listed for the exact-string tool, and stays out of the EVM set");
+  const eth = addrs.get("0xbad0000000000000000000000000000000000001");
+  ok(eth && eth.entity === "FIXTURE ENTITY ONE" && eth.sdnId === "900001", "a hit names the entity and its SDN uid, so the caller can check it against the published list themselves");
   eq(eth.asset, "ETH", "and the asset it was listed under");
-  ok(addrs.has("1LrxsRd7zNuxPJcL5rttnoeJFyfq5HTMe4"), "a Bitcoin address is kept EXACTLY - base58 is case-sensitive and folding it would miss the match");
+  ok(addrs.has("1FixtureBitcoinAddressNotEvm0000001"), "a Bitcoin address is kept EXACTLY - base58 is case-sensitive and folding it would miss the match");
+  eq(addrs.get("0xbad0000000000000000000000000000000000002").asset, "USDT", "an address listed under two tickers keeps its first listing");
+  eq(list.entries[0].programs, ["TEST"], "the program list is read");
 
-  const names = parseSdnNames(CSV);
-  eq(names.length, 3, "every named entry is parsed, including one with no addresses");
-  ok(names.some((x) => x.name === "GAZPROMBANK JOINT STOCK COMPANY"), "names come through verbatim");
+  const names = sdnNames(list);
+  eq(names.length, 3, "every named entry is parsed");
+  eq(names.map((x) => x.type), ["-0-", "-0-", "individual"], "types keep the published vocabulary: individual, vessel, aircraft, and -0- for an entity");
+}
+
+// --- the long entry: the case the CSV truncated ---------------------------------
+{
+  const list = parseSdnXml(LONG);
+  const big = list.entries.find((e) => e.uid === "910001");
+  eq(big.addresses.length, 60, "all 60 Digital Currency Address ids on one entry are read");
+  const remarks = big.addresses.map((a) => `Digital Currency Address - ${a.asset} ${a.address}`).join("; alt. ");
+  ok(remarks.length > 2000, `the same addresses as a CSV remarks field run ${remarks.length} characters, past the ~1,000 the CSV keeps: the fixture is the truncated case`);
+  const map = sdnCryptoAddresses(list);
+  const assets = new Set(big.addresses.map((a) => a.asset));
+  eq([...assets].sort(), ["ARB", "BSC", "DOGE", "ETC", "ETH", "SOL", "TRX", "USDC", "USDT", "XBT", "XMR"], "every asset ticker on the entry comes through");
+  const missedExact = big.addresses.filter((a) => map.get(normalizeAddress(a.address))?.sdnId !== "910001");
+  eq(missedExact.length, 0, `every address on the long entry is found by an asset-less lookup, the router's (${missedExact.map((a) => a.address).join(",")})`);
+  const missedHinted = big.addresses.filter((a) => lookupAddress(map, a.address, a.asset)?.sdnId !== "910001");
+  eq(missedHinted.length, 0, "and by the tool's lookup with each address's own asset hint (a Tron address under USDT included)");
+  const tronUsdt = big.addresses.find((a) => a.asset === "USDT" && a.address.startsWith("T"));
+  ok(map.has(tronUsdt.address) && !map.has(tronUsdt.address.toLowerCase()), "a base58 address under a ticker outside CASE_SENSITIVE is stored exactly, never folded");
+  const evm = sdnEvmAddresses(list);
+  eq(evm.addresses.size, 24, "the EVM set holds the 24 EVM addresses of the long entry");
+  ok(big.addresses.filter((a) => /^0x/.test(a.address)).every((a) => evm.addresses.has(a.address.toLowerCase())), "every one of them");
+  eq(map.get("0xfeed000000000000000000000000000000000018").sdnId, "910001", "an address listed on two entries names the first");
+  eq(big.programs, ["CYBER2", "RUSSIA-EO14024"], "every program on the entry");
+
+  const names = sdnNames(list);
+  ok(names.some((x) => x.id === "910001" && x.name === "FIXTURE EXCHANGE WITH MANY ADDRESSES"), "an alias's lastName never replaces the entry's own");
+  ok(!names.some((x) => /ALIAS|FIXTUROFF/.test(x.name)), "aliases are not screened as names, as before");
+  ok(names.some((x) => x.id === "910002" && x.name === "FIXTUROV, Ivan Fixturovich" && x.type === "individual"), "an individual reads LASTNAME, Firstname, the list's display form");
+  ok(names.some((x) => x.id === "910003" && x.name === "FIXTURE JOINT STOCK COMPANY \"HOLDING\" & PARTNERS" && x.type === "-0-"), "XML entities are decoded");
+  ok(names.some((x) => x.id === "910004" && x.type === "vessel"), "a vessel keeps its type");
 }
 
 // --- address normalisation ---------------------------------------------------
@@ -51,7 +89,7 @@ const CSV = [
 
 // --- name screening ----------------------------------------------------------
 {
-  const names = parseSdnNames(CSV);
+  const names = [...sdnNames(parseSdnXml(SAMPLE)), { id: "12345", name: "GAZPROMBANK JOINT STOCK COMPANY", type: "-0-" }];
   const r = screenName("Gazprombank", names);
   eq(r.matches.length, 1, "a substring of a listed name matches");
   eq(r.matches[0].matchType, "contains", "and says HOW it matched, so a reader can judge it");
@@ -150,15 +188,65 @@ const CSV = [
 // An unloaded list refuses every call; a STALE one answers from an old list,
 // which is the failure nothing else would notice, so the word must say "stale".
 {
-  const { loadSanctions, sanctionsHealth } = await import("../src/tools/sanctions-kit.js");
+  const { loadSanctions, sanctionsHealth, sanctionsStatus } = await import("../src/tools/sanctions-kit.js");
   const H = 3600_000, boot = 1_000_000;
   ok(sanctionsHealth(boot + 60_000, boot).status === "loading", "never loaded inside the boot grace: loading");
-  ok(sanctionsHealth(boot + 11 * 60_000, boot).status === "unloaded", "never loaded past the boot grace: unloaded");
+  ok(sanctionsHealth(boot + 16 * 60_000, boot).status === "unloaded", "never loaded past the boot grace: unloaded");
   const t0 = boot + 20 * 60_000;
-  await loadSanctions({ force: true, now: () => t0, fetchImpl: async () => new Response(CSV, { status: 200 }) });
+  await loadSanctions({ force: true, now: () => t0, fetchImpl: async () => new Response(XML, { status: 200 }) });
   ok(sanctionsHealth(t0 + H, boot).status === "ok", "a fresh load: ok");
   ok(sanctionsHealth(t0 + 25 * H, boot).status === "stale", "two refresh cycles without a successful load: stale");
   ok(Object.keys(sanctionsHealth(t0, boot)).join() === "status", "the public word carries no count, date or error text");
+  const st = sanctionsStatus();
+  ok(st.source === "SDN.XML" && st.addresses === 67 && st.entries === 7 && st.publishDate === "10/14/2026", `the operator counts read the XML load (${JSON.stringify(st)})`);
+}
+
+// --- the tools and the router's screen find every address, end to end ----------
+{
+  const { SANCTIONS_TOOLS, screenAddressForPayment, loadSanctions, sanctionsStatus } = await import("../src/tools/sanctions-kit.js");
+  const wallet = SANCTIONS_TOOLS.find((t) => t.slug === "sanctions-wallet");
+  const nameTool = SANCTIONS_TOOLS.find((t) => t.slug === "sanctions-name");
+  const big = parseSdnXml(LONG).entries.find((e) => e.uid === "910001");
+  let walletMiss = 0, routerMiss = 0;
+  for (const a of big.addresses) {
+    const r = await wallet.handler({ address: a.address });
+    if (r.verdict !== "match" || r.sdnId !== "910001" || r.listedAddress !== a.address) walletMiss++;
+    if ((await screenAddressForPayment(a.address))?.sdnId !== "910001") routerMiss++;
+  }
+  eq(walletMiss, 0, "sanctions-wallet matches every one of the 60 addresses on the long entry");
+  eq(routerMiss, 0, "and so does the router's payout screen");
+  const miss = await wallet.handler({ address: "0x902dCf34E53695bDEA2fFB354b1a2e58bD598256" });
+  ok(miss.verdict === "no_match_on_lists_checked" && miss.notAClearance && miss.addressesOnList === 67, "an unlisted address is a miss with the caveat");
+  const nm = await nameTool.handler({ name: "Fixturovich Fixturov" });
+  ok(nm.verdict === "match" && nm.allTokensCount === 1 && nm.matches[0].id === "910002", "sanctions-name finds an individual by the natural name order");
+  ok(Object.keys(nm).join() === "query,verdict,exactCount,containsCount,allTokensCount,matches,entriesOnList,listsChecked,listsFetchedAt,confirmBeforeActing", `sanctions-name answers the same fields (${Object.keys(nm).join()})`);
+  const w = await wallet.handler({ address: big.addresses[0].address });
+  ok(Object.keys(w).join() === "address,verdict,entity,sdnId,asset,listedAddress,addressesOnList,listsChecked,listsFetchedAt,confirmBeforeActing", `sanctions-wallet answers the same fields (${Object.keys(w).join()})`);
+
+  // A broken refresh keeps the previous good load: the format guard.
+  const before = sanctionsStatus().fetchedAt;
+  for (const body of ["<html>not a list</html>", SAMPLE.replace(/<idList>[\s\S]*?<\/idList>/g, "")]) {
+    await loadSanctions({ force: true, now: () => Date.now() + 365 * 86400_000, fetchImpl: async () => new Response(body, { status: 200 }) });
+    ok(sanctionsStatus().fetchedAt === before && sanctionsStatus().addresses === 67 && /format change/.test(sanctionsStatus().lastError), `an export with no entries or no addresses is a format change; the previous load stays (${sanctionsStatus().lastError})`);
+  }
+}
+
+// --- the shared loader ---------------------------------------------------------
+{
+  __resetSdnListForTests();
+  ok(SDN_MAX_BYTES >= 64 * 1024 * 1024, "the size cap leaves headroom over the ~30 MB export");
+  let fetches = 0;
+  const f = async () => { fetches++; await new Promise((r) => setTimeout(r, 20)); return new Response(XML, { status: 200 }); };
+  const [a, b] = await Promise.all([loadSdnList({ fetchImpl: f }), loadSdnList({ fetchImpl: f })]);
+  ok(fetches === 1 && a === b, "two loads at once share one fetch");
+  await loadSdnList({ maxAgeMs: 60_000, fetchImpl: f });
+  ok(fetches === 1, "a load inside the caller's window takes the held parse");
+  await loadSdnList({ maxAgeMs: 0, fetchImpl: f });
+  ok(fetches === 2, "a load with no window fetches");
+  await assert.rejects(loadSdnList({ fetchImpl: async () => new Response("x", { status: 503 }) }), /HTTP 503/); n++;
+  await assert.rejects(loadSdnList({ fetchImpl: async () => new Response("<sdnList></sdnList>", { status: 200 }) }), /zero entries/); n++;
+  const src = readFileSync(new URL("../src/ofac-sdn.js", import.meta.url), "utf8");
+  ok(/AbortSignal\.timeout\(sdnFetchTimeoutMs\(\)\)/.test(src) && /10 \* 60_000/.test(src), "the download timeout covers a multi-minute download");
 }
 
 console.log(`test-sanctions: ${n} assertions OK`);

@@ -10354,7 +10354,7 @@ const datasetSources = () => ({
 bootStep("startBackupScheduler", () => startBackupScheduler());
 bootStep("searchData.start", () => searchData.start());
 bootStep("mppReconciler.start", () => mppReconciler.start());
-// Warm the sanctions list at boot so the first buyer does not wait on a 5.7MB
+// Warm the sanctions list at boot so the first buyer does not wait on a ~30MB
 // download, and refresh on a timer - a stale list answering "no match" is the
 // failure mode this tool exists to avoid.
 bootStep("startSanctionsRefresh", () => startSanctionsRefresh());

@@ -35,43 +35,52 @@ export function normalizeAddress(addr, asset = null) {
 }
 
 /**
- * Every "Digital Currency Address - <ASSET> <address>" in an OFAC SDN export.
+ * Every Digital Currency Address in a parsed OFAC SDN list (src/ofac-sdn.js
+ * parseSdnXml), keyed for an O(1) lookup that names who it belongs to:
+ * normalized address -> { asset, address, entity, sdnId }.
  *
- * Parsed from the remarks column rather than a dedicated field because that is
- * where OFAC publishes them; one SDN entry can carry dozens. Returns a Map of
- * normalized address -> { asset, addresses, entry } so a lookup is O(1) and a
- * hit can name who it belongs to.
+ * The key is normalizeAddress WITHOUT the asset: EVM folded to lowercase,
+ * every other address exactly as listed. Keying on the asset folded the
+ * base58 addresses OFAC lists under tickers missing from CASE_SENSITIVE (a
+ * Tron address under USDT, DOGE, BSV, ...), and a lookup without an asset
+ * hint, which is how the router screens a payout address, then missed them.
+ * The first listing of an address wins.
  */
-export function parseSdnCryptoAddresses(csv) {
+export function sdnCryptoAddresses(list) {
   const out = new Map();
-  const text = String(csv || "");
-  // Row-anchored so an entry's name can be attached to its addresses: the SDN
-  // csv is one entry per line, id first, name second.
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.includes("Digital Currency Address")) continue;
-    const name = (line.match(/^\s*\d+\s*,\s*"([^"]*)"/) || [])[1] || null;
-    const id = (line.match(/^\s*(\d+)\s*,/) || [])[1] || null;
-    for (const m of line.matchAll(/Digital Currency Address - ([A-Z0-9]{2,6})\s+([a-zA-Z0-9]{20,100})/g)) {
-      const [, asset, addr] = m;
-      const key = normalizeAddress(addr, asset);
-      if (!key) continue;
-      if (!out.has(key)) out.set(key, { asset, address: addr, entity: name, sdnId: id });
+  for (const e of list?.entries || []) {
+    for (const { asset, address } of e.addresses || []) {
+      const key = normalizeAddress(address);
+      if (!key || out.has(key)) continue;
+      out.set(key, { asset, address, entity: e.name, sdnId: e.uid });
     }
   }
   return out;
 }
 
-/** Names from an OFAC SDN export: primary name + the entry id. */
-export function parseSdnNames(csv) {
+/** The entry's type in the vocabulary this tool has always published (the
+ *  SDN.CSV column): individual, vessel, aircraft, and -0- for an entity. */
+const SDN_TYPE_WORD = { individual: "individual", vessel: "vessel", aircraft: "aircraft", entity: "-0-" };
+
+/** Names from a parsed OFAC SDN list: the primary name, the entry id and its type. */
+export function sdnNames(list) {
   const out = [];
-  for (const line of String(csv || "").split(/\r?\n/)) {
-    const m = line.match(/^\s*(\d+)\s*,\s*"([^"]*)"\s*,\s*([^,]*)/);
-    if (!m) continue;
-    const [, id, name, type] = m;
-    if (!name || name === "-0-") continue;
-    out.push({ id, name, type: (type || "").replace(/"/g, "").trim() || null });
+  for (const e of list?.entries || []) {
+    if (!e.name || e.name === "-0-") continue;
+    const t = String(e.sdnType || "").trim().toLowerCase();
+    out.push({ id: e.uid, name: e.name, type: t ? (SDN_TYPE_WORD[t] || t) : null });
   }
   return out;
+}
+
+/** Look one address up: the exact key first (EVM folded, everything else as
+ *  given), then the asset-aware key a caller's hint selects. */
+export function lookupAddress(map, raw, asset = null) {
+  const exact = normalizeAddress(raw);
+  if (exact && map.has(exact)) return map.get(exact);
+  const hinted = normalizeAddress(raw, asset);
+  if (hinted && hinted !== exact && map.has(hinted)) return map.get(hinted);
+  return null;
 }
 
 /** Fold a name for comparison: case, punctuation and corporate suffixes.

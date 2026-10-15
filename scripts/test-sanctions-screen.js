@@ -268,6 +268,49 @@ function header({ source = CLEAN, signature = "0x76" + "00".repeat(60), type = "
   ok(T.tempoEnabled() === true, "relay mode is enabled with no screen list loaded");
 }
 
+// --- the long entry, and one download feeding both readers -------------------
+// The screen and the sanctions tools (src/tools/sanctions-kit.js) read the
+// same parse through src/ofac-sdn.js: a refresh that comes due inside the
+// reuse window takes the parse the other fetched, and two at once share one
+// fetch. The long fixture entry carries 60 addresses, the shape SDN.CSV cut.
+{
+  const LONG = readFileSync(new URL("./fixtures/ofac-sdn-long-entry.xml", import.meta.url), "utf8");
+  const BOTH = FIXTURE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), LONG.indexOf("</sdnList>")) + "</sdnList>");
+  const longEvm = [...LONG.matchAll(/<idNumber>(0x[0-9a-fA-F]{40})<\/idNumber>/g)].map((m) => m[1].toLowerCase());
+  const p = S.parseSdnXmlEvmAddresses(LONG);
+  ok(longEvm.length === 25 && longEvm.every((a) => p.addresses.has(a)) && p.addresses.size === 24, `every EVM address on the long entry is kept (${p.addresses.size} distinct of ${longEvm.length} listings)`);
+  ok(JSON.stringify(p.perAsset) === JSON.stringify({ ARB: 4, BSC: 4, ETC: 4, ETH: 4, USDC: 4, USDT: 4 }), `per-asset counts across every EVM ticker (${JSON.stringify(p.perAsset)})`);
+
+  const K = await import("../src/tools/sanctions-kit.js");
+  const L = await import("../src/ofac-sdn.js");
+  const listCalls = () => calls.filter((u) => u.startsWith("http://fixture.local/")).length;
+  S.__resetSanctionsScreenForTests();
+  L.__resetSdnListForTests();
+  listBody = BOTH;
+  calls.length = 0;
+  await K.loadSanctions({ force: true });
+  const r1 = await S.refreshSanctionsScreen({ maxAgeMs: S.sanctionsListRefreshMs() / 4, log: () => {} });
+  ok(listCalls() === 1, `the kit's load and the screen's refresh after it make one download (${listCalls()})`);
+  ok(r1.ok && r1.evmAddresses === 27 && K.sanctionsStatus().addresses === 67, `both read the same list (screen ${r1.evmAddresses} EVM, kit ${K.sanctionsStatus().addresses} addresses)`);
+  ok(S.sanctionsScreenOperatorView().lastLoadedAt === K.sanctionsStatus().fetchedAt, "the screen's load time is the shared fetch's time, never the time it was reused");
+  ok(longEvm.every((a) => S.screenAddresses([a]).reason === "listed"), "every EVM address on the long entry is refused by the screen");
+
+  L.__resetSdnListForTests();
+  calls.length = 0;
+  const [, r2] = await Promise.all([K.loadSanctions({ force: true }), S.refreshSanctionsScreen({ maxAgeMs: S.sanctionsListRefreshMs() / 4, log: () => {} })]);
+  ok(listCalls() === 1 && r2.ok, `a kit load and a screen refresh at the same time share one download (${listCalls()})`);
+
+  calls.length = 0;
+  const later = Date.now() + 7 * 3600_000;
+  await S.sanctionsScreenTick({ now: () => later, log: () => {} });
+  ok(listCalls() === 1, `a screen refresh due past the reuse window downloads again (${listCalls()})`);
+  ok(K.sanctionsStatus().fetchedAt === new Date(later).toISOString() && S.sanctionsScreenOperatorView().lastLoadedAt === K.sanctionsStatus().fetchedAt, "the kit adopts the list the screen fetched, so its own timer has nothing to download");
+  calls.length = 0;
+  await K.loadSanctions({ now: () => later + 3600_000 });
+  ok(listCalls() === 0, `and a kit load inside its refresh period then downloads nothing (${listCalls()})`);
+  listBody = FIXTURE;
+}
+
 // --- a real paid-mode boot in direct mode ------------------------------------
 // No tempo/charge challenge in the 402 while the list is missing; the public
 // status is one word; with the list the challenge is offered; a restart reads

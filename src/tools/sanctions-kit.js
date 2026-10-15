@@ -7,41 +7,63 @@
 // The second reason is the better one - this makes the router answerable, not
 // just the catalog longer.
 //
-// THE LISTS ARE BULK FILES, SO THEY ARE CACHED, NOT FETCHED PER CALL. OFAC SDN
-// is ~5.7MB and the UK OFSI consolidated list ~16MB; fetching either per
-// request would be slow, rude to a government endpoint, and a fine way to get
-// our egress IP blocked. One load per process, refreshed on a timer, served
-// from memory.
+// THE LIST IS A BULK FILE, SO IT IS CACHED, NOT FETCHED PER CALL. The OFAC
+// SDN export is ~30MB; fetching it per request would be slow, rude to a
+// government endpoint, and a fine way to get our egress IP blocked. One load
+// per process, refreshed on a timer, served from memory.
+//
+// SOURCE: OFAC's legacy SDN.XML, downloaded and parsed by src/ofac-sdn.js,
+// the same module (and the same in-memory parse) Tempo direct mode's
+// payment-party screen reads, so the two never read the list differently and
+// one download feeds both. Every Digital Currency Address of every asset is
+// kept; see that file for why the CSV export is not used.
 //
 // A MISS IS NEVER A CLEARANCE - see src/tools/sanctions-core.js for why the
 // verdict vocabulary has no word in it that reads as permission.
-import { parseSdnCryptoAddresses, parseSdnNames, screenName, normalizeAddress, SANCTIONS_VERDICTS } from "./sanctions-core.js";
+import { sdnCryptoAddresses, sdnNames, screenName, normalizeAddress, lookupAddress, SANCTIONS_VERDICTS } from "./sanctions-core.js";
+import { loadSdnList, onSdnList } from "../ofac-sdn.js";
 
-const SDN_URL = process.env.OFAC_SDN_URL || "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.CSV";
 const REFRESH_MS = Math.max(3600_000, Number(process.env.SANCTIONS_REFRESH_MS) || 12 * 3600_000);
-const MAX_BYTES = 32 * 1024 * 1024; // a list that grows past this is a surprise worth failing on
+// A parse the payment-party screen fetched within this window is taken as is
+// rather than downloaded again. Well under REFRESH_MS, so the timer below
+// still brings a list no older than one period plus this window.
+const SHARED_REUSE_MS = REFRESH_MS / 4;
+// While nothing is loaded the warmer retries on this period rather than
+// waiting a whole REFRESH_MS, since every screening call refuses meanwhile.
+const RETRY_MS = Math.max(1000, Number(process.env.SANCTIONS_LIST_RETRY_MS) || 5 * 60_000);
 const bad = (msg, code) => { const e = new Error(msg); e.statusCode = code; return e; };
 
-let state = { addresses: new Map(), names: [], fetchedAt: null, error: null, loading: null, bytes: 0 };
+let lastAttemptAt = 0;
+let state = { addresses: new Map(), names: [], fetchedAt: null, error: null, loading: null, bytes: 0, publishDate: null };
 
-/** Load the SDN export once. Injectable fetch so the tests never touch a
- *  government endpoint. */
+/** Build this kit's maps from a parsed list (src/ofac-sdn.js). Throws on a
+ *  parse that is a format change, leaving the previous good load in place. */
+function adoptList(list) {
+  const addresses = sdnCryptoAddresses(list);
+  const names = sdnNames(list);
+  // A parse that yields nothing is a FORMAT CHANGE, not an empty list, and
+  // serving "no match" off it would be the worst possible failure here:
+  // every query would read as clean. Keep the previous good load instead.
+  if (!names.length) throw new Error("OFAC SDN parsed to zero entries - treating as a format change, not an empty list");
+  if (!addresses.size) throw new Error("OFAC SDN parsed to zero digital currency addresses - treating as a format change, not an empty list");
+  state = { addresses, names, fetchedAt: list.fetchedAt, error: null, loading: state.loading, bytes: list.bytes, publishDate: list.publishDate };
+}
+
+// Every list the payment-party screen (src/sanctions-screen.js) fetches is
+// adopted here too, so the timer below downloads only when nobody has.
+onSdnList((list) => { if (!state.fetchedAt || list.fetchedAt > state.fetchedAt) adoptList(list); });
+
+/** Load the SDN list. Injectable fetch so the tests never touch a government
+ *  endpoint. `force` skips this kit's own cache; a parse the shared loader
+ *  fetched within SHARED_REUSE_MS is still taken rather than downloaded twice. */
 export async function loadSanctions({ fetchImpl = fetch, now = () => Date.now(), force = false } = {}) {
   if (!force && state.fetchedAt && now() - state.fetchedAt < REFRESH_MS) return state;
   if (state.loading) return state.loading; // one in-flight load, never a stampede
+  lastAttemptAt = Date.now();
   state.loading = (async () => {
     try {
-      const res = await fetchImpl(SDN_URL, { signal: AbortSignal.timeout(60_000), headers: { accept: "text/csv" } });
-      if (!res.ok) throw new Error(`OFAC SDN fetch: HTTP ${res.status}`);
-      const csv = await res.text();
-      if (csv.length > MAX_BYTES) throw new Error(`OFAC SDN export is ${(csv.length / 1e6).toFixed(1)}MB, over the ${MAX_BYTES / 1e6}MB cap`);
-      const addresses = parseSdnCryptoAddresses(csv);
-      const names = parseSdnNames(csv);
-      // A parse that yields nothing is a FORMAT CHANGE, not an empty list, and
-      // serving "no match" off it would be the worst possible failure here:
-      // every query would read as clean. Keep the previous good load instead.
-      if (!names.length) throw new Error("OFAC SDN parsed to zero entries - treating as a format change, not an empty list");
-      state = { addresses, names, fetchedAt: now(), error: null, loading: null, bytes: csv.length };
+      const list = await loadSdnList({ maxAgeMs: SHARED_REUSE_MS, fetchImpl, now });
+      if (list.fetchedAt !== state.fetchedAt) adoptList(list);
     } catch (e) {
       state.error = String(e?.message || e).slice(0, 200);
       state.loading = null;
@@ -54,7 +76,8 @@ export async function loadSanctions({ fetchImpl = fetch, now = () => Date.now(),
 }
 
 const LOADED_SINCE = Date.now();
-const BOOT_GRACE_MS = 10 * 60_000;
+// Covers the 15 s boot delay plus a whole download timeout (src/ofac-sdn.js).
+const BOOT_GRACE_MS = 15 * 60_000;
 
 /** One word for the public /api/gateway-status, so the heartbeat can page:
  *  "ok" loaded within two refresh cycles; "stale" refreshes are failing and
@@ -73,8 +96,24 @@ export const sanctionsStatus = () => ({
   addresses: state.addresses.size,
   entries: state.names.length,
   bytes: state.bytes,
+  publishDate: state.publishDate,
+  source: "SDN.XML",
   lastError: state.error,
 });
+
+// A request never waits out a whole download (minutes on a slow link): it
+// waits this long for a load in flight, then answers 503, and the boot warmer
+// and the retry timer below finish the load.
+const HANDLER_WAIT_MS = 25_000;
+// A request starts a load only when none ran inside RETRY_MS, so callers
+// retrying against a source that is down never queue download after download.
+async function awaitList() {
+  if (state.fetchedAt) return;
+  if (!state.loading && Date.now() - lastAttemptAt < RETRY_MS) return;
+  let t;
+  await Promise.race([loadSanctions().catch(() => {}), new Promise((r) => { t = setTimeout(r, HANDLER_WAIT_MS); t.unref?.(); })]);
+  clearTimeout(t);
+}
 
 const LISTS = [{ list: "OFAC SDN", authority: "US Treasury OFAC", url: "https://sanctionslist.ofac.treas.gov/" }];
 // The caveat travels IN the answer - documentation nobody reads is not a
@@ -108,16 +147,16 @@ export const SANCTIONS_TOOLS = [
       // became verdict-aware, which is the documented-keys guard doing exactly
       // its job: a published example that promises a key the answer does not
       // carry teaches an agent to expect a field that never arrives.
-      output: { type: "json", example: { address: "0x098b716b8aaf21512996dc57eb0615e2383e2f96", verdict: "match", entity: "LAZARUS GROUP", sdnId: "12345", asset: "ETH", listedAddress: "0x098b716b8aaf21512996dc57eb0615e2383e2f96", addressesOnList: 492, listsChecked: [{ list: "OFAC SDN", authority: "US Treasury OFAC" }], listsFetchedAt: "2026-09-12T00:00:00.000Z", confirmBeforeActing: "a match is a string match against a published list, not a confirmed identification..." } },
+      output: { type: "json", example: { address: "0x098b716b8aaf21512996dc57eb0615e2383e2f96", verdict: "match", entity: "LAZARUS GROUP", sdnId: "27307", asset: "ETH", listedAddress: "0x098B716B8Aaf21512996dC57EB0615e2383E2f96", addressesOnList: 1050, listsChecked: [{ list: "OFAC SDN", authority: "US Treasury OFAC" }], listsFetchedAt: "2026-10-14T00:00:00.000Z", confirmBeforeActing: "a match is a string match against a published list, not a confirmed identification..." } },
     },
     handler: async (input) => {
       const raw = String(input?.address || "").trim();
       if (!raw) throw bad("address is required", 400);
       if (raw.length > 120) throw bad("address is too long to be an address", 400);
-      await loadSanctions().catch(() => {});
+      await awaitList();
       if (!state.fetchedAt) throw bad(SANCTIONS_VERDICTS.lists_unavailable, 503);
       const key = normalizeAddress(raw, input?.asset);
-      const hit = state.addresses.get(key);
+      const hit = lookupAddress(state.addresses, raw, input?.asset);
       return {
         address: key,
         verdict: hit ? "match" : "no_match_on_lists_checked",
@@ -138,13 +177,13 @@ export const SANCTIONS_TOOLS = [
     discovery: {
       inputSchema: { type: "object", properties: { name: { type: "string", description: "Person or company name to screen" }, limit: { type: "number", description: "Max matches to return (default 25)" } }, required: ["name"] },
       input: { name: "Gazprom" },
-      output: { type: "json", example: { query: "Gazprom", verdict: "match", exactCount: 0, containsCount: 2, allTokensCount: 0, matches: [{ id: "12345", name: "GAZPROMBANK JOINT STOCK COMPANY", type: "-0-", matchType: "contains" }], entriesOnList: 19388, listsChecked: [{ list: "OFAC SDN", authority: "US Treasury OFAC" }], listsFetchedAt: "2026-09-12T00:00:00.000Z", confirmBeforeActing: "a match is a string match against a published list, not a confirmed identification..." } },
+      output: { type: "json", example: { query: "Gazprom", verdict: "match", exactCount: 0, containsCount: 40, allTokensCount: 0, matches: [{ id: "17016", name: "GAZPROMBANK JOINT STOCK COMPANY", type: "-0-", matchType: "contains" }], entriesOnList: 19430, listsChecked: [{ list: "OFAC SDN", authority: "US Treasury OFAC" }], listsFetchedAt: "2026-10-14T00:00:00.000Z", confirmBeforeActing: "a match is a string match against a published list, not a confirmed identification..." } },
     },
     handler: async (input) => {
       const q = String(input?.name || "").trim();
       if (!q) throw bad("name is required", 400);
       if (q.length > 200) throw bad("name is too long to screen", 400);
-      await loadSanctions().catch(() => {});
+      await awaitList();
       if (!state.fetchedAt) throw bad(SANCTIONS_VERDICTS.lists_unavailable, 503);
       const limit = Math.max(1, Math.min(100, Number(input?.limit) || 25));
       const r = screenName(q, state.names, { limit });
@@ -177,7 +216,7 @@ export const SANCTIONS_TOOLS = [
  * exception means (it proceeds, loudly - see the call site in x402-buyer.js
  * for why failing closed there would be an outage wearing compliance clothes).
  *
- * Never fetches: a payment path must not wait on a 5.7MB download. It reads
+ * Never fetches: a payment path must not wait on a ~30MB download. It reads
  * the copy the boot warmer and the refresh timer maintain.
  */
 export async function screenAddressForPayment(address) {
@@ -187,11 +226,22 @@ export async function screenAddressForPayment(address) {
   return state.addresses.get(key) || null;
 }
 
-/** Warm the list at boot so the first buyer does not pay for a 5.7MB download. */
+let refreshTimer = null;
+
+/** Warm the list at boot so the first buyer does not wait on the download.
+ *  Then a check every quarter period loads a new list once the held one is
+ *  REFRESH_MS old (a list the screen fetched meanwhile resets that clock),
+ *  and every RETRY_MS while nothing is loaded. */
 export function startSanctionsRefresh({ log = console.log } = {}) {
-  const tick = () => loadSanctions({ force: true })
-    .then(() => log(`[sanctions] OFAC SDN loaded: ${state.names.length} entries, ${state.addresses.size} crypto addresses`))
-    .catch((e) => console.warn(`[sanctions] load failed (screening will refuse until it succeeds): ${String(e?.message || e).slice(0, 120)}`));
-  setTimeout(tick, 15_000).unref?.();
-  setInterval(tick, REFRESH_MS).unref?.();
+  let loggedAt = null;
+  const tick = () => loadSanctions()
+    .then(() => { if (state.fetchedAt !== loggedAt) { loggedAt = state.fetchedAt; log(`[sanctions] OFAC SDN loaded: ${state.names.length} entries, ${state.addresses.size} crypto addresses${state.publishDate ? `, published ${state.publishDate}` : ""}`); } })
+    .catch((e) => console.warn(`[sanctions] load failed (screening will refuse until it succeeds): ${String(e?.message || e).slice(0, 120)}`))
+    .finally(schedule);
+  const schedule = () => {
+    refreshTimer = setTimeout(tick, state.fetchedAt ? REFRESH_MS / 4 : RETRY_MS);
+    refreshTimer.unref?.();
+  };
+  refreshTimer = setTimeout(tick, 15_000);
+  refreshTimer.unref?.();
 }

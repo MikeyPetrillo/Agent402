@@ -210,7 +210,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "attest",  // attest-kit.js (writes an EAS attestation on Base from the spending wallet: gas, never free)
   // sanctions-kit.js. Not upstream COST - the lists are free - but a free tier
   // here is a free bulk-screening service against a copy of a government list
-  // we pay egress to keep current, and the whole 492-address set could be
+  // we pay egress to keep current, and the whole address set could be
   // enumerated for nothing. Paid keeps the enumeration bounded and the refresh
   // funded.
   "sanctions-wallet",

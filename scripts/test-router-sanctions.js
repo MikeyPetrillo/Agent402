@@ -60,9 +60,31 @@ const kit = readFileSync(new URL("../src/tools/sanctions-kit.js", import.meta.ur
   ok(/if \(!state\.fetchedAt\) throw new Error/.test(fn),
      "it THROWS when the list is not loaded: the router cannot be handed a null meaning both 'not listed' and 'we have no list', because those lead to opposite actions");
   ok(!/await loadSanctions/.test(fn),
-     "and it never fetches - a payment path must not wait on a 5.7MB download; it reads the copy the boot warmer maintains");
+     "and it never fetches - a payment path must not wait on a ~30MB download; it reads the copy the boot warmer maintains");
   ok(/state\.addresses\.get\(key\) \|\| null/.test(fn), "a match returns the SDN entry so the refusal can name who it belongs to");
   ok(/normalizeAddress\(address\)/.test(fn), "the address is normalised first, so a checksummed payTo matches a lowercase listing");
+}
+
+// --- driven: the router's screen against the XML list, every address ---------
+// The long fixture entry carries 60 Digital Currency Addresses, the shape the
+// CSV export cut short; the router must refuse every one of them, including
+// the base58 ones listed under a ticker outside CASE_SENSITIVE (a Tron address
+// under USDT), which it looks up with no asset hint.
+{
+  const K = await import("../src/tools/sanctions-kit.js");
+  const { parseSdnXml } = await import("../src/ofac-sdn.js");
+  const LONG = readFileSync(new URL("./fixtures/ofac-sdn-long-entry.xml", import.meta.url), "utf8");
+  let threw = false;
+  try { await K.screenAddressForPayment("0x1234567890123456789012345678901234567890"); } catch { threw = true; }
+  ok(threw, "before the list loads the screen throws (unknown), never answers null");
+  await K.loadSanctions({ force: true, fetchImpl: async () => new Response(LONG, { status: 200 }) });
+  const big = parseSdnXml(LONG).entries.find((e) => e.uid === "910001");
+  const missed = [];
+  for (const a of big.addresses) if ((await K.screenAddressForPayment(a.address))?.sdnId !== "910001") missed.push(a.address);
+  eq(missed, [], `every one of the ${big.addresses.length} addresses on one long entry is refused`);
+  ok((await K.screenAddressForPayment(big.addresses[0].address.toUpperCase().replace(/^0X/, "0x")))?.sdnId === "910001", "a checksummed or upper-case EVM payTo still matches");
+  for (const w of ["0x902dCf34E53695bDEA2fFB354b1a2e58bD598256", "0xaF13AA07E7360cC56B3dAbf649fFeF087c0cD5A6", "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0"])
+    eq(await K.screenAddressForPayment(w), null, `an unlisted address answers null (${w.slice(0, 6)})`);
 }
 
 console.log(`test-router-sanctions: ${n} assertions OK`);
