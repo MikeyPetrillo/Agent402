@@ -567,7 +567,7 @@ import { creditsSalesEnabled, creditsTopupFields } from "./credits-sales.js";
 
 // Listed only with a key, like every other env-gated kit: a tool we cannot serve
 // must not appear in the catalog, on /api/pricing, or in a 402's offer.
-const JUDGE_TOOLS_ENABLED = judgeEnabled() ? JUDGE_TOOLS : [];
+const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePreviewEnabled() ? JUDGE_PREVIEW_TOOLS : [])];
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger() }) : [];
 const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...EXA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CVE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...DECIDE_TOOLS_ENABLED];
 // House style on every report tier's output (agents, card buyers, monitors
@@ -584,7 +584,7 @@ const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZ
 // code, and the model-backed ones are named rather than hidden - so the copy
 // now says that and derives its counts from here.
 const MODEL_BACKED_KITS = [
-  ...JUDGE_TOOLS,   // model-backed whether or not the key is set, so the claim is never wrong
+  ...JUDGE_TOOLS, ...JUDGE_PREVIEW_TOOLS,   // model-backed whether or not the key is set, so the claim is never wrong
   ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...IMAGE_GEN_TOOLS, ...IMAGES_FAST_TOOLS, ...TTS_TOOLS, ...STT_TOOLS,
   ...EMBED_TOOLS, ...MODERATE_TOOLS, ...PDF_SUMMARIZE_TOOLS,
   ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS,
@@ -648,6 +648,7 @@ import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL, l
 import { classifyWishes, wishClassifyEnabled } from "./wish-classify.js";
 import { rerankMisses, rerankEnabled } from "./discovery-rerank.js";
 import { JUDGE_TOOLS, judgeEnabled } from "./tools/judge-kit.js";
+import { JUDGE_PREVIEW_TOOLS, judgePreviewEnabled } from "./tools/judge-preview-kit.js";
 import { sweepStaleTsMap } from "./rate-sweep.js";
 
 // Shared with the MCP free tier (src/mcp-http.js) — same policy, separate
@@ -2848,6 +2849,12 @@ if (UNPAID_BUDGET) app.use(UNPAID_BUDGET.middleware);
 // reading it into memory twice.
 app.use(["/v1/audio/transcriptions", "/v1/pro/audio/transcriptions"], express.raw({ type: "multipart/form-data", limit: "26mb" }));
 app.use("/v1/metered", express.json({ limit: "1mb" }));
+// The Jev preview routes carry images (base64 in JSON) or a long document, so
+// they take a larger body than the global 100 kb. Each limit is the route's own
+// cap plus the JSON envelope; the handler checks every image and byte again.
+app.use("/v1/judge/vision", express.json({ limit: "23mb" }));
+app.use("/v1/judge/locate", express.json({ limit: "6mb" }));
+app.use("/v1/judge/long", express.json({ limit: "2mb" }));
 // An unpaid POST here tokenizes the body for its 402 quote (measured 28 ms
 // per 190k CJK chars): bound unauthenticated quote requests per IP so the
 // quoter cannot be used as free CPU. Paid retries carry a credential and pass.
