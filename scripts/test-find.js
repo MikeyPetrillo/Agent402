@@ -476,5 +476,16 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   ok(find("perp klines for btc 1h").results[0]?.slug === "perp-klines", "a klines ask still reaches perp-klines");
 }
 
+// ---- typos and misses (2026-10-15, from the demand board) ----
+{
+  const { closestCatalogWord, markMissRows } = await import("../src/find.js");
+  const words = new Map([["sanctions", 4], ["screenshot", 2], ["other", 9], ["lowercase", 1]]);
+  ok(closestCatalogWord("danctions", words) === "sanctions", "a one-letter slip in a long word is corrected (danctions -> sanctions)");
+  ok(closestCatalogWord("screenhsot", words) === "screenshot", "two swapped letters are corrected (screenhsot -> screenshot)");
+  ok(closestCatalogWord("mother", words) === null, "a short real word is never turned into another by dropping a letter (mother stays)");
+  ok(closestCatalogWord("sanctions", words) === null, "a word already in the catalog is not corrected");
+  const m = markMissRows({ results: [{ slug: "perp-orderbook" }] });
+  ok(m.weakMatches === true && m.results[0].weak === true, "a miss marks every returned row weak");
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

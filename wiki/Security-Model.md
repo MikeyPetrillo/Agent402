@@ -45,6 +45,10 @@ Proof-of-work proves *effort*, not *cost coverage*. Anything that spends real re
 - Client-side spend caps exist at every layer (see [[Paying with x402]]).
 - Settlement is on-chain and publicly auditable; the seller cannot inflate revenue claims.
 
+## Sanctions screening
+
+When the server settles Tempo payments itself (`TEMPO_RELAY=off`), every party to a payment, and the wallets that recently funded the payer, are checked against OFAC's SDN list before anything settles. A listed party is refused and nothing is charged. Without a loaded list the server offers no Tempo challenge at all, so a payment is never accepted unscreened. Payments the router makes to outside sellers are screened against the same list. The list is read from OFAC's full SDN XML export and refreshed on a schedule; `/api/gateway-status` reports its state as one word.
+
 ## Supply chain
 
 - `npm audit` is kept at zero known vulnerabilities - dependencies with unfixable advisories get removed along with their tools (this happened to the Excel tools: SheetJS prototype-pollution/ReDoS on untrusted input, no patched build installable - tools deleted rather than shipped vulnerable).

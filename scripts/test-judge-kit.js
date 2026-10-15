@@ -139,7 +139,8 @@ for (const [status, want, why] of [[401, 503, "a refused key is OUR problem, a 5
   const s = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   const mb = s.slice(s.indexOf("const MODEL_BACKED_KITS = ["), s.indexOf("const MODEL_BACKED_KITS = [") + 400);
   ok(/JUDGE_TOOLS/.test(mb), "judge is in MODEL_BACKED_KITS, so /api/pricing publishes modelBacked:true and the manifest claim stays true");
-  ok(/const JUDGE_TOOLS_ENABLED = judgeEnabled\(\)/.test(s), "listing is gated on the key: a tool we cannot serve is not advertised");
+  ok(/const JUDGE_TOOLS_ENABLED = \[\.\.\.\(judgeEnabled\(\) \? JUDGE_TOOLS : \[\]\), \.\.\.\(judgePreviewEnabled\(\) \? JUDGE_PREVIEW_TOOLS : \[\]\)\]/.test(s), "listing is gated on the key: a tool we cannot serve is not advertised (the preview routes too)");
+  ok(/\.\.\.JUDGE_TOOLS, \.\.\.JUDGE_PREVIEW_TOOLS/.test(mb), "the preview routes are model-backed too");
   ok(s.indexOf("const JUDGE_TOOLS_ENABLED") < s.indexOf("const ALL_KIT = ["),
     "and it is declared BEFORE ALL_KIT uses it (a const used above its declaration is a TDZ crash at boot, which node --check cannot see)");
   const pow = readFileSync(new URL("../src/pow.js", import.meta.url), "utf8");

@@ -84,7 +84,7 @@ export function agenticFinancePage(baseUrl) {
     <div class="af-2col" style="display:grid;grid-template-columns:1.1fr .9fr;gap:50px;align-items:start;">
       <div>
         <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);">Agentic Finance <span style="color:var(--accent);">(AIFI)</span></h1>
-        <p id="definition" style="font-size:var(--fs-lg);line-height:1.5;color:var(--on-panel-soft);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">Agentic Finance is software agents transacting on their own:</strong> discovering a service, reading a machine-readable price, paying per request from a non-custodial wallet over open protocols like <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">x402</a> and <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">MPP</a>, receiving a verifiable receipt, and, on the other side, earning per request for what they serve.</p>
+        <p id="definition" style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">Agentic Finance is software agents transacting on their own:</strong> discovering a service, reading a machine-readable price, paying per request from a non-custodial wallet over open protocols like <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">x402</a> and <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">MPP</a>, receiving a verifiable receipt, and, on the other side, earning per request for what they serve.</p>
         <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">No accounts, no API keys, no invoices. The payment is the identity and every settlement is on a public ledger. <strong style="color:var(--ink);">Agent402 is the applied layer of agentic finance</strong>: the tools agents buy, the index and router that find and pay the best seller, the tollbooth that lets any site earn from agents, and the transparency that proves it all on chain.</p>
       </div>
       <div style="border:1px solid var(--hairline);background:var(--panel);">
@@ -104,7 +104,7 @@ export function agenticFinancePage(baseUrl) {
 
 <section id="agent402" style="background:var(--panel);margin-top:64px;border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
-    <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">02 / THE APPLIED LAYER</div>
+    <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent-lit);margin-bottom:12px;">02 / THE APPLIED LAYER</div>
     <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--on-panel);">Where Agent402 sits.</h2>
     <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--on-panel-muted);max-width:820px;margin:0 0 30px;">Open source, self-hostable, two-sided, and live on both open protocols. Everything below settles on mainnet today, and every claim links to the surface that proves it.</p>
     <div class="af-4col" style="display:grid;grid-template-columns:repeat(4,1fr);border:1.5px solid var(--panel-rule-2);border-right:none;border-bottom:none;">${rolesHtml}</div>

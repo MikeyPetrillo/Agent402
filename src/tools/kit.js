@@ -987,8 +987,9 @@ const textTools = [
     slug: "case",
     category: "text",
     price: "$0.001",
-    description: "Convert text between camelCase, PascalCase, snake_case, kebab-case, CONSTANT_CASE, Title Case, lower, UPPER.",
+    description: "Convert text between camelCase, PascalCase, snake_case, kebab-case, CONSTANT_CASE, Title Case, lowercase and UPPERCASE.",
     tags: ["case", "camel", "snake", "kebab", "text"],
+    aliases: ["lowercase", "uppercase", "capitalize"],
     discovery: {
       bodyType: "json",
       input: { text: "hello world example", to: "camel" },

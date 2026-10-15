@@ -659,6 +659,19 @@ export function refundByEvidence(evidence) {
   try { return (typeof evidence === "string" && evidence.trim() && selectByEvidence.get(evidence.trim())) || null; } catch { return null; }
 }
 
+/**
+ * refundByEvidence for a decision another container may have just changed (a
+ * refund marked sending or paid there): the mirror pulls once first, bounded
+ * at `ms` so a slow database never holds the caller, then answers. File mode
+ * answers from the mirror alone.
+ */
+export async function refundByEvidenceFresh(evidence, { ms = 1500 } = {}) {
+  if (USE_PG) {
+    await Promise.race([refundLedgerRefresh().catch(() => 0), new Promise((r) => setTimeout(r, ms).unref?.())]);
+  }
+  return refundByEvidence(evidence);
+}
+
 /** A debt booked for a payment that has since been claimed for the request it
  *  paid (a Tempo push transfer refused on input, then presented again and
  *  served): void it, so the buyer is never both served and refunded. Requires

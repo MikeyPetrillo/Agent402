@@ -34,14 +34,30 @@
   // --- the live panel's four figures: every x402 and MPP payment the live
   // view reads from the chain in the last hour (its public stats endpoint;
   // the scene itself is the framed /embed page). Left as "-" if unreadable.
+  // Each live figure eases from what it shows to the new reading; with
+  // reduced motion it is simply set.
+  var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var liveShown = {};
+  function tween(id, to, fmt) {
+    var el = document.getElementById(id); if (!el) return;
+    var from = liveShown[id] == null ? 0 : liveShown[id];
+    liveShown[id] = to;
+    if (reduceMotion || from === to) { el.textContent = fmt(to); return; }
+    var t0 = performance.now(), dur = from ? 700 : 1100;
+    (function step(t) {
+      var p = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+      el.textContent = fmt(from + (to - from) * e);
+      if (p < 1) requestAnimationFrame(step);
+    })(t0);
+  }
   function pollLive() {
     fetch('https://live.agent402.tools/api/stats').then(function(r) { return r.ok ? r.json() : null; }).then(function(d) {
       var a = d && d.all, h = a && a.h1; if (!h) return;
-      var set = function(id, v) { var e = document.getElementById(id); if (e) e.textContent = v; };
-      set('hm-live-n', Number(h.payments || 0).toLocaleString('en-US'));
-      var u = Number(h.usd || 0); set('hm-live-usd', '$' + (u >= 100 ? Math.round(u).toLocaleString('en-US') : u.toFixed(2)));
-      set('hm-live-buyers', Number(h.buyers || 0).toLocaleString('en-US'));
-      set('hm-live-pm', Number(a.perMinute || 0).toFixed(1));
+      var u = Number(h.usd || 0);
+      tween('hm-live-n', Number(h.payments || 0), function(v) { return Math.round(v).toLocaleString('en-US'); });
+      tween('hm-live-usd', u, function(v) { return '$' + (u >= 100 ? Math.round(v).toLocaleString('en-US') : v.toFixed(2)); });
+      tween('hm-live-buyers', Number(h.buyers || 0), function(v) { return Math.round(v).toLocaleString('en-US'); });
+      tween('hm-live-pm', Number(a.perMinute || 0), function(v) { return v.toFixed(1); });
     }).catch(function() {});
   }
   if (document.getElementById('hm-live-n')) { pollLive(); setInterval(pollLive, 30000); }

@@ -129,6 +129,8 @@
       field.className='pg-field';
 
       var lbl=document.createElement('label');
+      var fieldId='pg-f-'+String(k).replace(/[^A-Za-z0-9_-]/g,'_');
+      lbl.htmlFor=fieldId;
       lbl.textContent=k;
       if(prop.description){
         var descSpan=document.createElement('span');
@@ -144,6 +146,7 @@
         var cb=document.createElement('input');
         cb.type='checkbox';
         cb.setAttribute('data-key',k);
+        cb.id=fieldId;
         cb.setAttribute('data-type','boolean');
         if(val)cb.checked=true;
         wrap.appendChild(cb);
@@ -155,6 +158,7 @@
         var numIn=document.createElement('input');
         numIn.type='number';
         numIn.setAttribute('data-key',k);
+        numIn.id=fieldId;
         numIn.setAttribute('data-type','number');
         numIn.value=String(val);
         field.appendChild(numIn);
@@ -162,6 +166,7 @@
         var txtIn=document.createElement('input');
         txtIn.type='text';
         txtIn.setAttribute('data-key',k);
+        txtIn.id=fieldId;
         txtIn.setAttribute('data-type','string');
         txtIn.value=String(val);
         field.appendChild(txtIn);

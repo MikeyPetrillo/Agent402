@@ -1754,7 +1754,7 @@ const GUIDE_PAGE_CSS = `
 .gp-wrap{max-width:760px;margin:0 auto;padding:56px 30px 48px;}
 .gp-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;}
 .gp-crumb{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:20px;}
-.gp-crumb a{color:var(--accent);text-decoration:none;}
+.gp-crumb a{color:var(--accent);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px;}
 .gp-crumb a:hover{text-decoration:underline;}
 .gp-wrap h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 28px;color:var(--ink);text-wrap:balance;}
 @media(max-width:640px){.gp-wrap h1{font-size:var(--fs-2xl);line-height:1.1;}}
@@ -1765,7 +1765,7 @@ const GUIDE_PAGE_CSS = `
 .gp-body li{margin-bottom:6px;}
 .gp-body strong{color:var(--ink);}
 .gp-body em{font-style:italic;}
-.gp-body a{color:var(--accent);text-decoration:none;}
+.gp-body a{color:var(--accent);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px;}
 .gp-body a:hover{text-decoration:underline;}
 .gp-body code{font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--card);border:1px solid var(--hairline);padding:2px 6px;}
 .gp-body pre{background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px 20px;overflow-x:auto;margin:0 0 16px;border:1px solid var(--hairline);}

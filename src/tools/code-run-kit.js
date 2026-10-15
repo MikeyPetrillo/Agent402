@@ -9,6 +9,7 @@
 
 import { redactSecrets } from "./redact.js";
 import { payerFromRequest } from "../payer.js";
+import { perReplica } from "../rate-limit.js";
 
 let Sandbox;
 
@@ -29,15 +30,18 @@ const TIERS = {
 // calls (or one buyer in a loop) can spin up unbounded sandboxes and burn the
 // E2B quota + our memory. Checked BEFORE Sandbox.create so we never pay to
 // start one we can't afford.
-const E2B_MAX_CONCURRENT = Number(process.env.E2B_MAX_CONCURRENT) || 8;
+// The cap is for the whole service: with RATE_LIMIT_REPLICAS set, each
+// container takes its share, so two replicas never run 16 at once against an
+// account quota sized for 8.
+const E2B_MAX_CONCURRENT = perReplica(Number(process.env.E2B_MAX_CONCURRENT) || 8);
 let e2bInFlight = 0;
 
 // Per-payer concurrency: one caller cannot hold every sandbox slot. Keyed on
 // the payer's own identity where the request carries one (signed EVM payer,
 // credits key, Tempo sender); otherwise on the client IP, with a looser limit
 // because many callers can share one address.
-const PER_PAYER_MAX_CONCURRENT = 2;
-const PER_IP_MAX_CONCURRENT = 4;
+const PER_PAYER_MAX_CONCURRENT = perReplica(2);
+const PER_IP_MAX_CONCURRENT = perReplica(4);
 const payerInFlight = new Map();
 function payerKeyOf(req) {
   if (!req) return null;

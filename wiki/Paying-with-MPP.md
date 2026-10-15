@@ -9,12 +9,12 @@ Every paid endpoint on Agent402.Tools is **dual-stack**: the same 402 carries an
 | MPP method | Asset | Where it settles | Notes |
 |---|---|---|---|
 | `evm` charge | USDC | Base, Celo | Same EIP-3009 on-chain settlement as x402, translated by the shim; verifiable on Basescan/Celoscan |
-| `tempo` charge | USDC.e, PathUSD | Tempo (chain 4217) | Native TIP-20 settlement through Tempo's hosted MPP relay, no x402 facilitator involved. The hosted instance offers USDC.e first, then PathUSD (one challenge per currency; a stock mppx client pays the first it can, or `autoSwap` between them) |
+| `tempo` charge | USDC.e, PathUSD | Tempo (chain 4217) | Native TIP-20 settlement, no x402 facilitator involved: through Tempo's hosted MPP relay by default, or checked and broadcast by the server itself (`TEMPO_RELAY=off`), which then screens every party to the payment against OFAC's SDN list before anything settles. The hosted instance offers USDC.e first, then PathUSD (one challenge per currency; a stock mppx client pays the first it can, or `autoSwap` between them) |
 | `stripe` charge | card (USD) | Stripe | Cards over the MPP wire via Stripe Shared Payment Tokens, offered only on routes priced $0.50 or more (the card minimum); settles a PaymentIntent after the handler, same settle-after-handler discipline. Mounted when the operator sets `STRIPE_SECRET_KEY` + `STRIPE_PROFILE_ID` |
 
 ### Which routes offer which method, and in what order
 
-The 402 lists the challenges in a fixed order: `tempo` (one per currency, USDC.e first), then `evm` (Base, then Celo), then `stripe`. A stock mppx client pays the first challenge it has a method for and does not fall back to the next one, so a wallet holding Tempo funds pays over Tempo. A client whose Tempo credential the relay has just refused (an empty Tempo balance is the usual cause) sees the `evm` challenges first for a while, so it can pay on Base instead.
+The 402 lists the challenges in a fixed order: `tempo` (one per currency, USDC.e first), then `evm` (Base, then Celo), then `stripe`. A stock mppx client pays the first challenge it has a method for and does not fall back to the next one, so a wallet holding Tempo funds pays over Tempo. A client whose Tempo credential the server has just refused (an empty Tempo balance is the usual cause) sees the `evm` challenges first for a while, so it can pay on Base instead.
 
 - `evm` is offered on every paid route.
 - `tempo` is offered on every paid route except the identity-bound ones (wallet-keyed memory, usage history, attestations, feedback), whose identity is the signed EIP-3009 payer, and the long-running ones (report products, video, the fast and pro image tiers, seller payability checks), which can outlive a Tempo credential.

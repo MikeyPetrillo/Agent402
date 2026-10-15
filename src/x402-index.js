@@ -5608,6 +5608,7 @@ export function looksLikeListingInjection(text) {
 let crawlerTimer = null;
 let firstCrawlTimer = null;
 let discoveryTimer = null;
+let pullTimer = null;
 let crawlInFlight = false;
 // How many crawl cycles have RUN TO COMPLETION. Read only by indexReadiness()
 // below, to tell "we hold no row for that seller" apart from "we have not
@@ -6105,6 +6106,8 @@ export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
   if (persistInFlight) return false;
   persistInFlight = true;
   try {
+    // The other container's removals and newer entries first (no-op without a database).
+    await pullIndexChanges();
     if (cache.size === 0) return false;
     const entries = persistedEntries();
     if (!entries.length) return false;
@@ -6175,6 +6178,72 @@ const PG_BYTES_PER_BATCH = 4 * 1_048_576;
 const pgOriginHashes = new Map();
 const lineHash = (line) => createHash("sha1").update(line).digest("base64");
 const recordsTable = () => `${stateDbSchema()}.records`;
+// An entry's fetchedAt as a number in SQL, 0 when absent or not numeric.
+const FETCHED_AT_SQL = (col) => `(CASE WHEN (${col}->>'fetchedAt') ~ '^[0-9]+(\\.[0-9]+)?$' THEN (${col}->>'fetchedAt')::numeric ELSE 0 END)`;
+
+// ---- two containers, one index (2026-10-15) --------------------------------
+// Each container holds the whole index in memory. A seller registered, or an
+// origin crawled, on the other container reaches this one only through the
+// table, so every container pulls the rows changed since its last pull (every
+// INDEX_PULL_MS and before each save). A pulled entry replaces the one held
+// only when it was fetched at least as recently; a removed origin is never
+// folded back. The removal list is re-read first, so an origin the operator
+// removed on the other container leaves this one before it could be saved.
+const INDEX_PULL_MS = Number(process.env.INDEX_PULL_MS) || 30_000;
+const entryFetchedAt = (e) => { const n = Number(e?.fetchedAt); return Number.isFinite(n) ? n : 0; };
+let pullWatermark = null;
+let pullInFlight = null;
+export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) {
+  if (!stateDbEnabled()) return 0;
+  if (pullInFlight) return pullInFlight;
+  pullInFlight = (async () => {
+    await reloadRemovedOrigins();
+    let folded = 0;
+    if (pullWatermark == null) {
+      // The first pull starts from the database's clock a little before now:
+      // the warm start already read everything older.
+      const r = await stateQuery("SELECT (now() - interval '10 minutes')::text AS t");
+      pullWatermark = r.rows[0].t;
+    }
+    for (let page = 0; page < maxPages; page++) {
+      const r = await stateQuery(
+        // The stamp travels as text: a JS Date drops the microseconds, and the
+        // last row of every pull would then be read again forever.
+        `SELECT id, body, updated_at::text AS stamp FROM ${recordsTable()} WHERE collection = $1 AND updated_at > $2::timestamptz ORDER BY updated_at, id LIMIT $3`,
+        [INDEX_RECORDS, pullWatermark, pageSize],
+      );
+      for (const { id, body, stamp } of r.rows) {
+        pullWatermark = stamp;
+        if (typeof id !== "string" || !body || typeof body !== "object" || isRemovedOrigin(id)) continue;
+        const held = cache.get(id);
+        if (held && entryFetchedAt(held) >= entryFetchedAt(body)) continue;
+        cache.set(id, held ? { ...held, ...body } : { ...body, warmStarted: true });
+        if (!held) discoveredSeeds.add(id);
+        folded++;
+      }
+      if (r.rows.length < pageSize) break;
+      await new Promise((res) => setImmediate(res));
+    }
+    if (folded) console.log(`[x402-index] pulled ${folded} origin change(s) another container wrote`);
+    return folded;
+  })().catch((e) => { console.warn(`[x402-index] pull from the state database failed: ${String(e?.message || e).slice(0, 120)}`); return 0; })
+    .finally(() => { pullInFlight = null; });
+  return pullInFlight;
+}
+/** Read the removal list again from the database and purge what it names. */
+async function reloadRemovedOrigins() {
+  if (!stateDbEnabled()) return;
+  const d = docFor(removedFile());
+  try {
+    const body = await d.load(null);
+    for (const r of Array.isArray(body) ? body : []) {
+      const k = strictOriginKey(r?.origin);
+      if (!k || removedOrigins.has(k) || removedOrigins.size >= REMOVED_ORIGINS_MAX) continue;
+      removedOrigins.set(k, { origin: k, removedAt: Number(r.removedAt) || 0, note: typeof r.note === "string" ? r.note.slice(0, 500) : "" });
+      purgeOrigin(k);
+    }
+  } catch { /* the list held stays; the next pull tries again */ }
+}
 
 /** The lines as (id, body) batches: `lines[i]` is JSON.stringify([origin, entry]). */
 function* recordBatches(entries, bodyOf) {
@@ -6206,10 +6275,15 @@ async function persistIndexCacheToStateDb(entries, lines) {
     // entry starts after the origin string and its comma.
     const bodyOf = (i) => (changed.has(entries[i][0]) ? lines[i].slice(JSON.stringify(entries[i][0]).length + 2, -1) : null);
     for (const [ids, bodies] of recordBatches(entries, bodyOf)) {
+      // NEWER WINS (2026-10-15). With two containers, one may hold an older
+      // copy of an origin than the row (the other crawled it since), and an
+      // unconditional upsert wrote that copy back. A row is replaced only by
+      // an entry fetched at least as recently as the one it holds.
       await stateQuery(
-        `INSERT INTO ${recordsTable()} (collection, id, body)
+        `INSERT INTO ${recordsTable()} AS r (collection, id, body)
          SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
-         ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()`,
+         ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
+         WHERE ${FETCHED_AT_SQL("r.body")} <= ${FETCHED_AT_SQL("EXCLUDED.body")}`,
         [INDEX_RECORDS, ids, bodies],
       );
       for (const id of ids) pgOriginHashes.set(id, changed.get(id));
@@ -6503,6 +6577,10 @@ export function startCrawler(opts = {}) {
       .catch(() => {});
   }, CRAWL_INTERVAL_MS);
   discoveryTimer = setInterval(() => runDiscoveryLeased(selfOrigin), DISCOVERY_INTERVAL_MS);
+  if (stateDbEnabled()) {
+    pullTimer = setInterval(() => { pullIndexChanges().catch(() => {}); }, INDEX_PULL_MS);
+    if (typeof pullTimer.unref === "function") pullTimer.unref();
+  }
   // Don't keep the event loop alive on shutdown.
   if (typeof crawlerTimer.unref === "function") crawlerTimer.unref();
   if (typeof discoveryTimer.unref === "function") discoveryTimer.unref();
@@ -6520,6 +6598,7 @@ export function stopCrawler() {
   }
   if (discoveryTimer) {
     clearInterval(discoveryTimer);
+    if (pullTimer) { clearInterval(pullTimer); pullTimer = null; }
     discoveryTimer = null;
   }
 }

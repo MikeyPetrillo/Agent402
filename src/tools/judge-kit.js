@@ -90,20 +90,33 @@ export function validateJudgeRequest(input = {}) {
   if (stateStr.length > LIMITS.stateChars) {
     throw bad(`"state" is ${stateStr.length} characters; this endpoint accepts ${LIMITS.stateChars}. Split the work or summarise upstream.`);
   }
+  const out = buildQuestions(questions);
+  const body = { state: stateStr, model: String(model), questions: out };
+  const bytes = Buffer.byteLength(JSON.stringify(body));
+  if (bytes > LIMITS.bodyBytes) {
+    throw bad(`This request is ${bytes} bytes; this endpoint accepts ${LIMITS.bodyBytes}. Shorten the state or the questions.`);
+  }
+  return body;
+}
+
+/** The questions map, checked and copied into the upstream shape. `box` is
+ *  accepted only where the caller allows it (the image routes on the preview
+ *  model); it takes instructions and no criteria. */
+export function buildQuestions(questions, { allowBox = false } = {}) {
   if (!questions || typeof questions !== "object" || Array.isArray(questions)) {
     throw bad('"questions" must be a map of your own question ids to question objects.');
   }
   const ids = Object.keys(questions);
   if (!ids.length) throw bad('"questions" is empty. Ask at least one.');
   if (ids.length > LIMITS.questions) throw bad(`At most ${LIMITS.questions} questions per call; got ${ids.length}.`);
-
+  const types = allowBox ? ["choice", "score", "noul", "box"] : ["choice", "score", "noul"];
   const out = {};
   for (const id of ids) {
     const q = questions[id];
     if (!q || typeof q !== "object") throw bad(`Question "${id}" must be an object.`);
     const type = String(q.type || "");
-    if (!["choice", "score", "noul"].includes(type)) {
-      throw bad(`Question "${id}" has type ${JSON.stringify(q.type)}; must be "choice", "score" or "noul".`);
+    if (!types.includes(type)) {
+      throw bad(`Question "${id}" has type ${JSON.stringify(q.type)}; must be ${types.map((t) => `"${t}"`).join(", ")}.`);
     }
     const instructions = String(q.instructions || "").trim();
     if (!instructions) throw bad(`Question "${id}" needs "instructions": the question the model answers.`);
@@ -114,6 +127,8 @@ export function validateJudgeRequest(input = {}) {
 
     if (type === "noul") {
       if (q.criteria !== undefined) throw bad(`Question "${id}" is a noul and takes no "criteria". A noul answers yes/no as a probability.`);
+    } else if (type === "box") {
+      if (q.criteria !== undefined) throw bad(`Question "${id}" is a box and takes no "criteria". Describe the one thing to find in "instructions".`);
     } else if (type === "choice") {
       const c = q.criteria;
       if (!c || typeof c !== "object" || Array.isArray(c)) throw bad(`Question "${id}" is a choice and needs "criteria": a map of option name to description.`);
@@ -131,17 +146,16 @@ export function validateJudgeRequest(input = {}) {
     }
     out[id] = built;
   }
-  const body = { state: stateStr, model: String(model), questions: out };
-  const bytes = Buffer.byteLength(JSON.stringify(body));
-  if (bytes > LIMITS.bodyBytes) {
-    throw bad(`This request is ${bytes} bytes; this endpoint accepts ${LIMITS.bodyBytes}. Shorten the state or the questions.`);
-  }
-  return body;
+  return out;
 }
 
+// "jev-latest" moves when TypeSafe promotes a release, so a paid answer could
+// change model with no comparison on our side. The default backend is pinned
+// to the version we tested; "jev-preview" stays the buyer's explicit opt-in.
+export const JEV_PINNED = (process.env.JEV_MODEL || "jev-1.13.0").trim();
+export const upstreamJevModel = (m) => (m === "jev-preview" ? "jev-preview" : JEV_PINNED);
 async function callJev(body, fetchImpl = fetch) {
-  const model = body.model === LUNA || body.model === DECISION_ONE ? "jev-latest" : body.model;
-  return post(ENDPOINT, keyOf(), { ...body, model }, fetchImpl, (j) => j?.answers && typeof j.answers === "object");
+  return post(ENDPOINT, keyOf(), { ...body, model: upstreamJevModel(body.model) }, fetchImpl, (j) => j?.answers && typeof j.answers === "object");
 }
 
 // The Jev body with only the model changed. Same error classes as post().
@@ -154,7 +168,7 @@ async function callLuna(request, fetchImpl = fetch) {
   return post(LUNA_ENDPOINT, openaiKey(), request, fetchImpl, (j) => Array.isArray(j?.answers));
 }
 
-async function post(url, key, body, fetchImpl, hasAnswers) {
+export async function post(url, key, body, fetchImpl, hasAnswers, extraHeaders = {}) {
   // Unreachable or slow upstream: theirs, not ours (the 503 classes of
   // src/upstream-deadline.js), and a >= 400 cancels settlement. A timed-out
   // call may still have been billed upstream (mayBeBilled: no other backend is
@@ -164,7 +178,7 @@ async function post(url, key, body, fetchImpl, hasAnswers) {
   try {
     res = await upstreamFetch(url, {
       method: "POST",
-      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${key}`, "content-type": "application/json", ...extraHeaders },
       body: JSON.stringify(body),
     }, ctx);
   } catch (err) {
@@ -179,6 +193,10 @@ async function post(url, key, body, fetchImpl, hasAnswers) {
     if (res.status === 401 || res.status === 403) { const e = new Error("Judgment upstream rejected our credentials."); e.statusCode = 503; throw e; }
     if (res.status === 402) { const e = new Error("Judgment upstream is unavailable."); e.statusCode = 503; throw e; }
     if (res.status === 429) { const e = new Error("Judgment upstream is rate limiting. Retry shortly."); e.statusCode = 503; throw e; }
+    // The upstream answers some of its own failures with 499 and an
+    // internal_server_error body (seen 2026-10-15 on an image request): its
+    // fault, not the request's, so it is a 503 to retry, not a 400 to fix.
+    if (res.status === 499 || /"error_type"\s*:\s*"internal_server_error"/.test(text || "")) { const e = new Error("Judgment upstream had an internal error. Retry shortly; nothing was charged."); e.statusCode = 503; e.mayBeBilled = false; throw e; }
     if (res.status >= 400 && res.status < 500) throw bad(`Judgment upstream refused the request (${res.status}). Check the question shapes against /v1/judge's schema.`);
     const e = new Error(`Judgment upstream returned ${res.status}.`); e.statusCode = 502; throw e;
   }
@@ -448,7 +466,7 @@ export const JUDGE_TOOLS = [{
       required: ["state", "questions"],
       properties: {
         state: { type: ["string", "object", "array"], description: `The content to judge. Up to ${LIMITS.stateChars} characters.` },
-        model: { type: "string", enum: [...MODELS], description: "Which model answers first; the others are fallbacks. microsoft-decision-1 is Microsoft Decision-1, a model-backed judgment, not deterministic. Defaults to jev-latest." },
+        model: { type: "string", enum: [...MODELS], description: "Which model answers first; the others are fallbacks. jev-latest is the Jev version we have tested (the answer names it); jev-preview is the newer Jev release, which its maker labels a preview. microsoft-decision-1 is Microsoft Decision-1, a model-backed judgment, not deterministic. Defaults to jev-latest." },
         questions: { type: "object", description: "Your own ids mapped to question objects. Each has type (choice/score/noul), instructions, and criteria for choice/score." },
       },
     },

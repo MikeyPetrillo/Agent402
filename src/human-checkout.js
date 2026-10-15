@@ -117,6 +117,18 @@ function publicView(rec, publicId) {
   // Everything on a done record is the report itself; nothing buyer-identifying is stored on it.
   return { status: "done", publicView: true, publicId, product: productKey, kind: rec.kind, slug: rec.slug, input: rec.input, title: rec.title, report: rec.report, sources: rec.sources || [], tables: rec.tables || [], ...(rec.images ? { images: rec.images } : {}), at: rec.at, publishedAt: rec.publishedAt || null, priceUsd: productKey ? HUMAN_PRODUCTS[productKey].price / 100 : null };
 }
+/** readPublicReport, for a link published moments ago on another container:
+ *  on a miss the mirror is refreshed once (at most once a second across all
+ *  callers, bounded at 2 s) and read again, so the buyer's first open of a
+ *  link they just published is not a 404. */
+export async function readPublicReportFresh(publicId, dir = DEFAULT_DIR()) {
+  const hit = readPublicReport(publicId, dir);
+  if (hit || !USE_PG || typeof publicId !== "string" || !PUBLIC_ID_RE.test(publicId)) return hit;
+  if (Date.now() - pub.lastAt > 1000 || pub.refreshing) {
+    await Promise.race([refreshPublicMirror(), new Promise((r) => setTimeout(r, 2000).unref?.())]);
+  }
+  return readPublicReport(publicId, dir);
+}
 export function readPublicReport(publicId, dir = DEFAULT_DIR()) {
   if (typeof publicId !== "string" || !PUBLIC_ID_RE.test(publicId)) return null;
   if (USE_PG) {

@@ -109,7 +109,8 @@ const get = async (p) => (await fetch(`${base}${p}`)).json();
   ok(/const externalServes = async \(q, meter = null\) => \{/.test(src), "the miss branch has an external-capability consult");
   ok(/externalServes\(q, meter\)/.test(src) && src.indexOf("externalServes(q, meter)") > src.indexOf("result.relatedSellers"),
      "...consulted AFTER the seller-name bridge, so a name match still wins");
-  const missBranch = src.slice(src.indexOf("} else if (await externalServes(q, meter)) {"), src.indexOf('result.hint = "POST /api/wish'));
+  const missBranch = src.slice(src.indexOf("} else if (await externalServes(q, meter)) {"), src.indexOf("if (result.count > 0) markMissRows(result);"));
+  ok(src.indexOf("if (result.count > 0) markMissRows(result);") > src.indexOf("} else if (await externalServes(q, meter)) {"), "the true-miss branch (which records the wish) follows the external consult");
   ok(!/recordWish/.test(missBranch),
      "a query an indexed seller serves records NO wish - a false demand signal steers what we build next");
   ok(/routeAcross|markWeakMatches\(result, `\$\{BASE_URL\}\/api\/route/.test(missBranch), "...and the caller is handed the router link instead of being told nothing exists");

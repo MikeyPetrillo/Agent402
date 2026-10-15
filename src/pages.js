@@ -453,7 +453,8 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   <ul style="padding-left:20px;">${inPacks.map((p) => `<li style="margin-bottom:6px;"><a href="/skills/${e(p.slug)}" style="color:var(--accent);font-weight:700;">${e(p.title)}</a> - <span style="color:var(--muted);">${e(p.tagline)}</span></li>`).join("")}</ul>`
     : "";
 
-  const methodColor = tool.method === "GET" ? "var(--ok)" : "var(--accent)";
+  // The label sits on the dark panel, so it takes the panel accent (lit) for both methods.
+  const methodColor = "var(--accent-lit)";
 
   // The H1 wraps balanced: tool names run from 3 chars ("hex") to 50+, and a
   // long name takes two even lines instead of an ellipsis, so the page's own

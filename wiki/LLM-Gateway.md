@@ -47,13 +47,31 @@ Because tiers are flat-priced while upstream bills per token, every request is a
 | `POST /v1/nano/chat/completions` | $0.003 | nano models (gpt-6-luna by default, gpt-5.6-luna, gpt-5-nano, gemini flash-lite, mercury-2.5, small llama/ministral/qwen, deepseek-chat; `GET /v1/models` lists the live set) - priced for high-frequency agent loops | 12k chars | 768 tokens |
 | `POST /v1/auto/chat/completions` | $0.01 | **model optional** - deterministic eval-ranked routing (see below) | 16k chars | 1,024 tokens |
 | `POST /v1/chat/completions` | $0.02 | budget/mid models (gpt-4o-mini, gpt-4.1-mini, claude haiku, gemini flash-lite, deepseek, llama, mistral, qwen) | 32k chars | 2,048 tokens |
-| `POST /v1/pro/chat/completions` | $0.10 | mid-frontier (gpt-4o, gpt-4.1, gpt-6 sol, claude sonnet incl. sonnet-5, gemini pro and 3.x flash, grok) | 48k chars | 4,096 tokens |
+| `POST /v1/pro/chat/completions` | $0.10 | mid-frontier (gpt-4o, gpt-4.1, gpt-6 sol, claude sonnet incl. sonnet-5.5, gemini pro and 3.x flash, grok) | 48k chars | 4,096 tokens |
 | `POST /v1/premium/chat/completions` | $0.50 | frontier (gpt-5 and gpt-6 astra, o3 and o4-mini, claude opus incl. opus-5.5, and claude fable 5.1) | 200k chars | 8,192 tokens |
 | `POST /v1/embeddings` | $0.002 | text-embedding-3-small (default), 3-large, ada-002 - batch up to 64 inputs | 16k chars | - |
 | `POST /v1/images/generations` | $0.08 | FLUX.2 Pro with GPT-5 Image Mini as the failover - one 1024x1024 PNG per call, inline base64 out | 4k-char prompt | 1 image |
 | `POST /v1/audio/speech` | $0.06 | a five-model failover chain; raw mp3/pcm bytes out, the 11 OpenAI voice names plus each model's native voices | 2k-char input | - |
 
 Bare OpenAI-style names (`gpt-4o-mini`) are accepted and mapped; requesting a model that another flat tier serves is priced at that tier: the 402 quotes its price, the paid call is served under its caps and failover, and the answer says so in `agent402_tier`. All tiers are **wallet-only** - every call burns real upstream credit, so there is no proof-of-work free tier (see [[Security Model]]). The pro and premium chat tiers also accept three upstream server tools under a server-owned bound (`openrouter:web_search`, `openrouter:web_fetch`, `openrouter:datetime`, each with a hard use cap that `GET /v1/models` lists per tier); other server tools are refused by name.
+
+## Typed judgment (`/v1/judge`, `/v1/decisions`)
+
+Questions your code can branch on instead of prose to parse. Model-backed, wallet-only (no proof-of-work).
+
+| Route | Price | What it does |
+|---|---|---|
+| `POST /v1/judge` | $0.001 | `state` (text or JSON, up to 8,000 characters) and up to 8 `questions`, each `noul` (a yes/no probability), `choice` (one of your named options, with a probability each) or `score` (a position on levels you describe). `model` picks the first backend (`jev-latest`, `jev-preview`, `microsoft-decision-1`, `gpt-6-luna`); the others are fallbacks, and the answer names the model that served and `fallbackFrom` when the first was unavailable. |
+| `POST /v1/decisions` | $0.001 | The same judgment on OpenAI's Decisions wire: point an OpenAI SDK here and `decisions.create` works unchanged. |
+| `POST /v1/judge/vision` | $0.003 | Preview. Up to 4 PNG or JPEG images (`images`: your names mapped to `{ format, data_base64 }`, 256 to 1,568 px a side, 4 MiB each, never resized) and `questions`, which refer to an image as `` `name` `` and may also be `box` (where something is, as edges from 0 to 1). A box question always runs on `jev-preview`. |
+| `POST /v1/judge/locate` | $0.002 | Preview. One `image` and up to 4 `targets`; each comes back with `present` (a probability), `found`, `box` and `boxConfidence`. A box is always returned, so read `found` first. |
+| `POST /v1/judge/long` | $0.02 | Preview. `/v1/judge`'s questions over a document of up to 900,000 bytes (about 262k tokens). |
+
+`jev-latest` is the Jev version we have tested; every answer names the version that served it (for example `jev-1.13.0`). `jev-preview` reaches the newer release. The preview routes are built on Jev features its maker labels experimental, carry `preview: true`, and are listed only where the judgment upstream is configured. A request larger than one call covers is refused with nothing charged.
+
+## Retired model ids
+
+A request that names a model the upstream has retired is served by its successor, and the reply says so in `agent402_model_substituted`. Current mappings include `anthropic/claude-sonnet-4` to `anthropic/claude-sonnet-5.5`, `qwen/qwen3.5-9b` to `qwen/qwen3.7-flash`, the Gemini 2.5 models to their Gemini 3.x successors and the Laguna 2.1 models to Ministral. GPT-4o, GPT-4o mini, GPT-4.1 and GPT-4.1 mini are scheduled to be retired upstream on 2027-01-14.
 
 ## Metered tier - pay per request, quoted first
 

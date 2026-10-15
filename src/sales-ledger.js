@@ -590,6 +590,22 @@ export function saleByTx(tx) {
   };
 }
 
+/**
+ * saleByTx, for a caller that may have bought on ANOTHER container: the local
+ * mirror pulls the other containers' writes on a timer, so a receipt check
+ * made moments after the purchase can miss a sale that is already in
+ * Postgres. On a miss this pulls the newer rows once and looks again before
+ * the caller refuses; `force` pulls even on a hit (a caller about to act on
+ * a field another container may have just set, like the attestation UID).
+ * File mode (one process) answers from the mirror alone.
+ */
+export async function saleByTxFresh(tx, { force = false } = {}) {
+  const hit = saleByTx(tx);
+  if ((hit && !force) || !USE_PG) return hit;
+  try { await readyP(); await refresh(); } catch { /* the database is unreachable: answer from the mirror */ }
+  return saleByTx(tx);
+}
+
 /** Record the attestation written for a sale. Write-once: a second call for
  *  the same row is a no-op (returns false), so a racing double attest can
  *  never overwrite the first UID. Database mode: a Promise of the verdict,

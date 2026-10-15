@@ -62,7 +62,7 @@ const kit = readFileSync(new URL("../src/tools/domain-audit-kit.js", import.meta
 for (const needle of ["=== NAMESERVERS / DNS HOST", "=== WWW / APEX TWIN", "=== REPORT MAILBOXES", "1. MAILBOXES:", "2. FEASIBILITY:", "3. CAA WITH PLATFORM CERTIFICATES:", "4. CROSS-ORIGIN HEADERS", "7. Escalate safely", "8. Check both hosts"]) ok(kit.includes(needle), `prompt carries "${needle}"`);
 const srv2 = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 ok(/const wantsJson = \(req\)/.test(srv2) && /app\.get\("\/r\/:sessionId", \(req, res, next\) => \{\s*\/\/[^\n]*\n[^\n]*\n\s*if \(wantsJson\(req\)\)/.test(srv2), "/r/<id> serves the JSON bundle to Accept: application/json");
-ok(/app\.get\("\/reports\/public\/:publicId", \(req, res, next\) => \{\s*if \(wantsJson\(req\)\)/.test(srv2) && srv2.includes('rel="alternate"; type="application/json"'), "public report pages negotiate JSON too and carry a Link alternate");
+ok(/app\.get\("\/reports\/public\/:publicId", (async )?\(req, res, next\) => \{\s*if \(wantsJson\(req\)\)/.test(srv2) && srv2.includes('rel="alternate"; type="application/json"'), "public report pages negotiate JSON too and carry a Link alternate");
 // ---------------------------------------------------------------------------
 // Regression: the report crashed on every domain that publishes a DMARC rua.
 //

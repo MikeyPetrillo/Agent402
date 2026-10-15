@@ -423,7 +423,7 @@ export function marketFilterBar(chainKey, _baseUrl, routerChains = null) {
     <span class="mfb-label">Chain</span>
     <div class="mfb-tabs" style="display:flex;flex-wrap:wrap;gap:5px;">${tabs.join("")}</div>
     <span class="mfb-label" style="margin-left:6px;">Sort</span>
-    <select class="mfb-sel" data-mfb-sort><option value="calls">most settled</option><option value="usd">volume</option><option value="buyers">buyers</option><option value="tools">tools</option><option value="health">health</option></select>
+    <select class="mfb-sel" data-mfb-sort aria-label="Sort sellers by"><option value="calls">most settled</option><option value="usd">volume</option><option value="buyers">buyers</option><option value="tools">tools</option><option value="health">health</option></select>
     <input class="mfb-search" data-mfb-search placeholder="search sellers" aria-label="Search sellers">
   </div>
   <p class="mfb-legend" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:6px 0 0;line-height:1.5;"><strong style="color:var(--muted);">healthy</strong> = the last crawl of the origin succeeded, nothing more. <strong style="color:var(--muted);">dispatch</strong> = this host's router will buy from this seller right now, on the chain the badge names; it buys on ${esc(routerChainsProse(routerChains))}, paying from the chain the buyer paid on. A seller can be listed, healthy and still not dispatch-eligible (for example: the last crawl failed, it accepts no chain the router pays on, or it has too little settlement history yet). The reason is on each row and on <code>/api/index</code> as <code>routerDispatchReason</code>.</p>
@@ -1001,7 +1001,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
       <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 10px;padding:10px 15px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);letter-spacing:.06em;"><span>402 challenge · accepts[]</span><span>JSON</span></div>
       <pre style="margin:0;padding:16px 18px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.8;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;">{
   <span style="color:var(--on-panel-faint);">"scheme"</span>: "exact",
-  <span style="color:var(--on-panel-faint);">"network"</span>: <span style="color:var(--accent);">"${esc(C.acceptNetwork)}"</span>,
+  <span style="color:var(--on-panel-faint);">"network"</span>: <span style="color:var(--accent-lit);">"${esc(C.acceptNetwork)}"</span>,
   <span style="color:var(--on-panel-faint);">"amount"</span>: "1000",
   <span style="color:var(--on-panel-faint);">"asset"</span>: "&lt;${esc(C.asset)} token ${C.caip2.startsWith("algorand:") ? "ASA id" : C.caip2.startsWith("solana:") ? "mint" : "contract address"}&gt;",
   <span style="color:var(--on-panel-faint);">"payTo"</span>: "&lt;your wallet&gt;"

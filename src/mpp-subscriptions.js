@@ -892,7 +892,18 @@ export function createMppSubscriptions({
   });
 
   // --- house records ---------------------------------------------------------
-  async function readRec(subId) { return (await kv.get(REC_KEY(subId))) || null; }
+  // Read through to the store: a subscription is changed on whichever
+  // container served the request, and every decision here (activate, cancel,
+  // status) must see the other container's last write. Subscriptions are few,
+  // so the extra read is cheap; a store that cannot be read falls back to the
+  // mirror.
+  async function readRec(subId) {
+    if (kv.backend === "pg") {
+      try { const fresh = await kv.getFresh(REC_KEY(subId)); if (fresh) cache.set(subId, fresh); return fresh || null; }
+      catch { /* the mirror answers below */ }
+    }
+    return (await kv.get(REC_KEY(subId))) || null;
+  }
   async function writeRec(rec) {
     const next = { ...rec, updatedAt: new Date(now()).toISOString() };
     await kv.put(REC_KEY(rec.subId), next);
@@ -1610,6 +1621,19 @@ export function createMppSubscriptions({
     return out;
   }
   const get = (subId) => cache.get(subId) || null;
+  // The record as the store holds it now, for a buyer-facing read: a
+  // subscription activated or cancelled on the other container moments ago
+  // is not in this container's mirror until its next re-read. Falls back to
+  // the mirror if the store cannot be read.
+  async function getFresh(subId) {
+    if (!isMine(subId)) return null;
+    if (kv.backend !== "pg") return get(subId);
+    try {
+      const fresh = await kv.getFresh(REC_KEY(subId));
+      if (fresh) cache.set(subId, fresh); else cache.delete(subId);
+      return fresh || null;
+    } catch { return get(subId); }
+  }
 
   async function status() {
     await warm();
@@ -1628,7 +1652,7 @@ export function createMppSubscriptions({
 
   return {
     offerInfo, mintOffer, activateFromCredential, refreshStatus, cancel, isCanarySub, sweepStaleCanaries,
-    listActive, get, isMine, status, warm, warmSync, refreshMirror, manageToken, manageTokenOk, publicView,
+    listActive, get, getFresh, isMine, status, warm, warmSync, refreshMirror, manageToken, manageTokenOk, publicView,
     ready: () => ready, flush: () => kv.flush(),
     _store: kv, _subStore: subStore, _method: method,
     _feePayer: feePayer, _feePayerPolicy: feePayer ? subscriptionFeePayerPolicy() : null,

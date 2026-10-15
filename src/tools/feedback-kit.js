@@ -23,7 +23,7 @@
 // WHAT IT IS NOT: it is not a star rating, not a public review feed, and not a
 // reputation score. Two verdicts and a tally of counts. See recordSaleFeedback
 // in sales-ledger.js for why two, and feedbackByTool for why counts only.
-import { saleByTx, recordSaleFeedback, feedbackForTx, feedbackByTool } from "../sales-ledger.js";
+import { saleByTxFresh, recordSaleFeedback, feedbackForTx, feedbackByTool } from "../sales-ledger.js";
 import { payerFromRequest } from "../payer.js";
 
 const MAX_REASON = 1000;
@@ -41,7 +41,7 @@ const normalizeTx = (v) => String(v || "").trim();
  * offline in a test with a temp database.
  */
 export function makeFeedbackHandler(deps = {}) {
-  const lookup = deps.saleByTx || saleByTx;
+  const lookup = deps.saleByTx || saleByTxFresh;
   const record = deps.recordSaleFeedback || recordSaleFeedback;
   const existing = deps.feedbackForTx || feedbackForTx;
   const payerOf = deps.payerOf || payerFromRequest;
@@ -73,7 +73,7 @@ export function makeFeedbackHandler(deps = {}) {
       throw bad("Feedback is bound to the wallet that PAID for the call being rated, so this call must itself be paid with a signed EVM authorization from that wallet. Nothing was charged.", 403);
     }
 
-    const sale = lookup(tx);
+    const sale = await lookup(tx);
     // The two refusals below are deliberately the same sentence: a wallet that
     // did not buy the call learns nothing about whether the transaction is ours
     // or what it bought. Same rule as attest - only the buyer sees detail.

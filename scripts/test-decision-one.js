@@ -269,7 +269,7 @@ const DOWN = reply(503, {});
     const r = await judge(JUDGE_IN, { fetchImpl: s.fetchImpl });
     ok(s.hosts() === `${TYPESAFE},${OPENROUTER}` && r.model === DECISION_ONE && r.fallbackFrom === "jev-latest", `/v1/judge: a Jev outage is answered by Decision-1, named by the buyer's model value (${r.model}), fallbackFrom names Jev`);
     ok(r.answers.team.choice === "frontend" && r.answers.repro.noul === 0.32 && r.usage.input_tokens === 290, "...in /v1/judge's own answer shape");
-    ok(withoutModel(s.calls[1].body) === withoutModel(s.calls[0].body) && s.calls[0].body.model === "jev-latest" && s.calls[1].body.model === DECISION_ONE_MODEL, "...and Decision-1 receives Jev's body with only the model changed");
+    ok(withoutModel(s.calls[1].body) === withoutModel(s.calls[0].body) && s.calls[0].body.model === "jev-1.13.0" && s.calls[1].body.model === DECISION_ONE_MODEL, "...and Decision-1 receives Jev's body with only the model changed");
     ok(Object.entries(OPENROUTER_ATTRIBUTION).every(([k, v]) => s.calls[1].headers[k] === v), "...with the attribution headers");
   }
   {
@@ -281,7 +281,7 @@ const DOWN = reply(503, {});
   {
     const s = stub({ [OPENROUTER]: DOWN, [TYPESAFE]: JEV_OK });
     const r = await judge({ ...JUDGE_IN, model: DECISION_ONE }, { fetchImpl: s.fetchImpl });
-    ok(s.hosts() === `${OPENROUTER},${TYPESAFE}` && r.fallbackFrom === DECISION_ONE && s.calls[1].body.model === "jev-latest", "a Decision-1 outage falls back to Jev, asked as jev-latest; fallbackFrom names Decision-1");
+    ok(s.hosts() === `${OPENROUTER},${TYPESAFE}` && r.fallbackFrom === DECISION_ONE && s.calls[1].body.model === "jev-1.13.0", "a Decision-1 outage falls back to Jev, asked for the pinned version; fallbackFrom names Decision-1");
   }
   {
     const s = stub({ [TYPESAFE]: JEV_OK, [OPENROUTER]: D1_OK });

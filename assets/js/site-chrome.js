@@ -202,3 +202,13 @@ var a402BindPass=function(root){try{
   });
 }catch(e){}};
 document.addEventListener('DOMContentLoaded',function(){window.a402BindWidows(document);});
+
+/* Keyboard access to sideways-scrolling code and tables (WCAG 2.1.1): a <pre>
+   or table wrapper wider than its box gets tabindex=0, so arrow keys scroll it once it has focus. Checked
+   after load and on resize, since the same block can fit on one screen and
+   overflow on another. */
+(function(){function mark(){try{document.querySelectorAll('pre, .tablewrap, .pg-table-wrap, .wx-scroll, .tp-scroll').forEach(function(p){var over=p.scrollWidth>p.clientWidth+1;if(over&&!p.hasAttribute('tabindex'))p.setAttribute('tabindex','0');else if(!over&&p.getAttribute('tabindex')==='0')p.removeAttribute('tabindex');});}catch(e){}}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mark);else mark();
+var t=null;var later=function(){clearTimeout(t);t=setTimeout(mark,200);};window.addEventListener('resize',later);
+/* Report bodies and tables are drawn after load: mark them when they arrive. */
+try{new MutationObserver(later).observe(document.body||document.documentElement,{childList:true,subtree:true});}catch(e){}})();

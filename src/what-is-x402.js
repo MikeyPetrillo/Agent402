@@ -149,7 +149,7 @@ table{border-collapse:collapse;width:100%}
   ).join("");
 
   const railsRowsHtml = rails.map((r) =>
-    `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:700;padding:12px 18px;color:var(--ink);">${esc(r.name)}</th><td style="padding:12px 18px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);">${esc(r.asset)}</td><td style="padding:12px 18px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">${esc(r.caip2)}</td><td style="padding:12px 18px;text-align:right;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel);font-variant-numeric:tabular-nums;">${esc(r.calls)}</td></tr>`
+    `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:700;padding:12px 18px;color:var(--ink);">${esc(r.name)}</th><td style="padding:12px 18px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);">${esc(r.asset)}</td><td style="padding:12px 18px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">${esc(r.caip2)}</td><td style="padding:12px 18px;text-align:right;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);font-variant-numeric:tabular-nums;">${esc(r.calls)}</td></tr>`
   ).join("");
 
   const adoptionHtml = board.length
@@ -171,7 +171,7 @@ table{border-collapse:collapse;width:100%}
     <div class="wx-2col" style="display:grid;grid-template-columns:1.1fr .9fr;gap:50px;align-items:start;">
       <div>
         <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);">What are <span style="color:var(--accent);">x402</span> and <span style="color:var(--accent);">MPP</span>?</h1>
-        <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--on-panel-soft);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">x402 is an open protocol that lets software pay for a single HTTP request in stablecoins.</strong> The server answers <span style="font-family:var(--font-mono);font-size:var(--fs-lg);">402 Payment Required</span> with a price, the client signs a payment, and the same request completes. <strong style="color:var(--ink);font-weight:700;">MPP, the Machine Payments Protocol, is a second protocol for that same handshake</strong>, carried in standard HTTP authentication headers.</p>
+        <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">x402 is an open protocol that lets software pay for a single HTTP request in stablecoins.</strong> The server answers <span style="font-family:var(--font-mono);font-size:var(--fs-lg);">402 Payment Required</span> with a price, the client signs a payment, and the same request completes. <strong style="color:var(--ink);font-weight:700;">MPP, the Machine Payments Protocol, is a second protocol for that same handshake</strong>, carried in standard HTTP authentication headers.</p>
         <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">No subscription, no checkout page, no account. That matters because an AI agent cannot open one: paying per call is the only purchase an autonomous program can actually make on its own. Both protocols are the wire underneath <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Agentic Finance</a>, agents that pay and get paid on their own; every term on this page is defined in the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>. New to all of it? Start with the <a href="/101" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">ten-minute 101</a>.</p>
       </div>
       <div style="border:1px solid var(--hairline);background:var(--panel);">
@@ -212,7 +212,7 @@ PAYMENT-SIGNATURE: eyJ4NDAyVmVyc2lvbiI6MiwicGF5bG9hZCI6&hellip;
 <span style="color:var(--on-panel-faint);"># 4. verified, the handler runs, then the payment settles
 </span><span style="color:var(--accent-lit);">HTTP/1.1 200 OK</span>
 PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
-<span style="color:var(--faint);">{ "algo": "sha256", "hex": "&hellip;" }</span></pre>
+<span style="color:var(--on-panel-faint);">{ "algo": "sha256", "hex": "&hellip;" }</span></pre>
     </div>
   </div>
   <p style="font-size:var(--fs-base);line-height:1.65;color:var(--faint);max-width:820px;margin:22px 0 0;">The payment settles only alongside a successful response, so a failed call is not charged. Because settlement lands on a public chain, both sides can check afterwards what was actually paid instead of trusting an invoice.</p>
@@ -237,7 +237,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0 0 18px;">Signing up for twenty APIs is not something it can do. It has no email inbox to confirm, no credit card, no authority to accept terms of service, and no way to rotate the keys it would collect. Every one of those is a human step wedged in front of a machine task.</p>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0 0 24px;">Paying a fraction of a cent per call, from a wallet it controls, is a step it can take unattended. That inverts the model: instead of registering for access, the agent simply pays for the one thing it needs, and the payment is the identity. Nothing to sign up for means nothing to leak.</p>
   <div style="border-left:2px solid var(--accent);padding:4px 0 4px 20px;">
-    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-soft);margin:0;font-weight:500;">The practical test of an agentic payment: could the software complete the purchase with no human awake? If a human has to approve, register, or paste a key, it is not agentic.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--ink);margin:0;font-weight:500;">The practical test of an agentic payment: could the software complete the purchase with no human awake? If a human has to approve, register, or paste a key, it is not agentic.</p>
   </div>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:24px 0 0;">Agentic payments are the wire. What forms on top of them once thousands of agents and sellers transact - price discovery, routing between competing sellers, reliability signals, receipts, transparent revenue - is <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Agentic Finance</a>, and Agent402 is built as its applied layer.</p>
 </section>
@@ -257,11 +257,11 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
 
 <section id="who" style="background:var(--panel);margin-top:64px;border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
-    <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">06 / ADOPTION</div>
+    <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent-lit);margin-bottom:12px;">06 / ADOPTION</div>
     <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--on-panel);">Who is actually settling x402 payments?</h2>
     <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--on-panel-muted);max-width:820px;margin:0 0 30px;">Not a forecast: a ranking of real sellers by Base USDC settled volume, built by crawling public x402 sellers and reading the chain. Agent402's own row is left out, so the table is evidence from other sellers.</p>
     <div class="wx-scroll">
-      <table style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1.5px solid var(--panel-rule-2);background:var(--card);">
+      <table style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1.5px solid var(--panel-rule-2);background:var(--panel);">
         <thead><tr style="border-bottom:1px solid var(--panel-rule-2);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);"><th scope="col" style="text-align:left;font-weight:400;padding:12px 18px;width:40px;">#</th><th scope="col" style="text-align:left;font-weight:400;padding:12px 18px;">seller</th><th scope="col" style="text-align:right;font-weight:400;padding:12px 18px;">usdc settled</th><th scope="col" style="text-align:right;font-weight:400;padding:12px 18px;">calls</th><th scope="col" style="text-align:right;font-weight:400;padding:12px 18px;">buyers</th></tr></thead>
         <tbody>${adoptionHtml}</tbody>
       </table>

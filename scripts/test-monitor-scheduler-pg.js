@@ -55,6 +55,15 @@ try {
   ok(oneRuns.length === 1 && row?.reports?.[oneRuns[0].reportId]?.report === "rA one.example", "the in-flight run's record and report land in the row");
   ok(twoRuns.length === 1 && row?.reports?.[twoRuns[0].reportId]?.report === "rB two.example", "the other container's run of another subscription survives the first container's save");
   ok(!row?.subs?.sub_one?.runClaim && !row?.subs?.sub_two?.runClaim, "no run claim is left in the row");
+  // The buyer's email link to B's report, opened on A (2026-10-15): the fresh
+  // reads find it on the first open instead of answering not found.
+  {
+    const twoId = twoRuns[0]?.reportId;
+    const v = await A.reportViewFresh(twoId);
+    ok(v?.status === "done" && v.report === "rB two.example", `A opens the report B delivered on the first try (${v?.status})`);
+    ok((await A.subIdOfReportFresh(twoId)) === "sub_two", "...and maps it to its subscription for the manage link");
+    ok((await A.reportViewFresh("no-such-report-0000")) === null, "an unknown report id is still not found");
+  }
 
   // A later tick on either container does not pay for either run again.
   const before = runs.length;

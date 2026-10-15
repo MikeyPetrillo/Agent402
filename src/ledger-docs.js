@@ -62,7 +62,7 @@ function gatewayHtml(catalog) {
   const chatTiers = tiers.nano && tiers.premium ? `Chat has flat quality tiers (${tiers.nano} nano to ${tiers.premium} premium)${tiers.auto ? ` plus a ${tiers.auto} auto tier that routes on your prompt with no model required` : ""}` : "Chat has flat quality tiers";
   const extras = [tiers.embed ? `embeddings are ${tiers.embed} with a default-on cache` : "", tiers.image ? `image generation is ${tiers.image} per image` : ""].filter(Boolean).join("; ");
   const rowHtml = rows.map((r, i) => `        <div class="ml-ref-row"${i < rows.length - 1 || more ? ' style="border-bottom:1px solid var(--hairline);"' : ""}><span style="color:var(--accent);font-weight:700;">POST</span><span>${r.path}</span><span style="color:var(--faint);">${r.note(p(r.slug), tiers)}</span></div>`).join("\n");
-  const moreHtml = more ? `\n        <div class="ml-ref-row"><span></span><span><a href="/tools/category/llm" style="color:var(--ink);">and ${more} more /v1 routes</a></span><span style="color:var(--faint);">every /v1 route with its price</span></div>` : "";
+  const moreHtml = more ? `\n        <div class="ml-ref-row"><span></span><span><a href="/tools/category/llm" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">and ${more} more /v1 routes</a></span><span style="color:var(--faint);">every /v1 route with its price</span></div>` : "";
   return { prose: `${chatTiers}${extras ? `; ${extras}` : ""}.`, rows: rowHtml + moreHtml };
 }
 
@@ -111,7 +111,7 @@ node demo.js
 AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
       </div>
       <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:0 0 14px;">// an autonomous buyer discovers the catalog, gets quoted over HTTP 402, settles, and uses the result - zero humans.</p>
-      <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 44px;">The demo signs on the EVM rails. To pay on Solana, Stellar or Algorand, see <a href="/docs/Paying-with-x402" style="color:var(--ink);">Paying with x402</a>.</p>
+      <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 44px;">The demo signs on the EVM rails. To pay on Solana, Stellar or Algorand, see <a href="/docs/Paying-with-x402" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">Paying with x402</a>.</p>
       </section>
 
       ${whyDocsStubHtml()}      <!-- HOW -->
@@ -141,7 +141,7 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
     "agent402": { "url": "https://agent402.tools/mcp" }
   }
 }</pre></div>
-      <p style="font-size:var(--fs-md);color:var(--muted);margin:-12px 0 22px;">Every other host, each block read from its own docs: <a href="/guides/agent-hosts" style="color:var(--ink);">VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK</a>. Shortlinks: <span style="font-family:var(--font-mono);">agent402.sh/cursor</span>, <span style="font-family:var(--font-mono);">agent402.sh/vscode</span>, <span style="font-family:var(--font-mono);">agent402.sh/codex</span>; one-shot install <span style="font-family:var(--font-mono);">curl -fsSL agent402.sh/install | sh</span>.</p>
+      <p style="font-size:var(--fs-md);color:var(--muted);margin:-12px 0 22px;">Every other host, each block read from its own docs: <a href="/guides/agent-hosts" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK</a>. Shortlinks: <span style="font-family:var(--font-mono);">agent402.sh/cursor</span>, <span style="font-family:var(--font-mono);">agent402.sh/vscode</span>, <span style="font-family:var(--font-mono);">agent402.sh/codex</span>; one-shot install <span style="font-family:var(--font-mono);">curl -fsSL agent402.sh/install | sh</span>.</p>
 
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:8px;">B / x402 client - pay in code</div>
       <div style="border:1px solid var(--hairline);background:var(--panel);margin-bottom:22px;"><pre style="margin:0;padding:16px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.8;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);">// npm i @x402/core @x402/evm @x402/fetch viem
@@ -172,7 +172,7 @@ const out = await a.call("hash", { text: "hello", algo: "sha256" });</pre></div>
       <section>
       <h2 id="free" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 14px;">Free tier - proof-of-work.</h2>
       <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 18px;">The ${fmtNum(freeCount)} pure-CPU tools (of ${fmtNum(totalCount)} in the catalog) work with no wallet. Instead of paying USDC, your machine solves a short sha256 puzzle - a fraction of a second of CPU - and the call goes through. Nothing here consumes AI tokens.</p>
-      <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:var(--fs-sm);margin-bottom:44px;"><div class="ml-ref-row"><span style="color:var(--ok);font-weight:700;">GET</span><span style="color:var(--ink);">/api/pow/challenge?slug=&lt;tool&gt;</span><span style="color:var(--faint);">returns a challenge; solve it and resend the call with X-Pow-Solution; free, rate-limited</span></div></div>
+      <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:var(--fs-sm);margin-bottom:44px;"><div class="ml-ref-row"><span style="color:var(--ok);font-weight:700;">GET</span><span style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">/api/pow/challenge?slug=&lt;tool&gt;</span><span style="color:var(--faint);">returns a challenge; solve it and resend the call with X-Pow-Solution; free, rate-limited</span></div></div>
       </section>
 
       <!-- GATEWAY -->

@@ -207,6 +207,20 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     hay: `${t.name} ${t.description} ${t.category} ${(t.tags || []).join(" ")} ${(t.aliases || []).join(" ")}`.toLowerCase(),
   }));
   const N = all.length || 1;
+  // ONE-LETTER TYPOS. A word no tool mentions anywhere ("danctions") used to
+  // score nothing and answer an empty list, which a caller reads as "no tool
+  // does this". When a word of six or more letters matches nothing, it is
+  // replaced by the catalog word one same-length edit away (two edits of any
+  // kind for nine letters or more),
+  // the most common one on a tie, and the answer says what it corrected.
+  const corrected = {};
+  for (let i = 0; i < terms.length; i++) {
+    const term = terms[i];
+    if (term.length < 6 || !/^[a-z]+$/.test(term)) continue;
+    if (all.some((e) => e.slug.includes(term) || e.hay.includes(term))) continue;
+    const fix = closestCatalogWord(term, catalogVocabulary(all));
+    if (fix) { corrected[term] = fix; terms[i] = fix; }
+  }
   const idf = new Map();
   for (const term of terms) {
     let df = 0;
@@ -397,7 +411,73 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     rarestTerm,
     rarestTermCovered,
     ...(coverageShare != null ? { coverageShare: Math.round(coverageShare * 100) / 100 } : {}),
+    ...(Object.keys(corrected).length ? { corrected } : {}),
   };
+}
+
+// Every word the catalog uses, with how many tools use it. Built once per
+// catalog list and reused, so a typo costs one scan of the vocabulary, not of
+// every tool's text.
+const vocabCache = new WeakMap();
+function catalogVocabulary(all) {
+  const key = all[0]?.t;
+  if (key && vocabCache.has(key) && vocabCache.get(key).n === all.length) return vocabCache.get(key).words;
+  const words = new Map();
+  for (const e of all) {
+    for (const w of new Set(`${e.slug.replace(/-/g, " ")} ${e.hay}`.split(/[^a-z]+/))) {
+      if (w.length >= 4) words.set(w, (words.get(w) || 0) + 1);
+    }
+  }
+  if (key) vocabCache.set(key, { n: all.length, words });
+  return words;
+}
+
+/** The catalog word within one edit of `term` (two at nine letters or more),
+ *  the most common on a tie; null when there is none. Edits are insert,
+ *  delete, substitute and swap of two neighbors; under nine letters only a
+ *  same-length edit counts. */
+export function closestCatalogWord(term, words) {
+  const max = term.length >= 9 ? 2 : 1;
+  let best = null, bestD = max + 1, bestN = 0;
+  for (const [w, n] of words) {
+    // Under nine letters only a same-length slip counts (one letter replaced
+    // or two neighbors swapped): adding or dropping a letter turns real words
+    // into other real words ("mother" into "other") and would hide a miss.
+    if (max === 1 ? w.length !== term.length : Math.abs(w.length - term.length) > max) continue;
+    const d = editDistance(term, w, max);
+    if (d < bestD || (d === bestD && n > bestN)) { best = w; bestD = d; bestN = n; }
+  }
+  return bestD <= max && bestD > 0 ? best : null;
+}
+
+function editDistance(a, b, cap) {
+  const m = a.length, n = b.length;
+  let prev2 = null, prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= n; j++) {
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev2[j - 2] + 1);
+      cur.push(v);
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > cap) return cap + 1;
+    prev2 = prev; prev = cur;
+  }
+  return prev[n];
+}
+
+/**
+ * A query no catalog tool serves still returns its nearest word matches
+ * ("book a flight" ranked the order-book tools on "book"). Mark every row weak
+ * so a caller that reads only `results` does not pay for one; the rows stay.
+ */
+export function markMissRows(result) {
+  if (!result || typeof result !== "object") return result;
+  result.weakMatches = true;
+  result.results = (Array.isArray(result.results) ? result.results : []).map((r) => ({ ...r, weak: true }));
+  return result;
 }
 
 /**

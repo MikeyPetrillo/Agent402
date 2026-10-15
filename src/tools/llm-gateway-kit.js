@@ -55,6 +55,7 @@ import { clientGoneSignal } from "../drain-abort.js";
 import { clientGoneError } from "../hangup-settlement.js";
 import { evmCredentialSettleableMs } from "../evm-validity.js";
 import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-policy.js";
+import { cacheGet, cacheSet } from "../cache.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -2511,19 +2512,43 @@ export function promptCacheGet(key) {
   return hit.body;
 }
 
+// Shared across replicas (2026-10-15). The store above is per process, so with
+// two replicas a repeat that landed on the other one missed and was charged
+// again. Every entry is also written to the shared Redis cache (src/cache.js)
+// under the same key and TTL; a local miss reads it there, with that cache's
+// 300 ms read bound, before the request goes on to the paywall. Without Redis
+// the behavior is exactly the per-process store.
+const SHARED_PREFIX = "a402:pc:";
+export async function promptCacheGetShared(key) {
+  const local = promptCacheGet(key);
+  if (local || !key) return local;
+  const shared = await cacheGet(SHARED_PREFIX + key);
+  if (shared == null) return null;
+  promptCacheStoreLocal(key, shared);
+  return shared;
+}
+
 export function promptCacheStore(key, body) {
   if (!key || body == null) return;
+  if (promptCacheStoreLocal(key, body)) cacheSet(SHARED_PREFIX + key, body, Math.round(PROMPT_CACHE_TTL_MS / 1000)).catch(() => {});
+}
+
+function promptCacheStoreLocal(key, body) {
+  if (!key || body == null) return false;
   let bytes = 0;
-  try { bytes = Buffer.byteLength(JSON.stringify(body), "utf8"); } catch { return; }
-  if (!bytes || bytes > PROMPT_CACHE_MAX_ENTRY_BYTES) return;
+  try { bytes = Buffer.byteLength(JSON.stringify(body), "utf8"); } catch { return false; }
+  if (!bytes || bytes > PROMPT_CACHE_MAX_ENTRY_BYTES) return false;
   while ((promptStore.size >= PROMPT_CACHE_MAX_ENTRIES || promptStoreBytes + bytes > PROMPT_CACHE_MAX_BYTES) && promptStore.size > 0) {
     const firstKey = promptStore.keys().next().value;
     const ev = promptStore.get(firstKey);
     if (ev) promptStoreBytes -= ev.bytes;
     promptStore.delete(firstKey);
   }
+  const prev = promptStore.get(key);
+  if (prev) { promptStoreBytes -= prev.bytes; promptStore.delete(key); }
   promptStore.set(key, { at: Date.now(), body, bytes });
   promptStoreBytes += bytes;
+  return true;
 }
 
 /** "POST /v1/…" path -> tier slug, for the pre-paywall middleware. */

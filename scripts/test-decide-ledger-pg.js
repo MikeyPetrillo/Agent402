@@ -72,6 +72,17 @@ try {
   L2.getDecisionSync("d1");
   await new Promise((r) => setTimeout(r, 150));
   ok(L2.getDecisionSync("d1")?.settled === true, "a stale mirror entry in another instance refreshes in the background");
+  // The FIRST quote on the other container (2026-10-15): the background
+  // refresh comes too late for it, so the route warms the mirror first.
+  await L.saveDecision({ decisionId: "d_warm", depth: "plan", priceUsd: 0.03, payer: "0xb", plan: [], costViaUsd: 0.04, feedbackHash: hashToken("fbw"), now });
+  const cw = await L.mintCredit({ decisionId: "d_warm", amountUsd: 0.02, ttlMs: 3_600_000, payer: "0xb", now });
+  await L.activateCredit(cw.hash ?? hashToken(cw.token));
+  const L5 = openDecideLedger(FILE);
+  await L5.ready;
+  ok(L5.getDecisionSync("d_warm") === null || L5.getDecisionSync("d_warm")?.id === "d_warm", "(a fresh instance may or may not hold the new decision from its boot read)");
+  await L5.warmForQuote("d_warm", cw?.token);
+  ok(L5.getDecisionSync("d_warm")?.costViaUsd === 0.04, "after warmForQuote the synchronous quote view has the decision another instance just wrote");
+  ok(L5.creditAvailableUsdSync(cw.token, "d_warm", now) === 0.02, `...and the credit another instance just minted and activated (${L5.creditAvailableUsdSync(cw.token, "d_warm", now)})`);
 
   // ---- (3) the credit lifecycle, with two concurrent redeems ----------------
   const c = await L.mintCredit({ decisionId: "d1", amountUsd: 0.02, ttlMs: 3_600_000, payer: "0xb", now });

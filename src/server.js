@@ -4,7 +4,7 @@ import { securityHeaders } from "./security-headers.js";
 import { carriesPaymentAttempt } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
-import { createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
+import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
 // Railway's egress has NO working IPv6 (every AAAA is ENETUNREACH). Node's
 // happy-eyeballs races the IPv6 address on dual-stack upstreams and fails ~15% of
@@ -60,7 +60,7 @@ import { translateV1Accepts, v1AcceptsTranslationEnabled } from "./x402-v1-accep
 import { mountShortlinks } from "./shortlinks.js";
 import { withHouseStyle } from "./house-style.js";
 import { withNextCall, nextCallFor } from "./next-call.js";
-import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS, reportHeadline, readPublicReport } from "./human-checkout.js";
+import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS, reportHeadline, readPublicReport, readPublicReportFresh } from "./human-checkout.js";
 import { humanReportsPage, reportDeliveryPage } from "./human-reports-page.js";
 import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
@@ -253,7 +253,7 @@ import { sendMonitorEmail, emailSendStatus } from "./email.js";
 import { probeDomain, normDomain } from "./tools/domain-audit-kit.js";
 import { latest13fFiling, resolveManager as edgarResolveManager } from "./tools/edgar-kit.js";
 import { resolveSpend as resolveExternalSpend } from "./external-spend-guard.js";
-import { registerWellKnown, removeWellKnown, getWellKnown, listWellKnown } from "./well-known-store.js";
+import { registerWellKnown, removeWellKnown, getWellKnown, getWellKnownShared, listWellKnown } from "./well-known-store.js";
 import { backupAlarmStatus, backupPlan, backupStatus, runBackup, startBackupScheduler } from "./backup.js";
 import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
@@ -324,7 +324,7 @@ import { meteredSkip } from "./metered-slugs.js";
 import { runSelfCheck, createSelfCheckRoute } from "./selfcheck.js";
 import { installEgressMeter, egressReport } from "./egress-meter.js";
 import { acpFeed, acpManifest } from "./acp.js";
-import { findTools, findRelatedSellers, markWeakMatches } from "./find.js";
+import { findTools, findRelatedSellers, markWeakMatches, markMissRows } from "./find.js";
 import { buildPlanSketch } from "./plan-sketch.js";
 import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE, startWishRotation } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
@@ -441,7 +441,7 @@ import { LLM_GEMINI_TOOLS, GEMINI_PATH_BY_TIER } from "./tools/llm-gemini-kit.js
 import { refusalReason } from "./refusal-reason.js";
 import { setKnownProductKeys } from "./posthog.js";
 import { LLM_RESPONSES_TOOLS } from "./tools/llm-responses-kit.js";
-import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGet, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD } from "./tools/llm-gateway-kit.js";
+import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGet, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD } from "./tools/llm-gateway-kit.js";
 // /v1/audio/speech stays behind OPENROUTER_TTS_ENABLED as a rollout gate:
 // @x402/express (v2.16) runs the handler first and settles only a <400
 // response, so a 502 is never charged — but an UNLISTED route returns no 402
@@ -567,7 +567,7 @@ import { creditsSalesEnabled, creditsTopupFields } from "./credits-sales.js";
 
 // Listed only with a key, like every other env-gated kit: a tool we cannot serve
 // must not appear in the catalog, on /api/pricing, or in a 402's offer.
-const JUDGE_TOOLS_ENABLED = judgeEnabled() ? JUDGE_TOOLS : [];
+const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePreviewEnabled() ? JUDGE_PREVIEW_TOOLS : [])];
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger() }) : [];
 const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...EXA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CVE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...DECIDE_TOOLS_ENABLED];
 // House style on every report tier's output (agents, card buyers, monitors
@@ -584,7 +584,7 @@ const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZ
 // code, and the model-backed ones are named rather than hidden - so the copy
 // now says that and derives its counts from here.
 const MODEL_BACKED_KITS = [
-  ...JUDGE_TOOLS,   // model-backed whether or not the key is set, so the claim is never wrong
+  ...JUDGE_TOOLS, ...JUDGE_PREVIEW_TOOLS,   // model-backed whether or not the key is set, so the claim is never wrong
   ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...IMAGE_GEN_TOOLS, ...IMAGES_FAST_TOOLS, ...TTS_TOOLS, ...STT_TOOLS,
   ...EMBED_TOOLS, ...MODERATE_TOOLS, ...PDF_SUMMARIZE_TOOLS,
   ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS,
@@ -648,6 +648,7 @@ import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL, l
 import { classifyWishes, wishClassifyEnabled } from "./wish-classify.js";
 import { rerankMisses, rerankEnabled } from "./discovery-rerank.js";
 import { JUDGE_TOOLS, judgeEnabled } from "./tools/judge-kit.js";
+import { JUDGE_PREVIEW_TOOLS, judgePreviewEnabled } from "./tools/judge-preview-kit.js";
 import { sweepStaleTsMap } from "./rate-sweep.js";
 
 // Shared with the MCP free tier (src/mcp-http.js) — same policy, separate
@@ -703,7 +704,7 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
+import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
@@ -2831,6 +2832,8 @@ const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
   isPriced: (method, path) => Boolean(CATALOG[`${method} ${path}`]),
   isSynthetic: isSyntheticRequest,
   policyUrl: `${BASE_URL.replace(/\/$/, "")}/crawler`,
+  // A client that paid on one replica is exempt on every replica (Redis).
+  sharedSettled: redisSharedSettled(),
 }) : null;
 if (UNPAID_BUDGET) app.use(UNPAID_BUDGET.middleware);
 // The metered tier prices every request from its body, so a big body is a big
@@ -2848,6 +2851,12 @@ if (UNPAID_BUDGET) app.use(UNPAID_BUDGET.middleware);
 // reading it into memory twice.
 app.use(["/v1/audio/transcriptions", "/v1/pro/audio/transcriptions"], express.raw({ type: "multipart/form-data", limit: "26mb" }));
 app.use("/v1/metered", express.json({ limit: "1mb" }));
+// The Jev preview routes carry images (base64 in JSON) or a long document, so
+// they take a larger body than the global 100 kb. Each limit is the route's own
+// cap plus the JSON envelope; the handler checks every image and byte again.
+app.use("/v1/judge/vision", express.json({ limit: "23mb" }));
+app.use("/v1/judge/locate", express.json({ limit: "6mb" }));
+app.use("/v1/judge/long", express.json({ limit: "2mb" }));
 // An unpaid POST here tokenizes the body for its 402 quote (measured 28 ms
 // per 190k CJK chars): bound unauthenticated quote requests per IP so the
 // quoter cannot be used as free CPU. Paid retries carry a credential and pass.
@@ -2900,6 +2909,17 @@ app.use(REVENUE_READ_PATHS, (req, res, next) => {
 });
 
 app.use(express.json({ limit: "100kb" }));
+// Decide execute is quoted from the decision and the caller's credit, read
+// synchronously from the ledger's mirror when the 402 is priced. Before any
+// gate runs, both are read fresh from the database, so a plan made or a
+// credit minted on the other container moments ago is priced correctly.
+app.post("/api/decide/execute", async (req, _res, next) => {
+  try {
+    const L = DECIDE_TOOLS_ENABLED.length ? decideLedger() : null;
+    if (L?.warmForQuote && req.body && typeof req.body === "object") await L.warmForQuote(req.body.decisionId, req.body.creditToken);
+  } catch { /* the mirror prices as before */ }
+  next();
+});
 
 // Funnel stage 1 — discovery. An agent fetching any of these machine-readable
 // surfaces is the top of the buyer journey (it learned the catalog exists and
@@ -3325,9 +3345,9 @@ app.get("/.well-known/glama.json", (_req, res) => {
 // time. Falls through on a store miss, so the dedicated /.well-known routes
 // (x402, security.txt, glama.json — some registered LATER in this file) are
 // never shadowed; the store also refuses those names at write time.
-app.get("/.well-known/*doc", (req, res, next) => {
+app.get("/.well-known/*doc", async (req, res, next) => {
   const rest = Array.isArray(req.params.doc) ? req.params.doc.join("/") : String(req.params.doc || "");
-  const hit = getWellKnown(rest);
+  const hit = await getWellKnownShared(rest);
   if (!hit) return next();
   // nosniff + the store's json/plain content-type allowlist: the served body
   // is operator-authored and can never be markup; the buyer-controlled path
@@ -3388,11 +3408,11 @@ app.get("/reports/sample/:product", (req, res) => {
 // Public reports (buyer's choice, src/human-checkout.js readPublicReport):
 // the same viewer, indexable, own title/preview/JSON-LD, buy box for the
 // reader's own subject. Served with or without Stripe (files on the volume).
-app.get("/reports/public/:publicId", (req, res, next) => {
+app.get("/reports/public/:publicId", async (req, res, next) => {
   if (wantsJson(req)) { req.url = `/api/reports/public/${encodeURIComponent(String(req.params.publicId || ""))}`; return next(); }
   if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).type("html").send("<p>Too many requests, please slow down.</p>");
   res.set("Link", `</api/reports/public/${encodeURIComponent(String(req.params.publicId || ""))}>; rel="alternate"; type="application/json"`);
-  const r = readPublicReport(String(req.params.publicId || ""));
+  const r = await readPublicReportFresh(String(req.params.publicId || ""));
   if (!r) return notFoundPage(res, { what: "Public report", href: "/reports", label: "All reports" });
   const canonical = `${BASE_URL}/reports/public/${r.publicId}`;
   const label = HUMAN_PRODUCTS[r.product]?.label || "report";
@@ -3407,9 +3427,9 @@ app.get("/reports/public/:publicId", (req, res, next) => {
     ],
   }));
 });
-app.get("/api/reports/public/:publicId", (req, res) => {
+app.get("/api/reports/public/:publicId", async (req, res) => {
   if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
-  const r = readPublicReport(String(req.params.publicId || ""));
+  const r = await readPublicReportFresh(String(req.params.publicId || ""));
   if (!r) return res.status(404).json({ status: "not_found" });
   res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=900").json(r);
 });
@@ -3433,13 +3453,15 @@ app.get("/decide", (req, res, next) => (CATALOG["POST /api/decide"] ? htmlCache(
 // so this only stops a spray; it does not ride sessionReadLimiter, which guards
 // the routes a paying buyer polls.
 const refundLookupLimiter = createRateLimiter("refund-lookup", { perMin: 30, perHour: 300 });
-function serveRefundLookup(req, res) {
+async function serveRefundLookup(req, res) {
   res.set("Cache-Control", "no-store");
   if (refundLookupLimiter.check(clientIp(req)).limited) {
     res.set("Retry-After", "60");
     return res.status(429).json({ error: "Too many refund lookups from this address; retry in a minute.", retryAfterSeconds: 60 });
   }
   const tx = (req.query && typeof req.query.tx === "string" ? req.query.tx : null) ?? (req.body && typeof req.body.tx === "string" ? req.body.tx : "");
+  // Another container may have paid this refund moments ago: pull first.
+  try { await refundByEvidenceFresh(""); } catch { /* the mirror answers */ }
   try { return res.json(refundLookup(tx)); }
   catch (e) { return res.status(e?.statusCode === 400 ? 400 : 500).json({ error: e?.statusCode === 400 ? e.message : "Refund lookup failed" }); }
 }
@@ -4005,8 +4027,11 @@ if (_subs) {
       if (req.query.report && _monitors) {
         const reportId = String(req.query.report || "");
         if (!_manageTokenOk(reportId, req.query.k)) return res.redirect("/monitors");
-        const subId = _monitors.subIdOfReport(reportId);
-        const rec = subId ? _subs.get(subId) : null;
+        // Both reads see the other container's writes: the report may have
+        // been delivered, and the subscription recorded, over there.
+        const subId = await _monitors.subIdOfReportFresh(reportId);
+        let rec = subId ? _subs.get(subId) : null;
+        if (subId && !rec) { await _subs.reload().catch(() => 0); rec = _subs.get(subId); }
         if (rec?.customer) customer = rec.customer;
       } else {
         const r = await _subs.recordFromSession(String(req.query.session || ""));
@@ -4020,10 +4045,10 @@ if (_subs) {
   // Delivered monitor reports: same page + viewer as one-shot reports, served
   // from the scheduler's store (no Stripe session - the report id is the bearer).
   app.get("/m/:reportId", (req, res) => res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(reportDeliveryPage(String(req.params.reportId || ""), { api: "/api/m/", waitCopy: "Loading your monitor report.", baseUrl: BASE_URL, robots: "noindex, nofollow" })));
-  app.get("/api/m/:reportId", (req, res) => {
+  app.get("/api/m/:reportId", async (req, res) => {
     res.set("Cache-Control", "no-store");
     const id = String(req.params.reportId || "");
-    const v = _monitors && /^[A-Za-z0-9_-]{10,64}$/.test(id) ? _monitors.reportView(id) : null;
+    const v = _monitors && /^[A-Za-z0-9_-]{10,64}$/.test(id) ? await _monitors.reportViewFresh(id) : null;
     res.json(v || { status: "not_found" });
   });
 }
@@ -4087,7 +4112,9 @@ if (_mppSubs) {
     if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
     res.set("Cache-Control", "no-store");
     const subId = String(req.params.subId || "");
-    const rec = _mppSubs.isMine(subId) ? _mppSubs.get(subId) : null;
+    // Read fresh: the subscription may have been activated or cancelled on
+    // the other container moments ago.
+    const rec = _mppSubs.isMine(subId) ? await _mppSubs.getFresh(subId) : null;
     if (!rec || !_mppSubs.manageTokenOk(subId, req.query.token)) return res.status(404).json({ error: "Unknown subscription" });
     // ?refresh=1 drives refreshStatus - which is also where a due period is
     // PULLED - and is therefore restricted to the rail canary's own
@@ -5917,7 +5944,10 @@ const computeFind = async (q, k, meter = null, ip = null) => {
       // build next.
       markWeakMatches(result, `${BASE_URL}/api/route?q=${encodeURIComponent(String(q ?? ""))}&include=external`);
     } else {
-      result.hint = "POST /api/wish with what you needed";
+      if (result.count > 0) markMissRows(result);
+      result.hint = result.count > 0
+        ? "none of these results does this task; POST /api/wish with what you needed"
+        : "POST /api/wish with what you needed";
       const qStr = String(q ?? "").trim();
       if (qStr) {
         try { recordWish({ need: qStr, source: "find-miss", ip: ip || "?" }); } catch { /* best-effort; never break /api/find */ }
@@ -8586,7 +8616,9 @@ if (!FREE_MODE) {
     // src/tempo-push-debts.js); a served claim voids the debt.
     onPushNotClaimed: (req, info) => tempoPushDebts.notClaimed(req, info),
     onPushInputRefused: (req, info) => tempoPushDebts.inputRefused(req, info),
-    pushClaimAllowed: (hash) => !["sending", "paid"].includes(refundByEvidence(hash)?.status),
+    // Read fresh: a refund another container just started for this push must
+    // stop this one from serving it (served and refunded is the case to avoid).
+    pushClaimAllowed: async (hash) => !["sending", "paid"].includes((await refundByEvidenceFresh(hash))?.status),
   });
   if (tempoGate) {
     app.use(tempoGate);
@@ -8845,7 +8877,7 @@ if (FREE_MODE) {
   //                  a resend usually WANTS a fresh sample)
   //   /v1/embeddings — default-ON (deterministic output; `cache: false` opts out)
   // Invalid bodies fall through so the normal path produces the real 402/400.
-  app.use((req, res, next) => {
+  app.use(async (req, res, next) => {
     if (req.method !== "POST" || !carriesPaymentAttempt(req)) return next();
     try {
       let key = null;
@@ -8858,7 +8890,8 @@ if (FREE_MODE) {
         if (tierSlug) key = promptCacheKey(tierSlug, req.body);
       }
       if (key) {
-        const hit = promptCacheGet(key);
+        // The local store first, then the cache every replica shares.
+        const hit = await promptCacheGetShared(key);
         if (hit) {
           // Read by the Tempo and Stripe gates, which run earlier: a gateway
           // cache hit is never settled on any rail.

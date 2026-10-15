@@ -370,7 +370,7 @@ const CSS = `
 .st-wrap{max-width:1180px;margin:0 auto;padding:56px 30px}
 .st-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.98;margin:0 0 10px}
 .st-sub{color:var(--muted);margin:0 0 26px;font-size:var(--fs-base);line-height:1.55}
-.st-sub a{color:var(--accent);text-decoration:none}
+.st-sub a{color:var(--accent);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px;}
 .st-sub a:hover{text-decoration:underline}
 .hero{border:1px solid var(--hairline);border-radius:var(--radius);padding:22px;margin:0 0 26px;background:var(--card);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .hero .hw{font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl)}

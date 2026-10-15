@@ -87,14 +87,22 @@ Set these on your host. None are committed to the repo.
 | `OPENROUTER_API_KEY` | No | Enables the `/v1` LLM gateway tiers (chat, metered, embeddings, rerank, images, speech); the routes answer `503` without it |
 | `OPENAI_API_KEY` | No | Enables the older `/api/llm*`, `/api/image-gen*`, `/api/tts*`, `/api/transcribe*` and `/api/embed*` proxies |
 | `E2B_API_KEY` | No | Enables the `/api/code-run*` sandbox tools |
-| `REDIS_URL` | No | Enables Redis response caching (see below) |
+| `REDIS_URL` | No | Enables Redis: response caching (see below), and, across replicas, the shared rate limits, breakers and budgets (`SHARED_LIMITS=off` turns those off), the payment replay guard and idempotency store. A plain `redis://` URL to a public host is refused at boot |
 | `STATE_DATABASE_URL` | No | Postgres connection string for the state database; unset keeps state in SQLite and files on `/data` |
+| `RATE_LIMIT_REPLICAS` | With replicas | How many server replicas share the limits; set it to the replica count (default 1) |
+| `INDEX_PULL_MS` | No | How often each replica pulls the seller index rows another wrote (default 30000) |
+| `TEMPO_RELAY` | No | `off` settles Tempo payments in the server itself (verify, simulate, broadcast over `TEMPO_RPC_URL`) and screens every party against OFAC's SDN list; unset uses Tempo's hosted relay |
+| `JEV_MODEL` | No | The Jev version the judgment routes pin to (default `jev-1.13.0`); `TYPESAFE_MODEL` overrides it for the internal callers |
+| `E2B_MAX_CONCURRENT` | No | Sandboxes running at once for the whole service (default 8), split across replicas |
+| `DATABENTO_SUMMARY` | No | `off` makes the stock tools read the three-venue feed instead of the consolidated summary |
+| `X402_UPTO_NETWORKS` | No | `all` or a CSV of CAIP-2 ids that also offer the `upto` scheme; a facilitator must advertise it for that network |
+| `BASE_DENIM_ACTIVATION_TIMESTAMP` | No | When Base's shorter block time takes effect (ISO time); payment windows are counted in seconds either side of it |
 | `ANALYTICS_DATABASE_URL` | No | Postgres connection string for analytics; falls back to `DATABASE_URL` |
 | `GLAMA_MAINTAINER_EMAIL` | No | Email returned at `/.well-known/glama.json` |
 | `MPP_SECRET_KEY` | For MPP | HMAC secret binding MPP challenges; presence mounts the MPP dual-stack shim (`WWW-Authenticate: Payment` on every 402, `evm` method settled through your x402 facilitator). Unset = pure x402 |
 | `MPP_CHALLENGE_NETWORKS` | No | `all` or a CSV of chain ids that get MPP `evm` challenges (default Base + Celo) |
 | `MPP_EVM_DOMAIN_FALLBACK` | No | `off` disarms the wrong-EIP-712-domain detection. On by default: a credential signed under a different known token-domain name than the one your accepts entry advertises is refused locally with an RFC 9457 problem, and MPP challenges are withheld from that client briefly so an MPP-preferring wallet falls through to your x402 offer instead of looping. `MPP_EVM_DOMAIN_FALLBACK_TTL_MS` (30 min) and `MPP_EVM_DOMAIN_FALLBACK_MAX_RESPONSES` (5) bound the hold |
-| `TEMPO_API_KEY` | For native Tempo | Tempo MPP relay key (needs the `mpp:write` scope); with a recipient it offers `tempo/charge` challenges settled natively on Tempo |
+| `TEMPO_API_KEY` | For native Tempo (relay mode) | Tempo MPP relay key (needs the `mpp:write` scope; not needed with `TEMPO_RELAY=off`); with a recipient it offers `tempo/charge` challenges settled natively on Tempo |
 | `TEMPO_RECIPIENT_ADDRESS` | No | Tempo payTo (defaults to `WALLET_ADDRESS`) |
 | `TEMPO_CURRENCY` | No | CSV of TIP-20 token addresses to offer (first = preferred; default PathUSD, the hosted instance offers USDC.e then PathUSD) |
 | `STRIPE_SECRET_KEY` | For card paths | Rollout switch for the human front door: `/reports` (card checkout), `/monitors` (subscriptions), `/credits` (prepaid credits) and the `Authorization: Bearer a402_…` credits gate. Unset = none of it is mounted; the `/v1` report routes still sell over x402 / MPP |

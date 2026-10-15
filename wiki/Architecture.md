@@ -54,8 +54,9 @@ method uses TIP-1034/TIP-20 primitives, not EIP-3009, so it can never become
 a `PAYMENT-SIGNATURE`; no x402 facilitator can settle it, and the shim above
 genuinely doesn't apply. This is NOT a translation layer: a `createTempoGate`
 middleware buffers the route handler's response (mirroring `@x402/express`'s
-own settlement-ordering technique) and only calls Tempo's own hosted relay
-(`api.tempo.xyz`, a non-mutating `validate` then a terminal `broadcast`) after
+own settlement-ordering technique) and, by default, only calls Tempo's hosted
+relay (`api.tempo.xyz`, a non-mutating `validate` then a terminal `broadcast`)
+after
 a successful handler response, preserving the same "handler runs before
 money moves" guarantee through an entirely separate mechanism. A dedicated
 `createReplayGuard()` instance (never shared with the x402 one) closes the
@@ -100,7 +101,7 @@ packs while `CREDITS_SALES=on` (off by default; keys already issued keep spendin
 
 ## Design positions
 
-- **No LLM in the utility serving path.** The utility tools are deterministic: schemas, flat prices, reproducible outputs. The model-backed surfaces are the `/v1` gateway, the report products, Decide, the router's judgment model, and the image, speech, transcription, embedding and answer tools; each carries `modelBacked: true` in `/api/pricing`, says so, and is priced for it (the metered tier quotes a ceiling per request).
+- **No LLM in the utility serving path.** The utility tools are deterministic: schemas, flat prices, reproducible outputs. The model-backed surfaces are the `/v1` gateway and judgment routes, the report products, Decide, the router's judgment model, and the image, speech, transcription, embedding and answer tools; each carries `modelBacked: true` in `/api/pricing`, says so, and is priced for it (the metered tier quotes a ceiling per request).
 - **Settlement evidence comes from the chain, never from a registry.** Before the router pays an outside seller from our wallet, it wants evidence that others already pay them. That evidence is read from the chain on every rail we can spend on: Base and Solana from their own USDC transfers, Tempo from its own, Algorand from inbound USDC-ASA transfers to the payTo the seller advertises. Third-party registries (Coinbase's Bazaar, a facilitator's catalog) are a source of CANDIDATES and never the only source, so a seller indexed only by our own crawl is judged on its chain history like any other. An unreadable chain is a refusal, not evidence, and evidence a seller inherits from a wallet it does not itself pay to is refused outright.
 - **Payment is identity.** No accounts means no credential database, no signup abuse surface, and memory ownership falls out of the payment protocol for free.
 - **Charge-then-fail is unacceptable.** Get the ordering right: the installed `@x402/express` runs the **handler first and settles afterwards**, and it settles **only** a response whose `statusCode` is `< 400`. Any `4xx`/`5xx` (a bad input, a capacity `503`, an upstream `502`) **cancels settlement**, so the buyer is not charged for a failure. A `200` is charged only if settlement then succeeds; if settlement of a `200` fails, the buffered body is discarded and the caller gets a `402` instead. Two consequences the code depends on: anything that caches, credits, or bills must key off the **final, post-settlement** response (`res.on("finish")` with `statusCode === 200`), never the handler's own status; and a tool that cannot be served reliably (e.g. upstreams that block datacenter IPs) gets removed from the catalog rather than monetized, because a steady stream of cancelled settlements is a broken product even though nobody was billed.
