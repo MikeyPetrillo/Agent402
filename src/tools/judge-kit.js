@@ -193,6 +193,10 @@ export async function post(url, key, body, fetchImpl, hasAnswers, extraHeaders =
     if (res.status === 401 || res.status === 403) { const e = new Error("Judgment upstream rejected our credentials."); e.statusCode = 503; throw e; }
     if (res.status === 402) { const e = new Error("Judgment upstream is unavailable."); e.statusCode = 503; throw e; }
     if (res.status === 429) { const e = new Error("Judgment upstream is rate limiting. Retry shortly."); e.statusCode = 503; throw e; }
+    // The upstream answers some of its own failures with 499 and an
+    // internal_server_error body (seen 2026-10-15 on an image request): its
+    // fault, not the request's, so it is a 503 to retry, not a 400 to fix.
+    if (res.status === 499 || /"error_type"\s*:\s*"internal_server_error"/.test(text || "")) { const e = new Error("Judgment upstream had an internal error. Retry shortly; nothing was charged."); e.statusCode = 503; e.mayBeBilled = false; throw e; }
     if (res.status >= 400 && res.status < 500) throw bad(`Judgment upstream refused the request (${res.status}). Check the question shapes against /v1/judge's schema.`);
     const e = new Error(`Judgment upstream returned ${res.status}.`); e.statusCode = 502; throw e;
   }

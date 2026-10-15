@@ -80,6 +80,8 @@ const stub = (answers, model = "jev-1.13.0", status = 200) => async (url, init) 
   ok(L.results[0].found === false && L.results[0].present === 0.2 && L.results[0].box.left === 0.2, "locate reports found:false when the noul says the target is absent, with the guessed box beside it");
   const g = await K.judgeLong({ state: "a long document", questions: { q: { type: "noul", instructions: "Is it long?" } } }, { fetchImpl: stub({ q: { type: "noul", noul: 0.1 } }) });
   ok(g.answers.q.noul === 0.1 && calls.at(-1).headers["TypeSafe-Danger-Zone-Long-Context"] === "true", "long sends the long-context header");
+  const err499 = async () => new Response(JSON.stringify({ detail: { message: "An unexpected error occurred", error_type: "internal_server_error" } }), { status: 499, headers: { "content-type": "application/json" } });
+  await refuses(() => K.judgeVision({ images: { pic: IMG }, questions: Q }, { fetchImpl: err499 }), 503, /internal error/, "the upstream's 499 internal error is a 503 to retry, not a 400 to fix");
   await refuses(() => K.locate({ image: IMG, targets: ["x"] }, { fetchImpl: stub({ t0_box: { type: "box", box: { top: 0.5, bottom: 0.1, left: 0, right: 1 }, confidence: 0.5 }, t0_present: { type: "noul", noul: 0.9 } }) }), 502, /malformed box/, "an inverted box from upstream is a 502, not a paid malformed answer");
 }
 {
