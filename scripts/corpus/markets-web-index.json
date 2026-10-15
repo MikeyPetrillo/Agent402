@@ -366,12 +366,14 @@
           "dayHigh",
           "dayLow",
           "asOf",
+          "dataset",
+          "coverage",
           "venues",
           "source",
           "note"
         ]
       },
-      "note": "a liquid US listing: venueVolume is three venues, never the consolidated tape, and says so in `note`"
+      "note": "a liquid US listing: coverage names the dataset's scope (consolidated, or three-venue on the fallback) and `note` says what the volume counts"
     },
     {
       "slug": "stock-quote",

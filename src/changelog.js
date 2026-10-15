@@ -9,6 +9,7 @@ const ENTRIES = [
       "Search and routing (/api/find, /api/route and the MCP catalog tools) bound every uncached search with a deadline and recover on their own if one stalls; under load they answer 503 with Retry-After instead of hanging.",
       "Every published npm package retries a discovery read that answers 503 with a retry delay, a few times and briefly, and never repeats a paid call.",
       "Data tools that wait on an outside service answer 503 naming the service and the step when it does not answer in time, and nothing is charged.",
+      "stock-quote and stock-history read the consolidated end-of-day summary across all US exchanges and ATSs: the official close and the market's total volume, returned as volume. Each answer names its dataset and coverage; a read that falls back to the three-venue feed says coverage three-venue and returns volume null.",
     ],
   },
   {
