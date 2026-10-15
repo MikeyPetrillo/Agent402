@@ -128,7 +128,7 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
       <section>
       <h2 id="add" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 18px;">Three ways in.</h2>
 
-      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:8px;">A / MCP - Claude &amp; any MCP client</div>
+      <div class="ml-meta" style="font-size:var(--fs-xs);color:var(--accent);margin:0 0 8px;"><span>A / MCP</span><span>Claude &amp; any MCP client</span></div>
       <div style="border:1px solid var(--hairline);background:var(--panel);margin-bottom:22px;"><pre style="margin:0;padding:16px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.8;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># Claude Code - hosted connector (no install; free proof-of-work tools, paid tools need a wallet client)
 </span>claude mcp add --transport http agent402 https://agent402.tools/mcp
 
@@ -143,7 +143,7 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
 }</pre></div>
       <p style="font-size:var(--fs-md);color:var(--muted);margin:-12px 0 22px;">Every other host, each block read from its own docs: <a href="/guides/agent-hosts" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK</a>. Shortlinks: <span style="font-family:var(--font-mono);">agent402.sh/cursor</span>, <span style="font-family:var(--font-mono);">agent402.sh/vscode</span>, <span style="font-family:var(--font-mono);">agent402.sh/codex</span>; one-shot install <span style="font-family:var(--font-mono);">curl -fsSL agent402.sh/install | sh</span>.</p>
 
-      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:8px;">B / x402 client - pay in code</div>
+      <div class="ml-meta" style="font-size:var(--fs-xs);color:var(--accent);margin:0 0 8px;"><span>B / x402 client</span><span>pay in code</span></div>
       <div style="border:1px solid var(--hairline);background:var(--panel);margin-bottom:22px;"><pre style="margin:0;padding:16px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.8;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);">// npm i @x402/core @x402/evm @x402/fetch viem
 </span>import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
@@ -161,7 +161,7 @@ const res = await payFetch("https://agent402.tools/api/extract", {
 });
 console.log(await res.json());</pre></div>
 
-      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:8px;">C / SDK - resolves a task &amp; pays automatically</div>
+      <div class="ml-meta" style="font-size:var(--fs-xs);color:var(--accent);margin:0 0 8px;"><span>C / SDK</span><span>resolves a task &amp; pays automatically</span></div>
       <div style="border:1px solid var(--hairline);background:var(--panel);margin-bottom:44px;"><pre style="margin:0;padding:16px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.8;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;">npm install agent402-client
 import { Agent402 } from "agent402-client";
 const a = new Agent402();           <span style="color:var(--on-panel-faint);">// free tier (proof-of-work)</span>

@@ -77,6 +77,8 @@ export const REPORTS_CSS = `
   .rpt-brand{display:flex;align-items:baseline;gap:9px;font-family:var(--font-mono);margin-bottom:14px}
   .rpt-brand .n{font-weight:500;color:var(--ink);font-size:var(--fs-base)}.rpt-brand .s{font-size:var(--fs-2xs);letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
   .rpt-title{font-weight:500;font-size:var(--fs-3xl);letter-spacing:-.03em;line-height:1.08;margin:0;color:var(--ink);text-wrap:balance}
+  .cite-run{white-space:nowrap}
+  @media (max-width:600px){.cite-run{white-space:normal}.cite-gap::after{content:"\\200b"}}
   .rpt-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:10px;display:flex;flex-wrap:wrap;row-gap:2px}.rpt-meta>span{white-space:nowrap}.rpt-meta>span+span::before{content:"·";padding:0 8px}
   .upsell{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:24px 26px;margin-top:24px;box-shadow:inset 0 1px 0 var(--card-inset)}
   .upsell .k{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}

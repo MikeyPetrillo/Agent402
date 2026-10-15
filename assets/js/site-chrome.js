@@ -142,8 +142,20 @@ window.a402BreakCode=function(root){try{
    A font starts loading at the first layout that needs it, and before that layout document.fonts.status
    still reads "loaded"; a forced layout starts every fetch, so the status read after it is the real one. */
 window.a402BindWidows=function(root){void document.documentElement.offsetHeight;if(document.fonts&&document.fonts.status!=='loaded'&&document.fonts.ready){document.fonts.ready.then(function(){a402BindNow(root);},function(){a402BindNow(root);});return;}a402BindNow(root);};
+/* A prose cell of a table that scrolls in its own wrapper keeps a reading width: on a phone the table would
+   otherwise squeeze its widest column to a word or two per line, so a cell of a sentence or more gets a
+   floor of about 20em (a phrase of four words or more, 10em) and the table scrolls sideways instead.
+   Short cells (a name, a price) are untouched, and so is a wider screen, where the table has room. */
+var a402CellMeasure=function(root){try{var cells=(root||document).querySelectorAll('td,th'),todo=[];
+  /* A cell that is only a list of code names ("a, b, c") is a list: it takes .ml-codelist, and on a phone each name gets its own line. */
+  for(var j=0;j<cells.length;j++){var d=cells[j],codes=0,other=false;for(var n=d.firstChild;n;n=n.nextSibling){if(n.nodeType===1&&/^(CODE|KBD|SAMP)$/.test(n.tagName))codes++;else if(n.nodeType===1||(n.nodeType===3&&/[^\s,;·|/]/.test(n.data)))other=true;}if(codes>=3&&!other)d.classList.add('ml-codelist');}
+  if(!(window.matchMedia&&window.matchMedia('(max-width: 600px)').matches))return;
+  var scrolls=function(e){for(var a=e.parentElement;a&&a!==document.body;a=a.parentElement){var ox=getComputedStyle(a).overflowX;if(ox==='auto'||ox==='scroll')return true;}return false;};
+  for(var i=0;i<cells.length;i++){var c=cells[i];if(c.style.minWidth||c.classList.contains('ml-codelist'))continue;var t=(c.textContent||'').replace(/\s+/g,' ').trim();var em=t.length>=48&&t.indexOf(' ')>0?20:t.length>=20&&t.split(' ').length>=4?10:0;if(em&&scrolls(c))todo.push([c,em]);}
+  todo.forEach(function(x){x[0].style.minWidth=x[1]+'em';});
+}catch(e){}};
 /* Two passes: binding a table cell changes its column, which moves its neighbours' lines, so the second pass binds against the settled layout. */
-var a402BindNow=function(root){if(window.a402BreakCode)window.a402BreakCode(root);a402BindPass(root);a402BindPass(root);};
+var a402BindNow=function(root){a402CellMeasure(root);if(window.a402BreakCode)window.a402BreakCode(root);a402BindPass(root);a402BindPass(root);};
 var a402BindPass=function(root){try{
   var SEL='p,li,h1,h2,h3,h4,dd,dt,td,th,figcaption,blockquote,label,[class*="lede"],[class*="intro"],[class*="meta"]';
   var OPAQUE=/^(CODE|PRE|KBD|SAMP|SCRIPT|STYLE|TEXTAREA|BUTTON|SELECT|svg|SVG|IMG|BR)$/;
@@ -151,14 +163,17 @@ var a402BindPass=function(root){try{
   var BLOCK=/^(block|list-item|table-cell|flow-root)$/;
   var WS=/[ \t\n\r\f]+/g;
   var plans=[];
-  var collect=function(el){var segs=[];var walk=function(n){for(var c=n.firstChild;c;c=c.nextSibling){if(c.nodeType===3){segs.push({node:c,text:c.data});}else if(c.nodeType===1){if(OPAQUE.test(c.tagName)){var cw=0,cr=c.getClientRects();for(var u=0;u<cr.length;u++)cw+=cr[u].width;segs.push({node:null,el:c,text:c.textContent||'x',w:cw});continue;}var d=getComputedStyle(c).display;if(d==='none')continue;if(INLINE.test(d)){walk(c);}else if(/^inline-/.test(d)){segs.push({node:null,el:c,text:c.textContent||'x'});}else{segs.push({node:null,text:c.textContent||'x'});}}}};walk(el);return segs;};
+  var collect=function(el){var segs=[];var walk=function(n){for(var c=n.firstChild;c;c=c.nextSibling){if(c.nodeType===3){segs.push({node:c,text:c.data});}else if(c.nodeType===1){if(OPAQUE.test(c.tagName)&&!/^(block|list-item|flex|grid|table|flow-root)$/.test(getComputedStyle(c).display)){var cw=0,cr=c.getClientRects();for(var u=0;u<cr.length;u++)cw+=cr[u].width;segs.push({node:null,el:c,text:c.textContent||'x',w:cw});continue;}var d=getComputedStyle(c).display;if(d==='none')continue;if(INLINE.test(d)){walk(c);}else if(/^inline-/.test(d)){segs.push({node:null,el:c,text:c.textContent||'x'});}else{segs.push({node:null,text:c.textContent||'x'});}}}};walk(el);return segs;};
   var els=(root||document).querySelectorAll(SEL);
   /* The rendered width of the text from string offset x to the end: text by
      Range, inline code by its boxes; a block child in the tail is never bound. */
   var tailW=function(map,x,last){var W=0;for(var q=0;q<map.length;q++){var g=map[q];var a=Math.max(x,g.start),b=Math.min(last+1,g.start+g.len);if(b<=a)continue;var rs;if(g.node){var r=document.createRange();r.setStart(g.node,a-g.start);r.setEnd(g.node,b-g.start);rs=r.getClientRects();}else if(g.el){rs=g.el.getClientRects();}else return Infinity;for(var u=0;u<rs.length;u++)W+=rs[u].width;}return W;};
   /* Reads first (every block's tail measured), writes after, so the page lays out once. */
   for(var i=0;i<els.length;i++){var el=els[i];if(el.a402Split||!el.closest('main,footer')||el.closest('pre,code,[data-wrap="off"]'))continue;var cs=getComputedStyle(el);if(!BLOCK.test(cs.display)||/pre|nowrap/.test(cs.whiteSpace))continue;var w=el.clientWidth-parseFloat(cs.paddingLeft||0)-parseFloat(cs.paddingRight||0);if(!(w>0))continue;
-    var segs=collect(el);var s='',map=[];segs.forEach(function(g){map.push({node:g.node,el:g.el,w:g.w,start:s.length,len:g.text.length});s+=g.text;});
+    var segs=collect(el);
+    /* A block that closes the element (a nested list after a list item's lead sentence) is measured on its own: the tail bound here is the text before it. */
+    var e2=segs.length,blk=false;while(e2>0){var gq=segs[e2-1];if(gq.node&&!/\S/.test(gq.text)){e2--;continue;}if(!gq.node&&!gq.el){blk=true;e2--;continue;}break;}if(blk)segs=segs.slice(0,e2);
+    var s='',map=[];segs.forEach(function(g){map.push({node:g.node,el:g.el,w:g.w,start:s.length,len:g.text.length});s+=g.text;});
     var first=s.search(/[^ \t\n\r\f]/);if(first<0)continue;var last=s.replace(/[ \t\n\r\f]+$/,'').length-1;
     var segAt=(function(map){return function(x){for(var q=map.length-1;q>=0;q--)if(map[q].start<=x)return map[q];return null;};})(map);
     var runs=[],m;WS.lastIndex=0;while((m=WS.exec(s))){if(m.index>first&&m.index<last){var g0=segAt(m.index);if(g0&&g0.node)runs.push({a:m.index,b:m.index+m[0].length});}}
@@ -207,7 +222,7 @@ document.addEventListener('DOMContentLoaded',function(){window.a402BindWidows(do
    or table wrapper wider than its box gets tabindex=0, so arrow keys scroll it once it has focus. Checked
    after load and on resize, since the same block can fit on one screen and
    overflow on another. */
-(function(){function mark(){try{document.querySelectorAll('pre, .tablewrap, .pg-table-wrap, .wx-scroll, .tp-scroll').forEach(function(p){var over=p.scrollWidth>p.clientWidth+1;if(over&&!p.hasAttribute('tabindex'))p.setAttribute('tabindex','0');else if(!over&&p.getAttribute('tabindex')==='0')p.removeAttribute('tabindex');});}catch(e){}}
+(function(){function mark(){try{document.querySelectorAll('pre, .tablewrap, .pg-table-wrap, .wx-scroll, .tp-scroll, .gp-tw').forEach(function(p){var over=p.scrollWidth>p.clientWidth+1;if(over&&!p.hasAttribute('tabindex'))p.setAttribute('tabindex','0');else if(!over&&p.getAttribute('tabindex')==='0')p.removeAttribute('tabindex');});}catch(e){}}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mark);else mark();
 var t=null;var later=function(){clearTimeout(t);t=setTimeout(mark,200);};window.addEventListener('resize',later);
 /* Report bodies and tables are drawn after load: mark them when they arrive. */

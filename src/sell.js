@@ -202,7 +202,7 @@ table{border-collapse:collapse;width:100%}
       </div>
       <div style="border:1px solid var(--hairline);background:var(--panel);">
         <div style="padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);">WHAT IT COSTS YOU</div>
-        <table style="font-family:var(--font-mono);font-size:var(--fs-sm);"><tbody>${costsHtml}</tbody></table>
+        <table class="ml-kv" style="font-family:var(--font-mono);font-size:var(--fs-sm);"><tbody>${costsHtml}</tbody></table>
         <a href="#earn" style="display:block;padding:12px 18px;border-top:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent-lit);text-decoration:none;">Read exactly how we make money ↓</a>
       </div>
     </div>
@@ -210,13 +210,13 @@ table{border-collapse:collapse;width:100%}
 </header>
 
 <section style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
-  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/bestsellers${price("bestsellers") ? ` · ${esc(price("bestsellers"))} per read` : ""}</div>
+  <div class="ml-meta" style="font-size:var(--fs-sm);color:var(--accent);margin:0 0 12px;"><span>$ GET /api/bestsellers</span>${price("bestsellers") ? `<span>${esc(price("bestsellers"))} per read</span>` : ""}</div>
   <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Demand data from our own sales ledger.</h2>
   <div class="ml-meta" style="margin:10px 0 14px;"><span>lanes shown</span><span>figures are a paid read</span></div>
   <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 28px;">Settlements land on chain, but <em style="color:var(--ink);">which tool an agent bought</em> does not, so these figures come from the sales ledger of the server that served each call and cannot be rebuilt from a block explorer. Below are the lanes agents buy in on this catalog, in no particular order. The ranking and the numbers behind it are a tool, not a marketing page.</p>
-  <div class="sl-scroll" style="border:1px solid var(--hairline);background:var(--card);">
+  <div class="sl-scroll ml-rowlist" style="border:1px solid var(--hairline);background:var(--card);">
     <table style="font-size:var(--fs-md);">
-      <caption style="text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);padding:14px 18px;border-bottom:1px solid var(--hairline);">Where the buying is · unranked, figures withheld</caption>
+      <caption style="text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);padding:14px 18px;border-bottom:1px solid var(--hairline);"><span class="ml-meta" style="margin:0;font-size:inherit;color:inherit;"><span>Where the buying is</span><span>unranked, figures withheld</span></span></caption>
       <thead><tr style="border-bottom:1px solid var(--hairline);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);"><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">lane</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">what agents buy in it</th></tr></thead>
       <tbody>${lanesHtml}
         <tr style="background:var(--footer-bg);"><th scope="row" style="text-align:left;font-weight:400;padding:16px 18px;color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-xs);white-space:nowrap;">the figures</th><td style="padding:16px 18px;color:var(--muted);font-size:var(--fs-md);line-height:1.5;">Per-tool purchase counts, distinct buyers, revenue and buyer-diversity - plus each tool's trend against the previous window, over any 1-90 day span.</td><td style="padding:16px 18px;text-align:right;"><a href="/tools/bestsellers" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;white-space:nowrap;">${esc(price("bestsellers") || "bestsellers")} →</a></td></tr>
@@ -226,7 +226,7 @@ table{border-collapse:collapse;width:100%}
   <div class="sl-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);border-top:none;">
     <div style="padding:24px;border-right:1px solid var(--hairline);background:var(--footer-bg);">
       <h3 style="font-family:var(--font-mono);font-weight:600;font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 12px;">The unmet half</h3>
-      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 14px;">We also log what agents searched for and <strong style="color:var(--ink);">did not find</strong>. Those wish clusters are ranked at <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);">/api/demand-radar</span>, tagged by whether agents asked outright or simply failed to discover something that already exists - and flagged when a cluster is within two signals of the build threshold. It is the closest thing to a build list for an x402 seller, read from what agents asked this server for.</p>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 14px;">We also log what agents searched for and <strong style="color:var(--ink);">did not find</strong>. Those wish clusters are ranked at <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);white-space:nowrap;">/api/demand-radar</span>, tagged by whether agents asked outright or simply failed to discover something that already exists - and flagged when a cluster is within two signals of the build threshold. It is the closest thing to a build list for an x402 seller, read from what agents asked this server for.</p>
       <a href="/tools/demand-radar" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">demand radar →${price("demand-radar") ? ` ${esc(price("demand-radar"))} per read` : ""}</a>
     </div>
     <div style="padding:24px;background:var(--footer-bg);">
@@ -287,7 +287,7 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
   -d '{"origin":"https://seller.example"}'</pre>
       ${formHtml}
       <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:18px 0 12px;">What we read from you</div>
-      <table style="font-family:var(--font-mono);font-size:var(--fs-xs);border:1px solid var(--hairline);"><tbody>${whatWeReadHtml}</tbody></table>
+      <table class="ml-kv" style="font-family:var(--font-mono);font-size:var(--fs-xs);border:1px solid var(--hairline);"><tbody>${whatWeReadHtml}</tbody></table>
       <p style="font-size:var(--fs-sm);line-height:1.6;color:var(--faint);margin:16px 0 0;">Already listed and nobody is paying? <span style="font-family:var(--font-mono);color:var(--muted);white-space:nowrap;">POST /api/seller-payability</span> buys one call from your own endpoint with our wallet and reports every leg: the 402 decoded, whether a stock client's signature was accepted, the settlement receipt.${price("seller-payability") ? ` It costs ${esc(price("seller-payability"))}.` : ""} Want the audit first? <span style="font-family:var(--font-mono);color:var(--muted);white-space:nowrap;">/api/x402-audit</span> grades any x402 endpoint's payment-security posture from the outside, without paying it${price("x402-audit") ? ` (${esc(price("x402-audit"))} a read)` : ""}. Run it on yourself before you list.</p>
     </div>
   </div>
@@ -298,7 +298,7 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
   <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">How buyers reach you.</h2>
   <div class="ml-meta" style="margin:10px 0 14px;">${ROUTE_ORDER.map((o) => `<span>${esc(o.short)}</span>`).join("")}<span>then judged fit</span></div>
   <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 28px;">Four places buyers find you. In the router, a buyer describes a task and gets a ranked list of matching tools from this catalog and the open index; a new seller with no probe history starts at full crawl health in that ranking. Being paid by the router is a separate gate. ${esc(routingProofSentence())}</p>
-  <div class="sl-scroll" style="border:1px solid var(--hairline);background:var(--card);">
+  <div class="sl-scroll ml-rowlist" style="border:1px solid var(--hairline);background:var(--card);">
     <table style="font-size:var(--fs-md);">
       <tbody>${surfacesHtml}
         <tr style="background:var(--footer-bg);"><th scope="row" style="text-align:left;font-weight:400;padding:16px 18px;color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-xs);">+ the rest</th><td style="padding:16px 18px;color:var(--muted);font-size:var(--fs-md);line-height:1.5;">Ranked by distinct buyers, sales, revenue or buyer-diversity - plus each tool's trend against the previous window, over any 1-90 day span.</td><td style="padding:16px 18px;text-align:right;"><a href="/tools/bestsellers" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;white-space:nowrap;">${esc(price("bestsellers") || "bestsellers")} →</a></td></tr>
@@ -331,7 +331,7 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">WHAT WE WON'T DO</div>
       <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 18px;color:var(--ink);">The commitments</h2>
       <table style="font-size:var(--fs-md);border:1px solid var(--hairline);"><tbody>${commitmentsHtml}</tbody></table>
-      <p class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:14px 0 0;"><span>ranking: <a href="${esc(REPO)}/blob/main/src/route-order.js" rel="noopener" style="color:var(--muted);">src/route-order.js →</a></span><span>self-exclusion: <a href="${esc(REPO)}/blob/main/src/ledger-leaderboard.js" rel="noopener" style="color:var(--muted);">src/ledger-leaderboard.js →</a></span></p>
+      <p class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:14px 0 0;"><span>ranking: <a href="${esc(REPO)}/blob/main/src/route-order.js" rel="noopener" style="color:var(--muted);">route-order.js →</a></span><span>self-exclusion: <a href="${esc(REPO)}/blob/main/src/ledger-leaderboard.js" rel="noopener" style="color:var(--muted);">ledger-leaderboard.js →</a></span></p>
     </div>
   </div>
 </section>
@@ -342,7 +342,7 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:48px 30px 56px;">
-  <div style="background:var(--panel);border:1px solid var(--hairline);padding:52px 44px;position:relative;overflow:hidden;">
+  <div class="ml-cta-panel" style="background:var(--panel);border:1px solid var(--hairline);padding:52px 44px;position:relative;overflow:hidden;">
     <div style="position:relative;">
       <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">One curl and you're listed.</h2>
       <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 28px;max-width:64ch;">No account, no review, nothing deducted. Registering reads your origin at once: if the crawler can reach your 402, you are in the index as soon as that read completes.</p>

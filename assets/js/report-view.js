@@ -32,7 +32,17 @@
   function inline(l) {
     l = l.replace(/\[(\d+)\]/g, '<span class="cite">[$1]</span>');
     // A run of citations ("[5][6][7]") is one mark: a word joiner keeps it from splitting across lines.
-    l = l.replace(/<\/span><span class="cite">/g, '</span>\u2060<span class="cite">');
+    // A run longer than five is wider than a phone's line: it is one unbroken mark on a wide screen
+    // (.cite-run) and on a phone breaks between groups of three (.cite-gap; the last group takes the
+    // remainder), never leaving one citation alone on a line.
+    l = l.replace(/(?:<span class="cite">\[\d+\]<\/span>)+/g, function (run) {
+      var c = run.match(/<span class="cite">\[\d+\]<\/span>/g);
+      if (c.length <= 5) return c.join("\u2060");
+      var groups = [];
+      for (var i = 0; i < c.length; i += 3) groups.push(c.slice(i, i + 3));
+      if (groups.length > 1 && groups[groups.length - 1].length < 3) groups[groups.length - 2] = groups[groups.length - 2].concat(groups.pop());
+      return '<span class="cite-run">' + groups.map(function (g) { return g.join("\u2060"); }).join('<span class="cite-gap"></span>') + "</span>";
+    });
     l = l.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     // [label](https://…) before the bare-URL autolink, or the bare rule would
     // eat the URL out of the parentheses and leave the label stranded.
@@ -243,7 +253,7 @@
       '<div class="rpt-head">' +
         '<div class="rpt-brand"><span class="n">agent402</span><span class="s">Report</span></div>' +
         '<h1 class="rpt-title">' + esc(s.title || "Report") + "</h1>" +
-        '<div class="rpt-meta"><span>' + esc(reportLabel(s)) + "</span>" + (s.at ? "<span>" + esc(fmtDate(s.at)) + "</span>" : "") + "</div>" +
+        '<div class="rpt-meta">' + String(reportLabel(s)).split(/:\s+/).map(function (x) { return "<span>" + esc(x) + "</span>"; }).join("") + (s.at ? "<span>" + esc(fmtDate(s.at)) + "</span>" : "") + "</div>" +
       "</div>";
 
     // Action bar (never printed).
