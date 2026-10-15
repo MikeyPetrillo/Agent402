@@ -243,7 +243,11 @@ export const TOOLS = [
     kit: "llm-nano",
     path: "/v1/nano/chat/completions",
     method: "POST",
-    body: { model: "openai/gpt-5-nano", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 },
+    // 64 output tokens: gpt-5-nano reasons before it answers and returns an
+    // empty reply at a budget of 5, which left this leg passing on the failover
+    // model instead of the one it names. The tier price is flat, so the budget
+    // does not change what the leg pays.
+    body: { model: "openai/gpt-5-nano", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 64 },
     priceUsd: 0.003,
     check: (r) => isExactOkReply(r.choices?.[0]?.message?.content) || `expected an exact "OK" reply, got ${JSON.stringify(r).slice(0, 100)}`,
   },
