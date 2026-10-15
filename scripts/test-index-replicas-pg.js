@@ -23,22 +23,22 @@ const X = "https://seller-x.example", Y = "https://seller-y.example";
 const entry = (route, fetchedAt, extra = {}) => ({ manifest: { x402Version: 1, name: route }, tools: [{ route, price: "$0.001" }], fetchedAt, error: null, source: "crawl", history: [], paywall: null, discoveryPath: null, ...extra });
 const snapArgs = { baseUrl: "https://agent402.tools", catalog: {}, prices: {}, network: "base", toolCount: 0, walletName: "test" };
 const COLLECTION = "x402-index";
-const served = (m) => m.indexSnapshot(snapArgs).sellers.map((s) => s.origin);
+const served = (m) => new Set(m.indexSnapshot(snapArgs).sellers.map((s) => s.origin));
 
 try {
   await sdb.records.put(COLLECTION, X, entry("/x", 1_000));
   const A = await import("../src/x402-index.js?container=a");
   const B = await import("../src/x402-index.js?container=b");
   await A.warmStartIndexFromStateDb(); await B.warmStartIndexFromStateDb();
-  ok(served(A).includes(X) && served(B).includes(X), "both containers warm-start the same origin");
+  ok(served(A).has(X) && served(B).has(X), "both containers warm-start the same origin");
 
   // ---- an origin added on A reaches B ---------------------------------------
   A.__testSeedCache([[Y, entry("/y", 2_000)]]);
   await A.persistIndexCacheAsync();
   ok((await sdb.records.get(COLLECTION, Y))?.manifest?.name === "/y", "A's new origin is in the table");
-  ok(!served(B).includes(Y), "B does not have it before it pulls (the old behavior, forever)");
+  ok(!served(B).has(Y), "B does not have it before it pulls (the old behavior, forever)");
   const pulled = await B.pullIndexChanges();
-  ok(pulled >= 1 && served(B).includes(Y), `B pulls it (${pulled} change(s))`);
+  ok(pulled >= 1 && served(B).has(Y), `B pulls it (${pulled} change(s))`);
 
   // ---- newer wins -----------------------------------------------------------
   // A crawls X again (fetched later); B still holds the boot copy.
@@ -65,10 +65,10 @@ try {
   await new Promise((r) => setTimeout(r, 300));
   await A.persistIndexCacheAsync();
   ok((await sdb.records.get(COLLECTION, Y)) == null, "A's save deletes Y's row");
-  ok(served(B).includes(Y), "B still holds Y until it hears of the removal");
+  ok(served(B).has(Y), "B still holds Y until it hears of the removal");
   await B.persistIndexCacheAsync();
   ok((await sdb.records.get(COLLECTION, Y)) == null, "B's save does not bring Y's row back");
-  ok(!served(B).includes(Y), "B no longer serves Y");
+  ok(!served(B).has(Y), "B no longer serves Y");
   ok(B.isRemovedOrigin(Y), "B knows Y is removed");
   A.stopCrawler?.(); B.stopCrawler?.();
 } catch (e) {

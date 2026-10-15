@@ -23,27 +23,30 @@ const SENDS = join(DIR, "sends.log");
 const sl = await import("../src/sales-ledger.js");
 const { closeStateDb, __dropStateSchema } = await import("../src/state-db.js");
 const child = (label) => new Promise((resolve) => {
+  // The child's source is constant; everything it varies on comes from env.
   const code = `
     import { appendFileSync } from "node:fs";
-    const sl = await import(${JSON.stringify(new URL("../src/sales-ledger.js", import.meta.url).href)});
+    const E = process.env;
+    const sl = await import(new URL("../src/sales-ledger.js", E.T_BASE).href);
     await sl.salesLedgerReady();
-    const { makeAttestHandler } = await import(${JSON.stringify(new URL("../src/tools/attest-kit.js", import.meta.url).href)});
+    const { makeAttestHandler } = await import(new URL("../src/tools/attest-kit.js", E.T_BASE).href);
     const chain = {
       address: "0x77065d81e18ad403BCD6e9A0616b288e16744121",
       ensureSchema: async () => {},
       estimateUsd: async () => 0.001,
-      attest: async () => { appendFileSync(${JSON.stringify(SENDS)}, "${label}\\n"); await new Promise((r) => setTimeout(r, 1500)); return { uid: "0x" + "${label === "A" ? "a1" : "b2"}".repeat(32), attestTx: "0x" + "33".repeat(32), block: "1" }; },
+      attest: async () => { appendFileSync(E.T_SENDS, E.T_LABEL + "\\n"); await new Promise((r) => setTimeout(r, 1500)); return { uid: "0x" + (E.T_LABEL === "A" ? "a1" : "b2").repeat(32), attestTx: "0x" + "33".repeat(32), block: "1" }; },
     };
     const spend = { maySpend: () => ({ ok: true }), noteSpend: () => ({ id: 1 }), adjustSpend: () => {}, reserveSpend: async () => ({ ok: true, handle: null }) };
-    const h = makeAttestHandler({ chain, spend, payerOf: () => "${BUYER}" });
+    const h = makeAttestHandler({ chain, spend, payerOf: () => E.T_BUYER });
     let out;
-    try { out = await h({ tx: "${TX}" }); } catch (e) { out = { error: e.statusCode + " " + e.message }; }
+    try { out = await h({ tx: E.T_TX }); } catch (e) { out = { error: e.statusCode + " " + e.message }; }
     await sl.salesLedgerFlush();
-    const { closeStateDb } = await import(${JSON.stringify(new URL("../src/state-db.js", import.meta.url).href)});
+    const { closeStateDb } = await import(new URL("../src/state-db.js", E.T_BASE).href);
     await closeStateDb();
     console.log(JSON.stringify({ uid: out.uid, existing: out.existing, error: out.error }));
   `;
-  const p = spawn(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, SALES_LEDGER_DB: join(DIR, `${label}.db`) }, stdio: ["ignore", "pipe", "inherit"] });
+
+  const p = spawn(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, SALES_LEDGER_DB: join(DIR, `${label}.db`), T_BASE: import.meta.url, T_SENDS: SENDS, T_LABEL: label, T_BUYER: BUYER, T_TX: TX }, stdio: ["ignore", "pipe", "inherit"] });
   let out = ""; p.stdout.on("data", (d) => { out += d; });
   p.on("exit", () => { try { resolve(JSON.parse(out.trim().split("\n").pop())); } catch { resolve({ error: out.slice(-200) }); } });
 });
