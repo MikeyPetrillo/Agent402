@@ -388,11 +388,12 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   ok(/const who = payer \|\| \(req\.mppTempoSender \? `tempo:\$\{req\.mppTempoSender\}` : req\.creditsKeyId \? `credits:\$\{req\.creditsKeyId\}` : null\);\s*\n\s*return \[who, `ip:\$\{clientIp\(req\)\}`\];/.test(server), "ticket keys: the verified payer (never the Tempo source hint) AND always the client IP");
   ok(!/mppTempoPayer/.test(server.slice(server.indexOf("function hangupForgivenessKeys("), server.indexOf("function hangupForgivenessKeys(") + 600)), "the ticket keys never read the client-supplied Tempo payer hint");
   // Both post-handler broadcasts (the early-confirm race and the relay-only
+  // path, after direct mode's last party screen)
   // path) come after the check; the push-credential finalize earlier in the
   // file runs before any handler and is covered by the tempoSettled rule.
   for (const [name, src, calls] of [["mpp-tempo", tempo, ["Promise.resolve(broadcast(auth))", "b = await broadcast(auth);"]], ["mpp-stripe", stripeGate, ["const b = await settle(auth);"]]]) {
     const check = src.indexOf("if (chargeCancelledForClientGone(req)) {");
-    ok(check > 0 && calls.every((c) => src.indexOf(c) > check && src.indexOf(c) - check < 2500), `${name}: the cancelled-charge check precedes the ${name === "mpp-tempo" ? "broadcast" : "capture"}`);
+    ok(check > 0 && calls.every((c) => src.indexOf(c) > check && src.indexOf(c) - check < 3200), `${name}: the cancelled-charge check precedes the ${name === "mpp-tempo" ? "broadcast" : "capture"}`);
   }
   ok(/\} else if \(req\.creditsSettled && Number\(req\.creditsChargedOnClose\) > 0\) \{/.test(server), "the debt recorder books a credits hold settled on an abandoned run");
   ok(/const denied = hangupTicketDenial\(req\);[\s\S]{0,1400}\$\{denied \? `; not forgiven: \$\{denied\}` : ""\}/.test(server), "the owed line names why the run was not forgiven");
