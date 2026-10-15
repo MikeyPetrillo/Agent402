@@ -15,6 +15,7 @@
 // PoW-eligible); covered by scripts/test-data-kit.js.
 import { readFileSync } from "node:fs";
 import { safeFetch } from "./fetch-guard.js";
+import { ratesUrl, latestShape, isUnknownCurrency } from "./frankfurter.js";
 
 // Committed open dataset (see src/data/LICENSE.md — ODbL attribution).
 // Regenerate with scripts/build-countries-data.js. Loaded once at module load;
@@ -160,31 +161,37 @@ export const DATA_TOOLS = [
       // always sourced from Frankfurter (the authoritative trading day),
       // never `new Date()`. Keeps the tool deterministic w.r.t. its inputs +
       // upstream state, which the catalog contract requires.
+      const unknownPair = () => bad(`unknown currency code: ${from}/${to} is not a listed pair (ECB reference currencies only, e.g. USD, EUR, GBP, JPY, CHF)`);
       try {
         if (from === to) {
-          const jId = await getJson(`https://api.frankfurter.dev/v1/latest?from=USD&to=EUR`);
+          const jId = latestShape(await getJson(ratesUrl({ base: "USD", quotes: ["EUR"] })), "USD");
+          if (!jId) throw bad("Frankfurter returned no USD/EUR reference rate", 502);
           return { from, to, amount, rate: 1, result: amount, date: jId.date };
         }
-        const j = await getJson(`https://api.frankfurter.dev/v1/latest?from=${from}&to=${to}&amount=${amount}`);
-        const result = j.rates?.[to];
-        if (result == null) throw bad(`unsupported currency pair ${from}/${to}`, 502);
-        return { from, to, amount, rate: Number((result / amount).toFixed(6)), result, date: j.date };
+        // v2 has no amount parameter: convert here at full precision, the same
+        // arithmetic as the fallback branch below (src/tools/frankfurter.js).
+        const j = latestShape(await getJson(ratesUrl({ base: from, quotes: [to] })), from);
+        const r = j?.rates?.[to];
+        if (j == null) throw unknownPair();
+        if (typeof r !== "number" || !(r > 0)) throw bad(`unsupported currency pair ${from}/${to}`, 502);
+        return { from, to, amount, rate: Number(r.toFixed(6)), result: Number((amount * r).toFixed(6)), date: j.date };
       } catch (e) {
         // Diverse fallback: Frankfurter is volunteer-run and shares fate with
         // nothing we control; open.er-api.com (exchangerate-api.com's keyless
         // open endpoint) is independent infrastructure. Only a Frankfurter
-        // UPSTREAM failure (502/504 from getJson) falls through — input 4xx
-        // (incl. Frankfurter's 404→422 for a currency it doesn't list) keeps
-        // today's semantics. NB: ER-API rates update once a day vs
+        // UPSTREAM failure (502/504 from getJson) falls through; input 4xx
+        // (an unknown code: v2 answers 422, v1 answered 404) keeps today's
+        // semantics. NB: ER-API rates update once a day vs
         // Frankfurter's ECB business-day reference — acceptable staleness for
         // a fallback. ER-API has no from/to conversion params, only a full
         // rate table per base (/v6/latest/<FROM>), so the cross-rate is
         // computed client-side from that table. Response shape is identical
         // to the Frankfurter path; `date` is ER-API's last-update day (UTC).
-        // Frankfurter answers 404 for a code it does not list; fetch-guard
-        // relabels that 422 "check the URL", which blames a URL the buyer
-        // never saw (corpus, 2026-09-06). Name the input instead.
-        if (e.statusCode === 422 && /HTTP 404/.test(String(e.message))) throw bad(`unknown currency code: ${from}/${to} is not a listed pair (ECB reference currencies only, e.g. USD, EUR, GBP, JPY, CHF)`);
+        // fetch-guard relabels the upstream refusal as a 422 "check the URL",
+        // which blames a URL the buyer never saw (corpus, 2026-09-06). Name
+        // the input instead.
+        if (isUnknownCurrency(e)) throw unknownPair();
+        if (e.statusCode === 400) throw e;
         if (e.statusCode !== 502 && e.statusCode !== 504) throw e;
         console.warn(`[fx-rate] frankfurter failed (${e.message}) - falling back to open.er-api.com`);
         // Identity branch mirrors the Frankfurter one: touch the upstream (USD

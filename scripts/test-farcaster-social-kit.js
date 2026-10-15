@@ -335,9 +335,30 @@ calls = [];
 await h("fc-cast-metrics")({ q: "x402" }); const m2 = await h("fc-cast-metrics")({ q: "x402" });
 ok(calls.length === 1 && m2.cached === true, "fc-cast-metrics: cached");
 calls = [];
-await h("fc-cast-search")({ q: "x402" }); await h("fc-cast-search")({ q: "x402" });
+// Cast search is stored for CAST_SEARCH_TTL_MS (its own per-minute meter);
+// a single-cast lookup is never stored.
+await h("fc-cast-search")({ q: "x402" }); const s2 = await h("fc-cast-search")({ q: "x402" });
+ok(calls.length === 1 && s2.cached === true, "fc-cast-search: an identical search inside the window is one upstream call");
+ok(__test.CAST_SEARCH_TTL_MS >= 5_000 && __test.CAST_SEARCH_TTL_MS <= 15_000, `fc-cast-search: the search window is short (${__test.CAST_SEARCH_TTL_MS} ms)`);
+await h("fc-cast-search")({ q: "x402", cursor: "abc" });
+ok(calls.length === 2, "fc-cast-search: a different cursor is a different read");
+{
+  const realNow2 = Date.now; const t0 = realNow2();
+  Date.now = () => t0 + __test.CAST_SEARCH_TTL_MS + 1;
+  const s3 = await h("fc-cast-search")({ q: "x402" });
+  Date.now = realNow2;
+  ok(calls.length === 3 && s3.cached === false, "fc-cast-search: past the window the search is read again");
+}
+calls = [];
 await h("fc-cast")({ identifier: CAST.hash }); await h("fc-cast")({ identifier: CAST.hash });
-ok(calls.length === 4, "search + cast lookups are never cached");
+ok(calls.length === 2, "single-cast lookups are never stored");
+// In-flight dedupe: concurrent identical reads share one request, stored or not.
+clearCache(); calls = [];
+const [d1, d2, d3] = await Promise.all([h("fc-cast-search")({ q: "dedupe" }), h("fc-cast-search")({ q: "dedupe" }), h("fc-cast-search")({ q: "dedupe" })]);
+ok(calls.length === 1 && d1.cached === false && d2.cached === true && d3.cached === true, `fc-cast-search: three concurrent identical searches spend one call (${calls.length})`);
+calls = [];
+await Promise.all([h("fc-cast")({ identifier: CAST.hash }), h("fc-cast")({ identifier: CAST.hash })]);
+ok(calls.length === 1, "fc-cast: concurrent identical lookups share one request even though they are never stored");
 // Errors are never cached (a 5xx followed by a 200 fetches twice).
 clearCache(); calls = [];
 const good = responder;

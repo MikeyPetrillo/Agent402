@@ -240,6 +240,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "gov-data", "weather-alerts", "earthquakes",
   "drug-recalls", "food-recalls", "drug-adverse-events", "vin-decode", "vehicle-recalls",
   "device-recalls", "college-lookup", "fec-candidates",
+  "drug-label", "drug-ndc", "device-510k", "device-adverse-events",
   "federal-awards", "geo-lookup", "fema-disasters",
   "barcode-lookup", "fx-rate", "weather-forecast",
   // Locale/time reference (data-kit): Nager.Date egress → wallet-only.

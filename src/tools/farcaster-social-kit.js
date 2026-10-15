@@ -25,8 +25,9 @@
 // Plan awareness: Neynar's per-minute allowance rides back in
 // x-ratelimit-limit / -remaining / -reset; every response carries it as
 // `rateLimit` so an agent can pace itself. Feed-shaped reads (channel feed,
-// trending, cast metrics) are cached in-process for 60 s keyed by the exact
-// upstream URL - a burst of identical reads costs one upstream call.
+// trending, cast metrics) are cached in-process for 60 s and cast search for
+// 15 s, keyed by the exact upstream URL; concurrent identical reads of any
+// endpoint share one request - a burst of identical reads costs one call.
 //
 // Output is compact by design: a cast is {hash, author{fid, username,
 // displayName, followerCount}, text, timestamp, channel, parentHash,
@@ -36,6 +37,7 @@
 // Live calls need a real key and are not exercised in CI.
 
 import { markUntrusted } from "./provenance.js";
+import { createTtlCache } from "./ttl-dedupe.js";
 const NEYNAR_API = "https://api.neynar.com/v2/farcaster";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): one read per handler under its own
@@ -43,6 +45,12 @@ import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upst
 // upstream and the step, never a 504.
 const TIMEOUT_MS = 10_000;
 const CACHE_TTL_MS = 60_000;
+// Cast search is metered at about 120 calls a minute on the plan this kit
+// runs on, and agents repeat a search while they page through a task. 15 s:
+// an identical search (same query, filters and cursor) inside that window
+// costs one call, while a newest-first search is never more than 15 s behind
+// the network. A different cursor is a different URL, so paging is unaffected.
+const CAST_SEARCH_TTL_MS = 15_000;
 const CACHE_MAX_ENTRIES = 256;
 const USER_AGENT = "Agent402/1.0 (+https://agent402.tools)";
 
@@ -172,23 +180,11 @@ function parseChannelRef(raw, field = "id") {
 }
 
 // --- cache -----------------------------------------------------------------
-const cache = new Map(); // url -> { at, value }
-
-function cacheGet(url) {
-  const hit = cache.get(url);
-  if (!hit) return null;
-  if (Date.now() - hit.at > CACHE_TTL_MS) { cache.delete(url); return null; }
-  return hit;
-}
-
-function cacheSet(url, value) {
-  if (cache.size >= CACHE_MAX_ENTRIES) {
-    // Drop the oldest entry (Map preserves insertion order).
-    const oldest = cache.keys().next().value;
-    if (oldest !== undefined) cache.delete(oldest);
-  }
-  cache.set(url, { at: Date.now(), value });
-}
+// One TTL store with in-flight dedupe (src/tools/ttl-dedupe.js), keyed by the
+// exact upstream URL. Every read dedupes: concurrent identical calls share one
+// upstream request. Only reads that opt in are stored (feeds 60 s, cast
+// search CAST_SEARCH_TTL_MS).
+const cache = createTtlCache({ maxEntries: CACHE_MAX_ENTRIES });
 
 // --- upstream --------------------------------------------------------------
 function readRateLimit(headers) {
@@ -214,11 +210,13 @@ async function neynarGet(path, params = {}, { notFound = "Not found on Farcaster
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
   }
   const href = url.toString();
-  if (cacheable) {
-    const hit = cacheGet(href);
-    if (hit) return { ...hit.value, cached: true };
-  }
+  // `cacheable`: true for the 60 s feed window, a number for its own TTL.
+  const ttlMs = cacheable === true ? CACHE_TTL_MS : Number.isFinite(cacheable) && cacheable > 0 ? cacheable : 0;
+  const { value, cached } = await cache.get(href, ttlMs, () => neynarFetch(href, path, key, notFound));
+  return cached ? { ...value, cached: true } : value;
+}
 
+async function neynarFetch(href, path, key, notFound) {
   const res = await upstreamFetch(href, {
     headers: { "x-api-key": key, accept: "application/json", "user-agent": USER_AGENT },
   }, { label: "Farcaster upstream", step: String(path).replace(/^\//, "").split("/").filter((seg) => /^[a-z_-]+$/.test(seg)).join(" ").replace(/[_-]/g, " ") || "lookup", timeoutMs: TIMEOUT_MS, tag: "[farcaster-social]" });
@@ -255,9 +253,7 @@ async function neynarGet(path, params = {}, { notFound = "Not found on Farcaster
   try { data = await res.json(); } catch { throw bad("Farcaster upstream returned non-JSON", 502); }
   if (!data || typeof data !== "object") throw bad("Farcaster upstream returned an unexpected payload", 502);
 
-  const value = { data, rateLimit, fetchedAt: nowIso(), cached: false };
-  if (cacheable) cacheSet(href, value);
-  return value;
+  return { data, rateLimit, fetchedAt: nowIso(), cached: false };
 }
 
 // --- mappers (compact output) ----------------------------------------------
@@ -366,7 +362,7 @@ async function fcCastSearch(input = {}) {
   const cursor = takeCursor(input.cursor);
   const r = await neynarGet("/cast/search", {
     q, mode, sort_type: sort, author_fid: authorFid, channel_id: channel, limit, cursor,
-  });
+  }, { cacheable: CAST_SEARCH_TTL_MS });
   const casts = Array.isArray(r.data?.result?.casts) ? r.data.result.casts.map(mapCast) : [];
   return envelope(r, {
     query: q, mode, sort, authorFid, channel,
@@ -842,8 +838,9 @@ export const FARCASTER_SOCIAL_TOOLS = [
 export const __test = {
   NEYNAR_API,
   CACHE_TTL_MS,
+  CAST_SEARCH_TTL_MS,
   clearCache: () => cache.clear(),
-  cacheSize: () => cache.size,
+  cacheSize: () => cache.size(),
   parseIdentifier,
   parseChannelRef,
   takeUsername,

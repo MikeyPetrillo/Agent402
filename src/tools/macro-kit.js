@@ -12,7 +12,7 @@
 //        and intermittently throttles it.
 //      • US Treasury Fiscal Data API (api.fiscaldata.treasury.gov) — public
 //        domain, for debt outstanding and average interest rates by security
-//      • ECB reference rates via Frankfurter (api.frankfurter.dev) — open data
+//      • ECB reference rates via Frankfurter v2 (api.frankfurter.dev/v2, providers=ecb) — open data
 //      • World Bank Indicators API (api.worldbank.org) — open data
 //
 //   2. Keyed FRED JSON API (requires FRED_API_KEY env var, free to obtain at
@@ -26,6 +26,7 @@
 // fed funds, recession signals). Pure HTTP wrappers, deterministic.
 import { safeFetch, assertPublicUrl, retryTransient } from "./fetch-guard.js";
 import { redactSecrets } from "./redact.js";
+import { ratesUrl, latestShape, seriesShape, isUnknownCurrency } from "./frankfurter.js";
 
 // Moved to fetch-guard.js 2026-08-12 (now used by gov-kit.js and
 // weather-kit.js too, not just here) — re-exported so this file's own
@@ -417,7 +418,18 @@ export const MACRO_TOOLS = [
       const date = String(i.date ?? "").trim();
       if (!/^[A-Z]{3}$/.test(from) || !/^[A-Z]{3}$/.test(to)) throw bad("from and to must be 3-letter currency codes");
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw bad('"date" must be ISO format YYYY-MM-DD');
-      const j = await getJson(`https://api.frankfurter.dev/v1/${date}?from=${from}&to=${to}`);
+      // v2 rows through the v1-shape adapter (src/tools/frankfurter.js). An
+      // empty answer is the ECB not publishing that pair on or before that
+      // date (a non-ECB code, or a date before 1999-01-04), the input's
+      // problem; v1 said so with a 404 the fetch guard turned into a 422.
+      let j;
+      try {
+        j = latestShape(await getJson(ratesUrl({ base: from, quotes: [to], date })), from);
+      } catch (e) {
+        if (isUnknownCurrency(e)) throw bad(`unknown currency code: ${from}/${to} is not a listed pair (ECB reference currencies only, e.g. USD, EUR, GBP, JPY, CHF)`, 422);
+        throw e;
+      }
+      if (j == null) throw bad(`No ECB reference rate for ${from}→${to} on or before ${date} (ECB reference currencies only; the series starts 1999-01-04)`, 422);
       const rate = j?.rates?.[to];
       if (typeof rate !== "number") throw bad(`Frankfurter returned no rate for ${from}→${to} on ${date}`, 502);
       return { from, to, date: j.date ?? date, rate, source: "ECB via Frankfurter (open data)" };
@@ -449,10 +461,19 @@ export const MACRO_TOOLS = [
       if (!/^[A-Z]{3}$/.test(from) || !/^[A-Z]{3}$/.test(to)) throw bad("from and to must be 3-letter currency codes");
       if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw bad('"startDate"/"endDate" must be ISO YYYY-MM-DD');
       if (endDate < startDate) throw bad('"endDate" must not precede "startDate"');
-      const j = await getJson(`https://api.frankfurter.dev/v1/${startDate}..${endDate}?from=${from}&to=${to}`);
+      let j;
+      try {
+        j = seriesShape(await getJson(ratesUrl({ base: from, quotes: [to], from: startDate, to: endDate })), from);
+      } catch (e) {
+        if (isUnknownCurrency(e)) throw bad(`unknown currency code: ${from}/${to} is not a listed pair (ECB reference currencies only, e.g. USD, EUR, GBP, JPY, CHF)`, 422);
+        throw e;
+      }
       const rates = j?.rates ?? {};
       const series = Object.keys(rates).sort().map((d) => ({ date: d, rate: rates[d]?.[to] ?? null }))
         .filter((p) => typeof p.rate === "number");
+      // The ECB series starts 1999-01-04: a window wholly before it is the
+      // input's problem (v1 answered 404 for it), not an outage.
+      if (!series.length && endDate < "1999-01-04") throw bad(`No ECB reference rates for ${from}→${to} before 1999-01-04 (the ECB series start)`, 422);
       if (!series.length) throw bad("Frankfurter returned no rates for the requested window", 502);
       return { from, to, startDate, endDate, count: series.length, series, source: "ECB via Frankfurter (open data)" };
     },
@@ -479,7 +500,8 @@ export const MACRO_TOOLS = [
       if (fresh) return fxDashCache.value;
       let j = null, source = "ECB via Frankfurter (open data)";
       try {
-        j = await getJson(`https://api.frankfurter.dev/v1/latest?from=USD&to=${G10.join(",")}`, FX_PRIMARY);
+        j = latestShape(await getJson(ratesUrl({ base: "USD", quotes: G10 }), FX_PRIMARY), "USD");
+        if (!j) throw bad("Frankfurter returned no G10 rows", 502);
       } catch (e) {
         console.warn(`[fx-dashboard] frankfurter failed (${String(e?.message || e).slice(0, 80)}) - walking to open.er-api.com`);
         try {

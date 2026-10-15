@@ -417,9 +417,11 @@ ok(Object.keys(NEWS_SOURCES).length >= 5 && Object.keys(NEWS_SOURCES).length <= 
   const live = await h("crypto-market-pulse")({ limit: 5 });
   ok(live.source === "hyperliquid" && live.markets.listed === 3 && live.breadth.advancers === 2 && live.breadth.decliners === 0, `pulse handler on fixture (listed ${live.markets.listed}, counted ${live.markets.counted})`);
   ok(live.majors.BTC.markPx === 77267 && live.topByVolume[0].coin === "BTC" && typeof live.fetchedAt === "string", "pulse handler: majors + leaders + fetchedAt");
-  mode = "http500";
+  // Each new upstream state drops the shared 5 s document cache first; a
+  // stored success would otherwise (correctly) answer for the outage.
+  mode = "http500"; __test.resetCaches();
   await throws(h("crypto-market-pulse")({}), 502, "pulse HL 500 -> 502");
-  mode = "timeout";
+  mode = "timeout"; __test.resetCaches();
   await throws(h("crypto-market-pulse")({}), 503, "pulse HL deadline -> 503");
   mode = "ok";
 }

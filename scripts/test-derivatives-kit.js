@@ -381,7 +381,8 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
   ok(calls.filter((c) => c.url === __test.HL_INFO).length === 3, "perp-dexs: exactly three info reads (perpDexs + perpDeployAuctionStatus + allPerpMetas)");
   ok(xyz.markets === 3 && xyz.activeMarkets === 2 && xyz.delistedMarkets === 1, "perp-dexs: market counts are read from allPerpMetas by coin prefix (active vs delisted)");
   ok(out.dexs[1].markets === 1 && out.dexs[1].activeMarkets === 0 && out.dexs[1].delistedMarkets === 1, "perp-dexs: a wound-down dex reads 1 market, 0 active, 1 delisted");
-  mode = "no-all-metas";
+  // A new upstream state: drop the shared 60 s listing cache so the read lands.
+  mode = "no-all-metas"; __test.resetMetaCache();
   const noMetas = await h("perp-dexs")({});
   ok(noMetas.count === 2 && noMetas.dexs[0].markets === null && noMetas.dexs[0].deployer === xyz.deployer, "perp-dexs: an unreadable allPerpMetas leaves the rows with null counts, never fails the call");
   mode = "ok";

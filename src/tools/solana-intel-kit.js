@@ -33,6 +33,7 @@
 
 import { markUntrusted } from "./provenance.js";
 import { partialFields } from "../partial-answer.js";
+import { createTtlCache } from "./ttl-dedupe.js";
 import { HANDLER_BUDGET_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 const MAX_BODY_BYTES = 24 * 1024 * 1024;  // DefiLlama bulk docs run ~11MB; this is the hard ceiling.
 // Refuse an over-large body BEFORE reading it into a string: `res.text()` has
@@ -68,6 +69,15 @@ const DEXSCREENER_MS = 8_000;
 const RPC_MS = 5_000;
 // An optional read is not started with less than this left in the budget.
 const RPC_FLOOR_MS = 1_500;
+// The safety tool's optional full-report read is not started with less than
+// this left: the report is measured at 1.2 to 3.6 s on a blue chip.
+const FULL_REPORT_FLOOR_MS = 4_000;
+// ...and gets a shorter cap than the report tools' own read: the safety tool
+// is the fast headline read (summary + index answer in well under a second),
+// so an optional fill must not hold it for the report tools' full 12 s.
+// Measured 2026-10-14: a healthy report answers in 1.2 to 3.6 s; a slow day
+// ran past 12 s, where the fill gives up and the answer says why.
+const RUGCHECK_FALLBACK_MS = 6_000;
 const UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
 
 const RUGCHECK = "https://api.rugcheck.xyz/v1";
@@ -174,6 +184,18 @@ async function upstreamJson(url, { label, step = "data", timeoutMs = JUPITER_MS,
 }
 
 const stamp = () => new Date().toISOString();
+
+// The full report, read once per mint at a time. sol-token-report,
+// sol-token-holders and the safety tool's fallback all read this document;
+// the brief composite runs two of them in parallel for one mint, so
+// concurrent reads share one request (src/tools/ttl-dedupe.js, dedupe only:
+// a multi-megabyte document is never held after it is answered).
+const reportReads = createTtlCache({ maxEntries: 1 });
+async function rugcheckReport(mint, budget, timeoutMs = RUGCHECK_REPORT_MS) {
+  // A caller joining a read already in flight waits on that read's own cap.
+  const { value } = await reportReads.get(mint, 0, () => upstreamJson(`${RUGCHECK}/tokens/${mint}/report`, { label: "RugCheck", step: "report", timeoutMs, budget, notFound: "RugCheck has no report for that mint (not an SPL token mint?)" }));
+  return value;
+}
 
 // ---------------------------------------------------------------------------
 // RugCheck shaping
@@ -500,7 +522,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "Safety headline for any Solana SPL token mint: a public token-risk score (raw + 0-100 normalised), the named risks with level (danger/warn/info), LP locked percentage, and the aggregator's audit facts - mint authority and freeze authority revoked or live, top-holder share, dev mints, holder count, verified flag and organic score. Two keyless public sources read in parallel; one compact verdict for pre-trade screening of memecoins and new launches.",
+      "Safety headline for any Solana SPL token mint: a public token-risk score (raw + 0-100 normalised), the named risks with level (danger/warn/info), LP locked percentage, and the aggregator's audit facts - mint authority and freeze authority revoked or live, top-holder share, dev mints, holder count, verified flag and organic score. Two keyless public sources read in parallel; one compact verdict for pre-trade screening of memecoins and new launches. The full token-risk report is read only when a published field needs it (the aggregator does not index the mint, or the summary carries no score), and fullReport names the fields it filled.",
     tags: ["solana", "token", "safety", "memecoin", "risk", "spl"],
     discovery: {
       bodyType: "json",
@@ -528,14 +550,62 @@ export const SOLANA_INTEL_TOOLS = [
     handler: async (i) => {
       const mint = takeMint(i.mint);
       const budget = budgetOf();
+      // SUMMARY FIRST. The summary (a few hundred bytes, measured ~0.4 s) and
+      // Jupiter's index entry carry every field this tool publishes for the
+      // tokens it is asked about. The full report (megabytes on a blue chip,
+      // measured 3.6 s for JUP) is read only when a published field would
+      // otherwise be null: the summary carried no score, or Jupiter does not
+      // index the mint (token, authorities). That read is optional: when it
+      // cannot finish, the fields stay null and `fullReport` says why.
       const [summary, jupList] = await Promise.all([
         upstreamJson(`${RUGCHECK}/tokens/${mint}/report/summary`, { label: "RugCheck", step: "report summary", timeoutMs: RUGCHECK_SUMMARY_MS, budget, notFound: "RugCheck has no report for that mint (not an SPL token mint?)" }),
         upstreamJson(`${jupiterBase()}/tokens/v2/search?query=${encodeURIComponent(mint)}`, { label: "Jupiter", step: "token search", timeoutMs: JUPITER_MS, budget }),
       ]);
-      const risks = shapeRisks(summary?.risks);
-      const counts = riskCounts(risks);
       const jt = shapeJupToken((Array.isArray(jupList) ? jupList : []).find((t) => t?.id === mint) || null);
-      const normalised = num(summary?.score_normalised);
+      const need = [];
+      if (num(summary?.score_normalised) == null) need.push("score");
+      if (!jt) need.push("token", "authorities");
+      let full = null, fullReport = null;
+      if (need.length) {
+        if (budget && budget.remaining() < FULL_REPORT_FLOOR_MS) {
+          fullReport = { read: false, needed: need, filled: [], why: "budget" };
+        } else {
+          try {
+            full = await rugcheckReport(mint, budget, RUGCHECK_FALLBACK_MS);
+          } catch (e) {
+            fullReport = { read: false, needed: need, filled: [], why: e?.statusCode === 503 ? "deadline-or-refused" : e?.statusCode === 422 ? "no-report" : "upstream-error" };
+          }
+        }
+      }
+      const filled = [];
+      let risks = shapeRisks(summary?.risks);
+      let score = num(summary?.score);
+      let normalised = num(summary?.score_normalised);
+      if (full && need.includes("score") && num(full?.score_normalised) != null) {
+        score = num(full.score); normalised = num(full.score_normalised); risks = shapeRisks(full.risks); filled.push("score", "risks");
+      }
+      const counts = riskCounts(risks);
+      let token = jt ? { name: jt.name, symbol: jt.symbol, decimals: jt.decimals, holderCount: jt.holderCount, isVerified: jt.isVerified, organicScore: jt.organicScore, organicScoreLabel: jt.organicScoreLabel, launchpad: jt.launchpad } : null;
+      let authorities = jt ? { mintAuthorityDisabled: jt.audit.mintAuthorityDisabled, freezeAuthorityDisabled: jt.audit.freezeAuthorityDisabled, mintAuthority: jt.mintAuthority, freezeAuthority: jt.freezeAuthority } : null;
+      if (full && !jt) {
+        // The report's own fields; Jupiter-only facts (organic score) stay null.
+        token = {
+          name: full?.tokenMeta?.name ?? full?.fileMeta?.name ?? null,
+          symbol: full?.tokenMeta?.symbol ?? full?.fileMeta?.symbol ?? null,
+          decimals: num(full?.token?.decimals),
+          // RugCheck reports 0 when it has not counted (measured on USDC):
+          // a zero is "no count", never "no holders".
+          holderCount: num(full?.totalHolders) > 0 ? num(full.totalHolders) : null,
+          isVerified: full?.verification ? Boolean(full.verification.jup_verified) : null,
+          organicScore: null, organicScoreLabel: null,
+          launchpad: full?.launchpad?.name ?? full?.launchpad?.platform ?? null,
+        };
+        const m = authorityState(full?.token?.mintAuthority ?? full?.mintAuthority);
+        const f = authorityState(full?.token?.freezeAuthority ?? full?.freezeAuthority);
+        authorities = { mintAuthorityDisabled: m.revoked, freezeAuthorityDisabled: f.revoked, mintAuthority: m.address, freezeAuthority: f.address };
+        filled.push("token", "authorities");
+      }
+      if (full) fullReport = { read: true, needed: need, filled };
       // Deterministic band from RugCheck's own numbers (lower is safer). Note
       // RugCheck flags "LP Vault unlocked" as danger on established tokens too,
       // so an old blue chip can land in "danger"; the authorities/holders
@@ -548,18 +618,22 @@ export const SOLANA_INTEL_TOOLS = [
       }
       return {
         mint,
-        score: num(summary?.score),
+        score,
         scoreNormalised: normalised,
         lpLockedPct: round(summary?.lpLockedPct, 2),
-        tokenProgram: summary?.tokenProgram ?? null,
+        tokenProgram: summary?.tokenProgram ?? full?.tokenProgram ?? null,
         risks,
         riskCounts: counts,
-        token: jt ? { name: jt.name, symbol: jt.symbol, decimals: jt.decimals, holderCount: jt.holderCount, isVerified: jt.isVerified, organicScore: jt.organicScore, organicScoreLabel: jt.organicScoreLabel, launchpad: jt.launchpad } : null,
-        authorities: jt ? { mintAuthorityDisabled: jt.audit.mintAuthorityDisabled, freezeAuthorityDisabled: jt.audit.freezeAuthorityDisabled, mintAuthority: jt.mintAuthority, freezeAuthority: jt.freezeAuthority } : null,
+        token,
+        authorities,
         holders: jt ? { topHoldersPct: jt.audit.topHoldersPct, devBalancePct: jt.audit.devBalancePct, devMints: jt.audit.devMints } : null,
         riskLevel,
-        note: "riskLevel bands RugCheck's own score and risk levels (lower score is safer, normalised 0-100); it is not a recommendation. Jupiter fields are null when Jupiter does not index the mint.",
-        source: ["rugcheck", "jupiter"],
+        // null when the summary and Jupiter carried everything (the usual
+        // case); otherwise which fields needed the full report, which it
+        // filled, and why it could not when it could not.
+        fullReport,
+        note: "riskLevel bands RugCheck's own score and risk levels (lower score is safer, normalised 0-100); it is not a recommendation. Jupiter fields are null when Jupiter does not index the mint; token and authorities then come from RugCheck's full report when it answers (fullReport says which), and holders stays null.",
+        source: filled.length ? ["rugcheck", "jupiter", "rugcheck-report"] : ["rugcheck", "jupiter"],
         fetchedAt: stamp(),
       };
     },
@@ -609,7 +683,7 @@ export const SOLANA_INTEL_TOOLS = [
       const marketLimit = takeLimit(i.marketLimit, 5, 25);
       const holderLimit = takeLimit(i.holderLimit, 20, 20);
       const budget = budgetOf();
-      const r = await upstreamJson(`${RUGCHECK}/tokens/${mint}/report`, { label: "RugCheck", step: "report", timeoutMs: RUGCHECK_REPORT_MS, budget, notFound: "RugCheck has no report for that mint (not an SPL token mint?)" });
+      const r = await rugcheckReport(mint, budget);
       const risks = shapeRisks(r?.risks);
       const decimals = num(r?.token?.decimals);
       const rawSupply = num(r?.token?.supply);
@@ -703,7 +777,7 @@ export const SOLANA_INTEL_TOOLS = [
       const mint = takeMint(i.mint);
       const limit = takeLimit(i.limit, 20, 20);
       const budget = budgetOf();
-      const r = await upstreamJson(`${RUGCHECK}/tokens/${mint}/report`, { label: "RugCheck", step: "report", timeoutMs: RUGCHECK_REPORT_MS, budget, notFound: "RugCheck has no report for that mint (not an SPL token mint?)" });
+      const r = await rugcheckReport(mint, budget);
       const decimals = num(r?.token?.decimals);
       const rawSupply = num(r?.token?.supply);
       const fromRugcheck = Array.isArray(r?.topHolders) && r.topHolders.length > 0;
@@ -1091,7 +1165,7 @@ for (const t of SOLANA_INTEL_TOOLS) if (JUPITER_SLUGS.has(t.slug)) t.description
 
 // Exported for offline unit tests (pure shaping, no network).
 export const __test = { takeMint, takeLimit, shapeHolders, shapeMarkets, shapePair, shapeJupToken, authorityState, riskCounts, BASE58_RE, budgetOf, topAccountsFromRpc,
-  DEADLINES: Object.freeze({ HANDLER_BUDGET_MS, RUGCHECK_SUMMARY_MS, RUGCHECK_REPORT_MS, JUPITER_MS, DEXSCREENER_MS, RPC_MS, RPC_FLOOR_MS }) };
+  DEADLINES: Object.freeze({ HANDLER_BUDGET_MS, RUGCHECK_SUMMARY_MS, RUGCHECK_REPORT_MS, JUPITER_MS, DEXSCREENER_MS, RPC_MS, RPC_FLOOR_MS, FULL_REPORT_FLOOR_MS, RUGCHECK_FALLBACK_MS }), reportReadsInflight: () => reportReads.inflightSize() };
 
 // Free text in these results is written by third parties (headlines, posts,
 // casts, token names and descriptions, page titles). Anyone can mint a token or

@@ -9,6 +9,10 @@
 //   vin-decode          decode a VIN (NHTSA vPIC)
 //   vehicle-recalls     NHTSA safety recalls by make/model/year
 //   device-recalls      FDA medical-device recall/enforcement (openFDA)
+//   drug-label          FDA drug labeling sections by name or NDC (openFDA)
+//   drug-ndc            FDA NDC directory by NDC or name (openFDA)
+//   device-510k         FDA 510(k) clearances (openFDA)
+//   device-adverse-events FDA device MDR counts, top problems, newest reports (openFDA)
 //   college-lookup      US colleges via the Dept of Ed College Scorecard
 //   fec-candidates      US federal election candidates (FEC)
 //   federal-awards      US federal contract awards (USAspending, POST search)
@@ -19,6 +23,7 @@
 // fallback); the rest are keyless. (Treasury debt/rates live in macro-kit; don't
 // dup here.)
 import { safeFetch } from "./fetch-guard.js";
+import { partialFields, clampFields } from "../partial-answer.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -156,6 +161,138 @@ const KNOWN_STATE_CODES = new Set(Object.values(STATE_NAME_TO_CODE));
 // the recall monitor's probes); OPENFDA_API_KEY raises it to 120k/day. Appended
 // as a query param only when set - never logged (the URL is never surfaced).
 const openFdaKeyParam = () => (process.env.OPENFDA_API_KEY ? `&api_key=${encodeURIComponent(process.env.OPENFDA_API_KEY.trim())}` : "");
+// ---- openFDA reference reads (labels, NDC directory, 510(k), device MDRs) --
+// Terms (open.fda.gov/terms, read 2026-10-14): openFDA content is public
+// domain under CC0, "You can copy, modify, distribute, and perform the work,
+// even for commercial purposes, all without asking permission." The one
+// carve-out on these endpoints is GMDN device nomenclature (licensed from The
+// GMDN Agency, no commercial use without its license): every row below is
+// built from an explicit field list, none of which is a GMDN field, so GMDN
+// content can never ride through. Personal fields openFDA carries (a 510(k)
+// contact's name and street address, MDR reporter and contact names) are
+// likewise never copied. MDR narratives appear only as one bounded excerpt.
+const FDA_DISCLAIMER = "openFDA data is unvalidated and is not medical advice; do not rely on it to make decisions regarding medical care.";
+// A search term rides inside a quoted openFDA phrase: drop what would close
+// the phrase or escape it, collapse whitespace, cap the length.
+export function fdaTerm(raw, field, max = 100) {
+  const s = String(raw ?? "").replace(/["\\\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  if (s.length > max) throw bad(`"${field}" is too long (max ${max} characters)`);
+  return s;
+}
+const fdaSearch = (clauses, joiner) => encodeURIComponent(clauses.join(` ${joiner} `));
+// NDC: labeler-product (product NDC) or labeler-product-package, hyphenated
+// the way the FDA lists them (4-4, 5-3, 5-4 plus an optional 1-2 digit package).
+const NDC_RE = /^\d{4,5}-\d{3,4}(-\d{1,2})?$/;
+export function takeNdc(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  if (!NDC_RE.test(s)) throw bad('"ndc" must be a hyphenated NDC as the FDA lists it, e.g. "58151-155" (product) or "58151-155-77" (package)');
+  return s;
+}
+// One label section: SPL text arrays joined, whitespace collapsed, capped.
+// `chars` is the full length, so a cut section is never read as complete.
+export function labelSection(arr, maxChars) {
+  const list = Array.isArray(arr) ? arr : arr == null ? [] : [arr];
+  const text = list.map((x) => String(x ?? "")).join(" ").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  return { text: text.slice(0, maxChars), chars: text.length, truncated: text.length > maxChars };
+}
+const first = (v) => (Array.isArray(v) ? v[0] ?? null : v ?? null);
+const capList = (v, n) => (Array.isArray(v) ? v.slice(0, n).map(String) : []);
+export function labelRow(r, maxChars) {
+  const o = r?.openfda || {};
+  return {
+    brandName: first(o.brand_name),
+    genericName: first(o.generic_name),
+    manufacturer: first(o.manufacturer_name),
+    productType: first(o.product_type),
+    routes: capList(o.route, 10),
+    applicationNumber: first(o.application_number),
+    productNdc: capList(o.product_ndc, 10),
+    productNdcCount: Array.isArray(o.product_ndc) ? o.product_ndc.length : 0,
+    splSetId: r?.set_id ?? first(o.spl_set_id),
+    effectiveDate: fdaDate(r?.effective_time),
+    version: r?.version ?? null,
+    sections: {
+      boxedWarning: labelSection(r?.boxed_warning, maxChars),
+      indications: labelSection(r?.indications_and_usage, maxChars),
+      dosage: labelSection(r?.dosage_and_administration, maxChars),
+      contraindications: labelSection(r?.contraindications, maxChars),
+      // PLR-format labels carry "warnings and precautions"; older labels "warnings".
+      warnings: labelSection(r?.warnings_and_cautions ?? r?.warnings, maxChars),
+    },
+    url: r?.set_id ? `https://dailymed.nlm.nih.gov/dailymed/lookup.cfm?setid=${encodeURIComponent(r.set_id)}` : null,
+  };
+}
+export function ndcRow(r) {
+  const pk = Array.isArray(r?.packaging) ? r.packaging : [];
+  return {
+    productNdc: r?.product_ndc ?? null,
+    brandName: r?.brand_name ?? null,
+    genericName: r?.generic_name ?? null,
+    labeler: r?.labeler_name ?? null,
+    dosageForm: r?.dosage_form ?? null,
+    routes: capList(r?.route, 10),
+    productType: r?.product_type ?? null,
+    marketingCategory: r?.marketing_category ?? null,
+    applicationNumber: r?.application_number ?? null,
+    activeIngredients: (Array.isArray(r?.active_ingredients) ? r.active_ingredients : []).slice(0, 20).map((a) => ({ name: a?.name ?? null, strength: a?.strength ?? null })),
+    pharmClass: capList(r?.pharm_class, 10),
+    marketingStartDate: fdaDate(r?.marketing_start_date),
+    listingExpirationDate: fdaDate(r?.listing_expiration_date),
+    finished: typeof r?.finished === "boolean" ? r.finished : null,
+    packaging: pk.slice(0, 10).map((p) => ({ packageNdc: p?.package_ndc ?? null, description: cut(p?.description, 200), marketingStartDate: fdaDate(p?.marketing_start_date), sample: typeof p?.sample === "boolean" ? p.sample : null })),
+    packagingCount: pk.length,
+  };
+}
+export function k510Row(r) {
+  const o = r?.openfda || {};
+  const k = r?.k_number ?? null;
+  return {
+    kNumber: k,
+    applicant: r?.applicant ?? null,
+    deviceName: cut(r?.device_name, 200),
+    productCode: r?.product_code ?? null,
+    classificationName: o.device_name ?? null,
+    deviceClass: o.device_class ?? null,
+    regulationNumber: o.regulation_number ?? null,
+    medicalSpecialty: o.medical_specialty_description ?? r?.advisory_committee_description ?? null,
+    decisionDate: r?.decision_date ?? null,
+    decision: r?.decision_description ?? null,
+    decisionCode: r?.decision_code ?? null,
+    dateReceived: r?.date_received ?? null,
+    clearanceType: r?.clearance_type ?? null,
+    statementOrSummary: r?.statement_or_summary || null,
+    thirdPartyReview: r?.third_party_flag === "Y" ? true : r?.third_party_flag === "N" ? false : null,
+    applicantCity: r?.city || null, applicantState: r?.state || null, applicantCountry: r?.country_code || null,
+    url: k ? `https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpmn/pmn.cfm?ID=${encodeURIComponent(k)}` : null,
+  };
+}
+export const MDR_EXCERPT_CHARS = 280;
+export function mdrRow(r) {
+  const d = Array.isArray(r?.device) ? r.device[0] || {} : {};
+  const texts = Array.isArray(r?.mdr_text) ? r.mdr_text : [];
+  const desc = texts.find((t) => /description of event/i.test(String(t?.text_type_code || ""))) || texts[0] || null;
+  const full = desc ? String(desc.text ?? "").replace(/\s+/g, " ").trim() : "";
+  return {
+    reportNumber: r?.report_number ?? null,
+    mdrReportKey: r?.mdr_report_key ?? null,
+    dateReceived: fdaDate(r?.date_received),
+    dateOfEvent: fdaDate(r?.date_of_event),
+    eventType: r?.event_type ?? null,
+    brandName: d.brand_name || null,
+    genericName: d.generic_name || null,
+    manufacturer: d.manufacturer_d_name || r?.manufacturer_name || null,
+    productCode: d.device_report_product_code || null,
+    deviceClass: d.openfda?.device_class ?? null,
+    problems: capList(r?.product_problems, 10),
+    excerpt: full ? full.slice(0, MDR_EXCERPT_CHARS) : null,
+    excerptChars: full.length,
+    excerptTruncated: full.length > MDR_EXCERPT_CHARS,
+  };
+}
+const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 export const GOV_TOOLS = [
   {
     route: "GET /api/gov-data", name: "US gov dataset search", slug: "gov-data", aliases: ["us-gov-dataset-search", "dataset-search", "data-gov"], category: "data", price: "$0.002",
@@ -553,6 +690,230 @@ export const GOV_TOOLS = [
         total: data?.meta?.results?.total ?? results.length,
         recalls: results.map((r) => recallRow(r, i.full === true)),
         source: "api.fda.gov (openFDA, public domain)",
+      };
+    },
+  },
+
+  // ---- openFDA reference reads (api.fda.gov) - labels, NDC, 510(k), MDRs ---
+  {
+    route: "GET /api/drug-label", name: "FDA drug label lookup", slug: "drug-label", category: "data", price: "$0.004",
+    description:
+      "FDA drug labeling (openFDA SPL) by brand or generic name, or by NDC: boxed warning, indications and usage, dosage and administration, contraindications, and warnings and precautions, with manufacturer, routes, application number, NDCs and the label's effective date. Each section reports its full length and whether it was cut. Newest label first; the answer says how many labels matched. Live FDA data, no key. ?name=lipitor",
+    tags: ["fda", "drug", "label", "spl", "boxed-warning", "dosage", "openfda", "health", "government"],
+    discovery: {
+      input: { name: "lipitor", limit: 1 },
+      inputSchema: {
+        properties: {
+          name: { type: "string", description: "Brand or generic drug name (e.g. lipitor, atorvastatin)" },
+          ndc: { type: "string", description: "Product or package NDC, hyphenated (e.g. 58151-155 or 58151-155-77); used instead of name" },
+          limit: { type: "number", description: "Labels to return, 1-5 (default 1)" },
+          maxChars: { type: "number", description: "Characters per section, 200-6000 (default 1500)" },
+        },
+        required: [],
+      },
+      output: {
+        example: {
+          query: { name: "lipitor", ndc: null }, count: 1,
+          labels: [{ brandName: "Lipitor", genericName: "ATORVASTATIN CALCIUM", manufacturer: "Viatris Specialty LLC", productType: "HUMAN PRESCRIPTION DRUG", routes: ["ORAL"], applicationNumber: "NDA020702", productNdc: ["58151-155"], productNdcCount: 4, splSetId: "a60cc18b-0631-4cf0-b021-9f52224ece65", effectiveDate: "2024-04-15", version: "8",
+            sections: { boxedWarning: null, indications: { text: "1 INDICATIONS AND USAGE LIPITOR is indicated: ...", chars: 2199, truncated: true }, dosage: { text: "2 DOSAGE AND ADMINISTRATION ...", chars: 2650, truncated: true }, contraindications: { text: "4 CONTRAINDICATIONS ...", chars: 300, truncated: false }, warnings: { text: "5 WARNINGS AND PRECAUTIONS ...", chars: 7166, truncated: true } },
+            url: "https://dailymed.nlm.nih.gov/dailymed/lookup.cfm?setid=a60cc18b-0631-4cf0-b021-9f52224ece65" }],
+          returned: 1, matched: 1, complete: true, truncated: false, maxChars: 1500,
+          disclaimer: FDA_DISCLAIMER, source: "api.fda.gov (openFDA drug labeling, public domain)",
+        },
+      },
+    },
+    handler: async (i) => {
+      const ndc = takeNdc(i.ndc);
+      const name = ndc ? "" : fdaTerm(i.name ?? i.q ?? i.drug, "name");
+      if (!ndc && !name) throw bad('"name" (brand or generic drug name) or "ndc" is required');
+      const limit = Math.min(Math.max(parseInt(i.limit, 10) || 1, 1), 5);
+      const maxChars = Math.min(Math.max(parseInt(i.maxChars, 10) || 1500, 200), 6000);
+      const clauses = ndc
+        ? [`openfda.product_ndc:"${ndc}"`, `openfda.package_ndc:"${ndc}"`]
+        : [`openfda.brand_name:"${name}"`, `openfda.generic_name:"${name}"`];
+      const data = await getJsonAllowEmpty(`https://api.fda.gov/drug/label.json?search=${fdaSearch(clauses, "OR")}&limit=${limit}&sort=effective_time:desc${openFdaKeyParam()}`);
+      const results = data?.results ?? [];
+      const labels = results.map((r) => labelRow(r, maxChars));
+      return {
+        query: { name: name || null, ndc: ndc || null },
+        count: labels.length,
+        labels,
+        ...partialFields(data?.meta?.results?.total ?? labels.length, labels.length),
+        ...clampFields(i.limit, 5),
+        maxChars,
+        disclaimer: FDA_DISCLAIMER,
+        source: "api.fda.gov (openFDA drug labeling, public domain)",
+      };
+    },
+  },
+  {
+    route: "GET /api/drug-ndc", name: "FDA NDC directory lookup", slug: "drug-ndc", category: "data", price: "$0.004",
+    description:
+      "Look up the FDA National Drug Code directory (openFDA) by NDC or by brand or generic name: product NDC, labeler, dosage form, routes, active ingredients with strengths, marketing category and application number, pharmacologic class, marketing and listing dates, and the package NDCs with their descriptions. The answer says how many products matched. Live FDA data, no key. ?ndc=58151-155",
+    tags: ["fda", "drug", "ndc", "national-drug-code", "pharmacy", "openfda", "health", "government"],
+    discovery: {
+      input: { ndc: "58151-155" },
+      inputSchema: {
+        properties: {
+          ndc: { type: "string", description: "Product NDC (e.g. 58151-155) or package NDC (e.g. 58151-155-77), hyphenated" },
+          name: { type: "string", description: "Brand or generic name, used when no ndc is given (e.g. lipitor)" },
+          limit: { type: "number", description: "Products to return, 1-20 (default 5)" },
+        },
+        required: [],
+      },
+      output: {
+        example: {
+          query: { ndc: "58151-155", name: null }, count: 1,
+          products: [{ productNdc: "58151-155", brandName: "Lipitor", genericName: "atorvastatin calcium", labeler: "Viatris Specialty LLC", dosageForm: "TABLET, FILM COATED", routes: ["ORAL"], productType: "HUMAN PRESCRIPTION DRUG", marketingCategory: "NDA", applicationNumber: "NDA020702", activeIngredients: [{ name: "ATORVASTATIN CALCIUM TRIHYDRATE", strength: "10 mg/1" }], pharmClass: ["HMG-CoA Reductase Inhibitor [EPC]"], marketingStartDate: "2024-05-01", listingExpirationDate: "2027-12-31", finished: true, packaging: [{ packageNdc: "58151-155-77", description: "90 TABLET, FILM COATED in 1 BOTTLE (58151-155-77)", marketingStartDate: "2024-05-01", sample: false }], packagingCount: 1 }],
+          returned: 1, matched: 1, complete: true, truncated: false,
+          disclaimer: FDA_DISCLAIMER, source: "api.fda.gov (openFDA NDC directory, public domain)",
+        },
+      },
+    },
+    handler: async (i) => {
+      const ndc = takeNdc(i.ndc);
+      const name = ndc ? "" : fdaTerm(i.name ?? i.q, "name");
+      if (!ndc && !name) throw bad('"ndc" (hyphenated product or package NDC) or "name" is required');
+      const limit = Math.min(Math.max(parseInt(i.limit, 10) || 5, 1), 20);
+      const clauses = ndc
+        ? [`product_ndc:"${ndc}"`, `packaging.package_ndc:"${ndc}"`]
+        : [`brand_name:"${name}"`, `generic_name:"${name}"`];
+      const data = await getJsonAllowEmpty(`https://api.fda.gov/drug/ndc.json?search=${fdaSearch(clauses, "OR")}&limit=${limit}${openFdaKeyParam()}`);
+      const products = (data?.results ?? []).map(ndcRow);
+      return {
+        query: { ndc: ndc || null, name: name || null },
+        count: products.length,
+        products,
+        ...partialFields(data?.meta?.results?.total ?? products.length, products.length),
+        ...clampFields(i.limit, 20),
+        disclaimer: FDA_DISCLAIMER,
+        source: "api.fda.gov (openFDA NDC directory, public domain)",
+      };
+    },
+  },
+  {
+    route: "GET /api/device-510k", name: "FDA 510(k) device clearances", slug: "device-510k", category: "data", price: "$0.004",
+    description:
+      "Search FDA 510(k) premarket clearances (openFDA) by applicant, three-letter product code, K number or device name: decision and date, clearance type, device class, regulation number, the FDA classification name, medical specialty, and a link to the FDA record. Newest decision first; the answer says how many clearances matched. Live FDA data, no key. ?applicant=medtronic&limit=5",
+    tags: ["fda", "device", "510k", "clearance", "medical-device", "regulatory", "openfda", "government"],
+    discovery: {
+      input: { applicant: "medtronic", limit: 5 },
+      inputSchema: {
+        properties: {
+          applicant: { type: "string", description: "Applicant (company) name, e.g. medtronic" },
+          productCode: { type: "string", description: "Three-letter FDA product code, e.g. LZG" },
+          kNumber: { type: "string", description: "510(k) number, e.g. K233210" },
+          deviceName: { type: "string", description: "Device name as submitted, e.g. insulin pump" },
+          limit: { type: "number", description: "Clearances to return, 1-20 (default 5)" },
+        },
+        required: [],
+      },
+      output: {
+        example: {
+          query: { applicant: "medtronic", productCode: null, kNumber: null, deviceName: null }, count: 1,
+          clearances: [{ kNumber: "K251234", applicant: "Medtronic, Inc.", deviceName: "Example Device", productCode: "FGE", classificationName: "Stents, Drains And Dilators For The Biliary Ducts", deviceClass: "2", regulationNumber: "876.5010", medicalSpecialty: "Gastroenterology, Urology", decisionDate: "2026-09-30", decision: "Substantially Equivalent", decisionCode: "SESE", dateReceived: "2026-06-02", clearanceType: "Traditional", statementOrSummary: "Summary", thirdPartyReview: false, applicantCity: "Plymouth", applicantState: "MN", applicantCountry: "US", url: "https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpmn/pmn.cfm?ID=K251234" }],
+          returned: 1, matched: 1587, complete: false, truncated: true,
+          disclaimer: FDA_DISCLAIMER, source: "api.fda.gov (openFDA device 510(k), public domain)",
+        },
+      },
+    },
+    handler: async (i) => {
+      const applicant = fdaTerm(i.applicant, "applicant");
+      const deviceName = fdaTerm(i.deviceName ?? i.q, "deviceName");
+      const pc = String(i.productCode ?? "").trim().toUpperCase();
+      if (pc && !/^[A-Z]{3}$/.test(pc)) throw bad('"productCode" must be a three-letter FDA product code, e.g. LZG');
+      const kn = String(i.kNumber ?? "").trim().toUpperCase();
+      if (kn && !/^K\d{6}$/.test(kn)) throw bad('"kNumber" must look like K233210 (K plus six digits)');
+      if (!applicant && !deviceName && !pc && !kn) throw bad('one of "applicant", "productCode", "kNumber" or "deviceName" is required');
+      const limit = Math.min(Math.max(parseInt(i.limit, 10) || 5, 1), 20);
+      const clauses = [];
+      if (kn) clauses.push(`k_number:"${kn}"`);
+      if (pc) clauses.push(`product_code:"${pc}"`);
+      if (applicant) clauses.push(`applicant:"${applicant}"`);
+      if (deviceName) clauses.push(`device_name:"${deviceName}"`);
+      const data = await getJsonAllowEmpty(`https://api.fda.gov/device/510k.json?search=${fdaSearch(clauses, "AND")}&limit=${limit}&sort=decision_date:desc${openFdaKeyParam()}`);
+      const clearances = (data?.results ?? []).map(k510Row);
+      return {
+        query: { applicant: applicant || null, productCode: pc || null, kNumber: kn || null, deviceName: deviceName || null },
+        count: clearances.length,
+        clearances,
+        ...partialFields(data?.meta?.results?.total ?? clearances.length, clearances.length),
+        ...clampFields(i.limit, 20),
+        disclaimer: FDA_DISCLAIMER,
+        source: "api.fda.gov (openFDA device 510(k), public domain)",
+      };
+    },
+  },
+  {
+    route: "GET /api/device-adverse-events", name: "FDA device adverse events (MAUDE)", slug: "device-adverse-events", category: "data", price: "$0.004",
+    description:
+      "Summarize FDA medical device adverse event reports (openFDA MAUDE) for a device name, brand, product code or manufacturer: total matching reports, counts by event type (death, injury, malfunction), the most reported device problems, and the newest reports with date, event type, device, manufacturer, problems and a short excerpt of the event description. Counts cover every matching report; the report list is a capped sample and says so. Optional since date. Live FDA data, no key. ?device=insulin+pump",
+    tags: ["fda", "device", "adverse-events", "maude", "mdr", "medical-device", "safety", "openfda", "government"],
+    discovery: {
+      input: { device: "insulin pump", limit: 3 },
+      inputSchema: {
+        properties: {
+          device: { type: "string", description: "Generic device name as reported, e.g. insulin pump" },
+          brand: { type: "string", description: "Brand name as reported" },
+          productCode: { type: "string", description: "Three-letter FDA product code, e.g. LZG" },
+          manufacturer: { type: "string", description: "Device manufacturer name as reported" },
+          since: { type: "string", description: "Only reports received on or after this date (YYYY-MM-DD)" },
+          limit: { type: "number", description: "Newest reports to list, 0-10 (default 5)" },
+          problems: { type: "number", description: "Top device problems to rank, 1-25 (default 10)" },
+        },
+        required: [],
+      },
+      output: {
+        example: {
+          query: { device: "insulin pump", brand: null, productCode: null, manufacturer: null, since: null },
+          totalReports: 171622,
+          eventTypes: [{ eventType: "Malfunction", reports: 120000 }, { eventType: "Injury", reports: 50000 }, { eventType: "Death", reports: 300 }],
+          topProblems: [{ problem: "Unintended Movement", reports: 41009 }],
+          recentReports: [{ reportNumber: "2032227-2026-01234", mdrReportKey: "21000000", dateReceived: "2026-10-01", dateOfEvent: "2026-09-20", eventType: "Malfunction", brandName: "EXAMPLE PUMP", genericName: "INSULIN PUMP", manufacturer: "Example Medical", productCode: "LZG", deviceClass: "2", problems: ["Unintended Movement"], excerpt: "IT WAS REPORTED THAT THE PUMP ...", excerptChars: 640, excerptTruncated: true }],
+          returned: 1, matched: 171622, complete: false, truncated: true, maxExcerptChars: MDR_EXCERPT_CHARS,
+          disclaimer: FDA_DISCLAIMER, source: "api.fda.gov (openFDA device adverse events, public domain)",
+        },
+      },
+    },
+    handler: async (i) => {
+      const device = fdaTerm(i.device ?? i.q, "device");
+      const brand = fdaTerm(i.brand, "brand");
+      const manufacturer = fdaTerm(i.manufacturer, "manufacturer");
+      const pc = String(i.productCode ?? "").trim().toUpperCase();
+      if (pc && !/^[A-Z]{3}$/.test(pc)) throw bad('"productCode" must be a three-letter FDA product code, e.g. LZG');
+      const since = String(i.since ?? "").trim();
+      if (since && (!ISO_DAY_RE.test(since) || Number.isNaN(Date.parse(since)))) throw bad('"since" must be a date, YYYY-MM-DD');
+      if (!device && !brand && !manufacturer && !pc) throw bad('one of "device", "brand", "productCode" or "manufacturer" is required');
+      const limit = i.limit == null || i.limit === "" ? 5 : Math.min(Math.max(parseInt(i.limit, 10) || 0, 0), 10);
+      const nProblems = Math.min(Math.max(parseInt(i.problems, 10) || 10, 1), 25);
+      const clauses = [];
+      if (device) clauses.push(`device.generic_name:"${device}"`);
+      if (brand) clauses.push(`device.brand_name:"${brand}"`);
+      if (pc) clauses.push(`device.device_report_product_code:"${pc}"`);
+      if (manufacturer) clauses.push(`device.manufacturer_d_name:"${manufacturer}"`);
+      if (since) clauses.push(`date_received:[${since.replace(/-/g, "")} TO ${new Date().toISOString().slice(0, 10).replace(/-/g, "")}]`);
+      const base = `https://api.fda.gov/device/event.json?search=${fdaSearch(clauses, "AND")}`;
+      // Three reads in parallel: the newest reports (its meta total is the
+      // matched count), and two server-side counts over EVERY matching report.
+      const [recent, byType, byProblem] = await Promise.all([
+        getJsonAllowEmpty(`${base}&limit=${Math.max(limit, 1)}&sort=date_received:desc${openFdaKeyParam()}`),
+        getJsonAllowEmpty(`${base}&count=event_type.exact${openFdaKeyParam()}`),
+        getJsonAllowEmpty(`${base}&count=product_problems.exact&limit=${nProblems}${openFdaKeyParam()}`),
+      ]);
+      const total = recent?.meta?.results?.total ?? 0;
+      const reports = limit ? (recent?.results ?? []).slice(0, limit).map(mdrRow) : [];
+      return {
+        query: { device: device || null, brand: brand || null, productCode: pc || null, manufacturer: manufacturer || null, since: since || null },
+        totalReports: total,
+        eventTypes: (byType?.results ?? []).map((r) => ({ eventType: r.term || "Not reported", reports: r.count ?? null })),
+        topProblems: (byProblem?.results ?? []).map((r) => ({ problem: r.term ?? null, reports: r.count ?? null })),
+        recentReports: reports,
+        ...partialFields(total, reports.length),
+        ...clampFields(i.limit, 10),
+        maxExcerptChars: MDR_EXCERPT_CHARS,
+        note: "Counts cover every matching report. recentReports is the newest few, and each excerpt is the first characters of the event description only. MDR reports are unverified submissions and do not establish that a device caused an event.",
+        disclaimer: FDA_DISCLAIMER,
+        source: "api.fda.gov (openFDA device adverse events, public domain)",
       };
     },
   },

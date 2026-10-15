@@ -3249,7 +3249,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (9 scripts, one process each)
+      - name: Offline suites (11 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3268,6 +3268,10 @@ jobs:
           t node scripts/test-cve-kit.js
           # crypto-signals kit (offline)
           t node scripts/test-crypto-signals-kit.js
+          # Hyperliquid info cache shared by the two Hyperliquid kits (offline)
+          t node scripts/test-hyperliquid-shared-cache.js
+          # openFDA reference tools: labels, NDC, 510(k), device MDRs (offline)
+          t node scripts/test-openfda-reference.js
           # x402-market-pulse category classifier (path-aware, closed taxonomy)
           t node scripts/test-ecosystem-category.js
           # token brief kit (offline)
