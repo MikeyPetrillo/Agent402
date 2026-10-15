@@ -10,7 +10,7 @@ import { avmSubcentGateEnabled, installAvmSubcentGate, noteAvmSettleRefusal, sta
 import { isBillingRefusalReceipt } from "./payment-reject.js";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
-import { pinUptoFacilitatorAddress } from "./upto-signer.js";
+import { pinFacilitatorSigners } from "./upto-signer.js";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
@@ -668,8 +668,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     let cache = null;
     client.getSupported = async () => {
       if (cache && Date.now() - cache.at < ttlMs) return cache.promise;
-      // Every replica names the same upto signer (src/upto-signer.js).
-      const entry = { at: Date.now(), promise: orig().then(pinUptoFacilitatorAddress) };
+      // Every replica names the same facilitator signer (src/upto-signer.js).
+      const entry = { at: Date.now(), promise: orig().then(pinFacilitatorSigners) };
       cache = entry;
       try {
         return await entry.promise;
