@@ -13,6 +13,8 @@
 // secret must NEVER appear in the hosted file — it stays with the operator
 // who requested the challenge).
 
+import { cacheGet, cacheSet } from "./cache.js";
+
 const MAX_ENTRIES = 16;
 const MAX_BYTES = 16 * 1024; // challenge fetchers bound their reads to a few KiB; 16K covers them
 const TTL_MS = 24 * 60 * 60 * 1000;
@@ -55,12 +57,31 @@ export function registerWellKnown(path, body, contentType = "application/json") 
   }
   prune();
   if (!store.has(path) && store.size >= MAX_ENTRIES) throw bad(`store full (${MAX_ENTRIES} entries) - remove one first`);
-  store.set(path, { body: text, contentType, at: Date.now() });
+  const entry = { body: text, contentType, at: Date.now() };
+  store.set(path, entry);
+  // Shared with the other containers (Redis), so a directory's fetch is
+  // answered whichever replica it reaches. Best-effort: without Redis the
+  // document is served by the container that registered it, as before.
+  void cacheSet(SHARED(path), entry, Math.round(TTL_MS / 1000));
   return { path, bytes: Buffer.byteLength(text, "utf8"), expiresInMs: TTL_MS };
 }
 
+const SHARED = (path) => `a402:wk:${path}`;
 export function removeWellKnown(path) {
+  // A tombstone, so the other container stops serving its shared copy too.
+  void cacheSet(SHARED(path), { removed: true }, Math.round(TTL_MS / 1000));
   return store.delete(path);
+}
+
+/** getWellKnown, then the copy another container registered. Consulted only
+ *  for a path this store could hold, so the dedicated routes never wait on it. */
+export async function getWellKnownShared(path) {
+  const hit = getWellKnown(path);
+  if (hit || !validWellKnownPath(path) || RESERVED.has(path)) return hit;
+  const shared = await cacheGet(SHARED(path));
+  if (!shared || shared.removed || typeof shared.body !== "string" || Date.now() - Number(shared.at) > TTL_MS) return null;
+  if (shared.contentType !== "application/json" && shared.contentType !== "text/plain") return null;
+  return shared;
 }
 
 /** Serving read: null on miss or expiry (the route falls through to 404). */

@@ -28,6 +28,24 @@ ok(JSON.stringify(hit) === JSON.stringify(body), "the shared read finds the othe
 ok(JSON.stringify(K.promptCacheGet(key)) === JSON.stringify(body), "...and keeps a local copy, so the next read stays local");
 const src = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 ok(/const hit = await promptCacheGetShared\(key\);/.test(src), "the pre-paywall cache check reads the shared cache");
+// Operator verification files (src/well-known-store.js), the same rule.
+{
+  const W = await import("../src/well-known-store.js");
+  const path = `test-verification/${randomUUID()}`;
+  execFileSync(process.execPath, ["--input-type=module", "-e", `
+    const W = await import(${JSON.stringify(new URL("../src/well-known-store.js", import.meta.url).href)});
+    W.registerWellKnown(${JSON.stringify(path)}, { token: "abc" });
+    await new Promise((r) => setTimeout(r, 500));
+    process.exit(0);
+  `], { env: process.env, stdio: "inherit", timeout: 30_000 });
+  ok(W.getWellKnown(path) === null, "a verification file registered on another process is not in this one's store");
+  const got = await W.getWellKnownShared(path);
+  ok(got && JSON.parse(got.body).token === "abc" && got.contentType === "application/json", "...and is served from the shared copy");
+  ok((await W.getWellKnownShared("x402")) === null, "a reserved name never reads the shared cache");
+  W.removeWellKnown(path);
+  await new Promise((r) => setTimeout(r, 300));
+  ok((await W.getWellKnownShared(path)) === null, "a removal leaves a tombstone, so no process serves it again");
+}
 const { closeSharedRedis } = await import("../src/shared-limit.js");
 await closeSharedRedis();
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

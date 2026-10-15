@@ -253,7 +253,7 @@ import { sendMonitorEmail, emailSendStatus } from "./email.js";
 import { probeDomain, normDomain } from "./tools/domain-audit-kit.js";
 import { latest13fFiling, resolveManager as edgarResolveManager } from "./tools/edgar-kit.js";
 import { resolveSpend as resolveExternalSpend } from "./external-spend-guard.js";
-import { registerWellKnown, removeWellKnown, getWellKnown, listWellKnown } from "./well-known-store.js";
+import { registerWellKnown, removeWellKnown, getWellKnown, getWellKnownShared, listWellKnown } from "./well-known-store.js";
 import { backupAlarmStatus, backupPlan, backupStatus, runBackup, startBackupScheduler } from "./backup.js";
 import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
@@ -3345,9 +3345,9 @@ app.get("/.well-known/glama.json", (_req, res) => {
 // time. Falls through on a store miss, so the dedicated /.well-known routes
 // (x402, security.txt, glama.json — some registered LATER in this file) are
 // never shadowed; the store also refuses those names at write time.
-app.get("/.well-known/*doc", (req, res, next) => {
+app.get("/.well-known/*doc", async (req, res, next) => {
   const rest = Array.isArray(req.params.doc) ? req.params.doc.join("/") : String(req.params.doc || "");
-  const hit = getWellKnown(rest);
+  const hit = await getWellKnownShared(rest);
   if (!hit) return next();
   // nosniff + the store's json/plain content-type allowlist: the served body
   // is operator-authored and can never be markup; the buyer-controlled path
