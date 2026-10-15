@@ -306,7 +306,7 @@ export const SKILL_PACKS = [
       "stock-history",
     ],
     workflow: [
-      "Get the latest close from stock-quote - price, day range, change vs the previous close, and venue volume (three venues, not the market total).",
+      "Get the latest close from stock-quote - price, day range, change vs the previous close, and consolidated volume (the answer's coverage field says when a read fell back to three venues).",
       "Pull key financials from company-financials - revenue, net income, operating income, total assets, liabilities, equity, EPS, and operating cash flow from the latest annual and quarterly SEC filings.",
       "Pull the price history from stock-history - how the quote sits against recent trading rather than on its own.",
     ],
@@ -332,7 +332,7 @@ export const SKILL_PACKS = [
       "fred-series",
     ],
     workflow: [
-      "Get the latest close from stock-quote - price, day range, change vs the previous close, and venue volume (three venues, not the market total).",
+      "Get the latest close from stock-quote - price, day range, change vs the previous close, and consolidated volume (the answer's coverage field says when a read fell back to three venues).",
       "Pull 1Y of OHLCV from stock-history to compute return, vol, and drawdown for the brief.",
       "List recent SEC filings (10-K, 10-Q, 8-K) via edgar-filings - link each one in the report.",
       "Pull the structured XBRL company facts (revenue, net income, total assets, share count) from edgar-company-facts for the canonical numbers.",
@@ -1365,13 +1365,13 @@ export const SKILL_PACKS = [
     ],
     workflow: [
       "Call date-format with datetime='now' (or the current ISO timestamp) to get a formatted snapshot timestamp - ISO, date-only, and day of week. This anchors the comparison to a specific point in time so the caller can track changes across repeated runs. The unix timestamp is useful as a cache key or filename.",
-      "Call stock-quote with symbol=<ticker> to get the equity's latest close: price, previousClose, changeAbs, changePct, dayHigh, dayLow and venueVolume. This is end-of-day, not an intraday print, and venueVolume counts three venues rather than the whole market - note the timestamp from step 1 so the caller knows which session it is.",
+      "Call stock-quote with symbol=<ticker> to get the equity's latest close: price, previousClose, changeAbs, changePct, dayHigh, dayLow and volume. This is end-of-day, not an intraday print; volume is the consolidated market total (null, with coverage three-venue, when a read fell back to three venues) - note the timestamp from step 1 so the caller knows which session it is.",
       "Call stock-history with symbol=<ticker> and days=250 to get a trailing-year price series (250 sessions is the maximum this endpoint serves). Extract the first and last data points to compute the year-over-year return: ((last - first) / first * 100). This is the equity's trailing-12-month performance.",
       "Call crypto-price with coins=<coin> and currency=usd to get the live crypto price: price, market_cap, 24h_volume, 24h_change. This is the 'right now' read for the crypto side.",
       "Call crypto-history with coin=<coin>, days=365, and currency=usd to get the 1-year price series. Compute the year-over-year return the same way as step 3, then return { timestamp: <step 1>, stock: { symbol, price, change, changePercent, yearReturn }, crypto: { coin, price, change24h, yearReturn }, comparison: { stockOutperforms: stockYearReturn > cryptoYearReturn, spreadPct: Math.abs(stockYearReturn - cryptoYearReturn) } } as the final payload.",
     ],
     claudePrompt:
-      "Build a cross-asset price comparison for ticker=AAPL vs coin=bitcoin using Agent402.\n\n(1) date-format with datetime=new Date().toISOString() - returns {iso, date, dayOfWeek, unix}. Save as snapshot timestamp.\n\n(2) stock-quote with symbol=AAPL - returns {price, previousClose, changeAbs, changePct, dayHigh, dayLow, venueVolume}.\n\n(3) stock-history with symbol=AAPL, days=250 - returns {bars: [{day, close}]}. Compute stockYearReturn = ((bars[last].close - bars[0].close) / bars[0].close * 100).toFixed(2).\n\n(4) crypto-price with coins=bitcoin, currency='usd' - returns [{price, market_cap, change_24h}].\n\n(5) crypto-history with coin=bitcoin, days='365', currency='usd' - returns {prices: [[timestamp, price]]}. Compute cryptoYearReturn = ((prices[last][1] - prices[0][1]) / prices[0][1] * 100).toFixed(2).\n\nFinal return: {timestamp: {iso: <step 1 iso>, date: <step 1 date>, dayOfWeek: <step 1 dayOfWeek>}, stock: {symbol: 'AAPL', price: <step 2 price>, change: <step 2 change>, changePercent: <step 2 changePercent>, yearReturn: stockYearReturn}, crypto: {coin: 'bitcoin', price: <step 4 price>, change24h: <step 4 change_24h>, yearReturn: cryptoYearReturn}, comparison: {stockOutperforms: parseFloat(stockYearReturn) > parseFloat(cryptoYearReturn), spreadPct: Math.abs(parseFloat(stockYearReturn) - parseFloat(cryptoYearReturn)).toFixed(2)}}. Budget ~$0.005 paid; all 5 tools are wallet-only (external API calls).",
+      "Build a cross-asset price comparison for ticker=AAPL vs coin=bitcoin using Agent402.\n\n(1) date-format with datetime=new Date().toISOString() - returns {iso, date, dayOfWeek, unix}. Save as snapshot timestamp.\n\n(2) stock-quote with symbol=AAPL - returns {price, previousClose, changeAbs, changePct, dayHigh, dayLow, volume, venueVolume, coverage}.\n\n(3) stock-history with symbol=AAPL, days=250 - returns {bars: [{day, close}]}. Compute stockYearReturn = ((bars[last].close - bars[0].close) / bars[0].close * 100).toFixed(2).\n\n(4) crypto-price with coins=bitcoin, currency='usd' - returns [{price, market_cap, change_24h}].\n\n(5) crypto-history with coin=bitcoin, days='365', currency='usd' - returns {prices: [[timestamp, price]]}. Compute cryptoYearReturn = ((prices[last][1] - prices[0][1]) / prices[0][1] * 100).toFixed(2).\n\nFinal return: {timestamp: {iso: <step 1 iso>, date: <step 1 date>, dayOfWeek: <step 1 dayOfWeek>}, stock: {symbol: 'AAPL', price: <step 2 price>, change: <step 2 change>, changePercent: <step 2 changePercent>, yearReturn: stockYearReturn}, crypto: {coin: 'bitcoin', price: <step 4 price>, change24h: <step 4 change_24h>, yearReturn: cryptoYearReturn}, comparison: {stockOutperforms: parseFloat(stockYearReturn) > parseFloat(cryptoYearReturn), spreadPct: Math.abs(parseFloat(stockYearReturn) - parseFloat(cryptoYearReturn)).toFixed(2)}}. Budget ~$0.005 paid; all 5 tools are wallet-only (external API calls).",
     promptArgs: [
       {
         name: "ticker",
@@ -1542,7 +1542,7 @@ export const SKILL_PACKS = [
       "search",
     ],
     workflow: [
-      "Get the latest close from stock-quote - price, day range, change vs the previous close, and venue volume (three venues, not the market total).",
+      "Get the latest close from stock-quote - price, day range, change vs the previous close, and consolidated volume (the answer's coverage field says when a read fell back to three venues).",
       "Pull key financials from company-financials - revenue, net income, operating income, total assets, liabilities, equity, EPS, and operating cash flow.",
       "List the 5 most recent SEC filings via edgar-filings to surface any 10-K, 10-Q, 8-K, or S-1 activity.",
       "Check edgar-insider-trades for Form 4 filings in the last 90 days - directional insider activity is a real signal.",

@@ -406,10 +406,15 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
       changePct: { type: "number" },
       dayHigh: { type: "number" },
       dayLow: { type: "number" },
-      // Three venues, not the consolidated tape. Named so it can never be
-      // read as a market total; `volume` is deliberately not declared.
+      // The consolidated market total; null when the answer came from the
+      // three-venue fallback dataset (coverage says which).
+      volume: { type: ["number", "null"] },
+      // Volume across the venues in `venues`: the whole market on the
+      // consolidated dataset, three venues on the fallback.
       venueVolume: { type: "number" },
       asOf: { type: "string" },
+      dataset: { type: "string" },
+      coverage: { type: "string", enum: ["consolidated", "three-venue"] },
       venues: { type: "string" },
       source: { type: "string" },
       note: { type: "string" },

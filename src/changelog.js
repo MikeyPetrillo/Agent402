@@ -10,6 +10,7 @@ const ENTRIES = [
       "Every published npm package retries a discovery read that answers 503 with a retry delay, a few times and briefly, and never repeats a paid call.",
       "Data tools that wait on an outside service answer 503 naming the service and the step when it does not answer in time, and nothing is charged.",
       "Transcription with diarize:true adds language_confidence, the model's 0 to 1 confidence in the language it detected. Speech requests, and transcription with diarize:true, route only to model providers that do not collect the data, and to zero-data-retention endpoints wherever every endpoint of the model offers it.",
+      "stock-quote and stock-history read the consolidated end-of-day summary across all US exchanges and ATSs: the official close and the market's total volume, returned as volume. Each answer names its dataset and coverage; a read that falls back to the three-venue feed says coverage three-venue and returns volume null.",
     ],
   },
   {
