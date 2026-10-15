@@ -441,7 +441,7 @@ import { LLM_GEMINI_TOOLS, GEMINI_PATH_BY_TIER } from "./tools/llm-gemini-kit.js
 import { refusalReason } from "./refusal-reason.js";
 import { setKnownProductKeys } from "./posthog.js";
 import { LLM_RESPONSES_TOOLS } from "./tools/llm-responses-kit.js";
-import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGet, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD } from "./tools/llm-gateway-kit.js";
+import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGet, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD } from "./tools/llm-gateway-kit.js";
 // /v1/audio/speech stays behind OPENROUTER_TTS_ENABLED as a rollout gate:
 // @x402/express (v2.16) runs the handler first and settles only a <400
 // response, so a 502 is never charged — but an UNLISTED route returns no 402
@@ -8855,7 +8855,7 @@ if (FREE_MODE) {
   //                  a resend usually WANTS a fresh sample)
   //   /v1/embeddings — default-ON (deterministic output; `cache: false` opts out)
   // Invalid bodies fall through so the normal path produces the real 402/400.
-  app.use((req, res, next) => {
+  app.use(async (req, res, next) => {
     if (req.method !== "POST" || !carriesPaymentAttempt(req)) return next();
     try {
       let key = null;
@@ -8868,7 +8868,8 @@ if (FREE_MODE) {
         if (tierSlug) key = promptCacheKey(tierSlug, req.body);
       }
       if (key) {
-        const hit = promptCacheGet(key);
+        // The local store first, then the cache every replica shares.
+        const hit = await promptCacheGetShared(key);
         if (hit) {
           // Read by the Tempo and Stripe gates, which run earlier: a gateway
           // cache hit is never settled on any rail.

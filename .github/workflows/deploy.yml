@@ -1382,6 +1382,8 @@ jobs:
           t node scripts/test-sales-ledger-pg.js
           # A receipt check on one container finds a sale another just recorded.
           t node scripts/test-sale-lookup-crosscontainer-pg.js
+          # The gateway response cache is shared across replicas (needs this lane's Redis).
+          t node scripts/test-prompt-cache-shared.js
           t node scripts/test-ledger-dead-letter-pg.js
           # The journals in REAL redis: claimed once across containers, a lapsed lease recovered,
           # local disk (and the "local" word) when redis is away; card finals keep one outcome.
