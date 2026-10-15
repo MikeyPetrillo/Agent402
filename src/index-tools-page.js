@@ -66,7 +66,25 @@ table.ix tr.is-ours td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 .ix-pager a{border:1px solid var(--hairline);color:var(--ink);text-decoration:none;padding:8px 16px}
 .ix-pager span{color:var(--faint)}
 .ix-empty{border:1px solid var(--hairline);background:var(--card);padding:26px;text-align:center;color:var(--muted)}
-@media(max-width:720px){.ix-h1{font-size:var(--fs-2xl)}.ix-wrap{padding:34px 18px}table.ix th:nth-child(3),table.ix td:nth-child(3){display:none}}
+@media(max-width:720px){.ix-h1{font-size:var(--fs-2xl)}.ix-wrap{padding:34px 16px}table.ix th:nth-child(3),table.ix td:nth-child(3){display:none}}
+/* A phone reads each row as a card: the tool on top, then the seller and its route beside the price.
+   The route keeps one line and scrolls inside its own cell when it is longer than the card. */
+@media(max-width:720px){
+table.ix,table.ix tbody{display:block}
+table.ix thead{display:none}
+table.ix tr{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;border-bottom:1px solid var(--hairline)}
+table.ix tr.is-ours{box-shadow:inset 3px 0 0 var(--accent)}
+table.ix tr.is-ours td:first-child{box-shadow:none}
+table.ix td{display:block;border-bottom:0;min-width:0}
+/* The row carries the zebra, the tint and the accent edge; its cells are transparent so they paint as one card. */
+table.ix tr:nth-child(n) td{background:none}
+table.ix td:first-child{grid-column:1/-1;padding-bottom:6px}
+table.ix td.ix-seller{padding-top:0;overflow-x:auto}
+table.ix td.ix-seller a{word-break:normal;white-space:nowrap}
+table.ix td.ix-price{padding-top:0;text-align:right}
+table.ix tr:nth-child(even){background:var(--card-zebra)}
+table.ix tr.is-ours{background:color-mix(in srgb,var(--accent) 7%,var(--card))}
+}
 `;
 
 /** https origin of a third-party row (the endpoint's own origin as a fallback). */

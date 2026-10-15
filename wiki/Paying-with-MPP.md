@@ -10,7 +10,7 @@ Every paid endpoint on Agent402.Tools is **dual-stack**: the same 402 carries an
 |---|---|---|---|
 | `evm` charge | USDC | Base, Celo | Same EIP-3009 on-chain settlement as x402, translated by the shim; verifiable on Basescan/Celoscan |
 | `tempo` charge | USDC.e, PathUSD | Tempo (chain 4217) | Native TIP-20 settlement, no x402 facilitator involved: through Tempo's hosted MPP relay by default, or checked and broadcast by the server itself (`TEMPO_RELAY=off`), which then screens every party to the payment against OFAC's SDN list before anything settles. The hosted instance offers USDC.e first, then PathUSD (one challenge per currency; a stock mppx client pays the first it can, or `autoSwap` between them) |
-| `stripe` charge | card (USD) | Stripe | Cards over the MPP wire via Stripe Shared Payment Tokens, offered only on routes priced $0.50 or more (the card minimum); settles a PaymentIntent after the handler, same settle-after-handler discipline. Mounted when the operator sets `STRIPE_SECRET_KEY` + `STRIPE_PROFILE_ID` |
+| `stripe` charge | card (USD) | Stripe | Cards over the MPP wire via Stripe Shared Payment Tokens, offered only on routes priced $0.50 or more (the card minimum); settles a PaymentIntent after the handler, same settle-after-handler discipline. Mounted once `STRIPE_SECRET_KEY` and `STRIPE_PROFILE_ID` are both set |
 
 ### Which routes offer which method, and in what order
 

@@ -833,7 +833,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   const statsHtml = `
   <div class="ml-2col" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 0;">
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${sellerCount.toLocaleString("en-US")}</div><div class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin:2px 0 0;">${sellersListedNote(measured, sellers.filter((s) => !s.local).length)}</div></div>
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">TOOLS (THIS HOST)</div><div style="font-size:var(--fs-2xl);font-weight:800;">${tools.length.toLocaleString("en-US")}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">OUR TOOLS</div><div style="font-size:var(--fs-2xl);font-weight:800;">${tools.length.toLocaleString("en-US")}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">OUR LATEST SETTLE</div><div style="font-size:var(--fs-2xl);font-weight:800;">${latest && latest.usd != null ? usd(latest.usd) : "-"}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">our own canary or volume run</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">PRICE FLOOR</div><div style="font-size:var(--fs-2xl);font-weight:800;">${usdExact(low)}</div>${Number(premiumUsd) > 0 ? `<div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">premium included</div>` : ""}</div>
   </div>`;
@@ -880,7 +880,11 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   <script src="/js/reg-form.js"></script>`;
 
   const canary = canaryManifestStatus(rail);
-  const manifestRow = (label, value) => `<div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);flex:none;">${label}</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><span style="font-weight:700;min-width:0;overflow-wrap:anywhere;text-align:right;">${value}</span></div>`;
+  // A value given as parts ([phrase, note]) keeps each part whole: the row wraps
+  // between its label and the value, and the value between its parts.
+  const manifestRow = (label, value) => Array.isArray(value)
+    ? `<div style="display:flex;flex-wrap:wrap;align-items:baseline;column-gap:8px;"><span style="color:var(--muted);flex:none;">${label}</span><span style="flex:1 1 16px;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><span style="font-weight:700;margin-left:auto;display:flex;flex-wrap:wrap;justify-content:flex-end;column-gap:.6em;">${value.map((p) => `<span style="white-space:nowrap;">${p}</span>`).join("")}</span></div>`
+    : `<div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);flex:none;">${label}</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><span style="font-weight:700;min-width:0;overflow-wrap:anywhere;text-align:right;">${value}</span></div>`;
   const railManifestHtml = `
     <div style="border:1px solid var(--hairline);background:var(--card);padding:18px 20px;">
       <div style="display:flex;flex-direction:column;gap:4px;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--muted);border-bottom:1px dashed var(--dash);padding-bottom:10px;margin-bottom:12px;"><span>·· RAIL MANIFEST ··</span><span>${esc(C.tickerLabel)}</span></div>
@@ -889,8 +893,8 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
         ${manifestRow("wires", C.mpp ? "x402 + MPP" : "x402")}
         ${manifestRow("asset", esc(C.asset))}
         ${manifestRow("settled by", esc(C.settledBy))}
-        ${manifestRow("buyer gas", Number(premiumUsd) > 0 ? `none, the buyer only signs (a ${esc(usd(premiumUsd))} settlement premium is in the price)` : "none, the buyer only signs")}
-        <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">explorer</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><a href="${esc(walletExplorerUrl)}" rel="noopener" style="font-weight:700;color:var(--accent);text-decoration:none;">${esc(C.explorerUrl)}&nbsp;→</a></div>
+        ${manifestRow("buyer gas", Number(premiumUsd) > 0 ? ["none, the buyer only signs", `(a ${esc(usd(premiumUsd))}`, "settlement premium is in the price)"] : ["none, the buyer only signs"])}
+        <div style="display:flex;flex-wrap:wrap;align-items:baseline;column-gap:8px;"><span style="color:var(--muted);">explorer</span><span style="flex:1 1 16px;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><a href="${esc(walletExplorerUrl)}" rel="noopener" style="font-weight:700;color:var(--accent);text-decoration:none;margin-left:auto;white-space:nowrap;">${esc(C.explorerUrl)}&nbsp;→</a></div>
         <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">daily canary</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><span style="font-weight:700;color:${canary.color};">${esc(canary.text)}</span></div>
       </div>
       <div style="margin-top:14px;padding-top:10px;border-top:1px dashed var(--dash);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);line-height:1.6;">agents: <code>GET /api/route?q=&lt;task&gt;&amp;network=${esc(C.networkParam)}</code></div>
@@ -1006,7 +1010,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   <span style="color:var(--on-panel-faint);">"asset"</span>: "&lt;${esc(C.asset)} token ${C.caip2.startsWith("algorand:") ? "ASA id" : C.caip2.startsWith("solana:") ? "mint" : "contract address"}&gt;",
   <span style="color:var(--on-panel-faint);">"payTo"</span>: "&lt;your wallet&gt;"
 }</pre>
-      <p style="margin:0;padding:0 18px 14px;font-family:var(--font-mono);font-size:var(--fs-2xs);line-height:1.6;color:var(--on-panel-faint);">amount is in the token's smallest unit (6 decimals: 1000 = $0.001); asset is the token's on-chain id. For a live accept on this chain: <code style="font:inherit;color:var(--on-panel);background:none;padding:0;">curl -i ${esc(baseUrl)}/api/hash?text=hi</code></p>
+      <p style="margin:0;padding:0 18px 14px;font-family:var(--font-mono);font-size:var(--fs-2xs);line-height:1.6;color:var(--on-panel-faint);">amount is in the token's smallest unit (6 decimals: 1000 = $0.001); asset is the token's on-chain id. For a live accept on this chain: <code style="display:block;margin-top:4px;font:inherit;color:var(--on-panel);background:none;padding:0;">curl -i ${esc(baseUrl)}/api/hash?text=hi</code></p>
     </div>
   </div>`;
 
@@ -1280,7 +1284,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${marketOperatorCount(null, snapshot, leaderboardSnap).toLocaleString("en-US")}</div><div class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin:2px 0 0;">${sellersListedNote(true, standingCounts.sellers)}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">TOOL LISTINGS</div><div style="font-size:var(--fs-2xl);font-weight:800;">${totalToolListings.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">from other sellers</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">CHAINS SUPPORTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${Number.isFinite(Number(chainsOffered)) && chainsOffered !== null ? Number(chainsOffered) : Object.keys(CHAIN_PAGES).length}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">x402${tempo ? " + Tempo" : ""}</div></div>
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">TOOLS (THIS HOST)</div><div style="font-size:var(--fs-2xl);font-weight:800;">${(sellers.find((s) => s.local)?.toolCount || 0).toLocaleString("en-US")}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">OUR TOOLS</div><div style="font-size:var(--fs-2xl);font-weight:800;">${(sellers.find((s) => s.local)?.toolCount || 0).toLocaleString("en-US")}</div></div>
   </div>`;
 
   // "Sellers on Base" for the hero subhead - live, not the design's frozen
@@ -1377,7 +1381,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   </div>`;
 
   const closingCta = `
-  <div style="margin:48px 0 0;background:var(--panel);border:1px solid var(--hairline);padding:40px 36px;position:relative;overflow:hidden;">
+  <div class="ml-cta-panel" style="margin:48px 0 0;background:var(--panel);border:1px solid var(--hairline);padding:40px 36px;position:relative;overflow:hidden;">
     <div style="position:relative;">
       <h2 style="font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 12px;color:var(--on-panel);">Add your API to the index.</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-muted);margin:0 0 22px;max-width:64ch;">Free, no signup, nothing deducted. Serve a 402 and register the origin: the crawler reads it at once and re-probes it ${crawlIntervalLabel()}.</p>

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Wrap quality, measured: every visible text block on the public pages is laid
-// out in real Chromium at desktop (1440) and phone (400) widths, its line boxes
+// out in real Chromium at desktop (1440) and phone (400, 390 and 360) widths, its line boxes
 // are read back with Range.getClientRects(), and these shapes fail:
 //
 //  rag     a block of 2+ lines whose last line is shorter than 30% of its
@@ -44,7 +44,9 @@ import { getFreePort } from "./lib/free-port.js";
 import { stripTags } from "./lib/html-text.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const WIDTHS = (process.env.WRAP_WIDTHS || "1440,400").split(",").map(Number);
+// 360 is the narrowest common phone, 390 the most common one; 400 keeps the
+// width the table-cell exclusion below is pinned to.
+const WIDTHS = (process.env.WRAP_WIDTHS || "1440,400,390,360").split(",").map(Number);
 const WRAP_ALL = process.env.WRAP_ALL === "1";
 const SAMPLE = Number(process.env.WRAP_SAMPLE || 25);
 const CONCURRENCY = Math.max(1, Number(process.env.WRAP_CONCURRENCY || 4));

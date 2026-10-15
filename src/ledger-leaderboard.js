@@ -123,7 +123,7 @@ export function solanaSectionHtml(sol) {
       ${body}
     </div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:14px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">
-      <span>organic = distinct buyers per 100 transfers.</span>
+      <span>organic = buyers per 100 transfers</span>
       <a href="/api/solana-leaderboard?window=${esc(win)}" style="color:var(--accent);text-decoration:none;">raw JSON →</a>
     </div>
   </section>`;
@@ -249,7 +249,7 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
             <span>SNAPSHOT</span>
             <span style="display:inline-flex;align-items:center;gap:6px;color:var(--accent-lit);"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent-lit);display:inline-block;animation:ml-pulse 1.8s ease-in-out infinite;"></span>HOURLY</span>
           </div>
-          <table style="font-family:var(--font-mono);font-size:var(--fs-sm);"><tbody>${metaRowsHtml}</tbody></table>
+          <table class="ml-kv" style="font-family:var(--font-mono);font-size:var(--fs-sm);"><tbody>${metaRowsHtml}</tbody></table>
         </div>
       </div>
     </div>
@@ -278,8 +278,8 @@ ${solanaSectionHtml(solana)}
         <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">OUR OWN ROW, DISCLOSED</div>
         <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Agent402, for comparison</h2>
         <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;">We run the index, so we keep ourselves out of the ranking above. Here are our own figures instead, from our sales ledger: settlements and rails count paid settlements from outside buyers only, and the proof-of-work row is a lifetime count of free calls, excluding our own monitoring probes.</p>
-        <table style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--hairline);"><tbody>
-          <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">free calls over proof-of-work, lifetime</th><td style="padding:11px 14px;text-align:right;color:var(--ink);">${esc(selfPow)}</td></tr>
+        <table class="ml-kv" style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--hairline);"><tbody>
+          <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">proof-of-work free calls, lifetime</th><td style="padding:11px 14px;text-align:right;color:var(--ink);">${esc(selfPow)}</td></tr>
           ${selfRails ? `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">rails with an outside settlement</th><td style="padding:11px 14px;text-align:right;color:var(--ink);" data-self-rails>${esc(selfRails)}</td></tr>` : ""}
           ${host ? `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">outside settlements, 30 days</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-ext-30d>${esc(fmtNum(host.external30d.settlements))}</td></tr>
           <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">distinct outside buyers, 30 days</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-buyers-30d>${esc(fmtNum(host.external30d.buyers))}</td></tr>
@@ -311,7 +311,7 @@ ${solanaSectionHtml(solana)}
   </section>
 
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 64px;">
-    <div style="background:var(--panel);border:1px solid var(--hairline);padding:48px 44px;position:relative;overflow:hidden;">
+    <div class="ml-cta-panel" style="background:var(--panel);border:1px solid var(--hairline);padding:48px 44px;position:relative;overflow:hidden;">
       <div style="position:relative;">
         <h2 class="lb-h2" style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Want a row here?</h2>
         <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:64ch;">Serve x402 challenges, register your origin, and the crawler picks you up on the next pass. Free, no signup, nothing deducted from your price.</p>
@@ -359,6 +359,7 @@ ${solanaSectionHtml(solana)}
   .lb-2col { grid-template-columns: minmax(0,1fr) !important; }
 }
 @media (max-width: 600px) {
+  .lb-2col > div { padding: 22px 16px !important; }
   .lb-h1 { font-size: var(--fs-3xl) !important; }
   .lb-h2 { font-size: var(--fs-2xl) !important; }
 }`;

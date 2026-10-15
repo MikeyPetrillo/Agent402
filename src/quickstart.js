@@ -29,7 +29,8 @@ export function quickstartPage(baseUrl) {
 .qs-code-wrap .qs-copy:hover{background:var(--paper);color:var(--ink)}
 .qs-code-wrap .qs-copy.copied{color:var(--accent);border-color:var(--accent)}
 
-.qs-label{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:8px}
+.qs-label{display:flex;flex-wrap:wrap;column-gap:.6em;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:8px}
+.qs-label>span{white-space:nowrap}
 .qs-alt{color:var(--muted);font-size:var(--fs-base);line-height:1.55;margin-top:18px}
 .qs-alt code{font-family:var(--font-mono);background:var(--panel);color:var(--on-panel);padding:2px 7px;font-size:var(--fs-sm);border:1px solid var(--hairline)}
 
@@ -79,7 +80,7 @@ export function quickstartPage(baseUrl) {
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
 
-<span class="qs-label">Or with a funded EVM key (every paid tool)</span>
+<span class="qs-label"><span>Or with a funded EVM key</span><span>(every paid tool)</span></span>
 <div class="qs-code-wrap">
 <pre><code>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@latest</code></pre>
 <button class="qs-copy" aria-label="Copy">Copy</button>

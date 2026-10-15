@@ -440,6 +440,8 @@ export const PROGRAMMATIC_CSS = `
   .pg-buy p{color:var(--muted);font-size:var(--fs-base);line-height:1.55;margin:0 0 16px;font-weight:300}
   /* The headline carries a filer's name, often long capitals: on a phone it steps down a size and the panel's padding narrows, so the name's last words share a line. */
   @media (max-width:600px){.pg-buy{padding:18px}.pg-buy h2{font-size:var(--fs-lg)}}
+  /* The page title carries a filer's or fund's name: on a phone it steps down to the catalog-name size (DESIGN.md "Wrap"). */
+  @media (max-width:600px){.hero h1{font-size:var(--fs-2xl)}}
   .pg-agent{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);background:var(--chip-bg);border:1px solid var(--hairline);border-radius:var(--radius);padding:12px 14px;margin-top:16px;line-height:1.7;overflow-x:auto;display:flex;flex-wrap:wrap;column-gap:.6em}
   .pg-agent>span{white-space:nowrap}
   .pg-links{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}

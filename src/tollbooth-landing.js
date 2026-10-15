@@ -51,7 +51,7 @@ export function tollboothLandingPage(baseUrl) {
   .step .mode { font-family:var(--font-mono); color:var(--accent); font-size:var(--fs-md); }
   .step p { margin:6px 0 0; color:var(--muted); font-size:var(--fs-md); }
   .links { display:flex; flex-wrap:wrap; gap:8px; margin:14px 0 24px; }
-  .links a { background:var(--card); border:1px solid var(--hairline); padding:8px 12px; color:var(--ink); text-decoration:none; font-size:var(--fs-md); }
+  .links a { background:var(--card); border:1px solid var(--hairline); padding:8px 12px; color:var(--ink); text-decoration:none; font-size:var(--fs-md); white-space:nowrap; }
   .links a:hover { border-color:var(--accent); color:var(--accent); }
   .deploy { display:grid; gap:10px; grid-template-columns:repeat(2,1fr); }
   @media (max-width:720px){ .deploy { grid-template-columns:1fr; } }

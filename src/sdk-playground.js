@@ -67,6 +67,7 @@ export function sdkPlaygroundPage(baseUrl) {
   .sp-crumb{font-family:var(--font-mono);font-size:var(--fs-md);color:var(--faint);margin-bottom:1rem}
   .sp-crumb a{color:var(--accent);text-decoration:none}
   .sp-title{font-family:var(--font-body);font-weight:800;font-size:var(--fs-5xl);line-height:.96;letter-spacing:-.03em;margin:0 0 .5rem}
+  @media (max-width:600px){.sp-title{font-size:var(--fs-3xl)}}
   .sp-sub{color:var(--muted);margin:0 0 1.5rem;font-size:var(--fs-base)}
   .sp-sub a{color:var(--accent)}
   .sp-examples{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem}

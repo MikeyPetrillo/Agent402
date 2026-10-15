@@ -38,7 +38,7 @@ export function monitorsPage(baseUrl = "https://agent402.tools", prefill = null)
   const body = `
 <div class="wrap">
   <section class="hero">
-    <div class="eyebrow">Recurring monitoring · cancel anytime</div>
+    <div class="eyebrow eyebrow-tags"><span>Recurring monitoring</span><span>cancel anytime</span></div>
     <h1>Set it once. <em>We watch it for you.</em></h1>
     <p class="lede">Standing reports that re-run on their own and email you when something changes. <b>No account</b> beyond your card, self-serve cancel any time.</p>
   </section>
