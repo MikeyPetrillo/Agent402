@@ -4014,8 +4014,11 @@ if (_subs) {
       if (req.query.report && _monitors) {
         const reportId = String(req.query.report || "");
         if (!_manageTokenOk(reportId, req.query.k)) return res.redirect("/monitors");
-        const subId = _monitors.subIdOfReport(reportId);
-        const rec = subId ? _subs.get(subId) : null;
+        // Both reads see the other container's writes: the report may have
+        // been delivered, and the subscription recorded, over there.
+        const subId = await _monitors.subIdOfReportFresh(reportId);
+        let rec = subId ? _subs.get(subId) : null;
+        if (subId && !rec) { await _subs.reload().catch(() => 0); rec = _subs.get(subId); }
         if (rec?.customer) customer = rec.customer;
       } else {
         const r = await _subs.recordFromSession(String(req.query.session || ""));
@@ -4029,10 +4032,10 @@ if (_subs) {
   // Delivered monitor reports: same page + viewer as one-shot reports, served
   // from the scheduler's store (no Stripe session - the report id is the bearer).
   app.get("/m/:reportId", (req, res) => res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(reportDeliveryPage(String(req.params.reportId || ""), { api: "/api/m/", waitCopy: "Loading your monitor report.", baseUrl: BASE_URL, robots: "noindex, nofollow" })));
-  app.get("/api/m/:reportId", (req, res) => {
+  app.get("/api/m/:reportId", async (req, res) => {
     res.set("Cache-Control", "no-store");
     const id = String(req.params.reportId || "");
-    const v = _monitors && /^[A-Za-z0-9_-]{10,64}$/.test(id) ? _monitors.reportView(id) : null;
+    const v = _monitors && /^[A-Za-z0-9_-]{10,64}$/.test(id) ? await _monitors.reportViewFresh(id) : null;
     res.json(v || { status: "not_found" });
   });
 }

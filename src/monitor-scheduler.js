@@ -708,6 +708,25 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     };
   }
   const subIdOfReport = (reportId) => (store.reports[reportId] || fromDisk(reportId))?.subId || null;
+  // For a buyer's link to a report another container delivered: on a miss
+  // the stored document is read once (one shared read at a time, at most one
+  // a second) and the lookup tried again, so the first open is not a 404.
+  let missLoad = null, missLoadAt = 0;
+  async function loadMissing(reportId) {
+    if (Object.hasOwn(store.reports, reportId)) return store.reports[reportId];
+    if (!usePg) return fromDisk(reportId);
+    if (!missLoad && now() - missLoadAt >= 1000) {
+      missLoadAt = now();
+      missLoad = doc.load(null).then((j) => {
+        const row = shapeStore(j);
+        for (const [id, r] of Object.entries(row.reports)) if (!store.reports[id]) store.reports[id] = r;
+      }).catch(() => {}).finally(() => { missLoad = null; });
+    }
+    if (missLoad) await missLoad;
+    return store.reports[reportId] || null;
+  }
+  async function reportViewFresh(reportId) { await loadMissing(reportId); return reportView(reportId); }
+  async function subIdOfReportFresh(reportId) { return (await loadMissing(reportId))?.subId || null; }
 
   function status() {
     const active = subs.listActive();
@@ -741,5 +760,5 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   }
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
-  return { tick, reportView, subIdOfReport, status, start, stop, ready: () => ready, flush: () => doc.flush(), _store: () => store, _touchedCount: () => touched.size };
+  return { tick, reportView, reportViewFresh, subIdOfReport, subIdOfReportFresh, status, start, stop, ready: () => ready, flush: () => doc.flush(), _store: () => store, _touchedCount: () => touched.size };
 }
