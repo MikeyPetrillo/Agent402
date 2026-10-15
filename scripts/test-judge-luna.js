@@ -103,7 +103,7 @@ for (const [why, lunaReply] of [
   const s = stub({ [OPENAI]: lunaReply, [TYPESAFE]: json(200, JEV_ANSWERS) });
   const r = await judge(LUNA_IN, { fetchImpl: s.fetchImpl });
   ok(s.hosts().join() === `${OPENAI},${TYPESAFE}` && r.model === "jev-1.13.0" && r.fallbackFrom === LUNA, `${why} falls back to Jev, named in fallbackFrom`);
-  ok(s.calls[1].body.model === "jev-latest", "...and Jev is asked as jev-latest, never with Luna's name");
+  ok(s.calls[1].body.model === "jev-1.13.0", "...and Jev is asked for the pinned version, never with Luna's name");
 }
 // After Luna answered 200 (billed) or timed out (maybe billed), the call ends
 // as an uncharged 502/504 and Jev is never asked: one sale, one upstream.
@@ -223,6 +223,19 @@ for (const [why, answers] of [
   ok(/"decisions"/.test(pow) && /"decisions"/.test(metered), "decisions is wallet-only and kept out of the CI sweeps (it spends upstream)");
 }
 
+// The pin (2026-10-15): "jev-latest" moves when TypeSafe promotes a release.
+{
+  const { upstreamJevModel, JEV_PINNED } = await import("../src/tools/judge-kit.js");
+  ok(JEV_PINNED === "jev-1.13.0", "the default Jev backend is pinned to the tested version");
+  ok(upstreamJevModel("jev-latest") === JEV_PINNED && upstreamJevModel(undefined) === JEV_PINNED, "a buyer's jev-latest, or no model, is sent as the pinned version");
+  ok(upstreamJevModel("jev-preview") === "jev-preview", "jev-preview stays the explicit opt-in to the newer release");
+  const src = (await import("node:fs")).readFileSync(new URL("../src/tools/judge-kit.js", import.meta.url), "utf8");
+  ok(/model: upstreamJevModel\(body\.model\)/.test(src), "every Jev call goes through the pin");
+  for (const f of ["../src/tool-judge.js", "../src/discovery-rerank.js", "../src/wish-classify.js", "../services/decide/jev.js"]) {
+    const t = (await import("node:fs")).readFileSync(new URL(f, import.meta.url), "utf8");
+    ok(/"jev-1\.13\.0"/.test(t) && !/\|\| "jev-latest"/.test(t), `${f.split("/").pop()} defaults to the pinned version, not the moving alias`);
+  }
+}
 console.warn = quiet;
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
