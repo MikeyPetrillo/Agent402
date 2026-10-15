@@ -3968,7 +3968,7 @@ jobs:
       # Rendered text contrast: every visible text vs its real backdrop, both themes, 390 + 1280 px (Chromium; a dark-surface token on a light surface is invisible in light mode, /sell 2026-09-10)
       - name: Text contrast (rendered, WCAG AA, both themes)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-text-contrast.js
-      # Wrap quality, measured: line boxes read back in Chromium at 1440 and 400 px; a
+      # Wrap quality, measured: line boxes read back in Chromium at 1440, 400, 390 and 360 px; a
       # last line under 30% or under 3 words, a label split over two lines, a link
       # row ending on one stray link, a code name split mid-word, or text past the
       # viewport fails (DESIGN.md "Wrap"). Every hand-written page in the sitemap and
@@ -3977,7 +3977,7 @@ jobs:
       # crawlers off: the shared server on :3000 crawls live sellers, and their names
       # and counts change between runs, so the pages it measured were never the same
       # twice. The templates are what this guards; seller data is not in the repo.
-      - name: Wrap quality (rendered line boxes, 1440 + 400 px, sitemap + wiki, families sampled)
+      - name: Wrap quality (rendered line boxes, 1440 + 400 + 390 + 360 px, sitemap + wiki, families sampled)
         run: node scripts/test-wrap-quality.js
       # Sticky chrome, measured: html and body are never scroll containers, and the
       # nav, docs TOC, playground panel and 101 bar hold their offsets after a scroll
