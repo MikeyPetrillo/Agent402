@@ -16,6 +16,7 @@
 // scripts/test-derivatives-kit.js (stubbed fetch).
 
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { hlSharedInfo, __hlShared } from "./hyperliquid-shared.js";
 // The reads answered in 0.1 to 1 s when measured (2026-10-14).
 const TIMEOUT_MS = 10_000;
 const HL_INFO = "https://api.hyperliquid.xyz/info";
@@ -117,7 +118,13 @@ function parseJson(text, label) {
 // Hyperliquid info endpoint. Unknown coins come back as HTTP 500 "null"
 // (candleSnapshot, fundingHistory) or HTTP 200 "null" (l2Book); both are
 // "no such market" to a buyer, not an outage.
-async function hlInfo(payload) {
+// Universe-wide documents (metaAndAssetCtxs, meta, predictedFundings, the
+// HIP-3 listings) go through the cache this kit shares with the other
+// Hyperliquid kit: one IP budget upstream, so one cache here
+// (src/tools/hyperliquid-shared.js). Everything else reads straight through.
+function hlInfo(payload) { return hlSharedInfo(payload, hlInfoDirect); }
+
+async function hlInfoDirect(payload) {
   const { status, text } = await rawFetch(HL_INFO, { method: "POST", body: JSON.stringify(payload), label: "Hyperliquid", step: String(payload?.type || "info") });
   const trimmed = text.trim();
   if (status >= 500) {
@@ -1381,7 +1388,7 @@ export const DERIVATIVES_TOOLS = [
 ];
 
 export const __test = {
-  resetMetaCache: () => { metaCache = { at: 0, names: null }; },
+  resetMetaCache: () => { metaCache = { at: 0, names: null }; __hlShared.clear(); },
   shapePerpDex,
   shapeDeployAuction,
   pairsToRows,

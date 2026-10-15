@@ -35,6 +35,7 @@ function assertBodyWithinCap(res, capBytes, label) {
 const HL_INFO = "https://api.hyperliquid.xyz/info";
 const UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { hlSharedInfo, __hlShared } from "./hyperliquid-shared.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504. The Hyperliquid reads answered in 0.3 to 0.5 s when
@@ -132,7 +133,13 @@ async function rawFetch(url, { method = "GET", body, label, timeoutMs, accept, s
 }
 
 // Hyperliquid info endpoint. Unknown coins come back as HTTP 500 "null".
-async function hlInfo(payload) {
+// Universe-wide documents (metaAndAssetCtxs, meta, predictedFundings, the
+// HIP-3 listings) go through the cache this kit shares with the other
+// Hyperliquid kit: one IP budget upstream, so one cache here
+// (src/tools/hyperliquid-shared.js). Everything else reads straight through.
+function hlInfo(payload) { return hlSharedInfo(payload, hlInfoDirect); }
+
+async function hlInfoDirect(payload) {
   const { status, text } = await rawFetch(HL_INFO, {
     method: "POST", body: JSON.stringify(payload), label: "Hyperliquid", timeoutMs: HL_TIMEOUT_MS, step: String(payload?.type || "info"),
   });
@@ -862,7 +869,7 @@ export function marketPulse(rows, { limit, minVolumeUsd }) {
 export const __test = {
   HL_INFO,
   INTERVALS,
-  resetCaches: () => { metaCache = { at: 0, names: null }; feedCache.clear(); },
+  resetCaches: () => { metaCache = { at: 0, names: null }; feedCache.clear(); __hlShared.clear(); },
   feedCacheSize: () => feedCache.size,
   cleanText,
   canonicalUrl,
