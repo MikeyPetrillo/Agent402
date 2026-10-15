@@ -1380,6 +1380,8 @@ jobs:
           t node scripts/test-revenue-ledger-enable-pg.js
           t node scripts/test-refund-ledger-pg.js
           t node scripts/test-sales-ledger-pg.js
+          # A receipt check on one container finds a sale another just recorded.
+          t node scripts/test-sale-lookup-crosscontainer-pg.js
           t node scripts/test-ledger-dead-letter-pg.js
           # The journals in REAL redis: claimed once across containers, a lapsed lease recovered,
           # local disk (and the "local" word) when redis is away; card finals keep one outcome.

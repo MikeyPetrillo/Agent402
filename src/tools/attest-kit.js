@@ -30,7 +30,7 @@
 // scripts/test-attest-kit.js). Non-revocable, no resolver, no expiry.
 import { createHash } from "node:crypto";
 import { assertSigningAllowed } from "../signing-halt.js";
-import { saleByTx, setAttestation } from "../sales-ledger.js";
+import { saleByTxFresh, setAttestation } from "../sales-ledger.js";
 import { maySpend, noteSpend, adjustSpend, reserveSpend, composeReserve } from "../external-spend-guard.js";
 import { payerFromRequest } from "../payer.js";
 
@@ -232,7 +232,7 @@ async function realChain() {
  * `deps.saleByTx`, `deps.setAttestation`, `deps.spend` = { maySpend, noteSpend, adjustSpend }.
  */
 export function makeAttestHandler(deps = {}) {
-  const lookup = deps.saleByTx || saleByTx;
+  const lookup = deps.saleByTx || saleByTxFresh;
   const persist = deps.setAttestation || setAttestation;
   const spend = deps.spend || { maySpend, noteSpend, adjustSpend, reserveSpend };
   // Check and book in one step; an injected { maySpend, noteSpend } (tests) composes into the same shape.
@@ -247,7 +247,7 @@ export function makeAttestHandler(deps = {}) {
     // and a non-EVM buyer was never offered the route, never charged.
     const caller = payerOf(req);
     if (!caller) throw bad("Attestations are written for the buyer of a sale, so this call must be paid with a signed EVM authorization from the wallet that made the purchase. Nothing was charged.", 403);
-    const sale = lookup(tx);
+    const sale = await lookup(tx);
     // The three refusals below say the same thing on purpose: a wallet that did
     // not make a purchase learns nothing about whether the tx is ours, what it
     // bought, or whether it was digested. Only the buyer sees the detail.
