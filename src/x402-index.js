@@ -6202,16 +6202,18 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
     if (pullWatermark == null) {
       // The first pull starts from the database's clock a little before now:
       // the warm start already read everything older.
-      const r = await stateQuery("SELECT now() - interval '10 minutes' AS t");
+      const r = await stateQuery("SELECT (now() - interval '10 minutes')::text AS t");
       pullWatermark = r.rows[0].t;
     }
     for (let page = 0; page < maxPages; page++) {
       const r = await stateQuery(
-        `SELECT id, body, updated_at FROM ${recordsTable()} WHERE collection = $1 AND updated_at > $2 ORDER BY updated_at, id LIMIT $3`,
+        // The stamp travels as text: a JS Date drops the microseconds, and the
+        // last row of every pull would then be read again forever.
+        `SELECT id, body, updated_at::text AS stamp FROM ${recordsTable()} WHERE collection = $1 AND updated_at > $2::timestamptz ORDER BY updated_at, id LIMIT $3`,
         [INDEX_RECORDS, pullWatermark, pageSize],
       );
-      for (const { id, body, updated_at } of r.rows) {
-        pullWatermark = updated_at;
+      for (const { id, body, stamp } of r.rows) {
+        pullWatermark = stamp;
         if (typeof id !== "string" || !body || typeof body !== "object" || isRemovedOrigin(id)) continue;
         const held = cache.get(id);
         if (held && entryFetchedAt(held) >= entryFetchedAt(body)) continue;
