@@ -2934,8 +2934,12 @@ export function validateSpeechRequest(input) {
   // not turn a provider outage into their 502).
   let chain = SPEECH_MODELS;
   if (input.model !== undefined) {
+    // The caller's own spelling is matched too: canonicalModel prefixes some
+    // bare names (grok-* becomes x-ai/grok-*), which would turn a documented
+    // alias such as "grok-voice-tts" into an id no entry carries.
+    const raw = String(input.model).trim().toLowerCase();
     const m = canonicalModel(input.model).toLowerCase();
-    const hit = SPEECH_MODELS.find((e) => m === e.id || e.aliases.includes(m));
+    const hit = SPEECH_MODELS.find((e) => m === e.id || e.aliases.includes(m) || raw === e.id || e.aliases.includes(raw));
     if (!hit) {
       throw bad(`"model" must be one of: ${SPEECH_MODELS.map((e) => e.id).join(", ")} (or omit it for the default chain)`);
     }

@@ -1281,6 +1281,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const pinned = validateSpeechRequest({ input: "hi", model: "kokoro" });
   ok(pinned.bodies[0].model === "hexgrad/kokoro-82m" && pinned.bodies.length === 5, "explicit model pins that link first — the rest stay as fallbacks");
   ok(validateSpeechRequest({ input: "hi", model: "voxtral-mini-tts" }).bodies[0].model === "mistralai/voxtral-mini-tts-2603", "bare family alias accepted");
+  ok(validateSpeechRequest({ input: "hi", model: "grok-voice-tts" }).bodies[0].model === "x-ai/grok-voice-tts-1.0", "the documented bare grok alias is accepted (canonicalModel would prefix it to x-ai/)");
   const nova = validateSpeechRequest({ input: "hi", voice: "nova" });
   ok(nova.bodies[0].voice === "gb_jane_confident" && nova.bodies[2].voice === "af_nova", "OpenAI voice name maps per-model down the chain");
   const native = validateSpeechRequest({ input: "hi", voice: "en_paul_cheerful" });
