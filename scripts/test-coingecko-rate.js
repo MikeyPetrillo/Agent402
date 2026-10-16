@@ -126,6 +126,13 @@ const J = (status, body) => new Response(typeof body === "string" ? body : JSON.
     eq(JSON.stringify(a.prices ?? a), JSON.stringify(b.prices ?? b), "and gets the same answer");
     try { await price({ coins: "ETH" }); } catch { /* the stub has no ETH row */ }
     eq(fetched, 2, "a different request still goes upstream");
+    clearCryptoCache(); fetched = 0;
+    const quick = reply;
+    reply = () => new Promise((r) => setTimeout(() => r(quick()), 100)); // still in flight when the second arrives
+    const [c1, c2] = await Promise.all([price({ coins: "BTC" }), price({ coins: "BTC" })]);
+    reply = quick;
+    eq(fetched, 1, "two identical requests in flight together share one upstream request");
+    eq(JSON.stringify(c1.prices ?? c1), JSON.stringify(c2.prices ?? c2), "and both get the answer");
 
     clearPriceFeedCache(); fetched = 0;
     reply = () => J(200, { bitcoin: { usd: 1 } });
