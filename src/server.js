@@ -2111,7 +2111,10 @@ for (const def of Object.values(CATALOG)) {
 // Applied before any surface reads discovery, so /openapi.json, the tool
 // pages, MCP and the 402 discovery extension all see the same example.
 {
-  const { applied } = applyCapturedExamples(Object.values(CATALOG), loadCapturedExamples());
+  // TOOL_OUTPUT_EXAMPLES_TEST_BARE is read on a FREE_MODE boot only: tests
+  // render a captured example on a tool that otherwise has a hand-written one.
+  const treatAsBare = FREE_MODE ? String(process.env.TOOL_OUTPUT_EXAMPLES_TEST_BARE || "").split(",").map((x) => x.trim()).filter(Boolean) : [];
+  const { applied } = applyCapturedExamples(Object.values(CATALOG), loadCapturedExamples(), { treatAsBare });
   if (applied.length) console.log(`[examples] ${applied.length} captured output example(s) applied to tools with none`);
 }
 // Routes priced per request publish a RANGE in /openapi.json (price.mode
