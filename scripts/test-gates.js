@@ -76,6 +76,13 @@ const GATES = [
     defect: "absence of evidence reported as a bad verdict",
   },
   {
+    gate: "test-seller-trust.js",
+    file: "src/router-lanes.js",
+    from: "eligible: Boolean(ceiling) && tiered.length > 0,",
+    to: "eligible: false,",
+    defect: "a seller the Base unproven lane can pay reported as not routable",
+  },
+  {
     gate: "test-analytics-redaction.js",
     file: "src/analytics-db.js",
     // Simulate a REAL regression rather than a crash: spread the whole payload

@@ -4409,6 +4409,8 @@ jobs:
           # Router dispatch eligibility, labelled: one function for the resolver's Base gate and every public row (offline)
           t node scripts/test-dispatch-eligibility.js
           t node scripts/test-unproven-lane-labels.js
+          # seller-trust and seller-dossier report both router lanes (proven, Base unproven) from the per-route verdicts, through their routes (FREE_MODE boots, seeded index, ceiling on and off)
+          t node scripts/test-seller-trust-lanes.js
           # USDC EIP-712 domain truth per chain: table pinned to payments.js + @x402/evm, wrong-name accepts refused (offline)
           t node scripts/test-evm-usdc-domain.js
           # Shared-wallet settlement evidence counts only where the live 402 pays: fake leaderboard row + fake 402s, call sites pinned (offline)
