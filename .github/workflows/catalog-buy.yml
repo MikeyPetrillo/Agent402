@@ -13,7 +13,7 @@ name: Catalog buy (every tool at list price)
 # output key present, no empty array where the published example shows rows.
 #
 # Two tiers (scripts/catalog-buy.js). daily: every tool priced at or under
-# $0.10, once a day, with its published example. weekly: the products above
+# $0.10, with its published example. weekly: the products above
 # $0.10 (reports, dossiers, the ticker pack, the router tiers) on a seven-day
 # rotation balanced by price, so each is bought once a week; the daily run buys
 # that day's slice. The router tiers pay an outside seller for their answer, so
@@ -41,9 +41,11 @@ name: Catalog buy (every tool at list price)
 # slugs and their grades; a green scheduled run closes it.
 on:
   schedule:
-    # 11:47 UTC: clear of the paid canary's four-hourly slots at :17, the
-    # nightly corpus at 05:17 and the weekly report audit on Tuesday 06:37.
-    - cron: "47 11 * * *"
+    # Mondays 11:47 UTC: clear of the paid canary's slots at :17, the nightly
+    # corpus at 05:17 and the weekly report audit on Tuesday 06:37. Each
+    # scheduled run waits on the spending environment's approval, so it runs
+    # weekly and buys the whole catalog (tier all) under its own cap.
+    - cron: "47 11 * * 1"
   workflow_dispatch:
     inputs:
       tier:
@@ -96,7 +98,10 @@ jobs:
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
           POW_SECRET: ${{ secrets.POW_SECRET }}
-          TIER: ${{ inputs.tier || 'daily' }}
+          # The weekly scheduled run buys every tool, so it carries a cap sized
+          # to the whole catalog at list price; a dispatch keeps the script's.
+          CATALOG_BUY_MAX_USD: ${{ github.event_name == 'schedule' && '32' || '' }}
+          TIER: ${{ inputs.tier || 'all' }}
           ONLY: ${{ inputs.only || '' }}
           # The route-execute products pay an outside seller from the spending
           # wallet (its own daily ceiling); the paid canary covers that path.
@@ -143,7 +148,7 @@ jobs:
           GRADED: ${{ steps.buy.outputs.graded }}
           FAILED: ${{ steps.buy.outputs.failed }}
           DEFERRED: ${{ steps.buy.outputs.deferred }}
-          TIER: ${{ inputs.tier || 'daily' }}
+          TIER: ${{ inputs.tier || 'all' }}
           ONLY: ${{ inputs.only || '' }}
           # The route-execute products pay an outside seller from the spending
           # wallet (its own daily ceiling); the paid canary covers that path.
