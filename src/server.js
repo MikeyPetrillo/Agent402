@@ -1961,6 +1961,7 @@ for (const tier of EXEC_TIERS) {
     // per-route verdicts /api/index?seller= publishes, at the ceiling in force.
     getToolVerdicts: (detail) => sellerToolVerdicts(detail),
     getUnprovenMaxUsd: () => baseUnprovenAllowanceUsd(),
+    execTiers: EXEC_TIERS,
     sorThreshold: SOR_MIN_SETTLED_TX,
     sorCap: EXEC_TIERS[0].underlyingMaxUsd,
     settlementNetwork: "eip155:8453",
@@ -1988,6 +1989,7 @@ let operatorDossier = null;
     getDispatchRow: (detail) => withDispatchFields(detail),
     getToolVerdicts: (detail) => sellerToolVerdicts(detail),
     getUnprovenMaxUsd: () => baseUnprovenAllowanceUsd(),
+    execTiers: EXEC_TIERS,
     getEvidenceBinding: (origin) => dispatchEvidence().binding.get(norm(origin)) || null,
     getLeaderboardRow: (origin, host) => {
       const snap = getLeaderboardSnapshot();

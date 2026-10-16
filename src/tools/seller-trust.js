@@ -62,10 +62,13 @@ export function assessSeller({ origin, detail, settledCalls, sorThreshold, sorCa
   };
 }
 
-export function buildSellerTrustTool({ getSellerDetail, getSettledCalls, getPayToEvidence, getToolVerdicts, getUnprovenMaxUsd = baseUnprovenAllowanceUsd, sorThreshold = 50, sorCap = 0.005, settlementNetwork = "eip155:8453", selfHost = "" }) {
+export function buildSellerTrustTool({ getSellerDetail, getSettledCalls, getPayToEvidence, getToolVerdicts, getUnprovenMaxUsd = baseUnprovenAllowanceUsd, execTiers, sorThreshold = 50, sorCap = 0.005, settlementNetwork = "eip155:8453", selfHost = "" }) {
   // Without the router's own per-route verdicts this tool could only guess at
   // the lanes, so the wiring has to hand them in.
   if (typeof getToolVerdicts !== "function") throw new Error("seller-trust needs getToolVerdicts (the router's per-route dispatch verdicts)");
+  // ...and route-execute's own tier table, so "a tier can pay it" is read off
+  // the tiers the router sells rather than a copy of their caps.
+  if (!Array.isArray(execTiers) || !execTiers.length) throw new Error("seller-trust needs execTiers (route-execute's EXEC_TIERS)");
   return {
     route: "GET /api/x402/seller-trust",
     name: "Check an x402 seller's trust evidence",
@@ -73,7 +76,7 @@ export function buildSellerTrustTool({ getSellerDetail, getSettledCalls, getPayT
     category: "x402",
     price: "$0.005",
     description:
-      "Trust evidence for any x402 seller origin: is it indexed, does its manifest parse, how many tools does it publish, which chains does it actually advertise, how many settled calls has it been observed receiving on-chain, and would our own Smart Order Router spend buyer money on it, in either of its two lanes: as a proven seller, or through the Base unproven lane (a seller below the settlement floor, tried after every proven candidate under a small per-call ceiling, paid only at the wallet its own live 402 names and flagged unproven on the receipt). routableByOurRouter is true when either lane can pay; routableAsProven keeps the proven-only answer. Returns each lane with its blockers, so a refusal is explainable. Never fetches the seller at call time - this is our accumulated crawl and settlement evidence, not a liveness probe.",
+      "Trust evidence for any x402 seller origin: is it indexed, does its manifest parse, how many tools does it publish, which chains does it actually advertise, how many settled calls has it been observed receiving on-chain, and would our own Smart Order Router spend buyer money on it, in either of its two lanes: as a proven seller, or through the Base unproven lane (a seller below the settlement floor, tried after every proven candidate under a small per-call ceiling, paid only at the wallet its own live 402 names and flagged unproven on the receipt). routableByOurRouter is true when either lane can pay; routableAsProven is true when some route-execute tier pays it as a proven seller. Each lane names the route-execute tiers whose underlying cap covers its routes (lanes.proven.tiers, cheapestTier), with its blockers, so a refusal is explainable. Never fetches the seller at call time - this is our accumulated crawl and settlement evidence, not a liveness probe.",
     tags: ["x402", "seller", "trust", "reputation", "verify", "due-diligence", "counterparty",
       "safety", "policy", "allowlist", "settled", "proven", "index", "discovery",
       "is this seller real", "has anyone paid this seller", "check a seller before paying",
@@ -107,8 +110,8 @@ export function buildSellerTrustTool({ getSellerDetail, getSettledCalls, getPayT
           settledCallsObserved: 3,
           routerGate: { settledCalls: 3, settlementThreshold: 50, meetsSettlementThreshold: false, advertisesSettlementNetwork: true, cheapestPaidToolUsd: 0.005, routerUnderlyingCapUsd: 0.005, hasToolWithinRouterCap: true },
           lanes: {
-            proven: { eligible: false, chain: "base", toolCount: 0, cheapestUsd: null, underlyingCapUsd: 0.005, blockers: ["fewer than 50 settled calls observed on-chain"] },
-            unproven: { eligible: true, chain: "base", maxUsd: 0.01, toolCount: 1, cheapestUsd: 0.005, note: "On Base the router may still pay the seller, but only after every proven seller for the task, only at the wallet its own live 402 names, never above that ceiling, and flagged unproven on the buyer's receipt ($0.01 per call)." },
+            proven: { eligible: false, chain: "base", toolCount: 0, cheapestUsd: null, cheapestTier: null, tiers: [], blockers: ["fewer than 50 settled calls observed on-chain"] },
+            unproven: { eligible: true, chain: "base", maxUsd: 0.01, toolCount: 1, cheapestUsd: 0.005, cheapestTier: "route-execute", note: "On Base the router may still pay the seller, but only after every proven seller for the task, only at the wallet its own live 402 names, never above that ceiling, and flagged unproven on the buyer's receipt ($0.01 per call)." },
           },
           routableByOurRouter: true,
           routableAsProven: false,
@@ -161,12 +164,14 @@ export function buildSellerTrustTool({ getSellerDetail, getSettledCalls, getPayT
       // here would read as a bad verdict on a healthy catalog. Say why.
       const isSelf = Boolean(selfHost) && host === String(selfHost).toLowerCase();
       // Both lanes, read off the router's own per-route verdicts.
-      const lanes = routerLanes({ toolVerdicts: getToolVerdicts(detail) || [], unprovenMaxUsd: getUnprovenMaxUsd(), provenCapUsd: sorCap });
-      // Proven needs the old gate AND the router's verdict: the gate's numbers
-      // explain a refusal, and the verdict carries what the gate alone cannot
-      // see (breadth, wallet binding, EIP-712 domain, delivery memo).
-      const asProven = !isSelf && a.routableByOurRouter && lanes.proven.eligible;
-      const provenBlockers = asProven ? [] : (a.blockers.length ? a.blockers : lanes.proven.blockers);
+      const lanes = routerLanes({ toolVerdicts: getToolVerdicts(detail) || [], unprovenMaxUsd: getUnprovenMaxUsd(), execTiers });
+      // Proven = the router's verdict says eligible AND some route-execute
+      // tier's underlying cap covers the route (lanes.proven.tiers). The old
+      // gate's numbers still explain a refusal, except its cap line: that cap
+      // is the cheapest tier's only, and the tiers above it pay more.
+      const asProven = !isSelf && lanes.proven.eligible;
+      const gateBlockers = a.blockers.filter((b) => !b.startsWith("no paid resource at or under"));
+      const provenBlockers = asProven ? [] : [...gateBlockers, ...lanes.proven.blockers.filter((b) => !gateBlockers.length || /route-execute tier/.test(b))];
       const viaUnproven = !isSelf && !asProven && lanes.unproven.eligible;
       const routable = asProven || viaUnproven;
       return {
@@ -195,7 +200,7 @@ export function buildSellerTrustTool({ getSellerDetail, getSettledCalls, getPayT
           ? { proven: { ...lanes.proven, eligible: false, blockers: ["this host is the local catalog"] }, unproven: { ...lanes.unproven, eligible: false, reason: "this host is the local catalog" } }
           : { proven: { ...lanes.proven, eligible: asProven, blockers: provenBlockers }, unproven: lanes.unproven },
         // True when EITHER lane can pay (since the unproven lane shipped);
-        // routableAsProven keeps the proven-only answer this field used to give.
+        // routableAsProven: some route-execute tier pays it as a proven seller.
         routableByOurRouter: routable,
         routableAsProven: asProven,
         routableVia: asProven ? "proven" : (viaUnproven ? "unproven" : null),
@@ -211,6 +216,7 @@ export function buildSellerTrustTool({ getSellerDetail, getSettledCalls, getPayT
           "no liveness probe is performed at call time - a listed seller can still be down right now; `paywall` is from the last crawl, and null means not yet probed rather than healthy",
           "healthScore measures whether the manifest parsed, NOT whether paid routes work - read it with `paywall`, never instead of it",
           "routableByOurRouter is true when either lane can pay; the unproven lane is Base only, tried after every proven seller for the task, and flagged unproven on the buyer's receipt - read routableAsProven for the proven-only answer",
+          "routerGate.routerUnderlyingCapUsd is the cheapest route-execute tier's cap; lanes.proven.tiers lists every tier that can pay a proven route",
         ],
         evidenceSource: "x402 seller crawl + on-chain settlement counts + the router's per-route dispatch verdicts",
       };

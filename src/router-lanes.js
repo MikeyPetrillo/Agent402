@@ -3,7 +3,8 @@
 //
 //   proven    a Base route whose verdict is `eligible` (the settlement floor,
 //             breadth, wallet binding, EIP-712 domain and delivery memo all
-//             clear), at or under the cap this summary is asked about.
+//             clear) that some route-execute tier can pay: its price at or
+//             under that tier's underlyingMaxUsd (EXEC_TIERS, handed in).
 //   unproven  a Base route whose verdict carries `unprovenTier`: below the
 //             floor with nothing else wrong, priced within the unproven
 //             ceiling (src/base-unproven.js). Tried after every proven
@@ -28,10 +29,18 @@ const reasonLine = (reason, detail) => {
  *                                   routerDispatchByChain / routerDispatchReason
  *                                   (rowLevel verdicts, priced per route)
  * @param {number} o.unprovenMaxUsd  the unproven ceiling in force (0 = switched off)
- * @param {number|null} [o.provenCapUsd]  the underlying cap the proven lane is
- *                                   reported against (null = no cap)
+ * @param {object[]} o.execTiers    route-execute's EXEC_TIERS ({ slug, underlyingMaxUsd });
+ *                                   a route is payable by a tier when its price is at
+ *                                   or under that tier's underlyingMaxUsd
  */
-export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, provenCapUsd = null } = {}) {
+export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, execTiers = [] } = {}) {
+  const tiersAsc = (Array.isArray(execTiers) ? execTiers : [])
+    .filter((t) => t && t.slug && Number(t.underlyingMaxUsd) > 0)
+    .map((t) => ({ slug: t.slug, underlyingMaxUsd: Number(t.underlyingMaxUsd) }))
+    .sort((a, b) => a.underlyingMaxUsd - b.underlyingMaxUsd);
+  const highest = tiersAsc[tiersAsc.length - 1] || null;
+  // The cheapest tier whose underlying cap covers a price (null = none can).
+  const tierFor = (usd) => (usd == null ? null : tiersAsc.find((t) => usd <= t.underlyingMaxUsd) || null);
   const ceiling = Number(unprovenMaxUsd) > 0 ? Number(unprovenMaxUsd) : 0;
   const paid = (Array.isArray(toolVerdicts) ? toolVerdicts : [])
     .filter((t) => t && t.paid !== false && isPricedAboveZero(t.price))
@@ -41,20 +50,28 @@ export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, provenCapUs
 
   // ---- proven
   const provenAny = onBase.filter((t) => t.base.eligible === true);
-  const provenTools = provenAny.filter((t) => provenCapUsd == null || t.usd <= provenCapUsd);
+  // Each tier that can pay at least one proven route, with the cheapest it covers.
+  const tiers = tiersAsc.map((t) => {
+    const covered = provenAny.filter((r) => r.usd <= t.underlyingMaxUsd);
+    return covered.length ? { slug: t.slug, underlyingMaxUsd: t.underlyingMaxUsd, routeCount: covered.length, cheapestUsd: cheapest(covered) } : null;
+  }).filter(Boolean);
+  const provenTools = provenAny.filter((t) => tierFor(t.usd));
   const provenBlockers = [];
   if (!provenTools.length) {
     if (!paid.length) provenBlockers.push("no paid resource is indexed for this origin");
     else if (!onBase.length) provenBlockers.push(reasonLine(paid.find((t) => t.reason)?.reason || "no_supported_route"));
-    else if (provenAny.length) provenBlockers.push(`its proven Base routes are all priced above the $${provenCapUsd} underlying cap`);
+    else if (provenAny.length) provenBlockers.push(highest
+      ? `its proven Base routes are all priced above the highest route-execute tier's $${highest.underlyingMaxUsd} underlying cap (${highest.slug}; cheapest route $${cheapest(provenAny)})`
+      : "no route-execute tier is configured to pay it");
     else for (const line of new Set(onBase.map((t) => reasonLine(t.base.reason, t.base.detail)))) provenBlockers.push(line);
   }
   const proven = {
-    eligible: provenTools.length > 0,
+    eligible: tiers.length > 0,
     chain: "base",
     toolCount: provenTools.length,
     cheapestUsd: cheapest(provenTools),
-    ...(provenCapUsd != null ? { underlyingCapUsd: provenCapUsd } : {}),
+    cheapestTier: tiers[0]?.slug || null,
+    tiers,
     blockers: provenBlockers,
   };
 
@@ -64,7 +81,7 @@ export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, provenCapUs
   let reason = null;
   if (!ceiling) reason = "the Base unproven ceiling is switched off on this host, so no seller below the settlement floor is tried";
   else if (tiered.length) reason = null;
-  else if (proven.eligible || provenAny.length) reason = "this seller clears the settlement floor, so the router pays it as a proven seller; the unproven lane is only for sellers below the floor";
+  else if (proven.eligible || provenAny.length) reason = "this seller clears the Base settlement floor, so the router pays it as a proven seller; the Base unproven lane serves sellers below that floor";
   else if (!paid.length) reason = "no paid resource is indexed for this origin";
   else if (!onBase.length) reason = "the unproven lane is Base only, and this seller has no Base route the router can pay";
   else if (floorOnly.length) reason = `every Base route held back only by the floor is priced above the $${ceiling} unproven ceiling (cheapest $${cheapest(floorOnly)})`;
@@ -75,6 +92,9 @@ export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, provenCapUs
     maxUsd: ceiling,
     toolCount: ceiling ? tiered.length : 0,
     cheapestUsd: ceiling ? cheapest(tiered) : null,
+    // The lane is bounded by its own ceiling; this names the cheapest tier a
+    // buyer can call to reach its cheapest route.
+    cheapestTier: ceiling && tiered.length ? (tierFor(cheapest(tiered))?.slug || null) : null,
     note: `${UNPROVEN_LANE_TERMS[0].toUpperCase()}${UNPROVEN_LANE_TERMS.slice(1)}${ceiling ? ` ($${ceiling} per call)` : ""}.`,
     ...(reason ? { reason } : {}),
   };

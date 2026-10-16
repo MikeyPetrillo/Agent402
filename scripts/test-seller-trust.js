@@ -16,6 +16,11 @@ import { strict as assert } from "node:assert";
 import { buildSellerTrustTool, assessSeller } from "../src/tools/seller-trust.js";
 import { dispatchEligibility } from "../src/dispatch-eligibility.js";
 import { priceUsdOf } from "../src/price-usd.js";
+import { EXEC_TIERS } from "../src/tools/route-execute.js";
+// Tier expectations are derived from route-execute's own table, never typed.
+const TIERS_ASC = [...EXEC_TIERS].sort((a, b) => a.underlyingMaxUsd - b.underlyingMaxUsd);
+const tierFor = (usd) => TIERS_ASC.find((t) => usd <= t.underlyingMaxUsd) || null;
+const HIGHEST = TIERS_ASC[TIERS_ASC.length - 1];
 
 let passed = 0, failed = 0;
 const check = (name, fn) => {
@@ -60,6 +65,7 @@ const build = (details, settled, extra = {}) => buildSellerTrustTool({
   getSettledCalls: (origin) => settled[origin] || 0,
   getToolVerdicts: verdictsVia(settled, extra),
   getUnprovenMaxUsd: () => extra.unprovenMaxUsd ?? 0.01,
+  execTiers: EXEC_TIERS,
   sorThreshold: 50,
   sorCap: 0.005,
   settlementNetwork: "eip155:8453",
@@ -122,12 +128,14 @@ check("advertising a chain is never treated as proof of settling on it", () => {
   assert.ok(r.caveats.some((c) => /not proof/i.test(c)), "the advertised-vs-settles caveat must ship");
 });
 
-check("a seller priced above the router cap is refused with the cap named", () => {
+check("a seller priced above the cheapest tier's cap reads false on the old gate field, and a higher tier pays it", () => {
   const t = build([PRICEY], { "https://pricey.example": 999 });
   const r = t.handler({ origin: "pricey.example" });
   assert.equal(r.routerGate.hasToolWithinRouterCap, false);
   assert.equal(r.routerGate.routerUnderlyingCapUsd, 0.005);
   assert.equal(r.routerGate.cheapestPaidToolUsd, 0.5);
+  assert.equal(r.lanes.proven.cheapestTier, tierFor(0.5).slug, "a higher tier pays it, and the lane names that tier");
+  assert.equal(r.routableAsProven, true);
 });
 
 // --- counts are a floor, and the response must say so -----------------------
@@ -251,12 +259,15 @@ check("without a payTo-evidence source the field is omitted, not faked", () => {
   };
   const NEW = "https://example.com", PRICEY2 = "https://example.org", PROVEN2 = "https://example.net";
   x.__testResetSubmitted();
-  x.__testSeedCache([seed(NEW, ["$0.005"]), seed(PRICEY2, ["$0.02"]), seed(PROVEN2, ["$0.005"])]);
+  const MID = "https://example.edu", BIG = "https://example.info", HUGE = "https://example.biz";
+  const OVER_TOP = Number((HIGHEST.underlyingMaxUsd * 1.2).toFixed(4));
+  x.__testSeedCache([seed(NEW, ["$0.005"]), seed(PRICEY2, ["$0.02"]), seed(PROVEN2, ["$0.005"]), seed(MID, ["$0.04"]), seed(BIG, ["$0.60"]), seed(HUGE, [`$${OVER_TOP}`]), seed("https://example.co", ["$0.01"])]);
   const realBuild = (settled, extra = {}) => buildSellerTrustTool({
     getSellerDetail: (host) => x.sellerDetail(host),
     getSettledCalls: (origin) => settled[origin] || 0,
     getToolVerdicts: verdictsVia(settled, extra),
     getUnprovenMaxUsd: () => extra.unprovenMaxUsd ?? 0.01,
+    execTiers: EXEC_TIERS,
     sorThreshold: 50, sorCap: 0.005, settlementNetwork: "eip155:8453",
   });
 
@@ -273,6 +284,7 @@ check("without a payTo-evidence source the field is omitted, not faked", () => {
     assert.equal(r.lanes.unproven.maxUsd, 0.01);
     assert.equal(r.lanes.unproven.toolCount, 1);
     assert.equal(r.lanes.unproven.cheapestUsd, 0.005);
+    assert.equal(r.lanes.unproven.cheapestTier, tierFor(0.005).slug, "the unproven lane names the cheapest tier covering its cheapest route");
     assert.match(r.lanes.unproven.note, /after every proven seller for the task, only at the wallet its own live 402 names/);
     assert.match(r.lanes.unproven.note, /flagged unproven on the buyer's receipt/);
     assert.equal(r.routableByOurRouter, true);
@@ -307,6 +319,46 @@ check("without a payTo-evidence source the field is omitted, not faked", () => {
     assert.equal(r.lanes.unproven.eligible, false);
     assert.match(r.lanes.unproven.reason, /proven seller/);
     assert.deepEqual(r.blockers, []);
+    assert.equal(r.lanes.proven.cheapestTier, tierFor(0.005).slug);
+    assert.deepEqual(r.lanes.proven.tiers.map((t) => t.slug), TIERS_ASC.map((t) => t.slug), "every tier covers a $0.005 route");
+  });
+
+  check("real rows: an unproven $0.01 route names the cheapest tier whose cap covers it, not the cheapest tier", () => {
+    const r = realBuild({ "https://example.co": 3 }).handler({ origin: "example.co" });
+    assert.equal(r.lanes.unproven.eligible, true, JSON.stringify(r.lanes.unproven));
+    assert.equal(r.lanes.unproven.cheapestTier, tierFor(0.01).slug);
+    assert.notEqual(r.lanes.unproven.cheapestTier, TIERS_ASC[0].slug, "the cheapest tier's cap is below $0.01");
+  });
+
+  const proven = (o) => realBuild({ [o]: 120 }, { payers: { [o]: 10 } });
+  check("real rows: a proven seller at $0.04 is paid via route-execute-plus, not via route-execute", () => {
+    const r = proven(MID).handler({ origin: "example.edu" });
+    assert.equal(r.routableAsProven, true, JSON.stringify(r.lanes.proven));
+    assert.equal(r.lanes.proven.cheapestTier, "route-execute-plus");
+    assert.equal(tierFor(0.04).slug, "route-execute-plus", "the table still puts $0.04 in the plus tier");
+    assert.ok(!r.lanes.proven.tiers.some((t) => t.slug === "route-execute"), "the $0.005 tier cannot pay a $0.04 route");
+    assert.deepEqual(r.lanes.proven.tiers[0], { slug: "route-execute-plus", underlyingMaxUsd: tierFor(0.04).underlyingMaxUsd, routeCount: 1, cheapestUsd: 0.04 });
+    assert.equal(r.routerGate.hasToolWithinRouterCap, false, "the old cheapest-tier field still reads false");
+    assert.deepEqual(r.blockers, []);
+  });
+
+  check("real rows: a proven seller at $0.60 is paid by the first tier whose cap covers it (route-execute-max cannot)", () => {
+    const r = proven(BIG).handler({ origin: "example.info" });
+    const want = tierFor(0.6);
+    assert.ok(!r.lanes.proven.tiers.some((t) => t.slug === "route-execute-max"), "max's cap is below $0.60");
+    assert.equal(r.routableAsProven, Boolean(want));
+    assert.equal(r.lanes.proven.cheapestTier, want ? want.slug : null);
+  });
+
+  check("real rows: a proven seller above every tier's cap is not routable, and the highest tier's cap is named", () => {
+    const r = proven(HUGE).handler({ origin: "example.biz" });
+    assert.equal(r.routableAsProven, false);
+    assert.equal(r.routableByOurRouter, false);
+    assert.deepEqual(r.lanes.proven.tiers, []);
+    assert.equal(r.lanes.proven.cheapestTier, null);
+    const line = r.lanes.proven.blockers.find((b) => /highest route-execute tier/.test(b));
+    assert.ok(line && line.includes(`$${HIGHEST.underlyingMaxUsd}`) && line.includes(HIGHEST.slug), JSON.stringify(r.lanes.proven.blockers));
+    assert.ok(r.blockers.includes(line));
   });
 }
 
