@@ -249,8 +249,18 @@ try {
       const yc = await call(C, "/api/stock-quote?symbol=CVX");
       ok(xd.body?.cached === true && yc.body?.cached === true && xd.body?.asOf === "2026-10-13" && yc.body?.asOf === "2026-10-13", `d. each server serves the other's symbol warm for the new session (${xd.body?.cached}, ${yc.body?.cached})`);
       ok(up.calls.length === w0, `d. ...with zero upstream calls (${up.calls.length - w0})`);
-      const held = await sdb.leases.holder("databento-quote-warmer").catch(() => "error");
-      ok(held === null || (held && typeof held.owner === "string"), "d. the warmer's lease lives in the state schema");
+      // The lease gates the tick: while a third container holds it, neither
+      // server's warmer calls the upstream, even across a new session.
+      const third = "third-container";
+      ok(await until(async () => await sdb.leases.acquire("databento-quote-warmer", { owner: third, ttlMs: 60_000 }), 10_000, 50), "d. a third container takes the warmer's lease");
+      const l0 = up.calls.length;
+      up.end = "2026-10-14";
+      await sleep(4500); // three refresh intervals on each server
+      ok(up.calls.length === l0, `d. while another holder has the lease, no tick on either server reads upstream (${up.calls.length - l0} calls)`);
+      await sdb.leases.release("databento-quote-warmer", { owner: third });
+      ok(await until(async () => (await perf(C))?.range?.end === "2026-10-14" && (await perf(D))?.range?.end === "2026-10-14", 15_000, 250), "d. once released, the warmers move to the new session");
+      const ranges3 = count((c, i) => i >= l0 && c.kind === "range");
+      ok(ranges3 >= 1 && count((c, i) => i >= l0 && c.kind === "cost" && c.end === "2026-10-14") === 1, `d. ...with one audit for it across both (range reads ${ranges3})`);
     } finally {
       kill(C); kill(D);
       await sleep(300);
