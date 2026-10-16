@@ -55,11 +55,16 @@ try {
     "leaderboard-refresh", "solana-leaderboard-refresh", "mpp-leaderboard-refresh", "mpp-reconcile-run", "backup-nightly", "revenue-ledger-tick",
     // Reads the published sanctions list into our own store; a second container
     // refreshing it at the same time only downloads the same public file twice.
-    "sanctions-screen-refresh"]);
+    "sanctions-screen-refresh",
+    // Pre-reads end-of-day bars into the cache under its own daily call ceiling;
+    // a second container warming at the same time reads the same bars twice.
+    "databento-quote-warmer"]);
   const { readdirSync } = await import("node:fs");
   const leasedCall = /\b(?:leased|withLease)\(\s*([`"][^`"]+[`"])\s*,\s*\{([^}]*)\}/g;
   let sites = 0;
-  for (const f of readdirSync(new URL("../src/", import.meta.url)).filter((x) => x.endsWith(".js") && x !== "state-db.js")) {
+  const files = [...readdirSync(new URL("../src/", import.meta.url)).filter((x) => x.endsWith(".js") && x !== "state-db.js"),
+    ...readdirSync(new URL("../src/tools/", import.meta.url)).filter((x) => x.endsWith(".js")).map((x) => `tools/${x}`)];
+  for (const f of files) {
     const src = readFileSync(new URL("../src/" + f, import.meta.url), "utf8");
     for (const m of src.matchAll(leasedCall)) {
       sites++;

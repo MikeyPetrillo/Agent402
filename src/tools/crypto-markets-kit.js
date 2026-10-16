@@ -34,7 +34,7 @@ function bad(message, statusCode = 400) {
 
 export const CG_BASE = "https://api.coingecko.com/api/v3";
 const SOURCE = "coingecko";
-import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget, the one retry included; a read that outlives it is a 503
 // naming the upstream and the step, never a 504.
@@ -105,7 +105,10 @@ async function cgGet(path, params, ttlMs) {
 
   const why = cgTokenRefusal(Date.now());
   if (why) throw bad(cgRefusalMessage(why, "Market data"), 503);
-  const attempt = () => upstreamFetch(key, { headers: headers() }, { label: "Market data upstream", step: stepOf(path), timeoutMs: TIMEOUT_MS, tag: "[crypto-markets]" });
+  // The ctx of the read that answered is kept, so its body read runs under
+  // the same deadline (a stalled body is the 503 deadline, not "non-JSON").
+  const ctxOf = new WeakMap();
+  const attempt = () => { const c = { label: "Market data upstream", step: stepOf(path), timeoutMs: TIMEOUT_MS, tag: "[crypto-markets]" }; return upstreamFetch(key, { headers: headers() }, c).then((r) => { ctxOf.set(r, c); return r; }); };
   let res = await attempt();
   // One retry on 429/5xx after a short backoff: the Demo bucket is 30/min and
   // a chained agent call can brush it; a second failure of the same class maps
@@ -138,8 +141,8 @@ async function cgGet(path, params, ttlMs) {
     throw bad(`Market data upstream rejected the request (HTTP ${s}) - check the inputs`, 422);
   }
   let data;
-  try { data = await res.json(); }
-  catch { throw bad("Market data upstream returned non-JSON", 502); }
+  try { data = await bodyUnderDeadline(res.json(), ctxOf.get(res) || {}); }
+  catch (err) { if (err?.statusCode) throw err; throw bad("Market data upstream returned non-JSON", 502); }
   return cachePut(key, data, ttlMs);
 }
 

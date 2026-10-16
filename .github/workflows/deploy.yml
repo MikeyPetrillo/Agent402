@@ -2514,6 +2514,12 @@ jobs:
           REDIS_URL: redis://127.0.0.1:6379
         run: node scripts/test-redis-integration.js
 
+      - name: "Market data across replicas (REAL redis + postgres: two servers share bars, boundary and price audit with zero upstream calls on the second; the warmer runs under a lease; every stalled upstream read is a 503)"
+        env:
+          REDIS_URL: redis://127.0.0.1:6379
+          STATE_DATABASE_URL: postgres://decide@127.0.0.1:5432/decide_test?sslmode=disable
+        run: node scripts/test-databento-shared-cache.js
+
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
       # runs in its own process, in the same order; `t` groups its log and names it
