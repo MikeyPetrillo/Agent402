@@ -238,6 +238,16 @@ const run = (opts) => runCatalogBuy({ target, payer: fakePayer, powSecret: SECRE
   eq(by.pricey.grade, "ok", "a weekly product passes on its documented keys");
   eq(by.verb.grade, "ok", "a tool whose price-list row names another verb is still bought");
   ok(seen.some((x) => x.path === "/api/verb" && x.method === "POST" && x.paid), "with the spec's verb, which is the one the route answers");
+  // The paid answers the run keeps for scripts/catalog-buy-examples.js.
+  const cap = Object.fromEntries(s.captures.map((c) => [c.slug, c]));
+  ok(cap.healthy?.captured && JSON.stringify(cap.healthy.captured.body) === JSON.stringify({ hex: "cd", rows: [1, 2] }), "a graded paid 200 is captured with its body");
+  ok(cap.healthy.documented.source === "hand-written" && cap.healthy.documented.keys.join() === "hex,rows", "the capture records the documented example's shape");
+  ok(cap.hollow?.captured && cap.hollow.pass === false && cap.hollow.grade === "empty:items", "a failing 200 is captured too, with its grade, for the enhancement report");
+  ok(cap.broken && cap.broken.captured === null && cap.broken.dropped === "no-paid-200", "a non-200 keeps its grade and no body");
+  ok(cap.receipts && cap.receipts.captured === null && cap.receipts.dropped === "denylist", "a payer-keyed read is never captured");
+  ok(!cap["no-example"] && !cap["quote-high"]?.captured, "an unbought or unpaid tool has no captured body");
+  ok(s.captures.every((c) => !("tx" in c) && !JSON.stringify(c).includes(fakePayer.address)), "no capture carries the receipt tx or the payer's address");
+  ok(s.results.every((r) => !("body" in r)), "the graded report carries no answer bodies");
   const tools = seen.filter((x) => !["/api/pricing", "/openapi.json"].includes(x.path));
   ok(tools.every((x) => typeof x.heartbeat === "string" && x.heartbeat.length === 32), "every request carries the heartbeat token");
   const minute = Math.floor(Date.now() / 60_000);

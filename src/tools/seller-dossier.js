@@ -20,6 +20,9 @@
 // "not observed", never "zero"; and there is no score, because a number would
 // be read as a verdict we did not measure. Flags are sentences.
 
+// A crawled row's price is a label ("$0.01"), a number or an object: one reader.
+import { priceUsdOf, isPricedAboveZero } from "../price-usd.js";
+
 const PLAIN = (v) => (v === undefined ? null : v);
 
 function iso(ms) {
@@ -159,8 +162,8 @@ export function composeSellerDossier(a) {
 
   // ----------------------------------------------------------------- catalog
   const tools = (detail.tools || []).slice(0, 500);
-  const paidTools = tools.filter((t) => t.paid !== false && Number(t.price) > 0);
-  const prices = paidTools.map((t) => Number(t.price)).filter((p) => p > 0).sort((x, y) => x - y);
+  const paidTools = tools.filter((t) => t.paid !== false && isPricedAboveZero(t.price));
+  const prices = paidTools.map((t) => priceUsdOf(t.price)).sort((x, y) => x - y);
   const networks = [...new Set(tools.flatMap((t) => t.networks || []))];
   let stale = 0, carried = 0, disagree = 0, inferredMethod = 0, correctedMethod = 0, templates = 0, verifyDue = 0, unpriced = 0;
   const toolRows = tools.slice(0, TOOL_ROWS_MAX).map((t) => {
@@ -176,20 +179,21 @@ export function composeSellerDossier(a) {
     if (raw.methodCorrectedFrom) correctedMethod++;
     if (t.urlTemplate) templates++;
     if (needsVerify) verifyDue++;
-    if (t.paid !== false && !(Number(t.price) > 0)) unpriced++;
+    const priced = isPricedAboveZero(t.price);
+    if (t.paid !== false && !priced) unpriced++;
     const delivery = deliveries && typeof deliveries.get === "function" ? deliveries.get(key) : (deliveries ? deliveries[key] : null);
     return {
       method: String(t.method || "GET").toUpperCase(),
       route: t.route,
       name: PLAIN(t.name),
-      priceUsd: Number(t.price) > 0 ? Number(t.price) : null,
+      priceUsd: priced ? priceUsdOf(t.price) : null,
       networks: Array.isArray(t.networks) ? t.networks : [],
       price: {
-        source: raw.quoteSource || (raw.priceResolvedFrom ? `origin (${raw.priceResolvedFrom})` : (Number(t.price) > 0 ? "manifest" : null)),
+        source: raw.quoteSource || (raw.priceResolvedFrom ? `origin (${raw.priceResolvedFrom})` : (priced ? "manifest" : null)),
         observedAt: iso(raw.quoteObservedAt),
         carriedForward: raw.quoteCarriedForward === true,
         stale: isStale,
-        originDeclaredUsd: Number(raw.originDeclaredPrice) > 0 ? Number(raw.originDeclaredPrice) : null,
+        originDeclaredUsd: isPricedAboveZero(raw.originDeclaredPrice) ? priceUsdOf(raw.originDeclaredPrice) : null,
         disagreesWithOrigin: disagrees,
         conflict: t.priceConflict || null,
       },

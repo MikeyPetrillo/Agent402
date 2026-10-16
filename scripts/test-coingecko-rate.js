@@ -17,6 +17,19 @@ ok(rate.takeCgToken(t0) && rate.takeCgToken(t0) && rate.takeCgToken(t0), "three 
 ok(!rate.takeCgToken(t0), "the fourth is refused");
 ok(rate.takeCgToken(t0 + 20_001), "a third of a minute later one token has refilled");
 ok(!rate.takeCgToken(t0 + 20_001), "and only one");
+// Without a shared store each process holds its RATE_LIMIT_REPLICAS share of the caps.
+rate.resetCgRateLimit();
+process.env.RATE_LIMIT_REPLICAS = "2"; process.env.COINGECKO_MAX_PER_MIN = "4";
+ok((await rate.cgTake(t0)) === null && (await rate.cgTake(t0)) === null, "two replicas configured: this process takes its half of a cap of 4");
+eq(await rate.cgTake(t0), "minute", "and the third is refused");
+ok(rate.cgTakeCounts().local === 3 && rate.cgTakeCounts().shared === 0, "decided on this process's bucket (no shared store configured)");
+process.env.COINGECKO_API_KEY = "cg-test-key"; process.env.COINGECKO_DAILY_MAX = "4"; process.env.COINGECKO_MAX_PER_MIN = "100";
+rate.resetCgRateLimit();
+ok((await rate.cgTake(t0)) === null && (await rate.cgTake(t0)) === null, "the daily ceiling is shared out the same way");
+eq(await rate.cgTake(t0), "day", "half of a daily ceiling of 4");
+eq(rate.cgLocalShare(1), 1, "a share never falls below one");
+delete process.env.RATE_LIMIT_REPLICAS; delete process.env.COINGECKO_API_KEY; delete process.env.COINGECKO_DAILY_MAX; process.env.COINGECKO_MAX_PER_MIN = "3";
+rate.resetCgRateLimit();
 ok(rate.isCoinGeckoHost("api.coingecko.com") && rate.isCoinGeckoHost("pro-api.coingecko.com") && rate.isCoinGeckoHost("COINGECKO.COM") && !rate.isCoinGeckoHost("api.exchange.coinbase.com"), "host test");
 ok(!rate.isCoinGeckoHost("evilcoingecko.com") && !rate.isCoinGeckoHost("coingecko.com.attacker.example"), "a host that merely ends in the letters never gets the key (CodeQL js/incomplete-url-substring-sanitization)");
 eq(markets.resetCgRateLimit, rate.resetCgRateLimit, "crypto-markets-kit re-exports the SHARED reset (one bucket, not two)");
@@ -113,6 +126,13 @@ const J = (status, body) => new Response(typeof body === "string" ? body : JSON.
     eq(JSON.stringify(a.prices ?? a), JSON.stringify(b.prices ?? b), "and gets the same answer");
     try { await price({ coins: "ETH" }); } catch { /* the stub has no ETH row */ }
     eq(fetched, 2, "a different request still goes upstream");
+    clearCryptoCache(); fetched = 0;
+    const quick = reply;
+    reply = () => new Promise((r) => setTimeout(() => r(quick()), 100)); // still in flight when the second arrives
+    const [c1, c2] = await Promise.all([price({ coins: "BTC" }), price({ coins: "BTC" })]);
+    reply = quick;
+    eq(fetched, 1, "two identical requests in flight together share one upstream request");
+    eq(JSON.stringify(c1.prices ?? c1), JSON.stringify(c2.prices ?? c2), "and both get the answer");
 
     clearPriceFeedCache(); fetched = 0;
     reply = () => J(200, { bitcoin: { usd: 1 } });

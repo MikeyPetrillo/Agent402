@@ -329,6 +329,7 @@ import { buildPlanSketch } from "./plan-sketch.js";
 import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE, startWishRotation } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
 import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
+import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
 import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
@@ -633,6 +634,7 @@ const NEXT_CALL = { search: "answer", decide: "decide-execute" };
   }
 }
 import { buildSkillTools, modelBackedPackSlugs } from "./tools/skill-runner.js";
+import { applyCapturedExamples, loadCapturedExamples } from "./tool-output-examples.js";
 import { buildRouteExecuteTool, EXEC_TIERS } from "./tools/route-execute.js";
 import { buildSellerTrustTool } from "./tools/seller-trust.js";
 import { buildSellerDossierTool } from "./tools/seller-dossier.js";
@@ -2081,6 +2083,15 @@ for (const def of Object.values(CATALOG)) {
     def.runSeconds = runS;
     def.description = `${String(def.description || "").trim()} ${runTimeNote(runS)}`;
   }
+}
+// Captured output examples (src/tool-output-examples.js): a real paid answer
+// from the weekly catalog buy fills in a tool's published output example ONLY
+// where its definition has none; a hand-written example is never overwritten.
+// Applied before any surface reads discovery, so /openapi.json, the tool
+// pages, MCP and the 402 discovery extension all see the same example.
+{
+  const { applied } = applyCapturedExamples(Object.values(CATALOG), loadCapturedExamples());
+  if (applied.length) console.log(`[examples] ${applied.length} captured output example(s) applied to tools with none`);
 }
 // Routes priced per request publish a RANGE in /openapi.json (price.mode
 // "dynamic", offer amount null), never the catalog floor as if it were the
@@ -5062,14 +5073,14 @@ app.get("/__internal/decide/tools.ndjson", decideIndexExportHandler({
   // Execute pays outside steps on Base through route-execute-pro, so a row is
   // executable only when the router's Base verdict for it is eligible now.
   remoteExecutable: (t) => {
-    const priceUsd = Number(String(t?.price ?? "").replace(/^\$/, ""));
+    const priceUsd = priceUsdOf(t?.price);
     // A route the router has benched for refusing our payment is not one a
     // run can pay right now (the resolver skips it), so plans do not lean on
     // it while the bench lasts (2026-10-01 prod checks: steps failed on
     // sellers that had just refused).
     const url = t?.url || t?.endpoint;
     if (url && routeRefusedNow(url, "base")) return false;
-    return withDispatchFields({ ...t, priceUsd: Number.isFinite(priceUsd) ? priceUsd : null }, { rowLevel: true }).routerDispatchByChain?.base?.eligible === true;
+    return withDispatchFields({ ...t, priceUsd }, { rowLevel: true }).routerDispatchByChain?.base?.eligible === true;
   },
 }));
 app.get("/__operator/egress.json", (req, res) => {
@@ -7052,9 +7063,9 @@ app.get("/api/index", (req, res) => {
     // unproven tier; each tool row carries its own Base verdict, the same one
     // /api/route publishes for that route.
     const sellerRow = withDispatchFields(detail);
-    const priceUsdOf = (p) => { const n = typeof p === "number" ? p : Number(String(p ?? "").replace(/[^0-9.]/g, "")); return Number.isFinite(n) && n > 0 ? n : null; };
+    const positiveUsd = (p) => { const n = priceUsdOf(p); return n != null && n > 0 ? n : null; };
     const tools = Array.isArray(sellerRow.tools) ? sellerRow.tools.map((t) => {
-      const v = withDispatchFields({ ...t, seller: detail.origin, origin: detail.origin, routable: detail.routable, networks: Array.isArray(t.networks) && t.networks.length ? t.networks : detail.networks, priceUsd: priceUsdOf(t.price), urlTemplate: /[{}]/.test(String(t.route || "")), payToByNetwork: detail.payToByNetwork, evmDomainByNetwork: detail.evmDomainByNetwork }, { rowLevel: true });
+      const v = withDispatchFields({ ...t, seller: detail.origin, origin: detail.origin, routable: detail.routable, networks: Array.isArray(t.networks) && t.networks.length ? t.networks : detail.networks, priceUsd: positiveUsd(t.price), urlTemplate: /[{}]/.test(String(t.route || "")), payToByNetwork: detail.payToByNetwork, evmDomainByNetwork: detail.evmDomainByNetwork }, { rowLevel: true });
       return { ...t, routerDispatchEligible: v.routerDispatchEligible, routerDispatchReason: v.routerDispatchReason, routerDispatchByChain: v.routerDispatchByChain };
     }) : sellerRow.tools;
     return res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json({ ...sellerRow, tools, legend: dispatchLegend({ spendChains: spendChainsConfigured() }) });

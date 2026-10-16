@@ -168,6 +168,9 @@ jobs:
           ALGORAND_BURNER_MNEMONIC: ${{ secrets.ALGORAND_BURNER_MNEMONIC }}
           POW_SECRET: ${{ secrets.POW_SECRET }}
           UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+          # Celo legs draw prepaid facilitator credits: the 13:17 run and hand
+          # dispatches buy on Celo, the other scheduled runs skip it.
+          CANARY_CELO: ${{ github.event_name != 'schedule' || github.event.schedule == '17 13 * * *' }}
         run: |
           if [ -z "$BURNER_KEY" ]; then
             echo "No BURNER_KEY secret — canary cannot run (configure a funded test wallet)."

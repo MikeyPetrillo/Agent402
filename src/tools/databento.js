@@ -28,7 +28,9 @@
 // three-venue figure never reads as a total. DATABENTO_SUMMARY=off pins the
 // fallback.
 import { assertPublicUrl } from "./fetch-guard.js";
-import { upstreamFetch } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline } from "../upstream-deadline.js";
+import { getSharedRedisClient } from "../shared-limit.js";
+import { leased } from "../state-db.js";
 
 const HOST = "https://hist.databento.com/v0";
 export const PRIMARY_DATASET = "EQUS.SUMMARY";
@@ -74,9 +76,19 @@ function auth() {
 // and a read that outlives its cap or a dropped connection is a 503 naming
 // the upstream and the step; a >= 400 cancels settlement, so nobody is
 // charged for it.
-export const DATABENTO_TIMEOUTS_MS = { range: 6_000, cost: 5_000, data: 12_000 };
-function readUnderDeadline(url, init, timeoutMs, step) {
-  return upstreamFetch(url, init, { label: "Market data upstream", step, timeoutMs, tag: "[databento]" });
+// DATABENTO_{RANGE,COST,DATA}_TIMEOUT_MS override a cap (tests drive each read
+// to its deadline without waiting the production cap out).
+const capMs = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? n : dflt; };
+export const DATABENTO_TIMEOUTS_MS = { range: capMs("DATABENTO_RANGE_TIMEOUT_MS", 6_000), cost: capMs("DATABENTO_COST_TIMEOUT_MS", 5_000), data: capMs("DATABENTO_DATA_TIMEOUT_MS", 12_000) };
+// The ctx object is kept so the body read runs under the same deadline:
+// upstreamFetch bounds headers AND body with one signal, and a body that
+// stalls past it rejects with a bare TimeoutError ("The operation was aborted
+// due to timeout"), which carries no status and used to surface as a 500.
+// bodyUnderDeadline maps that abort to the same 503 as a header timeout.
+async function readUnderDeadline(url, init, timeoutMs, step) {
+  const ctx = { label: "Market data upstream", step, timeoutMs, tag: "[databento]" };
+  const res = await upstreamFetch(url, init, ctx);
+  return { res, body: (read) => bodyUnderDeadline(read(res), ctx) };
 }
 
 // The SSRF check resolves the host through DNS. HOST is a constant (never a
@@ -90,15 +102,75 @@ async function checkHost(url) {
   hostCheckedAt = Date.now();
 }
 
+// ---------------------------------------------------------- shared copy
+//
+// Every replica used to hold its own bars cache, session boundary and quote
+// price audit, so each warmed its own copy and every local miss paid the
+// upstream, which on a slow evening answers a one-symbol read in seconds.
+// With REDIS_URL set, a local miss reads the shared copy first and an
+// upstream read writes it back, so a read made by one replica serves the
+// others. What is shared is exactly what a fresh read of the same key
+// returns (end-of-day bars keyed on dataset, symbol, schema and a range whose
+// end is the dataset's own end; the boundary with the time it was confirmed;
+// the audit of one dataset and session), so the answer does not change by
+// replica. Every command is bounded by SHARED_DEADLINE_MS; one that does not
+// answer, a payload that does not parse, or no Redis at all is a miss and
+// the local path runs as before. Nothing is ever served from the shared copy
+// that a local read would refuse.
+const SHARED_PREFIX = () => String(process.env.DATABENTO_SHARED_PREFIX || "databento:v1:");
+export const SHARED_DEADLINE_MS = capMs("DATABENTO_SHARED_DEADLINE_MS", 250);
+/** Bars and audits outlive a session by a margin; the key itself changes
+ *  when a new session lands, so the TTL only reclaims space. */
+export const SHARED_BARS_TTL_S = 36 * 3600;
+const SHARED_RANGE_TTL_S = 2 * 3600;
+const sharedCounts = { hits: 0, misses: 0, writes: 0, errors: 0 };
+const sharedPending = new Set();
+function within(p) {
+  let timer;
+  return Promise.race([
+    p,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer in ${SHARED_DEADLINE_MS} ms`)), SHARED_DEADLINE_MS); timer.unref?.(); }),
+  ]).finally(() => clearTimeout(timer));
+}
+async function sharedClient() {
+  try { return await within(getSharedRedisClient()); } catch { return null; }
+}
+async function sharedGet(key) {
+  const c = await sharedClient();
+  if (!c) return null;
+  try {
+    const raw = await within(c.get(SHARED_PREFIX() + key));
+    if (raw == null) { sharedCounts.misses++; return null; }
+    return JSON.parse(raw);
+  } catch { sharedCounts.errors++; return null; }
+}
+/** Write-behind: never awaited on a request path. */
+function sharedSet(key, value, ttlS) {
+  const p = (async () => {
+    const c = await sharedClient();
+    if (!c) return;
+    try { await within(c.set(SHARED_PREFIX() + key, JSON.stringify(value), { EX: ttlS })); sharedCounts.writes++; }
+    catch { sharedCounts.errors++; }
+  })();
+  sharedPending.add(p);
+  p.finally(() => sharedPending.delete(p));
+  return p;
+}
+/** Test hook: resolves once every write-behind started so far has landed. */
+export async function __sharedWritesSettled() { await Promise.allSettled([...sharedPending]); }
+export function sharedCacheCounts() { return { ...sharedCounts }; }
+const validBars = (v) => v && typeof v.fetchedAt === "string" && Array.isArray(v.bars) && v.bars.length > 0
+  && v.bars.every((b) => b && typeof b.day === "string" && Number.isFinite(b.close) && Number.isFinite(b.high) && Number.isFinite(b.low) && Number.isFinite(b.open));
+
 async function post(path, params, timeoutMs = DATABENTO_TIMEOUTS_MS.data) {
   const url = `${HOST}/${path}`;
   await checkHost(url);
-  const res = await readUnderDeadline(url, {
+  const { res, body } = await readUnderDeadline(url, {
     method: "POST",
     headers: { authorization: auth(), "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(params),
   }, timeoutMs, path.replace(/^.*\./, "").replace(/_/g, " "));
-  const text = await res.text();
+  const text = await body((r) => r.text());
   if (!res.ok) {
     // Their 4xx bodies name the cause (unknown symbol, range past the data).
     // Relay the CLASS, never the raw body: it can carry query details.
@@ -114,9 +186,10 @@ async function post(path, params, timeoutMs = DATABENTO_TIMEOUTS_MS.data) {
 async function get(path, params) {
   const url = `${HOST}/${path}?${new URLSearchParams(params)}`;
   await checkHost(url);
-  const res = await readUnderDeadline(url, { headers: { authorization: auth() } }, DATABENTO_TIMEOUTS_MS.range, "dataset range");
+  const { res, body } = await readUnderDeadline(url, { headers: { authorization: auth() } }, DATABENTO_TIMEOUTS_MS.range, "dataset range");
   if (!res.ok) throw datasetFailure(bad(`Market data upstream returned ${res.status}.`, 502));
-  return res.json();
+  const text = await body((r) => r.text());
+  try { return JSON.parse(text); } catch { throw datasetFailure(bad("Market data upstream returned an unreadable range answer.", 502)); }
 }
 
 /** Last session the dataset actually holds. Asking for "today" 422s on a
@@ -149,6 +222,7 @@ function readRange() {
         try {
           const end = await readRangeOf(dataset);
           rangeState = { end, at: Date.now(), dataset };
+          sharedSet("range", rangeState, SHARED_RANGE_TTL_S);
           return end;
         } catch (e) {
           if (!e.datasetError || i === order.length - 1) throw e;
@@ -158,12 +232,29 @@ function readRange() {
   }
   return rangeInflight;
 }
+/** Adopt the boundary another replica confirmed, when it is younger than
+ *  `maxAgeMs` and newer than ours. Its confirmation time is kept, so the age
+ *  an answer reports is the real one. */
+async function adoptSharedRange(maxAgeMs) {
+  const s = await sharedGet("range");
+  const ok = s && typeof s.end === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s.end) && Number.isFinite(s.at)
+    && datasetOrder().includes(s.dataset) && Date.now() - s.at < maxAgeMs && s.at > rangeState.at;
+  if (!ok) return false;
+  sharedCounts.hits++;
+  rangeState = { end: s.end, at: s.at, dataset: s.dataset };
+  return true;
+}
 /** `demand: false` (the self-check) reads the range without counting as a
  *  buyer's demand, so it never keeps the warmer awake. */
 export async function availableEndInfo({ demand = true } = {}) {
   if (demand) lastDemandAt = Date.now();
-  const age = Date.now() - rangeState.at;
+  let age = Date.now() - rangeState.at;
   if (rangeState.end && age < rangeMaxAgeMs()) return { end: rangeState.end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: age, cached: true };
+  // Stale here: another replica's warmer may have confirmed it since.
+  if (await adoptSharedRange(rangeMaxAgeMs())) {
+    age = Date.now() - rangeState.at;
+    return { end: rangeState.end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: age, cached: true };
+  }
   const end = await readRange();
   return { end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: 0, cached: false };
 }
@@ -260,13 +351,36 @@ async function dailyBarsOf(dataset, { symbol, start, end, maxUsd }) {
     barsCache.delete(key); barsCache.set(key, hit);
     return { bars: hit.bars.map((b) => ({ ...b })), cached: true, fetchedAt: hit.fetchedAt, dataset };
   }
+  // One promise per key covers the shared read and the upstream read, so
+  // concurrent first reads still make at most one of each.
   let p = barsInflight.get(key);
   if (!p) {
-    p = readBars(params, key, maxUsd).finally(() => barsInflight.delete(key));
+    p = loadBars(params, key, maxUsd).finally(() => barsInflight.delete(key));
     barsInflight.set(key, p);
   }
   const r = await p;
-  return { bars: r.bars.map((b) => ({ ...b })), cached: false, fetchedAt: r.fetchedAt, dataset };
+  return { bars: r.bars.map((b) => ({ ...b })), cached: r.shared === true, fetchedAt: r.fetchedAt, dataset };
+}
+
+function putLocal(key, entry) {
+  barsCache.set(key, entry);
+  while (barsCache.size > barsCacheMax) barsCache.delete(barsCache.keys().next().value);
+}
+/** The shared copy of `key` into the local cache, or null. */
+async function adoptSharedBars(key) {
+  const v = await sharedGet(`bars:${key}`);
+  if (!validBars(v)) return null;
+  sharedCounts.hits++;
+  const entry = { bars: v.bars.map((b) => Object.freeze({ ...b })), fetchedAt: v.fetchedAt };
+  putLocal(key, entry);
+  return entry;
+}
+async function loadBars(params, key, maxUsd) {
+  const shared = await adoptSharedBars(key);
+  if (shared) return { ...shared, shared: true };
+  const entry = await readBars(params, key, maxUsd);
+  sharedSet(`bars:${key}`, entry, SHARED_BARS_TTL_S);
+  return entry;
 }
 
 /** Whether a read of `params` is priced on the request path: always, except
@@ -281,9 +395,14 @@ async function readBars(params, key, maxUsd) {
   // The price check, when it is on the request path, runs BEFORE the data
   // read: a query it refuses is never read (nor paid for upstream). Pricing
   // that is unavailable does not fail the call (assertAffordable).
+  // A quote-shaped read whose session this process has not seen audited
+  // asks the shared copy first: the replica that warmed may have audited it.
+  if (readPricesInline(params, maxUsd) && !quotePriceInline && isQuoteShape(params)) await adoptSharedAudit(params.dataset, params.end);
   if (readPricesInline(params, maxUsd)) await assertAffordable(params, maxUsd);
   const text = await post("timeseries.get_range", { ...params, encoding: "json" });
-  const rows = text.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  let rows;
+  try { rows = text.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)); }
+  catch { throw datasetFailure(bad("Market data upstream returned an unreadable answer.", 502)); }
   if (!rows.length) throw datasetFailure(bad("No market data for that symbol in that range. US equities only."));
   // A consolidated dataset's volume is the market total, so it is also
   // returned as `volume`; a venue-partial one carries volume: null, never
@@ -291,8 +410,7 @@ async function readBars(params, key, maxUsd) {
   const total = COVERAGE[params.dataset]?.consolidated === true;
   const bars = consolidate(rows).map((b) => ({ ...b, volume: total ? b.venueVolume : null }));
   const entry = { bars: bars.map((b) => Object.freeze({ ...b })), fetchedAt: new Date().toISOString() };
-  barsCache.set(key, entry);
-  while (barsCache.size > barsCacheMax) barsCache.delete(barsCache.keys().next().value);
+  putLocal(key, entry);
   return entry;
 }
 
@@ -315,7 +433,7 @@ async function readBars(params, key, maxUsd) {
 // falls back to reading inline, exactly as before the warmer existed. The
 // symbols come only from successful paid quote requests (stock-quote is
 // wallet-only; the free tier never reaches this kit).
-const warm = { timer: null, started: false, lastTickAt: 0, lastWarmedEnd: null, day: null, calls: 0, ceilingHitDay: null, prefetched: 0 };
+const warm = { timer: null, started: false, lastTickAt: 0, lastWarmedEnd: null, day: null, calls: 0, ceilingHitDay: null, prefetched: 0, adopted: 0, leaseSkips: 0 };
 let lastDemandAt = 0;
 const popularity = new Map(); // symbol -> { hits, lastAt }
 const POPULARITY_MAX = 500;
@@ -357,9 +475,34 @@ export function warmSymbols(n = warmTopN()) {
     .sort((a, b) => b[1].hits - a[1].hits || b[1].lastAt - a[1].lastAt).slice(0, n).map(([s]) => s);
 }
 
+// THE AUDIT ACROSS REPLICAS. An audit is a fact about one dataset and one
+// session, not about the process that ran it, so it is shared on the same
+// match the local check uses (dataset and session end): the replica that
+// runs the warmer's tick writes it, and any other replica adopts it on its
+// own tick or on the first quote read of that session, so it does not price
+// every quote inline while another replica holds the warmer. An audit over
+// the bound is shared too, and adopting it latches the inline check here as
+// it does on the replica that ran it. Without Redis each replica still runs
+// its own tick (the lease only keeps two ticks from overlapping), so each
+// audits for itself as before.
+const auditKey = (dataset, end) => `audit:${dataset}:${end}`;
+async function adoptSharedAudit(dataset, end) {
+  if (quotePriceAudit.ok !== null && quotePriceAudit.end === end && quotePriceAudit.dataset === dataset) return true;
+  const v = await sharedGet(auditKey(dataset, end));
+  if (!v || typeof v.ok !== "boolean") return false;
+  sharedCounts.hits++;
+  quotePriceAudit = { end, at: Number(v.at) || Date.now(), ok: v.ok, dataset };
+  if (!v.ok && !quotePriceInline) {
+    quotePriceInline = true;
+    console.warn("[databento] a shared audit priced the quote-shaped query over its bound; the price check is back on every quote read");
+  }
+  return true;
+}
+
 async function auditQuotePrice(end) {
   const dataset = datasetOrder()[0];
   if (quotePriceAudit.end === end && quotePriceAudit.dataset === dataset) return;
+  if (await adoptSharedAudit(dataset, end)) return;
   if (!spendBackground()) return;
   quotePriceAudit = { end, at: Date.now(), ok: null, dataset };
   try {
@@ -367,6 +510,7 @@ async function auditQuotePrice(end) {
     // No number: the session is not audited, and the next tick tries again.
     if (!Number.isFinite(usd)) { quotePriceAudit.end = null; return; }
     quotePriceAudit.ok = usd <= DEFAULT_MAX_QUERY_USD;
+    sharedSet(auditKey(dataset, end), { ok: quotePriceAudit.ok, at: quotePriceAudit.at }, SHARED_BARS_TTL_S);
     if (!quotePriceAudit.ok && !quotePriceInline) {
       quotePriceInline = true;
       console.warn("[databento] the quote-shaped query priced over its bound; the price check is back on every quote read");
@@ -382,16 +526,23 @@ export async function warmTick() {
   // The boot read (no value yet) runs once without demand; after that, no
   // demand means no call.
   if (idle && (rangeState.end || warm.primed)) return { skipped: "idle" };
-  if (!spendBackground()) return { skipped: "ceiling" };
+  // A boundary another replica confirmed inside this refresh interval is the
+  // one this tick would read: adopt it and make no upstream call for it.
   let end;
-  try { end = await readRange(); } catch (e) { return { skipped: "range-failed", error: String(e?.message || e).slice(0, 120) }; }
+  if (await adoptSharedRange(RANGE_REFRESH_MS * 0.9)) end = rangeState.end;
+  else {
+    if (!spendBackground()) return { skipped: "ceiling" };
+    try { end = await readRange(); } catch (e) { return { skipped: "range-failed", error: String(e?.message || e).slice(0, 120) }; }
+  }
   // Primed only once the boot read landed, so a failed boot read is retried
   // (recordedTick) even with no demand yet.
   warm.primed = true;
   // The quote shape is priced once per session, including the boot read, so
   // no quote goes unpriced past the first tick after a deploy.
   await auditQuotePrice(end);
-  if (idle || end === warm.lastWarmedEnd) return { end };
+  // The tick ends (and the lease is released) only once its shared writes
+  // landed or timed out, so the next holder reads what this one wrote.
+  if (idle || end === warm.lastWarmedEnd) { await __sharedWritesSettled(); return { end }; }
   warm.lastWarmedEnd = end;
   let read = 0;
   const dataset = datasetOrder()[0];
@@ -399,11 +550,14 @@ export async function warmTick() {
     const { start } = quoteWindow(end);
     const params = { dataset, symbols: symbol, schema: "ohlcv-1d", start, end };
     if (barsCache.has(barsKey(params))) continue;
+    // Read by another replica: copy it here, no upstream call.
+    if (await adoptSharedBars(barsKey(params))) { warm.adopted++; continue; }
     // A pre-read priced inline is two upstream calls; both count.
     if (!spendBackground()) break;
     if (readPricesInline(params) && !spendBackground()) break;
     try { await dailyBarsRead({ symbol, start, end }); read++; warm.prefetched++; } catch { /* a failed pre-read is a cold read later */ }
   }
+  await __sharedWritesSettled();
   return { end, prefetched: read };
 }
 
@@ -413,11 +567,25 @@ export async function warmTick() {
 // interval: a boot whose event loop is busy for a few seconds (the revenue
 // snapshot) can time out the first read, and waiting a full interval left the
 // boundary on the request path for 15 minutes.
+//
+// ONE REPLICA AT A TIME. The tick runs under a lease (src/state-db.js), so two
+// replicas never run it at once; the one that holds it reads upstream and its
+// reads land in the shared copy. A replica that finds the lease held retries
+// shortly (the holder's tick is short), and its own tick then adopts the
+// boundary, the audit and the pre-read bars from the shared copy with no
+// upstream call, so it serves warm and audited too. The lease only orders
+// ticks: without a state database it is the tick itself, and without Redis
+// each replica's tick reads for itself, as before. Fail-open like the other
+// read-only loops: its only effect is cache reads under the daily ceiling.
 const WARM_RETRY_MS = envMs("DATABENTO_WARM_RETRY_MS", 30_000);
+const leasedWarmTick = leased("databento-quote-warmer", { ttlMs: 10 * 60_000, failOpen: true }, () => warmTick());
 async function recordedTick() {
-  try { warm.lastResult = await warmTick(); }
+  try { warm.lastResult = await leasedWarmTick(); }
   catch (e) { warm.lastResult = { skipped: "error", error: String(e?.message || e).slice(0, 120) }; }
-  const failed = warm.lastResult?.skipped === "range-failed" || warm.lastResult?.skipped === "error";
+  if (warm.lastResult?.skipped === "leased") warm.leaseSkips++;
+  // "busy" is this process's own tick still running: no retry for that.
+  const failed = warm.lastResult?.skipped === "range-failed" || warm.lastResult?.skipped === "error"
+    || (warm.lastResult?.skipped === "leased" && warm.lastResult?.reason !== "busy" && warm.lastResult?.reason !== "shutdown");
   if (warm.retryTimer) { clearTimeout(warm.retryTimer); warm.retryTimer = null; }
   if (failed && warm.started) {
     warm.retryDelay = Math.min(RANGE_REFRESH_MS, warm.retryDelay ? warm.retryDelay * 2 : WARM_RETRY_MS);
@@ -447,7 +615,8 @@ export function quoteWarmerStatus() {
     lastTickAt: warm.lastTickAt ? new Date(warm.lastTickAt).toISOString() : null,
     range: rangeState.end ? { end: rangeState.end, dataset: rangeState.dataset, ageSec: Math.round((Date.now() - rangeState.at) / 1000) } : null,
     background: { day, calls: warm.day === day ? warm.calls : 0, dailyMax: backgroundDailyMax(), ceilingHit: warm.ceilingHitDay === day },
-    trackedSymbols: popularity.size, topN: warmTopN(), prefetched: warm.prefetched,
+    trackedSymbols: popularity.size, topN: warmTopN(), prefetched: warm.prefetched, adoptedFromShared: warm.adopted, leaseSkips: warm.leaseSkips,
+    shared: sharedCacheCounts(),
     quotePriceCheck: quotePriceInline ? "inline" : "per-session",
     quotePriceAuditOk: quotePriceAudit.ok,
     lastTick: warm.lastResult ? { skipped: warm.lastResult.skipped || null, error: warm.lastResult.error || null, prefetched: warm.lastResult.prefetched ?? null } : null,
@@ -460,7 +629,8 @@ export function __resetDatabentoState() {
   rangeState = { end: null, at: 0, dataset: null }; rangeInflight = null; hostCheckedAt = 0;
   barsCache.clear(); barsInflight.clear(); popularity.clear(); lastDemandAt = 0;
   quotePriceInline = false; quotePriceAudit = { end: null, at: 0, ok: null, dataset: null };
-  Object.assign(warm, { lastTickAt: 0, lastWarmedEnd: null, day: null, calls: 0, ceilingHitDay: null, prefetched: 0, primed: false });
+  Object.assign(warm, { lastTickAt: 0, lastWarmedEnd: null, day: null, calls: 0, ceilingHitDay: null, prefetched: 0, adopted: 0, leaseSkips: 0, primed: false });
+  for (const k of Object.keys(sharedCounts)) sharedCounts[k] = 0;
 }
 
 /** DBEQ.BASIC returns ONE BAR PER VENUE (EQUS.SUMMARY returns one bar per

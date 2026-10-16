@@ -59,7 +59,9 @@
 //
 // Usage:
 //   node scripts/catalog-buy.js [--tier daily|weekly|cheap|all] [--only <slug substring>]
-//                               [--dry] [--out report.json]
+//                               [--dry] [--out report.json] [--outputs outputs.json]
+//   --outputs writes every graded paid answer, redacted and bounded
+//   (scripts/catalog-buy-capture.js), for scripts/catalog-buy-examples.js.
 // Env: TARGET_URL, BURNER_KEY, POW_SECRET, CATALOG_BUY_MAX_USD, CATALOG_BUY_FLOOR_USD,
 //      CATALOG_BUY_SKIP (comma slugs), CATALOG_BUY_CONCURRENCY (default 1),
 //      CATALOG_BUY_PACE_MS (default 1000), CATALOG_BUY_TIMEOUT_MS, CATALOG_BUY_SLOW_TIMEOUT_MS.
@@ -71,6 +73,7 @@ import { createHmac } from "node:crypto";
 import { appendFileSync, writeFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { missingDocumentedKeys, emptyPromisedArrays } from "./sweep-shape.js";
+import { captureRecord, CAPTURE_MAX_BYTES } from "./catalog-buy-capture.js";
 
 export const BASE_CAIP2 = "eip155:8453";
 export const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -167,7 +170,7 @@ export function catalogFromSurfaces(pricing, spec) {
       const types = Object.keys(op.responses?.["200"]?.content || {});
       const ceiling = quoteCeilingUsd(ep, op);
       rows.push({
-        slug, path, method, usd, op, example: exampleOf(method, op),
+        slug, path, method, usd, op, example: exampleOf(method, op), modelBacked: ep?.modelBacked === true,
         binary: types.length > 0 && !types.includes("application/json"),
         // quoted: the list price is a floor and maxUsd the documented ceiling;
         // fixed: both are the list price.
@@ -348,6 +351,7 @@ export async function runCatalogBuy({
   target, payer, fetchImpl = fetch, readBalanceUsd = null, powSecret = "", tier = "daily", only = "", skip = [],
   capUsd = DEFAULT_CAP_USD, floorUsd = DEFAULT_FLOOR_USD, concurrency = DEFAULT_CONCURRENCY, paceMs = DEFAULT_PACE_MS, timeoutMs = 90_000,
   slowTimeoutMs = 330_000, retryBackoffMs = 5_000, now = new Date(), dry = false, log = console,
+  capture = true, captureMaxBytes = CAPTURE_MAX_BYTES,
 } = {}) {
   const base = String(target).replace(/\/+$/, "");
   const getJson = async (p) => { const r = await fetchImpl(`${base}${p}`, { signal: AbortSignal.timeout(30_000) }); if (!r.ok) throw Object.assign(new Error(`GET ${p} HTTP ${r.status}`), { exitCode: 2 }); return r.json(); };
@@ -362,7 +366,7 @@ export async function runCatalogBuy({
   const unbought = (r, grade) => ({ slug: r.slug, path: r.path, usd: r.usd, status: null, grade, pass: false, ms: null, attempts: 0 });
   for (const r of plan.deferred) results.push(unbought(r, "cap"));
   for (const r of plan.noExample) results.push(unbought(r, "no-example"));
-  const summary = { plan, results, spentUsd: 0, balanceUsd: null, unfunded: false, dry, payer: payer?.address || null };
+  const summary = { plan, results, captures: [], spentUsd: 0, balanceUsd: null, unfunded: false, dry, payer: payer?.address || null };
   if (dry) { summary.exitCode = exitCodeFor(summary); return summary; }
 
   if (readBalanceUsd) {
@@ -433,7 +437,7 @@ export async function runCatalogBuy({
       const paid = await fetchImpl(url, { ...init, headers: { ...stamp(init.headers), ...payHeaders }, signal: AbortSignal.timeout(timeout) });
       const b = await readBody(paid);
       if (paid.status !== 200) reserved -= quoted; // a non-200 cancels settlement: nothing was charged
-      return { status: paid.status, ...b, quotedUsd: quoted / 1e6, tx: txFromReceiptHeader(paid.headers.get("payment-response") || paid.headers.get("x-payment-response")) };
+      return { status: paid.status, ...b, paid: true, quotedUsd: quoted / 1e6, tx: txFromReceiptHeader(paid.headers.get("payment-response") || paid.headers.get("x-payment-response")) };
     } catch (e) {
       reserved -= quoted;
       throw e;
@@ -457,6 +461,10 @@ export async function runCatalogBuy({
     }
     const { pass, grade } = gradeAnswer(row, r);
     const out = { slug: row.slug, path: row.path, usd: row.usd, quotedUsd: r.quotedUsd ?? null, status: r.status ?? null, grade, pass, ms: Date.now() - t0, attempts, tx: r.tx || null };
+    // The paid answer itself goes to the separate outputs file (redacted,
+    // bounded, guarded: scripts/catalog-buy-capture.js), never into the
+    // graded report, which keeps its receipt fields for the run's own audit.
+    if (capture) summary.captures.push(captureRecord(row, out, { status: r.status, body: r.body, paid: r.paid === true }, { payer: payer?.address || null, maxBytes: captureMaxBytes }));
     log.log(`${pass ? "OK  " : "FAIL"} ${row.slug.padEnd(34)} ${usd(row.usd)}  ${String(out.status ?? "-").padStart(3)}  ${grade}  ${out.ms}ms`);
     return out;
   }
@@ -491,6 +499,7 @@ async function main() {
   const tier = arg("--tier", process.env.CATALOG_BUY_TIER || "daily");
   const only = arg("--only", process.env.CATALOG_BUY_ONLY || "");
   const out = arg("--out");
+  const outputsOut = arg("--outputs");
   const target = process.env.TARGET_URL || "https://agent402.tools";
   const pk = (process.env.BURNER_KEY || "").trim();
   if (!pk && !dry) { console.error("catalog-buy: BURNER_KEY is not set (use --dry to plan without buying)"); process.exit(2); }
@@ -526,6 +535,14 @@ async function main() {
   if (out) {
     writeFileSync(out, JSON.stringify({ target, tier: summary.plan.tier, sliceIndex: summary.plan.sliceIndex, dry, startedAt: new Date().toISOString(), plannedUsd: summary.plan.plannedUsd, chargedUsd: summary.spentUsd, funded: summary.balanceUsd == null ? null : !summary.unfunded, unfunded: summary.unfunded, results: summary.results }, null, 2));
     console.log(`wrote ${out}`);
+  }
+  if (outputsOut) {
+    // The paid answers, for scripts/catalog-buy-examples.js. No payer, no
+    // receipts, no tx: each record is the grade, the latency, the documented
+    // example's shape and the redacted, bounded body (or why it was dropped).
+    const kept = summary.captures.filter((c) => c.captured).length;
+    writeFileSync(outputsOut, JSON.stringify({ version: 1, target, tier: summary.plan.tier, capturedAt: new Date().toISOString(), maxBytesPerTool: CAPTURE_MAX_BYTES, captures: summary.captures }, null, 2));
+    console.log(`wrote ${outputsOut} (${summary.captures.length} graded, ${kept} answers kept)`);
   }
   if (process.env.GITHUB_STEP_SUMMARY) { try { appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdownSummary(summary)}\n`); } catch { /* local run */ } }
   if (process.env.GITHUB_OUTPUT) {

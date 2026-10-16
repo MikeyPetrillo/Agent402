@@ -20,7 +20,8 @@ import { assertPublicUrl } from "./fetch-guard.js";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 const CRYPTO_READ_MS = 10_000;
 const CRYPTO_RETRY_READ_MS = 12_000;
-import { cgTokenRefusal, cgRefusalMessage, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
+import { cgTake, cgRefusalMessage, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
+import { createCgCache } from "./coingecko-cache.js";
 import { redactSecrets } from "./redact.js";
 
 function bad(message, statusCode = 400) {
@@ -93,28 +94,16 @@ function normalizeCurrency(raw, dflt = "usd") {
   return s;
 }
 
-// Short in-process cache for CoinGecko reads, keyed on the exact URL. An
-// identical request inside the window gets the same answer the upstream gave
-// moments ago and spends no key budget. Text is stored, so every caller
-// parses its own copy.
+// Short cache for CoinGecko reads, keyed on the exact URL. An identical
+// request inside the window gets the same answer the upstream gave moments ago
+// and spends no key budget, on this replica or another
+// (src/tools/coingecko-cache.js). Text is stored, so every caller parses its
+// own copy. A body over 256 KB is served but not kept, so the cache stays small.
 const CG_CACHE_TTL_MS = 30_000;
 const CG_CACHE_MAX = 200;
-const cgCache = new Map();
+const cgCache = createCgCache("crypto", { max: CG_CACHE_MAX, maxBody: 256 * 1024 });
 /** Test seam: drop every cached CoinGecko answer. */
 export function clearCryptoCache() { cgCache.clear(); }
-function cgCacheGet(key, now = Date.now()) {
-  const hit = cgCache.get(key);
-  if (!hit) return null;
-  if (hit.expiresAt <= now) { cgCache.delete(key); return null; }
-  return hit.text;
-}
-// A body larger than this is served but not kept, so the cache stays small.
-const CG_CACHE_MAX_BODY = 256 * 1024;
-function cgCachePut(key, text, now = Date.now()) {
-  if (text.length > CG_CACHE_MAX_BODY) return;
-  if (cgCache.size >= CG_CACHE_MAX) { const oldest = cgCache.keys().next().value; if (oldest !== undefined) cgCache.delete(oldest); }
-  cgCache.set(key, { text, expiresAt: now + CG_CACHE_TTL_MS });
-}
 
 // CoinGecko error codes on a 401/403. Plan/range codes are about the request
 // (an endpoint or a date range the key does not serve); everything else on a
@@ -135,17 +124,20 @@ async function jsonGet(url, host = "CoinGecko") {
   const cgKey = process.env.COINGECKO_API_KEY;
   const isCg = isCoinGeckoHost(safeUrl.hostname);
   const sendCgKey = Boolean(cgKey) && isCg;
-  const cacheKey = isCg ? safeUrl.toString() : null;
-  if (cacheKey) {
-    const hit = cgCacheGet(cacheKey);
-    if (hit !== null) return JSON.parse(hit);
-  }
+  if (!isCg) return (await jsonLoad(safeUrl, host, { isCg, sendCgKey, cgKey })).data;
+  const { entry } = await cgCache.through(safeUrl.toString(), CG_CACHE_TTL_MS, () => jsonLoad(safeUrl, host, { isCg, sendCgKey, cgKey }));
+  return JSON.parse(entry.text);
+}
+
+// One upstream read for jsonGet: the body of a 200 that parses as JSON, as
+// { text, data }, or a thrown refusal (never cached).
+async function jsonLoad(safeUrl, host, { isCg, sendCgKey, cgKey }) {
   // The key's budget is ONE bucket shared with crypto-markets-kit
   // (coingecko-rate.js). Refuse before the upstream call when it is spent:
   // 503 is never charged. Every request that goes out takes a token,
   // retries included.
   if (isCg) {
-    const why = cgTokenRefusal(Date.now());
+    const why = await cgTake(Date.now());
     if (why) throw bad(cgRefusalMessage(why), 503);
   }
   // DEADLINES (src/upstream-deadline.js): each attempt runs under its own cap
@@ -161,14 +153,14 @@ async function jsonGet(url, host = "CoinGecko") {
         ...(sendCgKey ? { "x-cg-demo-api-key": cgKey.trim() } : {}),
       },
     }, { label: host, step: "query", timeoutMs: timeout, tag: "[crypto]" });
-  const mayRetry = () => !isCg || cgTokenRefusal(Date.now()) === null;
+  const mayRetry = async () => !isCg || (await cgTake(Date.now())) === null;
   let res;
   try {
     res = await attempt(CRYPTO_READ_MS);
   } catch (e) {
     // Single retry on a deadline or transport failure (same pattern as
     // finance-kit), only while the budget can hold another read.
-    if (!mayRetry() || budgetSpent(currentBudget(), 2_000)) throw e;
+    if (!(await mayRetry()) || budgetSpent(currentBudget(), 2_000)) throw e;
     res = await attempt(CRYPTO_RETRY_READ_MS);
   }
   // Retry once on 429/5xx after a short backoff. CoinGecko burst-limits per
@@ -178,7 +170,7 @@ async function jsonGet(url, host = "CoinGecko") {
   // overall time budget. (finance-kit/gov-kit carry the same 5xx retry.)
   if ((res.status === 429 || res.status >= 500) && !budgetSpent(currentBudget(), 4_500)) {
     await new Promise((r) => setTimeout(r, 2500));
-    if (mayRetry()) {
+    if (await mayRetry()) {
       try {
         const retryRes = await attempt(CRYPTO_RETRY_READ_MS);
         if (retryRes.ok || retryRes.status !== res.status) res = retryRes;
@@ -199,11 +191,10 @@ async function jsonGet(url, host = "CoinGecko") {
     // demo key rides this request and there is no 401/403 shield above.
     throw bad(`${host} HTTP ${s}: ${redactSecrets(text).slice(0, 200)}`, 422);
   }
-  let parsed;
-  try { parsed = JSON.parse(text); }
+  let data;
+  try { data = JSON.parse(text); }
   catch { throw bad(`${host} returned non-JSON response`, 502); }
-  if (cacheKey) cgCachePut(cacheKey, text);
-  return parsed;
+  return { text, data };
 }
 
 const CG = "https://api.coingecko.com/api/v3";

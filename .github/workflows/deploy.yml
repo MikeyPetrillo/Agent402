@@ -1337,6 +1337,8 @@ jobs:
           t node scripts/test-tool-judge.js
           # An already-on-chain settle recovers only this request's own transfer; replays across two servers on one Redis never answer twice.
           t node scripts/test-settle-onchain-proof.js
+          # The CoinGecko minute and day caps are one budget across two servers on one Redis; an answer cached on A serves B with no upstream call; a store that does not answer, or no Redis, leaves each server its RATE_LIMIT_REPLICAS share.
+          t node scripts/test-coingecko-shared.js
 
       - name: "State database (REAL postgres: documents/records/log lines/leases; every migrated store imports its file once and reads the row; loops skip under another holder's lease; idempotency answers and claims shared over REAL redis)"
         env:
@@ -1749,6 +1751,8 @@ jobs:
           t node scripts/test-leaderboard-redaction.js
           t node scripts/test-leaderboard-price-match.js
           t node scripts/test-price-known.js
+          # Every reader of a crawled row's price reads labels, numbers and objects through src/price-usd.js (offline, real row shapes)
+          t node scripts/test-price-label-readers.js
           # /api/revenue error strings never carry the Alchemy key, and the transaction surfaces keep their scraping bound (offline + source pins)
           t node scripts/test-revenue-redaction.js
           # The public source link is read from one constant, so moving the repo off a personal account stays a one-line change (offline)
@@ -2514,6 +2518,12 @@ jobs:
           REDIS_URL: redis://127.0.0.1:6379
         run: node scripts/test-redis-integration.js
 
+      - name: "Market data across replicas (REAL redis + postgres: two servers share bars, boundary and price audit with zero upstream calls on the second; the warmer runs under a lease; every stalled upstream read is a 503)"
+        env:
+          REDIS_URL: redis://127.0.0.1:6379
+          STATE_DATABASE_URL: postgres://decide@127.0.0.1:5432/decide_test?sslmode=disable
+        run: node scripts/test-databento-shared-cache.js
+
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
       # runs in its own process, in the same order; `t` groups its log and names it
@@ -2914,6 +2924,10 @@ jobs:
           t node scripts/test-canary-underfunded.js
           # Catalog buy (every tool bought at list price: grade, cap, rotation slice, funding preflight, exit codes - stub server + fake payer, offline)
           t node scripts/test-catalog-buy.js
+          # Catalog buy answers into examples: trimming, redaction, host/address guards, the never-overwrite merge rule, the enhancement report (synthetic captures, offline)
+          t node scripts/test-catalog-buy-examples.js
+          # Captured examples render where buyers read them: /openapi.json and the tool page carry the example, its date and model label (FREE_MODE boot on a free port)
+          t node scripts/test-captured-examples-render.js
           # Payer identity (reads X-PAYMENT + legacy header; rejects unsigned/invalid — money-path regression lock — offline)
           t node scripts/test-payer.js
           # Payment rail scoping (A402-03 identity routes EVM-only; every other tool keeps all chains — offline)
