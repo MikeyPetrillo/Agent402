@@ -94,7 +94,10 @@ import { CHAIN_PAGES, marketSellers } from "./market-page.js";
 import { WELL_KNOWN_PATH, discoveryNote } from "./discovery-note.js";
 import { judgeFreeResponse } from "./tool-judge.js";
 import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, probeAttemptsFor, isQuoteResponse, joinSellerRoute } from "./x402-live-quote.js";
-import { evmDomainsOfAccepts, EVM_TOKEN_DOMAINS } from "./evm-usdc-domain.js";
+import { evmDomainsOfAccepts } from "./evm-usdc-domain.js";
+import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAmountToDollars } from "./price-usd.js";
+// Re-exported: the dataset snapshot, the server and the tests import it from here.
+export { priceToMicroUsd };
 import { queryTerms, isCjkTerm, splitTokens } from "./query-terms.js";
 import { summarize, fmtUsd, fmtPct } from "./economy.js";
 import { rankBy, canonicalHost, getLeaderboardSnapshot, getLeaderboardCircularWallets } from "./leaderboard.js";
@@ -1872,44 +1875,6 @@ function parsePrice(p) {
   return isFinite(n) ? n : 0;
 }
 
-/** USD → integer micro-dollars for exact compares (avoids float !== hazards).
- *  Exported for the dataset snapshot, which needs a price column that is NULL
- *  when the origin published something unparseable - never parsePrice's 0,
- *  which would publish "free" for "we could not read it". */
-export function priceToMicroUsd(p) {
-  if (p == null || p === "") return null;
-  if (typeof p === "number") return Number.isFinite(p) && p >= 0 ? Math.round(p * 1e6) : null;
-
-  // A seller may publish a price as an OBJECT. Read the shapes that actually
-  // appear in the crawl rather than dropping a price we were told: a bare
-  // {usd}, or Stripe-style minor units. Measured 2026-09-11: 21 routes carried
-  // {"amountMinor":50,"currency":"USD"} or {"usd":0.05} and every one of them
-  // published as null while the seller had stated the price plainly.
-  if (typeof p === "object") {
-    if (Number.isFinite(Number(p.usd))) return priceToMicroUsd(Number(p.usd));
-    if (Number.isFinite(Number(p.amountMinor)) && String(p.currency || "USD").toUpperCase() === "USD") {
-      return Math.round(Number(p.amountMinor) * 1e4); // cents -> micro-dollars
-    }
-    // `amount` beside payment context (decimals / asset / an MPP currency) is
-    // BASE UNITS, the same rule parseManifestPrice reads it by: the million-
-    // fold overquote arrives here too whenever a row stores its price object.
-    const amount = p.amount != null && atomicContext(p) ? atomicAmountToDollars(p, p.amount) : p.amount;
-    return priceToMicroUsd(p.display ?? p.price ?? amount ?? null);
-  }
-  if (typeof p !== "string") return null;
-
-  // Strip currency and separators, then require the remainder to be ONE number.
-  // The old rule deleted every non-digit and parsed whatever was left, so
-  // "$free (since 2026-09-02)" became 20260902 - a date welded into a price,
-  // and not a small error: five routes published at $20,260,902 while their
-  // seller was saying FREE. A string carrying several numbers is a sentence,
-  // not a price, and the honest answer is null.
-  const cleaned = p.replace(/[$,\s]|usdc?\b/gi, "");
-  if (!/^[0-9]*\.?[0-9]+$/.test(cleaned)) return null;
-  const n = parseFloat(cleaned);
-  if (!Number.isFinite(n) || n < 0) return null;
-  return Math.round(n * 1e6);
-}
 
 function microUsdToPrice(micro) {
   return micro / 1e6;
@@ -2453,119 +2418,6 @@ function acceptShaped(raw) {
       || typeof raw.payTo === "string" || typeof raw.maxAmountRequired === "string" || Array.isArray(raw.accepts));
 }
 
-/**
- * An AMOUNT beside PAYMENT CONTEXT is base units of a token, never dollars
- * (2026-09-22). Two live shapes still read atomic figures as dollars after the
- * 2026-09-15 fix, because that one recognised the accept shape at the ENTRY
- * level only:
- *   - a manifest price OBJECT, `price: { amount: "3000", asset: <Base USDC>,
- *     decimals: 6, display: "$0.003" }`, was listed at $3000 (the object path
- *     took `amount` as dollars and never read `decimals`, `asset` or `display`);
- *   - MPP's discovery shape in an OpenAPI operation, `x-payment-info: {
- *     amount: "5000", currency: <Tempo USDC.e>, method: "tempo", intent:
- *     "charge", offers: [...] }`, was listed at $5000 instead of $0.005.
- * Payment context is `decimals`, an `asset`, or a `currency` beside an MPP
- * `method`/`intent`. A bare `currency: "USDC"` beside an amount is NOT context:
- * catalogues publish `{ amount: "0.032", currency: "USDC" }` meaning dollars.
- * A fractional figure is never base units, so it keeps its dollar reading.
- * Decimals are the declared ones, else 6 for the stablecoins every rail here
- * settles in (USDC on any chain, Tempo USDC.e and PathUSD), else NOTHING: a
- * token we cannot size is a price we do not publish (the live-402 probe learns
- * it), because a wrong exponent is the same million-fold error by another road.
- */
-const SIX_DECIMAL_TICKER = /^(usdc|usd coin|usdc\.e|pathusd)$/i;
-// Each id as its chain publishes it, lowercased HERE rather than by hand: the
-// first cut typed the Solana mint out in lower case and got one letter wrong,
-// which reads as "we cannot size this token" and publishes no price at all.
-const SIX_DECIMAL_ASSETS = new Set([
-  ...EVM_TOKEN_DOMAINS.filter((d) => d.symbol === "USDC").map((d) => d.asset),
-  "0x20C000000000000000000000b9537d11c60E8b50", // Tempo USDC.e
-  "0x20c0000000000000000000000000000000000000", // Tempo PathUSD
-  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // Solana USDC mint
-].map((a) => a.toLowerCase()));
-/** Six, when this object names a token we RECOGNISE as dollar-pegged. Null
- *  otherwise, which is the whole gate: sizing an amount by decimals only turns
- *  base units into DOLLARS if the token is a dollar. */
-function dollarPeggedDecimalsOf(obj) {
-  for (const id of [obj?.asset, obj?.currency, obj?.asset_address, obj?.assetAddress, obj?.symbol, obj?.extra?.name]) {
-    if (typeof id !== "string" || !id.trim()) continue;
-    const v = id.trim();
-    if (SIX_DECIMAL_TICKER.test(v) || SIX_DECIMAL_ASSETS.has(v.toLowerCase())) return 6;
-  }
-  return null;
-}
-function declaredDecimalsOf(obj) {
-  const d = obj?.decimals;
-  if (typeof d === "number" && Number.isInteger(d) && d >= 0 && d <= 36) return d;
-  if (typeof d === "string" && /^\s*\d{1,2}\s*$/.test(d) && Number(d) <= 36) return Number(d);
-  return null;
-}
-/** Decimals to divide an amount by, or null to publish no price at all.
- *
- *  A DECLARED `decimals` used to be enough on its own, which made the seller's
- *  own field the whole rule for ANY asset: `{ amount: "5000", decimals: 18,
- *  asset: <some token> }` published 0.000000000000005 as a DOLLAR price of a
- *  token that is not a dollar, and the same field set to 2 would have published
- *  $50. Decimals say how to READ an amount, never what it is worth, so the
- *  token has to be one we recognise as dollar-pegged first; anything else is a
- *  price the live-402 probe learns rather than one we invent.
- *
- *  A declaration that CONTRADICTS the chain (USDC is six decimals on every rail
- *  we settle) is not a tie we get to break: publish nothing. */
-function tokenDecimalsOf(obj) {
-  const pegged = dollarPeggedDecimalsOf(obj);
-  if (pegged == null) return null;
-  const declared = declaredDecimalsOf(obj);
-  if (declared != null && declared !== pegged) return null;
-  return pegged;
-}
-/** An asset IDENTIFIER - an EVM address, a Solana mint, a CAIP-19 id - rather
- *  than a ticker. Payment context is the identifier: a ticker is a word a
- *  catalogue writes beside a dollar figure. */
-function looksLikeAssetIdentifier(v) {
-  if (typeof v !== "string") return false;
-  const id = v.trim();
-  if (/^0x[0-9a-fA-F]{40}$/.test(id) || /^0x[0-9a-fA-F]{64}$/.test(id)) return true;
-  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(id)) return true; // base58 mint
-  return id.includes(":") && /[/:][^\s:/]{6,}$/.test(id);   // caip-19 and friends
-}
-function atomicContext(obj) {
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
-  if (obj.decimals != null) return true;
-  // A TICKER IS NOT PAYMENT CONTEXT, in whichever field it is written. The rule
-  // was applied to `currency` and not to `asset`, so one declaration read three
-  // ways: `{ amount: 2, currency: "USDC" }` was $2, `{ amount: 2, symbol:
-  // "USDC" }` was $2, and `{ amount: 2, asset: "USDC" }` was $0.000002 - a
-  // millionfold under-quote on a seller's listing, arrived at from the same
-  // sentence. An asset field carrying a real identifier still states base
-  // units, which is what an x402 accept carries and what every case this
-  // machinery was built for looks like.
-  if (looksLikeAssetIdentifier(obj.asset)) return true;
-  return typeof obj.currency === "string" && !!obj.currency.trim()
-    && (typeof obj.method === "string" || typeof obj.intent === "string");
-}
-/** The dollar figure an amount in atomic context stands for: a number, the
- *  fractional figure itself when it cannot be base units, or null for a token
- *  whose decimals we cannot know. */
-function atomicAmountToDollars(obj, amount) {
-  const whole = typeof amount === "number" ? (Number.isInteger(amount) && amount >= 0)
-    : (typeof amount === "string" && /^\s*\d+\s*$/.test(amount));
-  if (!whole) {
-    const frac = typeof amount === "number" ? Number.isFinite(amount) && amount >= 0
-      : (typeof amount === "string" && /^\s*\d*\.\d+\s*$/.test(amount));
-    return frac ? amount : null;
-  }
-  const decimals = tokenDecimalsOf(obj);
-  if (decimals == null) return null;
-  const usd = Number(String(amount).trim()) / 10 ** decimals;
-  // Only a figure that writes out as a plain decimal. JS renders anything from
-  // 1e21 up (and below 1e-6) in exponent notation, and every price reader
-  // downstream takes a STRING: "$1e+21" parses to null in our own reader and to
-  // some unrelated number in any reader that strips punctuation. A price we
-  // cannot write down is a price we do not publish.
-  if (!Number.isFinite(usd) || /e/i.test(String(usd))) return null;
-  return usd;
-}
 /** An explicit DOLLAR label (`display`, `amountLabel`) the seller wrote for
  *  humans: preferred over any figure we would have to convert. Taken only when
  *  it reads as one dollar amount ("$0.003", "0.003 USDC"), never a sentence. */
@@ -2913,7 +2765,7 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
     // yields NaN and silently skips the stamp (caught while verifying against
     // the reporter's own live manifest).
     const micro = priceToMicroUsd(t.price);
-    if (micro != null && micro > 0 && !(Number(t.originDeclaredPrice) > 0)) t.originDeclaredPrice = microUsdToPrice(micro);
+    if (micro != null && micro > 0 && !isPricedAboveZero(t.originDeclaredPrice)) t.originDeclaredPrice = microUsdToPrice(micro);
   }
   // Drop a row whose METHOD we guessed when another row declares a method for
   // the same route. A bare `resources` string ("https://origin/x402/thing")
@@ -3891,10 +3743,10 @@ export function carryForwardLearnedQuotes(tools, prev) {
       // quote window - after which the row is a probe candidate anyway and the
       // live route decides again. Exact verb only: a retired GET says nothing
       // about a POST on the same path.
-      if (exact && !(Number(t.originDeclaredPrice) > 0) && Number(hit.quoteRetiredAt) > 0 && Date.now() - Number(hit.quoteRetiredAt) < QUOTE_MAX_AGE_MS) {
+      if (exact && !isPricedAboveZero(t.originDeclaredPrice) && Number(hit.quoteRetiredAt) > 0 && Date.now() - Number(hit.quoteRetiredAt) < QUOTE_MAX_AGE_MS) {
         t.price = null; t.paid = false;
         t.quoteSource = "live-200"; t.quoteRetiredAt = hit.quoteRetiredAt; t.quoteObservedAt = hit.quoteObservedAt;
-      } else if (exact && !(Number(t.originDeclaredPrice) > 0) && !(Number(t.price) > 0) && isObservedFree(hit)) {
+      } else if (exact && !isPricedAboveZero(t.originDeclaredPrice) && !isPricedAboveZero(t.price) && isObservedFree(hit)) {
         // An observed-free route carries its observation across the rebuild.
         t.paid = false;
         t.quoteSource = "live-200"; t.freeObservedAt = hit.freeObservedAt; t.quoteObservedAt = hit.quoteObservedAt;
@@ -3907,12 +3759,12 @@ export function carryForwardLearnedQuotes(tools, prev) {
     // when an older live-402 learned a different one (2026-08-29: the stale
     // amount was filling the fresh row and then being re-stamped "live-402",
     // which made a nine-day-old price look freshly observed).
-    const originPricedThisCrawl = Number(t.originDeclaredPrice) > 0;
+    const originPricedThisCrawl = isPricedAboveZero(t.originDeclaredPrice);
     // Only a learned QUOTE fills a price: a verified read's price was the
     // origin's own declaration, and if the origin has stopped declaring it the
     // honest state is "unpriced" (a probe candidate), not a remembered figure
     // relabelled as learned.
-    if (fromQuote && !(Number(t.price) > 0) && !originPricedThisCrawl && Number(hit.price) > 0) {
+    if (fromQuote && !isPricedAboveZero(t.price) && !originPricedThisCrawl && isPricedAboveZero(hit.price)) {
       t.price = hit.price;
       t.quoteCarriedForward = true;
       // A quote whose read was withheld is carried without its age, so
@@ -4035,7 +3887,7 @@ const QUOTE_DRIFT_FACTOR = Number(process.env.QUOTE_DRIFT_FACTOR) || 2;
 const QUOTE_MAX_AGE_MS = Number(process.env.QUOTE_MAX_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
 export function quoteIsStale(t, now = Date.now()) {
   if (t?.quoteSource !== "live-402") return false;
-  if (!(Number(t?.price) > 0)) return false;
+  if (!isPricedAboveZero(t?.price)) return false;
   const at = Number(t?.quoteObservedAt);
   if (!Number.isFinite(at) || at <= 0) return true; // never stamped: refresh once
   return now - at >= QUOTE_MAX_AGE_MS;
@@ -4052,7 +3904,7 @@ export function quoteIsStale(t, now = Date.now()) {
 const NETWORKS_VERIFY_AGE_MS = Number(process.env.NETWORKS_VERIFY_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
 export function networksNeedLiveVerify(t, now = Date.now()) {
   if (!t || t.quoteSource === "live-402") return false;
-  if (!(Number(t.price) > 0)) return false;
+  if (!isPricedAboveZero(t.price)) return false;
   if (!(Array.isArray(t.networks) && t.networks.length)) return false;
   const at = Number(t.networksVerifiedAt);
   if (!Number.isFinite(at) || at <= 0) return true;
@@ -4067,12 +3919,12 @@ export function networksNeedLiveVerify(t, now = Date.now()) {
   // registry's settlement snapshot, while carry-forward kept the stamp of the
   // read made beside the old declaration. Before verified reads were carried
   // such a row had no stamp and was read on the next crawl; it still is.
-  if (!(Number(t.originDeclaredPrice) > 0)) return true;
+  if (!isPricedAboveZero(t.originDeclaredPrice)) return true;
   return now - at >= NETWORKS_VERIFY_AGE_MS;
 }
 
 export function priceDisagreesWithOrigin(t) {
-  const held = Number(t?.price), declared = Number(t?.originDeclaredPrice);
+  const held = priceUsdOf(t?.price), declared = priceUsdOf(t?.originDeclaredPrice);
   if (!(held > 0) || !(declared > 0)) return false;
   const ratio = held > declared ? held / declared : declared / held;
   return ratio >= QUOTE_DRIFT_FACTOR;
@@ -4089,7 +3941,7 @@ export function priceDisagreesWithOrigin(t) {
  * polite cap the moment anything is priced. Pure; exported for the test. */
 export function quoteProbeCapFor(tools) {
   const list = Array.isArray(tools) ? tools : [];
-  const priced = list.filter((t) => Number(t?.price) > 0).length;
+  const priced = list.filter((t) => isPricedAboveZero(t?.price)).length;
   const unpriced = list.length - priced;
   // "Zero priced" was the first predicate and it missed the live case: a
   // registry merge had already priced a handful of one seller's 128 rows,
@@ -4232,19 +4084,19 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       // but could not price (the Solana isUsdc gap) LOCKED the row unpriced
       // for the 7-day staleness window: networks known, price null, never
       // probed again (measured 2026-09-01).
-      && ((!(Number(t.price) > 0) || !(Array.isArray(t.networks) && t.networks.length)) || priceDisagreesWithOrigin(t) || quoteIsStale(t) || networksNeedLiveVerify(t)
+      && ((!isPricedAboveZero(t.price) || !(Array.isArray(t.networks) && t.networks.length)) || priceDisagreesWithOrigin(t) || quoteIsStale(t) || networksNeedLiveVerify(t)
         // An explicit re-registration ("price my catalog NOW") also re-asks
         // every route whose price is NOT the origin's own declaration - a
         // learned quote, or a Bazaar settlement snapshot. Issue #1365
         // (2026-09-15): a seller made a route free, re-registered, and the
         // 0.001 learned two weeks earlier stood because a priced row was never
         // a candidate until its 7-day clock ran out.
-        || (ignoreBudget && Number(t.price) > 0 && !(Number(t.originDeclaredPrice) > 0))
+        || (ignoreBudget && isPricedAboveZero(t.price) && !isPricedAboveZero(t.originDeclaredPrice))
         // ...and every route whose held price differs from the origin's own
         // declaration AT ALL. The automatic crawl waits for a 2x drift
         // (QUOTE_DRIFT_FACTOR) to stay polite; a seller who re-registers is
         // asking us to look now, and a 1.67x gap is still a wrong price.
-        || (ignoreBudget && Number(t.price) > 0 && Number(t.originDeclaredPrice) > 0
+        || (ignoreBudget && isPricedAboveZero(t.price) && isPricedAboveZero(t.originDeclaredPrice)
           && priceToMicroUsd(t.price) !== priceToMicroUsd(t.originDeclaredPrice))
         // ...and every route whose chains, payTo and EIP-712 domain came from
         // a past live read. The price of an origin-priced row is the origin's
@@ -4355,14 +4207,14 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
           // quote stood). The retirement is stamped so the next crawl's
           // carry-forward keeps it over the Bazaar snapshot, and the row stays
           // a probe candidate (unpriced), so a later 402 re-prices it.
-          if (String(tool.method || "GET").toUpperCase() === "GET" && Number(tool.price) > 0 && !(Number(tool.originDeclaredPrice) > 0)) {
+          if (String(tool.method || "GET").toUpperCase() === "GET" && isPricedAboveZero(tool.price) && !isPricedAboveZero(tool.originDeclaredPrice)) {
             const was = tool.price;
             tool.price = null; tool.paid = false;
             tool.quoteSource = "live-200"; tool.quoteRetiredAt = Date.now(); tool.quoteObservedAt = Date.now();
             tool.liveProvenAt = Date.now();
             delete tool.quoteCarriedForward;
             console.log(`[x402-index] live-200: ${originUrl}${tool.route} answered GET 200 with no paywall; retired the learned price ${was}`);
-          } else if (String(tool.method || "GET").toUpperCase() === "GET" && !(Number(tool.price) > 0) && !(Number(tool.originDeclaredPrice) > 0)) {
+          } else if (String(tool.method || "GET").toUpperCase() === "GET" && !isPricedAboveZero(tool.price) && !isPricedAboveZero(tool.originDeclaredPrice)) {
             // An UNPRICED row that answers 200 is a free route (health, docs,
             // previews, free data: 36 of 36 in a 2026-09-23 sample). Until now
             // it stayed "price unknown" and was re-probed every crawl - ~640
@@ -4595,8 +4447,8 @@ async function probePaywall(tools, { redirectedTo = null } = {}) {
     (t) => t
       && typeof t.seller === "string" && t.seller !== LOCAL_SELLER  // never probe ourselves
       && typeof t.route === "string" && t.route.startsWith("/")
-      // Read as the public priceUsd is: a manifest row's "$0.005" is a price.
-      && parsePrice(t.price) > 0
+      // A manifest row's "$0.005" is a price; a sentence is not (price-usd.js).
+      && isPricedAboveZero(t.price)
   );
   // Prefer a GET: no body to guess, and a wrong body shape would produce a 400
   // that says nothing about the paywall.

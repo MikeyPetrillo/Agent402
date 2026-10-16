@@ -6,6 +6,7 @@
 // when no TypeSafe key is set: every caller here already degrades to the
 // lexical order on a null, so a second backend only adds answers.
 import { createHash } from "node:crypto";
+import { priceUsdOf } from "./price-usd.js";
 import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL } from "./decision-one.js";
 import { raceDeadline } from "./inflight-gauge.js";
 import { createSharedDailySpend } from "./shared-limits.js";
@@ -217,9 +218,8 @@ export async function judgeTool(task, candidates, { fetchImpl = fetch, timeoutMs
 // fit; the lowest price wins, equal prices keep the lexical order.
 const TIE_MIN = () => Number(process.env.ROUTE_JUDGE_TIE_MIN || 0.15);
 const usdOf = (c) => {
-  const v = c?.priceUsd ?? c?.price;
-  const n = typeof v === "number" ? v : Number(String(v ?? "").replace(/[^0-9.]/g, ""));
-  return Number.isFinite(n) && n > 0 ? n : Infinity;
+  const n = priceUsdOf(c?.priceUsd ?? c?.price);
+  return n != null && n > 0 ? n : Infinity;
 };
 
 export function decide(eligible, judgment) {

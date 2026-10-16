@@ -1749,6 +1749,8 @@ jobs:
           t node scripts/test-leaderboard-redaction.js
           t node scripts/test-leaderboard-price-match.js
           t node scripts/test-price-known.js
+          # Every reader of a crawled row's price reads labels, numbers and objects through src/price-usd.js (offline, real row shapes)
+          t node scripts/test-price-label-readers.js
           # /api/revenue error strings never carry the Alchemy key, and the transaction surfaces keep their scraping bound (offline + source pins)
           t node scripts/test-revenue-redaction.js
           # The public source link is read from one constant, so moving the repo off a personal account stays a one-line change (offline)
