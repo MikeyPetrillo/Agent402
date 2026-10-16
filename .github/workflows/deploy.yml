@@ -2924,6 +2924,10 @@ jobs:
           t node scripts/test-canary-underfunded.js
           # Catalog buy (every tool bought at list price: grade, cap, rotation slice, funding preflight, exit codes - stub server + fake payer, offline)
           t node scripts/test-catalog-buy.js
+          # Catalog buy answers into examples: trimming, redaction, host/address guards, the never-overwrite merge rule, the enhancement report (synthetic captures, offline)
+          t node scripts/test-catalog-buy-examples.js
+          # Captured examples render where buyers read them: /openapi.json and the tool page carry the example, its date and model label (FREE_MODE boot on a free port)
+          t node scripts/test-captured-examples-render.js
           # Payer identity (reads X-PAYMENT + legacy header; rejects unsigned/invalid — money-path regression lock — offline)
           t node scripts/test-payer.js
           # Payment rail scoping (A402-03 identity routes EVM-only; every other tool keeps all chains — offline)
