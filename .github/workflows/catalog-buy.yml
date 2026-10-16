@@ -117,7 +117,7 @@ jobs:
           echo "::add-mask::$BURNER_KEY"
           [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
           set +e
-          node scripts/catalog-buy.js --tier "$TIER" --only "$ONLY" --out catalog-buy.json
+          node scripts/catalog-buy.js --tier "$TIER" --only "$ONLY" --out catalog-buy.json --outputs catalog-buy-outputs.json
           CODE=$?
           set -e
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
@@ -134,6 +134,29 @@ jobs:
           name: catalog-buy
           path: catalog-buy.json
           if-no-files-found: ignore
+
+      # What we bought, for better examples and better tools. No secret is in
+      # scope and nothing is committed: the step reads the paid answers the buy
+      # kept (redacted, bounded, guarded by scripts/catalog-buy-capture.js),
+      # writes the enhancement report and appends its top 20 to the job
+      # summary. Applying captured examples stays a reviewed PR, made locally
+      # with: node scripts/catalog-buy-examples.js --from-run <id> --write
+      - name: Enhancement report from the paid answers
+        if: always() && hashFiles('catalog-buy-outputs.json') != ''
+        run: node scripts/catalog-buy-examples.js --file catalog-buy-outputs.json --report catalog-buy-enhancements.md --step-summary 20
+
+      - name: Upload the paid answers and the enhancement report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: catalog-buy-outputs
+          path: |
+            catalog-buy-outputs.json
+            catalog-buy-enhancements.md
+          if-no-files-found: ignore
+          # Long enough to apply a week's examples after review, short enough
+          # that old answers do not linger.
+          retention-days: 30
 
       # ONE issue. Opened on the first failing run, commented on each later one,
       # closed by a green scheduled (or full daily dispatch) run. A run narrowed

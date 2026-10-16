@@ -634,6 +634,7 @@ const NEXT_CALL = { search: "answer", decide: "decide-execute" };
   }
 }
 import { buildSkillTools, modelBackedPackSlugs } from "./tools/skill-runner.js";
+import { applyCapturedExamples, loadCapturedExamples } from "./tool-output-examples.js";
 import { buildRouteExecuteTool, EXEC_TIERS } from "./tools/route-execute.js";
 import { buildSellerTrustTool } from "./tools/seller-trust.js";
 import { buildSellerDossierTool } from "./tools/seller-dossier.js";
@@ -2082,6 +2083,15 @@ for (const def of Object.values(CATALOG)) {
     def.runSeconds = runS;
     def.description = `${String(def.description || "").trim()} ${runTimeNote(runS)}`;
   }
+}
+// Captured output examples (src/tool-output-examples.js): a real paid answer
+// from the weekly catalog buy fills in a tool's published output example ONLY
+// where its definition has none; a hand-written example is never overwritten.
+// Applied before any surface reads discovery, so /openapi.json, the tool
+// pages, MCP and the 402 discovery extension all see the same example.
+{
+  const { applied } = applyCapturedExamples(Object.values(CATALOG), loadCapturedExamples());
+  if (applied.length) console.log(`[examples] ${applied.length} captured output example(s) applied to tools with none`);
 }
 // Routes priced per request publish a RANGE in /openapi.json (price.mode
 // "dynamic", offer amount null), never the catalog floor as if it were the

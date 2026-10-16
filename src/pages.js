@@ -3,6 +3,7 @@
 import { REPO_URL } from "./repo-link.js";
 import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
+import { captureNote } from "./tool-output-examples.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbLd } from "./ledger-chrome.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
 import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
@@ -295,6 +296,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const props = schema.properties || {};
   const required = Array.isArray(schema.required) ? schema.required : [];
   const example = tool.discovery?.output?.example;
+  const captured = tool.discovery?.output?.captured || null;
   const input = tool.discovery?.input ?? {};
   // A tool that names its only networks (`onlyNetworks`, e.g. decide-execute:
   // Base) is offered on exactly those (payments.js acceptsForItem), so the page
@@ -515,7 +517,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   <h2 class="tp-h2">Example response</h2>
   ${binaryTypes
     ? `<p class="tp-sub">A 200 carries ${binaryPhrase}: the file itself.</p>`
-    : `<pre class="tp-pre">${e(JSON.stringify(example ?? {}, null, 2))}</pre>`}
+    : `<pre class="tp-pre">${e(JSON.stringify(example ?? {}, null, 2))}</pre>${captured ? `\n  <p class="tp-sub tp-captured">${e(captureNote(captured))}</p>` : ""}`}
   ${respRows ? `<div class="tp-tw"><table class="tp-table"><tr><th>Field</th><th>Type</th><th>Always present</th><th>In the example</th></tr>${respRows}</table></div>` : ""}
 
   <h2 class="tp-h2">From an MCP client</h2>
@@ -778,12 +780,14 @@ export function openapiSpec(baseUrl, catalog) {
       tags: [tool.category],
       responses: {
         200: {
-          description: "Success",
+          // A captured example (src/tool-output-examples.js) says where it came
+          // from: a real paid answer and its date, and model-generated when so.
+          description: discovery?.output?.captured && !binaryTypesOf(tool) ? `Success. ${captureNote(discovery.output.captured)}` : "Success",
           // A binary tool answers raw bytes (one content type per format it
           // can produce), never the JSON note its discovery example carries.
           content: binaryTypesOf(tool)
             ? Object.fromEntries(binaryTypesOf(tool).map((t) => [t, { schema: { type: "string", format: "binary" } }]))
-            : { "application/json": { schema: responseSchemaFor(path, discovery?.output?.example), example: discovery?.output?.example ?? {} } },
+            : { "application/json": { schema: responseSchemaFor(path, discovery?.output?.example), example: discovery?.output?.example ?? {}, ...(discovery?.output?.captured ? { "x-example-source": { kind: "captured-paid-answer", capturedAt: discovery.output.captured.capturedAt, modelBacked: discovery.output.captured.modelBacked === true } } : {}) } },
         },
         402: { description: "Payment Required - x402 payment requirements in the PAYMENT-REQUIRED header, mirrored in the JSON body, and MPP challenges (WWW-Authenticate: Payment)" },
         400: { description: "Invalid input" },
