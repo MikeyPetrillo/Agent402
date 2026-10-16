@@ -76,6 +76,20 @@ const GATES = [
     defect: "absence of evidence reported as a bad verdict",
   },
   {
+    gate: "test-seller-trust.js",
+    file: "src/router-lanes.js",
+    from: "eligible: Boolean(ceiling) && tiered.length > 0,",
+    to: "eligible: false,",
+    defect: "a seller the Base unproven lane can pay reported as not routable",
+  },
+  {
+    gate: "test-seller-trust.js",
+    file: "src/router-lanes.js",
+    from: "const covered = provenAny.filter((r) => r.usd <= t.underlyingMaxUsd);",
+    to: "const covered = provenAny.filter(() => true);",
+    defect: "a route-execute tier reported as paying a proven route priced above its underlying cap",
+  },
+  {
     gate: "test-analytics-redaction.js",
     file: "src/analytics-db.js",
     // Simulate a REAL regression rather than a crash: spread the whole payload

@@ -14,6 +14,13 @@
 //   node scripts/test-seller-trust.js
 import { strict as assert } from "node:assert";
 import { buildSellerTrustTool, assessSeller } from "../src/tools/seller-trust.js";
+import { dispatchEligibility } from "../src/dispatch-eligibility.js";
+import { priceUsdOf } from "../src/price-usd.js";
+import { EXEC_TIERS } from "../src/tools/route-execute.js";
+// Tier expectations are derived from route-execute's own table, never typed.
+const TIERS_ASC = [...EXEC_TIERS].sort((a, b) => a.underlyingMaxUsd - b.underlyingMaxUsd);
+const tierFor = (usd) => TIERS_ASC.find((t) => usd <= t.underlyingMaxUsd) || null;
+const HIGHEST = TIERS_ASC[TIERS_ASC.length - 1];
 
 let passed = 0, failed = 0;
 const check = (name, fn) => {
@@ -39,9 +46,26 @@ const PROVEN = {
 const SOLANA_ONLY = { ...PROVEN, origin: "https://svm.example", tools: [{ route: "/x", slug: "x", price: 0.002, paid: true, networks: ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"] }] };
 const PRICEY = { ...PROVEN, origin: "https://pricey.example", tools: [{ route: "/x", slug: "x", price: 0.5, paid: true, networks: ["eip155:8453"] }] };
 
+// Per-route verdicts from the REAL dispatchEligibility, built the way the
+// server's sellerToolVerdicts builds them (row-level: price and template
+// known). The server wiring itself is proven by test-seller-trust-lanes.js.
+const verdictsVia = (settled, { payers, unprovenMaxUsd = 0.01 } = {}) => (detail) => (detail.tools || []).map((t) => {
+  const p = priceUsdOf(t.price);
+  const v = dispatchEligibility({
+    routable: detail.routable !== false,
+    networks: Array.isArray(t.networks) && t.networks.length ? t.networks : (detail.networks || []),
+    settled: settled[detail.origin] || 0, payers: payers?.[detail.origin],
+    priceUsd: p != null && p > 0 ? p : null, urlTemplate: /[{}]/.test(String(t.route || "")),
+    spendChains: ["base"], minSettled: 50, minPayers: 3, unprovenMaxUsd,
+  });
+  return { ...t, routerDispatchEligible: v.eligible, routerDispatchReason: v.reason, routerDispatchByChain: v.chains };
+});
 const build = (details, settled, extra = {}) => buildSellerTrustTool({
   getSellerDetail: (host) => details.find((d) => d.origin.replace("https://", "") === host) || null,
   getSettledCalls: (origin) => settled[origin] || 0,
+  getToolVerdicts: verdictsVia(settled, extra),
+  getUnprovenMaxUsd: () => extra.unprovenMaxUsd ?? 0.01,
+  execTiers: EXEC_TIERS,
   sorThreshold: 50,
   sorCap: 0.005,
   settlementNetwork: "eip155:8453",
@@ -73,29 +97,45 @@ check("a proven in-cap Base seller is routable", () => {
   assert.deepEqual(r.blockers, []);
 });
 
-check("under the settlement threshold is refused, and says so numerically", () => {
+check("under the settlement threshold is not proven, says so numerically, and is routable through the unproven lane", () => {
   const t = build([PROVEN], { "https://proven.example": 49 });
   const r = t.handler({ origin: "proven.example" });
-  assert.equal(r.routableByOurRouter, false);
+  assert.equal(r.routableAsProven, false);
   assert.equal(r.routerGate.meetsSettlementThreshold, false);
   assert.equal(r.routerGate.settlementThreshold, 50);
-  assert.ok(r.blockers.some((b) => /50 settled/.test(b)), `expected a numeric blocker, got ${r.blockers}`);
+  assert.ok(r.provenBlockers.some((b) => /50 settled/.test(b)), `expected a numeric blocker, got ${r.provenBlockers}`);
+  assert.ok(r.lanes.proven.blockers.some((b) => /50 settled/.test(b)));
+  // the $0.002 route is below the floor with nothing else wrong: unproven lane
+  assert.equal(r.lanes.unproven.eligible, true);
+  assert.equal(r.routableByOurRouter, true);
+  assert.equal(r.routableVia, "unproven");
+});
+
+check("a proven seller with too few distinct payers is not proven: the router's verdict, not only the count", () => {
+  const t = build([PROVEN], { "https://proven.example": 120 }, { payers: { "https://proven.example": 1 } });
+  const r = t.handler({ origin: "proven.example" });
+  assert.equal(r.routerGate.meetsSettlementThreshold, true, "the bare count clears");
+  assert.equal(r.routableAsProven, false, "but the router's breadth rule refuses it as proven");
+  assert.ok(r.lanes.proven.blockers.some((b) => /settlement_required/.test(b)), JSON.stringify(r.lanes.proven.blockers));
 });
 
 check("advertising a chain is never treated as proof of settling on it", () => {
   const t = build([SOLANA_ONLY], { "https://svm.example": 5000 });
   const r = t.handler({ origin: "svm.example" });
   assert.equal(r.routableByOurRouter, false, "a Solana-only seller must not be Base-routable on advertised chains alone");
+  assert.equal(r.lanes.unproven.eligible, false, "the unproven lane is Base only");
   assert.equal(r.routerGate.advertisesSettlementNetwork, false);
   assert.ok(r.caveats.some((c) => /not proof/i.test(c)), "the advertised-vs-settles caveat must ship");
 });
 
-check("a seller priced above the router cap is refused with the cap named", () => {
+check("a seller priced above the cheapest tier's cap reads false on the old gate field, and a higher tier pays it", () => {
   const t = build([PRICEY], { "https://pricey.example": 999 });
   const r = t.handler({ origin: "pricey.example" });
   assert.equal(r.routerGate.hasToolWithinRouterCap, false);
   assert.equal(r.routerGate.routerUnderlyingCapUsd, 0.005);
   assert.equal(r.routerGate.cheapestPaidToolUsd, 0.5);
+  assert.equal(r.lanes.proven.cheapestTier, tierFor(0.5).slug, "a higher tier pays it, and the lane names that tier");
+  assert.equal(r.routableAsProven, true);
 });
 
 // --- counts are a floor, and the response must say so -----------------------
@@ -203,6 +243,124 @@ check("without a payTo-evidence source the field is omitted, not faked", () => {
   assert.ok(!("advertisedPayTo" in t.handler({ origin: "dead.example" })));
 });
 
+// --- both lanes on REAL row shapes ---------------------------------------------
+// Rows built by the crawler's own manifest reader (dollar LABELS, "$0.005") and
+// read back through sellerDetail, as the server hands them to the tool.
+{
+  process.env.X402_INDEX_CRAWL = "off";
+  const x = await import("../src/x402-index.js");
+  const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const PAYTO = "0x9fb365E4E9385E2a39FeBAd70368267e6f571d9A";
+  const seed = (origin, prices) => {
+    const accepts = [{ scheme: "exact", network: "eip155:8453", payTo: PAYTO, amount: "5000", asset: BASE_USDC, maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } }];
+    const rows = x.normaliseManifestTools({ x402Version: 2, accepts, resources: prices.map((p, i) => ({ resource: `${origin}/api/r${i}`, method: "POST", price: p, name: `R${i}`, accepts })) }, origin)
+      .map((r) => ({ ...r, networks: ["eip155:8453"] }));
+    return [origin, { tools: rows, manifest: { name: origin }, fetchedAt: Date.now(), error: null, history: [1], originResponded: true }];
+  };
+  const NEW = "https://example.com", PRICEY2 = "https://example.org", PROVEN2 = "https://example.net";
+  x.__testResetSubmitted();
+  const MID = "https://example.edu", BIG = "https://example.info", HUGE = "https://example.biz";
+  const OVER_TOP = Number((HIGHEST.underlyingMaxUsd * 1.2).toFixed(4));
+  x.__testSeedCache([seed(NEW, ["$0.005"]), seed(PRICEY2, ["$0.02"]), seed(PROVEN2, ["$0.005"]), seed(MID, ["$0.04"]), seed(BIG, ["$0.60"]), seed(HUGE, [`$${OVER_TOP}`]), seed("https://example.co", ["$0.01"])]);
+  const realBuild = (settled, extra = {}) => buildSellerTrustTool({
+    getSellerDetail: (host) => x.sellerDetail(host),
+    getSettledCalls: (origin) => settled[origin] || 0,
+    getToolVerdicts: verdictsVia(settled, extra),
+    getUnprovenMaxUsd: () => extra.unprovenMaxUsd ?? 0.01,
+    execTiers: EXEC_TIERS,
+    sorThreshold: 50, sorCap: 0.005, settlementNetwork: "eip155:8453",
+  });
+
+  check("real rows: the crawler stores label prices", () => {
+    const d = x.sellerDetail("example.com");
+    assert.ok(d && d.tools.length === 1 && d.tools[0].price === "$0.005", JSON.stringify(d?.tools?.map((t) => t.price)));
+  });
+
+  check("real rows: a seller below the floor with a $0.005 route is not proven but routable through the unproven lane", () => {
+    const r = realBuild({ [NEW]: 3 }).handler({ origin: "example.com" });
+    assert.equal(r.lanes.proven.eligible, false);
+    assert.equal(r.routableAsProven, false);
+    assert.equal(r.lanes.unproven.eligible, true, JSON.stringify(r.lanes.unproven));
+    assert.equal(r.lanes.unproven.maxUsd, 0.01);
+    assert.equal(r.lanes.unproven.toolCount, 1);
+    assert.equal(r.lanes.unproven.cheapestUsd, 0.005);
+    assert.equal(r.lanes.unproven.cheapestTier, tierFor(0.005).slug, "the unproven lane names the cheapest tier covering its cheapest route");
+    assert.match(r.lanes.unproven.note, /after every proven seller for the task, only at the wallet its own live 402 names/);
+    assert.match(r.lanes.unproven.note, /flagged unproven on the buyer's receipt/);
+    assert.equal(r.routableByOurRouter, true);
+    assert.equal(r.routableVia, "unproven");
+    assert.deepEqual(r.blockers, []);
+  });
+
+  check("real rows: a $0.02-only seller below the floor is routable through neither lane, and the ceiling is named", () => {
+    const r = realBuild({ [PRICEY2]: 3 }).handler({ origin: "example.org" });
+    assert.equal(r.lanes.proven.eligible, false);
+    assert.equal(r.lanes.unproven.eligible, false);
+    assert.equal(r.routableByOurRouter, false);
+    assert.equal(r.routableVia, null);
+    assert.match(r.lanes.unproven.reason, /above the \$0\.01 unproven ceiling/);
+    assert.ok(r.blockers.some((b) => /^unproven lane: /.test(b)), JSON.stringify(r.blockers));
+  });
+
+  check("real rows: with the unproven ceiling switched off the lane is ineligible and says why", () => {
+    const r = realBuild({ [NEW]: 3 }, { unprovenMaxUsd: 0 }).handler({ origin: "example.com" });
+    assert.equal(r.lanes.unproven.eligible, false);
+    assert.equal(r.lanes.unproven.maxUsd, 0);
+    assert.match(r.lanes.unproven.reason, /switched off/);
+    assert.equal(r.routableByOurRouter, false);
+  });
+
+  check("real rows: a proven seller is routable as proven, and the unproven lane says it does not apply", () => {
+    const r = realBuild({ [PROVEN2]: 120 }, { payers: { [PROVEN2]: 10 } }).handler({ origin: "example.net" });
+    assert.equal(r.lanes.proven.eligible, true, JSON.stringify(r.lanes.proven));
+    assert.equal(r.routableAsProven, true);
+    assert.equal(r.routableByOurRouter, true);
+    assert.equal(r.routableVia, "proven");
+    assert.equal(r.lanes.unproven.eligible, false);
+    assert.match(r.lanes.unproven.reason, /proven seller/);
+    assert.deepEqual(r.blockers, []);
+    assert.equal(r.lanes.proven.cheapestTier, tierFor(0.005).slug);
+    assert.deepEqual(r.lanes.proven.tiers.map((t) => t.slug), TIERS_ASC.map((t) => t.slug), "every tier covers a $0.005 route");
+  });
+
+  check("real rows: an unproven $0.01 route names the cheapest tier whose cap covers it, not the cheapest tier", () => {
+    const r = realBuild({ "https://example.co": 3 }).handler({ origin: "example.co" });
+    assert.equal(r.lanes.unproven.eligible, true, JSON.stringify(r.lanes.unproven));
+    assert.equal(r.lanes.unproven.cheapestTier, tierFor(0.01).slug);
+    assert.notEqual(r.lanes.unproven.cheapestTier, TIERS_ASC[0].slug, "the cheapest tier's cap is below $0.01");
+  });
+
+  const proven = (o) => realBuild({ [o]: 120 }, { payers: { [o]: 10 } });
+  check("real rows: a proven seller at $0.04 is paid via route-execute-plus, not via route-execute", () => {
+    const r = proven(MID).handler({ origin: "example.edu" });
+    assert.equal(r.routableAsProven, true, JSON.stringify(r.lanes.proven));
+    assert.equal(r.lanes.proven.cheapestTier, "route-execute-plus");
+    assert.equal(tierFor(0.04).slug, "route-execute-plus", "the table still puts $0.04 in the plus tier");
+    assert.ok(!r.lanes.proven.tiers.some((t) => t.slug === "route-execute"), "the $0.005 tier cannot pay a $0.04 route");
+    assert.deepEqual(r.lanes.proven.tiers[0], { slug: "route-execute-plus", underlyingMaxUsd: tierFor(0.04).underlyingMaxUsd, routeCount: 1, cheapestUsd: 0.04 });
+    assert.equal(r.routerGate.hasToolWithinRouterCap, false, "the old cheapest-tier field still reads false");
+    assert.deepEqual(r.blockers, []);
+  });
+
+  check("real rows: a proven seller at $0.60 is paid by the first tier whose cap covers it (route-execute-max cannot)", () => {
+    const r = proven(BIG).handler({ origin: "example.info" });
+    const want = tierFor(0.6);
+    assert.ok(!r.lanes.proven.tiers.some((t) => t.slug === "route-execute-max"), "max's cap is below $0.60");
+    assert.equal(r.routableAsProven, Boolean(want));
+    assert.equal(r.lanes.proven.cheapestTier, want ? want.slug : null);
+  });
+
+  check("real rows: a proven seller above every tier's cap is not routable, and the highest tier's cap is named", () => {
+    const r = proven(HUGE).handler({ origin: "example.biz" });
+    assert.equal(r.routableAsProven, false);
+    assert.equal(r.routableByOurRouter, false);
+    assert.deepEqual(r.lanes.proven.tiers, []);
+    assert.equal(r.lanes.proven.cheapestTier, null);
+    const line = r.lanes.proven.blockers.find((b) => /highest route-execute tier/.test(b));
+    assert.ok(line && line.includes(`$${HIGHEST.underlyingMaxUsd}`) && line.includes(HIGHEST.slug), JSON.stringify(r.lanes.proven.blockers));
+    assert.ok(r.blockers.includes(line));
+  });
+}
 
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

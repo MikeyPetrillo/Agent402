@@ -552,6 +552,7 @@ import { flushJsonDocuments } from "./json-document.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
+import { baseUnprovenAllowanceUsd } from "./base-unproven.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
@@ -1427,6 +1428,18 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
     ...affordance,
   };
 }
+// Every tool row of one crawled seller with its OWN route-level verdict (price
+// and template known), the rows /api/index?seller= publishes. The seller tools
+// (seller-trust, seller-dossier) read their lane summaries off these same rows,
+// so a seller's report and its index row can never disagree.
+function sellerToolVerdicts(detail) {
+  if (!detail || !Array.isArray(detail.tools)) return [];
+  const positiveUsd = (p) => { const n = priceUsdOf(p); return n != null && n > 0 ? n : null; };
+  return detail.tools.map((t) => {
+    const v = withDispatchFields({ ...t, seller: detail.origin, origin: detail.origin, routable: detail.routable, networks: Array.isArray(t.networks) && t.networks.length ? t.networks : detail.networks, priceUsd: positiveUsd(t.price), urlTemplate: /[{}]/.test(String(t.route || "")), payToByNetwork: detail.payToByNetwork, evmDomainByNetwork: detail.evmDomainByNetwork }, { rowLevel: true });
+    return { ...t, routerDispatchEligible: v.routerDispatchEligible, routerDispatchReason: v.routerDispatchReason, routerDispatchByChain: v.routerDispatchByChain };
+  });
+}
 function withDispatchSnapshot(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.sellers)) return snapshot;
   return { ...snapshot, sellers: snapshot.sellers.map((sel) => (sel?.local ? sel : withDispatchFields(sel))) };
@@ -1944,6 +1957,11 @@ for (const tier of EXEC_TIERS) {
     // a clean bill.
     getPayToEvidence: (detail) =>
       advertisedPayToEvidence({ seller: detail, merchants: economySnapshotCached()?.topMerchants || [] }),
+    // Both router lanes (proven, and the Base unproven tier) are read off the
+    // per-route verdicts /api/index?seller= publishes, at the ceiling in force.
+    getToolVerdicts: (detail) => sellerToolVerdicts(detail),
+    getUnprovenMaxUsd: () => baseUnprovenAllowanceUsd(),
+    execTiers: EXEC_TIERS,
     sorThreshold: SOR_MIN_SETTLED_TX,
     sorCap: EXEC_TIERS[0].underlyingMaxUsd,
     settlementNetwork: "eip155:8453",
@@ -1969,6 +1987,9 @@ let operatorDossier = null;
     getSellerDetail: (host) => sellerDetail(host),
     getSellerEntry: (host) => sellerEntry(host),
     getDispatchRow: (detail) => withDispatchFields(detail),
+    getToolVerdicts: (detail) => sellerToolVerdicts(detail),
+    getUnprovenMaxUsd: () => baseUnprovenAllowanceUsd(),
+    execTiers: EXEC_TIERS,
     getEvidenceBinding: (origin) => dispatchEvidence().binding.get(norm(origin)) || null,
     getLeaderboardRow: (origin, host) => {
       const snap = getLeaderboardSnapshot();
@@ -2090,7 +2111,10 @@ for (const def of Object.values(CATALOG)) {
 // Applied before any surface reads discovery, so /openapi.json, the tool
 // pages, MCP and the 402 discovery extension all see the same example.
 {
-  const { applied } = applyCapturedExamples(Object.values(CATALOG), loadCapturedExamples());
+  // TOOL_OUTPUT_EXAMPLES_TEST_BARE is read on a FREE_MODE boot only: tests
+  // render a captured example on a tool that otherwise has a hand-written one.
+  const treatAsBare = FREE_MODE ? String(process.env.TOOL_OUTPUT_EXAMPLES_TEST_BARE || "").split(",").map((x) => x.trim()).filter(Boolean) : [];
+  const { applied } = applyCapturedExamples(Object.values(CATALOG), loadCapturedExamples(), { treatAsBare });
   if (applied.length) console.log(`[examples] ${applied.length} captured output example(s) applied to tools with none`);
 }
 // Routes priced per request publish a RANGE in /openapi.json (price.mode
@@ -7063,11 +7087,7 @@ app.get("/api/index", (req, res) => {
     // unproven tier; each tool row carries its own Base verdict, the same one
     // /api/route publishes for that route.
     const sellerRow = withDispatchFields(detail);
-    const positiveUsd = (p) => { const n = priceUsdOf(p); return n != null && n > 0 ? n : null; };
-    const tools = Array.isArray(sellerRow.tools) ? sellerRow.tools.map((t) => {
-      const v = withDispatchFields({ ...t, seller: detail.origin, origin: detail.origin, routable: detail.routable, networks: Array.isArray(t.networks) && t.networks.length ? t.networks : detail.networks, priceUsd: positiveUsd(t.price), urlTemplate: /[{}]/.test(String(t.route || "")), payToByNetwork: detail.payToByNetwork, evmDomainByNetwork: detail.evmDomainByNetwork }, { rowLevel: true });
-      return { ...t, routerDispatchEligible: v.routerDispatchEligible, routerDispatchReason: v.routerDispatchReason, routerDispatchByChain: v.routerDispatchByChain };
-    }) : sellerRow.tools;
+    const tools = Array.isArray(sellerRow.tools) ? sellerToolVerdicts(detail) : sellerRow.tools;
     return res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json({ ...sellerRow, tools, legend: dispatchLegend({ spendChains: spendChainsConfigured() }) });
   }
   // The full snapshot is ~1.4MB: every crawled origin with its health score,

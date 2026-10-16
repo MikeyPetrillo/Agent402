@@ -16,7 +16,9 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const J = (x) => JSON.stringify(x);
 
-// seller-trust publishes no output example of its own; hash has a hand-written one.
+// Every priced tool now has a hand-written example, so the boot names seller-trust
+// in TOOL_OUTPUT_EXAMPLES_TEST_BARE (FREE_MODE only) to stand in for one without;
+// hash keeps its hand-written one.
 const BARE = { slug: "seller-trust", path: "/api/x402/seller-trust", method: "get" };
 const HAND = { slug: "hash", path: "/api/hash", method: "post" };
 const CAPTURED = { verdict: "no-evidence", checks: [{ name: "listed", pass: true }], capturedMarker: "captured-render-test" };
@@ -32,7 +34,7 @@ const port = await getFreePort();
 const base = `http://127.0.0.1:${port}`;
 const proc = spawn(process.execPath, ["src/server.js"], {
   cwd: new URL("..", import.meta.url),
-  env: { ...process.env, PORT: String(port), FREE_MODE: "true", TOOL_OUTPUT_EXAMPLES_FILE: file, X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" },
+  env: { ...process.env, PORT: String(port), FREE_MODE: "true", TOOL_OUTPUT_EXAMPLES_FILE: file, TOOL_OUTPUT_EXAMPLES_TEST_BARE: BARE.slug, X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let log = "";
@@ -57,7 +59,9 @@ const spec = await (await fetch(`${base}/openapi.json`)).json();
   ok(J(content?.example) === J(CAPTURED), "/openapi.json: the tool with no example publishes the captured one");
   ok(content?.["x-example-source"]?.kind === "captured-paid-answer" && content["x-example-source"].capturedAt === "2026-10-12" && content["x-example-source"].modelBacked === true, "/openapi.json: x-example-source names the capture, its date and the model label");
   ok(/real paid answer captured on 2026-10-12/.test(r200?.description || "") && /model-generated, so a call with the same input varies/.test(r200?.description || ""), "/openapi.json: the 200 description says real paid answer, the date, and model-generated");
-  ok(Array.isArray(content?.schema?.required) && content.schema.required.includes("verdict"), "/openapi.json: the schema is derived from the captured example like any other");
+  // `required` is added only on routes the shape sweep enforces, so the
+  // derivation is judged on the typed properties.
+  ok(content?.schema?.properties?.verdict?.type === "string" && content.schema.properties.checks?.type === "array" && content.schema.properties.capturedMarker, "/openapi.json: the schema is derived from the captured example like any other");
 }
 {
   const r200 = spec.paths?.[HAND.path]?.[HAND.method]?.responses?.["200"];

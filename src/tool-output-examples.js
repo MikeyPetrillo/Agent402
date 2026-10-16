@@ -104,13 +104,16 @@ export function loadCapturedExamples(file = process.env.TOOL_OUTPUT_EXAMPLES_FIL
  * Apply captured examples to catalog definitions, in place. Returns the slugs
  * applied and the slugs left alone because a hand-written example exists.
  * A binary tool (its example is a note about bytes) is never given one.
+ * `treatAsBare` names slugs whose hand-written example is ignored: a render
+ * test needs a tool without one, and every priced tool now has one.
  */
-export function applyCapturedExamples(defs, captured) {
+export function applyCapturedExamples(defs, captured, { treatAsBare = [] } = {}) {
   const applied = new Set(), kept = new Set();
+  const bare = new Set(treatAsBare);
   for (const def of defs) {
     const entry = def?.slug ? captured[def.slug] : null;
     if (!entry) continue;
-    if (hasHandWrittenExample(def)) { kept.add(def.slug); continue; }
+    if (hasHandWrittenExample(def) && !bare.has(def.slug)) { kept.add(def.slug); continue; }
     if ((Array.isArray(def.binaryTypes) && def.binaryTypes.length) || (def.mimeType && def.mimeType !== "application/json")) continue;
     // A fresh discovery object: kit definitions can share one by reference.
     def.discovery = {
