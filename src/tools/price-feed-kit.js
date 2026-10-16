@@ -9,7 +9,8 @@
 // rate limit), never PoW-eligible. Covered by scripts/test-price-feed-kit.js.
 
 import { protocols as llamaProtocols } from "./defi-kit.js";
-import { cgTokenRefusal, cgRefusalMessage, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
+import { cgTake, cgRefusalMessage, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
+import { createCgCache } from "./coingecko-cache.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, and a read that outlives it is a 503 naming the
@@ -31,24 +32,28 @@ function bad(message, statusCode = 400) {
 // charged.
 const LLAMA_DOC_TIMEOUT_MS = 25_000;
 
-// Short in-process cache for CoinGecko reads, keyed on the exact URL: an
-// identical request inside the window gets the answer fetched moments ago and
-// spends no key budget. Text is stored, so every caller parses its own copy.
+// Short cache for CoinGecko reads, keyed on the exact URL: an identical
+// request inside the window gets the answer fetched moments ago and spends no
+// key budget, on this replica or another (src/tools/coingecko-cache.js). Text
+// is stored, so every caller parses its own copy. A body over 256 KB is served
+// but not kept, so the cache stays small.
 const CG_CACHE_TTL_MS = 30_000;
 const CG_CACHE_MAX = 200;
-const cgCache = new Map();
+const cgCache = createCgCache("price-feed", { max: CG_CACHE_MAX, maxBody: 256 * 1024 });
 /** Test seam: drop every cached CoinGecko answer. */
 export function clearPriceFeedCache() { cgCache.clear(); }
 
-async function feedFetch(url, { timeout = FEED_READ_MS, step = "data" } = {}) {
+async function feedFetch(url, opts = {}) {
   const host = new URL(url).hostname;
+  if (!isCoinGeckoHost(host)) return (await feedLoad(url, host, opts)).data;
+  const { entry } = await cgCache.through(String(url), CG_CACHE_TTL_MS, () => feedLoad(url, host, opts));
+  return JSON.parse(entry.text);
+}
+
+// One upstream read: the body of a 200 that parses as JSON, as { text, data },
+// or a thrown refusal (never cached).
+async function feedLoad(url, host, { timeout = FEED_READ_MS, step = "data" } = {}) {
   const headers = { Accept: "application/json" };
-  const cacheKey = isCoinGeckoHost(host) ? String(url) : null;
-  if (cacheKey) {
-    const hit = cgCache.get(cacheKey);
-    if (hit && hit.expiresAt > Date.now()) return JSON.parse(hit.text);
-    if (hit) cgCache.delete(cacheKey);
-  }
   // CoinGecko demo key rides along when configured (call-time read, same header
   // as crypto-kit's jsonGet). Keyless CoinGecko is metered per IP — and our
   // egress IP is shared with every other Railway tenant.
@@ -59,7 +64,7 @@ async function feedFetch(url, { timeout = FEED_READ_MS, step = "data" } = {}) {
     // no bucket at all (the 2026-08-28 fix reached the other two kits only), so
     // under load it overran the key for every caller. Refuse before the call
     // when the minute is spent: 503 is never charged.
-    const why = cgTokenRefusal(Date.now());
+    const why = await cgTake(Date.now());
     if (why) throw bad(cgRefusalMessage(why), 503);
   }
   // A read that outlives its cap, or a host that cannot be reached, is the
@@ -76,15 +81,10 @@ async function feedFetch(url, { timeout = FEED_READ_MS, step = "data" } = {}) {
   if (!ct.includes("json")) {
     throw bad(`Price feed upstream returned non-JSON (${ct.split(";")[0] || "unknown"})`, 502);
   }
-  let text, parsed;
-  try { text = await bodyUnderDeadline(res.text(), ctx); parsed = JSON.parse(text); }
+  let text, data;
+  try { text = await bodyUnderDeadline(res.text(), ctx); data = JSON.parse(text); }
   catch (err) { if (err?.statusCode) throw err; throw bad("Price feed upstream returned malformed JSON", 502); }
-  // A body over 256 KB is served but not kept, so the cache stays small.
-  if (cacheKey && text.length <= 256 * 1024) {
-    if (cgCache.size >= CG_CACHE_MAX) { const oldest = cgCache.keys().next().value; if (oldest !== undefined) cgCache.delete(oldest); }
-    cgCache.set(cacheKey, { text, expiresAt: Date.now() + CG_CACHE_TTL_MS });
-  }
-  return parsed;
+  return { text, data };
 }
 
 // Pyth quotes prices as { price, expo } where the human value is price * 10**expo.
