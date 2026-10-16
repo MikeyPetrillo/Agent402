@@ -162,7 +162,11 @@ try {
   // 2. Re-registration re-asks a label-priced row whose price is not the origin's declaration (llms.txt label).
   globalThis.fetch = stub({ "GET /api/thing": 402 });
   seen.length = 0;
-  const llmsFresh = [{ ...llmsRows[0], networks: ["eip155:8453"], networksVerifiedAt: Date.now() - 3_600_000, networksVerifiedMethod: "GET", quoteSource: "live-402", quoteObservedAt: Date.now() - 3_600_000 }];
+  // No verification stamp: the re-registration's verified-read clause would
+  // re-ask a stamped row on its own, and this case is about the price clause.
+  const llmsFresh = [{ ...llmsRows[0], networks: ["eip155:8453"], quoteSource: "live-402", quoteObservedAt: Date.now() - 3_600_000 }];
+  await x.enrichLiveQuotes(llmsFresh.map((r) => ({ ...r })), ORIGIN);
+  ok(!seen.length, "control: the automatic crawl leaves a fresh learned label alone");
   await x.enrichLiveQuotes(llmsFresh, ORIGIN, { ignoreBudget: true });
   ok(seen.includes("GET /api/thing"), "an explicit re-registration re-asks a label price that is not the origin's own declaration");
 
