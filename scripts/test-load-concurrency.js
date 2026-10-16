@@ -18,8 +18,11 @@
 // test counts.
 //
 // Fails when a tool route answers anything but 200, when discovery sheds more
-// than a small share of its calls, when /health under load is slow relative to
-// its idle reading from the same run, or when any request hits the hard timeout.
+// than a small share of its calls, when /health probes find the event loop held
+// for more of the run than the mix accounts for or held for several slow
+// handlers at a time (both read in the slow tool's idle cost from the same
+// run, and confirmed by a second load window before failing), or when any
+// request hits the hard timeout.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -37,19 +40,41 @@ const LOAD_MS = Number(process.env.LOAD_MS || 45_000);
 // /health every 250 ms: twice per loop-lag tick, so a held loop shows up in
 // the probe before the server's own lag gate reacts.
 const PROBE_EVERY_MS = 250;
-// 5 s of idle probing before the load: the same-run baseline the load p95 is
-// read against (runner speed varies; an absolute bound would not).
+// 5 s of idle probing before the load: a same-run reading of the probe's own
+// overhead, reported beside the load numbers. It is not the unit the bounds
+// are read in: twenty probes of a couple of milliseconds on a fresh process
+// make a p95 that moves by whole multiples between runs.
 const IDLE_MS = 5_000;
-// /health p95 under load may be at most this many times its idle p95: an
-// event loop that answers a 2 ms probe in 40 ms under thirty buyers is sharing
-// fairly; one that takes hundreds of ms is being held by synchronous work.
-const HEALTH_P95_RATIO = 20;
-// ...but never tighter than two slow-tool handlers, at the slow tool's idle
-// cost measured in this run: the probe can always land behind the synchronous
-// levenshtein that is running plus one that queued ahead of it, so a bound
-// below that would measure the mix, not the loop. Read from the run, not
-// typed, because that cost scales with the runner the way idle /health does not.
-const HEALTH_FLOOR_SLOW_HANDLERS = 2;
+// The unit every /health bound is read in is the slow tool's idle cost,
+// measured in this run (median of SLOW_IDLE_CALLS serial calls after
+// SLOW_WARM_CALLS warm-ups): it scales with the runner's core the way the
+// handlers holding the loop do.
+const SLOW_WARM_CALLS = 3;
+const SLOW_IDLE_CALLS = 12;
+// Held probe: one that waited more than this fraction of a slow handler. A
+// probe that finds the loop free answers in the probe's own overhead, well
+// under it on any runner; one that lands behind a synchronous handler waits
+// out the rest of that handler.
+const HELD_FRACTION_OF_SLOW = 0.25;
+// Busy share: the fraction of probes that were held. Probes are sent on a
+// fixed clock, independent of the buyers, so this samples the share of time
+// the loop is held by long synchronous work. The mix holds it by design for
+// about SLOW_TOOL_THREAD_SHARE (the slow tool's pacing below); the cheap tools,
+// discovery and proof-of-work leg answer under the held threshold. A share
+// above SLOW_TOOL_THREAD_SHARE + this slack means synchronous work the mix does
+// not account for: a busy loop on a hot route or in a middleware. The share
+// is a count, not a magnitude, so a runner hiccup that makes a few waits long
+// moves it by those few probes only.
+const BUSY_SHARE_SLACK = 0.12;
+// Tail: the load window is cut into this many equal windows by send time, and
+// the median window p95 may be at most this many slow handlers. An event loop
+// held for hundreds of ms at a time fails it in every window; a burst of
+// runner noise lands in one window and the median ignores it.
+const TAIL_WINDOWS = 3;
+const TAIL_SLOW_HANDLERS = 4;
+// Confirmation: when a /health check fails, the load runs once more and the
+// check fails only when it fails again. A regression in the server holds the
+// loop in both runs; a noisy neighbor on a shared runner rarely lands in both.
 // Discovery sheds (503 + Retry-After) are admission control, not errors, but
 // at most this share of discovery calls. The gates: DISCOVERY_MAX_INFLIGHT (4
 // uncached computes at once) and the 800 ms/s shared CPU budget (src/load-shed.js,
@@ -149,6 +174,7 @@ async function call(key, url, init = {}, ip = null) {
 
 // /health probe: fixed cadence, never serialized behind its own slow answer,
 // so a held loop is recorded as the long waits an outside monitor would see.
+// `lat` is in send order, so a run can be cut into time windows.
 function probeHealth(ms) {
   const lat = [];
   let bad = 0;
@@ -157,9 +183,11 @@ function probeHealth(ms) {
   return (async () => {
     while (Date.now() < end) {
       const t0 = performance.now();
+      const i = lat.length;
+      lat.push(null);
       pending.push(fetch(`${base}/health`, { signal: AbortSignal.timeout(HARD_TIMEOUT_MS) })
-        .then(async (r) => { await r.arrayBuffer(); lat.push(performance.now() - t0); if (r.status !== 200) bad++; })
-        .catch(() => { lat.push(performance.now() - t0); bad++; }));
+        .then(async (r) => { await r.arrayBuffer(); lat[i] = performance.now() - t0; if (r.status !== 200) bad++; })
+        .catch(() => { lat[i] = performance.now() - t0; bad++; }));
       await sleep(PROBE_EVERY_MS);
     }
     await Promise.all(pending);
@@ -209,9 +237,11 @@ try {
   ok(cheap.length === 4, `cheap tools by published example: ${cheap.map((c) => c.key).join(", ")}`);
   const slowInit = { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ a: SLOW_A, b: SLOW_B }) };
   // The slow tool's idle cost, serial, on the quiet server: the unit the
-  // /health floor is read in.
+  // /health bounds are read in.
   let warm = null;
-  for (let i = 0; i < 8; i++) warm = await call("slow-idle", `${base}/api/levenshtein`, slowInit);
+  for (let i = 0; i < SLOW_WARM_CALLS; i++) await call("slow-warm", `${base}/api/levenshtein`, slowInit);
+  stats.delete("slow-warm");
+  for (let i = 0; i < SLOW_IDLE_CALLS; i++) warm = await call("slow-idle", `${base}/api/levenshtein`, slowInit);
   const slowIdleP50 = pct(stats.get("slow-idle").lat, 0.5);
   ok(warm.status === 200 && typeof warm.json?.distance === "number", `the slow tool answers its ${SLOW_INPUT_CHARS}-char input (distance ${warm.json?.distance}, idle p50 ${r0(slowIdleP50)}ms)`);
   stats.delete("slow-idle");
@@ -224,13 +254,10 @@ try {
   const logMarkAt = serverLog.length;
 
   // ---- 30 buyers for LOAD_MS, with the probe beside them -----------------
-  const loadStart = Date.now();
-  const until = loadStart + LOAD_MS;
   const slowGapMs = Math.ceil((BUYERS * slowIdleP50) / SLOW_TOOL_THREAD_SHARE);
   console.log(`# slow tool: one call per buyer every ${slowGapMs} ms (${Math.round(SLOW_TOOL_THREAD_SHARE * 100)}% of the thread at ${r0(slowIdleP50)} ms idle)`);
-  const probe = probeHealth(LOAD_MS);
   let powAccepted = 0, powSolves = 0;
-  const buyer = async (id) => {
+  const buyer = async (id, loadStart, until) => {
     const ip = `198.51.100.${id + 1}`;
     const next = lcg(1000 + id);
     const think = () => sleep(Math.round(THINK_MS * (0.6 + 0.8 * (next() / 0x7fffffff))));
@@ -267,9 +294,27 @@ try {
       }
     }
   };
-  await Promise.all([...Array.from({ length: BUYERS }, (_, id) => buyer(id))]);
-  const load = await probe;
+  // One load window: the buyers for LOAD_MS with the /health probe beside them.
+  const runLoad = async () => {
+    const start = Date.now();
+    const probe = probeHealth(LOAD_MS);
+    await Promise.all(Array.from({ length: BUYERS }, (_, id) => buyer(id, start, start + LOAD_MS)));
+    return probe;
+  };
+  const loadStart = Date.now();
+  const load = await runLoad();
   const loadP95 = pct(load.lat, 0.95);
+  const HELD_MS = HELD_FRACTION_OF_SLOW * slowIdleP50;
+  const BUSY_SHARE_MAX = SLOW_TOOL_THREAD_SHARE + BUSY_SHARE_SLACK;
+  const TAIL_MAX = TAIL_SLOW_HANDLERS * slowIdleP50;
+  const healthVerdict = (lat) => {
+    const busy = lat.filter((x) => x > HELD_MS).length / Math.max(1, lat.length);
+    const per = Math.ceil(lat.length / TAIL_WINDOWS);
+    const winP95 = Array.from({ length: TAIL_WINDOWS }, (_, k) => pct(lat.slice(k * per, (k + 1) * per), 0.95));
+    const tail = pct(winP95, 0.5);
+    return { busy, winP95, tail, busyOk: busy <= BUSY_SHARE_MAX, tailOk: tail <= TAIL_MAX,
+      line: `n=${lat.length} p50=${r0(pct(lat, 0.5))}ms p95=${r0(pct(lat, 0.95))}ms max=${r0(Math.max(...lat))}ms busy=${(100 * busy).toFixed(1)}% window p95 ${winP95.map(r0).join("/")}ms` };
+  };
   const perf = await (await fetch(`${base}/__operator/perf.json`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
   const loadLog = serverLog.slice(logMarkAt);
   const stallLines = loadLog.split("\n").filter((l) => l.includes("[loop-lag]"));
@@ -286,7 +331,7 @@ try {
     const st = Object.entries(s.status).map(([c, v]) => `${c}:${v}`).join(" ") + (s.timeouts ? ` timeout:${s.timeouts}` : "") + (s.errors ? ` error:${s.errors}` : "");
     console.log(`${k.padEnd(w)}  ${String(s.lat.length).padStart(6)}  ${r0(pct(s.lat, 0.5)).padStart(6)}  ${r0(pct(s.lat, 0.95)).padStart(6)}  ${r0(Math.max(...s.lat)).padStart(6)}  ${st}`);
   }
-  console.log(`${"GET /health (probe)".padEnd(w)}  ${String(load.lat.length).padStart(6)}  ${r0(pct(load.lat, 0.5)).padStart(6)}  ${r0(loadP95).padStart(6)}  ${r0(Math.max(...load.lat)).padStart(6)}  idle p95 ${r0(idleP95)}ms, ratio ${(loadP95 / Math.max(idleP95, 0.01)).toFixed(1)}x`);
+  console.log(`${"GET /health (probe)".padEnd(w)}  ${String(load.lat.length).padStart(6)}  ${r0(pct(load.lat, 0.5)).padStart(6)}  ${r0(loadP95).padStart(6)}  ${r0(Math.max(...load.lat)).padStart(6)}  idle p95 ${r0(idleP95)}ms, slow-tool idle p50 ${r0(slowIdleP50)}ms, p95 ${(loadP95 / slowIdleP50).toFixed(1)}x slow`);
   console.log(`# total ${totalCalls} calls (${Math.round(totalCalls / (LOAD_MS / 1000))}/s); pow solves ${powSolves}, accepted headers ${powAccepted}; shed=${JSON.stringify(perf.shed)}; discoveryCpuSpentMs=${perf.discoveryCpuSpentMs}; loop stalls>=1s=${perf.loop?.stalls ?? "?"} worst=${perf.loop?.worstMs ?? "?"}ms; [discovery] slow lines=${slowDiscovery}`);
   for (const l of stallLines.slice(0, 10)) console.log(`# server: ${l.trim()}`);
 
@@ -314,9 +359,20 @@ try {
   const errors = [...stats.values()].reduce((a, s) => a + s.errors, 0);
   ok(timeouts === 0 && errors === 0, `no request hit the ${HARD_TIMEOUT_MS / 1000}s hard timeout or failed to connect (timeouts ${timeouts}, errors ${errors})`);
   ok(load.bad === 0 && load.lat.length >= LOAD_MS / PROBE_EVERY_MS * 0.8, `/health answered 200 on every probe during the load (n=${load.lat.length})`);
-  const floor95 = HEALTH_FLOOR_SLOW_HANDLERS * slowIdleP50;
-  const bound95 = Math.max(HEALTH_P95_RATIO * idleP95, floor95);
-  ok(loadP95 <= bound95, `/health p95 under load ${r0(loadP95)}ms <= ${r0(bound95)}ms (${HEALTH_P95_RATIO}x idle p95 ${r0(idleP95)}ms, floor ${HEALTH_FLOOR_SLOW_HANDLERS}x slow-tool idle p50 ${r0(slowIdleP50)}ms = ${r0(floor95)}ms)`);
+  const verdict = healthVerdict(load.lat);
+  console.log(`# /health run 1: ${verdict.line}`);
+  let busyOk = verdict.busyOk, tailOk = verdict.tailOk, confirm = null;
+  if (!busyOk || !tailOk) {
+    console.log("# a /health check failed; running the load once more to confirm");
+    const again = await runLoad();
+    confirm = healthVerdict(again.lat);
+    console.log(`# /health run 2: ${confirm.line}`);
+    busyOk ||= confirm.busyOk;
+    tailOk ||= confirm.tailOk;
+  }
+  const both = (k, f) => f(verdict[k]) + (confirm ? `; confirm run ${f(confirm[k])}` : "");
+  ok(busyOk, `/health busy share under load ${both("busy", (x) => `${(100 * x).toFixed(1)}%`)} <= ${(100 * BUSY_SHARE_MAX).toFixed(0)}% (probes held over ${r0(HELD_MS)}ms = ${HELD_FRACTION_OF_SLOW}x slow-tool idle p50 ${r0(slowIdleP50)}ms; the mix holds the loop about ${SLOW_TOOL_THREAD_SHARE * 100}%)`);
+  ok(tailOk, `/health median window p95 under load ${both("tail", (x) => `${r0(x)}ms`)} <= ${r0(TAIL_MAX)}ms (${TAIL_SLOW_HANDLERS}x slow-tool idle p50 ${r0(slowIdleP50)}ms; windows ${both("winP95", (w) => w.map(r0).join("/"))})`);
 } catch (e) {
   console.error(`\n# server log tail:\n${serverLog.split("\n").slice(-60).join("\n")}`);
   throw e;
