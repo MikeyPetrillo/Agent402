@@ -17,11 +17,14 @@
 // that reads like a bad verdict. Absence of evidence is reported as absence,
 // the same rule /status follows for uptime gaps.
 
+// A crawled row's price is a label ("$0.01"), a number or an object: one reader.
+import { priceUsdOf, isPricedAboveZero } from "../price-usd.js";
+
 /** Advertised-vs-settling summary for one origin. Pure; all state injected. */
 export function assessSeller({ origin, detail, settledCalls, sorThreshold, sorCap, requireNetwork }) {
   const advertisedNetworks = [...new Set((detail?.tools || []).flatMap((t) => t.networks || []))];
-  const paidTools = (detail?.tools || []).filter((t) => t.paid !== false && Number(t.price) > 0);
-  const prices = paidTools.map((t) => Number(t.price)).filter((p) => p > 0).sort((a, b) => a - b);
+  const paidTools = (detail?.tools || []).filter((t) => t.paid !== false && isPricedAboveZero(t.price));
+  const prices = paidTools.map((t) => priceUsdOf(t.price)).sort((a, b) => a - b);
   const advertisesRequired = requireNetwork ? advertisedNetworks.includes(requireNetwork) : true;
   const meetsThreshold = settledCalls >= sorThreshold;
   const withinCap = prices.length > 0 && prices[0] <= sorCap;

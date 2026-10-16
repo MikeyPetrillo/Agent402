@@ -17,6 +17,7 @@
 // (request-contract.js's rule): an outside row gets field names only.
 
 import { createHash } from "node:crypto";
+import { priceUsdOf } from "../price-usd.js";
 
 export const FIRST_PARTY_SELLER = "agent402";
 export const ROW_VERSION = 1;
@@ -99,14 +100,10 @@ function finish(row) {
   return row;
 }
 
-function priceNumber(p) {
-  if (typeof p === "number") return Number.isFinite(p) && p >= 0 ? p : null;
-  if (typeof p === "string") {
-    const n = Number(p.replace(/^\$/, ""));
-    return Number.isFinite(n) && n >= 0 ? n : null;
-  }
-  return null;
-}
+// One reader for a row's price, shared with the index (src/price-usd.js): a
+// label ("$0.01", "0.003 USDC"), a number or a supported object; null when
+// it cannot be read.
+const priceNumber = (p) => priceUsdOf(p);
 
 /**
  * A row for one of this server's own catalog tools.
