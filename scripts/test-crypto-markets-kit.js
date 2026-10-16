@@ -220,6 +220,10 @@ reset();
 routes = { "/api/v3/exchange_rates": () => { const e = new Error("aborted"); e.name = "TimeoutError"; throw e; } };
 await throws(h("exchange-rates")({}), 503, "deadline -> 503 naming the upstream and the step", /^Market data upstream did not answer the exchange rates read within \d+ s \(upstream deadline\)/);
 reset();
+// Headers answered, the body stalled past the deadline: the same 503, not "non-JSON".
+routes = { "/api/v3/exchange_rates": () => ({ ...jsonRes(200, {}), json: async () => { const e = new Error("The operation was aborted due to timeout"); e.name = "TimeoutError"; throw e; } }) };
+await throws(h("exchange-rates")({}), 503, "a stalled body read -> the deadline 503", /^Market data upstream did not answer the exchange rates read within \d+ s \(upstream deadline\)/);
+reset();
 routes = { "/api/v3/exchange_rates": () => { throw new Error("ECONNRESET"); } };
 await throws(h("exchange-rates")({}), 503, "network error -> 503 unreachable", /^Market data upstream is unreachable from here/);
 ok(calls.length === 1, "network error: no retry loop (timeout budget stays bounded)");
