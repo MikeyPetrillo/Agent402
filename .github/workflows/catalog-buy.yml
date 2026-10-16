@@ -33,7 +33,10 @@ name: Catalog buy (every tool at list price)
 #
 # A tool the cap left unbought is cap-deferred, counted apart from failures in
 # the headline, the issue and the exit code (4): nothing is known about it, so
-# the issue stays open until a run buys it, but it is not called broken.
+# the issue stays open until a run buys it, but it is not called broken. An
+# identity-bound tool that names the buyer's own sale (attest, feedback) runs
+# after a sale this run settled; with none to name it is deferred the same way
+# (grade no-own-sale).
 #
 # /status: this workflow never records an observation. A tool that answers
 # wrongly is not a settlement outage; settlement is the paid canary's
@@ -191,8 +194,8 @@ jobs:
               fi
               exit 0 ;;
             fail)
-              DEFER_LINE=""; [ "${DEFERRED:-0}" != "0" ] && DEFER_LINE="Cap-deferred (not bought, nothing known): $DEFERRED tool(s): $DEFERRING"
-              BODY="Bought from production and graded like the strict sweep ($SCOPE): $FAILED of $GRADED failed, $DEFERRED cap-deferred. A grade names what the paid answer lacked: http-NNN (the status), error-field (a 200 carrying an error), missing-keys (documented output keys absent), empty (an array the published example shows populated came back empty), unsettled (a 402 after paying), quote-over-list (a fixed-price tool's live 402 asked more than its list price and was not signed), quote-over-ceiling (a quoted tool's live 402 asked more than its documented ceiling and was not signed), no-example (no usable published example). A cap-deferred tool was not bought because the run's spend cap was reached; it is counted apart because nothing is known about it. The step summary carries the full table and the graded report is attached to the run.
+              DEFER_LINE=""; [ "${DEFERRED:-0}" != "0" ] && DEFER_LINE="Deferred (not bought, nothing known): $DEFERRED tool(s): $DEFERRING"
+              BODY="Bought from production and graded like the strict sweep ($SCOPE): $FAILED of $GRADED failed, $DEFERRED deferred. A grade names what the paid answer lacked: http-NNN (the status), error-field (a 200 carrying an error), missing-keys (documented output keys absent), empty (an array the published example shows populated came back empty), unsettled (a 402 after paying), quote-over-list (a fixed-price tool's live 402 asked more than its list price and was not signed), quote-over-ceiling (a quoted tool's live 402 asked more than its documented ceiling and was not signed), no-example (no usable published example). A deferred tool was not bought because the run's spend cap was reached, or (no-own-sale) because it names a sale this run makes and none settled; it is counted apart because nothing is known about it. The step summary carries the full table and the graded report is attached to the run.
 
           Failing: $FAILING
           $DEFER_LINE
@@ -200,7 +203,7 @@ jobs:
           Run: $RUN
           A buyer copying the published example gets the same answer; fix the tool or its example, then dispatch this workflow. A green scheduled run closes this." ;;
             deferred)
-              BODY="Every tool bought from production passed its grade ($SCOPE, $GRADED graded), but $DEFERRED tool(s) were not bought because the run's spend cap was reached, so nothing is known about them: $DEFERRING. Raise CATALOG_BUY_MAX_USD, or dispatch this workflow with tier weekly for the products the daily cap cannot fit. Run: $RUN" ;;
+              BODY="Every tool bought from production passed its grade ($SCOPE, $GRADED graded), but $DEFERRED tool(s) were not bought, so nothing is known about them: $DEFERRING. A plain slug was cut by the run's spend cap: raise CATALOG_BUY_MAX_USD, or dispatch this workflow with tier weekly for the products the daily cap cannot fit. A slug marked no-own-sale names a sale this run makes, and none settled to name. Run: $RUN" ;;
             unfunded)
               BODY="The catalog buy did not start ($SCOPE): the burner's Base USDC balance is below this run's planned spend plus the floor, so nothing was bought and nothing was checked today. This is funding, not a tool failure. Top up the burner (the run log names the address), then dispatch this workflow; a green run closes this. Run: $RUN" ;;
             *)

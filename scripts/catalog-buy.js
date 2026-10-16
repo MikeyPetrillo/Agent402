@@ -53,6 +53,18 @@
 //   that passed). A tool cut by the spend cap is `cap`: NOT a failure, it is
 //   counted apart as cap-deferred in the headline, the issue and the exit code,
 //   because a tool the budget skipped says nothing about the tool.
+//
+// TOOLS THAT NEED THE BUYER'S OWN SALE
+//   An identity-bound tool whose input names a settlement `tx` (attest,
+//   feedback) answers only for a sale the CALLER paid for, and attest only for
+//   one with a recorded response digest. Its published example names an old
+//   sale, so a cold buy of that example can never pass. These tools run after
+//   every other tool, with the example's `tx` replaced by the settlement tx of
+//   a non-streamed JSON 200 this run paid for (preferring SALE_SOURCE_SLUG, the
+//   paid canary's choice). When the plan holds no such sale (an `--only attest`
+//   run), the cheap source tool is added to the plan first, under the cap. When
+//   no sale can be had (the cap cannot fit one, or none settled), the tool is
+//   `no-own-sale`: deferred with that reason, never a failure.
 //     0  every graded tool passed      5  some tool failed its grade
 //     4  nothing failed, some tools    3  unfunded (nothing bought)
 //        were cap-deferred (unchecked) 2  misconfigured (no key, no catalog)
@@ -84,6 +96,9 @@ export const DEFAULT_FLOOR_USD = 2;
 export const DEFAULT_CONCURRENCY = 1;
 export const DEFAULT_PACE_MS = 1000;
 export const TIERS = ["daily", "weekly", "cheap", "all"];
+/** The sale an own-sale tool is pointed at when the plan holds no other: the paid canary's choice. */
+export const SALE_SOURCE_SLUG = "hash";
+export const NO_OWN_SALE = "no-own-sale";
 const BASE_RPCS = ["https://mainnet.base.org", "https://base.blockscout.com/api/eth-rpc"];
 
 export const parsePriceUsd = (p) => (typeof p === "number" ? p : Number(String(p ?? "").replace(/[^0-9.]/g, "")) || 0);
@@ -129,6 +144,30 @@ export function exampleOf(method, op) {
   return { kind: "json", body };
 }
 
+const exampleInput = (ex) => (ex?.kind === "json" ? ex.body : ex?.kind === "query" ? ex.query : null);
+
+/** An identity-bound tool whose input names a settlement tx: it needs a sale the buyer made. */
+export function needsOwnSale(row) {
+  const input = exampleInput(row?.example);
+  return row?.identityBound === true && !!input && typeof input === "object" && Object.prototype.hasOwnProperty.call(input, "tx");
+}
+
+/** A tool whose paid 200 leaves a sale an own-sale tool can name: not identity-bound
+ *  (attest refuses those), a JSON answer (a binary or streamed one has no digest). */
+export function isSaleSource(row) {
+  if (!row?.example || row.identityBound || row.binary || needsOwnSale(row)) return false;
+  if (row.example.kind !== "json" && row.example.kind !== "query") return false;
+  const input = exampleInput(row.example);
+  return !(input && (input.stream === true || input.stream === "true"));
+}
+
+/** The example with its `tx` replaced by a sale this run settled. */
+export function withOwnSale(example, tx) {
+  if (example?.kind === "json") return { ...example, body: { ...example.body, tx } };
+  if (example?.kind === "query") return { ...example, query: { ...example.query, tx } };
+  return example;
+}
+
 /**
  * The most a quoted tool's live 402 may ask for, in USD, or null for a
  * fixed-price tool. Read from the price list's row first (`quoted: true` with
@@ -171,6 +210,7 @@ export function catalogFromSurfaces(pricing, spec) {
       const ceiling = quoteCeilingUsd(ep, op);
       rows.push({
         slug, path, method, usd, op, example: exampleOf(method, op), modelBacked: ep?.modelBacked === true,
+        identityBound: ep?.identityBound === true,
         binary: types.length > 0 && !types.includes("application/json"),
         // quoted: the list price is a floor and maxUsd the documented ceiling;
         // fixed: both are the list price.
@@ -229,7 +269,22 @@ export function planRun(catalog, { tier = "daily", only = "", skip = [], now = n
     buy.push(r);
     planned += micro(r.usd);
   }
-  return { tier, sliceIndex, buy, deferred, noExample, skipped, plannedUsd: planned / 1e6, dailyCount: daily.length, weeklyCount: weekly.length, sliceUsd: slice.reduce((s, r) => s + micro(r.usd), 0) / 1e6 };
+  // An own-sale tool needs a sale this run settles first. With none in the plan,
+  // add the cheap source (never a skipped one) under the cap; when it cannot be
+  // had, the tool waits as no-own-sale, a deferral and never a failure.
+  let saleSource = null, addedSaleSource = false;
+  const noOwnSale = [];
+  if (buy.some(needsOwnSale)) {
+    const inPlan = buy.filter(isSaleSource);
+    if (inPlan.length) saleSource = (inPlan.find((r) => r.slug === SALE_SOURCE_SLUG) || inPlan[0]).slug;
+    else {
+      const eligible = catalog.filter((r) => isSaleSource(r) && !skipSet.has(r.slug)).sort((a, b) => micro(a.usd) - micro(b.usd) || a.slug.localeCompare(b.slug));
+      const pick = eligible.find((r) => r.slug === SALE_SOURCE_SLUG) || eligible[0];
+      if (pick && planned + micro(pick.usd) <= cap) { buy.unshift(pick); planned += micro(pick.usd); saleSource = pick.slug; addedSaleSource = true; }
+      else for (const r of buy.filter(needsOwnSale)) { noOwnSale.push(r); buy.splice(buy.indexOf(r), 1); planned -= micro(r.usd); }
+    }
+  }
+  return { tier, sliceIndex, buy, deferred, noExample, skipped, noOwnSale, saleSource, addedSaleSource, plannedUsd: planned / 1e6, dailyCount: daily.length, weeklyCount: weekly.length, sliceUsd: slice.reduce((s, r) => s + micro(r.usd), 0) / 1e6 };
 }
 
 /** The strict sweep's grade over one paid answer. Pure. */
@@ -251,8 +306,10 @@ export function gradeAnswer(row, r) {
   return { pass: true, grade: "ok" };
 }
 
-/** A tool the spend cap left unbought: unchecked, never failed. */
-export const isDeferred = (r) => r.grade === "cap";
+/** A tool the spend cap left unbought, or an own-sale tool with no sale to name: unchecked, never failed. */
+export const isDeferred = (r) => r.grade === "cap" || r.grade === NO_OWN_SALE;
+const capDeferredOf = (results) => results.filter((r) => r.grade === "cap");
+const noOwnSaleOf = (results) => results.filter((r) => r.grade === NO_OWN_SALE);
 export const failedOf = (results) => results.filter((r) => !r.pass && !isDeferred(r));
 export const deferredOf = (results) => results.filter(isDeferred);
 
@@ -284,9 +341,9 @@ export function summaryTable(results) {
 
 export function headlineFor(summary) {
   if (summary.unfunded) return "UNFUNDED";
-  const failed = failedOf(summary.results).length, deferred = deferredOf(summary.results).length;
-  if (!failed && !deferred) return "all passed";
-  return [failed ? `${failed} FAILED` : "nothing failed", deferred ? `${deferred} cap-deferred` : ""].filter(Boolean).join(", ");
+  const failed = failedOf(summary.results).length, capped = capDeferredOf(summary.results).length, unsold = noOwnSaleOf(summary.results).length;
+  if (!failed && !capped && !unsold) return "all passed";
+  return [failed ? `${failed} FAILED` : "nothing failed", capped ? `${capped} cap-deferred` : "", unsold ? `${unsold} deferred (no own sale)` : ""].filter(Boolean).join(", ");
 }
 
 export function markdownSummary(summary) {
@@ -295,7 +352,7 @@ export function markdownSummary(summary) {
   const lines = [
     `## Catalog buy: ${headlineFor(summary)}`,
     "",
-    `tier \`${plan.tier}\` (slice ${plan.sliceIndex} of ${ROTATION_DAYS}) | graded ${results.length} | passed ${results.length - failed.length - deferred.length} | failed ${failed.length} | cap-deferred ${deferred.length} | planned ${usd(plan.plannedUsd)} | charged ${usd(spentUsd)}, never above a tool's documented ceiling${balanceUsd == null ? "" : ` | burner ${summary.unfunded ? "below" : "above"} its floor before the run`}`,
+    `tier \`${plan.tier}\` (slice ${plan.sliceIndex} of ${ROTATION_DAYS}) | graded ${results.length} | passed ${results.length - failed.length - deferred.length} | failed ${failed.length} | cap-deferred ${capDeferredOf(results).length}${noOwnSaleOf(results).length ? ` | deferred without an own sale ${noOwnSaleOf(results).length}` : ""} | planned ${usd(plan.plannedUsd)} | charged ${usd(spentUsd)}, never above a tool's documented ceiling${balanceUsd == null ? "" : ` | burner ${summary.unfunded ? "below" : "above"} its floor before the run`}`,
     "",
     "| slug | price | status | grade | ms |",
     "|---|---:|---|---|---:|",
@@ -360,12 +417,15 @@ export async function runCatalogBuy({
   if (!catalog.length) throw Object.assign(new Error("the catalog read empty: nothing to buy"), { exitCode: 2 });
   const plan = planRun(catalog, { tier, only, skip, now, capUsd });
   log.log(`[catalog-buy] ${base} tier=${plan.tier} slice=${plan.sliceIndex}/${ROTATION_DAYS} catalog=${catalog.length} (daily ${plan.dailyCount}, weekly ${plan.weeklyCount}, today's slice ${usd(plan.sliceUsd)})`);
+  if (plan.addedSaleSource) log.log(`[catalog-buy] ${plan.saleSource} is bought first: ${plan.buy.filter(needsOwnSale).map((r) => r.slug).join(", ")} names a sale this run makes`);
+  if (plan.noOwnSale.length) log.warn(`WARN  ${plan.noOwnSale.map((r) => r.slug).join(", ")}: deferred, no sale this run can make fits the cap`);
   log.log(`[catalog-buy] buying ${plan.buy.length} (${plan.buy.filter((r) => r.quoted).length} quoted under a documented ceiling, the rest at list price), planned ${usd(plan.plannedUsd)} under the ${usd(capUsd)} cap; cap-deferred ${plan.deferred.length}, no example ${plan.noExample.length}, skipped ${plan.skipped.length}; ${concurrency} in flight, ${paceMs} ms pace${dry ? " [dry run: nothing is bought]" : ""}`);
 
   const results = [];
   const unbought = (r, grade) => ({ slug: r.slug, path: r.path, usd: r.usd, status: null, grade, pass: false, ms: null, attempts: 0 });
   for (const r of plan.deferred) results.push(unbought(r, "cap"));
   for (const r of plan.noExample) results.push(unbought(r, "no-example"));
+  for (const r of plan.noOwnSale) results.push(unbought(r, NO_OWN_SALE));
   const summary = { plan, results, captures: [], spentUsd: 0, balanceUsd: null, unfunded: false, dry, payer: payer?.address || null };
   if (dry) { summary.exitCode = exitCodeFor(summary); return summary; }
 
@@ -395,10 +455,9 @@ export async function runCatalogBuy({
     return fixture;
   };
 
-  async function requestFor(row) {
+  async function requestFor(row, ex = row.example) {
     let url = `${base}${row.path}`;
     const init = { method: row.method.toUpperCase(), headers: { Accept: "application/json" } };
-    const ex = row.example;
     if (ex.kind === "query") {
       const qs = new URLSearchParams(ex.query).toString();
       if (qs) url += `?${qs}`;
@@ -444,12 +503,19 @@ export async function runCatalogBuy({
     }
   }
 
-  async function buyOne(row) {
+  // The sale an own-sale tool names: the preferred source's when it settled, else the latest.
+  let ownSale = null;
+  const noteSale = (row, r, out) => {
+    if (!isSaleSource(row) || r.paid !== true || out.status !== 200 || !out.tx || !r.body || typeof r.body !== "object") return;
+    if (!ownSale || !ownSale.preferred || row.slug === plan.saleSource) ownSale = { tx: out.tx, slug: row.slug, preferred: row.slug === plan.saleSource };
+  };
+
+  async function buyOne(row, sale = null) {
     const t0 = Date.now();
     const timeout = tierOf(row) === "weekly" ? slowTimeoutMs : timeoutMs;
     let r, attempts = 0;
     try {
-      const { url, init } = await requestFor(row);
+      const { url, init } = await requestFor(row, sale ? withOwnSale(row.example, sale.tx) : row.example);
       r = await attempt(row, url, init, timeout); attempts = 1;
       if (!r.grade && r.status >= 500 && r.status <= 599) {
         log.warn(`  retry ${row.slug} after HTTP ${r.status}`);
@@ -460,18 +526,31 @@ export async function runCatalogBuy({
       r = { threw: String(e?.name === "TimeoutError" ? "timeout" : e?.message || e) }; attempts = attempts || 1;
     }
     const { pass, grade } = gradeAnswer(row, r);
-    const out = { slug: row.slug, path: row.path, usd: row.usd, quotedUsd: r.quotedUsd ?? null, status: r.status ?? null, grade, pass, ms: Date.now() - t0, attempts, tx: r.tx || null };
+    const out = { slug: row.slug, path: row.path, usd: row.usd, quotedUsd: r.quotedUsd ?? null, status: r.status ?? null, grade, pass, ms: Date.now() - t0, attempts, tx: r.tx || null, ...(sale ? { ownSaleOf: sale.slug } : {}) };
+    noteSale(row, r, out);
     // The paid answer itself goes to the separate outputs file (redacted,
     // bounded, guarded: scripts/catalog-buy-capture.js), never into the
     // graded report, which keeps its receipt fields for the run's own audit.
-    if (capture) summary.captures.push(captureRecord(row, out, { status: r.status, body: r.body, paid: r.paid === true }, { payer: payer?.address || null, maxBytes: captureMaxBytes }));
+    // The capture sees the published example, and the substituted tx is named
+    // as ours, so it is blanked wherever the answer echoes it.
+    if (capture) summary.captures.push(captureRecord(row, out, { status: r.status, body: r.body, paid: r.paid === true }, { payer: payer?.address || null, maxBytes: captureMaxBytes, ownTxs: sale ? [sale.tx] : [] }));
     log.log(`${pass ? "OK  " : "FAIL"} ${row.slug.padEnd(34)} ${usd(row.usd)}  ${String(out.status ?? "-").padStart(3)}  ${grade}  ${out.ms}ms`);
     return out;
   }
 
   // Dearest (slowest) first so the long report builds overlap the cheap stream.
+  // Own-sale tools go last, once every other tool has had its chance to settle.
   const order = [...plan.buy].sort((a, b) => micro(b.usd) - micro(a.usd) || a.slug.localeCompare(b.slug));
-  await mapPool(order, concurrency, async (row) => { results.push(await buyOne(row)); if (paceMs) await sleep(paceMs); });
+  await mapPool(order.filter((r) => !needsOwnSale(r)), concurrency, async (row) => { results.push(await buyOne(row)); if (paceMs) await sleep(paceMs); });
+  await mapPool(order.filter(needsOwnSale), concurrency, async (row) => {
+    if (!ownSale) {
+      log.warn(`DEFER ${row.slug.padEnd(34)} ${usd(row.usd)}  no sale settled this run for it to name`);
+      results.push(unbought(row, NO_OWN_SALE));
+      return;
+    }
+    results.push(await buyOne(row, ownSale));
+    if (paceMs) await sleep(paceMs);
+  });
   summary.spentUsd = reserved / 1e6;
   summary.exitCode = exitCodeFor(summary);
   return summary;
@@ -529,6 +608,7 @@ async function main() {
   console.log(`\n${summaryTable(summary.results)}`);
   console.log(`\ngraded ${summary.results.length}: ${summary.results.length - failed.length - deferred.length} passed, ${failed.length} failed, ${deferred.length} cap-deferred | planned ${usd(summary.plan.plannedUsd)} | charged ${usd(summary.spentUsd)}, never above a tool's documented ceiling${summary.payer ? ` | payer ${summary.payer}` : ""}`);
   if (summary.plan.deferred.length) console.log(`not bought (cap): ${summary.plan.deferred.map((r) => r.slug).join(", ")}`);
+  if (summary.plan.noOwnSale.length) console.log(`not bought (no own sale to name): ${summary.plan.noOwnSale.map((r) => r.slug).join(", ")}`);
   if (summary.plan.noExample.length) console.log(`no usable published example: ${summary.plan.noExample.map((r) => r.slug).join(", ")}`);
   if (summary.plan.skipped.length) console.log(`skipped by CATALOG_BUY_SKIP: ${summary.plan.skipped.map((r) => r.slug).join(", ")}`);
 
@@ -548,7 +628,7 @@ async function main() {
   if (process.env.GITHUB_OUTPUT) {
     const result = resultWordFor(summary);
     const named = failed.slice(0, 60).map((r) => `${r.slug} (${r.grade})`).join(", ") + (failed.length > 60 ? `, and ${failed.length - 60} more` : "");
-    const deferredNamed = deferred.slice(0, 60).map((r) => r.slug).join(", ") + (deferred.length > 60 ? `, and ${deferred.length - 60} more` : "");
+    const deferredNamed = deferred.slice(0, 60).map((r) => (r.grade === "cap" ? r.slug : `${r.slug} (${r.grade})`)).join(", ") + (deferred.length > 60 ? `, and ${deferred.length - 60} more` : "");
     try { appendFileSync(process.env.GITHUB_OUTPUT, `result=${result}\nfailing=${named}\ndeferring=${deferredNamed}\ngraded=${summary.results.length}\nfailed=${failed.length}\ndeferred=${deferred.length}\ncharged=${usd(summary.spentUsd)}\n`); } catch { /* local run */ }
   }
   process.exit(summary.exitCode);
