@@ -1186,6 +1186,8 @@ async function main() {
   // count, leaving the other 30 legs' cadence and cost untouched. Each round
   // is a genuine new $0.001 settlement, not a replay.
   const MPP_CANARY_ROUNDS = Number(process.env.MPP_CANARY_ROUNDS) || 2;
+  // Unset (a local or hand run) means every leg runs.
+  const CELO_DUE = process.env.CANARY_CELO !== "false";
   for (let mppRound = 1; mppRound <= MPP_CANARY_ROUNDS; mppRound++) {
   await (async () => {
     try {
@@ -1247,6 +1249,12 @@ async function main() {
       // second offered chain end to end (client registry domain "USDC"/"2",
       // our Celo money parser, Celo facilitator settle with X-API-Key). Same
       // burner, funded with Celo USDC by the pinned celo x402 leg's budget.
+      // Celo settlements draw prepaid facilitator credits, so they run once a
+      // day: one round, on the run the workflow marks (CANARY_CELO).
+      if (!CELO_DUE || mppRound > 1) {
+        if (mppRound === 1) console.log("\nmpp-celo leg: skipped (Celo runs on one canary a day)");
+        return;
+      }
       const celoClient = MppClientNS.create({
         methods: [mppEvm.charge({ account, currencies: [mppEvm.assets.celo.USDC], maxAmount: "0.01" })],
         polyfill: false,
@@ -1501,7 +1509,7 @@ async function main() {
     { key: "polygon", caip2: "eip155:137", sym: "USDC", chainLabel: "Polygon", tx: (h) => `https://polygonscan.com/tx/${h}` },
     { key: "arbitrum", caip2: "eip155:42161", sym: "USDC", chainLabel: "Arbitrum", tx: (h) => `https://arbiscan.io/tx/${h}` },
     { key: "monad", caip2: "eip155:143", sym: "USDC", chainLabel: "Monad", tx: (h) => `https://monadscan.com/tx/${h}` },
-    { key: "celo", caip2: "eip155:42220", sym: "USDC", chainLabel: "Celo", tx: (h) => `https://celoscan.io/tx/${h}` },
+    ...(process.env.CANARY_CELO !== "false" ? [{ key: "celo", caip2: "eip155:42220", sym: "USDC", chainLabel: "Celo", tx: (h) => `https://celoscan.io/tx/${h}` }] : []),
     { key: "avalanche", caip2: "eip155:43114", sym: "USDC", chainLabel: "Avalanche", tx: (h) => `https://snowtrace.io/tx/${h}` },
     { key: "sei", caip2: "eip155:1329", sym: "USDC", chainLabel: "Sei", tx: (h) => `https://seiscan.io/tx/${h}?chain=pacific-1` },
     { key: "optimism", caip2: "eip155:10", sym: "USDC", chainLabel: "Optimism", tx: (h) => `https://optimistic.etherscan.io/tx/${h}` },
