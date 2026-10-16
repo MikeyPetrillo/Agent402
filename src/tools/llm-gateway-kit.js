@@ -2060,6 +2060,11 @@ export const REASONING_MODELS = [
   // 2026-09-23. At 120 max_tokens "low" spent every token reasoning and came
   // back empty; "minimal" answered with 57 reasoning tokens.
   { prefix: "meta/muse-spark", efforts: ["minimal", "low", "medium", "high", "xhigh"] },
+  // Muse Spark Open: a separate listing under the same prefix; reasoning
+  // mandatory, default effort medium, efforts low/medium/high/xhigh with no
+  // "minimal" (live catalog 2026-10-15). The longer id wins over the prefix
+  // row, so "lowest" resolves to "low" instead of an effort upstream refuses.
+  { id: "meta/muse-spark-open", efforts: ["low", "medium", "high", "xhigh"] },
 ];
 export function reasoningRowMatches(row, id) {
   const m = String(id || "").toLowerCase();

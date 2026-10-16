@@ -2633,6 +2633,9 @@ function indexCatalog(catalog) {
 const SKILLS_CSS = `
 .sk-hero, .sk-2col { display:grid; gap:0; }
 @media (max-width:900px){ .sk-hero, .sk-2col { grid-template-columns:minmax(0,1fr) !important; } }
+/* The two-way comparison keeps every label and figure on one line; on a phone its cells take a narrower inset so the three columns fit. */
+.sk-cmp th, .sk-cmp td { white-space:nowrap; }
+@media (max-width:600px){ .sk-cmp th, .sk-cmp td { padding-left:8px !important; padding-right:8px !important; } .sk-cmp th:first-child, .sk-cmp td:first-child { padding-left:16px !important; } }
 .sk-cardgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--hairline); border:1px solid var(--hairline); }
 @media (max-width:900px){ .sk-cardgrid { grid-template-columns:repeat(2,1fr); } }
 @media (max-width:640px){ .sk-cardgrid { grid-template-columns:1fr; } }
@@ -2662,7 +2665,7 @@ const SKILLS_CSS = `
 .sk-buy-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
 .sk-buy-price { font-family:var(--font-mono); font-size:var(--fs-2xl); font-weight:700; color:var(--accent); }
 .sk-buy-unit { color:var(--muted); font-size:var(--fs-md); }
-.sk-buy-route { font-family:var(--font-mono); font-size:var(--fs-sm); color:var(--ink); margin-top:6px; }
+.sk-buy-route { font-family:var(--font-mono); font-size:var(--fs-sm); color:var(--ink); margin-top:6px; white-space:nowrap; overflow-x:auto; }
 .sk-buy-note { color:var(--muted); font-size:var(--fs-md); line-height:1.7; margin:10px 0 0; }
 .sk-tl .price { color:var(--accent); font-family:var(--font-mono); font-size:var(--fs-sm); }
 .sk-tl .route { color:var(--faint); font-family:var(--font-mono); font-size:var(--fs-xs); }
@@ -2738,11 +2741,11 @@ export function skillsIndex(baseUrl) {
   ).join("") + `<a href="/marketplace/tools" style="padding:13px 16px;color:var(--faint);text-decoration:none;border-bottom:2px solid transparent;white-space:nowrap;">All indexed tools ↗</a>`;
 
   const comparisonRowsHtml = [
-    ["payments to sign", "7", "1", false],
+    ["signatures", "7", "1", false],
     ["round trips", "7", "1", false],
-    ["settlements to reconcile", "7", "1", false],
-    ["failure paths to handle", "7", "1 envelope", false],
-    ["orchestration code", "yours", "none", true],
+    ["settlements", "7", "1", false],
+    ["failure paths", "7", "1 envelope", false],
+    ["code to write", "yours", "none", true],
   ].map(([label, alone, packed, green]) =>
     `<tr style="border-bottom:1px solid var(--panel-rule);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 18px;color:var(--on-panel-faint);">${e(label)}</th><td style="padding:11px 18px;text-align:right;color:var(--on-panel-muted);">${e(alone)}</td><td style="padding:11px 18px;text-align:right;color:${green ? "var(--accent-lit)" : "var(--on-panel)"};font-weight:700;">${e(packed)}</td></tr>`
   ).join("");
@@ -2778,9 +2781,9 @@ export function skillsIndex(baseUrl) {
         </div>
       </div>
       <div style="border:1px solid var(--hairline);background:var(--panel);">
-        <div style="padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);display:flex;justify-content:space-between;gap:12px;"><span>THE SAME JOB, TWO WAYS</span><span style="color:var(--on-panel-faint);">security-audit</span></div>
-        <table style="font-family:var(--font-mono);font-size:var(--fs-sm);">
-          <thead><tr style="border-bottom:1px solid var(--panel-rule);color:var(--on-panel-faint);"><th scope="col" style="text-align:left;font-weight:400;padding:10px 18px;"></th><th scope="col" style="text-align:right;font-weight:400;padding:10px 18px;">you orchestrate</th><th scope="col" style="text-align:right;font-weight:700;padding:10px 18px;color:var(--accent-lit);">one pack</th></tr></thead>
+        <div style="padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;"><span style="white-space:nowrap;">THE SAME JOB, TWO WAYS</span><span style="color:var(--on-panel-faint);white-space:nowrap;">security-audit</span></div>
+        <table class="sk-cmp" style="font-family:var(--font-mono);font-size:var(--fs-sm);">
+          <thead><tr style="border-bottom:1px solid var(--panel-rule);color:var(--on-panel-faint);"><th scope="col" style="text-align:left;font-weight:400;padding:10px 18px;"></th><th scope="col" style="text-align:right;font-weight:400;padding:10px 18px;">yourself</th><th scope="col" style="text-align:right;font-weight:700;padding:10px 18px;color:var(--accent-lit);">one pack</th></tr></thead>
           <tbody>${comparisonRowsHtml}</tbody>
         </table>
         <div style="padding:12px 18px;border-top:1px solid var(--panel-rule-2);font-size:var(--fs-sm);line-height:1.5;color:var(--on-panel-faint);">The pack still runs all seven tools; you just stop managing them.</div>
@@ -2816,7 +2819,7 @@ export function skillsIndex(baseUrl) {
   <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:700px;margin:0 0 28px;">Every pack publishes its tool sequence before you pay. These are deterministic sequences, not an agent improvising - the same inputs run the same steps in the same order, every time. Six are set out in full below; the rest of the ${packCount} follow.</p>
   <div class="sk-cardgrid">${flagshipCardsHtml}</div>
   <div style="border:1px solid var(--hairline);border-top:none;background:var(--footer-bg);padding:22px 24px;">
-    <div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:0 0 14px;"><span>${rest.length} more</span><span>every pack links to its own sequence</span></div>
+    <div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:0 0 14px;"><span>${rest.length} more</span><span>each links to its own steps</span></div>
     <div class="sk-rest-grid" style="display:flex;flex-wrap:wrap;gap:8px;">${restChipsHtml}</div>
   </div>
 </section>
@@ -2850,7 +2853,7 @@ export function skillsIndex(baseUrl) {
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:44px 30px 52px;">
-  <div style="background:var(--panel);border:1px solid var(--hairline);padding:46px 40px;position:relative;overflow:hidden;">
+  <div class="ml-cta-panel" style="background:var(--panel);border:1px solid var(--hairline);padding:46px 40px;position:relative;overflow:hidden;">
     <div style="position:relative;">
       <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Stop writing the glue.</h2>
       <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:520px;">Describe the job and let the pack run the sequence. One payment, one response, and a result you can use even when a step fails.</p>

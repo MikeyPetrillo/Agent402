@@ -53,7 +53,7 @@ export const REPORTS_CSS = `
   .field:focus-within{border-color:var(--ink)}
   .field input{flex:1;border:0;background:transparent;color:var(--ink);font-family:var(--font-body);font-size:var(--fs-lg);outline:none;min-width:0}
   .gets{font-size:var(--fs-md);line-height:1.55;color:var(--muted);margin:0 0 6px}.gets b{color:var(--ink);font-weight:500}
-  .note{font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin-top:16px}.pcard .note a{white-space:nowrap;margin-right:12px}
+  .note{font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin-top:16px}.pcard .note a{white-space:nowrap;margin-right:12px}.note a{white-space:nowrap}
   .err{color:var(--bad);font-size:var(--fs-md);margin-top:8px;min-height:18px}
   .trust{display:flex;gap:20px;flex-wrap:wrap;color:var(--muted);font-size:var(--fs-md);margin-top:16px}
   .trust span{display:inline-flex;gap:7px;align-items:center;white-space:nowrap}
@@ -77,6 +77,8 @@ export const REPORTS_CSS = `
   .rpt-brand{display:flex;align-items:baseline;gap:9px;font-family:var(--font-mono);margin-bottom:14px}
   .rpt-brand .n{font-weight:500;color:var(--ink);font-size:var(--fs-base)}.rpt-brand .s{font-size:var(--fs-2xs);letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
   .rpt-title{font-weight:500;font-size:var(--fs-3xl);letter-spacing:-.03em;line-height:1.08;margin:0;color:var(--ink);text-wrap:balance}
+  .cite-run{white-space:nowrap}
+  @media (max-width:600px){.cite-run{white-space:normal}.cite-gap::after{content:"\\200b"}}
   .rpt-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:10px;display:flex;flex-wrap:wrap;row-gap:2px}.rpt-meta>span{white-space:nowrap}.rpt-meta>span+span::before{content:"·";padding:0 8px}
   .upsell{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:24px 26px;margin-top:24px;box-shadow:inset 0 1px 0 var(--card-inset)}
   .upsell .k{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}

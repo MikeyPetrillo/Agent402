@@ -99,6 +99,6 @@ curl -H 'Authorization: Bearer a402_…' 'https://agent402.tools/api/whois?domai
 | Price | $0.001 and up per call | $0.60 to $2.00 per report over x402 / MPP ($0.05 for the IPO digest), or $2 to $5 by card | $5 per month per target |
 | Pay with | x402, MPP, proof-of-work (pure-CPU), a credits key issued earlier | x402, MPP, a credits key issued earlier, or card at `/reports` | card subscription at `/monitors` |
 | Who | agents | agents and people | people (agents call the underlying report directly) |
-| Serving path | mostly deterministic code; the model-backed ones (LLM tiers, media, embeddings, `answer`) carry `modelBacked: true` in `/api/pricing` | deterministic evidence + grounded synthesis (IPO digest: deterministic only) | the same report kits on a schedule |
+| Serving path | mostly deterministic code; the model-backed ones (LLM tiers, media, embeddings, `answer`) carry `modelBacked: true` in the `/api/pricing` listing | deterministic evidence + grounded synthesis (IPO digest: deterministic only) | the same report kits on a schedule |
 
 Related: [[Tool Catalog]] · [[Paying with x402]] · [[Paying with MPP]] · [[MCP Connector]] · [[Self-Hosting]] (the env that enables the card paths).

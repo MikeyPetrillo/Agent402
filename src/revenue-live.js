@@ -1830,11 +1830,11 @@ export function revenueChartSection(range = null) {
   .rvz{border:1px solid var(--hairline);background:var(--card);padding:18px 20px;margin:0 0 26px}
   .rvz-controls{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
   .rvz-seg{display:inline-flex;border:1px solid var(--hairline)}
-  .rvz-seg button{background:transparent;border:none;border-right:1px solid var(--hairline);color:var(--muted);font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 12px;cursor:pointer}
+  .rvz-seg button{background:transparent;border:none;border-right:1px solid var(--hairline);color:var(--muted);font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 12px;cursor:pointer;white-space:nowrap}
   .rvz-seg button:last-child{border-right:none}
   .rvz-seg button.on{background:var(--panel);color:var(--on-panel);font-weight:700}
   .rvz-legend{display:flex;gap:12px;flex-wrap:wrap;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:10px 0 0}
-  .rvz-legend span{display:inline-flex;align-items:center;gap:5px}
+  .rvz-legend span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
   .rvz-legend i{width:10px;height:10px;display:inline-block}
   .rvz-tip{position:absolute;pointer-events:none;background:var(--panel);color:var(--on-panel);border:1px solid var(--hairline);font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.6;padding:8px 11px;display:none;z-index:5;max-width:260px}
   .rvz-wrap{position:relative}

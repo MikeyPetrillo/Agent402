@@ -70,7 +70,7 @@ Generation priced per picture or per clip rather than per token, on the OpenAI w
 - `GET /api/drug-ndc` ($0.004): NDC directory entries by `ndc` or name.
 - `GET /api/device-510k` ($0.004): 510(k) device clearances by applicant, product code, K number or device name.
 - `GET /api/device-adverse-events` ($0.004): device adverse event reports (MAUDE).
-- `GET /api/drug-recalls` and `GET /api/device-recalls` ($0.004 each), and `GET /api/drug-adverse-events` ($0.001).
+- `GET /api/drug-recalls` and `GET /api/device-recalls` ($0.004 each), and `GET /api/drug-adverse-events` at $0.001 a call.
 
 ## Report products (outcome-priced, same 402)
 

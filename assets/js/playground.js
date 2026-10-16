@@ -134,8 +134,8 @@
       lbl.textContent=k;
       if(prop.description){
         var descSpan=document.createElement('span');
-        descSpan.style.cssText='font-weight:400;color:var(--faint);font-family:inherit;font-size:var(--fs-sm)';
-        descSpan.textContent=' - '+prop.description;
+        descSpan.style.cssText='display:block;font-weight:400;color:var(--faint);font-family:var(--font-body);font-size:var(--fs-sm);line-height:1.45;margin-top:2px';
+        descSpan.textContent=prop.description;
         lbl.appendChild(descSpan);
       }
       field.appendChild(lbl);

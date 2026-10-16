@@ -156,14 +156,23 @@ rules below.
 - Eyebrows: `--fs-2xs` mono, uppercase, 0.12em tracking, `--faint`.
 
 ## Layout
-- Container 1180px, 30px gutter (16px on phones). Sections 56px apart.
-- Nothing scrolls the page sideways at 390px; wide tables scroll inside their own wrapper.
+- Container 1180px, 30px gutter (16px on phones). Sections 56px apart. A page module sets the
+  container inline (`max-width:1180px` with a 30px side padding); the 16px phone gutter is one rule
+  in `ledger-chrome.js`, and a closing call-to-action panel (`.ml-cta-panel`) narrows its inset there too.
+- Nothing scrolls the page sideways at 360px; wide tables scroll inside their own wrapper. On a phone a
+  prose cell of a scrolling table keeps a reading width (site-chrome.js gives it a floor of about
+  20em) so the table scrolls instead of squeezing a sentence to a word per line, and a cell that is
+  only a list of code names (`.ml-codelist`) stacks one name per line. A directory table whose rows
+  are records (`/marketplace/tools`) reads as one card per row instead.
+- A label/value table (a stat panel, a cost list) is `.ml-kv`: label and value stay whole, and on a
+  phone a value that does not fit beside its label drops under it. A row of stats is `.ml-stat-row`:
+  on a phone each figure stacks over its label.
 - Radius: `var(--radius)` (4px) on every surface and control, `var(--radius-pill)` on the
   primary button alone, 50% for dots. The guard rejects any other radius.
 
 ## Wrap
 Measured, not eyeballed: `scripts/test-wrap-quality.js` lays out every page in the sitemap
-plus every `/docs/<wiki page>` in Chromium at 1440 and 400 px, reads each block's line boxes
+plus every `/docs/<wiki page>` in Chromium at 1440, 400, 390 and 360 px, reads each block's line boxes
 and fails on any of these. CI runs every hand-written page and a fixed sample of 25 per
 generated family (tool, category, skill pack and report pages, longest titles and code
 names first); `WRAP_ALL=1` runs all of them.

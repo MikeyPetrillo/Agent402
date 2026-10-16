@@ -36,7 +36,7 @@ const catalog = {
   const html = ledgerHomePage(BASE_URL, catalog, stats, leaderboardSnapshot, Array.from({ length: 42 }));
 
   ok(html.includes("40,233"), "live counter seeds from the real server-rendered viaUSDC value");
-  ok(html.includes("918,422") && html.includes("calls to the free tools (proof-of-work, no payment)"), "free-tier (PoW) count renders");
+  ok(html.includes("918,422") && html.includes("free calls via proof-of-work"), "free-tier (PoW) count renders");
   // The per-rail tile grid and its footer line left the home page: the tiles
   // left empty cells, and the MPP-wire figure read as a mismatch against the
   // Tempo tile because nothing said MPP also settles off Tempo. Per-rail

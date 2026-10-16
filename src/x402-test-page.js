@@ -87,7 +87,7 @@ export function x402TestPage(baseUrl) {
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:44px 30px 56px;">
-  <div style="background:var(--panel);border:1px solid var(--hairline);padding:44px 40px;">
+  <div class="ml-cta-panel" style="background:var(--panel);border:1px solid var(--hairline);padding:44px 40px;">
     <h2 style="font-weight:700;font-size:var(--fs-2xl);line-height:1.05;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">If the refusal looks wrong, it may be ours.</h2>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 24px;max-width:640px;">A refusal we cannot classify is as likely to be a defect on this server as a fault in your client, and we would rather hear about it than have you work around it. Two of the classes in the table above exist because someone outside told us their client was being refused for a reason that turned out to be ours.</p>
     <div style="display:flex;gap:11px;flex-wrap:wrap;">

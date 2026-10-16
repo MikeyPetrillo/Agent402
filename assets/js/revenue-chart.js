@@ -186,7 +186,7 @@
       if(!Object.keys(present).length){
         lg='<span>no '+(state.metric==="buyers"?"buyers":state.traffic==="free"?"free-tier calls":
           (state.wire==="all"?"":state.wire==="mpp"?"MPP-wire ":"x402-wire ")+
-          (state.scope==="ext"?"external":state.scope==="int"?"internal":"")+" settlements")+' in this window</span>'}
+          (state.scope==="ext"?"external":state.scope==="int"?"internal":"")+" settlements")+'</span><span>in this window</span>'}
       document.getElementById("rvzLegend").innerHTML=lg;
       // The chart defaults to External, which is right - the canary is our own
       // money recycling and must never inflate revenue. But that makes "no

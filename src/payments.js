@@ -10,7 +10,7 @@ import { avmSubcentGateEnabled, installAvmSubcentGate, noteAvmSettleRefusal, sta
 import { isBillingRefusalReceipt } from "./payment-reject.js";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
-import { pinUptoFacilitatorAddress } from "./upto-signer.js";
+import { pinFacilitatorSigners } from "./upto-signer.js";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
@@ -31,6 +31,8 @@ import { declarePaymentIdentifierExtension, PAYMENT_IDENTIFIER } from "@x402/ext
 import { normalizePayerAddress } from "./payer.js";
 import { x402EvmOnly } from "./rails.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
+import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
+import { registerSettlementClaimHooks, registerSettlementClaimRelease } from "./settlement-claims.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 
@@ -668,8 +670,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     let cache = null;
     client.getSupported = async () => {
       if (cache && Date.now() - cache.at < ttlMs) return cache.promise;
-      // Every replica names the same upto signer (src/upto-signer.js).
-      const entry = { at: Date.now(), promise: orig().then(pinUptoFacilitatorAddress) };
+      // Every replica names the same facilitator signer (src/upto-signer.js).
+      const entry = { at: Date.now(), promise: orig().then(pinFacilitatorSigners) };
       cache = entry;
       try {
         return await entry.promise;
@@ -1241,6 +1243,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   registerWalletBlocklistHook(server);
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
+  // One authorization, one answer (src/settlement-claims.js). The claim runs
+  // after the hooks that may abort a settle, so an aborted settle never holds
+  // the authorization; the release runs after the failure hooks, so it fires
+  // only when nothing recovered the payment.
+  registerSettlementClaimHooks(server);
+  registerSettlementClaimRelease(server);
   // Per-phase timing (src/paid-phase-timing.js). Registered last: a hook
   // that aborts settlement first leaves no settle mark, which is the truth.
   registerPhaseTimingHooks(server);
@@ -1920,6 +1928,21 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       `[payments] facilitator SETTLE failed on ${ctx?.requirements?.network} ` +
         `${ctx?.requirements?.scheme}: ${failure}`
     );
+    // "Already on-chain": the facilitator's own transfer may have landed, or
+    // the payload is a replay of one that settled another call. Only chain
+    // proof that the transfer is THIS request's recovers it
+    // (src/settle-onchain-proof.js), and the failure never reaches the
+    // fallback chain, since a second settle could charge twice.
+    if (isAlreadyOnChainSettleError(ctx?.error)) {
+      const r = await recoverAlreadyOnChain(ctx);
+      if (!r.recovered) {
+        console.warn(`[payments] already-on-chain settle on ${ctx?.requirements?.network} not recovered: ${r.reason}`);
+        return;
+      }
+      releaseCoverOnSettled(ctx, r.result);
+      console.warn(`[payments] recovered ${r.result.network} settlement from chain proof: tx ${r.result.transaction}`);
+      return { recovered: true, result: r.result };
+    }
     if (!fallbackEnabled) return;
     if (!isPreBroadcastSettleRejection(ctx?.error)) return;
     const candidates = fallbackCandidatesFor(ctx?.requirements?.network, payAiClient, solvadorClient);

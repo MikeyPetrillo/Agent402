@@ -132,19 +132,46 @@ const P = 3960 + (process.pid % 20);
   ok(calls >= 3, `the stub was read on every boot (${calls} reads), so each boot saw its own random signer`);
   ok(named.every((a) => a && a.toLowerCase() === SIGNERS[3]), `every replica offers the same upto signer, the lowest published (${named.join(", ")})`);
 }
+// --- 2c. ONE SOLANA FEE PAYER ON EVERY REPLICA --------------------------------
+// The same rotation hits a Solana offer's extra.feePayer: the buyer's
+// transaction names the fee payer, so a replica that named another one finds no
+// match. Base58 is pinned by exact byte order, never case-folded.
 {
-  const { pinUptoFacilitatorAddress: pin } = await import("../src/upto-signer.js");
+  const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+  const PAYERS = ["Hc3sdEAsCGQcpgfivywog9uwtk8gUBUZgsxdME1EJy88", "BENrLoUbndxoNMUS5JXApGMtNykLjFXXixMtpDwDR9SP",
+    "D6ZhtNQ5nT9ZnTHUbqXZsTx5MH2rPFiBBggX4hY1WePM", "GVJJ7rdGiXr5xaYbRwRbjfaJL7fmwRygFi1H6aGqDveb", "BFK9TLC3edb13K6v4YyH3DwPb5DSUpkWvb7XnqCL9b4F"];
+  let calls = 0;
+  const rotating = () => { calls++; return [kind("exact"), { x402Version: 2, scheme: "exact", network: SOL, extra: { feePayer: PAYERS[(calls + process.pid) % PAYERS.length] } }]; };
+  const named = [];
+  for (const i of [0, 1, 2]) {
+    const { up, accepts, log } = await acceptsFor({ PAYMENT_NETWORKS: "base,solana", SOLANA_WALLET_ADDRESS: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg",
+        PAYAI_FACILITATOR_URL: `http://127.0.0.1:${P + 49 + i}`, PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "" },
+      P + 9 + i, P + 49 + i, rotating, { "eip155:*": [], "solana:*": PAYERS });
+    ok(up, `replica ${i + 1} booted against a facilitator that rotates its Solana fee payer`);
+    if (!up) console.error(log.slice(-1200));
+    named.push((accepts || []).find((a) => a.network === SOL)?.extra?.feePayer || null);
+  }
+  ok(named.every((a) => a === "BENrLoUbndxoNMUS5JXApGMtNykLjFXXixMtpDwDR9SP"), `every replica offers the same Solana fee payer, the lowest published (${named.join(", ")})`);
+}
+{
+  const { pinFacilitatorSigners: pin } = await import("../src/upto-signer.js");
   const sup = (addr, signers) => ({ kinds: [{ x402Version: 2, scheme: "upto", network: BASE_CAIP2, extra: { facilitatorAddress: addr, other: 1 } }, { x402Version: 2, scheme: "exact", network: BASE_CAIP2, extra: { facilitatorAddress: "0x9" } }], signers });
   const L = { "eip155:*": ["0xBB", "0xaa", "0xCc"] };
   const r = pin(sup("0xCc", L));
   ok(r.kinds[0].extra.facilitatorAddress === "0xaa" && r.kinds[0].extra.other === 1, "a listed signer is pinned to the lowest listed address, other extra fields kept");
-  ok(r.kinds[1].extra.facilitatorAddress === "0x9", "an exact kind is never touched");
+  ok(r.kinds[1].extra.facilitatorAddress === "0x9", "an exact kind naming an unlisted address is left as sent");
   ok(pin(sup("0xDD", L)).kinds[0].extra.facilitatorAddress === "0xDD", "an address outside the published list is left as the facilitator sent it");
   ok(pin(sup("0xCc", {})).kinds[0].extra.facilitatorAddress === "0xCc", "an answer with no signer list is left as sent");
   ok(pin(sup("0xCc", { [BASE_CAIP2]: ["0xCc", "0x0b"] })).kinds[0].extra.facilitatorAddress === "0x0b", "an exact-network signer list counts too");
   ok(pin(sup("0xCc", { "solana:*": ["0x01", "0xCc"] })).kinds[0].extra.facilitatorAddress === "0xCc", "another chain family's list does not count");
+  const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+  const sol = (fp, signers) => ({ kinds: [{ x402Version: 2, scheme: "exact", network: SOL, extra: { feePayer: fp } }], signers });
+  ok(pin(sol("Zb", { "solana:*": ["Zb", "Ba", "aZ"] })).kinds[0].extra.feePayer === "Ba", "a listed Solana fee payer is pinned to the lowest by exact byte order");
+  ok(pin(sol("Zb", { "solana:*": ["Zb", "zA"] })).kinds[0].extra.feePayer === "Zb", "base58 is never case-folded: uppercase sorts before lowercase");
+  ok(pin(sol("ba", { "solana:*": ["BA", "Zz"] })).kinds[0].extra.feePayer === "ba", "a fee payer that matches a listed one only by case is not in the list");
+  ok(pin(sol("Zb", { "eip155:*": ["Aa"] })).kinds[0].extra.feePayer === "Zb", "an EVM list never pins a Solana fee payer");
   const src = (await import("node:fs")).readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
-  ok(/promise: orig\(\)\.then\(pinUptoFacilitatorAddress\)/.test(src), "every facilitator's /supported answer passes through the pin");
+  ok(/promise: orig\(\)\.then\(pinFacilitatorSigners\)/.test(src), "every facilitator's /supported answer passes through the pin");
 }
 
 // --- 3. THE GATE WITH TEETH: opted in, facilitator does NOT advertise upto ---

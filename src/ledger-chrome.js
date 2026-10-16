@@ -354,6 +354,40 @@ body { overflow-wrap: break-word; }
 .ml-foot-links { display: flex; gap: 6px 16px; flex-wrap: wrap; }
 .ml-foot-links > a { white-space: nowrap; }
 @media (max-width: 600px) { .ml-foot-links { display: grid; grid-template-columns: repeat(2, max-content); gap: 8px 28px; width: 100%; } }
+/* The legal line: the entity and the contact address are two whole items, joined by a dot on one row and stacked when the row is too narrow, so neither breaks inside itself. */
+.ml-foot-legal { display: flex; flex-wrap: wrap; gap: 4px 0; }
+.ml-foot-legal > span { white-space: nowrap; }
+.ml-foot-legal > span + span::before { content: "·"; padding: 0 8px; }
+@media (max-width: 600px) { .ml-foot-legal { flex-direction: column; } .ml-foot-legal > span + span::before { content: none; } }
+/* A table cell that is a list of code names (site-chrome.js marks it .ml-codelist): on a phone each name takes its own
+   line and the separators between them take no space, so the list never ends on one stray name. */
+@media (max-width: 600px) { td.ml-codelist, th.ml-codelist { font-size: 0; } .ml-codelist > code, .ml-codelist > kbd, .ml-codelist > samp { display: table; margin: 0 0 4px; font-size: var(--fs-sm); } }
+/* A row-list table (a name, its sentence, maybe a reference; class on the scrolling wrapper): on a phone each row
+   stacks, the name over its sentence, instead of scrolling sideways with the sentence out of view. */
+@media (max-width: 600px) {
+  .ml-rowlist { overflow-x: visible !important; }
+  .ml-rowlist table { min-width: 0 !important; }
+  .ml-rowlist table, .ml-rowlist caption, .ml-rowlist tbody, .ml-rowlist tr, .ml-rowlist th, .ml-rowlist td { display: block; width: auto !important; }
+  .ml-rowlist thead { display: none; }
+  .ml-rowlist th { padding: 14px 16px 4px !important; }
+  .ml-rowlist td { padding: 0 16px 14px !important; text-align: left !important; }
+  .ml-rowlist td + td { margin-top: -6px; }
+}
+/* Market stat tiles: one per row on a narrow phone, so a tile's label never shares a half-width column. */
+@media (max-width: 420px) { .ml-2col.ml-4col { grid-template-columns: minmax(0,1fr) !important; } }
+/* A label/value table (a stat panel, a "what it costs" list): each label and each value is one whole item. On a phone a
+   row is a wrapping line, so a value that does not fit beside its label drops under it, right-aligned, instead of
+   either one breaking inside itself. */
+.ml-kv th, .ml-kv td { white-space: nowrap; }
+@media (max-width: 600px) {
+  .ml-kv, .ml-kv tbody { display: block; width: 100%; }
+  .ml-kv tr { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; }
+  .ml-kv th, .ml-kv td { display: block; padding-left: 12px !important; padding-right: 12px !important; }
+  .ml-kv td { margin-left: auto; }
+}
+/* A row of stats (a figure and its label): on a phone each stat stacks its figure over its label, so a long
+   label ("paid settlements, since <date>") keeps one line under its number instead of breaking. */
+@media (max-width: 600px) { .ml-stat-row { row-gap: 12px !important; } .ml-stat-row > span { display: flex; flex-direction: column; gap: 2px; } .ml-stat-row > span > * { white-space: nowrap; } }
 .ml-ticks { list-style: none; margin: 0 0 18px; padding: 0; display: flex; flex-direction: column; gap: 7px; font-size: var(--fs-md); line-height: 1.45; color: var(--ink); }
 .ml-ticks li { position: relative; padding-left: 22px; }
 .ml-ticks li::before { content: "+"; position: absolute; left: 0; font-family: var(--font-mono); color: var(--accent); }
@@ -401,6 +435,12 @@ a { color: inherit; }
   .sl-steps { grid-template-columns: repeat(2, 1fr) !important; }
 }
 @media (max-width: 600px) {
+  /* The page container's gutter (DESIGN.md "Layout": 30px, 16px on phones). Page modules set the
+     container inline (max-width:1180px with a 30px side padding), so the phone gutter is one rule here. */
+  [style*="max-width:1180px"] { padding-left: 16px !important; padding-right: 16px !important; }
+  /* A closing call-to-action panel keeps a phone-sized inset, so its heading and buttons get the width. */
+  .ml-cta-panel { padding: 32px 20px !important; }
+  .ml-4col > div { padding: 12px !important; }
   .ml-status-in { padding: 8px 16px !important; }
   .ml-status-ticker { display: none !important; }
   .ml-status-left { flex: 1 1 auto; min-width: 0; }
@@ -483,7 +523,7 @@ nav[aria-label="Breadcrumb"] a { text-decoration: underline !important; text-und
 p a:not([class]):not([style*="border"]), li a:not([class]):not([style*="border"]) { text-decoration: underline !important; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 /* A code block that scrolls sideways takes keyboard focus (site-chrome.js
    adds tabindex), and shows it. */
-pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-table-wrap[tabindex="0"]:focus-visible, .wx-scroll[tabindex="0"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-table-wrap[tabindex="0"]:focus-visible, .wx-scroll[tabindex="0"]:focus-visible, .gp-tw[tabindex="0"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* Home hero color field (assets/js/hero-aura.js): a canvas behind the hero,
    faded out toward the bottom so the hero meets the page ground without an
    edge. Hidden until the script has drawn, so a browser without WebGL keeps
@@ -956,7 +996,7 @@ export function ledgerFooterCompact() {
       <span class="ml-foot-links"><a href="/reports" style="color:var(--muted);text-decoration:none;">reports</a><a href="/monitors" style="color:var(--muted);text-decoration:none;">monitors</a><a href="/tools" style="color:var(--muted);text-decoration:none;">tools</a>${DECIDE_LIVE ? `<a href="/decide" style="color:var(--muted);text-decoration:none;">decide</a>` : ""}<a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/marketplace" style="color:var(--muted);text-decoration:none;">marketplace</a><a href="/revenue" style="color:var(--muted);text-decoration:none;">transactions</a><a href="/sell" style="color:var(--muted);text-decoration:none;">sell</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--hairline);">
-      <span>© 2026 <a href="https://havok.holdings" rel="noopener" style="color:var(--muted);text-decoration:underline;">Havok Holdings LLC</a> · <a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:underline;">mike@agent402.tools</a></span>
+      <span class="ml-foot-legal"><span>© 2026 <a href="https://havok.holdings" rel="noopener" style="color:var(--muted);text-decoration:underline;">Havok Holdings LLC</a></span><span><a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:underline;">mike@agent402.tools</a></span></span>
       <span class="ml-foot-links"><a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:none;">contact</a><a href="/status" style="color:var(--muted);text-decoration:none;">status</a><a href="/security" style="color:var(--muted);text-decoration:none;">security</a><a href="/transparency" style="color:var(--muted);text-decoration:none;">transparency</a><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="${REPO_URL}" rel="noopener" aria-label="GitHub" title="GitHub" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${GITHUB_ICON_SVG}</a><a href="https://x.com/Agent402Tools" rel="noopener" aria-label="X" title="X" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${X_ICON_SVG}</a></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:10px;">

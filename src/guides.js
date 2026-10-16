@@ -1770,6 +1770,7 @@ const GUIDE_PAGE_CSS = `
 .gp-body code{font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--card);border:1px solid var(--hairline);padding:2px 6px;}
 .gp-body pre{background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px 20px;overflow-x:auto;margin:0 0 16px;border:1px solid var(--hairline);}
 .gp-body pre code{background:none;border:none;padding:0;color:inherit;font-size:var(--fs-sm);}
+.gp-tw{overflow-x:auto;margin:0 0 16px;}
 .gp-back{display:inline-block;margin-top:28px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;font-weight:700;}
 .gp-back:hover{text-decoration:underline;}
 `;
@@ -1835,7 +1836,7 @@ export function guidePage(baseUrl, slug, catalog = null) {
   <div class="gp-crumb ml-crumb"><a href="/">Home</a> / <a href="/guides">Guides</a><span class="ml-crumb-cur"> / ${esc(g.title)}</span></div>
   <h1 title="${esc(g.title)}">${esc(g.title)}</h1>
   <div class="gp-body">
-    ${marked.parse(g.md)}
+    ${marked.parse(g.md).replace(/<table>/g, '<div class="gp-tw"><table>').replace(/<\/table>/g, "</table></div>")}
   </div>
   ${integrationsBlock(g.slug)}
   <a href="/guides" class="gp-back">Back to guides</a>

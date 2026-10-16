@@ -9,7 +9,7 @@ Agent402 speaks [MCP](https://modelcontextprotocol.io) two ways. Both are listed
 Add **`https://agent402.tools/mcp`** as a remote MCP server:
 
 - **claude.ai / Claude mobile:** Settings → Connectors → *Add custom connector* → name `Agent402`, that URL, no auth.
-- **Claude Code:** `claude mcp add --transport http agent402 https://agent402.tools/mcp`
+- **Claude Code:** run `claude mcp add --transport http agent402 https://agent402.tools/mcp` in a terminal.
 - **Copy-paste blocks for Claude Code, Cursor, Continue, ElizaOS and AgentCore:** https://agent402.tools/guides/agent-hosts
 - **Cursor:** Settings → MCP → *Add new MCP server* → name `agent402`, transport `streamable-http`, URL `https://agent402.tools/mcp`. (Or add directly to `~/.cursor/mcp.json`.)
 - **ChatGPT:** Settings → Connectors → *Add custom connector* → that URL, no auth (where your plan offers custom connectors).

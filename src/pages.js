@@ -480,6 +480,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   .tp-grid { display:grid; gap:14px; margin:20px 0; }
   @media (min-width:640px){ .tp-grid { grid-template-columns:repeat(3,1fr); } }
   .tp-card { background:var(--card); border:1px solid var(--hairline); padding:18px 20px; display:flex; flex-direction:column; gap:8px; min-width:0; overflow-wrap:break-word; }
+  @media (max-width:600px) { .tp-card { padding:16px 14px; } }
   .tp-free { display:inline-block; background:var(--ok); color:var(--paper); font-weight:700; font-size:var(--fs-2xs); letter-spacing:.02em; padding:2px 8px; font-family:var(--font-mono); vertical-align:middle; }
   .tp-facts { color:var(--muted); font-size:var(--fs-base); line-height:1.65; max-width:820px; padding-left:20px; }
   .tp-facts li { margin-bottom:6px; }

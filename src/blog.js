@@ -161,7 +161,7 @@ export const BLOG_POSTS = [
 <h2>How it works</h2>
 
 <ol>
-  <li><strong>Request a challenge.</strong> The client sends a request without payment. The server responds with <code>402 Payment Required</code> and an <code>X-Pow-Challenge</code> header pointing at a challenge to fetch (<code>GET /api/pow/challenge?slug=&lt;tool&gt;</code>).</li>
+  <li><strong>Request a challenge.</strong> The client sends a request without payment. The server responds with <code>402 Payment Required</code> and an <code>X-Pow-Challenge</code> header naming <code>GET /api/pow/challenge?slug=&lt;tool&gt;</code>, the route the client fetches its challenge from.</li>
   <li><strong>Solve the challenge.</strong> The client finds a nonce that, when combined with the challenge, produces a hash with a required number of leading zero bits: ${powCostPhrase()}.</li>
   <li><strong>Submit the solution.</strong> The client re-sends the original request with the solution in an <code>X-Pow-Solution: &lt;token&gt;:&lt;nonce&gt;</code> header. The server verifies the solution (instant) and serves the result.</li>
 </ol>

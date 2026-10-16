@@ -153,9 +153,9 @@ export function hostCardHtml(f) {
   <div data-host-card style="border:1px solid var(--hairline);background:var(--card);padding:18px 20px;margin:0 0 22px;">
     <div style="display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:baseline;">
       <div class="ml-meta" style="margin:0;font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--accent);"><span>THIS SITE</span><span>HOST</span><span>NOT RANKED, NOT COUNTED</span></div>
-      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">${f.networkLabel ? `outside buyers on ${esc(f.networkLabel)} only` : "outside buyers only"}</div>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);white-space:nowrap;">${f.networkLabel ? `outside buyers on ${esc(f.networkLabel)} only` : "outside buyers only"}</div>
     </div>
-    <div style="display:flex;gap:26px;flex-wrap:wrap;margin:12px 0 10px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);">
+    <div class="ml-stat-row" style="display:flex;gap:26px;flex-wrap:wrap;margin:12px 0 10px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);">
       <span><strong>${fmt(f.external30d.settlements)}</strong> <span style="color:var(--faint);">paid settlement${f.external30d.settlements === 1 ? "" : "s"}, 30 days</span></span>
       <span><strong>${fmt(f.external30d.buyers)}</strong> <span style="color:var(--faint);">distinct buyer${f.external30d.buyers === 1 ? "" : "s"}, 30 days</span></span>
       <span><strong>${fmt(f.externalAllTime.settlements)}</strong> <span style="color:var(--faint);">paid settlement${f.externalAllTime.settlements === 1 ? "" : "s"}, ${esc(wideLabel(f))}</span></span>

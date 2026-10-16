@@ -69,6 +69,20 @@ export function ledgerCatalogPage(baseUrl, catalog, skillPacks) {
 .cat-scroll{overflow-x:auto}
 .cat-scroll table{min-width:780px}
 table{border-collapse:collapse;width:100%}
+/* A phone reads each category as a card: its name and tool count on one line, the blurb under them, then
+   how it is paid. Sideways scrolling hid the blurb, which is the part that says what is in the category. */
+@media (max-width:600px){
+.cat-scroll table{min-width:0}
+.cat-scroll table,.cat-scroll tbody{display:block}
+.cat-scroll thead{display:none}
+.cat-row{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;padding:14px 16px}
+.cat-row>th,.cat-row>td{display:block;padding:0!important;text-align:left!important;min-width:0}
+.cat-row>th{grid-column:1/-1}
+.cat-row>td:nth-child(3){grid-column:2;grid-row:3;text-align:right!important;white-space:nowrap;margin-top:6px}
+.cat-row>td:nth-child(3)::after{content:" tools"}
+.cat-row>.cat-blurb{grid-column:1/-1;margin-top:4px}
+.cat-row>td:nth-child(4){grid-column:1;grid-row:3;margin-top:6px}
+}
 @media (max-width:900px){.cat-2col{grid-template-columns:minmax(0,1fr)!important}}
 .cat-search-wrap{border:1px solid var(--hairline)}
 .cat-search-wrap:focus-within{border-color:var(--accent)}
@@ -159,7 +173,7 @@ table{border-collapse:collapse;width:100%}
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:44px 30px 52px;">
-  <div style="background:var(--panel);border:1px solid var(--hairline);padding:46px 40px;position:relative;overflow:hidden;">
+  <div class="ml-cta-panel" style="background:var(--panel);border:1px solid var(--hairline);padding:46px 40px;position:relative;overflow:hidden;">
     <div style="position:relative;">
       <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Don't browse. Just ask.</h2>
       <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:64ch;">Paste the MCP URL and describe the job: the hosted connector picks the tool, solves the proof-of-work for the free tools and hands back the result. Install agent402-mcp with a wallet key and it signs the payment for every other tool too.</p>
