@@ -147,7 +147,7 @@ export function serializeExamples(obj) {
 }
 
 // ---- report -----------------------------------------------------------------
-const cell = (s) => String(s ?? "").replace(/\|/g, "\\|").replace(/\n/g, " ");
+const cell = (s) => String(s ?? "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 
 export function markdownReport(doc, findings, plan, { top = Infinity } = {}) {
   const shown = findings.slice(0, top);

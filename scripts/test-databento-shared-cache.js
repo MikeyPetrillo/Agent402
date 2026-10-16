@@ -243,7 +243,9 @@ try {
       ok(audits2 === 1, `d. one price audit for the new session across both servers (${audits2})`);
       const ranges = count((c, i) => i >= e0 && c.kind === "range");
       const sc = await perf(C), sd = await perf(D);
-      ok(sc.shared.hits > 0 && sd.shared.hits > 0 && (sc.adoptedFromShared + sd.adoptedFromShared) >= 1, `d. ticks adopted the boundary, the audit and KO's pre-read from the shared copy instead of reading upstream (hits ${sc.shared.hits}+${sd.shared.hits}, adopted ${sc.adoptedFromShared}+${sd.adoptedFromShared}, lease skips ${sc.leaseSkips}+${sd.leaseSkips}, range reads ${ranges})`);
+      // Which server's tick reads first is timing: one may do every read and the
+      // other adopt all of it, so the shared copy is judged across both.
+      ok(sc.shared.hits + sd.shared.hits > 0 && (sc.adoptedFromShared + sd.adoptedFromShared) >= 1, `d. ticks adopted the boundary, the audit and KO's pre-read from the shared copy instead of reading upstream (hits ${sc.shared.hits}+${sd.shared.hits}, adopted ${sc.adoptedFromShared}+${sd.adoptedFromShared}, lease skips ${sc.leaseSkips}+${sd.leaseSkips}, range reads ${ranges})`);
       const w0 = up.calls.length;
       const xd = await call(D, "/api/stock-quote?symbol=XOM");
       const yc = await call(C, "/api/stock-quote?symbol=CVX");
