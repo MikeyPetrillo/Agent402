@@ -17,6 +17,19 @@ ok(rate.takeCgToken(t0) && rate.takeCgToken(t0) && rate.takeCgToken(t0), "three 
 ok(!rate.takeCgToken(t0), "the fourth is refused");
 ok(rate.takeCgToken(t0 + 20_001), "a third of a minute later one token has refilled");
 ok(!rate.takeCgToken(t0 + 20_001), "and only one");
+// Without a shared store each process holds its RATE_LIMIT_REPLICAS share of the caps.
+rate.resetCgRateLimit();
+process.env.RATE_LIMIT_REPLICAS = "2"; process.env.COINGECKO_MAX_PER_MIN = "4";
+ok((await rate.cgTake(t0)) === null && (await rate.cgTake(t0)) === null, "two replicas configured: this process takes its half of a cap of 4");
+eq(await rate.cgTake(t0), "minute", "and the third is refused");
+ok(rate.cgTakeCounts().local === 3 && rate.cgTakeCounts().shared === 0, "decided on this process's bucket (no shared store configured)");
+process.env.COINGECKO_API_KEY = "cg-test-key"; process.env.COINGECKO_DAILY_MAX = "4"; process.env.COINGECKO_MAX_PER_MIN = "100";
+rate.resetCgRateLimit();
+ok((await rate.cgTake(t0)) === null && (await rate.cgTake(t0)) === null, "the daily ceiling is shared out the same way");
+eq(await rate.cgTake(t0), "day", "half of a daily ceiling of 4");
+eq(rate.cgLocalShare(1), 1, "a share never falls below one");
+delete process.env.RATE_LIMIT_REPLICAS; delete process.env.COINGECKO_API_KEY; delete process.env.COINGECKO_DAILY_MAX; process.env.COINGECKO_MAX_PER_MIN = "3";
+rate.resetCgRateLimit();
 ok(rate.isCoinGeckoHost("api.coingecko.com") && rate.isCoinGeckoHost("pro-api.coingecko.com") && rate.isCoinGeckoHost("COINGECKO.COM") && !rate.isCoinGeckoHost("api.exchange.coinbase.com"), "host test");
 ok(!rate.isCoinGeckoHost("evilcoingecko.com") && !rate.isCoinGeckoHost("coingecko.com.attacker.example"), "a host that merely ends in the letters never gets the key (CodeQL js/incomplete-url-substring-sanitization)");
 eq(markets.resetCgRateLimit, rate.resetCgRateLimit, "crypto-markets-kit re-exports the SHARED reset (one bucket, not two)");

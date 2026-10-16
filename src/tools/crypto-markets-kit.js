@@ -41,33 +41,17 @@ import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, c
 const TIMEOUT_MS = 10_000;
 const RETRY_BACKOFF_MS = 1500;
 
-// --- in-process response cache ------------------------------------------------
+// --- response cache (this process, and every replica through the shared store) --
 // Keyed by the full upstream URL (which encodes every input that changes the
-// answer). Bounded: oldest entries drop past MAX_ENTRIES. Values are the parsed
-// JSON plus the fetch time; handlers project from the cached object every time,
-// never mutate it.
+// answer). Bounded: oldest entries drop past MAX_ENTRIES. An entry is the body
+// text plus the fetch time (src/tools/coingecko-cache.js shares it across
+// replicas with the same TTL); the parsed JSON is memoized on the entry, and
+// handlers project from it every time, never mutate it.
 const TTL = Object.freeze({ price: 60_000, list: 300_000, coinList: 600_000 });
 const MAX_ENTRIES = 256;
-const cache = new Map();
+const cache = createCgCache("markets", { max: MAX_ENTRIES, keepParsed: true });
 
 export function clearCryptoMarketsCache() { cache.clear(); }
-
-function cacheGet(key) {
-  const hit = cache.get(key);
-  if (!hit) return null;
-  if (hit.expiresAt <= Date.now()) { cache.delete(key); return null; }
-  return hit;
-}
-
-function cachePut(key, data, ttlMs) {
-  if (cache.size >= MAX_ENTRIES) {
-    const oldest = cache.keys().next().value;
-    if (oldest !== undefined) cache.delete(oldest);
-  }
-  const fetchedAt = new Date().toISOString();
-  cache.set(key, { data, fetchedAt, expiresAt: Date.now() + ttlMs });
-  return { data, fetchedAt, cached: false };
-}
 
 function userAgent() {
   return (process.env.CRYPTO_USER_AGENT || "").trim() || "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
@@ -90,7 +74,8 @@ function headers() {
 // charged; a cache hit never takes a token.
 // The bucket is SHARED with crypto-kit since 2026-09-03 (src/tools/coingecko-rate.js):
 // one Demo key, one minute budget, whichever kit spends it.
-import { cgTokenRefusal, cgRefusalMessage, resetCgRateLimit, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
+import { cgTake, cgRefusalMessage, resetCgRateLimit, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
+import { createCgCache } from "./coingecko-cache.js";
 export { resetCgRateLimit };
 
 async function cgGet(path, params, ttlMs) {
@@ -100,10 +85,15 @@ async function cgGet(path, params, ttlMs) {
     url.searchParams.set(k, String(v));
   }
   const key = url.toString();
-  const hit = cacheGet(key);
-  if (hit) return { data: hit.data, fetchedAt: hit.fetchedAt, cached: true };
+  const { entry, cached } = await cache.through(key, ttlMs, () => cgLoad(key, path));
+  entry.data ??= JSON.parse(entry.text);
+  return { data: entry.data, fetchedAt: entry.fetchedAt, cached };
+}
 
-  const why = cgTokenRefusal(Date.now());
+// One upstream read for cgGet: the body text of a 200 that parses as JSON, or
+// a thrown refusal (never cached).
+async function cgLoad(key, path) {
+  const why = await cgTake(Date.now());
   if (why) throw bad(cgRefusalMessage(why, "Market data"), 503);
   const attempt = () => upstreamFetch(key, { headers: headers() }, { label: "Market data upstream", step: stepOf(path), timeoutMs: TIMEOUT_MS, tag: "[crypto-markets]" });
   let res = await attempt();
@@ -115,7 +105,7 @@ async function cgGet(path, params, ttlMs) {
   // another read.
   if ((res.status === 429 || res.status >= 500) && !budgetSpent(currentBudget(), RETRY_BACKOFF_MS + 2_000)) {
     await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
-    if (cgTokenRefusal(Date.now()) === null) {
+    if ((await cgTake(Date.now())) === null) {
       try {
         const again = await attempt();
         if (again.ok || again.status !== res.status) res = again;
@@ -137,10 +127,10 @@ async function cgGet(path, params, ttlMs) {
     if (s >= 500) throw bad(`Market data upstream HTTP ${s} - try again later`, 502);
     throw bad(`Market data upstream rejected the request (HTTP ${s}) - check the inputs`, 422);
   }
-  let data;
-  try { data = await res.json(); }
+  let text, data;
+  try { text = await res.text(); data = JSON.parse(text); }
   catch { throw bad("Market data upstream returned non-JSON", 502); }
-  return cachePut(key, data, ttlMs);
+  return { text, data };
 }
 
 // --- input helpers --------------------------------------------------------------
