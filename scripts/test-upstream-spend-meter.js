@@ -62,7 +62,7 @@ const T = {
   embeddings: { "text-embedding-3-small": 8, "text-embedding-3-large": 16 },
   openai: { "gpt-image-2": { completion: 40, prompt: 5 }, "gpt-4o": { completion: 90, prompt: 10 } },
   sttPerMinute: { "gpt-transcribe": 0.6, "elevenlabs/scribe-v2": 1.2 },
-  media: { "fake/image-model": { worstCaseUsd: 1, listedMaxUsd: 1 } },
+  media: { "fake/image-model": { worstCaseUsd: 1, listedMaxUsd: 1 }, "black-forest-labs/flux-3-image-klein": { worstCaseUsd: 1, listedMaxUsd: 1 } },
   fees: { webSearchPerUse: 0.25, groundedPerCall: 0.125, rerankPerUnit: 5 },
   meter: { markup: 1.25 },
   vendor: { exa: { search: 0.5, instant: 0.25, answer: 1, content: 0.125 }, x: { postRead: 0.5, userRead: 0.25 }, decisions: { luna: 1, decisionOne: 1, jev: 1, maxShare: 0.9 } },
