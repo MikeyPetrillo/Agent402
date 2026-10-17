@@ -228,6 +228,16 @@ The cache is **settlement-aware**: a response body is captured when the handler 
 
 A copy of a keyed call sent while the first is still running (a client that timed out and retried early) gets `409` with `Retry-After` and does not run; retry after that and you get the first call's answer.
 
+### Lost the connection after paying
+
+A paid request can settle after the buyer's connection has closed (a client timeout shorter than the run plus the settlement). The server keeps that answer for 24 hours, and a resend of the **same request with the same payment header** collects it:
+
+- same payment credential, method, URL and body: `200`, the original body, the original `PAYMENT-RESPONSE` (or MPP `Payment-Receipt`) and `X-Payment-Recovered: true`. Nothing settles;
+- the first request is still finishing: `409` with `Retry-After`; ask again after it;
+- a different credential, URL or body, or after 24 hours: treated exactly as before (a spent authorization is refused).
+
+The answer is sealed at rest and bound to the credential and the input, so only that exact resend can read it. Kept: JSON answers on every rail with a single-use credential (x402 on every chain, MPP). Not kept: streamed responses (a stream cut part way keeps today's behavior), prepaid credits keys (reusable, so they use `Idempotency-Key`), and the identity-bound routes (memory, my-usage, attest, receipts, feedback), whose retry path is `Idempotency-Key`, because a settled authorization is readable on chain and those answers are the payer's own records.
+
 ## Async jobs (slow routes)
 
 Reports, video, the premium image and `/api/decide/execute` can take one to four minutes; each one's description says how long. Send the **paid** call with `Prefer: respond-async` and it answers `202` at once with a job link instead of holding the connection:

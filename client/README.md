@@ -116,7 +116,10 @@ What the server does with it depends on how the call was paid:
   dedupe). So on the wallet path a retry after a lost response can settle twice;
   the `Idempotency-Key` cannot prevent that on its own. If that matters for your
   workload, use a credits key for the tools you retry, or keep the signed
-  request and resend it yourself.
+  request and resend it yourself: the server keeps a settled answer whose
+  buyer left for 24 hours, and a resend of the same signed request (same
+  payment header, URL and body) returns it with `X-Payment-Recovered: true`
+  and no second settlement.
 
 ## Workflows (skill packs)
 
