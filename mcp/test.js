@@ -115,6 +115,51 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   console.log("discovery.js shed-503 retry \u2713 (bounded, capped, 503-only; catalog loads through a shed, catalog.find names the surface)");
 }
 
+// 0c) Offline: a paid send whose answer was lost is resent once, unchanged
+// (resend.js). The server returns a kept answer to the same signed request.
+{
+  const { resendSamePaymentOnce } = await import("./resend.js");
+  const seen = [];
+  const recordOf = async (req) => ({ sig: req.headers.get("payment-signature"), body: await req.text(), url: req.url });
+  const sleeps = [];
+  const sleep = async (ms) => { sleeps.push(ms); };
+  const paidInit = { method: "POST", headers: { "payment-signature": "SIGNED-ONCE", "content-type": "application/json" }, body: JSON.stringify({ q: 1 }) };
+  // A dropped connection: resent once, byte for byte.
+  let n = 0;
+  const dropsFirst = async (req) => { seen.push(await recordOf(req)); if (++n === 1) throw new TypeError("fetch failed"); return new Response("{\"ok\":1}", { status: 200 }); };
+  const r1 = await resendSamePaymentOnce("http://x.invalid/api/t", paidInit, { fetchImpl: dropsFirst, sleep });
+  if (r1.status !== 200 || seen.length !== 2 || JSON.stringify(seen[0]) !== JSON.stringify(seen[1])) fail(`a dropped paid send must be resent once, unchanged: ${JSON.stringify(seen)}`);
+  // Dropped twice: one resend only, the error surfaces.
+  seen.length = 0;
+  let threwTwice = false;
+  try { await resendSamePaymentOnce("http://x.invalid/api/t", paidInit, { fetchImpl: async (req) => { seen.push(await recordOf(req)); throw new TypeError("fetch failed"); }, sleep }); } catch { threwTwice = true; }
+  if (!threwTwice || seen.length !== 2) fail(`a paid send is resent at most once (${seen.length})`);
+  // 409 payment_settling with Retry-After: wait (capped), then resend once.
+  seen.length = 0; n = 0;
+  const settlingFirst = async (req) => { seen.push(await recordOf(req)); return ++n === 1 ? new Response(JSON.stringify({ error: "payment_settling" }), { status: 409, headers: { "retry-after": "3", "content-type": "application/json" } }) : new Response("{\"ok\":2}", { status: 200 }); };
+  const r2 = await resendSamePaymentOnce("http://x.invalid/api/t", paidInit, { fetchImpl: settlingFirst, sleep });
+  if (r2.status !== 200 || seen.length !== 2 || sleeps.at(-1) !== 3000 || seen[1].sig !== "SIGNED-ONCE") fail(`a 409 payment_settling is waited out and resent with the same payment (${seen.length}, slept ${sleeps.at(-1)})`);
+  // Any other 409 (a spent authorization) is returned as is.
+  seen.length = 0;
+  const r3 = await resendSamePaymentOnce("http://x.invalid/api/t", paidInit, { fetchImpl: async (req) => { seen.push(await recordOf(req)); return new Response(JSON.stringify({ error: "used" }), { status: 409, headers: { "retry-after": "3" } }); }, sleep });
+  if (r3.status !== 409 || seen.length !== 1) fail("a 409 that is not payment_settling is not resent");
+  // No payment header: never resent. A caller abort: never resent.
+  seen.length = 0;
+  let threwUnpaid = false;
+  try { await resendSamePaymentOnce("http://x.invalid/api/t", { method: "GET" }, { fetchImpl: async (req) => { seen.push(await recordOf(req)); throw new TypeError("fetch failed"); }, sleep }); } catch { threwUnpaid = true; }
+  if (!threwUnpaid || seen.length !== 1) fail("an unpaid send is never resent");
+  const ac = new AbortController();
+  seen.length = 0;
+  let threwAbort = false;
+  try { await resendSamePaymentOnce("http://x.invalid/api/t", { ...paidInit, signal: ac.signal }, { fetchImpl: async (req) => { seen.push(1); ac.abort(); throw new DOMException("aborted", "AbortError"); }, sleep }); } catch { threwAbort = true; }
+  if (!threwAbort || seen.length !== 1) fail("a send the caller aborted is never resent");
+  // The caller path: the paying fetch is built on it.
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(join(ROOT, "mcp", "index.js"), "utf8");
+  if (!/wrapFetchWithPayment\(resendSamePaymentOnce, client\)/.test(src)) fail("getPayFetch must wrap resendSamePaymentOnce, not the bare fetch");
+  console.log("resend.js \u2713 (a paid send whose answer was lost is resent once, unchanged; 409 payment_settling waited out; unpaid and aborted sends never resent)");
+}
+
 // 1) Boot a paywalled API instance (PoW gate live, facilitator not contacted).
 const api = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,

@@ -17,6 +17,7 @@
   "files": [
     "index.js",
     "networks.js",
+    "resend.js",
     "discovery.js",
     "output-schemas.js",
     "README.md"

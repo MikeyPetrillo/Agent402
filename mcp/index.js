@@ -25,6 +25,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parseNetworkPrefs, withNetworkPreference } from "./networks.js";
+import { resendSamePaymentOnce } from "./resend.js";
 import { fetchDiscovery, discoveryFailure, getDiscoveryJson } from "./discovery.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -143,6 +144,7 @@ async function loadCatalog() {
 
 // ---------------------------------------------------------------------------
 // Payment: USDC via x402 when a key is configured, else proof-of-work.
+
 let payFetchPromise;
 function getPayFetch() {
   payFetchPromise ??= (async () => {
@@ -165,7 +167,7 @@ function getPayFetch() {
     // Without it the client effectively always picks Base on multi-chain
     // sellers, leaving non-default rails unreachable.
     withNetworkPreference(client, parseNetworkPrefs(process.env.AGENT402_NETWORKS));
-    return wrapFetchWithPayment(fetch, client);
+    return wrapFetchWithPayment(resendSamePaymentOnce, client);
   })();
   return payFetchPromise;
 }
