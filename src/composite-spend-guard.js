@@ -58,23 +58,37 @@ function sharedRecordFailure(payer, t, global) {
     ? sharedWrite(CONTROL, shared.windowAdd("cg-fail", payer, { windowMs: WINDOW_MS, member, now: t })).then((r) => {
       if (!r?.ok) return r;
       if (r.count >= MAX_FAILS) {
-        void sharedWrite(CONTROL, shared.flagSet("cg-block", payer, t + BLOCK_MS, { now: t }));
-        void sharedWrite(CONTROL, shared.windowClear("cg-fail", payer));
+        return Promise.all([
+          sharedWrite(CONTROL, shared.flagSet("cg-block", payer, t + BLOCK_MS, { now: t })),
+          sharedWrite(CONTROL, shared.windowClear("cg-fail", payer)),
+        ]).then(() => r, () => r);
       }
       return r;
     })
     : Promise.resolve({ ok: true, count: 1 });
-  if (!global) return;
-  void perKey.then((r) => {
+  if (!global) return track(perKey);
+  return track(perKey.then((r) => {
     const slot = r?.ok ? Math.max(0, r.count - 1) % MAX_FAILS : sharedSeq;
     return sharedWrite(CONTROL, shared.windowAdd("cg-global", "all", { windowMs: WINDOW_MS, member: payer ? `${payer}#${slot}` : `anon:${member}`, now: t }));
   }).then((r) => {
     if (!r?.ok || r.count < GLOBAL_MAX_FAILS) return;
-    void sharedWrite(CONTROL, shared.flagSet("cg-pause", "all", t + GLOBAL_PAUSE_MS, { now: t }));
-    void sharedWrite(CONTROL, shared.windowClear("cg-global", "all"));
     if (globalPausedUntil <= t) globalPausedUntil = t + GLOBAL_PAUSE_MS;
-  });
+    return Promise.all([
+      sharedWrite(CONTROL, shared.flagSet("cg-pause", "all", t + GLOBAL_PAUSE_MS, { now: t })),
+      sharedWrite(CONTROL, shared.windowClear("cg-global", "all")),
+    ]);
+  }));
 }
+// The shared writes a failure starts (block, global window, pause) are a
+// chain nobody on the request path waits for. A test awaits the whole chain
+// rather than counting round trips.
+const pendingShared = new Set();
+function track(p) {
+  const q = Promise.resolve(p).catch(() => {}).finally(() => pendingShared.delete(q));
+  pendingShared.add(q);
+  return q;
+}
+export function __compositeGuardSharedSettled() { return Promise.all([...pendingShared]); }
 async function sharedBlocked(payer, now) {
   const r = await shared.flagGet("cg-block", payer, { now });
   if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return false; }
