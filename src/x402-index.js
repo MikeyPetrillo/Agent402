@@ -8476,11 +8476,14 @@ export function findSellerKey(originOrHost) {
 // A symbol key: never serialized, and a WeakMap over 112k rows measured slower
 // than the rebuild it saves.
 const DIRECTORY_HAY = Symbol("directoryHay");
+let directoryHayBuilds = 0;
 function directoryHayOf(t) {
   let h = t[DIRECTORY_HAY];
-  if (h === undefined) { h = `${t.name} ${t.description} ${t.route} ${t.sellerName} ${(t.tags || []).join(" ")}`.toLowerCase(); t[DIRECTORY_HAY] = h; }
+  if (h === undefined) { h = `${t.name} ${t.description} ${t.route} ${t.sellerName} ${(t.tags || []).join(" ")}`.toLowerCase(); t[DIRECTORY_HAY] = h; directoryHayBuilds++; }
   return h;
 }
+/** How many row search texts have been built (a repeat search builds none). */
+export function _directoryHayBuildsForTest() { return directoryHayBuilds; }
 export function allIndexedTools({ search = "", category = "", network = "", offset = 0, limit = 100, excludeOrigin = "", ourTools = [], source = "" } = {}) {
   // One index of the whole ecosystem WITH provenance on every row. Ours are
   // NOT floated to the top: 515 of them would fill the first six pages and bury
