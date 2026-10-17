@@ -6,7 +6,8 @@
 // latency and the shape of its documented example. Never kept:
 //   - anything naming the buyer or the payment: payer and receipt fields are
 //     blanked, the burner's address is replaced wherever it appears, and a
-//     transaction hash the example input did not name is replaced;
+//     transaction hash the example input did not name is replaced, as is one
+//     this run settled and put into the input itself (ownTxs);
 //   - an answer from a tool that names outside sellers or counterparties by
 //     design (CAPTURE_DENY: the router tiers, seller and index tools, the
 //     wallet-keyed reads);
@@ -97,8 +98,9 @@ export function foreignAddresses(body, input) {
  * Blank payment and request fields, replace the payer's address wherever it
  * appears, and replace transaction hashes the example input did not name.
  */
-export function redactBody(body, { payer = null, input = null } = {}) {
-  const namedTx = new Set(strings(input).flatMap((s) => (s.match(TX_HASH_RE) || []).map((t) => t.toLowerCase())));
+export function redactBody(body, { payer = null, input = null, ownTxs = [] } = {}) {
+  const ours = new Set((ownTxs || []).map((t) => String(t).toLowerCase()));
+  const namedTx = new Set(strings(input).flatMap((s) => (s.match(TX_HASH_RE) || []).map((t) => t.toLowerCase())).filter((t) => !ours.has(t)));
   const payerLc = payer ? String(payer).toLowerCase() : null;
   const scrub = (s) => {
     let out = s;
@@ -146,7 +148,7 @@ export function documentedShape(example, source) {
  * attempt. The record always carries the grade and the documented shape; the
  * body only when it survived the denylist, the redaction and both guards.
  */
-export function captureRecord(row, graded, answer, { payer = null, maxBytes = CAPTURE_MAX_BYTES } = {}) {
+export function captureRecord(row, graded, answer, { payer = null, maxBytes = CAPTURE_MAX_BYTES, ownTxs = [] } = {}) {
   const docEx = row.op?.responses?.["200"]?.content?.["application/json"]?.example;
   const docSource = row.op?.responses?.["200"]?.content?.["application/json"]?.["x-example-source"] ? "captured" : docEx === undefined || docEx === null || (typeof docEx === "object" && !Array.isArray(docEx) && !Object.keys(docEx).length) ? "none" : "hand-written";
   const input = row.example?.kind === "query" ? row.example.query : row.example?.kind === "json" ? row.example.body : row.example?.fields ?? null;
@@ -159,7 +161,7 @@ export function captureRecord(row, graded, answer, { payer = null, maxBytes = CA
   if (!answer || answer.paid !== true || answer.status !== 200) { rec.dropped = "no-paid-200"; return rec; }
   if (!answer.body || typeof answer.body !== "object") { rec.dropped = "non-json"; return rec; }
   if (isCaptureDenied(row.slug)) { rec.dropped = "denylist"; return rec; }
-  const redacted = redactBody(answer.body, { payer, input });
+  const redacted = redactBody(answer.body, { payer, input, ownTxs });
   if (foreignHosts(redacted, input).length) { rec.dropped = "foreign-host"; return rec; }
   if (foreignAddresses(redacted, input).length) { rec.dropped = "foreign-address"; return rec; }
   const b = boundBody(redacted, maxBytes);

@@ -109,6 +109,9 @@ try {
   refundFail = true;
   await A.fulfill("cs_fail");
   const failed = await settle(A, "cs_fail");
+  // The record lands first and the issues index is patched just after it
+  // (afterFinal), so wait for the index on the same deadline.
+  for (const until = Date.now() + 10_000; (await row("_issues"))?.cs_fail?.kind !== "refund-owed" && Date.now() < until;) await wait(10);
   ok(failed.status === "error" && failed.refundOwed === true && !failed.refundId && (await row("_issues"))?.cs_fail?.kind === "refund-owed", "a failed report whose refund fails is persisted as OWED and indexed");
   const issues = await B.listIssues();
   ok(issues.refundOwed.some((x) => x.id === "cs_fail") && issues.refundOwed.some((x) => x.id === "cs_owed") && issues.inflight.length === 0, "listIssues on the other instance reads the rows");
