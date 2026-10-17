@@ -138,7 +138,7 @@ export const EXPENSIVE_COMPOSITE_SLUGS = new Set([
   // settlement, so an unsettled repeat is free to the caller and real to us.
   // Being in this set also marks them longRunning (EVM exact only) - a 40-240 s
   // run outlives an SVM blockhash, the AVM default window and a Tempo credential.
-  "v1-images-fast", "v1-images-pro", "v1-videos",
+  "v1-images-fast", "v1-images-pro", "v1-images-edit", "v1-videos",
 ]);
 
 /** Slugs that are long-running for a reason OTHER than composite spend.

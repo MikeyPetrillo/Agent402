@@ -50,7 +50,7 @@ export const CLIENT_SLACK_SECONDS = 60;
 /** @x402/core's default, and the value every route here advertises. */
 export const DEFAULT_MAX_TIMEOUT_SECONDS = 300;
 
-const MEDIA_SLUGS = new Set(["v1-images-fast", "v1-images-pro", "v1-videos"]);
+const MEDIA_SLUGS = new Set(["v1-images-fast", "v1-images-pro", "v1-images-edit", "v1-videos"]);
 /** Measured run time (seconds) a route needs before its settlement can happen. */
 export const EVM_RUN_SECONDS = Object.freeze({
   ...Object.fromEntries([...EXPENSIVE_COMPOSITE_SLUGS].filter((s) => !MEDIA_SLUGS.has(s)).map((s) => [s, 180])),

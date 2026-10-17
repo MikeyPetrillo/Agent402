@@ -2892,6 +2892,10 @@ app.use("/v1/metered", express.json({ limit: "1mb" }));
 app.use("/v1/judge/vision", express.json({ limit: "23mb" }));
 app.use("/v1/judge/locate", express.json({ limit: "6mb" }));
 app.use("/v1/judge/long", express.json({ limit: "2mb" }));
+// Image edit: up to four reference images as base64 in JSON, or one as a
+// multipart file (OpenAI's images.edit() wire). The handler checks each image.
+app.use("/v1/images/edits", express.json({ limit: "34mb" }));
+app.use("/v1/images/edits", express.raw({ type: "multipart/form-data", limit: "7mb" }));
 // An unpaid POST here tokenizes the body for its 402 quote (measured 28 ms
 // per 190k CJK chars): bound unauthenticated quote requests per IP so the
 // quoter cannot be used as free CPU. Paid retries carry a credential and pass.

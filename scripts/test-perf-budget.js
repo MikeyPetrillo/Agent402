@@ -15,6 +15,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { getFreePort } from "./lib/free-port.js";
 import { buildRoutePerfFixture } from "./lib/route-perf-fixture.js";
 
@@ -53,6 +54,10 @@ try {
   await new Promise((r) => setTimeout(r, 2000)); // let the route index build off the query path
   await fetch(`${base}/__operator/perf.json?reset=1`, { headers: { authorization: `Bearer ${TOKEN}` } });
 
+  // This process drives the flood too; its own loop delay is time a probe
+  // spends waiting here, after the server has answered.
+  const clientLag = monitorEventLoopDelay({ resolution: 10 });
+  clientLag.enable();
   const until = Date.now() + FLOOD_MS;
   const words = ["json", "csv", "weather", "price", "token", "pdf", "image", "hash", "dns", "email", "wallet", "stock", "search", "crypto", "qr", "uuid"];
   let i = 0;
@@ -73,7 +78,10 @@ try {
     await new Promise((r) => setTimeout(r, 100));
   }
   await Promise.all([flood, ...probes]);
-  const perf = await (await fetch(`${base}/__operator/perf.json`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+  clientLag.disable();
+  const perf = await (await fetch(`${base}/__operator/perf.json?top=200&min=1`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+  const hashRow = (perf.routes || []).find((r) => /\/api\/hash\b/.test(r.route));
+  console.log(`# attribution: server ${hashRow ? `${hashRow.route} total p50=${hashRow.totalMs.p50}ms p95=${hashRow.totalMs.p95}ms n=${hashRow.window}` : "no /api/hash row"}; client loop delay p50=${Math.round(clientLag.percentile(50) / 1e6)}ms p99=${Math.round(clientLag.percentile(99) / 1e6)}ms max=${Math.round(clientLag.max / 1e6)}ms`);
   const p95 = Math.round(pct(paid, 0.95));
   console.log(`# paid-path: n=${paid.length} p50=${Math.round(pct(paid, 0.5))}ms p95=${p95}ms max=${Math.round(Math.max(...paid))}ms statuses=${JSON.stringify(paidStatus)}; flood searches=${i}; shed=${JSON.stringify(perf.shed)}; stalls=${perf.loop.stalls} worst=${perf.loop.worstMs}ms`);
   ok(paid.length >= FLOOD_MS / 150 && Object.keys(paidStatus).every((k) => k === "200"), `every paid-path call answered 200 during the flood (${JSON.stringify(paidStatus)})`);

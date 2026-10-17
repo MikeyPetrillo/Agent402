@@ -15,7 +15,7 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
 
 // --- the predicate itself ---------------------------------------------------
-for (const slug of ["v1-images-fast", "v1-images-pro", "v1-videos"]) {
+for (const slug of ["v1-images-fast", "v1-images-pro", "v1-images-edit", "v1-videos"]) {
   ok(isLongRunningSlug(slug), `${slug} is long-running, so EVM exact only and no AVM accept is CORRECT`);
 }
 ok(isLongRunningSlug("research-max") && isLongRunningSlug("dossier"),

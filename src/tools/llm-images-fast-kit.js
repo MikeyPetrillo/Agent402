@@ -19,6 +19,8 @@
 //   gpt-image-1-mini med. 14.1 s  png  1024x1024
 //   flux.2-pro             8.7 s  jpeg 1024x1024
 //   qwen-image-3          65.7 s  png  2048x2048
+//   flux-3-image-klein     5-7 s  jpeg 1024x1024 (2026-10-17; edits 9-12 s,
+//                                  output follows the reference's aspect)
 //   veo-3.1-lite 4s 720p   40 s   mp4, no audio
 //
 // Repricing guard: the Image API has no documented `max_price`, so a silent
@@ -41,6 +43,8 @@
 // the chat tiers). Content is fetched with our key (the unsigned URLs 401
 // without it - measured) and returned inline as base64, never as a URL that
 // would expose our job ids.
+import { parseMultipartFile } from "../multipart.js";
+import { imageSize, examplePngBase64 } from "./judge-preview-kit.js";
 import { bad, fetchOpenRouter, throwUpstreamError, assertUpstreamBody, MARGIN, OPENROUTER_ATTRIBUTION, upstreamUserId, IMAGES_PATH, IMAGES_PRICE } from "./llm-gateway-kit.js";
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
@@ -51,8 +55,24 @@ const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 
 export const IMAGES_FAST_PATH = "/v1/images/fast";
 export const IMAGES_PRO_PATH = "/v1/images/pro";
+export const IMAGES_EDIT_PATH = "/v1/images/edits";
 export const VIDEOS_PATH = "/v1/videos/generations";
 export const IMAGE_MAX_PROMPT_CHARS = 4_000;
+// Reference images on the edit route. Billing is flat per output image at the
+// pinned resolution whatever the references (measured with one and two), and
+// the provider accepts up to ten; four keeps the body bounded. Each is read
+// for its type and size from the bytes, so only an image the provider accepts
+// (it refuses one under 256 px a side) reaches the upstream.
+export const IMAGE_EDIT_MAX_REFS = 4;
+export const IMAGE_EDIT_MAX_REF_BYTES = 6 * 1024 * 1024;
+export const IMAGE_EDIT_MIN_SIDE = 256;
+
+// FLUX 3 Image Klein, flat per image at the pinned 1K resolution. Square on the
+// text-to-image tiers (their documented 1024x1024); unset on the edit tier,
+// where the output follows the reference image's aspect.
+const KLEIN3 = "black-forest-labs/flux-3-image-klein";
+const klein3Link = (params) => ({ model: KLEIN3, provider: "black-forest-labs", params: { resolution: "1K", ...params },
+  listed: { unit: "image", variant: "1k" } });
 
 // One link = one model on one provider. Its bounds live in the private table
 // (src/upstream-costs.js, `media`, never committed): `worstCaseUsd` is the
@@ -71,6 +91,7 @@ export const IMAGE_TIERS = {
       // Per-megapixel pricing, locked 1024x1024 billed as 1 MP.
       { model: "black-forest-labs/flux.2-klein-4b", provider: "black-forest-labs", params: {},
         listed: { unit: "megapixel" } },
+      klein3Link({ aspect_ratio: "1:1" }),
       // Token-priced: ~1568 image tokens at medium plus text prompt tokens.
       // gpt-5-image-mini replaced gpt-image-1-mini here 2026-09-02, ahead of the
       // latter's 2026-12-01 retirement: identical image_output and prompt
@@ -89,11 +110,19 @@ export const IMAGE_TIERS = {
       // Per-megapixel pricing, locked 1024x1024.
       { model: "black-forest-labs/flux.2-pro", provider: "black-forest-labs", params: {},
         listed: { unit: "megapixel" } },
-      // Flat per image (2K is the same price but 65 s and a 3 MB PNG, so the
-      // fallback pins 1K).
-      { model: "qwen/qwen-image-3", provider: "alibaba", params: { resolution: "1K" },
-        listed: { unit: "image", variant: "1k" } },
+      // Replaced qwen-image-3 (66 s per image) 2026-10-17: a few seconds, and
+      // the same 1024x1024 JPEG the primary returns.
+      klein3Link({ aspect_ratio: "1:1" }),
     ],
+  },
+  // Image edit: a prompt plus one to four reference images. One link; no other
+  // listed edit model fits under this price's bound, so an outage is a 503
+  // (not charged).
+  "v1-images-edit": {
+    path: IMAGES_EDIT_PATH,
+    price: 0.02,
+    edit: true,
+    chain: [klein3Link({})],
   },
   // The flagship /v1/images/generations route (tool def in llm-gateway-kit.js,
   // which hands the call to imageTierHandler here). It rode
@@ -154,7 +183,7 @@ export function withinMargin(price, worst) {
 export function validateImageTierRequest(input, tierSlug) {
   const tier = IMAGE_TIERS[tierSlug];
   if (!tier) throw bad("Unknown image tier", 500);
-  if (input == null || typeof input !== "object") throw bad("Request body must be a JSON object");
+  if (input == null || typeof input !== "object" || Buffer.isBuffer(input)) throw bad("Request body must be a JSON object");
   const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
   if (!prompt) throw bad('"prompt" is required - a text description of the image to generate');
   if (prompt.length > IMAGE_MAX_PROMPT_CHARS) throw bad(`Prompt too long (${prompt.length} chars). Maximum is ${IMAGE_MAX_PROMPT_CHARS}`);
@@ -170,13 +199,65 @@ export function validateImageTierRequest(input, tierSlug) {
   if (input.response_format !== undefined && input.response_format !== "b64_json") {
     throw bad('"response_format" must be "b64_json" - generated images are returned inline, not hosted');
   }
+  if (tier.edit) {
+    if (input.mask !== undefined) throw bad('"mask" is not accepted - describe the change in the prompt; the model edits from the prompt and the reference images');
+    return { prompt, refs: editReferences(input) };
+  }
   if (input.input_references !== undefined || input.image !== undefined || input.images !== undefined) {
-    throw bad("Reference images (image-to-image) are not accepted on this endpoint - it is priced for text-to-image only");
+    throw bad(`Reference images (image-to-image) are not accepted on this endpoint - it is priced for text-to-image only; send them to ${IMAGES_EDIT_PATH}`);
   }
   // size / quality / aspect_ratio / style are ignored, not rejected: the output
   // size is locked to the provider default the price was measured at, and
   // drop-in OpenAI clients send them by habit.
   return { prompt };
+}
+
+/** One reference image as a data URL, from bytes; the type and size are read
+ *  from the bytes, never from what the caller declared. */
+export function referenceDataUrl(buf, label = "image") {
+  if (!Buffer.isBuffer(buf) || !buf.length) throw bad(`${label} is empty`);
+  if (buf.length > IMAGE_EDIT_MAX_REF_BYTES) throw bad(`${label} is ${(buf.length / 1048576).toFixed(1)} MB; each reference image may be up to ${IMAGE_EDIT_MAX_REF_BYTES / 1048576} MB`);
+  const format = buf[0] === 0x89 ? "png" : buf[0] === 0xff ? "jpeg" : null;
+  const size = format ? imageSize(buf, format) : null;
+  if (!size) throw bad(`${label} is not a PNG or JPEG image (an animated PNG is not accepted)`);
+  if (size.width < IMAGE_EDIT_MIN_SIDE || size.height < IMAGE_EDIT_MIN_SIDE) throw bad(`${label} is ${size.width}x${size.height}; each reference image must be at least ${IMAGE_EDIT_MIN_SIDE}x${IMAGE_EDIT_MIN_SIDE} pixels`);
+  return `data:image/${format};base64,${buf.toString("base64")}`;
+}
+function decodeReference(v, label) {
+  let s = v;
+  if (s && typeof s === "object") s = s.image_url?.url ?? s.image_url ?? s.url ?? s.b64_json;
+  if (typeof s !== "string" || !s.trim()) throw bad(`${label} must be a base64 image or a data: URL`);
+  s = s.trim();
+  if (/^https?:/i.test(s)) throw bad(`${label}: image URLs are not fetched - send the image inline as base64 or a data: URL`);
+  const m = /^data:([^;,]*)(;base64)?,/i.exec(s);
+  if (m && !m[2]) throw bad(`${label}: the data: URL must be base64-encoded`);
+  const b64 = (m ? s.slice(m[0].length) : s).replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(b64)) throw bad(`${label} is not valid base64`);
+  return referenceDataUrl(Buffer.from(b64, b64.includes("-") || b64.includes("_") ? "base64url" : "base64"), label);
+}
+/** The edit route's references from a JSON body: `image` (one, or an array,
+ *  as OpenAI's wire allows) or `images`. */
+function editReferences(input) {
+  if (input._editRefs) return input._editRefs;
+  const raw = input.images !== undefined ? input.images : input.image;
+  const list = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
+  if (!list.length) throw bad('"image" is required - one to four reference images, each base64 or a data: URL (or a multipart "image" file)');
+  if (list.length > IMAGE_EDIT_MAX_REFS) throw bad(`At most ${IMAGE_EDIT_MAX_REFS} reference images per edit (got ${list.length})`);
+  return list.map((v, i) => decodeReference(v, list.length > 1 ? `image ${i + 1}` : "image"));
+}
+/** OpenAI's images.edit() sends multipart/form-data: an `image` file part plus
+ *  `prompt` (and fields it ignores here). One file part, by the parser's
+ *  design; send JSON for more than one reference. */
+export function editInputFromMultipart(req) {
+  const ct = req?.headers?.["content-type"] || "";
+  const body = req?.body;
+  if (!/^multipart\/form-data/i.test(String(ct)) || !Buffer.isBuffer(body)) return null;
+  const { fields, file } = parseMultipartFile(body, ct, { maxParts: 16 });
+  if (!file) throw bad('multipart body has no "image" file part');
+  const input = { ...fields };
+  delete input.image; delete input["image[]"];
+  input._editRefs = [referenceDataUrl(file.buf, "image")];
+  return input;
 }
 
 // ---------------------------------------------------------------------------
@@ -234,7 +315,7 @@ function userOf(req) { try { return req ? upstreamUserId(req) : undefined; } cat
 export async function imageTierHandler(tierSlug, input, req, { zdr = false } = {}) {
   const user = userOf(req);
   const tier = IMAGE_TIERS[tierSlug];
-  const { prompt } = validateImageTierRequest(input, tierSlug);
+  const { prompt, refs } = validateImageTierRequest(input, tierSlug);
   let lastErr = null;
   for (const link of tier.chain) {
     if (!linkBounds(link)) {
@@ -246,7 +327,8 @@ export async function imageTierHandler(tierSlug, input, req, { zdr = false } = {
       lastErr = bad("Image tier temporarily unavailable - upstream repriced above the bound; the operator has been notified", 503);
       continue;
     }
-    const body = { model: link.model, prompt, n: 1, ...link.params, provider: { only: [link.provider], ...(zdr ? { zdr: true } : {}) }, ...(user ? { user } : {}) };
+    const body = { model: link.model, prompt, n: 1, ...link.params,
+      ...(refs ? { input_references: refs.map((url) => ({ type: "image_url", image_url: { url } })) } : {}), provider: { only: [link.provider], ...(zdr ? { zdr: true } : {}) }, ...(user ? { user } : {}) };
     try {
       const res = await fetchOpenRouter(body, { url: OPENROUTER_IMAGES_URL, timeoutMs: IMAGE_LINK_TIMEOUT_MS });
       if (!res.ok) await throwUpstreamError(res);
@@ -436,6 +518,9 @@ const imageInputSchema = {
   },
   required: ["prompt"],
 };
+// The judge preview's 300x300 PNG (a red square on white): small enough to ride
+// in the 402's discovery block, and above the provider's 256 px minimum.
+const EDIT_EXAMPLE_IMAGE = `data:image/png;base64,${examplePngBase64()}`;
 const imageOutputExample = (model) => ({ created: 1750000000, model, data: [{ b64_json: "/9j/4AAQSkZJRgABAQAAAQABAAD…", media_type: "image/jpeg" }], usage: { prompt_tokens: 11, completion_tokens: 4096, total_tokens: 4107 } });
 
 export const IMAGES_FAST_TOOLS = [
@@ -446,7 +531,7 @@ export const IMAGES_FAST_TOOLS = [
     category: "llm",
     price: "$0.020",
     description:
-      "Budget text-to-image over x402 - OpenAI images wire (prompt in, inline base64 out) at $0.02 per picture, a quarter of the flagship /v1/images/generations price. Served by FLUX.2 Klein 4B (about 2 seconds per image, 1024x1024 JPEG) with GPT-5 Image Mini as the failover. n locked to 1, text-to-image only, size and quality fixed. Point any OpenAI SDK's images.generate() at base_url https://agent402.tools/v1 and call /images/fast.",
+      "Budget text-to-image over x402 - OpenAI images wire (prompt in, inline base64 out) at $0.02 per picture, a quarter of the flagship /v1/images/generations price. Served by FLUX.2 Klein 4B (about 2 seconds per image, 1024x1024 JPEG) with FLUX 3 Image Klein, then GPT-5 Image Mini, as the failover. n locked to 1, text-to-image only, size and quality fixed. Point any OpenAI SDK's images.generate() at base_url https://agent402.tools/v1 and call /images/fast.",
     tags: ["image-generation", "images", "text-to-image", "generate", "generate-image", "create-image", "picture", "cheap", "flux", "budget", "fast", ...SHARED_TAGS],
     discovery: {
       bodyType: "json",
@@ -463,7 +548,7 @@ export const IMAGES_FAST_TOOLS = [
     category: "llm",
     price: "$0.050",
     description:
-      "Higher-fidelity text-to-image over x402 - OpenAI images wire (prompt in, inline base64 out) at $0.05 per picture. Served by FLUX.2 Pro (about 9 seconds per image, 1024x1024 JPEG) with Qwen Image 3 at 1K as the failover. n locked to 1, text-to-image only, size and quality fixed. Point any OpenAI SDK's images.generate() at base_url https://agent402.tools/v1 and call /images/pro.",
+      "Higher-fidelity text-to-image over x402 - OpenAI images wire (prompt in, inline base64 out) at $0.05 per picture. Served by FLUX.2 Pro (about 9 seconds per image, 1024x1024 JPEG) with FLUX 3 Image Klein as the failover. n locked to 1, text-to-image only, size and quality fixed. Point any OpenAI SDK's images.generate() at base_url https://agent402.tools/v1 and call /images/pro.",
     tags: ["image-generation", "images", "text-to-image", "generate", "generate-image", "create-image", "picture", "flux", "pro", ...SHARED_TAGS],
     discovery: {
       bodyType: "json",
@@ -472,6 +557,32 @@ export const IMAGES_FAST_TOOLS = [
       output: { example: imageOutputExample(IMAGE_TIERS["v1-images-pro"].chain[0].model) },
     },
     handler: (input, req) => imageTierHandler("v1-images-pro", input, req),
+  },
+  {
+    route: `POST ${IMAGES_EDIT_PATH}`,
+    name: "Image edit (OpenAI-compatible)",
+    slug: "v1-images-edit", aliases: ["image-edit", "edit-image"],
+    category: "llm",
+    price: "$0.020",
+    description:
+      `Edit an image with a prompt over x402 - OpenAI images.edit wire (reference images and a prompt in, inline base64 out) at $0.02 per picture. Send one to ${IMAGE_EDIT_MAX_REFS} PNG or JPEG reference images (${IMAGE_EDIT_MIN_SIDE} px a side or more, up to ${IMAGE_EDIT_MAX_REF_BYTES / 1048576} MB each) as base64 or data: URLs in JSON, or one as a multipart "image" file; the output is one JPEG of about one megapixel that follows the first reference's aspect ratio. Served by FLUX 3 Image Klein in about 10 seconds. No mask: describe the change in the prompt. n locked to 1; a failed generation is not charged on x402. Point any OpenAI SDK's images.edit() at base_url https://agent402.tools/v1.`,
+    tags: ["image-edit", "edit-image", "images", "image-to-image", "inpainting", "retouch", "photo-edit", "flux", "klein", ...SHARED_TAGS],
+    discovery: {
+      bodyType: "json",
+      input: { prompt: "Turn the red square into a ripe red apple with a soft shadow", image: EDIT_EXAMPLE_IMAGE },
+      inputSchema: {
+        properties: {
+          prompt: { type: "string", description: `What to change (up to ${IMAGE_MAX_PROMPT_CHARS.toLocaleString()} chars)` },
+          image: {
+            oneOf: [{ type: "string" }, { type: "array", items: { type: "string" }, minItems: 1, maxItems: IMAGE_EDIT_MAX_REFS }],
+            description: `One to ${IMAGE_EDIT_MAX_REFS} reference images, each base64 or a data: URL (PNG or JPEG, at least ${IMAGE_EDIT_MIN_SIDE}x${IMAGE_EDIT_MIN_SIDE}, up to ${IMAGE_EDIT_MAX_REF_BYTES / 1048576} MB each). Image URLs are not fetched.`,
+          },
+        },
+        required: ["prompt", "image"],
+      },
+      output: { example: imageOutputExample(IMAGE_TIERS["v1-images-edit"].chain[0].model) },
+    },
+    handler: (input, req) => imageTierHandler("v1-images-edit", editInputFromMultipart(req) || input, req),
   },
   {
     route: `POST ${VIDEOS_PATH}`,

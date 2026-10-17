@@ -10,7 +10,7 @@
   "embeddings": { "text-embedding-3-small": 1 },
   "openai": { "gpt-4o-mini": { "prompt": 1, "cached": 1, "completion": 2 }, "gpt-image-2": { "prompt": 1, "cached": 1, "completion": 2 } },
   "sttPerMinute": { "gpt-transcribe": 1 },
-  "media": { "your/image-model": { "worstCaseUsd": 1, "listedMaxUsd": 1 } },
+  "media": { "your/image-model": { "worstCaseUsd": 1, "listedMaxUsd": 1 }, "black-forest-labs/flux-3-image-klein": { "worstCaseUsd": 1, "listedMaxUsd": 1 } },
   "meter": { "markup": 2 },
   "vendor": {
     "exa": { "search": 1, "instant": 1, "answer": 1, "content": 1 },

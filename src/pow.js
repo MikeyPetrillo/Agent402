@@ -199,7 +199,7 @@ export function powReplayStatus() { return { mode: PG ? "shared" : "local", wind
 export const WALLET_ONLY_SLUGS = new Set([
   "token-brief", "filing-report",  // token-brief-kit.js: keyless Solana egress + Opus synthesis, metered
   "linkedin-article",              // linkedin-article-kit.js: research + Opus + image generation, metered
-  "v1-images-fast", "v1-images-pro", "v1-videos",  // llm-images-fast-kit.js (OpenRouter spend)
+  "v1-images-fast", "v1-images-pro", "v1-images-edit", "v1-videos",  // llm-images-fast-kit.js (OpenRouter spend)
   "asset-transfers", "token-balances", "token-allowance", "tx-receipt", "block-receipts", "token-price-history",  // alchemy-data-kit.js (egress)
   // chain-rpc-kit.js: one JSON-RPC read each (Alchemy CU when keyed, a public
   // node otherwise) - egress, so never free-tier.
