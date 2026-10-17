@@ -10,14 +10,21 @@ import { createHmac } from "node:crypto";
 import {
   catalogFromSurfaces, quoteCeilingUsd, planRun, weeklySlices, sliceIndexFor, dayOfYear, gradeAnswer, exitCodeFor,
   resultWordFor, headlineFor, summaryTable, markdownSummary, runCatalogBuy, tierOf, micro, DAILY_MAX_USD, ROTATION_DAYS,
-  PROD_EMPTY_ARRAY_OK, DEFAULT_CONCURRENCY, DEFAULT_PACE_MS,
+  PROD_EMPTY_ARRAY_OK, DEFAULT_CONCURRENCY, DEFAULT_PACE_MS, needsOwnSale, isSaleSource, withOwnSale, SALE_SOURCE_SLUG, NO_OWN_SALE,
 } from "./catalog-buy.js";
+import { captureRecord, REDACTED } from "./catalog-buy-capture.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} (got ${JSON.stringify(a)})`);
 
 // ---- the stub catalog -------------------------------------------------------
+const OLD_TX = "0x2f1fecade9bd945e7817c11e5a34cafe6b349dd8c92a7587efed1de476bddfeb";
+let hashDown = false;
+const settled = new Map(); // tx -> slug of the paid 200 it settled
+let txCounter = 0;
+const ownSaleOf = (tx) => { const slug = settled.get(String(tx || "")); return slug && !ROUTES_BY_SLUG[slug]?.identityBound ? slug : null; };
+let ROUTES_BY_SLUG = {};
 // price, documented example input, documented 200 example, and how the stub answers.
 const ROUTES = {
   "/api/healthy":     { slug: "healthy",     usd: 0.001, input: { text: "hi" },  output: { hex: "ab", rows: [1] },        answer: () => [200, { hex: "cd", rows: [1, 2] }] },
@@ -28,7 +35,7 @@ const ROUTES = {
   "/api/error-field": { slug: "error-field", usd: 0.001, input: { q: "a" },      output: { ok: true },                    answer: () => [200, { ok: false, error: "nope" }] },
   "/api/four":        { slug: "four",        usd: 0.001, input: { q: "a" },      output: { ok: true },                    answer: () => [422, { error: "bad input" }] },
   "/api/missing":     { slug: "missing",     usd: 0.001, input: { q: "a" },      output: { a: 1, b: [1] },                answer: () => [200, { c: 1 }] },
-  "/api/memory":      { slug: "memory",      usd: 0.001, input: { q: "a" },      output: { keys: ["k"] },                 answer: () => [200, { keys: [] }] },
+  "/api/memory":      { slug: "memory",      usd: 0.001, input: { q: "a" },      output: { keys: ["k"] },                 answer: () => [200, { keys: [] }], identityBound: true },
   "/api/demand-radar":{ slug: "demand-radar",usd: 0.001, input: { q: "a" },      output: { radar: [1] },                  answer: () => [200, { radar: [] }] },
   "/api/quote-high":  { slug: "quote-high",  usd: 0.001, input: { q: "a" },      output: { ok: true },                    answer: () => [200, { ok: true }], quoteMicro: 2000 },
   "/api/binary":      { slug: "binary",      usd: 0.001, input: { q: "a" },      binary: true,                            answer: () => [200, Buffer.from("PNG...bytes")] },
@@ -49,13 +56,23 @@ const ROUTES = {
   // A slug whose route is not /api/<slug>: the spec's path is requested, never one spelled from the slug.
   "/api/nested/run":  { slug: "nested-run",  usd: 0.001, input: { q: "a" },      output: { ok: true },                    answer: () => [200, { ok: true }] },
   // Payer-keyed receipts list external settlements only; the run's own buys book internal, so the burner's are empty.
-  "/api/receipts":    { slug: "receipts",    usd: 0.001, input: { from: "2026-09-01" }, output: { total: 2, rows: [{ item: "hash" }] }, answer: () => [200, { total: 0, rows: [] }] },
+  "/api/receipts":    { slug: "receipts",    usd: 0.001, input: { from: "2026-09-01" }, output: { total: 2, rows: [{ item: "hash" }] }, answer: () => [200, { total: 0, rows: [] }], identityBound: true },
+  // The paid canary's sale source, and the two identity-bound tools that name the CALLER's own
+  // sale by its tx: they answer only for a sale the stub settled to a non-identity-bound route
+  // (like production: attest refuses an old sale with no digest, 422), and echo the tx they got.
+  "/api/hash":        { slug: "hash",        usd: 0.001, input: { text: "hello world" }, output: { hex: "b94d" },        answer: () => (hashDown ? [500, { error: "down" }] : [200, { hex: "b94d27" }]) },
+  "/api/attest":      { slug: "attest",      usd: 0.01,  input: { tx: OLD_TX },  output: { uid: "0xu", settlementTx: OLD_TX, data: { slug: "hash" } }, identityBound: true,
+    answer: (n, q, body) => (ownSaleOf(body?.tx) ? [200, { uid: "0xu", settlementTx: body.tx, data: { slug: ownSaleOf(body.tx) } }] : [422, { error: `Your sale in ${body?.tx} has no recorded response digest` }]) },
+  "/api/feedback":    { slug: "feedback",    usd: 0.01,  input: { tx: OLD_TX, verdict: "good" }, output: { recorded: true, item: "hash" }, identityBound: true,
+    answer: (n, q, body) => (ownSaleOf(body?.tx) ? [200, { recorded: true, item: ownSaleOf(body.tx) }] : [403, { error: "no settled call of yours" }]) },
 };
 const pricing = { endpoints: Object.entries(ROUTES).map(([path, r]) => ({
   method: r.pricingMethod || (r.get ? "GET" : "POST"), path, slug: r.slug, price: `${r.usd.toFixed(3)}`,
   ...(r.quoted && !r.rowSaysNothing ? { quoted: true, fromUsd: r.usd, quoteRange: r.quoted } : {}),
   ...(r.pricedByModel ? { pricedByModel: true } : {}),
+  ...(r.identityBound ? { identityBound: true } : {}),
 })) };
+ROUTES_BY_SLUG = Object.fromEntries(Object.values(ROUTES).map((r) => [r.slug, r]));
 const spec = { paths: {} };
 for (const [path, r] of Object.entries(ROUTES)) {
   const op = { tags: ["stub"], responses: { 200: { content: r.binary ? { "image/png": {} } : { "application/json": { example: r.output } } } } };
@@ -85,7 +102,8 @@ const server = createServer(async (req, res) => {
   const route = ROUTES[url.pathname];
   if (!route) { json(404, { error: "no such route" }); return done(); }
   const paid = req.headers["payment-signature"] === "stub-sig";
-  seen.push({ path: url.pathname, method: req.method, query: url.searchParams.get("q"), paid, heartbeat: req.headers["x-heartbeat-token"] || null, body: chunks.length ? Buffer.concat(chunks).toString() : "" });
+  const rawBody = chunks.length ? Buffer.concat(chunks).toString() : "";
+  seen.push({ path: url.pathname, method: req.method, query: url.searchParams.get("q"), paid, heartbeat: req.headers["x-heartbeat-token"] || null, body: rawBody });
   if (!paid) {
     json(402, { x402Version: 2, accepts: [
       { scheme: "exact", network: "eip155:137", amount: "1", asset: "0xdecoy", payTo: "0xpay" },
@@ -94,9 +112,12 @@ const server = createServer(async (req, res) => {
     return done();
   }
   const n = (paidAttempts.get(url.pathname) || 0) + 1; paidAttempts.set(url.pathname, n);
-  const [code, body] = route.answer(n, url.searchParams.get("q"));
-  if (Buffer.isBuffer(body)) { res.writeHead(code, { "content-type": "image/png", "payment-response": Buffer.from(JSON.stringify({ success: true, transaction: "0xtx" })).toString("base64") }); res.end(body); return done(); }
-  if (code === 200) res.setHeader("payment-response", Buffer.from(JSON.stringify({ success: true, transaction: "0xtx" })).toString("base64"));
+  let parsed = null; try { parsed = rawBody ? JSON.parse(rawBody) : null; } catch { parsed = null; }
+  const [code, body] = route.answer(n, url.searchParams.get("q"), parsed);
+  // Every settled 200 gets its own tx, recorded with the slug it paid for.
+  const receipt = () => { const tx = "0x" + (++txCounter).toString(16).padStart(64, "0"); settled.set(tx, route.slug); return Buffer.from(JSON.stringify({ success: true, transaction: tx })).toString("base64"); };
+  if (Buffer.isBuffer(body)) { res.writeHead(code, { "content-type": "image/png", "payment-response": receipt() }); res.end(body); return done(); }
+  if (code === 200) res.setHeader("payment-response", receipt());
   json(code, body); done();
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -204,7 +225,7 @@ const run = (opts) => runCatalogBuy({ target, payer: fakePayer, powSecret: SECRE
   const by = Object.fromEntries(s.results.map((r) => [r.slug, r]));
   eq(s.results.length, catalog.length, "every priced tool has a row in the results, bought or not");
   eq(by.healthy.grade, "ok", "healthy: 402 then a documented 200 passes");
-  ok(by.healthy.status === 200 && by.healthy.tx === "0xtx" && by.healthy.ms >= 0, "healthy: status, receipt tx and ms are recorded");
+  ok(by.healthy.status === 200 && settled.get(by.healthy.tx) === "healthy" && by.healthy.ms >= 0, "healthy: status, receipt tx and ms are recorded");
   eq(by["get-one"].grade, "ok", "a GET tool is bought with its example query");
   ok(seen.some((x) => x.path === "/api/get-one" && x.method === "GET" && x.query === "x" && x.paid), "the example query reached the server on the paid request");
   eq(by.hollow.grade, "empty:items", "hollow 200 fails on the empty array");
@@ -234,6 +255,17 @@ const run = (opts) => runCatalogBuy({ target, payer: fakePayer, powSecret: SECRE
   eq(by["nested-run"].grade, "ok", "a slug whose route is not /api/<slug> is bought at the spec's path");
   ok(seen.some((x) => x.path === "/api/nested/run" && x.paid) && !seen.some((x) => x.path === "/api/nested-run"), "the request went to /api/nested/run and never to a path spelled from the slug");
   eq(by.receipts.grade, "ok", "receipts empty for the burner passes");
+  // Own-sale tools: bought after every other tool, naming a sale this run settled.
+  const paidSeq = seen.filter((x) => x.paid).map((x) => x.path);
+  const firstOwnSale = Math.min(paidSeq.indexOf("/api/attest"), paidSeq.indexOf("/api/feedback"));
+  ok(firstOwnSale >= 0 && paidSeq.slice(firstOwnSale).every((p) => p === "/api/attest" || p === "/api/feedback"), "attest and feedback are bought after every other tool");
+  eq(by.attest.grade, "ok", "attest passes on a sale this run settled (the published example's old tx would answer 422)");
+  eq(by.feedback.grade, "ok", "feedback passes on a sale this run settled");
+  const attestBody = JSON.parse(seen.find((x) => x.path === "/api/attest" && x.paid).body);
+  ok(attestBody.tx !== OLD_TX && attestBody.tx === by.hash.tx && settled.get(attestBody.tx) === "hash", "attest's input tx is the settlement tx of the hash buy, from its payment-response");
+  eq(by.attest.ownSaleOf, "hash", "the graded row names the tool whose sale it attested (the slug, not the tx)");
+  ok(JSON.parse(seen.find((x) => x.path === "/api/feedback" && x.paid).body).verdict === "good", "the rest of the published example input is kept");
+  ok(by.memory.ownSaleOf === undefined && by.receipts.ownSaleOf === undefined, "identity-bound tools whose input names no tx are bought as published");
   eq(paidQuotes.length, seen.filter((x) => x.paid).length, "every signature the payer produced was sent as a paid request (none for the over-list quote)");
   eq(by.pricey.grade, "ok", "a weekly product passes on its documented keys");
   eq(by.verb.grade, "ok", "a tool whose price-list row names another verb is still bought");
@@ -247,6 +279,7 @@ const run = (opts) => runCatalogBuy({ target, payer: fakePayer, powSecret: SECRE
   ok(cap.receipts && cap.receipts.captured === null && cap.receipts.dropped === "denylist", "a payer-keyed read is never captured");
   ok(!cap["no-example"] && !cap["quote-high"]?.captured, "an unbought or unpaid tool has no captured body");
   ok(s.captures.every((c) => !("tx" in c) && !JSON.stringify(c).includes(fakePayer.address)), "no capture carries the receipt tx or the payer's address");
+  ok(![...settled.keys()].some((tx) => JSON.stringify(s.captures).includes(tx)), "no capture carries any tx this run settled, including the one substituted into attest's input");
   ok(s.results.every((r) => !("body" in r)), "the graded report carries no answer bodies");
   const tools = seen.filter((x) => !["/api/pricing", "/openapi.json"].includes(x.path));
   ok(tools.every((x) => typeof x.heartbeat === "string" && x.heartbeat.length === 32), "every request carries the heartbeat token");
@@ -293,6 +326,67 @@ const run = (opts) => runCatalogBuy({ target, payer: fakePayer, powSecret: SECRE
   eq(resultWordFor(d), "deferred", "the result word is deferred");
   eq(headlineFor(d), "nothing failed, 1 cap-deferred", "the headline says nothing failed and names the deferred count");
   ok(d.results.filter((r) => r.grade === "cap").every((r) => !r.pass), "a cap-deferred row is not a pass either");
+}
+
+// Own-sale tools on a narrowed run: the cheap source is bought first, or the tool is deferred.
+{
+  const att = catalog.find((r) => r.slug === "attest");
+  ok(needsOwnSale(att) && needsOwnSale(catalog.find((r) => r.slug === "feedback")), "attest and feedback need the buyer's own sale (identity-bound, input names a tx)");
+  ok(!needsOwnSale(catalog.find((r) => r.slug === "receipts")) && !needsOwnSale(catalog.find((r) => r.slug === "memory")), "identity-bound reads without a tx input do not");
+  ok(!needsOwnSale({ ...att, identityBound: false }), "a tx input on a tool that is not identity-bound is bought as published");
+  ok(isSaleSource(catalog.find((r) => r.slug === "hash")) && !isSaleSource(catalog.find((r) => r.slug === "binary")) && !isSaleSource(catalog.find((r) => r.slug === "memory")) && !isSaleSource(att), "a sale source is a JSON, non-identity-bound tool");
+  ok(!isSaleSource({ ...catalog.find((r) => r.slug === "hash"), example: { kind: "json", body: { stream: true } } }), "a streamed buy is not a sale source (no response digest)");
+  eq(withOwnSale({ kind: "query", query: { tx: "a", n: "1" } }, "b"), { kind: "query", query: { tx: "b", n: "1" } }, "withOwnSale replaces a query tx too");
+  eq(SALE_SOURCE_SLUG, "hash", "the sale source is the paid canary's choice");
+
+  const p = planRun(catalog, { tier: "all", now: JAN7, only: "attest" });
+  eq(p.buy.map((r) => r.slug), ["hash", "attest"], "--only attest adds the cheap source to the plan");
+  ok(p.addedSaleSource && p.saleSource === "hash" && Math.abs(p.plannedUsd - 0.011) < 1e-9, "and its list price counts in the planned spend");
+  const full = planRun(catalog, { tier: "all", now: JAN7, capUsd: 100 });
+  ok(!full.addedSaleSource && full.saleSource === "hash" && full.buy.filter((r) => r.slug === "hash").length === 1, "a plan that already buys a source adds nothing");
+  const noHash = planRun(catalog, { tier: "all", now: JAN7, only: "attest", skip: ["hash"] });
+  ok(noHash.saleSource && noHash.saleSource !== "hash" && isSaleSource(catalog.find((r) => r.slug === noHash.saleSource)), `a skipped source is never added; the cheapest other source is (${noHash.saleSource})`);
+  const tight = planRun(catalog, { tier: "all", now: JAN7, only: "attest", capUsd: 0.01 });
+  ok(tight.buy.length === 0 && tight.noOwnSale.map((r) => r.slug).join() === "attest" && tight.plannedUsd === 0, "a cap that cannot fit the source defers attest and plans nothing for it");
+
+  seen.length = 0;
+  const s = await run({ only: "attest" });
+  eq(s.results.map((r) => [r.slug, r.grade]), [["hash", "ok"], ["attest", "ok"]], "--only attest: the source is bought and graded, then attest passes");
+  const paidSeq = seen.filter((x) => x.paid).map((x) => x.path);
+  eq(paidSeq, ["/api/hash", "/api/attest"], "the source settles before attest is asked");
+  eq(JSON.parse(seen.find((x) => x.path === "/api/attest" && x.paid).body).tx, s.results[0].tx, "attest names the source's settlement tx");
+  eq(s.exitCode, 0, "and the run is green");
+  ok(Math.abs(s.spentUsd - 0.011) < 1e-9, "charged the source plus attest");
+
+  seen.length = 0;
+  const d = await run({ only: "attest", capUsd: 0.01 });
+  eq(d.results.map((r) => [r.slug, r.grade]), [["attest", NO_OWN_SALE]], "no source fits the cap: attest is deferred with a reason");
+  ok(!seen.some((x) => x.path === "/api/attest" || x.path === "/api/hash"), "and nothing is requested");
+  eq(d.exitCode, 4, "a deferral exits 4, never 5");
+  eq(resultWordFor(d), "deferred", "the result word is deferred");
+  eq(headlineFor(d), "nothing failed, 1 deferred (no own sale)", "the headline names the reason");
+  ok(markdownSummary(d).includes("deferred without an own sale 1") && markdownSummary(d).includes("cap-deferred 0"), "the markdown summary counts it apart from the cap");
+
+  seen.length = 0; hashDown = true;
+  const down = await run({ only: "attest" });
+  hashDown = false;
+  const by = Object.fromEntries(down.results.map((r) => [r.slug, r]));
+  eq(by.hash.grade, "http-500", "a source that does not settle fails on its own grade");
+  eq(by.attest.grade, NO_OWN_SALE, "and attest, with no sale to name, is deferred rather than sent the old example");
+  ok(!seen.some((x) => x.path === "/api/attest"), "attest is never asked");
+  eq(down.exitCode, 5, "the run fails for the source, not for attest");
+}
+
+// The capture blanks a tx this run substituted into the input, though the input names it.
+{
+  const T = "0x" + "ab".repeat(32);
+  const row = { slug: "plain-tool", path: "/api/plain", method: "post", usd: 0.01, op: {}, example: { kind: "json", body: { tx: T } } };
+  const graded = { status: 200, grade: "ok", pass: true, ms: 1 };
+  const answer = { status: 200, paid: true, body: { echoed: T, note: `sale ${T}` } };
+  const control = captureRecord(row, graded, answer, {});
+  ok(control.captured?.body.echoed === T, "control: a tx the published input names is kept");
+  const ours = captureRecord(row, graded, answer, { ownTxs: [T.toUpperCase().replace("0X", "0x")] });
+  ok(ours.captured?.body.echoed === REDACTED && ours.captured.body.note === `sale ${REDACTED}`, "a tx named as ours is blanked even when the input carries it, case-insensitively");
 }
 
 // Funding preflight.

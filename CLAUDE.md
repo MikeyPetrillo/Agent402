@@ -127,6 +127,8 @@ Operator-only surfaces live under `/__operator/*` (token-authed).
   `package.json`.
 - `heartbeat.yml` probes prod on a schedule and opens issues for outages and low balances; a
   daily paid canary (`scripts/paid-canary.js`) buys across every rail. No open issues = healthy.
+- `model-drift.yml` runs the live-catalog guard (`scripts/test-gateway-model-ids.js`) daily, never
+  on a push, and keeps one issue open while it fails; its output is redacted before log or issue.
 - Other workflows gate on their own `.github/trigger-*` path filters, independent of deploy.yml.
 
 ## Testing (run locally)

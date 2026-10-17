@@ -1,0 +1,113 @@
+# Daily live-catalog guard for the LLM gateway's model tables: every advertised,
+# ranked, fallback, image and speech id still exists upstream, every private cost
+# row covers its dearest live endpoint, and no ranked model expires inside the
+# warning window (scripts/test-gateway-model-ids.js, public catalog, no key).
+#
+# This is the single owner of that check. It runs on a schedule, never on a push:
+# a vendor repricing a model is not a defect in the change under review, and
+# serving already re-checks each model against its own cost row and refuses a
+# dearer endpoint. A failure opens (or updates) ONE issue and the next clean run
+# closes it.
+#
+# Logs and issues are public. The script names models only under CI, and every
+# line it prints passes through REDACT_RATES before it reaches the log or the
+# issue, so an amount next to "$", a per-unit price or a "row"/"table" value is
+# replaced even if the script's output changes. Spends nothing.
+name: Upstream model price drift (daily)
+
+on:
+  schedule:
+    - cron: "53 4 * * *" # daily ~04:53 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: model-drift
+  cancel-in-progress: false
+
+jobs:
+  model-drift:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # One perl program, used on the log and again on the issue text.
+      REDACT_RATES: >-
+        s/\$\s?[0-9][0-9.,eE+\-]*/\$[redacted]/g;
+        s/[0-9][0-9.,eE+\-]*(\s?(?:\/|per\s)\s?(?:1M|1K|M|K|mtok|tokens?|chars?|characters?|s|secs?|seconds?|mins?|minutes?|requests?|calls?|images?|megapixels?|units?)\b)/[redacted]$1/gi;
+        s/\b(rows?|tables?|rates?|costs?|prices?|live|costPerChar)(\s*[:=]?\s*)[0-9][0-9.,eE+\-]*/$1$2\[redacted]/gi
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install dependencies (secretless)
+        # Dependency lifecycle scripts run here, so the cost table is blanked
+        # for this step; only the guard step below receives it.
+        env:
+          UPSTREAM_COSTS_JSON: ""
+        run: npm ci --ignore-scripts && npm rebuild better-sqlite3
+      - name: Redactor self-check
+        run: |
+          out=$(printf '%s\n' 'm $1.25 row 0.0001 live 3 2e-6/char 7 per token 4.5/M table 9' | perl -pe "$REDACT_RATES")
+          echo "$out"
+          if printf '%s' "$out" | grep -q '[0-9]'; then
+            echo "::error::REDACT_RATES left a digit in its own canary line; refusing to run the guard"
+            exit 1
+          fi
+      - name: Live catalog guard (ids, cost rows, speech chain, expirations)
+        id: guard
+        # Step scope only: no other step sees the cost table.
+        env:
+          UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+          CI: "true"
+        run: |
+          set +e
+          node scripts/test-gateway-model-ids.js 2>&1 | perl -pe "$REDACT_RATES" | tee guard.log
+          code=${PIPESTATUS[0]}
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Page (open / update / close the issue)
+        if: always()
+        env:
+          RESULT: ${{ steps.guard.outputs.exit }}
+        run: |
+          TITLE="Upstream model price drift"
+          LEGACY="Gateway model/price guard FAILING"
+          RUN="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          find_issue() { gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$1\"" --json number,title --jq "[.[] | select(.title == \"$1\")][0].number // empty"; }
+          OPEN=$(find_issue "$TITLE")
+          # The nightly corpus workflow used to own this check under another title.
+          OLD=$(find_issue "$LEGACY")
+          if [ -n "$OLD" ]; then
+            gh issue close "$OLD" --repo "$GITHUB_REPOSITORY" --comment "Superseded: the live catalog guard now runs daily in model-drift.yml and reports under \"$TITLE\". Run: $RUN"
+          fi
+          if [ "$RESULT" != "0" ]; then
+            FAILS=$(grep -E '^FAIL ' guard.log 2>/dev/null | head -30 || true)
+            if [ -z "$FAILS" ]; then FAILS="(no FAIL lines: the guard itself did not complete; log tail follows)
+          $(tail -25 guard.log 2>/dev/null)"; fi
+            FAILS=$(printf '%s\n' "$FAILS" | perl -pe "$REDACT_RATES")
+            BODY="The daily live-catalog guard failed: an advertised, ranked, fallback, image or speech id is gone upstream, a private cost row is under its dearest live endpoint, or a ranked model expires inside the warning window. Serving re-checks each model against its own cost row, so this is a table to update, not an outage. Amounts are withheld here. Run: $RUN
+
+          \`\`\`
+          $FAILS
+          \`\`\`
+
+          Reproduce locally (full detail): \`node scripts/test-gateway-model-ids.js\` with the private cost table."
+            if [ -n "$OPEN" ]; then
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ). Run: $RUN
+
+          \`\`\`
+          $FAILS
+          \`\`\`"
+            else
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+            fi
+          elif [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the live catalog guard passed at $(date -u +%FT%TZ). Run: $RUN"
+          fi

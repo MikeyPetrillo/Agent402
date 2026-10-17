@@ -6,7 +6,27 @@ carries its own version on npm.
 
 ## Unreleased
 
-Nothing yet.
+### 2026-10-16
+- seller-trust and seller-dossier report both router lanes from the router's
+  own verdicts: the proven lane with each route-execute tier that can pay the
+  seller, and the Base unproven tier with its ceiling. `routableByOurRouter` is
+  true when either lane can pay; `routableAsProven` keeps the proven meaning.
+- A crawled seller's price is read the same way everywhere whether the seller
+  states it as a dollar label, a number or an object. seller-trust and
+  seller-dossier count label-priced routes as paid, and the index re-checks
+  them for staleness, price drift and networks like every other priced route.
+- Market-data quotes and history answer `503` (nothing charged) when the data
+  source stalls mid-answer, and the server instances share one cache of
+  market bars, so a repeat read is served without waiting on the source.
+- Crypto market tools share their response caches and one request budget
+  across server instances.
+- A Solana payment quoted by one server instance and paid on another settles:
+  every instance names the same fee payer.
+- A payment the facilitator reports as already on-chain is served when the
+  chain shows it paid this request in full; one signed authorization pays for
+  one answer.
+- Site pages read cleanly on phones from 360 px wide: tables become cards,
+  labels stay whole, and text keeps a readable measure.
 
 ## v2.7.0 - 2026-10-15
 
