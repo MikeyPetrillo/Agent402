@@ -271,7 +271,7 @@ const boot = (port, extra = {}) => {
       REDIS_URL, CHARGED_ANSWER_SECRET: SECRET, CHARGED_ANSWER_TTL_MS: String(TTL_MS), CHARGED_ANSWER_RECOVERY: "",
       HANGUP_FORGIVE: "", HANGUP_FORGIVE_KEY_USD: "0.1", HANGUP_FORGIVE_GLOBAL_USD: "0.4", HANGUP_FORGIVE_FILE: "off", HANGUP_FORGIVE_SALT: "recovery-test",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", STATE_DATABASE_URL: "",
-      AGENT402_OPERATOR_TOKEN: OP, REFUND_DB_DIR: join(TMP, "shared"), SALES_LEDGER_DB: join(TMP, `sales-${port}.db`), HANGUP_TEST_HOLD_JSON: "1", ...extra },
+      AGENT402_OPERATOR_TOKEN: OP, REFUND_DB_DIR: join(TMP, `refunds-${port}`), SALES_LEDGER_DB: join(TMP, `sales-${port}.db`), HANGUP_TEST_HOLD_JSON: "1", ...extra },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const keep = (chunk) => { for (const line of String(chunk).split("\n")) if (line.trim()) serverLog.push(`${port}: ${line.slice(0, 400)}`); };
@@ -279,7 +279,9 @@ const boot = (port, extra = {}) => {
   procs.push(p);
   return p;
 };
-mkdirSync(join(TMP, "shared"), { recursive: true });
+// Each server keeps its own refund ledger file (production shares one in the
+// state database); two processes creating one SQLite file at once can collide.
+for (const port of [PORT_A, PORT_B]) mkdirSync(join(TMP, `refunds-${port}`), { recursive: true });
 await sleep(50);
 boot(PORT_A);
 // Server B models a buyer whose forgiveness budget is spent: forgiveness off,
@@ -289,9 +291,11 @@ boot(PORT_B, { HANGUP_FORGIVE: "off" });
 let opReads = 0;
 const refundsDoc = async (base = A) => (await fetch(`${base}/__operator/refunds.json?status=all`, { headers: { Authorization: `Bearer ${OP}`, "x-forwarded-for": `10.253.${Math.floor(++opReads / 250) % 250}.${opReads % 250}` } })).json();
 let nonceN = 0;
+// Unique per run: the replay guard remembers a spent nonce in Redis for an hour.
+const RUN_NONCE = BigInt(Date.now()) * 1_000_000n;
 const credential = (accepted, payer, nonce = ++nonceN) => Buffer.from(JSON.stringify({
   x402Version: 2, resource: accepted.resource, accepted,
-  payload: { signature: "0x" + "22".repeat(65), authorization: { from: payer, to: accepted.payTo, value: accepted.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x" + (0x9000 + nonce).toString(16).padStart(64, "0") } },
+  payload: { signature: "0x" + "22".repeat(65), authorization: { from: payer, to: accepted.payTo, value: accepted.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x" + (RUN_NONCE + BigInt(nonce)).toString(16).padStart(64, "0") } },
 })).toString("base64");
 const accepts = {};
 const acceptFor = async (path, method = "GET", body) => {
@@ -377,7 +381,7 @@ try {
   {
     const s0 = fac.settle;
     const answer = JSON.parse(replayBody).uuids[0];
-    const sameNonce = credential(acc, OTHER, Number(BigInt(JSON.parse(Buffer.from(cB, "base64").toString()).payload.authorization.nonce) - 0x9000n));
+    const sameNonce = credential(acc, OTHER, Number(BigInt(JSON.parse(Buffer.from(cB, "base64").toString()).payload.authorization.nonce) - RUN_NONCE));
     const r1 = await fetch(`${A}${UUID}`, { headers: { "payment-signature": sameNonce } });
     const t1 = await r1.text();
     ok(r1.status >= 400 && !t1.includes(answer) && r1.headers.get("x-payment-recovered") === null, `d. the same nonce under another payer is refused (${r1.status}) and never sees the answer`);
