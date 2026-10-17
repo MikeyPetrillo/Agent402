@@ -1642,8 +1642,8 @@ export function releaseCoverOnSettled(ctx, result) {
  * fallback CHAIN - Solvador first on the networks its live /supported
  * advertises (when SOLVADOR_KEY is set), then PayAI on the networks IT can
  * settle, then Solvador as the ungated last resort elsewhere - when the primary
- * facilitator rejects settlement BEFORE broadcasting (an HTTP 402 billing
- * gate). Never on a timeout/5xx, where the settler may already have broadcast;
+ * facilitator rejects settlement BEFORE broadcasting (an HTTP 402, or a
+ * billing refusal on our facilitator account; see isPreBroadcastSettleRejection). Never on a timeout/5xx, where the settler may already have broadcast;
  * that rule applies between fallbacks too, so a Solvador timeout stops the
  * chain rather than risking a double-charge via PayAI. Order decided
  * 2026-09-18 on each facilitator's published settlement pricing, so the
@@ -1899,7 +1899,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
   if (fallbackEnabled) {
     console.log(
       `Settle fallback: ON - chain ${solvadorClient ? "Solvador (first on its advertised networks) -> " : ""}${payAiClient ? "PayAI" : solvadorClient ? "(Solvador only)" : "(no candidates!)"}` +
-        "; fires ONLY on facilitator-thrown pre-broadcast rejections (HTTP 402 class), never on buyer-side or ambiguous failures"
+        "; fires ONLY on pre-broadcast refusals (an HTTP 402 or a billing refusal on our facilitator account), never on buyer-side or ambiguous failures"
     );
   }
   server.onSettleFailure(async (ctx) => {
@@ -1949,6 +1949,21 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     for (const { name, client } of candidates) {
       try {
         const result = await client.settle(ctx.paymentPayload, ctx.requirements);
+        // A graceful 200 {success:false} from a fallback is judged by the same
+        // gate: a billing refusal on our account there (it signed nothing)
+        // lets the chain continue; any other failed result ends the chain and
+        // the primary's refusal stands (never "recovered" with a failure).
+        if (result?.success !== true) {
+          console.warn(
+            `[payments] ${name} settle fallback REJECTED on ${ctx?.requirements?.network}: ` +
+              `${result?.errorReason || result?.errorMessage || "no reason given"}`
+          );
+          const refusal = Object.assign(new Error(String(result?.errorMessage || result?.errorReason || "settle rejected")), {
+            errorReason: result?.errorReason, errorMessage: result?.errorMessage, transaction: result?.transaction,
+          });
+          if (isPreBroadcastSettleRejection(refusal)) continue;
+          return;
+        }
         // A recovered settlement fires no afterSettle hook (the vendor returns
         // it as-is), so the in-flight cover's release is called here.
         releaseCoverOnSettled(ctx, result);
@@ -1963,9 +1978,10 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
             summarizeFacilitatorError(err)
         );
         // The double-settle gate applies BETWEEN fallbacks exactly as it does
-        // after the primary: only a clean pre-broadcast rejection (HTTP 402
-        // class) proves this facilitator did not broadcast, so only that lets
-        // the chain continue to the next candidate. A timeout/5xx here may
+        // after the primary: only a clean pre-broadcast rejection (an HTTP
+        // 402, or a billing refusal on our account) proves this facilitator
+        // did not broadcast, so only that lets the chain continue to the next
+        // candidate. A timeout/5xx here may
         // mean the transfer is already on-chain — trying anyone else could
         // charge the buyer twice, so the chain STOPS.
         if (!isPreBroadcastSettleRejection(err)) return;
@@ -1976,16 +1992,47 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
 
 /**
  * True only for facilitator settle failures guaranteed NOT to have broadcast
- * on-chain (safe to re-settle elsewhere): an HTTP 402 from the facilitator
- * /settle endpoint (e.g. CDP's `payment-method-required` billing gate). Network
- * errors, timeouts, and 5xx are excluded — there the primary may already have
- * broadcast, so re-settling could double-charge the buyer.
+ * on-chain (safe to re-settle elsewhere). Two classes, both refusals the
+ * facilitator makes before it signs or submits anything:
+ *
+ *  1. An HTTP 402 from the facilitator's /settle. @x402/core's
+ *     HTTPFacilitatorClient throws a SettleError carrying `statusCode` for a
+ *     non-2xx JSON settle body, and a plain Error whose message reads
+ *     "Facilitator settle failed (402)" for a non-JSON one; older shapes carry
+ *     `status`. All three are read.
+ *  2. A billing refusal on OUR facilitator account, in the facilitator's own
+ *     words (src/payment-reject.js isBillingRefusalReceipt, the one
+ *     classifier the 402 body and the breakers also use): PayAI's
+ *     free_tier_exhausted, `insufficient_credits`, CDP's
+ *     payment-method-required, the Celo facilitator's "Out of mainnet
+ *     settlement funds". The facilitator checks the account balance before it
+ *     signs the transfer (its published flow: when the balance cannot cover
+ *     the next settlement, /settle refuses until it is topped up), so nothing
+ *     reached the chain. This class holds whatever the HTTP status: the
+ *     vendor turns a 200 `{success:false}` into a SettleError with a synthetic
+ *     statusCode 500, and the wording, not the status, is what proves the
+ *     refusal. The receipt rule still applies: an errorReason that is a
+ *     verdict about the payment (insufficient_funds, transaction_failed, ...)
+ *     is never relabelled billing by words in its message.
+ *
+ * Everything else is NOT pre-broadcast: timeouts, aborts, socket errors,
+ * 5xx and any other status or wording, because there the settler may already
+ * have broadcast and re-settling could double-charge the buyer. A refusal
+ * that names a transaction hash is never pre-broadcast, whatever it says.
  */
 export function isPreBroadcastSettleRejection(err) {
-  if (!err) return false;
-  if (err.status === 402) return true;
+  if (!err || typeof err !== "object") return false;
+  if (typeof err.transaction === "string" && err.transaction.trim()) return false;
+  if (err.status === 402 || err.statusCode === 402) return true;
   const msg = String(err.message || "");
-  return /settle failed \(402\)/i.test(msg) || /payment-method-required/i.test(msg);
+  if (/settle failed \(402\)/i.test(msg)) return true;
+  // A transport failure is ambiguous whatever text rides on it.
+  if (err.name === "AbortError" || err.name === "TimeoutError" || err.code || err.cause) return false;
+  return isBillingRefusalReceipt({
+    success: false,
+    errorReason: err.errorReason,
+    errorMessage: typeof err.errorMessage === "string" && err.errorMessage ? err.errorMessage : msg,
+  });
 }
 
 /** Pull the human-meaningful bits out of a facilitator error (its message

@@ -72,7 +72,10 @@ export const REJECTION_REASONS = Object.freeze([
  * A facilitator refusing to SETTLE for a quota or billing reason on OUR
  * account: PayAI's `free_tier_exhausted`, the Algorand facilitator's
  * `subcent_quota_exceeded` (its monthly allowance of sponsored sub-cent
- * settlements for our payTo), a prepaid-credits wall. Such a refusal says
+ * settlements for our payTo), a prepaid-credits wall (`insufficient_credits`,
+ * or the Celo facilitator's "Out of mainnet settlement funds" when the
+ * account balance cannot cover the next settlement), CDP's
+ * `payment-method-required` billing gate. Such a refusal says
  * nothing about the buyer's wallet - but the call behind it was served and
  * never charged, so it is NOT free to ignore. ONE definition: payments.js logs
  * with it, the 402 body below names it, and the settle breaker words its 429
@@ -81,7 +84,7 @@ export const REJECTION_REASONS = Object.freeze([
  * buyer's count; every other billing refusal still counts in both breakers
  * and the composite guard, because their bounds are all that stop it looping.
  */
-export const FACILITATOR_BILLING_REFUSAL = /free_tier_exhausted|subcent_quota_exceeded|quota[_ ]exceeded|payment[_ ]required.*credit/i;
+export const FACILITATOR_BILLING_REFUSAL = /free_tier_exhausted|subcent_quota_exceeded|quota[_ ]exceeded|payment[_ ]required.*credit|insufficient[_ ]credits|payment-method-required|out of (?:mainnet |testnet )?settlement funds/i;
 export function isFacilitatorBillingRefusal(text) {
   return FACILITATOR_BILLING_REFUSAL.test(String(text || ""));
 }
