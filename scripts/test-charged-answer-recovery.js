@@ -25,6 +25,8 @@
 //      refused, nothing settled, the answer never shown;
 //   e. a hang-up past the forgiveness budget (server B) -> kept and served on A;
 //   f. a hang-up inside the budget (not settled) -> nothing kept, refused as before;
+//   h. a memory write (identity-bound) -> never kept here; with an
+//      Idempotency-Key the settled hang-up replays from that cache;
 //   g. TTL expiry -> refused as before.
 //
 //   node scripts/test-charged-answer-recovery.js           (starts a local redis-server)
@@ -415,6 +417,35 @@ try {
     ok(fac.settle === s1, "f. a hang-up inside the forgiveness budget is not settled");
     const rf = await fetch(`${A}/api/base64`, { method: "POST", headers: { "payment-signature": cF, "content-type": "application/json" }, body });
     ok(rf.status === 409 && rf.headers.get("x-payment-recovered") === null && fac.settle === s1, `f. nothing was kept; the spent credential is refused as before (${rf.status})`);
+  }
+
+  // h. an identity-bound route (a memory write) is never kept by the recovery;
+  // with an Idempotency-Key its settled answer is kept by that cache, now
+  // committed on the settlement outcome rather than on "finish".
+  {
+    const key = `recovery-${Date.now()}`;
+    const body = JSON.stringify({ key, value: "kept" });
+    const accMem = await acceptFor("/api/memory", "POST", body);
+    const heldMemory = (c, extra = {}) => new Promise((resolve) => {
+      const req = httpRequest(`${A}/api/memory`, { method: "POST", headers: { "payment-signature": c, "content-type": "application/json", "x-test-hold-json-ms": "600", "x-forwarded-for": "10.9.0.7", ...extra } });
+      req.on("error", () => resolve()); req.on("response", (r) => { r.resume(); resolve(); });
+      req.write(body); req.end();
+      setTimeout(() => { req.destroy(); resolve(); }, 250);
+    });
+    const cH = credential(accMem, WALLET);
+    const s0 = fac.settle;
+    await heldMemory(cH);
+    ok(await waitFor(() => fac.settle === s0 + 1, 4000), "h. a memory write whose buyer left is settled (its effect outlives the answer)");
+    await sleep(300);
+    const r = await fetch(`${A}/api/memory`, { method: "POST", headers: { "payment-signature": cH, "content-type": "application/json" }, body });
+    ok(r.status === 409 && r.headers.get("x-payment-recovered") === null && fac.settle === s0 + 1, `h. without an Idempotency-Key the resend is refused: identity-bound answers are never kept by the recovery (${r.status})`);
+    const cK = credential(accMem, WALLET);
+    await heldMemory(cK, { "idempotency-key": `${key}-k` });
+    ok(await waitFor(() => fac.settle === s0 + 2, 4000), "h. the keyed write whose buyer left is settled");
+    await sleep(300);
+    const rk = await fetch(`${A}/api/memory`, { method: "POST", headers: { "payment-signature": cK, "content-type": "application/json", "idempotency-key": `${key}-k` }, body });
+    const jk = await rk.json().catch(() => ({}));
+    ok(rk.status === 200 && rk.headers.get("x-idempotent-replay") === "true" && fac.settle === s0 + 2, `h. with the same Idempotency-Key the resend replays the settled answer, settling nothing (${rk.status} ${JSON.stringify(jk).slice(0, 80)})`);
   }
 
   // g. past the TTL: refused as before.
