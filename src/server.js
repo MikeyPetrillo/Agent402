@@ -159,6 +159,9 @@ function whenVerdict(r, then) {
 function recordHangupDebt(req, res) {
   const def = CATALOG[`${req.method} ${req.path}`];
   if (!def) return null;
+  // A replay of a kept answer (src/charged-answer-recovery.js) settles
+  // nothing: the receipt it carries is the original payment's, already booked.
+  if (isRecoveryReplay(req)) return null;
   // The debt names the chain-read sender: book it once that read is done.
   // Truthy meanwhile, so recordHangupOutcome does not log it as uncharged.
   if (req.tempoSettled && tempoLedgerPayerPending(req)) {
@@ -211,7 +214,11 @@ function recordHangupDebt(req, res) {
   // The same push transfer was refused on input earlier and booked as owed
   // under its hash; INSERT OR IGNORE kept that 400 row. It is a disconnect
   // now: promote it, or the hang-up holds never see it.
-  const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason }), (made) => {
+  // The answer was kept for a retry with the same payment: the note tells the
+  // refund planner to wait out the window before repaying (a retry voids it).
+  const kept = answerKeptFor(req);
+  const note = kept ? `${KEPT_NOTE_PREFIX} until ${new Date(kept.untilMs).toISOString()}` : null;
+  const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason, note }), (made) => {
     if (!made && req.tempoSettled && tempoPushHashOf(req) === row.tx) void tempoPushDebts?.hungUp(row.tx, hangupReason);
   });
   console.warn(`[hangup] CHARGED-BUT-NOT-SERVED: client disconnected before the settled response was delivered (${req.method} ${req.path} rail=${row.wire} tx=${row.tx || "?"}) - ${created ? "recorded as owed in the refund ledger" : "already on the books"}${denied ? `; not forgiven: ${denied}` : ""}`);
@@ -233,6 +240,25 @@ function recordHangupOutcome(req, res) {
   const work = started > 0 ? `after ${Math.max(0, Date.now() - started)} ms of work` : "before the handler ran";
   const why = hangupForgiven(req) ? "within the hang-up forgiveness budget" : "nothing was settled";
   console.warn(`[hangup] NOT CHARGED: client closed the connection before the answer was ready (${req.method} ${req.path} rail=${rail} ${work}) - payment not settled; ${why}`);
+}
+// Proof that this response's charge settled, for the charged-answer recovery
+// (src/charged-answer-recovery.js): the same evidence rules as
+// recordHangupDebt. An x402 receipt must say success:true; the Tempo and
+// Stripe gates set their flag only after a real settlement. Credits carry no
+// single-use credential and are never kept there.
+function chargedAnswerEvidence(req, res) {
+  if (req.tempoSettled) return { tx: tempoPushHashOf(req) || tempoTxFromReceiptHeader(res.getHeader("Payment-Receipt")) || null };
+  if (req.stripeSettled) return { tx: stripeTxFromReceiptHeader(res.getHeader("Payment-Receipt")) || null };
+  const receipt = res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE");
+  if (receipt && receiptProvesCharge(decodeSettleReceipt(receipt))) return { tx: txFromPaymentResponse(receipt) };
+  return null;
+}
+// A kept answer reached the buyer on a retry: void the hang-up debt booked for
+// that payment, so an answer the buyer received is never also refunded. Only
+// an OWED row changes (one already sending or paid is left for a human).
+function chargedAnswerDelivered({ tx }) {
+  if (typeof tx !== "string" || !tx) return;
+  try { whenVerdict(voidOwedOnClaim(tx, DELIVERED_NOTE), () => {}); } catch { /* bookkeeping only */ }
 }
 // The keys a forgiveness ticket is counted under: the verified payer (signed
 // EIP-3009 payer, the Tempo sender the gate VERIFIED - see inspectTempoSender
@@ -704,6 +730,7 @@ function trialClientKey(ip) {
 }
 const TRIAL_LIMITS_LABEL = `${TRIAL_PER_TOOL_HOUR} per tool per hour, ${TRIAL_IP_HOUR} per hour per client`;
 const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY} per day per client`;
+import { createChargedAnswerRecovery, isRecoveryReplay, answerKeptFor, recoveryStatus, KEPT_NOTE_PREFIX, DELIVERED_NOTE } from "./charged-answer-recovery.js";
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
@@ -5315,6 +5342,9 @@ app.get("/__operator/refunds.json", (req, res) => {
     // How much of the hang-up forgiveness budget is in use: once it is spent,
     // an abandoned run is charged and appears above as owed with httpStatus 499.
     hangupForgiveness: hangupForgivenessStatus(),
+    // Settled answers kept for a buyer who left, and how many were delivered
+    // on a retry with the same payment (src/charged-answer-recovery.js).
+    chargedAnswerRecovery: recoveryStatus(),
   });
 });
 // Self-serve seller conversion/churn (2026-08-16). first_seen: when the
@@ -8522,6 +8552,20 @@ if (!FREE_MODE) {
   // (src/paid-phase-timing.js); before every gate, so gate time is measured.
   app.use(phaseArrivalMiddleware());
   app.use(createHangupSettlementHook({ onUndelivered: recordHangupOutcome }));
+  // A charged answer stays deliverable (src/charged-answer-recovery.js): a
+  // settled answer whose buyer left is kept, and a retry with the same payment,
+  // route and input is served it before any gate runs, settling nothing.
+  // Mounted right after the hang-up hook, ahead of every payment gate and the
+  // MPP shim: its res.end wrapper is inside every gate's captured end, so it
+  // sees the answer the gate writes after settlement, with its receipt.
+  app.use(createChargedAnswerRecovery({
+    routeOf: (req) => {
+      const def = CATALOG[`${req.method} ${req.path}`] || (req.method === "POST" ? CATALOG[`GET ${req.path}`] : (req.method === "GET" ? CATALOG[`POST ${req.path}`] : null));
+      return def ? { slug: def.slug, identityBound: isIdentityBoundRoute(def) } : null;
+    },
+    evidenceOf: chargedAnswerEvidence,
+    onDelivered: chargedAnswerDelivered,
+  }));
 
   // Tempo support for MPP (src/mpp-tempo.js) — a SECOND, independent
   // settlement path alongside the evm shim below: Tempo's TIP-1034/TIP-20
@@ -9164,6 +9208,10 @@ if (FREE_MODE) {
       const verdict = await replayGuard.begin(replayKey);
       if (verdict !== "ok") {
         res.setHeader("X-Payment-Replay", verdict); // "consumed" | "inflight"
+        // The same authorization is still running: its answer may yet be
+        // kept for this payment (src/charged-answer-recovery.js), so say when
+        // to ask again.
+        if (verdict === "inflight") res.setHeader("Retry-After", "3");
         return res.status(409).json({
           error:
             "Payment authorization already used. Each x402 payment authorization (nonce) is single-use - sign a fresh authorization to make another paid call.",

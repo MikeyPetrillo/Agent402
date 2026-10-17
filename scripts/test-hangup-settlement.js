@@ -495,6 +495,11 @@ const bootServer = () => spawn("node", ["--import", "./scripts/lib/openrouter-st
     COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_GLOBAL_MAX_FAILS: "3",
     HANGUP_FORGIVE: "", HANGUP_FORGIVE_KEY_USD: "0.1", HANGUP_FORGIVE_GLOBAL_USD: "0.4", HANGUP_FORGIVE_WINDOW_MS: "86400000",
     HANGUP_FORGIVE_FILE: HANGUP_FILE, HANGUP_FORGIVE_SALT: "hangup-test-salt",
+    // This suite measures the settle-or-forgive rule and the debts it books on
+    // their own. With the charged-answer recovery on, a settled hang-up's
+    // answer is kept and a resend of the same payment collects it (voiding the
+    // debt); scripts/test-charged-answer-recovery.js covers that path.
+    CHARGED_ANSWER_RECOVERY: "off",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     AGENT402_OPERATOR_TOKEN: OP, REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_TEST_HOLD_JSON: "1" },
   stdio: ["ignore", "pipe", "pipe"],

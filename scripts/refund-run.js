@@ -64,6 +64,7 @@
 
 import { createHash, createHmac } from "node:crypto";
 import { hasLastingEffect } from "../src/hangup-forgiveness.js";
+import { KEPT_NOTE_PREFIX } from "../src/charged-answer-recovery.js";
 import { EVM_RPCS } from "../src/evm-rpcs.js";
 
 // This repo is PUBLIC, so every Actions log is world-readable. The project's
@@ -196,6 +197,24 @@ export function isRepeatHangup(row) {
   return !reason || REPEAT_HANGUP_REASONS.includes(reason);
 }
 
+// A disconnect whose settled answer was kept for a retry with the same
+// payment (src/charged-answer-recovery.js; recordHangupDebt writes the note
+// with the window's end). Until that moment the buyer can still collect the
+// answer, and a delivered retry voids the row, so repaying it now could pay
+// for an answer the buyer then receives. Held until the window closes, then
+// planned like any other debt.
+export const AWAITING_RETRY_HOLD =
+  "answer kept for a retry with the same payment - held until the retry window closes";
+/** The moment a kept answer's retry window closes, or null when the row has none. */
+export function keptAnswerUntil(row) {
+  const note = typeof row?.note === "string" ? row.note : "";
+  if (Number(row?.httpStatus) !== HANGUP_STATUS || !note.startsWith(KEPT_NOTE_PREFIX)) return null;
+  const m = / until (\S+)/.exec(note.slice(KEPT_NOTE_PREFIX.length));
+  const t = m ? Date.parse(m[1]) : NaN;
+  // An unreadable end reads as open for a day from the row's creation, never as closed.
+  return Number.isFinite(t) ? t : (Number(row?.createdAt) || 0) + 24 * 3600 * 1000;
+}
+
 /** A disconnect on a route whose effect outlives the answer (see planRefunds). */
 export function isLastingEffectHangup(row) {
   return Number(row?.httpStatus) === HANGUP_STATUS && hasLastingEffect(row?.slug);
@@ -216,6 +235,7 @@ export function planRefunds(rawRows, {
   includeLastingHangups = false,
   includeRepeatHangups = false,
   senders = {},              // family -> truthy when a key+implementation exists
+  now = Date.now(),
 } = {}) {
   // Normalized ONCE at intake so familyOf, the accepts lookup and the row the
   // sender receives all agree on the CAIP-2 form.
@@ -231,6 +251,9 @@ export function planRefunds(rawRows, {
     if (row.status && row.status !== "owed") continue;
     if (onlyChain && row.network !== onlyChain) { hold("filtered by chain", row); continue; }
     if (row.synthetic && !includeSynthetic) { hold("synthetic (our own canary - opt in to refund it)", row); continue; }
+    // The buyer can still collect this answer by retrying with the same
+    // payment: wait for the window to close (a delivered retry voids the row).
+    { const until = keptAnswerUntil(row); if (until !== null && now < until) { hold(AWAITING_RETRY_HOLD, row); continue; } }
     // A disconnect on a route whose effect outlives the answer: the handler
     // had already acted (a purchase from an outside seller on our wallet, a
     // memory write, an attestation, a stored verdict) when the socket closed,

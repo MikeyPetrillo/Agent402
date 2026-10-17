@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { paymentHeaderOf, paymentIdentifierOf } from "./payer.js";
 import { IDEM_MAX_BODY_BYTES } from "./idempotency-limits.js";
 import { createIdempotencyStore, IDEM_TTL_MS, INFLIGHT_RENEW_MS } from "./idempotency-store.js";
+import { onSettleOutcome } from "./hangup-settlement.js";
 
 /** isCatalogRoute(req): true for a priced catalog route. freeMode: dev/test boot with no paywall. */
 export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore() }) {
@@ -103,7 +104,13 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     let captured;
     const origJson = res.json.bind(res);
     res.json = (body) => { captured = body; return origJson(body); };
-    res.on("finish", () => {
+    // Committed when the settlement is decided (src/hangup-settlement.js
+    // onSettleOutcome), not on "finish" alone: Node emits no "finish" for a
+    // response ended on a socket the buyer already closed, and that buyer -
+    // charged, answer undelivered - is exactly who this cache exists for. A
+    // hang-up whose charge was cancelled (a forgiveness ticket) is skipped by
+    // onSettleOutcome: nothing settled, so nothing may replay.
+    const commit = () => {
       if (res.statusCode !== 200 || captured === undefined) return;
       // Only a credential the server actually VERIFIED may seed the cache.
       //
@@ -128,7 +135,8 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       try { bytes = Buffer.byteLength(JSON.stringify(captured), "utf8"); } catch { bytes = 0; }
       if (!bytes || bytes > IDEM_MAX_BODY_BYTES) return;
       store.set(key, captured, bytes).catch(() => {});
-    });
+    };
+    if (!onSettleOutcome(req, res, commit)) res.on("finish", commit);
     next();
   };
 }
