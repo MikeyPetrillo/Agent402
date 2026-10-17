@@ -48,10 +48,11 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   ok(worst < GAP_MS, `the background rebuild never held the loop past ${GAP_MS} ms (worst ${Math.round(worst)} ms)`);
   const fresh = x.allIndexedTools({ search: "offload-stalls-marker", limit: 5 });
   ok(fresh.matched === 1, "the rebuilt directory carries the change");
-  const t1 = performance.now();
+  // Judged by work, not wall time: a shared runner's clock is not a measure.
+  const builds0 = x._directoryHayBuildsForTest();
   x.allIndexedTools({ search: "offload-stalls-marker", limit: 5 });
-  const warmSearchMs = performance.now() - t1;
-  ok(warmSearchMs < 60, `a repeat directory search reuses each row's search text (${Math.round(warmSearchMs)} ms)`);
+  const rebuilt = x._directoryHayBuildsForTest() - builds0;
+  ok(rebuilt === 0, `a repeat directory search reuses each row's search text (${rebuilt} rebuilt)`);
   // The background rows equal a synchronous build of the same cache.
   const bg = digest(x.allIndexedTools({ limit: 300, offset: 40_000 }));
   x._resetFlatCacheForTest(); x._resetIndexRowsForTest();

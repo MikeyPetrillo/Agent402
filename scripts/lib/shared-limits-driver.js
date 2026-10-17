@@ -58,7 +58,7 @@ async function run(cmd) {
     }
     case "gwb.local": return B.gatewaySettleBreakerBlocked(cmd.key);
     // composite spend guard
-    case "cg.fail": { for (let i = 0; i < (cmd.n || 1); i++) G.recordCompositeSpendFailure(cmd.payer, { global: cmd.global !== false }); await barrier(); await barrier(); return { ok: true }; }
+    case "cg.fail": { for (let i = 0; i < (cmd.n || 1); i++) G.recordCompositeSpendFailure(cmd.payer, { global: cmd.global !== false }); await G.__compositeGuardSharedSettled(); await barrier(); return { ok: true }; }
     case "cg.success": { G.recordCompositeSpendSuccess(cmd.payer); await barrier(); return { ok: true }; }
     case "cg.blocked": return { blocked: await G.compositeGuardBlocked(cmd.payer) };
     case "cg.paused": return { paused: await G.compositeGuardGlobalPaused() };
