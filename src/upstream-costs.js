@@ -44,6 +44,8 @@ const REQUIRED = [
   // (USD per 1M tokens: prompt for text input, completion for image output),
   // which the spend meter prices from these rows.
   ["speech", "tts-1"], ["speech", "tts-1-hd"], ["openai", "gpt-image-2"],
+  // The image edit route's only link (llm-images-fast-kit.js).
+  ["media", "black-forest-labs/flux-3-image-klein"],
 ];
 const NONEMPTY = ["speech", "embeddings", "openai", "sttPerMinute", "media"];
 

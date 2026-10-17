@@ -71,7 +71,7 @@ ok(packs.length >= 60, `the skill packs are built (${packs.length})`);
 
 // ---- the five routes with no Algorand accept are expected by design ----
 {
-  for (const slug of ["image-gen-premium", "v1-images-fast", "v1-images-pro", "v1-videos"]) ok(isLongRunningSlug(slug), `${slug} is long-running (EVM exact only: settlement runs after a handler that outlives an AVM validity window)`);
+  for (const slug of ["image-gen-premium", "v1-images-fast", "v1-images-pro", "v1-images-edit", "v1-videos"]) ok(isLongRunningSlug(slug), `${slug} is long-running (EVM exact only: settlement runs after a handler that outlives an AVM validity window)`);
   ok(isIdentityBoundRoute({ slug: "attest" }) && !isLongRunningSlug("attest"), "attest is identity-bound (the handler needs the signed EIP-3009 payer)");
   const canary = readFileSync(new URL("./algorand-rail-canary.js", import.meta.url), "utf8");
   ok(/const expectedNoAvm = isIdentityBoundRoute\(t\) \|\| isLongRunningSlug\(t\.slug\);/.test(canary), "the sweep expects a missing Algorand accept from exactly those two server rules");

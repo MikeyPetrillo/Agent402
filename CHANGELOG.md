@@ -6,6 +6,16 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-10-17
+- `POST /v1/images/edits` edits an image from a prompt and one to four PNG or
+  JPEG reference images (JSON base64 or data: URLs, or one multipart `image`
+  file, so OpenAI's `images.edit()` works unchanged): one JPEG of about one
+  megapixel that keeps the first reference's aspect ratio. Model-backed,
+  served by FLUX 3 Image Klein.
+- `/v1/images/pro` fails over to FLUX 3 Image Klein (a few seconds) and
+  `/v1/images/fast` adds it ahead of its existing failover; both keep their
+  1024x1024 JPEG output.
+
 ### 2026-10-16
 - seller-trust and seller-dossier report both router lanes from the router's
   own verdicts: the proven lane with each route-execute tier that can pay the

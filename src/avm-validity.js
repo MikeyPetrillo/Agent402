@@ -41,7 +41,7 @@ export const SLOW_TOOL_SECONDS = {
   "ticker-pack": 300, "token-brief": 300, "recall-report": 300, "insider-report": 300, "filing-report": 300, "market-brief": 300,
   // Media tiers + the crawler. The media ones are EVM-only (longRunning), but a
   // hand-built AVM payment must still be refused up front rather than burn the run.
-  "v1-images-fast": 240, "v1-images-pro": 240, "v1-videos": 300,
+  "v1-images-fast": 240, "v1-images-pro": 240, "v1-images-edit": 240, "v1-videos": 300,
   "site-crawl": 40, "site-map": 20,
   // Pays an outside seller from our Base wallet and runs to its own 55 s
   // deadline (see DEADLINE_MS in seller-payability-kit.js). EVM-exact only via
