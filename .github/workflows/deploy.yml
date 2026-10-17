@@ -1296,11 +1296,9 @@ jobs:
           # Security regressions (proto-pollution, input-DoS, 500-hardening)
           t node scripts/test-security.js
 
-      - name: LLM gateway model tables vs the LIVE OpenRouter catalog (dead/renamed ids, MODEL_COST floors, TTS chain, expirations)
-        # Network test against OpenRouter's public /models (no key). Fails on a
-        # read error rather than skipping - the stale-id class shipped three
-        # times behind a green suite that never looked upstream.
-        run: node scripts/test-gateway-model-ids.js
+      # The live-catalog guard (scripts/test-gateway-model-ids.js) runs daily in
+      # model-drift.yml, not on a push: an upstream price change is not a
+      # defect in the change under review.
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
