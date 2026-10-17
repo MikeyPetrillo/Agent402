@@ -1337,6 +1337,8 @@ jobs:
           t node scripts/test-tool-judge.js
           # An already-on-chain settle recovers only this request's own transfer; replays across two servers on one Redis never answer twice.
           t node scripts/test-settle-onchain-proof.js
+          # A settled answer whose buyer left is kept; a resend of the same payment, route and input collects it (200, original receipt, no second settle), on either of two servers on one Redis; anything else is refused as before; the debt is voided only once the replay is delivered.
+          t node scripts/test-charged-answer-recovery.js
           # The CoinGecko minute and day caps are one budget across two servers on one Redis; an answer cached on A serves B with no upstream call; a store that does not answer, or no Redis, leaves each server its RATE_LIMIT_REPLICAS share.
           t node scripts/test-coingecko-shared.js
 
