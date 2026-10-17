@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Live guard for the gateway's model tables. Network test (public OpenRouter
-// catalog, no key): fails CI when a model id we ADVERTISE or FAIL OVER TO no
+// catalog, no key): fails the daily model-drift workflow when a model id we ADVERTISE or FAIL OVER TO no
 // longer exists upstream, or when MODEL_COST underestimates a live price
 // inside a tier's max_price bound.
 //
@@ -9,7 +9,7 @@
 // routed call), ministral-3b/8b were renamed and claude-3.5-haiku left while
 // still advertised on /v1/models, and the TTS chain carried zyphra/zonos with
 // ZERO endpoints (2026-08-19, a wasted round-trip on every walk past link 3).
-// Each was found by a human reading the live catalog. This reads it in CI.
+// Each was found by a human reading the live catalog. This reads it daily (.github/workflows/model-drift.yml, which opens an issue).
 //
 // It FAILS on network error rather than skipping: a skipped guard is the same
 // silent green that let every one of those ship.
