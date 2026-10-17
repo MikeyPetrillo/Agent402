@@ -15,6 +15,9 @@ carries its own version on npm.
 - `/v1/images/pro` fails over to FLUX 3 Image Klein (a few seconds) and
   `/v1/images/fast` adds it ahead of its existing failover; both keep their
   1024x1024 JPEG output.
+- crypto-news recovers within seconds when every news feed failed once:
+  a retry fetches the feeds again instead of repeating the cached failure
+  for a minute.
 
 ### 2026-10-16
 - seller-trust and seller-dossier report both router lanes from the router's

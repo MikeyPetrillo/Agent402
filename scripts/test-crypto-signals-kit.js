@@ -273,6 +273,16 @@ ok(Object.keys(NEWS_SOURCES).length >= 5 && Object.keys(NEWS_SOURCES).length <= 
   const b2 = calls.length;
   await throws(h("crypto-news")({}), 502, "failed feeds negatively cached (still 502, no refetch)");
   ok(calls.length === b2, "no refetch inside the failure cache window");
+  // A cached failure past the short retry window is fetched again before it
+  // can turn the answer into a 502, so a caller retrying a blip recovers
+  // inside the minute the failure stays cached.
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + 11_000;
+    const b3 = calls.length;
+    const rec = await h("crypto-news")({});
+    ok(calls.length > b3 && rec.count > 0 && rec.errors.length < rec.sources.length, `an all-failed answer refetches cached failures older than the retry window and serves (${rec.count} items)`);
+  } finally { Date.now = realNow; }
   __test.resetCaches();
 }
 

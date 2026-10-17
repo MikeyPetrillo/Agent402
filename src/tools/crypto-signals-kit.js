@@ -44,6 +44,10 @@ const HL_TIMEOUT_MS = 10_000;
 const FEED_TIMEOUT_MS = 6_000;
 export const FEED_TTL_MS = 5 * 60_000;
 const FEED_FAIL_TTL_MS = 60_000;
+// A cached failure older than this is fetched again when it would otherwise
+// make the whole answer a 502: without it, one blip failed every retry for a
+// minute. Still bounded, so an outage costs one fetch per feed per window.
+const FEED_FAIL_RETRY_MS = 10_000;
 const FEED_MAX_BYTES = 2_000_000;
 export const META_TTL_MS = 5 * 60_000;
 const MAX_CANDLES = 500;
@@ -331,10 +335,11 @@ const feedCache = new Map(); // id -> { at, items, error }
 // fan out N times across every feed, which is how an egress IP gets blocked.
 const feedInFlight = new Map();
 
-async function loadFeed(id) {
+async function loadFeed(id, { retryFailure = false } = {}) {
   const hit = feedCache.get(id);
   const now = Date.now();
-  if (hit && now - hit.at < (hit.error ? FEED_FAIL_TTL_MS : FEED_TTL_MS)) return { ...hit, cached: true };
+  const ttl = hit?.error ? (retryFailure ? FEED_FAIL_RETRY_MS : FEED_FAIL_TTL_MS) : FEED_TTL_MS;
+  if (hit && now - hit.at < ttl) return { ...hit, cached: true };
   const pending = feedInFlight.get(id);
   if (pending) return pending.then((e) => ({ ...e, cached: true }));
   const p = fetchFeed(id).finally(() => feedInFlight.delete(id));
@@ -538,7 +543,10 @@ export const CRYPTO_SIGNALS_TOOLS = [
       const hours = takeInt(i.hours, "hours", 48, 1, 168);
       const limit = takeInt(i.limit, "limit", 20, 1, 50);
 
-      const loaded = await Promise.all(ids.map((id) => loadFeed(id).then((r) => ({ id, ...r }))));
+      let loaded = await Promise.all(ids.map((id) => loadFeed(id).then((r) => ({ id, ...r }))));
+      if (loaded.every((l) => l.error) && loaded.some((l) => l.cached)) {
+        loaded = await Promise.all(loaded.map((l) => (l.cached ? loadFeed(l.id, { retryFailure: true }).then((r) => ({ id: l.id, ...r })) : l)));
+      }
       const errors = loaded.filter((l) => l.error).map((l) => ({ source: l.id, error: l.error }));
       if (errors.length === loaded.length) throw bad("Every requested news feed failed - try again shortly", 502);
 
