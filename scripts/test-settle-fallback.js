@@ -6,12 +6,20 @@
 //
 // The property that must never regress is the double-settle gate: a fallback
 // facilitator is only tried when every earlier settler PROVABLY did not
-// broadcast (a clean HTTP-402-class rejection). A timeout or 5xx anywhere in
-// the chain means a transfer may already be on-chain, and trying anyone else
-// could charge the buyer twice. Everything here drives the real
-// registerFacilitatorFailureHooks against stub facilitator clients.
+// broadcast (an HTTP 402 from /settle, or a billing refusal on our facilitator
+// account). A timeout or 5xx anywhere in the chain means a transfer may already
+// be on-chain, and trying anyone else could charge the buyer twice. The unit
+// half drives the real registerFacilitatorFailureHooks against stub facilitator
+// clients; the last part boots a paid server against stub facilitators to
+// prove the caller path.
 import { strict as assert } from "node:assert";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import { SettleError } from "@x402/core/types";
+import { getFreePorts } from "./lib/free-port.js";
 import {
   registerFacilitatorFailureHooks,
   fallbackCandidatesFor,
@@ -91,6 +99,48 @@ await check("source: the order is derived from SOLVADOR_SETTLE_NETWORKS, Solvado
   assert.match(fn, /SOLVADOR_SETTLE_NETWORKS\.has\(network\)/, "the Solvador-first slot is gated on its advertised networks");
   assert.match(fn, /PAYAI_SETTLE_NETWORKS\.has\(network\)/, "PayAI stays gated on the networks it can settle");
   assert.match(src, /Settle fallback: ON - chain \$\{solvadorClient \? "Solvador/, "the boot log names Solvador first");
+});
+
+// The shapes @x402/core 2.28 actually throws. HTTPFacilitatorClient builds a
+// SettleError(response.status, body) for a non-2xx JSON /settle body (field
+// `statusCode`, never `status`); a 200 {success:false} becomes a SettleError
+// with a synthetic statusCode 500 (settleResponseToError). The Celo
+// facilitator's out-of-funds answer carries no errorReason, so its message
+// reads "unknown reason: Out of mainnet settlement funds ...".
+const settleError = (statusCode, body) => new SettleError(statusCode, { success: false, transaction: "", network: "eip155:42220", ...body });
+const celoOutOfFunds = (statusCode = 402) => settleError(statusCode, { errorMessage: "Out of mainnet settlement funds (this settlement costs 1 micro-USD). Top up at the dashboard." });
+
+await check("gate: SettleError statusCode 402 is pre-broadcast (the field @x402/core sets)", () => {
+  const e = settleError(402, { errorReason: "payment_required" });
+  assert.equal(e.status, undefined, "the vendor error carries statusCode, not status");
+  assert.equal(isPreBroadcastSettleRejection(e), true);
+});
+
+await check("gate: billing refusals on our account are pre-broadcast, whatever the status", () => {
+  for (const st of [402, 403, 400, 500]) assert.equal(isPreBroadcastSettleRejection(celoOutOfFunds(st)), true, `Celo out-of-funds ${st}`);
+  // The labelled form the diagnostics wrapper leaves (prefix only, fields kept).
+  const labelled = celoOutOfFunds(403); labelled.message = `[Celo (https://facilitator.example)] ${labelled.message}`;
+  assert.equal(isPreBroadcastSettleRejection(labelled), true);
+  assert.equal(isPreBroadcastSettleRejection(settleError(403, { errorReason: "free_tier_exhausted" })), true, "PayAI free_tier_exhausted");
+  assert.equal(isPreBroadcastSettleRejection(settleError(500, { errorReason: "insufficient_credits" })), true, "insufficient_credits");
+  assert.equal(isPreBroadcastSettleRejection(settleError(403, { errorReason: "unexpected_error", errorMessage: "payment-method-required" })), true, "CDP payment-method-required");
+});
+
+await check("gate: 5xx, timeouts, aborts, network errors and other wording are NOT pre-broadcast", () => {
+  assert.equal(isPreBroadcastSettleRejection(settleError(500, { errorReason: "unexpected_error", errorMessage: "upstream 502" })), false, "SettleError 500");
+  assert.equal(isPreBroadcastSettleRejection(settleError(503, {})), false, "SettleError 503 with no words");
+  assert.equal(isPreBroadcastSettleRejection(settleError(400, { errorReason: "invalid_payload" })), false, "SettleError 400");
+  assert.equal(isPreBroadcastSettleRejection(new Error("Facilitator settle failed (500): <html>bad gateway</html>")), false, "plain 500");
+  assert.equal(isPreBroadcastSettleRejection(Object.assign(new Error("This operation was aborted"), { name: "AbortError" })), false, "abort");
+  assert.equal(isPreBroadcastSettleRejection(Object.assign(new Error("Facilitator settle timed out"), { name: "TimeoutError" })), false, "timeout");
+  assert.equal(isPreBroadcastSettleRejection(Object.assign(new Error("fetch failed"), { cause: { code: "ECONNRESET" } })), false, "socket");
+  // Billing words riding on a transport failure prove nothing.
+  assert.equal(isPreBroadcastSettleRejection(Object.assign(new Error("insufficient_credits"), { code: "ETIMEDOUT" })), false, "timeout with billing words");
+  // A payment verdict is never relabelled by words in its message.
+  assert.equal(isPreBroadcastSettleRejection(settleError(500, { errorReason: "transaction_failed", errorMessage: "out of mainnet settlement funds" })), false, "verdict");
+  assert.equal(isPreBroadcastSettleRejection(settleError(500, { errorReason: "insufficient_funds" })), false, "the buyer's insufficient_funds");
+  // A refusal naming a transaction may be on-chain, whatever it says.
+  assert.equal(isPreBroadcastSettleRejection(new SettleError(402, { success: false, errorReason: "insufficient_credits", transaction: "0x" + "ab".repeat(32), network: "eip155:42220" })), false, "names a tx");
 });
 
 async function run({ flag, primaryError, payai, solvador, network = "eip155:8453" }) {
@@ -184,6 +234,208 @@ await check("no Solvador key: behavior is exactly the old PayAI-only chain", asy
   assert.equal(out, undefined);
   assert.deepEqual(calls, ["PayAI"]);
 });
+
+await check("Celo out-of-funds SettleError (statusCode, no errorReason): Solvador recovers", async () => {
+  const { out, calls } = await run({ flag: true, primaryError: celoOutOfFunds(402), network: "eip155:42220", payai: () => { throw new Error("should not be called"); }, solvador: () => ({ success: true, transaction: "0x01", network: "eip155:42220" }) });
+  assert.equal(out?.recovered, true);
+  assert.equal(out?.result?.success, true);
+  assert.deepEqual(calls, ["Solvador"]);
+});
+
+await check("primary SettleError 402 on Base: falls back", async () => {
+  const { out, calls } = await run({ flag: true, primaryError: settleError(402, { errorReason: "payment_required" }), solvador: () => ({ success: true }), payai: () => ({ success: true }) });
+  assert.equal(out?.recovered, true);
+  assert.deepEqual(calls, ["Solvador"]);
+});
+
+await check("primary SettleError 5xx or timeout: NO fallback", async () => {
+  for (const e of [settleError(502, { errorReason: "unexpected_error" }), Object.assign(new Error("Facilitator settle timed out"), { name: "TimeoutError" })]) {
+    const { out, calls } = await run({ flag: true, primaryError: e, network: "eip155:42220", solvador: () => ({ success: true }) });
+    assert.equal(out, undefined, e.message);
+    assert.deepEqual(calls, [], e.message);
+  }
+});
+
+await check("fallback refuses pre-broadcast (thrown SettleError 402 or billing): next candidate runs", async () => {
+  for (const refuse of [() => { throw settleError(402, {}); }, () => { throw settleError(403, { errorReason: "insufficient_credits" }); }]) {
+    const { out, calls } = await run({ flag: true, primaryError: rejection402(), solvador: refuse, payai: () => ({ success: true }) });
+    assert.equal(out?.recovered, true);
+    assert.deepEqual(calls, ["Solvador", "PayAI"]);
+  }
+});
+
+await check("fallback graceful 200 billing refusal: next candidate runs", async () => {
+  const { out, calls } = await run({ flag: true, primaryError: rejection402(), solvador: () => ({ success: false, errorReason: "insufficient_credits", transaction: "" }), payai: () => ({ success: true }) });
+  assert.equal(out?.recovered, true);
+  assert.equal(out?.result?.success, true);
+  assert.deepEqual(calls, ["Solvador", "PayAI"]);
+});
+
+await check("fallback ambiguous failure (SettleError 5xx, graceful non-billing): chain STOPS, never 'recovered' with a failure", async () => {
+  const ambiguous = [
+    () => { throw settleError(500, { errorReason: "unexpected_error" }); },
+    () => ({ success: false, errorReason: "transaction_failed", transaction: "0x" + "cd".repeat(32) }),
+    () => ({ success: false, errorReason: "unexpected_error" }),
+  ];
+  for (const f of ambiguous) {
+    const { out, calls } = await run({ flag: true, primaryError: rejection402(), solvador: f, payai: () => ({ success: true }) });
+    assert.equal(out, undefined);
+    assert.deepEqual(calls, ["Solvador"]);
+  }
+});
+
+await check("source: the gate reuses payment-reject's billing classifier and reads statusCode", () => {
+  const src = readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
+  const start = src.indexOf("export function isPreBroadcastSettleRejection(");
+  const fn = src.slice(start, src.indexOf("\n}", start));
+  assert.match(fn, /err\.statusCode === 402/);
+  assert.match(fn, /isBillingRefusalReceipt\(/);
+});
+
+// THE CALLER PATH. A paid server with Celo as the primary facilitator (a stub
+// that verifies and then refuses /settle the way the real one does when the
+// account is out of funds) and Solvador as the fallback (a stub that settles).
+// A buyer paying on Celo must get a 200, exactly one settlement must land
+// (Solvador's), the receipt names Celo, and the sale is booked on Celo with
+// Solvador's tx. The control: a Celo 5xx never reaches Solvador and the buyer
+// gets a 402 (not charged).
+await (async () => {
+  const [PORT, BASE_FAC, CELO_FAC, SV_FAC] = await getFreePorts(4);
+  const B = `http://127.0.0.1:${PORT}`;
+  const CELO = "eip155:42220";
+  const SV_TX = "0x" + "5e".repeat(32);
+  const st = { celoSettles: 0, svSettles: 0, celoMode: "out-of-funds", svBody: null };
+  const json = (res, status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+  const stub = (handler) => createServer((req, res) => {
+    let b = "";
+    req.on("data", (c) => (b += c));
+    req.on("end", () => { let body = {}; try { body = JSON.parse(b || "{}"); } catch { /* ignore */ } handler(req, res, body); });
+  });
+  const payerOf = (body) => body?.paymentPayload?.payload?.authorization?.from;
+  const baseFac = stub((req, res) => {
+    if (req.url === "/supported") return json(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} });
+    if (req.url === "/rpc") return json(res, 200, { jsonrpc: "2.0", id: 1, result: "0x0" });
+    return json(res, 404, {});
+  });
+  const celoFac = stub((req, res, body) => {
+    if (req.url === "/supported") return json(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: CELO }], extensions: [], signers: {} });
+    if (req.url === "/verify") return json(res, 200, { isValid: true, payer: payerOf(body) });
+    if (req.url === "/settle") {
+      st.celoSettles++;
+      if (req.headers["x-api-key"] !== "celo-test-key") return json(res, 401, { error: "unauthorized" });
+      if (st.celoMode === "out-of-funds" || st.celoMode === "out-of-funds-403") return json(res, st.celoMode === "out-of-funds" ? 402 : 403, { success: false, errorMessage: "Out of mainnet settlement funds (this settlement costs 1 micro-USD). Top up at the dashboard.", transaction: "", network: CELO });
+      return json(res, 502, { success: false, errorReason: "unexpected_error", errorMessage: "upstream", transaction: "", network: CELO });
+    }
+    return json(res, 404, {});
+  });
+  const svFac = stub((req, res, body) => {
+    if (req.url === "/supported") return json(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: CELO }], extensions: [], signers: {} });
+    if (req.url === "/settle") {
+      st.svSettles++; st.svBody = body;
+      if (req.headers["x-api-key"] !== "solvador-test-key") return json(res, 401, { error: "unauthorized" });
+      return json(res, 200, { success: true, transaction: SV_TX, network: CELO, payer: payerOf(body) });
+    }
+    return json(res, 404, {});
+  });
+  await Promise.all([[baseFac, BASE_FAC], [celoFac, CELO_FAC], [svFac, SV_FAC]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+  const tmp = mkdtempSync(join(tmpdir(), "a402-settle-fallback-"));
+  const salesDb = join(tmp, "sales.db");
+  const env = { ...process.env };
+  delete env.STATE_DATABASE_URL;
+  const proc = spawn(process.execPath, ["src/server.js"], {
+    cwd: new URL("..", import.meta.url).pathname,
+    env: {
+      ...env, PORT: String(PORT), FREE_MODE: "",
+      WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+      FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
+      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
+      PAYMENT_NETWORKS: "base,celo",
+      CELO_FACILITATOR_URL: `http://127.0.0.1:${CELO_FAC}`, CELO_FACILITATOR_KEY: "celo-test-key",
+      SOLVADOR_KEY: "solvador-test-key", SOLVADOR_FACILITATOR_URL: `http://127.0.0.1:${SV_FAC}`,
+      PAYMENT_SETTLE_FALLBACK: "true", SALES_LEDGER_DB: salesDb,
+      X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const log = [];
+  const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) log.push(l.slice(0, 400)); if (log.length > 200) log.splice(0, log.length - 200); };
+  proc.stdout.on("data", keep); proc.stderr.on("data", keep);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let nonce = 0;
+  const PAYER = "0x00000000000000000000000000000000000000c7";
+  const credential = (accepted) => Buffer.from(JSON.stringify({
+    x402Version: 2, resource: accepted.resource, accepted,
+    payload: { signature: "0x" + "11".repeat(65), authorization: { from: PAYER, to: accepted.payTo, value: accepted.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x" + (++nonce).toString(16).padStart(64, "0") } },
+  })).toString("base64");
+  const PATH = "/api/demand-radar?limit=1"; // wallet-only, answers from local state
+  const failuresBefore = failures;
+  try {
+    let up = false;
+    for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch { /* booting */ } if (!up) await sleep(500); }
+    await check("e2e: the paid server boots with the Solvador fallback on", async () => {
+      assert.ok(up, "server never came up");
+      assert.ok(log.some((l) => /Settle fallback: ON - chain Solvador/.test(l)), "boot line names the Solvador fallback");
+    });
+    let accepted;
+    await check("e2e: an unpaid call offers exact on Celo USDC", async () => {
+      const r = await fetch(`${B}${PATH}`);
+      assert.equal(r.status, 402);
+      const req402 = JSON.parse(Buffer.from(r.headers.get("payment-required"), "base64").toString("utf8"));
+      accepted = (req402.accepts || []).find((a) => a.network === CELO);
+      assert.ok(accepted, `no Celo accept in ${JSON.stringify((req402.accepts || []).map((a) => a.network))}`);
+    });
+    await check("e2e: Celo refuses out-of-funds -> Solvador settles once -> buyer gets 200, booked on Celo with Solvador's tx", async () => {
+      const r = await fetch(`${B}${PATH}`, { headers: { "payment-signature": credential(accepted) } });
+      await r.text();
+      assert.equal(r.status, 200, `status ${r.status}`);
+      assert.equal(st.celoSettles, 1, "the primary was asked once");
+      assert.equal(st.svSettles, 1, "exactly one fallback settle");
+      // Solvador was handed the requirements the buyer signed: Celo USDC to our payTo.
+      assert.equal(st.svBody?.paymentRequirements?.network, CELO);
+      assert.equal(String(st.svBody?.paymentRequirements?.asset).toLowerCase(), String(accepted.asset).toLowerCase());
+      assert.equal(String(st.svBody?.paymentRequirements?.payTo).toLowerCase(), String(accepted.payTo).toLowerCase());
+      const receipt = JSON.parse(Buffer.from(r.headers.get("payment-response"), "base64").toString("utf8"));
+      assert.equal(receipt.success, true);
+      assert.equal(receipt.transaction, SV_TX);
+      assert.equal(receipt.network, CELO);
+      assert.ok(log.some((l) => /recovered eip155:42220 settlement via Solvador fallback/.test(l)), "the recovery is logged");
+      const { default: Database } = await import("better-sqlite3");
+      let row = null;
+      for (let i = 0; i < 40 && !row; i++) {
+        try { const db = new Database(salesDb, { readonly: true }); row = db.prepare("SELECT rail, network, tx, payer FROM sales WHERE tx = ?").get(SV_TX) || null; db.close(); } catch { /* not written yet */ }
+        if (!row) await sleep(250);
+      }
+      assert.ok(row, "the sale is in the ledger");
+      assert.equal(row.rail, "usdc");
+      // The ledger's chain name comes from the settle receipt (networkFromPaymentResponse), as for any Celo sale.
+      assert.equal(row.network, "celo");
+      assert.equal(String(row.payer).toLowerCase(), PAYER);
+    });
+    await check("e2e: the same out-of-funds wording on a non-402 status still falls back once (the wording is the proof)", async () => {
+      st.celoMode = "out-of-funds-403";
+      const sv = st.svSettles, celo = st.celoSettles;
+      const r = await fetch(`${B}${PATH}`, { headers: { "payment-signature": credential(accepted) } });
+      await r.text();
+      assert.equal(r.status, 200, `status ${r.status}`);
+      assert.equal(st.celoSettles, celo + 1);
+      assert.equal(st.svSettles, sv + 1, "exactly one fallback settle");
+    });
+    await check("e2e control: a Celo 5xx never reaches Solvador, the buyer gets 402 (not charged)", async () => {
+      st.celoMode = "5xx";
+      const sv = st.svSettles, celo = st.celoSettles;
+      const r = await fetch(`${B}${PATH}`, { headers: { "payment-signature": credential(accepted) } });
+      await r.text();
+      assert.equal(r.status, 402, `status ${r.status}`);
+      assert.equal(st.celoSettles, celo + 1);
+      assert.equal(st.svSettles, sv, "Solvador must not run after an ambiguous primary failure");
+    });
+  } finally {
+    if (failures > failuresBefore) for (const l of log.slice(-40)) console.log("  server:", l);
+    proc.kill("SIGKILL");
+    for (const s of [baseFac, celoFac, svFac]) s.close();
+    rmSync(tmp, { recursive: true, force: true });
+  }
+})();
 
 console.log(failures ? `\nFAILED (${failures})` : "\nall passed");
 process.exit(failures ? 1 : 0);
