@@ -99,5 +99,25 @@ ok(html.includes('"@type":"BreadcrumbList"'), "BreadcrumbList JSON-LD present");
 // --- copy hygiene: no em dashes anywhere on the page -----------------------
 ok(!html.includes("—"), "no em dashes anywhere in the page copy");
 
+// --- new sellers: each verdict explained, the floor's figure never stated ---
+{
+  const { DISPATCH_REASONS } = await import("../src/dispatch-eligibility.js");
+  const start = html.indexOf('id="new-sellers"');
+  const sec = start < 0 ? "" : html.slice(html.indexOf(">", start) + 1, html.indexOf("</section>", start));
+  ok(sec.length > 0, "the page carries a #new-sellers section");
+  for (const code of ["price_unknown", "network_unknown", "usdc_domain_mismatch", "url_template", "settlement_required", "settlement_self_funded", "delivery_failing"]) {
+    ok(sec.includes(`>${code}<`) && sec.includes(DISPATCH_REASONS[code].slice(0, 40).replace(/"/g, "&quot;")), `${code}: named with the router's own reason text`);
+  }
+  // The floor's figures are server config (SOR_MIN_SETTLED_TX / SOR_MIN_DISTINCT_PAYERS):
+  // no bare number outside a price, a code name or an HTTP status may appear.
+  const text = sec.replace(/<[^>]+>/g, " ").replace(/&[a-z#0-9]+;/gi, " ");
+  const stray = (text.match(/(?<![$\w./-])\d+(?![\w.%-])/g) || []).filter((n) => n !== "402");
+  ok(stray.length === 0, `no floor figure in the section (stray numbers: ${stray.join(", ") || "none"})`);
+  ok(/We keep the figure private/.test(text), "the section says the figure is private");
+  const faq = FAQ_TEXT_OF(html);
+  ok(/settlement floor/i.test(faq) && !/\b(50|3) (settle|payer|transaction)/i.test(faq), "the floor FAQ explains it without a figure");
+}
+function FAQ_TEXT_OF(h) { const i = h.indexOf("What is the settlement floor"); return i < 0 ? "" : h.slice(i, i + 1500); }
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

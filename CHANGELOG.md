@@ -10,6 +10,11 @@ carries its own version on npm.
 - Operators can make Solvador Celo's primary settlement service with
   `SOLVADOR_CELO_PRIMARY=on`; the Celo facilitator then becomes Celo's
   settle fallback. Unset, the order is unchanged.
+- /sell has a New sellers section: listing and being paid by the router are
+  separate gates, how the unproven lane works, and what each
+  `routerDispatchReason` means with what the seller can do about it.
+- demand-radar's description calls `/api/wishes` a free aggregate beacon
+  (counts only), which is what it returns.
 
 ### 2026-10-17
 - `POST /v1/images/edits` edits an image from a prompt and one to four PNG or
