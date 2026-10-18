@@ -6,6 +6,11 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-10-18
+- Operators can make Solvador Celo's primary settlement service with
+  `SOLVADOR_CELO_PRIMARY=on`; the Celo facilitator then becomes Celo's
+  settle fallback. Unset, the order is unchanged.
+
 ### 2026-10-17
 - `POST /v1/images/edits` edits an image from a prompt and one to four PNG or
   JPEG reference images (JSON base64 or data: URLs, or one multipart `image`
