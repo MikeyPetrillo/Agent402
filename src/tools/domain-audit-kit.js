@@ -11,6 +11,7 @@
 // Settlement-safe (throws >=400 on failure), WALLET_ONLY, not cached. Gated on
 // OPENROUTER_API_KEY for the synthesis (503 without it).
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
+import { checkReportGrounding } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { KIT } from "./kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -390,6 +391,8 @@ NOTE: a gap in this material is never a finding about the domain - a probe marke
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose = proseOf(sd, cutShort);
     if (!prose) throw bad("Domain audit synthesis produced nothing - not charged", 502);
+    // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
+    const grounding = checkReportGrounding(prose, synthPrompt);
     const header = `# Domain Security Audit: ${domain}\n\n**Overall grade: ${grade}** (${composite}/100)${gradeCaveat}\n`;
     const report = `${header}\n${prose}`;
 
@@ -421,7 +424,7 @@ NOTE: a gap in this material is never a finding about the domain - a probe marke
       probes: { email: emailR.ok, tls: tlsR.ok, headers: hdrR.ok, ...(t.pro ? { certTransparency: !!ct, techStack: !!tech, whois: !!whois } : {}) },
       synthesis_model: SYNTH,
     };
-    const out = { report, domain, grade, composite, sources: [], tables, meta };
+    const out = { report, domain, grade, composite, sources: [], tables, meta, grounding };
     if (process.env.RESEARCH_DEBUG === "1") out._debug = { emailBlock, hdrBlock, tlsBlock, proBlock, hostBlock, wwwBlock, mailboxBlock };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent, ok: true, priceUsd: priceUsdOf(DOMAIN_AUDIT_TIERS[tierSlug]) });
     return out;

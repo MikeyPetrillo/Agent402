@@ -41,6 +41,7 @@
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { stoppedForLength, trimToCompleteBlock } from "../report-synthesis.js";
+import { checkReportGrounding, combineGrounding } from "../report-grounding.js";
 import { resolveCompany, eftsSearch, edgarGetJson, parse13fInformationTable, fetchXmlText } from "./edgar-kit.js";
 import { makeDossierHandler, DOSSIER_TIERS } from "./dossier-kit.js";
 import { makeInsiderHandler, INSIDER_TIERS, probeInsiderFilings } from "./insider-flow-kit.js";
@@ -781,6 +782,10 @@ ${factLines.join("\n")}`;
         if (!/[.!?:)"'`|\]]$/.test(execSummary)) execSummary = "";
       }
     }
+    // The model-written parts, checked before a code-written fallback fills a
+    // gap (a fallback is built from the facts and is not checked).
+    const packProse = [execSummary, nextSteps].filter(Boolean).join("\n\n");
+    const packGrounding = packProse ? checkReportGrounding(packProse, synthPrompt) : null;
     // Deterministic fallbacks: the pack still ships if the connective pass is
     // unavailable, because both parts and the tables are already grounded.
     if (!execSummary) {
@@ -892,7 +897,14 @@ ${factLines.join("\n")}`;
       disclaimer: DISCLAIMER,
     };
 
-    const out = { report, company: meta.company, ticker, cik, sources: merged, tables, evidence, meta };
+    // One grounding result for the pack: its own summary plus the dossier's and
+    // the insider report's prose, each checked by its own kit.
+    const grounding = combineGrounding({
+      summary: packGrounding,
+      dossier: dossierR.ok ? dossierR.data?.grounding : null,
+      insider: insiderR.ok ? insiderR.data?.grounding : null,
+    });
+    const out = { report, company: meta.company, ticker, cik, sources: merged, tables, evidence, meta, grounding };
     if (process.env.RESEARCH_DEBUG === "1") out._debug = { synthPrompt, factLines };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent + partSpend, ok: true, priceUsd: priceUsdOf(t) });
     return out;

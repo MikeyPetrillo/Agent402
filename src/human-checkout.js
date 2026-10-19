@@ -117,7 +117,7 @@ function publicView(rec, publicId) {
   if (!rec || rec.status !== "done" || rec.public !== true || rec.publicId !== publicId) return null;
   const productKey = Object.keys(HUMAN_PRODUCTS).find((k) => HUMAN_PRODUCTS[k].slug === rec.slug) || null;
   // Everything on a done record is the report itself; nothing buyer-identifying is stored on it.
-  return { status: "done", publicView: true, publicId, product: productKey, kind: rec.kind, slug: rec.slug, input: rec.input, title: rec.title, report: rec.report, sources: rec.sources || [], tables: rec.tables || [], ...(rec.images ? { images: rec.images } : {}), ...(rec.disclaimer ? { disclaimer: rec.disclaimer } : {}), ...(reportIsModelWritten(rec.kind) ? { notice: REPORT_MODEL_NOTE } : {}), at: rec.at, publishedAt: rec.publishedAt || null, priceUsd: productKey ? HUMAN_PRODUCTS[productKey].price / 100 : null };
+  return { status: "done", publicView: true, publicId, product: productKey, kind: rec.kind, slug: rec.slug, input: rec.input, title: rec.title, report: rec.report, sources: rec.sources || [], tables: rec.tables || [], ...(rec.images ? { images: rec.images } : {}), ...(rec.disclaimer ? { disclaimer: rec.disclaimer } : {}), ...(rec.groundingNote ? { groundingNote: rec.groundingNote } : {}), ...(reportIsModelWritten(rec.kind) ? { notice: REPORT_MODEL_NOTE } : {}), at: rec.at, publishedAt: rec.publishedAt || null, priceUsd: productKey ? HUMAN_PRODUCTS[productKey].price / 100 : null };
 }
 /** readPublicReport, for a link published moments ago on another container:
  *  on a miss the mirror is refreshed once (at most once a second across all
@@ -792,6 +792,8 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
             ...(Array.isArray(bundle.images) && bundle.images.length ? { images: bundle.images } : {}),
             // The kit's own disclaimer (meta.disclaimer), shown under the report's title.
             ...(typeof bundle.disclaimer === "string" && bundle.disclaimer ? { disclaimer: bundle.disclaimer } : {}),
+            // The grounding check's sentence (src/report-grounding.js), when it has one.
+            ...(typeof bundle.groundingNote === "string" && bundle.groundingNote ? { groundingNote: bundle.groundingNote } : {}),
             at: new Date(now()).toISOString(),
           };
           // The report exists and the upstream spend is made: from here a

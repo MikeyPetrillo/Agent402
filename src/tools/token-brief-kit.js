@@ -32,6 +32,7 @@
 // A changed fingerprint is what triggers a paid re-run + alert, exactly like
 // probeDomain / probeRecalls.
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
+import { checkReportGrounding } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase, JUPITER_ATTRIBUTION } from "./solana-intel-kit.js";
 import { markUntrusted } from "./provenance.js";
@@ -366,6 +367,8 @@ ${riskBlock}`;
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose = proseOf(sd, cutShort);
     if (!prose) throw bad("Token brief synthesis produced nothing - not charged", 502);
+    // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
+    const grounding = checkReportGrounding(prose, synthPrompt);
 
     const header = `# Solana Token Due-Diligence Brief: ${name || mint}${symbol ? ` (${symbol})` : ""}\n\n**Mint** \`${mint}\` · **Mint authority** ${buckets.mint} · **Freeze authority** ${buckets.freeze} · **LP locked** ${buckets.lpLocked} · **Top-10 holders** ${buckets.topHolders} · **RugCheck band** ${buckets.riskLevel}\n`;
     const sourceList = numbered.map((s) => `[${s.n}] ${s.title} - ${s.url}`).join("\n");
@@ -444,7 +447,7 @@ ${riskBlock}`;
       fingerprint: JSON.stringify({ mintAuthority: buckets.mint, freezeAuthority: buckets.freeze, lpLocked: buckets.lpLocked, topHolders: buckets.topHolders, riskLevel: buckets.riskLevel, dangerRisks: safety?.riskCounts?.danger ?? 0, risks: [...new Set(risks.map((r) => String(r?.name || "")).filter(Boolean))].sort() }),
       disclaimer: "Evidence from public Solana data sources (RugCheck, DexScreener, Jupiter) at the time of the request. Not investment advice, not a verdict, not exhaustive: this data cannot see off-chain rug mechanics, social scams, or team intent.",
     };
-    const out = { report: report_md, mint, sources: numbered, tables, evidence, meta };
+    const out = { report: report_md, mint, sources: numbered, tables, evidence, meta, grounding };
     if (process.env.RESEARCH_DEBUG === "1") out._debug = { synthPrompt };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent, ok: true, priceUsd: priceUsdOf(TOKEN_BRIEF_TIERS[tierSlug]) });
     // Token metadata, pool labels and DEX labels inside this payload are written

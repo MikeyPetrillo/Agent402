@@ -12,6 +12,7 @@
 // no LLM, with a fingerprint of the recall numbers seen - a NEW recall number
 // for the subscriber's query is what triggers a paid re-run + alert.
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
+import { checkReportGrounding } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { GOV_TOOLS } from "./gov-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -181,6 +182,8 @@ Write a clear, well-structured report of up to ${t.words} words with these secti
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose = proseOf(sd, cutShort);
     if (!prose) throw bad("Recall report synthesis produced nothing - not charged", 502);
+    // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
+    const grounding = checkReportGrounding(prose, synthPrompt);
     const header = `# FDA Recall Report: ${query}\n\n**${pr.items.length} most recent of ${pr.totalAll} record${pr.totalAll === 1 ? "" : "s"}** (${pr.events} recall event${pr.events === 1 ? "" : "s"} among those shown) across ${Object.keys(pr.status).length} FDA enforcement feed${Object.keys(pr.status).length === 1 ? "" : "s"} · ${ongoing} of the shown records ongoing\n`;
     const sourceList = numbered.map((s) => `[${s.n}] ${s.title} - ${s.url}`).join("\n");
     const report = `${header}\n${prose}\n\n## Sources\n${sourceList}`;
@@ -193,7 +196,7 @@ Write a clear, well-structured report of up to ${t.words} words with these secti
     }];
     const meta = { disclaimer: "A summary of public FDA enforcement records. Not medical advice and not a safety determination. Check the FDA record and the manufacturer before acting on it.", tier: tierSlug, query, scope, records: pr.items.length, records_total: pr.totalAll, totals_by_feed: pr.totals, events_shown: pr.events, by_feed: byKind, by_class: byClass, ongoing, feeds: pr.status, recall_numbers: pr.ids.length, sources_cited: numbered.length, synthesis_model: SYNTH,
       disclaimer: "FDA enforcement records as published by openFDA; not medical or legal advice. Verify the named product and lot against the FDA record." };
-    const out = { report, query, sources: numbered, tables, meta };
+    const out = { report, query, sources: numbered, tables, meta, grounding };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent, ok: true, priceUsd: priceUsdOf(RECALL_TIERS[tierSlug]) });
     return out;
   };

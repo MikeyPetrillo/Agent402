@@ -13,6 +13,7 @@
 // WALLET_ONLY, not cached. Pure SEC data for the core (no extra upstream wallet);
 // gated on OPENROUTER_API_KEY for the synthesis (503 without it).
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
+import { checkReportGrounding } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { get13fHoldings, resolveManager } from "./edgar-kit.js";
@@ -230,6 +231,8 @@ Write a thorough, well-structured report of up to ${t.words} words with these se
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose = proseOf(sd, cutShort);
     if (!prose) throw bad("Fund report synthesis produced nothing - not charged", 502);
+    // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
+    const grounding = checkReportGrounding(prose, synthPrompt);
 
     const sourceList = numbered.map((s) => `[${s.n}] ${s.title} - ${s.url}`).join("\n");
     const report = sourceList ? `${prose}\n\n## Sources\n${sourceList}` : prose;
@@ -257,7 +260,7 @@ Write a thorough, well-structured report of up to ${t.words} words with these se
       added: adds.length, trimmed: trims.length,
       web_angles: webGood.length, sources_cited: numbered.length, synthesis_model: SYNTH,
     };
-    const out = { report, manager: managerName, cik: resolved.cik, sources: numbered, tables, meta };
+    const out = { report, manager: managerName, cik: resolved.cik, sources: numbered, tables, meta, grounding };
     if (process.env.RESEARCH_DEBUG === "1") out._debug = { changeBlock, topHoldings, webAnswers: webGood.map((r) => ({ q: r.q, answer: r.answer })) };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent, ok: true, priceUsd: priceUsdOf(FUND_TIERS[tierSlug]) });
     return out;
