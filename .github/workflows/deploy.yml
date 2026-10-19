@@ -2881,6 +2881,8 @@ jobs:
           t node scripts/test-kit2.js
           # Stripe subscriptions (checkout, provisioning, webhook signature discipline)
           t node scripts/test-stripe-subscriptions.js
+          # Monitor renewal terms beside Subscribe and on Checkout; the manage-link route (same answer, rate limits, one send)
+          t node scripts/test-monitor-manage-link.js
           # Prepaid card credits (mint-once, exact micro-dollar balances, gate debits only on 200, 402 on insufficient, operator view)
           t node scripts/test-credits.js
           # CAN-SPAM: every outbound email carries the physical postal address
