@@ -25,6 +25,7 @@
 import { baseUnprovenAllowanceUsd } from "./base-unproven.js";
 import { meetsRouterGate } from "./settlement-proof.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail } from "./evm-usdc-domain.js";
+import { routeExcludedCategory } from "./route-category.js";
 
 // Network label -> the spending chain that pays it. Kept in lockstep with
 // route-execute's EXTERNAL_CHAIN_BY_NETWORK (pinned by test-dispatch-
@@ -53,6 +54,7 @@ export const DISPATCH_REASONS = Object.freeze({
   gateway_rail_unsupported: "the seller's accept on this chain is signed under Circle Gateway's EIP-712 domain (extra.name \"GatewayWalletBatched\", extra.verifyingContract the GatewayWallet), not under the token's own, and settles through a batch facilitator - a deliberate, working rail that this router's stock x402 signer cannot produce a credential for; nothing for the seller to fix, and it becomes eligible the day the router speaks the rail",
   payment_method_unsupported: "the seller's accept on this chain asks the buyer to send a transfer and prove it afterwards (extra.paymentMethod such as \"direct-transfer\"), which no stock x402 buyer does - this router signs an authorization for the facilitator to settle - so no buyer of ours can pay the route",
   usdc_domain_mismatch: "the seller's USDC accept on this chain advertises an EIP-712 domain name that is not the token's own (Base USDC signs under \"USD Coin\"; Monad, Celo and Sei USDC under \"USDC\"), so a stock x402 buyer - this router included - signs an authorization the facilitator refuses and nothing settles; the seller has to fix the accept before anyone can pay it",
+  category_excluded: "routes that sell personal data about individuals are listed but not bought by the router",
   delivery_failing: "the last time this router paid this seller on this chain the call did not deliver (a 5xx answer carrying no settle receipt, or no answer at all before the timeout), so it is skipped until that memo expires or a call to it succeeds. Settlement history is evidence about the past; this is what happened the last time someone actually paid",
   eligible: "the router will buy from this seller",
   local_catalog: "this host's own tool; no external payment is involved",
@@ -61,7 +63,7 @@ export const DISPATCH_REASONS = Object.freeze({
 // the seller tools' lane summaries (src/router-lanes.js) both quote it, so the
 // field docs and a seller's own report cannot word the lane differently.
 export const UNPROVEN_LANE_TERMS = "on Base the router may still pay the seller, but only after every proven seller for the task, only at the wallet its own live 402 names, never above that ceiling, and flagged unproven on the buyer's receipt";
-const REASON_PRECEDENCE = ["crawl_failed", "network_unknown", "no_supported_route", "url_template", "price_unknown", "usdc_domain_mismatch", "gateway_rail_unsupported", "payment_method_unsupported", "delivery_failing", "settlement_self_funded", "settlement_required"];
+const REASON_PRECEDENCE = ["category_excluded", "crawl_failed", "network_unknown", "no_supported_route", "url_template", "price_unknown", "usdc_domain_mismatch", "gateway_rail_unsupported", "payment_method_unsupported", "delivery_failing", "settlement_self_funded", "settlement_required"];
 // `detail` values a settlement_required verdict can carry beyond the gate's
 // own sentence. Documented in the legend under routerDispatchDetail.
 export const DISPATCH_DETAILS = Object.freeze({
@@ -176,13 +178,24 @@ export function spendChainsOf(networks = []) {
  *                                     A chain named here is not eligible whatever its settlement history says,
  *                                     because history is about the past and this is about the last real payment.
  *                                     Omit/null = nothing recorded (the ordinary case).
+ * @param {object|null} [o.routeText] row-level: the route row itself ({ route, slug, name, description, tags }),
+ *                                     read by src/route-category.js; a route in an excluded category is
+ *                                     category_excluded on every chain, whatever else is true of it. Omit/null
+ *                                     = a seller-level verdict, which no single route's category decides.
  */
-export function dispatchEligibility({ routable, networks = [], settled = 0, payers, priceUsd, urlTemplate = false, spendChains = ["base"], minSettled = 50, minPayers = 3, local = false, evidence, livePayTo = null, usdcDomain = null, deliveryFailing = null, unprovenMaxUsd = baseUnprovenAllowanceUsd() } = {}) {
+export function dispatchEligibility({ routable, networks = [], settled = 0, payers, priceUsd, urlTemplate = false, spendChains = ["base"], minSettled = 50, minPayers = 3, local = false, evidence, livePayTo = null, usdcDomain = null, deliveryFailing = null, unprovenMaxUsd = baseUnprovenAllowanceUsd(), routeText = null } = {}) {
   if (local) return { eligible: true, reason: "local_catalog", chains: {} };
   const byChain = {};
   const advertised = spendChainsOf(networks);
   const have = advertised.filter((c) => spendChains.includes(c));
   const basis = { settled: Number(settled || 0), ...(payers !== undefined && payers !== null ? { payers: Number(payers) } : {}), minSettled, minPayers };
+  // What the route SELLS outranks everything about how it is paid: a route
+  // in an excluded category stays listed, and no chain, history or price
+  // makes the router buy it.
+  if (routeText && routeExcludedCategory(routeText)) {
+    for (const c of have) byChain[c] = { eligible: false, reason: "category_excluded" };
+    return { eligible: false, reason: "category_excluded", chains: byChain, basis };
+  }
   if (!routable) {
     for (const c of have) byChain[c] = { eligible: false, reason: "crawl_failed" };
     return { eligible: false, reason: "crawl_failed", chains: byChain, basis };

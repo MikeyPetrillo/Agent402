@@ -4509,6 +4509,8 @@ jobs:
           t node scripts/test-skill-pack-avm-match.js
           # Router dispatch eligibility, labelled: one function for the resolver's Base gate and every public row (offline)
           t node scripts/test-dispatch-eligibility.js
+          # Routes that sell personal data about individuals stay listed and are never ranked, labelled eligible or paid; worker thread agrees (in-process pool + a free boot, offline)
+          t node scripts/test-router-people-data.js
           t node scripts/test-unproven-lane-labels.js
           # seller-trust and seller-dossier report both router lanes (proven, Base unproven) from the per-route verdicts, through their routes (FREE_MODE boots, seeded index, ceiling on and off)
           t node scripts/test-seller-trust-lanes.js

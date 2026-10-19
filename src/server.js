@@ -569,6 +569,7 @@ import { flushJsonDocuments } from "./json-document.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
+import { routeExcludedCategory } from "./route-category.js";
 import { baseUnprovenAllowanceUsd } from "./base-unproven.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
@@ -1401,7 +1402,9 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
     networks,
     settled: ev.settled.get(origin) || 0,
     payers: ev.payers.get(origin),
-    ...(rowLevel ? { priceUsd: row.priceUsd ?? null, urlTemplate: !!row.urlTemplate } : {}),
+    // A route row is also judged on what it sells (src/route-category.js);
+    // a seller-level verdict is not, since no one route's category decides it.
+    ...(rowLevel ? { priceUsd: row.priceUsd ?? null, urlTemplate: !!row.urlTemplate, routeText: row } : {}),
     spendChains: spendChainsConfigured(),
     minSettled: SOR_MIN_SETTLED_TX,
     minPayers: SOR_MIN_DISTINCT_PAYERS,
@@ -1464,6 +1467,12 @@ function withDispatchSnapshot(snapshot) {
 }
 async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wantModel = null, onlyUrl = null } = {}) {
   const sameUrl = (u) => { try { return new URL(u).href === new URL(onlyUrl).href; } catch { return false; } };
+  // Filled by the dispatch gate below; read by route-execute when nothing
+  // resolves, so the refusal can say which world it is in.
+  const gateDrops = { total: 0, byReason: {} };
+  // Rows routeQuery left out for their category (it never ranks them) are
+  // tallied like any other gate drop.
+  const noteExcluded = (n) => { if (n > 0) { gateDrops.total += n; gateDrops.byReason.category_excluded = (gateDrops.byReason.category_excluded || 0) + n; } };
   // A pinned endpoint (a decision's own step) is found by search like any
   // other, and the step's wording need not rank it in the first 200 rows:
   // a planned, router-eligible gas seller read as "no seller matched"
@@ -1471,14 +1480,13 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
   // endpoint's own host and path words, which rank it first.
   const routeRows = async (args) => {
     const r = await routeQueryAsync(args);
-    if (!onlyUrl || (r.results || []).some((x) => sameUrl(x.url))) return r;
+    if (!onlyUrl || (r.results || []).some((x) => sameUrl(x.url))) { noteExcluded(r.categoryExcluded || 0); return r; }
     let q2 = "";
-    try { const u = new URL(onlyUrl); q2 = `${u.host.replace(/[.:]/g, " ")} ${u.pathname.replace(/[/_.-]+/g, " ")}`.trim(); } catch { return r; }
-    return routeQueryAsync({ ...args, query: q2 });
+    try { const u = new URL(onlyUrl); q2 = `${u.host.replace(/[.:]/g, " ")} ${u.pathname.replace(/[/_.-]+/g, " ")}`.trim(); } catch { noteExcluded(r.categoryExcluded || 0); return r; }
+    const r2 = await routeQueryAsync({ ...args, query: q2 });
+    noteExcluded(r2.categoryExcluded || 0);
+    return r2;
   };
-  // Filled by the dispatch gate below; read by route-execute when nothing
-  // resolves, so the refusal can say which world it is in.
-  const gateDrops = { total: 0, byReason: {} };
   // F4: never route to ourselves (paying our own endpoint over x402 = fee loss
   // / accidental self-recursion) — exclude our own host from candidates.
   const ourHost = (() => { try { return new URL(BASE_URL).host.toLowerCase(); } catch { return ""; } })();
@@ -1517,6 +1525,8 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // candidate when it exceeds the cap.
         price: r.dynamic ? null : `$${r.priceUsd}`, priceUsd: r.dynamic ? null : r.priceUsd, dynamic: !!r.dynamic,
         networks: r.networks, wire: "mpp", settled: r.settled,
+        // The route's own text, for the category filter below.
+        description: r.description, tags: r.tags,
       }));
   } else if (chain === "algorand") {
     // Algorand sellers come from the GoPlausible facilitator catalog AND from
@@ -1542,6 +1552,8 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // would be comparing two assertions and could refuse a seller that is
         // genuinely proven.
         chainProvenPayTo: r.source === "crawl" && typeof r.payTo === "string" ? r.payTo : null,
+        // The route's own text, for the category filter below.
+        description: r.description,
       }));
   } else if (chain === "solana") {
     // Solana sellers come from the SAME crawled index as Base ones - their
@@ -1603,7 +1615,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       // observation. Only the tally is new; the decision is untouched, and it
       // is computed ONCE per candidate rather than once per branch.
       .filter((r) => {
-        const verdict = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: ["base"], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null });
+        const verdict = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: ["base"], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null });
         const eligible = verdict.chains.base?.eligible === true;
         // UNPROVEN TIER (src/base-unproven.js): below the floor with nothing
         // else wrong and a price within the ceiling. Kept, marked, and
@@ -1626,6 +1638,15 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       .slice(0, 5);
   }
   if (onlyUrl) candidates = candidates.filter((r) => sameUrl(r.url));
+  // What the route sells, on EVERY chain: the Tempo and Algorand candidates
+  // come from their own catalogs, not from routeQuery, so the category rule
+  // (src/route-category.js, the same one the labels and routeQuery read) is
+  // applied here to whatever any branch produced.
+  candidates = candidates.filter((r) => {
+    if (!routeExcludedCategory(r)) return true;
+    noteExcluded(1);
+    return false;
+  });
   // Judged order over gated candidates (src/tool-judge.js); injection-screened text only.
   // A pinned target was already chosen by a decision; it is not re-judged.
   let judgedSelection = null;
@@ -1835,7 +1856,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         }
         if (live && chain === "base" && r.binding && !r.unproven) {
           const livePayTo = await readLivePayTo();
-          const gate = baseLiveGate({ networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, binding: r.binding, livePayTo });
+          const gate = baseLiveGate({ networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, binding: r.binding, livePayTo });
           if (!gate.ok) {
             console.warn(`[sor] refusing ${r.seller}: ${gate.detail} (evidence wallets ${gate.payTos.length ? gate.payTos.join(",") : "none"}, live ${gate.livePayTo || "unreadable"})`);
             live = false;
