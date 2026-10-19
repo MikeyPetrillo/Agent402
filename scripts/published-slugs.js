@@ -59,6 +59,8 @@ export async function envGatedSegments() {
     import("../src/tools/exa-kit.js").then((m) => m.EXA_TOOLS),
     import("../src/tools/judge-kit.js").then((m) => m.JUDGE_TOOLS),
     import("../src/tools/b2b-enrich-kit.js").then((m) => m.B2B_ENRICH_TOOLS),
+    // Listed only with RUGCHECK_TOOLS=on.
+    import("../src/tools/solana-intel-kit.js").then((m) => m.SOLANA_INTEL_TOOLS.filter((t) => m.RUGCHECK_SLUGS.has(t.slug))),
     // Listed only when FLIGHT_SELLERS_JSON names sellers; built here with a
     // placeholder seller per kind just to read the route names.
     import("../src/tools/flights-kit.js").then((m) => m.buildFlightTools({
