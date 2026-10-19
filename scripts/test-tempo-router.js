@@ -93,6 +93,23 @@ ok(rankTempoResources(cat, "", { capUsd: 1 }).length === 0, "empty task ranks no
   ok(tie.length === 2 && tie[0].origin === "https://b.example", "equal lexical score breaks on settled desc (the more-paid seller first)");
 }
 
+// The first PAYABLE tempo/charge challenge is the one paid: an unpayable entry
+// (another currency, another chain, split recipients) listed first never
+// refuses a seller that also offers a payable one.
+{
+  const { pickTempoChallenge, TEMPO_CHAIN_ID } = await import("../src/tempo-buyer.js");
+  const good = { method: "tempo", intent: "charge", request: { currency: TEMPO_USDC, amount: "1000", recipient: "0x" + "1".repeat(40) } };
+  for (const [label, bad] of [
+    ["another currency", { method: "tempo", intent: "charge", request: { currency: "0x" + "2".repeat(40), amount: "1" } }],
+    ["another chain", { method: "tempo", intent: "charge", request: { currency: TEMPO_USDC, amount: "1", methodDetails: { chainId: TEMPO_CHAIN_ID + 1 } } }],
+    ["split recipients", { method: "tempo", intent: "charge", request: { currency: TEMPO_USDC, amount: "1", methodDetails: { splits: [{ recipient: "0x" + "3".repeat(40) }] } } }],
+  ]) ok(pickTempoChallenge([{ method: "stripe", intent: "charge" }, bad, good]) === good, `first payable challenge: ${label} listed first is skipped`);
+  const only = { method: "tempo", intent: "charge", request: { currency: "0xother" } };
+  ok(pickTempoChallenge([only]) === only, "with no payable challenge the first tempo/charge one is returned, so the refusal names it");
+  ok(pickTempoChallenge([{ method: "stripe", intent: "charge" }]) === null, "no tempo/charge challenge reads null");
+}
+
+
 // ---- stub MPP seller ----
 const RECIPIENT = "0x1111111111111111111111111111111111111111";
 let sellerMode = "ok"; let paidHits = 0; let lastAuth = null;

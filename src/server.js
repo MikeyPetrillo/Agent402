@@ -655,7 +655,7 @@ import { buildSellerDossierTool } from "./tools/seller-dossier.js";
 import { buildSellerPayabilityTool } from "./tools/seller-payability-kit.js";
 import { buildFlightTools, parseFlightSellers } from "./tools/flights-kit.js";
 import { deliveryObservation } from "./response-observation.js";
-import { payX402, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerRouteRefusedRecently as routeRefusedNow, sellerDeliveryFailingRecently, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
+import { payX402, pickPayableAccept, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerRouteRefusedRecently as routeRefusedNow, sellerDeliveryFailingRecently, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
 import { readTextCapped } from "./capped-body.js";
 import { svmBuyerConfigured, svmBuyerStatus, SOLANA_NETWORK_LABELS } from "./solana-buyer.js";
 import { payTempo, tempoBuyerConfigured, tempoBuyerStatus, tempoRpc } from "./tempo-buyer.js";
@@ -1764,7 +1764,10 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // it since the crawl is admitted and one who broke it since is not.
         if (chain === "base") {
           await readLivePayTo();
-          const liveBase = (liveAccepts || []).find((a) => a?.network === "eip155:8453" && String(a?.scheme || "exact") === "exact");
+          // The accept the buyer will sign (pickPayableAccept): the first
+          // payable Base USDC entry, so an unsignable one listed ahead of it
+          // does not skip a payable seller.
+          const liveBase = pickPayableAccept(liveAccepts || [], "base");
           const domain = liveBase ? usdcDomainVerdict(liveBase) : { verdict: "unknown" };
           // Both unsignable verdicts skip the seller HERE, before anything is
           // signed - a Gateway-rail accept used to pass this gate as "unknown"

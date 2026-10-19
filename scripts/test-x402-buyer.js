@@ -173,6 +173,29 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
     let rd = null;
     try { await payX402("https://rightdomain.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", provenPayTo: PROVEN }); } catch (e) { rd = e; }
     ok(rd && /Refusing to pay/.test(rd.message) && !/EIP-712 name/.test(rd.message) && !sellerRefusedRecently("https://rightdomain.example", "base"), "right domain: \"USD Coin\" passes the domain check (the later payTo binding is what refuses) and is not memoized");
+
+    // A direct-transfer accept is refused before anything is signed: the
+    // seller is asked once (the unpaid request) and never sent a payment.
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return v2challenge([{ ...v2("USD Coin"), extra: { name: "USD Coin", version: "2", paymentMethod: "direct-transfer" } }]); };
+    let dt = null;
+    try { await payX402("https://directtransfer.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base" }); } catch (e) { dt = e; }
+    ok(dt && dt.refused === true && /paymentMethod "direct-transfer"/.test(dt.message) && /Nothing was signed/.test(dt.message), "direct transfer: the accept is refused before signing, naming the method");
+    ok(calls === 1 && _spentThisWindow() === 0n, `direct transfer: only the unpaid request was sent and no budget held (requests ${calls})`);
+
+    // FIRST PAYABLE ACCEPT WINS: an unsignable Base USDC entry listed ahead of
+    // a payable one does not refuse the seller. The payable one is signed for,
+    // shown here by the payTo binding reading ITS address (OTHER).
+    const gatewayFirst = { ...v2("GatewayWalletBatched"), extra: { name: "GatewayWalletBatched", version: "1", verifyingContract: "0x77777777dcc4d5a8b6e418fd04d8997ef11000ee" } };
+    const directFirst = { ...v2("USD Coin"), extra: { name: "USD Coin", version: "2", paymentMethod: "direct-transfer" } };
+    for (const [label, bad] of [["gateway", gatewayFirst], ["wrong name", v2("USDC")], ["direct transfer", directFirst]]) {
+      globalThis.fetch = async () => v2challenge([bad, { ...v2("USD Coin"), payTo: OTHER }]);
+      let e1 = null;
+      try { await payX402(`https://first-${label.replace(/ /g, "-")}.example/x`, { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", provenPayTo: PROVEN }); } catch (e) { e1 = e; }
+      ok(e1 && /Refusing to pay/.test(e1.message) && e1.message.includes(OTHER) && !e1.refused, `first payable: a ${label} accept listed first does not refuse a payable seller (got ${e1 && e1.message.slice(0, 80)})`);
+    }
+    const { pickPayableAccept } = await import("../src/x402-buyer.js");
+    ok(pickPayableAccept([v2("USDC")], "base")?.extra?.name === "USDC", "first payable: with no payable entry the first is still returned, so the refusal names it");
   }
 
   // The check must read the accept we SIGN, not accepts[0]: a decoy first entry

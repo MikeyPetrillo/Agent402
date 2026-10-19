@@ -199,19 +199,23 @@ export function usdcDomainVerdict(accept, network = accept?.network) {
 
 /** The domain each EVM accept advertises, keyed by network - what the index
  *  stores beside payToByNetwork so the label and the router can read it later
- *  without the 402. First accept per network wins (a seller that offers two
- *  entries on one chain is priced from the first anyway). Bounded strings. */
+ *  without the 402. Per network the accept recorded is the one a buyer pays:
+ *  the first a stock signer can sign, else the first listed, so an unsignable
+ *  entry listed ahead of a payable one never labels the chain. Bounded strings. */
 export function evmDomainsOfAccepts(accepts) {
-  const out = {};
+  const chosen = new Map();
   for (const a of Array.isArray(accepts) ? accepts : []) {
     const net = typeof a?.network === "string" ? a.network : "";
-    if (!net.startsWith("eip155:") || out[net]) continue;
+    if (!net.startsWith("eip155:")) continue;
+    const cur = chosen.get(net);
+    if (!cur) { chosen.set(net, a); continue; }
+    if (unsignableByStockBuyer(usdcDomainVerdict(cur, net)) && !unsignableByStockBuyer(usdcDomainVerdict(a, net))) chosen.set(net, a);
+  }
+  const out = {};
+  for (const [net, a] of chosen) {
     const asset = typeof a?.asset === "string" ? a.asset.trim().slice(0, 42) : "";
     const name = typeof a?.extra?.name === "string" ? a.extra.name.trim().slice(0, 40) : "";
     const version = typeof a?.extra?.version === "string" ? a.extra.version.trim().slice(0, 16) : "";
-    // extra.verifyingContract is what tells a Gateway-rail accept from a typo
-    // WITHOUT a second 402, and dropping it here is why the index could not:
-    // every stored row read as { asset, name } and the rail was invisible.
     const verifyingContract = typeof a?.extra?.verifyingContract === "string" ? a.extra.verifyingContract.trim().slice(0, 42) : "";
     const paymentMethod = unsupportedPaymentMethodOf(a);
     if (!asset || (!name && !paymentMethod)) continue;
@@ -224,6 +228,13 @@ export function evmDomainsOfAccepts(accepts) {
     };
   }
   return out;
+}
+
+/** The first accept in `accepts` a stock signer can sign, else the first one:
+ *  what every caller that picks one accept per chain should hand the signer. */
+export function firstSignableAccept(accepts, network) {
+  const list = Array.isArray(accepts) ? accepts : [];
+  return list.find((a) => !unsignableByStockBuyer(usdcDomainVerdict(a, network ?? a?.network))) || list[0] || null;
 }
 
 /** One sentence for a wrong_domain verdict, written for the seller who has to fix it. */

@@ -19,7 +19,7 @@ import { assertSigningAllowed } from "./signing-halt.js";
 import { recordUpstreamSpend } from "./stats.js";
 import { provenPayToMatches } from "./settlement-proof.js";
 import { assertPayoutScreened } from "./tools/sanctions-kit.js";
-import { usdcDomainVerdict, unsignableByStockBuyer } from "./evm-usdc-domain.js";
+import { usdcDomainVerdict, unsignableByStockBuyer, firstSignableAccept } from "./evm-usdc-domain.js";
 import { disableVendorSpendControls } from "./x402-spend-controls.js";
 import { readBytesCapped, readTextCapped, declaredLength, discardBody, decodeUtf8 } from "./capped-body.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
@@ -73,11 +73,16 @@ const MAX_REFUSAL_BODY_BYTES = 4 * 1024;
 export function pickPayableAccept(accepts, chain) {
   const cfg = BUYER_CHAINS[chain];
   if (!cfg) return null;
-  return (accepts || []).find((a) =>
-    cfg.networkLabels.has(String(a.network || "").toLowerCase()) &&
+  const matches = (accepts || []).filter((a) =>
+    a && cfg.networkLabels.has(String(a.network || "").toLowerCase()) &&
     String(a.scheme || "exact") === "exact" &&
     String(a.asset || "").toLowerCase() === cfg.asset.toLowerCase()
-  ) || null;
+  );
+  // The first one the stock signer can sign: an unsignable entry (another
+  // rail's domain, a wrong name, a transfer-then-prove method) listed ahead of
+  // a payable one must not decide the purchase. Every entry here is already the
+  // chain's USDC, so whichever is picked is what the cap check reads.
+  return firstSignableAccept(matches, cfg.caip2);
 }
 
 /** True only for a well-formed atomic-USDC quote at or under `maxAtomic`.
