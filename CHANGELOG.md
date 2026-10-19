@@ -7,6 +7,9 @@ carries its own version on npm.
 ## Unreleased
 
 ### 2026-10-19
+- `/v1/videos/generations`: a request that times out (504, not charged)
+  can be sent again unchanged within 30 minutes to collect the same clip.
+- `html-frames`: loading and every `renderAt` together share a 25 s budget.
 - Route searches score in their worker thread again on production servers;
   since the 2026-10-13 storage change the worker had been exiting at start,
   so searches ran on the main thread.
