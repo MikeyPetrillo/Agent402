@@ -104,6 +104,12 @@ function toolWith({ bare, pay, spendOk = true, bareDelayMs = 0, bareAdvanceMs = 
   const rc = await clean.tool.handler({ url: "https://s.example" }, {});
   ok(rc.domainFindings[0]?.verdict === "matches" && !rc.flags.some((x) => /extra\.name/.test(x)), "a correct accept reports matches and raises no domain flag");
   ok(domainFindings([{ network: "eip155:1", asset: BASE_USDC, domainName: "USDC" }]).length === 0, "a chain we hold no truth for is silent, never guessed");
+  // The accept's paymentMethod reaches the verdict: a transfer proved
+  // afterwards is reported as such, with a flag naming the fix.
+  const dt = toolWith({ bare: res402([accept({ extra: { name: "USD Coin", version: "2", paymentMethod: "direct-transfer" } })]) });
+  const rd = await dt.tool.handler({ url: "https://s.example" }, {});
+  ok(rd.domainFindings[0]?.verdict === "payment_method_unsupported" && rd.domainFindings[0].paymentMethod === "direct-transfer", `a direct-transfer accept is reported payment_method_unsupported (got ${JSON.stringify(rd.domainFindings)})`);
+  ok(rd.flags.some((x) => /direct-transfer/.test(x) && /exact scheme/.test(x)), "and the flag names the method and the fix");
 }
 
 // --- the seller shapes that are NOT payable --------------------------------

@@ -19,7 +19,7 @@ import { assertSigningAllowed } from "./signing-halt.js";
 import { recordUpstreamSpend } from "./stats.js";
 import { provenPayToMatches } from "./settlement-proof.js";
 import { assertPayoutScreened } from "./tools/sanctions-kit.js";
-import { usdcDomainVerdict, unsignableByStockBuyer } from "./evm-usdc-domain.js";
+import { usdcDomainVerdict, unsignableByStockBuyer, firstSignableAccept } from "./evm-usdc-domain.js";
 import { disableVendorSpendControls } from "./x402-spend-controls.js";
 import { readBytesCapped, readTextCapped, declaredLength, discardBody, decodeUtf8 } from "./capped-body.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
@@ -73,11 +73,16 @@ const MAX_REFUSAL_BODY_BYTES = 4 * 1024;
 export function pickPayableAccept(accepts, chain) {
   const cfg = BUYER_CHAINS[chain];
   if (!cfg) return null;
-  return (accepts || []).find((a) =>
-    cfg.networkLabels.has(String(a.network || "").toLowerCase()) &&
+  const matches = (accepts || []).filter((a) =>
+    a && cfg.networkLabels.has(String(a.network || "").toLowerCase()) &&
     String(a.scheme || "exact") === "exact" &&
     String(a.asset || "").toLowerCase() === cfg.asset.toLowerCase()
-  ) || null;
+  );
+  // The first one the stock signer can sign: an unsignable entry (another
+  // rail's domain, a wrong name, a transfer-then-prove method) listed ahead of
+  // a payable one must not decide the purchase. Every entry here is already the
+  // chain's USDC, so whichever is picked is what the cap check reads.
+  return firstSignableAccept(matches, cfg.caip2);
 }
 
 /** True only for a well-formed atomic-USDC quote at or under `maxAtomic`.
@@ -302,6 +307,59 @@ const SELLER_REFUSAL_TTL_MS = Number(process.env.SOR_SELLER_REFUSAL_TTL_MS || 6 
 const SELLER_REFUSAL_MAX = 500;
 const SELLER_REFUSAL_MIN_STRIKES = 2;
 const sellerRefusals = new Map(); // "chain|origin/path" -> { at, firstAt, status, strikes }
+// BOTH MEMOS ARE SHARED BETWEEN REPLICAS (src/shared-limits.js). Each strike
+// is also a member of a shared window keyed like the local map, so a strike
+// one container records counts on the other. The local map stays the floor:
+// readers answer from it synchronously, and refreshSellerMemos() folds the
+// shared windows into it before a resolver reads them. A window the shared
+// store answered empty clears a local entry that reached it (another replica
+// saw a delivery); an entry whose shared write failed is kept.
+const REFUSAL_MEMO = "sor-refusal";
+const DELIVERY_MEMO = "sor-delivery";
+let memoSeq = 0;
+const MEMO_REPLICA = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+const memoKeysWritten = new Set(); // "name\u0000key", so a test reset clears what it wrote
+function memoShare(name, key, windowMs, status, now, entry) {
+  if (!(windowMs > 0)) return;
+  if (memoKeysWritten.size < 5000) memoKeysWritten.add(`${name}\u0000${key}`);
+  void sharedWrite("sor-memo", shared.windowAdd(name, key, { windowMs, member: `${MEMO_REPLICA}:${++memoSeq}`, weight: Number(status) || 0, now })).then((r) => { if (r?.ok) entry.shared = true; });
+}
+/** Fold one shared window into a local memo map (strikes from every replica). */
+function foldShared(map, key, r) {
+  const local = map.get(key);
+  if (!r?.ok) return;
+  const entries = Array.isArray(r.entries) ? r.entries : [];
+  if (!r.count) { if (local?.shared) map.delete(key); return; }
+  const at = entries.length ? Math.max(...entries.map((e) => e.score)) : (local?.at || Date.now());
+  const firstAt = entries.length ? Math.min(...entries.map((e) => e.score)) : (local?.firstAt || at);
+  const latest = entries.find((e) => e.score === at);
+  if (local && local.at >= at && (local.strikes || 0) >= r.count) return;
+  map.set(key, { ...(local || {}), at: Math.max(at, local?.at || 0), firstAt: Math.min(firstAt, local?.firstAt || firstAt), status: latest && latest.weight ? latest.weight : (local?.status ?? null), strikes: Math.max(r.count, local?.strikes || 0), shared: true });
+}
+/**
+ * Read the shared strikes for these candidates into the local memos, so the
+ * synchronous readers below see what every replica recorded. `items` are
+ * { url, chain } (route refusals) and/or { origin, chain } (delivery
+ * failures). Never throws; a store that does not answer leaves the local
+ * floor as it is.
+ */
+export async function refreshSellerMemos(items = [], now = Date.now()) {
+  const reads = [];
+  for (const it of items) {
+    if (!it?.chain) continue;
+    const route = it.url ? refusalRoute(it.url) : null;
+    if (route) reads.push({ map: sellerRefusals, key: `${it.chain}|${route}`, q: { name: REFUSAL_MEMO, key: `${it.chain}|${route}`, windowMs: SELLER_REFUSAL_TTL_MS } });
+    const ttl = deliveryFailTtlMs();
+    if (it.origin && ttl > 0) { const k = refusalKey(it.origin, it.chain); reads.push({ map: deliveryFailures, key: k, q: { name: DELIVERY_MEMO, key: k, windowMs: ttl } }); }
+  }
+  if (!reads.length) return;
+  try {
+    const r = await shared.windowReadMany(reads.map((x) => x.q), { now });
+    if (!r?.ok) { noteSharedLimitsDegraded("sor-memo", r); return; }
+    reads.forEach((x, i) => foldShared(x.map, x.key, { ok: true, ...(r.results?.[i] || {}) }));
+  } catch (e) { noteSharedLimitsDegraded("sor-memo", { error: e?.message }); }
+}
+
 // The delivery memo below keys by origin + chain.
 const refusalKey = (origin, chain) => `${chain}|${String(origin || "").toLowerCase().replace(/\/+$/, "")}`;
 /** "https://host/path" for a route URL (query dropped, trailing slash dropped), or null. */
@@ -345,12 +403,16 @@ export function noteSellerRefusal(url, chain, status) {
   // Re-inserted at the tail, so eviction takes the least recently refused.
   sellerRefusals.delete(key);
   if (sellerRefusals.size >= SELLER_REFUSAL_MAX) sellerRefusals.delete(sellerRefusals.keys().next().value);
-  sellerRefusals.set(key, { at: now, firstAt: live ? live.firstAt : now, status, strikes: (live?.strikes || 0) + 1 });
+  const entry = { at: now, firstAt: live ? live.firstAt : now, status, strikes: (live?.strikes || 0) + 1 };
+  sellerRefusals.set(key, entry);
+  memoShare(REFUSAL_MEMO, key, SELLER_REFUSAL_TTL_MS, status, now, entry);
 }
 /** A settled delivery from the route forgets its strikes. */
 export function clearSellerRefusal(url, chain) {
   const route = refusalRoute(url);
-  if (route && chain) sellerRefusals.delete(`${chain}|${route}`);
+  if (!route || !chain) return;
+  sellerRefusals.delete(`${chain}|${route}`);
+  void sharedWrite("sor-memo", shared.windowClear(REFUSAL_MEMO, `${chain}|${route}`));
 }
 /** Is the route `url` benched on `chain` right now? What the resolver asks. */
 export function sellerRouteRefusedRecently(url, chain, now = Date.now()) {
@@ -377,7 +439,15 @@ export function sellerRefusedRecently(origin, chain, now = Date.now()) {
   }
   return best;
 }
-export function __resetSellerRefusalsForTest() { sellerRefusals.clear(); }
+function clearSharedMemoKeys(name) {
+  for (const nk of memoKeysWritten) {
+    const [n, k] = nk.split("\u0000");
+    if (n !== name) continue;
+    memoKeysWritten.delete(nk);
+    void sharedWrite("sor-memo", shared.windowClear(n, k));
+  }
+}
+export function __resetSellerRefusalsForTest() { sellerRefusals.clear(); clearSharedMemoKeys(REFUSAL_MEMO); }
 
 // Sellers whose PAID call did not DELIVER. The memo above is the opposite
 // outcome and the milder one: the seller declined the payment and nobody was
@@ -457,13 +527,15 @@ export function noteSellerDeliveryFailure(origin, chain, { status = null, ms = n
   // the update path.)
   deliveryFailures.delete(key);
   if (deliveryFailures.size >= DELIVERY_FAIL_MAX) deliveryFailures.delete(deliveryFailures.keys().next().value);
-  deliveryFailures.set(key, {
+  const entry = {
     at: Date.now(),
     firstAt: live ? live.firstAt : Date.now(),
     status: Number.isFinite(status) ? status : null,
     ms: Number.isFinite(ms) ? Math.round(ms) : null,
     strikes: (live?.strikes || 0) + 1,
-  });
+  };
+  deliveryFailures.set(key, entry);
+  memoShare(DELIVERY_MEMO, key, ttl, status, entry.at, entry);
 }
 
 /**
@@ -488,6 +560,7 @@ export function isCallerInputStatus(status) {
 export function clearSellerDeliveryFailure(origin, chain) {
   if (!origin || !chain) return;
   deliveryFailures.delete(refusalKey(origin, chain));
+  void sharedWrite("sor-memo", shared.windowClear(DELIVERY_MEMO, refusalKey(origin, chain)));
 }
 
 /**
@@ -522,7 +595,7 @@ export function sellerDeliveryMemoEntries(now = Date.now()) {
 export const DELIVERY_FAIL_STRIKES_REQUIRED = DELIVERY_FAIL_MIN_STRIKES;
 /** The live TTL, for the operator surface. 0 = disarmed. */
 export const deliveryFailTtlMsNow = () => deliveryFailTtlMs();
-export function __resetSellerDeliveryFailuresForTest() { deliveryFailures.clear(); }
+export function __resetSellerDeliveryFailuresForTest() { deliveryFailures.clear(); clearSharedMemoKeys(DELIVERY_MEMO); }
 
 /** Does a response carry a settle receipt that says the payment SETTLED
  *  (`success: true`)? A receipt with no success flag, or one that fails to

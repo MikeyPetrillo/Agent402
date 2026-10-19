@@ -124,6 +124,9 @@ export function readChallenge({ header, body }) {
       // Kept beside the name because the pair, not the name alone, is what
       // separates Circle's Gateway rail from a mistyped token domain.
       verifyingContract: typeof a?.extra?.verifyingContract === "string" ? a.extra.verifyingContract.slice(0, 42) : null,
+      // How the accept asks to be paid, when it says (a transfer proved
+      // afterwards is a method a stock signer cannot make).
+      paymentMethod: (() => { const m = typeof a?.paymentMethod === "string" ? a.paymentMethod : a?.extra?.paymentMethod; return typeof m === "string" ? m.slice(0, 40) : null; })(),
       maxTimeoutSeconds: Number.isFinite(Number(a?.maxTimeoutSeconds)) ? Number(a.maxTimeoutSeconds) : null,
     })),
   };
@@ -135,9 +138,9 @@ export function readChallenge({ header, body }) {
 export function domainFindings(accepts) {
   const out = [];
   for (const a of accepts || []) {
-    const v = usdcDomainVerdict({ asset: a.asset, name: a.domainName, verifyingContract: a.verifyingContract }, a.network);
+    const v = usdcDomainVerdict({ asset: a.asset, name: a.domainName, verifyingContract: a.verifyingContract, paymentMethod: a.paymentMethod }, a.network);
     if (v.verdict === "unknown") continue;
-    out.push({ network: a.network, verdict: v.verdict, advertisedName: v.advertisedName ?? a.domainName, expectedName: v.expectedName, chain: v.chain, ...(v.verifyingContract ? { verifyingContract: v.verifyingContract } : {}) });
+    out.push({ network: a.network, verdict: v.verdict, advertisedName: v.advertisedName ?? a.domainName, expectedName: v.expectedName, chain: v.chain, ...(v.verifyingContract ? { verifyingContract: v.verifyingContract } : {}), ...(v.paymentMethod ? { paymentMethod: v.paymentMethod } : {}) });
   }
   return out;
 }
@@ -154,6 +157,7 @@ export function payabilityFlags({ bare, challenge, domains, paid, receipt, settl
     // Not a flag against the seller: a dossier that tells a Gateway seller to
     // "fix" a rail Circle ships would be wrong, and the seller would be right
     // to ignore the whole report after reading it.
+    else if (d.verdict === "payment_method_unsupported") flags.push(`${usdcDomainMismatchDetail(d)} - offer the exact scheme (a signed authorization the facilitator settles) on the ${d.network} accept`);
     else if (d.verdict === "gateway_batched") flags.push(`${usdcDomainMismatchDetail(d)} - a stock-buyer router (this one included) will skip the ${d.network} accept until it speaks the rail; offering one plain EIP-3009 accept beside it makes you payable by both`);
   }
   if (challenge?.readable && challenge.priceUsd == null) flags.push("the accepts carry no amount we could price: a buyer that checks the quote before paying cannot");

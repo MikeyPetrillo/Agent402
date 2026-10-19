@@ -638,7 +638,11 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
               body: paid.result,
             });
           }
-          const underlyingUsd = paid.quote ? paid.quote.usd : extUsd;
+          // A seller that answered the unpaid request with a 200 was never
+          // paid (no quote, no receipt): nothing left the wallet, so nothing is
+          // booked against it.
+          const servedUnpaid = !paid.quote && !paid.receipt;
+          const underlyingUsd = servedUnpaid ? 0 : (paid.quote ? paid.quote.usd : extUsd);
           // Now the real figure is known, so the ceiling stops counting the
           // worst case against this payer.
           adjustSpend(spendHandle, underlyingUsd);
@@ -653,6 +657,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
               external: true,
               settleTx: paid.receipt?.transaction || null,
               settleNetwork: chainCaip2,
+              ...(servedUnpaid ? { sellerPaid: false } : {}),
               wire: extWire,
               resolvedBy: "task-external",
               ...(ext.selection ? { selection: ext.selection } : {}),

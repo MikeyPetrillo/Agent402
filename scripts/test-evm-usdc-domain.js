@@ -101,7 +101,7 @@ const accept = (over = {}) => ({ scheme: "exact", network: "eip155:8453", asset:
 {
   const obs = evmDomainsOfAccepts([
     accept({ extra: { name: "USDC", version: "2" } }),
-    accept({ network: "eip155:8453", extra: { name: "USD Coin" } }), // second Base entry: first wins
+    accept({ network: "eip155:8453", extra: { name: "USD Coin v1" } }), // second Base entry, also unsignable: first wins
     accept({ network: "eip155:137", asset: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", extra: { name: "USD Coin" } }),
     { scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", extra: { feePayer: "x" } },
     accept({ network: "eip155:10", asset: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", extra: {} }),
@@ -155,6 +155,24 @@ const accept = (over = {}) => ({ scheme: "exact", network: "eip155:8453", asset:
   ok(rebuild({ ...EVM_TOKEN_DOMAINS[0], name: "USDC" }).toLowerCase() !== EVM_TOKEN_DOMAINS[0].domainSeparator.toLowerCase(), "the rebuild really discriminates: Base USDC under \"USDC\" misses its own separator");
   ok(rebuild({ ...EVM_TOKEN_DOMAINS[0], version: "1" }).toLowerCase() !== EVM_TOKEN_DOMAINS[0].domainSeparator.toLowerCase(), "...and under version \"1\" it misses too");
   ok(EVM_TOKEN_DOMAINS.filter((r) => r.network === "eip155:196").length === 3 && domainTruthFor("eip155:196", "0x779Ded0c9e1022225f8E0630b35a9b54bE713736")?.name === "USD₮0", "one chain can carry three tokens and each is answered for by its own address");
+}
+
+// The domain recorded per chain is the accept a buyer pays: an unsignable entry
+// listed ahead of a payable one never labels the chain.
+{
+  const { evmDomainsOfAccepts } = await import("../src/evm-usdc-domain.js");
+  const A = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const good = { network: "eip155:8453", asset: A, extra: { name: "USD Coin", version: "2" } };
+  const nameless = { network: "eip155:8453", asset: A };
+  for (const [label, bad] of [
+    ["gateway", { network: "eip155:8453", asset: A, extra: { name: "GatewayWalletBatched", version: "1", verifyingContract: "0x77777777dcc4d5a8b6e418fd04d8997ef11000ee" } }],
+    ["wrong name", { network: "eip155:8453", asset: A, extra: { name: "USDC", version: "2" } }],
+    ["direct transfer", { network: "eip155:8453", asset: A, extra: { name: "USD Coin", paymentMethod: "direct-transfer" } }],
+  ]) {
+    ok(evmDomainsOfAccepts([bad, good])["eip155:8453"]?.name === "USD Coin" && !evmDomainsOfAccepts([bad, good])["eip155:8453"].paymentMethod, `first payable: a ${label} accept listed first does not label the chain`);
+    ok(!evmDomainsOfAccepts([bad, nameless])["eip155:8453"], `first payable: a nameless payable accept after a ${label} one leaves the chain unlabelled (unknown, payable)`);
+    ok(evmDomainsOfAccepts([bad])["eip155:8453"] != null, `a ${label} accept alone still labels the chain`);
+  }
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
