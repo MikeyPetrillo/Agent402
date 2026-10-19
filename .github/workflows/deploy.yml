@@ -1721,6 +1721,7 @@ jobs:
           t node scripts/test-discovery-deadline.js
           # Router worker pool: worker answers equal in-thread, /health stays fast under a burst, crash and deadline recovery, refresh reaches the worker (offline, boots a server from the fixture)
           t node scripts/test-router-worker.js
+          t node scripts/test-router-worker-prod-boot.js
           t node scripts/test-plan-sketch.js
           # Report synthesis: a length stop is retried once, then trimmed to a complete block and marked (offline)
           t node scripts/test-report-synthesis.js

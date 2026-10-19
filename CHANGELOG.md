@@ -6,6 +6,11 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-10-19
+- Route searches score in their worker thread again on production servers;
+  since the 2026-10-13 storage change the worker had been exiting at start,
+  so searches ran on the main thread.
+
 ### 2026-10-18
 - Operators can make Solvador Celo's primary settlement service with
   `SOLVADOR_CELO_PRIMARY=on`; the Celo facilitator then becomes Celo's
