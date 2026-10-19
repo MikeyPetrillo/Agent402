@@ -19,7 +19,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { JSDOM, VirtualConsole } from "jsdom";
 import {
-  checkReportGrounding, extractClaims, groundingValues, combineGrounding, groundingNote,
+  checkReportGrounding, extractClaims, groundingValues, combineGrounding, groundingNote, shownGroundingNote,
   GROUNDING_CLAIM_CAP, GROUNDING_LIST_CAP,
 } from "../src/report-grounding.js";
 
@@ -274,6 +274,14 @@ for (const [kit, f] of Object.entries(KITS)) {
   ok(/check (it|them) against the sources/.test(note) && /may be derived/.test(note), "the note says a figure may be derived, and to check it");
   ok(groundingNote(checkReportGrounding("Revenue was $1.0 billion.", "Revenue $1.00B")) === null, "a clean report gets no note");
   ok(groundingNote(null) === null && groundingNote({ verdict: "unchecked" }) === null, "no field, no note");
+  {
+    const prev = process.env.REPORT_GROUNDING_NOTE;
+    delete process.env.REPORT_GROUNDING_NOTE;
+    ok(shownGroundingNote(flagged) === null, "report pages show no note unless REPORT_GROUNDING_NOTE is on");
+    process.env.REPORT_GROUNDING_NOTE = "on";
+    ok(shownGroundingNote(flagged) === note, "with the switch on, pages show the same note");
+    if (prev === undefined) delete process.env.REPORT_GROUNDING_NOTE; else process.env.REPORT_GROUNDING_NOTE = prev;
+  }
   const one = groundingNote(checkReportGrounding("A $9.87 billion figure.", "x"));
   ok(/one figure/.test(one) && /check it against/.test(one), "one figure reads in the singular");
 
@@ -296,11 +304,11 @@ for (const [kit, f] of Object.entries(KITS)) {
     ok(/const out = [^;]*\bgrounding\b/s.test(s.replace(/\n\s*\/\/[^\n]*/g, "")), `${f} puts the result on its JSON as "grounding"`);
   }
   const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
-  ok(/groundingNote\(out\?\.grounding\)/.test(read("../src/server.js")), "the card and monitor bundle carries the note");
+  ok(/shownGroundingNote\(out\?\.grounding\)/.test(read("../src/server.js")), "the card and monitor bundle carries the note when it is switched on");
   ok((read("../src/human-checkout.js").match(/groundingNote/g) || []).length >= 3, "a delivered and a public card report carry the note");
   ok((read("../src/monitor-scheduler.js").match(/groundingNote/g) || []).length >= 3, "a monitor report carries the note");
   ok(/id="grounding-note"/.test(read("../assets/js/report-view.js")) && /bundle\.groundingNote/.test(read("../assets/js/report-view.js")), "the viewer shows the note and keeps it in the JSON download");
-  ok(/groundingNote\(j\.grounding\)/.test(read("../src/sample-reports.js")), "a sample fixture that carries the field shows the same note");
+  ok(/shownGroundingNote\(j\.grounding\)/.test(read("../src/sample-reports.js")), "a sample fixture that carries the field shows the same note when it is switched on");
 }
 
 // ------------------------------------------------------------ 7. end to end (recall kit)

@@ -63,7 +63,7 @@ import { withNextCall, nextCallFor } from "./next-call.js";
 import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS, reportHeadline, readPublicReport, readPublicReportFresh } from "./human-checkout.js";
 import { humanReportsPage, reportDeliveryPage } from "./human-reports-page.js";
 import { kitDisclaimer } from "./report-disclosure.js";
-import { groundingNote } from "./report-grounding.js";
+import { shownGroundingNote } from "./report-grounding.js";
 import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS, MONITOR_PRODUCTS_ALL } from "./stripe-subscriptions.js";
 import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
 import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
@@ -3886,8 +3886,9 @@ const _humanGenerate = async (kind, slug, input, ctx = {}) => {
       // The kit's own disclaimer (meta.disclaimer), which the report page shows under the title.
       ...(kitDisclaimer(out) ? { disclaimer: kitDisclaimer(out) } : {}),
       // The grounding check's sentence (src/report-grounding.js), shown under
-      // the title when a figure could not be traced to the report's data.
-      ...(groundingNote(out?.grounding) ? { groundingNote: groundingNote(out.grounding) } : {}),
+      // the title when a figure could not be traced to the report's data and
+      // REPORT_GROUNDING_NOTE is on.
+      ...(shownGroundingNote(out?.grounding) ? { groundingNote: shownGroundingNote(out.grounding) } : {}),
     };
 };
 // The storefront PAGES are always served (they are linked from the nav and

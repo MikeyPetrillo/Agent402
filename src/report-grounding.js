@@ -306,6 +306,15 @@ export function combineGrounding(parts) {
   };
 }
 
+/** Whether report pages show groundingNote to people. Off unless
+ *  REPORT_GROUNDING_NOTE=on: the JSON field is always there for agents, and
+ *  the sentence for people waits until the flag rate on real reports is known
+ *  (a correct derived figure, such as a sum, is flagged too). */
+export function groundingNoteShown() { return String(process.env.REPORT_GROUNDING_NOTE || "").trim().toLowerCase() === "on"; }
+
+/** The note for a report page when REPORT_GROUNDING_NOTE is on, else null. */
+export function shownGroundingNote(g) { return groundingNoteShown() ? groundingNote(g) : null; }
+
 /** The sentence a person reads under a report's title, or null when the
  *  check found nothing to say. Built from the field, so every surface that
  *  shows it says the same thing. */
