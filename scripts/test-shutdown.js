@@ -13,6 +13,12 @@ import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// Each server this test starts gets its own stats database. Without one they
+// all open /tmp/agent402-stats.db, and a lock held there by any other process
+// on the machine (another test's server, a leftover one) fails the store's
+// first read, so /health answers 503 and the boot wait times out.
+const ownStats = () => ({ STATS_DB_DIR: mkdtempSync(join(tmpdir(), "a402-shutdown-stats-")), ALLOW_EPHEMERAL_STATS: "true" });
+
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -25,7 +31,7 @@ async function testSigterm() {
     // new calls when SIGTERM lands (see the shutdown comment in
     // src/server.js). SIGTERM closes the listener at once and drains; the
     // in-flight half of that contract is test-drain-on-sigterm.js.
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port) },
+    env: { ...process.env, FREE_MODE: "true", PORT: String(port), ...ownStats() },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let out = "";
@@ -108,7 +114,7 @@ async function testFatalFileModeDeadline() {
   const port = 3900 + (process.pid % 500);
   // Both index crawlers off: their outbound reads and parses are background
   // work on the event loop that has nothing to do with the drain being timed.
-  const env = { ...process.env, FREE_MODE: "true", PORT: String(port), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" };
+  const env = { ...process.env, FREE_MODE: "true", PORT: String(port), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", ...ownStats() };
   delete env.STATE_DATABASE_URL;
   const child = spawn(process.execPath, ["--import", preload, "src/server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
