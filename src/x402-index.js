@@ -7765,8 +7765,10 @@ function toolStatics(t) {
     // about individuals, src/route-category.js): it stays in the index and on
     // /api/index?seller= with its category_excluded verdict, and is never
     // ranked here, so neither this thread nor the router worker (which runs
-    // this same module) can hand it to route-execute.
-    excluded: routeExcludedCategory(t) !== null,
+    // this same module) can hand it to route-execute. The rule is about what
+    // the router buys from other sellers: this host's own catalog tools, which
+    // it serves under its own upstream terms, are never excluded by it.
+    excluded: t.seller !== LOCAL_SELLER && routeExcludedCategory(t) !== null,
     priceRank: priceRank(t.price),
     // Curated alternate names a tool answers to, scored exactly like the slug
     // (max over slug + aliases per term, never additive). Our asn-info IS an IP

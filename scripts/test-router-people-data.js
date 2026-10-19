@@ -197,7 +197,7 @@ const pool = await import("../src/router-pool.js");
   writeFileSync(join(dir, "x402-index-cache.ndjson"), [JSON.stringify({ savedAt: now, format: "ndjson-v1", origins: 1 }), JSON.stringify(sellerEntry)].join("\n") + "\n");
   const port = await getFreePort();
   const proc = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"), LEADERBOARD_SNAPSHOT_FILE: lbFile, ROUTER_WORKERS: "1" },
+    env: { ...process.env, FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"), LEADERBOARD_SNAPSHOT_FILE: lbFile, ROUTER_WORKERS: "1", HUNTER_API_KEY: "test-placeholder", APOLLO_API_KEY: "test-placeholder" },
     stdio: ["ignore", "ignore", "inherit"],
   });
   procs.add(proc);
@@ -235,12 +235,19 @@ const pool = await import("../src/router-pool.js");
     const sell = await (await fetch(`${base}/sell`)).text();
     ok(sell.includes(">category_excluded<") && sell.includes(DISPATCH_REASONS.category_excluded), "the /sell page lists category_excluded with the router's own reason text");
 
-    // No tool in this host's own catalog matches (a live false-positive control set).
+    // This host's own catalog is never excluded by the rule, even where a
+    // tool's words match it (the key-gated lookup tools are booted here with
+    // placeholder keys so they are in the catalog): /api/route still ranks them.
     const page = await (await fetch(`${base}/api/index?limit=1&page=0`)).json();
     const self = (page.sellers || []).find((s) => s.origin === "self");
     const local = self?.tools || [];
     const localHits = local.filter((t) => personalDataMatch(t));
-    ok(local.length >= 400 && localHits.length === 0, `none of this host's ${local.length} catalog tools matches${localHits.length ? ` (${localHits.map((t) => t.slug).join(", ")})` : ""}`);
+    ok(local.length >= 400, `the host's own catalog is in the index (${local.length} tools)`);
+    for (const t of localHits) {
+      const r = await (await fetch(`${base}/api/route?q=${encodeURIComponent(t.name || t.slug)}&top=10`)).json();
+      ok((r.results || []).some((x) => x.slug === t.slug), `own tool ${t.slug} matches the category words and still ranks (categoryExcluded ${r.categoryExcluded})`);
+    }
+    ok(localHits.length >= 1, `the control set includes an own tool that matches the words (${localHits.map((t) => t.slug).join(", ")})`);
   } finally { proc.kill("SIGTERM"); }
 }
 
