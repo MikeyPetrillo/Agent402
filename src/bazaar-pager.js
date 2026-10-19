@@ -11,19 +11,25 @@
 // and growing, so a single un-paginated fetch sees <0.2% of the corpus.
 
 /**
- * Walk every page of a Bazaar-shaped discovery endpoint.
+ * Walk every page of a Bazaar-shaped discovery endpoint, handing each page's
+ * items to `onPage` as it arrives instead of holding the whole corpus. A
+ * caller that folds pages into its own accumulators keeps one page alive at a
+ * time, not every page of a registry with tens of thousands of listings.
+ * A fetch or `onPage` failure rejects, so a caller that publishes only after
+ * the walk resolves never publishes half a registry.
  *
  * @param {string} baseUrl - the discovery endpoint (without limit/offset query params).
  * @param {object} opts
  * @param {number} [opts.pageSize=1000] - items per page (Bazaar caps at 1000).
  * @param {number} [opts.maxPages=200]  - hard ceiling on pages walked (DoS guard).
  * @param {(url: string) => Promise<any>} fetcher - returns the parsed JSON page.
- * @returns {Promise<{ items: any[], total: number | null }>}
+ * @param {(items: any[]) => (void | Promise<void>)} onPage - receives each non-empty page, in order.
+ * @returns {Promise<{ count: number, total: number | null }>}
  */
-export async function fetchAllBazaarItems(baseUrl, opts = {}, fetcher) {
+export async function walkBazaarPages(baseUrl, opts = {}, fetcher, onPage) {
   const pageSize = opts.pageSize ?? 1000;
   const maxPages = opts.maxPages ?? 200;
-  const items = [];
+  let count = 0;
   let offset = 0;
   let total = null;
   for (let p = 0; p < maxPages; p++) {
@@ -32,12 +38,30 @@ export async function fetchAllBazaarItems(baseUrl, opts = {}, fetcher) {
     const page = await fetcher(url);
     const pageItems = page?.items || page?.resources || (Array.isArray(page) ? page : []);
     if (!Array.isArray(pageItems) || pageItems.length === 0) break;
-    for (const it of pageItems) items.push(it);
+    await onPage(pageItems);
+    count += pageItems.length;
     total = page?.pagination?.total ?? total;
     offset += pageItems.length;
     if (total != null && offset >= total) break;
     if (pageItems.length < pageSize) break;
   }
+  return { count, total };
+}
+
+/**
+ * Walk every page of a Bazaar-shaped discovery endpoint and return every item.
+ * Same walk as walkBazaarPages; for callers that need the whole list at once.
+ *
+ * @param {string} baseUrl - the discovery endpoint (without limit/offset query params).
+ * @param {object} opts - as walkBazaarPages.
+ * @param {(url: string) => Promise<any>} fetcher - returns the parsed JSON page.
+ * @returns {Promise<{ items: any[], total: number | null }>}
+ */
+export async function fetchAllBazaarItems(baseUrl, opts = {}, fetcher) {
+  const items = [];
+  const { total } = await walkBazaarPages(baseUrl, opts, fetcher, (pageItems) => {
+    for (const it of pageItems) items.push(it);
+  });
   return { items, total };
 }
 
