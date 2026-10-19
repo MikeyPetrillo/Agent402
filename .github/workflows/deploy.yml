@@ -2667,6 +2667,8 @@ jobs:
           t node scripts/test-what-is-mpp-page.js
           # robots-check ReDoS regression (wildcard cap, normal robots.txt behavior — offline)
           t node scripts/test-robots-redos.js
+          # post-deploy has() counts a needle only in a 2xx answer (runs the workflow's shell function locally)
+          t node scripts/test-deploy-has-status.js
           # ffmpeg/ffprobe read a downloaded body as a local file of a named format (stub runner, offline)
           t node scripts/test-media-input-args.js
           # safeFetch timeoutMs bounds the body read too (local trickle server, offline)
@@ -6226,8 +6228,9 @@ jobs:
           # Each surface is fetched whole, then searched, and a miss is retried
           # (this runs while the deploy's old and new containers overlap, when
           # a cold container can briefly refuse a page); a final miss names the
-          # HTTP status it got.
-          has() { local body code i; for i in 1 2 3; do body=$(curl -s --max-time 20 -w '\n%{http_code}' "$1"); code=${body##*$'\n'}; body=${body%$'\n'*}; grep -qF -- "$2" <<<"$body" && return 0; LAST_CODE=$code; [ "$i" -lt 3 ] && sleep 10; done; return 1; }
+          # HTTP status it got. Only a 2xx answer counts: an error page that
+          # happens to contain the needle is still a miss.
+          has() { local body code i; for i in 1 2 3; do body=$(curl -s --max-time 20 -w '\n%{http_code}' "$1"); code=${body##*$'\n'}; body=${body%$'\n'*}; case "$code" in 2??) grep -qF -- "$2" <<<"$body" && return 0 ;; esac; LAST_CODE=$code; [ "$i" -lt 3 ] && sleep "${HAS_RETRY_SLEEP:-10}"; done; return 1; }
           ck() { if eval "$2"; then echo "  $1 ✓"; else echo "  $1 MISSING (last HTTP ${LAST_CODE:-?})"; FAILS=$((FAILS+1)); fi; }
           ck "FAQPage JSON-LD"            'has "$PROD/" "\"FAQPage\""'
           # The ledger homepage renders the FAQ section with a "$ GET /faq"
