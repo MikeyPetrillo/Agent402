@@ -30,7 +30,7 @@ These exist because an agent mid-task cannot give itself a browser, a paid searc
 | `block-number`, `chain-info`, `block-info`, `contract-code`, `erc721-owner`, `event-logs` | $0.001–$0.003 | **Chain reads**: head block and chain metadata, a block by number/hash, deployed bytecode at an address, ERC-721 `ownerOf`, and decoded `eth_getLogs` event queries. Read primitives an agent can call without running a node or holding an RPC key |
 | `openapi-extract`, `openapi-to-curl`, `openapi-mock-response`, `openapi-search`, `openapi-validate-payload`, `openapi-resolve-refs`, `openapi-security-summary`, `openapi-required-params`, `openapi-diff`, `openapi-lint`, `openapi-redact` | $0.001–$0.002 | **API-kit** - work an OpenAPI 3.x / Swagger 2.x spec end-to-end: find the right operation, see its effective auth, know the minimum inputs, build a runnable curl, mock a response, validate a payload, diff two versions, score agent-readiness, shrink for LLM context, inline `$ref`s |
 | `fx-rate`, `gov-data`, `weather-forecast`, `weather-alerts`, `earthquakes`, `barcode-lookup` | $0.001–$0.005 | Live keyless data: ECB currency rates, data.gov datasets, NWS weather, USGS quakes, product barcode lookup |
-| `stock-quote`, `stock-history` | $0.001–$0.005 | **finance-kit**: end-of-day US equity quote and daily OHLCV bars, from the licensed consolidated end-of-day summary across all US exchanges and ATSs, so `volume` is the market total. A read that falls back to a three-venue consolidation says so (`coverage: "three-venue"`, `volume: null`). US equities only |
+| `stock-quote`, `stock-history` | $0.001–$0.005 | **finance-kit**: end-of-day US equity quote and daily OHLCV bars, from an end-of-day summary dataset when one is available, so `volume` is that dataset's total. A read that falls back to the three-venue feed says so (`coverage: "three-venue"`, `volume: null`). US equities only |
 | `crypto-trending`, `crypto-global`, `crypto-price`, `crypto-market`, `crypto-history` | $0.001–$0.015 | **crypto-kit**: prices, market data, OHLC history, trending coins, total market cap. Multi-coin in one call |
 | `treasury-*`, `fred-*`, `cpi-yoy`, `fed-funds`, `sahm-rule`, `yield-curve-spread`, `world-bank-*` | $0.002–$0.005 | **macro-kit**: official macro time-series from the St. Louis Fed (FRED v1 + v2 bulk release observations), the US Treasury, and the World Bank |
 | `edgar-company-lookup`, `edgar-filings`, `edgar-company-concept`, `edgar-company-facts`, `edgar-xbrl-frame`, `edgar-insider-trades`, `edgar-13f-holdings`, `edgar-recent-ipos`, `edgar-search` | $0.001–$0.005 | **edgar-kit**, SEC EDGAR: ticker→CIK, filings, XBRL company facts and concepts, cross-company XBRL frames, insider Form 4, 13F holdings, recent IPOs, full-text search |
@@ -62,7 +62,7 @@ Generation priced per picture or per clip rather than per token, on the OpenAI w
 | `POST /v1/images/fast` | $0.02 | Budget text-to-image, about two seconds a picture, inline base64 out |
 | `POST /v1/images/pro` | $0.05 | Higher-fidelity text-to-image, one picture a call |
 | `POST /v1/images/generations` | $0.08 | The flagship image route |
-| `POST /v1/videos/generations` | $0.20 | One silent 4-second 720p clip, MP4 inline base64, 16:9 or 9:16. A failed or timed-out generation is not charged on x402 |
+| `POST /v1/videos/generations` | $0.20 | One silent 4-second 720p clip, MP4 inline base64, 16:9 or 9:16. A failed or timed-out generation is not charged on x402; a wallet payer collects a timed-out clip by sending the same request again unchanged within the window the 504 names |
 
 ## Health and safety data (openFDA)
 
@@ -74,7 +74,7 @@ Generation priced per picture or per clip rather than per token, on the OpenAI w
 
 ## Report products (outcome-priced, same 402)
 
-When the job is a whole report rather than a call, the `/v1` report routes sell one finished, cited report per payment - `POST /v1/research` ($0.60, pro $0.85, max $1.10), `/v1/research/market-brief` ($0.85), `/v1/dossier` ($0.85, max $1.10), `/v1/ticker-pack` ($2.00), `/v1/fund` ($0.60, max $0.85), `/v1/filing-report` ($0.85), `/v1/domain-audit` ($0.60, pro $0.85), `/v1/recall-report` ($0.60), `/v1/insider-report` ($0.60), `/v1/token-risk` ($0.60, pro $0.85), `/v1/linkedin-article` ($1.10, a publish-ready article package with images at LinkedIn's sizes), and the deterministic `/v1/ipo-report` digest ($0.05). Same x402 / MPP 402 as every other route (a credits key issued earlier also pays); people buy the same reports by card at `/reports` for $2 to $5, a price that includes payment processing. Inputs, cadences and the $5/month monitors are on [[Reports and Monitors|Reports-and-Monitors]].
+When the job is a whole report rather than a call, the `/v1` report routes sell one finished, cited report per payment - `POST /v1/research` ($0.60, pro $0.85, max $1.10), `/v1/research/market-brief` ($0.85), `/v1/dossier` ($0.85, max $1.10), `/v1/ticker-pack` ($2.00), `/v1/fund` ($0.60, max $0.85), `/v1/filing-report` ($0.85), `/v1/domain-audit` ($0.60, pro $0.85), `/v1/recall-report` ($0.60), `/v1/insider-report` ($0.60), `/v1/token-brief` ($0.60), `/v1/token-risk` ($0.60, pro $0.85), `/v1/linkedin-article` ($1.10, a publish-ready article package with images at LinkedIn's sizes), and the deterministic `/v1/ipo-report` digest ($0.05). Same x402 / MPP 402 as every other route (a credits key issued earlier also pays); people buy the same reports by card at `/reports` for $2 to $5, a price that includes payment processing. Inputs, cadences and the $5/month monitors are on [[Reports and Monitors|Reports-and-Monitors]].
 
 ## The long tail (pure-CPU, also payable with compute)
 
@@ -86,20 +86,20 @@ When the job is a whole report rather than a call, the `/v1` report routes sell 
 
 Why would an agent pay $0.001 instead of writing the code? Because writing, testing, and debugging a CSV parser mid-task burns 10–100× that in tokens - and some sandboxes can't execute code at all.
 
-## SQL execution certificates (`sql-guard` + `sql-cert-verify`)
+## Signed SQL check results (`sql-guard` + `sql-cert-verify`)
 
 Two tools that make "an agent is about to run this SQL against production" a checkable gate rather than a hope:
 
 | Tool | Price | What it does |
 |---|---|---|
-| `POST /api/sql-guard` | $0.004 | Reviews one SQL statement against a fixed, published risk catalogue and returns a verdict (`pass` / `warn` / `block`) with the risks named (unbounded `UPDATE`/`DELETE`, tautological `WHERE`, `DROP`, `TRUNCATE`, `DROP COLUMN`, statement stacking, `COPY … FROM PROGRAM`, `GRANT`/role changes, `session_replication_role` and trigger/constraint bypass, writes to `pg_catalog`). On `pass` it also returns an **Ed25519 certificate** binding that verdict to the SHA-256 of the exact statement. |
-| `POST /api/sql-cert-verify` | $0.001 | The gate your database layer calls **before** it obeys the agent. Checks the signature, the certificate version, the expiry, and that the statement's SHA-256 matches the one certified. Returns `{valid, reason, payload}` and never throws on a malformed token, so the executor always gets one uniform answer. Pass `publicKey` to verify a certificate issued by another deployment. |
+| `POST /api/sql-guard` | $0.004 | Reviews one SQL statement against a fixed, published risk catalogue and returns a verdict (`pass` / `warn` / `block`) with the risks named (unbounded `UPDATE`/`DELETE`, tautological `WHERE`, `DROP`, `TRUNCATE`, `DROP COLUMN`, statement stacking, `COPY … FROM PROGRAM`, `GRANT`/role changes, `session_replication_role` and trigger/constraint bypass, writes to `pg_catalog`). On `pass` it also returns an **Ed25519-signed check result** (the `certificate` field) binding that verdict to the SHA-256 of the exact statement. |
+| `POST /api/sql-cert-verify` | $0.001 | The gate your database layer calls **before** it obeys the agent. Checks the signature, the result's version, the expiry, and that the statement's SHA-256 matches the one signed. Returns `{valid, reason, payload}` and never throws on a malformed token, so the executor always gets one uniform answer. Pass `publicKey` to verify a result signed by another deployment. |
 
 Three design points worth knowing:
 
-- **The certificate binds a hash, not a statement.** An edited statement, even by one character, no longer matches, so a certificate can't be re-pointed at different SQL.
+- **The signed result binds a hash, not a statement.** An edited statement, even by one character, no longer matches, so a signed result can't be re-pointed at different SQL.
 - **Literals and comments are scrubbed before analysis**, so the word `DROP` inside a string is never a false alarm.
-- **Signing is env-gated.** `SQL_CERT_SIGNING_KEY` (a PKCS8 PEM) is the signing identity. Unset, `sql-guard` still returns full verdicts and says plainly that it cannot certify. It never returns an unsigned object shaped like a certificate. Rotating the key invalidates outstanding certificates, which live 5 minutes by default.
+- **Signing is env-gated.** `SQL_CERT_SIGNING_KEY` (a PKCS8 PEM) is the signing identity. Unset, `sql-guard` still returns full verdicts and says plainly that it cannot sign them. It never returns an unsigned object shaped like a signed result. Rotating the key invalidates outstanding signed results, which live 5 minutes by default.
 
 **Honest scope:** this is a *lexical* guard over a published catalogue. It catches the shapes that destroy production data. It is not a SQL parser and cannot know that a `WHERE` clause names the wrong tenant.
 
