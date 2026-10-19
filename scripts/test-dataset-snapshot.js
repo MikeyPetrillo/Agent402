@@ -245,23 +245,11 @@ const exists = async (key) => bucket.has(key);
   ok(/filter\(\(s\) => !s\.local\)/.test(block), "our own host row is excluded: this dataset describes the ecosystem, and an index that publishes itself as a seller is the thing we refuse to do elsewhere");
   ok(block.includes("getLeaderboardSnapshot") && block.includes("getSolanaLeaderboardSnapshot") && block.includes("mppLeaderboardSnapshot"), "all three settlement boards are wired");
 
-  const backup = readFileSync(new URL("../src/backup.js", import.meta.url), "utf8");
-  const ex = /export async function objectExists[\s\S]*?\n\}/.exec(backup)?.[0] || "";
-  ok(ex.includes("listAll("), "objectExists LISTS the key: a HEAD on a missing key answers 403 (not 404) on a credential without ListBucket, which is what our bucket does and what broke the first live run");
-  ok(!/s3\("HEAD"/.test(ex), "objectExists must not HEAD - that path cannot tell a missing day from a permissions failure");
-
-  const put = /export async function putObject[\s\S]*?\n\}/.exec(backup)?.[0] || "";
-  // The Hive partition puts an "=" in every object key. SigV4 signs the
-  // canonical URI and the request must send exactly that string, so the path
-  // is encoded once, per segment, and shared - the first live snapshot failed
-  // SignatureDoesNotMatch because the signature used a raw "=" and fetch sent
-  // a normalized one. Backup keys are unreserved-only, so encoding is inert
-  // for them and the proven path is untouched.
-  ok(/map\(encodeURIComponent\)/.test(backup), "the S3 path is percent-encoded per segment for both the signature and the request");
+  // The S3 wire rules (list, never HEAD; per-segment path encoding signed as
+  // sent; no explicit content-length on a Buffer PUT) are checked on the
+  // requests themselves in scripts/test-backup-s3-wire.js.
   ok(DATASET_PREFIX.startsWith("datasets/"), "the dataset prefix is stable");
 
-  ok(put.includes('s3("PUT", key, { body })'), "putObject sends NO explicit content-length: undici derives it from a Buffer and rejects a caller-supplied one (UND_ERR_INVALID_ARG). The streaming backup upload still passes it, correctly, because a stream cannot be measured.");
-  ok(!/contentLength/.test(put), "no contentLength in the Buffer upload path");
 }
 
 // --- the outlier flag: distribution, not judgement ---------------------------

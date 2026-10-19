@@ -982,6 +982,9 @@ jobs:
       - name: Live visualizer tests (services/live, offline)
         run: node services/live/test.js
 
+      - name: Live visualizer outbound guard and per-address stream cap (services/live, offline)
+        run: node services/live/test-guard.js
+
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
       # runs in its own process, in the same order; `t` groups its log and names it
@@ -1366,6 +1369,8 @@ jobs:
           t node scripts/test-overlap-stores-pg.js
           # A signed email link for a record the other container made works here.
           t node scripts/test-email-links-pg.js
+          # email status row read at module load with the state database; a later boot reports the recorded outcome (Postgres)
+          t node scripts/test-email-status-boot-pg.js
           # A link whose row write cannot land answers unavailable (503), never ok.
           t node scripts/test-email-links-outage-pg.js
           t node scripts/test-leased-loops.js
@@ -2688,6 +2693,42 @@ jobs:
           t node scripts/test-what-is-mpp-page.js
           # robots-check ReDoS regression (wildcard cap, normal robots.txt behavior — offline)
           t node scripts/test-robots-redos.js
+          # transcribe's refusal for our own billing limit names our side and no vendor (offline)
+          t node scripts/test-stt-billing-limit.js
+          # rwa-asset joins only the requested asset's market row (offline)
+          t node scripts/test-rwa-asset-own-row.js
+          # filing-watch form filter reads the full recent list and older filing files, bounded reads (offline)
+          t node scripts/test-filing-watch-older-files.js
+          # cpi-yoy lists unpublished months; world-bank default end year is last year; release calendar uses the Chicago date (offline)
+          t node scripts/test-macro-dates.js
+          # flight-search refuses a date as past only before today's date in UTC-12 (offline)
+          t node scripts/test-flights-local-date.js
+          # weather tools keep a missing precipitation value as null, never 0 mm (offline)
+          t node scripts/test-weather-null-precip.js
+          # IPO filings list each accession once across pages (offline)
+          t node scripts/test-ipo-dedupe.js
+          # 13F amendments apply oldest first (offline)
+          t node scripts/test-13f-amendment-order.js
+          # Insider reports keep only Form 4 filings whose issuer is the company (offline)
+          t node scripts/test-insider-issuer-filter.js
+          # EDGAR financials pick ~3- and ~12-month periods; fallback tags labeled as what they measure (offline)
+          t node scripts/test-edgar-period-pick.js
+          # 13G cover: an empty or absent tag falls through and reads as unknown, never 0 (offline)
+          t node scripts/test-13g-cover-fallback.js
+          # S3 wire for backup and dataset snapshot: list not HEAD, per-segment path signed as sent, no content-length on a Buffer PUT (stubbed fetch, offline)
+          t node scripts/test-backup-s3-wire.js
+          # load-shed boot warm-up default is 60 s (offline)
+          t node scripts/test-load-shed-warmup.js
+          # deploy job redeploys the render/media worker when a push changes its import closure or image inputs (offline)
+          t node scripts/test-worker-deploy-step.js
+          # post-deploy has() counts a needle only in a 2xx answer (runs the workflow's shell function locally)
+          t node scripts/test-deploy-has-status.js
+          # ffmpeg/ffprobe read a downloaded body as a local file of a named format (stub runner, offline)
+          t node scripts/test-media-input-args.js
+          # safeFetch timeoutMs bounds the body read too (local trickle server, offline)
+          t node scripts/test-safefetch-body-timeout.js
+          # yaml-to-json refuses aliases that expand past the JSON size cap (offline)
+          t node scripts/test-yaml-alias-cap.js
 
   test-unit-d:
     # The second half of test-unit-b (2026-08-25). That lane was 200 steps
@@ -4262,6 +4303,12 @@ jobs:
 
       - name: CSP violations sitewide (real browser, every distinct page template + real interactions on click-gated pages - script-src has no 'unsafe-inline' since 2026-08-16)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-csp-violations.js
+
+      - name: Static asset caching (versioned /js immutable, other /js short; fonts immutable woff2 behind an allowlist)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-static-asset-cache.js
+
+      - name: SDK playground sandbox runs code only for the page that frames it (real browser, cross-origin opener and frame)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-sdk-sandbox-origin.js
 
       - name: Focus-visible on search/demo inputs (real browser check - inline style can silently defeat a stylesheet :focus rule)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-focus-visible.js
@@ -6238,8 +6285,9 @@ jobs:
           # Each surface is fetched whole, then searched, and a miss is retried
           # (this runs while the deploy's old and new containers overlap, when
           # a cold container can briefly refuse a page); a final miss names the
-          # HTTP status it got.
-          has() { local body code i; for i in 1 2 3; do body=$(curl -s --max-time 20 -w '\n%{http_code}' "$1"); code=${body##*$'\n'}; body=${body%$'\n'*}; grep -qF -- "$2" <<<"$body" && return 0; LAST_CODE=$code; [ "$i" -lt 3 ] && sleep 10; done; return 1; }
+          # HTTP status it got. Only a 2xx answer counts: an error page that
+          # happens to contain the needle is still a miss.
+          has() { local body code i; for i in 1 2 3; do body=$(curl -s --max-time 20 -w '\n%{http_code}' "$1"); code=${body##*$'\n'}; body=${body%$'\n'*}; case "$code" in 2??) grep -qF -- "$2" <<<"$body" && return 0 ;; esac; LAST_CODE=$code; [ "$i" -lt 3 ] && sleep "${HAS_RETRY_SLEEP:-10}"; done; return 1; }
           ck() { if eval "$2"; then echo "  $1 ✓"; else echo "  $1 MISSING (last HTTP ${LAST_CODE:-?})"; FAILS=$((FAILS+1)); fi; }
           ck "FAQPage JSON-LD"            'has "$PROD/" "\"FAQPage\""'
           # The ledger homepage renders the FAQ section with a "$ GET /faq"
@@ -6304,6 +6352,44 @@ jobs:
           TARGET_URL=https://agent402.tools node scripts/demo-payment.js
           echo "=== live M2M stats (informational; present once deployed) ==="
           curl -s https://agent402.tools/api/stats | jq '{tools, wallet, onchainRevenueProof, served: .toolCallsServed}' || echo "(/api/stats not live yet — will appear after this image rolls out)"
+
+      # The render/media worker (agent402-worker) is its own Railway service,
+      # built from Dockerfile.worker by an upload of this checkout; nothing
+      # else rebuilds it, so a merge that changes the worker's code reaches it
+      # only through this step. It runs when the pushed range touches a file
+      # scripts/worker-deploy-paths.js lists (the image inputs plus
+      # worker/server.js's import closure). FAIL-OPEN: an unreadable diff or no
+      # diff base redeploys. The CLI is a pinned release binary checked
+      # against its published sha256 (no package install, no lifecycle scripts).
+      - name: Redeploy the render worker when its code changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIFF_BASE: ${{ github.event.before }}
+          RAILWAY_CLI_VERSION: "5.63.1"
+          RAILWAY_CLI_SHA256: cbb559de44cd304cf9d6598a4ea77575035a0e6e3215370bb3b105b8f48235cc
+        run: |
+          set -euo pipefail
+          RUN=yes
+          if [ -n "${DIFF_BASE:-}" ] && ! echo "$DIFF_BASE" | grep -qE '^0+$'; then
+            if CHANGED=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DIFF_BASE...$GITHUB_SHA" --paginate --jq '.files[].filename' 2>/dev/null); then
+              if [ "$(printf '%s\n' "$CHANGED" | node scripts/worker-deploy-paths.js --check)" = "yes" ]; then
+                echo "worker files changed in $DIFF_BASE...$GITHUB_SHA - redeploying agent402-worker"
+              else
+                echo "no worker file changed in $DIFF_BASE...$GITHUB_SHA - agent402-worker keeps its build"
+                RUN=no
+              fi
+            else
+              echo "could not read the diff $DIFF_BASE...$GITHUB_SHA - redeploying agent402-worker (fail-open)"
+            fi
+          else
+            echo "no diff base for this event - redeploying agent402-worker (fail-open)"
+          fi
+          [ "$RUN" = "yes" ] || exit 0
+          CLI_DIR=$(mktemp -d)
+          curl -fsSL --max-time 120 -o "$CLI_DIR/cli.tgz" "https://github.com/railwayapp/cli/releases/download/v${RAILWAY_CLI_VERSION}/railway-v${RAILWAY_CLI_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "$RAILWAY_CLI_SHA256  $CLI_DIR/cli.tgz" | sha256sum -c -
+          tar -xzf "$CLI_DIR/cli.tgz" -C "$CLI_DIR"
+          "$CLI_DIR/railway" up --service agent402-worker --environment production --project "$RAILWAY_PROJECT_ID" --detach
 
       # The decide service (DECIDE_MODE=true, same image) builds from the same
       # commit, AFTER the main app is verified: its index syncs from the main

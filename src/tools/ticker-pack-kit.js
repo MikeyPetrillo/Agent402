@@ -404,11 +404,14 @@ export async function probeHolders({ ticker, cik, name, maxFilings = 12, windowD
 const THIRTEEN_G_FORMS = "SCHEDULE 13G,SCHEDULE 13G/A,SCHEDULE 13D,SCHEDULE 13D/A,SC 13G,SC 13G/A,SC 13D,SC 13D/A";
 export function parse13GCover(xml) {
   const t = (n) => { const m = String(xml || "").match(new RegExp(`<${n}>([^<]*)</${n}>`)); return m ? m[1].trim() : ""; };
-  const num = (v) => { const n = Number(String(v).replace(/[,\s]/g, "")); return Number.isFinite(n) ? n : null; };
+  // An absent or empty element reads as missing, never as zero: a cover that
+  // names its share count under the second tag must not report 0 shares.
+  const firstOf = (...names) => { for (const n of names) { const v = t(n); if (v !== "") return v; } return ""; };
+  const num = (v) => { const s = String(v ?? "").replace(/[,\s]/g, ""); if (s === "") return null; const n = Number(s); return Number.isFinite(n) ? n : null; };
   return {
     filer: t("reportingPersonName") || t("filingPersonName") || null,
-    shares: num(t("reportingPersonBeneficiallyOwnedAggregateNumberOfShares") ?? t("aggregateAmountBeneficiallyOwned")),
-    percent: num(t("classPercent") || t("percentOfClass")),
+    shares: num(firstOf("reportingPersonBeneficiallyOwnedAggregateNumberOfShares", "aggregateAmountBeneficiallyOwned")),
+    percent: num(firstOf("classPercent", "percentOfClass")),
     eventDate: t("eventDateRequiresFilingThisStatement") || t("dateOfEvent") || null,
     securityClass: t("securitiesClassTitle") || null,
     form: t("submissionType") || null,
@@ -483,6 +486,8 @@ export async function probeCompanyFilings({ cik, limit = 24 }) {
     stateOfIncorporation: sub?.stateOfIncorporation || null,
     fiscalYearEnd: sub?.fiscalYearEnd || null,
     filings,
+    // Older filings live in further files the index names, newest first.
+    olderFiles: Array.isArray(sub?.filings?.files) ? sub.filings.files.map((f) => ({ name: String(f?.name || ""), filingFrom: String(f?.filingFrom || ""), filingTo: String(f?.filingTo || "") })).filter((f) => /^CIK\d{10}-submissions-\d{3}\.json$/.test(f.name)) : [],
     browseUrl: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${cik}&type=&dateb=&owner=include&count=40`,
   };
 }

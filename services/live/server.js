@@ -18,6 +18,17 @@ import { BASE, TEMPO } from "./lib/chains.js";
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
 const MAX_CLIENTS = Number(process.env.LIVE_MAX_CLIENTS || 1000);
+// Open event streams per client address, so one address cannot hold the
+// whole MAX_CLIENTS budget. Behind one proxy hop (LIVE_TRUST_PROXY_HOPS), the
+// address is the X-Forwarded-For entry that proxy appended.
+const MAX_CLIENTS_PER_IP = Number(process.env.LIVE_MAX_CLIENTS_PER_IP || 8);
+const TRUST_PROXY_HOPS = Number(process.env.LIVE_TRUST_PROXY_HOPS ?? 1);
+const perIp = new Map();
+export function clientIp(req, hops = TRUST_PROXY_HOPS) {
+  const xff = String(req.headers["x-forwarded-for"] || "").split(",").map((x) => x.trim()).filter(Boolean);
+  if (hops > 0 && xff.length) return xff[Math.max(0, xff.length - hops)];
+  return req.socket.remoteAddress || "";
+}
 const DIRECTORY_REFRESH_MS = Number(process.env.LIVE_DIRECTORY_REFRESH_MS || 30 * 60_000);
 const OFFLINE = process.env.LIVE_OFFLINE === "1"; // tests: no network ingest
 
@@ -192,6 +203,11 @@ const server = http.createServer(async (req, res) => {
   }
   if (path === "/events") {
     if (clients.size >= MAX_CLIENTS) { res.writeHead(503, { "retry-after": "30" }); return res.end(); }
+    const ip = clientIp(req);
+    if ((perIp.get(ip) || 0) >= MAX_CLIENTS_PER_IP) { res.writeHead(429, { "retry-after": "30", "content-type": "text/plain" }); return res.end("too many open event streams from this address"); }
+    perIp.set(ip, (perIp.get(ip) || 0) + 1);
+    let released = false;
+    req.on("close", () => { if (released) return; released = true; const n = (perIp.get(ip) || 1) - 1; if (n > 0) perIp.set(ip, n); else perIp.delete(ip); });
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive", "x-accel-buffering": "no" });
     send(res, "hello", { now: Date.now(), payments: store.recent(4000).map(toPublic), stats: statsNow() });
     clients.add(res);

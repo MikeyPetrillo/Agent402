@@ -527,6 +527,33 @@ function mapEftsHit(hit) {
 
 // efts.sec.gov requires the same User-Agent policy as data.sec.gov. Same
 // helper, different base URL.
+/** The issuer of an ownership filing (Form 3/4/5) in a full-text-search hit:
+ *  the hit lists the reporting owners first and the issuer last, so a company
+ *  that is itself a reporting owner (its trades in another issuer) appears
+ *  first or in the middle, never last. Pure; exported for tests. */
+export function eftsIssuerCik(hit) {
+  const ciks = hit?._source?.ciks;
+  return Array.isArray(ciks) && ciks.length ? padCik(ciks[ciks.length - 1]) : null;
+}
+/** Only the hits whose issuer is `cik`. */
+export function issuerHits(hits, cik) {
+  const want = padCik(cik);
+  return (Array.isArray(hits) ? hits : []).filter((h) => eftsIssuerCik(h) === want);
+}
+
+/** Full-text-search hits with one entry per filing (accession), first kept. Pure; exported for tests. */
+export function dedupeByAccession(hits) {
+  const seen = new Set();
+  const out = [];
+  for (const h of Array.isArray(hits) ? hits : []) {
+    const acc = h?._source?.adsh || String(h?._id || "").split(":")[0];
+    if (acc && seen.has(acc)) continue;
+    if (acc) seen.add(acc);
+    out.push(h);
+  }
+  return out;
+}
+
 async function eftsSearch({ q, forms, ciks, startdt, enddt, locationCode, from = 0 }) {
   const qs = new URLSearchParams();
   if (q) qs.set("q", q);
@@ -661,17 +688,80 @@ async function fetchXmlText(url) {
 // Key XBRL tags for the company-financials summary tool. Companies may report
 // under different tag names (GAAP evolved; "Revenues" → "RevenueFromContract..."
 // in ASC 606 era). `alts` lists fallback tags tried in order.
+// An alt that measures something else carries its own label, so a filer
+// with no OperatingIncomeLoss is shown pre-tax income under that name, never
+// as operating income (and current liabilities never as total liabilities).
 const FINANCIALS_TAGS = [
   { tag: "Revenues", label: "Revenue", alts: ["RevenueFromContractWithCustomerExcludingAssessedTax", "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet"] },
   { tag: "NetIncomeLoss", label: "Net Income", alts: ["ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"] },
-  { tag: "OperatingIncomeLoss", label: "Operating Income", alts: ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"] },
+  { tag: "OperatingIncomeLoss", label: "Operating Income", alts: [{ tag: "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", label: "Pre-tax Income (continuing operations)" }] },
   { tag: "Assets", label: "Total Assets", alts: [] },
-  { tag: "Liabilities", label: "Total Liabilities", alts: ["LiabilitiesCurrent"] },
+  { tag: "Liabilities", label: "Total Liabilities", alts: [{ tag: "LiabilitiesCurrent", label: "Current Liabilities" }] },
   { tag: "StockholdersEquity", label: "Stockholders Equity", alts: ["StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"] },
   { tag: "EarningsPerShareBasic", label: "EPS (Basic)", alts: [] },
   { tag: "EarningsPerShareDiluted", label: "EPS (Diluted)", alts: [] },
   { tag: "NetCashProvidedByUsedInOperatingActivities", label: "Operating Cash Flow", alts: ["NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"] },
 ];
+
+/** Days between an XBRL fact's start and end, or null for an instant fact. */
+export function periodSpanDays(row) {
+  if (!row?.start || !row?.end) return null;
+  const d = (Date.parse(row.end) - Date.parse(row.start)) / 86400000;
+  return Number.isFinite(d) ? d : null;
+}
+/** A duration fact covering about one quarter (instant facts pass). */
+export function isQuarterPeriod(row) { const d = periodSpanDays(row); return d === null || (d >= 80 && d <= 100); }
+/** A duration fact covering about one fiscal year, 52/53-week years included (instant facts pass). */
+export function isAnnualPeriod(row) { const d = periodSpanDays(row); return d === null || (d >= 350 && d <= 380); }
+/** Months a fact covers (rounded), or null for an instant fact. */
+export function periodMonths(row) { const d = periodSpanDays(row); return d === null ? null : Math.round(d / 30.44); }
+
+/** Latest annual and quarterly facts from companyfacts unit rows. A 10-K
+ *  carries quarter-length rows and a 10-Q carries year-to-date rows that end
+ *  on the same date as its quarter, so the period length is checked: the
+ *  annual pick is a ~12-month row, the quarterly pick a ~3-month row. A
+ *  concept a 10-Q reports only year-to-date (most cash-flow lines) falls back
+ *  to the latest 10-Q row, whose `months` field says what it covers. Pure. */
+export function pickLatestPeriods(units) {
+  let annual = null, quarter = null, anyQ = null;
+  for (const row of Array.isArray(units) ? units : []) {
+    if (!row || !row.end) continue;
+    if (row.form === "10-K" && isAnnualPeriod(row) && (!annual || row.end > annual.end)) annual = row;
+    if (row.form === "10-Q") {
+      if (isQuarterPeriod(row) && (!quarter || row.end > quarter.end)) quarter = row;
+      if (!anyQ || row.end > anyQ.end || (row.end === anyQ.end && (periodSpanDays(row) ?? 0) < (periodSpanDays(anyQ) ?? 0))) anyQ = row;
+    }
+  }
+  return { annual, quarterly: quarter ?? anyQ };
+}
+
+/** The company-financials metric rows from companyfacts' us-gaap facts.
+ *  Pure; exported for tests. */
+export function financialMetrics(facts) {
+  const metrics = [];
+  for (const { tag, label, alts } of FINANCIALS_TAGS) {
+    // Try all candidate tags and pick the one with the freshest annual filing.
+    // Companies migrate tag names over time (e.g. "Revenues" → ASC 606 tag),
+    // so the primary tag may have stale data while an alt has current filings.
+    const candidates = [{ tag, label }, ...(alts || []).map((a) => (typeof a === "string" ? { tag: a, label } : a))];
+    let best = candidates[0], bestTag = null, bestAnnual = null, bestQuarterly = null;
+    for (const c of candidates) {
+      const concept = facts[c.tag];
+      if (!concept) continue;
+      const units = concept.units?.USD ?? concept.units?.["USD/shares"] ?? concept.units?.pure ?? [];
+      const { annual, quarterly } = pickLatestPeriods(units);
+      // Pick the candidate whose annual data is most recent
+      if (annual && (!bestAnnual || annual.end > bestAnnual.end)) {
+        best = c; bestTag = c.tag; bestAnnual = annual; bestQuarterly = quarterly;
+      } else if (!bestAnnual && quarterly && (!bestQuarterly || quarterly.end > bestQuarterly.end)) {
+        best = c; bestTag = c.tag; bestQuarterly = quarterly;
+      }
+    }
+    const fmt = (r) => r ? { value: r.val, period: r.end, form: r.form, ...(periodMonths(r) != null ? { months: periodMonths(r) } : {}) } : null;
+    metrics.push({ label: best.label, tag: bestTag ?? tag, latestAnnual: fmt(bestAnnual), latestQuarterly: fmt(bestQuarterly) });
+  }
+  return metrics;
+}
 
 EDGAR_TOOLS.push(
   {
@@ -708,32 +798,7 @@ EDGAR_TOOLS.push(
       const { cik, name } = await resolveCompany({ ticker: i.ticker, cik: i.cik });
       const j = await edgarGetJson(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`);
       const facts = j?.facts?.["us-gaap"] ?? {};
-      const metrics = [];
-      for (const { tag, label, alts } of FINANCIALS_TAGS) {
-        // Try all candidate tags and pick the one with the freshest annual filing.
-        // Companies migrate tag names over time (e.g. "Revenues" → ASC 606 tag),
-        // so the primary tag may have stale data while an alt has current filings.
-        const candidates = [tag, ...(alts || [])];
-        let bestTag = null, bestAnnual = null, bestQuarterly = null;
-        for (const t of candidates) {
-          const concept = facts[t];
-          if (!concept) continue;
-          const units = concept.units?.USD ?? concept.units?.["USD/shares"] ?? concept.units?.pure ?? [];
-          let annual = null, quarterly = null;
-          for (const row of units) {
-            if (row.form === "10-K" && (!annual || row.end > annual.end)) annual = row;
-            if (row.form === "10-Q" && (!quarterly || row.end > quarterly.end)) quarterly = row;
-          }
-          // Pick the candidate whose annual data is most recent
-          if (annual && (!bestAnnual || annual.end > bestAnnual.end)) {
-            bestTag = t; bestAnnual = annual; bestQuarterly = quarterly;
-          } else if (!bestAnnual && quarterly && (!bestQuarterly || quarterly.end > bestQuarterly.end)) {
-            bestTag = t; bestQuarterly = quarterly;
-          }
-        }
-        const fmt = (r) => r ? { value: r.val, period: r.end, form: r.form } : null;
-        metrics.push({ label, tag: bestTag ?? tag, latestAnnual: fmt(bestAnnual), latestQuarterly: fmt(bestQuarterly) });
-      }
+      const metrics = financialMetrics(facts);
       return {
         ticker: typeof i.ticker === "string" ? i.ticker.trim().toUpperCase() : null,
         cik,
@@ -782,8 +847,12 @@ EDGAR_TOOLS.push(
       const enddt = isoDate(Date.now());
       const startdt = isoDate(Date.now() - days * 86400 * 1000);
       const j = await eftsSearch({ forms: "4", ciks: cik, startdt, enddt });
-      const hits = j?.hits?.hits ?? [];
-      const total = j?.hits?.total?.value ?? hits.length;
+      const page = j?.hits?.hits ?? [];
+      // The search matches the CIK as any party; keep the filings where the
+      // company is the issuer, not the ones it filed as an owner elsewhere.
+      const hits = issuerHits(page, cik);
+      const searchTotal = j?.hits?.total?.value ?? page.length;
+      const total = searchTotal <= page.length ? hits.length : searchTotal - (page.length - hits.length);
       const trades = hits.slice(0, limit).map(mapEftsHit);
       return {
         cik,
@@ -894,13 +963,16 @@ EDGAR_TOOLS.push(
       // EFTS answers 100 hits a page; a 90-day S-1 window holds ~600. Page up
       // to `limit` so "N in the window" is not silently "the newest 100".
       const j = await eftsSearch({ forms: form, startdt, enddt });
-      let hits = j?.hits?.hits ?? [];
+      let hits = dedupeByAccession(j?.hits?.hits ?? []);
       const total = j?.hits?.total?.value ?? hits.length;
-      for (let from = hits.length; hits.length < Math.min(total, limit) && from < 1000 && hits.length > 0; from += 100) {
+      // Offset paging over a window that ends today: a filing that lands
+      // between two page reads shifts the next page by one, so the boundary
+      // filing would be listed twice. Each filing is listed once.
+      for (let from = (j?.hits?.hits ?? []).length; hits.length < Math.min(total, limit) && from < 1000 && hits.length > 0; from += 100) {
         const page = await eftsSearch({ forms: form, startdt, enddt, from });
         const more = page?.hits?.hits ?? [];
         if (!more.length) break;
-        hits = hits.concat(more);
+        hits = dedupeByAccession(hits.concat(more));
       }
       const filings = hits.slice(0, limit).map(mapEftsHit);
       return {
@@ -995,6 +1067,27 @@ EDGAR_TOOLS.push(
 // 13F parsing lives in ONE place (edgar-13f-holdings uses get13fHoldings too).
 // ---------------------------------------------------------------------------
 
+/** Apply 13F-HR/A amendments to an original holdings table in filing order,
+ *  oldest first, so a later restatement replaces everything before it and a
+ *  NEW HOLDINGS amendment filed after a restatement is kept. The submissions
+ *  list is newest first, hence the sort. Each amendment is
+ *  { accessionNumber, filedDate, amendmentType, rows (array or null) }.
+ *  Pure; exported for tests. */
+export function apply13fAmendments(original, amendments) {
+  let all = Array.isArray(original) ? original : [];
+  const ordered = [...(amendments || [])].sort((a, b) => String(a.filedDate || "").localeCompare(String(b.filedDate || "")) || String(a.accessionNumber || "").localeCompare(String(b.accessionNumber || "")));
+  const out = [];
+  for (const a of ordered) {
+    const rows = Array.isArray(a.rows) ? a.rows : null;
+    const type = String(a.amendmentType || "").toUpperCase();
+    const entry = { accessionNumber: a.accessionNumber, filedDate: a.filedDate, amendmentType: a.amendmentType || "UNKNOWN", rows: rows ? rows.length : null, informationTableUrl: a.informationTableUrl ?? null, applied: false };
+    if (rows && type === "RESTATEMENT") { all = rows; entry.applied = true; }
+    else if (rows && type === "NEW HOLDINGS") { all = all.concat(rows); entry.applied = true; }
+    out.push(entry);
+  }
+  return { holdings: all, amendments: out };
+}
+
 // The Nth most recent 13F-HR holdings for a manager (index 0 = latest, 1 =
 // prior quarter). Returns null when the manager has fewer than index+1 13F-HR
 // filings (so a caller can ask for the prior quarter and get null, not throw).
@@ -1027,7 +1120,7 @@ export async function get13fHoldings({ cik, ticker, index = 0 }) {
   // 2025-08-14 by an amendment adding D R Horton, Lennar and Nucor - a diff
   // against the original alone reports those as NEW a quarter late.
   const cover = await settleCover(cikInt, accession);
-  const amendments = [];
+  const read = [];
   for (let k = 0; k < recent.form.length; k++) {
     if (String(recent.form[k]).toUpperCase() !== "13F-HR/A" || recent.reportDate[k] !== reportDate) continue;
     const accA = recent.accessionNumber[k], filedA = recent.filingDate[k];
@@ -1035,11 +1128,11 @@ export async function get13fHoldings({ cik, ticker, index = 0 }) {
     const type = String(coverA?.amendmentType || "").toUpperCase();
     let rows = null, tableA = null;
     try { tableA = await fetchInformationTableUrl(cikInt, accA); if (tableA) rows = parse13fInformationTable(await fetchXmlText(tableA), filedA); } catch { rows = null; }
-    amendments.push({ accessionNumber: accA, filedDate: filedA, amendmentType: type || "UNKNOWN", rows: rows ? rows.length : null, informationTableUrl: tableA, applied: false });
-    if (!rows) continue;
-    if (type === "RESTATEMENT") { all = rows; amendments[amendments.length - 1].applied = true; }
-    else if (type === "NEW HOLDINGS") { all = all.concat(rows); amendments[amendments.length - 1].applied = true; }
+    read.push({ accessionNumber: accA, filedDate: filedA, amendmentType: type || "UNKNOWN", rows, informationTableUrl: tableA });
   }
+  const applied = apply13fAmendments(all, read);
+  all = applied.holdings;
+  const amendments = applied.amendments;
   all.sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
   const totalValueUsd = all.reduce((acc, r) => acc + (r.valueUsd ?? 0), 0);
   return { cik: _cik, managerName: sub?.name ?? resolved.name ?? null, accessionNumber: accession, filedDate, reportDate, informationTableUrl: tableUrl, totalHoldings: all.length, totalValueUsd, holdings: all,
