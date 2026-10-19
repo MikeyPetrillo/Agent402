@@ -902,7 +902,7 @@ export function openapiSpec(baseUrl, catalog) {
       operationId: "getAsyncJob",
       security: [],
       summary: "Collect a job started with Prefer: respond-async",
-      description: "Free. Returns the job's status (working, completed, failed); a completed job carries the route's answer in result.body with its payment receipt in result.headers, and a failed job says why in error (a failed run is not charged). The id is the link the 202 returned; it expires after one hour.",
+      description: "Free. Returns the job's status (working, completed, failed); a completed job carries the route's answer in result.body with its payment receipt in result.headers, and a failed job says why in error (on x402 a failed run is not charged). The id is the link the 202 returned; it expires after one hour.",
       tags: ["jobs"],
       parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", pattern: "^[0-9a-f]{48}$" } }],
       responses: {

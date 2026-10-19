@@ -253,7 +253,7 @@ export const LEARN = [
     glossary: "pay-per-call",
     title: "Pay-per-call APIs: pricing each request on its own",
     description: "A pay-per-call API prices each request separately and takes payment with the request, instead of a subscription or a quota behind an API key. How it works, what gets charged, and how retries and failures are handled.",
-    summary: "A pay-per-call API prices every request on its own and takes payment with the request, rather than through a subscription, a quota or an API key. The price is quoted in an HTTP 402 before anything is paid, and a failed call is not charged.",
+    summary: "A pay-per-call API prices every request on its own and takes payment with the request, rather than through a subscription, a quota or an API key. The price is quoted in an HTTP 402 before anything is paid, and on x402 a failed call is not charged.",
     sections: [
       ["One request, one price", [
         P(`A pay-per-call API charges for each request individually. There is no plan to pick and no monthly minimum: the caller pays the stated price for the call it makes, and a caller who makes one request pays for one request. Prices on this server start at $0.001 per call.`),

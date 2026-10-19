@@ -549,7 +549,7 @@ export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false
     // can pay the other tools there too.
     `${mpp ? "Hosted (proof-of-work tools free; the rest payable there over MPP from a wallet)" : "No wallet yet (hosted, proof-of-work tools only)"}: ${install.claudeCodeHosted}`,
     `Cursor mcp.json: { "mcpServers": { "agent402": { "url": "${hosted}" } } }`,
-    `Why pay here (usage priced under a quoted ceiling, a failed call is not charged and the receipt proves it, keyed retries never pay twice, one key for tools + models + reports, no wallet needed for the proof-of-work tools or a report by card, proof at /status and /revenue): ${baseUrl}/#why`,
+    `Why pay here (usage priced under a quoted ceiling, a failed x402 call is not charged and the receipt shows it, keyed retries never pay twice, one key for tools + models + reports, no wallet needed for the proof-of-work tools or a report by card, proof at /status and /revenue): ${baseUrl}/#why`,
     `Docs: ${baseUrl}/llms.txt · ${baseUrl}/api/find?q=… · status ${baseUrl}/status`,
   ].join("\n");
 }

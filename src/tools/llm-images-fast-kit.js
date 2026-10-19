@@ -622,7 +622,7 @@ export const IMAGES_FAST_TOOLS = [
     category: "llm",
     price: "$0.200",
     description:
-      "Text-to-video over x402 - one silent 4-second 720p clip (MP4, inline base64) for a flat $0.20, served by Veo 3.1 Lite. Choose aspect_ratio 16:9 (default) or 9:16; duration, resolution and audio are fixed so the price is. The call returns when the clip is ready (about 40 seconds measured, up to 4 minutes); a failed or timed-out generation is never charged.",
+      "Text-to-video over x402 - one silent 4-second 720p clip (MP4, inline base64) for a flat $0.20, served by Veo 3.1 Lite. Choose aspect_ratio 16:9 (default) or 9:16; duration, resolution and audio are fixed so the price is. The call returns when the clip is ready (about 40 seconds measured, up to 4 minutes). A failed or timed-out generation is not charged on x402, and a wallet payer whose request timed out can send it again unchanged to collect the same clip.",
     tags: ["video-generation", "video", "videos", "text-to-video", "generate", "generate-video", "create-video", "clip", "animation", "veo", ...SHARED_TAGS],
     discovery: {
       bodyType: "json",

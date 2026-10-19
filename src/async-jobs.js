@@ -135,7 +135,7 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
 
     const statusUrl = `${basePath}/${rec.taskId}`;
     res.status(202).set({ Location: statusUrl, "Preference-Applied": "respond-async", "Retry-After": String(Math.max(1, Math.round(store.POLL_MS / 1000))), "Cache-Control": "no-store" })
-      .json({ ...publicJob(rec, { basePath }), message: `Running ${def.slug}. Poll ${statusUrl} (free) until status is completed or failed. Payment settles only when the result is ready; a failed run is not charged.` });
+      .json({ ...publicJob(rec, { basePath }), message: `Running ${def.slug}. Poll ${statusUrl} (free) until status is completed or failed. Payment settles only when the result is ready; on x402 a failed run is not charged.` });
   }
 
   /** GET /api/jobs/:id - free. */

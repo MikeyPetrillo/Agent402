@@ -34,7 +34,7 @@ const STEPS = [
   ["01", "The agent asks for something", "A plain HTTP request, with no credentials attached. There is no account to authenticate against, so nothing to send."],
   ["02", "The server answers 402 with a price", "The response names the amount, the asset, the chain, and where to pay. This is machine-readable, so the caller does not need documentation to understand the terms."],
   ["03", "The agent signs a payment and retries", "It signs an EIP-3009 stablecoin transfer authorization with its own key and repeats the identical request, carrying the authorization in a header. Funds are never handed to the seller's server."],
-  ["04", "The server verifies, answers, then settles", "A facilitator verifies the authorization, the server runs the request, and the payment settles on chain only when the response succeeds; the receipt rides back in a PAYMENT-RESPONSE header. A failed call is not charged."],
+  ["04", "The server verifies, answers, then settles", "A facilitator verifies the authorization, the server runs the request, and the payment settles on chain only when the response succeeds; the receipt rides back in a PAYMENT-RESPONSE header. A failed x402 call is not charged."],
 ];
 
 const COMPARE = [
@@ -57,7 +57,7 @@ const FAQS = [
   ["Do I need a wallet or crypto to call an x402 API?", `Not always. Some servers, including Agent402, offer a proof-of-work tier where your own machine solves a single-use sha256 puzzle instead of paying, costing ${powCostPhrase()}. On Agent402 that covers the tools marked computePayable on /api/pricing; every other tool needs a wallet, and quotes its price in the 402 challenge before anything is charged.`],
   ["Which blockchains settle x402 payments?", `It depends on the server. Agent402 settles x402 on ${RAIL_COUNT} chains: ${railList()}. Gas is sponsored by the facilitator on EVM chains, so callers need only the stablecoin. Base is the chain most public x402 indexes measure; the settlement table on this page shows where calls actually land.`],
   ["How do I sell an API over x402?", "Put an x402 paywall in front of your endpoint so unpaid requests answer 402 with your price and payment terms, then register the origin with a public index so buyers and routers can find you. See /sell for Agent402's own free, no-signup listing flow and how it prices routed calls."],
-  ["Is an x402 payment refundable if the call fails?", "On a correctly implemented server the payment only completes alongside a successful response, so a failed call is not charged. Because settlement happens on a public chain, both sides can verify independently what was actually paid rather than relying on an invoice."],
+  ["Is an x402 payment refundable if the call fails?", "On a correctly implemented server the payment only completes alongside a successful response, so a failed x402 call is not charged. Because settlement happens on a public chain, both sides can verify independently what was actually paid rather than relying on an invoice."],
 ];
 
 const TOC = [
@@ -215,7 +215,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
 <span style="color:var(--on-panel-faint);">{ "algo": "sha256", "hex": "&hellip;" }</span></pre>
     </div>
   </div>
-  <p style="font-size:var(--fs-base);line-height:1.65;color:var(--faint);max-width:820px;margin:22px 0 0;">The payment settles only alongside a successful response, so a failed call is not charged. Because settlement lands on a public chain, both sides can check afterwards what was actually paid instead of trusting an invoice.</p>
+  <p style="font-size:var(--fs-base);line-height:1.65;color:var(--faint);max-width:820px;margin:22px 0 0;">The payment settles only alongside a successful response, so a failed x402 call is not charged. Because settlement lands on a public chain, both sides can check afterwards what was actually paid instead of trusting an invoice.</p>
 </section>
 
 <section id="compare" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">

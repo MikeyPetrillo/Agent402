@@ -83,7 +83,7 @@ machine-readable quote - price, asset (USDC), network (Base), pay-to address.
 Your client signs a USDC transfer authorization from its own wallet (no gas
 needed; the facilitator sponsors it) and retries the request with the payment
 header. The server verifies the payment, runs the request, and settles on-chain
-only when the response succeeds, so a failed call is not charged. Seconds, end
+only when the response succeeds, so a failed x402 call is not charged. Seconds, end
 to end. **The payment is the identity** - no account ever existed.
 
 ## See a quote (free)
@@ -1731,8 +1731,8 @@ receipt shape:
 
 Why pay here, in one section with the proof links:
 [agent402.tools/#why](https://agent402.tools/#why). The short version: usage is
-priced under a ceiling you see before you pay, a failed call is not charged and the
-receipt proves it, a keyed retry never pays twice, and uptime and transactions are published from
+priced under a ceiling you see before you pay, a failed x402 call is not charged and the
+receipt shows it, a keyed retry never pays twice, and uptime and transactions are published from
 outside production.
 `,
   },
