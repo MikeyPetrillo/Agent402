@@ -1403,6 +1403,8 @@ jobs:
           t node scripts/test-tempo-push-void-crosscontainer-pg.js
           t node scripts/test-mcp-tasks-pg.js
           t node scripts/test-hangup-forgiveness-pg.js
+          # The forgiveness budget holds across replicas: one reservation script over every window on REAL redis (needs this lane's Redis).
+          t node scripts/test-hangup-forgiveness-redis.js
           t node scripts/test-external-spend-guard-pg.js
           # The per-payer unsettled ceiling holds across replicas: one reservation script on REAL redis (needs this lane's Redis).
           t node scripts/test-external-spend-guard-redis.js
