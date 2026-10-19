@@ -355,8 +355,12 @@ export async function retryTransient(fn, { retries = 1, backoffMs = 300 } = {}) 
 export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false } = {}) {
   const url = await assertPublicUrl(rawUrl);
 
+  // timeoutMs bounds the whole exchange: connect, headers AND body. The timer
+  // is cleared only once the body has been read (or the call has failed), so
+  // a server that sends headers and then trickles the body is cut off too.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
   let response;
   try {
     response = await fetch(url, {
@@ -400,8 +404,6 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
       ),
       { statusCode: 504 }
     );
-  } finally {
-    clearTimeout(timer);
   }
 
   // 304 Not Modified is a SUCCESS, and it must be handled before the !ok check
@@ -431,7 +433,16 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
   const chunks = [];
   let received = 0;
   for (;;) {
-    const { done, value } = await reader.read();
+    let step;
+    try {
+      step = await reader.read();
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw Object.assign(new Error(`Source URL did not finish sending within ${Math.round(timeoutMs / 1000)}s - host may be slow or unreachable`), { statusCode: 504 });
+      }
+      throw err;
+    }
+    const { done, value } = step;
     if (done) break;
     received += value.length;
     if (received > maxBytes) {
@@ -451,6 +462,9 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
   const vals = readValidators(response);
   if (binary) return { finalUrl: response.url, buffer, contentType, validators: vals };
   return { finalUrl: response.url, html: buffer.toString("utf-8"), contentType, validators: vals };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** ETag / Last-Modified off a response, or null when the origin sends neither.

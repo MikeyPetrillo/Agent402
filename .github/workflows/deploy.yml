@@ -2667,6 +2667,8 @@ jobs:
           t node scripts/test-what-is-mpp-page.js
           # robots-check ReDoS regression (wildcard cap, normal robots.txt behavior — offline)
           t node scripts/test-robots-redos.js
+          # safeFetch timeoutMs bounds the body read too (local trickle server, offline)
+          t node scripts/test-safefetch-body-timeout.js
           # yaml-to-json refuses aliases that expand past the JSON size cap (offline)
           t node scripts/test-yaml-alias-cap.js
 
