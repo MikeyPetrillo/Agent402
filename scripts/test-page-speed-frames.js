@@ -82,7 +82,7 @@ try {
     const r = await tool("page-speed").handler({ url: `${BASE}/`, device: "desktop" });
     ok(r.status === 200 && r.device === "desktop" && r.viewport.width === 1350, "desktop profile and the document status are reported");
     ok(r.measurement?.kind === "lab-single-run" && r.measurement.runs === 1 && r.measurement.fieldData === false && r.measurement.lighthouseScore === false, "measurement field says one lab run, not field data, not a Lighthouse score");
-    ok(/not field data/i.test(r.measurement.note) && /not a Lighthouse score/i.test(r.measurement.note), "measurement note states the limits in words");
+    ok(/not field data/i.test(r.measurement.note) && /single lab measurement/i.test(r.measurement.note), "measurement note states the limits in words");
     ok(Number.isFinite(r.timings.ttfbMs) && r.timings.domContentLoadedMs >= r.timings.ttfbMs && r.timings.loadMs >= r.timings.domContentLoadedMs, `navigation timings are ordered (${JSON.stringify(r.timings)})`);
     ok(r.webVitals.fcpMs > 0 && r.webVitals.lcpMs > 0, `FCP and LCP are measured (${r.webVitals.fcpMs}, ${r.webVitals.lcpMs})`);
     ok(r.webVitals.cls > 0, `the layout shift is counted in CLS (${r.webVitals.cls})`);

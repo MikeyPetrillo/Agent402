@@ -7,20 +7,24 @@ carries its own version on npm.
 ## Unreleased
 
 ### 2026-10-19
-- `/v1/videos/generations`: a request that times out (504, not charged)
-  can be sent again unchanged within 30 minutes to collect the same clip.
+- `/v1/videos/generations`: a request that times out answers 504, which is
+  not settled on x402. A wallet payer can send the same request again
+  unchanged within 30 minutes to collect the same clip.
 - `html-frames`: loading and every `renderAt` together share a 25 s budget.
-- Route searches score in their worker thread again on production servers;
-  since the 2026-10-13 storage change the worker had been exiting at start,
-  so searches ran on the main thread.
+- Route searches score in their worker thread on production servers again,
+  instead of on the main thread.
+- Tools whose upstream is billed per call have a daily call ceiling. Past it,
+  a call answers 503 until 00:00 UTC, and a 503 is not settled on x402.
+- stock-quote and stock-history read up to the last session the daily bars
+  hold, so a read over a weekend answers instead of being refused.
 - New tool `page-speed` (`POST /api/page-speed`): loads one public URL once in
   headless Chromium on a mobile or desktop viewport and reports navigation
   timings (TTFB, DOMContentLoaded, load), LCP, FCP, CLS and total blocking
   time from the page's own performance entries, transfer bytes, request
   count, the five heaviest resources, render-blocking scripts and styles, and
   console errors. The answer's `measurement` field states that it is a single
-  measurement from one server location under shared load, not field data
-  from real users and not a Lighthouse score. Deterministic code, no model.
+  lab measurement from one server location under shared load, not field data
+  from real users. Deterministic code, no model.
 - New tool `html-frames` (`POST /api/html-frames`): renders a self-contained
   HTML document with all network access refused, calls its
   `window.renderAt(t)` for each requested time, and returns a PNG still per
@@ -30,8 +34,8 @@ carries its own version on npm.
   answers 503 with `Retry-After`.
 
 ### 2026-10-18
-- Operators can make Solvador Celo's primary settlement service with
-  `SOLVADOR_CELO_PRIMARY=on`; the Celo facilitator then becomes Celo's
+- Operators can choose which settlement service Celo tries first with an
+  environment switch; the other one then becomes Celo's
   settle fallback. Unset, the order is unchanged.
 - /sell has a New sellers section: listing and being paid by the router are
   separate gates, how the unproven lane works, and what each
@@ -93,7 +97,8 @@ carries its own version on npm.
   the nearest matches `weak` when no tool does the task.
 - Receipts, usage, attestations, feedback, refund lookups, monitor links and
   Decide quotes read the same record whichever server instance answers.
-- Site pages meet WCAG 2.1 AA on contrast, labels, links and keyboard access.
+- Site pages were checked and fixed for contrast, labels, links and keyboard
+  access.
 
 ### 2026-10-15
 - sanctions-wallet now reads OFAC's full SDN XML export. Since it launched

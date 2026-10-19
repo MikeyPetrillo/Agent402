@@ -325,7 +325,7 @@ export const aboutAction = {
       const endpoints = p.endpoints || [];
       const data = {
         name: "Agent402", baseUrl, tools: endpoints.length, freeTier: endpoints.filter((e) => e.computePayable).length,
-        pay: "prepaid card credits (AGENT402_CREDITS_KEY) or USDC over x402 from a wallet (AGENT402_WALLET_KEY); free-tier tools pay with proof-of-work",
+        pay: "a prepaid credits key already issued (AGENT402_CREDITS_KEY) or USDC over x402 from a wallet (AGENT402_WALLET_KEY); free-tier tools pay with proof-of-work",
         discover: `${baseUrl}/api/find?q=<task>`, docs: `${baseUrl}/llms.txt`, why: `${baseUrl}/#why`,
       };
       return reply(callback, { success: true, text: `Agent402 serves ${data.tools} pay-per-call tools right now (${data.freeTier} on the free tier), paid by card credits or USDC over x402. Docs: ${data.docs}`, data });
@@ -349,7 +349,7 @@ export const agent402Provider = {
 
 export const agent402Plugin = {
   name: "agent402",
-  description: "Find and call Agent402's pay-per-call web tools (search, render, PDFs, market and SEC data), paid by prepaid card credits or USDC over x402; free tier via proof-of-work.",
+  description: "Find and call Agent402's pay-per-call web tools (search, render, PDFs, market and SEC data), paid by a prepaid credits key already issued or USDC over x402; free tier via proof-of-work.",
   actions: [findAction, callAction, aboutAction],
   providers: [agent402Provider],
   init: async (config, runtime) => {

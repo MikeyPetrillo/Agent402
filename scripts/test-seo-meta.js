@@ -32,7 +32,7 @@ const noSentence = "word ".repeat(60).trim();
 const d2 = metaDescription(noSentence);
 ok(d2.length <= META_DESCRIPTION_MAX && !d2.endsWith(" ") && /word$/.test(d2), "with no sentence end the cut lands on a word boundary");
 ok(metaDescription("  spaced   out\n\ntext  ") === "spaced out text", "whitespace is normalised");
-const priced = "Cited reports, $2 to $5 by card and $0.60 to $1.10 for an agent paying per call: deep research, company dossier, fund 13F, insider flow, market brief, SEC filings, domain security, Solana token safety, FDA recalls.";
+const priced = "Cited reports, $2 to $5 by card and $0.60 to $1.10 for an agent paying per call: deep research, company dossier, fund 13F, insider flow, market brief, SEC filings, domain security, Solana token risk evidence, FDA recalls.";
 ok(/\$2 to \$5/.test(metaDescription(priced)), "the reports description keeps its prices after the cut (test-price-prose depends on it)");
 
 // --- titles -------------------------------------------------------------------

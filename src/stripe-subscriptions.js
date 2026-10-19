@@ -35,7 +35,7 @@ export const MONITOR_PRODUCTS_ALL = {
     blurb: "We check this company's SEC filings index every day and email you a fresh cited report when anything new lands, an 8-K, a 10-Q, a 10-K, a proxy or a registration statement, with the new document read and explained in plain language.",
   },
   "token-monitor": {
-    label: "Solana token safety watch", price: 500, kind: "token", slug: "token-brief",
+    label: "Solana token risk watch", price: 500, kind: "token", slug: "token-brief",
     inputField: "mint", inputLabel: "a Solana token mint address",
     blurb: "We re-check this token's mint and freeze authorities, LP lock, holder concentration and risk flags every day, and email you a fresh cited brief when any of them changes.",
   },

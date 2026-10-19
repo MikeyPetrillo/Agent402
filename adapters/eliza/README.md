@@ -110,7 +110,7 @@ params, an unreachable catalog and no match are typed failures sent nowhere.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `AGENT402_CREDITS_KEY` | | prepaid card credits (`a402_...`) |
+| `AGENT402_CREDITS_KEY` | | a prepaid credits key already issued (`a402_...`) |
 | `AGENT402_WALLET_KEY` | | EVM private key paying USDC over x402 |
 | `AGENT402_BASE_URL` | `https://agent402.tools` | self-hosters point this at their instance |
 | `AGENT402_MAX_PER_CALL_USD` | `1` | refuse any single paid call above this |

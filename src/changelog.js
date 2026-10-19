@@ -2,6 +2,46 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-10-19",
+    title: "Page speed, HTML frames, and a video retry that collects the clip",
+    items: [
+      "New tool page-speed (POST /api/page-speed) loads one public URL once in headless Chromium on a mobile or desktop viewport and reports navigation timings, LCP, FCP, CLS, total blocking time, transfer bytes, request count, the heaviest resources, render-blocking scripts and styles, and console errors. Its measurement field says it is a single lab measurement from one server location, not field data from real users. Deterministic code, no model.",
+      "New tool html-frames (POST /api/html-frames) renders a self-contained HTML document with network access refused, calls its window.renderAt(t) for each requested time, and returns a PNG per time plus a contact sheet. Loading and every renderAt share one 25 s budget. Deterministic code, no model.",
+      "When the browser pool is full, render, screenshot, page-speed and html-frames answer 503 with Retry-After.",
+      "/v1/videos/generations: a request that times out answers 504, which is not settled on x402. A wallet payer can send the same request again unchanged within 30 minutes to collect the same clip.",
+      "Tools whose upstream is billed per call have a daily call ceiling. Past it, a call answers 503 until 00:00 UTC, and a 503 is not settled on x402.",
+      "stock-quote and stock-history read up to the last session the daily bars hold, so a read over a weekend answers instead of being refused.",
+    ],
+  },
+  {
+    date: "2026-10-18",
+    title: "A guide for new sellers",
+    items: [
+      "/sell has a New sellers section: listing and being paid by the router are separate gates, how the unproven lane works, and what each routerDispatchReason means with what the seller can do about it.",
+      "seller-trust names why our own host is not on the proven lane instead of answering an empty provenBlockers list.",
+    ],
+  },
+  {
+    date: "2026-10-17",
+    title: "Edit an image with a prompt",
+    items: [
+      "POST /v1/images/edits edits an image from a prompt and one to four PNG or JPEG reference images (JSON base64 or data: URLs, or one multipart image file, so an OpenAI images.edit() client works unchanged) and returns one JPEG of about one megapixel in the first reference's aspect ratio. Model-backed.",
+      "/v1/images/pro and /v1/images/fast gain a fast failover model and keep their 1024x1024 JPEG output.",
+      "crypto-news recovers within seconds when every news feed failed once: a retry fetches the feeds again instead of repeating the cached failure.",
+    ],
+  },
+  {
+    date: "2026-10-16",
+    title: "Both router lanes in seller reports, and pages that read on phones",
+    items: [
+      "seller-trust and seller-dossier report both router lanes from the router's own verdicts: the proven lane with each route-execute tier that can pay the seller, and the Base unproven tier with its ceiling. routableByOurRouter is true when either lane can pay; routableAsProven keeps the proven meaning.",
+      "A crawled seller's price is read the same way whether the seller states it as a dollar label, a number or an object, so label-priced routes count as paid.",
+      "Market-data quotes and history answer 503 when the data source stalls mid-answer, and a 503 is not settled on x402. Server instances share one cache of market bars, so a repeat read is served without waiting on the source.",
+      "A Solana payment quoted by one server instance and paid on another settles: every instance names the same fee payer.",
+      "Site pages read cleanly on phones from 360 px wide: tables become cards, labels stay whole, and text keeps a readable measure.",
+    ],
+  },
+  {
     date: "2026-10-15",
     title: "Questions about images, and search that forgives a typo",
     items: [
@@ -11,7 +51,7 @@ const ENTRIES = [
       "On /v1/judge, jev-latest is the Jev version we have tested, and every answer names the version that served it; jev-preview reaches the newer release.",
       "/api/find corrects a one-letter slip in a long word and says what it corrected in `corrected`, and when no tool does the task, the nearest matches it still returns are marked `weak`.",
       "Receipts, usage, attestations, feedback, refund lookups, monitor links and Decide quotes read the same record whichever server instance answers.",
-      "Site pages meet WCAG 2.1 AA on color contrast, form labels, link styling and keyboard access to scrolling code and tables.",
+      "Site pages were checked and fixed for color contrast, form labels, link styling and keyboard access to scrolling code and tables.",
     ],
   },
   {
@@ -23,7 +63,7 @@ const ENTRIES = [
       "Every published npm package retries a discovery read that answers 503 with a retry delay, a few times and briefly, and never repeats a paid call.",
       "Data tools that wait on an outside service answer 503 naming the service and the step when it does not answer in time, and nothing is charged.",
       "Transcription with diarize:true adds language_confidence, the model's 0 to 1 confidence in the language it detected. Speech requests, and transcription with diarize:true, route only to model providers that do not collect the data, and to zero-data-retention endpoints wherever every endpoint of the model offers it.",
-      "stock-quote and stock-history read the consolidated end-of-day summary across all US exchanges and ATSs: the official close and the market's total volume, returned as volume. Each answer names its dataset and coverage; a read that falls back to the three-venue feed says coverage three-venue and returns volume null.",
+      "stock-quote and stock-history read an end-of-day summary dataset when one is available: the official close and that dataset's total volume, returned as volume. Each answer names its dataset and coverage; a read that falls back to the three-venue feed says coverage three-venue and returns volume null.",
     ],
   },
   {
@@ -182,7 +222,7 @@ const ENTRIES = [
     date: "2026-09-20",
     title: "Equities on a licensed feed, five tools and a pack retired, credits sales paused",
     items: [
-      "stock-quote and stock-history read a licensed feed (three US venues, consolidated per session): volume is reported as venueVolume, stock-history takes up to 250 sessions, and the 52-week high/low fields are gone. options-chain, premarket-quote, stock-dividends, earnings-calendar, dividend-calendar and the market-open skill pack are removed.",
+      "stock-quote and stock-history read a licensed feed (three US venues, aggregated per session): volume is reported as venueVolume, stock-history takes up to 250 sessions, and the 52-week high/low fields are gone. options-chain, premarket-quote, stock-dividends, earnings-calendar, dividend-calendar and the market-open skill pack are removed.",
       "Prepaid card credits are no longer sold; existing keys keep redeeming.",
       "Google's native generateContent wire on every gateway tier; POST /v1/audio/transcriptions (OpenAI transcription wire, multipart); service_tier \"priority\" on the pro and premium tiers.",
       "New tools: perp-dexs, perp-dex-markets and perp-dex-limits (Hyperliquid HIP-3 dexs); kalshi-live-data and kalshi-weather-index; edgar-13f-datasets and edgar-13f-dataset-head. sol-token-holders restored.",

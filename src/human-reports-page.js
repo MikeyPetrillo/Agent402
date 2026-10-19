@@ -190,10 +190,10 @@ export function humanReportsPage(baseUrl) {
 ${R["token-brief"] ? `
       <div class="pcard receipt" data-kind="token">
         <div class="k">Token due diligence</div>
-        <h3>Is this Solana token safe to touch</h3>
-        <p>Mint and freeze authority, LP lock, holder concentration, liquidity and every named risk flag, graded and cited from on-chain sources.</p>
-        <div class="field"><input id="in-token" type="text" aria-label="Is this Solana token safe to touch" placeholder="A Solana mint address"></div>
-        <div class="gets"><b>What you get:</b> a graded safety read: authorities, liquidity, holder concentration, trading flow and every named risk flag, cited on-chain.</div>
+        <h3>Solana token risk evidence</h3>
+        <p>Mint and freeze authority, LP lock, holder concentration, liquidity and every named risk flag, each cited from on-chain sources.</p>
+        <div class="field"><input id="in-token" type="text" aria-label="Solana token risk evidence" placeholder="A Solana mint address"></div>
+        <div class="gets"><b>What you get:</b> risk evidence, not a rating: authorities, liquidity, holder concentration, trading flow and every named risk flag, cited on-chain.</div>
         <div class="err" id="err-token"></div>
         ${buyBtn("token", "token-brief", "Get the brief")}
         <div class="note" style="margin-top:10px;">${sampleLink("token-brief")}<a href="/tools/token-brief" style="color:var(--muted);">Sample output + API docs →</a></div>
@@ -267,7 +267,7 @@ ${ledgerFooterCompact()}
 <script src="/js/reports.js"></script>`;
   return ledgerShell({
     title: "Agent402 Reports: research, 13F, insider flow, audits",
-    description: `Cited reports, $${cardLo} to $${cardHi} by card and $${agentLo} to $${agentHi} for an agent paying per call: deep research, company dossier, fund 13F, insider flow, market brief, SEC filings, domain security, ${R["token-brief"] ? "Solana token safety, " : ""}FDA recalls.`,
+    description: `Cited reports, $${cardLo} to $${cardHi} by card and $${agentLo} to $${agentHi} for an agent paying per call: deep research, company dossier, fund 13F, insider flow, market brief, SEC filings, domain security, ${R["token-brief"] ? "Solana token risk evidence, " : ""}FDA recalls.`,
     canonical: `${baseUrl}/reports`, baseUrl, activePath: "/reports", extraCss: REPORTS_CSS, body,
     jsonLd: { "@context": "https://schema.org", "@type": "ItemList", "@id": `${baseUrl}/reports#products`, name: "Agent402 reports", itemListElement: Object.entries(R).map(([key, p], i) => ({ "@type": "ListItem", position: i + 1, item: { "@type": "Product", name: p.label, image: `${baseUrl}/tools/${p.slug}/card.png`, url: `${baseUrl}/reports`, brand: { "@type": "Brand", name: "Agent402" }, offers: { "@type": "Offer", price: (p.price / 100).toFixed(2), priceCurrency: "USD", availability: "https://schema.org/InStock", url: `${baseUrl}/reports`, seller: { "@type": "Organization", name: "Havok Holdings LLC" } } } })) },
   });
