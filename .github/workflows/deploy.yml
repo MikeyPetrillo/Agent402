@@ -2539,6 +2539,7 @@ jobs:
           t node scripts/test-finance-kit.js
           t node scripts/test-databento-timeouts.js
           t node scripts/test-databento-fallback.js
+          t node scripts/test-databento-bar-range.js
           # "stock-quote: warm symbol answers with no upstream call, cold symbol with one; warmer ceiling (offline, stubbed)"
           t node scripts/test-stock-quote-speed.js
           # "Operator bulk seed route: token-only, bounded, same validation as /sell, dry by default"
