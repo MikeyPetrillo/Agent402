@@ -72,7 +72,11 @@ export function buildPlanSketch(query, { rank, weakScore = 3, upgrade = null, ex
       row.fallbacks = (r.results || []).slice(1, 3).map((t) => ({ slug: t.slug, route: t.route, price: t.price }));
       if (row.tool.priceUsd == null) priced = false; else costUsd += row.tool.free ? 0 : row.tool.priceUsd;
     } else priced = false;
-    if (i > 0) row.dependsOn = [i];
+    // The one data edge this builder knows: execute hands a later step whose
+    // tool has exactly one required field the step before's output for it
+    // (src/decide/sketch-plan.js). Any other step takes the caller's inputs
+    // and depends on nothing, so independent steps can run side by side.
+    row.dependsOn = i > 0 && row.tool && row.tool.required.length === 1 ? [i] : [];
     out.push(row);
   }
   const unmatched = out.filter((s) => s.match !== "strong").map((s) => s.step);
@@ -100,7 +104,7 @@ export function buildPlanSketch(query, { rank, weakScore = 3, upgrade = null, ex
     ...(unmatched.length ? { weakSteps: unmatched } : {}),
     howToRun: execute
       ? "Call each step's tool in order with your own inputs (callExample shows the shape), or send execute.body to POST /api/decide/execute and Agent402 runs them in order."
-      : "Call each step's tool in order with your own inputs (callExample shows the shape); a later step's input usually comes from the step before it.",
+      : "Call each step's tool in order with your own inputs (callExample shows the shape); a step whose dependsOn names an earlier step takes its input from that step's output.",
     ...(execute ? { execute } : {}),
     ...(upgrade ? { upgrade } : {}),
   };
