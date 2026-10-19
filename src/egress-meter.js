@@ -23,6 +23,8 @@
 //     would capture buyer-supplied inputs (a render target, a search query),
 //     which is customer data we have no reason to hold
 //   * bounded memory: hosts are capped, and the counter resets daily
+import { hardCapRefusalForHost } from "./upstream-hard-caps.js";
+
 const MAX_HOSTS = 2000;          // far above the ~1,300 seen in a census run
 const counts = new Map();        // host -> { n, callers:Set, firstAt, lastAt }
 let day = "";
@@ -160,6 +162,10 @@ export function installEgressMeter() {
         // Lazy: the stack is only materialised while this host still needs
         // attribution. Building it unconditionally is what slowed boot.
         if (h) recordEgress(h, needsCaller(h) ? captureStack : null);
+        // A pay-as-you-go host past its daily ceiling is refused before the
+        // call is made (src/upstream-hard-caps.js).
+        const refusal = h ? hardCapRefusalForHost(h) : null;
+        if (refusal) return Promise.reject(refusal);
       } catch { /* an unparseable input is the caller's problem, not ours */ }
       return origFetch.apply(this, arguments);
     };

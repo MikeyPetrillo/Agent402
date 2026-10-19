@@ -502,6 +502,7 @@ import { jevSpendStatus, orderByJudgment } from "./tool-judge.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
 import { EXA_TOOLS, exaEnabled, exaSpendStatus, exaAllowanceStatus, exaCallsToday } from "./tools/exa-kit.js";
 import { upstreamBudgetStatus, registerUpstreamCounter } from "./upstream-budgets.js";
+import { hardCapStatus, startHardCapSync } from "./upstream-hard-caps.js";
 // Exa is also an indexed seller the crawlers read unpaid; its budget counts only
 // the calls our Exa tools make.
 registerUpstreamCounter("exa", exaCallsToday);
@@ -2196,6 +2197,8 @@ for (const [route, def] of Object.entries(CATALOG)) {
 // by an invoice: they all looked like ordinary traffic until someone totalled
 // it up, and nothing was totalling it up.
 installEgressMeter();
+// The pay-as-you-go ceilings the meter enforces read and feed a shared daily total.
+startHardCapSync();
 // Composite runs inherit the drain signal on every outbound fetch (src/drain-abort.js).
 installDrainAwareFetch();
 // Outbound wait is charged to the request that made it (src/request-timing.js).
@@ -3268,6 +3271,8 @@ app.get("/api/gateway-status", async (req, res) => {
     exaAllowance: full ? spend.exaAllowance : publicBucket(spend.exaAllowance),
     jevSpend: full ? spend.jevSpend : publicBucket(spend.jevSpend),
     upstreamBudgets: full ? budgets : publicBudgets(budgets),
+    // Hard daily ceilings (src/upstream-hard-caps.js): one word publicly.
+    upstreamHardCaps: (() => { try { const h = hardCapStatus(); return full ? h : { status: h.status }; } catch { return { status: "unknown" }; } })(),
     // Solana history reads (getTransaction by signature): which lane serves
     // them. One word publicly; per-lane counts for the operator.
     solanaHistory: (() => { try { return solanaHistoryStatus({ full }); } catch { return { status: "unknown" }; } })(),

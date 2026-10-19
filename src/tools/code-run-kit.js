@@ -10,6 +10,7 @@
 import { redactSecrets } from "./redact.js";
 import { payerFromRequest } from "../payer.js";
 import { perReplica } from "../rate-limit.js";
+import { takeHardCap, hardCapError } from "../upstream-hard-caps.js";
 
 let Sandbox;
 
@@ -105,6 +106,8 @@ async function runInSandbox(code, language, tierSlug) {
   // F12: global concurrency gate — refuse BEFORE creating a sandbox so a burst
   // can't run us (and the E2B account) out of capacity.
   if (e2bInFlight >= E2B_MAX_CONCURRENT) throw bad("code execution is at capacity - retry shortly", 503);
+  // The daily sandbox ceiling (src/upstream-hard-caps.js), shared across replicas.
+  if (!takeHardCap("e2b")) throw hardCapError();
   e2bInFlight++;
   let sbx;
   try {

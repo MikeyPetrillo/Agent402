@@ -3061,6 +3061,7 @@ jobs:
           t node scripts/test-ci-key-exposure.js
           # Daily call budgets for every paid upstream (Brave, Alchemy, CoinGecko, OpenAI, E2B, Neynar, Exa)
           t node scripts/test-upstream-budgets.js
+          t node scripts/test-upstream-hard-caps.js
           # /api/gateway-status is public: verdicts only, never limits or balances
           t node scripts/test-gateway-status-privacy.js
           # Redis persistence as one word (INFO persistence parse, the monitor, the journal gate on a stub client, the heartbeat and Worker legs - offline)

@@ -370,6 +370,26 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "upstreamBudgets is ok; closing." || true
           fi
 
+      - name: Upstream hard ceiling reached
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A pay-as-you-go upstream reached its hard daily ceiling, so calls
+          # to it are being refused (uncharged) until 00:00 UTC.
+          BODY=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
+          STATUS=$(echo "$BODY" | jq -r '.upstreamHardCaps.status // "unknown"' 2>/dev/null || echo unknown)
+          TITLE="Upstream hard ceiling REACHED"
+          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number --jq '.[0].number' 2>/dev/null || echo "")
+          if [ "$STATUS" = "capped" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "\`/api/gateway-status.upstreamHardCaps\` reports **capped**: at least one pay-as-you-go upstream reached its hard daily ceiling, and the tools behind it answer 503 (uncharged) until 00:00 UTC. The per-upstream rows are on the operator view. Find what drove the volume, then fix the cause or raise that ceiling's variable."
+            fi
+          elif [ -n "$EXISTING" ] && [ "$STATUS" = "ok" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "upstreamHardCaps is ok; closing." || true
+          fi
+
       - name: Exa prepaid allowance low
         if: always()
         env:
