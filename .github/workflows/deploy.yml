@@ -2809,6 +2809,7 @@ jobs:
           t node scripts/test-stripe-shadow-ledger.js
           # Fetch-guard error attribution (upstream 4xx→422, 5xx→502; media Content-Type fail-fast)
           t node scripts/test-fetch-guard.js
+          t node scripts/test-undici-dispatcher.js
           # Discovery & trust surfaces (/.well-known/x402, /api/reliability)
           t node scripts/test-discovery.js
           # Bazaar validate client (catalog method travels, required vs advisory, 429 backoff, unreadable never valid - offline)
