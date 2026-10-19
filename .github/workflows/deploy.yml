@@ -2635,6 +2635,8 @@ jobs:
           t node scripts/test-leaderboard-chains.js
           # Discovery strict-source filters (testnet + junk origins)
           t node scripts/test-discovery-filter.js
+          # Registry discovery folds each page as it arrives: same published maps as the whole-list fold, a failed walk publishes nothing, lower peak heap (offline)
+          t node scripts/test-discovery-streaming.js
           # Index warm-start (crawl cache survives a redeploy; no half-crawled marketplace — offline)
           t node scripts/test-index-warmstart.js
           t node scripts/test-index-persist-last-good.js

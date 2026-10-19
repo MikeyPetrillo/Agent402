@@ -183,7 +183,7 @@ import { responseContractOf, packResponseContract, responseContractProjection } 
 import { deliveryProjection } from "./response-observation.js";
 import { requestContractOf, requestContractFromInputSchema, packRequestContract, requestContractProjection, requestContractStrength } from "./request-contract.js";
 import { toolList } from "./pages.js";
-import { fetchAllBazaarItems, isBazaarDiscoveryUrl } from "./bazaar-pager.js";
+import { walkBazaarPages, isBazaarDiscoveryUrl } from "./bazaar-pager.js";
 import { RAILS, railKey } from "./rails.js";
 import { CHAIN_PAGES, marketSellers } from "./market-page.js";
 import { WELL_KNOWN_PATH, discoveryNote } from "./discovery-note.js";
@@ -1898,36 +1898,25 @@ async function safeFetchJson(url) {
   const { html } = await safeFetch(url, { maxBytes: MAX_DISCOVERY_BYTES, headers: { Accept: "application/json" } });
   return JSON.parse(html);
 }
+let discoveryFetchJson = safeFetchJson;
+/** Test seam: replace the discovery page fetcher (null restores safeFetch). */
+export function __setDiscoveryFetchForTest(fn) { discoveryFetchJson = typeof fn === "function" ? fn : safeFetchJson; }
+export async function __discoverSourceForTest(source, selfOrigin = null) { return discoverOneSource(source, selfOrigin); }
+/** Copies of what a discovery pass publishes, for the discovery tests. */
+export function __discoveryStateForTest() {
+  return {
+    bazaarTools: new Map(bazaarToolsByOrigin),
+    bazaarQuality: new Map(bazaarQualityByOrigin),
+    discoveredSeeds: [...discoveredSeeds],
+    status: new Map(discoveryStatus),
+  };
+}
+/** The module internals a test needs to replay the pre-streaming fold. */
+export const __discoveryHelpersForTest = { extractOrigin, pathSellersByHost, pathSellerOwning, rollHistory, MAX_DISCOVERED_SELLERS };
 
 async function discoverOneSource(source, selfOrigin) {
   const status = { url: source.url, fetchedAt: Date.now(), resources: 0, origins: 0, error: null };
   try {
-    // The Bazaar paginates and has 69k+ listings — a single fetch sees the
-    // first page only and the index ends up with <0.2% of sellers. For Bazaar
-    // sources walk every page; for other registries keep the single-fetch path
-    // (their shapes vary and most have no pagination contract).
-    let list;
-    if (isBazaarDiscoveryUrl(source.url) || source.paginate) {
-      const { items } = await fetchAllBazaarItems(
-        source.url,
-        {
-          pageSize: parseInt(process.env.BAZAAR_PAGE_SIZE || "1000", 10),
-          maxPages: parseInt(process.env.BAZAAR_MAX_PAGES || "200", 10),
-        },
-        safeFetchJson
-      );
-      list = items;
-    } else {
-      const data = await safeFetchJson(source.url);
-      // Discovery shapes vary by registry: { resources }, { items }, { data },
-      // or a top-level array.
-      list =
-        data.resources ||
-        data.items ||
-        data.data ||
-        (Array.isArray(data) ? data : []);
-    }
-    status.resources = list.length;
     const found = new Set();
     // Rebuild the registry→origin tool map from this discovery pass so renamed /
     // removed resources don't linger. Each registry is authoritative for the
@@ -1939,28 +1928,63 @@ async function discoverOneSource(source, selfOrigin) {
     let droppedTestnet = 0, droppedJunk = 0;
     // A registry row under a known path seller's prefix belongs to that seller,
     // not to its shared host (which would list every app on the host as one).
-    const pathSellers = pathSellersByHost();
-    for (const item of list) {
-      const url = item.resource || item.resourceUrl || item.url || item.endpoint || item.homepage;
-      const hostOrigin = extractOrigin(url);
-      if (!hostOrigin || hostOrigin === selfOrigin) continue;
-      const origin = pathSellerOwning(url, hostOrigin, pathSellers) || hostOrigin;
-      // strict sources (open registries): drop testnet-only listings and
-      // placeholder origins before they reach the index.
-      if (source.strict) {
-        if (!itemHasMainnetAccept(item)) { droppedTestnet++; continue; }
-        if (isJunkOrigin(origin)) { droppedJunk++; continue; }
-      }
-      found.add(origin);
-      if (toolsByOrigin) {
-        const t = bazaarItemToTool(item, origin);
-        if (t) {
-          const arr = toolsByOrigin.get(origin) || [];
-          arr.push(t);
-          toolsByOrigin.set(origin, arr);
+    // Read once per pass, when the first listings arrive.
+    let pathSellers = null;
+    // Folds one batch of listings into this pass's accumulators. Nothing here
+    // touches published state: the swap below runs only once every page is in.
+    const fold = (list) => {
+      if (!pathSellers) pathSellers = pathSellersByHost();
+      for (const item of list) {
+        const url = item.resource || item.resourceUrl || item.url || item.endpoint || item.homepage;
+        const hostOrigin = extractOrigin(url);
+        if (!hostOrigin || hostOrigin === selfOrigin) continue;
+        const origin = pathSellerOwning(url, hostOrigin, pathSellers) || hostOrigin;
+        // strict sources (open registries): drop testnet-only listings and
+        // placeholder origins before they reach the index.
+        if (source.strict) {
+          if (!itemHasMainnetAccept(item)) { droppedTestnet++; continue; }
+          if (isJunkOrigin(origin)) { droppedJunk++; continue; }
         }
-        if (qualityByOrigin && item.quality) foldBazaarQuality(qualityByOrigin, origin, item.quality, t?.payToByNetwork?.["eip155:8453"] || null, { curated: item.curated === true && isBazaarDiscoveryUrl(source.url) });
+        found.add(origin);
+        if (toolsByOrigin) {
+          const t = bazaarItemToTool(item, origin);
+          if (t) {
+            const arr = toolsByOrigin.get(origin) || [];
+            arr.push(t);
+            toolsByOrigin.set(origin, arr);
+          }
+          if (qualityByOrigin && item.quality) foldBazaarQuality(qualityByOrigin, origin, item.quality, t?.payToByNetwork?.["eip155:8453"] || null, { curated: item.curated === true && isBazaarDiscoveryUrl(source.url) });
+        }
       }
+    };
+    // The Bazaar paginates and has 69k+ listings — a single fetch sees the
+    // first page only and the index ends up with <0.2% of sellers. For Bazaar
+    // sources walk every page; for other registries keep the single-fetch path
+    // (their shapes vary and most have no pagination contract). Each page is
+    // folded as it arrives and then dropped, so the pass holds one page of raw
+    // listings at a time rather than the whole registry.
+    if (isBazaarDiscoveryUrl(source.url) || source.paginate) {
+      const { count } = await walkBazaarPages(
+        source.url,
+        {
+          pageSize: parseInt(process.env.BAZAAR_PAGE_SIZE || "1000", 10),
+          maxPages: parseInt(process.env.BAZAAR_MAX_PAGES || "200", 10),
+        },
+        discoveryFetchJson,
+        fold
+      );
+      status.resources = count;
+    } else {
+      const data = await discoveryFetchJson(source.url);
+      // Discovery shapes vary by registry: { resources }, { items }, { data },
+      // or a top-level array.
+      const list =
+        data.resources ||
+        data.items ||
+        data.data ||
+        (Array.isArray(data) ? data : []);
+      status.resources = list.length;
+      fold(list);
     }
     if (toolsByOrigin) {
       // Atomic swap-in (per-origin) to avoid stale partial state mid-update.
