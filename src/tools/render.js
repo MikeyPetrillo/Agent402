@@ -118,7 +118,9 @@ async function getBrowser() {
         // PROXY_URL), route ALL Chromium traffic through it so DNS resolution +
         // destination pinning happen in ONE place Chromium can't bypass. Unset
         // (in-process) => no proxy; the render.js route guard still applies.
-        const launchArgs = ["--no-sandbox", "--disable-dev-shm-usage"];
+        // WebRTC may not send UDP outside the proxy: neither the route guard nor
+        // the egress proxy sees STUN/TURN traffic.
+        const launchArgs = ["--no-sandbox", "--disable-dev-shm-usage", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"];
         const egressProxy = (process.env.RENDER_EGRESS_PROXY_URL || "").trim();
         if (egressProxy) {
           launchArgs.push(`--proxy-server=${egressProxy}`);
@@ -565,8 +567,14 @@ export async function renderHtmlFrames(html, times, { width, height, signal } = 
       if (req.isNavigationRequest()) return route.fulfill({ status: 204, body: "" }).catch(() => {});
       return route.abort("blockedbyclient").catch(() => {});
     });
+    // On the context, so a window the document opens gets the sandbox too; and
+    // any such window is closed as it opens. Only a page we open ourselves is
+    // let through, one per `allowPages` token; the first opens before any
+    // buyer script exists, the sheet after the document's page is closed.
+    await context.addInitScript(framesSandboxInit);
+    let allowPages = 1;
+    context.on("page", (p) => { if (allowPages > 0) { allowPages--; return; } p.close().catch(() => {}); });
     const page = await context.newPage();
-    await page.addInitScript(framesSandboxInit);
     const pageErrors = [];
     page.on("pageerror", (err) => { if (pageErrors.length < 5) pageErrors.push(clip(err?.message || String(err), 300)); });
     page.on("dialog", (d) => d.dismiss().catch(() => {}));
@@ -615,6 +623,9 @@ export async function renderHtmlFrames(html, times, { width, height, signal } = 
       const y = lay.gap + row * (lay.thumbH + lay.label + lay.gap);
       return `<figure style="left:${x}px;top:${y}px;width:${lay.thumbW}px"><img src="data:image/png;base64,${f.png.toString("base64")}" width="${lay.thumbW}" height="${lay.thumbH}"><figcaption>t = ${f.t} s</figcaption></figure>`;
     }).join("");
+    const violations = await page.evaluate(() => window.__a402fr?.violations || 0).catch(() => 0);
+    await page.close().catch(() => {});
+    allowPages++;
     const sheetPage = await context.newPage();
     await sheetPage.setViewportSize({ width: lay.width, height: lay.height });
     await sheetPage.setContent(`<!doctype html><style>*{margin:0;padding:0;box-sizing:border-box}html,body{width:${lay.width}px;height:${lay.height}px;background:#1f2328;overflow:hidden}figure{position:absolute}img{display:block;background:#ffffff}figcaption{height:${lay.label}px;line-height:${lay.label}px;font:12px/18px monospace;color:#e6edf3}</style>${cells}`, { waitUntil: "load" });
@@ -624,7 +635,6 @@ export async function renderHtmlFrames(html, times, { width, height, signal } = 
     if (totalBytes > L.maxOutputBytes) {
       throw framesError(`the stills and contact sheet exceed the ${L.maxOutputBytes / (1024 * 1024)} MB output cap; request fewer times or a smaller width and height`, 413);
     }
-    const violations = await page.evaluate(() => window.__a402fr?.violations || 0).catch(() => 0);
     return {
       width, height,
       frameCount: frames.length,

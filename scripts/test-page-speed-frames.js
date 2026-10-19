@@ -133,6 +133,17 @@ window.renderAt = function (t) {
   ok(sheet.width === fr.contactSheet.width && sheet.height === fr.contactSheet.height && fr.contactSheet.columns === 2 && fr.contactSheet.rows === 2, `contact sheet decodes at its stated grid size (${sheet.width}x${sheet.height})`);
   ok(fr.totalBytes === fr.frames.reduce((a, f) => a + f.bytes, 0) + fr.contactSheet.bytes, "totalBytes adds up the stills and the sheet");
 
+  // A window the document opens runs the same sandbox (no WebRTC, whose
+  // STUN/TURN traffic no route guard sees) and is closed as it opens.
+  const popupDoc = `<!doctype html><script>
+var w = window.open("about:blank");
+var seen = { rtc: w ? typeof w.RTCPeerConnection : "none", closedLater: null };
+window.renderAt = async function () { await new Promise((r) => setTimeout(r, 300)); seen.closedLater = w ? w.closed : true; throw new Error("POPUP " + JSON.stringify(seen)); };
+</script>`;
+  const popup = await rejects(tool("html-frames").handler({ html: popupDoc, times: [0] }));
+  const seen = JSON.parse((/POPUP (\{.*\})/.exec(popup?.message || "") || [, "{}"])[1]);
+  ok(seen.rtc !== "function", `a popup has no RTCPeerConnection (${seen.rtc})`);
+  ok(seen.closedLater === true, `a popup is closed as it opens (${seen.closedLater})`);
   const threw = await rejects(tool("html-frames").handler({ html: "<!doctype html><script>window.renderAt=function(t){ if (t > 0) throw new Error('boom at ' + t); };</script>", times: [0, 1] }));
   ok(threw?.statusCode === 400 && /renderAt\(1\) threw: boom at 1/.test(threw.message), `a renderAt that throws answers 400 naming the error (${threw?.message})`);
   const asyncThrew = await rejects(tool("html-frames").handler({ html: "<!doctype html><script>window.renderAt=async function(t){ await 0; throw new Error('async boom'); };</script>", times: [0] }));
