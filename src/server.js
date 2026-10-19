@@ -62,6 +62,7 @@ import { withHouseStyle } from "./house-style.js";
 import { withNextCall, nextCallFor } from "./next-call.js";
 import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS, reportHeadline, readPublicReport, readPublicReportFresh } from "./human-checkout.js";
 import { humanReportsPage, reportDeliveryPage } from "./human-reports-page.js";
+import { kitDisclaimer } from "./report-disclosure.js";
 import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
 import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
@@ -3857,6 +3858,8 @@ const _humanGenerate = async (kind, slug, input, ctx = {}) => {
       // Generated files (the LinkedIn article's sized images) ride the bundle so
       // the delivery page can preview and download them.
       ...(Array.isArray(out?.images) && out.images.length ? { images: out.images } : {}),
+      // The kit's own disclaimer (meta.disclaimer), which the report page shows under the title.
+      ...(kitDisclaimer(out) ? { disclaimer: kitDisclaimer(out) } : {}),
     };
 };
 // The storefront PAGES are always served (they are linked from the nav and

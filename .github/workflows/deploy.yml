@@ -2385,6 +2385,8 @@ jobs:
           t node scripts/test-mcp-search-ranking.js
           # Report -> monitor upgrade loop (kind mapping, table-driven price, escaping, prefill-only deep link)
           t node scripts/test-report-upgrade.js
+          # Model-written reports say so on every surface a person reads (storefront, viewer, samples, public pages, emails)
+          t node scripts/test-report-model-note.js
           # /llms.txt MPP/x402 dual-header reading note (issue #794 guidance, offline)
           t node scripts/test-llms-mpp-header-note.js
           # "Payment-nonce replay guard (M3 — Attack II: concurrent replay collapses to one grant, release-on-failure)"

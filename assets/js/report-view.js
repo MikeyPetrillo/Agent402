@@ -124,6 +124,20 @@
     try { var d = new Date(iso); if (isNaN(d)) return ""; return d.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }); }
     catch (e) { return ""; }
   }
+  // Under the title: the model-written note (its sentence comes from the page,
+  // REPORT_MODEL_NOTE in src/report-disclosure.js) for every kind a model
+  // writes, then the report's own disclaimer when its kit set one.
+  function modelNoteText(s) {
+    var text = (app && app.getAttribute("data-model-note")) || "";
+    var codeKinds = ((app && app.getAttribute("data-code-kinds")) || "").split(",");
+    return text && codeKinds.indexOf(String((s && s.kind) || "")) < 0 ? text : "";
+  }
+  function modelNote(s) {
+    var text = modelNoteText(s), out = "";
+    if (text) out += '<p class="rpt-note" id="model-note">' + esc(text) + "</p>";
+    if (s && typeof s.disclaimer === "string" && s.disclaimer.trim()) out += '<p class="rpt-note" id="report-disclaimer">' + esc(s.disclaimer.trim()) + "</p>";
+    return out;
+  }
   function slugify(s) { return String(s || "report").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "report"; }
 
   function toCSV(columns, rows) {
@@ -254,6 +268,7 @@
         '<div class="rpt-brand"><span class="n">agent402</span><span class="s">Report</span></div>' +
         '<h1 class="rpt-title">' + esc(s.title || "Report") + "</h1>" +
         '<div class="rpt-meta">' + String(reportLabel(s)).split(/:\s+/).map(function (x) { return "<span>" + esc(x) + "</span>"; }).join("") + (s.at ? "<span>" + esc(fmtDate(s.at)) + "</span>" : "") + "</div>" +
+        modelNote(s) +
       "</div>";
 
     // Action bar (never printed).
@@ -346,7 +361,10 @@
     }
     var json = document.getElementById("dl-json");
     if (json) json.addEventListener("click", function () {
-      var bundle = { title: s.title, product: productLabel(s.kind), generatedAt: s.at, report: s.report, sources: sources, tables: tables, images: images };
+      var bundle = { title: s.title, product: productLabel(s.kind), generatedAt: s.at };
+      if (modelNoteText(s)) bundle.notice = modelNoteText(s);
+      if (typeof s.disclaimer === "string" && s.disclaimer.trim()) bundle.disclaimer = s.disclaimer.trim();
+      bundle.report = s.report; bundle.sources = sources; bundle.tables = tables; bundle.images = images;
       download(base + "-bundle.json", JSON.stringify(bundle, null, 2), "application/json");
     });
     var cl = document.getElementById("copy-link");
