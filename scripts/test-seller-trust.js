@@ -161,6 +161,7 @@ check("our own host is labelled self rather than reading as a bad seller", () =>
   assert.equal(r.self, true);
   assert.match(r.note, /never routes to itself/i);
   assert.ok(r.blockers.some((b) => /local catalog/.test(b)), "self blocker must explain, not accuse");
+  assert.deepEqual(r.provenBlockers, ["this host is the local catalog"], "the published example (our own host) never answers an empty provenBlockers list");
 });
 
 // --- input handling ----------------------------------------------------------

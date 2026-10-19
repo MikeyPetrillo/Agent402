@@ -207,7 +207,9 @@ export function buildSellerTrustTool({ getSellerDetail, getSettledCalls, getPayT
         blockers: isSelf
           ? ["this host is the local catalog - call its tools directly"]
           : (routable ? [] : [...provenBlockers, ...(lanes.unproven.reason ? [`unproven lane: ${lanes.unproven.reason}`] : [])]),
-        provenBlockers: isSelf ? [] : provenBlockers,
+        // Never an empty list for us: the proven lane is closed to the local
+        // catalog, and the lane object above already says why.
+        provenBlockers: isSelf ? ["this host is the local catalog"] : provenBlockers,
         // Say plainly what this is and is not, so a policy engine consuming it
         // does not over-read a number we did not measure.
         caveats: [

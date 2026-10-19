@@ -818,6 +818,29 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     addFacilitator(`Monad (${MONAD_FACILITATOR_URL})`, new HTTPFacilitatorClient({ url: MONAD_FACILITATOR_URL }));
     console.log(`Monad: settling USDC via facilitator ${MONAD_FACILITATOR_URL}`);
   }
+  class NetworkFilteredFacilitatorClient extends HTTPFacilitatorClient {
+    constructor(cfg, networks) { super(cfg); this._only = new Set(networks); }
+    async getSupported() {
+      const s = await super.getSupported();
+      return { ...s, kinds: (s.kinds || []).filter((k) => this._only.has(k.network)) };
+    }
+  }
+  // Solvador as Celo's PRIMARY (SOLVADOR_CELO_PRIMARY=on, SOLVADOR_KEY set):
+  // a Celo-only Solvador client registered ahead of the Celo facilitator, so it
+  // wins the Celo route (the first registered facilitator wins a network); the
+  // Celo facilitator stays registered and becomes Celo's settle fallback.
+  // Removing the variable restores the old order. Fee-charging-primary rule:
+  // pair it with a NETWORK_PRICE_PREMIUMS entry for eip155:42220.
+  const solvadorCeloPrimary = /^(1|true|yes|on)$/i.test((process.env.SOLVADOR_CELO_PRIMARY || "").trim())
+    && evmCaip2.includes(CELO_CAIP2) && !!process.env.SOLVADOR_KEY;
+  if (solvadorCeloPrimary) {
+    const solvadorAuth = { "X-API-Key": process.env.SOLVADOR_KEY };
+    addFacilitator("Solvador (Celo primary)", new NetworkFilteredFacilitatorClient({
+      url: process.env.SOLVADOR_FACILITATOR_URL || "https://api.solvador.com",
+      createAuthHeaders: async () => ({ verify: solvadorAuth, settle: solvadorAuth, supported: solvadorAuth }),
+    }, [CELO_CAIP2]));
+    console.log("Celo: Solvador is primary; the Celo facilitator is its settle fallback");
+  }
   // Celo (chain 42220 / USDC) settles through the Celo-operated facilitator,
   // added only when `celo` is enabled — PayAI/CDP don't advertise
   // eip155:42220, so without this client an offered Celo accept would make
@@ -828,7 +851,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // without it, so a keyless Celo offer verifies fine and then bounces every
   // buyer at settlement (never charged, but a dead rail dressed up as live).
   const celoEnabled = evmCaip2.includes(CELO_CAIP2) && !!CELO_FACILITATOR_URL && !!CELO_FACILITATOR_KEY;
-  if (evmCaip2.includes(CELO_CAIP2) && !celoEnabled) {
+  let celoClient = null;
+  if (evmCaip2.includes(CELO_CAIP2) && !celoEnabled && !solvadorCeloPrimary) {
     console.warn(
       "WARNING: PAYMENT_NETWORKS enables `celo` but " +
         (CELO_FACILITATOR_URL ? "CELO_FACILITATOR_KEY is unset - the facilitator's /settle requires an " +
@@ -839,7 +863,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   }
   if (celoEnabled) {
     const celoAuthHeaders = { "X-API-Key": CELO_FACILITATOR_KEY };
-    addFacilitator(`Celo (${CELO_FACILITATOR_URL})`, new HTTPFacilitatorClient({
+    celoClient = addFacilitator(`Celo (${CELO_FACILITATOR_URL})`, new HTTPFacilitatorClient({
       url: CELO_FACILITATOR_URL,
       createAuthHeaders: async () => ({ verify: celoAuthHeaders, settle: celoAuthHeaders, supported: celoAuthHeaders }),
     }));
@@ -872,13 +896,6 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // NETWORK_PRICE_PREMIUMS entry so the settlement fee is priced into
   // that chain's accepts quote, never eaten silently.
   const SOLVADOR_PRIMARY_CAIP2 = ["eip155:10"];
-  class NetworkFilteredFacilitatorClient extends HTTPFacilitatorClient {
-    constructor(cfg, networks) { super(cfg); this._only = new Set(networks); }
-    async getSupported() {
-      const s = await super.getSupported();
-      return { ...s, kinds: (s.kinds || []).filter((k) => this._only.has(k.network)) };
-    }
-  }
   const solvadorPrimaryWanted = SOLVADOR_PRIMARY_CAIP2.filter((c) => evmCaip2.includes(c));
   if (solvadorPrimaryWanted.length && !process.env.SOLVADOR_KEY) {
     console.warn(
@@ -1239,7 +1256,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // scheme registrations live here, and only for networks that survived it.
   if (stellarEnabled) for (const caip2 of stellarCaip2) server = server.register(caip2, new ExactStellarScheme());
   if (algorandEnabled) for (const caip2 of avmCaip2) server = server.register(caip2, new ExactAvmScheme());
-  registerFacilitatorFailureHooks(server, payAiClient, solvadorClient);
+  registerFacilitatorFailureHooks(server, payAiClient, solvadorClient,
+    solvadorCeloPrimary ? { [CELO_CAIP2]: celoClient ? [{ name: "Celo", client: celoClient }] : [] } : null);
   registerWalletBlocklistHook(server);
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
@@ -1679,7 +1697,10 @@ const SOLVADOR_SETTLE_NETWORKS = new Set([
   "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
 ]);
 
-export function fallbackCandidatesFor(network, payAiClient, solvadorClient) {
+export function fallbackCandidatesFor(network, payAiClient, solvadorClient, overrides = null) {
+  // A network whose primary is Solvador names its own fallbacks: retrying the
+  // facilitator that just refused would only repeat the refusal.
+  if (overrides && Object.hasOwn(overrides, network)) return [...overrides[network]];
   const out = [];
   const solvadorAdvertises = !!solvadorClient && SOLVADOR_SETTLE_NETWORKS.has(network);
   if (solvadorAdvertises) out.push({ name: "Solvador", client: solvadorClient });
@@ -1820,7 +1841,7 @@ async function recordVerifyFailure(ctx, reason) {
   })).catch(() => {});
 }
 
-export function registerFacilitatorFailureHooks(server, payAiClient, solvadorClient = null) {
+export function registerFacilitatorFailureHooks(server, payAiClient, solvadorClient = null, fallbackOverrides = null) {
   server.onVerifyFailure(async (ctx) => {
     const reason = summarizeFacilitatorError(ctx?.error);
     console.warn(
@@ -1945,7 +1966,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     }
     if (!fallbackEnabled) return;
     if (!isPreBroadcastSettleRejection(ctx?.error)) return;
-    const candidates = fallbackCandidatesFor(ctx?.requirements?.network, payAiClient, solvadorClient);
+    const candidates = fallbackCandidatesFor(ctx?.requirements?.network, payAiClient, solvadorClient, fallbackOverrides);
     for (const { name, client } of candidates) {
       try {
         const result = await client.settle(ctx.paymentPayload, ctx.requirements);

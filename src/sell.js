@@ -20,6 +20,7 @@ import { RAILS, railKey, RAILS_AMP } from "./rails.js";
 import { crawlIntervalLabel } from "./crawl-cadence.js";
 import { routerRankingSentence, routingProofSentence } from "./routing-proof.js";
 import { ROUTE_ORDER } from "./route-order.js";
+import { DISPATCH_REASONS } from "./dispatch-eligibility.js";
 import { EXTERNAL_CHAIN_BY_NETWORK } from "./tools/route-execute.js";
 
 // The chains the router can pay an outside seller on, read from route-execute's
@@ -90,6 +91,22 @@ const COMMITMENTS = [
   "We publish how the ranking works, and exclude ourselves from our own leaderboard.",
 ];
 
+// New sellers: what each router verdict means and what the seller can do
+// about it. The meaning column quotes the router's own reason text
+// (src/dispatch-eligibility.js), so this page and a seller's /api/index
+// verdict cannot word a reason differently. The settlement floor's figure is
+// not typed on the page: it is a router setting (server config, readable in
+// this repo), and a seller's own seller-trust answer carries its exact gate.
+const NEW_SELLER_VERDICTS = [
+  ["price_unknown", "Answer a bare unpaid request to every paid route with its 402, before you validate input. A route that needs a query parameter or a body still has to return its 402 to the crawler's empty probe, or no price can be read and the router never spends against an unknown one."],
+  ["network_unknown", "Same fix: the paid route answered the probe with something other than a 402, so no chain was learned."],
+  ["usdc_domain_mismatch", "Advertise the token's own EIP-712 name in the accept's extra (\"USD Coin\" for Base USDC). Until then no stock buyer can pay you, ours included."],
+  ["url_template", "Serve concrete paths; the router never buys a templated path such as /items/{id}."],
+  ["settlement_required", "If the verdict also carries unprovenTier: true, there is nothing to fix: you are callable now in the unproven lane, and payments from real outside buyers move you up."],
+  ["settlement_self_funded", "Payments made with USDC your own paid wallet sent the payer are netted out. Only buyers' own money counts."],
+  ["delivery_failing", "The router's last paid call to you did not deliver. It retries once that memo expires; fix the failing route first."],
+];
+
 // Prices come from the catalog the server passes in (priceNote), never typed.
 const faqs = (priceNote) => [
   ["What does it cost to list?", "Nothing. Listing is free, there is no signup and no review queue, and no commission is deducted from your price. Buyers pay your wallet directly and Agent402 never holds seller funds. We never take a cut of your sales: we earn from buyers of our own tools and of the router (the spread when it buys from a seller and resells the result), and the seller tools on this page are optional paid reads."],
@@ -97,6 +114,7 @@ const faqs = (priceNote) => [
   ["What if my site is not an API?", "Use agent402-tollbooth - the pay-per-crawl mechanism is explained above under \"Charge the crawlers instead\". It ships as an open MIT middleware for Express, Next.js, Cloudflare Workers, a reverse proxy or WordPress: drop it in front of any site, no rebuild required."],
   ["Which chains can I get paid on?", `Advertise whichever you support. Agent402 itself accepts ${RAILS.length} rails: ${RAILS_AMP}. ${ROUTER_CHAIN_SENTENCE}`],
   ["How do I know what to charge, or what to build?", `Two paid intelligence tools: /api/bestsellers${priceNote("bestsellers")} ranks what agents actually pay for across a 500+-tool catalog by distinct buyers, sales, revenue or buyer diversity, with a trend against the previous window. /api/demand-radar${priceNote("demand-radar")} ranks what agents asked for and did not find. Neither can be reconstructed from on-chain data: settlements are public, but which tool was bought is not.`],
+  ["What is the settlement floor, and how do I get over it?", "It is a minimum of settled payments from distinct outside payers that the router reads on chain before it treats a seller as proven. The exact gate for your origin, with its figures, is in your seller-trust answer. It is not a target to buy your way to: payments funded from the wallet you are paid at are netted out, and payments from our own wallets never count toward it. Until then a seller below it can still be paid through the unproven lane. Your own verdict and its reason are free at /api/index?seller=<your host>."],
   ["What happens if my endpoint goes down?", `The probe that runs ${crawlIntervalLabel()} notices and your rolling health drops; you stay listed, and routing skips you until a probe succeeds again. Health is a rolling window rather than a single failure, and a new seller with no probe history yet starts at full health in the rankings.`],
 ];
 
@@ -178,6 +196,9 @@ table{border-collapse:collapse;width:100%}
   }).join("");
   const commitmentsHtml = COMMITMENTS.map((c) =>
     `<tr style="border-bottom:1px solid var(--hairline);"><td style="padding:12px 14px;color:var(--accent);font-family:var(--font-mono);font-size:var(--fs-sm);width:26px;">✓</td><td style="padding:12px 14px;color:var(--muted);font-size:var(--fs-md);line-height:1.5;">${esc(c)}</td></tr>`
+  ).join("");
+  const verdictsHtml = NEW_SELLER_VERDICTS.map(([code, todo]) =>
+    `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;vertical-align:top;font-weight:400;padding:14px 18px;"><code style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ink);background:var(--card-zebra);padding:4px 8px;white-space:nowrap;">${esc(code)}</code></th><td style="padding:14px 18px;color:var(--muted);font-size:var(--fs-sm);line-height:1.55;vertical-align:top;">${esc(DISPATCH_REASONS[code] || "")}</td><td style="padding:14px 18px;color:var(--ink);font-size:var(--fs-sm);line-height:1.55;vertical-align:top;">${esc(todo)}</td></tr>`
   ).join("");
   const faqHtml = FAQS.map(([q, a]) =>
     `<article style="padding:24px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${esc(a)}</p></article>`
@@ -303,6 +324,21 @@ PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
       <tbody>${surfacesHtml}
         <tr style="background:var(--footer-bg);"><th scope="row" style="text-align:left;font-weight:400;padding:16px 18px;color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-xs);">+ the rest</th><td style="padding:16px 18px;color:var(--muted);font-size:var(--fs-md);line-height:1.5;">Ranked by distinct buyers, sales, revenue or buyer-diversity - plus each tool's trend against the previous window, over any 1-90 day span.</td><td style="padding:16px 18px;text-align:right;"><a href="/tools/bestsellers" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;white-space:nowrap;">${esc(price("bestsellers") || "bestsellers")} →</a></td></tr>
       </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="new-sellers" style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
+  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/index?seller=&lt;your host&gt;</div>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">New sellers: listed, then paid.</h2>
+  <div class="ml-meta" style="margin:10px 0 14px;"><span>two separate gates</span><span>your verdict is free to read</span></div>
+  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 14px;">Registering lists you at once: your tools appear in search, in router answers and on the market pages. Being paid by the router is the second gate, and it is earned from real buyers. ${esc(routingProofSentence())}</p>
+  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 28px;">The settlement floor is a router setting that counts settled payments from distinct outside payers, read on chain; the exact gate for your origin, with its figures, is in your seller-trust answer. It is not a number to buy your way to: payments funded from the wallet you are paid at are netted out, and payments from our own wallets, including the ones our probes and payability checks make, never count toward it. Nothing here sells placement. Your verdict, with the reason below, is at <span style="font-family:var(--font-mono);font-size:var(--fs-md);color:var(--ink);overflow-wrap:anywhere;">/api/index?seller=&lt;your host&gt;</span>.</p>
+  <div class="sl-scroll ml-rowlist" style="border:1px solid var(--hairline);background:var(--card);">
+    <table style="font-size:var(--fs-md);">
+      <caption style="text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);padding:14px 18px;border-bottom:1px solid var(--hairline);">If routerDispatchReason says</caption>
+      <thead><tr style="border-bottom:1px solid var(--hairline);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);"><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">reason</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">what it means</th><th scope="col" style="text-align:left;font-weight:700;padding:12px 18px;">what you can do</th></tr></thead>
+      <tbody>${verdictsHtml}</tbody>
     </table>
   </div>
 </section>

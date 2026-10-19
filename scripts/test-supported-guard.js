@@ -51,8 +51,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // A stub facilitator whose /supported behavior can be swapped between legs.
 // mode: array of kinds → 200 {kinds}; "die" → 500 (the incident shape).
 function stubFacilitator(port) {
-  const state = { mode: "die" };
+  const state = { mode: "die", hits: [] };
   const srv = createServer((req, res) => {
+    state.hits.push(req.url);
     // Connection: close on every reply — the guard's probe and @x402's own
     // sync fetch the same origin seconds apart, and a bare node stub's 5s
     // keep-alive closing between them turns the second fetch into a flaky
@@ -61,6 +62,11 @@ function stubFacilitator(port) {
       if (state.mode === "die") { res.writeHead(500, { Connection: "close" }); return res.end("Internal Server Error"); }
       res.writeHead(200, { "Content-Type": "application/json", Connection: "close" });
       return res.end(JSON.stringify({ kinds: state.mode, extensions: [], signers: {} }));
+    }
+    if (req.url === "/verify") {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "application/json", Connection: "close" });
+      return res.end(JSON.stringify({ isValid: false, invalidReason: "invalid_exact_evm_payload_signature" }));
     }
     res.writeHead(404, { Connection: "close" }); res.end();
   });
@@ -175,6 +181,37 @@ celo.mode = KINDS_CELO;
   ok(nets.has("eip155:8453") && nets.has("eip155:42220"),
     "mid-run death does not rebuild accepts — both rails still advertised (dead rail degrades at verify/settle only, buyer never charged)");
   proc.kill("SIGKILL"); await sleep(300);
+}
+
+// ---- 6/7. SOLVADOR_CELO_PRIMARY: the switch decides who verifies Celo ----
+// A Celo payment is verified by the facilitator that won the Celo route, so
+// the stub that sees /verify is the one that would settle it.
+const solvador = await stubFacilitator(3969);
+const KINDS_SOLVADOR = [...KINDS_BASE, ...KINDS_CELO];
+async function celoVerifiedBy(port, extraEnv) {
+  for (const s of [payai, celo, solvador]) s.hits.length = 0;
+  const { base, log } = await bootServer(port, { SOLVADOR_KEY: "test-solvador", SOLVADOR_FACILITATOR_URL: "http://127.0.0.1:3969", ...extraEnv });
+  const r = await fetch(`${base}/api/uuid`);
+  const env = JSON.parse(Buffer.from(r.headers.get("payment-required") || "", "base64").toString("utf8"));
+  const accepted = (env.accepts || []).find((a) => a.network === "eip155:42220");
+  const now = Math.floor(Date.now() / 1000);
+  const payload = { x402Version: 2, resource: env.resource, accepted, payload: { signature: "0x" + "11".repeat(65), authorization: { from: "0x00000000000000000000000000000000000000aa", to: accepted?.payTo, value: accepted?.amount, validAfter: String(now - 60), validBefore: String(now + 600), nonce: "0x" + "22".repeat(32) } } };
+  const paid = await fetch(`${base}/api/uuid`, { headers: { "PAYMENT-SIGNATURE": Buffer.from(JSON.stringify(payload)).toString("base64") } });
+  await paid.arrayBuffer();
+  proc.kill("SIGKILL"); await sleep(300);
+  return { accepted: !!accepted, solvador: solvador.hits.filter((h) => h === "/verify").length, celo: celo.hits.filter((h) => h === "/verify").length, payai: payai.hits.filter((h) => h === "/verify").length, log: log.text, status: paid.status };
+}
+payai.mode = KINDS_BASE; celo.mode = KINDS_CELO; solvador.mode = KINDS_SOLVADOR;
+{
+  const on = await celoVerifiedBy(3970, { SOLVADOR_CELO_PRIMARY: "on" });
+  ok(on.accepted && on.status === 402, `switch on: Celo is offered and the refused payment answers 402 (got ${on.status})`);
+  ok(on.solvador === 1 && on.celo === 0 && on.payai === 0, `switch on: Solvador verifies the Celo payment (solvador ${on.solvador}, celo ${on.celo}, payai ${on.payai})`);
+  ok(/Solvador is primary/.test(on.log), "switch on: the boot log names Solvador as Celo's primary");
+  const off = await celoVerifiedBy(3971, {});
+  ok(off.solvador === 0 && off.celo === 1, `switch off: the Celo facilitator verifies it (solvador ${off.solvador}, celo ${off.celo})`);
+  celo.mode = "die";
+  const dead = await celoVerifiedBy(3972, { SOLVADOR_CELO_PRIMARY: "on" });
+  ok(dead.accepted && dead.solvador === 1, "switch on: Celo stays offered through Solvador while the Celo facilitator is down");
 }
 
 cleanup();

@@ -89,6 +89,15 @@ await check("candidates: Solvador first where it advertises, PayAI where it can 
   assert.deepEqual(fallbackCandidatesFor("eip155:8453", null, null), []);
 });
 
+await check("candidates: a network whose primary is Solvador falls back to its own named client, never back to Solvador", () => {
+  const pa = {}, sv = {}, celo = {};
+  const ov = { "eip155:42220": [{ name: "Celo", client: celo }] };
+  assert.deepEqual(fallbackCandidatesFor("eip155:42220", pa, sv, ov).map((c) => c.name), ["Celo"]);
+  assert.equal(fallbackCandidatesFor("eip155:42220", pa, sv, ov)[0].client, celo);
+  assert.deepEqual(fallbackCandidatesFor("eip155:42220", pa, sv, { "eip155:42220": [] }), [], "no Celo client: no fallback rather than a repeat");
+  assert.deepEqual(fallbackCandidatesFor("eip155:8453", pa, sv, ov).map((c) => c.name), ["Solvador", "PayAI"], "other networks keep their chain");
+});
+
 await check("source: the order is derived from SOLVADOR_SETTLE_NETWORKS, Solvador pushed before PayAI, and the boot line says so", () => {
   const src = readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
   assert.match(src, /const SOLVADOR_SETTLE_NETWORKS = new Set\(\[/, "Solvador has an allowlist (it runs first, so a wasted attempt would mask PayAI)");

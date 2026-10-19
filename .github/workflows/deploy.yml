@@ -512,7 +512,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.28.0 @x402/core@2.28.0 @x402/evm@2.28.0 @x402/svm@2.28.0 @solana/kit@8.4.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.28.0 @x402/core@2.28.0 @x402/evm@2.28.0 @x402/svm@2.28.0 @solana/kit@8.5.0 viem@2.52.2
       - name: Sweep the catalog via Solana settlement
         env:
           SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
@@ -2809,6 +2809,7 @@ jobs:
           t node scripts/test-stripe-shadow-ledger.js
           # Fetch-guard error attribution (upstream 4xx→422, 5xx→502; media Content-Type fail-fast)
           t node scripts/test-fetch-guard.js
+          t node scripts/test-undici-dispatcher.js
           # Discovery & trust surfaces (/.well-known/x402, /api/reliability)
           t node scripts/test-discovery.js
           # Bazaar validate client (catalog method travels, required vs advisory, 429 backoff, unreadable never valid - offline)
