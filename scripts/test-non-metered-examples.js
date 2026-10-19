@@ -133,7 +133,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 import { METERED_SLUGS, meteredPackSlugs } from "../src/metered-slugs.js";
 export { METERED_SLUGS };
 
-const BROWSER_SLUGS = new Set(["render", "screenshot"]);
+const BROWSER_SLUGS = new Set(["render", "screenshot", "page-speed", "html-frames"]);
 // Handlers proven offline by scripts/test-media.js; live examples depend on
 // Wikimedia (same URL for all three). Soft-skip source-host flakes only.
 const MEDIA_EXAMPLE_SLUGS = new Set(["media-info", "audio-convert", "audio-normalize"]);
