@@ -48,7 +48,7 @@ const child = (label) => new Promise((resolve) => {
 
   const p = spawn(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, SALES_LEDGER_DB: join(DIR, `${label}.db`), T_BASE: import.meta.url, T_SENDS: SENDS, T_LABEL: label, T_BUYER: BUYER, T_TX: TX }, stdio: ["ignore", "pipe", "inherit"] });
   let out = ""; p.stdout.on("data", (d) => { out += d; });
-  p.on("exit", () => { try { resolve(JSON.parse(out.trim().split("\n").pop())); } catch { resolve({ error: out.slice(-200) }); } });
+  p.on("close", () => { try { resolve(JSON.parse(out.trim().split("\n").pop())); } catch { resolve({ error: out.slice(-200) }); } });
 });
 try {
   await sl.salesLedgerReady();

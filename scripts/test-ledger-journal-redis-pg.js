@@ -203,7 +203,7 @@ const n = async (sql, params) => Number((await pgDirect(sql, params)).rows[0].n)
 const child = (args, env = {}) => new Promise((resolve, reject) => {
   const c = spawn(process.execPath, [SELF, ...args], { env: { ...process.env, STATE_DATABASE_URL: PG_DIRECT, STATE_DB_SCHEMA: schema, REDIS_URL: REDIS_DIRECT, ...env }, stdio: ["ignore", "pipe", "inherit"] });
   let out = ""; c.stdout.on("data", (d) => { out += d; });
-  c.on("exit", (code, sig) => { try { resolve({ ...JSON.parse(out.trim().split("\n").pop()), code, sig }); } catch { reject(new Error(`child ${args[0]} exited ${code ?? sig}: ${out}`)); } });
+  c.on("close", (code, sig) => { try { resolve({ ...JSON.parse(out.trim().split("\n").pop()), code, sig }); } catch { reject(new Error(`child ${args[0]} exited ${code ?? sig}: ${out}`)); } });
 });
 
 const sdb = await import("../src/state-db.js");
