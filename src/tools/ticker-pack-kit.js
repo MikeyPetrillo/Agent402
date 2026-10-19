@@ -486,6 +486,8 @@ export async function probeCompanyFilings({ cik, limit = 24 }) {
     stateOfIncorporation: sub?.stateOfIncorporation || null,
     fiscalYearEnd: sub?.fiscalYearEnd || null,
     filings,
+    // Older filings live in further files the index names, newest first.
+    olderFiles: Array.isArray(sub?.filings?.files) ? sub.filings.files.map((f) => ({ name: String(f?.name || ""), filingFrom: String(f?.filingFrom || ""), filingTo: String(f?.filingTo || "") })).filter((f) => /^CIK\d{10}-submissions-\d{3}\.json$/.test(f.name)) : [],
     browseUrl: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${cik}&type=&dateb=&owner=include&count=40`,
   };
 }
