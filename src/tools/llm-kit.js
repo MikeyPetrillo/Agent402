@@ -245,6 +245,7 @@ async function callOpenAI(model, messages, maxTokens, responseFormat, opts, tier
       signal: AbortSignal.timeout(30_000),
     });
   } catch (e) {
+    if (e?.hardCap) throw e;
     throw bad(`OpenAI request failed: ${e.message}`, 504);
   }
 
