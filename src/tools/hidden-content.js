@@ -25,6 +25,12 @@
 const MODES = new Set(["drop", "keep"]);
 const MAX_QUOTES = 5;
 const QUOTE_CHARS = 160;
+// Matching a style rule's selector visits every element, so the stylesheet
+// step is bounded by element visits, not rule count: a page with many hiding
+// rules and many elements cannot hold the thread. Rules past the budget are
+// not checked, and the report says so (styleRuleCoverage).
+const RULE_VISIT_BUDGET = 1_000_000;
+const MAX_RULES = 200;
 
 // Phrasing that addresses an AI or asks it to act. Kept narrow on purpose:
 // hidden preview lines and decorative text are common and must not be quoted
@@ -129,24 +135,44 @@ export function scrubHidden(root, { mode = "keep" } = {}) {
   const tw = doc.createTreeWalker(scope, win.NodeFilter.SHOW_COMMENT);
   for (let n = tw.nextNode(); n; n = tw.nextNode()) comments.push(n);
   for (const c of comments) { found.comments++; quote(instructionLike, c.data); if (drop) c.remove(); }
-  for (const t of scope.querySelectorAll("template")) { found.cssHidden++; quote(instructionLike, t.content?.textContent || t.textContent); if (drop) t.remove(); }
+  // One pass over the elements collects <template>s and every element that
+  // carries an attribute that can hide it (cheaper than attribute selectors).
+  const templates = [];
+  const flagged = [];
+  const ew = doc.createTreeWalker(scope, win.NodeFilter.SHOW_ELEMENT);
+  for (let el = scope.nodeType === 1 ? scope : ew.nextNode(); el; el = ew.nextNode()) {
+    if (el.localName === "template") { templates.push(el); continue; }
+    if (el.hasAttribute("hidden") || el.hasAttribute("aria-hidden") || el.hasAttribute("style") || el.hasAttribute("color") || el.localName === "font") flagged.push(el);
+  }
+  for (const t of templates) { found.cssHidden++; quote(instructionLike, t.content?.textContent || t.textContent); if (drop) t.remove(); }
 
   // 2. Elements hidden by attribute, inline style or a top-level stylesheet rule.
   const marked = new Map(); // element -> reason
   const mark = (el, why) => { if (!marked.has(el)) marked.set(el, why); };
+  const hidingRules = new Map(); // selector -> reason, first rule wins
   for (const sheet of Array.from(doc.styleSheets || [])) {
     let rules;
     try { rules = sheet.cssRules; } catch { continue; }
     for (const rule of Array.from(rules || [])) {
       if (rule.type !== 1 || !rule.selectorText) continue; // style rules only; @media and the rest are conditional
       const why = hiddenByDecl(rule.style);
-      if (!why) continue;
+      if (why && !hidingRules.has(rule.selectorText)) hidingRules.set(rule.selectorText, why);
+    }
+  }
+  let rulesChecked = 0;
+  let ruleCap = 0;
+  if (hidingRules.size) {
+    const elements = Math.max(1, scope.getElementsByTagName("*").length);
+    ruleCap = Math.max(1, Math.min(MAX_RULES, Math.floor(RULE_VISIT_BUDGET / elements)));
+    for (const [selector, why] of hidingRules) {
+      if (rulesChecked >= ruleCap) break;
+      rulesChecked++;
       let els = [];
-      try { els = scope.querySelectorAll(rule.selectorText); } catch { continue; }
+      try { els = scope.querySelectorAll(selector); } catch { continue; }
       for (const el of els) mark(el, why);
     }
   }
-  for (const el of scope.querySelectorAll("[hidden],[aria-hidden],[style],[color],font")) {
+  for (const el of flagged) {
     if (el.hasAttribute("hidden")) { mark(el, "hiddenAttr"); continue; }
     if (String(el.getAttribute("aria-hidden") || "").toLowerCase() === "true") { mark(el, "ariaHidden"); continue; }
     const why = hiddenByDecl(el.style);
@@ -182,9 +208,9 @@ export function scrubHidden(root, { mode = "keep" } = {}) {
   }
   if (joined) quote(instructionLike, joined);
 
-  // 4. Base64 runs in visible text that decode to a directive (reported, never found).
-  const visible = scope.textContent || "";
-  for (const run of visible.match(/[A-Za-z0-9+/]{40,}={0,2}/g) || []) {
+  // 4. Base64 runs in the text that decode to a directive (reported, never removed).
+  // Read from the text nodes already collected, not a second whole-tree pass.
+  for (const run of texts.map((t) => t.data).join(" ").match(/[A-Za-z0-9+/]{40,}={0,2}/g) || []) {
     if (instructionLike.length >= MAX_QUOTES) break;
     let dec = "";
     try { dec = Buffer.from(run, "base64").toString("utf8"); } catch { continue; }
@@ -192,5 +218,10 @@ export function scrubHidden(root, { mode = "keep" } = {}) {
   }
 
   const total = Object.values(found).reduce((a, b) => a + b, 0);
-  return { mode, total, found, instructionLike };
+  const out = { mode, total, found, instructionLike };
+  // Present when the page has hiding style rules. coversAll false means some
+  // were not checked (the visit budget ran out), so hidden content can be
+  // under-counted and a clean result is not a complete one.
+  if (hidingRules.size) out.styleRuleCoverage = { hidingRules: hidingRules.size, checked: rulesChecked, coversAll: rulesChecked >= hidingRules.size };
+  return out;
 }
