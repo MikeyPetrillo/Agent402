@@ -15,7 +15,7 @@
 // the set of Form 4 accession numbers - a new one = paid re-run + email.
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
-import { resolveCompany, eftsSearch, fetchXmlText } from "./edgar-kit.js";
+import { resolveCompany, eftsSearch, fetchXmlText, issuerHits } from "./edgar-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
@@ -116,7 +116,7 @@ export function parseForm4(xml) {
   const derivativeCount = dtx.length;
   const footnotes = blocks(xml, "footnote").map((f) => stripXmlTags(f).replace(/\s+/g, " ").trim()).filter(Boolean).slice(0, 12);
   const plan10b5 = footnotes.some((f) => /10b5-1/i.test(f));
-  return { issuer: tag(xml, "issuerName"), symbol: tag(xml, "issuerTradingSymbol"), period: tag(xml, "periodOfReport"), owners, transactions: tx, derivativeTransactions: dtx, holdings, derivativeCount, footnotes, plan10b5 };
+  return { issuer: tag(xml, "issuerName"), issuerCik: (tag(xml, "issuerCik") || "").trim().replace(/^0*/, "").padStart(10, "0"), symbol: tag(xml, "issuerTradingSymbol"), period: tag(xml, "periodOfReport"), owners, transactions: tx, derivativeTransactions: dtx, holdings, derivativeCount, footnotes, plan10b5 };
 }
 
 /** The cheap probe: Form 4 filings against the issuer in the window (ONE EDGAR
@@ -125,8 +125,21 @@ export async function probeInsiderFilings({ ticker, cik, days = 90, limit = 40 }
   const resolved = await resolveCompany({ ticker, cik });
   const enddt = isoDate(Date.now()), startdt = isoDate(Date.now() - days * 86400 * 1000);
   const j = await eftsSearch({ forms: "4", ciks: resolved.cik, startdt, enddt });
-  const hits = (j?.hits?.hits ?? []).slice(0, limit);
-  const filings = hits.map((h) => {
+  const page = j?.hits?.hits ?? [];
+  const filings = form4FilingsFromHits(page, resolved.cik, limit);
+  const ids = [...new Set(filings.map((f) => f.accessionNumber))].sort();
+  const dropped = page.length - issuerHits(page, resolved.cik).length;
+  const searchTotal = j?.hits?.total?.value ?? page.length;
+  return { cik: resolved.cik, name: resolved.name, days, startDate: startdt, endDate: enddt, total: Math.max(filings.length, searchTotal - dropped), filings, ids, fingerprint: JSON.stringify(ids) };
+}
+
+/** Form 4 filings against the issuer `cik` from full-text-search hits. The
+ *  search matches the CIK as any party, so a filing the company made as a
+ *  reporting owner of another issuer is dropped. Pure; exported for tests. */
+export function form4FilingsFromHits(allHits, issuerCik, limit = 40) {
+  const resolved = { cik: String(issuerCik).padStart(10, "0") };
+  const hits = issuerHits(allHits, resolved.cik).slice(0, limit);
+  return hits.map((h) => {
     const s = h?._source || {};
     const id = String(h?._id || "");
     const [acc, doc] = id.split(":");
@@ -135,8 +148,6 @@ export async function probeInsiderFilings({ ticker, cik, days = 90, limit = 40 }
     const rawDoc = String(doc || "").replace(/^xslF345X\d+\//, ""); // the raw XML, not the rendered view
     return { accessionNumber: acc || "", filedDate: s.file_date || "", ownerCik: String(ownerCik).padStart(10, "0"), displayNames: s.display_names || [], url: accDir && rawDoc ? `https://www.sec.gov/Archives/edgar/data/${parseInt(ownerCik || "0", 10)}/${accDir}/${rawDoc}` : "" };
   }).filter((f) => f.accessionNumber);
-  const ids = [...new Set(filings.map((f) => f.accessionNumber))].sort();
-  return { cik: resolved.cik, name: resolved.name, days, startDate: startdt, endDate: enddt, total: j?.hits?.total?.value ?? filings.length, filings, ids, fingerprint: JSON.stringify(ids) };
 }
 
 async function mapLimit(items, n, fn) {
@@ -167,7 +178,9 @@ function makeInsiderHandlerInner(tierSlug) {
       try { const xml = await withTimeout(fetchXmlText(f.url), XML_TIMEOUT_MS); return { f, p: parseForm4(xml) }; }
       catch (e) { return { f, err: String(e?.message || e).slice(0, 100) }; }
     });
-    const good = parsed.filter((x) => x.p);
+    // The XML names its issuer: a filing about another issuer is not this
+    // company's insider activity, whatever the search matched.
+    const good = parsed.filter((x) => x.p && (!x.p.issuerCik || /^0+$/.test(x.p.issuerCik) || x.p.issuerCik === pf.cik));
     // Minimum evidence: at least half the filings in the window must have been
     // read, else this is an EDGAR incident and the report is not charged.
     if (!good.length || good.length < Math.ceil(pf.filings.length / 2)) throw bad(`Could only read ${good.length} of ${pf.filings.length} Form 4 filings from EDGAR (upstream). Not charged - please retry.`, 502);

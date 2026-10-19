@@ -527,6 +527,20 @@ function mapEftsHit(hit) {
 
 // efts.sec.gov requires the same User-Agent policy as data.sec.gov. Same
 // helper, different base URL.
+/** The issuer of an ownership filing (Form 3/4/5) in a full-text-search hit:
+ *  the hit lists the reporting owners first and the issuer last, so a company
+ *  that is itself a reporting owner (its trades in another issuer) appears
+ *  first or in the middle, never last. Pure; exported for tests. */
+export function eftsIssuerCik(hit) {
+  const ciks = hit?._source?.ciks;
+  return Array.isArray(ciks) && ciks.length ? padCik(ciks[ciks.length - 1]) : null;
+}
+/** Only the hits whose issuer is `cik`. */
+export function issuerHits(hits, cik) {
+  const want = padCik(cik);
+  return (Array.isArray(hits) ? hits : []).filter((h) => eftsIssuerCik(h) === want);
+}
+
 async function eftsSearch({ q, forms, ciks, startdt, enddt, locationCode, from = 0 }) {
   const qs = new URLSearchParams();
   if (q) qs.set("q", q);
@@ -820,8 +834,12 @@ EDGAR_TOOLS.push(
       const enddt = isoDate(Date.now());
       const startdt = isoDate(Date.now() - days * 86400 * 1000);
       const j = await eftsSearch({ forms: "4", ciks: cik, startdt, enddt });
-      const hits = j?.hits?.hits ?? [];
-      const total = j?.hits?.total?.value ?? hits.length;
+      const page = j?.hits?.hits ?? [];
+      // The search matches the CIK as any party; keep the filings where the
+      // company is the issuer, not the ones it filed as an owner elsewhere.
+      const hits = issuerHits(page, cik);
+      const searchTotal = j?.hits?.total?.value ?? page.length;
+      const total = searchTotal <= page.length ? hits.length : searchTotal - (page.length - hits.length);
       const trades = hits.slice(0, limit).map(mapEftsHit);
       return {
         cik,
