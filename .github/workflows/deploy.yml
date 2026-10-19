@@ -1341,6 +1341,10 @@ jobs:
           t node scripts/test-coingecko-shared.js
           # The hard daily upstream ceilings are one count across two containers on one Redis: A spends the ceiling, B refuses after its sync.
           t node scripts/test-upstream-hard-caps-redis.js
+          # A sub-cent Algorand settle refusal in one process withdraws that accept in another after one shared read.
+          t node scripts/test-avm-subcent-shared-redis.js
+          # Seller registration limits (x402 and MPP, per IP and global) are one count across two servers on one Redis, with each process's own count as the floor.
+          t node scripts/test-registration-limits-redis.js
 
       - name: "State database (REAL postgres: documents/records/log lines/leases; every migrated store imports its file once and reads the row; loops skip under another holder's lease; idempotency answers and claims shared over REAL redis)"
         env:
@@ -1365,6 +1369,8 @@ jobs:
           # A link whose row write cannot land answers unavailable (503), never ok.
           t node scripts/test-email-links-outage-pg.js
           t node scripts/test-leased-loops.js
+          # With more than one replica, a database error never lets a singleton (backup, reconcile) run on both.
+          t node scripts/test-lease-failopen-replicas.js
           # A tick whose lease was lost stops before its next send, pull or paid run.
           t node scripts/test-lease-fencing-pg.js
           # A paid monitor run is claimed on its record; saves merge, never erase.
@@ -1383,6 +1389,10 @@ jobs:
           # Two containers, one seller index: pull, newer wins, removals stick.
           t node scripts/test-index-replicas-pg.js
           t node scripts/test-leaderboard-peer-adopt-pg.js
+          # The seller-funding operator switch set on one container applies on the other after one re-read.
+          t node scripts/test-seller-funding-switch-pg.js
+          # Two containers, one MPP index: registrations reach the other by its pull, saves merge by origin, a skipped crawl saves nothing.
+          t node scripts/test-mpp-index-replicas-pg.js
           t node scripts/test-x402-removals-pg.js
           t node scripts/test-scan-state-version-pg.js
           t node scripts/test-revenue-ledger-pg.js
@@ -1420,7 +1430,7 @@ jobs:
           t node scripts/test-human-checkout-failures-pg.js
           # Another container never takes over a claim whose owner still beats, nor refunds one marked generated.
           t node scripts/test-human-checkout-crosscontainer-pg.js
-          # A paid subscription recorded while the database is away survives a restart; reload shows another container's.
+          # A paid subscription recorded while the database is away survives a true restart (the next container lands it by its boot replay); reload shows another container's.
           t node scripts/test-stripe-subscriptions-pg.js
           t node scripts/test-wish-pg.js
           # A first load that failed is retried until it lands; DDL from two boots never races;
