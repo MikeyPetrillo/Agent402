@@ -45,11 +45,15 @@ const envMs = (k, d, min = 1) => { const n = Number(process.env[k]); return Numb
 export function sdnFetchTimeoutMs() { return envMs("SANCTIONS_LIST_TIMEOUT_MS", 10 * 60_000, 1000); }
 export function sdnListUrl() { return String(process.env.SANCTIONS_LIST_URL || "").trim() || SDN_LIST_DEFAULT_URL; }
 
-const decodeXml = (s) => String(s)
+// A substring of the export can share the export's own memory, so one kept
+// field would keep the whole ~30 MB text alive. Every held value is copied
+// out first, which is what lets the raw text go after the parse.
+const detach = (s) => Buffer.from(s, "utf8").toString("utf8");
+const decodeXml = (s) => detach(String(s)
   .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
   .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
   .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&apos;/g, "'").replace(/&amp;/g, "&")
-  .trim();
+  .trim());
 const tag = (block, name) => { const m = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(block); return m ? decodeXml(m[1]) : null; };
 const CURRENCY_RE = /^Digital Currency Address\s*-\s*([A-Za-z0-9.]+)\s*$/i;
 
@@ -78,7 +82,7 @@ export function parseSdnXml(xml) {
       digitalCurrencyIds++;
       const address = tag(idm[1], "idNumber") || "";
       if (!address || /\s/.test(address) || address.length > 200) continue;
-      addresses.push({ asset: t[1].toUpperCase(), address });
+      addresses.push({ asset: detach(t[1].toUpperCase()), address });
     }
     // The entry's own fields, read with every nested list (aka, address,
     // id, nationality, ...) removed, so an alias's lastName is never taken
@@ -91,7 +95,7 @@ export function parseSdnXml(xml) {
     entries.push({ uid, lastName, firstName, name: firstName ? `${lastName}, ${firstName}` : lastName, sdnType: tag(own, "sdnType") || null, programs, addresses });
   }
   const pd = /<Publish_Date>([^<]*)<\/Publish_Date>/.exec(text);
-  return { entries, digitalCurrencyIds, publishDate: pd ? pd[1].trim() : null };
+  return { entries, digitalCurrencyIds, publishDate: pd ? detach(pd[1].trim()) : null };
 }
 
 /** The EVM-format addresses of a parse (0x + 40 hex, under any asset ticker),
