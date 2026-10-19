@@ -893,7 +893,7 @@ routing everything through one chain regardless of what you sent.
     title: "Pay Agent402 from Coinbase's own agent tooling: Agentic Wallet CLI, Agentic Wallet MCP, purl, and the CDP SDK",
     seoTitle: "Pay Agent402 from Coinbase's agent tooling",
     description:
-      "Already holding a Coinbase Agentic Wallet, the Agentic Wallet MCP tools, Stripe's purl, or a CDP-managed wallet in code? Every Agent402 endpoint is a plain x402 resource on Base, so those pay it unchanged - here are the exact commands, the spend caps to set, and the two extensions we honour (payment-identifier, bazaar).",
+      "Already holding a Coinbase Agentic Wallet, the Agentic Wallet MCP tools, Stripe's purl, or a CDP-managed wallet in code? Every Agent402 endpoint is a plain x402 resource on Base, so those pay it unchanged - here are the exact commands, the spend caps to set, and the two extensions we honor (payment-identifier, bazaar).",
     md: `
 Agent402 is indexed on the Coinbase x402 Bazaar and every paid endpoint is a
 plain x402 v2 resource settling USDC on Base (plus eleven more rails). So the
@@ -982,7 +982,7 @@ maxPerCallUsd: 0.05, dailyLimitUsd: 2 })\` from
 [agent402-client](https://www.npmjs.com/package/agent402-client) adds
 \`find()\`, caching and idempotent retries on top of any payment-aware fetch.
 
-## Two x402 extensions we honour
+## Two x402 extensions we honor
 
 - **payment-identifier** - every 402 declares it (optional). Attach a
   \`pay_...\` id to your payment payload and an exact retry of that payment

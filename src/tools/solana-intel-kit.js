@@ -524,7 +524,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "Safety headline for any Solana SPL token mint: a public token-risk score (raw + 0-100 normalised), the named risks with level (danger/warn/info), LP locked percentage, and the aggregator's audit facts - mint authority and freeze authority revoked or live, top-holder share, dev mints, holder count, verified flag and organic score. Two keyless public sources read in parallel; one compact verdict for pre-trade screening of memecoins and new launches. The full token-risk report is read only when a published field needs it (the aggregator does not index the mint, or the summary carries no score), and fullReport names the fields it filled.",
+      "Safety headline for any Solana SPL token mint: a public token-risk score (raw + 0-100 normalized), the named risks with level (danger/warn/info), LP locked percentage, and the aggregator's audit facts - mint authority and freeze authority revoked or live, top-holder share, dev mints, holder count, verified flag and organic score. Two keyless public sources read in parallel; one compact verdict for pre-trade screening of memecoins and new launches. The full token-risk report is read only when a published field needs it (the aggregator does not index the mint, or the summary carries no score), and fullReport names the fields it filled.",
     tags: ["solana", "token", "safety", "memecoin", "risk", "spl"],
     discovery: {
       bodyType: "json",
@@ -634,7 +634,7 @@ export const SOLANA_INTEL_TOOLS = [
         // case); otherwise which fields needed the full report, which it
         // filled, and why it could not when it could not.
         fullReport,
-        note: "riskLevel bands RugCheck's own score and risk levels (lower score is safer, normalised 0-100); it is not a recommendation. Jupiter fields are null when Jupiter does not index the mint; token and authorities then come from RugCheck's full report when it answers (fullReport says which), and holders stays null.",
+        note: "riskLevel bands RugCheck's own score and risk levels (lower score is safer, normalized 0-100); it is not a recommendation. Jupiter fields are null when Jupiter does not index the mint; token and authorities then come from RugCheck's full report when it answers (fullReport says which), and holders stays null.",
         source: filled.length ? ["rugcheck", "jupiter", "rugcheck-report"] : ["rugcheck", "jupiter"],
         fetchedAt: stamp(),
       };
@@ -753,7 +753,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "Top-holder concentration for a Solana token mint: the 20 largest holders with token account, owner wallet, balance, percent of supply, insider flag and a pool/locker label when the account is a known AMM vault or locker, plus top-1/5/10/20 share, top-10 share excluding labelled pool accounts, insider count, total holder count and supply. Use it to tell a whale-held launch from one whose largest holder is the liquidity pool. Read from a public token-risk report; when that report carries no holder table, at most two bounded reads from our Solana RPC fill it (the 20 largest token accounts, then one batched owner lookup). Every read runs under a deadline, so a slow upstream answers as a retryable refusal, never a charge; the answer carries returned, matched and complete fields against the 20-row table.",
+      "Top-holder concentration for a Solana token mint: the 20 largest holders with token account, owner wallet, balance, percent of supply, insider flag and a pool/locker label when the account is a known AMM vault or locker, plus top-1/5/10/20 share, top-10 share excluding labeled pool accounts, insider count, total holder count and supply. Use it to tell a whale-held launch from one whose largest holder is the liquidity pool. Read from a public token-risk report; when that report carries no holder table, at most two bounded reads from our Solana RPC fill it (the 20 largest token accounts, then one batched owner lookup). Every read runs under a deadline, so a slow upstream answers as a retryable refusal, never a charge; the answer carries returned, matched and complete fields against the 20-row table.",
     tags: ["solana", "token", "holders", "whales", "concentration", "memecoin", "spl"],
     discovery: {
       bodyType: "json",

@@ -91,8 +91,8 @@ function partsToText(parts, where) {
 export function geminiToChat(input, model) {
   if (input == null || typeof input !== "object") throw bad("Request body must be a JSON object");
   for (const [k, why] of [
-    ["safetySettings", "this wire cannot honour a safety threshold it does not control upstream"],
-    ["safety_settings", "this wire cannot honour a safety threshold it does not control upstream"],
+    ["safetySettings", "this wire cannot honor a safety threshold it does not control upstream"],
+    ["safety_settings", "this wire cannot honor a safety threshold it does not control upstream"],
     ["cachedContent", "server-side context caching is not offered; the gateway caches nothing on your behalf"],
     ["cached_content", "server-side context caching is not offered; the gateway caches nothing on your behalf"],
   ]) if (input[k] !== undefined) throw bad(`"${k}" is not supported on this route - ${why}.`);
