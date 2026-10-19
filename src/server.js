@@ -1644,7 +1644,9 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
   }
   const { assertPublicUrl, ssrfDispatcher } = await import("./tools/fetch-guard.js");
   const resolved = [];
-  const { sellerRouteRefusedRecently, sellerServesModel } = await import("./x402-buyer.js");
+  const { sellerRouteRefusedRecently, sellerServesModel, refreshSellerMemos } = await import("./x402-buyer.js");
+  // Strikes another replica recorded reach this one's memos before they are read.
+  await refreshSellerMemos(candidates.map((r) => ({ url: r.url, origin: r.seller, chain })));
   for (const r of candidates) {
     let live = false;
     // The wallets this candidate's INHERITED evidence belongs to, when that

@@ -1559,6 +1559,8 @@ jobs:
           t node scripts/test-seller-verification.js
           # Delivery-failure memory: a seller whose PAID call 5xx'd with no receipt (or never answered) stops being ranked and stops being labelled callable, until a call to it succeeds
           t node scripts/test-seller-delivery-memory.js
+          # Refusal and delivery memos reach the other replica through the shared store
+          t node scripts/test-seller-memo-shared.js
           # "External spend guard (per-payer debt ceiling: an UNSETTLED upstream spend keeps counting, so verify-then-fail-to-settle cannot drain the wallet — offline)"
           t node scripts/test-external-spend-guard.js
           # H-01/H-03: one halt reaches every signing path; the daily ceiling survives a restart
