@@ -58,9 +58,10 @@ function noteDeleted(file, key) {
  * after a background re-read) and saving the merge when memory changed in the
  * meantime. `keyOf(entry)` names a body entry for the deleted-key filter.
  */
-function loadMerging(file, { apply, persist, keyOf }) {
+function loadMerging(file, { apply, persist, keyOf, adapter = null }) {
   const d = docFor(file);
   const onLoad = (body) => {
+    if (adapter) sideNoteLoaded(file, adapter, body);
     const u = unsaved.get(file);
     unsaved.delete(file);
     let b = body;
@@ -69,10 +70,84 @@ function loadMerging(file, { apply, persist, keyOf }) {
       else if (b && typeof b === "object") b = Object.fromEntries(Object.entries(b).filter(([k, v]) => !u.deleted.has(keyOf([k, v]))));
     }
     apply(b);
-    if (u && (u.dirty || u.deleted.size)) persist();
+    // With an adapter the save is a merge measured from the row as loaded, so
+    // it can always run: it writes only what memory holds beyond the row.
+    if (adapter || (u && (u.dirty || u.deleted.size))) persist();
   };
   return trackStoreReady(d.load(null, { onLoad }));
 }
+
+// SIDE STORES SHARED BY TWO CONTAINERS (successions, gone-route marks,
+// submitted seeds, removed origins). Each is one document, and a whole-body
+// save from one container replaced the other's entries. With a database a
+// save is now a MERGE: the keys this container set or deleted since it last
+// agreed with the row are applied to the row as stored (json-document
+// update(), conditional on the row version), and nothing else is touched. A
+// re-read on the pull timer folds the other container's changes in the same
+// terms: a key the row changed or dropped since we last agreed is applied
+// here, while a local change not yet written stays and is written next.
+// `adapter`: entries(body) -> [[key, value]], body(entries) -> body,
+// local() -> [[key, value]], set(key, value), del(key).
+const sideSynced = new Map(); // file -> Map(key -> JSON of the value the row held)
+const sideChains = new Map(); // file -> the in-flight merge, so merges run in order
+const sideAdapters = new Map(); // file -> adapter
+const jsonMap = (entries) => new Map(entries.map(([k, v]) => [k, JSON.stringify(v)]));
+function sideMergeSave(file, adapter) {
+  sideAdapters.set(file, adapter);
+  const d = docFor(file);
+  if (d.backend !== "pg") { saveOrHold(file, adapter.body(adapter.local())); return; }
+  const base = sideSynced.get(file) || new Map();
+  const localEntries = adapter.local();
+  const local = jsonMap(localEntries);
+  const values = new Map(localEntries);
+  const set = [...local].filter(([k, j]) => base.get(k) !== j).map(([k]) => k);
+  const del = [...base.keys()].filter((k) => !local.has(k));
+  if (!set.length && !del.length) return;
+  const next = new Map(base);
+  for (const k of set) next.set(k, local.get(k));
+  for (const k of del) next.delete(k);
+  sideSynced.set(file, next);
+  const prev = sideChains.get(file) || Promise.resolve();
+  const run = prev.then(() => d.update((b) => {
+    const m = new Map(adapter.entries(b));
+    for (const k of set) m.set(k, values.get(k));
+    for (const k of del) m.delete(k);
+    return adapter.body([...m]);
+  }, { fallback: adapter.body([]) })).then((r) => {
+    // Not written: forget the agreement so the next save offers every key again.
+    if (!r?.ok) sideSynced.set(file, base);
+  }, () => sideSynced.set(file, base));
+  sideChains.set(file, run.finally(() => { if (sideChains.get(file) === run) sideChains.delete(file); }));
+}
+/** The row as loaded becomes the agreement a later merge is measured from. */
+function sideNoteLoaded(file, adapter, body) {
+  sideAdapters.set(file, adapter);
+  sideSynced.set(file, jsonMap(adapter.entries(body)));
+}
+/** Fold the other container's changes to one side store into memory. */
+async function sideRefresh(file) {
+  const adapter = sideAdapters.get(file);
+  const d = docFor(file);
+  if (!adapter || d.backend !== "pg" || !sideSynced.has(file)) return;
+  await (sideChains.get(file) || Promise.resolve()).catch(() => {});
+  const r = await d.read({ quiet: true }).catch(() => null);
+  if (!r?.ok) return;
+  const remoteEntries = r.exists ? adapter.entries(r.body) : [];
+  const remote = jsonMap(remoteEntries);
+  const values = new Map(remoteEntries);
+  const base = sideSynced.get(file) || new Map();
+  const local = jsonMap(adapter.local());
+  for (const [k, j] of remote) if (base.get(k) !== j && local.get(k) !== j) adapter.set(k, values.get(k));
+  for (const k of base.keys()) if (!remote.has(k) && local.has(k) && local.get(k) === base.get(k)) adapter.del(k);
+  // Local changes not yet written stay pending against the row as now read.
+  sideSynced.set(file, remote);
+}
+/** Re-read every side store (the pull timer). */
+export async function refreshIndexSideStores() {
+  for (const file of [...sideAdapters.keys()]) { try { await sideRefresh(file); } catch { /* the next pull tries again */ } }
+}
+/** Test seam: wait for every queued side-store merge. */
+export async function __sideStoresSettledForTest() { await Promise.all([...sideChains.values()].map((p) => p.catch(() => {}))); }
 import { timedSync } from "./boot-timing.js";
 import { esc } from "./ledger-chrome.js";
 // F23: seller-manifest homepages are external, attacker-controlled URLs. esc()
@@ -549,14 +624,21 @@ export function loadSubmittedSeeds() {
       if (typeof o === "string") { submittedSeeds.add(o); discoveredSeeds.add(o); }
     }
   };
-  if (d.backend === "pg") return loadMerging(SUBMITTED_SEEDS_FILE, { apply, persist: persistSubmittedSeeds, keyOf: (o) => o });
+  if (d.backend === "pg") return loadMerging(SUBMITTED_SEEDS_FILE, { apply, persist: persistSubmittedSeeds, keyOf: (o) => o, adapter: SUBMITTED_ADAPTER });
   try { apply(d.loadSync(null)); } catch { /* absent file / no volume — in-memory only */ }
   return Promise.resolve();
 }
 
+const SUBMITTED_ADAPTER = {
+  entries: (b) => (Array.isArray(b) ? b.filter((o) => typeof o === "string").map((o) => [o, 1]) : []),
+  body: (es) => es.map(([k]) => k),
+  local: () => [...submittedSeeds].map((o) => [o, 1]),
+  set: (o) => { if (submittedSeeds.size < submittedSeedsCap && !isRemovedOrigin(o)) { submittedSeeds.add(o); discoveredSeeds.add(o); } },
+  del: (o) => { submittedSeeds.delete(o); },
+};
 function persistSubmittedSeeds() {
   try {
-    saveOrHold(SUBMITTED_SEEDS_FILE, [...submittedSeeds]);
+    sideMergeSave(SUBMITTED_SEEDS_FILE, SUBMITTED_ADAPTER);
   } catch { /* best-effort — no volume in local/dev */ }
 }
 
@@ -584,7 +666,7 @@ const successions = new VersionedMap(); // old origin -> { to: new origin, at: r
 
 export function loadSuccessions() {
   const d = docFor(SUCCESSIONS_FILE);
-  if (d.backend === "pg") return loadMerging(SUCCESSIONS_FILE, { apply: applySuccessions, persist: persistSuccessions, keyOf: ([k]) => k });
+  if (d.backend === "pg") return loadMerging(SUCCESSIONS_FILE, { apply: applySuccessions, persist: persistSuccessions, keyOf: ([k]) => k, adapter: SUCCESSIONS_ADAPTER });
   applySuccessions(d.loadSync(null));
   return Promise.resolve();
 }
@@ -609,9 +691,19 @@ function persistSuccessions() {
   // truncated file here reads as "no successions", silently restoring every
   // duplicate this exists to hide.
   try {
-    saveOrHold(SUCCESSIONS_FILE, Object.fromEntries(successions));
+    sideMergeSave(SUCCESSIONS_FILE, SUCCESSIONS_ADAPTER);
   } catch { /* best-effort - no volume in local/dev */ }
 }
+const SUCCESSIONS_ADAPTER = {
+  // Normalized as memory holds them, so an unchanged entry compares equal.
+  entries: (b) => (b && typeof b === "object" && !Array.isArray(b) ? Object.entries(b) : [])
+    .map(([k, v]) => [k, typeof v === "string" ? { to: v, at: 0 } : (v && typeof v.to === "string" ? { to: v.to, at: Number(v.at) || 0 } : null)])
+    .filter(([k, v]) => typeof k === "string" && v),
+  body: (es) => Object.fromEntries(es),
+  local: () => [...successions],
+  set: (k, v) => applySuccessions({ [k]: v }),
+  del: (k) => { successions.delete(k); },
+};
 
 // What decides that a listed route exists. A seller's listing is merged from
 // their own documents (well-known manifest, OpenAPI, agents.json, llms.txt),
@@ -642,7 +734,7 @@ const goneKey = (origin, method, route) => `${origin} ${String(method || "GET").
 
 export function loadGoneRoutes() {
   const d = docFor(GONE_ROUTES_FILE);
-  if (d.backend === "pg") return loadMerging(GONE_ROUTES_FILE, { apply: applyGoneRoutes, persist: persistGoneRoutes, keyOf: ([k]) => k });
+  if (d.backend === "pg") return loadMerging(GONE_ROUTES_FILE, { apply: applyGoneRoutes, persist: persistGoneRoutes, keyOf: ([k]) => k, adapter: GONE_ADAPTER });
   applyGoneRoutes(d.loadSync(null));
   return Promise.resolve();
 }
@@ -655,9 +747,18 @@ function applyGoneRoutes(obj) {
   } catch { /* absent file / no volume - in-memory only */ }
 }
 
+const GONE_ADAPTER = {
+  entries: (b) => (b && typeof b === "object" && !Array.isArray(b) ? Object.entries(b) : [])
+    .filter(([, v]) => v && Number(v.at) > 0)
+    .map(([k, v]) => [k, { at: Number(v.at), kind: ["410", "miss", "pending"].includes(v.kind) ? v.kind : "miss" }]),
+  body: (es) => Object.fromEntries(es),
+  local: () => [...goneRoutes],
+  set: (k, v) => applyGoneRoutes({ [k]: v }),
+  del: (k) => { goneRoutes.delete(k); },
+};
 function persistGoneRoutes() {
   try {
-    saveOrHold(GONE_ROUTES_FILE, Object.fromEntries(goneRoutes));
+    sideMergeSave(GONE_ROUTES_FILE, GONE_ADAPTER);
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -884,7 +985,7 @@ export function loadRemovedOrigins() {
     // still take effect: purge whatever is already held.
     for (const k of removedOrigins.keys()) purgeOrigin(k);
   };
-  if (d.backend === "pg") { loadMerging(removedFile(), { apply, persist: persistRemovedOrigins, keyOf: (r) => strictOriginKey(r?.origin) }); return removedOrigins.size; }
+  if (d.backend === "pg") { loadMerging(removedFile(), { apply, persist: persistRemovedOrigins, keyOf: (r) => strictOriginKey(r?.origin), adapter: REMOVED_ADAPTER }); return removedOrigins.size; }
   try { apply(d.loadSync(null)); } catch { /* absent file / no volume - in-memory only */ }
   return removedOrigins.size;
 }
@@ -893,9 +994,23 @@ function persistRemovedOrigins() {
   // tmp+rename: a truncated file here reads as "nothing removed", which would
   // quietly bring every removed origin back on the next boot.
   try {
-    saveOrHold(removedFile(), [...removedOrigins.values()]);
+    sideMergeSave(removedFile(), REMOVED_ADAPTER);
   } catch { /* best-effort - no volume in local/dev */ }
 }
+// A removal another container records purges here; a restore it records
+// lifts the removal here too.
+const REMOVED_ADAPTER = {
+  entries: (b) => (Array.isArray(b) ? b.map((r) => [strictOriginKey(r?.origin), r]).filter(([k]) => k)
+    .map(([k, r]) => [k, { origin: k, removedAt: Number(r?.removedAt) || 0, note: typeof r?.note === "string" ? r.note.slice(0, 500) : "" }]) : []),
+  body: (es) => es.map(([, v]) => v),
+  local: () => [...removedOrigins],
+  set: (k, r) => {
+    if (!removedOrigins.has(k) && removedOrigins.size >= REMOVED_ORIGINS_MAX) return;
+    removedOrigins.set(k, { origin: k, removedAt: Number(r?.removedAt) || 0, note: typeof r?.note === "string" ? r.note.slice(0, 500) : "" });
+    purgeOrigin(k);
+  },
+  del: (k) => { removedOrigins.delete(k); },
+};
 
 // Drop every piece of state keyed on this origin. Returns what was held.
 function purgeOrigin(key) {
@@ -6187,6 +6302,9 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
   if (pullInFlight) return pullInFlight;
   pullInFlight = (async () => {
     await reloadRemovedOrigins();
+    // Successions, gone marks, submitted seeds and removals another container
+    // changed, folded in before the index rows.
+    await refreshIndexSideStores();
     let folded = 0;
     if (pullWatermark == null) {
       // The first pull starts from the database's clock a little before now:
