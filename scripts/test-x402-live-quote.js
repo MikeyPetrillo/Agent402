@@ -176,5 +176,15 @@ const HEADER = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [REAL_ACCEP
   ok(junk && junk.price === null, "an unknown solana asset still refuses to guess a price (null, never 0)");
 }
 
+// ---- x402 v1 names the amount maxAmountRequired ------------------------------
+{
+  const { quoteFromAccepts } = await import("../src/x402-live-quote.js");
+  const v1 = { scheme: "exact", network: "base", maxAmountRequired: "25000", resource: "https://seller.example/x", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x0bac88e8B47D9F2dC38E66dB9dA4b41032d24065", extra: { name: "USD Coin", version: "2" } };
+  const q = quoteFromAccepts([v1]);
+  ok(q && q.price === 0.025, `a v1 accept prices from maxAmountRequired (got ${q && q.price})`);
+  const both = quoteFromAccepts([{ ...v1, amount: "10000" }]);
+  ok(both && both.price === 0.01, "amount wins when an accept carries both fields");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

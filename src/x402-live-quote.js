@@ -138,8 +138,10 @@ export function quoteFromAccepts(accepts) {
   const decimals = Number.isInteger(a$(preferred?.extra?.decimals)) ? a$(preferred.extra.decimals)
     : isUsdc(preferred) ? USDC_DECIMALS
       : null;
-  if (decimals != null && preferred?.amount != null) {
-    const n = Number(preferred.amount);
+  // x402 v1 names the amount `maxAmountRequired`; v2 renamed it `amount`.
+  const atomic = preferred?.amount ?? preferred?.maxAmountRequired;
+  if (decimals != null && atomic != null) {
+    const n = Number(atomic);
     // A negative or non-finite amount is corrupt, not free.
     if (Number.isFinite(n) && n >= 0) price = n / 10 ** decimals;
   }
