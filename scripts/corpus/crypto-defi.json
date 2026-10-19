@@ -1085,6 +1085,7 @@
   },
   {
    "slug": "sol-token-holders",
+   "requires": "RUGCHECK_TOOLS",
    "name": "a mint RugCheck does not track is filled from our own RPC",
    "input": {
     "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
@@ -1106,6 +1107,7 @@
   },
   {
    "slug": "sol-token-holders",
+   "requires": "RUGCHECK_TOOLS",
    "name": "BONK holders",
    "input": {
     "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
@@ -1156,6 +1158,7 @@
   },
   {
    "slug": "sol-token-report",
+   "requires": "RUGCHECK_TOOLS",
    "name": "BONK report",
    "input": {
     "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
@@ -1173,6 +1176,7 @@
   },
   {
    "slug": "sol-token-safety",
+   "requires": "RUGCHECK_TOOLS",
    "name": "USDC safety",
    "input": {
     "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
@@ -1187,6 +1191,7 @@
   },
   {
    "slug": "sol-token-safety",
+   "requires": "RUGCHECK_TOOLS",
    "name": "malformed mint is a 400",
    "input": {
     "mint": "nope"

@@ -46,6 +46,11 @@ export const EMPTY_ARRAY_OK = new Map([
   ["/api/weather-alerts", "alerts"],          // a state with no active NWS alert at that minute (CA read 0 on 2026-09-17 13:48Z); count 0 is the honest answer
   ["/api/nft-metadata", "attributes"],        // a token whose collection publishes no traits
   ["/api/coin-profile", "platforms"],         // a native coin has no contract addresses
+  // The example origin is agent402.tools. In production that is the local host,
+  // which always names a blocker; a CI boot runs on 127.0.0.1, so the origin is
+  // an outside seller there, and once the crawled index rates it proven the
+  // router has nothing to block it with.
+  ["/api/x402/seller-trust", "provenBlockers"],
   // RugCheck stopped populating `topHolders` for EVERY mint (measured
   // 2026-09-19: 5 of 5 majors answered 200 with an empty array while
   // totalHolders stayed populated). The tool now falls back to OUR Solana RPC,

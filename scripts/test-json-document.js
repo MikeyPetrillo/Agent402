@@ -141,8 +141,13 @@ if (String(process.env.STATE_DATABASE_URL || "").trim()) {
     // state database's parameter cleaning: the save lands rather than failing.
     const nulSave = await bad.save({ ok: 1, s: "nul\u0000inside" });
     ok(nulSave === true && (await sdb.documents.get("e1.json")).body.s === "nulinside", "a body with a NUL character is saved with the character removed");
+    // The failed body is re-sent on a timer; hold that timer past the heal so
+    // the row read below sees what the outage left, not the re-send.
+    const retryMs = process.env.STATE_STORE_RETRY_MS;
+    process.env.STATE_STORE_RETRY_MS = "60000";
     relay.cut();
     const cutSave = await bad.save({ ok: 2 });
+    if (retryMs === undefined) delete process.env.STATE_STORE_RETRY_MS; else process.env.STATE_STORE_RETRY_MS = retryMs;
     await heal();
     ok(cutSave === false && bad.lastError, "a save during an outage resolves false and records the error");
     ok((await sdb.documents.get("e1.json")).body.ok === 1, "...and the row is the last good body");

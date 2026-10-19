@@ -3,6 +3,7 @@
 // cross-references the Bazaar reader cannot follow), no em dashes; the
 // generic cap truncates at a sentence/word boundary, never mid-word "...".
 import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription } from "../src/payments.js";
+import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/tools/solana-intel-kit.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -11,7 +12,9 @@ const res = await fetch(`${process.env.TARGET_URL || "http://127.0.0.1:3000"}/ap
 const slugs = new Set((res?.endpoints || []).map((e) => e.slug));
 ok(slugs.size > 400, `live catalog readable (${slugs.size} slugs) - boot the server or set TARGET_URL`);
 for (const [slug, text] of Object.entries(BAZAAR_DESCRIPTIONS)) {
-  ok(slugs.has(slug), `curated description key "${slug}" is a real catalog slug`);
+  // A tool switched off on this boot keeps its copy for when it is listed again.
+  const gatedOff = !rugcheckEnabled() && RUGCHECK_SLUGS.has(slug);
+  ok(slugs.has(slug) || gatedOff, `curated description key "${slug}" is a real catalog slug`);
   ok(text.length <= BAZAAR_DESCRIPTION_MAX && text.length >= 120, `${slug}: ${text.length} chars (120..${BAZAAR_DESCRIPTION_MAX})`);
   ok(/Use it|use it|Use this/.test(text), `${slug}: says WHEN to use it`);
   ok(!text.includes("—"), `${slug}: no em dashes`);

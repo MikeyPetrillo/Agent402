@@ -22,8 +22,8 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   options book (`options-summary`, `crypto-options-chain`, `options-ticker`,
   `options-volume`, $0.002 to $0.005); DeFi yields, TVL, fees, DEX volume and
   stablecoin supply with history siblings (`defi-*`, `stablecoins`, $0.001 to
-  $0.003); Solana token due diligence (`sol-token-safety` $0.005,
-  `sol-token-report` $0.010, holders, pairs, trending, prices, swap quotes);
+  $0.003); Solana token markets (pairs, search, trending, prices, swap
+  quotes);
   crypto news, computed technical indicators and a whole-market pulse
   ($0.002 to $0.004); broad coin/exchange coverage including price by token
   contract address; indexed EVM chain reads (transfers, balances, allowances,

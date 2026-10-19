@@ -535,6 +535,9 @@ export const TOOLS = [
     // stable and the check can assert real fields rather than mere shape.
     kit: "solana-intel",
     path: "/api/sol-token-safety",
+    // Listed only while RUGCHECK_TOOLS=on on prod; an unlisted route is
+    // skipped, never bought.
+    whenListed: true,
     method: "POST",
     body: { mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN" },
     priceUsd: 0.005,
@@ -984,7 +987,17 @@ async function main() {
   // Run context for legs whose body depends on an earlier leg (the attest leg
   // attests the settlement tx of the leg before it).
   const ctx = { lastSettledTx: null, lastSettledPath: null };
+  // Legs marked `whenListed` buy only when prod's catalog lists the route.
+  let listedPaths = null;
+  if (TOOLS.some((t) => t.whenListed)) {
+    try { listedPaths = new Set(((await (await fetch(`${TARGET}/api/pricing`)).json()).endpoints || []).map((e) => e.path)); }
+    catch (e) { console.warn(`WARN  preflight: GET ${TARGET}/api/pricing failed: ${(e?.message || String(e)).slice(0, 120)}`); }
+  }
   for (const t of TOOLS) {
+    if (t.whenListed && listedPaths && !listedPaths.has(t.path)) {
+      console.log(`SKIP  ${t.kit.padEnd(10)} ${t.path}  (not listed on this server)`);
+      continue;
+    }
     // A leg with `weekday` (0 = Sunday, UTC) buys only on that day, unless the
     // run asks for every leg (CANARY_ALL_LEGS=1, e.g. a manual dispatch).
     if (Number.isInteger(t.weekday) && new Date().getUTCDay() !== t.weekday && process.env.CANARY_ALL_LEGS !== "1") {
