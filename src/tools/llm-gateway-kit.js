@@ -879,6 +879,22 @@ export function paymentWindowTimeoutMs(req, defaultMs) {
   return Math.min(defaultMs, left - PAYMENT_WINDOW_TAIL_MS);
 }
 
+/** An attempt that ran out its own timeout may still have generated (and
+ *  been billed) upstream, whatever rail the buyer paid on. After this many
+ *  such attempts a chain walk ends with a 504 (not charged) instead of
+ *  starting another. */
+export const MAX_TIMED_OUT_ATTEMPTS = () => Math.max(1, parseInt(process.env.LLM_MAX_TIMED_OUT_ATTEMPTS || "2", 10) || 2);
+export function timedOutAttempt(e, startedMs, timeoutMs, now = Date.now()) {
+  return e?.statusCode === 504 && (e.upstreamTimeout === true || now - startedMs >= timeoutMs * 0.95);
+}
+export function timedOutBudget() {
+  let n = 0;
+  return {
+    note(e, startedMs, timeoutMs) { if (timedOutAttempt(e, startedMs, timeoutMs)) n++; },
+    spent: () => n >= MAX_TIMED_OUT_ATTEMPTS(),
+  };
+}
+
 /** Tracks the buyer's connection across a stream chain walk: once it closed,
  *  no further attempt starts and the walk ends with a 499 (not charged). */
 export function streamClientWatch(res) {
@@ -2274,7 +2290,9 @@ export async function fetchOpenRouter(body, { timeoutMs, signal, url = OPENROUTE
     });
   } catch (e) {
     if (gone?.aborted) throw gone.reason;
-    throw bad(`Upstream request failed: ${e.message}`, 504);
+    const err = bad(`Upstream request failed: ${e.message}`, 504);
+    if (e?.name === "TimeoutError") err.upstreamTimeout = true;
+    throw err;
   }
 }
 
@@ -3304,6 +3322,7 @@ function makeHandler(routeTier) {
       return {
         __sse: async (res) => {
           let lastErr;
+          const timeouts = timedOutBudget();
           const client = streamClientWatch(res);
           try {
             for (const { model, flex } of attempts) {
@@ -3311,6 +3330,7 @@ function makeHandler(routeTier) {
               let outbound;
               try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
               const timeoutMs = paymentWindowTimeoutMs(req, STREAM_TIMEOUT_MS);
+              const attemptStarted = Date.now();
               try {
                 // Streams now carry margin telemetry too: the scrubber hands us
                 // the upstream cost it strips from the final usage frame.
@@ -3318,6 +3338,8 @@ function makeHandler(routeTier) {
               } catch (e) {
                 if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
                 lastErr = e;
+                timeouts.note(e, attemptStarted, timeoutMs);
+                if (timeouts.spent()) throw e;
               }
             }
             client.assertPresent();
@@ -3328,12 +3350,14 @@ function makeHandler(routeTier) {
     }
     let lastErr;
     let refusedModel = null;
+    const timeouts = timedOutBudget();
     for (const { model, flex } of attempts) {
       // A model that refused on flex will refuse on default too - don't pay twice.
       if (model === refusedModel) continue;
       let outbound;
       try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
       const timeoutMs = paymentWindowTimeoutMs(req, UPSTREAM_TIMEOUT_MS);
+      const attemptStarted = Date.now();
       try {
         // usage.include once asked OpenRouter for the exact upstream bill;
         // OpenRouter now returns it on every response regardless (2026-08),
@@ -3415,6 +3439,8 @@ function makeHandler(routeTier) {
       } catch (e) {
         if (![502, 503, 504].includes(e?.statusCode)) throw e;
         lastErr = e;
+        timeouts.note(e, attemptStarted, timeoutMs);
+        if (timeouts.spent()) throw e;
       }
     }
     throw lastErr;

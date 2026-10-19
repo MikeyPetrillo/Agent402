@@ -174,6 +174,36 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   delete process.env.OPENROUTER_API_KEY;
 }
 
+// Timed-out attempts may have generated (and billed) upstream on any rail, so
+// a chain walk stops after LLM_MAX_TIMED_OUT_ATTEMPTS of them (default 2)
+// instead of starting another; other failures still walk the whole chain.
+{
+  process.env.OPENROUTER_API_KEY = "test-key";
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    calls.push(JSON.parse(init.body).model);
+    const e = new Error("The operation was aborted due to timeout"); e.name = "TimeoutError"; throw e;
+  };
+  const nano = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-nano");
+  let threw = null;
+  try { await nano.handler({ model: "mistralai/ministral-8b-2512", messages: [{ role: "user", content: "hi" }], max_tokens: 5 }); } catch (e) { threw = e; }
+  ok(threw?.statusCode === 504 && calls.length === 2, `two timed-out attempts end the walk with a 504 (attempts ${calls.length})`);
+  calls.length = 0;
+  process.env.LLM_MAX_TIMED_OUT_ATTEMPTS = "1";
+  threw = null;
+  try { await nano.handler({ model: "mistralai/ministral-8b-2512", messages: [{ role: "user", content: "hi" }], max_tokens: 5 }); } catch (e) { threw = e; }
+  ok(threw?.statusCode === 504 && calls.length === 1, `the limit is configurable (attempts ${calls.length})`);
+  delete process.env.LLM_MAX_TIMED_OUT_ATTEMPTS;
+  calls.length = 0;
+  globalThis.fetch = async (url, init) => { calls.push(JSON.parse(init.body).model); return { ok: false, status: 502, text: async () => "{}" }; };
+  threw = null;
+  try { await nano.handler({ model: "mistralai/ministral-8b-2512", messages: [{ role: "user", content: "hi" }], max_tokens: 5 }); } catch (e) { threw = e; }
+  ok(threw?.statusCode === 502 && calls.length > 2, `provider errors (no generation) still walk the whole chain (attempts ${calls.length})`);
+  globalThis.fetch = realFetch;
+  delete process.env.OPENROUTER_API_KEY;
+}
+
 // Streaming: stream:true returns an __sse writer; SSE passes through verbatim
 // with correct headers; pre-stream provider errors walk the failover chain.
 {
