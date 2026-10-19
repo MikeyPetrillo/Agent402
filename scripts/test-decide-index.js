@@ -48,6 +48,8 @@ ok(remoteToolRow(remote, { executable: false }).executable === false && !("execu
 {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/remoteExecutable: \(t\) => \{[\s\S]{0,700}withDispatchFields\([\s\S]{0,120}\{ rowLevel: true \}\)\.routerDispatchByChain\?\.base\?\.eligible === true/.test(src), "the export marks an outside row executable only on the router's Base verdict");
+  const exp = readFileSync(new URL("../src/decide/index-export.js", import.meta.url), "utf8");
+  ok(/executable: routeExcludedCategory\(t\) !== null \? false :/.test(exp), "an outside route in a category the router never buys is exported as not executable, whatever the verdict function says");
   ok(/remoteExecutable: \(t\) => \{[\s\S]{0,500}if \(url && routeRefusedNow\(url, "base"\)\) return false;[\s\S]{0,200}withDispatchFields/.test(src), "a route the router has benched for refusing payment is exported as not payable");
 }
 ok(cleanText("a".repeat(700), 600).length === 600, "cleaned text is length-capped");

@@ -305,7 +305,7 @@ function setup(plan, { ledgerWrap = (l) => l, runStopSignal, runBudgetMs = () =>
   __resetDrainForTest();
   ok(out && out.status === "partial", `the run answers with what finished (${out?.status || out?.message})`);
   const s2 = out?.steps?.[1];
-  ok(s2?.status === "failed" && /the run was stopped/.test(s2.attempts[0].error) && s2.attempts[0].toolFault === false, "the hung step in flight was cancelled, and not counted against its tool");
+  ok(s2?.status === "failed" && /the run was stopped/.test(s2.attempts[0].error) && s2.attempts[0].toolFault === false, "the hung step in flight was canceled, and not counted against its tool");
   ok(before.join().includes("start d") ? out.steps[3].status === "ok" : out.steps[3].status === "skipped", "the dependent either finished before the drain or is reported");
 }
 {

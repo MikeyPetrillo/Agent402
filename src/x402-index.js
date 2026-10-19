@@ -5182,7 +5182,7 @@ async function probeDoc(originUrl, path, opts, prevParsed) {
 // WHAT A CRAWLED ENTRY KEEPS OF ITS MANIFEST. The parsed document is needed
 // only while the crawl derives the seller's tools from it; every later reader
 // uses the slim keys (slimManifestForMemory). Keeping the parsed object on the
-// entry held every seller's full catalogue document as heap objects for the
+// entry held every seller's full catalog document as heap objects for the
 // whole cycle. What the next crawl needs is the document itself, and only when
 // the origin can answer 304 (it sent a validator): then the body is kept
 // gzip-packed (`manifestBody`) and parsed again only on that 304, so the

@@ -1,21 +1,21 @@
 #!/usr/bin/env node
 // A crawled entry keeps the slim manifest, and a 304 still derives the same
-// catalogue.
+// catalog.
 //
 // The crawl derives a seller's tools from its /.well-known/x402 document and
 // then kept the whole parsed document on the cache entry, so every seller's
-// full catalogue document stayed on the heap between crawls. The entry now
+// full catalog document stayed on the heap between crawls. The entry now
 // keeps the slim keys its readers use (name, homepage, payment, capabilities,
 // description) plus, when the origin sends a validator, the document's body
 // packed for the next crawl's 304. This test drives the real crawl through
 // the __setCrawlFetchForTest seam with a stub that honors If-None-Match and
 // requires:
-//   - the entry holds no parsed catalogue, and the replica copy no body;
+//   - the entry holds no parsed catalog, and the replica copy no body;
 //   - a 304 crawl derives exactly the tools and seller detail a full read did
-//     (free_endpoints and catalogue payment terms included);
+//     (free_endpoints and catalog payment terms included);
 //   - an origin without validators keeps no body and is read in full each time;
 //   - a 304 with no kept body falls back to one full read, never to an empty
-//     catalogue;
+//     catalog;
 //   - the seller's own description is kept whole for the listing check.
 // Offline.
 process.env.X402_INDEX_CRAWL = "off";
@@ -88,7 +88,7 @@ for (const origin of [ETAGGED, PLAIN]) {
   const first = await crawl(origin);
   const e1 = _cacheForTests().get(origin);
   ok(first?.toolCount === 5, `${label}: the first crawl lists the paid routes and drops the declared free one (${first?.toolCount})`);
-  ok(e1?.manifest?.slimmed === true && !("resources" in e1.manifest) && !("free_endpoints" in e1.manifest), `${label}: the entry keeps the slim manifest, not the catalogue`);
+  ok(e1?.manifest?.slimmed === true && !("resources" in e1.manifest) && !("free_endpoints" in e1.manifest), `${label}: the entry keeps the slim manifest, not the catalog`);
   ok(e1?.manifest?.name && e1.manifest.homepage === origin && e1.manifest.payment?.x402?.primaryNetwork === "eip155:8453" && e1.manifest.capabilities?.tools === 6, `${label}: name, homepage, payment and declared tool count are kept`);
   ok(e1?.manifest?.description === LONG, `${label}: the seller's description is kept whole`);
   ok(first?.displayName === e1?.manifest?.name && first?.declaredToolCount === 6, `${label}: the detail still reads the name and the declared count (${first?.displayName}, ${first?.declaredToolCount})`);
@@ -118,7 +118,7 @@ for (const origin of [ETAGGED, PLAIN]) {
   const before = notModified;
   const d = await crawl(ETAGGED);
   ok(notModified === before + 1 && fetches.get(wellKnown(ETAGGED)) === 2, `a 304 with no kept body is followed by one full read (${fetches.get(wellKnown(ETAGGED))} reads)`);
-  ok(d?.toolCount === 5 && strip(_cacheForTests().get(ETAGGED).tools) === firstTools, "and the catalogue is the same");
+  ok(d?.toolCount === 5 && strip(_cacheForTests().get(ETAGGED).tools) === firstTools, "and the catalog is the same");
   ok(Buffer.isBuffer(_cacheForTests().get(ETAGGED).manifestBody), "and the body is kept again");
 }
 

@@ -719,7 +719,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
             attempts.push({ id: tool.id, error: String(e?.message || e).slice(0, 240), status: e?.statusCode || 500, toolFault: sellerRefused || !(e?.statusCode >= 400 && e?.statusCode < 500), ...(maybePaid ? { mayHavePaid: true } : {}) });
             if (maybePaid) {
               // The payment may have left (or may still leave: a timed-out leg is
-              // not cancelled). Book its worst case and try no other paid seller.
+              // not canceled). Book its worst case and try no other paid seller.
               mayHaveSpentOutside = true;
               // What the signed credential could move, when the payer said; else the cap.
               const signed = Number(e?.signedUsd);
