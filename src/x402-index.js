@@ -94,7 +94,7 @@ import { CHAIN_PAGES, marketSellers } from "./market-page.js";
 import { WELL_KNOWN_PATH, discoveryNote } from "./discovery-note.js";
 import { judgeFreeResponse } from "./tool-judge.js";
 import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, probeAttemptsFor, isQuoteResponse, joinSellerRoute } from "./x402-live-quote.js";
-import { evmDomainsOfAccepts } from "./evm-usdc-domain.js";
+import { evmDomainsOfAccepts, domainTruthFor } from "./evm-usdc-domain.js";
 import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAmountToDollars } from "./price-usd.js";
 // Re-exported: the dataset snapshot, the server and the tests import it from here.
 export { priceToMicroUsd };
@@ -2098,6 +2098,28 @@ export function sellerPayToByNetwork(tools) {
  * the same cost. Sharing the derivation is what keeps a manifest row and a
  * Bazaar row describing one endpoint from disagreeing about what it costs.
  */
+// USDC by its identity per chain family, for an accept that states no decimals.
+const SVM_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const AVM_USDC_ASA = "31566704";
+const STELLAR_USDC_SAC = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
+/** The decimals an accept's amount is denominated in, or null when its asset
+ *  is one we cannot scale. An accept naming no asset is read as USDC (the
+ *  x402 default every annotation dialect without an asset means). */
+export function acceptDecimals(a) {
+  const stated = a?.extra?.decimals ?? a?.decimals;
+  if (Number.isInteger(stated) && stated >= 0 && stated <= 36) return stated;
+  if (typeof stated === "string" && /^\d{1,2}$/.test(stated.trim())) return Number(stated.trim());
+  const asset = a?.asset == null ? "" : String(a.asset).trim();
+  const net = String(a?.network || "");
+  if (!asset || /^usdc$/i.test(asset)) return 6;
+  if (net.startsWith("eip155:")) { const t = domainTruthFor(net, asset); if (t) return t.symbol === "USDC" ? 6 : null; }
+  if (net.startsWith("solana") && asset === SVM_USDC_MINT) return 6;
+  if (net.startsWith("algorand") && asset === AVM_USDC_ASA) return 6;
+  if (net.startsWith("stellar") && asset === STELLAR_USDC_SAC) return 7;
+  if (/^0x[0-9a-f]{40}$/i.test(asset) && /^(usdc|usd coin)$/i.test(String(a?.extra?.name || "").trim())) return 6;
+  return null;
+}
+
 export function paymentFieldsFromAccepts(rawAccepts) {
   // Normalized ONCE here so every downstream read (the `preferred` accept
   // below, `networks:`, `stellarPayTo`, `algorandPayTo`, `payToByNetwork`)
@@ -2117,10 +2139,18 @@ export function paymentFieldsFromAccepts(rawAccepts) {
   // first left those rows priceless AND cost the live-402 probe that would
   // have learned the figure the origin already declared.
   const amount = preferred?.amount ?? preferred?.maxAmountRequired;
-  if (amount != null) {
-    // amount is an atomic-units string; USDC has 6 decimals.
+  // Atomic units of the accept's own asset: its stated decimals, or a USDC we
+  // know. An asset we cannot scale is left unpriced rather than read as USDC.
+  const decimals = preferred ? acceptDecimals(preferred) : null;
+  if (amount != null && decimals != null) {
     const n = Number(amount);
-    if (Number.isFinite(n)) price = n / 1e6;
+    if (Number.isFinite(n)) price = n / 10 ** decimals;
+  }
+  // payTo per network, the priced accept's own address first: the address a
+  // row names on a chain is the one its price was quoted for.
+  const payToByNetwork = {};
+  for (const a of [preferred, ...accepts]) {
+    if (typeof a?.network === "string" && typeof a?.payTo === "string" && a.payTo && !payToByNetwork[a.network]) payToByNetwork[a.network] = a.payTo;
   }
   return {
     price,
@@ -2142,11 +2172,7 @@ export function paymentFieldsFromAccepts(rawAccepts) {
     // strkey-validated fields above; this covers the EVM chains + Solana, whose
     // /base, /polygon, /arbitrum, /solana pages had no per-seller address to
     // scope to. Shape is validated by getActivityForChain before any RPC call.
-    payToByNetwork: Object.fromEntries(
-      accepts
-        .filter((a) => typeof a?.network === "string" && typeof a?.payTo === "string" && a.payTo)
-        .map((a) => [a.network, a.payTo])
-    ),
+    payToByNetwork,
     // The EIP-712 domain each EVM accept advertises (asset + extra.name). A
     // Base accept naming "USDC" where the token signs under "USD Coin" is a
     // challenge no stock buyer can pay; the router label reads this to say so
@@ -2158,9 +2184,10 @@ export function paymentFieldsFromAccepts(rawAccepts) {
 export function bazaarItemToTool(item, originUrl) {
   // `resource` = CDP Bazaar; `resourceUrl` = GoPlausible's AVM registry.
   const resource = item.resource || item.resourceUrl || item.url;
-  if (typeof resource !== "string" || !resource.startsWith(originUrl)) return null;
+  if (typeof resource !== "string") return null;
   // A segment boundary after the key: "https://host" must not own
   // "https://hostile.example/...", nor a path seller "/app/x" own "/app/x2".
+  // The host compares case-insensitively (a registry may record "API.Host").
   if (!isUnderSeller(resource, originUrl)) return null;
   const pay = paymentFieldsFromAccepts(item.accepts);
   let pathStr = "/";

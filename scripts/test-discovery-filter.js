@@ -101,4 +101,30 @@ assert.strictEqual(isJunkOrigin("https://solmaker.example"), false, "real host k
 assert.strictEqual(isJunkOrigin("https://mailseller.example"), false, "real host kept");
 assert.strictEqual(isJunkOrigin("https://api.cacheseller.example"), false, "real host kept");
 
+// --- the accepts reader: decimals, payTo, host case --------------------------
+{
+  const { paymentFieldsFromAccepts } = await import("../src/x402-index.js");
+  const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const stellar = paymentFieldsFromAccepts([{ network: "stellar:pubnet", asset: "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75", amount: "100000", payTo: "GSELLER" }]);
+  assert.strictEqual(stellar.price, 0.01, "Stellar USDC (7 decimals) scales by its own decimals");
+  const stated = paymentFieldsFromAccepts([{ network: "eip155:8453", asset: "0x" + "ab".repeat(20), amount: "5000000000000000", extra: { name: "Some Token", decimals: 18 } }]);
+  assert.strictEqual(stated.price, 0.005, "an accept's stated decimals scale its amount");
+  const unknown = paymentFieldsFromAccepts([{ network: "eip155:8453", asset: "0x" + "cd".repeat(20), amount: "1000000000000000000", extra: { name: "Some Token" } }]);
+  assert.strictEqual(unknown.price, null, "an asset we cannot scale is left unpriced, never read as USDC");
+  assert.strictEqual(paymentFieldsFromAccepts([{ network: "eip155:8453", asset: BASE_USDC, amount: "10000", extra: { name: "USD Coin" } }]).price, 0.01, "Base USDC still scales by 6");
+  assert.strictEqual(paymentFieldsFromAccepts([{ network: "base", amount: "10000" }]).price, 0.01, "an accept naming no asset reads as USDC");
+  // payTo comes from the accept the price came from.
+  const two = paymentFieldsFromAccepts([
+    { network: "eip155:8453", asset: "0x" + "cd".repeat(20), amount: "1", payTo: "0xOTHER", extra: { name: "Some Token" } },
+    { network: "eip155:8453", asset: BASE_USDC, amount: "10000", payTo: "0xPRICED", extra: { name: "USD Coin" } },
+    { network: "eip155:8453", asset: BASE_USDC, amount: "20000", payTo: "0xLATER", extra: { name: "USD Coin" } },
+  ]);
+  assert.strictEqual(two.price, 0.01, "the preferred Base USDC accept prices the row");
+  assert.strictEqual(two.payToByNetwork["eip155:8453"], "0xPRICED", "the row's Base payTo is the priced accept's own");
+  // A registry row whose resource spells the host in another case is kept.
+  const mixed = bazaarItemToTool({ resource: "https://API.Mixed.example/v1/x", accepts: [{ network: "eip155:8453", asset: BASE_USDC, amount: "10000", extra: { name: "USD Coin" } }] }, "https://api.mixed.example");
+  assert.ok(mixed && mixed.route === "/v1/x", "a mixed-case host registry row is filed under the seller");
+  assert.strictEqual(bazaarItemToTool({ resource: "https://api.mixed.example.evil/v1/x" }, "https://api.mixed.example"), null, "another host is still refused");
+}
+
 console.log("discovery-filter: all assertions passed");
