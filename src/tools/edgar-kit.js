@@ -1051,6 +1051,27 @@ EDGAR_TOOLS.push(
 // 13F parsing lives in ONE place (edgar-13f-holdings uses get13fHoldings too).
 // ---------------------------------------------------------------------------
 
+/** Apply 13F-HR/A amendments to an original holdings table in filing order,
+ *  oldest first, so a later restatement replaces everything before it and a
+ *  NEW HOLDINGS amendment filed after a restatement is kept. The submissions
+ *  list is newest first, hence the sort. Each amendment is
+ *  { accessionNumber, filedDate, amendmentType, rows (array or null) }.
+ *  Pure; exported for tests. */
+export function apply13fAmendments(original, amendments) {
+  let all = Array.isArray(original) ? original : [];
+  const ordered = [...(amendments || [])].sort((a, b) => String(a.filedDate || "").localeCompare(String(b.filedDate || "")) || String(a.accessionNumber || "").localeCompare(String(b.accessionNumber || "")));
+  const out = [];
+  for (const a of ordered) {
+    const rows = Array.isArray(a.rows) ? a.rows : null;
+    const type = String(a.amendmentType || "").toUpperCase();
+    const entry = { accessionNumber: a.accessionNumber, filedDate: a.filedDate, amendmentType: a.amendmentType || "UNKNOWN", rows: rows ? rows.length : null, informationTableUrl: a.informationTableUrl ?? null, applied: false };
+    if (rows && type === "RESTATEMENT") { all = rows; entry.applied = true; }
+    else if (rows && type === "NEW HOLDINGS") { all = all.concat(rows); entry.applied = true; }
+    out.push(entry);
+  }
+  return { holdings: all, amendments: out };
+}
+
 // The Nth most recent 13F-HR holdings for a manager (index 0 = latest, 1 =
 // prior quarter). Returns null when the manager has fewer than index+1 13F-HR
 // filings (so a caller can ask for the prior quarter and get null, not throw).
@@ -1083,7 +1104,7 @@ export async function get13fHoldings({ cik, ticker, index = 0 }) {
   // 2025-08-14 by an amendment adding D R Horton, Lennar and Nucor - a diff
   // against the original alone reports those as NEW a quarter late.
   const cover = await settleCover(cikInt, accession);
-  const amendments = [];
+  const read = [];
   for (let k = 0; k < recent.form.length; k++) {
     if (String(recent.form[k]).toUpperCase() !== "13F-HR/A" || recent.reportDate[k] !== reportDate) continue;
     const accA = recent.accessionNumber[k], filedA = recent.filingDate[k];
@@ -1091,11 +1112,11 @@ export async function get13fHoldings({ cik, ticker, index = 0 }) {
     const type = String(coverA?.amendmentType || "").toUpperCase();
     let rows = null, tableA = null;
     try { tableA = await fetchInformationTableUrl(cikInt, accA); if (tableA) rows = parse13fInformationTable(await fetchXmlText(tableA), filedA); } catch { rows = null; }
-    amendments.push({ accessionNumber: accA, filedDate: filedA, amendmentType: type || "UNKNOWN", rows: rows ? rows.length : null, informationTableUrl: tableA, applied: false });
-    if (!rows) continue;
-    if (type === "RESTATEMENT") { all = rows; amendments[amendments.length - 1].applied = true; }
-    else if (type === "NEW HOLDINGS") { all = all.concat(rows); amendments[amendments.length - 1].applied = true; }
+    read.push({ accessionNumber: accA, filedDate: filedA, amendmentType: type || "UNKNOWN", rows, informationTableUrl: tableA });
   }
+  const applied = apply13fAmendments(all, read);
+  all = applied.holdings;
+  const amendments = applied.amendments;
   all.sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
   const totalValueUsd = all.reduce((acc, r) => acc + (r.valueUsd ?? 0), 0);
   return { cik: _cik, managerName: sub?.name ?? resolved.name ?? null, accessionNumber: accession, filedDate, reportDate, informationTableUrl: tableUrl, totalHoldings: all.length, totalValueUsd, holdings: all,
