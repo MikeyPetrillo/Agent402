@@ -967,6 +967,8 @@ jobs:
           t node scripts/test-trial.js
           # LLM gateway validation (OpenAI-compat tiers, caps, env-gated 503)
           t node scripts/test-llm-gateway.js
+          # Timed-out attempt budget on chat, Messages and Responses, plain and streamed (offline)
+          t node scripts/test-llm-timed-out-budget.js
           t node scripts/test-gateway-resilience.js
           t node scripts/test-upstream-refusal.js
           t node scripts/test-llm-kit-spend.js
