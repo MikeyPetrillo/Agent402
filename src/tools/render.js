@@ -471,6 +471,9 @@ export const HTML_FRAMES_LIMITS = Object.freeze({
   maxOutputBytes: 8 * 1024 * 1024, // frames + contact sheet, raw PNG bytes
   loadTimeoutMs: 10_000,
   frameTimeoutMs: 5_000,
+  // Load plus every renderAt together: a document that fails late answers 400
+  // (uncharged), so this bounds how long one unpaid run holds a browser slot.
+  totalTimeoutMs: 25_000,
   sheetThumbWidth: 320,
   sheetMaxColumns: 4,
 });
@@ -575,6 +578,8 @@ export async function renderHtmlFrames(html, times, { width, height, signal } = 
     let allowPages = 1;
     context.on("page", (p) => { if (allowPages > 0) { allowPages--; return; } p.close().catch(() => {}); });
     const page = await context.newPage();
+    const runStarted = Date.now();
+    const leftMs = () => L.totalTimeoutMs - (Date.now() - runStarted);
     const pageErrors = [];
     page.on("pageerror", (err) => { if (pageErrors.length < 5) pageErrors.push(clip(err?.message || String(err), 300)); });
     page.on("dialog", (d) => d.dismiss().catch(() => {}));
@@ -591,6 +596,8 @@ export async function renderHtmlFrames(html, times, { width, height, signal } = 
     const frames = [];
     let totalBytes = 0;
     for (const t of times) {
+      const frameMs = Math.min(L.frameTimeoutMs, leftMs());
+      if (frameMs <= 0) throw framesError(`the document used its ${L.totalTimeoutMs / 1000} s budget for loading and renderAt before renderAt(${t})`);
       let timer = null;
       const outcome = await Promise.race([
         page.evaluate(async (time) => {
@@ -602,10 +609,12 @@ export async function renderHtmlFrames(html, times, { width, height, signal } = 
           await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
           return { ok: true };
         }, t).catch((e) => ({ ok: false, message: clip(e?.message || e, 300) })),
-        new Promise((r) => { timer = setTimeout(() => r({ ok: false, timeout: true }), L.frameTimeoutMs); }),
+        new Promise((r) => { timer = setTimeout(() => r({ ok: false, timeout: true }), frameMs); }),
       ]);
       clearTimeout(timer);
-      if (outcome.timeout) throw framesError(`renderAt(${t}) did not finish within ${L.frameTimeoutMs / 1000} s`);
+      if (outcome.timeout) throw framesError(frameMs < L.frameTimeoutMs
+        ? `renderAt(${t}) did not finish within the document's ${L.totalTimeoutMs / 1000} s budget`
+        : `renderAt(${t}) did not finish within ${L.frameTimeoutMs / 1000} s`);
       if (!outcome.ok) throw framesError(`renderAt(${t}) threw: ${clip(outcome.message, 300)}`);
       if (pageErrors.length) throw framesError(`the document's script threw during renderAt(${t}): ${pageErrors[0]}`);
       const png = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width, height }, caret: "hide" });

@@ -17,7 +17,7 @@
 //   node scripts/test-page-speed-frames.js
 import http from "node:http";
 import { PNG } from "pngjs";
-import { __test } from "../src/tools/render.js";
+import { __test, HTML_FRAMES_LIMITS } from "../src/tools/render.js";
 import { BROWSER_MEASURE_TOOLS, htmlFramesInput, pageSpeedInput } from "../src/tools/browser-measure-kit.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 
@@ -154,6 +154,13 @@ window.renderAt = async function () { await new Promise((r) => setTimeout(r, 300
   ok(missing?.statusCode === 400 && /renderAt/.test(missing.message), "a document without renderAt answers 400");
   const hang = await rejects(tool("html-frames").handler({ html: "<!doctype html><script>window.renderAt=()=>new Promise(()=>{});</script>", times: [0] }));
   ok(hang?.statusCode === 400 && /did not finish/.test(hang.message), "a renderAt that never resolves answers 400 at the per-frame limit");
+  // Every frame just under the per-frame limit: the document's total budget
+  // ends the run, so one unpaid run cannot hold a slot for twelve frame limits.
+  const slowStart = Date.now();
+  const slow = await rejects(tool("html-frames").handler({ html: `<!doctype html><script>window.renderAt=()=>new Promise((r)=>setTimeout(r, ${HTML_FRAMES_LIMITS.frameTimeoutMs - 500}));</script>`, times: Array(12).fill(0).map((_, i) => i) }));
+  const slowMs = Date.now() - slowStart;
+  ok(slow?.statusCode === 400 && /budget/.test(slow.message), `a run past the document's total budget answers 400 (${slow?.message})`);
+  ok(slowMs < HTML_FRAMES_LIMITS.totalTimeoutMs + 8_000, `and ends near the total budget, not after twelve frame limits (${slowMs} ms)`);
   // A saturated pool answers 503 with a retry delay (the binder sends it as Retry-After).
   for (let i = 0; i < __test.MAX_CONCURRENT; i++) await __test.acquireSlot();
   __test.setQueueDeadline(50);
