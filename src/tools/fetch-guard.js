@@ -1,7 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { lookup as lookupCb } from "node:dns";
 import { isIP } from "node:net";
-import { Agent } from "undici";
+import { Agent, buildConnector } from "undici";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
@@ -188,7 +188,21 @@ function guardedLookup(hostname, options, callback) {
 // validated public IP. Scoped to the tool fetchers — it is passed explicitly
 // and never set as the process-global dispatcher, so the x402 payment client's
 // own outbound calls are unaffected.
-export const ssrfDispatcher = new Agent({ connect: { lookup: guardedLookup, timeout: FETCH_TIMEOUT_MS } });
+// The lookup above never runs for a literal IP: Node connects to it directly.
+// A redirect to http://127.0.0.1/ or http://[::1]/ therefore skipped the check
+// entirely, so every connection (each redirect hop included) is checked here,
+// at connect time, whatever form its host takes.
+function guardedConnector() {
+  const connect = buildConnector({ lookup: guardedLookup, timeout: FETCH_TIMEOUT_MS });
+  return (opts, callback) => {
+    const host = String(opts?.hostname || "").replace(/^\[|\]$/g, "");
+    if (isIP(host) && isPrivateIp(host)) {
+      return callback(Object.assign(new Error(`Blocked: ${host} is a private address`), { code: SSRF_BLOCK_CODE }), null);
+    }
+    return connect(opts, callback);
+  };
+}
+export const ssrfDispatcher = new Agent({ connect: guardedConnector() });
 // A FRESH pinned dispatcher for callers that must not reuse a kept-alive
 // connection. Measured 2026-09-01 on a real seller: their edge corrupts the
 // socket after serving a 402, so a paid retry reusing the bare leg's
@@ -196,7 +210,7 @@ export const ssrfDispatcher = new Agent({ connect: { lookup: guardedLookup, time
 // throw that surfaced as an uncaught exception - while the same request on a
 // fresh connection settled fine. Same guardedLookup pin, so SSRF safety is
 // identical; the caller owns close().
-export const freshSsrfDispatcher = () => new Agent({ connect: { lookup: guardedLookup, timeout: FETCH_TIMEOUT_MS } });
+export const freshSsrfDispatcher = () => new Agent({ connect: guardedConnector() });
 
 // Distinguish an SSRF-block from a generic network failure on a thrown fetch error.
 export function isSsrfBlock(err) {
