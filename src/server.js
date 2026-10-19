@@ -7706,7 +7706,10 @@ app.get("/sdk-playground/sandbox", (req, res) => {
   let buf;
   try { buf = readFileSync(new URL("../assets/sdk-sandbox.html", import.meta.url)); }
   catch { return res.status(404).end(); }
-  res.setHeader("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'");
+  // sandbox allow-scripts gives the document an opaque origin however it is
+  // reached (a top-level visit or a frame without the sandbox attribute), so
+  // code it runs never acts as this site's origin.
+  res.setHeader("Content-Security-Policy", "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'self'");
   res.setHeader("Cache-Control", "public, max-age=300");
   res.type("text/html").send(buf);
 });

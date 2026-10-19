@@ -18,6 +18,9 @@
   }
 
   window.addEventListener('message', function(ev) {
+    // Only the page that framed this document may drive it. A top-level visit
+    // has window.parent === window, so an opener or another frame never matches.
+    if (window.parent === window || ev.source !== window.parent) return;
     var msg = ev.data;
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'callToolResult') {
