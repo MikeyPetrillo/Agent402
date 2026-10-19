@@ -64,12 +64,15 @@ for (const name of ["--btn-bg", "--btn-fg", "--nav-bg", "--brand-mark", "--mille
 ok(html.includes('class="ml-theme-toggle"'), "the theme toggle button is in the nav");
 ok(html.includes("ml-moon") && html.includes("ml-sun"), "moon + sun glyphs ship (CSS shows one per theme)");
 ok(!/\bonclick\s*=/.test(html), "no inline onclick attribute anywhere - CSP-blocked, must be wired via addEventListener");
-ok(!/<script>[^<]*localStorage/.test(html) && !/<script>[\s\S]{0,400}data-theme/.test(html), "no inline pre-paint theme script in the page (CSP); the external site-chrome.js does it");
+ok(!/<script>[^<]*localStorage/.test(html) && !/<script>[\s\S]{0,400}data-theme/.test(html), "no inline pre-paint theme script in the page (CSP); the external theme-init.js does it");
 ok(!/<html[^>]*data-theme/.test(html) && !/<body[^>]*data-theme/.test(html), "the server never stamps data-theme on the document (the default is the bare :root; only the client's stored preference sets light)");
 const siteChromeJs = readFileSync(new URL("../assets/js/site-chrome.js", import.meta.url), "utf8");
 const headOnly = html.slice(html.indexOf("<head>"), html.indexOf("</head>"));
-ok(headOnly.includes('<script src="/js/site-chrome.js">'), "site-chrome.js is referenced in <head> (synchronous) so the stored theme applies before first paint");
-ok(/localStorage\.getItem\('a402-theme'\)/.test(siteChromeJs.slice(0, 1200)) && /setAttribute\('data-theme','dark'\)/.test(siteChromeJs.slice(0, 1200)), "site-chrome.js applies a stored dark preference at the very top (pre-paint)");
+const themeInitJs = readFileSync(new URL("../assets/js/theme-init.js", import.meta.url), "utf8");
+ok(/<script src="\/js\/theme-init\.js\?v=[a-z0-9]+"><\/script>/.test(headOnly) && headOnly.indexOf("theme-init.js") < headOnly.indexOf("<style>"), "theme-init.js is in <head>, synchronous and before the styles, so the stored theme applies before first paint");
+ok(/<script src="\/js\/site-chrome\.js\?v=[a-z0-9]+" defer><\/script>/.test(headOnly), "site-chrome.js loads deferred (it never blocks the first paint)");
+ok(/localStorage\.getItem\('a402-theme'\)/.test(themeInitJs) && /setAttribute\('data-theme','dark'\)/.test(themeInitJs) && themeInitJs.length < 1200, "theme-init.js applies a stored dark preference and nothing else");
+ok(!/localStorage\.getItem\('a402-theme'\)/.test(siteChromeJs), "the deferred site-chrome.js no longer stamps the theme (it would be after first paint)");
 ok(/\.ml-theme-toggle/.test(siteChromeJs) && /localStorage\.setItem\('a402-theme'/.test(siteChromeJs) && siteChromeJs.includes("addEventListener('click'"), "site-chrome.js wires the toggle via addEventListener and stores the choice");
 ok(!html.includes("a402ToggleTheme"), "no global toggle function is referenced from markup");
 

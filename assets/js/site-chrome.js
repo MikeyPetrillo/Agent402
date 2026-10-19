@@ -1,7 +1,5 @@
-/* Theme: dark is the default (the :root tokens). A stored light preference is
-   applied HERE, synchronously in <head>, so the first paint is already right -
-   no flash, no inline script (CSP). Key: a402-theme = "light" | "dark"; light is the default, so only "dark" stamps. */
-(function(){try{var t=localStorage.getItem('a402-theme');if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}})();
+/* The stored theme is applied before first paint by /js/theme-init.js, the one
+   script in <head> that runs synchronously; this file loads deferred. */
 // Shared, site-wide chrome behavior: the hamburger menu toggle and
 // reveal-on-scroll. Every page rendered through ledgerShell() loads this
 // (CSP hardening, 2026-08-16 - was two inline <script> blocks; the burger

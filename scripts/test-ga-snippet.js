@@ -14,7 +14,7 @@ process.env.GA_MEASUREMENT_ID = "not-an-id";
 ok(gaSnippet(`${B}/`) === "", "a malformed id renders nothing");
 process.env.GA_MEASUREMENT_ID = "G-TEST1234";
 const home = gaSnippet(`${B}/`);
-ok(home.includes('"id":"G-TEST1234"') && home.includes('<script src="/js/ga-loader.js"></script>'), "a valid id renders the JSON island and the first-party loader");
+ok(home.includes('"id":"G-TEST1234"') && /<script src="\/js\/ga-loader\.js\?v=[a-z0-9]+" defer><\/script>/.test(home), "a valid id renders the JSON island and the first-party loader");
 ok(!/<script src="https?:/.test(home), "the page itself carries no third-party script tag");
 for (const p of ["/r/cs_abc", "/m/xyz", "/reports/public/rp_1", "/alerts/confirm", "/followups/stop", "/credits/thanks", "/monitors/manage", "/monitors/thanks", "/digest/confirm"]) {
   ok(gaSnippet(`${B}${p}`) === "", `no GA on the bearer-link page ${p}`);

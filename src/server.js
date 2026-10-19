@@ -537,7 +537,7 @@ import { workflowsPage } from "./workflows.js";
 import { badgeSvg } from "./badges.js";
 import { adapterDocsIndex, adapterDocPage } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
-import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore } from "./ledger-chrome.js";
+import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore, ASSET_VERSION } from "./ledger-chrome.js";
 import { ledgerHomePage } from "./ledger-home.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
@@ -7676,7 +7676,9 @@ app.get("/js/:file", (req, res) => {
   let buf;
   try { buf = readFileSync(new URL(`../assets/js/${file}`, import.meta.url)); }
   catch { return res.status(404).end(); }
-  res.setHeader("Cache-Control", "public, max-age=300");
+  // The page shell's URLs carry ?v=<build> (jsSrc): that exact version is
+  // immutable; anything else keeps the short cache.
+  res.setHeader("Cache-Control", req.query?.v === ASSET_VERSION ? "public, max-age=31536000, immutable" : "public, max-age=300");
   res.type("application/javascript").send(buf);
 });
 

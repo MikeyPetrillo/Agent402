@@ -31,6 +31,12 @@ export const esc = (s) =>
 // id must be a simple token (enforced) - it becomes a literal attribute
 // value, never interpolated from anything that could carry a quote.
 const SAFE_ISLAND_ID = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+// Our own scripts under /js/ carry the build as a version, so the server can
+// cache that exact URL for a year (src/server.js) while a deploy, which
+// changes the version, still reaches every browser at once.
+export const ASSET_VERSION = (process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT_SHA || "").slice(0, 7) || Date.now().toString(36);
+export function jsSrc(file) { return `/js/${file}?v=${ASSET_VERSION}`; }
+
 export function jsonScriptTag(id, value) {
   if (!SAFE_ISLAND_ID.test(id)) throw new Error(`jsonScriptTag: unsafe id "${id}"`);
   const json = JSON.stringify(value).replace(/</g, "\\u003c");
@@ -50,7 +56,8 @@ const GITHUB_ICON_SVG = `<svg width="19" height="19" viewBox="0 0 16 16" fill="c
 // the ?v= literal whenever the logo art changes or old marks linger for weeks.
 // ---------------------------------------------------------------------------
 
-export const LEDGER_HEAD = `<link rel="preload" href="/fonts/geist-500-latin.woff2" as="font" type="font/woff2" crossorigin>
+export const LEDGER_HEAD = `<link rel="preload" href="/fonts/geist-400-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/geist-500-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/geist-mono-400-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/instrument-serif-400-latin.woff2" as="font" type="font/woff2" crossorigin>
 <style>
@@ -1086,7 +1093,7 @@ function posthogSnippet(baseUrl) {
   // only the API key and per-deployment config vary, so they ride as a JSON
   // island the loader reads at runtime instead of being templated into JS
   // text (CSP hardening, 2026-08-16).
-  return jsonScriptTag("posthog-config", { key, cfg }) + '<script src="/js/posthog-loader.js"></script>';
+  return jsonScriptTag("posthog-config", { key, cfg }) + `<script src="${jsSrc("posthog-loader.js")}" defer></script>`;
 }
 // Google Analytics 4 (2026-10-01), env-gated on GA_MEASUREMENT_ID. The loader
 // (assets/js/ga-loader.js) is static and reads the id from a JSON island, as
@@ -1103,7 +1110,8 @@ export function gaSnippet(canonical) {
   // the request path decides too (truth audit 2026-10-02: the island shipped on
   // every private-link page and only the browser loader kept Google away).
   if (GA_BEARER_PATH.test(path) || GA_BEARER_PATH.test(renderPathStore.getStore() || "")) return "";
-  return jsonScriptTag("ga-config", { id }) + '<script src="/js/ga-loader.js"></script>';
+  return '<link rel="preconnect" href="https://www.googletagmanager.com"><link rel="preconnect" href="https://www.google-analytics.com">'
+    + jsonScriptTag("ga-config", { id }) + `<script src="${jsSrc("ga-loader.js")}" defer></script>`;
 }
 
 /** BreadcrumbList JSON-LD from [name, path] pairs (path relative to baseUrl). */
@@ -1157,7 +1165,8 @@ export function ledgerShell({ title: rawTitle, description: rawDescription, cano
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<script src="/js/site-chrome.js"></script>
+<script src="${jsSrc("theme-init.js")}"></script>
+<script src="${jsSrc("site-chrome.js")}" defer></script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">
