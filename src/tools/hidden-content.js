@@ -27,8 +27,8 @@ const MAX_QUOTES = 5;
 const QUOTE_CHARS = 160;
 
 // Phrasing that addresses an AI or asks it to act. Kept narrow on purpose:
-// hidden preview lines and decorative text are common and must not read as an
-// attack.
+// hidden preview lines and decorative text are common and must not be quoted
+// as instructions.
 export const DIRECTIVE = /\b(?:ignore|disregard|forget|override)\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|earlier|other)\b|\b(?:dear|attention|note to|hey|hi|hello|to the|for the)\s+(?:ai|email|inbox|virtual)?\s*(?:assistant|agent|model|llm)\b|\b(?:ai|email|inbox) assistant\b|\bas an ai\b|\b(?:language model|llm)\b|\b(?:system|developer)\s*(?:prompt|message|note)?\s*:|\binstructions? (?:for|to) (?:the )?(?:ai|assistant|agent|model)|\b(?:tell|inform|remind|instruct|advise) the (?:user|reader|recipient)\b|\bdo not (?:mention|reveal|tell|show)\b|\b(?:bank|payment|wire|account|banking) (?:details|information|instructions) (?:have |has )?(?:changed|updated)\b|\b(?:update|change) (?:the )?(?:payment|bank|wire) (?:details|information)\b|\b(?:run|execute) (?:this|the following) (?:command|script|code)\b|\b(?:mark|flag|treat) (?:this|the) (?:email|message|page) as (?:urgent|legitimate|safe|important|trusted)\b/i;
 
 // Invisible characters. U+200D (zero-width joiner) is only counted when it is
