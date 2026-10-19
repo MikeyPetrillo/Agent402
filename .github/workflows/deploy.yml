@@ -1379,6 +1379,8 @@ jobs:
           # Two containers, one seller index: pull, newer wins, removals stick.
           t node scripts/test-index-replicas-pg.js
           t node scripts/test-leaderboard-peer-adopt-pg.js
+          # The seller-funding operator switch set on one container applies on the other after one re-read.
+          t node scripts/test-seller-funding-switch-pg.js
           t node scripts/test-x402-removals-pg.js
           t node scripts/test-scan-state-version-pg.js
           t node scripts/test-revenue-ledger-pg.js
