@@ -19,8 +19,11 @@
 //   - a refused payment answers 402 on the loopback: the job carries that 402;
 //   - a process restart kills the loopback before any 200: not charged, and the
 //     boot sweep marks the job failed;
-//   - the one charged-but-undelivered case (a settled 200 whose result cannot be
-//     stored) records a debt on the refund ledger, as the MCP tasks do.
+//   - the charged-but-undelivered cases (a settled 200 whose result cannot be
+//     stored, or whose body cannot be read after its headers arrived) record a
+//     debt on the refund ledger (onChargedFailure, the MCP tasks' booking),
+//     only on the receipt's positive proof of charge. A loopback that ends
+//     before any answer is a disconnect the hang-up hook books or forgives.
 // The loopback is our own client and never hangs up early (its deadline is past
 // the longest run budget), so the hang-up rules never apply to it.
 //
@@ -67,7 +70,7 @@ export function publicJob(rec, { basePath = "/api/jobs" } = {}) {
  * @param {(req) => object|null} o.asyncRouteOf  the catalog def when this POST may run async
  * @param {object} o.store           createTaskStore() instance for these jobs
  */
-export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store, fetchImpl = fetch, maxPerIp = 4, basePath = "/api/jobs", log = console.log }) {
+export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store, fetchImpl = fetch, maxPerIp = 4, basePath = "/api/jobs", log = console.log, onChargedFailure = null }) {
   if (!port || !store || typeof asyncRouteOf !== "function") throw new Error("createAsyncJobs: port, store and asyncRouteOf are required");
   const loopbackToken = randomBytes(24).toString("hex");
   const perIp = new Map();
@@ -110,8 +113,9 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     const url = `http://${host}:${port}${req.originalUrl}`;
 
     (async () => {
+      let r = null;
       try {
-        const r = await fetchImpl(url, { method: "POST", headers, body, redirect: "manual", signal: AbortSignal.any([ctl.signal, AbortSignal.timeout(store.RUN_TIMEOUT_MS)]) });
+        r = await fetchImpl(url, { method: "POST", headers, body, redirect: "manual", signal: AbortSignal.any([ctl.signal, AbortSignal.timeout(store.RUN_TIMEOUT_MS)]) });
         const ct = r.headers.get("content-type") || "";
         let payload;
         if (/json/i.test(ct)) { const t = await r.text(); try { payload = JSON.parse(t); } catch { payload = { text: t }; } }
@@ -127,9 +131,23 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
         }
       } catch (e) {
         const aborted = e?.name === "AbortError" || e?.name === "TimeoutError";
-        await store.fail(rec.taskId, { httpStatus: 504, message: aborted ? "The run did not finish in time." : "The run could not be completed." },
-          "The call did not finish. If it had already been paid and settled, the charge is recorded as owed in our refund ledger and repaid; otherwise nothing was charged.");
-        log(`[async-jobs] ${def.slug} job ended without an answer (${aborted ? "timeout" : "error"})`);
+        // A 200 whose headers arrived has settled (settlement comes before
+        // the answer is written); its body was then lost. Book it here, on
+        // the receipt's proof, and say only what was done.
+        let booked = false;
+        if (r && r.status === 200) {
+          const receipt = decodeReceipt(r.headers.get("payment-response"));
+          if (receipt && receipt.success === true && typeof onChargedFailure === "function") {
+            try { booked = (await onChargedFailure({ slug: def.slug, receipt, priceUsd: def.priceUsd ?? null })) !== false; } catch { booked = false; }
+          }
+        }
+        const message = !r || r.status !== 200
+          ? "The call did not finish. If it had already been paid and settled, the charge is recorded as owed in our refund ledger and repaid; otherwise nothing was charged."
+          : booked
+            ? "The call was paid and settled, but its answer could not be read. The charge is recorded as owed in our refund ledger and repaid."
+            : "The call answered, but its answer could not be read. Quote this job id when asking about the charge.";
+        await store.fail(rec.taskId, { httpStatus: 504, message: aborted ? "The run did not finish in time." : "The run could not be completed." }, message);
+        log(`[async-jobs] ${def.slug} job ended without an answer (${aborted ? "timeout" : "error"}${r ? `, loopback ${r.status}` : ""}${booked ? ", recorded as owed" : ""})`);
       } finally { dec(ip); }
     })();
 

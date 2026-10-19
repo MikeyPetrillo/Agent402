@@ -1527,6 +1527,8 @@ jobs:
           t node scripts/test-composite-guard.js
           t node scripts/test-run-time-note.js
           t node scripts/test-async-jobs.js
+          # A settled async-job 200 whose body is lost is booked as owed, and the job says only what was done (offline)
+          t node scripts/test-async-jobs-body-loss.js
           # One payment_settled per settlement, from the one place a settlement becomes final: direct, async-replayed, hang-up (settled, owed), none for a 4xx or a refused payment (paid-mode boot vs stub facilitator - offline)
           t node scripts/test-settlement-event.js
           # x402-market-pulse supply-mix per-seller tool cap

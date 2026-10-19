@@ -8527,17 +8527,23 @@ app.get("/api/cache-stats", (_req, res) => res.json(cacheCounters()));
 // gate, so nothing settles on the 202. The call is replayed to this server over
 // 127.0.0.1 with the buyer's own payment headers and runs through the normal
 // chain below, settling only on a final 200; GET /api/jobs/:id serves the result.
+// A settled job result that cannot be delivered (not retained, or its body
+// lost on the loopback) is a debt, on the receipt's proof only. Resolves
+// false when nothing was booked.
+const bookAsyncChargedFailure = async ({ slug, receipt, priceUsd }) => {
+  try {
+    if (!receiptProvesCharge(receipt)) return false;
+    await recordRefundOwed({ slug, network: receipt?.network ?? null, payer: receipt?.payer ?? null, priceUsd, tx: receipt?.transaction ?? null, httpStatus: 500 });
+    // A duplicate (false) is a debt already on the books: still recorded.
+    return true;
+  } catch { return false; /* recording a debt must never break the serving path */ }
+};
 const asyncJobStore = createTaskStore({
   dir: taskDataDir("async-jobs"), label: "async-jobs",
-  onChargedFailure: async ({ slug, receipt, priceUsd }) => {
-    try {
-      if (!receiptProvesCharge(receipt)) return;
-      recordRefundOwed({ slug, network: receipt?.network ?? null, payer: receipt?.payer ?? null, priceUsd, tx: receipt?.transaction ?? null, httpStatus: 500 });
-    } catch { /* recording a debt must never break the serving path */ }
-  },
+  onChargedFailure: bookAsyncChargedFailure,
 });
 const asyncJobs = createAsyncJobs({
-  port: PORT, store: asyncJobStore,
+  port: PORT, store: asyncJobStore, onChargedFailure: bookAsyncChargedFailure,
   asyncRouteOf: (req) => { const def = CATALOG[`POST ${req.path}`]; return def && def.runSeconds ? def : null; },
 });
 app.use(asyncJobs.middleware);
