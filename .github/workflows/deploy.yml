@@ -6208,18 +6208,22 @@ jobs:
           # deploy job, so it checks the PREVIOUS build's homepage — a fix to
           # these surfaces goes green on the run AFTER the one that ships it.
           FAILS=0
-          ck() { if eval "$2"; then echo "  $1 ✓"; else echo "  $1 MISSING"; FAILS=$((FAILS+1)); fi; }
-          HTML=$(curl -s "$PROD/")
-          ck "FAQPage JSON-LD"            'echo "$HTML" | grep -q "\"FAQPage\""'
+          # Each surface is fetched whole, then searched, and a miss is retried
+          # (this runs while the deploy's old and new containers overlap, when
+          # a cold container can briefly refuse a page); a final miss names the
+          # HTTP status it got.
+          has() { local body code i; for i in 1 2 3; do body=$(curl -s --max-time 20 -w '\n%{http_code}' "$1"); code=${body##*$'\n'}; body=${body%$'\n'*}; grep -qF -- "$2" <<<"$body" && return 0; LAST_CODE=$code; [ "$i" -lt 3 ] && sleep 10; done; return 1; }
+          ck() { if eval "$2"; then echo "  $1 ✓"; else echo "  $1 MISSING (last HTTP ${LAST_CODE:-?})"; FAILS=$((FAILS+1)); fi; }
+          ck "FAQPage JSON-LD"            'has "$PROD/" "\"FAQPage\""'
           # The ledger homepage renders the FAQ section with a "$ GET /faq"
           # kicker (its h2 is styled, so the old <h2>FAQ</h2> literal is gone).
-          ck "visible FAQ"               'echo "$HTML" | grep -q "GET /faq"'
-          ck "AggregateOffer"            'echo "$HTML" | grep -q AggregateOffer'
-          ck "robots welcomes AI crawlers" 'curl -s "$PROD/robots.txt" | grep -q GPTBot'
-          ck "MCP connector on landing"  'echo "$HTML" | grep -q agent402-mcp'
-          ck "MCP connector in llms.txt" 'curl -s "$PROD/llms.txt" | grep -q agent402-mcp'
-          ck "unit-convert tool page"    'curl -s "$PROD/tools/unit-convert" | grep -q "Unit convert"'
-          ck "guides with TechArticle JSON-LD" 'curl -s "$PROD/guides/x402-in-5-minutes" | grep -q TechArticle'
+          ck "visible FAQ"               'has "$PROD/" "GET /faq"'
+          ck "AggregateOffer"            'has "$PROD/" AggregateOffer'
+          ck "robots welcomes AI crawlers" 'has "$PROD/robots.txt" GPTBot'
+          ck "MCP connector on landing"  'has "$PROD/" agent402-mcp'
+          ck "MCP connector in llms.txt" 'has "$PROD/llms.txt" agent402-mcp'
+          ck "unit-convert tool page"    'has "$PROD/tools/unit-convert" "Unit convert"'
+          ck "guides with TechArticle JSON-LD" 'has "$PROD/guides/x402-in-5-minutes" TechArticle'
           [ "$FAILS" -eq 0 ] || { echo "$FAILS production surface(s) regressed"; exit 1; }
           echo "=== proof-of-work tier live on production (no wallet) ==="
           node --input-type=module -e '
