@@ -33,7 +33,7 @@ import { trackStoreReady, withLease } from "./state-db.js";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { MONITOR_PRODUCTS_ALL as MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
-import { rugcheckEnabled } from "./tools/solana-intel-kit.js";
+import { rugcheckEnabled } from "./rugcheck-switch.js";
 
 const HOUR = 3600_000, DAY = 24 * HOUR;
 export const DOMAIN_CHECK_MS = DAY;

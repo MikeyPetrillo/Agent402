@@ -81,7 +81,7 @@ import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 // imported by pages the kits do not know about.
 import { priceUsdFor as agentPriceUsdFor } from "./report-tiers.js";
 import { randomBytes } from "node:crypto";
-import { rugcheckEnabled } from "./tools/solana-intel-kit.js";
+import { rugcheckEnabled } from "./rugcheck-switch.js";
 
 // ---- Public reports -------------------------------------------------------
 // A buyer may make a delivered report public: it gets a second, unguessable

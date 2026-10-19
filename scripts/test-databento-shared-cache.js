@@ -250,7 +250,11 @@ try {
       const xd = await call(D, "/api/stock-quote?symbol=XOM");
       const yc = await call(C, "/api/stock-quote?symbol=CVX");
       ok(xd.body?.cached === true && yc.body?.cached === true && xd.body?.asOf === "2026-10-13" && yc.body?.asOf === "2026-10-13", `d. each server serves the other's symbol warm for the new session (${xd.body?.cached}, ${yc.body?.cached})`);
-      ok(up.calls.length === w0, `d. ...with zero upstream calls (${up.calls.length - w0})`);
+      // The boundary refresh ticks on its own timer (DATABENTO_RANGE_REFRESH_MS
+      // above) and may land while these quotes run; only a bars or price read
+      // would mean a quote went upstream.
+      const quoteReads = up.calls.slice(w0).filter((c) => c.kind !== "range");
+      ok(quoteReads.length === 0, `d. ...with zero upstream calls (${quoteReads.length}: ${JSON.stringify(quoteReads)})`);
       // The lease gates the tick: while a third container holds it, neither
       // server's warmer calls the upstream, even across a new session.
       const third = "third-container";

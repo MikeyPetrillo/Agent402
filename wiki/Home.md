@@ -9,7 +9,7 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 - **Run it yourself (free):** `git clone … && npm install && FREE_MODE=true npm start` - see [[Getting Started]]
 - **Live hosted demo:** https://agent402.tools · **MCP connector (paste into Claude):** `https://agent402.tools/mcp`
 - **For people (card, no wallet):** [`/reports`](https://agent402.tools/reports) one-off reports · [`/monitors`](https://agent402.tools/monitors) monthly watches · [`/credits`](https://agent402.tools/credits) prepaid credits (not on sale at the moment; keys already issued keep working) - see [[Reports and Monitors|Reports-and-Monitors]]
-- **Market intel per call:** live perpetuals and options, DeFi yields and TVL, stablecoin supply, Solana token safety and risk reports, crypto news and computed indicators, indexed EVM chain reads, Farcaster social, and whole-site crawling - most of them keyless (the indexed EVM reads and Farcaster tools run on the operator's provider keys), see [[Tool Catalog]]
+- **Market intel per call:** live perpetuals and options, DeFi yields and TVL, stablecoin supply, Solana token markets and prices, crypto news and computed indicators, indexed EVM chain reads, Farcaster social, and whole-site crawling - most of them keyless (the indexed EVM reads and Farcaster tools run on the operator's provider keys), see [[Tool Catalog]]
 - **Images and video:** flat-price generation on the OpenAI wire (`/v1/images/fast`, `/v1/images/pro`, `/v1/images/generations`, `/v1/videos/generations`) - priced per picture or per clip, not per token
 - **Add your own tool:** a few lines in `src/tools/` - see [CONTRIBUTING](https://github.com/MikeyPetrillo/Agent402/blob/main/CONTRIBUTING.md)
 - **The other side of x402** - charge AI bots crawling *your* site with the open-source pay-per-crawl gate: see [[Pay-per-crawl]]
@@ -26,7 +26,7 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 | [[Agentic Finance]] | What Agentic Finance is, the stack, and where Agent402 sits |
 | [[Why Pay Here|Why-Pay-Here]] | Seven things that are different about paying here, each linked to the surface that proves it |
 | [[Getting Started]] | Your first call in 60 seconds - free, no wallet |
-| [[Reports and Monitors|Reports-and-Monitors]] | Outcome-priced report products (`/v1/research`, `/v1/dossier`, `/v1/ticker-pack`, `/v1/fund`, `/v1/filing-report`, `/v1/domain-audit`, `/v1/recall-report`, `/v1/insider-report`, `/v1/token-brief`, `/v1/token-risk`, `/v1/linkedin-article`, `/v1/ipo-report`), the card front door (`/reports`, `/monitors`), and prepaid credits (`/credits`, `Authorization: Bearer a402_…`; not on sale at the moment, keys already issued keep working) |
+| [[Reports and Monitors|Reports-and-Monitors]] | Outcome-priced report products (`/v1/research`, `/v1/dossier`, `/v1/ticker-pack`, `/v1/fund`, `/v1/filing-report`, `/v1/domain-audit`, `/v1/recall-report`, `/v1/insider-report`, `/v1/token-risk`, `/v1/linkedin-article`, `/v1/ipo-report`), the card front door (`/reports`, `/monitors`), and prepaid credits (`/credits`, `Authorization: Bearer a402_…`; not on sale at the moment, keys already issued keep working) |
 | [[Paying with x402]] | USDC payments: the 402 flow, code, spend controls, Stripe's `purl` |
 | [[Paying with MPP]] | The Machine Payments Protocol wire: `WWW-Authenticate: Payment`, mppx clients, Base/Celo, native Tempo settlement, cards over MPP, native MPP on the `/mcp` connector |
 | [[Paying with Compute]] | The proof-of-work tier: spec + reference solver |

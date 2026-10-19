@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady, stateDbSchema } from "./state-db.js";
 import { createDeadLetter, everyMs } from "./ledger-mirror.js";
-import { rugcheckEnabled } from "./tools/solana-intel-kit.js";
+import { rugcheckEnabled } from "./rugcheck-switch.js";
 
 // The monitoring products. Each subscribes to a `target` (a domain, a fund,
 // etc.) and re-runs a report kind on a cadence (src/monitor-scheduler.js).

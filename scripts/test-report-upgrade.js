@@ -21,7 +21,7 @@ import { JSDOM, VirtualConsole } from "jsdom";
 import { monitorForKind, monitorPrefillUrl, upgradeOffer, monitorMapJson, priceUsd } from "../src/report-upgrade.js";
 import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
 import { HUMAN_PRODUCTS } from "../src/human-checkout.js";
-import { rugcheckEnabled } from "../src/tools/solana-intel-kit.js";
+import { rugcheckEnabled } from "../src/rugcheck-switch.js";
 import { monitorsPage } from "../src/monitors-page.js";
 import { reportDeliveryPage } from "../src/human-reports-page.js";
 import { buildReportReadyEmail, buildMonitorEmail } from "../src/email.js";
