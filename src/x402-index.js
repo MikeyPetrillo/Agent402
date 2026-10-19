@@ -2402,6 +2402,9 @@ const MANIFEST_NON_TOOL_PATH =
   /^\/(\.well-known|health|openapi|llms|sitemap|robots|favicon|admin|internal)|\.(png|ico|svg|txt|xml)$/i;
 const MANIFEST_HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]);
 
+// Marks a manifest row whose ref was written host-relative (no scheme or host).
+const MANIFEST_HOST_RELATIVE = Symbol("manifestHostRelativeRef");
+
 function manifestToolRichness(t) {
   if (!t) return 0;
   const named = t.name && t.name !== t.route && !String(t.name).startsWith("/");
@@ -2432,6 +2435,7 @@ function mergeManifestToolRows(a, b) {
     ...(prefer.stellarPayTo ? {} : (other.stellarPayTo ? { stellarPayTo: other.stellarPayTo } : {})),
     ...(prefer.algorandPayTo ? {} : (other.algorandPayTo ? { algorandPayTo: other.algorandPayTo } : {})),
     ...(prefer.evmDomainByNetwork ? {} : (other.evmDomainByNetwork ? { evmDomainByNetwork: other.evmDomainByNetwork } : {})),
+    ...(a[MANIFEST_HOST_RELATIVE] || b[MANIFEST_HOST_RELATIVE] ? { [MANIFEST_HOST_RELATIVE]: true } : {}),
   };
 }
 
@@ -2648,9 +2652,11 @@ export function normaliseManifestTools(manifest, originUrl) {
   // ".../functions/v1/api"); read host-absolute they fall outside the prefix
   // and every row is dropped. Such routes are re-anchored under the prefix.
   const prefix = sellerPrefixOf(originUrl);
+  // Only a ref WRITTEN host-relative ("/v1/x") is re-anchored: an absolute URL
+  // that names another path on the host is outside the seller and stays out.
   if (prefix && Array.isArray(rows) && manifestDeclaresPrefixedOrigin(manifest, originUrl)) {
     for (const r of rows) {
-      if (r && typeof r.route === "string" && r.route.startsWith("/") && r.route !== prefix && !r.route.startsWith(`${prefix}/`) && !r.route.startsWith(`${prefix}?`)) r.route = `${prefix}${r.route}`;
+      if (r && r[MANIFEST_HOST_RELATIVE] && typeof r.route === "string" && r.route.startsWith("/") && r.route !== prefix && !r.route.startsWith(`${prefix}/`) && !r.route.startsWith(`${prefix}?`)) r.route = `${prefix}${r.route}`;
     }
   }
   return scopeRowsToSeller(rows, originUrl);
@@ -2767,6 +2773,7 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
           // been listed as GET, answered 405 to every buyer, and been recorded
           // as broken by us.
           ...(method ? {} : { methodInferred: true }),
+          ...(ref.startsWith("/") && !ref.startsWith("//") ? { [MANIFEST_HOST_RELATIVE]: true } : {}),
           route,
           slug,
           name: name || u.pathname,
