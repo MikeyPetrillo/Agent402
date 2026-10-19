@@ -105,7 +105,7 @@ const FORBIDDEN = [
     // A rating or an assurance someone could rely on, not evidence: a token
     // "safe to touch", a "safety watch", a "graded safety read", or a page that
     // "meets WCAG". Say what the output contains or what was checked instead.
-    re: /\bsafe to touch\b|\btoken safety watch\b|\bgraded safety read\b|\b(?:meets?|meeting|conforms? to|complian(?:t|ce) with)\s+WCAG\b/i,
+    re: /\bsafe to (?:touch|trade|buy|hold)\b|\btoken safety (?:watch|check)\b|\bgraded safety read\b|\b(?:meets?|meeting|conforms? to|complian(?:t|ce) with)\s+WCAG\b/i,
     why: "a rating or conformance claim; describe the evidence returned or the checks made",
   },
   {

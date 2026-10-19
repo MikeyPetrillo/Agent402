@@ -109,7 +109,7 @@ function takeBool(raw, field) {
 // `vendor.x`. Without it the cap cannot be enforced, so reads refuse 503.
 function xRate(k) {
   const v = upstreamCosts().vendor?.x?.[k];
-  if (v == null) { const e = new Error("X data tools are temporarily unavailable. Nothing was charged for this request."); e.statusCode = 503; throw e; }
+  if (v == null) { const e = new Error("X data tools are temporarily unavailable. This call is not charged on x402."); e.statusCode = 503; throw e; }
   return v;
 }
 // 0 refuses every call; blank or malformed reads as the default, never as off.
@@ -165,7 +165,7 @@ async function xGet(path, params = {}) {
   const token = requireBearer();
   const cap = X_DATA_DAILY_MAX_USD();
   const estimate = estimateXReadUsd(path, params);
-  const capped = () => { xSpend.refused++; return bad(`X data tools have reached today's usage cap - retry after 00:00 UTC. Nothing was charged for this request.`, 503); };
+  const capped = () => { xSpend.refused++; return bad(`X data tools have reached today's usage cap - retry after 00:00 UTC. This call is not charged on x402.`, 503); };
   // The shared reserve first (an atomic add on the store, awaited only when
   // there is one): over the cap there, nothing is booked here. Then this
   // process's check and booking, with no await between them, so concurrent

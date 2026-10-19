@@ -136,7 +136,7 @@ const CAPABILITY_CHIPS = [
   ["crypto-options-chain", "Options chain"],
   ["defi-yields", "DeFi yield screener"],
   ["stablecoins", "Stablecoin supply"],
-  ["sol-token-safety", "Solana token safety"],
+  ["sol-token-safety", "Solana token risk"],
   ["sol-token-report", "Solana risk report"],
   ["crypto-market-pulse", "Crypto market pulse"],
   ["coin-profile", "Coin profile"],

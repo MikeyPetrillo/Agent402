@@ -98,7 +98,7 @@ function requireKey() {
 // `vendor.exa`. Without it the cap cannot be enforced, so calls refuse 503.
 function exaRate(k) {
   const v = upstreamCosts().vendor?.exa?.[k];
-  if (v == null) throw bad("Exa tools are temporarily unavailable. Nothing was charged for this request.", 503);
+  if (v == null) throw bad("Exa tools are temporarily unavailable. This call is not charged on x402.", 503);
   return v;
 }
 // 0 refuses every call; blank or malformed reads as the default, never as off.
@@ -215,7 +215,7 @@ async function exaPost(path, body) {
   const key = requireKey();
   const cap = EXA_DAILY_MAX_USD();
   const estimate = estimateExaUsd(path, body);
-  const capped = () => { spend.refused++; return bad(`Exa tools have reached today's usage cap - retry after 00:00 UTC. Nothing was charged for this request.`, 503); };
+  const capped = () => { spend.refused++; return bad(`Exa tools have reached today's usage cap - retry after 00:00 UTC. This call is not charged on x402.`, 503); };
   // The shared reserve first (an atomic add on the store, awaited only when
   // there is one): over the cap there, nothing is booked here. Then this
   // process's check and booking, with no await between them.
@@ -240,17 +240,17 @@ async function exaPost(path, body) {
     // A clean refusal did no billable work: release the booked estimate so
     // refused calls cannot fill the day's cap. Timeouts and 5xx keep it.
     if (EXA_RELEASE_STATUSES.has(res.status)) book(-estimate);
-    if (res.status === 401 || res.status === 403) throw bad("Exa tools are not configured on this deployment. Nothing was charged for this request.", 503);
-    if (res.status === 402) throw bad("Exa tools are temporarily unavailable. Nothing was charged for this request.", 503);
+    if (res.status === 401 || res.status === 403) throw bad("Exa tools are not configured on this deployment. This call is not charged on x402.", 503);
+    if (res.status === 402) throw bad("Exa tools are temporarily unavailable. This call is not charged on x402.", 503);
     if (res.status === 429) throw bad("Exa is rate-limiting this deployment right now - retry shortly", 503);
     if (res.status === 404) throw bad("Exa has nothing for that request", 404);
-    if (res.status >= 500) throw bad(`Exa upstream error (HTTP ${res.status}) - the upstream is having trouble; retry shortly. Nothing was charged for this request.`, 503);
+    if (res.status >= 500) throw bad(`Exa upstream error (HTTP ${res.status}) - the upstream is having trouble; retry shortly. This call is not charged on x402.`, 503);
     throw bad(`Exa refused the request (HTTP ${res.status}) - check the query and any filters`, 400);
   }
 
   let data;
   try { data = await res.json(); }
-  catch { throw bad("Exa upstream error: the upstream returned a body that is not JSON. Nothing was charged for this request.", 503); }
+  catch { throw bad("Exa upstream error: the upstream returned a body that is not JSON. This call is not charged on x402.", 503); }
 
   // Correct the day's booking to what Exa says it charged. Only ever replaces
   // the estimate with a real figure; an absent costDollars keeps the estimate.
