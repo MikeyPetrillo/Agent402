@@ -37,8 +37,11 @@ const server = http.createServer((req, res) => {
 <link rel="stylesheet" href="/blocking.css">
 <script src="/blocking.js"></script>
 </head><body><h1 id="h">Fixture page</h1><div id="box" style="height:10px"></div>
-<p style="height:300px;background:silver">Shifted block</p><img src="/big.bin" width="10" height="10">
+<p style="height:300px;background:silver">Shifted block</p>
 <script>
+// The big file is read to its end: served to an <img> as non-image bytes,
+// the browser may stop the download part way, and the totals depend on when.
+fetch("/big.bin").then((r) => r.arrayBuffer());
 console.error("fixture console error");
 // After first paint: a layout shift, then a long task (both only count after FCP).
 setTimeout(() => {
