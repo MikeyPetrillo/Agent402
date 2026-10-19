@@ -1426,7 +1426,7 @@ jobs:
           t node scripts/test-human-checkout-failures-pg.js
           # Another container never takes over a claim whose owner still beats, nor refunds one marked generated.
           t node scripts/test-human-checkout-crosscontainer-pg.js
-          # A paid subscription recorded while the database is away survives a restart; reload shows another container's.
+          # A paid subscription recorded while the database is away survives a true restart (the next container lands it by its boot replay); reload shows another container's.
           t node scripts/test-stripe-subscriptions-pg.js
           t node scripts/test-wish-pg.js
           # A first load that failed is retried until it lands; DDL from two boots never races;

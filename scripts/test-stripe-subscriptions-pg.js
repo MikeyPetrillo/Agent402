@@ -1,7 +1,10 @@
 // Card subscriptions on a REAL Postgres behind a relay a test can cut:
 //   - a paid subscription recorded while the database is away is kept in
 //     the journal (Redis with REDIS_URL set, else local disk) and lands
-//     later, so a restart before then loses nothing;
+//     later, so a restart before then loses nothing: a TRUE restart, the
+//     container that recorded it is a child process killed before the
+//     database is back, and the next container lands it by its own boot
+//     replay (its replay timer is set past the test, and nothing reloads);
 //   - a replayed record never overwrites a newer copy of the subscription;
 //   - reload() shows one container a subscription another recorded since it
 //     loaded (the monitor scheduler calls it inside its lease);
@@ -9,6 +12,8 @@
 //     subscription keeps the record's product and target.
 // Requires STATE_DATABASE_URL (CI fails without it).
 import { mkdtempSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
@@ -41,23 +46,51 @@ const stripe = {
 };
 const make = () => createStripeSubscriptions({ stripe, baseUrl: "https://example.test", storePath: STORE });
 
-try {
-  const A = make();
-  await wait(300);
+// Container A in its own process: it loads, then records on command, then is killed.
+function containerA() {
+  const src = `
+    const { createStripeSubscriptions } = await import(${JSON.stringify(new URL("../src/stripe-subscriptions.js", import.meta.url).href)});
+    if (String(process.env.REDIS_URL || "").trim()) await (await import(${JSON.stringify(new URL("../src/ledger-journal-redis.js", import.meta.url).href)})).awaitJournalRedisGate({ timeoutMs: 5000 });
+    const stripe = { checkout: { sessions: { retrieve: async (id) => ({ id, mode: "subscription", payment_status: "paid", subscription: "sub_" + id, customer: "cus_1", metadata: { product: "domain-monitor", target: "example.com" }, customer_details: { email: "a@example.test" } }) } }, subscriptions: { retrieve: async () => ({ status: "active" }) } };
+    const A = createStripeSubscriptions({ stripe, baseUrl: "https://example.test", storePath: process.env.SUBS_STORE });
+    await A.ready();
+    console.log(JSON.stringify({ ready: true }));
+    const rl = (await import("node:readline")).createInterface({ input: process.stdin });
+    rl.on("line", async (id) => { const out = await A.recordFromSession(id); console.log(JSON.stringify({ status: out.status })); });
+  `;
+  const c = spawn(process.execPath, ["--input-type=module", "-e", src], { env: { ...process.env, SUBS_STORE: STORE }, stdio: ["pipe", "pipe", "pipe"] });
+  let err = "";
+  c.stderr.on("data", (d) => { err += d; });
+  const lines = createInterface({ input: c.stdout });
+  // The child's own log lines are skipped: its answers are the JSON objects.
+  const queue = [], waiters = [];
+  lines.on("line", (l) => { let m; try { m = JSON.parse(l); } catch { return; } if (!m || typeof m !== "object") return; if (waiters.length) waiters.shift()(m); else queue.push(m); });
+  const next = () => (queue.length ? Promise.resolve(queue.shift()) : new Promise((resolve) => { const t = setTimeout(() => resolve({ timeout: true, err: err.slice(-400) }), 20_000); waiters.push((m) => { clearTimeout(t); resolve(m); }); }));
+  return { proc: c, next, send: (id) => c.stdin.write(`${id}\n`) };
+}
 
-  // A paid subscription recorded while the database is away survives a restart.
+try {
+  // A paid subscription recorded while the database is away survives a TRUE restart.
+  const A = containerA();
+  const up = await A.next();
+  ok(up.ready === true, `container A (its own process) loaded (${JSON.stringify(up)})`);
   relay.cut();
-  const out = await A.recordFromSession("cs_down1");
+  A.send("cs_down1");
+  const out = await A.next();
   const onDisk = await journalHolds({ schema: sdb.stateDbSchema(), prefix: "subscriptions:", needle: "sub_cs_down1", file: `${STORE}.pending.ndjson` });
   ok(out.status === "active" && onDisk, `recorded with the database away: told ${out.status}, kept in the journal (${onDisk})`);
+  // A is stopped before the database is back: nothing of it can land the record.
+  A.proc.kill("SIGKILL");
+  await new Promise((r) => (A.proc.exitCode !== null || A.proc.signalCode ? r() : A.proc.once("exit", r)));
   relay.heal();
-  // A restart: a fresh instance on the same store path replays the record.
-  // A2 replays the journal itself when its first load lands; when that load
-  // meets a connection the cut left dead, the still-running A lands the record
-  // instead, and A2 sees it on its next reload (the scheduler's path).
+  // A2 boots on the same store path. Its replay timer is set past this test
+  // and nothing calls reload or replayPending: only its boot replay
+  // (ready.then(replayPending)) can land the record.
+  process.env.SUBSCRIPTIONS_REPLAY_MS = String(10 * 60_000);
   const A2 = make();
-  for (let i = 0; i < 40 && !A2.get("sub_cs_down1"); i++) { await wait(100); if (i % 5 === 4) await A2.reload().catch(() => {}); }
-  ok(A2.get("sub_cs_down1")?.product === "domain-monitor", `after a restart the subscription is there (${A2.get("sub_cs_down1")?.status})`);
+  process.env.SUBSCRIPTIONS_REPLAY_MS = "200";
+  for (let i = 0; i < 60 && !A2.get("sub_cs_down1"); i++) await wait(100);
+  ok(A2.get("sub_cs_down1")?.product === "domain-monitor", `after a restart the next container lands the subscription by its own boot replay (${A2.get("sub_cs_down1")?.status})`);
   const docName = (await sdb.stateQuery(`SELECT name FROM ${sdb.stateDbSchema()}.documents WHERE body ? 'sub_cs_down1'`)).rows[0]?.name;
   ok(Boolean(docName), `...and in the database (${docName})`);
 
