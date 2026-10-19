@@ -3101,12 +3101,25 @@ app.get("/marketplaces", (_req, res) => res.redirect(301, "/marketplace"));
 // route around this instance. Verifies the stats DB is readable and that the
 // payment configuration is intact (wallet present unless we're explicitly in
 // FREE_MODE). Kept O(1) so a flood of probes can't degrade the service.
+let listenedAt = 0;
+const READY_ROUTER_WAIT_MS = Math.max(0, Number(process.env.READY_ROUTER_WAIT_MS ?? 30_000) || 0);
+function routerWarming(now = Date.now()) {
+  if (!READY_ROUTER_WAIT_MS || !listenedAt || now - listenedAt >= READY_ROUTER_WAIT_MS) return false;
+  try { const st = routerPoolStatus(); return Boolean(st.enabled) && !st.loaded; } catch { return false; }
+}
 app.get("/health", (req, res) => {
   const checks = {
     db: dbHealthy(),
     wallet: FREE_MODE || Boolean(WALLET_ADDRESS),
   };
-  const ok = checks.db && checks.wallet;
+  // Readiness (`?ready=1`, the deploy healthcheck): right after listen, a
+  // container whose router worker has not loaded yet would score route
+  // queries on its main thread; during a deploy overlap the previous
+  // container is still serving, so it answers not-ready until a worker loads,
+  // for at most READY_ROUTER_WAIT_MS after listen (0 turns it off). Plain
+  // /health stays liveness for the monitors.
+  const warming = req.query?.ready === "1" && routerWarming();
+  const ok = checks.db && checks.wallet && !warming;
   // Public `meta` carries ONLY toolCount — it's already published on
   // /api/pricing, /openapi.json, and /api/stats, and sync-count.js reads it
   // here. Process uptime (restart-timing recon) and freeMode (operating mode)
@@ -10265,9 +10278,10 @@ setUnloadedStoresProbe(unloadedStores);
   if (r !== "ready") console.warn(`[state-db] stores not ready after ${Date.now() - t0}ms (${r}); serving with what has loaded (still loading: ${unloadedStateStores().slice(0, 12).join(", ") || "none named"})`);
   else if (stateDbEnabled()) console.log(`[state-db] stores loaded in ${Date.now() - t0}ms; listening`);
 }
-const httpServer = app.listen(PORT, () =>
-  console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`)
-);
+const httpServer = app.listen(PORT, () => {
+  listenedAt = Date.now();
+  console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`);
+});
 // Connection timeouts (Node defaults: request 300 s, headers 60 s, keep-alive
 // 5 s). Keep-alive outlives the edge proxy's idle window so it never reuses a
 // socket we just closed (a sporadic edge 502), headers stays above keep-alive
